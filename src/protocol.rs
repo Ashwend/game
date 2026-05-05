@@ -3,9 +3,11 @@ use serde::{Deserialize, Serialize};
 pub type ClientId = u64;
 pub type SteamId = u64;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 3;
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_CHAT_LEN: usize = 240;
+pub const MAX_HEALTH: f32 = 100.0;
+pub const MAX_STAMINA: f32 = 100.0;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
 pub struct Vec3Net {
@@ -65,6 +67,9 @@ pub struct PlayerInput {
     pub sequence: u64,
     pub direction: Vec3Net,
     pub sprint: bool,
+    pub jump: bool,
+    pub yaw: f32,
+    pub pitch: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -108,6 +113,12 @@ pub struct PlayerState {
     pub name: String,
     pub position: Vec3Net,
     pub velocity: Vec3Net,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub health: f32,
+    pub stamina: f32,
+    pub grounded: bool,
+    pub last_processed_input: u64,
     pub is_admin: bool,
 }
 

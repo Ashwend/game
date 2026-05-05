@@ -1,7 +1,12 @@
-use std::{collections::HashMap, net::SocketAddr};
+use std::{collections::HashMap, f32::consts::FRAC_PI_2, net::SocketAddr};
 
 use anyhow::{Context, Result};
-use bevy::{app::AppExit, prelude::*};
+use bevy::{
+    app::AppExit,
+    input::mouse::AccumulatedMouseMotion,
+    prelude::*,
+    window::{CursorGrabMode, CursorOptions},
+};
 use bevy_egui::{
     EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui,
     input::{egui_wants_any_keyboard_input, egui_wants_any_pointer_input},
@@ -9,18 +14,24 @@ use bevy_egui::{
 use uuid::Uuid;
 
 use crate::{
+    controller::PlayerController,
     net::ClientSession,
     protocol::{
-        ChatMessage, ClientId, ClientMessage, PlayerEvent, PlayerInput, ServerMessage, Vec3Net,
-        WorldSnapshot,
+        ChatMessage, ClientId, ClientMessage, MAX_HEALTH, MAX_STAMINA, PlayerEvent, PlayerInput,
+        PlayerState, ServerMessage, Vec3Net, WorldSnapshot,
     },
     save::{WorldStore, WorldSummary},
     steam::{AuthenticatedUser, OfflineSteamBackend, SteamBackend},
+    world::{FLOOR_SIZE, TEST_WORLD_BLOCKS},
 };
 
 const LOCAL_PLAYER_COLOR: Color = Color::srgb(0.25, 0.68, 0.95);
 const REMOTE_PLAYER_COLOR: Color = Color::srgb(0.95, 0.61, 0.25);
 const WORLD_COLOR: Color = Color::srgb(0.18, 0.34, 0.22);
+const EYE_HEIGHT: f32 = 1.62;
+const PLAYER_VISUAL_CENTER_Y: f32 = 0.9;
+const HUD_WIDTH: f32 = 240.0;
+const CHAT_WIDTH: f32 = 420.0;
 
 pub fn run_app() -> Result<()> {
     let store = WorldStore::platform_default()?;
@@ -35,6 +46,7 @@ pub fn run_app() -> Result<()> {
         .insert_resource(SteamUser(user))
         .insert_resource(MenuState::default())
         .insert_resource(ClientRuntime::default())
+        .insert_resource(LookState::default())
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Game".to_owned(),
@@ -50,6 +62,11 @@ pub fn run_app() -> Result<()> {
         .add_systems(
             Update,
             toggle_pause_system.run_if(not(egui_wants_any_keyboard_input)),
+        )
+        .add_systems(Update, update_cursor_system)
+        .add_systems(
+            Update,
+            mouse_look_system.run_if(not(egui_wants_any_pointer_input)),
         )
         .add_systems(
             Update,
@@ -113,6 +130,7 @@ struct ClientRuntime {
     client_id: Option<ClientId>,
     is_admin: bool,
     snapshot: Option<WorldSnapshot>,
+    predicted_local: Option<PlayerController>,
     messages: Vec<String>,
     input_sequence: u64,
 }
@@ -124,6 +142,7 @@ impl ClientRuntime {
         self.client_id = None;
         self.is_admin = false;
         self.snapshot = None;
+        self.predicted_local = None;
         self.messages.clear();
         self.input_sequence = 0;
     }
@@ -139,6 +158,7 @@ impl ClientRuntime {
         self.active_world_id = None;
         self.client_id = None;
         self.snapshot = None;
+        self.predicted_local = None;
         self.is_admin = false;
     }
 
@@ -152,6 +172,7 @@ impl ClientRuntime {
             } => {
                 self.client_id = Some(client_id);
                 self.is_admin = is_admin;
+                self.sync_prediction_from_snapshot(&snapshot, true);
                 self.snapshot = Some(snapshot);
                 self.messages
                     .push(format!("connected as player {client_id}"));
@@ -161,6 +182,7 @@ impl ClientRuntime {
             }
             ServerMessage::PlayerEvent(event) => self.messages.push(format_player_event(event)),
             ServerMessage::Snapshot(snapshot) => {
+                self.sync_prediction_from_snapshot(&snapshot, false);
                 self.snapshot = Some(snapshot);
             }
             ServerMessage::Chat(ChatMessage { from, text }) => {
@@ -171,6 +193,78 @@ impl ClientRuntime {
         if self.messages.len() > 80 {
             let drain_count = self.messages.len() - 80;
             self.messages.drain(0..drain_count);
+        }
+    }
+
+    fn local_player(&self) -> Option<&PlayerState> {
+        let client_id = self.client_id?;
+        self.snapshot
+            .as_ref()?
+            .players
+            .iter()
+            .find(|player| player.client_id == client_id)
+    }
+
+    fn local_view(&self) -> Option<LocalPlayerView> {
+        if let Some(predicted) = &self.predicted_local {
+            return Some(LocalPlayerView {
+                position: predicted.position,
+                health: predicted.health,
+                stamina: predicted.stamina,
+            });
+        }
+
+        let player = self.local_player()?;
+        Some(LocalPlayerView {
+            position: player.position,
+            health: player.health,
+            stamina: player.stamina,
+        })
+    }
+
+    fn sync_prediction_from_snapshot(&mut self, snapshot: &WorldSnapshot, force: bool) {
+        let Some(client_id) = self.client_id else {
+            return;
+        };
+        let Some(server_player) = snapshot
+            .players
+            .iter()
+            .find(|player| player.client_id == client_id)
+        else {
+            return;
+        };
+
+        if force || self.predicted_local.is_none() {
+            self.predicted_local = Some(PlayerController::from_player_state(server_player));
+            return;
+        }
+
+        if let Some(predicted) = self.predicted_local.as_mut() {
+            predicted.reconcile(server_player);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LocalPlayerView {
+    position: Vec3Net,
+    health: f32,
+    stamina: f32,
+}
+
+#[derive(Resource, Debug, Clone, Copy)]
+struct LookState {
+    yaw: f32,
+    pitch: f32,
+    sensitivity: Vec2,
+}
+
+impl Default for LookState {
+    fn default() -> Self {
+        Self {
+            yaw: 0.0,
+            pitch: -0.04,
+            sensitivity: Vec2::new(0.0024, 0.0020),
         }
     }
 }
@@ -191,6 +285,9 @@ struct NetworkPlayer {
 struct TargetPosition(Vec3);
 
 #[derive(Component)]
+struct TargetRotation(Quat);
+
+#[derive(Component)]
 struct MainCamera;
 
 fn setup_scene(
@@ -198,11 +295,21 @@ fn setup_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    commands.insert_resource(GlobalAmbientLight {
+        color: Color::srgb(0.72, 0.78, 0.86),
+        brightness: 90.0,
+        ..default()
+    });
+
     commands.spawn((
         Name::new("Camera"),
         MainCamera,
         Camera3d::default(),
-        Transform::from_xyz(6.0, 7.0, 8.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Projection::from(PerspectiveProjection {
+            fov: 65.0_f32.to_radians(),
+            ..default()
+        }),
+        Transform::from_xyz(0.0, EYE_HEIGHT, 3.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
     commands.spawn((
@@ -217,7 +324,14 @@ fn setup_scene(
 
     commands.spawn((
         Name::new("Authoritative Plane"),
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(80.0, 80.0).subdivisions(16))),
+        Mesh3d(
+            meshes.add(
+                Plane3d::default()
+                    .mesh()
+                    .size(FLOOR_SIZE, FLOOR_SIZE)
+                    .subdivisions(16),
+            ),
+        ),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: WORLD_COLOR,
             perceptual_roughness: 0.9,
@@ -225,6 +339,22 @@ fn setup_scene(
             ..default()
         })),
     ));
+
+    let block_materials = [
+        materials.add(Color::srgb(0.46, 0.50, 0.48)),
+        materials.add(Color::srgb(0.55, 0.48, 0.38)),
+        materials.add(Color::srgb(0.36, 0.44, 0.55)),
+        materials.add(Color::srgb(0.48, 0.40, 0.52)),
+    ];
+    for (index, block) in TEST_WORLD_BLOCKS.iter().enumerate() {
+        let size = block.size();
+        commands.spawn((
+            Name::new(format!("Test Cube {}", index + 1)),
+            Mesh3d(meshes.add(Cuboid::new(size.x, size.y, size.z))),
+            MeshMaterial3d(block_materials[index % block_materials.len()].clone()),
+            Transform::from_xyz(block.center.x, block.center.y, block.center.z),
+        ));
+    }
 
     commands.insert_resource(PlayerVisualAssets {
         mesh: meshes.add(Capsule3d::new(0.35, 0.9)),
@@ -248,6 +378,7 @@ fn ui_system(
         Screen::Worlds => worlds_ui(ctx, &mut menu, &mut runtime, &store, &user),
         Screen::Multiplayer => multiplayer_ui(ctx, &mut menu, &mut runtime, &user),
         Screen::InGame => {
+            hud_ui(ctx, &runtime);
             chat_ui(ctx, &mut menu, &mut runtime);
             if menu.pause_open {
                 pause_ui(ctx, &mut menu, &mut runtime, &store);
@@ -256,6 +387,49 @@ fn ui_system(
     }
 
     Ok(())
+}
+
+fn hud_ui(ctx: &egui::Context, runtime: &ClientRuntime) {
+    let Some(player) = runtime.local_view() else {
+        return;
+    };
+
+    egui::Area::new("hud_bars".into())
+        .anchor(egui::Align2::LEFT_TOP, [16.0, 16.0])
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 145))
+                .inner_margin(egui::Margin::same(10))
+                .show(ui, |ui| {
+                    ui.set_width(HUD_WIDTH);
+                    status_bar(
+                        ui,
+                        "Health",
+                        player.health,
+                        MAX_HEALTH,
+                        egui::Color32::from_rgb(190, 55, 58),
+                    );
+                    ui.add_space(6.0);
+                    status_bar(
+                        ui,
+                        "Stamina",
+                        player.stamina,
+                        MAX_STAMINA,
+                        egui::Color32::from_rgb(61, 159, 104),
+                    );
+                });
+        });
+}
+
+fn status_bar(ui: &mut egui::Ui, label: &str, value: f32, max: f32, color: egui::Color32) {
+    let fraction = (value / max).clamp(0.0, 1.0);
+    ui.label(label);
+    ui.add(
+        egui::ProgressBar::new(fraction)
+            .fill(color)
+            .text(format!("{value:.0}/{max:.0}"))
+            .desired_width(HUD_WIDTH - 20.0),
+    );
 }
 
 fn main_menu_ui(
@@ -445,8 +619,7 @@ fn chat_ui(ctx: &egui::Context, menu: &mut MenuState, runtime: &mut ClientRuntim
                 .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 135))
                 .inner_margin(egui::Margin::same(10))
                 .show(ui, |ui| {
-                    ui.set_min_width(360.0);
-                    ui.set_max_width(420.0);
+                    ui.set_width(CHAT_WIDTH);
                     egui::ScrollArea::vertical()
                         .stick_to_bottom(true)
                         .max_height(150.0)
@@ -459,7 +632,7 @@ fn chat_ui(ctx: &egui::Context, menu: &mut MenuState, runtime: &mut ClientRuntim
                     let response = ui.add(
                         egui::TextEdit::singleline(&mut menu.chat_input)
                             .hint_text("Chat")
-                            .desired_width(f32::INFINITY),
+                            .desired_width(CHAT_WIDTH - 20.0),
                     );
                     if response.lost_focus()
                         && ui.input(|input| input.key_pressed(egui::Key::Enter))
@@ -496,6 +669,7 @@ fn pause_ui(
     }
 
     egui::Window::new("Paused")
+        .order(egui::Order::Foreground)
         .title_bar(false)
         .resizable(false)
         .collapsible(false)
@@ -585,21 +759,55 @@ fn toggle_pause_system(keys: Res<ButtonInput<KeyCode>>, mut menu: ResMut<MenuSta
     }
 }
 
-fn client_input_system(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut runtime: ResMut<ClientRuntime>,
+fn update_cursor_system(mut cursor_options: Single<&mut CursorOptions>, menu: Res<MenuState>) {
+    let should_capture = menu.screen == Screen::InGame && !menu.pause_open;
+    cursor_options.visible = !should_capture;
+    cursor_options.grab_mode = if should_capture {
+        CursorGrabMode::Locked
+    } else {
+        CursorGrabMode::None
+    };
+}
+
+fn mouse_look_system(
+    accumulated_mouse_motion: Res<AccumulatedMouseMotion>,
+    mut look: ResMut<LookState>,
     menu: Res<MenuState>,
 ) {
     if menu.screen != Screen::InGame || menu.pause_open {
         return;
     }
 
+    let delta = accumulated_mouse_motion.delta;
+    if delta == Vec2::ZERO {
+        return;
+    }
+
+    look.yaw -= delta.x * look.sensitivity.x;
+    look.pitch =
+        (look.pitch - delta.y * look.sensitivity.y).clamp(-FRAC_PI_2 + 0.01, FRAC_PI_2 - 0.01);
+}
+
+fn client_input_system(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut runtime: ResMut<ClientRuntime>,
+    menu: Res<MenuState>,
+    look: Res<LookState>,
+) {
+    if menu.screen != Screen::InGame || menu.pause_open {
+        return;
+    }
+    if runtime.client_id.is_none() {
+        return;
+    }
+
     let mut direction = Vec3Net::ZERO;
     if keys.pressed(KeyCode::KeyW) {
-        direction.z -= 1.0;
+        direction.z += 1.0;
     }
     if keys.pressed(KeyCode::KeyS) {
-        direction.z += 1.0;
+        direction.z -= 1.0;
     }
     if keys.pressed(KeyCode::KeyA) {
         direction.x -= 1.0;
@@ -614,7 +822,15 @@ fn client_input_system(
         sequence,
         direction,
         sprint: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
+        jump: keys.just_pressed(KeyCode::Space),
+        yaw: look.yaw,
+        pitch: look.pitch,
     };
+
+    if let Some(predicted) = runtime.predicted_local.as_mut() {
+        predicted.apply_input(input);
+        predicted.simulate(time.delta_secs());
+    }
 
     if let Some(session) = runtime.session.as_mut() {
         let _ = session.send(ClientMessage::Input(input));
@@ -664,8 +880,11 @@ fn apply_snapshot_system(
 
     for player in &snapshot.players {
         let target = Vec3::new(player.position.x, player.position.y, player.position.z);
+        let rotation = Quat::from_rotation_y(player.yaw);
         if let Some(entity) = existing.get(&player.client_id) {
-            commands.entity(*entity).insert(TargetPosition(target));
+            commands
+                .entity(*entity)
+                .insert((TargetPosition(target), TargetRotation(rotation)));
         } else {
             let material = if Some(player.client_id) == runtime.client_id {
                 assets.local_material.clone()
@@ -678,9 +897,15 @@ fn apply_snapshot_system(
                     client_id: player.client_id,
                 },
                 TargetPosition(target),
+                TargetRotation(rotation),
                 Mesh3d(assets.mesh.clone()),
                 MeshMaterial3d(material),
-                Transform::from_translation(target),
+                Transform::from_translation(player_visual_position(target)).with_rotation(rotation),
+                if Some(player.client_id) == runtime.client_id {
+                    Visibility::Hidden
+                } else {
+                    Visibility::Visible
+                },
             ));
         }
     }
@@ -698,37 +923,44 @@ fn apply_snapshot_system(
 
 fn interpolate_players_system(
     time: Res<Time>,
-    mut players: Query<(&mut Transform, &TargetPosition), With<NetworkPlayer>>,
+    mut players: Query<(&mut Transform, &TargetPosition, &TargetRotation), With<NetworkPlayer>>,
 ) {
     let alpha = 1.0 - (-18.0 * time.delta_secs()).exp();
-    for (mut transform, target) in &mut players {
-        transform.translation = transform.translation.lerp(target.0, alpha);
+    for (mut transform, target, target_rotation) in &mut players {
+        transform.translation = transform
+            .translation
+            .lerp(player_visual_position(target.0), alpha);
+        transform.rotation = transform.rotation.slerp(target_rotation.0, alpha);
     }
 }
 
 fn camera_follow_system(
+    time: Res<Time>,
     runtime: Res<ClientRuntime>,
+    look: Res<LookState>,
+    menu: Res<MenuState>,
     mut camera: Query<&mut Transform, (With<MainCamera>, Without<NetworkPlayer>)>,
-    players: Query<(&Transform, &NetworkPlayer)>,
 ) {
-    let Some(client_id) = runtime.client_id else {
+    if menu.screen != Screen::InGame {
         return;
-    };
-    let Some((player_transform, _)) = players
-        .iter()
-        .find(|(_, player)| player.client_id == client_id)
-    else {
-        return;
-    };
+    }
 
     let Ok(mut camera_transform) = camera.single_mut() else {
         return;
     };
+    let Some(player) = runtime.local_view() else {
+        return;
+    };
 
-    let target = player_transform.translation;
-    let desired = target + Vec3::new(6.0, 7.0, 8.0);
-    camera_transform.translation = camera_transform.translation.lerp(desired, 0.08);
-    camera_transform.look_at(target, Vec3::Y);
+    let feet = Vec3::new(player.position.x, player.position.y, player.position.z);
+    let eye = feet + Vec3::Y * EYE_HEIGHT;
+    let alpha = 1.0 - (-30.0 * time.delta_secs()).exp();
+    camera_transform.translation = camera_transform.translation.lerp(eye, alpha);
+    camera_transform.rotation = Quat::from_euler(EulerRot::YXZ, look.yaw, look.pitch, 0.0);
+}
+
+fn player_visual_position(feet_position: Vec3) -> Vec3 {
+    feet_position + Vec3::Y * PLAYER_VISUAL_CENTER_Y
 }
 
 fn format_player_event(event: PlayerEvent) -> String {
