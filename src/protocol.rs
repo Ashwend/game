@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-use crate::world::WorldData;
+use crate::world::{MapType, WorldData};
 
 pub type ClientId = u64;
 pub type PacketSequence = u64;
 pub type SteamId = u64;
 
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_INPUT_DELTA_SECONDS: f32 = 1.0 / SERVER_TICK_RATE_HZ;
 pub const MAX_CHAT_LEN: usize = 240;
@@ -110,7 +110,7 @@ pub struct PlayerMovement {
 pub enum ServerMessage {
     Welcome {
         client_id: ClientId,
-        world_seed: u64,
+        map: MapType,
         world: WorldData,
         is_admin: bool,
         snapshot: WorldSnapshot,

@@ -17,6 +17,8 @@ const START_BUTTON_WIDTH: f32 = 78.0;
 const DELETE_BUTTON_WIDTH: f32 = 82.0;
 const ACTION_BUTTON_GAP: f32 = 10.0;
 const BUTTON_HEIGHT: f32 = 34.0;
+const DEFAULT_WORLD_NAME: &str = "New World";
+const NEW_WORLD_INPUT_ID: &str = "new_world_name_input";
 
 pub(super) fn worlds_ui(
     ctx: &egui::Context,
@@ -52,7 +54,19 @@ pub(super) fn worlds_ui(
                             [92.0, 34.0],
                             egui::Label::new(theme::field_label("New World")),
                         );
-                        ui.add_sized([360.0, 34.0], theme::text_input(&mut menu.new_world_name));
+                        let name_response = ui.add_sized(
+                            [360.0, 34.0],
+                            theme::text_input(&mut menu.new_world_name)
+                                .id(egui::Id::new(NEW_WORLD_INPUT_ID)),
+                        );
+                        if name_response.gained_focus() && menu.new_world_name == DEFAULT_WORLD_NAME
+                        {
+                            select_all_text(
+                                ui,
+                                name_response.id,
+                                menu.new_world_name.chars().count(),
+                            );
+                        }
                         if theme::compact_button(ui, "Create", ButtonKind::Primary, 92.0).clicked()
                         {
                             match store
@@ -60,7 +74,7 @@ pub(super) fn worlds_ui(
                                 .create_world(&menu.new_world_name, Some(user.0.steam_id))
                             {
                                 Ok(_) => {
-                                    menu.new_world_name = "New World".to_owned();
+                                    menu.new_world_name = DEFAULT_WORLD_NAME.to_owned();
                                     refresh_worlds(menu, store);
                                 }
                                 Err(error) => menu.status = Some(format!("create failed: {error}")),
@@ -153,8 +167,7 @@ fn draw_world_headers(ui: &mut egui::Ui) {
         columns,
         [
             HeaderCell::new("World"),
-            HeaderCell::new("Seed"),
-            HeaderCell::new("Admins"),
+            HeaderCell::new("Map"),
             HeaderCell::new("Actions"),
         ],
     );
@@ -171,13 +184,8 @@ fn draw_world_row(
     row_outer_width: f32,
 ) {
     let row_width = row_outer_width.max(0.0);
-    let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(row_width, ROW_HEIGHT), egui::Sense::hover());
-    let fill = if response.hovered() {
-        egui::Color32::from_rgba_unmultiplied(12, 18, 24, 238)
-    } else {
-        egui::Color32::from_rgba_unmultiplied(7, 10, 14, 218)
-    };
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(row_width, ROW_HEIGHT), egui::Sense::hover());
+    let fill = egui::Color32::from_rgba_unmultiplied(7, 10, 14, 218);
     ui.painter().rect(
         rect,
         5,
@@ -200,17 +208,9 @@ fn draw_world_row(
     );
     draw_cell_text(
         ui,
-        cells.seed,
-        world.seed.to_string(),
+        cells.map,
+        world.map.label(),
         theme::muted_text(),
-        13.0,
-        egui::FontFamily::Monospace,
-    );
-    draw_cell_text(
-        ui,
-        cells.admins,
-        world.admin_count.to_string(),
-        theme::text(),
         14.0,
         egui::FontFamily::Proportional,
     );
@@ -266,8 +266,7 @@ impl HeaderCell {
 #[derive(Debug, Clone, Copy)]
 struct ColumnRects {
     name: egui::Rect,
-    seed: egui::Rect,
-    admins: egui::Rect,
+    map: egui::Rect,
     actions: egui::Rect,
 }
 
@@ -275,7 +274,7 @@ fn draw_columns(
     ui: &egui::Ui,
     content_rect: egui::Rect,
     columns: WorldColumns,
-    headers: [HeaderCell; 4],
+    headers: [HeaderCell; 3],
 ) {
     let cells = column_rects(content_rect, columns);
     draw_cell_text(
@@ -288,7 +287,7 @@ fn draw_columns(
     );
     draw_cell_text(
         ui,
-        cells.seed,
+        cells.map,
         headers[1].text,
         egui::Color32::from_rgb(172, 190, 208),
         12.0,
@@ -296,16 +295,8 @@ fn draw_columns(
     );
     draw_cell_text(
         ui,
-        cells.admins,
-        headers[2].text,
-        egui::Color32::from_rgb(172, 190, 208),
-        12.0,
-        egui::FontFamily::Proportional,
-    );
-    draw_cell_text(
-        ui,
         cells.actions,
-        headers[3].text,
+        headers[2].text,
         egui::Color32::from_rgb(172, 190, 208),
         12.0,
         egui::FontFamily::Proportional,
@@ -316,18 +307,11 @@ fn column_rects(content_rect: egui::Rect, columns: WorldColumns) -> ColumnRects 
     let mut x = content_rect.left();
     let name = cell_rect(content_rect, x, columns.name);
     x += columns.name + COLUMN_GAP;
-    let seed = cell_rect(content_rect, x, columns.seed);
-    x += columns.seed + COLUMN_GAP;
-    let admins = cell_rect(content_rect, x, columns.admins);
-    x += columns.admins + COLUMN_GAP;
+    let map = cell_rect(content_rect, x, columns.map);
+    x += columns.map + COLUMN_GAP;
     let actions = cell_rect(content_rect, x, columns.actions);
 
-    ColumnRects {
-        name,
-        seed,
-        admins,
-        actions,
-    }
+    ColumnRects { name, map, actions }
 }
 
 fn cell_rect(content_rect: egui::Rect, left: f32, width: f32) -> egui::Rect {
@@ -357,28 +341,30 @@ fn draw_cell_text(
 #[derive(Debug, Clone, Copy)]
 struct WorldColumns {
     name: f32,
-    seed: f32,
-    admins: f32,
+    map: f32,
     actions: f32,
 }
 
 impl WorldColumns {
     fn for_width(width: f32) -> Self {
         let actions = START_BUTTON_WIDTH + ACTION_BUTTON_GAP + DELETE_BUTTON_WIDTH;
-        let admins = 64.0;
-        let remaining = (width - actions - admins - COLUMN_GAP * 3.0).max(0.0);
-        let seed = (remaining * 0.48)
-            .clamp(180.0, 330.0)
-            .min((remaining - 150.0).max(120.0));
-        let name = (remaining - seed).max(150.0);
+        let remaining = (width - actions - COLUMN_GAP * 2.0).max(0.0);
+        let map = 140.0_f32.min((remaining * 0.32).max(100.0));
+        let name = (remaining - map).max(150.0);
 
-        Self {
-            name,
-            seed,
-            admins,
-            actions,
-        }
+        Self { name, map, actions }
     }
+}
+
+fn select_all_text(ui: &egui::Ui, id: egui::Id, char_count: usize) {
+    let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::two(
+            egui::text::CCursor::default(),
+            egui::text::CCursor::new(char_count),
+        )));
+    state.store(ui.ctx(), id);
 }
 
 pub(super) fn refresh_worlds(menu: &mut MenuState, store: &SaveStore) {

@@ -4,6 +4,35 @@ use crate::protocol::Vec3Net;
 
 pub const DEFAULT_FLOOR_SIZE: f32 = 80.0;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MapType {
+    Test,
+    Procedural { seed: u64 },
+}
+
+impl Default for MapType {
+    fn default() -> Self {
+        Self::Test
+    }
+}
+
+impl MapType {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Test => "Test",
+            Self::Procedural { .. } => "Procedural",
+        }
+    }
+
+    pub fn world_data(&self) -> WorldData {
+        match self {
+            Self::Test => WorldData::test_world(),
+            Self::Procedural { .. } => WorldData::test_world(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorldData {
     pub floor_size: f32,

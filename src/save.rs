@@ -9,7 +9,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{protocol::SteamId, world::WorldData};
+use crate::{protocol::SteamId, world::MapType};
 
 const QUALIFIER: &str = "com";
 const ORGANIZATION: &str = "Game";
@@ -118,11 +118,10 @@ impl WorldStore {
 pub struct WorldSave {
     pub id: Uuid,
     pub name: String,
-    pub seed: u64,
+    #[serde(default)]
+    pub map: MapType,
     pub created_at_unix: u64,
     pub admins: Vec<SteamId>,
-    #[serde(default)]
-    pub world: WorldData,
     pub state: WorldStateSave,
 }
 
@@ -137,10 +136,9 @@ impl WorldSave {
         Self {
             id,
             name: normalize_world_name(name),
-            seed: seed_from_uuid(id),
+            map: MapType::Test,
             created_at_unix: now_unix(),
             admins,
-            world: WorldData::default(),
             state: WorldStateSave::default(),
         }
     }
@@ -155,9 +153,8 @@ pub struct WorldStateSave {
 pub struct WorldSummary {
     pub id: Uuid,
     pub name: String,
-    pub seed: u64,
+    pub map: MapType,
     pub created_at_unix: u64,
-    pub admin_count: usize,
     pub path: PathBuf,
 }
 
@@ -166,9 +163,8 @@ impl WorldSummary {
         Self {
             id: save.id,
             name: save.name.clone(),
-            seed: save.seed,
+            map: save.map.clone(),
             created_at_unix: save.created_at_unix,
-            admin_count: save.admins.len(),
             path,
         }
     }
@@ -181,11 +177,6 @@ fn normalize_world_name(name: &str) -> String {
     } else {
         trimmed.chars().take(64).collect()
     }
-}
-
-fn seed_from_uuid(id: Uuid) -> u64 {
-    let raw = id.as_u128();
-    (raw as u64) ^ ((raw >> 64) as u64)
 }
 
 fn now_unix() -> u64 {
@@ -211,8 +202,9 @@ mod tests {
             .expect("world should be created");
 
         assert_eq!(save.name, "Test World");
+        assert_eq!(save.map, MapType::Test);
         assert_eq!(save.admins, vec![123]);
-        assert!(!save.world.blocks.is_empty());
+        assert!(!save.map.world_data().blocks.is_empty());
 
         let loaded = store.load_world(save.id).expect("world should load");
         assert_eq!(loaded.id, save.id);
@@ -229,5 +221,27 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(store.root());
+    }
+
+    #[test]
+    fn old_seeded_saves_load_as_test_maps() {
+        let id = Uuid::new_v4();
+        let json = format!(
+            r#"{{
+                "id": "{id}",
+                "name": "Old World",
+                "seed": 123,
+                "created_at_unix": 1,
+                "admins": [123],
+                "world": {{"floor_size": 80.0, "blocks": []}},
+                "state": {{"last_authoritative_tick": 5}}
+            }}"#
+        );
+
+        let save: WorldSave = serde_json::from_str(&json).expect("old save should load");
+
+        assert_eq!(save.id, id);
+        assert_eq!(save.map, MapType::Test);
+        assert_eq!(save.state.last_authoritative_tick, 5);
     }
 }

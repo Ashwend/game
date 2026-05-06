@@ -61,10 +61,6 @@ impl GameServer {
         }
     }
 
-    pub fn world_seed(&self) -> u64 {
-        self.save.seed
-    }
-
     pub fn world_save(&self) -> WorldSave {
         let mut save = self.save.clone();
         save.state.last_authoritative_tick = self.tick;
@@ -112,8 +108,8 @@ impl GameServer {
                     target: DeliveryTarget::Client(client_id),
                     message: ServerMessage::Welcome {
                         client_id,
-                        world_seed: self.save.seed,
-                        world: self.save.world.clone(),
+                        map: self.save.map.clone(),
+                        world: self.save.map.world_data(),
                         is_admin,
                         snapshot,
                     },
