@@ -8,8 +8,8 @@ use anyhow::{Result, bail};
 use crate::{
     controller::{MAX_LOOK_PITCH, PlayerController},
     protocol::{
-        ChatMessage, ClientId, ClientMessage, MAX_STAMINA, PROTOCOL_VERSION, PlayerEvent,
-        PlayerMovement, PlayerState, ServerMessage, SteamId, Vec3Net, WorldSnapshot, sanitize_chat,
+        ChatMessage, ClientId, ClientMessage, PROTOCOL_VERSION, PlayerEvent, PlayerMovement,
+        PlayerState, ServerMessage, SteamId, Vec3Net, WorldSnapshot, sanitize_chat,
     },
     save::WorldSave,
     steam::{AuthMode, verify_auth_ticket},
@@ -195,7 +195,6 @@ impl GameServer {
                 yaw: client.controller.yaw,
                 pitch: client.controller.pitch,
                 health: client.controller.health,
-                stamina: client.controller.stamina,
                 grounded: client.controller.grounded,
                 last_processed_input: client.controller.last_processed_input,
                 is_admin: client.is_admin,
@@ -232,7 +231,6 @@ fn apply_client_movement(controller: &mut PlayerController, movement: PlayerMove
     controller.velocity = movement.velocity;
     controller.yaw = normalize_yaw(movement.yaw);
     controller.pitch = movement.pitch.clamp(-MAX_LOOK_PITCH, MAX_LOOK_PITCH);
-    controller.stamina = movement.stamina.clamp(0.0, MAX_STAMINA);
     controller.grounded = movement.grounded;
     controller.last_processed_input = movement.sequence;
 }
@@ -242,7 +240,6 @@ fn movement_is_finite(movement: PlayerMovement) -> bool {
         && vec3_is_finite(movement.velocity)
         && movement.yaw.is_finite()
         && movement.pitch.is_finite()
-        && movement.stamina.is_finite()
 }
 
 fn vec3_is_finite(value: Vec3Net) -> bool {

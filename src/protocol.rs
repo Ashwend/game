@@ -6,12 +6,11 @@ pub type ClientId = u64;
 pub type PacketSequence = u64;
 pub type SteamId = u64;
 
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_INPUT_DELTA_SECONDS: f32 = 1.0 / SERVER_TICK_RATE_HZ;
 pub const MAX_CHAT_LEN: usize = 240;
 pub const MAX_HEALTH: f32 = 100.0;
-pub const MAX_STAMINA: f32 = 100.0;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
 pub struct Vec3Net {
@@ -104,7 +103,6 @@ pub struct PlayerMovement {
     pub velocity: Vec3Net,
     pub yaw: f32,
     pub pitch: f32,
-    pub stamina: f32,
     pub grounded: bool,
 }
 
@@ -265,7 +263,6 @@ pub struct PlayerState {
     pub yaw: f32,
     pub pitch: f32,
     pub health: f32,
-    pub stamina: f32,
     pub grounded: bool,
     pub last_processed_input: u64,
     pub is_admin: bool,

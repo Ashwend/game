@@ -1,7 +1,7 @@
 mod collision;
 
 use crate::{
-    protocol::{MAX_HEALTH, MAX_STAMINA, PlayerInput, PlayerState, Vec3Net},
+    protocol::{MAX_HEALTH, PlayerInput, PlayerState, Vec3Net},
     world::WorldData,
 };
 
@@ -17,10 +17,6 @@ const MAX_FALL_SPEED: f32 = 32.0;
 const JUMP_SPEED: f32 = 6.4;
 const PLAYER_RADIUS: f32 = 0.35;
 const PLAYER_HEIGHT: f32 = 1.8;
-pub const JUMP_STAMINA_COST: f32 = 22.0;
-const SPRINT_STAMINA_PER_SECOND: f32 = 18.0;
-const STAMINA_REGEN_PER_SECOND: f32 = 30.0;
-const STAMINA_REGEN_DELAY: f32 = 0.45;
 const JUMP_BUFFER_SECONDS: f32 = 0.18;
 const COYOTE_TIME_SECONDS: f32 = 0.1;
 const GROUND_EPSILON: f32 = 0.04;
@@ -34,11 +30,9 @@ pub struct PlayerController {
     pub yaw: f32,
     pub pitch: f32,
     pub health: f32,
-    pub stamina: f32,
     pub grounded: bool,
     pub last_processed_input: u64,
     last_input: PlayerInput,
-    stamina_regen_delay: f32,
     jump_buffer_timer: f32,
     coyote_timer: f32,
 }
@@ -51,7 +45,6 @@ impl PlayerController {
             yaw: 0.0,
             pitch: 0.0,
             health: MAX_HEALTH,
-            stamina: MAX_STAMINA,
             grounded: true,
             last_processed_input: 0,
             last_input: PlayerInput {
@@ -63,7 +56,6 @@ impl PlayerController {
                 yaw: 0.0,
                 pitch: 0.0,
             },
-            stamina_regen_delay: 0.0,
             jump_buffer_timer: 0.0,
             coyote_timer: COYOTE_TIME_SECONDS,
         }
@@ -76,7 +68,6 @@ impl PlayerController {
         controller.yaw = state.yaw;
         controller.pitch = state.pitch;
         controller.health = state.health;
-        controller.stamina = state.stamina;
         controller.grounded = state.grounded;
         controller.last_processed_input = state.last_processed_input;
         controller.last_input.sequence = state.last_processed_input;
@@ -142,14 +133,8 @@ impl PlayerController {
         }
 
         let movement_direction = first_person_move_direction(self.last_input.direction, self.yaw);
-        let mut spent_stamina = false;
 
-        if self.jump_buffer_timer > 0.0
-            && self.coyote_timer > 0.0
-            && self.stamina >= JUMP_STAMINA_COST
-        {
-            self.consume_stamina(JUMP_STAMINA_COST);
-            spent_stamina = true;
+        if self.jump_buffer_timer > 0.0 && self.coyote_timer > 0.0 {
             self.velocity.y = JUMP_SPEED;
             self.grounded = false;
             self.coyote_timer = 0.0;
@@ -158,27 +143,12 @@ impl PlayerController {
             self.jump_buffer_timer = (self.jump_buffer_timer - delta_seconds).max(0.0);
         }
 
-        let wants_sprint = self.last_input.sprint
-            && movement_direction.length_squared() > 0.0
-            && self.stamina > 0.0;
+        let wants_sprint = self.last_input.sprint && movement_direction.length_squared() > 0.0;
         let speed = if wants_sprint {
             SPRINT_SPEED
         } else {
             WALK_SPEED
         };
-
-        if wants_sprint {
-            self.consume_stamina(SPRINT_STAMINA_PER_SECOND * delta_seconds);
-            spent_stamina = true;
-        }
-
-        if !spent_stamina {
-            self.stamina_regen_delay = (self.stamina_regen_delay - delta_seconds).max(0.0);
-            if self.stamina_regen_delay <= 0.0 {
-                self.stamina =
-                    (self.stamina + STAMINA_REGEN_PER_SECOND * delta_seconds).min(MAX_STAMINA);
-            }
-        }
 
         let target_velocity = movement_direction.scale(speed);
         let acceleration = if self.grounded {
@@ -239,12 +209,6 @@ impl PlayerController {
         let distance_sq = server_delta.length_squared();
 
         self.health = server.health;
-        self.stamina = if distance_sq > SNAP_DISTANCE_SQ {
-            server.stamina
-        } else {
-            self.stamina * 0.85 + server.stamina * 0.15
-        }
-        .clamp(0.0, MAX_STAMINA);
 
         if distance_sq > SNAP_DISTANCE_SQ {
             self.position = server.position;
@@ -255,11 +219,6 @@ impl PlayerController {
         } else {
             Reconciliation::Accepted
         }
-    }
-
-    fn consume_stamina(&mut self, amount: f32) {
-        self.stamina = (self.stamina - amount).max(0.0);
-        self.stamina_regen_delay = STAMINA_REGEN_DELAY;
     }
 }
 
@@ -345,25 +304,6 @@ mod tests {
     }
 
     #[test]
-    fn sprint_does_not_spend_stamina_before_jump_request() {
-        let mut controller = PlayerController::spawn();
-        controller.stamina = JUMP_STAMINA_COST + 0.1;
-        controller.apply_input(PlayerInput {
-            sequence: 1,
-            delta_seconds: 0.05,
-            direction: Vec3Net::new(0.0, 0.0, 1.0),
-            sprint: true,
-            jump: true,
-            yaw: 0.0,
-            pitch: 0.0,
-        });
-        controller.simulate(0.05, &test_world());
-
-        assert!(controller.position.y > 0.0);
-        assert!(controller.stamina <= 0.1);
-    }
-
-    #[test]
     fn reconciliation_keeps_local_prediction_until_snap_threshold() {
         let mut controller = PlayerController::spawn();
         controller.position = Vec3Net::new(0.6, 0.0, 0.0);
@@ -378,7 +318,6 @@ mod tests {
             yaw: 0.0,
             pitch: 0.0,
             health: MAX_HEALTH,
-            stamina: MAX_STAMINA,
             grounded: true,
             last_processed_input: 1,
             is_admin: false,

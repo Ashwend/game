@@ -39,9 +39,6 @@ pub(super) fn worlds_ui(
                     if theme::compact_button(ui, "Back", ButtonKind::Secondary, 78.0).clicked() {
                         menu.screen = Screen::MainMenu;
                     }
-                    if theme::compact_button(ui, "Refresh", ButtonKind::Secondary, 88.0).clicked() {
-                        refresh_worlds(menu, store);
-                    }
                 });
             });
 

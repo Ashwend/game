@@ -1,7 +1,7 @@
 use bevy::{
     input::mouse::AccumulatedMouseMotion,
     prelude::*,
-    window::{CursorGrabMode, CursorOptions},
+    window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window, WindowFocused},
 };
 
 use crate::{
@@ -47,6 +47,25 @@ pub(crate) fn update_cursor_system(
     } else {
         CursorGrabMode::None
     };
+}
+
+pub(crate) fn center_cursor_on_focus_system(
+    mut focus_events: MessageReader<WindowFocused>,
+    mut primary_window: Query<(Entity, &mut Window), With<PrimaryWindow>>,
+) {
+    let Ok((window_entity, mut window)) = primary_window.single_mut() else {
+        return;
+    };
+
+    let should_center = focus_events
+        .read()
+        .any(|event| event.window == window_entity && event.focused);
+    if !should_center {
+        return;
+    }
+
+    let center = Vec2::new(window.width() * 0.5, window.height() * 0.5);
+    window.set_cursor_position(Some(center));
 }
 
 pub(crate) fn mouse_look_system(
@@ -119,7 +138,6 @@ pub(crate) fn client_input_system(
             velocity: predicted.velocity,
             yaw: predicted.yaw,
             pitch: predicted.pitch,
-            stamina: predicted.stamina,
             grounded: predicted.grounded,
         });
     }

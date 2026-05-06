@@ -1,8 +1,6 @@
 use super::*;
 use crate::{
-    protocol::{
-        ChatMessage, ClientMessage, MAX_STAMINA, PROTOCOL_VERSION, PlayerMovement, Vec3Net,
-    },
+    protocol::{ChatMessage, ClientMessage, PROTOCOL_VERSION, PlayerMovement, Vec3Net},
     save::WorldSave,
     steam::offline_auth_token,
 };
@@ -24,7 +22,6 @@ fn movement(sequence: u64, position: Vec3Net) -> PlayerMovement {
         velocity: Vec3Net::ZERO,
         yaw: 0.0,
         pitch: 0.0,
-        stamina: MAX_STAMINA,
         grounded: true,
     }
 }
@@ -191,12 +188,10 @@ fn airborne_movement_state_is_networked() {
 
     let mut jump_movement = movement(1, Vec3Net::new(0.0, 0.2, 0.0));
     jump_movement.velocity = Vec3Net::new(0.0, 4.0, 0.0);
-    jump_movement.stamina = MAX_STAMINA - 22.0;
     jump_movement.grounded = false;
     server.receive(client_id, ClientMessage::Movement(jump_movement));
 
     let player = &server.snapshot().players[0];
     assert!(player.position.y > 0.0);
-    assert!(player.stamina < MAX_STAMINA);
     assert!(!player.grounded);
 }

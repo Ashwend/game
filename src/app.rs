@@ -5,10 +5,7 @@ mod ui;
 
 use anyhow::Result;
 use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, prelude::*};
-use bevy_egui::{
-    EguiPlugin, EguiPrimaryContextPass,
-    input::{egui_wants_any_keyboard_input, egui_wants_any_pointer_input},
-};
+use bevy_egui::{EguiPlugin, EguiPrimaryContextPass, input::egui_wants_any_pointer_input};
 
 use crate::{
     save::WorldStore,
@@ -19,9 +16,9 @@ use self::{
     scene::{apply_world_scene_system, setup_scene},
     state::{ClientRuntime, LookState, MenuState, SaveStore, SteamUser},
     systems::{
-        apply_snapshot_system, camera_follow_system, chat_shortcut_system, client_input_system,
-        interpolate_players_system, mouse_look_system, network_tick_system, toggle_pause_system,
-        update_cursor_system,
+        apply_snapshot_system, camera_follow_system, center_cursor_on_focus_system,
+        chat_shortcut_system, client_input_system, interpolate_players_system, mouse_look_system,
+        network_tick_system, toggle_pause_system, update_cursor_system,
     },
     ui::ui_system,
 };
@@ -60,25 +57,19 @@ pub fn run_app() -> Result<()> {
             Update,
             chat_shortcut_system
                 .before(toggle_pause_system)
+                .before(center_cursor_on_focus_system)
                 .before(update_cursor_system)
                 .before(mouse_look_system)
                 .before(client_input_system),
         )
-        .add_systems(
-            Update,
-            toggle_pause_system.run_if(not(egui_wants_any_keyboard_input)),
-        )
+        .add_systems(Update, toggle_pause_system)
+        .add_systems(Update, center_cursor_on_focus_system)
         .add_systems(Update, update_cursor_system)
         .add_systems(
             Update,
             mouse_look_system.run_if(not(egui_wants_any_pointer_input)),
         )
-        .add_systems(
-            Update,
-            client_input_system
-                .run_if(not(egui_wants_any_keyboard_input))
-                .after(mouse_look_system),
-        )
+        .add_systems(Update, client_input_system.after(mouse_look_system))
         .add_systems(Update, network_tick_system.after(client_input_system))
         .add_systems(Update, apply_world_scene_system)
         .add_systems(Update, apply_snapshot_system)

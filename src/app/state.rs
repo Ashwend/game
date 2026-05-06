@@ -245,7 +245,6 @@ impl ClientRuntime {
             return Some(LocalPlayerView {
                 position: predicted.position,
                 health: predicted.health,
-                stamina: predicted.stamina,
             });
         }
 
@@ -253,7 +252,6 @@ impl ClientRuntime {
         Some(LocalPlayerView {
             position: player.position,
             health: player.health,
-            stamina: player.stamina,
         })
     }
 
@@ -296,7 +294,6 @@ impl ClientRuntime {
 pub(crate) struct LocalPlayerView {
     pub(crate) position: Vec3Net,
     pub(crate) health: f32,
-    pub(crate) stamina: f32,
 }
 
 #[derive(Resource, Debug, Clone, Copy)]
@@ -326,7 +323,7 @@ fn format_player_event(event: PlayerEvent) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{MAX_HEALTH, MAX_STAMINA};
+    use crate::protocol::MAX_HEALTH;
 
     fn player_state(client_id: ClientId, position: Vec3Net) -> PlayerState {
         PlayerState {
@@ -338,7 +335,6 @@ mod tests {
             yaw: 0.0,
             pitch: 0.0,
             health: MAX_HEALTH,
-            stamina: MAX_STAMINA,
             grounded: true,
             last_processed_input: 0,
             is_admin: false,
