@@ -109,3 +109,55 @@ pub(in crate::app::ui) fn anchored_panel(
             });
         });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input() -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn style_and_frames_apply_game_palette() {
+        let ctx = egui::Context::default();
+        apply_game_style(&ctx);
+
+        let style = ctx.style();
+        assert_eq!(style.visuals.override_text_color, Some(text()));
+        assert_eq!(style.visuals.window_fill, panel_fill());
+        assert_eq!(style.visuals.widgets.active.bg_fill, accent_dark());
+
+        let panel = panel_frame();
+        assert_eq!(panel.fill, panel_fill());
+        let inset = inset_frame();
+        assert_ne!(inset.fill, Color32::TRANSPARENT);
+    }
+
+    #[test]
+    fn scrim_and_panel_render_in_headless_context() {
+        let ctx = egui::Context::default();
+
+        let output = ctx.run(input(), |ctx| {
+            screen_scrim(ctx, "test_scrim", 120);
+            anchored_panel(
+                ctx,
+                "test_panel",
+                500.0,
+                Align2::CENTER_CENTER,
+                [0.0, 0.0],
+                |ui| {
+                    ui.label("content");
+                },
+            );
+        });
+
+        assert!(!output.shapes.is_empty());
+    }
+}

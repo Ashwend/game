@@ -1,0 +1,44 @@
+name: Coverage Report
+
+on:
+  workflow_run:
+    workflows:
+      - Coverage Gate
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  comment:
+    name: Comment on PR
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion != 'cancelled'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Download coverage comment
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-pr-comment
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: coverage-comment
+
+      - name: Post coverage comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python .github/scripts/comment-pr-coverage.py \
+            --comment coverage-comment/comment.txt \
+            --pr-number coverage-comment/pr-number.txt

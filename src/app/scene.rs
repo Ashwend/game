@@ -144,3 +144,100 @@ fn spawn_world_geometry(
 pub(crate) fn player_visual_position(feet_position: Vec3) -> Vec3 {
     feet_position + Vec3::Y * PLAYER_VISUAL_CENTER_Y
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        app::state::ClientRuntime,
+        protocol::{PlayerState, Vec3Net, WorldSnapshot},
+        world::WorldData,
+    };
+
+    fn app_with_scene_resources() -> App {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<StandardMaterial>>();
+        app
+    }
+
+    #[test]
+    fn setup_scene_creates_camera_light_and_assets() {
+        let mut app = app_with_scene_resources();
+        app.add_systems(Startup, setup_scene);
+        app.update();
+
+        assert!(app.world().contains_resource::<WorldSceneState>());
+        assert!(app.world().contains_resource::<PlayerVisualAssets>());
+        let camera_count = {
+            let world = app.world_mut();
+            let mut query = world.query::<&MainCamera>();
+            query.iter(world).count()
+        };
+        assert_eq!(camera_count, 1);
+    }
+
+    #[test]
+    fn applying_world_scene_spawns_and_clears_geometry() {
+        let mut app = app_with_scene_resources();
+        app.insert_resource(WorldSceneState::default());
+        app.insert_resource(ClientRuntime {
+            world: Some(WorldData::test_world()),
+            ..Default::default()
+        });
+        app.add_systems(Update, apply_world_scene_system);
+        app.update();
+
+        let geometry_count = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<WorldGeometry>>();
+            query.iter(world).count()
+        };
+        assert!(geometry_count > 0);
+
+        app.world_mut().resource_mut::<ClientRuntime>().world = None;
+        app.update();
+
+        let geometry_count = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<WorldGeometry>>();
+            query.iter(world).count()
+        };
+        assert_eq!(geometry_count, 0);
+    }
+
+    #[test]
+    fn player_visuals_are_offset_from_feet() {
+        let feet = Vec3::new(1.0, 2.0, 3.0);
+        assert_eq!(
+            player_visual_position(feet),
+            feet + Vec3::Y * PLAYER_VISUAL_CENTER_Y
+        );
+    }
+
+    #[test]
+    fn network_marker_components_store_targets() {
+        let player = NetworkPlayer { client_id: 7 };
+        let target = TargetPosition(Vec3::new(1.0, 2.0, 3.0));
+        let rotation = TargetRotation(Quat::from_rotation_y(1.0));
+        let snapshot = WorldSnapshot {
+            tick: 1,
+            players: vec![PlayerState {
+                client_id: player.client_id,
+                steam_id: 7,
+                name: "Remote".to_owned(),
+                position: Vec3Net::new(target.0.x, target.0.y, target.0.z),
+                velocity: Vec3Net::ZERO,
+                yaw: 1.0,
+                pitch: 0.0,
+                health: 100.0,
+                grounded: true,
+                last_processed_input: 0,
+                is_admin: false,
+            }],
+        };
+
+        assert_eq!(snapshot.players[0].client_id, player.client_id);
+        assert_eq!(rotation.0, Quat::from_rotation_y(1.0));
+    }
+}

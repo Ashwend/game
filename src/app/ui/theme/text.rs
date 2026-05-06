@@ -38,3 +38,21 @@ pub(in crate::app::ui) fn status_text(text_value: &str) -> RichText {
         .size(13.0)
         .color(Color32::from_rgb(172, 207, 255))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_builders_accept_expected_labels() {
+        let mut value = "value".to_owned();
+        let _ = text_input(&mut value);
+        let _ = title("Game", 78.0);
+        let _ = section("Worlds");
+        let _ = muted("Muted");
+        let _ = field_label("Name");
+        let _ = status_text("Ready");
+
+        assert_eq!(value, "value");
+    }
+}

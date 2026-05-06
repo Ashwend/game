@@ -1,0 +1,116 @@
+name: Coverage Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: coverage
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ pkg-config libx11-dev libasound2-dev libudev-dev libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install --profile minimal
+          rustup component add llvm-tools-preview
+
+      - name: Cache Cargo data
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-llvm-cov
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: coverage-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            coverage-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Install cargo-llvm-cov
+        run: |
+          if ! command -v cargo-llvm-cov >/dev/null 2>&1; then
+            cargo install cargo-llvm-cov --locked
+          fi
+
+      - name: Run coverage
+        id: run_coverage
+        continue-on-error: true
+        run: |
+          mkdir -p coverage
+          cargo llvm-cov --all-targets --locked --json --summary-only --output-path coverage/summary.json
+          cargo llvm-cov report --lcov --output-path coverage/lcov.info
+          cargo llvm-cov report --html --output-dir coverage/html
+          cargo llvm-cov report --text --output-path coverage/summary.txt
+
+      - name: Build coverage summary
+        id: coverage
+        if: always()
+        run: |
+          failed_flag=()
+          if [ "${{ steps.run_coverage.outcome }}" != "success" ]; then
+            failed_flag+=(--coverage-failed)
+          fi
+          python .github/scripts/coverage-report.py \
+            --summary-json coverage/summary.json \
+            --summary-text coverage/summary.txt \
+            --comment coverage/comment.txt \
+            --threshold 50 \
+            "${failed_flag[@]}"
+
+      - name: Write PR metadata
+        if: always()
+        run: echo "${{ github.event.pull_request.number }}" > coverage/pr-number.txt
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage/summary.json
+            coverage/summary.txt
+            coverage/lcov.info
+            coverage/html
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload PR coverage comment
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-pr-comment
+          path: |
+            coverage/comment.txt
+            coverage/pr-number.txt
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce coverage threshold
+        if: always() && steps.coverage.outputs.meets_threshold != 'true'
+        run: |
+          echo "Line coverage is below the required 50% threshold or the coverage run failed." >&2
+          exit 1

@@ -107,3 +107,44 @@ pub(super) fn confirmation_modal(
         finished_closing: false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn raw_input() -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 480.0),
+            )),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn closed_modal_finishes_without_rendering_panel() {
+        let ctx = egui::Context::default();
+        let output =
+            confirmation_modal(&ctx, "closed", "Title", "Body", "Confirm", "Cancel", false);
+
+        assert!(output.finished_closing);
+        assert!(output.choice.is_none());
+    }
+
+    #[test]
+    fn open_modal_renders_and_keeps_waiting_for_choice() {
+        let ctx = egui::Context::default();
+        let mut output = None;
+
+        let _ = ctx.run(raw_input(), |ctx| {
+            output = Some(confirmation_modal(
+                ctx, "open", "Title", "Body", "Confirm", "Cancel", true,
+            ));
+        });
+
+        let output = output.expect("modal output should be set");
+        assert!(!output.finished_closing);
+        assert!(output.choice.is_none());
+    }
+}

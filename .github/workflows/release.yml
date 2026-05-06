@@ -1,0 +1,238 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: SemVer component to bump
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      draft:
+        description: Create the GitHub release as a draft
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare release
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.prepare.outputs.version }}
+      tag: ${{ steps.prepare.outputs.tag }}
+      base_sha: ${{ steps.prepare.outputs.base_sha }}
+      release_notes: ${{ steps.prepare.outputs.release_notes }}
+    steps:
+      - name: Require main branch
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "main" ]; then
+            echo "Run releases from main. Current ref: ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install --profile minimal
+
+      - name: Prepare release metadata
+        id: prepare
+        run: python .github/scripts/prepare-release.py --bump "${{ inputs.bump }}" --notes release-notes.txt
+
+      - name: Refresh lockfile
+        run: cargo generate-lockfile
+
+      - name: Create release patch
+        run: |
+          git diff --binary Cargo.toml Cargo.lock > release.patch
+          test -s release.patch
+
+      - name: Upload release patch
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-source-patch
+          path: release.patch
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux Intel
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            asset: game-x86_64-unknown-linux-gnu.tar.gz
+          - label: Linux ARM
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: game-aarch64-unknown-linux-gnu.tar.gz
+          - label: macOS ARM
+            runner: macos-15
+            target: aarch64-apple-darwin
+            asset: game-aarch64-apple-darwin.tar.gz
+          - label: Windows Intel
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            asset: game-x86_64-pc-windows-msvc.zip
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+
+      - name: Download release patch
+        uses: actions/download-artifact@v4
+        with:
+          name: release-source-patch
+          path: .
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Apply release patch
+        run: git apply release.patch
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ pkg-config libx11-dev libasound2-dev libudev-dev libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install --profile minimal --target "${{ matrix.target }}"
+
+      - name: Cache Cargo data
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            release-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-
+
+      - name: Build release binary
+        run: cargo build --locked --release --target "${{ matrix.target }}"
+
+      - name: Package release binary
+        run: python .github/scripts/package-release.py --target "${{ matrix.target }}" --asset "${{ matrix.asset }}"
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub release
+    needs:
+      - prepare
+      - build
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+          fetch-depth: 0
+
+      - name: Download release patch
+        uses: actions/download-artifact@v4
+        with:
+          name: release-source-patch
+          path: .
+
+      - name: Apply release patch
+        run: git apply release.patch
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: .
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: game-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Commit and tag release
+        run: |
+          remote_sha="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          if [ "${remote_sha}" != "${BASE_SHA}" ]; then
+            echo "main moved while this release was building; rerun the workflow from the latest main" >&2
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "tag ${TAG} already exists on origin" >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "release: ${TAG}"
+          git tag -a "${TAG}" -m "${TAG}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "${TAG}"
+
+      - name: Create GitHub release
+        run: |
+          draft_flag=()
+          if [ "${{ inputs.draft }}" = "true" ]; then
+            draft_flag+=(--draft)
+          fi
+
+          gh release create "${TAG}" artifacts/* \
+            --verify-tag \
+            --title "game ${TAG}" \
+            --notes-file release-notes.txt \
+            "${draft_flag[@]}"

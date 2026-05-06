@@ -116,3 +116,70 @@ fn health_bar(ui: &mut egui::Ui, health: f32) {
         egui::Color32::from_rgb(240, 247, 232),
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::{PlayerState, Vec3Net, WorldSnapshot};
+
+    fn raw_input() -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            ..Default::default()
+        }
+    }
+
+    fn player(health: f32) -> PlayerState {
+        PlayerState {
+            client_id: 1,
+            steam_id: 1,
+            name: "Player".to_owned(),
+            position: Vec3Net::new(1.0, 2.0, 3.0),
+            velocity: Vec3Net::ZERO,
+            yaw: 0.0,
+            pitch: 0.0,
+            health,
+            grounded: true,
+            last_processed_input: 0,
+            is_admin: false,
+        }
+    }
+
+    #[test]
+    fn hud_renders_with_and_without_local_player() {
+        let ctx = egui::Context::default();
+        let diagnostics = DiagnosticsStore::default();
+        let mut runtime = ClientRuntime::default();
+
+        let _ = ctx.run(raw_input(), |ctx| {
+            hud_ui(ctx, &runtime, &diagnostics);
+        });
+
+        runtime.client_id = Some(1);
+        runtime.snapshot = Some(WorldSnapshot {
+            tick: 1,
+            players: vec![player(75.0)],
+        });
+
+        let _ = ctx.run(raw_input(), |ctx| {
+            hud_ui(ctx, &runtime, &diagnostics);
+        });
+
+        assert_eq!(runtime.local_view().expect("local player").health, 75.0);
+    }
+
+    #[test]
+    fn health_bar_clamps_extreme_values() {
+        let ctx = egui::Context::default();
+
+        let _ = ctx.run(raw_input(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                health_bar(ui, -10.0);
+                health_bar(ui, MAX_HEALTH * 2.0);
+            });
+        });
+    }
+}

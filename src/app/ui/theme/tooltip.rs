@@ -44,3 +44,32 @@ fn draw_wow_tooltip(ui: &mut egui::Ui, title: &str, body: &str) {
             ui.label(RichText::new(body).size(13.0).color(text()));
         });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tooltip_body_renders_in_headless_context() {
+        let ctx = egui::Context::default();
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 300.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    draw_wow_tooltip(ui, "Title", "Body");
+                    let response =
+                        ui.allocate_response(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                    let returned = wow_tooltip(response, "Title", "Body");
+                    assert!(!returned.clicked());
+                });
+            },
+        );
+    }
+}

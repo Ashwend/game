@@ -243,3 +243,149 @@ fn cancel_chat(menu: &mut MenuState, response: &egui::Response) {
     menu.chat_input.clear();
     response.surrender_focus();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn raw_input(events: Vec<egui::Event>) -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            events,
+            ..Default::default()
+        }
+    }
+
+    fn key_press(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn shortcut_opens_chat_when_text_modifiers_are_clear() {
+        let ctx = egui::Context::default();
+        let mut menu = MenuState::default();
+
+        let _ = ctx.run(
+            raw_input(vec![key_press(egui::Key::T, egui::Modifiers::default())]),
+            |ctx| {
+                assert!(handle_chat_shortcuts(ctx, &mut menu));
+            },
+        );
+
+        assert!(menu.chat_open);
+        assert!(menu.chat_focus_pending);
+        assert!(menu.chat_input.is_empty());
+    }
+
+    #[test]
+    fn shortcut_ignores_command_modified_text_keys() {
+        let ctx = egui::Context::default();
+        let mut menu = MenuState::default();
+        let modifiers = egui::Modifiers {
+            command: true,
+            ..Default::default()
+        };
+
+        let mut input = raw_input(vec![key_press(egui::Key::T, modifiers)]);
+        input.modifiers = modifiers;
+        let _ = ctx.run(input, |ctx| {
+            assert!(!handle_chat_shortcuts(ctx, &mut menu));
+        });
+
+        assert!(!menu.chat_open);
+    }
+
+    #[test]
+    fn chat_ui_renders_inactive_and_active_states() {
+        let ctx = egui::Context::default();
+        let mut menu = MenuState::default();
+        let mut runtime = ClientRuntime {
+            messages: vec![
+                ClientLogEntry {
+                    kind: ClientLogKind::System,
+                    text: "connected".to_owned(),
+                },
+                ClientLogEntry {
+                    kind: ClientLogKind::Error,
+                    text: "failed".to_owned(),
+                },
+                ClientLogEntry {
+                    kind: ClientLogKind::Chat {
+                        from: "Dannie".to_owned(),
+                    },
+                    text: "hello".to_owned(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            chat_ui(ctx, &mut menu, &mut runtime);
+        });
+
+        menu.chat_open = true;
+        menu.chat_focus_pending = true;
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            chat_ui(ctx, &mut menu, &mut runtime);
+        });
+
+        assert!(!menu.chat_focus_pending);
+    }
+
+    #[test]
+    fn submit_and_cancel_chat_update_menu_state() {
+        let ctx = egui::Context::default();
+        let mut menu = MenuState {
+            chat_open: true,
+            chat_focus_pending: true,
+            chat_input: "hello".to_owned(),
+            ..Default::default()
+        };
+        let mut runtime = ClientRuntime::default();
+
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let response = ui.allocate_response(egui::vec2(20.0, 20.0), egui::Sense::click());
+                submit_chat(&mut menu, &mut runtime, &response);
+            });
+        });
+
+        assert!(!menu.chat_open);
+        assert_eq!(runtime.messages.len(), 1);
+        assert!(runtime.messages[0].text.contains("not connected"));
+
+        menu.chat_open = true;
+        menu.chat_focus_pending = true;
+        menu.chat_input = "draft".to_owned();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let response = ui.allocate_response(egui::vec2(20.0, 20.0), egui::Sense::click());
+                cancel_chat(&mut menu, &response);
+            });
+        });
+
+        assert!(!menu.chat_open);
+        assert!(!menu.chat_focus_pending);
+        assert!(menu.chat_input.is_empty());
+    }
+
+    #[test]
+    fn input_rect_keeps_text_inside_background() {
+        let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(200.0, 30.0));
+        let text_rect = input_text_rect(rect);
+
+        assert_eq!(text_rect.left(), rect.left() + 10.0);
+        assert_eq!(text_rect.right(), rect.right() - 10.0);
+        assert_eq!(chat_frame(true).fill.a(), 224);
+        assert_eq!(chat_frame(false).fill.a(), 150);
+    }
+}

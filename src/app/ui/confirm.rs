@@ -47,3 +47,66 @@ fn apply_confirmation_action(action: ConfirmationAction, menu: &mut MenuState, s
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    use crate::save::WorldStore;
+    use uuid::Uuid;
+
+    fn temp_store() -> SaveStore {
+        SaveStore(WorldStore::new(
+            std::env::temp_dir().join(format!("game-confirm-test-{}", Uuid::new_v4())),
+        ))
+    }
+
+    #[test]
+    fn delete_confirmation_action_refreshes_world_list() {
+        let store = temp_store();
+        let save = store
+            .0
+            .create_world("Delete Me", None)
+            .expect("world should create");
+        let mut menu = MenuState::default();
+
+        refresh_worlds(&mut menu, &store);
+        assert_eq!(menu.worlds.len(), 1);
+
+        apply_confirmation_action(
+            ConfirmationAction::DeleteWorld { world_id: save.id },
+            &mut menu,
+            &store,
+        );
+
+        assert!(menu.worlds.is_empty());
+        assert!(menu.status.is_none());
+
+        let _ = fs::remove_dir_all(store.0.root());
+    }
+
+    #[test]
+    fn delete_confirmation_reports_store_errors() {
+        let bad_root = std::env::temp_dir().join(format!("game-confirm-file-{}", Uuid::new_v4()));
+        fs::write(&bad_root, "not a directory").expect("file should write");
+        let store = SaveStore(WorldStore::new(&bad_root));
+        let mut menu = MenuState::default();
+
+        apply_confirmation_action(
+            ConfirmationAction::DeleteWorld {
+                world_id: Uuid::new_v4(),
+            },
+            &mut menu,
+            &store,
+        );
+
+        assert!(
+            menu.status
+                .expect("status should exist")
+                .contains("world list failed")
+        );
+
+        let _ = fs::remove_file(bad_root);
+    }
+}

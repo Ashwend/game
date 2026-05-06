@@ -405,3 +405,151 @@ fn start_singleplayer(
         Err(error) => menu.status = Some(format!("start failed: {error}")),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    use crate::{save::WorldStore, steam::AuthenticatedUser, world::MapType};
+
+    fn raw_input() -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1024.0, 768.0),
+            )),
+            ..Default::default()
+        }
+    }
+
+    fn temp_store() -> SaveStore {
+        SaveStore(WorldStore::new(
+            std::env::temp_dir().join(format!("game-worlds-ui-test-{}", Uuid::new_v4())),
+        ))
+    }
+
+    fn steam_user() -> SteamUser {
+        SteamUser(AuthenticatedUser {
+            steam_id: 42,
+            display_name: "Dannie".to_owned(),
+            token: "offline:42".to_owned(),
+        })
+    }
+
+    #[test]
+    fn layout_helpers_keep_action_columns_fixed() {
+        let columns = WorldColumns::for_width(640.0);
+        assert_eq!(
+            columns.actions,
+            START_BUTTON_WIDTH + ACTION_BUTTON_GAP + DELETE_BUTTON_WIDTH
+        );
+        assert!(columns.name >= 150.0);
+        assert!(columns.map >= 100.0);
+
+        let content_rect =
+            egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(640.0, ROW_HEIGHT));
+        let cells = column_rects(content_rect, columns);
+        assert_eq!(cells.name.left(), content_rect.left());
+        assert_eq!(cells.map.left(), cells.name.right() + COLUMN_GAP);
+        assert_eq!(cells.actions.left(), cells.map.right() + COLUMN_GAP);
+
+        let zero_width = cell_rect(content_rect, 24.0, -10.0);
+        assert_eq!(zero_width.width(), 0.0);
+        assert_eq!(HeaderCell::new("World").text, "World");
+    }
+
+    #[test]
+    fn refresh_worlds_handles_success_and_list_errors() {
+        let store = temp_store();
+        let mut menu = MenuState::default();
+        let first = store
+            .0
+            .create_world("Beta", Some(42))
+            .expect("world should create");
+        let second = store
+            .0
+            .create_world("Alpha", Some(42))
+            .expect("world should create");
+
+        refresh_worlds(&mut menu, &store);
+
+        assert_eq!(menu.worlds.len(), 2);
+        assert!(menu.status.is_none());
+        assert!(menu.worlds.iter().any(|world| world.id == first.id));
+        assert!(menu.worlds.iter().any(|world| world.id == second.id));
+
+        let bad_root = std::env::temp_dir().join(format!("game-worlds-ui-file-{}", Uuid::new_v4()));
+        fs::write(&bad_root, "not a directory").expect("file should write");
+        let bad_store = SaveStore(WorldStore::new(&bad_root));
+        refresh_worlds(&mut menu, &bad_store);
+
+        assert!(menu.worlds.is_empty());
+        assert!(
+            menu.status
+                .expect("status should exist")
+                .contains("world list failed")
+        );
+
+        let _ = fs::remove_dir_all(store.0.root());
+        let _ = fs::remove_file(bad_root);
+    }
+
+    #[test]
+    fn start_singleplayer_updates_runtime_or_reports_load_error() {
+        let store = temp_store();
+        let user = steam_user();
+        let save = store
+            .0
+            .create_world("Local", Some(user.0.steam_id))
+            .expect("world should create");
+        let mut menu = MenuState::default();
+        let mut runtime = ClientRuntime::default();
+
+        start_singleplayer(&mut menu, &mut runtime, &store, &user, save.id);
+
+        assert_eq!(menu.screen, Screen::InGame);
+        assert!(!menu.pause_open);
+        assert!(!menu.chat_open);
+        assert_eq!(runtime.active_world_id, Some(save.id));
+        assert!(runtime.session.is_some());
+
+        start_singleplayer(&mut menu, &mut runtime, &store, &user, Uuid::new_v4());
+
+        assert!(
+            menu.status
+                .expect("status should exist")
+                .contains("start failed")
+        );
+
+        let _ = fs::remove_dir_all(store.0.root());
+    }
+
+    #[test]
+    fn worlds_ui_renders_empty_and_populated_tables() {
+        let ctx = egui::Context::default();
+        let store = temp_store();
+        let user = steam_user();
+        let mut menu = MenuState::default();
+        let mut runtime = ClientRuntime::default();
+
+        let _ = ctx.run(raw_input(), |ctx| {
+            worlds_ui(ctx, &mut menu, &mut runtime, &store, &user);
+        });
+
+        store
+            .0
+            .create_world("Rendered", Some(user.0.steam_id))
+            .expect("world should create");
+        refresh_worlds(&mut menu, &store);
+        assert_eq!(menu.worlds[0].map, MapType::Test);
+
+        let _ = ctx.run(raw_input(), |ctx| {
+            worlds_ui(ctx, &mut menu, &mut runtime, &store, &user);
+        });
+
+        assert!(table_height(&ctx) >= 180.0);
+
+        let _ = fs::remove_dir_all(store.0.root());
+    }
+}
