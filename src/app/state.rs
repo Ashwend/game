@@ -428,4 +428,24 @@ mod tests {
         assert_eq!(predicted.position, Vec3Net::new(5.0, 0.0, 0.0));
         assert_eq!(predicted.health, 42.0);
     }
+
+    #[test]
+    fn client_messages_keep_recent_entries_only() {
+        let mut runtime = ClientRuntime::default();
+
+        for index in 0..MAX_CLIENT_LOG_MESSAGES + 5 {
+            runtime.push_system_message(format!("message {index}"));
+        }
+
+        assert_eq!(runtime.messages.len(), MAX_CLIENT_LOG_MESSAGES);
+        assert_eq!(runtime.messages[0].text, "message 5");
+        assert_eq!(
+            runtime
+                .messages
+                .last()
+                .expect("last message should exist")
+                .text,
+            format!("message {}", MAX_CLIENT_LOG_MESSAGES + 4)
+        );
+    }
 }

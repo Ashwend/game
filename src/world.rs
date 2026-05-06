@@ -4,17 +4,14 @@ use crate::protocol::Vec3Net;
 
 pub const DEFAULT_FLOOR_SIZE: f32 = 80.0;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MapType {
+    #[default]
     Test,
-    Procedural { seed: u64 },
-}
-
-impl Default for MapType {
-    fn default() -> Self {
-        Self::Test
-    }
+    Procedural {
+        seed: u64,
+    },
 }
 
 impl MapType {
@@ -114,5 +111,12 @@ mod tests {
             assert!(block.size().y > 0.0);
             assert!(block.size().z > 0.0);
         }
+    }
+
+    #[test]
+    fn map_type_default_and_labels_are_stable() {
+        assert_eq!(MapType::default(), MapType::Test);
+        assert_eq!(MapType::Test.label(), "Test");
+        assert_eq!(MapType::Procedural { seed: 42 }.label(), "Procedural");
     }
 }
