@@ -1,3 +1,4 @@
+use bevy::prelude::Reflect;
 use serde::{Deserialize, Serialize};
 
 use crate::world::{MapType, WorldData};
@@ -12,7 +13,7 @@ pub const MAX_INPUT_DELTA_SECONDS: f32 = 1.0 / SERVER_TICK_RATE_HZ;
 pub const MAX_CHAT_LEN: usize = 240;
 pub const MAX_HEALTH: f32 = 100.0;
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Reflect)]
 pub struct Vec3Net {
     pub x: f32,
     pub y: f32,

@@ -24,12 +24,6 @@ pub(crate) struct NetworkPlayer {
 }
 
 #[derive(Component)]
-pub(crate) struct TargetPosition(pub(crate) Vec3);
-
-#[derive(Component)]
-pub(crate) struct TargetRotation(pub(crate) Quat);
-
-#[derive(Component)]
 pub(crate) struct MainCamera;
 
 #[derive(Component)]
@@ -216,17 +210,15 @@ mod tests {
     }
 
     #[test]
-    fn network_marker_components_store_targets() {
+    fn network_marker_components_store_client_ids() {
         let player = NetworkPlayer { client_id: 7 };
-        let target = TargetPosition(Vec3::new(1.0, 2.0, 3.0));
-        let rotation = TargetRotation(Quat::from_rotation_y(1.0));
         let snapshot = WorldSnapshot {
             tick: 1,
             players: vec![PlayerState {
                 client_id: player.client_id,
                 steam_id: 7,
                 name: "Remote".to_owned(),
-                position: Vec3Net::new(target.0.x, target.0.y, target.0.z),
+                position: Vec3Net::new(1.0, 2.0, 3.0),
                 velocity: Vec3Net::ZERO,
                 yaw: 1.0,
                 pitch: 0.0,
@@ -238,6 +230,6 @@ mod tests {
         };
 
         assert_eq!(snapshot.players[0].client_id, player.client_id);
-        assert_eq!(rotation.0, Quat::from_rotation_y(1.0));
+        assert_eq!(snapshot.players[0].position, Vec3Net::new(1.0, 2.0, 3.0));
     }
 }

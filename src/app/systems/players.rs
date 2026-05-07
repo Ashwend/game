@@ -3,9 +3,7 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 
 use super::super::{
-    scene::{
-        NetworkPlayer, PlayerVisualAssets, TargetPosition, TargetRotation, player_visual_position,
-    },
+    scene::{NetworkPlayer, PlayerVisualAssets, player_visual_position},
     state::ClientRuntime,
 };
 
@@ -39,15 +37,14 @@ pub(crate) fn apply_snapshot_system(
         if let Some(entity) = existing.get(&player.client_id) {
             commands
                 .entity(*entity)
-                .insert((TargetPosition(target), TargetRotation(rotation)));
+                .insert((Transform::from_translation(player_visual_position(target))
+                    .with_rotation(rotation),));
         } else {
             commands.spawn((
                 Name::new(format!("Player {}", player.client_id)),
                 NetworkPlayer {
                     client_id: player.client_id,
                 },
-                TargetPosition(target),
-                TargetRotation(rotation),
                 Mesh3d(assets.mesh.clone()),
                 MeshMaterial3d(assets.remote_material.clone()),
                 Transform::from_translation(player_visual_position(target)).with_rotation(rotation),
@@ -64,18 +61,5 @@ pub(crate) fn apply_snapshot_system(
         {
             commands.entity(entity).despawn();
         }
-    }
-}
-
-pub(crate) fn interpolate_players_system(
-    time: Res<Time>,
-    mut players: Query<(&mut Transform, &TargetPosition, &TargetRotation), With<NetworkPlayer>>,
-) {
-    let alpha = 1.0 - (-18.0 * time.delta_secs()).exp();
-    for (mut transform, target, target_rotation) in &mut players {
-        transform.translation = transform
-            .translation
-            .lerp(player_visual_position(target.0), alpha);
-        transform.rotation = transform.rotation.slerp(target_rotation.0, alpha);
     }
 }

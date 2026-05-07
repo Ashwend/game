@@ -1,444 +1,395 @@
-use std::{
-    collections::HashMap,
-    io::ErrorKind,
-    net::{SocketAddr, UdpSocket},
-    thread,
-    time::{Duration, Instant},
-};
+use std::{net::SocketAddr, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use bevy::{
+    diagnostic::DiagnosticsPlugin,
+    ecs::entity::{EntityMapper, MapEntities},
+    ecs::system::SystemParam,
+    math::Curve,
+    prelude::*,
+    state::app::StatesPlugin,
+};
+#[cfg(feature = "steam")]
+use lightyear::prelude::server::{ListenTarget, SteamServerIo};
+use lightyear::{
+    connection::client::Connected,
+    netcode::NetcodeServer,
+    prelude::{
+        input::native::{ActionState, InputPlugin},
+        server::{ClientOf, NetcodeConfig, ServerPlugins, ServerUdpIo, Start},
+        *,
+    },
+};
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    net::{
-        MAX_PACKET_SIZE,
-        codec::decode,
-        codec::encode,
-        reliability::{RELIABLE_RESEND_INTERVAL, ReceivedPacketWindow},
-    },
-    protocol::{
-        ClientId, ClientMessage, ClientPacket, PROTOCOL_VERSION, PacketDelivery, PacketSequence,
-        SERVER_TICK_RATE_HZ, ServerMessage, ServerPacket,
-    },
+    controller::PlayerController,
+    protocol::{MAX_HEALTH, PROTOCOL_VERSION, PlayerInput, SERVER_TICK_RATE_HZ, SteamId, Vec3Net},
     save::WorldSave,
-    server::{DeliveryTarget, GameServer, ServerEnvelope, ServerSettings},
-    steam::{AuthMode, OfflineSteamBackend, ServerRegistrationRequest, SteamBackend},
+    steam::AuthMode,
+    world::WorldData,
 };
 
-const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
-const MAX_MOVEMENT_MESSAGES_PER_SECOND: u32 = 240;
-const MAX_PACKETS_PER_SERVER_TICK: usize = 256;
+const LIGHTYEAR_PROTOCOL_ID: u64 = PROTOCOL_VERSION as u64;
+const LIGHTYEAR_PRIVATE_KEY: [u8; 32] = [0; 32];
+const SEND_INTERVAL: Duration = Duration::from_millis(50);
+#[cfg(feature = "steam")]
+const DEFAULT_STEAM_APP_ID: u32 = 480;
 
 pub fn run_dedicated_server(
     bind_addr: SocketAddr,
     save: WorldSave,
     auth_mode: AuthMode,
 ) -> Result<()> {
-    let socket =
-        UdpSocket::bind(bind_addr).with_context(|| format!("could not bind {bind_addr}"))?;
-    socket
-        .set_nonblocking(true)
-        .context("could not set server socket nonblocking")?;
+    let fixed_delta = Duration::from_secs_f64(1.0 / f64::from(SERVER_TICK_RATE_HZ));
+    let mut app = App::new();
 
-    let steam = OfflineSteamBackend;
-    let registration = steam.register_server(&ServerRegistrationRequest {
-        name: "Game".to_owned(),
-        bind_addr: bind_addr.to_string(),
-        map: save.name.clone(),
-        max_players: 32,
-    })?;
-    println!("server registration: {}", registration.detail);
-    println!("authoritative server listening on {bind_addr}");
-
-    let mut runner = DedicatedServer::new(socket, save, auth_mode);
-    runner.run()
-}
-
-struct DedicatedServer {
-    socket: UdpSocket,
-    server: GameServer,
-    addr_to_client: HashMap<SocketAddr, ClientId>,
-    clients: HashMap<ClientId, DedicatedClient>,
-    next_server_sequence: PacketSequence,
-    packets_processed_this_tick: usize,
-}
-
-impl DedicatedServer {
-    fn new(socket: UdpSocket, save: WorldSave, auth_mode: AuthMode) -> Self {
-        Self {
-            socket,
-            server: GameServer::new(
-                save,
-                ServerSettings {
-                    auth_mode,
-                    singleplayer_host: None,
-                },
-            ),
-            addr_to_client: HashMap::new(),
-            clients: HashMap::new(),
-            next_server_sequence: 1,
-            packets_processed_this_tick: 0,
-        }
+    #[cfg(feature = "steam")]
+    if auth_mode == AuthMode::Steam {
+        app.add_steam_resources(steam_app_id());
     }
 
-    fn run(&mut self) -> Result<()> {
-        let fixed_delta = 1.0 / SERVER_TICK_RATE_HZ;
-        let tick_interval = Duration::from_secs_f32(fixed_delta);
-        let mut next_tick = Instant::now();
+    app.add_plugins((
+        MinimalPlugins,
+        StatesPlugin,
+        DiagnosticsPlugin,
+        ServerPlugins {
+            tick_duration: fixed_delta,
+        },
+    ));
+    app.add_plugins(LightyearProtocolPlugin);
+    app.insert_resource(NetworkWorld(save.map.world_data()));
+    app.add_observer(handle_new_client);
+    app.add_observer(handle_connected_client);
+    app.add_systems(FixedUpdate, authoritative_movement_system);
 
-        loop {
-            let now = Instant::now();
-            self.receive_packets(now)?;
+    spawn_server_transport(&mut app, bind_addr, auth_mode)?;
+    app.add_systems(Startup, start_server);
 
-            let now = Instant::now();
-            if now >= next_tick {
-                self.packets_processed_this_tick = 0;
-                let timeout_envelopes = self.disconnect_timed_out(now);
-                self.dispatch(timeout_envelopes)?;
-
-                let envelopes = self.server.tick(fixed_delta);
-                self.dispatch(envelopes)?;
-                next_tick = now + tick_interval;
-            }
-
-            self.resend_reliable(now)?;
-            thread::sleep(Duration::from_millis(2));
-        }
-    }
-
-    fn receive_packets(&mut self, now: Instant) -> Result<()> {
-        let mut buffer = [0_u8; MAX_PACKET_SIZE];
-        while self.packets_processed_this_tick < MAX_PACKETS_PER_SERVER_TICK {
-            match self.socket.recv_from(&mut buffer) {
-                Ok((len, addr)) => {
-                    self.packets_processed_this_tick += 1;
-                    self.handle_packet(addr, &buffer[..len], now)?;
-                }
-                Err(error) if error.kind() == ErrorKind::WouldBlock => break,
-                Err(error) => return Err(error).context("could not receive server UDP packet"),
-            }
-        }
-
-        Ok(())
-    }
-
-    fn handle_packet(&mut self, addr: SocketAddr, bytes: &[u8], now: Instant) -> Result<()> {
-        let packet: ClientPacket = decode(bytes)?;
-        if packet.protocol_version != PROTOCOL_VERSION {
-            self.send_untracked(
-                addr,
-                packet.sequence,
-                ServerMessage::AuthRejected {
-                    reason: format!(
-                        "protocol mismatch: client {}, server {PROTOCOL_VERSION}",
-                        packet.protocol_version
-                    ),
-                },
-            )?;
-            return Ok(());
-        }
-
-        let sequence = packet.sequence;
-        let ack = packet.ack;
-        let Some(message) = packet.into_message() else {
-            return Ok(());
-        };
-
-        if let Some(client_id) = self.addr_to_client.get(&addr).copied() {
-            let is_new_packet = self.record_client_packet(client_id, sequence, ack, now);
-            if !is_new_packet {
-                return Ok(());
-            }
-
-            self.handle_authenticated_message(client_id, message, now)?;
-            return Ok(());
-        }
-
-        match message {
-            ClientMessage::Auth {
-                protocol_version,
-                steam_id,
-                display_name,
-                token,
-            } => match self
-                .server
-                .connect(protocol_version, steam_id, display_name, token)
-            {
-                Ok((client_id, envelopes)) => {
-                    self.addr_to_client.insert(addr, client_id);
-                    self.clients
-                        .insert(client_id, DedicatedClient::new(addr, now, sequence));
-                    self.dispatch(envelopes)?;
-                }
-                Err(error) => {
-                    self.send_untracked(
-                        addr,
-                        sequence,
-                        ServerMessage::AuthRejected {
-                            reason: error.to_string(),
-                        },
-                    )?;
-                }
-            },
-            _ => {
-                self.send_untracked(
-                    addr,
-                    sequence,
-                    ServerMessage::AuthRejected {
-                        reason: "client is not authenticated".to_owned(),
-                    },
-                )?;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn handle_authenticated_message(
-        &mut self,
-        client_id: ClientId,
-        message: ClientMessage,
-        now: Instant,
-    ) -> Result<()> {
-        match message {
-            ClientMessage::Auth { .. } => {}
-            ClientMessage::Heartbeat => {
-                self.send_to_client(client_id, ServerMessage::Heartbeat)?;
-            }
-            ClientMessage::Movement(movement) => {
-                if self.allow_movement(client_id, now) {
-                    let envelopes = self
-                        .server
-                        .receive(client_id, ClientMessage::Movement(movement));
-                    self.dispatch(envelopes)?;
-                }
-            }
-            ClientMessage::Chat { text } => {
-                let envelopes = self.server.receive(client_id, ClientMessage::Chat { text });
-                self.dispatch(envelopes)?;
-            }
-            ClientMessage::Disconnect => {
-                let envelopes = self.server.receive(client_id, ClientMessage::Disconnect);
-                self.dispatch(envelopes)?;
-                self.remove_network_client(client_id);
-            }
-        }
-
-        Ok(())
-    }
-
-    fn record_client_packet(
-        &mut self,
-        client_id: ClientId,
-        sequence: PacketSequence,
-        ack: PacketSequence,
-        now: Instant,
-    ) -> bool {
-        self.clients
-            .get_mut(&client_id)
-            .is_some_and(|client| client.record_packet(sequence, ack, now))
-    }
-
-    fn allow_movement(&mut self, client_id: ClientId, now: Instant) -> bool {
-        self.clients
-            .get_mut(&client_id)
-            .is_some_and(|client| client.movement_rate_limiter.allow(now))
-    }
-
-    fn disconnect_timed_out(&mut self, now: Instant) -> Vec<ServerEnvelope> {
-        let timed_out = self
-            .clients
-            .iter()
-            .filter_map(|(client_id, client)| {
-                (now.duration_since(client.last_heard) >= CLIENT_TIMEOUT).then_some(*client_id)
-            })
-            .collect::<Vec<_>>();
-
-        let mut envelopes = Vec::new();
-        for client_id in timed_out {
-            self.remove_network_client(client_id);
-            envelopes.extend(self.server.disconnect(client_id));
-        }
-
-        envelopes
-    }
-
-    fn remove_network_client(&mut self, client_id: ClientId) {
-        if let Some(client) = self.clients.remove(&client_id) {
-            self.addr_to_client.remove(&client.addr);
-        }
-    }
-
-    fn dispatch(&mut self, envelopes: Vec<ServerEnvelope>) -> Result<()> {
-        let mut sends = Vec::new();
-        for envelope in envelopes {
-            match envelope.target {
-                DeliveryTarget::Client(client_id) => {
-                    if let Some(send) = self.queue_server_packet(client_id, envelope.message) {
-                        sends.push(send);
-                    }
-                }
-                DeliveryTarget::Broadcast => {
-                    let client_ids = self.clients.keys().copied().collect::<Vec<_>>();
-                    for client_id in client_ids {
-                        if let Some(send) =
-                            self.queue_server_packet(client_id, envelope.message.clone())
-                        {
-                            sends.push(send);
-                        }
-                    }
-                }
-            }
-        }
-
-        self.send_packets(sends)
-    }
-
-    fn send_to_client(&mut self, client_id: ClientId, message: ServerMessage) -> Result<()> {
-        let Some(send) = self.queue_server_packet(client_id, message) else {
-            return Ok(());
-        };
-        self.send_packets(vec![send])
-    }
-
-    fn queue_server_packet(
-        &mut self,
-        client_id: ClientId,
-        message: ServerMessage,
-    ) -> Option<(SocketAddr, ServerPacket)> {
-        let sequence = self.next_server_sequence;
-        self.next_server_sequence += 1;
-
-        let client = self.clients.get_mut(&client_id)?;
-        let packet = ServerPacket::new(sequence, client.received_packets.latest(), message);
-        if packet.delivery == PacketDelivery::Reliable {
-            client.pending_reliable.push(PendingServerPacket {
-                sequence,
-                message: packet.message.clone(),
-                last_sent: Instant::now(),
-            });
-        }
-
-        Some((client.addr, packet))
-    }
-
-    fn send_untracked(
-        &mut self,
-        addr: SocketAddr,
-        ack: PacketSequence,
-        message: ServerMessage,
-    ) -> Result<()> {
-        let packet = ServerPacket::new(self.next_server_sequence, ack, message);
-        self.next_server_sequence += 1;
-        self.send_packets(vec![(addr, packet)])
-    }
-
-    fn resend_reliable(&mut self, now: Instant) -> Result<()> {
-        let mut sends = Vec::new();
-        for client in self.clients.values_mut() {
-            for pending in &mut client.pending_reliable {
-                if now.duration_since(pending.last_sent) < RELIABLE_RESEND_INTERVAL {
-                    continue;
-                }
-
-                pending.last_sent = now;
-                sends.push((
-                    client.addr,
-                    ServerPacket::new(
-                        pending.sequence,
-                        client.received_packets.latest(),
-                        pending.message.clone(),
-                    ),
-                ));
-            }
-        }
-
-        self.send_packets(sends)
-    }
-
-    fn send_packets(&self, packets: Vec<(SocketAddr, ServerPacket)>) -> Result<()> {
-        for (addr, packet) in packets {
-            send_server_packet(&self.socket, addr, &packet)?;
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-struct DedicatedClient {
-    addr: SocketAddr,
-    last_heard: Instant,
-    received_packets: ReceivedPacketWindow,
-    pending_reliable: Vec<PendingServerPacket>,
-    movement_rate_limiter: MovementRateLimiter,
-}
-
-impl DedicatedClient {
-    fn new(addr: SocketAddr, now: Instant, initial_sequence: PacketSequence) -> Self {
-        Self {
-            addr,
-            last_heard: now,
-            received_packets: ReceivedPacketWindow::with_initial(initial_sequence),
-            pending_reliable: Vec::new(),
-            movement_rate_limiter: MovementRateLimiter::new(now),
-        }
-    }
-
-    fn record_packet(
-        &mut self,
-        sequence: PacketSequence,
-        ack: PacketSequence,
-        now: Instant,
-    ) -> bool {
-        self.last_heard = now;
-        self.pending_reliable
-            .retain(|pending| pending.sequence != ack);
-        self.received_packets.record(sequence)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct PendingServerPacket {
-    sequence: PacketSequence,
-    message: ServerMessage,
-    last_sent: Instant,
-}
-
-#[derive(Debug)]
-struct MovementRateLimiter {
-    window_started: Instant,
-    count: u32,
-}
-
-impl MovementRateLimiter {
-    fn new(now: Instant) -> Self {
-        Self {
-            window_started: now,
-            count: 0,
-        }
-    }
-
-    fn allow(&mut self, now: Instant) -> bool {
-        if now.duration_since(self.window_started) >= Duration::from_secs(1) {
-            self.window_started = now;
-            self.count = 0;
-        }
-
-        if self.count >= MAX_MOVEMENT_MESSAGES_PER_SECOND {
-            return false;
-        }
-
-        self.count += 1;
-        true
-    }
-}
-
-fn send_server_packet(socket: &UdpSocket, addr: SocketAddr, packet: &ServerPacket) -> Result<()> {
-    let bytes = encode(packet)?;
-    socket
-        .send_to(&bytes, addr)
-        .with_context(|| format!("could not send UDP packet to {addr}"))?;
+    println!("lightyear server listening on {bind_addr} ({auth_mode:?})");
+    app.run();
     Ok(())
+}
+
+fn spawn_server_transport(app: &mut App, bind_addr: SocketAddr, auth_mode: AuthMode) -> Result<()> {
+    let mut entity = app.world_mut().spawn(Name::new("Lightyear Server"));
+
+    match auth_mode {
+        AuthMode::Offline => {
+            entity.insert((
+                LocalAddr(bind_addr),
+                ServerUdpIo::default(),
+                NetcodeServer::new(NetcodeConfig {
+                    protocol_id: LIGHTYEAR_PROTOCOL_ID,
+                    private_key: private_key(),
+                    ..default()
+                }),
+            ));
+        }
+        AuthMode::Steam => spawn_steam_server_transport(&mut entity, bind_addr)?,
+    }
+
+    Ok(())
+}
+
+fn private_key() -> [u8; 32] {
+    std::env::var("LIGHTYEAR_PRIVATE_KEY")
+        .ok()
+        .and_then(|value| parse_private_key(&value))
+        .unwrap_or(LIGHTYEAR_PRIVATE_KEY)
+}
+
+fn parse_private_key(value: &str) -> Option<[u8; 32]> {
+    let bytes = value
+        .split(',')
+        .map(str::trim)
+        .map(str::parse::<u8>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    let bytes: [u8; 32] = bytes.try_into().ok()?;
+    Some(bytes)
+}
+
+#[cfg(feature = "steam")]
+fn steam_app_id() -> u32 {
+    std::env::var("GAME_STEAM_APP_ID")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(DEFAULT_STEAM_APP_ID)
+}
+
+#[cfg(feature = "steam")]
+fn spawn_steam_server_transport(entity: &mut EntityWorldMut, bind_addr: SocketAddr) -> Result<()> {
+    entity.insert(SteamServerIo {
+        target: ListenTarget::Addr(bind_addr),
+        config: SessionConfig::default(),
+    });
+    Ok(())
+}
+
+#[cfg(not(feature = "steam"))]
+fn spawn_steam_server_transport(
+    _entity: &mut EntityWorldMut,
+    _bind_addr: SocketAddr,
+) -> Result<()> {
+    anyhow::bail!("Steam networking requires building with --features steam");
+}
+
+fn start_server(mut commands: Commands, server: Single<Entity, With<Server>>) {
+    commands.trigger(Start {
+        entity: server.into_inner(),
+    });
+}
+
+fn handle_new_client(trigger: On<Add, LinkOf>, mut commands: Commands) {
+    commands.entity(trigger.entity).insert((
+        ReplicationSender::new(SEND_INTERVAL, SendUpdatesMode::SinceLastAck, false),
+        Name::new("Client Link"),
+    ));
+}
+
+fn handle_connected_client(
+    trigger: On<Add, Connected>,
+    clients: Query<&RemoteId, With<ClientOf>>,
+    mut commands: Commands,
+) {
+    let Ok(remote_id) = clients.get(trigger.entity) else {
+        return;
+    };
+    let client_id = remote_id.0;
+    commands.spawn((
+        NetworkPlayerBundle::new(client_id, Vec3Net::ZERO),
+        NetworkController(PlayerController::spawn()),
+        NetworkInputSequence::default(),
+        Replicate::to_clients(NetworkTarget::All),
+        PredictionTarget::to_clients(NetworkTarget::Single(client_id)),
+        InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(client_id)),
+        ControlledBy {
+            owner: trigger.entity,
+            lifetime: Default::default(),
+        },
+    ));
+}
+
+type NetworkMovementData = (
+    &'static mut NetworkController,
+    &'static mut NetworkInputSequence,
+    &'static ActionState<NetworkInput>,
+    &'static mut NetworkPosition,
+    &'static mut NetworkVelocity,
+    &'static mut NetworkLook,
+    &'static mut NetworkHealth,
+    &'static mut NetworkGrounded,
+);
+
+#[derive(SystemParam)]
+struct NetworkMovementParams<'w, 's> {
+    players: Query<'w, 's, NetworkMovementData, Without<Predicted>>,
+}
+
+fn authoritative_movement_system(world: Res<NetworkWorld>, mut params: NetworkMovementParams) {
+    for (
+        mut controller,
+        mut sequence,
+        input,
+        mut position,
+        mut velocity,
+        mut look,
+        mut health,
+        mut grounded,
+    ) in &mut params.players
+    {
+        apply_network_input(
+            &mut controller.0,
+            &mut sequence,
+            &input.0,
+            &world.0,
+            1.0 / SERVER_TICK_RATE_HZ,
+        );
+        write_controller_state(
+            &controller.0,
+            &mut position,
+            &mut velocity,
+            &mut look,
+            &mut health,
+            &mut grounded,
+        );
+    }
+}
+
+fn apply_network_input(
+    controller: &mut PlayerController,
+    sequence: &mut NetworkInputSequence,
+    input: &NetworkInput,
+    world: &WorldData,
+    delta_seconds: f32,
+) {
+    sequence.0 += 1;
+    controller.apply_input(PlayerInput {
+        sequence: sequence.0,
+        delta_seconds,
+        direction: input.direction,
+        sprint: input.sprint,
+        jump: input.jump,
+        yaw: input.yaw,
+        pitch: input.pitch,
+    });
+    controller.simulate(delta_seconds, world);
+}
+
+fn write_controller_state(
+    controller: &PlayerController,
+    position: &mut NetworkPosition,
+    velocity: &mut NetworkVelocity,
+    look: &mut NetworkLook,
+    health: &mut NetworkHealth,
+    grounded: &mut NetworkGrounded,
+) {
+    position.0 = controller.position;
+    velocity.0 = controller.velocity;
+    look.yaw = controller.yaw;
+    look.pitch = controller.pitch;
+    health.0 = controller.health;
+    grounded.0 = controller.grounded;
+}
+
+#[derive(Clone)]
+pub struct LightyearProtocolPlugin;
+
+impl Plugin for LightyearProtocolPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(InputPlugin::<NetworkInput>::default());
+
+        app.register_component::<NetworkPlayerId>();
+        app.register_component::<NetworkPlayerName>();
+        app.register_component::<NetworkSteamId>();
+        app.register_component::<NetworkAdmin>();
+
+        app.register_component::<NetworkPosition>()
+            .add_prediction()
+            .add_linear_interpolation();
+        app.register_component::<NetworkVelocity>().add_prediction();
+        app.register_component::<NetworkLook>()
+            .add_prediction()
+            .add_linear_interpolation();
+        app.register_component::<NetworkHealth>().add_prediction();
+        app.register_component::<NetworkGrounded>().add_prediction();
+    }
+}
+
+#[derive(Resource, Clone)]
+struct NetworkWorld(WorldData);
+
+#[derive(Component)]
+struct NetworkController(PlayerController);
+
+#[derive(Component, Default)]
+struct NetworkInputSequence(u64);
+
+#[derive(Bundle)]
+struct NetworkPlayerBundle {
+    id: NetworkPlayerId,
+    steam_id: NetworkSteamId,
+    name: NetworkPlayerName,
+    admin: NetworkAdmin,
+    position: NetworkPosition,
+    velocity: NetworkVelocity,
+    look: NetworkLook,
+    health: NetworkHealth,
+    grounded: NetworkGrounded,
+}
+
+impl NetworkPlayerBundle {
+    fn new(id: PeerId, position: Vec3Net) -> Self {
+        let steam_id = id.to_bits();
+        Self {
+            id: NetworkPlayerId(id),
+            steam_id: NetworkSteamId(steam_id),
+            name: NetworkPlayerName(clean_network_name(steam_id)),
+            admin: NetworkAdmin(false),
+            position: NetworkPosition(position),
+            velocity: NetworkVelocity(Vec3Net::ZERO),
+            look: NetworkLook::default(),
+            health: NetworkHealth(MAX_HEALTH),
+            grounded: NetworkGrounded(true),
+        }
+    }
+}
+
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct NetworkPlayerId(pub PeerId);
+
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
+pub struct NetworkSteamId(pub SteamId);
+
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Reflect)]
+pub struct NetworkPlayerName(pub String);
+
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
+pub struct NetworkAdmin(pub bool);
+
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+pub struct NetworkPosition(pub Vec3Net);
+
+impl Ease for NetworkPosition {
+    fn interpolating_curve_unbounded(start: Self, end: Self) -> impl Curve<Self> {
+        FunctionCurve::new(Interval::UNIT, move |t| {
+            NetworkPosition(lerp_vec3(start.0, end.0, t))
+        })
+    }
+}
+
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+pub struct NetworkVelocity(pub Vec3Net);
+
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+pub struct NetworkLook {
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+impl Ease for NetworkLook {
+    fn interpolating_curve_unbounded(start: Self, end: Self) -> impl Curve<Self> {
+        FunctionCurve::new(Interval::UNIT, move |t| Self {
+            yaw: lerp_f32(start.yaw, end.yaw, t),
+            pitch: lerp_f32(start.pitch, end.pitch, t),
+        })
+    }
+}
+
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct NetworkHealth(pub f32);
+
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
+pub struct NetworkGrounded(pub bool);
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+pub struct NetworkInput {
+    pub direction: Vec3Net,
+    pub sprint: bool,
+    pub jump: bool,
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+impl MapEntities for NetworkInput {
+    fn map_entities<M: EntityMapper>(&mut self, _entity_mapper: &mut M) {}
+}
+
+fn lerp_vec3(start: Vec3Net, end: Vec3Net, t: f32) -> Vec3Net {
+    Vec3Net::new(
+        lerp_f32(start.x, end.x, t),
+        lerp_f32(start.y, end.y, t),
+        lerp_f32(start.z, end.z, t),
+    )
+}
+
+fn lerp_f32(start: f32, end: f32, t: f32) -> f32 {
+    start + (end - start) * t
+}
+
+fn clean_network_name(steam_id: SteamId) -> String {
+    format!("Player {steam_id}")
 }
 
 #[cfg(test)]
@@ -446,30 +397,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn movement_rate_limiter_caps_and_resets() {
-        let start = Instant::now();
-        let mut limiter = MovementRateLimiter::new(start);
-
-        for _ in 0..MAX_MOVEMENT_MESSAGES_PER_SECOND {
-            assert!(limiter.allow(start));
-        }
-        assert!(!limiter.allow(start));
-        assert!(limiter.allow(start + Duration::from_secs(1)));
+    fn private_key_parser_requires_32_bytes() {
+        let key = (0..32).map(|_| "7").collect::<Vec<_>>().join(",");
+        assert_eq!(parse_private_key(&key), Some([7; 32]));
+        assert!(parse_private_key("1,2,3").is_none());
     }
 
     #[test]
-    fn client_records_duplicate_packets_and_exact_acks() {
-        let now = Instant::now();
-        let addr = "127.0.0.1:7777".parse().expect("addr should parse");
-        let mut client = DedicatedClient::new(addr, now, 1);
-        client.pending_reliable.push(PendingServerPacket {
-            sequence: 7,
-            message: ServerMessage::Heartbeat,
-            last_sent: now,
-        });
-
-        assert!(client.record_packet(2, 7, now));
-        assert!(client.pending_reliable.is_empty());
-        assert!(!client.record_packet(2, 0, now));
+    fn network_position_interpolates_linearly() {
+        let halfway = lerp_vec3(Vec3Net::ZERO, Vec3Net::new(2.0, 4.0, 6.0), 0.5);
+        assert_eq!(halfway, Vec3Net::new(1.0, 2.0, 3.0));
     }
 }

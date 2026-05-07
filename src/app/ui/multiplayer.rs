@@ -1,10 +1,7 @@
-use std::net::SocketAddr;
-
 use bevy_egui::egui;
 
 use crate::{
     app::state::{ClientRuntime, MenuState, Screen, SteamUser},
-    net::ClientSession,
     steam::{OfflineSteamBackend, SteamBackend},
 };
 
@@ -13,8 +10,8 @@ use super::theme::{self, ButtonKind};
 pub(super) fn multiplayer_ui(
     ctx: &egui::Context,
     menu: &mut MenuState,
-    runtime: &mut ClientRuntime,
-    user: &SteamUser,
+    _runtime: &mut ClientRuntime,
+    _user: &SteamUser,
 ) {
     theme::screen_scrim(ctx, "multiplayer_scrim", 145);
     theme::anchored_panel(
@@ -60,24 +57,8 @@ pub(super) fn multiplayer_ui(
                         ui.add_sized([320.0, 34.0], theme::text_input(&mut menu.multiplayer_addr));
                         if theme::compact_button(ui, "Connect", ButtonKind::Primary, 92.0).clicked()
                         {
-                            match menu.multiplayer_addr.parse::<SocketAddr>() {
-                                Ok(addr) => match ClientSession::connect_udp(addr, &user.0) {
-                                    Ok(session) => {
-                                        runtime.start_session(session, None);
-                                        menu.screen = Screen::InGame;
-                                        menu.pause_open = false;
-                                        menu.chat_open = false;
-                                        menu.chat_focus_pending = false;
-                                        menu.status = None;
-                                    }
-                                    Err(error) => {
-                                        menu.status = Some(format!("connect failed: {error}"));
-                                    }
-                                },
-                                Err(error) => {
-                                    menu.status = Some(format!("invalid address: {error}"))
-                                }
-                            }
+                            menu.status =
+                                Some("client networking is moving to Lightyear replication".into());
                         }
                     },
                 );

@@ -9,4 +9,4 @@ pub(crate) use input::{
     toggle_pause_system, update_cursor_system,
 };
 pub(crate) use network::network_tick_system;
-pub(crate) use players::{apply_snapshot_system, interpolate_players_system};
+pub(crate) use players::apply_snapshot_system;
