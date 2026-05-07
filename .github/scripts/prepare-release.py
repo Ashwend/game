@@ -13,6 +13,7 @@ from pathlib import Path
 ASSETS = [
     ("Linux Intel", "game-x86_64-unknown-linux-gnu.tar.gz"),
     ("Linux ARM", "game-aarch64-unknown-linux-gnu.tar.gz"),
+    ("macOS Intel", "game-x86_64-apple-darwin.tar.gz"),
     ("macOS ARM", "game-aarch64-apple-darwin.tar.gz"),
     ("Windows Intel", "game-x86_64-pc-windows-msvc.zip"),
 ]
@@ -217,7 +218,6 @@ def classify_commit(subject: str, body: str) -> tuple[str, str]:
 
 
 def build_release_notes(version: str, tag: str, since_tag: str | None, end_ref: str) -> str:
-    repo = os.environ.get("GITHUB_REPOSITORY")
     since_label = since_tag or "the first commit"
     grouped: dict[str, list[str]] = defaultdict(list)
 
@@ -234,11 +234,7 @@ def build_release_notes(version: str, tag: str, since_tag: str | None, end_ref: 
     ]
 
     for label, asset in ASSETS:
-        if repo:
-            url = f"https://github.com/{repo}/releases/download/{tag}/{asset}"
-            lines.append(f"- {label}: [{asset}]({url})")
-        else:
-            lines.append(f"- {label}: {asset}")
+        lines.append(f"- {label}: {asset}")
 
     lines.extend(["", "### Changelog"])
 

@@ -118,6 +118,10 @@ jobs:
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             asset: game-aarch64-unknown-linux-gnu.tar.gz
+          - label: macOS Intel
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            asset: game-x86_64-apple-darwin.tar.gz
           - label: macOS ARM
             runner: macos-15
             target: aarch64-apple-darwin
@@ -196,10 +200,17 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.version }}
       BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
     steps:
-      - name: Checkout
+      - name: Checkout release source
+        if: needs.prepare.outputs.patch_required == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare.outputs.base_sha }}
+          fetch-depth: 0
+
+      - name: Checkout workflow source
+        if: needs.prepare.outputs.patch_required != 'true'
+        uses: actions/checkout@v4
+        with:
           fetch-depth: 0
 
       - name: Download release patch
@@ -321,3 +332,16 @@ jobs:
           for asset in artifacts/*; do
             retry gh release upload "${TAG}" "${asset}" --clobber
           done
+
+          refresh_asset_links() {
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > release.json
+            python .github/scripts/update-release-asset-links.py \
+              --notes release-notes.txt \
+              --release-json release.json \
+              --require-all
+            gh release edit "${TAG}" \
+              --title "game ${TAG}" \
+              --notes-file release-notes.txt
+          }
+
+          retry refresh_asset_links
