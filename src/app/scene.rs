@@ -1,8 +1,12 @@
+use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
 
 use crate::{protocol::ClientId, world::WorldData};
 
-use super::{EYE_HEIGHT, PLAYER_VISUAL_CENTER_Y};
+use super::{
+    EYE_HEIGHT, PLAYER_VISUAL_CENTER_Y,
+    state::{ClientRuntime, MenuState, Screen},
+};
 
 const REMOTE_PLAYER_COLOR: Color = Color::srgb(0.95, 0.61, 0.25);
 const WORLD_COLOR: Color = Color::srgb(0.18, 0.34, 0.22);
@@ -48,6 +52,7 @@ pub(crate) fn setup_scene(
             fov: 65.0_f32.to_radians(),
             ..default()
         }),
+        menu_backdrop_depth_of_field(),
         Transform::from_xyz(0.0, EYE_HEIGHT, 3.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
@@ -71,12 +76,14 @@ pub(crate) fn setup_scene(
 pub(crate) fn apply_world_scene_system(
     mut commands: Commands,
     mut scene_state: ResMut<WorldSceneState>,
-    runtime: Res<super::state::ClientRuntime>,
+    runtime: Res<ClientRuntime>,
+    menu: Res<MenuState>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     geometry: Query<Entity, With<WorldGeometry>>,
 ) {
-    if scene_state.applied.as_ref() == runtime.world.as_ref() {
+    let desired_world = scene_world(runtime.world.as_ref(), menu.screen);
+    if scene_state.applied.as_ref() == desired_world.as_ref() {
         return;
     }
 
@@ -84,12 +91,18 @@ pub(crate) fn apply_world_scene_system(
         commands.entity(entity).despawn();
     }
 
-    if let Some(world) = &runtime.world {
-        spawn_world_geometry(&mut commands, &mut meshes, &mut materials, world);
-        scene_state.applied = Some(world.clone());
+    if let Some(world) = desired_world {
+        spawn_world_geometry(&mut commands, &mut meshes, &mut materials, &world);
+        scene_state.applied = Some(world);
     } else {
         scene_state.applied = None;
     }
+}
+
+fn scene_world(active_world: Option<&WorldData>, screen: Screen) -> Option<WorldData> {
+    active_world
+        .cloned()
+        .or_else(|| (screen != Screen::InGame).then(WorldData::test_world))
 }
 
 fn spawn_world_geometry(
@@ -139,6 +152,16 @@ pub(crate) fn player_visual_position(feet_position: Vec3) -> Vec3 {
     feet_position + Vec3::Y * PLAYER_VISUAL_CENTER_Y
 }
 
+pub(crate) fn menu_backdrop_depth_of_field() -> DepthOfField {
+    DepthOfField {
+        mode: DepthOfFieldMode::Gaussian,
+        focal_distance: 0.35,
+        aperture_f_stops: 0.08,
+        max_depth: 80.0,
+        ..default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,6 +198,7 @@ mod tests {
     fn applying_world_scene_spawns_and_clears_geometry() {
         let mut app = app_with_scene_resources();
         app.insert_resource(WorldSceneState::default());
+        app.insert_resource(MenuState::default());
         app.insert_resource(ClientRuntime {
             world: Some(WorldData::test_world()),
             ..Default::default()
@@ -190,6 +214,7 @@ mod tests {
         assert!(geometry_count > 0);
 
         app.world_mut().resource_mut::<ClientRuntime>().world = None;
+        app.world_mut().resource_mut::<MenuState>().screen = Screen::InGame;
         app.update();
 
         let geometry_count = {
@@ -198,6 +223,23 @@ mod tests {
             query.iter(world).count()
         };
         assert_eq!(geometry_count, 0);
+    }
+
+    #[test]
+    fn menu_without_active_world_uses_test_world_backdrop() {
+        let mut app = app_with_scene_resources();
+        app.insert_resource(WorldSceneState::default());
+        app.insert_resource(MenuState::default());
+        app.insert_resource(ClientRuntime::default());
+        app.add_systems(Update, apply_world_scene_system);
+        app.update();
+
+        let geometry_count = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<WorldGeometry>>();
+            query.iter(world).count()
+        };
+        assert!(geometry_count > 0);
     }
 
     #[test]

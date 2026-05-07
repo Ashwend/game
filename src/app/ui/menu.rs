@@ -16,7 +16,7 @@ pub(super) fn main_menu_ui(
     user: &SteamUser,
     app_exit: &mut MessageWriter<AppExit>,
 ) {
-    theme::screen_scrim(ctx, "main_menu_scrim", 150);
+    theme::screen_scrim(ctx, "main_menu_scrim", 118);
     egui::Area::new("main_menu".into())
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, -20.0])
@@ -46,10 +46,10 @@ pub(super) fn main_menu_ui(
                 });
 
                 ui.add_space(14.0);
-                ui.label(theme::muted(format!(
-                    "Signed in as {}",
-                    user.0.display_name
-                )));
+                ui.label(
+                    egui::RichText::new(format!("Signed in as {}", user.0.display_name))
+                        .color(theme::text()),
+                );
                 if let Some(status) = &menu.status {
                     ui.add_space(4.0);
                     ui.label(theme::status_text(status));

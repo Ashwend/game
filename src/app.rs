@@ -17,8 +17,8 @@ use self::{
     state::{ClientRuntime, LookState, MenuState, SaveStore, SteamUser},
     systems::{
         apply_snapshot_system, camera_follow_system, center_cursor_on_focus_system,
-        chat_shortcut_system, client_input_system, mouse_look_system, network_tick_system,
-        toggle_pause_system, update_cursor_system,
+        chat_shortcut_system, client_input_system, menu_backdrop_camera_system, mouse_look_system,
+        network_tick_system, toggle_pause_system, update_cursor_system,
     },
     ui::ui_system,
 };
@@ -73,6 +73,7 @@ pub fn run_app() -> Result<()> {
         .add_systems(Update, network_tick_system.after(client_input_system))
         .add_systems(Update, apply_world_scene_system)
         .add_systems(Update, apply_snapshot_system)
+        .add_systems(Update, menu_backdrop_camera_system)
         .add_systems(
             Update,
             camera_follow_system
