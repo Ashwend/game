@@ -57,6 +57,38 @@ impl WorldData {
                 WorldBlock::new(Vec3Net::new(2.2, 0.75, 3.8), Vec3Net::new(0.8, 0.75, 0.8)),
                 WorldBlock::new(Vec3Net::new(-7.0, 1.4, -1.0), Vec3Net::new(0.75, 1.4, 0.75)),
                 WorldBlock::new(Vec3Net::new(7.0, 0.35, -6.0), Vec3Net::new(1.6, 0.35, 1.0)),
+                WorldBlock::new(Vec3Net::new(-1.6, 0.18, -2.7), Vec3Net::new(0.7, 0.18, 0.5)),
+                WorldBlock::new(Vec3Net::new(0.0, 0.28, -3.4), Vec3Net::new(0.8, 0.28, 0.5)),
+                WorldBlock::new(Vec3Net::new(1.7, 0.38, -4.1), Vec3Net::new(0.8, 0.38, 0.5)),
+                WorldBlock::new(Vec3Net::new(-8.9, 1.2, -1.2), Vec3Net::new(0.25, 1.2, 5.4)),
+                WorldBlock::new(Vec3Net::new(-6.4, 1.2, -1.2), Vec3Net::new(0.25, 1.2, 5.4)),
+                WorldBlock::new(
+                    Vec3Net::new(-7.65, 0.15, -5.4),
+                    Vec3Net::new(0.8, 0.15, 0.35),
+                ),
+                WorldBlock::new(
+                    Vec3Net::new(-7.65, 0.35, -3.3),
+                    Vec3Net::new(0.65, 0.35, 0.35),
+                ),
+                WorldBlock::new(
+                    Vec3Net::new(-7.65, 0.55, -1.2),
+                    Vec3Net::new(0.55, 0.55, 0.35),
+                ),
+                WorldBlock::new(Vec3Net::new(4.0, 0.35, -9.0), Vec3Net::new(1.8, 0.35, 1.0)),
+                WorldBlock::new(Vec3Net::new(4.0, 0.35, -13.0), Vec3Net::new(1.8, 0.35, 1.0)),
+                WorldBlock::new(
+                    Vec3Net::new(4.0, 1.25, -16.0),
+                    Vec3Net::new(2.3, 1.25, 0.25),
+                ),
+                WorldBlock::new(
+                    Vec3Net::new(0.0, 1.25, -11.2),
+                    Vec3Net::new(4.6, 1.25, 0.25),
+                ),
+                WorldBlock::new(Vec3Net::new(7.5, 1.3, 0.0), Vec3Net::new(0.25, 1.3, 5.0)),
+                WorldBlock::new(Vec3Net::new(10.5, 1.3, 0.0), Vec3Net::new(0.25, 1.3, 5.0)),
+                WorldBlock::new(Vec3Net::new(9.0, 0.3, -3.6), Vec3Net::new(0.9, 0.3, 0.45)),
+                WorldBlock::new(Vec3Net::new(9.0, 0.6, -1.2), Vec3Net::new(0.7, 0.6, 0.45)),
+                WorldBlock::new(Vec3Net::new(9.0, 0.9, 1.3), Vec3Net::new(0.55, 0.9, 0.45)),
             ],
         }
     }
@@ -111,6 +143,28 @@ mod tests {
             assert!(block.size().y > 0.0);
             assert!(block.size().z > 0.0);
         }
+    }
+
+    #[test]
+    fn test_world_includes_movement_test_shapes() {
+        let world = WorldData::test_world();
+        let low_steps = world
+            .blocks
+            .iter()
+            .filter(|block| block.size().y <= 0.8)
+            .count();
+        let tall_walls = world
+            .blocks
+            .iter()
+            .filter(|block| {
+                let size = block.size();
+                size.y >= 2.0 && (size.x >= 4.0 || size.z >= 4.0)
+            })
+            .count();
+
+        assert!(world.blocks.len() >= 24);
+        assert!(low_steps >= 8);
+        assert!(tall_walls >= 5);
     }
 
     #[test]

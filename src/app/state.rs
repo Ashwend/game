@@ -243,7 +243,7 @@ impl ClientRuntime {
     pub(crate) fn local_view(&self) -> Option<LocalPlayerView> {
         if let Some(predicted) = &self.predicted_local {
             return Some(LocalPlayerView {
-                position: predicted.position,
+                position: predicted.view_position(),
                 health: predicted.health,
             });
         }
