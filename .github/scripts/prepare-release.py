@@ -129,16 +129,28 @@ def bump_version(version: str, bump: str) -> str:
     raise SystemExit(f"unsupported bump {bump!r}")
 
 
-def latest_release_tag() -> str | None:
+def release_tags() -> list[tuple[tuple[int, int, int], str]]:
     tags: list[tuple[tuple[int, int, int], str]] = []
     for tag in run_git(["tag", "--list", "v[0-9]*"]).stdout.splitlines():
         match = TAG_SEMVER.match(tag.strip())
         if match:
             version = tuple(int(match.group(name)) for name in ("major", "minor", "patch"))
             tags.append((version, tag.strip()))
+    return sorted(tags, reverse=True)
+
+
+def latest_release_tag() -> str | None:
+    tags = release_tags()
     if not tags:
         return None
-    return sorted(tags, reverse=True)[0][1]
+    return tags[0][1]
+
+
+def latest_release_tag_before(version: tuple[int, int, int]) -> str | None:
+    for tag_version, tag in release_tags():
+        if tag_version < version:
+            return tag
+    return None
 
 
 def assert_tag_is_available(tag: str, *, check_remote: bool) -> None:
@@ -154,10 +166,12 @@ def assert_tag_is_available(tag: str, *, check_remote: bool) -> None:
         raise SystemExit(f"tag {tag} already exists on origin")
 
 
-def read_commits(since_tag: str | None) -> list[dict[str, str]]:
+def read_commits(since_tag: str | None, end_ref: str) -> list[dict[str, str]]:
     args = ["log", "--no-merges", "--reverse", "--format=%H%x1f%h%x1f%s%x1f%b%x1e"]
     if since_tag:
-        args.append(f"{since_tag}..HEAD")
+        args.append(f"{since_tag}..{end_ref}")
+    else:
+        args.append(end_ref)
     output = run_git(args).stdout
     commits: list[dict[str, str]] = []
 
@@ -202,12 +216,12 @@ def classify_commit(subject: str, body: str) -> tuple[str, str]:
     return TYPE_TO_CATEGORY.get(commit_type, "other"), description
 
 
-def build_release_notes(version: str, tag: str, since_tag: str | None) -> str:
+def build_release_notes(version: str, tag: str, since_tag: str | None, end_ref: str) -> str:
     repo = os.environ.get("GITHUB_REPOSITORY")
     since_label = since_tag or "the first commit"
     grouped: dict[str, list[str]] = defaultdict(list)
 
-    for commit in read_commits(since_tag):
+    for commit in read_commits(since_tag, end_ref):
         category, description = classify_commit(commit["subject"], commit["body"])
         grouped[category].append(f"- {description} (`{commit['short_hash']}`)")
 
@@ -249,28 +263,57 @@ def write_github_output(name: str, value: str) -> None:
         output.write(f"{name}={value}\n")
 
 
+def parse_tag_version(tag: str) -> tuple[int, int, int]:
+    match = TAG_SEMVER.match(tag)
+    if not match:
+        raise SystemExit(f"existing tag must look like v1.2.3, got {tag!r}")
+    return tuple(int(match.group(name)) for name in ("major", "minor", "patch"))
+
+
+def tag_commit(tag: str) -> str:
+    result = run_git(["rev-list", "-n", "1", tag], check=False)
+    if result.returncode != 0 or not result.stdout.strip():
+        raise SystemExit(f"could not resolve existing tag {tag}")
+    return result.stdout.strip()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--bump", choices=["patch", "minor", "major"], required=True)
+    parser.add_argument("--bump", choices=["patch", "minor", "major"])
+    parser.add_argument("--existing-tag")
     parser.add_argument("--manifest", default="Cargo.toml")
     parser.add_argument("--notes", default="release-notes.txt")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     manifest = Path(args.manifest)
-    current_version = read_manifest_version(manifest)
-    next_version = bump_version(current_version, args.bump)
-    tag = f"v{next_version}"
-    base_sha = run_git(["rev-parse", "HEAD"]).stdout.strip()
-    since_tag = latest_release_tag()
+    patch_required = not bool(args.existing_tag)
 
-    assert_tag_is_available(tag, check_remote=not args.dry_run)
+    if args.existing_tag:
+        tag = args.existing_tag.strip()
+        version_tuple = parse_tag_version(tag)
+        next_version = tag.removeprefix("v")
+        base_sha = tag_commit(tag)
+        since_tag = latest_release_tag_before(version_tuple)
+        notes = build_release_notes(next_version, tag, since_tag, tag)
+    else:
+        if not args.bump:
+            raise SystemExit("--bump is required unless --existing-tag is provided")
+        current_version = read_manifest_version(manifest)
+        next_version = bump_version(current_version, args.bump)
+        tag = f"v{next_version}"
+        base_sha = run_git(["rev-parse", "HEAD"]).stdout.strip()
+        since_tag = latest_release_tag()
 
-    notes = build_release_notes(next_version, tag, since_tag)
+        assert_tag_is_available(tag, check_remote=not args.dry_run)
+
+        notes = build_release_notes(next_version, tag, since_tag, "HEAD")
+
     if args.dry_run:
         print(notes)
     else:
-        write_manifest_version(manifest, next_version)
+        if patch_required:
+            write_manifest_version(manifest, next_version)
         Path(args.notes).write_text(notes)
 
     write_github_output("version", next_version)
@@ -278,6 +321,7 @@ def main() -> None:
     write_github_output("base_sha", base_sha)
     write_github_output("release_notes", args.notes)
     write_github_output("previous_tag", since_tag or "")
+    write_github_output("patch_required", "true" if patch_required else "false")
 
 
 if __name__ == "__main__":
