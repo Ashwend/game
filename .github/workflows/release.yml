@@ -48,7 +48,7 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -56,7 +56,7 @@ jobs:
         run: git fetch --force --tags
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.x"
 
@@ -87,7 +87,7 @@ jobs:
 
       - name: Upload release patch
         if: steps.prepare.outputs.patch_required == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-source-patch
           path: release.patch
@@ -95,7 +95,7 @@ jobs:
           retention-days: 7
 
       - name: Upload release notes
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-notes
           path: release-notes.txt
@@ -118,35 +118,31 @@ jobs:
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             asset: game-aarch64-unknown-linux-gnu.tar.gz
-          - label: macOS Intel
-            runner: macos-15-intel
-            target: x86_64-apple-darwin
-            asset: game-x86_64-apple-darwin.tar.gz
           - label: macOS ARM
             runner: macos-15
             target: aarch64-apple-darwin
             asset: game-aarch64-apple-darwin.tar.gz
           - label: Windows Intel
-            runner: windows-2025
+            runner: windows-2025-vs2026
             target: x86_64-pc-windows-msvc
             asset: game-x86_64-pc-windows-msvc.zip
     env:
       CARGO_INCREMENTAL: "0"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ needs.prepare.outputs.base_sha }}
 
       - name: Download release patch
         if: needs.prepare.outputs.patch_required == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-source-patch
           path: .
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.x"
 
@@ -164,7 +160,7 @@ jobs:
         run: rustup toolchain install --profile minimal --target "${{ matrix.target }}"
 
       - name: Cache Cargo data
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -181,7 +177,7 @@ jobs:
         run: python .github/scripts/package-release.py --target "${{ matrix.target }}" --asset "${{ matrix.asset }}"
 
       - name: Upload release artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
@@ -202,20 +198,20 @@ jobs:
     steps:
       - name: Checkout release source
         if: needs.prepare.outputs.patch_required == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ needs.prepare.outputs.base_sha }}
           fetch-depth: 0
 
       - name: Checkout workflow source
         if: needs.prepare.outputs.patch_required != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Download release patch
         if: needs.prepare.outputs.patch_required == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-source-patch
           path: .
@@ -225,13 +221,13 @@ jobs:
         run: git apply release.patch
 
       - name: Download release notes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-notes
           path: .
 
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: game-*
           path: artifacts
