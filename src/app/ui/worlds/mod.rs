@@ -1,0 +1,92 @@
+mod dialogs;
+mod session;
+mod table;
+#[cfg(test)]
+mod tests;
+
+use bevy_egui::egui;
+
+use crate::app::state::{ClientRuntime, MenuState, SaveStore, Screen, SteamUser};
+
+use super::theme::{self, ButtonKind};
+use dialogs::{create_world_dialog_ui, edit_world_dialog_ui, open_create_world_dialog};
+pub(super) use session::refresh_worlds;
+use table::{draw_world_headers, draw_world_table, table_height};
+
+pub(super) const BUTTON_HEIGHT: f32 = 34.0;
+
+pub(super) fn worlds_ui(
+    ctx: &egui::Context,
+    menu: &mut MenuState,
+    runtime: &mut ClientRuntime,
+    store: &SaveStore,
+    user: &SteamUser,
+) {
+    theme::screen_scrim(ctx, "worlds_scrim", 145);
+    handle_worlds_escape(ctx, menu);
+    theme::anchored_panel(
+        ctx,
+        "worlds_panel",
+        920.0,
+        egui::Align2::CENTER_CENTER,
+        [0.0, -8.0],
+        |ui| {
+            let has_worlds = !menu.worlds.is_empty();
+            ui.horizontal(|ui| {
+                ui.label(theme::section("Singleplayer Worlds"));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if theme::compact_button(ui, "Back", ButtonKind::Secondary, 78.0).clicked() {
+                        menu.screen = Screen::MainMenu;
+                    }
+                    if has_worlds
+                        && theme::compact_button(ui, "Create New World", ButtonKind::Primary, 142.0)
+                            .clicked()
+                    {
+                        open_create_world_dialog(menu);
+                    }
+                });
+            });
+
+            ui.add_space(16.0);
+            draw_world_headers(ui);
+            let table_height = table_height(ctx);
+            draw_world_table(ui, menu, runtime, store, user, table_height);
+
+            if let Some(status) = &menu.status {
+                ui.add_space(10.0);
+                ui.label(theme::status_text(status));
+            }
+        },
+    );
+    create_world_dialog_ui(ctx, menu, store, user);
+    edit_world_dialog_ui(ctx, menu, store);
+}
+
+fn handle_worlds_escape(ctx: &egui::Context, menu: &mut MenuState) {
+    if !ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        return;
+    }
+
+    if let Some(dialog) = menu.create_world.as_mut() {
+        dialog.closing = true;
+        dialog.confirmed = false;
+        ctx.request_repaint();
+        return;
+    }
+
+    if let Some(dialog) = menu.edit_world.as_mut() {
+        dialog.closing = true;
+        dialog.confirmed = false;
+        ctx.request_repaint();
+        return;
+    }
+
+    if let Some(dialog) = menu.confirmation.as_mut() {
+        dialog.closing = true;
+        dialog.confirmed = false;
+        ctx.request_repaint();
+        return;
+    }
+
+    menu.screen = Screen::MainMenu;
+}

@@ -4,6 +4,19 @@
 
 Screens live in `MenuState`: `MainMenu`, `Worlds`, `Multiplayer`, `InGame`. Multiplayer UI exists, but the main-menu entry is gated as coming soon.
 
+Client resources live in `src/app/state/`:
+- `menu.rs`: screen selection and menu flags.
+- `dialogs.rs`: confirmation, create-world, and edit-world dialog data.
+- `runtime.rs`: active `ClientSession`, snapshots, local prediction, and client log messages.
+- `look.rs`: camera yaw/pitch and sensitivity.
+- `backdrop.rs`: menu backdrop fade state.
+
+The singleplayer worlds UI lives in `src/app/ui/worlds/`:
+- `mod.rs`: screen shell and Escape handling.
+- `table.rs`: worlds list layout and row actions.
+- `dialogs/`: create/edit world modals and shared form helpers.
+- `session.rs`: refresh world list and start singleplayer.
+
 Input systems:
 - Enter/T opens chat.
 - Escape toggles pause.

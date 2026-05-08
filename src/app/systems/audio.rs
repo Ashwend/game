@@ -17,19 +17,23 @@ pub(crate) struct MainMenuMusicFadeOut {
     elapsed_seconds: f32,
 }
 
+type MainMenuMusicQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        Option<&'static mut AudioSink>,
+        Option<&'static mut MainMenuMusicFadeOut>,
+    ),
+    With<MainMenuMusic>,
+>;
+
 pub(crate) fn main_menu_music_system(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     menu: Res<MenuState>,
     time: Option<Res<Time>>,
-    mut music: Query<
-        (
-            Entity,
-            Option<&mut AudioSink>,
-            Option<&mut MainMenuMusicFadeOut>,
-        ),
-        With<MainMenuMusic>,
-    >,
+    mut music: MainMenuMusicQuery,
 ) {
     if menu.screen.uses_menu_backdrop() {
         if music.is_empty() {

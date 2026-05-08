@@ -3,11 +3,14 @@
 One Rust binary, `game`, defaults to `client`; `server` runs the experimental dedicated Lightyear server.
 
 Modules:
-- `app`: Bevy client, egui UI, scene, input, audio, local prediction, local session polling.
+- `app`: Bevy client, scene, input, audio, local prediction, local session polling, and egui UI.
+  - `app/state`: client resources split by concern: menu state, dialogs, runtime session state, look state, and menu backdrop fade state.
+  - `app/ui/worlds`: singleplayer worlds screen split into the screen shell, table rendering, create/edit dialogs, and session actions.
 - `server`: in-process authoritative game state for local singleplayer, including auth, connected players, chat, admin state, and snapshots.
-- `controller`: shared player movement and collision simulation.
+- `controller`: shared player movement simulation. `mod.rs` owns `PlayerController`, `movement.rs` owns horizontal movement tuning/math, and `collision.rs` owns world-block collision.
 - `protocol`: serializable client/server messages, packets, snapshots.
-- `net`: local in-process session plus the server-side Lightyear dedicated transport.
+- `net`: local in-process session plus the server-side Lightyear dedicated path.
+  - `net/dedicated`: headless server app wiring, transport setup, connection spawning, authoritative movement, and replicated component protocol are split into separate files.
 - `save` + `world`: persistent world metadata and generated geometry.
 - `steam`: offline auth shim and feature-gated Steam hook points.
 

@@ -7,9 +7,12 @@ Game is a Rust/Bevy first-person prototype. Local singleplayer uses an in-proces
 Start here:
 - `src/cli.rs`: commands.
 - `src/app.rs`: Bevy app wiring.
+- `src/app/state/`: client resources and UI/runtime state.
+- `src/app/ui/worlds/`: singleplayer worlds screen, dialogs, table, and session actions.
 - `src/server.rs`: authoritative game state.
 - `src/protocol.rs`: wire messages and shared state.
-- `src/controller.rs`: movement simulation.
+- `src/controller/`: movement simulation, movement tuning/math, and collision.
+- `src/net/dedicated/`: Lightyear dedicated server app, transport, connection spawning, movement, and replicated components.
 - `src/save.rs`: world persistence.
 
 Use `./cli check`, `./cli test`, and `./cli lint`.
