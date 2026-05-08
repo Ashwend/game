@@ -26,6 +26,22 @@ pub(in crate::app::ui) fn wow_tooltip(
     response
 }
 
+pub(in crate::app::ui) fn anchored_wow_tooltip(
+    ctx: &egui::Context,
+    id: impl std::hash::Hash,
+    anchor: egui::Pos2,
+    title: &str,
+    body: &str,
+) {
+    egui::Area::new(egui::Id::new(id))
+        .order(egui::Order::Tooltip)
+        .interactable(false)
+        .fixed_pos(anchor + vec2(16.0, 18.0))
+        .show(ctx, |ui| {
+            draw_wow_tooltip(ui, title, body);
+        });
+}
+
 fn draw_wow_tooltip(ui: &mut egui::Ui, title: &str, body: &str) {
     Frame::NONE
         .fill(Color32::from_rgba_unmultiplied(4, 6, 12, 244))
@@ -64,6 +80,13 @@ mod tests {
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     draw_wow_tooltip(ui, "Title", "Body");
+                    anchored_wow_tooltip(
+                        ctx,
+                        "anchored_test_tooltip",
+                        egui::pos2(12.0, 18.0),
+                        "Title",
+                        "Body",
+                    );
                     let response =
                         ui.allocate_response(egui::vec2(10.0, 10.0), egui::Sense::hover());
                     let returned = wow_tooltip(response, "Title", "Body");

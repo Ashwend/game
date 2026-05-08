@@ -28,6 +28,7 @@ fn player_state(client_id: ClientId, position: Vec3Net) -> PlayerState {
         grounded: true,
         last_processed_input: 0,
         is_admin: false,
+        inventory: Default::default(),
     }
 }
 
@@ -44,6 +45,7 @@ fn welcome_seeds_local_prediction_from_snapshot() {
         &WorldSnapshot {
             tick: 1,
             players: vec![server_player],
+            dropped_items: Vec::new(),
         },
         true,
     );
@@ -67,6 +69,7 @@ fn snapshots_do_not_reconcile_existing_local_prediction() {
     runtime.apply_message(ServerMessage::Snapshot(WorldSnapshot {
         tick: 1,
         players: vec![player_state(1, Vec3Net::ZERO)],
+        dropped_items: Vec::new(),
     }));
 
     let predicted = runtime.predicted_local.expect("prediction should exist");
@@ -79,6 +82,7 @@ fn stale_snapshots_are_ignored() {
     let current_snapshot = WorldSnapshot {
         tick: 5,
         players: vec![player_state(1, Vec3Net::new(5.0, 0.0, 0.0))],
+        dropped_items: Vec::new(),
     };
     let mut runtime = ClientRuntime {
         client_id: Some(1),
@@ -92,6 +96,7 @@ fn stale_snapshots_are_ignored() {
     runtime.apply_message(ServerMessage::Snapshot(WorldSnapshot {
         tick: 4,
         players: vec![player_state(1, Vec3Net::ZERO)],
+        dropped_items: Vec::new(),
     }));
 
     let predicted = runtime.predicted_local.expect("prediction should exist");
@@ -148,6 +153,7 @@ fn menu_and_confirmation_defaults_match_initial_ui_state() {
     assert_eq!(menu.multiplayer_addr, "127.0.0.1:7777");
     assert!(!menu.pause_open);
     assert!(!menu.pause_options_open);
+    assert!(!menu.inventory_open);
     assert!(!menu.chat_open);
     assert!(menu.confirmation.is_none());
     assert!(!menu.quit_requested);
@@ -227,6 +233,7 @@ fn apply_message_handles_welcome_chat_events_and_rejections() {
     let snapshot = WorldSnapshot {
         tick: 9,
         players: vec![player_state(1, Vec3Net::new(1.0, 2.0, 3.0))],
+        dropped_items: Vec::new(),
     };
     let mut runtime = ClientRuntime::default();
 
@@ -291,6 +298,7 @@ fn local_view_falls_back_to_snapshot_when_prediction_is_missing() {
         snapshot: Some(WorldSnapshot {
             tick: 1,
             players: vec![player_state(1, Vec3Net::new(4.0, 0.0, 0.0))],
+            dropped_items: Vec::new(),
         }),
         ..Default::default()
     };
@@ -338,6 +346,7 @@ fn correction_and_snapshot_ignore_non_matching_players() {
         &WorldSnapshot {
             tick: 1,
             players: vec![player_state(1, Vec3Net::ZERO)],
+            dropped_items: Vec::new(),
         },
         true,
     );

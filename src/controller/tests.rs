@@ -266,6 +266,7 @@ fn reconciliation_keeps_local_prediction_until_snap_threshold() {
         grounded: true,
         last_processed_input: 1,
         is_admin: false,
+        inventory: Default::default(),
     };
 
     assert_eq!(controller.reconcile(&server), Reconciliation::Accepted);

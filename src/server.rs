@@ -7,14 +7,23 @@ use anyhow::{Result, bail};
 
 use crate::{
     controller::{MAX_LOOK_PITCH, PlayerController},
+    items::{
+        TEST_BANDAGE_ID, TEST_ORE_ID, TEST_RELIC_ID, can_pick_up, normalize_stack, stack_limit,
+    },
     protocol::{
-        ChatMessage, ClientId, ClientMessage, PROTOCOL_VERSION, PlayerEvent, PlayerMovement,
+        ACTIONBAR_SLOT_COUNT, ChatMessage, ClientId, ClientMessage, DroppedItemId,
+        DroppedWorldItem, INVENTORY_SLOT_COUNT, InventoryCommand, ItemContainer, ItemContainerSlot,
+        ItemStack, PROTOCOL_VERSION, PlayerEvent, PlayerInventoryState, PlayerMovement,
         PlayerState, ServerMessage, SteamId, Vec3Net, WorldSnapshot, sanitize_chat,
     },
     save::WorldSave,
     steam::{AuthMode, verify_auth_ticket},
     world::WorldData,
 };
+
+const SERVER_EYE_HEIGHT: f32 = 1.62;
+const DROP_FORWARD_DISTANCE: f32 = 1.45;
+const DROPPED_ITEM_GROUND_Y: f32 = 0.14;
 
 #[derive(Debug, Clone)]
 pub struct ServerSettings {
@@ -41,6 +50,8 @@ pub struct GameServer {
     settings: ServerSettings,
     clients: HashMap<ClientId, ServerClient>,
     steam_to_client: HashMap<SteamId, ClientId>,
+    dropped_items: HashMap<DroppedItemId, DroppedWorldItem>,
+    next_dropped_item_id: DroppedItemId,
     next_client_id: ClientId,
     tick: u64,
 }
@@ -61,6 +72,8 @@ impl GameServer {
             settings,
             clients: HashMap::new(),
             steam_to_client: HashMap::new(),
+            dropped_items: HashMap::new(),
+            next_dropped_item_id: 1,
             next_client_id: 1,
         }
     }
@@ -98,6 +111,7 @@ impl GameServer {
             steam_id,
             name: name.clone(),
             controller: PlayerController::spawn(),
+            inventory: starting_inventory(),
             is_admin,
         };
 
@@ -152,6 +166,10 @@ impl GameServer {
                 })
                 .into_iter()
                 .collect(),
+            ClientMessage::Inventory(command) => {
+                self.apply_inventory_command(client_id, command);
+                Vec::new()
+            }
             ClientMessage::Heartbeat => Vec::new(),
             ClientMessage::Disconnect => self.disconnect(client_id),
         }
@@ -198,18 +216,106 @@ impl GameServer {
                 grounded: client.controller.grounded,
                 last_processed_input: client.controller.last_processed_input,
                 is_admin: client.is_admin,
+                inventory: client.inventory.clone(),
             })
             .collect::<Vec<_>>();
         players.sort_by_key(|player| player.client_id);
 
+        let mut dropped_items = self.dropped_items.values().cloned().collect::<Vec<_>>();
+        dropped_items.sort_by_key(|item| item.id);
+
         WorldSnapshot {
             tick: self.tick,
             players,
+            dropped_items,
         }
     }
 
     fn is_admin(&self, steam_id: SteamId) -> bool {
         self.settings.singleplayer_host == Some(steam_id) || self.save.admins.contains(&steam_id)
+    }
+
+    fn apply_inventory_command(&mut self, client_id: ClientId, command: InventoryCommand) {
+        match command {
+            InventoryCommand::Move { from, to, quantity } => {
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    move_stack(&mut client.inventory, from, to, quantity);
+                }
+            }
+            InventoryCommand::Drop { from, quantity } => {
+                let Some((stack, position, yaw)) =
+                    self.clients.get_mut(&client_id).and_then(|client| {
+                        remove_stack(&mut client.inventory, from, quantity).map(|stack| {
+                            (
+                                stack,
+                                drop_position(&client.controller),
+                                client.controller.yaw,
+                            )
+                        })
+                    })
+                else {
+                    return;
+                };
+                self.spawn_dropped_item(stack, position, yaw);
+            }
+            InventoryCommand::PickUp { dropped_item_id } => {
+                self.pick_up_dropped_item(client_id, dropped_item_id);
+            }
+            InventoryCommand::SelectActionbarSlot { slot } => {
+                if slot < ACTIONBAR_SLOT_COUNT
+                    && let Some(client) = self.clients.get_mut(&client_id)
+                {
+                    client.inventory.active_actionbar_slot = slot;
+                }
+            }
+            InventoryCommand::SelectActionbarOffset { offset } => {
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    client.inventory.active_actionbar_slot =
+                        offset_actionbar_slot(client.inventory.active_actionbar_slot, offset);
+                }
+            }
+        }
+    }
+
+    fn spawn_dropped_item(&mut self, stack: ItemStack, position: Vec3Net, yaw: f32) {
+        let Some(stack) = normalize_stack(&stack) else {
+            return;
+        };
+        let id = self.next_dropped_item_id;
+        self.next_dropped_item_id += 1;
+        self.dropped_items.insert(
+            id,
+            DroppedWorldItem {
+                id,
+                stack,
+                position,
+                yaw,
+            },
+        );
+    }
+
+    fn pick_up_dropped_item(&mut self, client_id: ClientId, dropped_item_id: DroppedItemId) {
+        let Some(item) = self.dropped_items.get(&dropped_item_id).cloned() else {
+            return;
+        };
+        let Some(client) = self.clients.get(&client_id) else {
+            return;
+        };
+        if !can_pick_up(
+            player_eye_position(client.controller.position),
+            client.controller.yaw,
+            client.controller.pitch,
+            &item,
+        ) {
+            return;
+        }
+
+        let Some(client) = self.clients.get_mut(&client_id) else {
+            return;
+        };
+        if add_stack_to_inventory(&mut client.inventory, item.stack.clone()).is_none() {
+            self.dropped_items.remove(&dropped_item_id);
+        }
     }
 }
 
@@ -219,7 +325,182 @@ struct ServerClient {
     steam_id: SteamId,
     name: String,
     controller: PlayerController,
+    inventory: PlayerInventoryState,
     is_admin: bool,
+}
+
+fn starting_inventory() -> PlayerInventoryState {
+    let mut inventory = PlayerInventoryState::empty();
+    inventory.inventory_slots[0] = Some(ItemStack::new(TEST_ORE_ID, 12));
+    inventory.inventory_slots[1] = Some(ItemStack::new(TEST_BANDAGE_ID, 5));
+    inventory.inventory_slots[2] = Some(ItemStack::new(TEST_RELIC_ID, 1));
+    inventory
+}
+
+fn move_stack(
+    inventory: &mut PlayerInventoryState,
+    from: ItemContainerSlot,
+    to: ItemContainerSlot,
+    quantity: Option<u16>,
+) {
+    if from == to || !slot_exists(inventory, from) || !slot_exists(inventory, to) {
+        return;
+    }
+
+    let Some((moving, removed_all)) = remove_stack_for_move(inventory, from, quantity) else {
+        return;
+    };
+    let remainder = insert_stack_at(inventory, to, moving, removed_all);
+    if let Some(remainder) = remainder {
+        restore_stack(inventory, from, remainder);
+    }
+}
+
+fn remove_stack_for_move(
+    inventory: &mut PlayerInventoryState,
+    slot: ItemContainerSlot,
+    quantity: Option<u16>,
+) -> Option<(ItemStack, bool)> {
+    let source = slot_mut(inventory, slot)?;
+    let current = source.as_mut()?;
+    let amount = quantity
+        .unwrap_or(current.quantity)
+        .clamp(1, current.quantity);
+    let removed_all = amount == current.quantity;
+    let item_id = current.item_id.clone();
+    current.quantity -= amount;
+    if current.quantity == 0 {
+        *source = None;
+    }
+    Some((ItemStack::new(item_id, amount), removed_all))
+}
+
+fn remove_stack(
+    inventory: &mut PlayerInventoryState,
+    slot: ItemContainerSlot,
+    quantity: Option<u16>,
+) -> Option<ItemStack> {
+    let source = slot_mut(inventory, slot)?;
+    let current = source.as_mut()?;
+    let amount = quantity
+        .unwrap_or(current.quantity)
+        .clamp(1, current.quantity);
+    let item_id = current.item_id.clone();
+    current.quantity -= amount;
+    if current.quantity == 0 {
+        *source = None;
+    }
+    Some(ItemStack::new(item_id, amount))
+}
+
+fn insert_stack_at(
+    inventory: &mut PlayerInventoryState,
+    slot: ItemContainerSlot,
+    mut moving: ItemStack,
+    allow_swap: bool,
+) -> Option<ItemStack> {
+    moving = normalize_stack(&moving)?;
+    let target = slot_mut(inventory, slot)?;
+    match target {
+        None => {
+            *target = Some(moving);
+            None
+        }
+        Some(existing) if existing.item_id == moving.item_id => {
+            let limit = stack_limit(&existing.item_id).unwrap_or(1);
+            let room = limit.saturating_sub(existing.quantity);
+            let moved = room.min(moving.quantity);
+            existing.quantity += moved;
+            moving.quantity -= moved;
+            (moving.quantity > 0).then_some(moving)
+        }
+        Some(existing) if allow_swap => {
+            let displaced = std::mem::replace(existing, moving);
+            Some(displaced)
+        }
+        Some(_) => Some(moving),
+    }
+}
+
+fn restore_stack(inventory: &mut PlayerInventoryState, slot: ItemContainerSlot, stack: ItemStack) {
+    let Some(target) = slot_mut(inventory, slot) else {
+        return;
+    };
+    match target {
+        Some(existing) if existing.item_id == stack.item_id => {
+            let limit = stack_limit(&existing.item_id).unwrap_or(1);
+            existing.quantity = existing.quantity.saturating_add(stack.quantity).min(limit);
+        }
+        None => {
+            *target = Some(stack);
+        }
+        Some(_) => {}
+    }
+}
+
+fn add_stack_to_inventory(
+    inventory: &mut PlayerInventoryState,
+    stack: ItemStack,
+) -> Option<ItemStack> {
+    let mut remaining = normalize_stack(&stack)?;
+
+    for index in 0..inventory.inventory_slots.len() {
+        let slot = ItemContainerSlot::inventory(index);
+        if inventory.inventory_slots[index]
+            .as_ref()
+            .is_some_and(|existing| existing.item_id == remaining.item_id)
+        {
+            remaining = match insert_stack_at(inventory, slot, remaining, false) {
+                Some(remaining) => remaining,
+                None => return None,
+            };
+        }
+    }
+
+    for index in 0..inventory.inventory_slots.len() {
+        if inventory.inventory_slots[index].is_none() {
+            inventory.inventory_slots[index] = Some(remaining);
+            return None;
+        }
+    }
+
+    Some(remaining)
+}
+
+fn slot_mut(
+    inventory: &mut PlayerInventoryState,
+    slot: ItemContainerSlot,
+) -> Option<&mut Option<ItemStack>> {
+    match slot.container {
+        ItemContainer::Inventory => inventory.inventory_slots.get_mut(slot.slot),
+        ItemContainer::Actionbar => inventory.actionbar_slots.get_mut(slot.slot),
+    }
+}
+
+fn slot_exists(inventory: &PlayerInventoryState, slot: ItemContainerSlot) -> bool {
+    (match slot.container {
+        ItemContainer::Inventory => slot.slot < INVENTORY_SLOT_COUNT,
+        ItemContainer::Actionbar => slot.slot < ACTIONBAR_SLOT_COUNT,
+    }) && (match slot.container {
+        ItemContainer::Inventory => slot.slot < inventory.inventory_slots.len(),
+        ItemContainer::Actionbar => slot.slot < inventory.actionbar_slots.len(),
+    })
+}
+
+fn offset_actionbar_slot(current: usize, offset: i8) -> usize {
+    (current as isize + offset as isize).rem_euclid(ACTIONBAR_SLOT_COUNT as isize) as usize
+}
+
+fn drop_position(controller: &PlayerController) -> Vec3Net {
+    let forward = Vec3Net::new(-controller.yaw.sin(), 0.0, -controller.yaw.cos());
+    controller
+        .position
+        .plus(forward.scale(DROP_FORWARD_DISTANCE))
+        .plus(Vec3Net::new(0.0, DROPPED_ITEM_GROUND_Y, 0.0))
+}
+
+fn player_eye_position(position: Vec3Net) -> Vec3Net {
+    position.plus(Vec3Net::new(0.0, SERVER_EYE_HEIGHT, 0.0))
 }
 
 fn apply_client_movement(controller: &mut PlayerController, movement: PlayerMovement) {

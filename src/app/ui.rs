@@ -1,6 +1,7 @@
 mod chat;
 mod confirm;
 mod hud;
+mod inventory;
 mod menu;
 mod modal;
 mod multiplayer;
@@ -21,6 +22,7 @@ use self::{
     chat::chat_ui,
     confirm::confirmation_ui,
     hud::hud_ui,
+    inventory::inventory_ui,
     menu::main_menu_ui,
     multiplayer::multiplayer_ui,
     options::{OptionsBackTarget, options_ui},
@@ -38,6 +40,8 @@ pub(crate) struct UiResources<'w, 's> {
     backdrop_visibility: ResMut<'w, MenuBackdropVisibility>,
     runtime: ResMut<'w, ClientRuntime>,
     settings: ResMut<'w, ClientSettings>,
+    inventory_ui: ResMut<'w, super::state::InventoryUiState>,
+    pickup_target: Res<'w, super::state::PickupTargetState>,
     button_sound_requests: ResMut<'w, ButtonSoundRequests>,
     store: Res<'w, SaveStore>,
     user: Res<'w, SteamUser>,
@@ -106,7 +110,16 @@ pub(crate) fn ui_system(
                     &resources.diagnostics,
                     &resources.settings,
                 );
-                chat_ui(ctx, &mut resources.menu, &mut resources.runtime);
+                inventory_ui(
+                    ctx,
+                    &mut resources.menu,
+                    &mut resources.runtime,
+                    &mut resources.inventory_ui,
+                    &resources.pickup_target,
+                );
+                if !resources.menu.inventory_open {
+                    chat_ui(ctx, &mut resources.menu, &mut resources.runtime);
+                }
             }
             if resources.menu.pause_open && !resources.menu.pause_options_open {
                 pause_ui(

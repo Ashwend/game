@@ -53,6 +53,7 @@ pub(super) fn pause_ui(
                         menu.screen = Screen::MainMenu;
                         menu.pause_open = false;
                         menu.pause_options_open = false;
+                        menu.inventory_open = false;
                         menu.chat_open = false;
                         menu.chat_focus_pending = false;
                     }

@@ -16,6 +16,6 @@ pub(super) use frames::{
     anchored_panel, apply_game_style, backdrop_cover, inset_frame, panel_frame, screen_scrim,
 };
 pub(super) use text::{field_label, muted, section, status_text, text_input, title};
-pub(super) use tooltip::wow_tooltip;
+pub(super) use tooltip::{anchored_wow_tooltip, wow_tooltip};
 
 pub(super) const MENU_WIDTH: f32 = 360.0;

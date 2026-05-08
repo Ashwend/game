@@ -2,6 +2,7 @@ mod audio;
 mod camera;
 mod display;
 mod input;
+mod items;
 mod network;
 mod players;
 mod quit;
@@ -11,8 +12,12 @@ pub(crate) use audio::main_menu_music_system;
 pub(crate) use camera::{camera_follow_system, menu_backdrop_camera_system};
 pub(crate) use display::apply_display_settings_system;
 pub(crate) use input::{
-    center_cursor_on_focus_system, chat_shortcut_system, client_input_system, mouse_look_system,
-    toggle_pause_system, update_cursor_system,
+    center_cursor_on_focus_system, chat_shortcut_system, client_input_system,
+    gameplay_inventory_shortcuts_system, mouse_look_system, send_inventory_command,
+    toggle_inventory_system, toggle_pause_system, update_cursor_system,
+};
+pub(crate) use items::{
+    apply_dropped_items_system, apply_held_item_visual_system, update_pickup_target_system,
 };
 pub(crate) use network::network_tick_system;
 pub(crate) use players::apply_snapshot_system;

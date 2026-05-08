@@ -1,7 +1,10 @@
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
 
-use crate::{protocol::ClientId, world::WorldData};
+use crate::{
+    protocol::{ClientId, DroppedItemId},
+    world::WorldData,
+};
 
 use super::{
     EYE_HEIGHT, PLAYER_VISUAL_CENTER_Y,
@@ -10,6 +13,8 @@ use super::{
 
 const REMOTE_PLAYER_COLOR: Color = Color::srgb(0.95, 0.61, 0.25);
 const WORLD_COLOR: Color = Color::srgb(0.18, 0.34, 0.22);
+const DROPPED_BAG_COLOR: Color = Color::srgb(0.42, 0.31, 0.18);
+const HELD_BAG_COLOR: Color = Color::srgb(0.50, 0.38, 0.24);
 
 #[derive(Resource, Default)]
 pub(crate) struct WorldSceneState {
@@ -22,10 +27,26 @@ pub(crate) struct PlayerVisualAssets {
     pub(crate) remote_material: Handle<StandardMaterial>,
 }
 
+#[derive(Resource, Clone)]
+pub(crate) struct ItemVisualAssets {
+    pub(crate) dropped_mesh: Handle<Mesh>,
+    pub(crate) held_mesh: Handle<Mesh>,
+    pub(crate) dropped_material: Handle<StandardMaterial>,
+    pub(crate) held_material: Handle<StandardMaterial>,
+}
+
 #[derive(Component)]
 pub(crate) struct NetworkPlayer {
     pub(crate) client_id: ClientId,
 }
+
+#[derive(Component)]
+pub(crate) struct NetworkDroppedItem {
+    pub(crate) id: DroppedItemId,
+}
+
+#[derive(Component)]
+pub(crate) struct HeldItemVisual;
 
 #[derive(Component)]
 pub(crate) struct MainCamera;
@@ -70,6 +91,20 @@ pub(crate) fn setup_scene(
     commands.insert_resource(PlayerVisualAssets {
         mesh: meshes.add(Capsule3d::new(0.35, 0.9)),
         remote_material: materials.add(REMOTE_PLAYER_COLOR),
+    });
+    commands.insert_resource(ItemVisualAssets {
+        dropped_mesh: meshes.add(Capsule3d::new(0.28, 0.34)),
+        held_mesh: meshes.add(Cuboid::new(0.26, 0.22, 0.34)),
+        dropped_material: materials.add(StandardMaterial {
+            base_color: DROPPED_BAG_COLOR,
+            perceptual_roughness: 0.95,
+            ..default()
+        }),
+        held_material: materials.add(StandardMaterial {
+            base_color: HELD_BAG_COLOR,
+            perceptual_roughness: 0.88,
+            ..default()
+        }),
     });
 }
 
@@ -268,7 +303,9 @@ mod tests {
                 grounded: true,
                 last_processed_input: 0,
                 is_admin: false,
+                inventory: Default::default(),
             }],
+            dropped_items: Vec::new(),
         };
 
         assert_eq!(snapshot.players[0].client_id, player.client_id);

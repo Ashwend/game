@@ -7,11 +7,15 @@ pub type ClientId = u64;
 pub type PacketSequence = u64;
 pub type SteamId = u64;
 
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_INPUT_DELTA_SECONDS: f32 = 1.0 / SERVER_TICK_RATE_HZ;
 pub const MAX_CHAT_LEN: usize = 240;
 pub const MAX_HEALTH: f32 = 100.0;
+pub const INVENTORY_SLOT_COUNT: usize = 40;
+pub const ACTIONBAR_SLOT_COUNT: usize = 9;
+
+pub type DroppedItemId = u64;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Reflect)]
 pub struct Vec3Net {
@@ -49,6 +53,15 @@ impl Vec3Net {
     pub fn plus(self, other: Self) -> Self {
         Self::new(self.x + other.x, self.y + other.y, self.z + other.z)
     }
+
+    pub fn minus(self, other: Self) -> Self {
+        Self::new(self.x - other.x, self.y - other.y, self.z - other.z)
+    }
+
+    pub fn dot(self, other: Self) -> f32 {
+        self.x
+            .mul_add(other.x, self.y.mul_add(other.y, self.z * other.z))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -63,6 +76,7 @@ pub enum ClientMessage {
     Chat {
         text: String,
     },
+    Inventory(InventoryCommand),
     Heartbeat,
     Disconnect,
 }
@@ -73,6 +87,7 @@ impl ClientMessage {
             Self::Auth { .. } => ClientMessageKind::Auth,
             Self::Movement(_) => ClientMessageKind::Movement,
             Self::Chat { .. } => ClientMessageKind::Chat,
+            Self::Inventory(_) => ClientMessageKind::Inventory,
             Self::Heartbeat => ClientMessageKind::Heartbeat,
             Self::Disconnect => ClientMessageKind::Disconnect,
         }
@@ -80,10 +95,114 @@ impl ClientMessage {
 
     pub fn delivery(&self) -> PacketDelivery {
         match self {
-            Self::Auth { .. } | Self::Chat { .. } | Self::Disconnect => PacketDelivery::Reliable,
+            Self::Auth { .. } | Self::Chat { .. } | Self::Inventory(_) | Self::Disconnect => {
+                PacketDelivery::Reliable
+            }
             Self::Movement(_) | Self::Heartbeat => PacketDelivery::Unreliable,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ItemStack {
+    pub item_id: String,
+    pub quantity: u16,
+}
+
+impl ItemStack {
+    pub fn new(item_id: impl Into<String>, quantity: u16) -> Self {
+        Self {
+            item_id: item_id.into(),
+            quantity,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum ItemContainer {
+    Inventory,
+    Actionbar,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct ItemContainerSlot {
+    pub container: ItemContainer,
+    pub slot: usize,
+}
+
+impl ItemContainerSlot {
+    pub const fn inventory(slot: usize) -> Self {
+        Self {
+            container: ItemContainer::Inventory,
+            slot,
+        }
+    }
+
+    pub const fn actionbar(slot: usize) -> Self {
+        Self {
+            container: ItemContainer::Actionbar,
+            slot,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum InventoryCommand {
+    Move {
+        from: ItemContainerSlot,
+        to: ItemContainerSlot,
+        quantity: Option<u16>,
+    },
+    Drop {
+        from: ItemContainerSlot,
+        quantity: Option<u16>,
+    },
+    PickUp {
+        dropped_item_id: DroppedItemId,
+    },
+    SelectActionbarSlot {
+        slot: usize,
+    },
+    SelectActionbarOffset {
+        offset: i8,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlayerInventoryState {
+    pub inventory_slots: Vec<Option<ItemStack>>,
+    pub actionbar_slots: Vec<Option<ItemStack>>,
+    pub active_actionbar_slot: usize,
+}
+
+impl Default for PlayerInventoryState {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl PlayerInventoryState {
+    pub fn empty() -> Self {
+        Self {
+            inventory_slots: vec![None; INVENTORY_SLOT_COUNT],
+            actionbar_slots: vec![None; ACTIONBAR_SLOT_COUNT],
+            active_actionbar_slot: 0,
+        }
+    }
+
+    pub fn active_actionbar_stack(&self) -> Option<&ItemStack> {
+        self.actionbar_slots
+            .get(self.active_actionbar_slot)
+            .and_then(Option::as_ref)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DroppedWorldItem {
+    pub id: DroppedItemId,
+    pub stack: ItemStack,
+    pub position: Vec3Net,
+    pub yaw: f32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -161,6 +280,7 @@ pub enum ClientMessageKind {
     Auth,
     Movement,
     Chat,
+    Inventory,
     Heartbeat,
     Disconnect,
 }
@@ -252,6 +372,7 @@ pub struct ChatMessage {
 pub struct WorldSnapshot {
     pub tick: u64,
     pub players: Vec<PlayerState>,
+    pub dropped_items: Vec<DroppedWorldItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -267,6 +388,7 @@ pub struct PlayerState {
     pub grounded: bool,
     pub last_processed_input: u64,
     pub is_admin: bool,
+    pub inventory: PlayerInventoryState,
 }
 
 pub fn sanitize_chat(text: &str) -> Option<String> {

@@ -155,6 +155,7 @@ mod tests {
             grounded: true,
             last_processed_input: 0,
             is_admin: false,
+            inventory: Default::default(),
         }
     }
 
@@ -172,6 +173,7 @@ mod tests {
         runtime.snapshot = Some(WorldSnapshot {
             tick: 1,
             players: vec![player(75.0)],
+            dropped_items: Vec::new(),
         });
 
         let _ = ctx.run(raw_input(), |ctx| {
