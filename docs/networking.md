@@ -1,15 +1,17 @@
 # Networking
 
-Multiplayer networking uses Lightyear.
+Networking currently has two paths.
 
-Lightyear provides transport, replication, prediction, reliable channels, and snapshot interpolation. UDP uses netcode; Steam transport is available with `--features steam`.
+Local singleplayer uses `ClientSession::Local` and `LocalGameSession`. It runs `GameServer` in-process, sends `ClientMessage` values directly, drains `ServerMessage` values, and persists the selected save on shutdown.
 
-The game protocol registers replicated player components and native inputs in `src/net/dedicated.rs`.
-
-Dedicated server:
+The dedicated server path uses Lightyear in `src/net/dedicated.rs`. It:
 - runs a headless Bevy app.
 - starts Lightyear `ServerPlugins` at 20 Hz.
+- registers replicated player components and native `NetworkInput`.
+- simulates authoritative movement from input on the server.
 - uses UDP/netcode in offline mode.
 - uses Lightyear Steam transport in Steam mode when built with `--features steam`.
 
-Local singleplayer bypasses packet networking and uses `LocalGameSession`.
+The playable client is not yet connected to the Lightyear dedicated server path. The multiplayer UI is still gated from the main menu, and the direct UDP connect button reports that client networking is moving to Lightyear replication.
+
+Steam mode is transport-only for now. Live Steam auth ticket validation and server browser registration still need final Steamworks server integration.

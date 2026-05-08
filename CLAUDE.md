@@ -2,7 +2,7 @@
 
 AI context for this repo.
 
-Game is a Rust/Bevy first-person multiplayer prototype. Lightyear owns multiplayer replication, prediction, and interpolation; local singleplayer uses an in-process server; worlds are JSON saves.
+Game is a Rust/Bevy first-person prototype. Local singleplayer uses an in-process server; the dedicated Lightyear server path is experimental and server-side first; worlds are JSON saves.
 
 Start here:
 - `src/cli.rs`: commands.

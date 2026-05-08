@@ -6,4 +6,4 @@
 
 `WorldStore::platform_default()` stores saves under the platform app-data directory in `worlds/`.
 
-Singleplayer loads a selected save and persists `last_authoritative_tick` on shutdown. Dedicated server loads `--world` or creates/reuses `Dedicated`.
+Singleplayer loads a selected save and persists `last_authoritative_tick` on shutdown. Dedicated server loads `--world` or creates/reuses `Dedicated` for its world geometry, but dedicated runtime persistence is not wired yet.
