@@ -13,6 +13,7 @@ use crate::{
     },
     save::WorldSave,
     steam::{AuthMode, verify_auth_ticket},
+    world::WorldData,
 };
 
 #[derive(Debug, Clone)]
@@ -36,6 +37,7 @@ pub struct ServerEnvelope {
 #[derive(Debug)]
 pub struct GameServer {
     save: WorldSave,
+    world: WorldData,
     settings: ServerSettings,
     clients: HashMap<ClientId, ServerClient>,
     steam_to_client: HashMap<SteamId, ClientId>,
@@ -50,10 +52,12 @@ impl GameServer {
         {
             save.admins.push(host);
         }
+        let world = save.map.world_data();
 
         Self {
             tick: save.state.last_authoritative_tick,
             save,
+            world,
             settings,
             clients: HashMap::new(),
             steam_to_client: HashMap::new(),
@@ -109,7 +113,7 @@ impl GameServer {
                     message: ServerMessage::Welcome {
                         client_id,
                         map: self.save.map.clone(),
-                        world: self.save.map.world_data(),
+                        world: self.world.clone(),
                         is_admin,
                         snapshot,
                     },

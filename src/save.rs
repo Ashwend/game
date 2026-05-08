@@ -66,9 +66,18 @@ impl WorldStore {
     }
 
     pub fn create_world(&self, name: &str, owner_steam_id: Option<SteamId>) -> Result<WorldSave> {
+        self.create_world_with_map(name, owner_steam_id, MapType::Test)
+    }
+
+    pub fn create_world_with_map(
+        &self,
+        name: &str,
+        owner_steam_id: Option<SteamId>,
+        map: MapType,
+    ) -> Result<WorldSave> {
         self.ensure_exists()?;
 
-        let save = WorldSave::new(name, owner_steam_id);
+        let save = WorldSave::new_with_map(name, owner_steam_id, map);
         self.save_world(&save)?;
         Ok(save)
     }
@@ -83,6 +92,13 @@ impl WorldStore {
         let path = self.world_path(save.id);
         let json = serde_json::to_string_pretty(save).context("could not serialize world save")?;
         fs::write(&path, json).with_context(|| format!("could not write world {}", path.display()))
+    }
+
+    pub fn rename_world(&self, id: Uuid, name: &str) -> Result<WorldSave> {
+        let mut save = self.load_world(id)?;
+        save.name = normalize_world_name(name);
+        self.save_world(&save)?;
+        Ok(save)
     }
 
     pub fn delete_world(&self, id: Uuid) -> Result<()> {
@@ -127,6 +143,10 @@ pub struct WorldSave {
 
 impl WorldSave {
     pub fn new(name: &str, owner_steam_id: Option<SteamId>) -> Self {
+        Self::new_with_map(name, owner_steam_id, MapType::Test)
+    }
+
+    pub fn new_with_map(name: &str, owner_steam_id: Option<SteamId>, map: MapType) -> Self {
         let id = Uuid::new_v4();
         let mut admins = Vec::new();
         if let Some(owner_steam_id) = owner_steam_id {
@@ -136,7 +156,7 @@ impl WorldSave {
         Self {
             id,
             name: normalize_world_name(name),
-            map: MapType::Test,
+            map,
             created_at_unix: now_unix(),
             admins,
             state: WorldStateSave::default(),
@@ -189,6 +209,7 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::ProceduralMapSize;
 
     fn temp_store() -> WorldStore {
         WorldStore::new(std::env::temp_dir().join(format!("game-save-test-{}", Uuid::new_v4())))
@@ -224,6 +245,58 @@ mod tests {
     }
 
     #[test]
+    fn create_world_with_map_persists_map_settings() {
+        let store = temp_store();
+        let save = store
+            .create_world_with_map(
+                "Procedural",
+                Some(123),
+                MapType::Procedural {
+                    seed: 99,
+                    size: ProceduralMapSize::Large,
+                },
+            )
+            .expect("world should be created");
+
+        let loaded = store.load_world(save.id).expect("world should load");
+        assert_eq!(
+            loaded.map,
+            MapType::Procedural {
+                seed: 99,
+                size: ProceduralMapSize::Large,
+            }
+        );
+
+        let _ = fs::remove_dir_all(store.root());
+    }
+
+    #[test]
+    fn rename_world_preserves_other_save_fields() {
+        let store = temp_store();
+        let save = store
+            .create_world_with_map(
+                "Original",
+                Some(123),
+                MapType::Procedural {
+                    seed: 99,
+                    size: ProceduralMapSize::Large,
+                },
+            )
+            .expect("world should be created");
+
+        let renamed = store
+            .rename_world(save.id, "  Renamed  ")
+            .expect("world should rename");
+
+        assert_eq!(renamed.name, "Renamed");
+        assert_eq!(renamed.id, save.id);
+        assert_eq!(renamed.map, save.map);
+        assert_eq!(renamed.admins, save.admins);
+
+        let _ = fs::remove_dir_all(store.root());
+    }
+
+    #[test]
     fn old_seeded_saves_load_as_test_maps() {
         let id = Uuid::new_v4();
         let json = format!(
@@ -243,5 +316,30 @@ mod tests {
         assert_eq!(save.id, id);
         assert_eq!(save.map, MapType::Test);
         assert_eq!(save.state.last_authoritative_tick, 5);
+    }
+
+    #[test]
+    fn old_procedural_maps_default_to_medium_size() {
+        let id = Uuid::new_v4();
+        let json = format!(
+            r#"{{
+                "id": "{id}",
+                "name": "Old Procedural",
+                "map": {{"procedural": {{"seed": 123}}}},
+                "created_at_unix": 1,
+                "admins": [123],
+                "state": {{"last_authoritative_tick": 5}}
+            }}"#
+        );
+
+        let save: WorldSave = serde_json::from_str(&json).expect("old save should load");
+
+        assert_eq!(
+            save.map,
+            MapType::Procedural {
+                seed: 123,
+                size: ProceduralMapSize::Medium,
+            }
+        );
     }
 }

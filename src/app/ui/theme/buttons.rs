@@ -135,6 +135,12 @@ pub(in crate::app::ui) fn take_button_sounds(ctx: &egui::Context) -> Vec<ButtonS
     })
 }
 
+pub(in crate::app::ui) fn record_click_sound(ui: &egui::Ui, response: &egui::Response) {
+    if response.clicked() {
+        queue_button_sound(ui, ButtonSound::Click);
+    }
+}
+
 fn sized_button(
     ui: &mut egui::Ui,
     label: &str,
@@ -164,9 +170,7 @@ fn sized_button(
 }
 
 fn record_button_sounds(ui: &mut egui::Ui, response: &egui::Response) {
-    if response.clicked() {
-        queue_button_sound(ui, ButtonSound::Click);
-    }
+    record_click_sound(ui, response);
 
     let hovered = response.hovered();
     let hover_state_id = response.id.with("hover_sound");

@@ -9,7 +9,7 @@ use crate::{
     },
     save::{WorldStore, WorldSummary},
     steam::AuthenticatedUser,
-    world::WorldData,
+    world::{MapType, ProceduralMapSize, WorldData},
 };
 
 const MAX_CLIENT_LOG_MESSAGES: usize = 80;
@@ -42,7 +42,8 @@ pub(crate) struct SteamUser(pub(crate) AuthenticatedUser);
 pub(crate) struct MenuState {
     pub(crate) screen: Screen,
     pub(crate) worlds: Vec<WorldSummary>,
-    pub(crate) new_world_name: String,
+    pub(crate) create_world: Option<CreateWorldDialog>,
+    pub(crate) edit_world: Option<EditWorldDialog>,
     pub(crate) multiplayer_addr: String,
     pub(crate) status: Option<String>,
     pub(crate) pause_open: bool,
@@ -57,7 +58,8 @@ impl Default for MenuState {
         Self {
             screen: Screen::MainMenu,
             worlds: Vec::new(),
-            new_world_name: "New World".to_owned(),
+            create_world: None,
+            edit_world: None,
             multiplayer_addr: "127.0.0.1:7777".to_owned(),
             status: None,
             pause_open: false,
@@ -175,6 +177,95 @@ impl ConfirmationDialog {
 #[derive(Debug, Clone)]
 pub(crate) enum ConfirmationAction {
     DeleteWorld { world_id: Uuid },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CreateWorldDialog {
+    pub(crate) name: String,
+    pub(crate) map_kind: CreateWorldMapKind,
+    pub(crate) procedural_size: ProceduralMapSize,
+    pub(crate) seed: String,
+    pub(crate) error: Option<String>,
+    pub(crate) closing: bool,
+    pub(crate) confirmed: bool,
+}
+
+impl Default for CreateWorldDialog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CreateWorldDialog {
+    pub(crate) fn new() -> Self {
+        Self {
+            name: "New World".to_owned(),
+            map_kind: CreateWorldMapKind::Test,
+            procedural_size: ProceduralMapSize::Medium,
+            seed: random_seed().to_string(),
+            error: None,
+            closing: false,
+            confirmed: false,
+        }
+    }
+
+    pub(crate) fn refresh_seed(&mut self) {
+        self.seed = random_seed().to_string();
+        self.error = None;
+    }
+
+    pub(crate) fn selected_map(&self) -> Result<MapType, &'static str> {
+        match self.map_kind {
+            CreateWorldMapKind::Test => Ok(MapType::Test),
+            CreateWorldMapKind::Procedural => {
+                let seed = self
+                    .seed
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|_| "Seed must be a whole number.")?;
+                Ok(MapType::Procedural {
+                    seed,
+                    size: self.procedural_size,
+                })
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CreateWorldMapKind {
+    Test,
+    Procedural,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct EditWorldDialog {
+    pub(crate) world_id: Uuid,
+    pub(crate) name: String,
+    pub(crate) map: MapType,
+    pub(crate) error: Option<String>,
+    pub(crate) closing: bool,
+    pub(crate) confirmed: bool,
+}
+
+impl EditWorldDialog {
+    pub(crate) fn new(world: &WorldSummary) -> Self {
+        Self {
+            world_id: world.id,
+            name: world.name.clone(),
+            map: world.map.clone(),
+            error: None,
+            closing: false,
+            confirmed: false,
+        }
+    }
+}
+
+fn random_seed() -> u64 {
+    let bytes = Uuid::new_v4().into_bytes();
+    u64::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ])
 }
 
 #[derive(Resource, Default)]
@@ -501,7 +592,8 @@ mod tests {
     fn menu_and_confirmation_defaults_match_initial_ui_state() {
         let menu = MenuState::default();
         assert_eq!(menu.screen, Screen::MainMenu);
-        assert_eq!(menu.new_world_name, "New World");
+        assert!(menu.create_world.is_none());
+        assert!(menu.edit_world.is_none());
         assert_eq!(menu.multiplayer_addr, "127.0.0.1:7777");
         assert!(!menu.pause_open);
         assert!(!menu.chat_open);
@@ -517,6 +609,30 @@ mod tests {
         ));
         assert!(!dialog.closing);
         assert!(!dialog.confirmed);
+    }
+
+    #[test]
+    fn create_world_dialog_builds_selected_maps() {
+        let mut dialog = CreateWorldDialog::default();
+
+        assert_eq!(dialog.name, "New World");
+        assert_eq!(dialog.selected_map().expect("test map"), MapType::Test);
+
+        dialog.map_kind = CreateWorldMapKind::Procedural;
+        dialog.procedural_size = ProceduralMapSize::Large;
+        dialog.seed = "42".to_owned();
+        assert_eq!(
+            dialog.selected_map().expect("procedural map"),
+            MapType::Procedural {
+                seed: 42,
+                size: ProceduralMapSize::Large,
+            }
+        );
+
+        dialog.seed = "not a number".to_owned();
+        assert!(dialog.selected_map().is_err());
+        dialog.refresh_seed();
+        assert!(dialog.selected_map().is_ok());
     }
 
     #[test]

@@ -11,6 +11,8 @@ pub enum MapType {
     Test,
     Procedural {
         seed: u64,
+        #[serde(default)]
+        size: ProceduralMapSize,
     },
 }
 
@@ -25,7 +27,36 @@ impl MapType {
     pub fn world_data(&self) -> WorldData {
         match self {
             Self::Test => WorldData::test_world(),
-            Self::Procedural { .. } => WorldData::test_world(),
+            Self::Procedural { seed, size } => WorldData::procedural(*seed, *size),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProceduralMapSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl ProceduralMapSize {
+    pub const ALL: [Self; 3] = [Self::Small, Self::Medium, Self::Large];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Small => "Small",
+            Self::Medium => "Medium",
+            Self::Large => "Large",
+        }
+    }
+
+    pub fn floor_size(self) -> f32 {
+        match self {
+            Self::Small => 64.0,
+            Self::Medium => 128.0,
+            Self::Large => 256.0,
         }
     }
 }
@@ -43,6 +74,18 @@ impl Default for WorldData {
 }
 
 impl WorldData {
+    pub fn procedural(seed: u64, size: ProceduralMapSize) -> Self {
+        let _ = seed;
+        Self::flat_floor(size.floor_size())
+    }
+
+    pub fn flat_floor(floor_size: f32) -> Self {
+        Self {
+            floor_size,
+            blocks: Vec::new(),
+        }
+    }
+
     pub fn test_world() -> Self {
         Self {
             floor_size: DEFAULT_FLOOR_SIZE,
@@ -171,6 +214,25 @@ mod tests {
     fn map_type_default_and_labels_are_stable() {
         assert_eq!(MapType::default(), MapType::Test);
         assert_eq!(MapType::Test.label(), "Test");
-        assert_eq!(MapType::Procedural { seed: 42 }.label(), "Procedural");
+        assert_eq!(
+            MapType::Procedural {
+                seed: 42,
+                size: ProceduralMapSize::Medium,
+            }
+            .label(),
+            "Procedural"
+        );
+    }
+
+    #[test]
+    fn procedural_world_is_flat_floor_matching_size() {
+        let world = MapType::Procedural {
+            seed: 42,
+            size: ProceduralMapSize::Large,
+        }
+        .world_data();
+
+        assert_eq!(world.floor_size, ProceduralMapSize::Large.floor_size());
+        assert!(world.blocks.is_empty());
     }
 }
