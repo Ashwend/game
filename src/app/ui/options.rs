@@ -19,21 +19,28 @@ const SETTING_LABEL_WIDTH: f32 = 190.0;
 const SETTING_CONTROL_WIDTH: f32 = 260.0;
 const SETTING_ROW_HEIGHT: f32 = 36.0;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OptionsBackTarget {
+    MainMenu,
+    PauseMenu,
+}
+
 pub(super) fn options_ui(
     ctx: &egui::Context,
     menu: &mut MenuState,
     settings: &mut ClientSettings,
     primary_monitor: Option<&Monitor>,
+    back_target: OptionsBackTarget,
 ) {
     theme::screen_scrim(ctx, "options_scrim", 145);
-    handle_options_escape(ctx, menu);
+    handle_options_escape(ctx, menu, back_target);
     options_panel(ctx, |ui| {
         ui.horizontal(|ui| {
             ui.set_min_height(OPTIONS_HEADER_HEIGHT);
             ui.label(theme::section("Options"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if theme::compact_button(ui, "Back", ButtonKind::Secondary, 78.0).clicked() {
-                    menu.screen = Screen::MainMenu;
+                    close_options(menu, back_target);
                 }
                 if theme::compact_button(ui, "Reset", ButtonKind::Secondary, 78.0).clicked() {
                     *settings = ClientSettings::default();
@@ -145,9 +152,28 @@ fn options_section_label(label: &str) -> egui::RichText {
         .color(egui::Color32::from_rgb(196, 216, 236))
 }
 
-fn handle_options_escape(ctx: &egui::Context, menu: &mut MenuState) {
+fn handle_options_escape(
+    ctx: &egui::Context,
+    menu: &mut MenuState,
+    back_target: OptionsBackTarget,
+) {
     if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-        menu.screen = Screen::MainMenu;
+        close_options(menu, back_target);
+    }
+}
+
+fn close_options(menu: &mut MenuState, back_target: OptionsBackTarget) {
+    match back_target {
+        OptionsBackTarget::MainMenu => {
+            menu.screen = Screen::MainMenu;
+            menu.pause_open = false;
+            menu.pause_options_open = false;
+        }
+        OptionsBackTarget::PauseMenu => {
+            menu.screen = Screen::InGame;
+            menu.pause_open = true;
+            menu.pause_options_open = false;
+        }
     }
 }
 
@@ -304,12 +330,35 @@ mod tests {
     }
 
     fn raw_input_with_size(width: f32, height: f32) -> egui::RawInput {
+        raw_input_with_size_and_events(width, height, Vec::new())
+    }
+
+    fn raw_input_with_events(events: Vec<egui::Event>) -> egui::RawInput {
+        raw_input_with_size_and_events(960.0, 720.0, events)
+    }
+
+    fn raw_input_with_size_and_events(
+        width: f32,
+        height: f32,
+        events: Vec<egui::Event>,
+    ) -> egui::RawInput {
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 egui::vec2(width, height),
             )),
+            events,
             ..Default::default()
+        }
+    }
+
+    fn key_press(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
         }
     }
 
@@ -323,7 +372,13 @@ mod tests {
         let mut settings = ClientSettings::default();
 
         let output = ctx.run(raw_input(), |ctx| {
-            options_ui(ctx, &mut menu, &mut settings, None);
+            options_ui(
+                ctx,
+                &mut menu,
+                &mut settings,
+                None,
+                OptionsBackTarget::MainMenu,
+            );
         });
 
         assert!(!output.shapes.is_empty());
@@ -340,13 +395,75 @@ mod tests {
         let mut settings = ClientSettings::default();
 
         let output = ctx.run(raw_input_with_size(560.0, 320.0), |ctx| {
-            options_ui(ctx, &mut menu, &mut settings, None);
+            options_ui(
+                ctx,
+                &mut menu,
+                &mut settings,
+                None,
+                OptionsBackTarget::MainMenu,
+            );
         });
 
         assert!(!output.shapes.is_empty());
         assert_eq!(options_body_max_height(320.0), 182.0);
         assert!(options_body_needs_scroll(options_body_max_height(320.0)));
         assert!(!options_body_needs_scroll(options_body_max_height(1440.0)));
+    }
+
+    #[test]
+    fn escape_returns_to_main_menu_from_main_options() {
+        let ctx = egui::Context::default();
+        let mut menu = MenuState {
+            screen: Screen::Options,
+            ..Default::default()
+        };
+        let mut settings = ClientSettings::default();
+
+        let _ = ctx.run(
+            raw_input_with_events(vec![key_press(egui::Key::Escape)]),
+            |ctx| {
+                options_ui(
+                    ctx,
+                    &mut menu,
+                    &mut settings,
+                    None,
+                    OptionsBackTarget::MainMenu,
+                );
+            },
+        );
+
+        assert_eq!(menu.screen, Screen::MainMenu);
+        assert!(!menu.pause_open);
+        assert!(!menu.pause_options_open);
+    }
+
+    #[test]
+    fn escape_returns_to_pause_menu_from_ingame_options() {
+        let ctx = egui::Context::default();
+        let mut menu = MenuState {
+            screen: Screen::InGame,
+            pause_open: true,
+            pause_options_open: true,
+            ..Default::default()
+        };
+        let mut settings = ClientSettings::default();
+
+        let _ = ctx.run(
+            raw_input_with_events(vec![key_press(egui::Key::Escape)]),
+            |ctx| {
+                options_ui(
+                    ctx,
+                    &mut menu,
+                    &mut settings,
+                    None,
+                    OptionsBackTarget::PauseMenu,
+                );
+            },
+        );
+
+        assert_eq!(menu.screen, Screen::InGame);
+        assert!(menu.pause_open);
+        assert!(!menu.pause_options_open);
     }
 
     #[test]

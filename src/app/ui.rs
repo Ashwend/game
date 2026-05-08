@@ -23,7 +23,7 @@ use self::{
     hud::hud_ui,
     menu::main_menu_ui,
     multiplayer::multiplayer_ui,
-    options::options_ui,
+    options::{OptionsBackTarget, options_ui},
     pause::pause_ui,
     theme::{ButtonKind, game_button},
     worlds::worlds_ui,
@@ -80,6 +80,7 @@ pub(crate) fn ui_system(
                 &mut resources.menu,
                 &mut resources.settings,
                 primary_monitor,
+                OptionsBackTarget::MainMenu,
             );
         }
         Screen::Multiplayer => multiplayer_ui(
@@ -89,14 +90,25 @@ pub(crate) fn ui_system(
             &resources.user,
         ),
         Screen::InGame => {
-            hud_ui(
-                ctx,
-                &resources.runtime,
-                &resources.diagnostics,
-                &resources.settings,
-            );
-            chat_ui(ctx, &mut resources.menu, &mut resources.runtime);
-            if resources.menu.pause_open {
+            if resources.menu.pause_options_open {
+                let primary_monitor = resources.primary_monitor.single().ok();
+                options_ui(
+                    ctx,
+                    &mut resources.menu,
+                    &mut resources.settings,
+                    primary_monitor,
+                    OptionsBackTarget::PauseMenu,
+                );
+            } else {
+                hud_ui(
+                    ctx,
+                    &resources.runtime,
+                    &resources.diagnostics,
+                    &resources.settings,
+                );
+                chat_ui(ctx, &mut resources.menu, &mut resources.runtime);
+            }
+            if resources.menu.pause_open && !resources.menu.pause_options_open {
                 pause_ui(
                     ctx,
                     &mut resources.menu,

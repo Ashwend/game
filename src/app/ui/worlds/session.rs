@@ -37,6 +37,7 @@ pub(super) fn start_singleplayer(
             runtime.start_session(session, Some(world_id));
             menu.screen = Screen::InGame;
             menu.pause_open = false;
+            menu.pause_options_open = false;
             menu.chat_open = false;
             menu.chat_focus_pending = false;
             menu.status = None;

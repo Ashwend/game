@@ -28,6 +28,7 @@ pub(super) fn pause_ui(
 
     if backdrop_response.clicked() {
         menu.pause_open = false;
+        menu.pause_options_open = false;
     }
 
     egui::Area::new("pause_menu".into())
@@ -42,11 +43,16 @@ pub(super) fn pause_ui(
                     ui.add_space(16.0);
                     if menu_button(ui, "Resume").clicked() {
                         menu.pause_open = false;
+                        menu.pause_options_open = false;
+                    }
+                    if menu_button(ui, "Options").clicked() {
+                        menu.pause_options_open = true;
                     }
                     if danger_menu_button(ui, "Quit").clicked() {
                         runtime.shutdown(&store.0);
                         menu.screen = Screen::MainMenu;
                         menu.pause_open = false;
+                        menu.pause_options_open = false;
                         menu.chat_open = false;
                         menu.chat_focus_pending = false;
                     }

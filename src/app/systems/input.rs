@@ -32,7 +32,20 @@ pub(crate) fn toggle_pause_system(keys: Res<ButtonInput<KeyCode>>, mut menu: Res
     }
 
     if keys.just_pressed(KeyCode::Escape) {
-        menu.pause_open = !menu.pause_open;
+        handle_pause_escape(&mut menu);
+    }
+}
+
+fn handle_pause_escape(menu: &mut MenuState) {
+    if menu.pause_options_open {
+        menu.pause_open = true;
+        menu.pause_options_open = false;
+        return;
+    }
+
+    menu.pause_open = !menu.pause_open;
+    if !menu.pause_open {
+        menu.pause_options_open = false;
     }
 }
 
@@ -151,5 +164,45 @@ pub(crate) fn client_input_system(
 
     if let (Some(session), Some(movement)) = (runtime.session.as_mut(), movement) {
         let _ = session.send(ClientMessage::Movement(movement));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escape_closes_pause_options_back_to_pause_menu() {
+        let mut menu = MenuState {
+            screen: Screen::InGame,
+            pause_open: true,
+            pause_options_open: true,
+            ..Default::default()
+        };
+
+        handle_pause_escape(&mut menu);
+
+        assert!(menu.pause_open);
+        assert!(!menu.pause_options_open);
+    }
+
+    #[test]
+    fn escape_toggles_pause_root_and_clears_nested_options_when_closed() {
+        let mut menu = MenuState {
+            screen: Screen::InGame,
+            ..Default::default()
+        };
+
+        handle_pause_escape(&mut menu);
+        assert!(menu.pause_open);
+
+        menu.pause_options_open = true;
+        handle_pause_escape(&mut menu);
+        assert!(menu.pause_open);
+        assert!(!menu.pause_options_open);
+
+        handle_pause_escape(&mut menu);
+        assert!(!menu.pause_open);
+        assert!(!menu.pause_options_open);
     }
 }

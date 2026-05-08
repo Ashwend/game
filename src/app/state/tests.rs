@@ -147,6 +147,7 @@ fn menu_and_confirmation_defaults_match_initial_ui_state() {
     assert!(menu.edit_world.is_none());
     assert_eq!(menu.multiplayer_addr, "127.0.0.1:7777");
     assert!(!menu.pause_open);
+    assert!(!menu.pause_options_open);
     assert!(!menu.chat_open);
     assert!(menu.confirmation.is_none());
     assert!(!menu.quit_requested);
