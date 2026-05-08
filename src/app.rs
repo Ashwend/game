@@ -14,7 +14,7 @@ use crate::{
 
 use self::{
     scene::{apply_world_scene_system, setup_scene},
-    state::{ClientRuntime, LookState, MenuState, SaveStore, SteamUser},
+    state::{ClientRuntime, LookState, MenuBackdropVisibility, MenuState, SaveStore, SteamUser},
     systems::{
         apply_snapshot_system, camera_follow_system, center_cursor_on_focus_system,
         chat_shortcut_system, client_input_system, menu_backdrop_camera_system, mouse_look_system,
@@ -38,6 +38,7 @@ pub fn run_app() -> Result<()> {
         .insert_resource(SaveStore(store))
         .insert_resource(SteamUser(user))
         .insert_resource(MenuState::default())
+        .insert_resource(MenuBackdropVisibility::default())
         .insert_resource(ClientRuntime::default())
         .insert_resource(LookState::default())
         .add_plugins(DefaultPlugins.set(WindowPlugin {

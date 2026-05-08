@@ -26,6 +26,12 @@ pub(crate) enum Screen {
     InGame,
 }
 
+impl Screen {
+    pub(crate) fn uses_menu_backdrop(self) -> bool {
+        self != Self::InGame
+    }
+}
+
 #[derive(Resource)]
 pub(crate) struct SaveStore(pub(crate) WorldStore);
 
@@ -60,6 +66,48 @@ impl Default for MenuState {
             chat_input: String::new(),
             confirmation: None,
         }
+    }
+}
+
+const MENU_BACKDROP_BLUR_WARMUP_SECONDS: f32 = 1.5;
+const MENU_BACKDROP_FADE_SECONDS: f32 = 0.5;
+
+#[derive(Resource, Debug, Clone)]
+pub(crate) struct MenuBackdropVisibility {
+    active: bool,
+    elapsed_seconds: f32,
+}
+
+impl Default for MenuBackdropVisibility {
+    fn default() -> Self {
+        Self {
+            active: Screen::MainMenu.uses_menu_backdrop(),
+            elapsed_seconds: 0.0,
+        }
+    }
+}
+
+impl MenuBackdropVisibility {
+    pub(crate) fn cover_alpha(&mut self, screen: Screen, delta_seconds: f32) -> u8 {
+        let active = screen.uses_menu_backdrop();
+        if active != self.active {
+            self.active = active;
+            self.elapsed_seconds = 0.0;
+        }
+
+        if !active {
+            return 0;
+        }
+
+        self.elapsed_seconds += delta_seconds.max(0.0);
+        if self.elapsed_seconds <= MENU_BACKDROP_BLUR_WARMUP_SECONDS {
+            return u8::MAX;
+        }
+
+        let fade_progress = ((self.elapsed_seconds - MENU_BACKDROP_BLUR_WARMUP_SECONDS)
+            / MENU_BACKDROP_FADE_SECONDS)
+            .clamp(0.0, 1.0);
+        ((1.0 - fade_progress) * f32::from(u8::MAX)).round() as u8
     }
 }
 
@@ -469,6 +517,40 @@ mod tests {
         ));
         assert!(!dialog.closing);
         assert!(!dialog.confirmed);
+    }
+
+    #[test]
+    fn menu_backdrop_visibility_covers_until_blur_warms() {
+        let mut visibility = MenuBackdropVisibility::default();
+
+        let warmup_alpha =
+            visibility.cover_alpha(Screen::MainMenu, MENU_BACKDROP_BLUR_WARMUP_SECONDS * 0.5);
+        assert_eq!(warmup_alpha, u8::MAX);
+
+        let fading_alpha = visibility.cover_alpha(
+            Screen::MainMenu,
+            MENU_BACKDROP_BLUR_WARMUP_SECONDS * 0.5 + MENU_BACKDROP_FADE_SECONDS * 0.5,
+        );
+        assert!(fading_alpha > 0);
+        assert!(fading_alpha < u8::MAX);
+
+        let visible_alpha = visibility.cover_alpha(Screen::MainMenu, MENU_BACKDROP_FADE_SECONDS);
+        assert_eq!(visible_alpha, 0);
+    }
+
+    #[test]
+    fn menu_backdrop_visibility_resets_when_reentering_menu() {
+        let mut visibility = MenuBackdropVisibility::default();
+
+        assert_eq!(
+            visibility.cover_alpha(
+                Screen::MainMenu,
+                MENU_BACKDROP_BLUR_WARMUP_SECONDS + MENU_BACKDROP_FADE_SECONDS,
+            ),
+            0
+        );
+        assert_eq!(visibility.cover_alpha(Screen::InGame, 0.1), 0);
+        assert_eq!(visibility.cover_alpha(Screen::MainMenu, 0.1), u8::MAX);
     }
 
     #[test]

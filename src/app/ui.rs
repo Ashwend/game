@@ -22,19 +22,29 @@ use self::{
     theme::{ButtonKind, game_button},
     worlds::worlds_ui,
 };
-use super::state::{ClientRuntime, MenuState, SaveStore, Screen, SteamUser};
+use super::state::{
+    ClientRuntime, MenuBackdropVisibility, MenuState, SaveStore, Screen, SteamUser,
+};
 
 pub(crate) fn ui_system(
     mut contexts: EguiContexts,
     mut menu: ResMut<MenuState>,
+    mut backdrop_visibility: ResMut<MenuBackdropVisibility>,
     mut runtime: ResMut<ClientRuntime>,
     store: Res<SaveStore>,
     user: Res<SteamUser>,
+    time: Option<Res<Time>>,
     diagnostics: Res<DiagnosticsStore>,
     mut app_exit: MessageWriter<AppExit>,
 ) -> bevy::prelude::Result {
     let ctx = contexts.ctx_mut()?;
     theme::apply_game_style(ctx);
+    let delta_seconds = time
+        .as_ref()
+        .map(|time| time.delta_secs())
+        .unwrap_or(1.0 / 60.0);
+    let cover_alpha = backdrop_visibility.cover_alpha(menu.screen, delta_seconds);
+    theme::backdrop_cover(ctx, cover_alpha);
 
     match menu.screen {
         Screen::MainMenu => main_menu_ui(ctx, &mut menu, &store, &user, &mut app_exit),

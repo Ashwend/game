@@ -53,6 +53,22 @@ pub(in crate::app::ui) fn apply_game_style(ctx: &egui::Context) {
 }
 
 pub(in crate::app::ui) fn screen_scrim(ctx: &egui::Context, id: &'static str, alpha: u8) {
+    screen_fill(ctx, id, Color32::from_rgba_unmultiplied(2, 4, 7, alpha));
+}
+
+pub(in crate::app::ui) fn backdrop_cover(ctx: &egui::Context, alpha: u8) {
+    if alpha == 0 {
+        return;
+    }
+
+    screen_fill(
+        ctx,
+        "menu_backdrop_blur_cover",
+        Color32::from_rgba_unmultiplied(0, 0, 0, alpha),
+    );
+}
+
+fn screen_fill(ctx: &egui::Context, id: &'static str, fill: Color32) {
     let rect = ctx.content_rect();
     egui::Area::new(Id::new(id))
         .order(Order::Background)
@@ -61,11 +77,7 @@ pub(in crate::app::ui) fn screen_scrim(ctx: &egui::Context, id: &'static str, al
         .show(ctx, |ui| {
             let local_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, rect.size());
             ui.allocate_rect(local_rect, egui::Sense::hover());
-            ui.painter().rect_filled(
-                local_rect,
-                0,
-                Color32::from_rgba_unmultiplied(2, 4, 7, alpha),
-            );
+            ui.painter().rect_filled(local_rect, 0, fill);
         });
 }
 
@@ -146,6 +158,7 @@ mod tests {
 
         let output = ctx.run(input(), |ctx| {
             screen_scrim(ctx, "test_scrim", 120);
+            backdrop_cover(ctx, 180);
             anchored_panel(
                 ctx,
                 "test_panel",
