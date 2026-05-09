@@ -121,7 +121,12 @@ pub(crate) fn mouse_look_system(
     menu: Res<MenuState>,
     settings: Res<ClientSettings>,
 ) {
-    if menu.screen != Screen::InGame || menu.pause_open || menu.inventory_open || menu.chat_open {
+    if menu.screen != Screen::InGame
+        || menu.pause_open
+        || menu.pause_options_open
+        || menu.inventory_open
+        || menu.chat_open
+    {
         return;
     }
 
@@ -147,7 +152,12 @@ pub(crate) fn client_input_system(
     menu: Res<MenuState>,
     look: Res<LookState>,
 ) {
-    if menu.screen != Screen::InGame || menu.pause_open || menu.inventory_open || menu.chat_open {
+    if menu.screen != Screen::InGame
+        || menu.pause_open
+        || menu.pause_options_open
+        || menu.inventory_open
+        || menu.chat_open
+    {
         return;
     }
     if runtime.client_id.is_none() {
@@ -222,7 +232,12 @@ pub(crate) fn gameplay_inventory_shortcuts_system(
     menu: Res<MenuState>,
     pickup_target: Res<PickupTargetState>,
 ) {
-    if menu.screen != Screen::InGame || menu.pause_open || menu.inventory_open || menu.chat_open {
+    if menu.screen != Screen::InGame
+        || menu.pause_open
+        || menu.pause_options_open
+        || menu.inventory_open
+        || menu.chat_open
+    {
         mouse_wheel.clear();
         return;
     }

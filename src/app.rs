@@ -5,9 +5,7 @@ mod ui;
 
 use anyhow::Result;
 use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, prelude::*, transform::TransformSystems};
-use bevy_egui::{
-    EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass, input::egui_wants_any_pointer_input,
-};
+use bevy_egui::{EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass};
 
 use crate::{
     save::WorldStore,
@@ -119,10 +117,7 @@ pub fn run_app() -> Result<()> {
         )
         .add_systems(Update, center_cursor_on_focus_system)
         .add_systems(Update, update_cursor_system)
-        .add_systems(
-            Update,
-            mouse_look_system.run_if(not(egui_wants_any_pointer_input)),
-        )
+        .add_systems(Update, mouse_look_system)
         .add_systems(Update, client_input_system.after(mouse_look_system))
         .add_systems(Update, gameplay_inventory_shortcuts_system)
         .add_systems(Update, network_tick_system.after(client_input_system))
@@ -147,7 +142,6 @@ pub fn run_app() -> Result<()> {
         .add_systems(
             Update,
             camera_follow_system
-                .run_if(not(egui_wants_any_pointer_input))
                 .after(client_input_system)
                 .after(mouse_look_system),
         )

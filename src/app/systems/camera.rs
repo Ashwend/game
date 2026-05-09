@@ -1,4 +1,4 @@
-use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
+use bevy::post_process::dof::DepthOfField;
 use bevy::prelude::*;
 
 use super::super::{
@@ -31,8 +31,8 @@ pub(crate) fn menu_backdrop_camera_system(
     };
 
     if menu.screen == Screen::InGame {
-        if let Some(mut depth_of_field) = depth_of_field {
-            *depth_of_field = gameplay_depth_of_field();
+        if depth_of_field.is_some() {
+            commands.entity(entity).remove::<DepthOfField>();
         }
         return;
     }
@@ -91,19 +91,10 @@ fn menu_backdrop_transform(elapsed_seconds: f32) -> Transform {
     Transform::from_translation(eye).looking_at(look_at, Vec3::Y)
 }
 
-fn gameplay_depth_of_field() -> DepthOfField {
-    DepthOfField {
-        mode: DepthOfFieldMode::Gaussian,
-        focal_distance: 40.0,
-        aperture_f_stops: 64.0,
-        max_depth: 80.0,
-        ..default()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::post_process::dof::DepthOfFieldMode;
 
     fn app_with_camera(menu: MenuState) -> App {
         let mut app = App::new();
@@ -139,7 +130,7 @@ mod tests {
     }
 
     #[test]
-    fn gameplay_camera_keeps_depth_of_field_warm_without_visible_blur() {
+    fn gameplay_camera_removes_depth_of_field() {
         let menu = MenuState {
             screen: Screen::InGame,
             ..Default::default()
@@ -151,7 +142,6 @@ mod tests {
         let mut query = app
             .world_mut()
             .query_filtered::<&DepthOfField, With<MainCamera>>();
-        let depth_of_field = query.single(app.world()).expect("camera should exist");
-        assert!(depth_of_field.aperture_f_stops > 10.0);
+        assert!(query.single(app.world()).is_err());
     }
 }

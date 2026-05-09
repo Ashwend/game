@@ -1,4 +1,5 @@
 use bevy::{
+    anti_alias::smaa::{Smaa, SmaaPreset},
     asset::RenderAssetUsages,
     mesh::PrimitiveTopology,
     post_process::dof::{DepthOfField, DepthOfFieldMode},
@@ -77,6 +78,10 @@ pub(crate) fn setup_scene(
             fov: 65.0_f32.to_radians(),
             ..default()
         }),
+        Smaa {
+            preset: SmaaPreset::High,
+        },
+        Msaa::Off,
         menu_backdrop_depth_of_field(),
         Transform::from_xyz(0.0, EYE_HEIGHT, 3.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
@@ -85,7 +90,7 @@ pub(crate) fn setup_scene(
         Name::new("Sun"),
         DirectionalLight {
             illuminance: 16_000.0,
-            shadows_enabled: true,
+            shadows_enabled: false,
             ..default()
         },
         Transform::from_xyz(-3.0, 8.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -337,6 +342,20 @@ mod tests {
             query.iter(world).count()
         };
         assert_eq!(camera_count, 1);
+
+        let world = app.world_mut();
+        let (smaa, msaa) = world
+            .query_filtered::<(&Smaa, &Msaa), With<MainCamera>>()
+            .single(world)
+            .expect("main camera should use stable spatial antialiasing");
+        assert!(smaa.preset == SmaaPreset::High);
+        assert_eq!(*msaa, Msaa::Off);
+
+        let sun = world
+            .query::<&DirectionalLight>()
+            .single(world)
+            .expect("sun should exist");
+        assert!(!sun.shadows_enabled);
     }
 
     #[test]
