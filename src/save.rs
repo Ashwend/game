@@ -1,5 +1,8 @@
 use std::{
+    ffi::OsString,
     fs,
+    fs::File,
+    io::Write,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -91,7 +94,8 @@ impl WorldStore {
 
         let path = self.world_path(save.id);
         let json = serde_json::to_string_pretty(save).context("could not serialize world save")?;
-        fs::write(&path, json).with_context(|| format!("could not write world {}", path.display()))
+        write_file_atomically(&path, json.as_bytes())
+            .with_context(|| format!("could not write world {}", path.display()))
     }
 
     pub fn rename_world(&self, id: Uuid, name: &str) -> Result<WorldSave> {
@@ -206,6 +210,89 @@ fn now_unix() -> u64 {
         .unwrap_or_default()
 }
 
+fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<()> {
+    let temp_path = atomic_temp_path(path)?;
+    let result = (|| -> Result<()> {
+        let mut file = File::create(&temp_path)
+            .with_context(|| format!("could not create temp save {}", temp_path.display()))?;
+        file.write_all(contents)
+            .with_context(|| format!("could not write temp save {}", temp_path.display()))?;
+        file.sync_all()
+            .with_context(|| format!("could not sync temp save {}", temp_path.display()))?;
+        replace_file(&temp_path, path)
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+
+    result
+}
+
+fn atomic_temp_path(path: &Path) -> Result<PathBuf> {
+    let file_name = path
+        .file_name()
+        .context("could not build temp save path without a file name")?;
+    let mut temp_name = OsString::from(file_name);
+    temp_name.push(format!(".tmp-{}", std::process::id()));
+    Ok(path.with_file_name(temp_name))
+}
+
+#[cfg(not(windows))]
+fn replace_file(temp_path: &Path, path: &Path) -> Result<()> {
+    fs::rename(temp_path, path).with_context(|| {
+        format!(
+            "could not replace {} with {}",
+            path.display(),
+            temp_path.display()
+        )
+    })
+}
+
+#[cfg(windows)]
+fn replace_file(temp_path: &Path, path: &Path) -> Result<()> {
+    let backup_path = atomic_backup_path(path)?;
+    if path.exists() {
+        let _ = fs::remove_file(&backup_path);
+        fs::rename(path, &backup_path).with_context(|| {
+            format!(
+                "could not move existing save {} to {}",
+                path.display(),
+                backup_path.display()
+            )
+        })?;
+    }
+
+    match fs::rename(temp_path, path) {
+        Ok(()) => {
+            let _ = fs::remove_file(&backup_path);
+            Ok(())
+        }
+        Err(error) => {
+            if backup_path.exists() {
+                let _ = fs::rename(&backup_path, path);
+            }
+            Err(error).with_context(|| {
+                format!(
+                    "could not replace {} with {}",
+                    path.display(),
+                    temp_path.display()
+                )
+            })
+        }
+    }
+}
+
+#[cfg(windows)]
+fn atomic_backup_path(path: &Path) -> Result<PathBuf> {
+    let file_name = path
+        .file_name()
+        .context("could not build backup save path without a file name")?;
+    let mut backup_name = OsString::from(file_name);
+    backup_name.push(format!(".bak-{}", std::process::id()));
+    Ok(path.with_file_name(backup_name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,6 +379,26 @@ mod tests {
         assert_eq!(renamed.id, save.id);
         assert_eq!(renamed.map, save.map);
         assert_eq!(renamed.admins, save.admins);
+
+        let _ = fs::remove_dir_all(store.root());
+    }
+
+    #[test]
+    fn failed_temp_write_keeps_existing_world_file() {
+        let store = temp_store();
+        let mut save = store
+            .create_world("Original", Some(123))
+            .expect("world should be created");
+        let path = store.world_path(save.id);
+        let temp_path = atomic_temp_path(&path).expect("temp path should resolve");
+        fs::create_dir_all(&temp_path).expect("temp blocker should be created");
+
+        save.name = "Updated".to_owned();
+        assert!(store.save_world(&save).is_err());
+
+        fs::remove_dir_all(&temp_path).expect("temp blocker should be removed");
+        let loaded = store.load_world(save.id).expect("world should still load");
+        assert_eq!(loaded.name, "Original");
 
         let _ = fs::remove_dir_all(store.root());
     }

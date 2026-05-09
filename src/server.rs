@@ -208,7 +208,7 @@ impl GameServer {
             .step(delta_seconds, &mut self.dropped_items);
 
         let mut envelopes = Vec::new();
-        if self.tick % DROPPED_ITEM_MERGE_INTERVAL_TICKS == 0 {
+        if self.tick.is_multiple_of(DROPPED_ITEM_MERGE_INTERVAL_TICKS) {
             envelopes.extend(self.merge_nearby_dropped_items().into_iter().map(
                 |(item_id, quantity)| ServerEnvelope {
                     target: DeliveryTarget::Broadcast,
@@ -359,10 +359,10 @@ impl GameServer {
         let Some(client) = self.clients.get_mut(&client_id) else {
             return;
         };
-        if add_stack_to_inventory(&mut client.inventory, item.stack.clone()).is_none() {
-            if let Some(body) = self.dropped_items.remove(&dropped_item_id) {
-                self.dropped_item_physics.remove_body(body.body_handle);
-            }
+        if add_stack_to_inventory(&mut client.inventory, item.stack.clone()).is_none()
+            && let Some(body) = self.dropped_items.remove(&dropped_item_id)
+        {
+            self.dropped_item_physics.remove_body(body.body_handle);
         }
     }
 

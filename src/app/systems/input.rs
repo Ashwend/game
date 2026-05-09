@@ -196,8 +196,14 @@ pub(crate) fn client_input_system(
         });
     }
 
-    if let (Some(session), Some(movement)) = (runtime.session.as_mut(), movement) {
-        let _ = session.send(ClientMessage::Movement(movement));
+    if let Some(movement) = movement {
+        let send_result = runtime
+            .session
+            .as_mut()
+            .map(|session| session.send(ClientMessage::Movement(movement)));
+        if let Some(Err(error)) = send_result {
+            runtime.push_error_message(format!("movement send failed: {error}"));
+        }
     }
 }
 

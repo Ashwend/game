@@ -127,10 +127,7 @@ pub(super) fn add_stack_to_inventory(
             .as_ref()
             .is_some_and(|existing| existing.item_id == remaining.item_id)
         {
-            remaining = match insert_stack_at(inventory, slot, remaining, false) {
-                Some(remaining) => remaining,
-                None => return None,
-            };
+            remaining = insert_stack_at(inventory, slot, remaining, false)?;
         }
     }
 
@@ -140,10 +137,7 @@ pub(super) fn add_stack_to_inventory(
             .as_ref()
             .is_some_and(|existing| existing.item_id == remaining.item_id)
         {
-            remaining = match insert_stack_at(inventory, slot, remaining, false) {
-                Some(remaining) => remaining,
-                None => return None,
-            };
+            remaining = insert_stack_at(inventory, slot, remaining, false)?;
         }
     }
 
