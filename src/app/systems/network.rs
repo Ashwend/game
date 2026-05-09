@@ -1,11 +1,18 @@
 use bevy::prelude::*;
 
-use super::super::state::{ClientRuntime, MenuState, Screen};
+use crate::{
+    app::{
+        state::{ClientRuntime, MenuState, Screen},
+        ui::ButtonSoundRequests,
+    },
+    protocol::ServerMessage,
+};
 
 pub(crate) fn network_tick_system(
     time: Res<Time>,
     mut runtime: ResMut<ClientRuntime>,
     menu: Res<MenuState>,
+    mut button_sound_requests: ResMut<ButtonSoundRequests>,
 ) {
     if menu.screen != Screen::InGame {
         return;
@@ -25,6 +32,9 @@ pub(crate) fn network_tick_system(
     };
 
     for message in messages {
+        if matches!(message, ServerMessage::ItemMerged { .. }) {
+            button_sound_requests.push_hover();
+        }
         runtime.apply_message(message);
     }
 }

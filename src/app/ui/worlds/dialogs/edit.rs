@@ -5,7 +5,10 @@ use crate::{
     world::MapType,
 };
 
-use super::super::super::theme::{self, ButtonKind};
+use super::super::super::{
+    modal,
+    theme::{self, ButtonKind},
+};
 use super::super::{BUTTON_HEIGHT, session::refresh_worlds};
 use super::shared::{field_label, select_all_text};
 
@@ -125,6 +128,10 @@ fn edit_world_modal(
                 });
         })
         .response;
+
+    if open && choice.is_none() && modal::confirm_shortcut_pressed(ctx) {
+        choice = Some(EditWorldChoice::Save);
+    }
 
     if open && choice.is_none() && backdrop_response.clicked() {
         let clicked_outside_panel = ctx.input(|input| {

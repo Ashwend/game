@@ -7,7 +7,7 @@ pub type ClientId = u64;
 pub type PacketSequence = u64;
 pub type SteamId = u64;
 
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 11;
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_INPUT_DELTA_SECONDS: f32 = 1.0 / SERVER_TICK_RATE_HZ;
 pub const MAX_CHAT_LEN: usize = 240;
@@ -61,6 +61,28 @@ impl Vec3Net {
     pub fn dot(self, other: Self) -> f32 {
         self.x
             .mul_add(other.x, self.y.mul_add(other.y, self.z * other.z))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Reflect)]
+pub struct QuatNet {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub w: f32,
+}
+
+impl QuatNet {
+    pub const IDENTITY: Self = Self::new(0.0, 0.0, 0.0, 1.0);
+
+    pub const fn new(x: f32, y: f32, z: f32, w: f32) -> Self {
+        Self { x, y, z, w }
+    }
+}
+
+impl Default for QuatNet {
+    fn default() -> Self {
+        Self::IDENTITY
     }
 }
 
@@ -203,6 +225,8 @@ pub struct DroppedWorldItem {
     pub stack: ItemStack,
     pub position: Vec3Net,
     pub yaw: f32,
+    #[serde(default)]
+    pub rotation: QuatNet,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -242,6 +266,10 @@ pub enum ServerMessage {
     Snapshot(WorldSnapshot),
     Correction(PlayerState),
     Chat(ChatMessage),
+    ItemMerged {
+        item_id: String,
+        quantity: u16,
+    },
     Heartbeat,
 }
 
@@ -254,6 +282,7 @@ impl ServerMessage {
             Self::Snapshot(_) => ServerMessageKind::Snapshot,
             Self::Correction(_) => ServerMessageKind::Correction,
             Self::Chat(_) => ServerMessageKind::Chat,
+            Self::ItemMerged { .. } => ServerMessageKind::ItemMerged,
             Self::Heartbeat => ServerMessageKind::Heartbeat,
         }
     }
@@ -263,7 +292,8 @@ impl ServerMessage {
             Self::Welcome { .. }
             | Self::AuthRejected { .. }
             | Self::PlayerEvent(_)
-            | Self::Chat(_) => PacketDelivery::Reliable,
+            | Self::Chat(_)
+            | Self::ItemMerged { .. } => PacketDelivery::Reliable,
             Self::Snapshot(_) | Self::Correction(_) | Self::Heartbeat => PacketDelivery::Unreliable,
         }
     }
@@ -293,6 +323,7 @@ pub enum ServerMessageKind {
     Snapshot,
     Correction,
     Chat,
+    ItemMerged,
     Heartbeat,
 }
 

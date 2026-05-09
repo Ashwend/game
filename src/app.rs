@@ -134,7 +134,10 @@ pub fn run_app() -> Result<()> {
         )
         .add_systems(Update, apply_world_scene_system)
         .add_systems(Update, apply_snapshot_system)
-        .add_systems(Update, apply_dropped_items_system)
+        .add_systems(
+            Update,
+            apply_dropped_items_system.after(network_tick_system),
+        )
         .add_systems(
             Update,
             apply_held_item_visual_system.after(camera_follow_system),
@@ -150,7 +153,9 @@ pub fn run_app() -> Result<()> {
         )
         .add_systems(
             Update,
-            update_pickup_target_system.after(camera_follow_system),
+            update_pickup_target_system
+                .after(camera_follow_system)
+                .after(apply_dropped_items_system),
         )
         .run();
 

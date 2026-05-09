@@ -126,6 +126,7 @@ impl ClientRuntime {
             ServerMessage::Chat(ChatMessage { from, text }) => {
                 self.push_chat_message(from, text);
             }
+            ServerMessage::ItemMerged { .. } => {}
             ServerMessage::Heartbeat => {}
         }
     }

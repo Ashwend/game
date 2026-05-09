@@ -14,6 +14,10 @@ pub(super) struct ConfirmationModalOutput {
     pub(super) finished_closing: bool,
 }
 
+pub(in crate::app::ui) fn confirm_shortcut_pressed(ctx: &egui::Context) -> bool {
+    ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+}
+
 pub(super) fn confirmation_modal(
     ctx: &egui::Context,
     id: &'static str,
@@ -90,6 +94,10 @@ pub(super) fn confirmation_modal(
         })
         .response;
 
+    if open && choice.is_none() && confirm_shortcut_pressed(ctx) {
+        choice = Some(ConfirmationChoice::Confirm);
+    }
+
     if open && choice.is_none() && backdrop_response.clicked() {
         let clicked_outside_panel = ctx.input(|input| {
             input
@@ -113,12 +121,27 @@ mod tests {
     use super::*;
 
     fn raw_input() -> egui::RawInput {
+        raw_input_with_events(Vec::new())
+    }
+
+    fn raw_input_with_events(events: Vec<egui::Event>) -> egui::RawInput {
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 egui::vec2(640.0, 480.0),
             )),
+            events,
             ..Default::default()
+        }
+    }
+
+    fn key_press(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
         }
     }
 
@@ -146,5 +169,24 @@ mod tests {
         let output = output.expect("modal output should be set");
         assert!(!output.finished_closing);
         assert!(output.choice.is_none());
+    }
+
+    #[test]
+    fn enter_confirms_open_modal() {
+        let ctx = egui::Context::default();
+        let mut output = None;
+
+        let _ = ctx.run(
+            raw_input_with_events(vec![key_press(egui::Key::Enter)]),
+            |ctx| {
+                output = Some(confirmation_modal(
+                    ctx, "enter", "Title", "Body", "Confirm", "Cancel", true,
+                ));
+            },
+        );
+
+        let output = output.expect("modal output should be set");
+        assert_eq!(output.choice, Some(ConfirmationChoice::Confirm));
+        assert!(!output.finished_closing);
     }
 }

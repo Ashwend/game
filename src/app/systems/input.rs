@@ -257,7 +257,7 @@ pub(crate) fn gameplay_inventory_shortcuts_system(
             &mut runtime,
             InventoryCommand::Drop {
                 from: ItemContainerSlot::actionbar(active_actionbar_slot),
-                quantity: None,
+                quantity: Some(1),
             },
         );
     }

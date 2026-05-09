@@ -99,8 +99,11 @@ pub fn look_forward(yaw: f32, pitch: f32) -> Vec3Net {
 }
 
 pub fn pickup_anchor(item: &DroppedWorldItem) -> Vec3Net {
-    item.position
-        .plus(Vec3Net::new(0.0, PICKUP_ANCHOR_HEIGHT, 0.0))
+    pickup_anchor_from_position(item.position)
+}
+
+pub fn pickup_anchor_from_position(position: Vec3Net) -> Vec3Net {
+    position.plus(Vec3Net::new(0.0, PICKUP_ANCHOR_HEIGHT, 0.0))
 }
 
 pub fn pickup_score(eye: Vec3Net, yaw: f32, pitch: f32, item: &DroppedWorldItem) -> Option<f32> {
@@ -143,7 +146,7 @@ pub fn best_pickup_target<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{DroppedWorldItem, ItemStack};
+    use crate::protocol::{DroppedWorldItem, ItemStack, QuatNet};
 
     #[test]
     fn equipable_items_force_stack_size_one() {
@@ -162,6 +165,7 @@ mod tests {
             stack: ItemStack::new(TEST_ORE_ID, 1),
             position: Vec3Net::new(0.0, 0.0, -2.0),
             yaw: 0.0,
+            rotation: QuatNet::IDENTITY,
         };
         let eye = Vec3Net::new(0.0, 0.6, 0.0);
 

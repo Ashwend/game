@@ -117,9 +117,13 @@ pub(crate) fn ui_system(
                     &mut resources.inventory_ui,
                     &resources.pickup_target,
                 );
-                if !resources.menu.inventory_open {
-                    chat_ui(ctx, &mut resources.menu, &mut resources.runtime);
-                }
+                let inventory_open = resources.menu.inventory_open;
+                chat_ui(
+                    ctx,
+                    &mut resources.menu,
+                    &mut resources.runtime,
+                    inventory_open,
+                );
             }
             if resources.menu.pause_open && !resources.menu.pause_options_open {
                 pause_ui(
@@ -160,6 +164,12 @@ const BUTTON_HOVER_VOLUME_DECIBELS: f32 = -30.0;
 
 #[derive(Resource, Default)]
 pub(crate) struct ButtonSoundRequests(Vec<theme::ButtonSound>);
+
+impl ButtonSoundRequests {
+    pub(crate) fn push_hover(&mut self) {
+        self.0.push(theme::ButtonSound::Hover);
+    }
+}
 
 #[derive(Resource)]
 pub(crate) struct ButtonSoundAssets {

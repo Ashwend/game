@@ -2,8 +2,8 @@ use super::*;
 use crate::{
     items::{TEST_ORE_ID, TEST_RELIC_ID},
     protocol::{
-        ChatMessage, ClientMessage, InventoryCommand, ItemContainerSlot, PROTOCOL_VERSION,
-        PlayerMovement, Vec3Net,
+        ChatMessage, ClientMessage, InventoryCommand, ItemContainerSlot, ItemStack,
+        PROTOCOL_VERSION, PlayerMovement, SERVER_TICK_RATE_HZ, Vec3Net,
     },
     save::WorldSave,
     steam::offline_auth_token,
@@ -284,6 +284,208 @@ fn actionbar_selection_and_drop_are_server_authoritative() {
 }
 
 #[test]
+fn actionbar_q_style_drop_removes_one_item_from_stack() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+
+    server.receive(
+        client_id,
+        ClientMessage::Inventory(InventoryCommand::Move {
+            from: ItemContainerSlot::inventory(0),
+            to: ItemContainerSlot::actionbar(0),
+            quantity: Some(5),
+        }),
+    );
+    server.receive(
+        client_id,
+        ClientMessage::Inventory(InventoryCommand::Drop {
+            from: ItemContainerSlot::actionbar(0),
+            quantity: Some(1),
+        }),
+    );
+
+    let snapshot = server.snapshot();
+    assert_eq!(
+        snapshot.players[0].inventory.actionbar_slots[0]
+            .as_ref()
+            .map(|stack| stack.quantity),
+        Some(4)
+    );
+    assert_eq!(snapshot.dropped_items[0].stack.quantity, 1);
+}
+
+#[test]
+fn dropped_items_spawn_near_head_and_inherit_player_velocity() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    let mut sprinting = movement(1, Vec3Net::ZERO);
+    sprinting.velocity = Vec3Net::new(0.0, 0.0, -8.0);
+    server.receive(client_id, ClientMessage::Movement(sprinting));
+
+    server.receive(
+        client_id,
+        ClientMessage::Inventory(InventoryCommand::Drop {
+            from: ItemContainerSlot::inventory(2),
+            quantity: None,
+        }),
+    );
+    let initial_item = server.snapshot().dropped_items[0].clone();
+
+    assert!(initial_item.position.y > SERVER_EYE_HEIGHT);
+    assert!(initial_item.position.z > -0.7);
+    assert!(initial_item.position.z < -0.25);
+
+    server.tick(1.0 / SERVER_TICK_RATE_HZ);
+    let moving_item = server.snapshot().dropped_items[0].clone();
+    assert!(moving_item.position.z < initial_item.position.z - 0.3);
+}
+
+#[test]
+fn nearby_dropped_items_merge_on_server_interval() {
+    let mut server = server();
+    server.spawn_dropped_item(
+        ItemStack::new(TEST_ORE_ID, 12),
+        Vec3Net::new(0.0, DROPPED_ITEM_RADIUS, -2.0),
+        Vec3Net::ZERO,
+        0.0,
+    );
+    server.spawn_dropped_item(
+        ItemStack::new(TEST_ORE_ID, 8),
+        Vec3Net::new(DROPPED_ITEM_MERGE_RADIUS * 0.85, DROPPED_ITEM_RADIUS, -2.0),
+        Vec3Net::ZERO,
+        0.0,
+    );
+
+    let mut envelopes = Vec::new();
+    for _ in 0..DROPPED_ITEM_MERGE_INTERVAL_TICKS {
+        envelopes.extend(server.tick(1.0 / SERVER_TICK_RATE_HZ));
+    }
+
+    let snapshot = server.snapshot();
+    assert_eq!(snapshot.dropped_items.len(), 1);
+    assert_eq!(snapshot.dropped_items[0].stack.quantity, 20);
+    assert!(envelopes.iter().any(|envelope| {
+        matches!(
+            &envelope.message,
+            ServerMessage::ItemMerged { item_id, quantity }
+                if item_id == TEST_ORE_ID && *quantity == 8
+        )
+    }));
+}
+
+#[test]
+fn dropped_items_outside_merge_radius_stay_separate() {
+    let mut server = server();
+    server.spawn_dropped_item(
+        ItemStack::new(TEST_ORE_ID, 12),
+        Vec3Net::new(0.0, DROPPED_ITEM_RADIUS, -2.0),
+        Vec3Net::ZERO,
+        0.0,
+    );
+    server.spawn_dropped_item(
+        ItemStack::new(TEST_ORE_ID, 8),
+        Vec3Net::new(DROPPED_ITEM_MERGE_RADIUS + 0.25, DROPPED_ITEM_RADIUS, -2.0),
+        Vec3Net::ZERO,
+        0.0,
+    );
+
+    for _ in 0..DROPPED_ITEM_MERGE_INTERVAL_TICKS {
+        server.tick(1.0 / SERVER_TICK_RATE_HZ);
+    }
+
+    assert_eq!(server.snapshot().dropped_items.len(), 2);
+}
+
+#[test]
+fn dropped_items_use_rapier_gravity_and_floor_collision() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    server.receive(
+        client_id,
+        ClientMessage::Movement(movement(1, Vec3Net::new(0.0, 4.0, 0.0))),
+    );
+
+    server.receive(
+        client_id,
+        ClientMessage::Inventory(InventoryCommand::Drop {
+            from: ItemContainerSlot::inventory(2),
+            quantity: None,
+        }),
+    );
+    let initial_item = server.snapshot().dropped_items[0].clone();
+
+    for _ in 0..80 {
+        server.tick(1.0 / SERVER_TICK_RATE_HZ);
+    }
+
+    let settled_item = server.snapshot().dropped_items[0].clone();
+    assert!(settled_item.position.y < initial_item.position.y - 2.0);
+    assert!(settled_item.position.y >= DROPPED_ITEM_RADIUS - 0.03);
+    assert!(settled_item.position.y <= DROPPED_ITEM_RADIUS + 0.12);
+    assert_ne!(settled_item.rotation, initial_item.rotation);
+}
+
+#[test]
+fn dropped_item_physics_collides_with_world_blocks() {
+    let mut server = server();
+    server.spawn_dropped_item(
+        ItemStack::new(TEST_ORE_ID, 1),
+        Vec3Net::new(0.0, 3.0, -6.0),
+        Vec3Net::ZERO,
+        0.0,
+    );
+
+    for _ in 0..80 {
+        server.tick(1.0 / SERVER_TICK_RATE_HZ);
+    }
+
+    let item = &server.snapshot().dropped_items[0];
+    assert!(item.position.y >= 0.5 + DROPPED_ITEM_RADIUS - 0.03);
+    assert!(item.position.y <= 0.5 + DROPPED_ITEM_RADIUS + 0.12);
+}
+
+#[test]
+fn pickup_merges_actionbar_stacks_before_inventory() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    let client = server
+        .clients
+        .get_mut(&client_id)
+        .expect("connected host should exist");
+    client.inventory.inventory_slots[0] = None;
+    client.inventory.actionbar_slots[0] = Some(ItemStack::new(TEST_ORE_ID, 18));
+
+    server.spawn_dropped_item(
+        ItemStack::new(TEST_ORE_ID, 8),
+        Vec3Net::new(0.0, SERVER_EYE_HEIGHT - 0.28, -2.0),
+        Vec3Net::ZERO,
+        0.0,
+    );
+    let dropped_item_id = server.snapshot().dropped_items[0].id;
+
+    server.receive(
+        client_id,
+        ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
+    );
+
+    let snapshot = server.snapshot();
+    let inventory = &snapshot.players[0].inventory;
+    assert!(snapshot.dropped_items.is_empty());
+    assert_eq!(
+        inventory.actionbar_slots[0]
+            .as_ref()
+            .map(|stack| stack.quantity),
+        Some(20)
+    );
+    assert_eq!(
+        inventory.inventory_slots[0]
+            .as_ref()
+            .map(|stack| stack.quantity),
+        Some(6)
+    );
+}
+
+#[test]
 fn pickup_requires_looking_at_dropped_item_and_restores_inventory() {
     let mut server = server();
     let client_id = connect_host(&mut server);
@@ -297,15 +499,17 @@ fn pickup_requires_looking_at_dropped_item_and_restores_inventory() {
     );
     let dropped_item_id = server.snapshot().dropped_items[0].id;
 
+    let mut look_away = movement(1, Vec3Net::ZERO);
+    look_away.yaw = std::f32::consts::PI;
+    server.receive(client_id, ClientMessage::Movement(look_away));
     server.receive(
         client_id,
         ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
     );
     assert_eq!(server.snapshot().dropped_items.len(), 1);
 
-    let mut look_down = movement(1, Vec3Net::ZERO);
-    look_down.pitch = -0.7;
-    server.receive(client_id, ClientMessage::Movement(look_down));
+    let look_at_drop = movement(2, Vec3Net::ZERO);
+    server.receive(client_id, ClientMessage::Movement(look_at_drop));
     server.receive(
         client_id,
         ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),

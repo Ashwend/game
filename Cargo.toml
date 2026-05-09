@@ -16,6 +16,7 @@ bevy_egui = "0.39.1"
 clap = { version = "4.6.1", features = ["derive"] }
 directories = "6.0.0"
 lightyear = { version = "0.26.4", features = ["input_native", "netcode", "udp"] }
+rapier3d = "0.32.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"

@@ -14,22 +14,29 @@ const CHAT_INPUT_WIDTH: f32 = CHAT_WIDTH - 22.0;
 const CHAT_INPUT_HEIGHT: f32 = 30.0;
 const CHAT_INPUT_ID: &str = "game_chat_input";
 
-pub(super) fn chat_ui(ctx: &egui::Context, menu: &mut MenuState, runtime: &mut ClientRuntime) {
+pub(super) fn chat_ui(
+    ctx: &egui::Context,
+    menu: &mut MenuState,
+    runtime: &mut ClientRuntime,
+    inventory_open: bool,
+) {
     let opened_this_frame = handle_chat_shortcuts(ctx, menu);
     let active = menu.chat_open && !menu.pause_open;
+    let allow_pointer_interaction = active || inventory_open;
 
     egui::Area::new("chat".into())
         .order(egui::Order::Foreground)
+        .interactable(allow_pointer_interaction)
         .anchor(egui::Align2::LEFT_BOTTOM, [18.0, -18.0])
         .show(ctx, |ui| {
             chat_frame(active).show(ui, |ui| {
                 ui.set_width(CHAT_WIDTH);
-                draw_messages(ui, &runtime.messages, active);
+                draw_messages(ui, &runtime.messages, active, allow_pointer_interaction);
                 ui.add_space(8.0);
                 if active {
                     draw_active_input(ui, menu, runtime, opened_this_frame);
                 } else {
-                    draw_inactive_input(ui, menu);
+                    draw_inactive_input(ui, menu, allow_pointer_interaction);
                 }
             });
         });
@@ -69,23 +76,42 @@ fn chat_frame(active: bool) -> egui::Frame {
         .inner_margin(egui::Margin::symmetric(11, 10))
 }
 
-fn draw_messages(ui: &mut egui::Ui, messages: &[ClientLogEntry], active: bool) {
+fn draw_messages(
+    ui: &mut egui::Ui,
+    messages: &[ClientLogEntry],
+    active: bool,
+    scroll_enabled: bool,
+) {
     let max_height = if active {
         CHAT_ACTIVE_MESSAGE_HEIGHT
     } else {
         CHAT_INACTIVE_MESSAGE_HEIGHT
     };
 
-    egui::ScrollArea::vertical()
+    let mut scroll_area = egui::ScrollArea::vertical()
+        .id_salt(if scroll_enabled {
+            "chat_messages_scroll"
+        } else {
+            "chat_messages_static"
+        })
         .stick_to_bottom(true)
         .auto_shrink([false, false])
-        .max_height(max_height)
-        .show(ui, |ui| {
-            ui.set_width(CHAT_WIDTH - 22.0);
-            for message in messages {
-                draw_message(ui, message);
-            }
-        });
+        .max_height(max_height);
+
+    if !scroll_enabled {
+        scroll_area = scroll_area
+            .scroll_source(egui::containers::scroll_area::ScrollSource::NONE)
+            .scroll_bar_visibility(
+                egui::containers::scroll_area::ScrollBarVisibility::AlwaysHidden,
+            );
+    }
+
+    scroll_area.show(ui, |ui| {
+        ui.set_width(CHAT_WIDTH - 22.0);
+        for message in messages {
+            draw_message(ui, message);
+        }
+    });
 }
 
 fn draw_message(ui: &mut egui::Ui, message: &ClientLogEntry) {
@@ -169,7 +195,7 @@ fn draw_active_input(
     }
 }
 
-fn draw_inactive_input(ui: &mut egui::Ui, menu: &mut MenuState) {
+fn draw_inactive_input(ui: &mut egui::Ui, menu: &mut MenuState, interactive: bool) {
     let rect = allocate_input_rect(ui);
     paint_input_background(ui, rect);
     ui.put(
@@ -180,6 +206,10 @@ fn draw_inactive_input(ui: &mut egui::Ui, menu: &mut MenuState) {
             .interactive(false)
             .hint_text("Chat"),
     );
+
+    if !interactive {
+        return;
+    }
 
     let response = ui.interact(
         rect,
@@ -269,6 +299,26 @@ mod tests {
         }
     }
 
+    fn pointer_scroll_over_chat() -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(egui::pos2(40.0, 500.0)),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -48.0),
+                modifiers: egui::Modifiers::default(),
+            },
+        ]
+    }
+
+    fn many_messages() -> Vec<ClientLogEntry> {
+        (0..20)
+            .map(|index| ClientLogEntry {
+                kind: ClientLogKind::System,
+                text: format!("message {index}"),
+            })
+            .collect()
+    }
+
     #[test]
     fn shortcut_opens_chat_when_text_modifiers_are_clear() {
         let ctx = egui::Context::default();
@@ -329,16 +379,61 @@ mod tests {
         };
 
         let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            chat_ui(ctx, &mut menu, &mut runtime);
+            chat_ui(ctx, &mut menu, &mut runtime, false);
         });
 
         menu.chat_open = true;
         menu.chat_focus_pending = true;
         let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            chat_ui(ctx, &mut menu, &mut runtime);
+            chat_ui(ctx, &mut menu, &mut runtime, false);
         });
 
         assert!(!menu.chat_focus_pending);
+    }
+
+    #[test]
+    fn inactive_gameplay_chat_does_not_capture_pointer_scroll() {
+        let ctx = egui::Context::default();
+        let mut menu = MenuState::default();
+        let mut runtime = ClientRuntime {
+            messages: many_messages(),
+            ..Default::default()
+        };
+        let mut wants_pointer = true;
+        let mut scroll_delta = egui::Vec2::ZERO;
+
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            chat_ui(ctx, &mut menu, &mut runtime, false);
+        });
+        let _ = ctx.run(raw_input(pointer_scroll_over_chat()), |ctx| {
+            chat_ui(ctx, &mut menu, &mut runtime, false);
+            wants_pointer = ctx.wants_pointer_input();
+            scroll_delta = ctx.input(|input| input.smooth_scroll_delta);
+        });
+
+        assert!(!wants_pointer);
+        assert_ne!(scroll_delta, egui::Vec2::ZERO);
+    }
+
+    #[test]
+    fn inventory_chat_can_capture_pointer_scroll() {
+        let ctx = egui::Context::default();
+        let mut menu = MenuState::default();
+        let mut runtime = ClientRuntime {
+            messages: many_messages(),
+            ..Default::default()
+        };
+        let mut wants_pointer = false;
+
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            chat_ui(ctx, &mut menu, &mut runtime, true);
+        });
+        let _ = ctx.run(raw_input(pointer_scroll_over_chat()), |ctx| {
+            chat_ui(ctx, &mut menu, &mut runtime, true);
+            wants_pointer = ctx.wants_pointer_input();
+        });
+
+        assert!(wants_pointer);
     }
 
     #[test]

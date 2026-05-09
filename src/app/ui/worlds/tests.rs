@@ -229,6 +229,34 @@ fn escape_cancels_modal_or_returns_to_main_menu() {
 }
 
 #[test]
+fn enter_confirms_create_world_modal() {
+    let ctx = egui::Context::default();
+    let store = temp_store();
+    let user = steam_user();
+    let mut menu = MenuState {
+        screen: Screen::Worlds,
+        create_world: Some(CreateWorldDialog::new()),
+        ..Default::default()
+    };
+    let mut runtime = ClientRuntime::default();
+
+    let _ = ctx.run(
+        raw_input_with_events(vec![key_press(egui::Key::Enter)]),
+        |ctx| {
+            super::worlds_ui(ctx, &mut menu, &mut runtime, &store, &user);
+        },
+    );
+
+    let create_dialog = menu
+        .create_world
+        .expect("dialog should remain while closing");
+    assert!(create_dialog.closing);
+    assert!(create_dialog.confirmed);
+
+    let _ = fs::remove_dir_all(store.0.root());
+}
+
+#[test]
 fn worlds_ui_renders_empty_and_populated_tables() {
     let ctx = egui::Context::default();
     let store = temp_store();
