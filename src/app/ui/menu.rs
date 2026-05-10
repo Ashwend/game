@@ -1,6 +1,9 @@
 use bevy_egui::egui;
 
-use crate::app::state::{MenuState, SaveStore, Screen, SteamUser};
+use crate::{
+    app::state::{MenuState, SaveStore, Screen, SteamUser},
+    protocol::GAME_VERSION,
+};
 
 use super::{
     danger_menu_button, primary_menu_button,
@@ -52,5 +55,15 @@ pub(super) fn main_menu_ui(
                     ui.label(theme::status_text(status));
                 }
             });
+        });
+    draw_version_indicator(ctx);
+}
+
+fn draw_version_indicator(ctx: &egui::Context) {
+    egui::Area::new("main_menu_version".into())
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::RIGHT_BOTTOM, [-18.0, -14.0])
+        .show(ctx, |ui| {
+            ui.label(theme::muted(format!("v{GAME_VERSION}")));
         });
 }
