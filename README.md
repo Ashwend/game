@@ -1,5 +1,8 @@
 # Game
 
+[![Quality Gate](https://github.com/danniehansen/game/actions/workflows/quality-gate.yml/badge.svg)](https://github.com/danniehansen/game/actions/workflows/quality-gate.yml)
+[![Coverage Gate](https://github.com/danniehansen/game/actions/workflows/coverage.yml/badge.svg)](https://github.com/danniehansen/game/actions/workflows/coverage.yml)
+
 Rust/Bevy first-person game prototype with loopback singleplayer, direct UDP multiplayer, JSON world saves, and a Lightyear host/client path shared by both play modes.
 
 ## Run
@@ -9,6 +12,7 @@ Rust/Bevy first-person game prototype with loopback singleplayer, direct UDP mul
 - `./cli check` - run `cargo check --all-targets`.
 - `./cli test` - run tests.
 - `./cli lint` - run rustfmt and clippy.
+- `./cli coverage` - run tests under `cargo-llvm-cov` when installed.
 
 ## Shape
 

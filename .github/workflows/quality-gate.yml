@@ -1,0 +1,57 @@
+name: Quality Gate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  quality:
+    name: quality
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ pkg-config libx11-dev libasound2-dev libudev-dev libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install --profile minimal
+          rustup component add clippy rustfmt
+
+      - name: Cache Cargo data
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: quality-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            quality-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Check all targets
+        run: cargo check --locked --all-targets --all-features
+
+      - name: Run tests
+        run: cargo test --locked --all-targets --all-features
