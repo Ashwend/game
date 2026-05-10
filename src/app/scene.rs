@@ -1,5 +1,4 @@
 use bevy::{
-    anti_alias::smaa::{Smaa, SmaaPreset},
     asset::RenderAssetUsages,
     mesh::PrimitiveTopology,
     post_process::dof::{DepthOfField, DepthOfFieldMode},
@@ -78,9 +77,6 @@ pub(crate) fn setup_scene(
             fov: 65.0_f32.to_radians(),
             ..default()
         }),
-        Smaa {
-            preset: SmaaPreset::High,
-        },
         Msaa::Off,
         menu_backdrop_depth_of_field(),
         Transform::from_xyz(0.0, EYE_HEIGHT, 3.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -316,10 +312,11 @@ pub(crate) fn menu_backdrop_depth_of_field() -> DepthOfField {
 mod tests {
     use super::*;
     use crate::{
-        app::state::ClientRuntime,
+        app::{state::ClientRuntime, systems::menu_backdrop_camera_system},
         protocol::{PlayerState, Vec3Net, WorldSnapshot},
         world::WorldData,
     };
+    use bevy::anti_alias::taa::TemporalAntiAliasing;
 
     fn app_with_scene_resources() -> App {
         let mut app = App::new();
@@ -344,18 +341,54 @@ mod tests {
         assert_eq!(camera_count, 1);
 
         let world = app.world_mut();
-        let (smaa, msaa) = world
-            .query_filtered::<(&Smaa, &Msaa), With<MainCamera>>()
+        let msaa = world
+            .query_filtered::<&Msaa, With<MainCamera>>()
             .single(world)
-            .expect("main camera should use stable spatial antialiasing");
-        assert!(smaa.preset == SmaaPreset::High);
+            .expect("main camera should start with menu-compatible msaa");
         assert_eq!(*msaa, Msaa::Off);
+        let temporal_aa_count = world
+            .query_filtered::<&TemporalAntiAliasing, With<MainCamera>>()
+            .iter(world)
+            .count();
+        assert_eq!(temporal_aa_count, 0);
 
         let sun = world
             .query::<&DirectionalLight>()
             .single(world)
             .expect("sun should exist");
         assert!(!sun.shadows_enabled);
+    }
+
+    #[test]
+    fn gameplay_camera_rendering_avoids_temporal_double_image_artifacts() {
+        let mut app = app_with_scene_resources();
+        app.insert_resource(MenuState {
+            screen: Screen::InGame,
+            ..Default::default()
+        });
+        app.add_systems(Startup, setup_scene);
+        app.add_systems(Update, menu_backdrop_camera_system);
+
+        app.update();
+
+        let world = app.world_mut();
+        let msaa = world
+            .query_filtered::<&Msaa, With<MainCamera>>()
+            .single(world)
+            .expect("main camera should exist");
+        assert_eq!(*msaa, Msaa::Sample4);
+
+        let depth_of_field_count = world
+            .query_filtered::<&DepthOfField, With<MainCamera>>()
+            .iter(world)
+            .count();
+        assert_eq!(depth_of_field_count, 0);
+
+        let temporal_aa_count = world
+            .query_filtered::<&TemporalAntiAliasing, With<MainCamera>>()
+            .iter(world)
+            .count();
+        assert_eq!(temporal_aa_count, 0);
     }
 
     #[test]

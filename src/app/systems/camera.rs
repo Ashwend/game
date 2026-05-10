@@ -1,5 +1,4 @@
-use bevy::post_process::dof::DepthOfField;
-use bevy::prelude::*;
+use bevy::{post_process::dof::DepthOfField, prelude::*};
 
 use super::super::{
     EYE_HEIGHT,
@@ -16,6 +15,7 @@ const MENU_BACKDROP_LOOK_RADIUS: Vec3 = Vec3::new(0.22, 0.03, 0.18);
 type MenuBackdropCameraData = (
     Entity,
     &'static mut Transform,
+    &'static mut Msaa,
     Option<&'static mut DepthOfField>,
 );
 type MenuBackdropCameraFilter = (With<MainCamera>, Without<NetworkPlayer>);
@@ -26,17 +26,23 @@ pub(crate) fn menu_backdrop_camera_system(
     time: Option<Res<Time>>,
     mut camera: Query<MenuBackdropCameraData, MenuBackdropCameraFilter>,
 ) {
-    let Ok((entity, mut camera_transform, depth_of_field)) = camera.single_mut() else {
+    let Ok((entity, mut camera_transform, mut msaa, depth_of_field)) = camera.single_mut() else {
         return;
     };
 
     if menu.screen == Screen::InGame {
+        if *msaa != Msaa::Sample4 {
+            *msaa = Msaa::Sample4;
+        }
         if depth_of_field.is_some() {
             commands.entity(entity).remove::<DepthOfField>();
         }
         return;
     }
 
+    if *msaa != Msaa::Off {
+        *msaa = Msaa::Off;
+    }
     let elapsed_seconds = time
         .as_ref()
         .map(|time| time.elapsed_secs())
@@ -96,6 +102,9 @@ mod tests {
     use super::*;
     use bevy::post_process::dof::DepthOfFieldMode;
 
+    #[derive(Resource, Default)]
+    struct MsaaChangeLog(Vec<bool>);
+
     fn app_with_camera(menu: MenuState) -> App {
         let mut app = App::new();
         app.insert_resource(menu);
@@ -103,12 +112,23 @@ mod tests {
             commands.spawn((
                 MainCamera,
                 Camera3d::default(),
+                Msaa::Off,
                 menu_backdrop_depth_of_field(),
                 Transform::from_xyz(0.0, EYE_HEIGHT, 3.0),
             ));
         });
         app.add_systems(Update, menu_backdrop_camera_system);
         app
+    }
+
+    fn record_msaa_change(
+        mut changes: ResMut<MsaaChangeLog>,
+        camera: Query<Ref<Msaa>, With<MainCamera>>,
+    ) {
+        let Ok(msaa) = camera.single() else {
+            return;
+        };
+        changes.0.push(msaa.is_changed());
     }
 
     #[test]
@@ -143,5 +163,48 @@ mod tests {
             .world_mut()
             .query_filtered::<&DepthOfField, With<MainCamera>>();
         assert!(query.single(app.world()).is_err());
+    }
+
+    #[test]
+    fn gameplay_camera_uses_multisample_antialiasing() {
+        let mut app = app_with_camera(MenuState::default());
+        app.update();
+
+        app.world_mut().resource_mut::<MenuState>().screen = Screen::InGame;
+        app.update();
+
+        let mut query = app.world_mut().query_filtered::<&Msaa, With<MainCamera>>();
+        let msaa = query.single(app.world()).expect("camera should use msaa");
+        assert_eq!(*msaa, Msaa::Sample4);
+    }
+
+    #[test]
+    fn gameplay_camera_msaa_settles_after_transition() {
+        let menu = MenuState {
+            screen: Screen::InGame,
+            ..Default::default()
+        };
+        let mut app = app_with_camera(menu);
+        app.insert_resource(MsaaChangeLog::default());
+        app.add_systems(
+            Update,
+            record_msaa_change.after(menu_backdrop_camera_system),
+        );
+
+        app.update();
+        app.update();
+
+        let changes = app.world().resource::<MsaaChangeLog>();
+        assert_eq!(changes.0, vec![true, false]);
+    }
+
+    #[test]
+    fn menu_camera_keeps_msaa_off_for_depth_of_field() {
+        let mut app = app_with_camera(MenuState::default());
+        app.update();
+
+        let mut query = app.world_mut().query_filtered::<&Msaa, With<MainCamera>>();
+        let msaa = query.single(app.world()).expect("camera should use msaa");
+        assert_eq!(*msaa, Msaa::Off);
     }
 }

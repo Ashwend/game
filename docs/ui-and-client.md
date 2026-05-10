@@ -38,7 +38,7 @@ Input systems:
 - In-game cursor capture drives mouse look.
 - WASD, shift, and space feed predicted movement.
 
-Scene rendering uses a first-person camera, generated floor/block geometry, and replicated player capsules.
+Scene rendering uses a first-person camera, generated floor/block geometry, and replicated player capsules. Gameplay camera anti-aliasing must stay non-temporal: use MSAA in gameplay and keep temporal AA/depth-of-field out of the in-game camera. Temporal history and blur can create a double-image effect when strafing sideways around nearby objects.
 
 Audio:
 - `assets/main-screen/ambient-music.wav` loops across main-menu, worlds, and multiplayer menu screens.
