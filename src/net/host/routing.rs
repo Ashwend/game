@@ -105,6 +105,7 @@ fn handle_unauthenticated_message(
 ) {
     let ClientMessage::Auth {
         protocol_version,
+        client_version,
         steam_id,
         display_name,
         token,
@@ -120,7 +121,13 @@ fn handle_unauthenticated_message(
         return;
     };
 
-    match server.connect(protocol_version, steam_id, display_name, token) {
+    match server.connect(
+        protocol_version,
+        client_version,
+        steam_id,
+        display_name,
+        token,
+    ) {
         Ok((client_id, envelopes)) => {
             connections.by_entity.insert(entity, client_id);
             connections.client_to_entity.insert(client_id, entity);

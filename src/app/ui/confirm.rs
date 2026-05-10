@@ -39,6 +39,30 @@ pub(super) fn confirmation_ui(ctx: &egui::Context, menu: &mut MenuState, store: 
     }
 }
 
+pub(super) fn notice_ui(ctx: &egui::Context, menu: &mut MenuState) {
+    let Some(dialog) = menu.notice.as_mut() else {
+        return;
+    };
+
+    let output = modal::notice_modal(
+        ctx,
+        "notice_modal",
+        &dialog.title,
+        &dialog.body,
+        &dialog.confirm_label,
+        !dialog.closing,
+    );
+
+    if output.choice.is_some() {
+        dialog.closing = true;
+        ctx.request_repaint();
+    }
+
+    if output.finished_closing {
+        menu.notice = None;
+    }
+}
+
 fn apply_confirmation_action(action: ConfirmationAction, menu: &mut MenuState, store: &SaveStore) {
     match action {
         ConfirmationAction::DeleteWorld { world_id } => match store.0.delete_world(world_id) {

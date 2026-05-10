@@ -6,8 +6,8 @@ use super::{
 use crate::{
     items::{TEST_ORE_ID, TEST_RELIC_ID},
     protocol::{
-        ChatMessage, ClientMessage, InventoryCommand, ItemContainerSlot, ItemStack,
-        PROTOCOL_VERSION, PlayerMovement, SERVER_TICK_RATE_HZ, Vec3Net,
+        ChatMessage, ClientMessage, GAME_VERSION, InventoryCommand, ItemContainerSlot, ItemStack,
+        PROTOCOL_VERSION, PlayerEvent, PlayerMovement, SERVER_TICK_RATE_HZ, Vec3Net,
     },
     save::WorldSave,
     steam::offline_auth_token,
@@ -38,6 +38,7 @@ fn connect_host(server: &mut GameServer) -> ClientId {
     server
         .connect(
             PROTOCOL_VERSION,
+            Some(GAME_VERSION.to_owned()),
             1,
             "Host".to_owned(),
             offline_auth_token(1),

@@ -7,6 +7,7 @@ pub type ClientId = u64;
 pub type SteamId = u64;
 
 pub const PROTOCOL_VERSION: u32 = 11;
+pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_INPUT_DELTA_SECONDS: f32 = 1.0 / SERVER_TICK_RATE_HZ;
 pub const MAX_CHAT_LEN: usize = 240;
@@ -89,6 +90,8 @@ impl Default for QuatNet {
 pub enum ClientMessage {
     Auth {
         protocol_version: u32,
+        #[serde(default)]
+        client_version: Option<String>,
         steam_id: SteamId,
         display_name: String,
         token: String,
@@ -250,6 +253,9 @@ pub enum ServerMessage {
     AuthRejected {
         reason: String,
     },
+    Kicked {
+        reason: String,
+    },
     PlayerEvent(PlayerEvent),
     Snapshot(WorldSnapshot),
     Correction(PlayerState),
@@ -266,6 +272,7 @@ impl ServerMessage {
         match self {
             Self::Welcome { .. }
             | Self::AuthRejected { .. }
+            | Self::Kicked { .. }
             | Self::PlayerEvent(_)
             | Self::Chat(_)
             | Self::ItemMerged { .. } => PacketDelivery::Reliable,
@@ -364,6 +371,13 @@ mod tests {
         assert_eq!(
             ServerMessage::Heartbeat.delivery(),
             PacketDelivery::Unreliable
+        );
+        assert_eq!(
+            ServerMessage::Kicked {
+                reason: "restart".to_owned(),
+            }
+            .delivery(),
+            PacketDelivery::Reliable
         );
     }
 }

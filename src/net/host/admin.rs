@@ -73,7 +73,7 @@ impl Drop for HostAdminSocket {
 pub(super) fn drain_admin_socket(
     socket: Option<Res<HostAdminSocket>>,
     mut shutdown: ResMut<HostShutdown>,
-    server: Res<AuthoritativeServer>,
+    mut server: ResMut<AuthoritativeServer>,
     connections: Res<ServerConnections>,
     mut senders: Query<&mut MessageSender<ServerMessage>, With<ClientOf>>,
 ) {
@@ -91,14 +91,20 @@ pub(super) fn drain_admin_socket(
             }
         };
 
-        handle_admin_stream(stream, &mut shutdown, &server, &connections, &mut senders);
+        handle_admin_stream(
+            stream,
+            &mut shutdown,
+            &mut server,
+            &connections,
+            &mut senders,
+        );
     }
 }
 
 fn handle_admin_stream(
     mut stream: UnixStream,
     shutdown: &mut HostShutdown,
-    server: &AuthoritativeServer,
+    server: &mut AuthoritativeServer,
     connections: &ServerConnections,
     senders: &mut Query<&mut MessageSender<ServerMessage>, With<ClientOf>>,
 ) {
@@ -118,7 +124,7 @@ fn handle_admin_stream(
 fn handle_admin_request(
     request: DedicatedAdminRequest,
     shutdown: &mut HostShutdown,
-    server: &AuthoritativeServer,
+    server: &mut AuthoritativeServer,
     connections: &ServerConnections,
     senders: &mut Query<&mut MessageSender<ServerMessage>, With<ClientOf>>,
 ) -> Result<String> {
@@ -131,7 +137,8 @@ fn handle_admin_request(
             route_envelopes(connections, senders, envelopes);
             Ok("announcement sent".to_owned())
         }
-        DedicatedAdminRequest::Shutdown => {
+        DedicatedAdminRequest::Shutdown { reason } => {
+            route_envelopes(connections, senders, server.0.kick_all(reason));
             shutdown.requested = true;
             Ok("shutdown requested".to_owned())
         }

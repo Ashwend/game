@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum DedicatedAdminRequest {
     Announce { text: String },
-    Shutdown,
+    Shutdown { reason: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

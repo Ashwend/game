@@ -145,6 +145,37 @@ pub(super) fn confirmation_modal(
     }
 }
 
+pub(super) fn notice_modal(
+    ctx: &egui::Context,
+    id: &'static str,
+    title: &str,
+    body: &str,
+    confirm_label: &str,
+    open: bool,
+) -> ConfirmationModalOutput {
+    let output = modal_shell(ctx, id, open, 320.0, 410.0, |ui, choice| {
+        ui.label(theme::section(title));
+        ui.add_space(8.0);
+        ui.label(RichText::new(body).size(14.0).color(theme::text()));
+        ui.add_space(18.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if theme::compact_button(ui, confirm_label, ButtonKind::Primary, 92.0).clicked() {
+                *choice = Some(ConfirmationChoice::Confirm);
+            }
+        });
+    });
+
+    let mut choice = output.choice;
+    if choice.is_none() && (output.confirm_shortcut_pressed || output.clicked_outside) {
+        choice = Some(ConfirmationChoice::Confirm);
+    }
+
+    ConfirmationModalOutput {
+        choice,
+        finished_closing: output.finished_closing,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

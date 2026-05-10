@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use super::{
     backdrop::{MENU_BACKDROP_BLUR_WARMUP_SECONDS, MENU_BACKDROP_FADE_SECONDS},
+    menu::DEFAULT_MULTIPLAYER_ADDR,
     runtime::MAX_CLIENT_LOG_MESSAGES,
     *,
 };
@@ -177,12 +178,13 @@ fn menu_and_confirmation_defaults_match_initial_ui_state() {
     assert!(menu.edit_world.is_none());
     assert!(menu.direct_connect.is_none());
     assert!(menu.world_start.is_none());
-    assert_eq!(menu.multiplayer_addr, "127.0.0.1:7777");
+    assert_eq!(menu.multiplayer_addr, DEFAULT_MULTIPLAYER_ADDR);
     assert!(!menu.pause_open);
     assert!(!menu.pause_options_open);
     assert!(!menu.inventory_open);
     assert!(!menu.chat_open);
     assert!(menu.confirmation.is_none());
+    assert!(menu.notice.is_none());
     assert!(!menu.quit_requested);
 
     let world_id = Uuid::new_v4();
@@ -199,8 +201,8 @@ fn menu_and_confirmation_defaults_match_initial_ui_state() {
 
 #[test]
 fn direct_connect_dialog_separates_address_and_port() {
-    let dialog = DirectConnectDialog::new("127.0.0.1:7777");
-    assert_eq!(dialog.host, "127.0.0.1");
+    let dialog = DirectConnectDialog::new(DEFAULT_MULTIPLAYER_ADDR);
+    assert_eq!(dialog.host, "46.224.101.205");
     assert_eq!(dialog.port, "7777");
     assert!(dialog.error.is_none());
     assert!(!dialog.closing);
@@ -329,6 +331,34 @@ fn apply_message_handles_welcome_chat_events_and_rejections() {
             .messages
             .iter()
             .any(|message| message.text.contains("auth rejected"))
+    );
+}
+
+#[test]
+fn kicked_message_clears_session_state_and_logs_reason() {
+    let mut runtime = ClientRuntime {
+        client_id: Some(1),
+        is_admin: true,
+        world: Some(WorldData::test_world()),
+        snapshot: Some(WorldSnapshot::default()),
+        predicted_local: Some(PlayerController::spawn()),
+        ..Default::default()
+    };
+
+    runtime.apply_message(ServerMessage::Kicked {
+        reason: "Server restart".to_owned(),
+    });
+
+    assert!(runtime.client_id.is_none());
+    assert!(!runtime.is_admin);
+    assert!(runtime.world.is_none());
+    assert!(runtime.snapshot.is_none());
+    assert!(runtime.predicted_local.is_none());
+    assert!(
+        runtime
+            .messages
+            .iter()
+            .any(|message| message.text == "disconnected: Server restart")
     );
 }
 

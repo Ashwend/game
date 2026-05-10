@@ -165,6 +165,10 @@ impl ClientRuntime {
             ServerMessage::AuthRejected { reason } => {
                 self.push_error_message(format!("auth rejected: {reason}"));
             }
+            ServerMessage::Kicked { reason } => {
+                self.push_error_message(format!("disconnected: {reason}"));
+                self.clear_session_state();
+            }
             ServerMessage::PlayerEvent(event) => {
                 self.push_system_message(format_player_event(event))
             }
@@ -196,6 +200,11 @@ impl ClientRuntime {
 
     pub(crate) fn push_chat_message(&mut self, from: impl Into<String>, text: impl Into<String>) {
         self.push_message(ClientLogEntry::chat(from, text));
+    }
+
+    pub(crate) fn stop_session_after_kick(&mut self) {
+        self.session = None;
+        self.clear_session_state();
     }
 
     fn push_message(&mut self, message: ClientLogEntry) {

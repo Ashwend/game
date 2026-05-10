@@ -3,8 +3,11 @@ use bevy::prelude::*;
 use crate::{save::WorldStore, steam::AuthenticatedUser};
 
 use super::{
-    ConfirmationDialog, CreateWorldDialog, DirectConnectDialog, EditWorldDialog, WorldStartAttempt,
+    ConfirmationDialog, CreateWorldDialog, DirectConnectDialog, EditWorldDialog, NoticeDialog,
+    WorldStartAttempt,
 };
+
+pub(crate) const DEFAULT_MULTIPLAYER_ADDR: &str = "46.224.101.205:7777";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Screen {
@@ -44,6 +47,7 @@ pub(crate) struct MenuState {
     pub(crate) chat_focus_pending: bool,
     pub(crate) chat_input: String,
     pub(crate) confirmation: Option<ConfirmationDialog>,
+    pub(crate) notice: Option<NoticeDialog>,
     pub(crate) quit_requested: bool,
 }
 
@@ -56,7 +60,7 @@ impl Default for MenuState {
             edit_world: None,
             direct_connect: None,
             world_start: None,
-            multiplayer_addr: "127.0.0.1:7777".to_owned(),
+            multiplayer_addr: DEFAULT_MULTIPLAYER_ADDR.to_owned(),
             status: None,
             pause_open: false,
             pause_options_open: false,
@@ -65,6 +69,7 @@ impl Default for MenuState {
             chat_focus_pending: false,
             chat_input: String::new(),
             confirmation: None,
+            notice: None,
             quit_requested: false,
         }
     }

@@ -34,6 +34,7 @@ data_dir="${install_dir}/data"
 admin_socket="/run/${service_name}/admin.sock"
 world_path="${data_dir}/world.json"
 unit_path="/etc/systemd/system/${service_name}.service"
+shutdown_reason="Server is stopping for deployment. Please reconnect after it restarts."
 
 if ! command -v apt-get >/dev/null 2>&1; then
   echo "This deploy script currently expects an apt-based server." >&2
@@ -115,9 +116,9 @@ RuntimeDirectory=${service_name}
 RuntimeDirectoryMode=0750
 UMask=007
 ExecStart=${current_link}/game server --bind ${bind_addr} --auth ${auth_mode} --world ${world_path} --admin-socket ${admin_socket}
-ExecStop=/bin/sh -c '${current_link}/game admin --socket ${admin_socket} announce "Server is stopping for deployment. Please disconnect and wait for restart." || true'
+ExecStop=/bin/sh -c '${current_link}/game admin --socket ${admin_socket} announce "${shutdown_reason}" || true'
 ExecStop=/bin/sleep 3
-ExecStop=/bin/sh -c '${current_link}/game admin --socket ${admin_socket} shutdown || true'
+ExecStop=/bin/sh -c '${current_link}/game admin --socket ${admin_socket} shutdown --reason "${shutdown_reason}" || true'
 ExecStop=/bin/sleep 5
 KillSignal=SIGINT
 TimeoutStopSec=45

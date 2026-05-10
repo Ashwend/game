@@ -22,7 +22,7 @@ use crate::{
             LIGHTYEAR_PROTOCOL_ID, LightyearProtocolPlugin, private_key, send_client_message,
         },
     },
-    protocol::{ClientMessage, PROTOCOL_VERSION, ServerMessage},
+    protocol::{ClientMessage, GAME_VERSION, PROTOCOL_VERSION, ServerMessage},
     save::{WorldSave, WorldStore},
     server::ServerSettings,
     steam::{AuthMode, AuthenticatedUser},
@@ -30,6 +30,7 @@ use crate::{
 
 const CLIENT_SLEEP: Duration = Duration::from_millis(1);
 const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
+const CLIENT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 
 pub enum ClientSession {
     Network(Box<LightyearGameSession>),
@@ -126,6 +127,7 @@ impl LightyearGameSession {
         let steam_id = user.steam_id;
         let auth_message = ClientMessage::Auth {
             protocol_version: PROTOCOL_VERSION,
+            client_version: Some(GAME_VERSION.to_owned()),
             steam_id,
             display_name: user.display_name.clone(),
             token: user.token.clone(),
@@ -170,13 +172,24 @@ impl LightyearGameSession {
                 return Err(error).context("Lightyear game server did not answer auth");
             }
         };
-        if let ServerMessage::AuthRejected { reason } = first_message {
-            let _ = command_tx.send(ClientCommand::Shutdown);
-            let _ = thread.join();
-            if let Some(mut local_server) = local_server.take() {
-                let _ = local_server.shutdown();
+        match &first_message {
+            ServerMessage::AuthRejected { reason } => {
+                let _ = command_tx.send(ClientCommand::Shutdown);
+                let _ = thread.join();
+                if let Some(mut local_server) = local_server.take() {
+                    let _ = local_server.shutdown();
+                }
+                bail!("auth rejected: {reason}");
             }
-            bail!("auth rejected: {reason}");
+            ServerMessage::Kicked { reason } => {
+                let _ = command_tx.send(ClientCommand::Shutdown);
+                let _ = thread.join();
+                if let Some(mut local_server) = local_server.take() {
+                    let _ = local_server.shutdown();
+                }
+                bail!("disconnected: {reason}");
+            }
+            _ => {}
         }
 
         Ok(Self {
@@ -273,6 +286,11 @@ struct ClientAuth {
 struct PendingClientMessages(VecDeque<ClientMessage>);
 
 #[derive(Resource, Default)]
+struct ClientHeartbeat {
+    elapsed: Duration,
+}
+
+#[derive(Resource, Default)]
 struct ClientShutdown {
     requested: bool,
 }
@@ -317,6 +335,7 @@ fn build_client_app(
         sent: false,
     });
     app.insert_resource(PendingClientMessages::default());
+    app.insert_resource(ClientHeartbeat::default());
     app.insert_resource(ClientShutdown::default());
 
     app.add_systems(Startup, move |mut commands: Commands| {
@@ -350,9 +369,11 @@ fn run_client_app(app: &mut App) {
 }
 
 fn send_client_messages(
+    time: Res<Time>,
     inbox: Res<ClientCommandInbox>,
     mut auth: ResMut<ClientAuth>,
     mut pending: ResMut<PendingClientMessages>,
+    mut heartbeat: ResMut<ClientHeartbeat>,
     mut shutdown: ResMut<ClientShutdown>,
     mut clients: Query<(&mut MessageSender<ClientMessage>, Has<Connected>), With<client::Client>>,
 ) {
@@ -382,6 +403,21 @@ fn send_client_messages(
         while let Some(message) = pending.0.pop_front() {
             send_client_message(&mut sender, message);
         }
+        if auth.sent && heartbeat.tick(time.delta()) {
+            send_client_message(&mut sender, ClientMessage::Heartbeat);
+        }
+    }
+}
+
+impl ClientHeartbeat {
+    fn tick(&mut self, delta: Duration) -> bool {
+        self.elapsed += delta;
+        if self.elapsed < CLIENT_HEARTBEAT_INTERVAL {
+            return false;
+        }
+
+        self.elapsed = Duration::ZERO;
+        true
     }
 }
 

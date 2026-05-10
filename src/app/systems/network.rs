@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::{
     app::{
-        state::{ClientRuntime, MenuState, Screen, SessionShutdownTasks},
+        state::{ClientRuntime, MenuState, NoticeDialog, Screen, SessionShutdownTasks},
         ui::ButtonSoundRequests,
     },
     protocol::ServerMessage,
@@ -11,7 +11,7 @@ use crate::{
 pub(crate) fn network_tick_system(
     time: Res<Time>,
     mut runtime: ResMut<ClientRuntime>,
-    menu: Res<MenuState>,
+    mut menu: ResMut<MenuState>,
     mut button_sound_requests: ResMut<ButtonSoundRequests>,
 ) {
     if !network_tick_allowed(&menu) {
@@ -32,11 +32,27 @@ pub(crate) fn network_tick_system(
     };
 
     for message in messages {
+        if let ServerMessage::Kicked { reason } = &message {
+            runtime.apply_message(message.clone());
+            runtime.stop_session_after_kick();
+            show_kick_notice(&mut menu, reason.clone());
+            continue;
+        }
         if matches!(message, ServerMessage::ItemMerged { .. }) {
             button_sound_requests.push_hover();
         }
         runtime.apply_message(message);
     }
+}
+
+fn show_kick_notice(menu: &mut MenuState, reason: String) {
+    menu.notice = Some(NoticeDialog::disconnected(reason));
+    menu.screen = Screen::MainMenu;
+    menu.pause_open = false;
+    menu.pause_options_open = false;
+    menu.inventory_open = false;
+    menu.chat_open = false;
+    menu.chat_focus_pending = false;
 }
 
 fn network_tick_allowed(menu: &MenuState) -> bool {
@@ -72,5 +88,28 @@ mod tests {
             ..Default::default()
         };
         assert!(!network_tick_allowed(&main_menu));
+    }
+
+    #[test]
+    fn kick_notice_returns_to_main_menu() {
+        let mut menu = MenuState {
+            screen: Screen::InGame,
+            pause_open: true,
+            inventory_open: true,
+            chat_open: true,
+            chat_focus_pending: true,
+            ..Default::default()
+        };
+
+        show_kick_notice(&mut menu, "Server restart".to_owned());
+
+        assert_eq!(menu.screen, Screen::MainMenu);
+        assert!(!menu.pause_open);
+        assert!(!menu.inventory_open);
+        assert!(!menu.chat_open);
+        assert!(matches!(
+            menu.notice.as_ref().map(|notice| notice.body.as_str()),
+            Some("Server restart")
+        ));
     }
 }

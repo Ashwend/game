@@ -10,6 +10,8 @@ use crate::{
 };
 
 const DEFAULT_ADMIN_SOCKET: &str = "/run/game-server/admin.sock";
+const DEFAULT_SHUTDOWN_REASON: &str =
+    "Server is stopping for maintenance. Please reconnect after it restarts.";
 
 #[derive(Debug, Parser)]
 #[command(name = "Game", version, about = "Game client and authoritative server")]
@@ -45,7 +47,10 @@ enum AdminCommand {
         #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
         message: Vec<String>,
     },
-    Shutdown,
+    Shutdown {
+        #[arg(long, default_value = DEFAULT_SHUTDOWN_REASON)]
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -124,7 +129,7 @@ fn run_admin_command(socket: PathBuf, command: AdminCommand) -> Result<()> {
         AdminCommand::Announce { message } => net::DedicatedAdminRequest::Announce {
             text: message.join(" "),
         },
-        AdminCommand::Shutdown => net::DedicatedAdminRequest::Shutdown,
+        AdminCommand::Shutdown { reason } => net::DedicatedAdminRequest::Shutdown { reason },
     };
     let response = net::send_dedicated_admin_request(&socket, request)
         .with_context(|| format!("could not send admin command to {}", socket.display()))?;

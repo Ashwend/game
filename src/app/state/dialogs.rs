@@ -41,6 +41,25 @@ pub(crate) enum ConfirmationAction {
     DeleteWorld { world_id: Uuid },
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct NoticeDialog {
+    pub(crate) title: String,
+    pub(crate) body: String,
+    pub(crate) confirm_label: String,
+    pub(crate) closing: bool,
+}
+
+impl NoticeDialog {
+    pub(crate) fn disconnected(reason: impl Into<String>) -> Self {
+        Self {
+            title: "Disconnected".to_owned(),
+            body: reason.into(),
+            confirm_label: "OK".to_owned(),
+            closing: false,
+        }
+    }
+}
+
 pub(crate) type DirectConnectResult = std::result::Result<(SocketAddr, ClientSession), String>;
 
 pub(crate) struct DirectConnectAttempt {

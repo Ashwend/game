@@ -11,7 +11,7 @@ mod tests;
 pub(crate) use backdrop::MenuBackdropVisibility;
 pub(crate) use dialogs::{
     ConfirmationAction, ConfirmationDialog, CreateWorldDialog, CreateWorldMapKind,
-    DirectConnectAttempt, DirectConnectDialog, DirectConnectResult, EditWorldDialog,
+    DirectConnectAttempt, DirectConnectDialog, DirectConnectResult, EditWorldDialog, NoticeDialog,
     WorldStartAttempt, WorldStartResult,
 };
 pub(crate) use inventory::{

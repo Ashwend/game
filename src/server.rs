@@ -13,6 +13,8 @@ use crate::{
     world::WorldData,
 };
 
+const CLIENT_STALE_TIMEOUT_TICKS: u64 = 20 * 10;
+
 mod connection;
 mod dropped_items;
 mod inventory;
@@ -90,6 +92,8 @@ impl GameServer {
     }
 
     pub fn receive(&mut self, client_id: ClientId, message: ClientMessage) -> Vec<ServerEnvelope> {
+        self.mark_client_seen(client_id);
+
         match message {
             ClientMessage::Auth { .. } => vec![ServerEnvelope {
                 target: DeliveryTarget::Client(client_id),
@@ -137,13 +141,34 @@ impl GameServer {
             .collect()
     }
 
+    pub fn kick_all(&mut self, reason: impl Into<String>) -> Vec<ServerEnvelope> {
+        let reason = reason.into();
+        let client_ids = self.clients.keys().copied().collect::<Vec<_>>();
+        let mut envelopes = client_ids
+            .iter()
+            .copied()
+            .map(|client_id| ServerEnvelope {
+                target: DeliveryTarget::Client(client_id),
+                message: ServerMessage::Kicked {
+                    reason: reason.clone(),
+                },
+            })
+            .collect::<Vec<_>>();
+
+        for client_id in client_ids {
+            envelopes.extend(self.disconnect(client_id));
+        }
+
+        envelopes
+    }
+
     pub fn tick(&mut self, delta_seconds: f32) -> Vec<ServerEnvelope> {
         self.tick += 1;
         self.save.state.last_authoritative_tick = self.tick;
         self.dropped_item_physics
             .step(delta_seconds, &mut self.dropped_items);
 
-        let mut envelopes = Vec::new();
+        let mut envelopes = self.disconnect_stale_clients();
         if self.tick.is_multiple_of(DROPPED_ITEM_MERGE_INTERVAL_TICKS) {
             envelopes.extend(self.merge_nearby_dropped_items().into_iter().map(
                 |(item_id, quantity)| ServerEnvelope {
@@ -158,6 +183,28 @@ impl GameServer {
             message: ServerMessage::Snapshot(self.snapshot()),
         });
         envelopes
+    }
+
+    fn mark_client_seen(&mut self, client_id: ClientId) {
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.last_seen_tick = self.tick;
+        }
+    }
+
+    fn disconnect_stale_clients(&mut self) -> Vec<ServerEnvelope> {
+        let stale_client_ids = self
+            .clients
+            .values()
+            .filter(|client| {
+                self.tick.saturating_sub(client.last_seen_tick) > CLIENT_STALE_TIMEOUT_TICKS
+            })
+            .map(|client| client.client_id)
+            .collect::<Vec<_>>();
+
+        stale_client_ids
+            .into_iter()
+            .flat_map(|client_id| self.disconnect(client_id))
+            .collect()
     }
 
     fn apply_inventory_command(&mut self, client_id: ClientId, command: InventoryCommand) {
@@ -341,6 +388,7 @@ struct ServerClient {
     controller: PlayerController,
     inventory: PlayerInventoryState,
     is_admin: bool,
+    last_seen_tick: u64,
 }
 
 #[cfg(test)]

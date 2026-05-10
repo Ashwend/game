@@ -20,7 +20,7 @@ use bevy_egui::{EguiContexts, egui};
 
 use self::{
     chat::chat_ui,
-    confirm::confirmation_ui,
+    confirm::{confirmation_ui, notice_ui},
     hud::hud_ui,
     inventory::inventory_ui,
     menu::main_menu_ui,
@@ -140,6 +140,7 @@ pub(crate) fn ui_system(
     }
 
     confirmation_ui(ctx, &mut resources.menu, &resources.store);
+    notice_ui(ctx, &mut resources.menu);
     resources
         .button_sound_requests
         .0

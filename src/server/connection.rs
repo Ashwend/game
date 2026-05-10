@@ -3,7 +3,8 @@ use anyhow::{Result, bail};
 use crate::{
     controller::PlayerController,
     protocol::{
-        ClientId, PROTOCOL_VERSION, PlayerEvent, PlayerState, ServerMessage, SteamId, WorldSnapshot,
+        ClientId, GAME_VERSION, PROTOCOL_VERSION, PlayerEvent, PlayerState, ServerMessage, SteamId,
+        WorldSnapshot,
     },
     steam::verify_auth_ticket,
 };
@@ -17,12 +18,23 @@ impl GameServer {
     pub fn connect(
         &mut self,
         protocol_version: u32,
+        client_version: Option<String>,
         steam_id: SteamId,
         display_name: String,
         token: String,
     ) -> Result<(ClientId, Vec<ServerEnvelope>)> {
         if protocol_version != PROTOCOL_VERSION {
             bail!("protocol mismatch: client {protocol_version}, server {PROTOCOL_VERSION}");
+        }
+
+        match client_version.as_deref() {
+            Some(GAME_VERSION) => {}
+            Some(client_version) => {
+                bail!("version mismatch: client {client_version}, server {GAME_VERSION}");
+            }
+            None => {
+                bail!("version mismatch: client version is unknown, server {GAME_VERSION}");
+            }
         }
 
         verify_auth_ticket(self.settings.auth_mode, steam_id, &token)?;
@@ -43,6 +55,7 @@ impl GameServer {
             controller: PlayerController::spawn(),
             inventory: starting_inventory(),
             is_admin,
+            last_seen_tick: self.tick,
         };
 
         self.clients.insert(client_id, client);
