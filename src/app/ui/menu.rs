@@ -67,3 +67,55 @@ fn draw_version_indicator(ctx: &egui::Context) {
             ui.label(theme::muted(format!("v{GAME_VERSION}")));
         });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        save::WorldStore,
+        steam::{AuthenticatedUser, offline_auth_token},
+    };
+
+    fn raw_input() -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1024.0, 768.0),
+            )),
+            ..Default::default()
+        }
+    }
+
+    fn store() -> SaveStore {
+        SaveStore(WorldStore::new(
+            std::env::temp_dir().join(format!("game-main-menu-test-{}", uuid::Uuid::new_v4())),
+        ))
+    }
+
+    fn user() -> SteamUser {
+        SteamUser(AuthenticatedUser {
+            steam_id: 1,
+            display_name: "Tester".to_owned(),
+            token: offline_auth_token(1),
+        })
+    }
+
+    #[test]
+    fn main_menu_renders_status_and_version() {
+        let ctx = egui::Context::default();
+        let mut menu = MenuState {
+            status: Some("Ready".to_owned()),
+            ..Default::default()
+        };
+        let store = store();
+        let user = user();
+
+        let output = ctx.run(raw_input(), |ctx| {
+            main_menu_ui(ctx, &mut menu, &store, &user);
+        });
+
+        assert!(output.shapes.len() > 1);
+        assert_eq!(menu.screen, Screen::MainMenu);
+        assert!(!menu.quit_requested);
+    }
+}

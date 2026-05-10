@@ -38,3 +38,58 @@ pub(super) fn pickup_tooltip(
         &body,
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::{ItemStack, Vec3Net};
+    use bevy::prelude::Vec2;
+
+    fn raw_input() -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 480.0),
+            )),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn pickup_tooltip_renders_available_target() {
+        let ctx = egui::Context::default();
+        let menu = MenuState::default();
+        let pickup_target = PickupTargetState {
+            dropped_item_id: Some(1),
+            stack: Some(ItemStack::new("unknown-item", 3)),
+            world_position: Some(Vec3Net::new(1.0, 2.0, 3.0)),
+            screen_position: Some(Vec2::new(100.0, 120.0)),
+        };
+
+        let output = ctx.run(raw_input(), |ctx| {
+            pickup_tooltip(ctx, &menu, &pickup_target);
+        });
+
+        assert!(!output.shapes.is_empty());
+    }
+
+    #[test]
+    fn pickup_tooltip_is_hidden_when_ui_blocks_pickup() {
+        let ctx = egui::Context::default();
+        let menu = MenuState {
+            inventory_open: true,
+            ..Default::default()
+        };
+        let pickup_target = PickupTargetState {
+            stack: Some(ItemStack::new("unknown-item", 1)),
+            screen_position: Some(Vec2::new(100.0, 120.0)),
+            ..Default::default()
+        };
+
+        let output = ctx.run(raw_input(), |ctx| {
+            pickup_tooltip(ctx, &menu, &pickup_target);
+        });
+
+        assert!(output.shapes.is_empty());
+    }
+}

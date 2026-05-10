@@ -63,3 +63,101 @@ pub(crate) fn apply_snapshot_system(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::{
+        ClientId, MAX_HEALTH, PlayerInventoryState, PlayerState, SteamId, Vec3Net, WorldSnapshot,
+    };
+
+    fn player(client_id: ClientId, steam_id: SteamId, position: Vec3Net, yaw: f32) -> PlayerState {
+        PlayerState {
+            client_id,
+            steam_id,
+            name: format!("Player {client_id}"),
+            position,
+            velocity: Vec3Net::ZERO,
+            yaw,
+            pitch: 0.0,
+            health: MAX_HEALTH,
+            grounded: true,
+            last_processed_input: 0,
+            is_admin: false,
+            inventory: PlayerInventoryState::default(),
+        }
+    }
+
+    fn app_with_snapshot(snapshot: Option<WorldSnapshot>, client_id: Option<ClientId>) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(ClientRuntime {
+            client_id,
+            snapshot,
+            ..Default::default()
+        });
+        app.insert_resource(PlayerVisualAssets {
+            mesh: Handle::default(),
+            remote_material: Handle::default(),
+        });
+        app.add_systems(Update, apply_snapshot_system);
+        app
+    }
+
+    #[test]
+    fn apply_snapshot_spawns_updates_and_removes_remote_players() {
+        let mut app = app_with_snapshot(
+            Some(WorldSnapshot {
+                tick: 1,
+                players: vec![
+                    player(1, 1, Vec3Net::ZERO, 0.0),
+                    player(2, 2, Vec3Net::new(2.0, 0.0, 0.0), 1.0),
+                ],
+                dropped_items: Vec::new(),
+            }),
+            Some(1),
+        );
+
+        app.update();
+
+        let players = {
+            let mut query = app.world_mut().query::<(&NetworkPlayer, &Transform)>();
+            query
+                .iter(app.world())
+                .map(|(player, transform)| (player.client_id, transform.translation))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(players.len(), 1);
+        assert_eq!(players[0].0, 2);
+        assert!(players[0].1.x > 1.9);
+
+        app.world_mut().resource_mut::<ClientRuntime>().snapshot = Some(WorldSnapshot {
+            tick: 2,
+            players: vec![player(2, 2, Vec3Net::new(4.0, 0.0, 0.0), 0.5)],
+            dropped_items: Vec::new(),
+        });
+        app.update();
+
+        let players = {
+            let mut query = app.world_mut().query::<(&NetworkPlayer, &Transform)>();
+            query
+                .iter(app.world())
+                .map(|(player, transform)| (player.client_id, transform.translation))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(players.len(), 1);
+        assert!(players[0].1.x > 3.9);
+
+        app.world_mut().resource_mut::<ClientRuntime>().snapshot = None;
+        app.update();
+
+        let players = {
+            let mut query = app.world_mut().query::<(&NetworkPlayer, &Transform)>();
+            query
+                .iter(app.world())
+                .map(|(player, transform)| (player.client_id, transform.translation))
+                .collect::<Vec<_>>()
+        };
+        assert!(players.is_empty());
+    }
+}

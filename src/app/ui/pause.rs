@@ -62,3 +62,47 @@ pub(super) fn pause_ui(
             });
         });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::save::WorldStore;
+
+    fn raw_input() -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1024.0, 768.0),
+            )),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn pause_menu_renders_without_changing_state_when_idle() {
+        let ctx = egui::Context::default();
+        let mut menu = MenuState {
+            screen: Screen::InGame,
+            pause_open: true,
+            inventory_open: true,
+            chat_open: true,
+            chat_focus_pending: true,
+            ..Default::default()
+        };
+        let mut runtime = ClientRuntime::default();
+        let mut shutdown_tasks = SessionShutdownTasks::default();
+        let store = SaveStore(WorldStore::new(
+            std::env::temp_dir().join(format!("game-pause-test-{}", uuid::Uuid::new_v4())),
+        ));
+
+        let output = ctx.run(raw_input(), |ctx| {
+            pause_ui(ctx, &mut menu, &mut runtime, &mut shutdown_tasks, &store);
+        });
+
+        assert!(output.shapes.len() > 1);
+        assert_eq!(menu.screen, Screen::InGame);
+        assert!(menu.pause_open);
+        assert!(menu.inventory_open);
+        assert!(menu.chat_open);
+    }
+}

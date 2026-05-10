@@ -6,7 +6,7 @@ use std::{
         mpsc::{self, Receiver, Sender},
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
@@ -161,41 +161,22 @@ impl LightyearGameSession {
             }
         }
 
-        let first_message = match incoming.recv_timeout(AUTH_TIMEOUT) {
-            Ok(message) => message,
+        let inbox = match wait_for_welcome(&incoming) {
+            Ok(inbox) => inbox,
             Err(error) => {
                 let _ = command_tx.send(ClientCommand::Shutdown);
                 let _ = thread.join();
                 if let Some(mut local_server) = local_server.take() {
                     let _ = local_server.shutdown();
                 }
-                return Err(error).context("Lightyear game server did not answer auth");
+                return Err(error);
             }
         };
-        match &first_message {
-            ServerMessage::AuthRejected { reason } => {
-                let _ = command_tx.send(ClientCommand::Shutdown);
-                let _ = thread.join();
-                if let Some(mut local_server) = local_server.take() {
-                    let _ = local_server.shutdown();
-                }
-                bail!("auth rejected: {reason}");
-            }
-            ServerMessage::Kicked { reason } => {
-                let _ = command_tx.send(ClientCommand::Shutdown);
-                let _ = thread.join();
-                if let Some(mut local_server) = local_server.take() {
-                    let _ = local_server.shutdown();
-                }
-                bail!("disconnected: {reason}");
-            }
-            _ => {}
-        }
 
         Ok(Self {
             command_tx,
             incoming: Mutex::new(incoming),
-            inbox: VecDeque::from([first_message]),
+            inbox,
             thread: Mutex::new(Some(thread)),
             local_server: Mutex::new(local_server),
         })
@@ -255,6 +236,32 @@ impl LightyearGameSession {
                 .map_err(|_| anyhow::anyhow!("Lightyear game client thread panicked"))?;
         }
         Ok(())
+    }
+}
+
+fn wait_for_welcome(incoming: &Receiver<ServerMessage>) -> Result<VecDeque<ServerMessage>> {
+    let deadline = Instant::now() + AUTH_TIMEOUT;
+    let mut buffered = VecDeque::new();
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            bail!("Lightyear game server did not answer auth");
+        }
+
+        let message = incoming
+            .recv_timeout(remaining)
+            .context("Lightyear game server did not answer auth")?;
+        match message {
+            ServerMessage::Welcome { .. } => {
+                let mut inbox = VecDeque::from([message]);
+                inbox.extend(buffered);
+                return Ok(inbox);
+            }
+            ServerMessage::AuthRejected { reason } => bail!("auth rejected: {reason}"),
+            ServerMessage::Kicked { reason } => bail!("disconnected: {reason}"),
+            message => buffered.push_back(message),
+        }
     }
 }
 
