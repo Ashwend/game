@@ -323,11 +323,11 @@ fn primary_window_focused(primary_window: &Query<&Window, With<PrimaryWindow>>) 
 }
 
 fn gameplay_simulation_allowed(menu: &MenuState) -> bool {
-    menu.screen == Screen::InGame && !menu.pause_open && !menu.pause_options_open && !menu.chat_open
+    menu.screen == Screen::InGame && !menu.pause_options_open && !menu.chat_open
 }
 
 fn gameplay_accepts_controls(menu: &MenuState, window_focused: bool) -> bool {
-    window_focused && gameplay_simulation_allowed(menu) && !menu.inventory_open
+    window_focused && gameplay_simulation_allowed(menu) && !menu.pause_open && !menu.inventory_open
 }
 
 #[cfg(test)]
@@ -404,6 +404,18 @@ mod tests {
         };
 
         assert!(!gameplay_simulation_allowed(&menu));
+        assert!(!gameplay_accepts_controls(&menu, true));
+    }
+
+    #[test]
+    fn pause_menu_blocks_controls_without_blocking_gameplay_simulation() {
+        let menu = MenuState {
+            screen: Screen::InGame,
+            pause_open: true,
+            ..Default::default()
+        };
+
+        assert!(gameplay_simulation_allowed(&menu));
         assert!(!gameplay_accepts_controls(&menu, true));
     }
 

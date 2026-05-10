@@ -2,7 +2,7 @@ use std::hash::Hash;
 
 use bevy_egui::egui::{
     self, Align2, Button, Color32, CursorIcon, FontFamily, FontId, Id, RichText, Sense, Stroke,
-    Vec2,
+    StrokeKind, Vec2,
 };
 
 use super::{accent, accent_dark, button_fill, button_hover_fill, button_stroke, text};
@@ -12,6 +12,12 @@ pub(in crate::app::ui) enum ButtonKind {
     Primary,
     Secondary,
     Danger,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::app::ui) enum ButtonState {
+    Ready,
+    Loading,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -63,7 +69,7 @@ pub(in crate::app::ui) fn game_button(
     kind: ButtonKind,
     width: f32,
 ) -> egui::Response {
-    sized_button(ui, label, kind, ButtonDensity::Menu, width)
+    game_button_with_state(ui, label, kind, width, ButtonState::Ready)
 }
 
 pub(in crate::app::ui) fn compact_button(
@@ -72,7 +78,27 @@ pub(in crate::app::ui) fn compact_button(
     kind: ButtonKind,
     width: f32,
 ) -> egui::Response {
-    sized_button(ui, label, kind, ButtonDensity::Compact, width)
+    compact_button_with_state(ui, label, kind, width, ButtonState::Ready)
+}
+
+pub(in crate::app::ui) fn game_button_with_state(
+    ui: &mut egui::Ui,
+    label: &str,
+    kind: ButtonKind,
+    width: f32,
+    state: ButtonState,
+) -> egui::Response {
+    sized_button(ui, label, kind, ButtonDensity::Menu, width, state)
+}
+
+pub(in crate::app::ui) fn compact_button_with_state(
+    ui: &mut egui::Ui,
+    label: &str,
+    kind: ButtonKind,
+    width: f32,
+    state: ButtonState,
+) -> egui::Response {
+    sized_button(ui, label, kind, ButtonDensity::Compact, width, state)
 }
 
 pub(in crate::app::ui) fn compact_button_in_rect(
@@ -82,6 +108,23 @@ pub(in crate::app::ui) fn compact_button_in_rect(
     label: &str,
     kind: ButtonKind,
 ) -> egui::Response {
+    compact_button_in_rect_with_state(ui, id_source, rect, label, kind, ButtonState::Ready)
+}
+
+pub(in crate::app::ui) fn compact_button_in_rect_with_state(
+    ui: &mut egui::Ui,
+    id_source: impl Hash,
+    rect: egui::Rect,
+    label: &str,
+    kind: ButtonKind,
+    state: ButtonState,
+) -> egui::Response {
+    if state == ButtonState::Loading {
+        let response = ui.interact(rect, ui.id().with(id_source), Sense::hover());
+        paint_loading_button(ui, rect, label, kind, ButtonDensity::Compact);
+        return response;
+    }
+
     let response = ui
         .interact(rect, ui.id().with(id_source), Sense::click())
         .on_hover_cursor(CursorIcon::PointingHand);
@@ -121,7 +164,12 @@ fn sized_button(
     kind: ButtonKind,
     density: ButtonDensity,
     width: f32,
+    state: ButtonState,
 ) -> egui::Response {
+    if state == ButtonState::Loading {
+        return loading_button(ui, label, kind, density, width);
+    }
+
     let spec = density.spec();
     let (fill, stroke, text_color) = button_paint(kind, density, ButtonInteraction::Rest);
     let mut label = RichText::new(label).size(spec.font_size).color(text_color);
@@ -141,6 +189,50 @@ fn sized_button(
 
     record_button_sounds(ui, &response);
     response
+}
+
+fn loading_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    kind: ButtonKind,
+    density: ButtonDensity,
+    width: f32,
+) -> egui::Response {
+    let spec = density.spec();
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, spec.height), Sense::hover());
+    paint_loading_button(ui, rect, label, kind, density);
+    response
+}
+
+fn paint_loading_button(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    label: &str,
+    kind: ButtonKind,
+    density: ButtonDensity,
+) {
+    let spec = density.spec();
+    let (fill, stroke, text_color) = button_paint(kind, density, ButtonInteraction::Rest);
+    ui.painter().rect(rect, 4, fill, stroke, StrokeKind::Inside);
+
+    let spinner_size = match density {
+        ButtonDensity::Menu => 16.0,
+        ButtonDensity::Compact => 14.0,
+    };
+    let text_offset = spinner_size * 0.7;
+    let spinner_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.center().x - spinner_size * 1.8, rect.center().y),
+        Vec2::splat(spinner_size),
+    );
+    ui.put(spinner_rect, egui::Spinner::new().size(spinner_size));
+
+    ui.painter().text(
+        egui::pos2(rect.center().x + text_offset, rect.center().y),
+        Align2::CENTER_CENTER,
+        label,
+        FontId::new(spec.font_size, FontFamily::Proportional),
+        text_color,
+    );
 }
 
 fn record_button_sounds(ui: &mut egui::Ui, response: &egui::Response) {

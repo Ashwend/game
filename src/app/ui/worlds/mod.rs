@@ -10,6 +10,7 @@ use crate::app::state::{ClientRuntime, MenuState, SaveStore, Screen, SteamUser};
 
 use super::theme::{self, ButtonKind};
 use dialogs::{create_world_dialog_ui, edit_world_dialog_ui, open_create_world_dialog};
+use session::poll_singleplayer_start;
 pub(super) use session::refresh_worlds;
 use table::{draw_world_headers, draw_world_table, table_height};
 
@@ -24,6 +25,9 @@ pub(super) fn worlds_ui(
 ) {
     theme::screen_scrim(ctx, "worlds_scrim", 145);
     handle_worlds_escape(ctx, menu);
+    if poll_singleplayer_start(menu, runtime) {
+        ctx.request_repaint();
+    }
     theme::anchored_panel(
         ctx,
         "worlds_panel",
@@ -32,13 +36,18 @@ pub(super) fn worlds_ui(
         [0.0, -8.0],
         |ui| {
             let has_worlds = !menu.worlds.is_empty();
+            let starting_world = menu.world_start.is_some();
             ui.horizontal(|ui| {
                 ui.label(theme::section("Singleplayer Worlds"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if theme::compact_button(ui, "Back", ButtonKind::Secondary, 78.0).clicked() {
-                        menu.screen = Screen::MainMenu;
-                    }
+                    ui.add_enabled_ui(!starting_world, |ui| {
+                        if theme::compact_button(ui, "Back", ButtonKind::Secondary, 78.0).clicked()
+                        {
+                            menu.screen = Screen::MainMenu;
+                        }
+                    });
                     if has_worlds
+                        && !starting_world
                         && theme::compact_button(ui, "Create New World", ButtonKind::Primary, 142.0)
                             .clicked()
                     {
@@ -50,7 +59,7 @@ pub(super) fn worlds_ui(
             ui.add_space(16.0);
             draw_world_headers(ui);
             let table_height = table_height(ctx);
-            draw_world_table(ui, menu, runtime, store, user, table_height);
+            draw_world_table(ui, menu, store, user, table_height);
 
             if let Some(status) = &menu.status {
                 ui.add_space(10.0);
@@ -64,6 +73,11 @@ pub(super) fn worlds_ui(
 
 fn handle_worlds_escape(ctx: &egui::Context, menu: &mut MenuState) {
     if !ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        return;
+    }
+
+    if menu.world_start.is_some() {
+        ctx.request_repaint();
         return;
     }
 

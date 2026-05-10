@@ -1,10 +1,17 @@
-use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::{
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
+    sync::mpsc::{self, TryRecvError},
+    thread,
+};
 
 use anyhow::{Result, bail};
 use bevy_egui::egui;
 
 use crate::{
-    app::state::{ClientRuntime, DirectConnectDialog, MenuState, Screen, SteamUser},
+    app::state::{
+        ClientRuntime, DirectConnectAttempt, DirectConnectDialog, DirectConnectResult, MenuState,
+        Screen, SteamUser,
+    },
     net::ClientSession,
     steam::{OfflineSteamBackend, SteamBackend},
 };
@@ -28,6 +35,12 @@ enum DirectConnectChoice {
 struct DirectConnectModalOutput {
     choice: Option<DirectConnectChoice>,
     finished_closing: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DirectConnectTarget {
+    host: String,
+    port: u16,
 }
 
 pub(super) fn multiplayer_ui(
@@ -111,6 +124,11 @@ fn handle_multiplayer_escape(ctx: &egui::Context, menu: &mut MenuState) {
     }
 
     if let Some(dialog) = menu.direct_connect.as_mut() {
+        if dialog.is_connecting() {
+            ctx.request_repaint();
+            return;
+        }
+
         dialog.closing = true;
         ctx.request_repaint();
         return;
@@ -125,7 +143,22 @@ fn direct_connect_dialog_ui(
     runtime: &mut ClientRuntime,
     user: &SteamUser,
 ) {
-    let mut connect_addr = None;
+    let connect_result = {
+        let Some(dialog) = menu.direct_connect.as_mut() else {
+            return;
+        };
+
+        let result = take_finished_direct_connect(dialog);
+        if dialog.is_connecting() {
+            ctx.request_repaint();
+        }
+        result
+    };
+
+    if let Some(result) = connect_result {
+        finish_direct_connect(menu, runtime, result);
+    }
+
     let finished_closing;
     {
         let Some(dialog) = menu.direct_connect.as_mut() else {
@@ -135,10 +168,13 @@ fn direct_connect_dialog_ui(
         let output = direct_connect_modal(ctx, dialog, !dialog.closing);
         if let Some(choice) = output.choice {
             match choice {
-                DirectConnectChoice::Connect => match direct_connect_addr(dialog) {
-                    Ok(addr) => {
-                        dialog.error = None;
-                        connect_addr = Some(addr);
+                DirectConnectChoice::Connect => match direct_connect_target(dialog) {
+                    Ok(target) => {
+                        if let Err(error) = start_direct_connect_attempt(ctx, dialog, target, user)
+                        {
+                            dialog.error = Some(error);
+                            ctx.request_repaint();
+                        }
                     }
                     Err(error) => {
                         dialog.error = Some(error.to_string());
@@ -156,10 +192,6 @@ fn direct_connect_dialog_ui(
 
     if finished_closing {
         menu.direct_connect = None;
-    }
-
-    if let Some(addr) = connect_addr {
-        connect_to_addr(menu, runtime, user, addr);
     }
 }
 
@@ -220,11 +252,12 @@ fn direct_connect_modal(
         })
         .response;
 
-    if open && choice.is_none() && modal::confirm_shortcut_pressed(ctx) {
+    let connecting = dialog.is_connecting();
+    if open && choice.is_none() && !connecting && modal::confirm_shortcut_pressed(ctx) {
         choice = Some(DirectConnectChoice::Connect);
     }
 
-    if open && choice.is_none() && backdrop_response.clicked() {
+    if open && choice.is_none() && !connecting && backdrop_response.clicked() {
         let clicked_outside_panel = ctx.input(|input| {
             input
                 .pointer
@@ -247,21 +280,24 @@ fn draw_direct_connect_form(
     dialog: &mut DirectConnectDialog,
     choice: &mut Option<DirectConnectChoice>,
 ) {
+    let connecting = dialog.is_connecting();
     ui.label(theme::section("Direct Connect"));
     ui.add_space(12.0);
 
-    ui.label(theme::field_label("Server Address"));
-    ui.add_sized(
-        [ui.available_width(), DIRECT_CONNECT_FIELD_HEIGHT],
-        theme::text_input(&mut dialog.host).id(egui::Id::new(DIRECT_CONNECT_HOST_INPUT_ID)),
-    );
+    ui.add_enabled_ui(!connecting, |ui| {
+        ui.label(theme::field_label("Server Address"));
+        ui.add_sized(
+            [ui.available_width(), DIRECT_CONNECT_FIELD_HEIGHT],
+            theme::text_input(&mut dialog.host).id(egui::Id::new(DIRECT_CONNECT_HOST_INPUT_ID)),
+        );
 
-    ui.add_space(6.0);
-    ui.label(theme::field_label("Port"));
-    ui.add_sized(
-        [ui.available_width(), DIRECT_CONNECT_FIELD_HEIGHT],
-        theme::text_input(&mut dialog.port).id(egui::Id::new(DIRECT_CONNECT_PORT_INPUT_ID)),
-    );
+        ui.add_space(6.0);
+        ui.label(theme::field_label("Port"));
+        ui.add_sized(
+            [ui.available_width(), DIRECT_CONNECT_FIELD_HEIGHT],
+            theme::text_input(&mut dialog.port).id(egui::Id::new(DIRECT_CONNECT_PORT_INPUT_ID)),
+        );
+    });
 
     if let Some(error) = &dialog.error {
         ui.add_space(8.0);
@@ -274,19 +310,32 @@ fn draw_direct_connect_form(
 
     ui.add_space(18.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if theme::compact_button(ui, "Connect", ButtonKind::Primary, 92.0).clicked() {
+        if connecting {
+            theme::compact_button_with_state(
+                ui,
+                "Connect",
+                ButtonKind::Primary,
+                92.0,
+                theme::ButtonState::Loading,
+            );
+        } else if theme::compact_button(ui, "Connect", ButtonKind::Primary, 92.0).clicked() {
             *choice = Some(DirectConnectChoice::Connect);
         }
-        if theme::compact_button(ui, "Cancel", ButtonKind::Secondary, 92.0).clicked() {
-            *choice = Some(DirectConnectChoice::Cancel);
-        }
+        ui.add_enabled_ui(!connecting, |ui| {
+            if theme::compact_button(ui, "Cancel", ButtonKind::Secondary, 92.0).clicked() {
+                *choice = Some(DirectConnectChoice::Cancel);
+            }
+        });
     });
 }
 
-fn direct_connect_addr(dialog: &DirectConnectDialog) -> Result<SocketAddr> {
+fn direct_connect_target(dialog: &DirectConnectDialog) -> Result<DirectConnectTarget> {
     let host_input = dialog.host.trim();
     if let Ok(addr) = host_input.parse::<SocketAddr>() {
-        return Ok(addr);
+        return Ok(DirectConnectTarget {
+            host: addr.ip().to_string(),
+            port: addr.port(),
+        });
     }
 
     let (host, port_input) =
@@ -302,11 +351,19 @@ fn direct_connect_addr(dialog: &DirectConnectDialog) -> Result<SocketAddr> {
         bail!("Port must be a number between 1 and 65535.");
     }
 
+    Ok(DirectConnectTarget {
+        host: host.trim_matches(['[', ']']).to_owned(),
+        port,
+    })
+}
+
+fn resolve_direct_connect_target(target: &DirectConnectTarget) -> Result<SocketAddr> {
+    let host = target.host.trim();
     if let Ok(ip) = host.parse::<IpAddr>() {
-        return Ok(SocketAddr::new(ip, port));
+        return Ok(SocketAddr::new(ip, target.port));
     }
 
-    (host, port)
+    (host, target.port)
         .to_socket_addrs()
         .map_err(|_| anyhow::anyhow!("Could not resolve server address."))?
         .next()
@@ -326,14 +383,77 @@ fn split_inline_host_port(host_input: &str) -> Option<(&str, &str)> {
     None
 }
 
-fn connect_to_addr(
+fn start_direct_connect_attempt(
+    ctx: &egui::Context,
+    dialog: &mut DirectConnectDialog,
+    target: DirectConnectTarget,
+    user: &SteamUser,
+) -> std::result::Result<(), String> {
+    let (tx, receiver) = mpsc::channel::<DirectConnectResult>();
+    let user = user.0.clone();
+    thread::Builder::new()
+        .name("direct-connect-attempt".to_owned())
+        .spawn(move || {
+            let result = connect_to_target(target, user).map_err(|error| format!("{error:#}"));
+            let _ = tx.send(result);
+        })
+        .map_err(|error| format!("Could not start connection attempt: {error}"))?;
+
+    dialog.error = None;
+    dialog.attempt = Some(DirectConnectAttempt {
+        receiver: std::sync::Mutex::new(receiver),
+    });
+    ctx.request_repaint();
+    Ok(())
+}
+
+fn connect_to_target(
+    target: DirectConnectTarget,
+    user: crate::steam::AuthenticatedUser,
+) -> Result<(SocketAddr, ClientSession)> {
+    let addr = resolve_direct_connect_target(&target)?;
+    let session = ClientSession::connect(addr, &user)?;
+    Ok((addr, session))
+}
+
+fn take_finished_direct_connect(dialog: &mut DirectConnectDialog) -> Option<DirectConnectResult> {
+    enum AttemptPoll {
+        Result(std::result::Result<DirectConnectResult, TryRecvError>),
+        Poisoned,
+    }
+
+    let attempt = dialog.attempt.as_ref()?;
+    let poll = match attempt.receiver.lock() {
+        Ok(receiver) => AttemptPoll::Result(receiver.try_recv()),
+        Err(_) => AttemptPoll::Poisoned,
+    };
+
+    match poll {
+        AttemptPoll::Poisoned => {
+            dialog.attempt = None;
+            Some(Err("Connection attempt state is unavailable.".to_owned()))
+        }
+        AttemptPoll::Result(Ok(result)) => {
+            dialog.attempt = None;
+            Some(result)
+        }
+        AttemptPoll::Result(Err(TryRecvError::Empty)) => None,
+        AttemptPoll::Result(Err(TryRecvError::Disconnected)) => {
+            dialog.attempt = None;
+            Some(Err(
+                "Connection attempt ended before returning a result.".to_owned()
+            ))
+        }
+    }
+}
+
+fn finish_direct_connect(
     menu: &mut MenuState,
     runtime: &mut ClientRuntime,
-    user: &SteamUser,
-    addr: SocketAddr,
+    result: DirectConnectResult,
 ) {
-    match ClientSession::connect(addr, &user.0) {
-        Ok(session) => {
+    match result {
+        Ok((addr, session)) => {
             runtime.start_session(session, None);
             menu.multiplayer_addr = addr.to_string();
             menu.direct_connect = None;
@@ -358,52 +478,109 @@ fn connect_to_addr(
 mod tests {
     use super::*;
 
-    #[test]
-    fn direct_connect_addr_parses_ip_host_and_port() {
-        let dialog = DirectConnectDialog {
-            host: "127.0.0.1".to_owned(),
-            port: "7777".to_owned(),
+    fn dialog(host: &str, port: &str) -> DirectConnectDialog {
+        DirectConnectDialog {
+            host: host.to_owned(),
+            port: port.to_owned(),
             error: None,
             closing: false,
+            attempt: None,
+        }
+    }
+
+    fn raw_input_with_events(events: Vec<egui::Event>) -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1024.0, 768.0),
+            )),
+            events,
+            ..Default::default()
+        }
+    }
+
+    fn key_press(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+
+    #[test]
+    fn direct_connect_target_parses_ip_host_and_port() {
+        let dialog = dialog("127.0.0.1", "7777");
+
+        assert_eq!(
+            direct_connect_target(&dialog).expect("target should parse"),
+            DirectConnectTarget {
+                host: "127.0.0.1".to_owned(),
+                port: 7777,
+            }
+        );
+    }
+
+    #[test]
+    fn direct_connect_target_accepts_pasted_host_and_port() {
+        let dialog = dialog("127.0.0.1:8888", "7777");
+
+        assert_eq!(
+            direct_connect_target(&dialog).expect("target should parse"),
+            DirectConnectTarget {
+                host: "127.0.0.1".to_owned(),
+                port: 8888,
+            }
+        );
+    }
+
+    #[test]
+    fn direct_connect_target_rejects_empty_host_and_invalid_port() {
+        assert!(direct_connect_target(&dialog(" ", "7777")).is_err());
+        assert!(direct_connect_target(&dialog("127.0.0.1", "0")).is_err());
+    }
+
+    #[test]
+    fn resolve_direct_connect_target_handles_ip_without_dns() {
+        let target = DirectConnectTarget {
+            host: "127.0.0.1".to_owned(),
+            port: 7777,
         };
 
         assert_eq!(
-            direct_connect_addr(&dialog).expect("address should parse"),
+            resolve_direct_connect_target(&target).expect("target should resolve"),
             SocketAddr::from(([127, 0, 0, 1], 7777))
         );
     }
 
     #[test]
-    fn direct_connect_addr_accepts_pasted_host_and_port() {
-        let dialog = DirectConnectDialog {
-            host: "127.0.0.1:8888".to_owned(),
-            port: "7777".to_owned(),
-            error: None,
-            closing: false,
+    fn escape_does_not_close_direct_connect_modal_while_connecting() {
+        let (_tx, receiver) = mpsc::channel::<DirectConnectResult>();
+        let mut menu = MenuState {
+            screen: Screen::Multiplayer,
+            direct_connect: Some(DirectConnectDialog {
+                host: "127.0.0.1".to_owned(),
+                port: "7777".to_owned(),
+                error: None,
+                closing: false,
+                attempt: Some(DirectConnectAttempt {
+                    receiver: std::sync::Mutex::new(receiver),
+                }),
+            }),
+            ..Default::default()
         };
+        let ctx = egui::Context::default();
 
-        assert_eq!(
-            direct_connect_addr(&dialog).expect("address should parse"),
-            SocketAddr::from(([127, 0, 0, 1], 8888))
+        let _ = ctx.run(
+            raw_input_with_events(vec![key_press(egui::Key::Escape)]),
+            |ctx| handle_multiplayer_escape(ctx, &mut menu),
         );
-    }
 
-    #[test]
-    fn direct_connect_addr_rejects_empty_host_and_invalid_port() {
-        let empty_host = DirectConnectDialog {
-            host: " ".to_owned(),
-            port: "7777".to_owned(),
-            error: None,
-            closing: false,
-        };
-        assert!(direct_connect_addr(&empty_host).is_err());
-
-        let invalid_port = DirectConnectDialog {
-            host: "127.0.0.1".to_owned(),
-            port: "0".to_owned(),
-            error: None,
-            closing: false,
-        };
-        assert!(direct_connect_addr(&invalid_port).is_err());
+        assert_eq!(menu.screen, Screen::Multiplayer);
+        let dialog = menu
+            .direct_connect
+            .expect("dialog should remain open while connecting");
+        assert!(!dialog.closing);
     }
 }

@@ -1,14 +1,14 @@
 use bevy_egui::egui;
 
 use crate::{
-    app::state::{
-        ClientRuntime, ConfirmationDialog, EditWorldDialog, MenuState, SaveStore, SteamUser,
-    },
+    app::state::{ConfirmationDialog, EditWorldDialog, MenuState, SaveStore, SteamUser},
     save::WorldSummary,
 };
 
 use super::super::theme::{self, ButtonKind};
-use super::{BUTTON_HEIGHT, dialogs::open_create_world_dialog, session::start_singleplayer};
+use super::{
+    BUTTON_HEIGHT, dialogs::open_create_world_dialog, session::start_singleplayer_in_background,
+};
 
 const INSET_FRAME_HORIZONTAL_PADDING: f32 = 28.0;
 const ROW_HEIGHT: f32 = 60.0;
@@ -26,7 +26,6 @@ pub(super) fn table_height(ctx: &egui::Context) -> f32 {
 pub(super) fn draw_world_table(
     ui: &mut egui::Ui,
     menu: &mut MenuState,
-    runtime: &mut ClientRuntime,
     store: &SaveStore,
     user: &SteamUser,
     table_height: f32,
@@ -52,15 +51,7 @@ pub(super) fn draw_world_table(
                         ui.set_width(table_content_width);
                         let worlds = menu.worlds.clone();
                         for world in worlds {
-                            draw_world_row(
-                                ui,
-                                menu,
-                                runtime,
-                                store,
-                                user,
-                                world,
-                                table_content_width,
-                            );
+                            draw_world_row(ui, menu, store, user, world, table_content_width);
                             ui.add_space(8.0);
                         }
                     });
@@ -117,7 +108,6 @@ pub(super) fn draw_world_headers(ui: &mut egui::Ui) {
 fn draw_world_row(
     ui: &mut egui::Ui,
     menu: &mut MenuState,
-    runtime: &mut ClientRuntime,
     store: &SaveStore,
     user: &SteamUser,
     world: WorldSummary,
@@ -175,16 +165,22 @@ fn draw_world_row(
         egui::vec2(DELETE_BUTTON_WIDTH, BUTTON_HEIGHT),
     );
 
-    if theme::compact_button_in_rect(
+    let starting_world = menu.world_start.as_ref().map(|attempt| attempt.world_id);
+    let start_state = if starting_world == Some(world.id) {
+        theme::ButtonState::Loading
+    } else {
+        theme::ButtonState::Ready
+    };
+    let start_response = theme::compact_button_in_rect_with_state(
         ui,
         ("world-start", world.id),
         start_rect,
         "Start",
         ButtonKind::Primary,
-    )
-    .clicked()
-    {
-        start_singleplayer(menu, runtime, store, user, world.id);
+        start_state,
+    );
+    if start_response.clicked() && starting_world.is_none() {
+        start_singleplayer_in_background(menu, store, user, world.id);
     }
     if theme::compact_button_in_rect(
         ui,

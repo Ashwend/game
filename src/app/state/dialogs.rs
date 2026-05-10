@@ -1,6 +1,12 @@
+use std::{
+    net::SocketAddr,
+    sync::{Mutex, mpsc::Receiver},
+};
+
 use uuid::Uuid;
 
 use crate::{
+    net::ClientSession,
     save::WorldSummary,
     world::{MapType, ProceduralMapSize},
 };
@@ -35,12 +41,25 @@ pub(crate) enum ConfirmationAction {
     DeleteWorld { world_id: Uuid },
 }
 
-#[derive(Debug, Clone)]
+pub(crate) type DirectConnectResult = std::result::Result<(SocketAddr, ClientSession), String>;
+
+pub(crate) struct DirectConnectAttempt {
+    pub(crate) receiver: Mutex<Receiver<DirectConnectResult>>,
+}
+
+pub(crate) type WorldStartResult = std::result::Result<ClientSession, String>;
+
+pub(crate) struct WorldStartAttempt {
+    pub(crate) world_id: Uuid,
+    pub(crate) receiver: Mutex<Receiver<WorldStartResult>>,
+}
+
 pub(crate) struct DirectConnectDialog {
     pub(crate) host: String,
     pub(crate) port: String,
     pub(crate) error: Option<String>,
     pub(crate) closing: bool,
+    pub(crate) attempt: Option<DirectConnectAttempt>,
 }
 
 impl DirectConnectDialog {
@@ -51,7 +70,12 @@ impl DirectConnectDialog {
             port,
             error: None,
             closing: false,
+            attempt: None,
         }
+    }
+
+    pub(crate) fn is_connecting(&self) -> bool {
+        self.attempt.is_some()
     }
 }
 

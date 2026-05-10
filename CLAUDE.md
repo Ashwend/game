@@ -25,6 +25,7 @@ Singleplayer/multiplayer invariant:
 - Singleplayer-specific code should stay limited to selecting/loading a save, starting a loopback host, marking the local host as admin, and saving the host world state on shutdown.
 - Multiplayer-specific code should stay limited to remote address/server discovery, auth mode, transport setup, and dedicated-host lifecycle.
 - When adding a feature, make it work through `ClientMessage`/`ServerMessage` and `GameServer` first, then let both loopback singleplayer and direct multiplayer consume that same path.
+- Critical pause/menu invariant: the ESC pause menu must only block local player controls and cursor capture. It must not stop gameplay simulation, local prediction ticks, or network/session ticks while `Screen::InGame`; otherwise players and the loopback server appear frozen whenever pause UI is visible.
 
 Clean-code rules:
 - No monolithic files. If a file mixes transport, domain rules, UI layout, persistence, and tests, split by concern before extending it.
