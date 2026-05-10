@@ -42,7 +42,32 @@ fi
 
 as_root apt-get update
 as_root env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
-as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates tar
+runtime_packages=(
+  ca-certificates
+  tar
+  libasound2t64
+  libudev1
+  libwayland-client0
+  libwayland-cursor0
+  libwayland-egl1
+  libx11-6
+  libx11-xcb1
+  libxcb1
+  libxcb-randr0
+  libxcb-xfixes0
+  libxcursor1
+  libxi6
+  libxkbcommon0
+  libxkbcommon-x11-0
+  libxrandr2
+  libxrender1
+)
+
+if ! apt-cache show libasound2t64 >/dev/null 2>&1; then
+  runtime_packages=("${runtime_packages[@]/libasound2t64/libasound2}")
+fi
+
+as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y "${runtime_packages[@]}"
 
 if ! getent group "${service_user}" >/dev/null; then
   as_root groupadd --system "${service_user}"
