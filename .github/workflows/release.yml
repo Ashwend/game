@@ -102,6 +102,24 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Write release metadata
+        run: |
+          {
+            echo "VERSION=${{ steps.prepare.outputs.version }}"
+            echo "TAG=${{ steps.prepare.outputs.tag }}"
+            echo "BASE_SHA=${{ steps.prepare.outputs.base_sha }}"
+            echo "PATCH_REQUIRED=${{ steps.prepare.outputs.patch_required }}"
+            echo "DRAFT=${{ inputs.draft }}"
+          } > release-metadata.env
+
+      - name: Upload release metadata
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-metadata
+          path: release-metadata.env
+          if-no-files-found: error
+          retention-days: 7
+
   build:
     name: Build ${{ matrix.label }}
     needs: prepare

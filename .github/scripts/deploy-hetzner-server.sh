@@ -34,7 +34,7 @@ data_dir="${install_dir}/data"
 admin_socket="/run/${service_name}/admin.sock"
 world_path="${data_dir}/world.json"
 unit_path="/etc/systemd/system/${service_name}.service"
-shutdown_reason="Server is stopping for deployment. Please reconnect after it restarts."
+shutdown_reason="Server is updating to ${version}. Please download the latest client before reconnecting."
 
 if ! command -v apt-get >/dev/null 2>&1; then
   echo "This deploy script currently expects an apt-based server." >&2
@@ -146,7 +146,7 @@ announce() {
 }
 
 if as_root systemctl is-active --quiet "${service_name}"; then
-  announce "Deploying ${version}. Server will restart in ${restart_notice_seconds} seconds; please disconnect and wait for restart."
+  announce "Deploying ${version}. Server will restart in ${restart_notice_seconds} seconds. Please disconnect, download the latest client, then reconnect after it is back online."
   sleep "${restart_notice_seconds}"
   as_root systemctl stop "${service_name}"
 fi
@@ -160,5 +160,5 @@ for _ in {1..20}; do
   sleep 1
 done
 
-announce "Server is back online with ${version}."
+announce "Server is back online with ${version}. Please download the latest client before reconnecting."
 as_root systemctl --no-pager --full status "${service_name}"
