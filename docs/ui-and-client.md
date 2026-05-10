@@ -1,6 +1,6 @@
 # UI And Client Flow
 
-`src/app.rs` wires the Bevy app. `src/app/ui` draws menus, worlds, HUD, pause, chat, confirmation, and multiplayer views.
+`src/app.rs` wires the Bevy app through named `ClientSystemSet`s. `src/app/ui` draws menus, worlds, HUD, pause, chat, confirmation, and multiplayer views.
 
 Screens live in `MenuState`: `MainMenu`, `Worlds`, `Multiplayer`, `Options`, `InGame`. The multiplayer screen supports direct UDP connect through the same `ClientSession` runtime used by singleplayer.
 
@@ -16,6 +16,19 @@ The singleplayer worlds UI lives in `src/app/ui/worlds/`:
 - `table.rs`: worlds list layout and row actions.
 - `dialogs/`: create/edit world modals and shared form helpers.
 - `session.rs`: refresh world list and start singleplayer.
+
+Reusable modal behavior lives in `src/app/ui/modal.rs`. Screen-specific modals should use the modal shell for animation, backdrop, outside-click handling, and Enter confirmation, then keep only form contents and choice mapping in the screen module.
+
+Inventory UI is split by responsibility:
+- `src/app/ui/inventory.rs`: inventory/actionbar screen shell.
+- `src/app/ui/inventory/slot.rs`: slot rendering, item icons, stack tooltips, and drag start.
+- `src/app/ui/inventory/drag.rs`: drag release, move/drop command dispatch, and drag preview.
+- `src/app/ui/inventory/pickup.rs`: world-item pickup tooltip.
+
+Multiplayer direct connect is split from the screen shell:
+- `src/app/ui/multiplayer.rs`: multiplayer panel, header actions, and Escape behavior.
+- `src/app/ui/multiplayer/direct_connect.rs`: direct-connect modal orchestration and background connection attempts.
+- `src/app/ui/multiplayer/direct_connect/target.rs`: address/port parsing and DNS/IP resolution.
 
 Starting singleplayer should only select/load a save and call `ClientSession::start_singleplayer`; the resulting runtime must behave like multiplayer after connection. Do not add UI-side gameplay branches that treat local worlds differently after the session starts.
 

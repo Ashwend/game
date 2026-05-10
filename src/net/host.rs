@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use bevy::{app::TerminalCtrlCHandlerPlugin, prelude::*};
 use lightyear::prelude::{
     LocalAddr, MessageSender,
@@ -32,7 +32,24 @@ use self::{
 use super::protocol::{LIGHTYEAR_PROTOCOL_ID, LightyearProtocolPlugin, private_key};
 
 const HOST_SLEEP: Duration = Duration::from_millis(1);
+const HOST_START_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_SERVER_TICKS_PER_LOOP: f32 = 5.0;
+
+#[derive(Debug)]
+struct ReservedUdpAddr {
+    addr: SocketAddr,
+    socket: Option<UdpSocket>,
+}
+
+impl ReservedUdpAddr {
+    fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    fn release(&mut self) {
+        self.socket.take();
+    }
+}
 
 #[derive(Resource)]
 pub(super) struct AuthoritativeServer(GameServer);
@@ -52,17 +69,46 @@ pub(super) fn spawn_loopback_server(
     save: WorldSave,
     settings: ServerSettings,
 ) -> Result<SpawnedGameServer> {
-    let addr = reserve_udp_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+    let reserved_addr = reserve_udp_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
         .context("could not reserve loopback Lightyear server address")?;
+    let addr = reserved_addr.addr();
     let (command_tx, command_rx) = mpsc::channel();
+    let (startup_tx, startup_rx) = mpsc::channel();
     let thread = thread::Builder::new()
         .name("lightyear-game-server".to_owned())
         .spawn(move || {
-            if let Err(error) = run_host(addr, save, settings, command_rx, false) {
+            if let Err(error) = run_host(
+                reserved_addr,
+                save,
+                settings,
+                command_rx,
+                false,
+                Some(startup_tx.clone()),
+            ) {
+                let _ = startup_tx.send(Err(format!("{error:#}")));
                 eprintln!("Lightyear game server stopped: {error:#}");
             }
         })
         .context("could not spawn loopback Lightyear game server")?;
+
+    match startup_rx.recv_timeout(HOST_START_TIMEOUT) {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            let _ = thread.join();
+            bail!("{error}");
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            let (reply_tx, reply_rx) = mpsc::channel();
+            let _ = command_tx.send(HostCommand::Shutdown(reply_tx));
+            let _ = reply_rx.recv_timeout(HOST_START_TIMEOUT);
+            let _ = thread.join();
+            bail!("Lightyear game server did not start");
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            let _ = thread.join();
+            bail!("Lightyear game server stopped before startup");
+        }
+    }
 
     Ok(SpawnedGameServer {
         addr,
@@ -75,12 +121,13 @@ pub(super) fn run_game_server(
     save: WorldSave,
     auth_mode: AuthMode,
 ) -> Result<WorldSave> {
-    let bind_addr = reserve_udp_addr(bind_addr)
+    let reserved_addr = reserve_udp_addr(bind_addr)
         .with_context(|| format!("could not reserve Lightyear server address {bind_addr}"))?;
+    let bind_addr = reserved_addr.addr();
     let (_command_tx, command_rx) = mpsc::channel();
     println!("Lightyear game server listening on {bind_addr} ({auth_mode:?})");
     run_host(
-        bind_addr,
+        reserved_addr,
         save,
         ServerSettings {
             auth_mode,
@@ -88,26 +135,33 @@ pub(super) fn run_game_server(
         },
         command_rx,
         true,
+        None,
     )
 }
 
-fn reserve_udp_addr(addr: SocketAddr) -> Result<SocketAddr> {
+fn reserve_udp_addr(addr: SocketAddr) -> Result<ReservedUdpAddr> {
     if addr.port() != 0 {
-        return Ok(addr);
+        return Ok(ReservedUdpAddr { addr, socket: None });
     }
     let socket = UdpSocket::bind(addr).with_context(|| format!("could not bind {addr}"))?;
-    socket
+    let addr = socket
         .local_addr()
-        .context("could not read reserved UDP address")
+        .context("could not read reserved UDP address")?;
+    Ok(ReservedUdpAddr {
+        addr,
+        socket: Some(socket),
+    })
 }
 
 fn run_host(
-    bind_addr: SocketAddr,
+    mut reserved_addr: ReservedUdpAddr,
     save: WorldSave,
     settings: ServerSettings,
     command_rx: mpsc::Receiver<HostCommand>,
     install_terminal_shutdown: bool,
+    mut startup_tx: Option<mpsc::Sender<std::result::Result<(), String>>>,
 ) -> Result<WorldSave> {
+    let bind_addr = reserved_addr.addr();
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     if install_terminal_shutdown {
@@ -156,12 +210,18 @@ fn run_host(
     app.finish();
     app.cleanup();
 
+    reserved_addr.release();
+    app.update();
+    if let Some(startup_tx) = startup_tx.take() {
+        let _ = startup_tx.send(Ok(()));
+    }
+
     loop {
-        app.update();
         if host_should_shutdown(&app) {
             return Ok(app.world().resource::<AuthoritativeServer>().0.world_save());
         }
         thread::sleep(HOST_SLEEP);
+        app.update();
     }
 }
 

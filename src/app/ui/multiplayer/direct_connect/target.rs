@@ -1,0 +1,125 @@
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+
+use anyhow::{Result, bail};
+
+use crate::app::state::DirectConnectDialog;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct DirectConnectTarget {
+    pub(super) host: String,
+    pub(super) port: u16,
+}
+
+pub(super) fn direct_connect_target(dialog: &DirectConnectDialog) -> Result<DirectConnectTarget> {
+    let host_input = dialog.host.trim();
+    if let Ok(addr) = host_input.parse::<SocketAddr>() {
+        return Ok(DirectConnectTarget {
+            host: addr.ip().to_string(),
+            port: addr.port(),
+        });
+    }
+
+    let (host, port_input) =
+        split_inline_host_port(host_input).unwrap_or((host_input, dialog.port.trim()));
+    if host.is_empty() {
+        bail!("Server address is required.");
+    }
+
+    let Ok(port) = port_input.parse::<u16>() else {
+        bail!("Port must be a number between 1 and 65535.");
+    };
+    if port == 0 {
+        bail!("Port must be a number between 1 and 65535.");
+    }
+
+    Ok(DirectConnectTarget {
+        host: host.trim_matches(['[', ']']).to_owned(),
+        port,
+    })
+}
+
+pub(super) fn resolve_direct_connect_target(target: &DirectConnectTarget) -> Result<SocketAddr> {
+    let host = target.host.trim();
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return Ok(SocketAddr::new(ip, target.port));
+    }
+
+    (host, target.port)
+        .to_socket_addrs()
+        .map_err(|_| anyhow::anyhow!("Could not resolve server address."))?
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Could not resolve server address."))
+}
+
+fn split_inline_host_port(host_input: &str) -> Option<(&str, &str)> {
+    if let Some(bracketed) = host_input.strip_prefix('[') {
+        let (host, port) = bracketed.rsplit_once("]:")?;
+        return Some((host, port));
+    }
+
+    if host_input.matches(':').count() == 1 {
+        return host_input.rsplit_once(':');
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dialog(host: &str, port: &str) -> DirectConnectDialog {
+        DirectConnectDialog {
+            host: host.to_owned(),
+            port: port.to_owned(),
+            error: None,
+            closing: false,
+            attempt: None,
+        }
+    }
+
+    #[test]
+    fn direct_connect_target_parses_ip_host_and_port() {
+        let dialog = dialog("127.0.0.1", "7777");
+
+        assert_eq!(
+            direct_connect_target(&dialog).expect("target should parse"),
+            DirectConnectTarget {
+                host: "127.0.0.1".to_owned(),
+                port: 7777,
+            }
+        );
+    }
+
+    #[test]
+    fn direct_connect_target_accepts_pasted_host_and_port() {
+        let dialog = dialog("127.0.0.1:8888", "7777");
+
+        assert_eq!(
+            direct_connect_target(&dialog).expect("target should parse"),
+            DirectConnectTarget {
+                host: "127.0.0.1".to_owned(),
+                port: 8888,
+            }
+        );
+    }
+
+    #[test]
+    fn direct_connect_target_rejects_empty_host_and_invalid_port() {
+        assert!(direct_connect_target(&dialog(" ", "7777")).is_err());
+        assert!(direct_connect_target(&dialog("127.0.0.1", "0")).is_err());
+    }
+
+    #[test]
+    fn resolve_direct_connect_target_handles_ip_without_dns() {
+        let target = DirectConnectTarget {
+            host: "127.0.0.1".to_owned(),
+            port: 7777,
+        };
+
+        assert_eq!(
+            resolve_direct_connect_target(&target).expect("target should resolve"),
+            SocketAddr::from(([127, 0, 0, 1], 7777))
+        );
+    }
+}

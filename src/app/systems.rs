@@ -8,6 +8,8 @@ mod players;
 mod quit;
 mod settings;
 
+use bevy::prelude::SystemSet;
+
 pub(crate) use audio::main_menu_music_system;
 pub(crate) use camera::{camera_follow_system, menu_backdrop_camera_system};
 pub(crate) use display::apply_display_settings_system;
@@ -23,3 +25,28 @@ pub(crate) use network::{network_tick_system, session_shutdown_poll_system};
 pub(crate) use players::apply_snapshot_system;
 pub(crate) use quit::app_quit_system;
 pub(crate) use settings::save_client_settings_system;
+
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum ClientSystemSet {
+    Focus,
+    ChatShortcut,
+    PauseToggle,
+    InventoryToggle,
+    Cursor,
+    Look,
+    Input,
+    InventoryShortcuts,
+    Network,
+    SessionShutdown,
+    Quit,
+    Display,
+    SettingsSave,
+    WorldScene,
+    Players,
+    DroppedItems,
+    Camera,
+    HeldItem,
+    PickupTarget,
+    MainMenuMusic,
+    MenuBackdropCamera,
+}

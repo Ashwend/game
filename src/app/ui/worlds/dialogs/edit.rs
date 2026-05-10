@@ -77,77 +77,21 @@ fn edit_world_modal(
     dialog: &mut EditWorldDialog,
     open: bool,
 ) -> EditWorldModalOutput {
-    let id = egui::Id::new("edit_world_modal");
-    let animation = ctx.animate_bool_with_time(id.with("animation"), open, 0.16);
-    if animation > 0.0 && animation < 1.0 {
-        ctx.request_repaint();
-    }
+    let output = modal::modal_shell(ctx, "edit_world_modal", open, 340.0, 480.0, |ui, choice| {
+        draw_edit_world_form(ui, dialog, choice);
+    });
 
-    if !open && animation <= 0.01 {
-        return EditWorldModalOutput {
-            choice: None,
-            finished_closing: true,
-        };
-    }
-
-    let screen_rect = ctx.content_rect();
-    let backdrop_response = egui::Area::new(id.with("backdrop"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(screen_rect.min)
-        .show(ctx, |ui| {
-            let local_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen_rect.size());
-            let response = ui.allocate_rect(local_rect, egui::Sense::click());
-            ui.painter().rect_filled(
-                local_rect,
-                0,
-                egui::Color32::from_rgba_unmultiplied(1, 3, 8, (190.0 * animation) as u8),
-            );
-            response
-        })
-        .inner;
-
-    let panel_width = screen_rect.width().clamp(340.0, 480.0);
-    let mut choice = None;
-    let panel_response = egui::Area::new(id.with("panel"))
-        .order(egui::Order::Tooltip)
-        .anchor(
-            egui::Align2::CENTER_CENTER,
-            [0.0, 18.0 * (1.0 - animation.clamp(0.0, 1.0))],
-        )
-        .show(ctx, |ui| {
-            ui.set_width(panel_width);
-            ui.multiply_opacity(animation);
-            egui::Frame::NONE
-                .fill(egui::Color32::from_rgba_unmultiplied(12, 17, 23, 246))
-                .stroke(egui::Stroke::new(1.0, theme::panel_stroke()))
-                .corner_radius(7)
-                .inner_margin(egui::Margin::symmetric(24, 22))
-                .show(ui, |ui| {
-                    ui.set_width(panel_width - 48.0);
-                    draw_edit_world_form(ui, dialog, &mut choice);
-                });
-        })
-        .response;
-
-    if open && choice.is_none() && modal::confirm_shortcut_pressed(ctx) {
+    let mut choice = output.choice;
+    if choice.is_none() && output.confirm_shortcut_pressed {
         choice = Some(EditWorldChoice::Save);
     }
-
-    if open && choice.is_none() && backdrop_response.clicked() {
-        let clicked_outside_panel = ctx.input(|input| {
-            input
-                .pointer
-                .interact_pos()
-                .is_some_and(|position| !panel_response.rect.contains(position))
-        });
-        if clicked_outside_panel {
-            choice = Some(EditWorldChoice::Cancel);
-        }
+    if choice.is_none() && output.clicked_outside {
+        choice = Some(EditWorldChoice::Cancel);
     }
 
     EditWorldModalOutput {
         choice,
-        finished_closing: false,
+        finished_closing: output.finished_closing,
     }
 }
 

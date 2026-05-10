@@ -14,19 +14,25 @@ pub(super) struct ConfirmationModalOutput {
     pub(super) finished_closing: bool,
 }
 
+pub(super) struct ModalShellOutput<T> {
+    pub(super) choice: Option<T>,
+    pub(super) finished_closing: bool,
+    pub(super) confirm_shortcut_pressed: bool,
+    pub(super) clicked_outside: bool,
+}
+
 pub(in crate::app::ui) fn confirm_shortcut_pressed(ctx: &egui::Context) -> bool {
     ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
 }
 
-pub(super) fn confirmation_modal(
+pub(super) fn modal_shell<T>(
     ctx: &egui::Context,
     id: &'static str,
-    title: &str,
-    body: &str,
-    confirm_label: &str,
-    cancel_label: &str,
     open: bool,
-) -> ConfirmationModalOutput {
+    min_width: f32,
+    max_width: f32,
+    add_contents: impl FnOnce(&mut egui::Ui, &mut Option<T>),
+) -> ModalShellOutput<T> {
     let id = Id::new(id);
     let animation = ctx.animate_bool_with_time(id.with("animation"), open, 0.16);
     if animation > 0.0 && animation < 1.0 {
@@ -34,9 +40,11 @@ pub(super) fn confirmation_modal(
     }
 
     if !open && animation <= 0.01 {
-        return ConfirmationModalOutput {
+        return ModalShellOutput {
             choice: None,
             finished_closing: true,
+            confirm_shortcut_pressed: false,
+            clicked_outside: false,
         };
     }
 
@@ -56,7 +64,7 @@ pub(super) fn confirmation_modal(
         })
         .inner;
 
-    let panel_width = screen_rect.width().clamp(320.0, 410.0);
+    let panel_width = screen_rect.width().clamp(min_width, max_width);
     let mut choice = None;
     let panel_response = egui::Area::new(id.with("panel"))
         .order(Order::Tooltip)
@@ -74,45 +82,66 @@ pub(super) fn confirmation_modal(
                 .inner_margin(Margin::symmetric(24, 22))
                 .show(ui, |ui| {
                     ui.set_width(panel_width - 48.0);
-                    ui.label(theme::section(title));
-                    ui.add_space(8.0);
-                    ui.label(RichText::new(body).size(14.0).color(theme::text()));
-                    ui.add_space(18.0);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if theme::compact_button(ui, confirm_label, ButtonKind::Danger, 92.0)
-                            .clicked()
-                        {
-                            choice = Some(ConfirmationChoice::Confirm);
-                        }
-                        if theme::compact_button(ui, cancel_label, ButtonKind::Secondary, 92.0)
-                            .clicked()
-                        {
-                            choice = Some(ConfirmationChoice::Cancel);
-                        }
-                    });
+                    add_contents(ui, &mut choice);
                 });
         })
         .response;
 
-    if open && choice.is_none() && confirm_shortcut_pressed(ctx) {
-        choice = Some(ConfirmationChoice::Confirm);
-    }
-
-    if open && choice.is_none() && backdrop_response.clicked() {
-        let clicked_outside_panel = ctx.input(|input| {
+    let confirm_shortcut_pressed = open && choice.is_none() && confirm_shortcut_pressed(ctx);
+    let clicked_outside = open
+        && choice.is_none()
+        && !confirm_shortcut_pressed
+        && backdrop_response.clicked()
+        && ctx.input(|input| {
             input
                 .pointer
                 .interact_pos()
                 .is_some_and(|position| !panel_response.rect.contains(position))
         });
-        if clicked_outside_panel {
-            choice = Some(ConfirmationChoice::Cancel);
-        }
+
+    ModalShellOutput {
+        choice,
+        finished_closing: false,
+        confirm_shortcut_pressed,
+        clicked_outside,
+    }
+}
+
+pub(super) fn confirmation_modal(
+    ctx: &egui::Context,
+    id: &'static str,
+    title: &str,
+    body: &str,
+    confirm_label: &str,
+    cancel_label: &str,
+    open: bool,
+) -> ConfirmationModalOutput {
+    let output = modal_shell(ctx, id, open, 320.0, 410.0, |ui, choice| {
+        ui.label(theme::section(title));
+        ui.add_space(8.0);
+        ui.label(RichText::new(body).size(14.0).color(theme::text()));
+        ui.add_space(18.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if theme::compact_button(ui, confirm_label, ButtonKind::Danger, 92.0).clicked() {
+                *choice = Some(ConfirmationChoice::Confirm);
+            }
+            if theme::compact_button(ui, cancel_label, ButtonKind::Secondary, 92.0).clicked() {
+                *choice = Some(ConfirmationChoice::Cancel);
+            }
+        });
+    });
+
+    let mut choice = output.choice;
+    if choice.is_none() && output.confirm_shortcut_pressed {
+        choice = Some(ConfirmationChoice::Confirm);
+    }
+    if choice.is_none() && output.clicked_outside {
+        choice = Some(ConfirmationChoice::Cancel);
     }
 
     ConfirmationModalOutput {
         choice,
-        finished_closing: false,
+        finished_closing: output.finished_closing,
     }
 }
 
