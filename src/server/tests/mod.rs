@@ -4,11 +4,13 @@ use super::{
     movement::SERVER_EYE_HEIGHT,
 };
 use crate::{
-    items::{TEST_ORE_ID, TEST_RELIC_ID},
+    items::{BASIC_HATCHET_ID, BASIC_PICKAXE_ID, COAL_ID, TEST_ORE_ID, TEST_RELIC_ID},
     protocol::{
         ChatMessage, ClientMessage, GAME_VERSION, InventoryCommand, ItemContainerSlot, ItemStack,
-        PROTOCOL_VERSION, PlayerEvent, PlayerMovement, SERVER_TICK_RATE_HZ, Vec3Net,
+        PROTOCOL_VERSION, PlayerEvent, PlayerMovement, ResourceGatherCommand, ResourceNodeState,
+        SERVER_TICK_RATE_HZ, Vec3Net,
     },
+    resources::COAL_NODE_ID,
     save::WorldSave,
     steam::offline_auth_token,
 };
@@ -51,3 +53,4 @@ mod connection;
 mod dropped_items;
 mod inventory;
 mod movement;
+mod resource_nodes;

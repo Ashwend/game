@@ -128,6 +128,9 @@ impl PlayerController {
             0.0
         };
 
+        self.yaw = normalize_angle(self.last_input.yaw);
+        self.pitch = self.last_input.pitch.clamp(-MAX_LOOK_PITCH, MAX_LOOK_PITCH);
+
         while remaining > 0.0 {
             let step = remaining.min(MAX_SIMULATION_STEP);
             self.simulate_step(step, world);
@@ -144,8 +147,6 @@ impl PlayerController {
     }
 
     fn simulate_step(&mut self, delta_seconds: f32, world: &WorldData) {
-        self.yaw = self.last_input.yaw;
-        self.pitch = self.last_input.pitch.clamp(-MAX_LOOK_PITCH, MAX_LOOK_PITCH);
         self.health = self.health.clamp(0.0, MAX_HEALTH);
 
         self.grounded = is_supported(self.position, world);
@@ -320,34 +321,10 @@ impl PlayerController {
         }
         self.velocity = clamp_horizontal_speed(self.velocity, LEAP_MAX_HORIZONTAL_SPEED);
     }
-
-    pub fn reconcile(&mut self, server: &PlayerState) -> Reconciliation {
-        const SNAP_DISTANCE_SQ: f32 = 1.0;
-
-        let server_delta = Vec3Net::new(
-            server.position.x - self.position.x,
-            server.position.y - self.position.y,
-            server.position.z - self.position.z,
-        );
-        let distance_sq = server_delta.length_squared();
-
-        self.health = server.health;
-
-        if distance_sq > SNAP_DISTANCE_SQ {
-            self.position = server.position;
-            self.velocity = server.velocity;
-            self.grounded = server.grounded;
-            self.last_processed_input = self.last_processed_input.max(server.last_processed_input);
-            self.step_view_offset_y = 0.0;
-            Reconciliation::Snap
-        } else {
-            Reconciliation::Accepted
-        }
-    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Reconciliation {
-    Accepted,
-    Snap,
+fn normalize_angle(value: f32) -> f32 {
+    use std::f32::consts::{PI, TAU};
+
+    (value + PI).rem_euclid(TAU) - PI
 }

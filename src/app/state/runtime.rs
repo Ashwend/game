@@ -176,7 +176,6 @@ impl ClientRuntime {
                 if self.is_stale_snapshot(snapshot.tick) {
                     return;
                 }
-                self.seed_local_prediction_from_snapshot(&snapshot, false);
                 self.snapshot = Some(snapshot);
             }
             ServerMessage::Correction(player) => {
@@ -229,6 +228,8 @@ impl ClientRuntime {
         if let Some(predicted) = &self.predicted_local {
             return Some(LocalPlayerView {
                 position: predicted.view_position(),
+                yaw: predicted.yaw,
+                pitch: predicted.pitch,
                 health: predicted.health,
             });
         }
@@ -236,6 +237,8 @@ impl ClientRuntime {
         let player = self.local_player()?;
         Some(LocalPlayerView {
             position: player.position,
+            yaw: player.yaw,
+            pitch: player.pitch,
             health: player.health,
         })
     }
@@ -282,6 +285,8 @@ impl ClientRuntime {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LocalPlayerView {
     pub(crate) position: Vec3Net,
+    pub(crate) yaw: f32,
+    pub(crate) pitch: f32,
     pub(crate) health: f32,
 }
 

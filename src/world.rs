@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::Vec3Net;
+use crate::{
+    protocol::Vec3Net,
+    resources::{
+        BIRCH_TREE_NODE_ID, COAL_NODE_ID, DEAD_TREE_NODE_ID, IRON_NODE_ID, PINE_TREE_NODE_ID,
+        SULFUR_NODE_ID,
+    },
+};
 
 pub const DEFAULT_FLOOR_SIZE: f32 = 80.0;
 
@@ -65,6 +71,8 @@ impl ProceduralMapSize {
 pub struct WorldData {
     pub floor_size: f32,
     pub blocks: Vec<WorldBlock>,
+    #[serde(default)]
+    pub resource_nodes: Vec<WorldResourceNodeSpawn>,
 }
 
 impl Default for WorldData {
@@ -83,6 +91,7 @@ impl WorldData {
         Self {
             floor_size,
             blocks: Vec::new(),
+            resource_nodes: Vec::new(),
         }
     }
 
@@ -133,6 +142,68 @@ impl WorldData {
                 WorldBlock::new(Vec3Net::new(9.0, 0.6, -1.2), Vec3Net::new(0.7, 0.6, 0.45)),
                 WorldBlock::new(Vec3Net::new(9.0, 0.9, 1.3), Vec3Net::new(0.55, 0.9, 0.45)),
             ],
+            resource_nodes: vec![
+                WorldResourceNodeSpawn::new(1, COAL_NODE_ID, Vec3Net::new(12.5, 0.0, -8.5), 0.2),
+                WorldResourceNodeSpawn::new(2, COAL_NODE_ID, Vec3Net::new(14.3, 0.0, -10.1), 1.1),
+                WorldResourceNodeSpawn::new(3, IRON_NODE_ID, Vec3Net::new(16.5, 0.0, -8.4), -0.4),
+                WorldResourceNodeSpawn::new(4, IRON_NODE_ID, Vec3Net::new(18.4, 0.0, -10.3), 0.8),
+                WorldResourceNodeSpawn::new(5, SULFUR_NODE_ID, Vec3Net::new(13.3, 0.0, -13.0), 0.5),
+                WorldResourceNodeSpawn::new(
+                    6,
+                    SULFUR_NODE_ID,
+                    Vec3Net::new(16.1, 0.0, -13.2),
+                    -1.0,
+                ),
+                WorldResourceNodeSpawn::new(
+                    20,
+                    PINE_TREE_NODE_ID,
+                    Vec3Net::new(-8.6, 0.0, 5.8),
+                    0.1,
+                ),
+                WorldResourceNodeSpawn::new(
+                    21,
+                    BIRCH_TREE_NODE_ID,
+                    Vec3Net::new(-6.2, 0.0, 7.2),
+                    -0.6,
+                ),
+                WorldResourceNodeSpawn::new(
+                    22,
+                    DEAD_TREE_NODE_ID,
+                    Vec3Net::new(-3.5, 0.0, 6.4),
+                    0.9,
+                ),
+                WorldResourceNodeSpawn::new(
+                    23,
+                    PINE_TREE_NODE_ID,
+                    Vec3Net::new(5.4, 0.0, 7.4),
+                    -0.2,
+                ),
+                WorldResourceNodeSpawn::new(
+                    24,
+                    BIRCH_TREE_NODE_ID,
+                    Vec3Net::new(8.0, 0.0, 6.1),
+                    0.7,
+                ),
+            ],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorldResourceNodeSpawn {
+    pub id: u64,
+    pub definition_id: String,
+    pub position: Vec3Net,
+    pub yaw: f32,
+}
+
+impl WorldResourceNodeSpawn {
+    pub fn new(id: u64, definition_id: impl Into<String>, position: Vec3Net, yaw: f32) -> Self {
+        Self {
+            id,
+            definition_id: definition_id.into(),
+            position,
+            yaw,
         }
     }
 }
@@ -208,6 +279,43 @@ mod tests {
         assert!(world.blocks.len() >= 24);
         assert!(low_steps >= 8);
         assert!(tall_walls >= 5);
+    }
+
+    #[test]
+    fn test_world_ore_nodes_do_not_overlap_blocks() {
+        const ORE_RADIUS: f32 = 0.8;
+
+        let world = WorldData::test_world();
+        let ore_nodes = world
+            .resource_nodes
+            .iter()
+            .filter(|node| {
+                matches!(
+                    node.definition_id.as_str(),
+                    COAL_NODE_ID | IRON_NODE_ID | SULFUR_NODE_ID
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(ore_nodes.len(), 6);
+        for node in ore_nodes {
+            for block in &world.blocks {
+                let min = block.min();
+                let max = block.max();
+                assert!(
+                    node.position.x < min.x - ORE_RADIUS
+                        || node.position.x > max.x + ORE_RADIUS
+                        || node.position.z < min.z - ORE_RADIUS
+                        || node.position.z > max.z + ORE_RADIUS,
+                    "ore node {} at ({:.1}, {:.1}) overlaps block centered at ({:.1}, {:.1})",
+                    node.definition_id,
+                    node.position.x,
+                    node.position.z,
+                    block.center.x,
+                    block.center.z
+                );
+            }
+        }
     }
 
     #[test]

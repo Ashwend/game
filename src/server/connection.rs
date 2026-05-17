@@ -56,6 +56,7 @@ impl GameServer {
             inventory: starting_inventory(),
             is_admin,
             last_seen_tick: self.tick,
+            next_gather_tick: self.tick,
         };
 
         self.clients.insert(client_id, client);
@@ -125,11 +126,14 @@ impl GameServer {
             .map(|body| body.item.clone())
             .collect::<Vec<_>>();
         dropped_items.sort_by_key(|item| item.id);
+        let mut resource_nodes = self.resource_nodes.values().cloned().collect::<Vec<_>>();
+        resource_nodes.sort_by_key(|node| node.id);
 
         WorldSnapshot {
             tick: self.tick,
             players,
             dropped_items,
+            resource_nodes,
         }
     }
 

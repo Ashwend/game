@@ -34,7 +34,7 @@ pub(super) fn player_eye_position(position: Vec3Net) -> Vec3Net {
     position.plus(Vec3Net::new(0.0, SERVER_EYE_HEIGHT, 0.0))
 }
 
-pub(super) fn apply_client_movement(controller: &mut PlayerController, movement: PlayerMovement) {
+pub(super) fn accept_client_movement(controller: &mut PlayerController, movement: PlayerMovement) {
     if movement.sequence <= controller.last_processed_input || !movement_is_finite(movement) {
         return;
     }

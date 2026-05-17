@@ -1,5 +1,8 @@
 use crate::{
-    items::{TEST_BANDAGE_ID, TEST_ORE_ID, TEST_RELIC_ID, normalize_stack, stack_limit},
+    items::{
+        BASIC_HATCHET_ID, BASIC_PICKAXE_ID, TEST_BANDAGE_ID, TEST_ORE_ID, TEST_RELIC_ID,
+        normalize_stack, stack_limit,
+    },
     protocol::{
         ACTIONBAR_SLOT_COUNT, INVENTORY_SLOT_COUNT, ItemContainer, ItemContainerSlot, ItemStack,
         PlayerInventoryState,
@@ -11,6 +14,8 @@ pub(super) fn starting_inventory() -> PlayerInventoryState {
     inventory.inventory_slots[0] = Some(ItemStack::new(TEST_ORE_ID, 12));
     inventory.inventory_slots[1] = Some(ItemStack::new(TEST_BANDAGE_ID, 5));
     inventory.inventory_slots[2] = Some(ItemStack::new(TEST_RELIC_ID, 1));
+    inventory.actionbar_slots[0] = Some(ItemStack::new(BASIC_HATCHET_ID, 1));
+    inventory.actionbar_slots[1] = Some(ItemStack::new(BASIC_PICKAXE_ID, 1));
     inventory
 }
 

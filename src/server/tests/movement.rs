@@ -16,7 +16,7 @@ fn movement_state_is_accepted_by_server() {
 }
 
 #[test]
-fn stale_movement_sequence_is_ignored_by_server() {
+fn older_client_owned_movement_does_not_overwrite_newer_pose() {
     let mut server = server();
     let client_id = connect_host(&mut server);
 

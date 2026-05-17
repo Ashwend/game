@@ -6,16 +6,16 @@ use crate::world::{MapType, WorldData};
 pub type ClientId = u64;
 pub type SteamId = u64;
 
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 12;
 pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
-pub const MAX_INPUT_DELTA_SECONDS: f32 = 1.0 / SERVER_TICK_RATE_HZ;
 pub const MAX_CHAT_LEN: usize = 240;
 pub const MAX_HEALTH: f32 = 100.0;
 pub const INVENTORY_SLOT_COUNT: usize = 40;
 pub const ACTIONBAR_SLOT_COUNT: usize = 9;
 
 pub type DroppedItemId = u64;
+pub type ResourceNodeId = u64;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Reflect)]
 pub struct Vec3Net {
@@ -101,6 +101,7 @@ pub enum ClientMessage {
         text: String,
     },
     Inventory(InventoryCommand),
+    Gather(ResourceGatherCommand),
     Heartbeat,
     Disconnect,
 }
@@ -108,9 +109,11 @@ pub enum ClientMessage {
 impl ClientMessage {
     pub fn delivery(&self) -> PacketDelivery {
         match self {
-            Self::Auth { .. } | Self::Chat { .. } | Self::Inventory(_) | Self::Disconnect => {
-                PacketDelivery::Reliable
-            }
+            Self::Auth { .. }
+            | Self::Chat { .. }
+            | Self::Inventory(_)
+            | Self::Gather(_)
+            | Self::Disconnect => PacketDelivery::Reliable,
             Self::Movement(_) | Self::Heartbeat => PacketDelivery::Unreliable,
         }
     }
@@ -182,6 +185,11 @@ pub enum InventoryCommand {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResourceGatherCommand {
+    pub resource_node_id: ResourceNodeId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlayerInventoryState {
     pub inventory_slots: Vec<Option<ItemStack>>,
     pub actionbar_slots: Vec<Option<ItemStack>>,
@@ -218,6 +226,15 @@ pub struct DroppedWorldItem {
     pub yaw: f32,
     #[serde(default)]
     pub rotation: QuatNet,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResourceNodeState {
+    pub id: ResourceNodeId,
+    pub definition_id: String,
+    pub position: Vec3Net,
+    pub yaw: f32,
+    pub storage: Vec<ItemStack>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -304,6 +321,8 @@ pub struct WorldSnapshot {
     pub tick: u64,
     pub players: Vec<PlayerState>,
     pub dropped_items: Vec<DroppedWorldItem>,
+    #[serde(default)]
+    pub resource_nodes: Vec<ResourceNodeState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

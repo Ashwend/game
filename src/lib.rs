@@ -4,6 +4,7 @@ pub mod controller;
 pub mod items;
 pub mod net;
 pub mod protocol;
+pub mod resources;
 pub mod save;
 pub mod server;
 pub mod steam;

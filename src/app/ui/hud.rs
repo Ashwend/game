@@ -174,6 +174,7 @@ mod tests {
             tick: 1,
             players: vec![player(75.0)],
             dropped_items: Vec::new(),
+            resource_nodes: Vec::new(),
         });
 
         let _ = ctx.run(raw_input(), |ctx| {

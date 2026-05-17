@@ -40,7 +40,7 @@ fn inventory_move_splits_merges_and_populates_actionbar() {
         client_id,
         ClientMessage::Inventory(InventoryCommand::Move {
             from: ItemContainerSlot::inventory(0),
-            to: ItemContainerSlot::actionbar(0),
+            to: ItemContainerSlot::actionbar(2),
             quantity: Some(5),
         }),
     );
@@ -54,7 +54,7 @@ fn inventory_move_splits_merges_and_populates_actionbar() {
         Some(7)
     );
     assert_eq!(
-        inventory.actionbar_slots[0]
+        inventory.actionbar_slots[2]
             .as_ref()
             .map(|stack| stack.quantity),
         Some(5)
@@ -63,7 +63,7 @@ fn inventory_move_splits_merges_and_populates_actionbar() {
     server.receive(
         client_id,
         ClientMessage::Inventory(InventoryCommand::Move {
-            from: ItemContainerSlot::actionbar(0),
+            from: ItemContainerSlot::actionbar(2),
             to: ItemContainerSlot::inventory(0),
             quantity: None,
         }),
@@ -77,7 +77,7 @@ fn inventory_move_splits_merges_and_populates_actionbar() {
             .map(|stack| stack.quantity),
         Some(12)
     );
-    assert!(inventory.actionbar_slots[0].is_none());
+    assert!(inventory.actionbar_slots[2].is_none());
 }
 
 #[test]
@@ -122,21 +122,21 @@ fn actionbar_q_style_drop_removes_one_item_from_stack() {
         client_id,
         ClientMessage::Inventory(InventoryCommand::Move {
             from: ItemContainerSlot::inventory(0),
-            to: ItemContainerSlot::actionbar(0),
+            to: ItemContainerSlot::actionbar(2),
             quantity: Some(5),
         }),
     );
     server.receive(
         client_id,
         ClientMessage::Inventory(InventoryCommand::Drop {
-            from: ItemContainerSlot::actionbar(0),
+            from: ItemContainerSlot::actionbar(2),
             quantity: Some(1),
         }),
     );
 
     let snapshot = server.snapshot();
     assert_eq!(
-        snapshot.players[0].inventory.actionbar_slots[0]
+        snapshot.players[0].inventory.actionbar_slots[2]
             .as_ref()
             .map(|stack| stack.quantity),
         Some(4)

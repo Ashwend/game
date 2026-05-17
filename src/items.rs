@@ -3,6 +3,13 @@ use crate::protocol::{DroppedWorldItem, ItemStack, Vec3Net};
 pub const TEST_ORE_ID: &str = "test_ore";
 pub const TEST_BANDAGE_ID: &str = "test_bandage";
 pub const TEST_RELIC_ID: &str = "test_relic";
+pub const WOOD_ID: &str = "wood";
+pub const STONE_ID: &str = "stone";
+pub const COAL_ID: &str = "coal";
+pub const IRON_ORE_ID: &str = "iron_ore";
+pub const SULFUR_ORE_ID: &str = "sulfur_ore";
+pub const BASIC_HATCHET_ID: &str = "wood_stone_hatchet";
+pub const BASIC_PICKAXE_ID: &str = "wood_stone_pickaxe";
 
 pub const PICKUP_RANGE: f32 = 3.4;
 const PICKUP_RAY_RADIUS: f32 = 0.58;
@@ -11,6 +18,31 @@ const PICKUP_ANCHOR_HEIGHT: f32 = 0.28;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemModel {
     Bag,
+    Hatchet,
+    Pickaxe,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolKind {
+    Axe,
+    Pickaxe,
+}
+
+impl ToolKind {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Axe => "Hatchet",
+            Self::Pickaxe => "Pickaxe",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolProfile {
+    pub kind: ToolKind,
+    pub tier: u8,
+    pub gather_amount: u16,
+    pub cooldown_ticks: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +67,7 @@ pub struct ItemDefinition {
     pub equipable: bool,
     pub model: ItemModel,
     pub tint: ItemTint,
+    pub tool: Option<ToolProfile>,
 }
 
 impl ItemDefinition {
@@ -56,6 +89,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         equipable: false,
         model: ItemModel::Bag,
         tint: ItemTint::new(111, 174, 226),
+        tool: None,
     },
     ItemDefinition {
         id: TEST_BANDAGE_ID,
@@ -65,6 +99,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         equipable: false,
         model: ItemModel::Bag,
         tint: ItemTint::new(226, 202, 143),
+        tool: None,
     },
     ItemDefinition {
         id: TEST_RELIC_ID,
@@ -74,6 +109,87 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         equipable: true,
         model: ItemModel::Bag,
         tint: ItemTint::new(183, 136, 229),
+        tool: None,
+    },
+    ItemDefinition {
+        id: WOOD_ID,
+        name: "Wood",
+        description: "A common building material gathered from trees.",
+        stack_size: 100,
+        equipable: false,
+        model: ItemModel::Bag,
+        tint: ItemTint::new(139, 95, 56),
+        tool: None,
+    },
+    ItemDefinition {
+        id: STONE_ID,
+        name: "Stone",
+        description: "A rough stone material used for primitive tools.",
+        stack_size: 100,
+        equipable: false,
+        model: ItemModel::Bag,
+        tint: ItemTint::new(122, 128, 126),
+        tool: None,
+    },
+    ItemDefinition {
+        id: COAL_ID,
+        name: "Coal",
+        description: "A fuel-rich mineral gathered from coal nodes.",
+        stack_size: 100,
+        equipable: false,
+        model: ItemModel::Bag,
+        tint: ItemTint::new(42, 45, 48),
+        tool: None,
+    },
+    ItemDefinition {
+        id: IRON_ORE_ID,
+        name: "Iron Ore",
+        description: "Raw iron-bearing rock ready for later smelting systems.",
+        stack_size: 100,
+        equipable: false,
+        model: ItemModel::Bag,
+        tint: ItemTint::new(155, 120, 94),
+        tool: None,
+    },
+    ItemDefinition {
+        id: SULFUR_ORE_ID,
+        name: "Sulfur Ore",
+        description: "A yellow mineral gathered from sulfur nodes.",
+        stack_size: 100,
+        equipable: false,
+        model: ItemModel::Bag,
+        tint: ItemTint::new(218, 189, 73),
+        tool: None,
+    },
+    ItemDefinition {
+        id: BASIC_HATCHET_ID,
+        name: "Stone Hatchet",
+        description: "A basic wood-and-stone axe for gathering trees.",
+        stack_size: 1,
+        equipable: true,
+        model: ItemModel::Hatchet,
+        tint: ItemTint::new(148, 122, 82),
+        tool: Some(ToolProfile {
+            kind: ToolKind::Axe,
+            tier: 1,
+            gather_amount: 4,
+            cooldown_ticks: 6,
+        }),
+    },
+    ItemDefinition {
+        id: BASIC_PICKAXE_ID,
+        name: "Stone Pickaxe",
+        description: "A basic wood-and-stone pickaxe for gathering ore nodes.",
+        stack_size: 1,
+        equipable: true,
+        model: ItemModel::Pickaxe,
+        tint: ItemTint::new(134, 128, 112),
+        tool: Some(ToolProfile {
+            kind: ToolKind::Pickaxe,
+            tier: 1,
+            gather_amount: 3,
+            cooldown_ticks: 6,
+        }),
     },
 ];
 
@@ -107,19 +223,27 @@ pub fn pickup_anchor_from_position(position: Vec3Net) -> Vec3Net {
 }
 
 pub fn pickup_score(eye: Vec3Net, yaw: f32, pitch: f32, item: &DroppedWorldItem) -> Option<f32> {
+    let anchor = pickup_anchor(item);
+    let to_item = anchor.minus(eye);
+    // Cheap distance cull before the trig in `look_forward`. Anything outside
+    // the swept cylinder is unreachable; the bound stays conservative so it
+    // never rejects a candidate the ray test would have accepted.
+    let max_reach_sq = (PICKUP_RANGE + PICKUP_RAY_RADIUS).powi(2);
+    if to_item.length_squared() > max_reach_sq {
+        return None;
+    }
+
     let forward = look_forward(yaw, pitch);
     if forward.length_squared() <= f32::EPSILON {
         return None;
     }
-
-    let to_item = pickup_anchor(item).minus(eye);
     let projection = to_item.dot(forward);
     if !(0.0..=PICKUP_RANGE).contains(&projection) {
         return None;
     }
 
     let closest = eye.plus(forward.scale(projection));
-    let lateral = pickup_anchor(item).minus(closest);
+    let lateral = anchor.minus(closest);
     if lateral.length_squared() > PICKUP_RAY_RADIUS * PICKUP_RAY_RADIUS {
         return None;
     }

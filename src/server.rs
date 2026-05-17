@@ -5,8 +5,8 @@ use crate::{
     items::{can_pick_up, normalize_stack, stack_limit},
     protocol::{
         ACTIONBAR_SLOT_COUNT, ChatMessage, ClientId, ClientMessage, DroppedItemId,
-        DroppedWorldItem, InventoryCommand, ItemStack, PlayerInventoryState, ServerMessage,
-        SteamId, Vec3Net, sanitize_chat,
+        DroppedWorldItem, InventoryCommand, ItemStack, PlayerInventoryState, ResourceNodeId,
+        ResourceNodeState, ServerMessage, SteamId, Vec3Net, sanitize_chat,
     },
     save::WorldSave,
     steam::AuthMode,
@@ -19,6 +19,7 @@ mod connection;
 mod dropped_items;
 mod inventory;
 mod movement;
+mod resource_nodes;
 
 use self::{
     dropped_items::{
@@ -26,7 +27,7 @@ use self::{
         nearby_dropped_item_pairs, yaw_rotation,
     },
     inventory::{add_stack_to_inventory, move_stack, offset_actionbar_slot, remove_stack},
-    movement::{apply_client_movement, drop_position, drop_velocity, player_eye_position},
+    movement::{accept_client_movement, drop_position, drop_velocity, player_eye_position},
 };
 
 #[derive(Debug, Clone)]
@@ -56,6 +57,7 @@ pub struct GameServer {
     steam_to_client: HashMap<SteamId, ClientId>,
     dropped_items: HashMap<DroppedItemId, DroppedItemBody>,
     dropped_item_physics: DroppedItemPhysics,
+    resource_nodes: HashMap<ResourceNodeId, ResourceNodeState>,
     next_dropped_item_id: DroppedItemId,
     next_client_id: ClientId,
     tick: u64,
@@ -70,6 +72,7 @@ impl GameServer {
         }
         let world = save.map.world_data();
         let dropped_item_physics = DroppedItemPhysics::new(&world);
+        let resource_nodes = resource_nodes::initial_resource_nodes(&world);
 
         Self {
             tick: save.state.last_authoritative_tick,
@@ -80,6 +83,7 @@ impl GameServer {
             steam_to_client: HashMap::new(),
             dropped_items: HashMap::new(),
             dropped_item_physics,
+            resource_nodes,
             next_dropped_item_id: 1,
             next_client_id: 1,
         }
@@ -103,7 +107,7 @@ impl GameServer {
             }],
             ClientMessage::Movement(movement) => {
                 if let Some(client) = self.clients.get_mut(&client_id) {
-                    apply_client_movement(&mut client.controller, movement);
+                    accept_client_movement(&mut client.controller, movement);
                 }
                 Vec::new()
             }
@@ -121,6 +125,10 @@ impl GameServer {
                 .collect(),
             ClientMessage::Inventory(command) => {
                 self.apply_inventory_command(client_id, command);
+                Vec::new()
+            }
+            ClientMessage::Gather(command) => {
+                self.apply_gather_command(client_id, command);
                 Vec::new()
             }
             ClientMessage::Heartbeat => Vec::new(),
@@ -389,6 +397,7 @@ struct ServerClient {
     inventory: PlayerInventoryState,
     is_admin: bool,
     last_seen_tick: u64,
+    next_gather_tick: u64,
 }
 
 #[cfg(test)]

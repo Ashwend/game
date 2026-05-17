@@ -7,14 +7,23 @@ use super::super::{
     state::ClientRuntime,
 };
 
+const REMOTE_PLAYER_INTERPOLATION_SECONDS: f32 = 0.1;
+const REMOTE_PLAYER_INTERPOLATION_SNAP_DISTANCE: f32 = 6.0;
+
 pub(crate) fn apply_snapshot_system(
     mut commands: Commands,
+    time: Res<Time>,
     runtime: Res<ClientRuntime>,
     assets: Res<PlayerVisualAssets>,
-    players: Query<(Entity, &NetworkPlayer)>,
+    mut players: Query<(
+        Entity,
+        &NetworkPlayer,
+        &Transform,
+        &mut NetworkPlayerInterpolation,
+    )>,
 ) {
     let Some(snapshot) = &runtime.snapshot else {
-        for (entity, _) in &players {
+        for (entity, _, _, _) in &players {
             commands.entity(entity).despawn();
         }
         return;
@@ -22,7 +31,7 @@ pub(crate) fn apply_snapshot_system(
 
     let existing = players
         .iter()
-        .map(|(entity, player)| (player.client_id, entity))
+        .map(|(entity, player, _, _)| (player.client_id, entity))
         .collect::<HashMap<_, _>>();
 
     let remote_players = snapshot
@@ -32,28 +41,31 @@ pub(crate) fn apply_snapshot_system(
         .collect::<Vec<_>>();
 
     for player in &remote_players {
-        let target = Vec3::new(player.position.x, player.position.y, player.position.z);
-        let rotation = Quat::from_rotation_y(player.yaw);
+        let feet = Vec3::new(player.position.x, player.position.y, player.position.z);
+        let target = Transform::from_translation(player_visual_position(feet))
+            .with_rotation(Quat::from_rotation_y(player.yaw));
         if let Some(entity) = existing.get(&player.client_id) {
-            commands
-                .entity(*entity)
-                .insert((Transform::from_translation(player_visual_position(target))
-                    .with_rotation(rotation),));
+            if let Ok((_, _, current, mut interpolation)) = players.get_mut(*entity) {
+                interpolation.retarget(snapshot.tick, current, target);
+                let transform = interpolation.advance(time.delta_secs());
+                commands.entity(*entity).insert((transform,));
+            }
         } else {
             commands.spawn((
                 Name::new(format!("Player {}", player.client_id)),
                 NetworkPlayer {
                     client_id: player.client_id,
                 },
+                NetworkPlayerInterpolation::new(snapshot.tick, target),
                 Mesh3d(assets.mesh.clone()),
                 MeshMaterial3d(assets.remote_material.clone()),
-                Transform::from_translation(player_visual_position(target)).with_rotation(rotation),
+                target,
                 Visibility::Visible,
             ));
         }
     }
 
-    for (entity, network_player) in &players {
+    for (entity, network_player, _, _) in &players {
         if Some(network_player.client_id) == runtime.client_id
             || !remote_players
                 .iter()
@@ -61,6 +73,48 @@ pub(crate) fn apply_snapshot_system(
         {
             commands.entity(entity).despawn();
         }
+    }
+}
+
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct NetworkPlayerInterpolation {
+    snapshot_tick: u64,
+    from: Transform,
+    to: Transform,
+    elapsed: f32,
+}
+
+impl NetworkPlayerInterpolation {
+    fn new(snapshot_tick: u64, transform: Transform) -> Self {
+        Self {
+            snapshot_tick,
+            from: transform,
+            to: transform,
+            elapsed: REMOTE_PLAYER_INTERPOLATION_SECONDS,
+        }
+    }
+
+    fn retarget(&mut self, snapshot_tick: u64, current: &Transform, target: Transform) {
+        if snapshot_tick <= self.snapshot_tick {
+            return;
+        }
+
+        let distance = current.translation.distance(target.translation);
+        self.from = if distance > REMOTE_PLAYER_INTERPOLATION_SNAP_DISTANCE {
+            target
+        } else {
+            *current
+        };
+        self.to = target;
+        self.elapsed = 0.0;
+        self.snapshot_tick = snapshot_tick;
+    }
+
+    fn advance(&mut self, delta_seconds: f32) -> Transform {
+        self.elapsed += delta_seconds.max(0.0);
+        let alpha = (self.elapsed / REMOTE_PLAYER_INTERPOLATION_SECONDS).clamp(0.0, 1.0);
+        Transform::from_translation(self.from.translation.lerp(self.to.translation, alpha))
+            .with_rotation(self.from.rotation.slerp(self.to.rotation, alpha))
     }
 }
 
@@ -114,6 +168,7 @@ mod tests {
                     player(2, 2, Vec3Net::new(2.0, 0.0, 0.0), 1.0),
                 ],
                 dropped_items: Vec::new(),
+                resource_nodes: Vec::new(),
             }),
             Some(1),
         );
@@ -135,6 +190,7 @@ mod tests {
             tick: 2,
             players: vec![player(2, 2, Vec3Net::new(4.0, 0.0, 0.0), 0.5)],
             dropped_items: Vec::new(),
+            resource_nodes: Vec::new(),
         });
         app.update();
 
@@ -146,7 +202,10 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(players.len(), 1);
-        assert!(players[0].1.x > 3.9);
+        // Position is now interpolating between the old (2,0,0) and new (4,0,0) target.
+        // Exact value depends on dt, but it must sit within that range and the entity
+        // must persist.
+        assert!(players[0].1.x >= 1.9 && players[0].1.x <= 4.1);
 
         app.world_mut().resource_mut::<ClientRuntime>().snapshot = None;
         app.update();
@@ -159,5 +218,32 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert!(players.is_empty());
+    }
+
+    #[test]
+    fn remote_player_interpolation_blends_between_snapshot_targets() {
+        let current = Transform::from_xyz(0.0, 0.0, 0.0);
+        let target = Transform::from_xyz(4.0, 0.0, 0.0)
+            .with_rotation(Quat::from_rotation_y(std::f32::consts::PI));
+        let mut interpolation = NetworkPlayerInterpolation::new(1, current);
+
+        interpolation.retarget(2, &current, target);
+        let halfway = interpolation.advance(REMOTE_PLAYER_INTERPOLATION_SECONDS * 0.5);
+
+        assert!((halfway.translation.x - 2.0).abs() < 0.001);
+        assert!(halfway.rotation.angle_between(current.rotation) > 0.1);
+        assert!(halfway.rotation.angle_between(target.rotation) > 0.1);
+    }
+
+    #[test]
+    fn remote_player_interpolation_snaps_extreme_corrections() {
+        let current = Transform::from_xyz(0.0, 0.0, 0.0);
+        let target = Transform::from_xyz(REMOTE_PLAYER_INTERPOLATION_SNAP_DISTANCE + 1.0, 0.0, 0.0);
+        let mut interpolation = NetworkPlayerInterpolation::new(1, current);
+
+        interpolation.retarget(2, &current, target);
+        let corrected = interpolation.advance(0.0);
+
+        assert_eq!(corrected.translation, target.translation);
     }
 }
