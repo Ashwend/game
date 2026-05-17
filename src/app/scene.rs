@@ -20,9 +20,6 @@ const WORLD_COLOR: Color = Color::srgb(0.18, 0.34, 0.22);
 const DROPPED_BAG_COLOR: Color = Color::srgb(0.42, 0.31, 0.18);
 const HELD_BAG_COLOR: Color = Color::srgb(0.50, 0.38, 0.24);
 const VERTEX_MATERIAL_COLOR: Color = Color::WHITE;
-const COAL_NODE_COLOR: Color = Color::srgb(0.08, 0.09, 0.10);
-const IRON_NODE_COLOR: Color = Color::srgb(0.48, 0.34, 0.27);
-const SULFUR_NODE_COLOR: Color = Color::srgb(0.73, 0.62, 0.19);
 
 #[derive(Resource, Default)]
 pub(crate) struct WorldSceneState {
@@ -48,9 +45,9 @@ pub(crate) struct ItemVisualAssets {
 
 #[derive(Resource, Clone)]
 pub(crate) struct ResourceVisualAssets {
-    pub(crate) ore_mesh_low: Handle<Mesh>,
-    pub(crate) ore_mesh_ridge: Handle<Mesh>,
-    pub(crate) ore_mesh_cluster: Handle<Mesh>,
+    pub(crate) coal_node_mesh: Handle<Mesh>,
+    pub(crate) iron_node_mesh: Handle<Mesh>,
+    pub(crate) sulfur_node_mesh: Handle<Mesh>,
     pub(crate) pine_tree_mesh: Handle<Mesh>,
     pub(crate) birch_tree_mesh: Handle<Mesh>,
     pub(crate) dead_tree_mesh: Handle<Mesh>,
@@ -58,6 +55,14 @@ pub(crate) struct ResourceVisualAssets {
     pub(crate) iron_material: Handle<StandardMaterial>,
     pub(crate) sulfur_material: Handle<StandardMaterial>,
     pub(crate) vertex_material: Handle<StandardMaterial>,
+}
+
+#[derive(Resource, Clone)]
+pub(crate) struct ImpactEffectAssets {
+    pub(crate) wood_chip_mesh: Handle<Mesh>,
+    pub(crate) stone_shard_mesh: Handle<Mesh>,
+    pub(crate) wood_chip_material: Handle<StandardMaterial>,
+    pub(crate) stone_shard_material: Handle<StandardMaterial>,
 }
 
 #[derive(Component)]
@@ -147,30 +152,45 @@ pub(crate) fn setup_scene(
         }),
     });
     commands.insert_resource(ResourceVisualAssets {
-        ore_mesh_low: meshes.add(low_poly_ore_mesh(0)),
-        ore_mesh_ridge: meshes.add(low_poly_ore_mesh(1)),
-        ore_mesh_cluster: meshes.add(low_poly_ore_mesh(2)),
+        coal_node_mesh: meshes.add(low_poly_ore_node_mesh(COAL_ORE)),
+        iron_node_mesh: meshes.add(low_poly_ore_node_mesh(IRON_ORE)),
+        sulfur_node_mesh: meshes.add(low_poly_ore_node_mesh(SULFUR_ORE)),
         pine_tree_mesh: meshes.add(low_poly_pine_tree_mesh()),
         birch_tree_mesh: meshes.add(low_poly_birch_tree_mesh()),
         dead_tree_mesh: meshes.add(low_poly_dead_tree_mesh()),
         coal_material: materials.add(StandardMaterial {
-            base_color: COAL_NODE_COLOR,
+            base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.98,
             ..default()
         }),
         iron_material: materials.add(StandardMaterial {
-            base_color: IRON_NODE_COLOR,
-            perceptual_roughness: 0.94,
+            base_color: VERTEX_MATERIAL_COLOR,
+            perceptual_roughness: 0.78,
+            metallic: 0.18,
             ..default()
         }),
         sulfur_material: materials.add(StandardMaterial {
-            base_color: SULFUR_NODE_COLOR,
-            perceptual_roughness: 0.88,
+            base_color: VERTEX_MATERIAL_COLOR,
+            perceptual_roughness: 0.62,
             ..default()
         }),
         vertex_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.98,
+            ..default()
+        }),
+    });
+    commands.insert_resource(ImpactEffectAssets {
+        wood_chip_mesh: meshes.add(impact_wood_chip_mesh()),
+        stone_shard_mesh: meshes.add(impact_stone_shard_mesh()),
+        wood_chip_material: materials.add(StandardMaterial {
+            base_color: VERTEX_MATERIAL_COLOR,
+            perceptual_roughness: 0.95,
+            ..default()
+        }),
+        stone_shard_material: materials.add(StandardMaterial {
+            base_color: VERTEX_MATERIAL_COLOR,
+            perceptual_roughness: 0.88,
             ..default()
         }),
     });
@@ -286,13 +306,55 @@ type MeshColor = [f32; 4];
 
 const WOOD_DARK: MeshColor = [0.34, 0.21, 0.10, 1.0];
 const WOOD_LIGHT: MeshColor = [0.56, 0.36, 0.18, 1.0];
+const WOOD_MID: MeshColor = [0.44, 0.28, 0.14, 1.0];
 const LEATHER_WRAP: MeshColor = [0.19, 0.12, 0.07, 1.0];
-const STONE_DARK: MeshColor = [0.35, 0.37, 0.35, 1.0];
+const IRON_BAND: MeshColor = [0.30, 0.30, 0.32, 1.0];
+const STONE_DARK: MeshColor = [0.32, 0.34, 0.33, 1.0];
 const STONE_LIGHT: MeshColor = [0.58, 0.61, 0.57, 1.0];
+const STONE_EDGE: MeshColor = [0.74, 0.76, 0.72, 1.0];
 const LEAF_PINE: MeshColor = [0.12, 0.34, 0.18, 1.0];
 const LEAF_BIRCH: MeshColor = [0.38, 0.55, 0.26, 1.0];
 const BIRCH_BARK: MeshColor = [0.78, 0.75, 0.65, 1.0];
 const DEAD_WOOD: MeshColor = [0.33, 0.25, 0.17, 1.0];
+
+#[derive(Clone, Copy)]
+struct OreNodeStyle {
+    base_color: MeshColor,
+    accent_color: MeshColor,
+    chunk_color: MeshColor,
+    chunk_highlight: MeshColor,
+    chunk_shape: OreChunkShape,
+}
+
+#[derive(Clone, Copy)]
+enum OreChunkShape {
+    Boulder,
+    Crystal,
+}
+
+const COAL_ORE: OreNodeStyle = OreNodeStyle {
+    base_color: [0.26, 0.27, 0.28, 1.0],
+    accent_color: [0.18, 0.19, 0.20, 1.0],
+    chunk_color: [0.05, 0.05, 0.06, 1.0],
+    chunk_highlight: [0.12, 0.12, 0.13, 1.0],
+    chunk_shape: OreChunkShape::Boulder,
+};
+
+const IRON_ORE: OreNodeStyle = OreNodeStyle {
+    base_color: [0.52, 0.50, 0.46, 1.0],
+    accent_color: [0.40, 0.38, 0.34, 1.0],
+    chunk_color: [0.62, 0.30, 0.18, 1.0],
+    chunk_highlight: [0.78, 0.42, 0.24, 1.0],
+    chunk_shape: OreChunkShape::Boulder,
+};
+
+const SULFUR_ORE: OreNodeStyle = OreNodeStyle {
+    base_color: [0.48, 0.46, 0.42, 1.0],
+    accent_color: [0.36, 0.34, 0.30, 1.0],
+    chunk_color: [0.96, 0.80, 0.18, 1.0],
+    chunk_highlight: [1.00, 0.92, 0.36, 1.0],
+    chunk_shape: OreChunkShape::Crystal,
+};
 
 #[derive(Default)]
 struct LowPolyMeshBuilder {
@@ -369,6 +431,35 @@ impl LowPolyMeshBuilder {
         }
     }
 
+    fn add_quad_prism(&mut self, points: [[f32; 2]; 4], half_depth: f32, color: MeshColor) {
+        let origin = [
+            (points[0][0] + points[1][0] + points[2][0] + points[3][0]) / 4.0,
+            (points[0][1] + points[1][1] + points[2][1] + points[3][1]) / 4.0,
+            0.0,
+        ];
+        let front = [
+            [points[0][0], points[0][1], -half_depth],
+            [points[1][0], points[1][1], -half_depth],
+            [points[2][0], points[2][1], -half_depth],
+            [points[3][0], points[3][1], -half_depth],
+        ];
+        let back = [
+            [points[0][0], points[0][1], half_depth],
+            [points[1][0], points[1][1], half_depth],
+            [points[2][0], points[2][1], half_depth],
+            [points[3][0], points[3][1], half_depth],
+        ];
+        self.push_triangle_away_from(origin, front[0], front[1], front[2], color);
+        self.push_triangle_away_from(origin, front[0], front[2], front[3], color);
+        self.push_triangle_away_from(origin, back[0], back[2], back[1], color);
+        self.push_triangle_away_from(origin, back[0], back[3], back[2], color);
+        for side in 0..4 {
+            let next = (side + 1) % 4;
+            self.push_triangle_away_from(origin, front[side], front[next], back[next], color);
+            self.push_triangle_away_from(origin, front[side], back[next], back[side], color);
+        }
+    }
+
     fn add_tri_prism(&mut self, points: [[f32; 2]; 3], half_depth: f32, color: MeshColor) {
         let origin = [
             (points[0][0] + points[1][0] + points[2][0]) / 3.0,
@@ -413,27 +504,6 @@ impl LowPolyMeshBuilder {
         for index in 0..segments {
             let next = (index + 1) % segments;
             self.push_triangle_away_from(origin, apex, ring[index], ring[next], color);
-        }
-    }
-
-    fn add_rock_mound(&mut self, variant: u8, color: MeshColor) {
-        match variant % 3 {
-            0 => {
-                self.add_rock_lump([0.0, 0.0, 0.0], [1.0, 1.0, 1.0], color);
-                self.add_rock_lump([-0.34, 0.0, 0.18], [0.58, 0.72, 0.62], STONE_DARK);
-                self.add_rock_lump([0.34, 0.0, -0.16], [0.50, 0.62, 0.56], STONE_DARK);
-            }
-            1 => {
-                self.add_rock_lump([-0.24, 0.0, -0.02], [0.86, 1.10, 0.70], color);
-                self.add_rock_lump([0.34, 0.0, 0.12], [0.72, 0.86, 0.62], STONE_DARK);
-                self.add_rock_lump([0.02, 0.0, -0.34], [0.54, 0.66, 0.46], color);
-            }
-            _ => {
-                self.add_rock_lump([-0.38, 0.0, 0.08], [0.68, 0.82, 0.58], STONE_DARK);
-                self.add_rock_lump([0.06, 0.0, -0.10], [0.92, 1.18, 0.76], color);
-                self.add_rock_lump([0.44, 0.0, 0.22], [0.56, 0.72, 0.52], STONE_DARK);
-                self.add_rock_lump([0.10, 0.0, 0.44], [0.42, 0.54, 0.38], color);
-            }
         }
     }
 
@@ -493,6 +563,42 @@ impl LowPolyMeshBuilder {
         }
     }
 
+    fn add_crystal_cluster(
+        &mut self,
+        centre: [f32; 3],
+        scale: [f32; 3],
+        body: MeshColor,
+        highlight: MeshColor,
+    ) {
+        let prongs: &[([f32; 3], [f32; 3], MeshColor)] = &[
+            ([0.0, 0.0, 0.0], [0.0, 1.4, 0.0], body),
+            ([0.6, -0.05, 0.1], [0.5, 1.1, 0.2], highlight),
+            ([-0.55, -0.06, -0.1], [-0.55, 1.05, -0.1], body),
+            ([0.18, -0.04, -0.55], [0.18, 1.0, -0.55], highlight),
+        ];
+        for (base, apex, color) in prongs {
+            let bx = centre[0] + base[0] * scale[0];
+            let by = centre[1] + base[1] * scale[1];
+            let bz = centre[2] + base[2] * scale[2];
+            let ax = centre[0] + apex[0] * scale[0] * 0.55;
+            let ay = centre[1] + apex[1] * scale[1];
+            let az = centre[2] + apex[2] * scale[2] * 0.55;
+            let half = (scale[0] + scale[2]) * 0.12;
+            let origin = [(bx + ax) * 0.5, (by + ay) * 0.5, (bz + az) * 0.5];
+            let ring = [
+                [bx - half, by, bz],
+                [bx, by, bz + half],
+                [bx + half, by, bz],
+                [bx, by, bz - half],
+            ];
+            let apex_point = [ax, ay, az];
+            for index in 0..4 {
+                let next = (index + 1) % 4;
+                self.push_triangle_away_from(origin, apex_point, ring[index], ring[next], *color);
+            }
+        }
+    }
+
     fn add_octa_rock(&mut self, center: [f32; 3], scale: [f32; 3], color: MeshColor) {
         let [cx, cy, cz] = center;
         let [sx, sy, sz] = scale;
@@ -526,52 +632,142 @@ impl LowPolyMeshBuilder {
 }
 
 fn low_poly_hatchet_mesh() -> Mesh {
+    // Built in the same orientation convention as the pickaxe: the head
+    // extends along mesh +X (which becomes world -Z, i.e. forward in the
+    // first-person view, after the model's Y rotation). The mesh-Z axis is
+    // the blade's thickness — kept thin so the blade reads as a blade rather
+    // than a block from the side profile.
     let mut builder = LowPolyMeshBuilder::default();
-    builder.add_box([0.0, -0.08, 0.0], [0.024, 0.34, 0.026], WOOD_LIGHT);
-    builder.add_box([0.0, -0.32, 0.0], [0.036, 0.042, 0.034], WOOD_DARK);
-    builder.add_box([0.0, -0.18, 0.0], [0.032, 0.018, 0.032], LEATHER_WRAP);
-    builder.add_box([0.0, -0.04, 0.0], [0.032, 0.018, 0.032], LEATHER_WRAP);
-    builder.add_box([0.0, 0.19, 0.0], [0.062, 0.040, 0.042], LEATHER_WRAP);
-    builder.add_box([0.05, 0.22, 0.0], [0.12, 0.045, 0.044], STONE_DARK);
-    builder.add_tri_prism(
-        [[0.08, 0.34], [0.25, 0.23], [0.08, 0.12]],
-        0.044,
+
+    // Handle shaft (tapered look via two stacked boxes).
+    builder.add_box([0.0, -0.06, 0.0], [0.024, 0.28, 0.024], WOOD_LIGHT);
+    builder.add_box([0.0, -0.30, 0.0], [0.028, 0.06, 0.028], WOOD_MID);
+    // Pommel knob.
+    builder.add_box([0.0, -0.38, 0.0], [0.036, 0.030, 0.034], WOOD_DARK);
+    // Leather grip wraps near the bottom of the shaft.
+    builder.add_box([0.0, -0.20, 0.0], [0.031, 0.022, 0.031], LEATHER_WRAP);
+    builder.add_box([0.0, -0.10, 0.0], [0.031, 0.014, 0.031], LEATHER_WRAP);
+    // Iron band binding the head to the handle.
+    builder.add_box([0.0, 0.17, 0.0], [0.054, 0.020, 0.038], IRON_BAND);
+    // Wooden head saddle that the stone bit wraps around.
+    builder.add_box([0.0, 0.22, 0.0], [0.050, 0.044, 0.040], WOOD_DARK);
+
+    // Stone bit body — flared trapezoid in the mesh-XY plane. The half-depth
+    // is small so the blade is a true blade in profile rather than a block.
+    builder.add_quad_prism(
+        [[0.04, 0.10], [0.22, 0.07], [0.32, 0.32], [0.04, 0.32]],
+        0.020,
         STONE_LIGHT,
     );
+    // Bright cutting edge along the leading curve of the bit. Sits slightly
+    // proud of the body so the highlight catches the light during the swing.
     builder.add_tri_prism(
-        [[-0.02, 0.29], [-0.13, 0.21], [-0.02, 0.13]],
-        0.035,
+        [[0.22, 0.08], [0.36, 0.20], [0.30, 0.30]],
+        0.013,
+        STONE_EDGE,
+    );
+    // Beard — small downward hook at the front-bottom of the bit.
+    builder.add_tri_prism(
+        [[0.04, 0.10], [0.22, 0.05], [0.20, 0.10]],
+        0.013,
         STONE_DARK,
     );
-    builder.add_box([0.0, 0.19, 0.0], [0.042, 0.030, 0.046], WOOD_DARK);
+    // Upper horn — small triangular peak at the front-top, balances the beard.
+    builder.add_tri_prism(
+        [[0.04, 0.32], [0.22, 0.36], [0.28, 0.32]],
+        0.013,
+        STONE_DARK,
+    );
+    // Poll — short counterweight behind the eye (mesh -X), i.e. the back of
+    // the head in the held view.
+    builder.add_box([-0.07, 0.22, 0.0], [0.046, 0.036, 0.036], STONE_DARK);
+
     builder.build()
 }
 
 fn low_poly_pickaxe_mesh() -> Mesh {
     let mut builder = LowPolyMeshBuilder::default();
-    builder.add_box([0.0, -0.11, 0.0], [0.024, 0.38, 0.026], WOOD_LIGHT);
-    builder.add_box([0.0, -0.38, 0.0], [0.036, 0.042, 0.034], WOOD_DARK);
-    builder.add_box([0.0, -0.22, 0.0], [0.032, 0.018, 0.032], LEATHER_WRAP);
-    builder.add_box([0.0, -0.07, 0.0], [0.032, 0.018, 0.032], LEATHER_WRAP);
-    builder.add_box([0.0, 0.25, 0.0], [0.094, 0.034, 0.044], STONE_DARK);
-    builder.add_tri_prism(
-        [[-0.08, 0.31], [-0.28, 0.25], [-0.08, 0.19]],
-        0.044,
+    // Longer, slightly heavier handle than the hatchet.
+    builder.add_box([0.0, -0.08, 0.0], [0.026, 0.32, 0.026], WOOD_LIGHT);
+    builder.add_box([0.0, -0.36, 0.0], [0.030, 0.060, 0.030], WOOD_MID);
+    // Pommel knob.
+    builder.add_box([0.0, -0.44, 0.0], [0.040, 0.030, 0.038], WOOD_DARK);
+    // Leather grip wraps.
+    builder.add_box([0.0, -0.24, 0.0], [0.033, 0.022, 0.033], LEATHER_WRAP);
+    builder.add_box([0.0, -0.12, 0.0], [0.033, 0.014, 0.033], LEATHER_WRAP);
+    builder.add_box([0.0, 0.00, 0.0], [0.033, 0.014, 0.033], LEATHER_WRAP);
+    // Iron band binding the head.
+    builder.add_box([0.0, 0.20, 0.0], [0.040, 0.020, 0.054], IRON_BAND);
+    // Wooden head saddle that holds the stone pick.
+    builder.add_box([0.0, 0.24, 0.0], [0.038, 0.040, 0.058], WOOD_DARK);
+    // Stone cross bar.
+    builder.add_box([0.0, 0.26, 0.0], [0.080, 0.030, 0.044], STONE_DARK);
+    // Left pick spike — long tapered prong reaching out to the side.
+    builder.add_quad_prism(
+        [[-0.36, 0.26], [-0.08, 0.30], [-0.08, 0.22], [-0.34, 0.24]],
+        0.034,
         STONE_LIGHT,
     );
     builder.add_tri_prism(
-        [[0.08, 0.31], [0.28, 0.25], [0.08, 0.19]],
-        0.044,
+        [[-0.36, 0.26], [-0.42, 0.255], [-0.34, 0.24]],
+        0.020,
+        STONE_EDGE,
+    );
+    // Right pick spike — mirror of the left.
+    builder.add_quad_prism(
+        [[0.08, 0.30], [0.36, 0.26], [0.34, 0.24], [0.08, 0.22]],
+        0.034,
         STONE_LIGHT,
     );
-    builder.add_box([0.0, 0.21, 0.0], [0.044, 0.030, 0.048], LEATHER_WRAP);
+    builder.add_tri_prism(
+        [[0.36, 0.26], [0.42, 0.255], [0.34, 0.24]],
+        0.020,
+        STONE_EDGE,
+    );
     builder.build()
 }
 
-fn low_poly_ore_mesh(variant: u8) -> Mesh {
+fn low_poly_ore_node_mesh(style: OreNodeStyle) -> Mesh {
     let mut builder = LowPolyMeshBuilder::default();
-    builder.add_rock_mound(variant, STONE_LIGHT);
+    // Layered base rock mound — bigger central mass plus smaller flanking stones.
+    builder.add_rock_lump([0.00, 0.00, 0.00], [1.00, 1.00, 1.00], style.base_color);
+    builder.add_rock_lump([-0.32, 0.00, 0.18], [0.62, 0.74, 0.58], style.accent_color);
+    builder.add_rock_lump([0.38, 0.00, -0.12], [0.54, 0.62, 0.52], style.accent_color);
+    builder.add_rock_lump([0.04, 0.00, -0.38], [0.46, 0.52, 0.44], style.base_color);
+    // Embedded ore chunks placed at varied heights/angles on top of the rocks.
+    add_ore_chunks(&mut builder, style);
     builder.build()
+}
+
+fn add_ore_chunks(builder: &mut LowPolyMeshBuilder, style: OreNodeStyle) {
+    let placements: &[([f32; 3], [f32; 3])] = &[
+        ([0.06, 0.46, 0.08], [0.16, 0.18, 0.16]),
+        ([-0.22, 0.32, -0.06], [0.12, 0.13, 0.11]),
+        ([0.28, 0.30, 0.16], [0.13, 0.14, 0.12]),
+        ([-0.18, 0.20, 0.34], [0.10, 0.12, 0.10]),
+        ([0.22, 0.18, -0.30], [0.11, 0.13, 0.11]),
+        ([-0.04, 0.10, 0.38], [0.09, 0.10, 0.09]),
+    ];
+    for (centre, scale) in placements {
+        match style.chunk_shape {
+            OreChunkShape::Boulder => {
+                builder.add_octa_rock(*centre, *scale, style.chunk_color);
+                builder.add_octa_rock(
+                    [centre[0], centre[1] + scale[1] * 0.55, centre[2]],
+                    [scale[0] * 0.45, scale[1] * 0.35, scale[2] * 0.45],
+                    style.chunk_highlight,
+                );
+            }
+            OreChunkShape::Crystal => {
+                builder.add_crystal_cluster(
+                    *centre,
+                    *scale,
+                    style.chunk_color,
+                    style.chunk_highlight,
+                );
+            }
+        }
+    }
 }
 
 fn low_poly_pine_tree_mesh() -> Mesh {
@@ -600,6 +796,22 @@ fn low_poly_dead_tree_mesh() -> Mesh {
     builder.add_box([0.24, 1.10, 0.0], [0.25, 0.045, 0.045], DEAD_WOOD);
     builder.add_box([-0.20, 0.88, 0.0], [0.20, 0.040, 0.040], DEAD_WOOD);
     builder.add_box([0.0, 1.44, 0.0], [0.10, 0.12, 0.10], DEAD_WOOD);
+    builder.build()
+}
+
+fn impact_wood_chip_mesh() -> Mesh {
+    let mut builder = LowPolyMeshBuilder::default();
+    // Splinter: a thin elongated box with a small darker cap to read at any angle.
+    builder.add_box([0.0, 0.0, 0.0], [0.045, 0.012, 0.022], WOOD_LIGHT);
+    builder.add_box([0.030, 0.0, 0.0], [0.015, 0.014, 0.018], WOOD_MID);
+    builder.build()
+}
+
+fn impact_stone_shard_mesh() -> Mesh {
+    let mut builder = LowPolyMeshBuilder::default();
+    // Angular pebble: small octa rock plus a brighter cap face.
+    builder.add_octa_rock([0.0, 0.0, 0.0], [0.05, 0.05, 0.05], STONE_DARK);
+    builder.add_octa_rock([0.0, 0.022, 0.0], [0.028, 0.022, 0.028], STONE_EDGE);
     builder.build()
 }
 

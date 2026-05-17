@@ -1,10 +1,43 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-use crate::protocol::{DroppedItemId, ItemContainerSlot, ItemStack, ResourceNodeId, Vec3Net};
+use crate::{
+    items::ToolKind,
+    protocol::{DroppedItemId, ItemContainerSlot, ItemStack, ResourceNodeId, Vec3Net},
+};
 
-const GATHER_SWING_SECONDS: f32 = 0.85;
-const GATHER_IMPACT_FRACTION: f32 = 0.5;
+const AXE_SWING_SECONDS: f32 = 0.50;
+const AXE_IMPACT_FRACTION: f32 = 0.50;
+const PICKAXE_SWING_SECONDS: f32 = 1.60;
+const PICKAXE_IMPACT_FRACTION: f32 = 0.68;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ImpactEffectKind {
+    WoodChips,
+    StoneShards,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PendingImpactEffect {
+    pub(crate) anchor: Vec3,
+    pub(crate) spray_direction: Vec3,
+    pub(crate) kind: ImpactEffectKind,
+    pub(crate) seed: u32,
+}
+
+pub(crate) fn swing_duration_seconds(tool: ToolKind) -> f32 {
+    match tool {
+        ToolKind::Axe => AXE_SWING_SECONDS,
+        ToolKind::Pickaxe => PICKAXE_SWING_SECONDS,
+    }
+}
+
+pub(crate) fn swing_impact_fraction(tool: ToolKind) -> f32 {
+    match tool {
+        ToolKind::Axe => AXE_IMPACT_FRACTION,
+        ToolKind::Pickaxe => PICKAXE_IMPACT_FRACTION,
+    }
+}
 
 #[derive(Resource, Default)]
 pub(crate) struct InventoryUiState {
@@ -64,85 +97,124 @@ impl PickupTargetState {
     }
 }
 
-#[derive(Resource, Debug, Clone)]
+#[derive(Resource, Debug, Default, Clone)]
 pub(crate) struct GatherInputState {
-    active_target: Option<ResourceNodeId>,
-    swing_elapsed: f32,
-    impact_sent: bool,
+    active: Option<ActiveSwing>,
+    pending_impact: Option<PendingImpactEffect>,
+    swing_seed: u32,
 }
 
-impl Default for GatherInputState {
-    fn default() -> Self {
-        Self {
-            active_target: None,
-            swing_elapsed: 0.0,
-            impact_sent: false,
-        }
-    }
+#[derive(Debug, Clone, Copy)]
+struct ActiveSwing {
+    tool: ToolKind,
+    duration: f32,
+    impact_fraction: f32,
+    elapsed: f32,
+    impact_handled: bool,
+    seed: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SwingImpact {
+    pub(crate) target: Option<ResourceNodeId>,
+    pub(crate) tool: ToolKind,
 }
 
 impl GatherInputState {
+    /// Drive the swing animation and resolve impacts.
+    ///
+    /// The tool always swings on left-click as long as a tool is equipped.
+    /// On the impact frame, the swing emits a [`SwingImpact`] whose `target`
+    /// is `Some` only if a valid resource target is in view — that is the
+    /// signal to dispatch a gather command. Visual impact effects are
+    /// queued separately via [`Self::set_pending_impact`].
     pub(crate) fn update(
         &mut self,
         delta_seconds: f32,
         just_pressed: bool,
         pressed: bool,
+        equipped_tool: Option<ToolKind>,
         target: Option<ResourceNodeId>,
-    ) -> Option<ResourceNodeId> {
-        if self.active_target.is_none()
+    ) -> Option<SwingImpact> {
+        if self.active.is_none()
             && (just_pressed || pressed)
-            && let Some(target) = target
+            && let Some(tool) = equipped_tool
         {
-            self.start_swing(target);
+            self.start_swing(tool);
         }
 
-        let active_target = self.active_target?;
-        let previous_elapsed = self.swing_elapsed;
-        self.swing_elapsed =
-            (self.swing_elapsed + delta_seconds.max(0.0)).min(GATHER_SWING_SECONDS);
+        let mut active = self.active?;
+        let previous_elapsed = active.elapsed;
+        active.elapsed = (active.elapsed + delta_seconds.max(0.0)).min(active.duration);
 
-        let impact_time = GATHER_SWING_SECONDS * GATHER_IMPACT_FRACTION;
-        let impact_target = (!self.impact_sent
+        let impact_time = active.duration * active.impact_fraction;
+        let crossed_impact = !active.impact_handled
             && previous_elapsed < impact_time
-            && self.swing_elapsed >= impact_time)
-            .then_some(active_target);
-        if impact_target.is_some() {
-            self.impact_sent = true;
-        }
+            && active.elapsed >= impact_time;
 
-        if self.swing_elapsed >= GATHER_SWING_SECONDS {
-            if pressed {
-                if let Some(target) = target {
-                    self.start_swing(target);
-                } else {
-                    self.cancel();
-                }
+        let impact = if crossed_impact {
+            active.impact_handled = true;
+            Some(SwingImpact {
+                target,
+                tool: active.tool,
+            })
+        } else {
+            None
+        };
+
+        if active.elapsed >= active.duration {
+            if pressed && let Some(tool) = equipped_tool {
+                // Continue swinging while LMB is held.
+                self.start_swing(tool);
             } else {
-                self.cancel();
+                self.active = None;
+                return impact;
             }
+        } else {
+            self.active = Some(active);
         }
 
-        impact_target
+        impact
     }
 
     pub(crate) fn cancel(&mut self) {
-        self.active_target = None;
-        self.swing_elapsed = 0.0;
-        self.impact_sent = false;
+        self.active = None;
+        self.pending_impact = None;
     }
 
-    fn start_swing(&mut self, target: ResourceNodeId) {
-        self.active_target = Some(target);
-        self.swing_elapsed = 0.0;
-        self.impact_sent = false;
+    fn start_swing(&mut self, tool: ToolKind) {
+        self.swing_seed = self.swing_seed.wrapping_add(1);
+        self.active = Some(ActiveSwing {
+            tool,
+            duration: swing_duration_seconds(tool),
+            impact_fraction: swing_impact_fraction(tool),
+            elapsed: 0.0,
+            impact_handled: false,
+            seed: self.swing_seed,
+        });
     }
 
     pub(crate) fn swing_fraction(&self) -> f32 {
-        if self.active_target.is_none() {
-            0.0
-        } else {
-            (self.swing_elapsed / GATHER_SWING_SECONDS).clamp(0.0, 1.0)
+        match self.active {
+            Some(active) if active.duration > 0.0 => {
+                (active.elapsed / active.duration).clamp(0.0, 1.0)
+            }
+            _ => 0.0,
         }
+    }
+
+    pub(crate) fn set_pending_impact(&mut self, impact: PendingImpactEffect) {
+        self.pending_impact = Some(impact);
+    }
+
+    pub(crate) fn take_pending_impact(&mut self) -> Option<PendingImpactEffect> {
+        self.pending_impact.take()
+    }
+
+    pub(crate) fn current_swing_seed(&self) -> u32 {
+        self.active
+            .map(|swing| swing.seed)
+            .unwrap_or(self.swing_seed)
     }
 }
 
@@ -210,22 +282,56 @@ mod tests {
     #[test]
     fn gather_input_sends_at_swing_impact_and_repeats_while_held() {
         let mut state = GatherInputState::default();
+        let tool = ToolKind::Axe;
+        let duration = swing_duration_seconds(tool);
+        let impact_time = duration * swing_impact_fraction(tool);
 
-        assert_eq!(state.update(0.1, true, true, Some(4)), None);
+        assert!(
+            state
+                .update(0.01, true, true, Some(tool), Some(4))
+                .is_none()
+        );
         assert!(state.swing_fraction() > 0.0);
 
-        assert_eq!(
-            state.update(
-                GATHER_SWING_SECONDS * GATHER_IMPACT_FRACTION,
-                false,
-                true,
-                Some(4)
-            ),
-            Some(4)
+        let impact = state
+            .update(impact_time, false, true, Some(tool), Some(4))
+            .expect("impact should emit at the impact fraction of the swing");
+        assert_eq!(impact.target, Some(4));
+        assert_eq!(impact.tool, tool);
+        assert!(
+            state
+                .update(0.01, false, true, Some(tool), Some(4))
+                .is_none()
         );
-        assert_eq!(state.update(0.1, false, true, Some(4)), None);
 
-        let _ = state.update(GATHER_SWING_SECONDS, false, true, Some(5));
+        let _ = state.update(duration, false, true, Some(tool), Some(5));
+        // Swing rolled over into a new swing while LMB is held.
         assert!(state.swing_fraction() < 0.2);
+    }
+
+    #[test]
+    fn gather_input_swings_without_target_and_yields_no_impact() {
+        let mut state = GatherInputState::default();
+        let tool = ToolKind::Pickaxe;
+        let duration = swing_duration_seconds(tool);
+        let impact_time = duration * swing_impact_fraction(tool);
+
+        // Click with no target — swing still starts.
+        let _ = state.update(0.01, true, true, Some(tool), None);
+        assert!(state.swing_fraction() > 0.0);
+
+        // Crossing the impact fraction emits a SwingImpact with no target.
+        let impact = state
+            .update(impact_time, false, true, Some(tool), None)
+            .expect("impact frame should still fire");
+        assert!(impact.target.is_none());
+        assert_eq!(impact.tool, tool);
+    }
+
+    #[test]
+    fn gather_input_does_nothing_without_a_tool_equipped() {
+        let mut state = GatherInputState::default();
+        assert!(state.update(0.01, true, true, None, Some(4)).is_none());
+        assert_eq!(state.swing_fraction(), 0.0);
     }
 }

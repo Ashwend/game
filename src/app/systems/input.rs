@@ -1,4 +1,5 @@
 use bevy::{
+    ecs::system::SystemParam,
     input::mouse::{AccumulatedMouseMotion, MouseWheel},
     prelude::*,
     window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window, WindowFocused},
@@ -6,15 +7,17 @@ use bevy::{
 
 use crate::{
     controller::MAX_LOOK_PITCH,
+    items::{ToolKind, ToolProfile, item_definition},
     protocol::{
-        ACTIONBAR_SLOT_COUNT, ClientMessage, InventoryCommand, ItemContainerSlot,
-        MAX_INPUT_DELTA_SECONDS, PlayerInput, PlayerMovement, ResourceGatherCommand, Vec3Net,
+        ACTIONBAR_SLOT_COUNT, ClientMessage, InventoryCommand, ItemContainerSlot, PlayerInput,
+        PlayerMovement, ResourceGatherCommand, Vec3Net,
     },
+    resources::{ResourceNodeModel, resource_node_definition},
 };
 
 use super::super::state::{
-    ClientRuntime, ClientSettings, GatherInputState, InventoryUiState, LookState, MenuState,
-    PickupTargetState, Screen,
+    ClientRuntime, ClientSettings, GatherInputState, ImpactEffectKind, InventoryUiState, LookState,
+    MenuState, PendingImpactEffect, PickupTargetState, Screen, SwingImpact,
 };
 
 pub(crate) fn chat_shortcut_system(keys: Res<ButtonInput<KeyCode>>, mut menu: ResMut<MenuState>) {
@@ -172,7 +175,7 @@ pub(crate) fn client_input_system(
 
     runtime.input_sequence += 1;
     let sequence = runtime.input_sequence;
-    let delta_seconds = time.delta_secs().clamp(0.0, MAX_INPUT_DELTA_SECONDS);
+    let delta_seconds = time.delta_secs();
     let input = PlayerInput {
         sequence,
         delta_seconds,
@@ -234,51 +237,60 @@ fn movement_direction_from_keys(
     direction
 }
 
-pub(crate) fn gameplay_inventory_shortcuts_system(
-    time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
-    mouse_buttons: Res<ButtonInput<MouseButton>>,
-    mut mouse_wheel: MessageReader<MouseWheel>,
-    mut runtime: ResMut<ClientRuntime>,
-    mut gather_input: ResMut<GatherInputState>,
-    menu: Res<MenuState>,
-    pickup_target: Res<PickupTargetState>,
-    primary_window: Query<&Window, With<PrimaryWindow>>,
-) {
-    if !gameplay_accepts_controls(&menu, primary_window_focused(&primary_window)) {
-        mouse_wheel.clear();
-        gather_input.cancel();
+#[derive(SystemParam)]
+pub(crate) struct GameplayInventoryShortcutsParams<'w, 's> {
+    time: Res<'w, Time>,
+    keys: Res<'w, ButtonInput<KeyCode>>,
+    mouse_buttons: Res<'w, ButtonInput<MouseButton>>,
+    mouse_wheel: MessageReader<'w, 's, MouseWheel>,
+    runtime: ResMut<'w, ClientRuntime>,
+    gather_input: ResMut<'w, GatherInputState>,
+    menu: Res<'w, MenuState>,
+    pickup_target: Res<'w, PickupTargetState>,
+    camera_kick: ResMut<'w, super::camera::CameraImpactKick>,
+    primary_window: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+}
+
+pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryShortcutsParams) {
+    if !gameplay_accepts_controls(&params.menu, primary_window_focused(&params.primary_window)) {
+        params.mouse_wheel.clear();
+        params.gather_input.cancel();
         return;
     }
 
     for slot in 0..ACTIONBAR_SLOT_COUNT {
-        if actionbar_key_pressed(&keys, slot) {
-            send_inventory_command(&mut runtime, InventoryCommand::SelectActionbarSlot { slot });
+        if actionbar_key_pressed(&params.keys, slot) {
+            send_inventory_command(
+                &mut params.runtime,
+                InventoryCommand::SelectActionbarSlot { slot },
+            );
         }
     }
 
-    let wheel_delta = mouse_wheel
+    let wheel_delta = params
+        .mouse_wheel
         .read()
         .map(|event| event.y.signum() as i8)
         .sum::<i8>();
     if wheel_delta != 0 {
         send_inventory_command(
-            &mut runtime,
+            &mut params.runtime,
             InventoryCommand::SelectActionbarOffset {
                 offset: -wheel_delta.signum(),
             },
         );
     }
 
-    if keys.just_pressed(KeyCode::KeyQ) {
-        let Some(active_actionbar_slot) = runtime
+    if params.keys.just_pressed(KeyCode::KeyQ) {
+        let Some(active_actionbar_slot) = params
+            .runtime
             .local_player()
             .map(|player| player.inventory.active_actionbar_slot)
         else {
             return;
         };
         send_inventory_command(
-            &mut runtime,
+            &mut params.runtime,
             InventoryCommand::Drop {
                 from: ItemContainerSlot::actionbar(active_actionbar_slot),
                 quantity: Some(1),
@@ -286,23 +298,120 @@ pub(crate) fn gameplay_inventory_shortcuts_system(
         );
     }
 
-    if keys.just_pressed(KeyCode::KeyE)
-        && let Some(dropped_item_id) = pickup_target.dropped_item_id
+    if params.keys.just_pressed(KeyCode::KeyE)
+        && let Some(dropped_item_id) = params.pickup_target.dropped_item_id
     {
-        send_inventory_command(&mut runtime, InventoryCommand::PickUp { dropped_item_id });
+        send_inventory_command(
+            &mut params.runtime,
+            InventoryCommand::PickUp { dropped_item_id },
+        );
     }
 
-    if let Some(resource_node_id) = gather_input.update(
-        time.delta_secs(),
-        mouse_buttons.just_pressed(MouseButton::Left),
-        mouse_buttons.pressed(MouseButton::Left),
-        pickup_target.resource_node_id,
+    let equipped_tool = equipped_tool_kind(&params.runtime);
+    if let Some(impact) = params.gather_input.update(
+        params.time.delta_secs(),
+        params.mouse_buttons.just_pressed(MouseButton::Left),
+        params.mouse_buttons.pressed(MouseButton::Left),
+        equipped_tool,
+        params.pickup_target.resource_node_id,
     ) {
-        send_gameplay_message(
-            &mut runtime,
-            ClientMessage::Gather(ResourceGatherCommand { resource_node_id }),
-            "gather command",
-        );
+        dispatch_swing_impact(&mut params, impact);
+    }
+}
+
+fn equipped_tool_kind(runtime: &ClientRuntime) -> Option<ToolKind> {
+    equipped_tool_profile(runtime).map(|profile| profile.kind)
+}
+
+fn equipped_tool_profile(runtime: &ClientRuntime) -> Option<ToolProfile> {
+    let stack = runtime.local_player()?.inventory.active_actionbar_stack()?;
+    item_definition(&stack.item_id).and_then(|definition| definition.tool)
+}
+
+fn dispatch_swing_impact(params: &mut GameplayInventoryShortcutsParams, impact: SwingImpact) {
+    let Some(node_id) = impact.target else {
+        return;
+    };
+
+    // Only emit hit feedback (chips, camera kick, gather command) when the
+    // equipped tool can actually harvest this resource. Swinging an axe at
+    // an iron node should look like a clean miss, not a bounced chip burst.
+    if !equipped_tool_can_harvest_target(&params.runtime, &params.pickup_target) {
+        return;
+    }
+
+    let target_anchor = resource_target_anchor(&params.pickup_target, node_id);
+    let target_kind = resource_target_effect_kind(&params.pickup_target);
+
+    if let Some(anchor) = target_anchor
+        && let Some(kind) = target_kind
+    {
+        let spray_direction = swing_spray_direction(&params.runtime, anchor);
+        let seed = params.gather_input.current_swing_seed();
+        params.gather_input.set_pending_impact(PendingImpactEffect {
+            anchor,
+            spray_direction,
+            kind,
+            seed,
+        });
+    }
+
+    params.camera_kick.trigger(impact.tool);
+
+    send_gameplay_message(
+        &mut params.runtime,
+        ClientMessage::Gather(ResourceGatherCommand {
+            resource_node_id: node_id,
+        }),
+        "gather command",
+    );
+}
+
+fn equipped_tool_can_harvest_target(runtime: &ClientRuntime, target: &PickupTargetState) -> bool {
+    let Some(profile) = equipped_tool_profile(runtime) else {
+        return false;
+    };
+    let Some(definition_id) = target.resource_definition_id.as_deref() else {
+        return false;
+    };
+    let Some(definition) = resource_node_definition(definition_id) else {
+        return false;
+    };
+    definition.required_tool.allows(profile)
+}
+
+fn resource_target_anchor(target: &PickupTargetState, node_id: u64) -> Option<Vec3> {
+    let position = target.world_position?;
+    if target.resource_node_id != Some(node_id) {
+        return None;
+    }
+    Some(Vec3::new(position.x, position.y, position.z))
+}
+
+fn resource_target_effect_kind(target: &PickupTargetState) -> Option<ImpactEffectKind> {
+    let definition_id = target.resource_definition_id.as_deref()?;
+    let definition = resource_node_definition(definition_id)?;
+    Some(match definition.model {
+        ResourceNodeModel::PineTree
+        | ResourceNodeModel::BirchTree
+        | ResourceNodeModel::DeadTree => ImpactEffectKind::WoodChips,
+        ResourceNodeModel::CoalOre | ResourceNodeModel::IronOre | ResourceNodeModel::SulfurOre => {
+            ImpactEffectKind::StoneShards
+        }
+    })
+}
+
+fn swing_spray_direction(runtime: &ClientRuntime, anchor: Vec3) -> Vec3 {
+    let Some(player) = runtime.local_view() else {
+        return Vec3::Y;
+    };
+    let eye = Vec3::new(player.position.x, player.position.y, player.position.z)
+        + Vec3::Y * crate::app::EYE_HEIGHT;
+    let to_player = (eye - anchor).normalize_or_zero();
+    if to_player.length_squared() < f32::EPSILON {
+        Vec3::Y
+    } else {
+        to_player
     }
 }
 

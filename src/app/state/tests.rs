@@ -58,7 +58,7 @@ fn welcome_seeds_local_prediction_from_snapshot() {
 }
 
 #[test]
-fn snapshots_do_not_reconcile_existing_local_prediction() {
+fn snapshots_do_not_overwrite_existing_local_prediction() {
     let mut runtime = ClientRuntime {
         client_id: Some(1),
         predicted_local: Some(PlayerController::from_player_state(&player_state(

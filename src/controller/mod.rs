@@ -127,26 +127,14 @@ impl PlayerController {
         } else {
             0.0
         };
-        let total = remaining;
-        let start_yaw = self.yaw;
-        let target_yaw = self.last_input.yaw;
-        let start_pitch = self.pitch;
-        let target_pitch = self.last_input.pitch.clamp(-MAX_LOOK_PITCH, MAX_LOOK_PITCH);
-        let mut simulated = 0.0;
+
+        self.yaw = normalize_angle(self.last_input.yaw);
+        self.pitch = self.last_input.pitch.clamp(-MAX_LOOK_PITCH, MAX_LOOK_PITCH);
 
         while remaining > 0.0 {
             let step = remaining.min(MAX_SIMULATION_STEP);
-            let fraction = ((simulated + step * 0.5) / total).clamp(0.0, 1.0);
-            self.yaw = lerp_angle(start_yaw, target_yaw, fraction);
-            self.pitch = lerp(start_pitch, target_pitch, fraction);
             self.simulate_step(step, world);
-            simulated += step;
             remaining -= step;
-        }
-
-        if total > 0.0 {
-            self.yaw = normalize_angle(target_yaw);
-            self.pitch = target_pitch;
         }
     }
 
@@ -333,54 +321,10 @@ impl PlayerController {
         }
         self.velocity = clamp_horizontal_speed(self.velocity, LEAP_MAX_HORIZONTAL_SPEED);
     }
-
-    pub fn reconcile(&mut self, server: &PlayerState) -> Reconciliation {
-        const SNAP_DISTANCE_SQ: f32 = 1.0;
-
-        let server_delta = Vec3Net::new(
-            server.position.x - self.position.x,
-            server.position.y - self.position.y,
-            server.position.z - self.position.z,
-        );
-        let distance_sq = server_delta.length_squared();
-
-        self.health = server.health;
-
-        if distance_sq > SNAP_DISTANCE_SQ {
-            self.position = server.position;
-            self.velocity = server.velocity;
-            self.grounded = server.grounded;
-            self.last_processed_input = self.last_processed_input.max(server.last_processed_input);
-            self.step_view_offset_y = 0.0;
-            Reconciliation::Snap
-        } else {
-            Reconciliation::Accepted
-        }
-    }
-}
-
-fn lerp(from: f32, to: f32, fraction: f32) -> f32 {
-    from + (to - from) * fraction
-}
-
-fn lerp_angle(from: f32, to: f32, fraction: f32) -> f32 {
-    normalize_angle(from + angle_delta(from, to) * fraction)
-}
-
-fn angle_delta(from: f32, to: f32) -> f32 {
-    use std::f32::consts::{PI, TAU};
-
-    (to - from + PI).rem_euclid(TAU) - PI
 }
 
 fn normalize_angle(value: f32) -> f32 {
     use std::f32::consts::{PI, TAU};
 
     (value + PI).rem_euclid(TAU) - PI
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Reconciliation {
-    Accepted,
-    Snap,
 }

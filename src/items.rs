@@ -223,19 +223,27 @@ pub fn pickup_anchor_from_position(position: Vec3Net) -> Vec3Net {
 }
 
 pub fn pickup_score(eye: Vec3Net, yaw: f32, pitch: f32, item: &DroppedWorldItem) -> Option<f32> {
+    let anchor = pickup_anchor(item);
+    let to_item = anchor.minus(eye);
+    // Cheap distance cull before the trig in `look_forward`. Anything outside
+    // the swept cylinder is unreachable; the bound stays conservative so it
+    // never rejects a candidate the ray test would have accepted.
+    let max_reach_sq = (PICKUP_RANGE + PICKUP_RAY_RADIUS).powi(2);
+    if to_item.length_squared() > max_reach_sq {
+        return None;
+    }
+
     let forward = look_forward(yaw, pitch);
     if forward.length_squared() <= f32::EPSILON {
         return None;
     }
-
-    let to_item = pickup_anchor(item).minus(eye);
     let projection = to_item.dot(forward);
     if !(0.0..=PICKUP_RANGE).contains(&projection) {
         return None;
     }
 
     let closest = eye.plus(forward.scale(projection));
-    let lateral = pickup_anchor(item).minus(closest);
+    let lateral = anchor.minus(closest);
     if lateral.length_squared() > PICKUP_RAY_RADIUS * PICKUP_RAY_RADIUS {
         return None;
     }

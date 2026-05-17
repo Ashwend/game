@@ -5,11 +5,61 @@ use bevy::{
     render::camera::TemporalJitter,
 };
 
+use crate::items::ToolKind;
+
 use super::super::{
     EYE_HEIGHT,
     scene::{MainCamera, NetworkPlayer, menu_backdrop_depth_of_field},
     state::{ClientRuntime, MenuState, Screen},
 };
+
+const AXE_KICK_PITCH: f32 = 0.022;
+const AXE_KICK_DOWN: f32 = 0.012;
+const AXE_KICK_DURATION: f32 = 0.12;
+const PICKAXE_KICK_PITCH: f32 = 0.038;
+const PICKAXE_KICK_DOWN: f32 = 0.024;
+const PICKAXE_KICK_DURATION: f32 = 0.18;
+
+#[derive(Resource, Debug, Default, Clone, Copy)]
+pub(crate) struct CameraImpactKick {
+    pitch_magnitude: f32,
+    down_magnitude: f32,
+    duration: f32,
+    elapsed: f32,
+}
+
+impl CameraImpactKick {
+    pub(crate) fn trigger(&mut self, tool: ToolKind) {
+        let (pitch, down, duration) = match tool {
+            ToolKind::Axe => (AXE_KICK_PITCH, AXE_KICK_DOWN, AXE_KICK_DURATION),
+            ToolKind::Pickaxe => (PICKAXE_KICK_PITCH, PICKAXE_KICK_DOWN, PICKAXE_KICK_DURATION),
+        };
+        // If a previous kick is still decaying, take the stronger of the two so
+        // rapid hits accumulate rather than stomp on each other.
+        self.pitch_magnitude = self.pitch_magnitude.max(pitch);
+        self.down_magnitude = self.down_magnitude.max(down);
+        self.duration = duration;
+        self.elapsed = 0.0;
+    }
+
+    fn advance(&mut self, dt: f32) -> (f32, f32) {
+        if self.duration <= 0.0 {
+            return (0.0, 0.0);
+        }
+        self.elapsed += dt.max(0.0);
+        if self.elapsed >= self.duration {
+            self.pitch_magnitude = 0.0;
+            self.down_magnitude = 0.0;
+            self.duration = 0.0;
+            self.elapsed = 0.0;
+            return (0.0, 0.0);
+        }
+        // Half-sine pulse: ramps in fast, settles smoothly.
+        let t = self.elapsed / self.duration;
+        let pulse = (t * std::f32::consts::PI).sin();
+        (self.pitch_magnitude * pulse, self.down_magnitude * pulse)
+    }
+}
 
 const MENU_BACKDROP_EYE: Vec3 = Vec3::new(-5.8, EYE_HEIGHT, 7.2);
 const MENU_BACKDROP_LOOK_AT: Vec3 = Vec3::new(0.4, 0.85, -3.6);
@@ -84,6 +134,8 @@ pub(crate) fn menu_backdrop_camera_system(
 pub(crate) fn camera_follow_system(
     runtime: Res<ClientRuntime>,
     menu: Res<MenuState>,
+    time: Res<Time>,
+    mut kick: ResMut<CameraImpactKick>,
     mut camera: Query<&mut Transform, (With<MainCamera>, Without<NetworkPlayer>)>,
 ) {
     if menu.screen != Screen::InGame {
@@ -97,10 +149,16 @@ pub(crate) fn camera_follow_system(
         return;
     };
 
+    let (pitch_kick, down_kick) = kick.advance(time.delta_secs());
+
     let feet = Vec3::new(player.position.x, player.position.y, player.position.z);
     let eye = feet + Vec3::Y * EYE_HEIGHT;
-    camera_transform.translation = eye;
-    camera_transform.rotation = Quat::from_euler(EulerRot::YXZ, player.yaw, player.pitch, 0.0);
+    let base_rotation = Quat::from_euler(EulerRot::YXZ, player.yaw, player.pitch, 0.0);
+    let rotation = base_rotation * Quat::from_rotation_x(-pitch_kick);
+    // Apply the downward drop in world space — feels like the shoulders
+    // absorbing the strike without the camera diving along the look vector.
+    camera_transform.translation = eye + Vec3::Y * -down_kick;
+    camera_transform.rotation = rotation;
 }
 
 fn menu_backdrop_transform(elapsed_seconds: f32) -> Transform {
@@ -293,6 +351,8 @@ mod tests {
             ))),
             ..Default::default()
         });
+        app.insert_resource(Time::<()>::default());
+        app.insert_resource(CameraImpactKick::default());
         app.world_mut().spawn((
             MainCamera,
             Transform::from_xyz(0.0, 0.0, 0.0),
@@ -315,5 +375,32 @@ mod tests {
                 .rotation
                 .abs_diff_eq(Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0), 0.0001)
         );
+    }
+
+    #[test]
+    fn camera_kick_pulses_and_decays_after_trigger() {
+        let mut kick = CameraImpactKick::default();
+        assert_eq!(kick.advance(0.1), (0.0, 0.0));
+
+        kick.trigger(ToolKind::Pickaxe);
+        let (mid_pitch, mid_drop) = kick.advance(PICKAXE_KICK_DURATION * 0.5);
+        assert!(mid_pitch > 0.0);
+        assert!(mid_drop > 0.0);
+
+        let (after_pitch, after_drop) = kick.advance(PICKAXE_KICK_DURATION);
+        assert_eq!((after_pitch, after_drop), (0.0, 0.0));
+    }
+
+    #[test]
+    fn pickaxe_kick_is_heavier_than_axe_kick() {
+        let mut axe_kick = CameraImpactKick::default();
+        axe_kick.trigger(ToolKind::Axe);
+        let (axe_peak, _) = axe_kick.advance(AXE_KICK_DURATION * 0.5);
+
+        let mut pickaxe_kick = CameraImpactKick::default();
+        pickaxe_kick.trigger(ToolKind::Pickaxe);
+        let (pickaxe_peak, _) = pickaxe_kick.advance(PICKAXE_KICK_DURATION * 0.5);
+
+        assert!(pickaxe_peak > axe_peak);
     }
 }

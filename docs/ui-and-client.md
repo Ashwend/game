@@ -38,7 +38,7 @@ Input systems:
 - In-game cursor capture drives mouse look.
 - WASD, shift, and space feed predicted movement.
 
-Scene rendering uses a first-person camera, generated floor/block geometry, and replicated player capsules. Gameplay camera anti-aliasing must stay non-temporal: use MSAA in gameplay and keep temporal AA/depth-of-field out of the in-game camera. Temporal history and blur can create a double-image effect when strafing sideways around nearby objects.
+Scene rendering uses a first-person camera, generated floor/block geometry, and replicated player capsules. Gameplay camera anti-aliasing must stay non-temporal: use MSAA in gameplay and keep temporal AA/depth-of-field out of the in-game camera. Camera position and rotation must come from the same source each frame — `camera_follow_system` reads `predicted.yaw/pitch` straight from `PlayerController`, and `simulate` integrates the substep loop with that same yaw fixed for the whole frame. Splitting the two (e.g., interpolating yaw across substeps while the camera reads the final value) causes object jitter when strafing while turning.
 
 Audio:
 - `assets/main-screen/ambient-music.wav` loops across main-menu, worlds, and multiplayer menu screens.

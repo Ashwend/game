@@ -23,14 +23,14 @@ use self::{
         SteamUser,
     },
     systems::{
-        ClientSystemSet, app_quit_system, apply_display_settings_system,
+        CameraImpactKick, ClientSystemSet, app_quit_system, apply_display_settings_system,
         apply_dropped_items_system, apply_held_item_visual_system, apply_resource_nodes_system,
         apply_snapshot_system, camera_follow_system, center_cursor_on_focus_system,
         chat_shortcut_system, client_input_system, gameplay_inventory_shortcuts_system,
         main_menu_music_system, menu_backdrop_camera_system, mouse_look_system,
         network_tick_system, save_client_settings_system, session_shutdown_poll_system,
-        toggle_inventory_system, toggle_pause_system, update_cursor_system,
-        update_pickup_target_system,
+        spawn_impact_effects_system, tick_impact_chips_system, toggle_inventory_system,
+        toggle_pause_system, update_cursor_system, update_pickup_target_system,
     },
     ui::{ButtonSoundRequests, button_sound_system, setup_button_sound_assets, ui_system},
 };
@@ -64,6 +64,7 @@ pub fn run_app() -> Result<()> {
         .insert_resource(InventoryUiState::default())
         .insert_resource(PickupTargetState::default())
         .insert_resource(GatherInputState::default())
+        .insert_resource(CameraImpactKick::default())
         .insert_resource(LookState::default())
         .insert_resource(WinitSettings::continuous())
         .init_resource::<ButtonSoundRequests>()
@@ -113,6 +114,15 @@ pub fn run_app() -> Result<()> {
                 ClientSystemSet::Camera,
                 ClientSystemSet::HeldItem,
                 ClientSystemSet::PickupTarget,
+            )
+                .chain(),
+        )
+        .configure_sets(
+            Update,
+            (
+                ClientSystemSet::PickupTarget,
+                ClientSystemSet::ImpactEffectsSpawn,
+                ClientSystemSet::ImpactEffectsTick,
             )
                 .chain(),
         )
@@ -195,6 +205,14 @@ pub fn run_app() -> Result<()> {
         .add_systems(
             Update,
             update_pickup_target_system.in_set(ClientSystemSet::PickupTarget),
+        )
+        .add_systems(
+            Update,
+            spawn_impact_effects_system.in_set(ClientSystemSet::ImpactEffectsSpawn),
+        )
+        .add_systems(
+            Update,
+            tick_impact_chips_system.in_set(ClientSystemSet::ImpactEffectsTick),
         )
         .add_systems(
             Update,

@@ -51,7 +51,7 @@ fn sprinting_is_forward_weighted_and_sidewalking_is_slower() {
 }
 
 #[test]
-fn strafing_while_turning_sweeps_movement_yaw_across_frame() {
+fn simulate_integrates_movement_using_the_target_yaw_for_the_whole_frame() {
     let mut controller = PlayerController::spawn();
     controller.apply_input(PlayerInput {
         sequence: 1,
@@ -65,8 +65,10 @@ fn strafing_while_turning_sweeps_movement_yaw_across_frame() {
 
     controller.simulate(1.0 / 60.0, &test_world());
 
-    assert!(controller.position.x > 0.001);
+    // Right-strafe at yaw = -PI/2 points along +Z. Position and camera yaw must
+    // agree at end-of-frame so the rendered camera matches the integrated path.
     assert!(controller.position.z > 0.001);
+    assert!(controller.position.x.abs() < 1.0e-4);
     assert!((controller.yaw + std::f32::consts::FRAC_PI_2).abs() < 0.0001);
 }
 
@@ -273,34 +275,4 @@ fn jump_request_survives_following_non_jump_input_before_tick() {
 
     assert!(controller.position.y > 0.0);
     assert!(!controller.grounded);
-}
-
-#[test]
-fn reconciliation_keeps_local_prediction_until_snap_threshold() {
-    let mut controller = PlayerController::spawn();
-    controller.position = Vec3Net::new(0.6, 0.0, 0.0);
-    controller.velocity = Vec3Net::new(5.0, 0.0, 0.0);
-
-    let mut server = PlayerState {
-        client_id: 1,
-        steam_id: 1,
-        name: "Player".to_owned(),
-        position: Vec3Net::ZERO,
-        velocity: Vec3Net::ZERO,
-        yaw: 0.0,
-        pitch: 0.0,
-        health: MAX_HEALTH,
-        grounded: true,
-        last_processed_input: 1,
-        is_admin: false,
-        inventory: Default::default(),
-    };
-
-    assert_eq!(controller.reconcile(&server), Reconciliation::Accepted);
-    assert_eq!(controller.position, Vec3Net::new(0.6, 0.0, 0.0));
-    assert_eq!(controller.velocity, Vec3Net::new(5.0, 0.0, 0.0));
-
-    server.position = Vec3Net::new(2.0, 0.0, 0.0);
-    assert_eq!(controller.reconcile(&server), Reconciliation::Snap);
-    assert_eq!(controller.position, server.position);
 }

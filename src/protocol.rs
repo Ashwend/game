@@ -9,7 +9,6 @@ pub type SteamId = u64;
 pub const PROTOCOL_VERSION: u32 = 12;
 pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
-pub const MAX_INPUT_DELTA_SECONDS: f32 = 1.0 / SERVER_TICK_RATE_HZ;
 pub const MAX_CHAT_LEN: usize = 240;
 pub const MAX_HEALTH: f32 = 100.0;
 pub const INVENTORY_SLOT_COUNT: usize = 40;

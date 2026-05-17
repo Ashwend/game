@@ -13,6 +13,10 @@ pub const DEAD_TREE_NODE_ID: &str = "dead_tree";
 
 pub const RESOURCE_GATHER_RANGE: f32 = 3.75;
 const DEFAULT_RESOURCE_RAY_RADIUS: f32 = 0.7;
+// Loose upper bound used only for the cheap distance cull in
+// `resource_node_score`. Must be >= any definition's `ray_radius`; correctness
+// of the actual ray test does not depend on it.
+const MAX_RESOURCE_RAY_RADIUS: f32 = 1.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceNodeModel {
@@ -158,13 +162,20 @@ pub fn resource_node_score(
     pitch: f32,
     node: &ResourceNodeState,
 ) -> Option<f32> {
+    let anchor = resource_node_anchor(node);
+    let to_node = anchor.minus(eye);
+    // Cheap distance cull before the trig in `look_forward` and the definition
+    // lookup. Uses a conservative upper bound on ray_radius so it never rejects
+    // a candidate the actual ray test would accept.
+    let max_reach_sq = (RESOURCE_GATHER_RANGE + MAX_RESOURCE_RAY_RADIUS).powi(2);
+    if to_node.length_squared() > max_reach_sq {
+        return None;
+    }
+
     let forward = look_forward(yaw, pitch);
     if forward.length_squared() <= f32::EPSILON {
         return None;
     }
-
-    let anchor = resource_node_anchor(node);
-    let to_node = anchor.minus(eye);
     let projection = to_node.dot(forward);
     if !(0.0..=RESOURCE_GATHER_RANGE).contains(&projection) {
         return None;
