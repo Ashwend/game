@@ -258,42 +258,6 @@ impl LowPolyMeshBuilder {
         }
     }
 
-    pub(crate) fn add_crystal_cluster(
-        &mut self,
-        centre: [f32; 3],
-        scale: [f32; 3],
-        body: MeshColor,
-        highlight: MeshColor,
-    ) {
-        let prongs: &[([f32; 3], [f32; 3], MeshColor)] = &[
-            ([0.0, 0.0, 0.0], [0.0, 1.4, 0.0], body),
-            ([0.6, -0.05, 0.1], [0.5, 1.1, 0.2], highlight),
-            ([-0.55, -0.06, -0.1], [-0.55, 1.05, -0.1], body),
-            ([0.18, -0.04, -0.55], [0.18, 1.0, -0.55], highlight),
-        ];
-        for (base, apex, color) in prongs {
-            let bx = centre[0] + base[0] * scale[0];
-            let by = centre[1] + base[1] * scale[1];
-            let bz = centre[2] + base[2] * scale[2];
-            let ax = centre[0] + apex[0] * scale[0] * 0.55;
-            let ay = centre[1] + apex[1] * scale[1];
-            let az = centre[2] + apex[2] * scale[2] * 0.55;
-            let half = (scale[0] + scale[2]) * 0.12;
-            let origin = [(bx + ax) * 0.5, (by + ay) * 0.5, (bz + az) * 0.5];
-            let ring = [
-                [bx - half, by, bz],
-                [bx, by, bz + half],
-                [bx + half, by, bz],
-                [bx, by, bz - half],
-            ];
-            let apex_point = [ax, ay, az];
-            for index in 0..4 {
-                let next = (index + 1) % 4;
-                self.push_triangle_away_from(origin, apex_point, ring[index], ring[next], *color);
-            }
-        }
-    }
-
     pub(crate) fn add_octa_rock(&mut self, center: [f32; 3], scale: [f32; 3], color: MeshColor) {
         let [cx, cy, cz] = center;
         let [sx, sy, sz] = scale;

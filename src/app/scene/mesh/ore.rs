@@ -8,13 +8,6 @@ pub(crate) struct OreNodeStyle {
     pub(crate) accent_color: MeshColor,
     pub(crate) chunk_color: MeshColor,
     pub(crate) chunk_highlight: MeshColor,
-    pub(crate) chunk_shape: OreChunkShape,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum OreChunkShape {
-    Boulder,
-    Crystal,
 }
 
 pub(crate) const COAL_ORE: OreNodeStyle = OreNodeStyle {
@@ -22,7 +15,6 @@ pub(crate) const COAL_ORE: OreNodeStyle = OreNodeStyle {
     accent_color: [0.18, 0.19, 0.20, 1.0],
     chunk_color: [0.05, 0.05, 0.06, 1.0],
     chunk_highlight: [0.12, 0.12, 0.13, 1.0],
-    chunk_shape: OreChunkShape::Boulder,
 };
 
 pub(crate) const IRON_ORE: OreNodeStyle = OreNodeStyle {
@@ -30,7 +22,6 @@ pub(crate) const IRON_ORE: OreNodeStyle = OreNodeStyle {
     accent_color: [0.40, 0.38, 0.34, 1.0],
     chunk_color: [0.62, 0.30, 0.18, 1.0],
     chunk_highlight: [0.78, 0.42, 0.24, 1.0],
-    chunk_shape: OreChunkShape::Boulder,
 };
 
 pub(crate) const SULFUR_ORE: OreNodeStyle = OreNodeStyle {
@@ -38,7 +29,6 @@ pub(crate) const SULFUR_ORE: OreNodeStyle = OreNodeStyle {
     accent_color: [0.36, 0.34, 0.30, 1.0],
     chunk_color: [0.96, 0.80, 0.18, 1.0],
     chunk_highlight: [1.00, 0.92, 0.36, 1.0],
-    chunk_shape: OreChunkShape::Crystal,
 };
 
 pub(crate) fn low_poly_ore_node_mesh(style: OreNodeStyle) -> Mesh {
@@ -54,32 +44,32 @@ pub(crate) fn low_poly_ore_node_mesh(style: OreNodeStyle) -> Mesh {
 }
 
 fn add_ore_chunks(builder: &mut LowPolyMeshBuilder, style: OreNodeStyle) {
+    // Each chunk is positioned over one of the mound's high spots — the
+    // central peak (y≈0.58) or one of the three flanking stones (peaks
+    // around y=0.30–0.43) — with the centre tuned to sink under the local
+    // surface so the visible portion pokes out by a similar amount on
+    // every chunk. Without that, chunks placed over a slope used to look
+    // like they were floating in mid-air.
     let placements: &[([f32; 3], [f32; 3])] = &[
-        ([0.06, 0.46, 0.08], [0.16, 0.18, 0.16]),
-        ([-0.22, 0.32, -0.06], [0.12, 0.13, 0.11]),
-        ([0.28, 0.30, 0.16], [0.13, 0.14, 0.12]),
-        ([-0.18, 0.20, 0.34], [0.10, 0.12, 0.10]),
-        ([0.22, 0.18, -0.30], [0.11, 0.13, 0.11]),
-        ([-0.04, 0.10, 0.38], [0.09, 0.10, 0.09]),
+        // Main outcrop on the central peak.
+        ([0.04, 0.42, -0.04], [0.17, 0.18, 0.16]),
+        // Smaller chunk on the upper front-right shoulder of the central mound.
+        ([0.20, 0.30, 0.10], [0.12, 0.13, 0.12]),
+        // Sitting on the back-left flanking stone's peak (~(-0.30, 0.43, 0.17)).
+        ([-0.28, 0.30, 0.18], [0.13, 0.14, 0.13]),
+        // Sitting on the front-right flanking stone's peak (~(0.39, 0.36, -0.13)).
+        ([0.34, 0.22, -0.10], [0.11, 0.12, 0.11]),
+        // Sitting on the back flanking stone's peak (~(0.05, 0.30, -0.39)).
+        ([0.05, 0.18, -0.34], [0.10, 0.11, 0.10]),
+        // Filler on the left slope between the central mound and stone 2.
+        ([-0.18, 0.22, 0.04], [0.10, 0.11, 0.10]),
     ];
     for (centre, scale) in placements {
-        match style.chunk_shape {
-            OreChunkShape::Boulder => {
-                builder.add_octa_rock(*centre, *scale, style.chunk_color);
-                builder.add_octa_rock(
-                    [centre[0], centre[1] + scale[1] * 0.55, centre[2]],
-                    [scale[0] * 0.45, scale[1] * 0.35, scale[2] * 0.45],
-                    style.chunk_highlight,
-                );
-            }
-            OreChunkShape::Crystal => {
-                builder.add_crystal_cluster(
-                    *centre,
-                    *scale,
-                    style.chunk_color,
-                    style.chunk_highlight,
-                );
-            }
-        }
+        builder.add_octa_rock(*centre, *scale, style.chunk_color);
+        builder.add_octa_rock(
+            [centre[0], centre[1] + scale[1] * 0.55, centre[2]],
+            [scale[0] * 0.45, scale[1] * 0.35, scale[2] * 0.45],
+            style.chunk_highlight,
+        );
     }
 }
