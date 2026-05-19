@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::{
     app, net,
-    save::{WorldSave, WorldStore, save_world_file},
+    save::{WorldSave, WorldStore, load_world_file, save_world_file},
     steam::{AuthMode, OfflineSteamBackend, SteamBackend},
 };
 
@@ -99,10 +99,8 @@ pub fn run() -> Result<()> {
 fn load_server_world(path: Option<PathBuf>) -> Result<ServerWorld> {
     if let Some(path) = path {
         let save = if path.exists() {
-            let json = std::fs::read_to_string(&path)
-                .with_context(|| format!("could not read world save {}", path.display()))?;
-            serde_json::from_str(&json)
-                .with_context(|| format!("could not parse world save {}", path.display()))?
+            load_world_file(&path)
+                .with_context(|| format!("could not load world save {}", path.display()))?
         } else {
             let save = WorldSave::new("Dedicated File", None);
             save_world_file(&path, &save)?;

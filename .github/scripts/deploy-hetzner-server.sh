@@ -32,7 +32,7 @@ release_dir="${install_dir}/releases/${version}"
 current_link="${install_dir}/current"
 data_dir="${install_dir}/data"
 admin_socket="/run/${service_name}/admin.sock"
-world_path="${data_dir}/world.json"
+world_path="${data_dir}/world.save"
 unit_path="/etc/systemd/system/${service_name}.service"
 shutdown_reason="Server is updating to ${version}. Please download the latest client before reconnecting."
 
