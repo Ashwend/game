@@ -2,10 +2,13 @@ use bevy::prelude::*;
 
 use crate::{
     app::{
-        state::{ClientRuntime, MenuState, NoticeDialog, Screen, SessionShutdownTasks, ToastState},
+        state::{
+            ClientRuntime, ImpactEffectKind, MenuState, NoticeDialog, RemoteImpactEvent, Screen,
+            SessionShutdownTasks, ToastState,
+        },
         ui::ButtonSoundRequests,
     },
-    protocol::ServerMessage,
+    protocol::{ResourceImpactKind, ServerMessage, Vec3Net},
 };
 
 pub(crate) fn network_tick_system(
@@ -14,6 +17,7 @@ pub(crate) fn network_tick_system(
     mut menu: ResMut<MenuState>,
     mut button_sound_requests: ResMut<ButtonSoundRequests>,
     mut toasts: ResMut<ToastState>,
+    mut remote_impacts: MessageWriter<RemoteImpactEvent>,
 ) {
     toasts.tick(time.delta_secs());
 
@@ -48,8 +52,34 @@ pub(crate) fn network_tick_system(
         if let ServerMessage::Toast(payload) = &message {
             toasts.push_message(payload.clone());
         }
+        if let ServerMessage::ResourceImpact { position, kind } = &message {
+            remote_impacts.write(remote_impact_event(*position, *kind));
+        }
         runtime.apply_message(message);
     }
+}
+
+fn remote_impact_event(position: Vec3Net, kind: ResourceImpactKind) -> RemoteImpactEvent {
+    RemoteImpactEvent {
+        anchor: Vec3::new(position.x, position.y, position.z),
+        kind: match kind {
+            ResourceImpactKind::Tree => ImpactEffectKind::WoodChips,
+            ResourceImpactKind::OreNode => ImpactEffectKind::StoneShards,
+        },
+        // Remote impacts have no client-side swing seed; pick something
+        // stable per-event so the chip burst is deterministic but varies
+        // between consecutive hits.
+        seed: position_seed(position),
+    }
+}
+
+fn position_seed(position: Vec3Net) -> u32 {
+    let x = position.x.to_bits();
+    let y = position.y.to_bits();
+    let z = position.z.to_bits();
+    x.wrapping_mul(0x9E3779B1)
+        .wrapping_add(y.wrapping_mul(0x85EBCA77))
+        .wrapping_add(z.wrapping_mul(0xC2B2AE3D))
 }
 
 fn show_kick_notice(menu: &mut MenuState, reason: String) {

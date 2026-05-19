@@ -11,7 +11,7 @@ steam = ["lightyear/steam"]
 
 [dependencies]
 anyhow = "1.0.102"
-bevy = { version = "0.18.1", features = ["wav"] }
+bevy = { version = "0.18.1", features = ["mp3", "wav"] }
 bevy_egui = "0.39.1"
 clap = { version = "4.6.1", features = ["derive"] }
 directories = "6.0.0"

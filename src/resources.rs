@@ -7,18 +7,15 @@ use crate::{
 pub const COAL_NODE_ID: &str = "coal_node";
 pub const IRON_NODE_ID: &str = "iron_node";
 pub const SULFUR_NODE_ID: &str = "sulfur_node";
-// Tree IDs: the un-suffixed names (`pine_tree`, `birch_tree`, `dead_tree`)
-// are the medium variants. Old saves that referenced these IDs before
-// size variants existed continue to load as medium without migration.
+// Tree IDs: the un-suffixed names (`pine_tree`, `birch_tree`) are the
+// medium variants. Old saves that referenced these IDs before size
+// variants existed continue to load as medium without migration.
 pub const PINE_TREE_SMALL_NODE_ID: &str = "pine_tree_small";
 pub const PINE_TREE_NODE_ID: &str = "pine_tree";
 pub const PINE_TREE_LARGE_NODE_ID: &str = "pine_tree_large";
 pub const BIRCH_TREE_SMALL_NODE_ID: &str = "birch_tree_small";
 pub const BIRCH_TREE_NODE_ID: &str = "birch_tree";
 pub const BIRCH_TREE_LARGE_NODE_ID: &str = "birch_tree_large";
-pub const DEAD_TREE_SMALL_NODE_ID: &str = "dead_tree_small";
-pub const DEAD_TREE_NODE_ID: &str = "dead_tree";
-pub const DEAD_TREE_LARGE_NODE_ID: &str = "dead_tree_large";
 
 pub const RESOURCE_GATHER_RANGE: f32 = 3.75;
 const DEFAULT_RESOURCE_RAY_RADIUS: f32 = 0.7;
@@ -38,9 +35,6 @@ pub enum ResourceNodeModel {
     BirchTreeSmall,
     BirchTreeMedium,
     BirchTreeLarge,
-    DeadTreeSmall,
-    DeadTreeMedium,
-    DeadTreeLarge,
 }
 
 impl ResourceNodeModel {
@@ -53,9 +47,6 @@ impl ResourceNodeModel {
                 | Self::BirchTreeSmall
                 | Self::BirchTreeMedium
                 | Self::BirchTreeLarge
-                | Self::DeadTreeSmall
-                | Self::DeadTreeMedium
-                | Self::DeadTreeLarge
         )
     }
 
@@ -188,33 +179,6 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         storage: &[ResourceMaterial::new(WOOD_ID, 48)],
         anchor_height: 1.50,
         ray_radius: 0.98,
-    },
-    ResourceNodeDefinition {
-        id: DEAD_TREE_SMALL_NODE_ID,
-        name: "Dead Snag",
-        model: ResourceNodeModel::DeadTreeSmall,
-        required_tool: ToolRequirement::new(ToolKind::Axe, 1),
-        storage: &[ResourceMaterial::new(WOOD_ID, 10)],
-        anchor_height: 1.20,
-        ray_radius: 0.66,
-    },
-    ResourceNodeDefinition {
-        id: DEAD_TREE_NODE_ID,
-        name: "Dead Tree",
-        model: ResourceNodeModel::DeadTreeMedium,
-        required_tool: ToolRequirement::new(ToolKind::Axe, 1),
-        storage: &[ResourceMaterial::new(WOOD_ID, 18)],
-        anchor_height: 1.35,
-        ray_radius: 0.78,
-    },
-    ResourceNodeDefinition {
-        id: DEAD_TREE_LARGE_NODE_ID,
-        name: "Ancient Dead Tree",
-        model: ResourceNodeModel::DeadTreeLarge,
-        required_tool: ToolRequirement::new(ToolKind::Axe, 1),
-        storage: &[ResourceMaterial::new(WOOD_ID, 32)],
-        anchor_height: 1.45,
-        ray_radius: 0.92,
     },
 ];
 
@@ -353,10 +317,7 @@ pub fn resource_node_collider(node: &ResourceNodeState) -> Option<WorldBlock> {
         | ResourceNodeModel::PineTreeLarge
         | ResourceNodeModel::BirchTreeSmall
         | ResourceNodeModel::BirchTreeMedium
-        | ResourceNodeModel::BirchTreeLarge
-        | ResourceNodeModel::DeadTreeSmall
-        | ResourceNodeModel::DeadTreeMedium
-        | ResourceNodeModel::DeadTreeLarge => Some(tree_collider_block(node, definition.model)),
+        | ResourceNodeModel::BirchTreeLarge => Some(tree_collider_block(node, definition.model)),
         ResourceNodeModel::CoalOre | ResourceNodeModel::IronOre | ResourceNodeModel::SulfurOre => {
             Some(ore_collider_block(node))
         }
@@ -371,9 +332,6 @@ fn tree_collider_block(node: &ResourceNodeState, model: ResourceNodeModel) -> Wo
         ResourceNodeModel::BirchTreeSmall => 0.24,
         ResourceNodeModel::BirchTreeMedium => 0.28,
         ResourceNodeModel::BirchTreeLarge => 0.34,
-        ResourceNodeModel::DeadTreeSmall => 0.30,
-        ResourceNodeModel::DeadTreeMedium => 0.34,
-        ResourceNodeModel::DeadTreeLarge => 0.44,
         _ => unreachable!("tree_collider_block called with non-tree model"),
     };
     let half_height = 1.5;

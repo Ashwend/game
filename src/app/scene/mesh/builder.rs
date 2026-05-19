@@ -22,8 +22,6 @@ pub(crate) const BIRCH_BARK: MeshColor = [0.85, 0.82, 0.74, 1.0];
 pub(crate) const BIRCH_BARK_BAND: MeshColor = [0.18, 0.16, 0.14, 1.0];
 pub(crate) const BARK_DARK: MeshColor = [0.20, 0.13, 0.06, 1.0];
 pub(crate) const BARK_MID: MeshColor = [0.32, 0.20, 0.11, 1.0];
-pub(crate) const DEAD_WOOD: MeshColor = [0.44, 0.34, 0.22, 1.0];
-pub(crate) const DEAD_WOOD_DARK: MeshColor = [0.24, 0.17, 0.10, 1.0];
 
 #[derive(Default)]
 pub(crate) struct LowPolyMeshBuilder {

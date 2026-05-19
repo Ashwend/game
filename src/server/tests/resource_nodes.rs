@@ -154,6 +154,73 @@ fn failed_gather_emits_no_toast() {
 }
 
 #[test]
+fn successful_gather_broadcasts_impact_to_peers_only() {
+    use crate::protocol::{ResourceImpactKind, ServerMessage};
+
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    server.resource_nodes.clear();
+    server.resource_nodes.insert(99, coal_node(99, 5));
+    look_at_test_node(&mut server, client_id);
+    server.receive(
+        client_id,
+        ClientMessage::Inventory(InventoryCommand::SelectActionbarSlot { slot: 1 }),
+    );
+
+    let envelopes = server.receive(
+        client_id,
+        ClientMessage::Gather(ResourceGatherCommand {
+            resource_node_id: 99,
+        }),
+    );
+
+    let (target, position, kind) = envelopes
+        .iter()
+        .find_map(|envelope| match &envelope.message {
+            ServerMessage::ResourceImpact { position, kind } => {
+                Some((envelope.target.clone(), *position, *kind))
+            }
+            _ => None,
+        })
+        .expect("server should emit a ResourceImpact envelope on successful gather");
+
+    assert_eq!(
+        target,
+        super::DeliveryTarget::BroadcastExcept(client_id),
+        "the swinger's client already played the impact locally; the echo \
+         must skip them",
+    );
+    assert_eq!(kind, ResourceImpactKind::OreNode);
+    assert_eq!(position, Vec3Net::new(0.0, 0.0, -2.2));
+}
+
+#[test]
+fn failed_gather_emits_no_impact_broadcast() {
+    use crate::protocol::ServerMessage;
+
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    server.resource_nodes.clear();
+    server.resource_nodes.insert(99, coal_node(99, 5));
+    look_at_test_node(&mut server, client_id);
+    // Still holding the hatchet at slot 0 — wrong tool for coal.
+
+    let envelopes = server.receive(
+        client_id,
+        ClientMessage::Gather(ResourceGatherCommand {
+            resource_node_id: 99,
+        }),
+    );
+
+    assert!(
+        !envelopes
+            .iter()
+            .any(|envelope| matches!(envelope.message, ServerMessage::ResourceImpact { .. })),
+        "rejected gather must not broadcast an impact effect to peers",
+    );
+}
+
+#[test]
 fn resource_gathering_requires_matching_tool_and_server_cooldown() {
     let mut server = server();
     let client_id = connect_host(&mut server);

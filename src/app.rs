@@ -19,8 +19,8 @@ use self::{
     scene::{apply_world_scene_system, setup_scene},
     state::{
         ClientRuntime, ClientSettingsStore, GatherInputState, InventoryUiState, LookState,
-        MenuBackdropVisibility, MenuState, PickupTargetState, SaveStore, SessionShutdownTasks,
-        SteamUser, ToastState, ToolSwapState,
+        MenuBackdropVisibility, MenuState, PickupTargetState, RemoteImpactEvent, SaveStore,
+        SessionShutdownTasks, SteamUser, ToastState, ToolSwapState,
     },
     systems::{
         CameraImpactKick, ClientSystemSet, DroppedItemEntities, RemotePlayerEntities,
@@ -29,10 +29,11 @@ use self::{
         apply_snapshot_system, camera_follow_system, center_cursor_on_focus_system,
         chat_shortcut_system, client_input_system, gameplay_inventory_shortcuts_system,
         main_menu_music_system, menu_backdrop_camera_system, mouse_look_system,
-        network_tick_system, save_client_settings_system, session_shutdown_poll_system,
-        spawn_impact_effects_system, tick_felling_trees_system, tick_impact_chips_system,
-        toggle_inventory_system, toggle_pause_system, update_cursor_system,
-        update_pickup_target_system, update_tool_swap_state_system,
+        network_tick_system, play_impact_sounds_system, save_client_settings_system,
+        session_shutdown_poll_system, setup_impact_sound_assets, spawn_impact_effects_system,
+        tick_felling_trees_system, tick_impact_chips_system, toggle_inventory_system,
+        toggle_pause_system, update_cursor_system, update_pickup_target_system,
+        update_tool_swap_state_system,
     },
     ui::{ButtonSoundRequests, button_sound_system, setup_button_sound_assets, ui_system},
 };
@@ -82,6 +83,7 @@ pub fn run_app() -> Result<()> {
         // animation is on-screen.
         .insert_resource(WinitSettings::continuous())
         .init_resource::<ButtonSoundRequests>()
+        .add_message::<RemoteImpactEvent>()
         .add_plugins(
             DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
@@ -135,6 +137,10 @@ pub fn run_app() -> Result<()> {
             Update,
             (
                 ClientSystemSet::PickupTarget,
+                // Sound peeks the local pending impact before
+                // `ImpactEffectsSpawn` takes (and clears) it, so the cue
+                // plays even if the visual system runs in the same frame.
+                ClientSystemSet::ImpactSounds,
                 ClientSystemSet::ImpactEffectsSpawn,
                 ClientSystemSet::ImpactEffectsTick,
                 ClientSystemSet::NodeDeathTick,
@@ -165,6 +171,7 @@ pub fn run_app() -> Result<()> {
         )
         .add_systems(Startup, setup_scene)
         .add_systems(Startup, setup_button_sound_assets)
+        .add_systems(Startup, setup_impact_sound_assets)
         .add_systems(
             EguiPrimaryContextPass,
             (ui_system, button_sound_system).chain(),
@@ -241,6 +248,10 @@ pub fn run_app() -> Result<()> {
         .add_systems(
             Update,
             update_pickup_target_system.in_set(ClientSystemSet::PickupTarget),
+        )
+        .add_systems(
+            Update,
+            play_impact_sounds_system.in_set(ClientSystemSet::ImpactSounds),
         )
         .add_systems(
             Update,

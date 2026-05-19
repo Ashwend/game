@@ -269,6 +269,11 @@ impl ClientRuntime {
                 // tick system so they reach the UI without touching client
                 // log history. `apply_message` is intentionally a no-op here.
             }
+            ServerMessage::ResourceImpact { .. } => {
+                // Fanned out to `RemoteImpactEvent` by the network tick
+                // system before reaching runtime state — no log/history
+                // side-effect here.
+            }
             ServerMessage::Heartbeat => {}
         }
     }

@@ -85,6 +85,7 @@ mod tests {
             audio: AudioSettings {
                 music_volume: 2.0,
                 ui_volume: -1.0,
+                sfx_volume: 5.0,
             },
             input: InputSettings {
                 mouse_sensitivity: 20.0,
@@ -100,6 +101,7 @@ mod tests {
         );
         assert_eq!(settings.audio.music_volume, 1.0);
         assert_eq!(settings.audio.ui_volume, 0.0);
+        assert_eq!(settings.audio.sfx_volume, 1.0);
         assert_eq!(settings.input.mouse_sensitivity, 3.0);
     }
 

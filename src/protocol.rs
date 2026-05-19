@@ -6,7 +6,7 @@ use crate::world::{MapType, WorldData};
 pub type ClientId = u64;
 pub type SteamId = u64;
 
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_CHAT_LEN: usize = 240;
@@ -292,7 +292,24 @@ pub enum ServerMessage {
         quantity: u16,
     },
     Toast(ToastMessage),
+    /// A remote player landed a successful gather hit. The server sends this
+    /// to every client except the swinger (whose client already triggered
+    /// the impact locally via prediction) so all nearby players hear and
+    /// see the same hit feedback. Position is the gathered node's center
+    /// so spatial audio attenuates naturally with distance.
+    ResourceImpact {
+        position: Vec3Net,
+        kind: ResourceImpactKind,
+    },
     Heartbeat,
+}
+
+/// Which class of resource a `ResourceImpact` was produced on. Trees play
+/// the hatchet/wood cue; ore nodes play the pickaxe/stone cue.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ResourceImpactKind {
+    Tree,
+    OreNode,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -328,7 +345,13 @@ impl ServerMessage {
             | Self::Chat(_)
             | Self::ItemMerged { .. }
             | Self::Toast(_) => PacketDelivery::Reliable,
-            Self::Snapshot(_) | Self::Correction(_) | Self::Heartbeat => PacketDelivery::Unreliable,
+            // Impact effects are pure cosmetic feedback. Dropping one is
+            // far less bad than the extra latency of a reliable resend,
+            // and the next swing will queue another regardless.
+            Self::Snapshot(_)
+            | Self::Correction(_)
+            | Self::ResourceImpact { .. }
+            | Self::Heartbeat => PacketDelivery::Unreliable,
         }
     }
 }

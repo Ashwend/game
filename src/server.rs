@@ -40,6 +40,11 @@ pub struct ServerSettings {
 pub enum DeliveryTarget {
     Client(ClientId),
     Broadcast,
+    /// Send to every connected client except the named one. Used for
+    /// "echo to peers" payloads (e.g. impact effects) where the originating
+    /// client already produced the effect locally via prediction and a
+    /// second copy from the server would double-trigger it.
+    BroadcastExcept(ClientId),
 }
 
 #[derive(Debug, Clone, PartialEq)]

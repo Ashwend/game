@@ -1,4 +1,5 @@
 use bevy::{
+    audio::SpatialListener,
     post_process::dof::{DepthOfField, DepthOfFieldMode},
     prelude::*,
 };
@@ -8,10 +9,9 @@ use super::{
     mesh::{
         COAL_ORE, IRON_ORE, SULFUR_ORE, impact_stone_shard_mesh, impact_wood_chip_mesh,
         low_poly_bag_mesh, low_poly_birch_tree_large_mesh, low_poly_birch_tree_medium_mesh,
-        low_poly_birch_tree_small_mesh, low_poly_dead_tree_large_mesh,
-        low_poly_dead_tree_medium_mesh, low_poly_dead_tree_small_mesh, low_poly_hatchet_mesh,
-        low_poly_ore_node_mesh, low_poly_pickaxe_mesh, low_poly_pine_tree_large_mesh,
-        low_poly_pine_tree_medium_mesh, low_poly_pine_tree_small_mesh,
+        low_poly_birch_tree_small_mesh, low_poly_hatchet_mesh, low_poly_ore_node_mesh,
+        low_poly_pickaxe_mesh, low_poly_pine_tree_large_mesh, low_poly_pine_tree_medium_mesh,
+        low_poly_pine_tree_small_mesh,
     },
 };
 
@@ -51,9 +51,6 @@ pub(crate) struct ResourceVisualAssets {
     pub(crate) birch_tree_small_mesh: Handle<Mesh>,
     pub(crate) birch_tree_medium_mesh: Handle<Mesh>,
     pub(crate) birch_tree_large_mesh: Handle<Mesh>,
-    pub(crate) dead_tree_small_mesh: Handle<Mesh>,
-    pub(crate) dead_tree_medium_mesh: Handle<Mesh>,
-    pub(crate) dead_tree_large_mesh: Handle<Mesh>,
     pub(crate) coal_material: Handle<StandardMaterial>,
     pub(crate) iron_material: Handle<StandardMaterial>,
     pub(crate) sulfur_material: Handle<StandardMaterial>,
@@ -93,6 +90,10 @@ pub(crate) fn setup_scene(
         }),
         Msaa::Off,
         menu_backdrop_depth_of_field(),
+        // ~17cm between ears — keeps L/R panning natural for nearby spatial
+        // sound sources. Bevy's default (4.0) is tuned for huge open worlds
+        // and exaggerates panning at first-person ranges.
+        SpatialListener::new(0.17),
         Transform::from_xyz(0.0, EYE_HEIGHT, 3.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
@@ -142,9 +143,6 @@ pub(crate) fn setup_scene(
         birch_tree_small_mesh: meshes.add(low_poly_birch_tree_small_mesh()),
         birch_tree_medium_mesh: meshes.add(low_poly_birch_tree_medium_mesh()),
         birch_tree_large_mesh: meshes.add(low_poly_birch_tree_large_mesh()),
-        dead_tree_small_mesh: meshes.add(low_poly_dead_tree_small_mesh()),
-        dead_tree_medium_mesh: meshes.add(low_poly_dead_tree_medium_mesh()),
-        dead_tree_large_mesh: meshes.add(low_poly_dead_tree_large_mesh()),
         coal_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.98,

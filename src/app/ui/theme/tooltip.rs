@@ -1,4 +1,4 @@
-use bevy_egui::egui::{self, Color32, Frame, Margin, RichText, Stroke, vec2};
+use bevy_egui::egui::{self, Color32, Frame, Label, Margin, RichText, Stroke, vec2};
 
 use super::text;
 
@@ -50,14 +50,19 @@ fn draw_wow_tooltip(ui: &mut egui::Ui, title: &str, body: &str) {
         .inner_margin(Margin::symmetric(12, 10))
         .show(ui, |ui| {
             ui.set_max_width(260.0);
-            ui.label(
-                RichText::new(title)
-                    .size(14.0)
-                    .strong()
-                    .color(Color32::from_rgb(255, 214, 105)),
+            // Tooltips for world objects must not behave like selectable text;
+            // dragging across one shouldn't start a text selection.
+            ui.add(
+                Label::new(
+                    RichText::new(title)
+                        .size(14.0)
+                        .strong()
+                        .color(Color32::from_rgb(255, 214, 105)),
+                )
+                .selectable(false),
             );
             ui.add_space(4.0);
-            ui.label(RichText::new(body).size(13.0).color(text()));
+            ui.add(Label::new(RichText::new(body).size(13.0).color(text())).selectable(false));
         });
 }
 

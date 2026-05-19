@@ -47,9 +47,6 @@ pub(crate) fn tree_mesh_height(model: ResourceNodeModel) -> Option<f32> {
         ResourceNodeModel::BirchTreeSmall => Some(3.60),
         ResourceNodeModel::BirchTreeMedium => Some(5.30),
         ResourceNodeModel::BirchTreeLarge => Some(7.15),
-        ResourceNodeModel::DeadTreeSmall => Some(2.70),
-        ResourceNodeModel::DeadTreeMedium => Some(4.20),
-        ResourceNodeModel::DeadTreeLarge => Some(5.90),
         ResourceNodeModel::CoalOre | ResourceNodeModel::IronOre | ResourceNodeModel::SulfurOre => {
             None
         }

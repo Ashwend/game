@@ -25,6 +25,17 @@ pub(crate) struct PendingImpactEffect {
     pub(crate) seed: u32,
 }
 
+/// Impact a remote player produced on a tree or ore node. Written by the
+/// network tick when a `ServerMessage::ResourceImpact` arrives so the
+/// audio and visual effect systems can render the same hit feedback we
+/// produce locally — minus the camera kick, which belongs to the swinger.
+#[derive(Message, Debug, Clone, Copy)]
+pub(crate) struct RemoteImpactEvent {
+    pub(crate) anchor: Vec3,
+    pub(crate) kind: ImpactEffectKind,
+    pub(crate) seed: u32,
+}
+
 pub(crate) fn swing_duration_seconds(tool: ToolKind) -> f32 {
     match tool {
         ToolKind::Axe => AXE_SWING_SECONDS,
@@ -291,6 +302,14 @@ impl GatherInputState {
 
     pub(crate) fn take_pending_impact(&mut self) -> Option<PendingImpactEffect> {
         self.pending_impact.take()
+    }
+
+    /// Inspect the pending impact without clearing it. Used by the sound
+    /// system so it can spawn an audio cue alongside the visual chips that
+    /// the effects system spawns when it takes the impact later in the same
+    /// frame.
+    pub(crate) fn peek_pending_impact(&self) -> Option<&PendingImpactEffect> {
+        self.pending_impact.as_ref()
     }
 
     pub(crate) fn current_swing_seed(&self) -> u32 {

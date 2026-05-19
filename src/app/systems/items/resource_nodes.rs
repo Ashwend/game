@@ -123,10 +123,7 @@ pub(super) fn resource_node_transform(
         | ResourceNodeModel::PineTreeLarge
         | ResourceNodeModel::BirchTreeSmall
         | ResourceNodeModel::BirchTreeMedium
-        | ResourceNodeModel::BirchTreeLarge
-        | ResourceNodeModel::DeadTreeSmall
-        | ResourceNodeModel::DeadTreeMedium
-        | ResourceNodeModel::DeadTreeLarge => (0.0, Vec3::ONE),
+        | ResourceNodeModel::BirchTreeLarge => (0.0, Vec3::ONE),
     };
     Transform::from_xyz(
         node.position.x,
@@ -171,18 +168,6 @@ fn resource_node_visual(
         ),
         ResourceNodeModel::BirchTreeLarge => (
             assets.birch_tree_large_mesh.clone(),
-            assets.vertex_material.clone(),
-        ),
-        ResourceNodeModel::DeadTreeSmall => (
-            assets.dead_tree_small_mesh.clone(),
-            assets.vertex_material.clone(),
-        ),
-        ResourceNodeModel::DeadTreeMedium => (
-            assets.dead_tree_medium_mesh.clone(),
-            assets.vertex_material.clone(),
-        ),
-        ResourceNodeModel::DeadTreeLarge => (
-            assets.dead_tree_large_mesh.clone(),
             assets.vertex_material.clone(),
         ),
     }

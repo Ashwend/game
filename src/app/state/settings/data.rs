@@ -23,6 +23,7 @@ impl ClientSettings {
         self.display.resolution = self.display.resolution.sanitized();
         self.audio.music_volume = self.audio.music_volume.clamp(0.0, 1.0);
         self.audio.ui_volume = self.audio.ui_volume.clamp(0.0, 1.0);
+        self.audio.sfx_volume = self.audio.sfx_volume.clamp(0.0, 1.0);
         self.input.mouse_sensitivity = self.input.mouse_sensitivity.clamp(0.25, 3.0);
         self
     }
@@ -124,6 +125,8 @@ pub(crate) struct AudioSettings {
     pub(crate) music_volume: f32,
     #[serde(default = "default_volume")]
     pub(crate) ui_volume: f32,
+    #[serde(default = "default_volume")]
+    pub(crate) sfx_volume: f32,
 }
 
 impl Default for AudioSettings {
@@ -131,6 +134,7 @@ impl Default for AudioSettings {
         Self {
             music_volume: 1.0,
             ui_volume: 1.0,
+            sfx_volume: 1.0,
         }
     }
 }

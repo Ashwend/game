@@ -70,33 +70,50 @@ pub(crate) fn low_poly_pickaxe_mesh() -> Mesh {
     builder.add_box([0.0, -0.24, 0.0], [0.033, 0.022, 0.033], LEATHER_WRAP);
     builder.add_box([0.0, -0.12, 0.0], [0.033, 0.014, 0.033], LEATHER_WRAP);
     builder.add_box([0.0, 0.00, 0.0], [0.033, 0.014, 0.033], LEATHER_WRAP);
-    // Iron band binding the head.
+    // Iron band binding the head to the haft.
     builder.add_box([0.0, 0.20, 0.0], [0.040, 0.020, 0.054], IRON_BAND);
-    // Wooden head saddle that holds the stone pick.
+    // Wooden head saddle that the stone head is set into.
     builder.add_box([0.0, 0.24, 0.0], [0.038, 0.040, 0.058], WOOD_DARK);
-    // Stone cross bar.
-    builder.add_box([0.0, 0.26, 0.0], [0.080, 0.030, 0.044], STONE_DARK);
-    // Left pick spike — long tapered prong reaching out to the side.
+
+    // Stone head — central eye block sitting on the saddle. Wider than
+    // the saddle so the head reads as a distinct stone piece capping the
+    // handle rather than a continuation of the wood.
+    builder.add_box([0.0, 0.27, 0.0], [0.054, 0.030, 0.054], STONE_DARK);
+    // Top crown — bright stone that catches light along the upper face.
+    builder.add_box([0.0, 0.298, 0.0], [0.048, 0.012, 0.044], STONE_LIGHT);
+
+    // Forward pick — long tapered stone prong to a sharp point. The
+    // profile narrows in both height and depth so the spike reads as a
+    // real pick rather than a wedge.
     builder.add_quad_prism(
-        [[-0.36, 0.26], [-0.08, 0.30], [-0.08, 0.22], [-0.34, 0.24]],
+        [[0.054, 0.300], [0.22, 0.268], [0.22, 0.252], [0.054, 0.232]],
+        0.030,
+        STONE_LIGHT,
+    );
+    builder.add_tri_prism(
+        [[0.22, 0.268], [0.30, 0.262], [0.22, 0.252]],
+        0.017,
+        STONE_EDGE,
+    );
+
+    // Back tail — short blunt chisel counterweight opposite the pick.
+    // Kept stubby so the silhouette reads as asymmetric (pick + tail)
+    // rather than a double-headed rock hammer.
+    builder.add_quad_prism(
+        [
+            [-0.054, 0.300],
+            [-0.15, 0.286],
+            [-0.15, 0.234],
+            [-0.054, 0.232],
+        ],
         0.034,
         STONE_LIGHT,
     );
     builder.add_tri_prism(
-        [[-0.36, 0.26], [-0.42, 0.255], [-0.34, 0.24]],
-        0.020,
+        [[-0.15, 0.286], [-0.19, 0.262], [-0.15, 0.234]],
+        0.024,
         STONE_EDGE,
     );
-    // Right pick spike — mirror of the left.
-    builder.add_quad_prism(
-        [[0.08, 0.30], [0.36, 0.26], [0.34, 0.24], [0.08, 0.22]],
-        0.034,
-        STONE_LIGHT,
-    );
-    builder.add_tri_prism(
-        [[0.36, 0.26], [0.42, 0.255], [0.34, 0.24]],
-        0.020,
-        STONE_EDGE,
-    );
+
     builder.build()
 }

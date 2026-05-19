@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use super::super::{
     scene::ImpactEffectAssets,
-    state::{GatherInputState, ImpactEffectKind},
+    state::{GatherInputState, ImpactEffectKind, RemoteImpactEvent},
 };
 
 const IMPACT_GRAVITY: f32 = 5.4;
@@ -35,19 +35,33 @@ pub(crate) fn spawn_impact_effects_system(
     mut commands: Commands,
     assets: Res<ImpactEffectAssets>,
     mut gather_input: ResMut<GatherInputState>,
+    mut remote_impacts: MessageReader<RemoteImpactEvent>,
 ) {
-    let Some(impact) = gather_input.take_pending_impact() else {
-        return;
-    };
-    spawn_impact_burst(
-        &mut commands,
-        &assets,
-        impact.kind,
-        impact.anchor,
-        impact.spray_direction,
-        impact.seed,
-        1.0,
-    );
+    if let Some(impact) = gather_input.take_pending_impact() {
+        spawn_impact_burst(
+            &mut commands,
+            &assets,
+            impact.kind,
+            impact.anchor,
+            impact.spray_direction,
+            impact.seed,
+            1.0,
+        );
+    }
+    for event in remote_impacts.read() {
+        // Remote impacts have no view of which way the swinger was facing.
+        // An upward spray reads as a clean "hit landed here" without needing
+        // that information, and keeps the burst symmetric.
+        spawn_impact_burst(
+            &mut commands,
+            &assets,
+            event.kind,
+            event.anchor,
+            Vec3::Y,
+            event.seed,
+            1.0,
+        );
+    }
 }
 
 /// Spawn a radial shatter burst — the "rock cracked apart" effect we play

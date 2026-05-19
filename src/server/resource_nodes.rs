@@ -2,17 +2,21 @@ use std::collections::HashMap;
 
 use crate::{
     items::item_definition,
-    protocol::{ClientId, ItemStack, ResourceGatherCommand, ResourceNodeId, ResourceNodeState},
+    protocol::{
+        ClientId, ItemStack, ResourceGatherCommand, ResourceImpactKind, ResourceNodeId,
+        ResourceNodeState, ServerMessage,
+    },
     resources::{
-        can_gather_resource_node, next_resource_payout, remove_resource_from_storage,
-        resource_node_definition, resource_storage_is_empty, spawn_resource_node,
+        ResourceNodeModel, can_gather_resource_node, next_resource_payout,
+        remove_resource_from_storage, resource_node_definition, resource_storage_is_empty,
+        spawn_resource_node,
     },
     world::WorldData,
 };
 
 use super::{
-    GameServer, ServerEnvelope, inventory::add_stack_to_inventory, item_acquired_toast_envelopes,
-    movement::player_eye_position,
+    DeliveryTarget, GameServer, ServerEnvelope, inventory::add_stack_to_inventory,
+    item_acquired_toast_envelopes, movement::player_eye_position,
 };
 
 pub(super) fn initial_resource_nodes(
@@ -89,7 +93,26 @@ impl GameServer {
             }
         }
 
-        item_acquired_toast_envelopes(client_id, &payout_id, accepted_quantity)
+        let mut envelopes = item_acquired_toast_envelopes(client_id, &payout_id, accepted_quantity);
+        envelopes.push(ServerEnvelope {
+            // Skip the swinger — their client already played the impact via
+            // local prediction. Sending a second copy from the server would
+            // double-trigger both the sound and the chip burst.
+            target: DeliveryTarget::BroadcastExcept(client_id),
+            message: ServerMessage::ResourceImpact {
+                position: node.position,
+                kind: resource_impact_kind(node_definition.model),
+            },
+        });
+        envelopes
+    }
+}
+
+fn resource_impact_kind(model: ResourceNodeModel) -> ResourceImpactKind {
+    if model.is_tree() {
+        ResourceImpactKind::Tree
+    } else {
+        ResourceImpactKind::OreNode
     }
 }
 

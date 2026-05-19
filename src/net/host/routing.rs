@@ -69,6 +69,21 @@ pub(super) fn route_envelopes(
                     send_to_entity(senders, entity, envelope.message.clone());
                 }
             }
+            DeliveryTarget::BroadcastExcept(excluded_client_id) => {
+                let excluded_entity = connections
+                    .client_to_entity
+                    .get(&excluded_client_id)
+                    .copied();
+                let entities = connections
+                    .by_entity
+                    .keys()
+                    .copied()
+                    .filter(|entity| Some(*entity) != excluded_entity)
+                    .collect::<Vec<_>>();
+                for entity in entities {
+                    send_to_entity(senders, entity, envelope.message.clone());
+                }
+            }
         }
     }
 }
