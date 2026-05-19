@@ -73,7 +73,6 @@ impl ClientSession {
     }
 
     pub fn shutdown(&mut self, store: &WorldStore) -> Result<()> {
-        let _ = self.send(ClientMessage::Disconnect);
         match self {
             Self::Network(session) => session.shutdown(store)?,
         }
@@ -303,7 +302,27 @@ struct ClientHeartbeat {
 #[derive(Resource, Default)]
 struct ClientShutdown {
     requested: bool,
+    /// Update ticks that have elapsed since `requested` flipped to true.
+    /// `drive_shutdown` uses this to time the multi-phase graceful
+    /// disconnect (flush user message → netcode disconnect → flush UDP).
+    ticks_in_phase: u32,
+    /// True once `drive_shutdown` has triggered Lightyear's netcode
+    /// `Disconnect` event. After that point we are counting down ticks
+    /// to let the 10 netcode DISCONNECT packets reach the wire.
+    netcode_disconnect_issued: bool,
 }
+
+/// Update ticks to wait between queuing the app-level `Disconnect` message
+/// and triggering the netcode `Disconnect`. The reliable channel needs one
+/// PostUpdate to write the message into the UDP socket; the netcode layer
+/// stops accepting user packets the moment we call its `disconnect()`, so
+/// we must drain the user message first.
+const USER_DISCONNECT_FLUSH_TICKS: u32 = 2;
+
+/// Update ticks to wait after triggering the netcode `Disconnect` so the
+/// 10 redundant DISCONNECT packets can be drained from netcode's internal
+/// send queue into the UDP transport.
+const NETCODE_DISCONNECT_FLUSH_TICKS: u32 = 4;
 
 fn build_client_app(
     server_addr: SocketAddr,
@@ -359,6 +378,7 @@ fn build_client_app(
             send_client_messages,
             receive_server_messages,
             report_client_disconnect,
+            drive_shutdown,
         )
             .chain(),
     );
@@ -371,8 +391,19 @@ fn build_client_app(
 fn run_client_app(app: &mut App) {
     loop {
         app.update();
-        if app.world().resource::<ClientShutdown>().requested {
-            return;
+        {
+            let shutdown = app.world().resource::<ClientShutdown>();
+            // Only exit once the graceful disconnect has run to completion:
+            // netcode `Disconnect` must have been triggered AND enough ticks
+            // must have elapsed for the DISCONNECT packets to reach UDP.
+            // Otherwise the server will only learn about us leaving via the
+            // multi-second netcode connection timeout, which causes a fast
+            // reconnect to be rejected as "already connected".
+            if shutdown.netcode_disconnect_issued
+                && shutdown.ticks_in_phase >= NETCODE_DISCONNECT_FLUSH_TICKS
+            {
+                return;
+            }
         }
         thread::sleep(CLIENT_SLEEP);
     }
@@ -398,7 +429,16 @@ fn send_client_messages(
     for command in commands {
         match command {
             ClientCommand::Send(message) => pending.0.push_back(message),
-            ClientCommand::Shutdown => shutdown.requested = true,
+            ClientCommand::Shutdown => {
+                if !shutdown.requested {
+                    // Queue the app-level Disconnect so the server can clean
+                    // us up immediately on its message-handling path, in
+                    // addition to the netcode Disconnect that `drive_shutdown`
+                    // will issue a couple of ticks from now.
+                    pending.0.push_back(ClientMessage::Disconnect);
+                    shutdown.requested = true;
+                }
+            }
         }
     }
 
@@ -442,6 +482,42 @@ fn receive_server_messages(
                 return;
             }
         }
+    }
+}
+
+/// Drives the multi-phase graceful disconnect.
+///
+/// Phase 1 (ticks 0..USER_DISCONNECT_FLUSH_TICKS): after `Shutdown` has been
+/// requested we sit idle to let the reliable `ClientMessage::Disconnect`
+/// already queued in `send_client_messages` get drained through Lightyear's
+/// transport into UDP.
+///
+/// Phase 2 (after USER_DISCONNECT_FLUSH_TICKS): trigger Lightyear's netcode
+/// `Disconnect` on the client entity, which queues 10 redundant DISCONNECT
+/// packets and flips the netcode state to `Disconnected`. We then keep
+/// running update ticks (gated by `NETCODE_DISCONNECT_FLUSH_TICKS` in
+/// `run_client_app`) so PostUpdate's transport stage can flush those
+/// packets to the UDP socket before the thread exits.
+///
+/// Without this the server only sees the netcode connection time out
+/// (seconds later), so a fast reconnect would be rejected as "already
+/// connected".
+fn drive_shutdown(
+    mut commands: Commands,
+    mut shutdown: ResMut<ClientShutdown>,
+    clients: Query<Entity, With<client::Client>>,
+) {
+    if !shutdown.requested {
+        return;
+    }
+    shutdown.ticks_in_phase = shutdown.ticks_in_phase.saturating_add(1);
+    if !shutdown.netcode_disconnect_issued && shutdown.ticks_in_phase >= USER_DISCONNECT_FLUSH_TICKS
+    {
+        for entity in &clients {
+            commands.trigger(client::Disconnect { entity });
+        }
+        shutdown.netcode_disconnect_issued = true;
+        shutdown.ticks_in_phase = 0;
     }
 }
 
