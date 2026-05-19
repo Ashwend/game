@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    controller::PlayerController,
+    controller::{BlockGrid, PlayerController},
     items::{can_pick_up, normalize_stack, stack_limit},
     protocol::{
         ACTIONBAR_SLOT_COUNT, ChatMessage, ClientId, ClientMessage, DroppedItemId,
@@ -52,6 +52,12 @@ pub struct ServerEnvelope {
 pub struct GameServer {
     save: WorldSave,
     world: WorldData,
+    /// Spatial index over `world.blocks`. Built once at construction. Movement
+    /// is currently client-authoritative so the server doesn't simulate, but
+    /// the grid is here for the next time a server-side collision check (e.g.
+    /// drop validation, future server-authoritative movement) is wired in.
+    #[allow(dead_code)]
+    world_grid: BlockGrid,
     settings: ServerSettings,
     clients: HashMap<ClientId, ServerClient>,
     steam_to_client: HashMap<SteamId, ClientId>,
@@ -71,6 +77,7 @@ impl GameServer {
             save.admins.push(host);
         }
         let world = save.map.world_data();
+        let world_grid = BlockGrid::build(&world);
         let dropped_item_physics = DroppedItemPhysics::new(&world);
         let resource_nodes = resource_nodes::initial_resource_nodes(&world);
 
@@ -78,6 +85,7 @@ impl GameServer {
             tick: save.state.last_authoritative_tick,
             save,
             world,
+            world_grid,
             settings,
             clients: HashMap::new(),
             steam_to_client: HashMap::new(),
@@ -186,10 +194,17 @@ impl GameServer {
             ));
         }
 
-        envelopes.push(ServerEnvelope {
-            target: DeliveryTarget::Broadcast,
-            message: ServerMessage::Snapshot(self.snapshot()),
-        });
+        // Per-client snapshots: each client gets a copy where only their own
+        // player carries the inventory payload. Saves bandwidth and keeps
+        // hotbar contents private without needing a separate inventory
+        // message channel.
+        let client_ids = self.clients.keys().copied().collect::<Vec<_>>();
+        for client_id in client_ids {
+            envelopes.push(ServerEnvelope {
+                target: DeliveryTarget::Client(client_id),
+                message: ServerMessage::Snapshot(self.snapshot_for(client_id)),
+            });
+        }
         envelopes
     }
 
@@ -318,7 +333,9 @@ impl GameServer {
         }
     }
 
-    fn merge_nearby_dropped_items(&mut self) -> Vec<(String, u16)> {
+    fn merge_nearby_dropped_items(&mut self) -> Vec<(crate::items::ItemId, u16)> {
+        // Returns the interned `ItemId` (not a fresh `String`) so the
+        // resulting `ServerMessage::ItemMerged` doesn't allocate per merge.
         let mut merges = Vec::new();
         for (first_id, second_id) in nearby_dropped_item_pairs(&self.dropped_items) {
             if let Some(merge) = self.merge_dropped_item_pair(first_id, second_id) {
@@ -332,7 +349,7 @@ impl GameServer {
         &mut self,
         first_id: DroppedItemId,
         second_id: DroppedItemId,
-    ) -> Option<(String, u16)> {
+    ) -> Option<(crate::items::ItemId, u16)> {
         let (target_id, source_id) = self.merge_target_and_source(first_id, second_id)?;
         let mut source = self.dropped_items.remove(&source_id)?;
         let Some(target) = self.dropped_items.get_mut(&target_id) else {

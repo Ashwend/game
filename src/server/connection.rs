@@ -62,7 +62,7 @@ impl GameServer {
         self.clients.insert(client_id, client);
         self.steam_to_client.insert(steam_id, client_id);
 
-        let snapshot = self.snapshot();
+        let snapshot = self.snapshot_for(client_id);
         Ok((
             client_id,
             vec![
@@ -99,23 +99,43 @@ impl GameServer {
         }]
     }
 
+    /// Snapshot intended for `for_client` — only that client's player gets
+    /// their full inventory in the payload, peer entries leave it `None`.
+    pub fn snapshot_for(&self, for_client: ClientId) -> WorldSnapshot {
+        self.snapshot_inner(Some(for_client))
+    }
+
+    /// Snapshot with no inventories attached. Used for places that don't
+    /// belong to any specific client (tests, the initial broadcast slot
+    /// while a client is still in handshake, etc.).
     pub fn snapshot(&self) -> WorldSnapshot {
+        self.snapshot_inner(None)
+    }
+
+    fn snapshot_inner(&self, for_client: Option<ClientId>) -> WorldSnapshot {
         let mut players = self
             .clients
             .values()
-            .map(|client| PlayerState {
-                client_id: client.client_id,
-                steam_id: client.steam_id,
-                name: client.name.clone(),
-                position: client.controller.position,
-                velocity: client.controller.velocity,
-                yaw: client.controller.yaw,
-                pitch: client.controller.pitch,
-                health: client.controller.health,
-                grounded: client.controller.grounded,
-                last_processed_input: client.controller.last_processed_input,
-                is_admin: client.is_admin,
-                inventory: client.inventory.clone(),
+            .map(|client| {
+                let inventory = if Some(client.client_id) == for_client {
+                    Some(client.inventory.clone())
+                } else {
+                    None
+                };
+                PlayerState {
+                    client_id: client.client_id,
+                    steam_id: client.steam_id,
+                    name: client.name.clone(),
+                    position: client.controller.position,
+                    velocity: client.controller.velocity,
+                    yaw: client.controller.yaw,
+                    pitch: client.controller.pitch,
+                    health: client.controller.health,
+                    grounded: client.controller.grounded,
+                    last_processed_input: client.controller.last_processed_input,
+                    is_admin: client.is_admin,
+                    inventory,
+                }
             })
             .collect::<Vec<_>>();
         players.sort_by_key(|player| player.client_id);

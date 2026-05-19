@@ -121,17 +121,26 @@ impl ClientMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ItemStack {
-    pub item_id: String,
+    #[serde(deserialize_with = "deserialize_interned_item_id")]
+    pub item_id: crate::items::ItemId,
     pub quantity: u16,
 }
 
 impl ItemStack {
-    pub fn new(item_id: impl Into<String>, quantity: u16) -> Self {
+    pub fn new(item_id: impl AsRef<str>, quantity: u16) -> Self {
         Self {
-            item_id: item_id.into(),
+            item_id: crate::items::intern_item_id(item_id.as_ref()),
             quantity,
         }
     }
+}
+
+fn deserialize_interned_item_id<'de, D>(deserializer: D) -> Result<crate::items::ItemId, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = <String as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(crate::items::intern_item_id(&raw))
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -278,7 +287,8 @@ pub enum ServerMessage {
     Correction(PlayerState),
     Chat(ChatMessage),
     ItemMerged {
-        item_id: String,
+        #[serde(deserialize_with = "deserialize_interned_item_id")]
+        item_id: crate::items::ItemId,
         quantity: u16,
     },
     Heartbeat,
@@ -338,7 +348,17 @@ pub struct PlayerState {
     pub grounded: bool,
     pub last_processed_input: u64,
     pub is_admin: bool,
-    pub inventory: PlayerInventoryState,
+    /// Only populated for the receiving client. Peer entries omit the
+    /// inventory to keep snapshots small (49 slots × N players × 20 Hz
+    /// adds up fast) and to avoid leaking other players' contents.
+    #[serde(default)]
+    pub inventory: Option<PlayerInventoryState>,
+}
+
+impl PlayerState {
+    pub fn inventory(&self) -> Option<&PlayerInventoryState> {
+        self.inventory.as_ref()
+    }
 }
 
 pub fn sanitize_chat(text: &str) -> Option<String> {

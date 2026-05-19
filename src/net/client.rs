@@ -28,7 +28,10 @@ use crate::{
     steam::{AuthMode, AuthenticatedUser},
 };
 
-const CLIENT_SLEEP: Duration = Duration::from_millis(1);
+// 1ms polling was 1000Hz against a 20Hz server — 50× more wake-ups than
+// strictly necessary. 5ms still gives sub-snapshot latency for receive and
+// keeps CPU/battery cost down on the network thread.
+const CLIENT_SLEEP: Duration = Duration::from_millis(5);
 const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 const CLIENT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 

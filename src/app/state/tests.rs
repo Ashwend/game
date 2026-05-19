@@ -29,7 +29,7 @@ fn player_state(client_id: ClientId, position: Vec3Net) -> PlayerState {
         grounded: true,
         last_processed_input: 0,
         is_admin: false,
-        inventory: Default::default(),
+        inventory: None,
     }
 }
 

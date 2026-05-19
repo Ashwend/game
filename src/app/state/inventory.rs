@@ -156,7 +156,16 @@ pub(crate) struct PickupTargetState {
     pub(crate) resource_storage: Vec<ItemStack>,
     pub(crate) world_position: Option<Vec3Net>,
     pub(crate) screen_position: Option<Vec2>,
+    /// Seconds since the last full pickup-target scan. The scan is throttled
+    /// to ~33 ms (≈ 30 Hz) — that's well above the cadence a player can
+    /// react to a tooltip highlight and saves an O(N×M) sweep over every
+    /// dropped item and resource node every render frame.
+    pub(crate) elapsed_since_scan: f32,
 }
+
+/// Minimum interval between pickup-target scans. 33ms keeps the scan at
+/// roughly 30Hz regardless of frame rate.
+pub(crate) const PICKUP_TARGET_SCAN_INTERVAL_SECS: f32 = 0.033;
 
 impl PickupTargetState {
     pub(crate) fn clear(&mut self) {
@@ -339,6 +348,7 @@ mod tests {
             resource_storage: vec![ItemStack::new("wood", 2)],
             world_position: Some(Vec3Net::new(1.0, 2.0, 3.0)),
             screen_position: Some(Vec2::new(10.0, 20.0)),
+            elapsed_since_scan: 0.0,
         };
 
         state.clear();

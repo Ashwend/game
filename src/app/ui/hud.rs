@@ -155,7 +155,7 @@ mod tests {
             grounded: true,
             last_processed_input: 0,
             is_admin: false,
-            inventory: Default::default(),
+            inventory: None,
         }
     }
 

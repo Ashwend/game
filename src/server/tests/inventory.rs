@@ -3,17 +3,20 @@ use super::*;
 #[test]
 fn connect_seeds_authoritative_inventory_with_dummy_items() {
     let mut server = server();
-    connect_host(&mut server);
+    let client_id = connect_host(&mut server);
 
-    let snapshot = server.snapshot();
-    let inventory = &snapshot.players[0].inventory;
+    let snapshot = server.snapshot_for(client_id);
+    let inventory = snapshot.players[0]
+        .inventory
+        .as_ref()
+        .expect("host inventory should be present in its own snapshot");
 
     assert_eq!(inventory.inventory_slots.len(), 40);
     assert_eq!(inventory.actionbar_slots.len(), 9);
     assert_eq!(
         inventory.inventory_slots[0]
             .as_ref()
-            .map(|stack| stack.item_id.as_str()),
+            .map(|stack| stack.item_id.as_ref()),
         Some(TEST_ORE_ID)
     );
     assert_eq!(
@@ -26,7 +29,7 @@ fn connect_seeds_authoritative_inventory_with_dummy_items() {
     assert_eq!(
         inventory.inventory_slots[2]
             .as_ref()
-            .map(|stack| stack.item_id.as_str()),
+            .map(|stack| stack.item_id.as_ref()),
         Some(TEST_RELIC_ID)
     );
 }
@@ -45,8 +48,11 @@ fn inventory_move_splits_merges_and_populates_actionbar() {
         }),
     );
 
-    let snapshot = server.snapshot();
-    let inventory = &snapshot.players[0].inventory;
+    let snapshot = server.snapshot_for(client_id);
+    let inventory = snapshot.players[0]
+        .inventory
+        .as_ref()
+        .expect("host inventory should be present");
     assert_eq!(
         inventory.inventory_slots[0]
             .as_ref()
@@ -69,8 +75,11 @@ fn inventory_move_splits_merges_and_populates_actionbar() {
         }),
     );
 
-    let snapshot = server.snapshot();
-    let inventory = &snapshot.players[0].inventory;
+    let snapshot = server.snapshot_for(client_id);
+    let inventory = snapshot.players[0]
+        .inventory
+        .as_ref()
+        .expect("host inventory should be present");
     assert_eq!(
         inventory.inventory_slots[0]
             .as_ref()
@@ -105,12 +114,18 @@ fn actionbar_selection_and_drop_are_server_authoritative() {
         }),
     );
 
-    let snapshot = server.snapshot();
-    let inventory = &snapshot.players[0].inventory;
+    let snapshot = server.snapshot_for(client_id);
+    let inventory = snapshot.players[0]
+        .inventory
+        .as_ref()
+        .expect("host inventory should be present");
     assert_eq!(inventory.active_actionbar_slot, 3);
     assert!(inventory.actionbar_slots[3].is_none());
     assert_eq!(snapshot.dropped_items.len(), 1);
-    assert_eq!(snapshot.dropped_items[0].stack.item_id, TEST_RELIC_ID);
+    assert_eq!(
+        snapshot.dropped_items[0].stack.item_id.as_ref(),
+        TEST_RELIC_ID
+    );
 }
 
 #[test]
@@ -134,9 +149,13 @@ fn actionbar_q_style_drop_removes_one_item_from_stack() {
         }),
     );
 
-    let snapshot = server.snapshot();
+    let snapshot = server.snapshot_for(client_id);
+    let inventory = snapshot.players[0]
+        .inventory
+        .as_ref()
+        .expect("host inventory should be present");
     assert_eq!(
-        snapshot.players[0].inventory.actionbar_slots[2]
+        inventory.actionbar_slots[2]
             .as_ref()
             .map(|stack| stack.quantity),
         Some(4)
@@ -168,8 +187,11 @@ fn pickup_merges_actionbar_stacks_before_inventory() {
         ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
     );
 
-    let snapshot = server.snapshot();
-    let inventory = &snapshot.players[0].inventory;
+    let snapshot = server.snapshot_for(client_id);
+    let inventory = snapshot.players[0]
+        .inventory
+        .as_ref()
+        .expect("host inventory should be present");
     assert!(snapshot.dropped_items.is_empty());
     assert_eq!(
         inventory.actionbar_slots[0]
@@ -215,12 +237,16 @@ fn pickup_requires_looking_at_dropped_item_and_restores_inventory() {
         ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
     );
 
-    let snapshot = server.snapshot();
+    let snapshot = server.snapshot_for(client_id);
+    let inventory = snapshot.players[0]
+        .inventory
+        .as_ref()
+        .expect("host inventory should be present");
     assert!(snapshot.dropped_items.is_empty());
     assert_eq!(
-        snapshot.players[0].inventory.inventory_slots[2]
+        inventory.inventory_slots[2]
             .as_ref()
-            .map(|stack| stack.item_id.as_str()),
+            .map(|stack| stack.item_id.as_ref()),
         Some(TEST_RELIC_ID)
     );
 }

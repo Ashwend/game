@@ -23,7 +23,8 @@ use self::{
         SteamUser, ToolSwapState,
     },
     systems::{
-        CameraImpactKick, ClientSystemSet, app_quit_system, apply_display_settings_system,
+        CameraImpactKick, ClientSystemSet, DroppedItemEntities, RemotePlayerEntities,
+        ResourceNodeEntities, app_quit_system, apply_display_settings_system,
         apply_dropped_items_system, apply_held_item_visual_system, apply_resource_nodes_system,
         apply_snapshot_system, camera_follow_system, center_cursor_on_focus_system,
         chat_shortcut_system, client_input_system, gameplay_inventory_shortcuts_system,
@@ -67,7 +68,17 @@ pub fn run_app() -> Result<()> {
         .insert_resource(GatherInputState::default())
         .insert_resource(ToolSwapState::default())
         .insert_resource(CameraImpactKick::default())
+        .insert_resource(DroppedItemEntities::default())
+        .insert_resource(ResourceNodeEntities::default())
+        .insert_resource(RemotePlayerEntities::default())
         .insert_resource(LookState::default())
+        // `continuous()` rather than `desktop_app()`: the menu backdrop
+        // camera pans continuously (see `menu_backdrop_camera_system`) and
+        // needs steady frames to look smooth. Switching to reactive update
+        // would chop the animation. If the backdrop is later gated behind
+        // `MenuBackdropVisibility::is_active(...)` we can revisit and use
+        // `desktop_app()` (or a reactive-low-power variant) when no panning
+        // animation is on-screen.
         .insert_resource(WinitSettings::continuous())
         .init_resource::<ButtonSoundRequests>()
         .add_plugins(
@@ -214,7 +225,10 @@ pub fn run_app() -> Result<()> {
             Update,
             apply_resource_nodes_system.in_set(ClientSystemSet::ResourceNodes),
         )
-        .add_systems(Update, camera_follow_system.in_set(ClientSystemSet::Camera))
+        // Camera follow runs only in PostUpdate, before transform propagation.
+        // Running in both Update and PostUpdate would advance the impact-kick
+        // timer twice per frame (halving its visible duration) and write a
+        // stale camera transform that other Update-phase systems would read.
         .add_systems(
             PostUpdate,
             camera_follow_system.before(TransformSystems::Propagate),

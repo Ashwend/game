@@ -22,12 +22,13 @@ pub(crate) use input::{
     toggle_inventory_system, toggle_pause_system, update_cursor_system,
 };
 pub(crate) use items::{
-    apply_dropped_items_system, apply_held_item_visual_system, apply_resource_nodes_system,
-    update_pickup_target_system, update_tool_swap_state_system,
+    DroppedItemEntities, ResourceNodeEntities, apply_dropped_items_system,
+    apply_held_item_visual_system, apply_resource_nodes_system, update_pickup_target_system,
+    update_tool_swap_state_system,
 };
 pub(crate) use network::{network_tick_system, session_shutdown_poll_system};
 pub(crate) use node_death::tick_felling_trees_system;
-pub(crate) use players::apply_snapshot_system;
+pub(crate) use players::{RemotePlayerEntities, apply_snapshot_system};
 pub(crate) use quit::app_quit_system;
 pub(crate) use settings::save_client_settings_system;
 

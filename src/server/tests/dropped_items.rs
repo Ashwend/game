@@ -54,7 +54,7 @@ fn nearby_dropped_items_merge_on_server_interval() {
         matches!(
             &envelope.message,
             ServerMessage::ItemMerged { item_id, quantity }
-                if item_id == TEST_ORE_ID && *quantity == 8
+                if item_id.as_ref() == TEST_ORE_ID && *quantity == 8
         )
     }));
 }

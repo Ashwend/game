@@ -3,7 +3,7 @@ use crate::{
     world::{WorldBlock, WorldData},
 };
 
-use super::{GROUND_EPSILON, PLAYER_HEIGHT, PLAYER_RADIUS};
+use super::{GROUND_EPSILON, PLAYER_HEIGHT, PLAYER_RADIUS, grid::BlockGrid};
 
 const COLLISION_SKIN: f32 = 0.001;
 
@@ -24,6 +24,7 @@ pub(super) fn move_with_collisions(
     position: &mut Vec3Net,
     velocity: &mut Vec3Net,
     world: &WorldData,
+    grid: &BlockGrid,
     axis: Axis,
     delta: f32,
 ) -> MoveResult {
@@ -46,8 +47,14 @@ pub(super) fn move_with_collisions(
         resolved_axis_position = Some(0.0);
     }
 
-    for block in &world.blocks {
-        if let Some(candidate) = swept_axis_collision(*position, attempted, *block, axis, delta) {
+    let candidates: Box<dyn Iterator<Item = usize>> = match axis {
+        Axis::X => Box::new(grid.candidates_for_swept(*position, delta, 0.0)),
+        Axis::Y => Box::new(grid.candidates_for_vertical(*position)),
+        Axis::Z => Box::new(grid.candidates_for_swept(*position, 0.0, delta)),
+    };
+    for index in candidates {
+        let block = world.blocks[index];
+        if let Some(candidate) = swept_axis_collision(*position, attempted, block, axis, delta) {
             result.collided = true;
             result.landed |= matches!(axis, Axis::Y) && delta < 0.0;
             resolved_axis_position = Some(nearest_axis_resolution(
@@ -151,27 +158,31 @@ fn player_overlaps_block_on_other_axes(position: Vec3Net, block: WorldBlock, axi
     }
 }
 
-pub(super) fn player_overlaps_world(position: Vec3Net, world: &WorldData) -> bool {
-    world
-        .blocks
-        .iter()
-        .any(|block| player_overlaps_block(position, *block))
+pub(super) fn player_overlaps_world(
+    position: Vec3Net,
+    world: &WorldData,
+    grid: &BlockGrid,
+) -> bool {
+    grid.candidates_for_player(position)
+        .any(|index| player_overlaps_block(position, world.blocks[index]))
 }
 
 pub(super) fn support_height_between(
     position: Vec3Net,
     world: &WorldData,
+    grid: &BlockGrid,
     min_y: f32,
     max_y: f32,
 ) -> Option<f32> {
     let mut support = (min_y <= 0.0 && max_y >= 0.0).then_some(0.0);
 
-    for block in &world.blocks {
+    for index in grid.candidates_for_player(position) {
+        let block = world.blocks[index];
         let top = block.max().y;
         if top < min_y || top > max_y {
             continue;
         }
-        if !player_horizontally_overlaps_block(position, *block) {
+        if !player_horizontally_overlaps_block(position, block) {
             continue;
         }
 
@@ -208,10 +219,11 @@ fn player_vertically_overlaps_block(position: Vec3Net, block: WorldBlock) -> boo
     position.y + PLAYER_HEIGHT > min.y && position.y < max.y
 }
 
-pub(super) fn is_supported(position: Vec3Net, world: &WorldData) -> bool {
+pub(super) fn is_supported(position: Vec3Net, world: &WorldData, grid: &BlockGrid) -> bool {
     support_height_between(
         position,
         world,
+        grid,
         position.y - GROUND_EPSILON,
         position.y + GROUND_EPSILON,
     )

@@ -6,7 +6,7 @@ use bevy_egui::egui::{self, Align2, Color32, Rect, Sense, Stroke};
 
 use crate::{
     app::state::{ClientRuntime, InventoryUiState, MenuState, PickupTargetState},
-    protocol::{ACTIONBAR_SLOT_COUNT, ItemContainerSlot},
+    protocol::{ACTIONBAR_SLOT_COUNT, ItemContainerSlot, PlayerState},
 };
 
 use self::{
@@ -91,7 +91,7 @@ fn draw_inventory_grid(
     runtime: &ClientRuntime,
     inventory_ui: &mut InventoryUiState,
 ) {
-    let inventory = runtime.local_player().map(|player| &player.inventory);
+    let inventory = runtime.local_player().and_then(PlayerState::inventory);
     for row in 0..INVENTORY_ROWS {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = SLOT_GAP;
@@ -114,7 +114,7 @@ fn draw_actionbar(
     inventory_ui: &mut InventoryUiState,
     inventory_open: bool,
 ) {
-    let Some(inventory) = runtime.local_player().map(|player| &player.inventory) else {
+    let Some(inventory) = runtime.local_player().and_then(PlayerState::inventory) else {
         return;
     };
 

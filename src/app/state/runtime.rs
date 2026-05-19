@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use uuid::Uuid;
 
 use crate::{
-    controller::PlayerController,
+    controller::{BlockGrid, PlayerController},
     net::ClientSession,
     protocol::{
         ChatMessage, ClientId, PlayerEvent, PlayerState, ServerMessage, Vec3Net, WorldSnapshot,
@@ -58,6 +58,14 @@ pub(crate) struct ClientRuntime {
     pub(crate) client_id: Option<ClientId>,
     pub(crate) is_admin: bool,
     pub(crate) world: Option<WorldData>,
+    /// Spatial index over `world.blocks`. Rebuilt whenever a new world is
+    /// installed (i.e. on `Welcome`). Lets prediction's substep loop query
+    /// nearby blocks without scanning the full list.
+    pub(crate) world_grid: Option<BlockGrid>,
+    /// Monotonically increases every time `world` is replaced. The scene
+    /// system uses this to detect "do I need to respawn world geometry?" in
+    /// O(1) instead of deep-comparing the previous `WorldData`.
+    pub(crate) world_version: u64,
     pub(crate) snapshot: Option<WorldSnapshot>,
     pub(crate) predicted_local: Option<PlayerController>,
     pub(crate) messages: Vec<ClientLogEntry>,
@@ -119,6 +127,8 @@ impl ClientRuntime {
         self.client_id = None;
         self.is_admin = false;
         self.world = None;
+        self.world_grid = None;
+        self.world_version = self.world_version.wrapping_add(1);
         self.snapshot = None;
         self.predicted_local = None;
         self.messages.clear();
@@ -142,6 +152,8 @@ impl ClientRuntime {
         self.client_id = None;
         self.snapshot = None;
         self.world = None;
+        self.world_grid = None;
+        self.world_version = self.world_version.wrapping_add(1);
         self.predicted_local = None;
         self.is_admin = false;
     }
@@ -157,7 +169,9 @@ impl ClientRuntime {
             } => {
                 self.client_id = Some(client_id);
                 self.is_admin = is_admin;
+                self.world_grid = Some(BlockGrid::build(&world));
                 self.world = Some(world);
+                self.world_version = self.world_version.wrapping_add(1);
                 self.seed_local_prediction_from_snapshot(&snapshot, true);
                 self.snapshot = Some(snapshot);
                 self.push_system_message(format!("connected as player {client_id}"));

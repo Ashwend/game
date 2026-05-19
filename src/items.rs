@@ -1,3 +1,5 @@
+use std::sync::{Arc, OnceLock, RwLock};
+
 use crate::protocol::{DroppedWorldItem, ItemStack, Vec3Net};
 
 pub const TEST_ORE_ID: &str = "test_ore";
@@ -10,6 +12,42 @@ pub const IRON_ORE_ID: &str = "iron_ore";
 pub const SULFUR_ORE_ID: &str = "sulfur_ore";
 pub const BASIC_HATCHET_ID: &str = "wood_stone_hatchet";
 pub const BASIC_PICKAXE_ID: &str = "wood_stone_pickaxe";
+
+/// Identifier shared between `ItemStack`, `ItemMerged`, and item definitions.
+/// Backed by `Arc<str>` so clones are a refcount bump instead of a heap copy.
+/// Known IDs are interned to a single allocation at startup; deserialized IDs
+/// are looked up against the registry and reuse the cached `Arc` on hits.
+pub type ItemId = Arc<str>;
+
+/// Returns the interned `Arc<str>` for `id`. Compile-time constants from
+/// `REGISTERED_ITEMS` resolve without allocating on hits; unknown ids fall
+/// through to a fresh `Arc` so the system stays open to runtime-loaded items.
+pub fn intern_item_id(id: &str) -> ItemId {
+    let registry = interned_registry();
+    if let Some(cached) = registry
+        .read()
+        .ok()
+        .and_then(|map| map.iter().find(|cached| cached.as_ref() == id).cloned())
+    {
+        return cached;
+    }
+    let fresh: Arc<str> = Arc::from(id);
+    if let Ok(mut map) = registry.write() {
+        map.push(fresh.clone());
+    }
+    fresh
+}
+
+fn interned_registry() -> &'static RwLock<Vec<Arc<str>>> {
+    static REGISTRY: OnceLock<RwLock<Vec<Arc<str>>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        let seeded = REGISTERED_ITEMS
+            .iter()
+            .map(|definition| Arc::<str>::from(definition.id))
+            .collect();
+        RwLock::new(seeded)
+    })
+}
 
 pub const PICKUP_RANGE: f32 = 3.4;
 const PICKUP_RAY_RADIUS: f32 = 0.58;

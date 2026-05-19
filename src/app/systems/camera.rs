@@ -183,7 +183,7 @@ mod tests {
     use super::*;
     use crate::{
         controller::PlayerController,
-        protocol::{MAX_HEALTH, PlayerInventoryState, PlayerState, Vec3Net},
+        protocol::{MAX_HEALTH, PlayerState, Vec3Net},
     };
     use bevy::post_process::dof::DepthOfFieldMode;
 
@@ -229,7 +229,7 @@ mod tests {
             grounded: true,
             last_processed_input: 0,
             is_admin: false,
-            inventory: PlayerInventoryState::default(),
+            inventory: None,
         }
     }
 

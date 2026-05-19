@@ -227,7 +227,7 @@ pub fn remove_resource_from_storage(
     mut quantity: u16,
 ) {
     for stack in &mut node.storage {
-        if stack.item_id != item_id || quantity == 0 {
+        if stack.item_id.as_ref() != item_id || quantity == 0 {
             continue;
         }
         let removed = stack.quantity.min(quantity);

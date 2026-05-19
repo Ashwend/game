@@ -1,0 +1,246 @@
+use bevy::{
+    ecs::system::SystemParam,
+    input::mouse::MouseWheel,
+    prelude::*,
+    window::{PrimaryWindow, Window},
+};
+
+use crate::{
+    app::state::{
+        ClientRuntime, GatherInputState, ImpactEffectKind, MenuState, PendingImpactEffect,
+        PickupTargetState, SwingImpact, ToolSwapState,
+    },
+    items::{ToolKind, ToolProfile, item_definition},
+    protocol::{
+        ACTIONBAR_SLOT_COUNT, ClientMessage, InventoryCommand, ItemContainerSlot,
+        ResourceGatherCommand,
+    },
+    resources::{ResourceNodeModel, resource_node_definition},
+};
+
+use super::gating::{gameplay_accepts_controls, primary_window_focused};
+
+#[derive(SystemParam)]
+pub(crate) struct GameplayInventoryShortcutsParams<'w, 's> {
+    time: Res<'w, Time>,
+    keys: Res<'w, ButtonInput<KeyCode>>,
+    mouse_buttons: Res<'w, ButtonInput<MouseButton>>,
+    mouse_wheel: MessageReader<'w, 's, MouseWheel>,
+    runtime: ResMut<'w, ClientRuntime>,
+    gather_input: ResMut<'w, GatherInputState>,
+    menu: Res<'w, MenuState>,
+    pickup_target: Res<'w, PickupTargetState>,
+    swap_state: Res<'w, ToolSwapState>,
+    camera_kick: ResMut<'w, crate::app::systems::CameraImpactKick>,
+    primary_window: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+}
+
+pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryShortcutsParams) {
+    if !gameplay_accepts_controls(&params.menu, primary_window_focused(&params.primary_window)) {
+        params.mouse_wheel.clear();
+        params.gather_input.cancel();
+        return;
+    }
+
+    for slot in 0..ACTIONBAR_SLOT_COUNT {
+        if actionbar_key_pressed(&params.keys, slot) {
+            send_inventory_command(
+                &mut params.runtime,
+                InventoryCommand::SelectActionbarSlot { slot },
+            );
+        }
+    }
+
+    let wheel_delta = params
+        .mouse_wheel
+        .read()
+        .map(|event| event.y.signum() as i8)
+        .sum::<i8>();
+    if wheel_delta != 0 {
+        send_inventory_command(
+            &mut params.runtime,
+            InventoryCommand::SelectActionbarOffset {
+                offset: -wheel_delta.signum(),
+            },
+        );
+    }
+
+    if params.keys.just_pressed(KeyCode::KeyQ) {
+        let Some(active_actionbar_slot) = params
+            .runtime
+            .local_player()
+            .and_then(|player| player.inventory.as_ref())
+            .map(|inventory| inventory.active_actionbar_slot)
+        else {
+            return;
+        };
+        send_inventory_command(
+            &mut params.runtime,
+            InventoryCommand::Drop {
+                from: ItemContainerSlot::actionbar(active_actionbar_slot),
+                quantity: Some(1),
+            },
+        );
+    }
+
+    if params.keys.just_pressed(KeyCode::KeyE)
+        && let Some(dropped_item_id) = params.pickup_target.dropped_item_id
+    {
+        send_inventory_command(
+            &mut params.runtime,
+            InventoryCommand::PickUp { dropped_item_id },
+        );
+    }
+
+    // Tool-swap entry locks out swings — the new tool is still being
+    // lifted into view, so it can't be used yet.
+    let equipped_tool = if params.swap_state.is_swapping() {
+        params.gather_input.cancel();
+        None
+    } else {
+        equipped_tool_kind(&params.runtime)
+    };
+    if let Some(impact) = params.gather_input.update(
+        params.time.delta_secs(),
+        params.mouse_buttons.just_pressed(MouseButton::Left),
+        params.mouse_buttons.pressed(MouseButton::Left),
+        equipped_tool,
+        params.pickup_target.resource_node_id,
+    ) {
+        dispatch_swing_impact(&mut params, impact);
+    }
+}
+
+fn equipped_tool_kind(runtime: &ClientRuntime) -> Option<ToolKind> {
+    equipped_tool_profile(runtime).map(|profile| profile.kind)
+}
+
+fn equipped_tool_profile(runtime: &ClientRuntime) -> Option<ToolProfile> {
+    let stack = runtime
+        .local_player()?
+        .inventory
+        .as_ref()?
+        .active_actionbar_stack()?;
+    item_definition(&stack.item_id).and_then(|definition| definition.tool)
+}
+
+fn dispatch_swing_impact(params: &mut GameplayInventoryShortcutsParams, impact: SwingImpact) {
+    let Some(node_id) = impact.target else {
+        return;
+    };
+
+    // Only emit hit feedback (chips, camera kick, gather command) when the
+    // equipped tool can actually harvest this resource. Swinging an axe at
+    // an iron node should look like a clean miss, not a bounced chip burst.
+    if !equipped_tool_can_harvest_target(&params.runtime, &params.pickup_target) {
+        return;
+    }
+
+    let target_anchor = resource_target_anchor(&params.pickup_target, node_id);
+    let target_kind = resource_target_effect_kind(&params.pickup_target);
+
+    if let Some(anchor) = target_anchor
+        && let Some(kind) = target_kind
+    {
+        let spray_direction = swing_spray_direction(&params.runtime, anchor);
+        let seed = params.gather_input.current_swing_seed();
+        params.gather_input.set_pending_impact(PendingImpactEffect {
+            anchor,
+            spray_direction,
+            kind,
+            seed,
+        });
+    }
+
+    params.camera_kick.trigger(impact.tool);
+
+    send_gameplay_message(
+        &mut params.runtime,
+        ClientMessage::Gather(ResourceGatherCommand {
+            resource_node_id: node_id,
+        }),
+        "gather command",
+    );
+}
+
+fn equipped_tool_can_harvest_target(runtime: &ClientRuntime, target: &PickupTargetState) -> bool {
+    let Some(profile) = equipped_tool_profile(runtime) else {
+        return false;
+    };
+    let Some(definition_id) = target.resource_definition_id.as_deref() else {
+        return false;
+    };
+    let Some(definition) = resource_node_definition(definition_id) else {
+        return false;
+    };
+    definition.required_tool.allows(profile)
+}
+
+fn resource_target_anchor(target: &PickupTargetState, node_id: u64) -> Option<Vec3> {
+    let position = target.world_position?;
+    if target.resource_node_id != Some(node_id) {
+        return None;
+    }
+    Some(Vec3::new(position.x, position.y, position.z))
+}
+
+fn resource_target_effect_kind(target: &PickupTargetState) -> Option<ImpactEffectKind> {
+    let definition_id = target.resource_definition_id.as_deref()?;
+    let definition = resource_node_definition(definition_id)?;
+    Some(match definition.model {
+        ResourceNodeModel::PineTree
+        | ResourceNodeModel::BirchTree
+        | ResourceNodeModel::DeadTree => ImpactEffectKind::WoodChips,
+        ResourceNodeModel::CoalOre | ResourceNodeModel::IronOre | ResourceNodeModel::SulfurOre => {
+            ImpactEffectKind::StoneShards
+        }
+    })
+}
+
+fn swing_spray_direction(runtime: &ClientRuntime, anchor: Vec3) -> Vec3 {
+    let Some(player) = runtime.local_view() else {
+        return Vec3::Y;
+    };
+    let eye = Vec3::new(player.position.x, player.position.y, player.position.z)
+        + Vec3::Y * crate::app::EYE_HEIGHT;
+    let to_player = (eye - anchor).normalize_or_zero();
+    if to_player.length_squared() < f32::EPSILON {
+        Vec3::Y
+    } else {
+        to_player
+    }
+}
+
+fn actionbar_key_pressed(keys: &ButtonInput<KeyCode>, slot: usize) -> bool {
+    match slot {
+        0 => keys.just_pressed(KeyCode::Digit1),
+        1 => keys.just_pressed(KeyCode::Digit2),
+        2 => keys.just_pressed(KeyCode::Digit3),
+        3 => keys.just_pressed(KeyCode::Digit4),
+        4 => keys.just_pressed(KeyCode::Digit5),
+        5 => keys.just_pressed(KeyCode::Digit6),
+        6 => keys.just_pressed(KeyCode::Digit7),
+        7 => keys.just_pressed(KeyCode::Digit8),
+        8 => keys.just_pressed(KeyCode::Digit9),
+        _ => false,
+    }
+}
+
+pub(crate) fn send_inventory_command(runtime: &mut ClientRuntime, command: InventoryCommand) {
+    send_gameplay_message(
+        runtime,
+        ClientMessage::Inventory(command),
+        "inventory command",
+    );
+}
+
+fn send_gameplay_message(runtime: &mut ClientRuntime, message: ClientMessage, label: &str) {
+    let Some(session) = runtime.session.as_mut() else {
+        runtime.push_error_message(format!("{label} failed: not connected"));
+        return;
+    };
+
+    if let Err(error) = session.send(message) {
+        runtime.push_error_message(format!("{label} failed: {error}"));
+    }
+}

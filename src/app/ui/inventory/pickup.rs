@@ -38,7 +38,7 @@ fn pickup_tooltip_text(pickup_target: &PickupTargetState) -> Option<(String, Str
     if let Some(stack) = pickup_target.stack.as_ref() {
         let title = item_definition(&stack.item_id)
             .map(|definition: &ItemDefinition| definition.name)
-            .unwrap_or(stack.item_id.as_str())
+            .unwrap_or(stack.item_id.as_ref())
             .to_owned();
         let body = if stack.quantity > 1 {
             format!("Press E to pick up\nQuantity: {}", stack.quantity)
@@ -59,7 +59,7 @@ fn pickup_tooltip_text(pickup_target: &PickupTargetState) -> Option<(String, Str
             .map(|stack| {
                 let name = item_definition(&stack.item_id)
                     .map(|definition| definition.name)
-                    .unwrap_or(stack.item_id.as_str());
+                    .unwrap_or(stack.item_id.as_ref());
                 format!("{name}: {}", stack.quantity)
             })
             .collect::<Vec<_>>()

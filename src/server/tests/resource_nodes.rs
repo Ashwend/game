@@ -19,21 +19,24 @@ fn look_at_test_node(server: &mut GameServer, client_id: ClientId) {
 #[test]
 fn connect_seeds_hatchet_and_pickaxe_on_actionbar() {
     let mut server = server();
-    connect_host(&mut server);
+    let client_id = connect_host(&mut server);
 
-    let snapshot = server.snapshot();
-    let inventory = &snapshot.players[0].inventory;
+    let snapshot = server.snapshot_for(client_id);
+    let inventory = snapshot.players[0]
+        .inventory
+        .as_ref()
+        .expect("host inventory should be present");
 
     assert_eq!(
         inventory.actionbar_slots[0]
             .as_ref()
-            .map(|stack| stack.item_id.as_str()),
+            .map(|stack| stack.item_id.as_ref()),
         Some(BASIC_HATCHET_ID)
     );
     assert_eq!(
         inventory.actionbar_slots[1]
             .as_ref()
-            .map(|stack| stack.item_id.as_str()),
+            .map(|stack| stack.item_id.as_ref()),
         Some(BASIC_PICKAXE_ID)
     );
 }
@@ -73,17 +76,16 @@ fn pickaxe_gathers_materials_and_deletes_empty_node() {
         }),
     );
 
-    let snapshot = server.snapshot();
+    let snapshot = server.snapshot_for(client_id);
+    let inventory = snapshot.players[0]
+        .inventory
+        .as_ref()
+        .expect("host inventory should be present");
     assert!(snapshot.resource_nodes.is_empty());
-    assert!(
-        snapshot.players[0]
-            .inventory
-            .inventory_slots
-            .iter()
-            .any(|slot| slot
-                .as_ref()
-                .is_some_and(|stack| stack.item_id == COAL_ID && stack.quantity == 3))
-    );
+    assert!(inventory.inventory_slots.iter().any(|slot| {
+        slot.as_ref()
+            .is_some_and(|stack| stack.item_id.as_ref() == COAL_ID && stack.quantity == 3)
+    }));
 }
 
 #[test]

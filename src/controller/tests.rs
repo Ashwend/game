@@ -1,6 +1,7 @@
 use super::*;
 use crate::world::WorldBlock;
 
+use super::grid::BlockGrid;
 use super::movement::{desired_horizontal_velocity, horizontal_length};
 
 fn test_world() -> WorldData {
@@ -159,7 +160,8 @@ fn failed_corner_step_does_not_push_player_off_current_cube() {
     controller.position = Vec3Net::new(1.24, 0.6, 0.55);
     controller.velocity = Vec3Net::new(4.0, 0.0, 0.0);
     controller.grounded = true;
-    controller.move_horizontal_with_step(&world, Axis::X, 0.2);
+    let grid = BlockGrid::build(&world);
+    controller.move_horizontal_with_step(&world, &grid, Axis::X, 0.2);
 
     assert!(controller.position.x <= 1.25);
     assert_eq!(controller.position.y, 0.6);
@@ -180,8 +182,16 @@ fn collision_resolution_does_not_cascade_across_nearby_blocks() {
     };
     let mut position = Vec3Net::new(2.35, 0.0, -6.1762643);
     let mut velocity = Vec3Net::new(0.0, 0.0, -5.0);
+    let grid = BlockGrid::build(&world);
 
-    let result = move_with_collisions(&mut position, &mut velocity, &world, Axis::Z, -0.0417);
+    let result = move_with_collisions(
+        &mut position,
+        &mut velocity,
+        &world,
+        &grid,
+        Axis::Z,
+        -0.0417,
+    );
 
     assert!(!result.collided);
     assert!((position.z - -6.217964).abs() < 0.001);
@@ -200,8 +210,16 @@ fn collision_resolution_ignores_adjacent_face_not_crossed_by_axis_move() {
     };
     let mut position = Vec3Net::new(0.5500001, 0.0, -4.85);
     let mut velocity = Vec3Net::new(0.0, 0.0, -0.5666593);
+    let grid = BlockGrid::build(&world);
 
-    let result = move_with_collisions(&mut position, &mut velocity, &world, Axis::Z, -0.0047);
+    let result = move_with_collisions(
+        &mut position,
+        &mut velocity,
+        &world,
+        &grid,
+        Axis::Z,
+        -0.0047,
+    );
 
     assert!(result.collided);
     assert!((position.z - -4.85).abs() < 0.001);
@@ -220,8 +238,16 @@ fn collision_resolution_allows_sliding_out_of_current_axis_overlap() {
     };
     let mut position = Vec3Net::new(2.35, 0.0, -6.7282076);
     let mut velocity = Vec3Net::new(0.0, 0.0, -4.5498476);
+    let grid = BlockGrid::build(&world);
 
-    let result = move_with_collisions(&mut position, &mut velocity, &world, Axis::Z, -0.0297);
+    let result = move_with_collisions(
+        &mut position,
+        &mut velocity,
+        &world,
+        &grid,
+        Axis::Z,
+        -0.0297,
+    );
 
     assert!(!result.collided);
     assert!((position.z - -6.757908).abs() < 0.001);

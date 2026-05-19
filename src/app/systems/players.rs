@@ -1,6 +1,8 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 use bevy::prelude::*;
+
+use crate::protocol::ClientId;
 
 use super::super::{
     scene::{NetworkPlayer, PlayerVisualAssets, player_visual_position},
@@ -10,70 +12,75 @@ use super::super::{
 const REMOTE_PLAYER_INTERPOLATION_SECONDS: f32 = 0.1;
 const REMOTE_PLAYER_INTERPOLATION_SNAP_DISTANCE: f32 = 6.0;
 
+/// Persistent `client_id → Entity` map for remote players. Mirrors the live
+/// entity set so the snapshot-apply system doesn't have to rebuild it from a
+/// `Query` every frame.
+#[derive(Resource, Default)]
+pub(crate) struct RemotePlayerEntities(pub(crate) std::collections::HashMap<ClientId, Entity>);
+
 pub(crate) fn apply_snapshot_system(
     mut commands: Commands,
     time: Res<Time>,
     runtime: Res<ClientRuntime>,
     assets: Res<PlayerVisualAssets>,
-    mut players: Query<(
-        Entity,
-        &NetworkPlayer,
-        &Transform,
-        &mut NetworkPlayerInterpolation,
-    )>,
+    mut entities: ResMut<RemotePlayerEntities>,
+    mut players: Query<(&Transform, &mut NetworkPlayerInterpolation), With<NetworkPlayer>>,
 ) {
     let Some(snapshot) = &runtime.snapshot else {
-        for (entity, _, _, _) in &players {
+        for (_, entity) in entities.0.drain() {
             commands.entity(entity).despawn();
         }
         return;
     };
 
-    let existing = players
-        .iter()
-        .map(|(entity, player, _, _)| (player.client_id, entity))
-        .collect::<HashMap<_, _>>();
-
-    let remote_players = snapshot
+    let local_client_id = runtime.client_id;
+    let snapshot_remote_ids: HashSet<ClientId> = snapshot
         .players
         .iter()
-        .filter(|player| Some(player.client_id) != runtime.client_id)
-        .collect::<Vec<_>>();
+        .filter(|player| Some(player.client_id) != local_client_id)
+        .map(|player| player.client_id)
+        .collect();
+    let entities = &mut *entities;
 
-    for player in &remote_players {
+    for player in &snapshot.players {
+        if Some(player.client_id) == local_client_id {
+            continue;
+        }
         let feet = Vec3::new(player.position.x, player.position.y, player.position.z);
         let target = Transform::from_translation(player_visual_position(feet))
             .with_rotation(Quat::from_rotation_y(player.yaw));
-        if let Some(entity) = existing.get(&player.client_id) {
-            if let Ok((_, _, current, mut interpolation)) = players.get_mut(*entity) {
+        if let Some(entity) = entities.0.get(&player.client_id).copied() {
+            if let Ok((current, mut interpolation)) = players.get_mut(entity) {
                 interpolation.retarget(snapshot.tick, current, target);
                 let transform = interpolation.advance(time.delta_secs());
-                commands.entity(*entity).insert((transform,));
+                commands.entity(entity).insert(transform);
             }
         } else {
-            commands.spawn((
-                Name::new(format!("Player {}", player.client_id)),
-                NetworkPlayer {
-                    client_id: player.client_id,
-                },
-                NetworkPlayerInterpolation::new(snapshot.tick, target),
-                Mesh3d(assets.mesh.clone()),
-                MeshMaterial3d(assets.remote_material.clone()),
-                target,
-                Visibility::Visible,
-            ));
+            let entity = commands
+                .spawn((
+                    Name::new(format!("Player {}", player.client_id)),
+                    NetworkPlayer {
+                        client_id: player.client_id,
+                    },
+                    NetworkPlayerInterpolation::new(snapshot.tick, target),
+                    Mesh3d(assets.mesh.clone()),
+                    MeshMaterial3d(assets.remote_material.clone()),
+                    target,
+                    Visibility::Visible,
+                ))
+                .id();
+            entities.0.insert(player.client_id, entity);
         }
     }
 
-    for (entity, network_player, _, _) in &players {
-        if Some(network_player.client_id) == runtime.client_id
-            || !remote_players
-                .iter()
-                .any(|player| player.client_id == network_player.client_id)
-        {
-            commands.entity(entity).despawn();
+    entities.0.retain(|id, entity| {
+        if snapshot_remote_ids.contains(id) {
+            true
+        } else {
+            commands.entity(*entity).despawn();
+            false
         }
-    }
+    });
 }
 
 #[derive(Component, Debug, Clone, Copy)]
@@ -121,9 +128,7 @@ impl NetworkPlayerInterpolation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{
-        ClientId, MAX_HEALTH, PlayerInventoryState, PlayerState, SteamId, Vec3Net, WorldSnapshot,
-    };
+    use crate::protocol::{ClientId, MAX_HEALTH, PlayerState, SteamId, Vec3Net, WorldSnapshot};
 
     fn player(client_id: ClientId, steam_id: SteamId, position: Vec3Net, yaw: f32) -> PlayerState {
         PlayerState {
@@ -138,7 +143,7 @@ mod tests {
             grounded: true,
             last_processed_input: 0,
             is_admin: false,
-            inventory: PlayerInventoryState::default(),
+            inventory: None,
         }
     }
 
@@ -154,6 +159,7 @@ mod tests {
             mesh: Handle::default(),
             remote_material: Handle::default(),
         });
+        app.insert_resource(RemotePlayerEntities::default());
         app.add_systems(Update, apply_snapshot_system);
         app
     }

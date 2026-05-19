@@ -159,7 +159,7 @@ fn paint_item_icon(ui: &egui::Ui, rect: Rect, stack: &ItemStack, is_drag_source:
 fn item_tooltip(response: egui::Response, stack: &ItemStack) -> egui::Response {
     let title = item_definition(&stack.item_id)
         .map(|definition| definition.name)
-        .unwrap_or(stack.item_id.as_str());
+        .unwrap_or(stack.item_id.as_ref());
     let body = item_tooltip_body(stack);
     theme::wow_tooltip(response, title, &body)
 }
