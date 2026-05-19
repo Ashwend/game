@@ -331,15 +331,40 @@ pub fn resource_storage_is_empty(node: &ResourceNodeState) -> bool {
     node.storage.iter().all(|stack| stack.quantity == 0)
 }
 
-/// Returns an AABB collider for a live tree, or `None` for any other node
-/// model. The collider is a vertical pillar at the trunk base, slightly
-/// wider than the visible trunk so the player and camera don't clip the
-/// bark when brushing past. Height is fixed at 3m — taller than the player
-/// AABB so the player can't walk over or under it, but well below the
-/// canopy so the player's bounding box never touches foliage.
-pub fn tree_collider(node: &ResourceNodeState) -> Option<WorldBlock> {
+/// Returns an AABB collider for a live resource node, or `None` if the
+/// node has no definition.
+///
+/// Trees get a vertical pillar at the trunk base, slightly wider than the
+/// visible trunk so the player and camera don't clip the bark when brushing
+/// past. Height is fixed at 3m — taller than the player AABB so the player
+/// can't walk over or under it, but well below the canopy so the player's
+/// bounding box never touches foliage.
+///
+/// Ores get a short square box sized to the rock-lump footprint. The
+/// `add_rock_lump` mesh sits with its base at local y=0 and tops out
+/// around y≈0.6–0.7, so the collider is centered at y=0.32 with half-
+/// height 0.32 to span the visible rock without poking the floor or
+/// floating above the peak.
+pub fn resource_node_collider(node: &ResourceNodeState) -> Option<WorldBlock> {
     let definition = resource_node_definition(&node.definition_id)?;
-    let half_width = match definition.model {
+    match definition.model {
+        ResourceNodeModel::PineTreeSmall
+        | ResourceNodeModel::PineTreeMedium
+        | ResourceNodeModel::PineTreeLarge
+        | ResourceNodeModel::BirchTreeSmall
+        | ResourceNodeModel::BirchTreeMedium
+        | ResourceNodeModel::BirchTreeLarge
+        | ResourceNodeModel::DeadTreeSmall
+        | ResourceNodeModel::DeadTreeMedium
+        | ResourceNodeModel::DeadTreeLarge => Some(tree_collider_block(node, definition.model)),
+        ResourceNodeModel::CoalOre | ResourceNodeModel::IronOre | ResourceNodeModel::SulfurOre => {
+            Some(ore_collider_block(node))
+        }
+    }
+}
+
+fn tree_collider_block(node: &ResourceNodeState, model: ResourceNodeModel) -> WorldBlock {
+    let half_width = match model {
         ResourceNodeModel::PineTreeSmall => 0.30,
         ResourceNodeModel::PineTreeMedium => 0.36,
         ResourceNodeModel::PineTreeLarge => 0.46,
@@ -349,12 +374,20 @@ pub fn tree_collider(node: &ResourceNodeState) -> Option<WorldBlock> {
         ResourceNodeModel::DeadTreeSmall => 0.30,
         ResourceNodeModel::DeadTreeMedium => 0.34,
         ResourceNodeModel::DeadTreeLarge => 0.44,
-        _ => return None,
+        _ => unreachable!("tree_collider_block called with non-tree model"),
     };
     let half_height = 1.5;
     let center = Vec3Net::new(node.position.x, half_height, node.position.z);
     let half_extents = Vec3Net::new(half_width, half_height, half_width);
-    Some(WorldBlock::new(center, half_extents))
+    WorldBlock::new(center, half_extents)
+}
+
+fn ore_collider_block(node: &ResourceNodeState) -> WorldBlock {
+    let half_width = 0.55;
+    let half_height = 0.32;
+    let center = Vec3Net::new(node.position.x, half_height, node.position.z);
+    let half_extents = Vec3Net::new(half_width, half_height, half_width);
+    WorldBlock::new(center, half_extents)
 }
 
 #[cfg(test)]
@@ -386,6 +419,51 @@ mod tests {
             next_resource_payout(&node, tool),
             Some(ItemStack::new(COAL_ID, 2))
         );
+    }
+
+    #[test]
+    fn ore_collider_sits_on_ground_and_covers_visible_rock() {
+        for ore_id in [COAL_NODE_ID, IRON_NODE_ID, SULFUR_NODE_ID] {
+            let node = ResourceNodeState {
+                id: 1,
+                definition_id: ore_id.to_owned(),
+                position: Vec3Net::new(5.0, 0.0, -3.0),
+                yaw: 0.0,
+                storage: Vec::new(),
+            };
+            let collider = resource_node_collider(&node)
+                .unwrap_or_else(|| panic!("expected collider for {ore_id}"));
+            let min = collider.min();
+            let max = collider.max();
+            assert_eq!(
+                min.y, 0.0,
+                "{ore_id} collider must sit on the ground, got min.y = {}",
+                min.y
+            );
+            // Bounds should be square in x/z and tall enough to cover the
+            // rock-lump peak at ~y=0.58 without poking through the floor.
+            assert!(max.y >= 0.58, "{ore_id} collider too short: {}", max.y);
+            assert!(max.y <= 0.8, "{ore_id} collider too tall: {}", max.y);
+            assert_eq!(collider.half_extents.x, collider.half_extents.z);
+            assert!(min.x < node.position.x && max.x > node.position.x);
+            assert!(min.z < node.position.z && max.z > node.position.z);
+        }
+    }
+
+    #[test]
+    fn tree_models_still_return_tall_pillar_colliders() {
+        let node = ResourceNodeState {
+            id: 1,
+            definition_id: PINE_TREE_NODE_ID.to_owned(),
+            position: Vec3Net::new(0.0, 0.0, 0.0),
+            yaw: 0.0,
+            storage: Vec::new(),
+        };
+        let collider = resource_node_collider(&node).expect("tree should have a collider");
+        let size = collider.size();
+        assert!(size.y >= 2.5, "tree collider should be a tall pillar");
+        assert!(size.x < 1.0 && size.z < 1.0, "tree pillar should be narrow");
+        assert_eq!(collider.min().y, 0.0);
     }
 
     #[test]

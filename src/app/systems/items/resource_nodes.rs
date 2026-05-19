@@ -111,11 +111,13 @@ pub(super) fn resource_node_transform(
     // Trees bake their full size into the mesh and sit on the ground at
     // unit scale, which keeps each variant a single canonical mesh that
     // can be GPU-instanced. Ore nodes keep their per-instance scale
-    // jitter for shape variety.
+    // jitter for shape variety. Both the tree trunks and the ore rock
+    // lumps have their lowest vertices at local y=0, so no height offset
+    // is needed — adding one would float the geometry above the floor.
     let (height_offset, scale) = match model {
-        ResourceNodeModel::CoalOre => (0.34, Vec3::new(1.0, 1.0, 1.0)),
-        ResourceNodeModel::IronOre => (0.36, Vec3::new(1.1, 1.05, 0.95)),
-        ResourceNodeModel::SulfurOre => (0.32, Vec3::new(0.96, 0.92, 1.06)),
+        ResourceNodeModel::CoalOre => (0.0, Vec3::new(1.0, 1.0, 1.0)),
+        ResourceNodeModel::IronOre => (0.0, Vec3::new(1.1, 1.05, 0.95)),
+        ResourceNodeModel::SulfurOre => (0.0, Vec3::new(0.96, 0.92, 1.06)),
         ResourceNodeModel::PineTreeSmall
         | ResourceNodeModel::PineTreeMedium
         | ResourceNodeModel::PineTreeLarge
@@ -183,5 +185,37 @@ fn resource_node_visual(
             assets.dead_tree_large_mesh.clone(),
             assets.vertex_material.clone(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::Vec3Net;
+    use crate::resources::{COAL_NODE_ID, IRON_NODE_ID, SULFUR_NODE_ID};
+
+    fn node_at(id: &str, position: Vec3Net) -> ResourceNodeState {
+        ResourceNodeState {
+            id: 1,
+            definition_id: id.to_owned(),
+            position,
+            yaw: 0.0,
+            storage: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn ore_transform_matches_spawn_y_so_rock_sits_on_ground() {
+        // The ore meshes have their lowest vertex at local y=0, so the
+        // transform must not raise them above the floor.
+        for ore_id in [COAL_NODE_ID, IRON_NODE_ID, SULFUR_NODE_ID] {
+            let node = node_at(ore_id, Vec3Net::new(2.0, 0.0, -3.0));
+            let definition = crate::resources::resource_node_definition(ore_id).unwrap();
+            let transform = resource_node_transform(&node, definition.model);
+            assert_eq!(
+                transform.translation.y, node.position.y,
+                "{ore_id} mesh must sit at the spawn y (no floating offset)"
+            );
+        }
     }
 }

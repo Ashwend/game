@@ -9,27 +9,25 @@ use crate::{
     protocol::{
         ChatMessage, ClientId, PlayerEvent, PlayerState, ServerMessage, Vec3Net, WorldSnapshot,
     },
-    resources::{resource_node_definition, tree_collider},
+    resources::resource_node_collider,
     save::WorldStore,
     world::{WorldBlock, WorldData},
 };
 
-/// Cheap order-independent fingerprint of the live tree set. Used by the
-/// snapshot handler to skip rebuilding the collision grid when the set of
-/// trees didn't change. XOR of node IDs + count is good enough — the only
-/// way it collides in practice is two trees being added and two different
-/// trees being removed in the same tick, which can't happen during play.
-fn tree_collider_set_version(snapshot: Option<&WorldSnapshot>) -> u64 {
+/// Cheap order-independent fingerprint of the live collider-bearing
+/// resource node set (trees + ores). Used by the snapshot handler to skip
+/// rebuilding the collision grid when the set didn't change. XOR of node
+/// IDs + count is good enough — the only way it collides in practice is
+/// two nodes being added and two different nodes being removed in the
+/// same tick, which can't happen during play.
+fn resource_node_collider_set_version(snapshot: Option<&WorldSnapshot>) -> u64 {
     let Some(snapshot) = snapshot else {
         return 0;
     };
     let mut hash: u64 = 0;
     let mut count: u64 = 0;
     for node in &snapshot.resource_nodes {
-        let is_tree = resource_node_definition(&node.definition_id)
-            .map(|d| d.model.is_tree())
-            .unwrap_or(false);
-        if !is_tree {
+        if resource_node_collider(node).is_none() {
             continue;
         }
         hash ^= node.id;
@@ -95,10 +93,11 @@ pub(crate) struct ClientRuntime {
     pub(crate) predicted_local: Option<PlayerController>,
     pub(crate) messages: Vec<ClientLogEntry>,
     pub(crate) input_sequence: u64,
-    /// Hash of the live tree set used to detect when the `world_grid` needs
-    /// to be rebuilt. Only changes when a tree spawns or is felled — most
-    /// snapshots keep the same set and skip the rebuild.
-    pub(crate) tree_collider_version: u64,
+    /// Hash of the live collider-bearing resource node set (trees + ores)
+    /// used to detect when the `world_grid` needs to be rebuilt. Only
+    /// changes when a node spawns or is exhausted — most snapshots keep
+    /// the same set and skip the rebuild.
+    pub(crate) resource_node_collider_version: u64,
 }
 
 #[derive(Resource, Default)]
@@ -162,7 +161,7 @@ impl ClientRuntime {
         self.predicted_local = None;
         self.messages.clear();
         self.input_sequence = 0;
-        self.tree_collider_version = 0;
+        self.resource_node_collider_version = 0;
     }
 
     pub(crate) fn shutdown_in_background(
@@ -186,12 +185,14 @@ impl ClientRuntime {
         self.world_version = self.world_version.wrapping_add(1);
         self.predicted_local = None;
         self.is_admin = false;
-        self.tree_collider_version = 0;
+        self.resource_node_collider_version = 0;
     }
 
     /// Rebuilds the world collision grid from the current world plus any
-    /// live tree trunks present in the latest snapshot. Called after Welcome
-    /// and whenever the live tree set changes (a tree spawns or is felled).
+    /// live resource node colliders (tree trunks, ore rocks) present in
+    /// the latest snapshot. Called after Welcome and whenever the live
+    /// set of collider-bearing nodes changes (a node spawns, is felled,
+    /// or is mined out).
     fn rebuild_world_grid(&mut self) {
         let Some(world) = self.world.as_ref() else {
             self.world_grid = None;
@@ -204,7 +205,7 @@ impl ClientRuntime {
                 snapshot
                     .resource_nodes
                     .iter()
-                    .filter_map(tree_collider)
+                    .filter_map(resource_node_collider)
                     .collect()
             })
             .unwrap_or_default();
@@ -227,7 +228,8 @@ impl ClientRuntime {
                 self.seed_local_prediction_from_snapshot(&snapshot, true);
                 self.snapshot = Some(snapshot);
                 self.rebuild_world_grid();
-                self.tree_collider_version = tree_collider_set_version(self.snapshot.as_ref());
+                self.resource_node_collider_version =
+                    resource_node_collider_set_version(self.snapshot.as_ref());
                 self.push_system_message(format!("connected as player {client_id}"));
             }
             ServerMessage::AuthRejected { reason } => {
@@ -245,12 +247,13 @@ impl ClientRuntime {
                     return;
                 }
                 self.snapshot = Some(snapshot);
-                // Trees can die between snapshots (felled by other players).
-                // Rebuild the collision grid only when the live tree set
-                // actually changes — every snapshot would be wasted work.
-                let new_version = tree_collider_set_version(self.snapshot.as_ref());
-                if new_version != self.tree_collider_version {
-                    self.tree_collider_version = new_version;
+                // Nodes can disappear between snapshots (trees felled,
+                // ores mined out). Rebuild the collision grid only when
+                // the live set actually changes — every snapshot would
+                // be wasted work.
+                let new_version = resource_node_collider_set_version(self.snapshot.as_ref());
+                if new_version != self.resource_node_collider_version {
+                    self.resource_node_collider_version = new_version;
                     self.rebuild_world_grid();
                 }
             }
