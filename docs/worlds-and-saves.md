@@ -11,7 +11,7 @@
 
 Bump `SAVE_FORMAT_VERSION` in `src/save.rs` on any breaking schema change. There is no migration — older saves are rejected.
 
-`MapType::Test` builds `WorldData::test_world()`: one floor plus AABB blocks. `Procedural` currently maps to the test world.
+`MapType::Test` builds `WorldData::test_world()`: an 80m floor with perimeter stone walls, a movement test obstacle course, ore clusters, and tree groves. `MapType::Procedural { seed, size }` currently builds a flat floor sized by `ProceduralMapSize::{Small, Medium, Large}` (64m / 128m / 256m); the seed is reserved for future generation work.
 
 `WorldStore::platform_default()` stores saves under the platform app-data directory in `worlds/`.
 

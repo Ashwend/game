@@ -13,3 +13,5 @@ Movement lives in `src/controller/`:
 - `mod.rs`: `PlayerController`, fixed-step simulation, jumping, coyote time, reconciliation, and step-up handling.
 - `movement.rs`: walk/sprint speeds, horizontal acceleration, air acceleration, and camera-relative movement vectors.
 - `collision.rs`: world-block AABB collision and support checks.
+- `grid.rs`: `BlockGrid`, a coarse spatial index over `WorldData::blocks` used by collision and held by `GameServer` for future server-side checks.
+- `tests.rs`: substep, step-up, coyote-time, and reconciliation regression tests.
