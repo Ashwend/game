@@ -6,7 +6,7 @@ use crate::world::{MapType, WorldData};
 pub type ClientId = u64;
 pub type SteamId = u64;
 
-pub const PROTOCOL_VERSION: u32 = 15;
+pub const PROTOCOL_VERSION: u32 = 16;
 pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_CHAT_LEN: usize = 240;
@@ -100,6 +100,12 @@ pub enum ClientMessage {
     Chat {
         text: String,
     },
+    /// Server-evaluated slash command. The full text (without the leading
+    /// `/`) is shipped verbatim — the server is the source of truth for
+    /// parsing, validation, and the admin check.
+    Command {
+        text: String,
+    },
     Inventory(InventoryCommand),
     Gather(ResourceGatherCommand),
     Heartbeat,
@@ -111,6 +117,7 @@ impl ClientMessage {
         match self {
             Self::Auth { .. }
             | Self::Chat { .. }
+            | Self::Command { .. }
             | Self::Inventory(_)
             | Self::Gather(_)
             | Self::Disconnect => PacketDelivery::Reliable,
@@ -244,6 +251,15 @@ pub struct ResourceNodeState {
     pub position: Vec3Net,
     pub yaw: f32,
     pub storage: Vec<ItemStack>,
+    /// `None` when the node is ready to be gathered. `Some(p)` while it's
+    /// regenerating after being depleted, with `p` in `0.0..1.0` — the
+    /// server ticks this up to 1.0 over the configured respawn window and
+    /// then resets storage and clears the flag.
+    ///
+    /// The client renders nodes with `Some(_)` as translucent ghosts that
+    /// fade up to full opacity. Gather attempts are rejected server-side
+    /// during this window.
+    pub respawn_progress: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]

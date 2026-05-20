@@ -31,9 +31,9 @@ use self::{
         main_menu_music_system, menu_backdrop_camera_system, mouse_look_system,
         network_tick_system, play_impact_sounds_system, save_client_settings_system,
         session_shutdown_poll_system, setup_impact_sound_assets, spawn_impact_effects_system,
-        tick_felling_trees_system, tick_impact_chips_system, toggle_inventory_system,
-        toggle_pause_system, update_cursor_system, update_pickup_target_system,
-        update_tool_swap_state_system,
+        tick_felling_trees_system, tick_impact_chips_system, tick_resource_node_pop_in_system,
+        toggle_inventory_system, toggle_pause_system, update_cursor_system,
+        update_pickup_target_system, update_tool_swap_state_system,
     },
     ui::{ButtonSoundRequests, button_sound_system, setup_button_sound_assets, ui_system},
 };
@@ -265,6 +265,13 @@ pub fn run_app() -> Result<()> {
         .add_systems(
             Update,
             tick_felling_trees_system.in_set(ClientSystemSet::NodeDeathTick),
+        )
+        .add_systems(
+            Update,
+            // Same phase as the falling-tree tick — both ride the
+            // post-snapshot scene update window and write to local
+            // transforms that no other system reads after them.
+            tick_resource_node_pop_in_system.in_set(ClientSystemSet::NodeDeathTick),
         )
         .add_systems(
             Update,

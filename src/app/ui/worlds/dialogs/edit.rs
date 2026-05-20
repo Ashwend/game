@@ -2,6 +2,7 @@ use bevy_egui::egui;
 
 use crate::{
     app::state::{EditWorldDialog, MenuState, SaveStore},
+    save::validate_world_name,
     world::MapType,
 };
 
@@ -42,9 +43,25 @@ pub(in crate::app::ui::worlds) fn edit_world_dialog_ui(
 
         let output = edit_world_modal(ctx, dialog, !dialog.closing);
         if let Some(choice) = output.choice {
-            dialog.closing = true;
-            dialog.confirmed = choice == EditWorldChoice::Save;
-            ctx.request_repaint();
+            match choice {
+                EditWorldChoice::Save => match validate_world_name(&dialog.name) {
+                    Ok(_) => {
+                        dialog.error = None;
+                        dialog.closing = true;
+                        dialog.confirmed = true;
+                        ctx.request_repaint();
+                    }
+                    Err(error) => {
+                        dialog.error = Some(error.to_owned());
+                        ctx.request_repaint();
+                    }
+                },
+                EditWorldChoice::Cancel => {
+                    dialog.closing = true;
+                    dialog.confirmed = false;
+                    ctx.request_repaint();
+                }
+            }
         }
         finished_closing = output.finished_closing;
     }
@@ -103,6 +120,7 @@ fn draw_edit_world_form(
     ui.label(theme::section("Edit World"));
     ui.add_space(12.0);
 
+    let mut name_changed = false;
     ui.horizontal(|ui| {
         field_label(ui, "Name");
         let name_response = ui.add_sized(
@@ -112,7 +130,18 @@ fn draw_edit_world_form(
         if name_response.gained_focus() {
             select_all_text(ui, name_response.id, dialog.name.chars().count());
         }
+        if name_response.changed() {
+            name_changed = true;
+        }
     });
+
+    let name_is_valid = {
+        let validation = validate_world_name(&dialog.name);
+        if name_changed {
+            dialog.error = validation.err().map(str::to_owned);
+        }
+        validation.is_ok()
+    };
 
     ui.add_space(6.0);
     ui.horizontal(|ui| {
@@ -149,9 +178,11 @@ fn draw_edit_world_form(
 
     ui.add_space(18.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if theme::compact_button(ui, "Save", ButtonKind::Primary, 92.0).clicked() {
-            *choice = Some(EditWorldChoice::Save);
-        }
+        ui.add_enabled_ui(name_is_valid, |ui| {
+            if theme::compact_button(ui, "Save", ButtonKind::Primary, 92.0).clicked() {
+                *choice = Some(EditWorldChoice::Save);
+            }
+        });
         if theme::compact_button(ui, "Cancel", ButtonKind::Secondary, 92.0).clicked() {
             *choice = Some(EditWorldChoice::Cancel);
         }

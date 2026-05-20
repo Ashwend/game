@@ -254,16 +254,33 @@ fn submit_chat(menu: &mut MenuState, runtime: &mut ClientRuntime, response: &egu
     menu.chat_focus_pending = false;
     response.surrender_focus();
 
-    if text.trim().is_empty() {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
         return;
     }
 
-    if let Some(session) = runtime.session.as_mut() {
-        if let Err(error) = session.send(ClientMessage::Chat { text }) {
-            runtime.push_error_message(format!("chat send failed: {error}"));
+    // Leading slash routes through the server's command dispatcher rather
+    // than broadcasting as chat. The server is the source of truth for
+    // parsing, admin checks, and any state mutation — keeps clients honest.
+    let message = if let Some(body) = trimmed.strip_prefix('/') {
+        ClientMessage::Command {
+            text: body.to_owned(),
         }
     } else {
-        runtime.push_error_message("chat send failed: not connected");
+        ClientMessage::Chat { text: text.clone() }
+    };
+    let send_label = if matches!(message, ClientMessage::Command { .. }) {
+        "command send failed"
+    } else {
+        "chat send failed"
+    };
+
+    if let Some(session) = runtime.session.as_mut() {
+        if let Err(error) = session.send(message) {
+            runtime.push_error_message(format!("{send_label}: {error}"));
+        }
+    } else {
+        runtime.push_error_message(format!("{send_label}: not connected"));
     }
 }
 

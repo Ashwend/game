@@ -20,12 +20,14 @@ use crate::{
 
 pub(in crate::app::ui) fn refresh_worlds(menu: &mut MenuState, store: &SaveStore) {
     match store.0.list_worlds() {
-        Ok(worlds) => {
-            menu.worlds = worlds;
+        Ok(listing) => {
+            menu.worlds = listing.worlds;
+            menu.corrupted_worlds = listing.corrupted;
             menu.status = None;
         }
         Err(error) => {
             menu.worlds.clear();
+            menu.corrupted_worlds.clear();
             menu.status = Some(format!("world list failed: {error}"));
         }
     }

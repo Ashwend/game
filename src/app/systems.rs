@@ -1,7 +1,7 @@
 mod audio;
 mod camera;
 mod display;
-mod effects;
+pub(crate) mod effects;
 mod input;
 mod items;
 mod network;
@@ -27,8 +27,8 @@ pub(crate) use input::{
 };
 pub(crate) use items::{
     DroppedItemEntities, ResourceNodeEntities, apply_dropped_items_system,
-    apply_held_item_visual_system, apply_resource_nodes_system, update_pickup_target_system,
-    update_tool_swap_state_system,
+    apply_held_item_visual_system, apply_resource_nodes_system, tick_resource_node_pop_in_system,
+    update_pickup_target_system, update_tool_swap_state_system,
 };
 pub(crate) use network::{network_tick_system, session_shutdown_poll_system};
 pub(crate) use node_death::tick_felling_trees_system;

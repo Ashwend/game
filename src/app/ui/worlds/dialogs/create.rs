@@ -2,6 +2,7 @@ use bevy_egui::egui;
 
 use crate::{
     app::state::{CreateWorldDialog, CreateWorldMapKind, MenuState, SaveStore, SteamUser},
+    save::validate_world_name,
     world::ProceduralMapSize,
 };
 
@@ -46,18 +47,24 @@ pub(in crate::app::ui::worlds) fn create_world_dialog_ui(
         let output = create_world_modal(ctx, dialog, !dialog.closing);
         if let Some(choice) = output.choice {
             match choice {
-                CreateWorldChoice::Create => match dialog.selected_map() {
-                    Ok(_) => {
-                        dialog.error = None;
-                        dialog.closing = true;
-                        dialog.confirmed = true;
-                        ctx.request_repaint();
+                CreateWorldChoice::Create => {
+                    match (validate_world_name(&dialog.name), dialog.selected_map()) {
+                        (Ok(_), Ok(_)) => {
+                            dialog.error = None;
+                            dialog.closing = true;
+                            dialog.confirmed = true;
+                            ctx.request_repaint();
+                        }
+                        (Err(error), _) => {
+                            dialog.error = Some(error.to_owned());
+                            ctx.request_repaint();
+                        }
+                        (_, Err(error)) => {
+                            dialog.error = Some(error.to_owned());
+                            ctx.request_repaint();
+                        }
                     }
-                    Err(error) => {
-                        dialog.error = Some(error.to_owned());
-                        ctx.request_repaint();
-                    }
-                },
+                }
                 CreateWorldChoice::Cancel => {
                     dialog.closing = true;
                     dialog.confirmed = false;
@@ -141,6 +148,7 @@ fn draw_create_world_form(
     ui.label(theme::section("Create World"));
     ui.add_space(12.0);
 
+    let mut name_changed = false;
     ui.horizontal(|ui| {
         field_label(ui, "Name");
         let name_response = ui.add_sized(
@@ -150,7 +158,22 @@ fn draw_create_world_form(
         if name_response.gained_focus() {
             select_all_text(ui, name_response.id, dialog.name.chars().count());
         }
+        if name_response.changed() {
+            name_changed = true;
+        }
     });
+
+    // Refresh the inline error every keystroke so the user sees their typo
+    // disappear the moment they fix it, rather than only on the next submit.
+    // `name_is_valid` is detached from `dialog.name`'s borrow so the rest of
+    // the form (which needs `&mut dialog`) can keep mutating freely.
+    let name_is_valid = {
+        let validation = validate_world_name(&dialog.name);
+        if name_changed {
+            dialog.error = validation.err().map(str::to_owned);
+        }
+        validation.is_ok()
+    };
 
     ui.add_space(6.0);
     ui.horizontal(|ui| {
@@ -205,9 +228,11 @@ fn draw_create_world_form(
 
     ui.add_space(18.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if theme::compact_button(ui, "Create", ButtonKind::Primary, 92.0).clicked() {
-            *choice = Some(CreateWorldChoice::Create);
-        }
+        ui.add_enabled_ui(name_is_valid, |ui| {
+            if theme::compact_button(ui, "Create", ButtonKind::Primary, 92.0).clicked() {
+                *choice = Some(CreateWorldChoice::Create);
+            }
+        });
         if theme::compact_button(ui, "Cancel", ButtonKind::Secondary, 92.0).clicked() {
             *choice = Some(CreateWorldChoice::Cancel);
         }

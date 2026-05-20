@@ -4,25 +4,60 @@ use bevy::prelude::*;
 
 use crate::{
     app::{
-        scene::{NetworkResourceNode, ResourceVisualAssets},
-        state::ClientRuntime,
+        scene::{ImpactEffectAssets, NetworkResourceNode, ResourceVisualAssets},
+        state::{ClientRuntime, ImpactEffectKind},
+        systems::effects::spawn_impact_burst,
     },
     protocol::{ResourceNodeId, ResourceNodeState},
     resources::{ResourceNodeModel, resource_node_definition},
 };
 
-/// Persistent `id → Entity` lookup for resource nodes. Mirrors the live
-/// entity set so the snapshot-apply system can skip rebuilding the map
-/// every frame.
+/// How long the "node emerges from the ground" animation runs. Short
+/// enough to feel like a pop rather than a slow grow, long enough to
+/// register as something happening.
+const POP_IN_DURATION_SECS: f32 = 0.42;
+/// How far below the floor the node starts on emerge. The mesh's bottom
+/// sits at local y=0 so this pulls the rock/sapling fully into the
+/// ground at t=0, then lifts back to flush.
+const POP_IN_GROUND_OFFSET: f32 = 0.55;
+/// Peak overshoot scale during the emergence pulse. The node briefly
+/// pops slightly above its target size then settles, giving a "landed"
+/// feel rather than a linear ramp.
+const POP_IN_OVERSHOOT: f32 = 0.06;
+
+/// Component attached to a freshly-spawned resource node while it
+/// animates into view. The base transform is captured at spawn time so
+/// the tick system can interpolate without re-reading the snapshot.
+#[derive(Component, Debug, Clone)]
+pub(crate) struct ResourceNodePopIn {
+    elapsed: f32,
+    base_transform: Transform,
+}
+
+/// Persistent `id → Entity` lookup plus the previous tick's respawn
+/// progress for each tracked node. The progress map lets the snapshot
+/// system detect transitions (depleted → regenerating, regenerating →
+/// ready) without persisting any extra state on the entity itself.
 #[derive(Resource, Default)]
-pub(crate) struct ResourceNodeEntities(pub(crate) HashMap<ResourceNodeId, Entity>);
+pub(crate) struct ResourceNodeEntities {
+    pub(crate) entities: HashMap<ResourceNodeId, Entity>,
+    /// `id → respawn_progress as of the last applied snapshot`.
+    /// `None` means the node was ready to gather; `Some` means it was
+    /// regenerating.
+    previous_progress: HashMap<ResourceNodeId, Option<f32>>,
+    /// `true` once at least one snapshot has been applied. Suppresses
+    /// the fresh-node pop-in animation for the initial wave of world
+    /// geometry — we don't want 30 trees and ores to all pop up the
+    /// moment the player connects.
+    applied_first_snapshot: bool,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_resource_nodes_system(
     mut commands: Commands,
     runtime: Res<ClientRuntime>,
     assets: Res<ResourceVisualAssets>,
-    impact_assets: Res<crate::app::scene::ImpactEffectAssets>,
+    impact_assets: Res<ImpactEffectAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut camera_kick: ResMut<crate::app::systems::CameraImpactKick>,
     mut entities: ResMut<ResourceNodeEntities>,
@@ -32,53 +67,136 @@ pub(crate) fn apply_resource_nodes_system(
         &MeshMaterial3d<StandardMaterial>,
         &Transform,
     )>,
+    popping_in: Query<(), With<ResourceNodePopIn>>,
 ) {
     let Some(snapshot) = &runtime.snapshot else {
-        for (_, entity) in entities.0.drain() {
+        for (_, entity) in entities.entities.drain() {
             commands.entity(entity).despawn();
         }
+        entities.previous_progress.clear();
+        entities.applied_first_snapshot = false;
         return;
     };
 
     let snapshot_ids: HashSet<ResourceNodeId> =
         snapshot.resource_nodes.iter().map(|node| node.id).collect();
     let entities = &mut *entities;
-
-    for node in &snapshot.resource_nodes {
-        let Some(definition) = resource_node_definition(&node.definition_id) else {
-            continue;
-        };
-        let transform = resource_node_transform(node, definition.model);
-        if let Some(entity) = entities.0.get(&node.id).copied() {
-            commands.entity(entity).insert(transform);
-        } else {
-            let (mesh, material) = resource_node_visual(&assets, node, definition.model);
-            let entity = commands
-                .spawn((
-                    Name::new(format!("Resource Node {}", node.id)),
-                    NetworkResourceNode {
-                        id: node.id,
-                        model: definition.model,
-                    },
-                    Mesh3d(mesh),
-                    MeshMaterial3d(material),
-                    transform,
-                    Visibility::Visible,
-                ))
-                .id();
-            entities.0.insert(node.id, entity);
-        }
-    }
+    let pop_in_enabled = entities.applied_first_snapshot;
 
     let player_position = runtime.local_view().map(|view| {
         Vec3::new(view.position.x, view.position.y, view.position.z)
             + Vec3::Y * crate::app::EYE_HEIGHT
     });
 
-    // Despawn nodes that fell out of the snapshot, retaining the
-    // spawn-node-death effect at their final transform.
+    for node in &snapshot.resource_nodes {
+        let Some(definition) = resource_node_definition(&node.definition_id) else {
+            continue;
+        };
+
+        let was_tracked = entities.previous_progress.contains_key(&node.id);
+        let previous_progress = entities
+            .previous_progress
+            .get(&node.id)
+            .copied()
+            .unwrap_or(None);
+
+        // Transition: node just got depleted. Fire the death effect on
+        // the current entity, then despawn it — during regen the area
+        // should look empty, not show a shrunken ghost.
+        let just_entered_regen = previous_progress.is_none() && node.respawn_progress.is_some();
+        if just_entered_regen && let Some(entity) = entities.entities.remove(&node.id) {
+            if let Ok((resource, mesh, material, current_transform)) = resource_entities.get(entity)
+            {
+                crate::app::systems::node_death::spawn_node_death(
+                    &mut commands,
+                    &impact_assets,
+                    &mut materials,
+                    &mut camera_kick,
+                    resource.id,
+                    resource.model,
+                    *current_transform,
+                    mesh.0.clone(),
+                    material.0.clone(),
+                    player_position,
+                );
+            }
+            commands.entity(entity).despawn();
+        }
+
+        // Regenerating nodes have no on-screen presence — skip any
+        // entity creation or transform updates this frame.
+        if node.respawn_progress.is_some() {
+            continue;
+        }
+
+        let just_finished_regen = previous_progress.is_some() && node.respawn_progress.is_none();
+        let arrived_fresh = !was_tracked && pop_in_enabled;
+        let should_pop_in = just_finished_regen || arrived_fresh;
+
+        let target_transform = resource_node_transform(node, definition.model);
+
+        if let Some(entity) = entities.entities.get(&node.id).copied() {
+            // An entity that's mid-pop-in owns its own transform — the
+            // pop-in tick system is the only writer until the animation
+            // completes. Snapshot reads can still nudge other components,
+            // but this prevents a one-frame jump on the first frame.
+            if !popping_in.contains(entity) {
+                commands.entity(entity).insert(target_transform);
+            }
+            continue;
+        }
+
+        let (mesh, material) = resource_node_visual(&assets, node, definition.model);
+        let mut spawn_command = commands.spawn((
+            Name::new(format!("Resource Node {}", node.id)),
+            NetworkResourceNode {
+                id: node.id,
+                model: definition.model,
+            },
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
+            target_transform,
+            Visibility::Visible,
+        ));
+
+        if should_pop_in {
+            spawn_command.insert(ResourceNodePopIn {
+                elapsed: 0.0,
+                base_transform: target_transform,
+            });
+        }
+        let entity = spawn_command.id();
+        entities.entities.insert(node.id, entity);
+
+        if should_pop_in {
+            // A short upward chip burst sells the "fresh from the
+            // ground" moment. Trees throw wood chips, ores throw stone
+            // shards — same palette as gather impacts so the visual
+            // language stays consistent.
+            let burst_anchor = Vec3::new(node.position.x, node.position.y + 0.18, node.position.z);
+            let kind = if definition.model.is_tree() {
+                ImpactEffectKind::WoodChips
+            } else {
+                ImpactEffectKind::StoneShards
+            };
+            let seed = (node.id as u32).wrapping_mul(0x9E37_79B1);
+            spawn_impact_burst(
+                &mut commands,
+                &impact_assets,
+                kind,
+                burst_anchor,
+                Vec3::Y,
+                seed,
+                0.65,
+            );
+        }
+    }
+
+    // Despawn nodes that fell out of the snapshot entirely (an admin
+    // /clear or hot-reload), retaining the spawn-node-death effect at
+    // their final transform.
     let mut to_remove: Vec<ResourceNodeId> = Vec::new();
-    for (&id, &entity) in entities.0.iter() {
+    for (&id, &entity) in entities.entities.iter() {
         if snapshot_ids.contains(&id) {
             continue;
         }
@@ -100,8 +218,72 @@ pub(crate) fn apply_resource_nodes_system(
         to_remove.push(id);
     }
     for id in to_remove {
-        entities.0.remove(&id);
+        entities.entities.remove(&id);
     }
+
+    // Update the per-node progress map so the next tick can detect
+    // transitions. Drop entries that left the snapshot so the map
+    // doesn't grow without bound across long sessions.
+    entities
+        .previous_progress
+        .retain(|id, _| snapshot_ids.contains(id));
+    for node in &snapshot.resource_nodes {
+        entities
+            .previous_progress
+            .insert(node.id, node.respawn_progress);
+    }
+    entities.applied_first_snapshot = true;
+}
+
+/// Drives the "emerge from the ground" animation attached to freshly
+/// (re)spawned resource nodes. Removes the component once the curve
+/// settles, after which the entity returns to snapshot-driven transforms.
+pub(crate) fn tick_resource_node_pop_in_system(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut popping_in: Query<(Entity, &mut Transform, &mut ResourceNodePopIn)>,
+) {
+    let dt = time.delta_secs().clamp(0.0, 0.1);
+    if dt == 0.0 {
+        return;
+    }
+    for (entity, mut transform, mut pop_in) in &mut popping_in {
+        pop_in.elapsed += dt;
+        let finished = pop_in.elapsed >= POP_IN_DURATION_SECS;
+        *transform = pop_in_transform(pop_in.base_transform, pop_in.elapsed);
+        if finished {
+            commands.entity(entity).remove::<ResourceNodePopIn>();
+        }
+    }
+}
+
+/// Pure math behind the pop-in transform. Pulled out of the system so
+/// it can be exercised without spinning up a Bevy world.
+fn pop_in_transform(base: Transform, elapsed: f32) -> Transform {
+    let raw = (elapsed / POP_IN_DURATION_SECS).clamp(0.0, 1.0);
+    if raw >= 1.0 {
+        return base;
+    }
+    let ease = ease_out_cubic(raw);
+    // Lift from below the floor to flush, with a brief overshoot beyond
+    // unit scale that settles back to 1.0 — reads as the node "thudding"
+    // into place rather than easing to a stop.
+    let height = -POP_IN_GROUND_OFFSET * (1.0 - ease);
+    let overshoot = if raw < 0.7 {
+        POP_IN_OVERSHOOT * (raw / 0.7)
+    } else {
+        POP_IN_OVERSHOOT * (1.0 - (raw - 0.7) / 0.3)
+    };
+    let scale_factor = ease + overshoot * (raw * (1.0 - raw) * 4.0);
+    let mut next = base;
+    next.translation.y = base.translation.y + height;
+    next.scale = base.scale * scale_factor.max(0.0);
+    next
+}
+
+fn ease_out_cubic(t: f32) -> f32 {
+    let inv = 1.0 - t.clamp(0.0, 1.0);
+    1.0 - inv * inv * inv
 }
 
 pub(super) fn resource_node_transform(
@@ -186,7 +368,34 @@ mod tests {
             position,
             yaw: 0.0,
             storage: Vec::new(),
+            respawn_progress: None,
         }
+    }
+
+    #[test]
+    fn pop_in_starts_below_floor_and_settles_to_base_transform() {
+        let base = Transform::from_xyz(3.0, 0.0, -2.0).with_scale(Vec3::ONE);
+
+        // At t=0 the node is fully buried — the very first frame the
+        // animation runs the entity should be at the deepest point.
+        let at_start = pop_in_transform(base, 0.0);
+        assert!(
+            at_start.translation.y < base.translation.y - 0.4,
+            "pop-in should start well below the floor, got {at_start:?}"
+        );
+        assert!(at_start.scale.length() <= base.scale.length() + 1e-3);
+
+        // Mid-curve the node is on its way up and slightly above unit
+        // scale (the overshoot pulse), but still below its final y.
+        let mid = pop_in_transform(base, POP_IN_DURATION_SECS * 0.6);
+        assert!(mid.translation.y > at_start.translation.y);
+        assert!(mid.translation.y < base.translation.y);
+
+        // Past the window the result snaps exactly back to the base
+        // transform so subsequent snapshot updates take over cleanly.
+        let after = pop_in_transform(base, POP_IN_DURATION_SECS + 1.0);
+        assert_eq!(after.translation, base.translation);
+        assert_eq!(after.scale, base.scale);
     }
 
     #[test]

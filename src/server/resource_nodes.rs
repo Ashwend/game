@@ -7,9 +7,9 @@ use crate::{
         ResourceNodeState, ServerMessage,
     },
     resources::{
-        ResourceNodeModel, can_gather_resource_node, next_resource_payout,
-        remove_resource_from_storage, resource_node_definition, resource_storage_is_empty,
-        spawn_resource_node,
+        ResourceNodeModel, can_gather_resource_node, definition_storage_stacks,
+        next_resource_payout, remove_resource_from_storage, resource_node_definition,
+        resource_storage_is_empty, spawn_resource_node,
     },
     world::WorldData,
 };
@@ -18,6 +18,17 @@ use super::{
     DeliveryTarget, GameServer, ServerEnvelope, inventory::add_stack_to_inventory,
     inventory_full_toast_envelopes, item_acquired_toast_envelopes, movement::player_eye_position,
 };
+
+/// How long a depleted resource node takes to fully regenerate. Picked so
+/// the loop has rhythm without making the map feel cluttered with timers:
+/// long enough that a "first-clear" of the starting zone still feels
+/// earned, short enough that returning to the area later finds things
+/// regrown.
+pub(super) const RESPAWN_DURATION_SECONDS: f32 = 75.0;
+/// Floor on a per-tick respawn step. Fixed-rate tick (~20 Hz) keeps step
+/// noise low; this clamp just guards against an absurd `delta_seconds`
+/// stalling progress.
+const MAX_RESPAWN_STEP: f32 = 0.1;
 
 pub(super) fn initial_resource_nodes(
     world: &WorldData,
@@ -42,6 +53,12 @@ impl GameServer {
         let Some(node_definition) = resource_node_definition(&node.definition_id) else {
             return Vec::new();
         };
+        // Regenerating nodes carry no payout — they're a ghost waiting to
+        // come back. Silently reject the gather so a swing hitting a
+        // regrowing node doesn't dispense items or fire impact effects.
+        if node.respawn_progress.is_some() {
+            return Vec::new();
+        }
         let Some(client) = self.clients.get(&client_id) else {
             return Vec::new();
         };
@@ -92,7 +109,9 @@ impl GameServer {
         if let Some(node) = self.resource_nodes.get_mut(&command.resource_node_id) {
             remove_resource_from_storage(node, &payout_id, accepted_quantity);
             if resource_storage_is_empty(node) {
-                self.resource_nodes.remove(&command.resource_node_id);
+                // Don't delete — start the respawn timer instead. The
+                // ghost remains visible to clients while it regrows.
+                node.respawn_progress = Some(0.0);
             }
         }
 
@@ -108,6 +127,31 @@ impl GameServer {
             },
         });
         envelopes
+    }
+
+    /// Advance every regenerating node by `delta_seconds`. When a node
+    /// finishes regrowing, its storage is restocked from the definition
+    /// and the `respawn_progress` flag is cleared so the next gather
+    /// finds it ready. Called from `tick()` once per server step.
+    pub(super) fn tick_resource_node_respawn(&mut self, delta_seconds: f32) {
+        let step = delta_seconds.clamp(0.0, MAX_RESPAWN_STEP) / RESPAWN_DURATION_SECONDS;
+        if step <= 0.0 {
+            return;
+        }
+        for node in self.resource_nodes.values_mut() {
+            let Some(progress) = node.respawn_progress else {
+                continue;
+            };
+            let next = progress + step;
+            if next >= 1.0 {
+                if let Some(definition) = resource_node_definition(&node.definition_id) {
+                    node.storage = definition_storage_stacks(definition);
+                }
+                node.respawn_progress = None;
+            } else {
+                node.respawn_progress = Some(next);
+            }
+        }
     }
 }
 

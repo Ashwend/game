@@ -195,12 +195,20 @@ pub fn spawn_resource_node(spawn: &WorldResourceNodeSpawn) -> Option<ResourceNod
         definition_id: definition.id.to_owned(),
         position: spawn.position,
         yaw: spawn.yaw,
-        storage: definition
-            .storage
-            .iter()
-            .map(|material| ItemStack::new(material.item_id, material.quantity))
-            .collect(),
+        storage: definition_storage_stacks(definition),
+        respawn_progress: None,
     })
+}
+
+/// Build the freshly-spawned storage payload for a resource definition.
+/// Called both at world generation time and when a node finishes
+/// regenerating after being mined out.
+pub fn definition_storage_stacks(definition: &ResourceNodeDefinition) -> Vec<ItemStack> {
+    definition
+        .storage
+        .iter()
+        .map(|material| ItemStack::new(material.item_id, material.quantity))
+        .collect()
 }
 
 pub fn resource_node_anchor(node: &ResourceNodeState) -> Vec3Net {
@@ -216,6 +224,11 @@ pub fn resource_node_score(
     pitch: f32,
     node: &ResourceNodeState,
 ) -> Option<f32> {
+    // Regenerating nodes have no payout and shouldn't appear as gather
+    // targets — the look-tooltip and swing dispatch both pivot on this.
+    if node.respawn_progress.is_some() {
+        return None;
+    }
     let anchor = resource_node_anchor(node);
     let to_node = anchor.minus(eye);
     // Cheap distance cull before the trig in `look_forward` and the definition
@@ -310,6 +323,11 @@ pub fn resource_storage_is_empty(node: &ResourceNodeState) -> bool {
 /// height 0.32 to span the visible rock without poking the floor or
 /// floating above the peak.
 pub fn resource_node_collider(node: &ResourceNodeState) -> Option<WorldBlock> {
+    // Regenerating nodes are visual ghosts only — let players walk through
+    // them so the area doesn't stay blocked while a tree regrows.
+    if node.respawn_progress.is_some() {
+        return None;
+    }
     let definition = resource_node_definition(&node.definition_id)?;
     match definition.model {
         ResourceNodeModel::PineTreeSmall
@@ -360,6 +378,7 @@ mod tests {
             position: Vec3Net::ZERO,
             yaw: 0.0,
             storage: vec![ItemStack::new(COAL_ID, 5)],
+            respawn_progress: None,
         };
         let tool = ToolProfile {
             kind: ToolKind::Pickaxe,
@@ -388,6 +407,7 @@ mod tests {
                 position: Vec3Net::new(5.0, 0.0, -3.0),
                 yaw: 0.0,
                 storage: Vec::new(),
+                respawn_progress: None,
             };
             let collider = resource_node_collider(&node)
                 .unwrap_or_else(|| panic!("expected collider for {ore_id}"));
@@ -416,6 +436,7 @@ mod tests {
             position: Vec3Net::new(0.0, 0.0, 0.0),
             yaw: 0.0,
             storage: Vec::new(),
+            respawn_progress: None,
         };
         let collider = resource_node_collider(&node).expect("tree should have a collider");
         let size = collider.size();
@@ -432,6 +453,7 @@ mod tests {
             position: Vec3Net::new(0.0, 0.0, -2.2),
             yaw: 0.0,
             storage: vec![ItemStack::new(COAL_ID, 1)],
+            respawn_progress: None,
         };
         let eye = Vec3Net::new(0.0, 1.62, 0.0);
 

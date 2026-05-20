@@ -6,7 +6,10 @@ mod tests;
 
 use bevy_egui::egui;
 
-use crate::app::state::{ClientRuntime, MenuState, SaveStore, Screen, SteamUser};
+use crate::{
+    app::state::{ClientRuntime, MenuState, SaveStore, Screen, SteamUser},
+    save::CorruptedWorld,
+};
 
 use super::theme::{self, ButtonKind};
 use dialogs::{create_world_dialog_ui, edit_world_dialog_ui, open_create_world_dialog};
@@ -57,6 +60,7 @@ pub(super) fn worlds_ui(
             });
 
             ui.add_space(16.0);
+            draw_corrupted_worlds_banner(ui, &menu.corrupted_worlds);
             draw_world_headers(ui);
             let table_height = table_height(ctx);
             draw_world_table(ui, menu, store, user, table_height);
@@ -69,6 +73,51 @@ pub(super) fn worlds_ui(
     );
     create_world_dialog_ui(ctx, menu, store, user);
     edit_world_dialog_ui(ctx, menu, store);
+}
+
+/// Renders a warning banner above the worlds table for save files that
+/// could not be loaded. Each entry shows the file name and a tooltip with
+/// the underlying parse error so the player has enough info to either
+/// delete or recover the file.
+fn draw_corrupted_worlds_banner(ui: &mut egui::Ui, corrupted: &[CorruptedWorld]) {
+    if corrupted.is_empty() {
+        return;
+    }
+
+    let fill = egui::Color32::from_rgba_unmultiplied(58, 24, 16, 220);
+    let stroke = egui::Stroke::new(
+        1.0,
+        egui::Color32::from_rgba_unmultiplied(220, 120, 80, 200),
+    );
+    egui::Frame::NONE
+        .fill(fill)
+        .stroke(stroke)
+        .corner_radius(5)
+        .inner_margin(egui::Margin::symmetric(14, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let heading = if corrupted.len() == 1 {
+                "1 save couldn't be loaded".to_owned()
+            } else {
+                format!("{} saves couldn't be loaded", corrupted.len())
+            };
+            ui.label(
+                egui::RichText::new(heading)
+                    .size(13.5)
+                    .strong()
+                    .color(egui::Color32::from_rgb(252, 224, 196)),
+            );
+            ui.add_space(4.0);
+            for entry in corrupted {
+                let line = ui.label(
+                    egui::RichText::new(format!("• {}", entry.file_name))
+                        .size(12.5)
+                        .color(egui::Color32::from_rgb(244, 210, 192)),
+                );
+                let _ = theme::wow_tooltip(line, &entry.file_name, &entry.error);
+            }
+        });
+    ui.add_space(10.0);
 }
 
 fn handle_worlds_escape(ctx: &egui::Context, menu: &mut MenuState) {

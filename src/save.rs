@@ -28,7 +28,12 @@ const SAVE_EXTENSION: &str = "save";
 const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 /// Bump on every breaking change to the on-disk schema. Old saves with a
 /// different version are rejected; there is no migration path.
-const SAVE_FORMAT_VERSION: u32 = 1;
+///
+/// `2` added `ResourceNodeState::respawn_progress` for the regenerating-node
+/// flow. Older v1 saves don't include that field and would be misread
+/// (postcard is positional), so they are rejected at load time and surfaced
+/// in the worlds-screen "couldn't load" banner.
+const SAVE_FORMAT_VERSION: u32 = 2;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
 /// at >100MB/s compression and ~1GB/s decompression.
 const ZSTD_LEVEL: i32 = 5;
@@ -58,10 +63,11 @@ impl WorldStore {
             .with_context(|| format!("could not create world directory {}", self.root.display()))
     }
 
-    pub fn list_worlds(&self) -> Result<Vec<WorldSummary>> {
+    pub fn list_worlds(&self) -> Result<WorldListing> {
         self.ensure_exists()?;
 
         let mut worlds = Vec::new();
+        let mut corrupted = Vec::new();
         for entry in fs::read_dir(&self.root)
             .with_context(|| format!("could not read world directory {}", self.root.display()))?
         {
@@ -71,8 +77,21 @@ impl WorldStore {
                 continue;
             }
 
-            let save = self.load_world_file(&path)?;
-            worlds.push(WorldSummary::from_save(&save, path));
+            // Per-file isolation: one unreadable save must not hide the rest
+            // of the player's worlds. Surface the failure separately instead.
+            match self.load_world_file(&path) {
+                Ok(save) => worlds.push(WorldSummary::from_save(&save, path)),
+                Err(error) => {
+                    let file_name = path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path.display().to_string());
+                    corrupted.push(CorruptedWorld {
+                        file_name,
+                        error: format!("{error:#}"),
+                    });
+                }
+            }
         }
 
         worlds.sort_by(|a, b| {
@@ -80,7 +99,8 @@ impl WorldStore {
                 .cmp(&a.created_at_unix)
                 .then(a.name.cmp(&b.name))
         });
-        Ok(worlds)
+        corrupted.sort_by(|a, b| a.file_name.cmp(&b.file_name));
+        Ok(WorldListing { worlds, corrupted })
     }
 
     pub fn create_world(&self, name: &str, owner_steam_id: Option<SteamId>) -> Result<WorldSave> {
@@ -128,8 +148,12 @@ impl WorldStore {
     }
 
     pub fn load_or_create_dedicated(&self, owner_steam_id: Option<SteamId>) -> Result<WorldSave> {
-        let worlds = self.list_worlds()?;
-        if let Some(world) = worlds.into_iter().find(|world| world.name == "Dedicated") {
+        let listing = self.list_worlds()?;
+        if let Some(world) = listing
+            .worlds
+            .into_iter()
+            .find(|world| world.name == "Dedicated")
+        {
             return self.load_world(world.id);
         }
 
@@ -261,6 +285,26 @@ pub struct PersistedPlayer {
     pub inventory: PlayerInventoryState,
 }
 
+/// Result of a `list_worlds()` call. Loadable saves are returned in `worlds`;
+/// any save files that failed to parse (truncated, wrong magic, bad format
+/// version, corrupted zstd payload, …) are surfaced separately in
+/// `corrupted` so the player can see what's broken instead of being shown
+/// an empty list.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WorldListing {
+    pub worlds: Vec<WorldSummary>,
+    pub corrupted: Vec<CorruptedWorld>,
+}
+
+/// A save file that was present on disk but could not be loaded. The file
+/// name is preserved (rather than the parsed UUID) because the parse is
+/// exactly what failed — there's no save struct to extract an id from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CorruptedWorld {
+    pub file_name: String,
+    pub error: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorldSummary {
     pub id: Uuid,
@@ -280,6 +324,38 @@ impl WorldSummary {
             path,
         }
     }
+}
+
+/// Maximum number of characters allowed in a player-supplied world name.
+/// Saves themselves can hold the historical 64-character form (via
+/// `normalize_world_name`), but the UI rejects new inputs above this cap so
+/// names stay legible in the worlds list.
+pub const MAX_WORLD_NAME_LEN: usize = 48;
+
+/// Validate a player-supplied world name. Returns the canonical (trimmed)
+/// form on success, or a human-readable error otherwise.
+///
+/// The rules are intentionally tighter than `normalize_world_name`'s fallback
+/// behaviour: callers that surface validation to the player should reject
+/// rather than silently fixing up the input.
+pub fn validate_world_name(name: &str) -> Result<&str, &'static str> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("Name cannot be empty.");
+    }
+    let char_count = trimmed.chars().count();
+    if char_count > MAX_WORLD_NAME_LEN {
+        return Err("Name is too long (48 characters max).");
+    }
+    for ch in trimmed.chars() {
+        if ch.is_control() {
+            return Err("Name cannot contain control characters.");
+        }
+        if matches!(ch, '/' | '\\') {
+            return Err("Name cannot contain '/' or '\\'.");
+        }
+    }
+    Ok(trimmed)
 }
 
 fn normalize_world_name(name: &str) -> String {
@@ -409,14 +485,37 @@ mod tests {
         assert_eq!(loaded.id, save.id);
 
         let listed = store.list_worlds().expect("world list should load");
-        assert_eq!(listed.len(), 1);
+        assert_eq!(listed.worlds.len(), 1);
+        assert!(listed.corrupted.is_empty());
 
         store.delete_world(save.id).expect("world should delete");
+        let after_delete = store.list_worlds().expect("world list should load");
+        assert!(after_delete.worlds.is_empty());
+        assert!(after_delete.corrupted.is_empty());
+
+        let _ = fs::remove_dir_all(store.root());
+    }
+
+    #[test]
+    fn list_worlds_reports_corrupted_files_separately_from_valid_ones() {
+        let store = temp_store();
+        let good = store
+            .create_world("Good", Some(123))
+            .expect("good world should save");
+        let bad_path = store.root().join(format!("broken.{SAVE_EXTENSION}"));
+        std::fs::create_dir_all(store.root()).expect("store dir");
+        std::fs::write(&bad_path, b"this is not a real save file")
+            .expect("broken save should be written");
+
+        let listing = store.list_worlds().expect("listing should still succeed");
+
+        assert_eq!(listing.worlds.len(), 1);
+        assert_eq!(listing.worlds[0].id, good.id);
+        assert_eq!(listing.corrupted.len(), 1);
+        assert_eq!(listing.corrupted[0].file_name, "broken.save");
         assert!(
-            store
-                .list_worlds()
-                .expect("world list should load")
-                .is_empty()
+            !listing.corrupted[0].error.is_empty(),
+            "corrupted entry should carry a human-readable error"
         );
 
         let _ = fs::remove_dir_all(store.root());
@@ -561,5 +660,36 @@ mod tests {
         bytes.extend_from_slice(&999u32.to_le_bytes());
         let err = decode_world_save(&bytes).unwrap_err();
         assert!(err.to_string().contains("version 999"));
+    }
+
+    #[test]
+    fn validate_world_name_accepts_normal_input_and_trims() {
+        assert_eq!(
+            validate_world_name("  Spruce Valley  "),
+            Ok("Spruce Valley")
+        );
+        assert_eq!(validate_world_name("a"), Ok("a"));
+    }
+
+    #[test]
+    fn validate_world_name_rejects_empty_and_whitespace_only() {
+        assert!(validate_world_name("").is_err());
+        assert!(validate_world_name("   \t  ").is_err());
+    }
+
+    #[test]
+    fn validate_world_name_rejects_overflowing_names() {
+        let too_long: String = "a".repeat(MAX_WORLD_NAME_LEN + 1);
+        assert!(validate_world_name(&too_long).is_err());
+        let at_cap: String = "a".repeat(MAX_WORLD_NAME_LEN);
+        assert!(validate_world_name(&at_cap).is_ok());
+    }
+
+    #[test]
+    fn validate_world_name_rejects_path_separators_and_control_chars() {
+        assert!(validate_world_name("nice/name").is_err());
+        assert!(validate_world_name("nice\\name").is_err());
+        assert!(validate_world_name("nice\nname").is_err());
+        assert!(validate_world_name("nice\tname").is_err());
     }
 }

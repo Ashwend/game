@@ -49,6 +49,7 @@ fn connect_host(server: &mut GameServer) -> ClientId {
         .0
 }
 
+mod commands;
 mod connection;
 mod dropped_items;
 mod inventory;

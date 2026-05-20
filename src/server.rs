@@ -15,6 +15,7 @@ use crate::{
 
 const CLIENT_STALE_TIMEOUT_TICKS: u64 = 20 * 10;
 
+mod commands;
 mod connection;
 mod dropped_items;
 mod inventory;
@@ -202,6 +203,7 @@ impl GameServer {
                 })
                 .into_iter()
                 .collect(),
+            ClientMessage::Command { text } => self.apply_command(client_id, text),
             ClientMessage::Inventory(command) => self.apply_inventory_command(client_id, command),
             ClientMessage::Gather(command) => self.apply_gather_command(client_id, command),
             ClientMessage::Heartbeat => Vec::new(),
@@ -248,6 +250,7 @@ impl GameServer {
         self.save.state.last_authoritative_tick = self.tick;
         self.dropped_item_physics
             .step(delta_seconds, &mut self.dropped_items);
+        self.tick_resource_node_respawn(delta_seconds);
 
         let mut envelopes = self.disconnect_stale_clients();
         if self.tick.is_multiple_of(DROPPED_ITEM_MERGE_INTERVAL_TICKS) {

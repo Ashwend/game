@@ -1,6 +1,9 @@
 use bevy::prelude::*;
 
-use crate::{save::WorldStore, steam::AuthenticatedUser};
+use crate::{
+    save::{CorruptedWorld, WorldStore},
+    steam::AuthenticatedUser,
+};
 
 use super::{
     ConfirmationDialog, CreateWorldDialog, DirectConnectDialog, EditWorldDialog, NoticeDialog,
@@ -34,6 +37,12 @@ pub(crate) struct SteamUser(pub(crate) AuthenticatedUser);
 pub(crate) struct MenuState {
     pub(crate) screen: Screen,
     pub(crate) worlds: Vec<crate::save::WorldSummary>,
+    /// Saves that were present on disk but could not be parsed (truncated,
+    /// bad header, mismatched format version, …). Rendered above the worlds
+    /// table as a separate "couldn't load" group so the player knows there
+    /// are files that need attention rather than seeing them silently
+    /// dropped from the list.
+    pub(crate) corrupted_worlds: Vec<CorruptedWorld>,
     pub(crate) create_world: Option<CreateWorldDialog>,
     pub(crate) edit_world: Option<EditWorldDialog>,
     pub(crate) direct_connect: Option<DirectConnectDialog>,
@@ -56,6 +65,7 @@ impl Default for MenuState {
         Self {
             screen: Screen::MainMenu,
             worlds: Vec::new(),
+            corrupted_worlds: Vec::new(),
             create_world: None,
             edit_world: None,
             direct_connect: None,
