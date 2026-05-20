@@ -1,4 +1,7 @@
-use std::sync::{Arc, OnceLock, RwLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock, RwLock},
+};
 
 use crate::protocol::{DroppedWorldItem, ItemStack, Vec3Net};
 
@@ -20,32 +23,41 @@ pub const BASIC_PICKAXE_ID: &str = "wood_stone_pickaxe";
 pub type ItemId = Arc<str>;
 
 /// Returns the interned `Arc<str>` for `id`. Compile-time constants from
-/// `REGISTERED_ITEMS` resolve without allocating on hits; unknown ids fall
-/// through to a fresh `Arc` so the system stays open to runtime-loaded items.
+/// `REGISTERED_ITEMS` resolve without allocating on hits via an O(1) hash
+/// lookup; unknown ids fall through to a fresh `Arc` and are cached so
+/// subsequent hits also avoid allocating. Stays open to runtime-loaded items.
 pub fn intern_item_id(id: &str) -> ItemId {
     let registry = interned_registry();
-    if let Some(cached) = registry
-        .read()
-        .ok()
-        .and_then(|map| map.iter().find(|cached| cached.as_ref() == id).cloned())
-    {
+    if let Some(cached) = registry.read().ok().and_then(|map| map.get(id).cloned()) {
         return cached;
     }
+    // Allocate outside the write lock so a contended path doesn't hold the
+    // lock through the heap allocation. The double-insert window is harmless:
+    // both inserts produce the same Arc<str> contents, and the second simply
+    // overwrites with an Arc that hashes/compares equal.
     let fresh: Arc<str> = Arc::from(id);
     if let Ok(mut map) = registry.write() {
-        map.push(fresh.clone());
+        // Re-check after taking the write lock — another caller may have
+        // inserted between our read miss and now. Returning the cached value
+        // keeps the registry's "one Arc per id" invariant in lockstep with
+        // anything that already grabbed the earlier-inserted Arc.
+        if let Some(cached) = map.get(id).cloned() {
+            return cached;
+        }
+        map.insert(Box::from(id), fresh.clone());
     }
     fresh
 }
 
-fn interned_registry() -> &'static RwLock<Vec<Arc<str>>> {
-    static REGISTRY: OnceLock<RwLock<Vec<Arc<str>>>> = OnceLock::new();
+fn interned_registry() -> &'static RwLock<HashMap<Box<str>, Arc<str>>> {
+    static REGISTRY: OnceLock<RwLock<HashMap<Box<str>, Arc<str>>>> = OnceLock::new();
     REGISTRY.get_or_init(|| {
-        let seeded = REGISTERED_ITEMS
-            .iter()
-            .map(|definition| Arc::<str>::from(definition.id))
-            .collect();
-        RwLock::new(seeded)
+        let mut map = HashMap::with_capacity(REGISTERED_ITEMS.len());
+        for definition in REGISTERED_ITEMS {
+            let arc: Arc<str> = Arc::from(definition.id);
+            map.insert(Box::from(definition.id), arc);
+        }
+        RwLock::new(map)
     })
 }
 

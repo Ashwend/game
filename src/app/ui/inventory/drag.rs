@@ -2,7 +2,7 @@ use bevy_egui::egui::{self, PointerButton, Sense, Vec2, vec2};
 
 use crate::{
     app::{
-        state::{ClientRuntime, InventoryDragButton, InventoryUiState, MenuState},
+        state::{ClientRuntime, ErrorToastSink, InventoryDragButton, InventoryUiState, MenuState},
         systems::send_inventory_command,
     },
     protocol::InventoryCommand,
@@ -15,6 +15,7 @@ pub(super) fn handle_drag_release(
     menu: &MenuState,
     runtime: &mut ClientRuntime,
     inventory_ui: &mut InventoryUiState,
+    error_toasts: &mut dyn ErrorToastSink,
 ) {
     if !menu.inventory_open {
         inventory_ui.cancel_drag();
@@ -36,6 +37,7 @@ pub(super) fn handle_drag_release(
         if target != drag.source {
             send_inventory_command(
                 runtime,
+                error_toasts,
                 InventoryCommand::Move {
                     from: drag.source,
                     to: target,
@@ -46,6 +48,7 @@ pub(super) fn handle_drag_release(
     } else if pointer_is_outside_inventory_surfaces(ctx, inventory_ui) {
         send_inventory_command(
             runtime,
+            error_toasts,
             InventoryCommand::Drop {
                 from: drag.source,
                 quantity: Some(drag.quantity),

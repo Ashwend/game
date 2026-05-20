@@ -3,8 +3,8 @@ use bevy::prelude::*;
 use crate::{
     app::{
         state::{
-            ClientRuntime, ImpactEffectKind, MenuState, NoticeDialog, RemoteImpactEvent, Screen,
-            SessionShutdownTasks, ToastState,
+            ClientErrorToast, ClientRuntime, ImpactEffectKind, MenuState, NoticeDialog,
+            RemoteImpactEvent, Screen, SessionShutdownTasks, ToastState,
         },
         ui::ButtonSoundRequests,
     },
@@ -18,9 +18,9 @@ pub(crate) fn network_tick_system(
     mut button_sound_requests: ResMut<ButtonSoundRequests>,
     mut toasts: ResMut<ToastState>,
     mut remote_impacts: MessageWriter<RemoteImpactEvent>,
+    mut error_toasts: MessageWriter<ClientErrorToast>,
 ) {
     toasts.tick(time.delta_secs());
-    drain_pending_error_toasts(&mut runtime, &mut toasts);
 
     if !network_tick_allowed(&menu) {
         return;
@@ -33,7 +33,9 @@ pub(crate) fn network_tick_system(
     let messages = match tick_result {
         Some(Ok(messages)) => messages,
         Some(Err(error)) => {
-            runtime.push_error_message(format!("network error: {error}"));
+            let text = format!("network error: {error}");
+            runtime.push_error_message(text.clone());
+            error_toasts.write(ClientErrorToast::new(text));
             Vec::new()
         }
         None => Vec::new(),
@@ -45,11 +47,20 @@ pub(crate) fn network_tick_system(
 
     for message in messages {
         if let ServerMessage::Kicked { reason } = &message {
-            runtime.apply_message(message.clone());
+            let reason = reason.clone();
+            runtime.apply_message(message);
             runtime.stop_session_after_kick();
             show_kick_notice(&mut menu, reason.clone());
+            // Wipe in-flight gather toasts: the player is back at the main
+            // menu, those messages aren't relevant anymore. The disconnect
+            // notice is delivered via the modal dialog above, so no
+            // replacement toast is needed.
             toasts.clear();
+            let _ = reason;
             continue;
+        }
+        if let ServerMessage::AuthRejected { reason } = &message {
+            error_toasts.write(ClientErrorToast::new(format!("auth rejected: {reason}")));
         }
         if matches!(message, ServerMessage::ItemMerged { .. }) {
             button_sound_requests.push_hover();
@@ -62,15 +73,19 @@ pub(crate) fn network_tick_system(
         }
         runtime.apply_message(message);
     }
-
-    drain_pending_error_toasts(&mut runtime, &mut toasts);
 }
 
-/// Surface buffered error log entries as toasts so the player actually
-/// sees them — the in-memory `messages` history is only visible in chat.
-fn drain_pending_error_toasts(runtime: &mut ClientRuntime, toasts: &mut ToastState) {
-    for text in runtime.take_pending_error_toasts() {
-        toasts.push(ToastKind::Error, text);
+/// Reads queued [`ClientErrorToast`] events and surfaces them on
+/// [`ToastState`]. Centralising the write keeps every error-emitting
+/// system free of `ResMut<ToastState>` and makes the path from "an
+/// error happens" to "the player sees a toast" a single hop through an
+/// event channel.
+pub(crate) fn surface_client_error_toasts_system(
+    mut toasts: ResMut<ToastState>,
+    mut events: MessageReader<ClientErrorToast>,
+) {
+    for event in events.read() {
+        toasts.push(ToastKind::Error, event.text.clone());
     }
 }
 

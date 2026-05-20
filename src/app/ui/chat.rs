@@ -1,7 +1,7 @@
 use bevy_egui::egui;
 
 use crate::{
-    app::state::{ClientLogEntry, ClientLogKind, ClientRuntime, MenuState},
+    app::state::{ClientLogEntry, ClientLogKind, ClientRuntime, ErrorToastSink, MenuState},
     protocol::ClientMessage,
 };
 
@@ -18,6 +18,7 @@ pub(super) fn chat_ui(
     ctx: &egui::Context,
     menu: &mut MenuState,
     runtime: &mut ClientRuntime,
+    error_toasts: &mut dyn ErrorToastSink,
     inventory_open: bool,
 ) {
     let opened_this_frame = handle_chat_shortcuts(ctx, menu);
@@ -34,7 +35,7 @@ pub(super) fn chat_ui(
                 draw_messages(ui, &runtime.messages, active, allow_pointer_interaction);
                 ui.add_space(8.0);
                 if active {
-                    draw_active_input(ui, menu, runtime, opened_this_frame);
+                    draw_active_input(ui, menu, runtime, error_toasts, opened_this_frame);
                 } else {
                     draw_inactive_input(ui, menu, allow_pointer_interaction);
                 }
@@ -164,6 +165,7 @@ fn draw_active_input(
     ui: &mut egui::Ui,
     menu: &mut MenuState,
     runtime: &mut ClientRuntime,
+    error_toasts: &mut dyn ErrorToastSink,
     opened_this_frame: bool,
 ) {
     let input_id = egui::Id::new(CHAT_INPUT_ID);
@@ -189,7 +191,7 @@ fn draw_active_input(
     if escape_pressed {
         cancel_chat(menu, &response);
     } else if !focus_requested && enter_pressed && (response.has_focus() || response.lost_focus()) {
-        submit_chat(menu, runtime, &response);
+        submit_chat(menu, runtime, error_toasts, &response);
     } else if !focus_requested && response.lost_focus() {
         cancel_chat(menu, &response);
     }
@@ -248,7 +250,12 @@ fn paint_input_background(ui: &egui::Ui, rect: egui::Rect) {
     );
 }
 
-fn submit_chat(menu: &mut MenuState, runtime: &mut ClientRuntime, response: &egui::Response) {
+fn submit_chat(
+    menu: &mut MenuState,
+    runtime: &mut ClientRuntime,
+    error_toasts: &mut dyn ErrorToastSink,
+    response: &egui::Response,
+) {
     let text = std::mem::take(&mut menu.chat_input);
     menu.chat_open = false;
     menu.chat_focus_pending = false;
@@ -275,12 +282,17 @@ fn submit_chat(menu: &mut MenuState, runtime: &mut ClientRuntime, response: &egu
         "chat send failed"
     };
 
-    if let Some(session) = runtime.session.as_mut() {
-        if let Err(error) = session.send(message) {
-            runtime.push_error_message(format!("{send_label}: {error}"));
-        }
+    let failure: Option<String> = if let Some(session) = runtime.session.as_mut() {
+        session
+            .send(message)
+            .err()
+            .map(|error| format!("{send_label}: {error}"))
     } else {
-        runtime.push_error_message(format!("{send_label}: not connected"));
+        Some(format!("{send_label}: not connected"))
+    };
+    if let Some(text) = failure {
+        runtime.push_error_message(text.clone());
+        error_toasts.push_error(text);
     }
 }
 
@@ -396,13 +408,25 @@ mod tests {
         };
 
         let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            chat_ui(ctx, &mut menu, &mut runtime, false);
+            chat_ui(
+                ctx,
+                &mut menu,
+                &mut runtime,
+                &mut Vec::<String>::new(),
+                false,
+            );
         });
 
         menu.chat_open = true;
         menu.chat_focus_pending = true;
         let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            chat_ui(ctx, &mut menu, &mut runtime, false);
+            chat_ui(
+                ctx,
+                &mut menu,
+                &mut runtime,
+                &mut Vec::<String>::new(),
+                false,
+            );
         });
 
         assert!(!menu.chat_focus_pending);
@@ -420,10 +444,22 @@ mod tests {
         let mut scroll_delta = egui::Vec2::ZERO;
 
         let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            chat_ui(ctx, &mut menu, &mut runtime, false);
+            chat_ui(
+                ctx,
+                &mut menu,
+                &mut runtime,
+                &mut Vec::<String>::new(),
+                false,
+            );
         });
         let _ = ctx.run(raw_input(pointer_scroll_over_chat()), |ctx| {
-            chat_ui(ctx, &mut menu, &mut runtime, false);
+            chat_ui(
+                ctx,
+                &mut menu,
+                &mut runtime,
+                &mut Vec::<String>::new(),
+                false,
+            );
             wants_pointer = ctx.wants_pointer_input();
             scroll_delta = ctx.input(|input| input.smooth_scroll_delta);
         });
@@ -443,10 +479,22 @@ mod tests {
         let mut wants_pointer = false;
 
         let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            chat_ui(ctx, &mut menu, &mut runtime, true);
+            chat_ui(
+                ctx,
+                &mut menu,
+                &mut runtime,
+                &mut Vec::<String>::new(),
+                true,
+            );
         });
         let _ = ctx.run(raw_input(pointer_scroll_over_chat()), |ctx| {
-            chat_ui(ctx, &mut menu, &mut runtime, true);
+            chat_ui(
+                ctx,
+                &mut menu,
+                &mut runtime,
+                &mut Vec::<String>::new(),
+                true,
+            );
             wants_pointer = ctx.wants_pointer_input();
         });
 
@@ -463,17 +511,20 @@ mod tests {
             ..Default::default()
         };
         let mut runtime = ClientRuntime::default();
+        let mut sink: Vec<String> = Vec::new();
 
         let _ = ctx.run(raw_input(Vec::new()), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let response = ui.allocate_response(egui::vec2(20.0, 20.0), egui::Sense::click());
-                submit_chat(&mut menu, &mut runtime, &response);
+                submit_chat(&mut menu, &mut runtime, &mut sink, &response);
             });
         });
 
         assert!(!menu.chat_open);
         assert_eq!(runtime.messages.len(), 1);
         assert!(runtime.messages[0].text.contains("not connected"));
+        assert_eq!(sink.len(), 1, "missing toast for failed send");
+        assert!(sink[0].contains("not connected"));
 
         menu.chat_open = true;
         menu.chat_focus_pending = true;

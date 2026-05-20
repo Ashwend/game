@@ -33,8 +33,8 @@ use self::{
     worlds::worlds_ui,
 };
 use super::state::{
-    ClientRuntime, ClientSettings, MenuBackdropVisibility, MenuState, SaveStore, Screen,
-    SessionShutdownTasks, SteamUser, ToastState,
+    ClientErrorToast, ClientRuntime, ClientSettings, MenuBackdropVisibility, MenuState, SaveStore,
+    Screen, SessionShutdownTasks, SteamUser, ToastState,
 };
 
 #[derive(SystemParam)]
@@ -48,6 +48,7 @@ pub(crate) struct UiResources<'w, 's> {
     toasts: Res<'w, ToastState>,
     shutdown_tasks: ResMut<'w, SessionShutdownTasks>,
     button_sound_requests: ResMut<'w, ButtonSoundRequests>,
+    error_toasts: MessageWriter<'w, ClientErrorToast>,
     store: Res<'w, SaveStore>,
     user: Res<'w, SteamUser>,
     time: Option<Res<'w, Time>>,
@@ -121,6 +122,7 @@ pub(crate) fn ui_system(
                     &mut resources.runtime,
                     &mut resources.inventory_ui,
                     &resources.pickup_target,
+                    &mut resources.error_toasts,
                     delta_seconds,
                 );
                 let inventory_open = resources.menu.inventory_open;
@@ -128,6 +130,7 @@ pub(crate) fn ui_system(
                     ctx,
                     &mut resources.menu,
                     &mut resources.runtime,
+                    &mut resources.error_toasts,
                     inventory_open,
                 );
                 toast_ui(ctx, &resources.toasts);

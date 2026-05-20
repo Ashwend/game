@@ -7,8 +7,8 @@ use bevy::{
 
 use crate::{
     app::state::{
-        ClientRuntime, GatherInputState, ImpactEffectKind, MenuState, PendingImpactEffect,
-        PickupTargetState, SwingImpact, ToolSwapState,
+        ClientErrorToast, ClientRuntime, ErrorToastSink, GatherInputState, ImpactEffectKind,
+        MenuState, PendingImpactEffect, PickupTargetState, SwingImpact, ToolSwapState,
     },
     items::{ToolKind, ToolProfile, item_definition},
     protocol::{
@@ -32,6 +32,7 @@ pub(crate) struct GameplayInventoryShortcutsParams<'w, 's> {
     pickup_target: Res<'w, PickupTargetState>,
     swap_state: Res<'w, ToolSwapState>,
     camera_kick: ResMut<'w, crate::app::systems::CameraImpactKick>,
+    error_toasts: MessageWriter<'w, ClientErrorToast>,
     primary_window: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
 }
 
@@ -46,6 +47,7 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
         if actionbar_key_pressed(&params.keys, slot) {
             send_inventory_command(
                 &mut params.runtime,
+                &mut params.error_toasts,
                 InventoryCommand::SelectActionbarSlot { slot },
             );
         }
@@ -59,6 +61,7 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
     if wheel_delta != 0 {
         send_inventory_command(
             &mut params.runtime,
+            &mut params.error_toasts,
             InventoryCommand::SelectActionbarOffset {
                 offset: -wheel_delta.signum(),
             },
@@ -76,6 +79,7 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
         };
         send_inventory_command(
             &mut params.runtime,
+            &mut params.error_toasts,
             InventoryCommand::Drop {
                 from: ItemContainerSlot::actionbar(active_actionbar_slot),
                 quantity: Some(1),
@@ -88,6 +92,7 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
     {
         send_inventory_command(
             &mut params.runtime,
+            &mut params.error_toasts,
             InventoryCommand::PickUp { dropped_item_id },
         );
     }
@@ -156,6 +161,7 @@ fn dispatch_swing_impact(params: &mut GameplayInventoryShortcutsParams, impact: 
 
     send_gameplay_message(
         &mut params.runtime,
+        &mut params.error_toasts,
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: node_id,
         }),
@@ -223,21 +229,44 @@ fn actionbar_key_pressed(keys: &ButtonInput<KeyCode>, slot: usize) -> bool {
     }
 }
 
-pub(crate) fn send_inventory_command(runtime: &mut ClientRuntime, command: InventoryCommand) {
+pub(crate) fn send_inventory_command(
+    runtime: &mut ClientRuntime,
+    error_toasts: &mut dyn ErrorToastSink,
+    command: InventoryCommand,
+) {
     send_gameplay_message(
         runtime,
+        error_toasts,
         ClientMessage::Inventory(command),
         "inventory command",
     );
 }
 
-fn send_gameplay_message(runtime: &mut ClientRuntime, message: ClientMessage, label: &str) {
+fn send_gameplay_message(
+    runtime: &mut ClientRuntime,
+    error_toasts: &mut dyn ErrorToastSink,
+    message: ClientMessage,
+    label: &str,
+) {
     let Some(session) = runtime.session.as_mut() else {
-        runtime.push_error_message(format!("{label} failed: not connected"));
+        report_send_failure(
+            runtime,
+            error_toasts,
+            format!("{label} failed: not connected"),
+        );
         return;
     };
 
     if let Err(error) = session.send(message) {
-        runtime.push_error_message(format!("{label} failed: {error}"));
+        report_send_failure(runtime, error_toasts, format!("{label} failed: {error}"));
     }
+}
+
+fn report_send_failure(
+    runtime: &mut ClientRuntime,
+    error_toasts: &mut dyn ErrorToastSink,
+    text: String,
+) {
+    runtime.push_error_message(text.clone());
+    error_toasts.push_error(text);
 }

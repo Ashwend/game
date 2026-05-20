@@ -30,13 +30,15 @@ pub(crate) use items::{
     apply_held_item_visual_system, apply_resource_nodes_system, tick_resource_node_pop_in_system,
     update_pickup_target_system, update_tool_swap_state_system,
 };
-pub(crate) use network::{network_tick_system, session_shutdown_poll_system};
+pub(crate) use network::{
+    network_tick_system, session_shutdown_poll_system, surface_client_error_toasts_system,
+};
 pub(crate) use node_death::tick_felling_trees_system;
 pub(crate) use players::{RemotePlayerEntities, apply_snapshot_system};
 pub(crate) use quit::app_quit_system;
 pub(crate) use settings::save_client_settings_system;
 
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ClientSystemSet {
     Focus,
     ChatShortcut,

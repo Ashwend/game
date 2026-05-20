@@ -5,7 +5,7 @@ mod slot;
 use bevy_egui::egui::{self, Align2, Color32, Rect, Sense, Stroke};
 
 use crate::{
-    app::state::{ClientRuntime, InventoryUiState, MenuState, PickupTargetState},
+    app::state::{ClientRuntime, ErrorToastSink, InventoryUiState, MenuState, PickupTargetState},
     protocol::{ACTIONBAR_SLOT_COUNT, ItemContainerSlot, PlayerState},
 };
 
@@ -28,6 +28,7 @@ pub(super) fn inventory_ui(
     runtime: &mut ClientRuntime,
     inventory_ui: &mut InventoryUiState,
     pickup_target: &PickupTargetState,
+    error_toasts: &mut dyn ErrorToastSink,
     delta_seconds: f32,
 ) {
     inventory_ui.begin_frame();
@@ -51,7 +52,7 @@ pub(super) fn inventory_ui(
     }
 
     pickup_tooltip(ctx, menu, pickup_target);
-    handle_drag_release(ctx, menu, runtime, inventory_ui);
+    handle_drag_release(ctx, menu, runtime, inventory_ui, error_toasts);
     draw_drag_preview(ctx, inventory_ui);
     inventory_ui.was_open = menu.inventory_open;
 }

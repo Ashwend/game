@@ -14,6 +14,8 @@ use crate::{
     world::{WorldBlock, WorldData},
 };
 
+use super::connection::ConnectionWatch;
+
 /// Cheap order-independent fingerprint of the live collider-bearing
 /// resource node set (trees + ores). Used by the snapshot handler to skip
 /// rebuilding the collision grid when the set didn't change. XOR of node
@@ -98,23 +100,49 @@ pub(crate) struct ClientRuntime {
     /// changes when a node spawns or is exhausted — most snapshots keep
     /// the same set and skip the rebuild.
     pub(crate) resource_node_collider_version: u64,
-    /// Wall-clock time (in seconds) since the most recent message of any
-    /// kind from the server. The server sends `Heartbeat` once per tick on
-    /// each connected client, so this only grows during a real interruption
-    /// (lossy link, server pause, dropped packets). The HUD reads this to
-    /// flag suspected lag without needing a dedicated RTT measurement.
-    pub(crate) seconds_since_last_message: f32,
-    /// Error log entries that should also surface as toasts. The runtime
-    /// can't push toasts directly (the toast resource isn't reachable from
-    /// here), so this buffer is drained by `network_tick_system` each
-    /// frame. Anything pushed via `push_error_message` shows up here.
-    pub(crate) pending_error_toasts: Vec<String>,
+    /// Tracks how long it's been since the server last sent anything. Used
+    /// by the HUD's connection indicator. Lives in its own type so the
+    /// thresholds and ticking logic stay focused on that concern.
+    pub(crate) connection: ConnectionWatch,
 }
 
-/// Threshold (in seconds without a server message) past which the HUD
-/// connection indicator switches to a "lagging" state. Server heartbeats
-/// land at ~1 Hz, so 2.5s is well outside normal variance.
-pub(crate) const CONNECTION_LAG_WARNING_SECONDS: f32 = 2.5;
+/// Surfaces a client-side error string as a toast. Emitted by any system
+/// that has access to a `MessageWriter<ClientErrorToast>` (chat send, input
+/// dispatch, network tick) so a single system —
+/// `surface_client_error_toasts_system` — can be the only place that writes
+/// to `ToastState`. The runtime still keeps a copy in its chat log via
+/// `push_error_message` for in-game history; this event is just for the
+/// transient on-screen surface.
+#[derive(Message, Debug, Clone)]
+pub(crate) struct ClientErrorToast {
+    pub(crate) text: String,
+}
+
+impl ClientErrorToast {
+    pub(crate) fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into() }
+    }
+}
+
+/// Small abstraction over [`MessageWriter<ClientErrorToast>`] so UI and
+/// input helpers can be unit-tested without spinning up a Bevy world.
+/// Production code uses the blanket impl on `MessageWriter`; tests can
+/// pass an `&mut Vec<String>` instead.
+pub(crate) trait ErrorToastSink {
+    fn push_error(&mut self, text: String);
+}
+
+impl<'w> ErrorToastSink for MessageWriter<'w, ClientErrorToast> {
+    fn push_error(&mut self, text: String) {
+        self.write(ClientErrorToast::new(text));
+    }
+}
+
+impl ErrorToastSink for Vec<String> {
+    fn push_error(&mut self, text: String) {
+        self.push(text);
+    }
+}
 
 #[derive(Resource, Default)]
 pub(crate) struct SessionShutdownTasks(Vec<JoinHandle<Result<(), String>>>);
@@ -178,8 +206,7 @@ impl ClientRuntime {
         self.messages.clear();
         self.input_sequence = 0;
         self.resource_node_collider_version = 0;
-        self.seconds_since_last_message = 0.0;
-        self.pending_error_toasts.clear();
+        self.connection.reset();
     }
 
     pub(crate) fn shutdown_in_background(
@@ -204,8 +231,7 @@ impl ClientRuntime {
         self.predicted_local = None;
         self.is_admin = false;
         self.resource_node_collider_version = 0;
-        self.seconds_since_last_message = 0.0;
-        self.pending_error_toasts.clear();
+        self.connection.reset();
     }
 
     /// Rebuilds the world collision grid from the current world plus any
@@ -235,7 +261,7 @@ impl ClientRuntime {
     pub(crate) fn apply_message(&mut self, message: ServerMessage) {
         // Any server-originated payload — including the periodic Heartbeat —
         // counts as proof the link is alive.
-        self.seconds_since_last_message = 0.0;
+        self.connection.note_received();
         match message {
             ServerMessage::Welcome {
                 client_id,
@@ -305,34 +331,26 @@ impl ClientRuntime {
         self.push_message(ClientLogEntry::system(text));
     }
 
+    /// Append an error to the chat log only. Callers that also want a
+    /// transient toast should write a [`ClientErrorToast`] event alongside
+    /// this call; the dedicated toast-surfacing system will pick it up.
+    /// Keeping the log push and the toast push as two explicit calls makes
+    /// the visibility of each side-effect obvious at the call site.
     pub(crate) fn push_error_message(&mut self, text: impl Into<String>) {
-        let text = text.into();
-        self.pending_error_toasts.push(text.clone());
         self.push_message(ClientLogEntry::error(text));
-    }
-
-    /// Drain queued error texts so the network tick can publish them as
-    /// toasts. Errors stay in `messages` (the chat-log history) regardless.
-    pub(crate) fn take_pending_error_toasts(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.pending_error_toasts)
     }
 
     /// Returns true when the session has gone long enough without a server
     /// message that the connection should be flagged as suspect. Only
     /// meaningful while a session is active.
     pub(crate) fn connection_is_lagging(&self) -> bool {
-        self.session.is_some() && self.seconds_since_last_message >= CONNECTION_LAG_WARNING_SECONDS
+        self.connection.is_lagging(self.session.is_some())
     }
 
     /// Step the "time since last server message" counter. Called from the
     /// network tick. Wall-clock seconds since the last successful receive.
     pub(crate) fn tick_connection_silence(&mut self, delta_seconds: f32) {
-        if self.session.is_some() {
-            self.seconds_since_last_message =
-                (self.seconds_since_last_message + delta_seconds.max(0.0)).min(60.0);
-        } else {
-            self.seconds_since_last_message = 0.0;
-        }
+        self.connection.tick(delta_seconds, self.session.is_some());
     }
 
     pub(crate) fn push_chat_message(&mut self, from: impl Into<String>, text: impl Into<String>) {

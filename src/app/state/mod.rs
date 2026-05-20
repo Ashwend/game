@@ -1,5 +1,7 @@
 mod backdrop;
+mod connection;
 mod dialogs;
+mod gather;
 mod inventory;
 mod look;
 mod menu;
@@ -10,21 +12,24 @@ mod tests;
 mod toasts;
 
 pub(crate) use backdrop::MenuBackdropVisibility;
+#[cfg(test)]
+pub(crate) use connection::CONNECTION_LAG_WARNING_SECONDS;
 pub(crate) use dialogs::{
     ConfirmationAction, ConfirmationDialog, CreateWorldDialog, CreateWorldMapKind,
     DirectConnectAttempt, DirectConnectDialog, DirectConnectResult, EditWorldDialog, NoticeDialog,
     WorldStartAttempt, WorldStartResult,
 };
-pub(crate) use inventory::{
-    GatherInputState, ImpactEffectKind, InventoryDrag, InventoryDragButton, InventoryUiState,
-    PICKUP_TARGET_SCAN_INTERVAL_SECS, PendingImpactEffect, PickupTargetState, RemoteImpactEvent,
-    SwingImpact, ToolSwapState,
+pub(crate) use gather::{
+    GatherInputState, ImpactEffectKind, PICKUP_TARGET_SCAN_INTERVAL_SECS, PendingImpactEffect,
+    PickupTargetState, RemoteImpactEvent, SwingImpact, ToolSwapState,
 };
+pub(crate) use inventory::{InventoryDrag, InventoryDragButton, InventoryUiState};
 pub(crate) use look::LookState;
 pub(crate) use menu::{MenuState, SaveStore, Screen, SteamUser};
-#[cfg(test)]
-pub(crate) use runtime::CONNECTION_LAG_WARNING_SECONDS;
-pub(crate) use runtime::{ClientLogEntry, ClientLogKind, ClientRuntime, SessionShutdownTasks};
+pub(crate) use runtime::{
+    ClientErrorToast, ClientLogEntry, ClientLogKind, ClientRuntime, ErrorToastSink,
+    SessionShutdownTasks,
+};
 pub(crate) use settings::{
     ClientSettings, ClientSettingsStore, DisplayMode, DisplayResolution, display_resolutions,
 };

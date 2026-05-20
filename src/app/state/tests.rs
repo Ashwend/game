@@ -151,24 +151,15 @@ fn correction_updates_health_without_realigning_local_prediction() {
 }
 
 #[test]
-fn push_error_message_queues_toast_text_for_drain() {
+fn push_error_message_only_appends_to_chat_log() {
+    // `push_error_message` is the chat-log-only side of the pair; the
+    // toast surface is driven by `ClientErrorToast` events sent at the
+    // call site. This test pins down that "log only" guarantee so future
+    // refactors don't accidentally reintroduce a hidden side-channel.
     let mut runtime = ClientRuntime::default();
     runtime.push_error_message("network error: timeout");
     runtime.push_error_message("chat send failed");
 
-    let drained = runtime.take_pending_error_toasts();
-    assert_eq!(
-        drained,
-        vec![
-            "network error: timeout".to_owned(),
-            "chat send failed".to_owned(),
-        ]
-    );
-    assert!(
-        runtime.take_pending_error_toasts().is_empty(),
-        "draining should leave the queue empty until new errors arrive"
-    );
-    // Error entries still land in the history log so chat can show them.
     assert_eq!(runtime.messages.len(), 2);
     assert!(
         runtime
@@ -190,7 +181,9 @@ fn connection_lag_flag_requires_active_session_and_silence_threshold() {
     // Even past the warning threshold, without an active session the flag
     // stays false — `connection_is_lagging` gates on `session.is_some()`.
     let runtime = ClientRuntime {
-        seconds_since_last_message: super::CONNECTION_LAG_WARNING_SECONDS + 1.0,
+        connection: super::connection::ConnectionWatch::with_silence(
+            super::CONNECTION_LAG_WARNING_SECONDS + 1.0,
+        ),
         ..default()
     };
     assert!(!runtime.connection_is_lagging());
@@ -199,11 +192,12 @@ fn connection_lag_flag_requires_active_session_and_silence_threshold() {
 #[test]
 fn applying_any_server_message_resets_the_silence_counter() {
     let mut runtime = ClientRuntime {
-        seconds_since_last_message: 5.0,
+        connection: super::connection::ConnectionWatch::with_silence(5.0),
         ..default()
     };
     runtime.apply_message(ServerMessage::Heartbeat);
-    assert_eq!(runtime.seconds_since_last_message, 0.0);
+    // After receive the lag flag is cleared even with an active session.
+    assert!(!runtime.connection.is_lagging(true));
 }
 
 #[test]

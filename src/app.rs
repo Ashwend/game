@@ -18,9 +18,9 @@ use crate::{
 use self::{
     scene::{apply_world_scene_system, setup_scene},
     state::{
-        ClientRuntime, ClientSettingsStore, GatherInputState, InventoryUiState, LookState,
-        MenuBackdropVisibility, MenuState, PickupTargetState, RemoteImpactEvent, SaveStore,
-        SessionShutdownTasks, SteamUser, ToastState, ToolSwapState,
+        ClientErrorToast, ClientRuntime, ClientSettingsStore, GatherInputState, InventoryUiState,
+        LookState, MenuBackdropVisibility, MenuState, PickupTargetState, RemoteImpactEvent,
+        SaveStore, SessionShutdownTasks, SteamUser, ToastState, ToolSwapState,
     },
     systems::{
         CameraImpactKick, CameraMotionEffects, ClientSystemSet, DroppedItemEntities,
@@ -31,15 +31,79 @@ use self::{
         main_menu_music_system, menu_backdrop_camera_system, mouse_look_system,
         network_tick_system, play_impact_sounds_system, save_client_settings_system,
         session_shutdown_poll_system, setup_impact_sound_assets, spawn_impact_effects_system,
-        tick_felling_trees_system, tick_impact_chips_system, tick_resource_node_pop_in_system,
-        toggle_inventory_system, toggle_pause_system, update_cursor_system,
-        update_pickup_target_system, update_tool_swap_state_system,
+        surface_client_error_toasts_system, tick_felling_trees_system, tick_impact_chips_system,
+        tick_resource_node_pop_in_system, toggle_inventory_system, toggle_pause_system,
+        update_cursor_system, update_pickup_target_system, update_tool_swap_state_system,
     },
     ui::{ButtonSoundRequests, button_sound_system, setup_button_sound_assets, ui_system},
 };
 
 pub(crate) const EYE_HEIGHT: f32 = 1.62;
 pub(crate) const PLAYER_VISUAL_CENTER_Y: f32 = 0.9;
+
+/// Authoritative Update-phase order for client systems.
+///
+/// One ordered list, one source of truth: every consecutive pair becomes an
+/// `after(prev)` edge in the schedule. Add new sets here in the slot that
+/// matches their data dependency, not in a side chain. The phases below are
+/// purely for human navigation — the runtime only sees the flat list.
+///
+/// Phases:
+/// - Input/UI shortcut intake (Focus → InventoryShortcuts).
+/// - Network tick and the tool-swap animation that reads its snapshot
+///   (Network → ToolSwap). ToolSwap must run after Network because the
+///   active actionbar slot lives on the snapshot, and before HeldItem so
+///   the entry-animation fraction is fresh when the held-item visual is
+///   rebuilt the same frame a new tool first appears.
+/// - Session lifecycle and settings (SessionShutdown → SettingsSave).
+/// - Scene application from the freshest snapshot (WorldScene → HeldItem).
+/// - Look-target scan + impact effect pipeline (PickupTarget → NodeDeathTick).
+///   ImpactSounds peeks the pending impact before ImpactEffectsSpawn takes
+///   (and clears) it, so the cue plays even when the visual system runs in
+///   the same frame.
+const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
+    ClientSystemSet::Focus,
+    ClientSystemSet::ChatShortcut,
+    ClientSystemSet::PauseToggle,
+    ClientSystemSet::InventoryToggle,
+    ClientSystemSet::Cursor,
+    ClientSystemSet::Look,
+    ClientSystemSet::Input,
+    ClientSystemSet::InventoryShortcuts,
+    ClientSystemSet::Network,
+    ClientSystemSet::ToolSwap,
+    ClientSystemSet::SessionShutdown,
+    ClientSystemSet::Quit,
+    ClientSystemSet::Display,
+    ClientSystemSet::SettingsSave,
+    ClientSystemSet::WorldScene,
+    ClientSystemSet::Players,
+    ClientSystemSet::DroppedItems,
+    ClientSystemSet::ResourceNodes,
+    ClientSystemSet::Camera,
+    ClientSystemSet::HeldItem,
+    ClientSystemSet::PickupTarget,
+    ClientSystemSet::ImpactSounds,
+    ClientSystemSet::ImpactEffectsSpawn,
+    ClientSystemSet::ImpactEffectsTick,
+    ClientSystemSet::NodeDeathTick,
+];
+
+/// Menu-only systems form their own short chain — independent of the main
+/// gameplay flow because they read menu state, not snapshots.
+const CLIENT_MENU_ORDER: &[ClientSystemSet] = &[
+    ClientSystemSet::MainMenuMusic,
+    ClientSystemSet::MenuBackdropCamera,
+];
+
+fn configure_client_schedule(app: &mut App) {
+    for window in CLIENT_UPDATE_ORDER.windows(2) {
+        app.configure_sets(Update, window[1].after(window[0]));
+    }
+    for window in CLIENT_MENU_ORDER.windows(2) {
+        app.configure_sets(Update, window[1].after(window[0]));
+    }
+}
 
 pub fn run_app() -> Result<()> {
     let store = WorldStore::platform_default()?;
@@ -54,8 +118,8 @@ pub fn run_app() -> Result<()> {
     });
     let window_settings = settings.display;
 
-    App::new()
-        .insert_resource(ClearColor(Color::srgb(0.015, 0.018, 0.023)))
+    let mut app = App::new();
+    app.insert_resource(ClearColor(Color::srgb(0.015, 0.018, 0.023)))
         .insert_resource(SaveStore(store))
         .insert_resource(SteamUser(user))
         .insert_resource(settings_store)
@@ -85,6 +149,7 @@ pub fn run_app() -> Result<()> {
         .insert_resource(WinitSettings::continuous())
         .init_resource::<ButtonSoundRequests>()
         .add_message::<RemoteImpactEvent>()
+        .add_message::<ClientErrorToast>()
         .add_plugins(
             DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
@@ -107,70 +172,11 @@ pub fn run_app() -> Result<()> {
         .configure_sets(
             PostUpdate,
             EguiPostUpdateSet::EndPass.before(TransformSystems::Propagate),
-        )
-        .configure_sets(
-            Update,
-            (
-                ClientSystemSet::Focus,
-                ClientSystemSet::ChatShortcut,
-                ClientSystemSet::PauseToggle,
-                ClientSystemSet::InventoryToggle,
-                ClientSystemSet::Cursor,
-                ClientSystemSet::Look,
-                ClientSystemSet::Input,
-                ClientSystemSet::InventoryShortcuts,
-                ClientSystemSet::Network,
-                ClientSystemSet::SessionShutdown,
-                ClientSystemSet::Quit,
-                ClientSystemSet::Display,
-                ClientSystemSet::SettingsSave,
-                ClientSystemSet::WorldScene,
-                ClientSystemSet::Players,
-                ClientSystemSet::DroppedItems,
-                ClientSystemSet::ResourceNodes,
-                ClientSystemSet::Camera,
-                ClientSystemSet::HeldItem,
-                ClientSystemSet::PickupTarget,
-            )
-                .chain(),
-        )
-        .configure_sets(
-            Update,
-            (
-                ClientSystemSet::PickupTarget,
-                // Sound peeks the local pending impact before
-                // `ImpactEffectsSpawn` takes (and clears) it, so the cue
-                // plays even if the visual system runs in the same frame.
-                ClientSystemSet::ImpactSounds,
-                ClientSystemSet::ImpactEffectsSpawn,
-                ClientSystemSet::ImpactEffectsTick,
-                ClientSystemSet::NodeDeathTick,
-            )
-                .chain(),
-        )
-        // Tool-swap detection has to read the most recent snapshot — the
-        // inventory's active actionbar slot lives there — so it must run
-        // after Network. Putting it before HeldItem guarantees the entry
-        // animation fraction is fresh when the held-item visual is rebuilt
-        // in the same frame the new tool first appears.
-        .configure_sets(
-            Update,
-            (
-                ClientSystemSet::Network,
-                ClientSystemSet::ToolSwap,
-                ClientSystemSet::HeldItem,
-            )
-                .chain(),
-        )
-        .configure_sets(
-            Update,
-            (
-                ClientSystemSet::MainMenuMusic,
-                ClientSystemSet::MenuBackdropCamera,
-            )
-                .chain(),
-        )
-        .add_systems(Startup, setup_scene)
+        );
+
+    configure_client_schedule(&mut app);
+
+    app.add_systems(Startup, setup_scene)
         .add_systems(Startup, setup_button_sound_assets)
         .add_systems(Startup, setup_impact_sound_assets)
         .add_systems(
@@ -205,6 +211,16 @@ pub fn run_app() -> Result<()> {
             gameplay_inventory_shortcuts_system.in_set(ClientSystemSet::InventoryShortcuts),
         )
         .add_systems(Update, network_tick_system.in_set(ClientSystemSet::Network))
+        .add_systems(
+            Update,
+            // Surfaces queued error toasts after the network tick has had
+            // its chance to enqueue any. Sharing the Network set keeps
+            // toast latency to one frame for UI/input writers and zero
+            // frames for writers in network_tick_system itself.
+            surface_client_error_toasts_system
+                .in_set(ClientSystemSet::Network)
+                .after(network_tick_system),
+        )
         .add_systems(
             Update,
             session_shutdown_poll_system.in_set(ClientSystemSet::SessionShutdown),
