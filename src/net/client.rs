@@ -17,10 +17,10 @@ use lightyear::prelude::{
 
 use crate::{
     net::{
-        host::{GameServerHandle, spawn_loopback_server},
-        protocol::{
+        channels::{
             LIGHTYEAR_PROTOCOL_ID, LightyearProtocolPlugin, private_key, send_client_message,
         },
+        host::{GameServerHandle, spawn_loopback_server},
     },
     protocol::{ClientMessage, GAME_VERSION, PROTOCOL_VERSION, ServerMessage},
     save::{WorldSave, WorldStore},

@@ -182,88 +182,127 @@ pub(crate) fn tick_felling_trees_system(
         tree.age += dt;
 
         if tree.landed_age.is_none() {
-            // Pendulum integration: α = (3g / (2L)) · sin(θ). Heavier (taller)
-            // trees naturally fall more slowly thanks to the longer lever.
-            let alpha = (3.0 * TREE_FALL_GRAVITY / (2.0 * tree.lever_length)) * tree.angle.sin();
-            tree.angular_velocity += alpha * dt;
-            tree.angle += tree.angular_velocity * dt;
-
-            if tree.angle >= FRAC_PI_2 {
-                tree.angle = FRAC_PI_2;
-                tree.angular_velocity = 0.0;
-                tree.landed_age = Some(tree.age);
-            }
+            step_pendulum(&mut tree, dt);
         }
-
-        // Apply rotation + ground lift (so the trunk rests on the ground
-        // rather than half-buried in it after rotation).
-        let lift = (1.0 - tree.angle.cos()) * TREE_GROUND_LIFT;
-        let rotation = Quat::from_axis_angle(tree.fall_axis, tree.angle) * tree.initial_rotation;
-        transform.rotation = rotation;
-        transform.translation = tree.pivot + Vec3::Y * lift;
+        apply_base_transform(&tree, &mut transform);
 
         if let Some(landed_at) = tree.landed_age {
-            // Tiny kinematic overshoot at landing — a damped oscillation
-            // around horizontal that reads as the trunk bouncing off the
-            // ground. Doesn't affect angular_velocity afterwards.
             let since_land = tree.age - landed_at;
-            if since_land < TREE_OVERSHOOT_DURATION {
-                let t = since_land / TREE_OVERSHOOT_DURATION;
-                let damp = 1.0 - t;
-                let phase = t * std::f32::consts::PI * 2.4;
-                let overshoot = phase.sin() * TREE_OVERSHOOT_AMPLITUDE * damp;
-                transform.rotation = Quat::from_axis_angle(tree.fall_axis, FRAC_PI_2 + overshoot)
-                    * tree.initial_rotation;
-            }
-
-            // Fire landing feedback once.
-            if !tree.landing_kick_fired {
-                tree.landing_kick_fired = true;
-                camera_kick.trigger(ToolKind::Pickaxe);
-            }
-            if !tree.landing_chips_fired {
-                tree.landing_chips_fired = true;
-                // Spawn the chips at the centre of the lying trunk in world
-                // space. The mesh's +Y axis is the trunk's length direction,
-                // so rotating it by the current world rotation gives us
-                // whichever way the trunk is actually lying — regardless of
-                // which way it fell. Adding a small Y offset lifts the burst
-                // up to roughly the top surface of the lying trunk so the
-                // chips read as flying off it.
-                let lying_direction = transform.rotation * Vec3::Y;
-                let landing_point = transform.translation
-                    + lying_direction * (tree.lever_length * 0.5)
-                    + Vec3::Y * 0.15;
-                spawn_impact_burst(
-                    &mut commands,
-                    &impact_assets,
-                    ImpactEffectKind::WoodChips,
-                    landing_point,
-                    Vec3::Y,
-                    entity.to_bits() as u32,
-                    2.0,
-                );
-            }
-
-            // Hold at full opacity for a beat, then alpha-fade the trunk
-            // out. The trunk stays at full size so it reads as the wood
-            // dissolving rather than crumpling into the ground.
+            apply_landing_overshoot(&tree, &mut transform, since_land);
+            fire_landing_feedback(
+                &mut commands,
+                &impact_assets,
+                &mut camera_kick,
+                entity,
+                &mut tree,
+                &transform,
+            );
             transform.scale = tree.initial_scale;
-            let total_after_land = since_land;
-            if total_after_land >= TREE_LANDED_HOLD {
-                let fade_t =
-                    ((total_after_land - TREE_LANDED_HOLD) / TREE_FADE_DURATION).clamp(0.0, 1.0);
-                let alpha = (1.0 - fade_t).clamp(0.0, 1.0);
-                if let Some(material) = materials.get_mut(&tree.material) {
-                    material.base_color.set_alpha(alpha);
-                }
-                if fade_t >= 1.0 {
-                    commands.entity(entity).despawn();
-                }
-            }
+            apply_fade_out(&mut commands, &mut materials, entity, &tree, since_land);
         } else {
             transform.scale = tree.initial_scale;
         }
+    }
+}
+
+/// Pendulum integration: α = (3g / (2L)) · sin(θ). Heavier (taller) trees
+/// naturally fall more slowly thanks to the longer lever. Clamps to 90° on
+/// contact and records the landing time so subsequent phases can fire.
+fn step_pendulum(tree: &mut FellingTree, dt: f32) {
+    let alpha = (3.0 * TREE_FALL_GRAVITY / (2.0 * tree.lever_length)) * tree.angle.sin();
+    tree.angular_velocity += alpha * dt;
+    tree.angle += tree.angular_velocity * dt;
+
+    if tree.angle >= FRAC_PI_2 {
+        tree.angle = FRAC_PI_2;
+        tree.angular_velocity = 0.0;
+        tree.landed_age = Some(tree.age);
+    }
+}
+
+/// Apply rotation around the fall axis plus a small ground lift, so the
+/// trunk rests on the ground rather than half-buried in it after rotation.
+fn apply_base_transform(tree: &FellingTree, transform: &mut Transform) {
+    let lift = (1.0 - tree.angle.cos()) * TREE_GROUND_LIFT;
+    transform.rotation = Quat::from_axis_angle(tree.fall_axis, tree.angle) * tree.initial_rotation;
+    transform.translation = tree.pivot + Vec3::Y * lift;
+}
+
+/// Tiny kinematic overshoot at landing — a damped oscillation around
+/// horizontal that reads as the trunk bouncing off the ground. Doesn't
+/// affect `angular_velocity` afterwards; once the overshoot window closes
+/// the trunk sits at exactly 90°.
+fn apply_landing_overshoot(tree: &FellingTree, transform: &mut Transform, since_land: f32) {
+    if since_land >= TREE_OVERSHOOT_DURATION {
+        return;
+    }
+    let t = since_land / TREE_OVERSHOOT_DURATION;
+    let damp = 1.0 - t;
+    let phase = t * std::f32::consts::PI * 2.4;
+    let overshoot = phase.sin() * TREE_OVERSHOOT_AMPLITUDE * damp;
+    transform.rotation =
+        Quat::from_axis_angle(tree.fall_axis, FRAC_PI_2 + overshoot) * tree.initial_rotation;
+}
+
+/// One-shot feedback on the frame the trunk hits the ground: a camera kick
+/// and a chip burst at the far end of the lying trunk. Guarded by `tree`'s
+/// own latched flags so the second-and-later frames after landing are
+/// silent.
+fn fire_landing_feedback(
+    commands: &mut Commands,
+    impact_assets: &ImpactEffectAssets,
+    camera_kick: &mut CameraImpactKick,
+    entity: Entity,
+    tree: &mut FellingTree,
+    transform: &Transform,
+) {
+    if !tree.landing_kick_fired {
+        tree.landing_kick_fired = true;
+        camera_kick.trigger(ToolKind::Pickaxe);
+    }
+    if !tree.landing_chips_fired {
+        tree.landing_chips_fired = true;
+        // Spawn the chips at the centre of the lying trunk in world space.
+        // The mesh's +Y axis is the trunk's length direction, so rotating
+        // it by the current world rotation gives us whichever way the
+        // trunk is actually lying — regardless of which way it fell. The
+        // small Y offset lifts the burst up to roughly the top surface of
+        // the lying trunk so the chips read as flying off it.
+        let lying_direction = transform.rotation * Vec3::Y;
+        let landing_point =
+            transform.translation + lying_direction * (tree.lever_length * 0.5) + Vec3::Y * 0.15;
+        spawn_impact_burst(
+            commands,
+            impact_assets,
+            ImpactEffectKind::WoodChips,
+            landing_point,
+            Vec3::Y,
+            entity.to_bits() as u32,
+            2.0,
+        );
+    }
+}
+
+/// Hold at full opacity for a beat, then alpha-fade the trunk out. The
+/// trunk stays at full size so it reads as the wood dissolving rather than
+/// crumpling into the ground. Despawns when fully transparent.
+fn apply_fade_out(
+    commands: &mut Commands,
+    materials: &mut Assets<StandardMaterial>,
+    entity: Entity,
+    tree: &FellingTree,
+    since_land: f32,
+) {
+    if since_land < TREE_LANDED_HOLD {
+        return;
+    }
+    let fade_t = ((since_land - TREE_LANDED_HOLD) / TREE_FADE_DURATION).clamp(0.0, 1.0);
+    let alpha = (1.0 - fade_t).clamp(0.0, 1.0);
+    if let Some(material) = materials.get_mut(&tree.material) {
+        material.base_color.set_alpha(alpha);
+    }
+    if fade_t >= 1.0 {
+        commands.entity(entity).despawn();
     }
 }
 

@@ -2,11 +2,11 @@ use std::collections::HashMap;
 
 use crate::{
     controller::{BlockGrid, PlayerController},
-    items::{ItemId, can_pick_up, item_definition, normalize_stack, stack_limit},
+    items::{can_pick_up, normalize_stack, stack_limit},
     protocol::{
         ACTIONBAR_SLOT_COUNT, ChatMessage, ClientId, ClientMessage, DroppedItemId,
         DroppedWorldItem, InventoryCommand, ItemStack, PlayerInventoryState, ResourceNodeId,
-        ResourceNodeState, ServerMessage, SteamId, ToastKind, ToastMessage, Vec3Net, sanitize_chat,
+        ResourceNodeState, ServerMessage, SteamId, Vec3Net, sanitize_chat,
     },
     save::{PersistedPlayer, WorldSave, WorldStateSave},
     steam::AuthMode,
@@ -21,6 +21,7 @@ mod dropped_items;
 mod inventory;
 mod movement;
 mod resource_nodes;
+mod toasts;
 
 use self::{
     dropped_items::{
@@ -29,6 +30,7 @@ use self::{
     },
     inventory::{add_stack_to_inventory, move_stack, offset_actionbar_slot, remove_stack},
     movement::{accept_client_movement, drop_position, drop_velocity, player_eye_position},
+    toasts::{inventory_full_toast_envelopes, item_acquired_toast_envelopes},
 };
 
 #[derive(Debug, Clone)]
@@ -493,40 +495,6 @@ impl GameServer {
             (true, true) => Some((second_id, first_id)),
         }
     }
-}
-
-/// Builds the "you just acquired N items" toast envelope used by both the
-/// resource gathering path and the dropped-item pickup path. Lives in
-/// `server.rs` so submodules can share it without cross-module reach-around.
-pub(super) fn item_acquired_toast_envelopes(
-    client_id: ClientId,
-    item_id: &ItemId,
-    quantity: u16,
-) -> Vec<ServerEnvelope> {
-    if quantity == 0 {
-        return Vec::new();
-    }
-    let Some(definition) = item_definition(item_id) else {
-        return Vec::new();
-    };
-    vec![ServerEnvelope {
-        target: DeliveryTarget::Client(client_id),
-        message: ServerMessage::Toast(ToastMessage::new(
-            ToastKind::Success,
-            format!("+{quantity} {}", definition.name),
-        )),
-    }]
-}
-
-/// "Your inventory is full" warning. Sent when a pickup or gather succeeds
-/// in every other respect (line of sight, valid tool, valid target) but the
-/// resulting stack cannot fit in the player's bag. Without this the action
-/// fails silently and the player just sees nothing happen.
-pub(super) fn inventory_full_toast_envelopes(client_id: ClientId) -> Vec<ServerEnvelope> {
-    vec![ServerEnvelope {
-        target: DeliveryTarget::Client(client_id),
-        message: ServerMessage::Toast(ToastMessage::new(ToastKind::Warning, "Inventory is full")),
-    }]
 }
 
 #[derive(Debug)]

@@ -1,7 +1,7 @@
+mod channels;
 mod client;
 mod dedicated;
 mod host;
-mod protocol;
 
 pub use client::ClientSession;
 pub use dedicated::{

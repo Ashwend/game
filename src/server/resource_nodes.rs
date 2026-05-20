@@ -15,8 +15,10 @@ use crate::{
 };
 
 use super::{
-    DeliveryTarget, GameServer, ServerEnvelope, inventory::add_stack_to_inventory,
-    inventory_full_toast_envelopes, item_acquired_toast_envelopes, movement::player_eye_position,
+    DeliveryTarget, GameServer, ServerEnvelope,
+    inventory::add_stack_to_inventory,
+    movement::player_eye_position,
+    toasts::{inventory_full_toast_envelopes, item_acquired_toast_envelopes},
 };
 
 /// How long a depleted resource node takes to fully regenerate. Picked so

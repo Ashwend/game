@@ -52,6 +52,17 @@ pub(crate) struct ResourceNodeEntities {
     applied_first_snapshot: bool,
 }
 
+type ResourceEntityQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static NetworkResourceNode,
+        &'static Mesh3d,
+        &'static MeshMaterial3d<StandardMaterial>,
+        &'static Transform,
+    ),
+>;
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_resource_nodes_system(
     mut commands: Commands,
@@ -61,20 +72,11 @@ pub(crate) fn apply_resource_nodes_system(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut camera_kick: ResMut<crate::app::systems::CameraImpactKick>,
     mut entities: ResMut<ResourceNodeEntities>,
-    resource_entities: Query<(
-        &NetworkResourceNode,
-        &Mesh3d,
-        &MeshMaterial3d<StandardMaterial>,
-        &Transform,
-    )>,
+    resource_entities: ResourceEntityQuery,
     popping_in: Query<(), With<ResourceNodePopIn>>,
 ) {
     let Some(snapshot) = &runtime.snapshot else {
-        for (_, entity) in entities.entities.drain() {
-            commands.entity(entity).despawn();
-        }
-        entities.previous_progress.clear();
-        entities.applied_first_snapshot = false;
+        clear_all_tracked_nodes(&mut commands, &mut entities);
         return;
     };
 
@@ -93,34 +95,18 @@ pub(crate) fn apply_resource_nodes_system(
             continue;
         };
 
-        let was_tracked = entities.previous_progress.contains_key(&node.id);
-        let previous_progress = entities
-            .previous_progress
-            .get(&node.id)
-            .copied()
-            .unwrap_or(None);
+        let transition = entities.classify(node, pop_in_enabled);
 
-        // Transition: node just got depleted. Fire the death effect on
-        // the current entity, then despawn it — during regen the area
-        // should look empty, not show a shrunken ghost.
-        let just_entered_regen = previous_progress.is_none() && node.respawn_progress.is_some();
-        if just_entered_regen && let Some(entity) = entities.entities.remove(&node.id) {
-            if let Ok((resource, mesh, material, current_transform)) = resource_entities.get(entity)
-            {
-                crate::app::systems::node_death::spawn_node_death(
-                    &mut commands,
-                    &impact_assets,
-                    &mut materials,
-                    &mut camera_kick,
-                    resource.id,
-                    resource.model,
-                    *current_transform,
-                    mesh.0.clone(),
-                    material.0.clone(),
-                    player_position,
-                );
-            }
-            commands.entity(entity).despawn();
+        if transition.just_entered_regen {
+            despawn_with_death_effect(
+                &mut commands,
+                &impact_assets,
+                &mut materials,
+                &mut camera_kick,
+                &resource_entities,
+                player_position,
+                entities.entities.remove(&node.id),
+            );
         }
 
         // Regenerating nodes have no on-screen presence — skip any
@@ -128,10 +114,6 @@ pub(crate) fn apply_resource_nodes_system(
         if node.respawn_progress.is_some() {
             continue;
         }
-
-        let just_finished_regen = previous_progress.is_some() && node.respawn_progress.is_none();
-        let arrived_fresh = !was_tracked && pop_in_enabled;
-        let should_pop_in = just_finished_regen || arrived_fresh;
 
         let target_transform = resource_node_transform(node, definition.model);
 
@@ -146,93 +128,210 @@ pub(crate) fn apply_resource_nodes_system(
             continue;
         }
 
-        let (mesh, material) = resource_node_visual(&assets, node, definition.model);
-        let mut spawn_command = commands.spawn((
-            Name::new(format!("Resource Node {}", node.id)),
-            NetworkResourceNode {
-                id: node.id,
-                model: definition.model,
-            },
-            Mesh3d(mesh),
-            MeshMaterial3d(material),
+        spawn_resource_node_entity(
+            &mut commands,
+            &assets,
+            &impact_assets,
+            entities,
+            node,
+            definition.model,
             target_transform,
-            Visibility::Visible,
-        ));
-
-        if should_pop_in {
-            spawn_command.insert(ResourceNodePopIn {
-                elapsed: 0.0,
-                base_transform: target_transform,
-            });
-        }
-        let entity = spawn_command.id();
-        entities.entities.insert(node.id, entity);
-
-        if should_pop_in {
-            // A short upward chip burst sells the "fresh from the
-            // ground" moment. Trees throw wood chips, ores throw stone
-            // shards — same palette as gather impacts so the visual
-            // language stays consistent.
-            let burst_anchor = Vec3::new(node.position.x, node.position.y + 0.18, node.position.z);
-            let kind = if definition.model.is_tree() {
-                ImpactEffectKind::WoodChips
-            } else {
-                ImpactEffectKind::StoneShards
-            };
-            let seed = (node.id as u32).wrapping_mul(0x9E37_79B1);
-            spawn_impact_burst(
-                &mut commands,
-                &impact_assets,
-                kind,
-                burst_anchor,
-                Vec3::Y,
-                seed,
-                0.65,
-            );
-        }
+            transition.should_pop_in,
+        );
     }
 
-    // Despawn nodes that fell out of the snapshot entirely (an admin
-    // /clear or hot-reload), retaining the spawn-node-death effect at
-    // their final transform.
-    let mut to_remove: Vec<ResourceNodeId> = Vec::new();
-    for (&id, &entity) in entities.entities.iter() {
-        if snapshot_ids.contains(&id) {
-            continue;
-        }
-        if let Ok((resource, mesh, material, transform)) = resource_entities.get(entity) {
-            crate::app::systems::node_death::spawn_node_death(
-                &mut commands,
-                &impact_assets,
-                &mut materials,
-                &mut camera_kick,
-                resource.id,
-                resource.model,
-                *transform,
-                mesh.0.clone(),
-                material.0.clone(),
-                player_position,
-            );
-        }
+    despawn_nodes_missing_from_snapshot(
+        &mut commands,
+        &impact_assets,
+        &mut materials,
+        &mut camera_kick,
+        &resource_entities,
+        entities,
+        &snapshot_ids,
+        player_position,
+    );
+
+    entities.commit_progress(&snapshot.resource_nodes, &snapshot_ids);
+}
+
+/// First-pass cleanup when the snapshot disappears (disconnect, world swap).
+/// Resets the "have we ever applied a snapshot?" flag so the next batch of
+/// nodes doesn't all pop in at once like a re-entry animation.
+fn clear_all_tracked_nodes(commands: &mut Commands, entities: &mut ResourceNodeEntities) {
+    for (_, entity) in entities.entities.drain() {
         commands.entity(entity).despawn();
-        to_remove.push(id);
     }
-    for id in to_remove {
-        entities.entities.remove(&id);
+    entities.previous_progress.clear();
+    entities.applied_first_snapshot = false;
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NodeTransition {
+    just_entered_regen: bool,
+    should_pop_in: bool,
+}
+
+impl ResourceNodeEntities {
+    /// Classifies what this tick's snapshot means for `node` compared to the
+    /// previously-applied snapshot. Returned flags drive the death-effect
+    /// despawn and the fresh-spawn pop-in animation in the system loop.
+    fn classify(&self, node: &ResourceNodeState, pop_in_enabled: bool) -> NodeTransition {
+        let was_tracked = self.previous_progress.contains_key(&node.id);
+        let previous_progress = self
+            .previous_progress
+            .get(&node.id)
+            .copied()
+            .unwrap_or(None);
+        let just_entered_regen = previous_progress.is_none() && node.respawn_progress.is_some();
+        let just_finished_regen = previous_progress.is_some() && node.respawn_progress.is_none();
+        let arrived_fresh = !was_tracked && pop_in_enabled;
+        NodeTransition {
+            just_entered_regen,
+            should_pop_in: just_finished_regen || arrived_fresh,
+        }
     }
 
-    // Update the per-node progress map so the next tick can detect
-    // transitions. Drop entries that left the snapshot so the map
-    // doesn't grow without bound across long sessions.
-    entities
-        .previous_progress
-        .retain(|id, _| snapshot_ids.contains(id));
-    for node in &snapshot.resource_nodes {
-        entities
-            .previous_progress
-            .insert(node.id, node.respawn_progress);
+    /// Refresh the progress map after a tick, dropping ids that left the
+    /// snapshot so it can't grow without bound across long sessions.
+    fn commit_progress(
+        &mut self,
+        nodes: &[ResourceNodeState],
+        snapshot_ids: &HashSet<ResourceNodeId>,
+    ) {
+        self.previous_progress
+            .retain(|id, _| snapshot_ids.contains(id));
+        for node in nodes {
+            self.previous_progress
+                .insert(node.id, node.respawn_progress);
+        }
+        self.applied_first_snapshot = true;
     }
-    entities.applied_first_snapshot = true;
+}
+
+#[allow(clippy::too_many_arguments)]
+fn despawn_with_death_effect(
+    commands: &mut Commands,
+    impact_assets: &ImpactEffectAssets,
+    materials: &mut Assets<StandardMaterial>,
+    camera_kick: &mut crate::app::systems::CameraImpactKick,
+    resource_entities: &ResourceEntityQuery,
+    player_position: Option<Vec3>,
+    entity: Option<Entity>,
+) {
+    let Some(entity) = entity else {
+        return;
+    };
+    if let Ok((resource, mesh, material, transform)) = resource_entities.get(entity) {
+        crate::app::systems::node_death::spawn_node_death(
+            commands,
+            impact_assets,
+            materials,
+            camera_kick,
+            resource.id,
+            resource.model,
+            *transform,
+            mesh.0.clone(),
+            material.0.clone(),
+            player_position,
+        );
+    }
+    commands.entity(entity).despawn();
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_resource_node_entity(
+    commands: &mut Commands,
+    assets: &ResourceVisualAssets,
+    impact_assets: &ImpactEffectAssets,
+    entities: &mut ResourceNodeEntities,
+    node: &ResourceNodeState,
+    model: ResourceNodeModel,
+    target_transform: Transform,
+    should_pop_in: bool,
+) {
+    let (mesh, material) = resource_node_visual(assets, node, model);
+    let mut spawn_command = commands.spawn((
+        Name::new(format!("Resource Node {}", node.id)),
+        NetworkResourceNode { id: node.id, model },
+        Mesh3d(mesh),
+        MeshMaterial3d(material),
+        target_transform,
+        Visibility::Visible,
+    ));
+    if should_pop_in {
+        spawn_command.insert(ResourceNodePopIn {
+            elapsed: 0.0,
+            base_transform: target_transform,
+        });
+    }
+    let entity = spawn_command.id();
+    entities.entities.insert(node.id, entity);
+
+    if should_pop_in {
+        spawn_pop_in_chip_burst(commands, impact_assets, node, model);
+    }
+}
+
+/// A short upward chip burst sells the "fresh from the ground" moment.
+/// Trees throw wood chips, ores throw stone shards — same palette as gather
+/// impacts so the visual language stays consistent.
+fn spawn_pop_in_chip_burst(
+    commands: &mut Commands,
+    impact_assets: &ImpactEffectAssets,
+    node: &ResourceNodeState,
+    model: ResourceNodeModel,
+) {
+    let burst_anchor = Vec3::new(node.position.x, node.position.y + 0.18, node.position.z);
+    let kind = if model.is_tree() {
+        ImpactEffectKind::WoodChips
+    } else {
+        ImpactEffectKind::StoneShards
+    };
+    let seed = (node.id as u32).wrapping_mul(0x9E37_79B1);
+    spawn_impact_burst(
+        commands,
+        impact_assets,
+        kind,
+        burst_anchor,
+        Vec3::Y,
+        seed,
+        0.65,
+    );
+}
+
+/// Sweeps the tracked-entities map for ids that no longer appear in the
+/// snapshot — admin `/clear`, hot-reload, etc. Each one gets the standard
+/// death effect at its final transform before despawning, so the world
+/// doesn't simply blink empty.
+#[allow(clippy::too_many_arguments)]
+fn despawn_nodes_missing_from_snapshot(
+    commands: &mut Commands,
+    impact_assets: &ImpactEffectAssets,
+    materials: &mut Assets<StandardMaterial>,
+    camera_kick: &mut crate::app::systems::CameraImpactKick,
+    resource_entities: &ResourceEntityQuery,
+    entities: &mut ResourceNodeEntities,
+    snapshot_ids: &HashSet<ResourceNodeId>,
+    player_position: Option<Vec3>,
+) {
+    let to_remove: Vec<ResourceNodeId> = entities
+        .entities
+        .iter()
+        .filter(|(id, _)| !snapshot_ids.contains(id))
+        .map(|(id, _)| *id)
+        .collect();
+    for id in to_remove {
+        let entity = entities.entities.remove(&id);
+        despawn_with_death_effect(
+            commands,
+            impact_assets,
+            materials,
+            camera_kick,
+            resource_entities,
+            player_position,
+            entity,
+        );
+    }
 }
 
 /// Drives the "emerge from the ground" animation attached to freshly

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use lightyear::prelude::{Disconnected, MessageReceiver, MessageSender, server::ClientOf};
 
-use super::super::protocol::send_server_message;
+use super::super::channels::send_server_message;
 use super::AuthoritativeServer;
 use crate::{
     protocol::{ClientId, ClientMessage, ServerMessage},

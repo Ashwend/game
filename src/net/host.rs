@@ -34,7 +34,7 @@ use self::{
         ServerConnections, handle_disconnected_clients, receive_client_messages, route_envelopes,
     },
 };
-use super::protocol::{LIGHTYEAR_PROTOCOL_ID, LightyearProtocolPlugin, private_key};
+use super::channels::{LIGHTYEAR_PROTOCOL_ID, LightyearProtocolPlugin, private_key};
 
 const HOST_SLEEP: Duration = Duration::from_millis(1);
 const HOST_START_TIMEOUT: Duration = Duration::from_secs(2);
