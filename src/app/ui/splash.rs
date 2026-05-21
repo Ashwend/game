@@ -9,11 +9,7 @@ use super::theme;
 /// drops the splash when it has fully faded out. Returns whether the
 /// splash is currently absorbing input (so callers can short-circuit any
 /// extra repaint scheduling).
-pub(super) fn world_entry_splash_ui(
-    ctx: &egui::Context,
-    menu: &mut MenuState,
-    delta_seconds: f32,
-) {
+pub(super) fn world_entry_splash_ui(ctx: &egui::Context, menu: &mut MenuState, delta_seconds: f32) {
     let alpha = {
         let Some(splash) = menu.world_entry_splash.as_mut() else {
             return;
@@ -62,18 +58,19 @@ fn draw_overlay(ctx: &egui::Context, splash: &WorldEntrySplash, alpha: u8) {
 }
 
 fn draw_panel(ui: &mut egui::Ui, splash: &WorldEntrySplash, screen_rect: egui::Rect, alpha: u8) {
-    let center = egui::pos2(
-        screen_rect.width() * 0.5,
-        screen_rect.height() * 0.5 - 28.0,
-    );
+    let center = egui::pos2(screen_rect.width() * 0.5, screen_rect.height() * 0.5 - 28.0);
     let title = splash.title();
     let subtitle = splash.target_label.trim();
 
     let title_color = with_alpha(theme::text(), alpha);
-    let subtitle_color =
-        with_alpha(egui::Color32::from_rgb(190, 206, 224), scale_alpha(alpha, 0.82));
-    let hint_color =
-        with_alpha(egui::Color32::from_rgb(150, 168, 188), scale_alpha(alpha, 0.7));
+    let subtitle_color = with_alpha(
+        egui::Color32::from_rgb(190, 206, 224),
+        scale_alpha(alpha, 0.82),
+    );
+    let hint_color = with_alpha(
+        egui::Color32::from_rgb(150, 168, 188),
+        scale_alpha(alpha, 0.7),
+    );
 
     ui.painter().text(
         center,
@@ -101,13 +98,9 @@ fn draw_panel(ui: &mut egui::Ui, splash: &WorldEntrySplash, screen_rect: egui::R
     // the overlay area which gets the same alpha multiplier visually
     // (color is multiplied by widget colors which come from style — keep
     // the spinner subtle by reducing alpha further during the fade-out).
-    let mut spinner_ui = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(spinner_rect)
-            .layout(egui::Layout::centered_and_justified(
-                egui::Direction::TopDown,
-            )),
-    );
+    let mut spinner_ui = ui.new_child(egui::UiBuilder::new().max_rect(spinner_rect).layout(
+        egui::Layout::centered_and_justified(egui::Direction::TopDown),
+    ));
     spinner_ui
         .style_mut()
         .visuals
@@ -197,11 +190,13 @@ mod tests {
     #[test]
     fn splash_overlay_renders_in_headless_context() {
         let ctx = egui::Context::default();
-        let mut menu = MenuState::default();
-        menu.world_entry_splash = Some(WorldEntrySplash::new(
-            WorldEntryKind::Multiplayer,
-            "127.0.0.1:7777",
-        ));
+        let mut menu = MenuState {
+            world_entry_splash: Some(WorldEntrySplash::new(
+                WorldEntryKind::Multiplayer,
+                "127.0.0.1:7777",
+            )),
+            ..Default::default()
+        };
 
         let output = ctx.run(
             egui::RawInput {

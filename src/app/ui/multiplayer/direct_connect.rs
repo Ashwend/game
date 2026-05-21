@@ -97,8 +97,7 @@ pub(super) fn direct_connect_dialog_ui(
     }
 
     if let Some(target) = splash_to_start {
-        menu.world_entry_splash =
-            Some(WorldEntrySplash::new(WorldEntryKind::Multiplayer, target));
+        menu.world_entry_splash = Some(WorldEntrySplash::new(WorldEntryKind::Multiplayer, target));
     }
 
     if finished_closing {

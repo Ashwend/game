@@ -237,7 +237,10 @@ fn draw_corrupted_world_row(
         rect,
         5,
         fill,
-        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(190, 110, 70, 130)),
+        egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgba_unmultiplied(190, 110, 70, 130),
+        ),
         egui::StrokeKind::Inside,
     );
 

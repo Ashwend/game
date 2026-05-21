@@ -102,8 +102,10 @@ pub(super) fn start_singleplayer_in_background(
                 world_id,
                 receiver: Mutex::new(receiver),
             });
-            menu.world_entry_splash =
-                Some(WorldEntrySplash::new(WorldEntryKind::Singleplayer, world_name));
+            menu.world_entry_splash = Some(WorldEntrySplash::new(
+                WorldEntryKind::Singleplayer,
+                world_name,
+            ));
             menu.status = None;
         }
         Err(error) => {
