@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
 
-use bevy::prelude::*;
+use bevy::{light::NotShadowCaster, prelude::*};
 
 use crate::{
     app::{
@@ -75,6 +75,10 @@ pub(crate) fn apply_held_item_visual_system(
                 Mesh3d(mesh),
                 MeshMaterial3d(material),
                 Visibility::Visible,
+                // Held items sit right in front of the camera; their
+                // shadow would slash across the floor like a phantom
+                // player and dominate the frame. Skip the shadow pass.
+                NotShadowCaster,
             ));
         }
     } else {
@@ -87,6 +91,7 @@ pub(crate) fn apply_held_item_visual_system(
             MeshMaterial3d(material),
             transform,
             Visibility::Visible,
+            NotShadowCaster,
         ));
     }
 }

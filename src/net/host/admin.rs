@@ -20,6 +20,7 @@ use super::{
 use crate::{
     net::dedicated::{DedicatedAdminRequest, DedicatedAdminResponse},
     protocol::ServerMessage,
+    server::{DeliveryTarget, ServerEnvelope},
 };
 
 const ADMIN_SOCKET_MODE: u32 = 0o660;
@@ -141,6 +142,36 @@ fn handle_admin_request(
             route_envelopes(connections, senders, server.0.kick_all(reason));
             shutdown.requested = true;
             Ok("shutdown requested".to_owned())
+        }
+        DedicatedAdminRequest::SetTime { seconds_of_day } => {
+            server.0.set_world_time_seconds(seconds_of_day);
+            let snapshot = server.0.world_time_snapshot();
+            route_envelopes(
+                connections,
+                senders,
+                vec![ServerEnvelope {
+                    target: DeliveryTarget::Broadcast,
+                    message: ServerMessage::WorldTime(snapshot),
+                }],
+            );
+            Ok(format!(
+                "time set to {}",
+                server.0.world_time().format_hhmm()
+            ))
+        }
+        DedicatedAdminRequest::SetTimeMultiplier { multiplier } => {
+            server.0.set_world_time_multiplier(multiplier);
+            let snapshot = server.0.world_time_snapshot();
+            let applied = server.0.world_time().multiplier;
+            route_envelopes(
+                connections,
+                senders,
+                vec![ServerEnvelope {
+                    target: DeliveryTarget::Broadcast,
+                    message: ServerMessage::WorldTime(snapshot),
+                }],
+            );
+            Ok(format!("day/night speed set to {applied:.2}×"))
         }
     }
 }

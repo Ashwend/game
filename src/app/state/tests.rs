@@ -14,6 +14,7 @@ use crate::{
         WorldSnapshot,
     },
     world::{MapType, ProceduralMapSize, WorldData},
+    world_time::{WorldTime, WorldTimeSnapshot},
 };
 
 fn player_state(client_id: ClientId, position: Vec3Net) -> PlayerState {
@@ -362,6 +363,7 @@ fn apply_message_handles_welcome_chat_events_and_rejections() {
         world: WorldData::test_world(),
         is_admin: true,
         snapshot,
+        world_time: WorldTimeSnapshot::from_time(&WorldTime::default(), 9),
     });
     runtime.apply_message(ServerMessage::PlayerEvent(PlayerEvent::Joined {
         client_id: 2,

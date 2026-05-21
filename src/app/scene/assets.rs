@@ -13,6 +13,7 @@ use super::{
         low_poly_pickaxe_mesh, low_poly_pine_tree_large_mesh, low_poly_pine_tree_medium_mesh,
         low_poly_pine_tree_small_mesh,
     },
+    sky::{initial_distance_fog, setup_sky},
 };
 
 use crate::app::{EYE_HEIGHT, PLAYER_VISUAL_CENTER_Y};
@@ -70,6 +71,10 @@ pub(crate) fn setup_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    // Ambient and clear color are now driven by the day/night cycle in
+    // `sky::update_sky_system`. We still insert defaults here so the
+    // very first frame (before the system runs) has sensible values
+    // rather than the engine defaults.
     commands.insert_resource(GlobalAmbientLight {
         color: Color::srgb(0.72, 0.78, 0.86),
         brightness: 90.0,
@@ -94,18 +99,14 @@ pub(crate) fn setup_scene(
         // sound sources. Bevy's default (4.0) is tuned for huge open worlds
         // and exaggerates panning at first-person ranges.
         SpatialListener::new(0.17),
+        // Atmospheric haze: faded by the day/night system per-frame, but
+        // present from frame zero so far geometry never pops into a
+        // colourless void on the first render.
+        initial_distance_fog(),
         Transform::from_xyz(0.0, EYE_HEIGHT, 3.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
-    commands.spawn((
-        Name::new("Sun"),
-        DirectionalLight {
-            illuminance: 16_000.0,
-            shadows_enabled: false,
-            ..default()
-        },
-        Transform::from_xyz(-3.0, 8.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
+    setup_sky(&mut commands, &mut meshes, &mut materials);
 
     commands.insert_resource(super::world::WorldSceneState::default());
     commands.insert_resource(PlayerVisualAssets {

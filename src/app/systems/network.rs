@@ -26,6 +26,12 @@ pub(crate) fn network_tick_system(
         return;
     }
 
+    // Step the client-side day/night clock every frame the network tick
+    // runs, before any new server snapshots overwrite it. The server's
+    // routine `WorldTime` broadcast realigns drift; this keeps the visible
+    // sun/moon smooth in between.
+    runtime.tick_world_time(time.delta_secs());
+
     let tick_result = runtime
         .session
         .as_mut()

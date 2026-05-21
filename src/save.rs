@@ -18,6 +18,7 @@ use crate::{
         SteamId, Vec3Net,
     },
     world::MapType,
+    world_time::{DEFAULT_START_SECONDS, WorldTime},
 };
 
 const QUALIFIER: &str = "com";
@@ -33,7 +34,11 @@ const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 /// flow. Older v1 saves don't include that field and would be misread
 /// (postcard is positional), so they are rejected at load time and surfaced
 /// in the worlds-screen "couldn't load" banner.
-const SAVE_FORMAT_VERSION: u32 = 2;
+///
+/// `3` added the persistent day/night clock (`world_time_seconds_of_day` and
+/// `world_time_multiplier`) on `WorldStateSave`. Same story as v2: postcard
+/// layout drift, so older saves are rejected with a "couldn't load" banner.
+const SAVE_FORMAT_VERSION: u32 = 3;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
 /// at >100MB/s compression and ~1GB/s decompression.
 const ZSTD_LEVEL: i32 = 5;
@@ -303,7 +308,7 @@ impl WorldSave {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorldStateSave {
     pub last_authoritative_tick: u64,
     pub players: Vec<PersistedPlayer>,
@@ -315,10 +320,57 @@ pub struct WorldStateSave {
     pub next_dropped_item_id: DroppedItemId,
     #[serde(default = "default_next_id")]
     pub next_client_id: ClientId,
+    /// Persisted day/night clock — wall-clock seconds within the in-game
+    /// day. Reload picks up wherever the last session left off so the world
+    /// doesn't jump back to morning every restart.
+    #[serde(default = "default_world_time_seconds")]
+    pub world_time_seconds_of_day: f32,
+    /// Persisted day/night multiplier. Admins can change it via the
+    /// `/speed` command; the value survives a save round-trip.
+    #[serde(default = "default_world_time_multiplier")]
+    pub world_time_multiplier: f32,
+}
+
+impl Default for WorldStateSave {
+    fn default() -> Self {
+        Self {
+            last_authoritative_tick: 0,
+            players: Vec::new(),
+            dropped_items: Vec::new(),
+            resource_nodes: None,
+            next_dropped_item_id: default_next_id(),
+            next_client_id: default_next_id(),
+            world_time_seconds_of_day: default_world_time_seconds(),
+            world_time_multiplier: default_world_time_multiplier(),
+        }
+    }
+}
+
+impl WorldStateSave {
+    pub fn world_time(&self) -> WorldTime {
+        let mut time = WorldTime {
+            seconds_of_day: self.world_time_seconds_of_day,
+            multiplier: self.world_time_multiplier,
+        };
+        // Re-clamp on load — a save edited by hand or produced by a future
+        // version we tolerate-via-default could carry a value outside
+        // the safe range. Cheaper to fix once on load than on every tick.
+        time.set_seconds(time.seconds_of_day);
+        time.set_multiplier(time.multiplier);
+        time
+    }
 }
 
 fn default_next_id() -> u64 {
     1
+}
+
+fn default_world_time_seconds() -> f32 {
+    DEFAULT_START_SECONDS
+}
+
+fn default_world_time_multiplier() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

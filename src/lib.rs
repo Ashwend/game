@@ -9,6 +9,7 @@ pub mod save;
 pub mod server;
 pub mod steam;
 pub mod world;
+pub mod world_time;
 
 pub fn run() -> anyhow::Result<()> {
     cli::run()

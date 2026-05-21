@@ -24,6 +24,7 @@ Modules:
   - `protocol.rs`: Lightyear channel/message registration and delivery-channel helpers.
   - `dedicated/mod.rs`: small CLI-facing wrapper around the shared host plus the `DedicatedAdminRequest`/`DedicatedAdminResponse` JSON contract used by `./cli admin`.
 - `save` + `world`: persistent world metadata, generated geometry, and resource-node spawns. `WorldSave` is a binary `.save` file (postcard payload + zstd, behind a `GAMESAVE` magic header and a `u32` format version).
+- `world_time`: authoritative day/night clock shared by server and client. The server advances `seconds_of_day` per tick using a `multiplier`, persists both into `WorldStateSave`, and broadcasts a `ServerMessage::WorldTime` snapshot every minute (and immediately after `/time` or `/speed` admin changes). The client integrates locally between snapshots so the sun/moon stay smooth between drift realignments. Visual realisation (sun + moon directional lights, ambient curve, sky color, fog, sun/moon discs) lives in `app/scene/sky.rs`.
 - `steam`: offline auth shim and feature-gated Steam hook points.
 
 Singleplayer and multiplayer are intentionally the same gameplay path. `ClientSession::start_singleplayer` starts a loopback Lightyear host with `GameServer`, then connects the normal Lightyear client to it. `ClientSession::connect` connects that same client to a remote Lightyear host. Both paths send `ClientMessage`, receive `ServerMessage`, and consume snapshots through `ClientRuntime`.

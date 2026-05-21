@@ -16,7 +16,7 @@ use crate::{
 };
 
 use self::{
-    scene::{apply_world_scene_system, setup_scene},
+    scene::{apply_world_scene_system, setup_scene, update_sky_system},
     state::{
         ClientErrorToast, ClientRuntime, ClientSettingsStore, GatherInputState, InventoryUiState,
         LookState, MenuBackdropVisibility, MenuState, PickupTargetState, RemoteImpactEvent,
@@ -82,6 +82,7 @@ const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::ResourceNodes,
     ClientSystemSet::Camera,
     ClientSystemSet::HeldItem,
+    ClientSystemSet::Sky,
     ClientSystemSet::PickupTarget,
     ClientSystemSet::ImpactSounds,
     ClientSystemSet::ImpactEffectsSpawn,
@@ -262,6 +263,7 @@ pub fn run_app() -> Result<()> {
             Update,
             apply_held_item_visual_system.in_set(ClientSystemSet::HeldItem),
         )
+        .add_systems(Update, update_sky_system.in_set(ClientSystemSet::Sky))
         .add_systems(
             Update,
             update_pickup_target_system.in_set(ClientSystemSet::PickupTarget),

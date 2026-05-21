@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{light::NotShadowCaster, prelude::*};
 
 use super::super::{
     scene::ImpactEffectAssets,
@@ -129,6 +129,9 @@ pub(crate) fn spawn_ore_shatter_burst(
                 .with_rotation(rotation)
                 .with_scale(Vec3::splat(initial_scale)),
             Visibility::Visible,
+            // Sub-cm flying debris. A shadow would be a single fuzzy
+            // texel at best and just adds work to the cascade pass.
+            NotShadowCaster,
         ));
     }
 }
@@ -230,6 +233,7 @@ pub(crate) fn spawn_impact_burst(
                 .with_rotation(rotation)
                 .with_scale(Vec3::splat(initial_scale)),
             Visibility::Visible,
+            NotShadowCaster,
         ));
     }
 }

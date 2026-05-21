@@ -12,6 +12,7 @@ use crate::{
     resources::resource_node_collider,
     save::WorldStore,
     world::{WorldBlock, WorldData},
+    world_time::{WorldTime, WorldTimeSnapshot},
 };
 
 use super::connection::ConnectionWatch;
@@ -104,6 +105,10 @@ pub(crate) struct ClientRuntime {
     /// by the HUD's connection indicator. Lives in its own type so the
     /// thresholds and ticking logic stay focused on that concern.
     pub(crate) connection: ConnectionWatch,
+    /// Client-side mirror of the authoritative day/night clock. Driven by
+    /// the periodic `WorldTime` server broadcast plus per-frame local
+    /// integration so the sun/moon position stays smooth between snapshots.
+    pub(crate) world_time: WorldTime,
 }
 
 /// Surfaces a client-side error string as a toast. Emitted by any system
@@ -207,6 +212,7 @@ impl ClientRuntime {
         self.input_sequence = 0;
         self.resource_node_collider_version = 0;
         self.connection.reset();
+        self.world_time = WorldTime::default();
     }
 
     pub(crate) fn shutdown_in_background(
@@ -268,6 +274,7 @@ impl ClientRuntime {
                 world,
                 is_admin,
                 snapshot,
+                world_time,
                 ..
             } => {
                 self.client_id = Some(client_id);
@@ -279,6 +286,7 @@ impl ClientRuntime {
                 self.rebuild_world_grid();
                 self.resource_node_collider_version =
                     resource_node_collider_set_version(self.snapshot.as_ref());
+                self.apply_world_time_snapshot(world_time);
                 self.push_system_message(format!("connected as player {client_id}"));
             }
             ServerMessage::AuthRejected { reason } => {
@@ -323,8 +331,28 @@ impl ClientRuntime {
                 // system before reaching runtime state — no log/history
                 // side-effect here.
             }
+            ServerMessage::WorldTime(snapshot) => {
+                self.apply_world_time_snapshot(snapshot);
+            }
             ServerMessage::Heartbeat => {}
         }
+    }
+
+    fn apply_world_time_snapshot(&mut self, snapshot: WorldTimeSnapshot) {
+        self.world_time.seconds_of_day = snapshot.seconds_of_day;
+        self.world_time.multiplier = snapshot.multiplier;
+        // Re-clamp on the read side: a future server might broadcast a
+        // value outside our tolerated range and we don't want a stray
+        // negative multiplier driving the local integrator.
+        self.world_time.set_seconds(self.world_time.seconds_of_day);
+        self.world_time.set_multiplier(self.world_time.multiplier);
+    }
+
+    /// Advance the client-side mirror of the day/night clock by one frame
+    /// of real time. Called from the network tick so the sun/moon visuals
+    /// keep moving smoothly between the server's ~minute snapshots.
+    pub(crate) fn tick_world_time(&mut self, delta_seconds: f32) {
+        self.world_time.advance(delta_seconds);
     }
 
     pub(crate) fn push_system_message(&mut self, text: impl Into<String>) {

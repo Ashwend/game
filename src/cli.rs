@@ -7,6 +7,7 @@ use crate::{
     app, net,
     save::{WorldSave, WorldStore, load_world_file, save_world_file},
     steam::{AuthMode, OfflineSteamBackend, SteamBackend},
+    world_time::parse_time_token,
 };
 
 const DEFAULT_ADMIN_SOCKET: &str = "/run/game-server/admin.sock";
@@ -51,6 +52,12 @@ enum AdminCommand {
         #[arg(long, default_value = DEFAULT_SHUTDOWN_REASON)]
         reason: String,
     },
+    /// Set the day/night clock. Accepts `HH:MM` or an integer/decimal
+    /// hour (`/admin time 18` for 6 pm).
+    Time { time: String },
+    /// Set the day/night cycle speed multiplier. `1.0` is the default
+    /// (one cycle per 30 real minutes). `0` pauses the cycle.
+    Speed { multiplier: f32 },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -128,6 +135,15 @@ fn run_admin_command(socket: PathBuf, command: AdminCommand) -> Result<()> {
             text: message.join(" "),
         },
         AdminCommand::Shutdown { reason } => net::DedicatedAdminRequest::Shutdown { reason },
+        AdminCommand::Time { time } => {
+            let Some(seconds_of_day) = parse_time_token(&time) else {
+                anyhow::bail!("could not parse '{time}'; expected HH:MM or an hour like 14");
+            };
+            net::DedicatedAdminRequest::SetTime { seconds_of_day }
+        }
+        AdminCommand::Speed { multiplier } => {
+            net::DedicatedAdminRequest::SetTimeMultiplier { multiplier }
+        }
     };
     let response = net::send_dedicated_admin_request(&socket, request)
         .with_context(|| format!("could not send admin command to {}", socket.display()))?;

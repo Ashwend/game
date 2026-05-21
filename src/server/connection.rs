@@ -82,6 +82,7 @@ impl GameServer {
         self.steam_to_client.insert(steam_id, client_id);
 
         let snapshot = self.snapshot_for(client_id);
+        let world_time = self.world_time_snapshot();
         Ok((
             client_id,
             vec![
@@ -93,6 +94,7 @@ impl GameServer {
                         world: self.world.clone(),
                         is_admin,
                         snapshot,
+                        world_time,
                     },
                 },
                 ServerEnvelope {

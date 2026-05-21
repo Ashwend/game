@@ -19,6 +19,7 @@ use crate::{
         COAL_NODE_ID, IRON_NODE_ID, SULFUR_NODE_ID, resource_node_definition, spawn_resource_node,
     },
     world::WorldResourceNodeSpawn,
+    world_time::{MAX_MULTIPLIER, MIN_MULTIPLIER, parse_time_token},
 };
 
 use super::{DeliveryTarget, GameServer, ServerEnvelope};
@@ -51,6 +52,8 @@ impl GameServer {
 
         match name.as_str() {
             "spawn-ore" | "spawnore" => self.command_spawn_ore(client_id, &args),
+            "time" => self.command_set_time(client_id, &args),
+            "speed" | "timescale" => self.command_set_time_multiplier(client_id, &args),
             "help" => self.command_help(client_id),
             other => reply_warning(client_id, format!("unknown command: /{other}")),
         }
@@ -77,6 +80,18 @@ impl GameServer {
             "  /spawn-ore [coal|iron|sulfur] [radius] — admin only"
         };
         lines.push(spawn_ore_line.to_owned());
+        let time_line = if is_admin {
+            "  /time <HH:MM|hour> — set the time of day"
+        } else {
+            "  /time <HH:MM|hour> — admin only"
+        };
+        lines.push(time_line.to_owned());
+        let speed_line = if is_admin {
+            "  /speed <multiplier> — set the day/night speed (0 to 240)"
+        } else {
+            "  /speed <multiplier> — admin only"
+        };
+        lines.push(speed_line.to_owned());
 
         lines
             .into_iter()
@@ -88,6 +103,86 @@ impl GameServer {
                 }),
             })
             .collect()
+    }
+
+    fn command_set_time(&mut self, client_id: ClientId, args: &[&str]) -> Vec<ServerEnvelope> {
+        let Some(client) = self.clients.get(&client_id) else {
+            return Vec::new();
+        };
+        if !client.is_admin {
+            return reply_warning(client_id, "admin only");
+        }
+
+        let Some(token) = args.first() else {
+            return reply_warning(client_id, "usage: /time <HH:MM> or /time <hour>");
+        };
+        let Some(seconds) = parse_time_token(token) else {
+            return reply_warning(
+                client_id,
+                format!("could not parse '{token}'; try '/time 06:30' or '/time 14'"),
+            );
+        };
+
+        self.set_world_time_seconds(seconds);
+        let label = self.world_time.format_hhmm();
+        vec![
+            ServerEnvelope {
+                target: DeliveryTarget::Broadcast,
+                message: ServerMessage::WorldTime(self.world_time_snapshot()),
+            },
+            ServerEnvelope {
+                target: DeliveryTarget::Client(client_id),
+                message: ServerMessage::Toast(ToastMessage::new(
+                    ToastKind::Success,
+                    format!("time set to {label}"),
+                )),
+            },
+        ]
+    }
+
+    fn command_set_time_multiplier(
+        &mut self,
+        client_id: ClientId,
+        args: &[&str],
+    ) -> Vec<ServerEnvelope> {
+        let Some(client) = self.clients.get(&client_id) else {
+            return Vec::new();
+        };
+        if !client.is_admin {
+            return reply_warning(client_id, "admin only");
+        }
+
+        let Some(token) = args.first() else {
+            return reply_warning(
+                client_id,
+                format!("usage: /speed <multiplier> (0 to {MAX_MULTIPLIER})"),
+            );
+        };
+        let Ok(multiplier) = token.parse::<f32>() else {
+            return reply_warning(client_id, format!("could not parse '{token}' as a number"));
+        };
+        if !multiplier.is_finite() || multiplier < MIN_MULTIPLIER {
+            return reply_warning(
+                client_id,
+                format!("multiplier must be in [{MIN_MULTIPLIER}, {MAX_MULTIPLIER}]"),
+            );
+        }
+
+        self.set_world_time_multiplier(multiplier);
+        let applied = self.world_time.multiplier;
+        vec![
+            ServerEnvelope {
+                target: DeliveryTarget::Broadcast,
+                message: ServerMessage::WorldTime(self.world_time_snapshot()),
+            },
+            ServerEnvelope {
+                target: DeliveryTarget::Client(client_id),
+                message: ServerMessage::Toast(ToastMessage::new(
+                    ToastKind::Success,
+                    format!("day/night speed set to {applied:.2}×"),
+                )),
+            },
+        ]
     }
 
     /// `/spawn-ore [coal|iron|sulfur] [radius]`

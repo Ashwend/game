@@ -13,6 +13,7 @@
 mod assets;
 mod components;
 mod mesh;
+mod sky;
 mod world;
 
 pub(crate) use assets::{
@@ -23,6 +24,7 @@ pub(crate) use components::{
     HeldItemVisual, MainCamera, NetworkDroppedItem, NetworkPlayer, NetworkResourceNode,
     tree_mesh_height,
 };
+pub(crate) use sky::update_sky_system;
 pub(crate) use world::apply_world_scene_system;
 #[cfg(test)]
 pub(crate) use {components::WorldGeometry, world::WorldSceneState};
@@ -78,11 +80,16 @@ mod tests {
             .count();
         assert_eq!(temporal_aa_count, 0);
 
-        let sun = world
+        // Sun and moon are two distinct directional lights; the sun
+        // casts shadows and the moon does not.
+        let lights: Vec<DirectionalLight> = world
             .query::<&DirectionalLight>()
-            .single(world)
-            .expect("sun should exist");
-        assert!(!sun.shadows_enabled);
+            .iter(world)
+            .cloned()
+            .collect();
+        assert_eq!(lights.len(), 2, "sun + moon directional lights");
+        let shadow_casters = lights.iter().filter(|light| light.shadows_enabled).count();
+        assert_eq!(shadow_casters, 1, "exactly the sun should cast shadows");
     }
 
     #[test]

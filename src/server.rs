@@ -6,14 +6,21 @@ use crate::{
     protocol::{
         ACTIONBAR_SLOT_COUNT, ChatMessage, ClientId, ClientMessage, DroppedItemId,
         DroppedWorldItem, InventoryCommand, ItemStack, PlayerInventoryState, ResourceNodeId,
-        ResourceNodeState, ServerMessage, SteamId, Vec3Net, sanitize_chat,
+        ResourceNodeState, SERVER_TICK_RATE_HZ, ServerMessage, SteamId, Vec3Net, sanitize_chat,
     },
     save::{PersistedPlayer, WorldSave, WorldStateSave},
     steam::AuthMode,
     world::WorldData,
+    world_time::{WorldTime, WorldTimeSnapshot},
 };
 
 const CLIENT_STALE_TIMEOUT_TICKS: u64 = 20 * 10;
+
+/// Cadence of the routine [`ServerMessage::WorldTime`] broadcast. One per
+/// real minute keeps clients aligned against drift without flooding the
+/// wire — the client integrates between snapshots using the same
+/// multiplier, so the visible cycle stays smooth in between.
+const WORLD_TIME_BROADCAST_INTERVAL_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 60;
 
 mod commands;
 mod connection;
@@ -79,6 +86,13 @@ pub struct GameServer {
     next_dropped_item_id: DroppedItemId,
     next_client_id: ClientId,
     tick: u64,
+    /// Authoritative day/night clock. Mirrored to clients via
+    /// [`ServerMessage::WorldTime`]. Persisted to the save in `world_save`.
+    world_time: WorldTime,
+    /// Last tick a routine `WorldTime` broadcast was sent. Lets admin
+    /// commands push an out-of-band immediate snapshot and reset this
+    /// counter so the next routine broadcast is a full interval later.
+    last_world_time_broadcast_tick: u64,
 }
 
 impl GameServer {
@@ -120,9 +134,11 @@ impl GameServer {
 
         let next_dropped_item_id = save.state.next_dropped_item_id.max(1);
         let next_client_id = save.state.next_client_id.max(1);
+        let world_time = save.state.world_time();
+        let tick = save.state.last_authoritative_tick;
 
         Self {
-            tick: save.state.last_authoritative_tick,
+            tick,
             save,
             world,
             world_grid,
@@ -135,7 +151,35 @@ impl GameServer {
             resource_nodes,
             next_dropped_item_id,
             next_client_id,
+            world_time,
+            last_world_time_broadcast_tick: tick,
         }
+    }
+
+    pub fn world_time(&self) -> WorldTime {
+        self.world_time
+    }
+
+    /// Builds a fresh wire snapshot of the day/night clock. Used by both
+    /// the routine broadcast and the immediate post-admin-change broadcast.
+    pub(crate) fn world_time_snapshot(&self) -> WorldTimeSnapshot {
+        WorldTimeSnapshot::from_time(&self.world_time, self.tick)
+    }
+
+    /// Admin path: jump the clock to a specific seconds-of-day. Resets the
+    /// routine broadcast cadence so the immediate envelope returned by the
+    /// caller carries the freshest value.
+    pub(crate) fn set_world_time_seconds(&mut self, seconds_of_day: f32) {
+        self.world_time.set_seconds(seconds_of_day);
+        self.last_world_time_broadcast_tick = self.tick;
+    }
+
+    /// Admin path: change the cycle speed. Same routine-broadcast reset as
+    /// `set_world_time_seconds` so clients aren't drifting against the
+    /// stale multiplier for up to a full broadcast interval.
+    pub(crate) fn set_world_time_multiplier(&mut self, multiplier: f32) {
+        self.world_time.set_multiplier(multiplier);
+        self.last_world_time_broadcast_tick = self.tick;
     }
 
     pub fn world_save(&self) -> WorldSave {
@@ -165,6 +209,8 @@ impl GameServer {
             resource_nodes: Some(resource_nodes),
             next_dropped_item_id: self.next_dropped_item_id,
             next_client_id: self.next_client_id,
+            world_time_seconds_of_day: self.world_time.seconds_of_day,
+            world_time_multiplier: self.world_time.multiplier,
         };
         save
     }
@@ -250,6 +296,7 @@ impl GameServer {
     pub fn tick(&mut self, delta_seconds: f32) -> Vec<ServerEnvelope> {
         self.tick += 1;
         self.save.state.last_authoritative_tick = self.tick;
+        self.world_time.advance(delta_seconds);
         self.dropped_item_physics
             .step(delta_seconds, &mut self.dropped_items);
         self.tick_resource_node_respawn(delta_seconds);
@@ -262,6 +309,18 @@ impl GameServer {
                     message: ServerMessage::ItemMerged { item_id, quantity },
                 },
             ));
+        }
+
+        if self
+            .tick
+            .saturating_sub(self.last_world_time_broadcast_tick)
+            >= WORLD_TIME_BROADCAST_INTERVAL_TICKS
+        {
+            envelopes.push(ServerEnvelope {
+                target: DeliveryTarget::Broadcast,
+                message: ServerMessage::WorldTime(self.world_time_snapshot()),
+            });
+            self.last_world_time_broadcast_tick = self.tick;
         }
 
         // Per-client snapshots: each client gets a copy where only their own

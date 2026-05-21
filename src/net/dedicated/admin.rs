@@ -3,11 +3,25 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum DedicatedAdminRequest {
-    Announce { text: String },
-    Shutdown { reason: String },
+    Announce {
+        text: String,
+    },
+    Shutdown {
+        reason: String,
+    },
+    /// Jump the day/night clock to the given seconds-of-day. Caller is
+    /// responsible for parsing `HH:MM` etc. before serialising.
+    SetTime {
+        seconds_of_day: f32,
+    },
+    /// Change the day/night cycle speed. Clamped server-side to the safe
+    /// multiplier range.
+    SetTimeMultiplier {
+        multiplier: f32,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

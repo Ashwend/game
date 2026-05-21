@@ -60,6 +60,7 @@ pub(crate) enum ClientSystemSet {
     ResourceNodes,
     Camera,
     HeldItem,
+    Sky,
     PickupTarget,
     ImpactEffectsSpawn,
     ImpactEffectsTick,

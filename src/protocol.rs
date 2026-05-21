@@ -1,12 +1,15 @@
 use bevy::prelude::Reflect;
 use serde::{Deserialize, Serialize};
 
-use crate::world::{MapType, WorldData};
+use crate::{
+    world::{MapType, WorldData},
+    world_time::WorldTimeSnapshot,
+};
 
 pub type ClientId = u64;
 pub type SteamId = u64;
 
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 17;
 pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_CHAT_LEN: usize = 240;
@@ -291,6 +294,7 @@ pub enum ServerMessage {
         world: WorldData,
         is_admin: bool,
         snapshot: WorldSnapshot,
+        world_time: WorldTimeSnapshot,
     },
     AuthRejected {
         reason: String,
@@ -317,6 +321,11 @@ pub enum ServerMessage {
         position: Vec3Net,
         kind: ResourceImpactKind,
     },
+    /// Authoritative day/night clock. Sent every ~60 s as a routine drift
+    /// realignment, and immediately after an admin command changes the
+    /// clock or speed. Clients integrate locally between broadcasts using
+    /// the same multiplier, so the visible cycle stays smooth.
+    WorldTime(WorldTimeSnapshot),
     Heartbeat,
 }
 
@@ -367,6 +376,7 @@ impl ServerMessage {
             Self::Snapshot(_)
             | Self::Correction(_)
             | Self::ResourceImpact { .. }
+            | Self::WorldTime(_)
             | Self::Heartbeat => PacketDelivery::Unreliable,
         }
     }
