@@ -122,6 +122,41 @@ pub(in crate::app::ui) fn anchored_panel(
         });
 }
 
+/// Anchored panel that reserves explicit top and bottom window padding
+/// instead of centering. Use this for screens whose contents should grow
+/// to fill the available vertical space (worlds table, server browser)
+/// rather than sitting compact in the middle. The contents receive a `Ui`
+/// already sized to the bounded inner height, so calls like
+/// `ui.available_height()` produce the right budget for child widgets.
+pub(in crate::app::ui) fn bounded_panel(
+    ctx: &egui::Context,
+    id: &'static str,
+    desired_width: f32,
+    top_padding: f32,
+    bottom_padding: f32,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
+    let screen_rect = ctx.content_rect();
+    let screen_width = screen_rect.width();
+    let screen_height = screen_rect.height();
+    let width = desired_width.min((screen_width - 56.0).max(300.0));
+    // panel_frame() uses an inner vertical margin of 22 on each side.
+    let outer_height = (screen_height - top_padding - bottom_padding).max(220.0);
+    let inner_height = (outer_height - 44.0).max(160.0);
+    egui::Area::new(Id::new(id))
+        .order(Order::Foreground)
+        .anchor(Align2::CENTER_TOP, [0.0, top_padding])
+        .show(ctx, |ui| {
+            ui.set_width(width);
+            panel_frame().show(ui, |ui| {
+                ui.set_width(width - 48.0);
+                ui.set_min_height(inner_height);
+                ui.set_max_height(inner_height);
+                add_contents(ui);
+            });
+        });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

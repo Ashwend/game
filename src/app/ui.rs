@@ -7,6 +7,7 @@ mod modal;
 mod multiplayer;
 mod options;
 mod pause;
+mod splash;
 mod theme;
 mod toast;
 mod worlds;
@@ -28,6 +29,7 @@ use self::{
     multiplayer::multiplayer_ui,
     options::{OptionsBackTarget, options_ui},
     pause::pause_ui,
+    splash::world_entry_splash_ui,
     theme::{ButtonKind, game_button},
     toast::toast_ui,
     worlds::worlds_ui,
@@ -149,6 +151,9 @@ pub(crate) fn ui_system(
 
     confirmation_ui(ctx, &mut resources.menu, &resources.store);
     notice_ui(ctx, &mut resources.menu);
+    // Splash overlay sits on top of every screen and modal so it fully
+    // covers the menu→game transition during world entry.
+    world_entry_splash_ui(ctx, &mut resources.menu, delta_seconds);
     resources
         .button_sound_requests
         .0

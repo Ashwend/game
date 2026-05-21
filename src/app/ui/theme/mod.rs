@@ -14,7 +14,8 @@ pub(super) use colors::{
     panel_fill, panel_stroke, text,
 };
 pub(super) use frames::{
-    anchored_panel, apply_game_style, backdrop_cover, inset_frame, panel_frame, screen_scrim,
+    anchored_panel, apply_game_style, backdrop_cover, bounded_panel, inset_frame, panel_frame,
+    screen_scrim,
 };
 pub(super) use text::{field_label, muted, section, status_text, text_input, title};
 pub(super) use tooltip::{anchored_wow_tooltip, wow_tooltip};

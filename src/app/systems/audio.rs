@@ -138,25 +138,20 @@ pub(crate) fn setup_impact_sound_assets(mut commands: Commands, asset_server: Re
 }
 
 /// Spawn spatial audio for tree/ore impacts — both the local player's own
-/// hits (peeked from the pending-impact slot; the visual effects system
-/// will take it on the same frame) and remote players' hits (delivered via
-/// `RemoteImpactEvent`). Spatial playback gives natural distance falloff
-/// and L/R panning so a tree being chopped to your west sounds west.
+/// hits (drained from the audio cue slot, which is queued a few frames ahead
+/// of the visual impact so the MP3 attack lines up with the moment the tool
+/// lands) and remote players' hits (delivered via `RemoteImpactEvent`).
+/// Spatial playback gives natural distance falloff and L/R panning so a tree
+/// being chopped to your west sounds west.
 pub(crate) fn play_impact_sounds_system(
     mut commands: Commands,
     assets: Res<ImpactSoundAssets>,
     settings: Res<ClientSettings>,
-    gather_input: Res<GatherInputState>,
+    mut gather_input: ResMut<GatherInputState>,
     mut remote_impacts: MessageReader<RemoteImpactEvent>,
 ) {
-    if let Some(impact) = gather_input.peek_pending_impact() {
-        spawn_impact_sound(
-            &mut commands,
-            &assets,
-            &settings,
-            impact.anchor,
-            impact.kind,
-        );
+    if let Some(cue) = gather_input.take_pending_audio_cue() {
+        spawn_impact_sound(&mut commands, &assets, &settings, cue.anchor, cue.kind);
     }
     for event in remote_impacts.read() {
         spawn_impact_sound(&mut commands, &assets, &settings, event.anchor, event.kind);

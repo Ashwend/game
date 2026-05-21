@@ -10,7 +10,7 @@ use bevy_egui::egui;
 use crate::{
     app::state::{
         ClientRuntime, DirectConnectAttempt, DirectConnectDialog, DirectConnectResult, MenuState,
-        Screen, SteamUser,
+        Screen, SteamUser, WorldEntryKind, WorldEntrySplash,
     },
     net::ClientSession,
 };
@@ -62,6 +62,7 @@ pub(super) fn direct_connect_dialog_ui(
     }
 
     let finished_closing;
+    let mut splash_to_start: Option<String> = None;
     {
         let Some(dialog) = menu.direct_connect.as_mut() else {
             return;
@@ -72,10 +73,13 @@ pub(super) fn direct_connect_dialog_ui(
             match choice {
                 DirectConnectChoice::Connect => match direct_connect_target(dialog) {
                     Ok(target) => {
+                        let display_target = format!("{}:{}", target.host, target.port);
                         if let Err(error) = start_direct_connect_attempt(ctx, dialog, target, user)
                         {
                             dialog.error = Some(error);
                             ctx.request_repaint();
+                        } else {
+                            splash_to_start = Some(display_target);
                         }
                     }
                     Err(error) => {
@@ -90,6 +94,11 @@ pub(super) fn direct_connect_dialog_ui(
             }
         }
         finished_closing = output.finished_closing;
+    }
+
+    if let Some(target) = splash_to_start {
+        menu.world_entry_splash =
+            Some(WorldEntrySplash::new(WorldEntryKind::Multiplayer, target));
     }
 
     if finished_closing {
@@ -262,6 +271,9 @@ fn finish_direct_connect(
             menu.chat_open = false;
             menu.chat_focus_pending = false;
             menu.status = None;
+            if let Some(splash) = menu.world_entry_splash.as_mut() {
+                splash.world_ready = true;
+            }
         }
         Err(error) => {
             if let Some(dialog) = menu.direct_connect.as_mut() {
@@ -269,6 +281,7 @@ fn finish_direct_connect(
             } else {
                 menu.status = Some(format!("Connection failed: {error}"));
             }
+            menu.world_entry_splash = None;
         }
     }
 }

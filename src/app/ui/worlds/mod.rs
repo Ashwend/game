@@ -6,18 +6,22 @@ mod tests;
 
 use bevy_egui::egui;
 
-use crate::{
-    app::state::{ClientRuntime, MenuState, SaveStore, Screen, SteamUser},
-    save::CorruptedWorld,
-};
+use crate::app::state::{ClientRuntime, MenuState, SaveStore, Screen, SteamUser};
 
 use super::theme::{self, ButtonKind};
 use dialogs::{create_world_dialog_ui, edit_world_dialog_ui, open_create_world_dialog};
 use session::poll_singleplayer_start;
 pub(super) use session::refresh_worlds;
-use table::{draw_world_headers, draw_world_table, table_height};
+use table::{available_table_height, draw_world_headers, draw_world_table};
 
 pub(super) const BUTTON_HEIGHT: f32 = 34.0;
+
+/// Vertical breathing room reserved between the worlds panel and the top of
+/// the window. Chosen so the panel doesn't bump against the screen edge on
+/// any supported resolution while still letting the table grow on tall
+/// monitors.
+const WORLDS_PANEL_TOP_PADDING: f32 = 56.0;
+const WORLDS_PANEL_BOTTOM_PADDING: f32 = 56.0;
 
 pub(super) fn worlds_ui(
     ctx: &egui::Context,
@@ -31,14 +35,14 @@ pub(super) fn worlds_ui(
     if poll_singleplayer_start(menu, runtime) {
         ctx.request_repaint();
     }
-    theme::anchored_panel(
+    theme::bounded_panel(
         ctx,
         "worlds_panel",
         920.0,
-        egui::Align2::CENTER_CENTER,
-        [0.0, -8.0],
+        WORLDS_PANEL_TOP_PADDING,
+        WORLDS_PANEL_BOTTOM_PADDING,
         |ui| {
-            let has_worlds = !menu.worlds.is_empty();
+            let has_worlds = !menu.worlds.is_empty() || !menu.corrupted_worlds.is_empty();
             let starting_world = menu.world_start.is_some();
             ui.horizontal(|ui| {
                 ui.label(theme::section("Singleplayer Worlds"));
@@ -60,9 +64,12 @@ pub(super) fn worlds_ui(
             });
 
             ui.add_space(16.0);
-            draw_corrupted_worlds_banner(ui, &menu.corrupted_worlds);
             draw_world_headers(ui);
-            let table_height = table_height(ctx);
+            // The status line under the table needs room when present; the
+            // table itself takes whatever vertical space is left in the
+            // bounded panel after the header + status reservation.
+            let status_reserve = if menu.status.is_some() { 26.0 } else { 0.0 };
+            let table_height = available_table_height(ui, status_reserve);
             draw_world_table(ui, menu, store, user, table_height);
 
             if let Some(status) = &menu.status {
@@ -73,51 +80,6 @@ pub(super) fn worlds_ui(
     );
     create_world_dialog_ui(ctx, menu, store, user);
     edit_world_dialog_ui(ctx, menu, store);
-}
-
-/// Renders a warning banner above the worlds table for save files that
-/// could not be loaded. Each entry shows the file name and a tooltip with
-/// the underlying parse error so the player has enough info to either
-/// delete or recover the file.
-fn draw_corrupted_worlds_banner(ui: &mut egui::Ui, corrupted: &[CorruptedWorld]) {
-    if corrupted.is_empty() {
-        return;
-    }
-
-    let fill = egui::Color32::from_rgba_unmultiplied(58, 24, 16, 220);
-    let stroke = egui::Stroke::new(
-        1.0,
-        egui::Color32::from_rgba_unmultiplied(220, 120, 80, 200),
-    );
-    egui::Frame::NONE
-        .fill(fill)
-        .stroke(stroke)
-        .corner_radius(5)
-        .inner_margin(egui::Margin::symmetric(14, 10))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            let heading = if corrupted.len() == 1 {
-                "1 save couldn't be loaded".to_owned()
-            } else {
-                format!("{} saves couldn't be loaded", corrupted.len())
-            };
-            ui.label(
-                egui::RichText::new(heading)
-                    .size(13.5)
-                    .strong()
-                    .color(egui::Color32::from_rgb(252, 224, 196)),
-            );
-            ui.add_space(4.0);
-            for entry in corrupted {
-                let line = ui.label(
-                    egui::RichText::new(format!("• {}", entry.file_name))
-                        .size(12.5)
-                        .color(egui::Color32::from_rgb(244, 210, 192)),
-                );
-                let _ = theme::wow_tooltip(line, &entry.file_name, &entry.error);
-            }
-        });
-    ui.add_space(10.0);
 }
 
 fn handle_worlds_escape(ctx: &egui::Context, menu: &mut MenuState) {

@@ -17,11 +17,12 @@ pub(crate) use connection::CONNECTION_LAG_WARNING_SECONDS;
 pub(crate) use dialogs::{
     ConfirmationAction, ConfirmationDialog, CreateWorldDialog, CreateWorldMapKind,
     DirectConnectAttempt, DirectConnectDialog, DirectConnectResult, EditWorldDialog, NoticeDialog,
-    WorldStartAttempt, WorldStartResult,
+    WorldEntryKind, WorldEntrySplash, WorldStartAttempt, WorldStartResult,
 };
 pub(crate) use gather::{
-    GatherInputState, ImpactEffectKind, PICKUP_TARGET_SCAN_INTERVAL_SECS, PendingImpactEffect,
-    PickupTargetState, RemoteImpactEvent, SwingImpact, ToolSwapState,
+    GatherInputState, ImpactEffectKind, PICKUP_TARGET_SCAN_INTERVAL_SECS, PendingAudioCue,
+    PendingImpactEffect, PickupTargetState, RemoteImpactEvent, SwingAudioCue, SwingImpact,
+    ToolSwapState,
 };
 pub(crate) use inventory::{InventoryDrag, InventoryDragButton, InventoryUiState};
 pub(crate) use look::LookState;

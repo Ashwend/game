@@ -11,7 +11,8 @@ use uuid::Uuid;
 
 use crate::{
     app::state::{
-        ClientRuntime, MenuState, SaveStore, Screen, SteamUser, WorldStartAttempt, WorldStartResult,
+        ClientRuntime, MenuState, SaveStore, Screen, SteamUser, WorldEntryKind, WorldEntrySplash,
+        WorldStartAttempt, WorldStartResult,
     },
     net::ClientSession,
     save::WorldStore,
@@ -91,10 +92,18 @@ pub(super) fn start_singleplayer_in_background(
             let _ = tx.send(result);
         }) {
         Ok(_) => {
+            let world_name = menu
+                .worlds
+                .iter()
+                .find(|world| world.id == world_id)
+                .map(|world| world.name.clone())
+                .unwrap_or_default();
             menu.world_start = Some(WorldStartAttempt {
                 world_id,
                 receiver: Mutex::new(receiver),
             });
+            menu.world_entry_splash =
+                Some(WorldEntrySplash::new(WorldEntryKind::Singleplayer, world_name));
             menu.status = None;
         }
         Err(error) => {
@@ -162,7 +171,13 @@ fn finish_singleplayer_start(
             menu.chat_open = false;
             menu.chat_focus_pending = false;
             menu.status = None;
+            if let Some(splash) = menu.world_entry_splash.as_mut() {
+                splash.world_ready = true;
+            }
         }
-        Err(error) => menu.status = Some(format!("start failed: {error}")),
+        Err(error) => {
+            menu.status = Some(format!("start failed: {error}"));
+            menu.world_entry_splash = None;
+        }
     }
 }

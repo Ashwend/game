@@ -8,7 +8,8 @@ use bevy::{
 use crate::{
     app::state::{
         ClientErrorToast, ClientRuntime, ErrorToastSink, GatherInputState, ImpactEffectKind,
-        MenuState, PendingImpactEffect, PickupTargetState, SwingImpact, ToolSwapState,
+        MenuState, PendingAudioCue, PendingImpactEffect, PickupTargetState, SwingAudioCue,
+        SwingImpact, ToolSwapState,
     },
     items::{ToolKind, ToolProfile, item_definition},
     protocol::{
@@ -105,13 +106,17 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
     } else {
         equipped_tool_kind(&params.runtime)
     };
-    if let Some(impact) = params.gather_input.update(
+    let tick = params.gather_input.update(
         params.time.delta_secs(),
         params.mouse_buttons.just_pressed(MouseButton::Left),
         params.mouse_buttons.pressed(MouseButton::Left),
         equipped_tool,
         params.pickup_target.resource_node_id,
-    ) {
+    );
+    if let Some(cue) = tick.audio_cue {
+        dispatch_swing_audio_cue(&mut params, cue);
+    }
+    if let Some(impact) = tick.impact {
         dispatch_swing_impact(&mut params, impact);
     }
 }
@@ -127,6 +132,28 @@ fn equipped_tool_profile(runtime: &ClientRuntime) -> Option<ToolProfile> {
         .as_ref()?
         .active_actionbar_stack()?;
     item_definition(&stack.item_id).and_then(|definition| definition.tool)
+}
+
+// Queue the spatial impact sound a few frames before the visual hit so the
+// MP3's attack envelope lines up with the moment the tool lands. Mirrors the
+// "must aim at a valid, harvestable target" gate used for visual chips —
+// otherwise the player would hear thuds for clean misses.
+fn dispatch_swing_audio_cue(params: &mut GameplayInventoryShortcutsParams, cue: SwingAudioCue) {
+    let Some(node_id) = cue.target else {
+        return;
+    };
+    if !equipped_tool_can_harvest_target(&params.runtime, &params.pickup_target) {
+        return;
+    }
+    let Some(anchor) = resource_target_anchor(&params.pickup_target, node_id) else {
+        return;
+    };
+    let Some(kind) = resource_target_effect_kind(&params.pickup_target) else {
+        return;
+    };
+    params
+        .gather_input
+        .set_pending_audio_cue(PendingAudioCue { anchor, kind });
 }
 
 fn dispatch_swing_impact(params: &mut GameplayInventoryShortcutsParams, impact: SwingImpact) {

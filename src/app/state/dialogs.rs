@@ -73,6 +73,71 @@ pub(crate) struct WorldStartAttempt {
     pub(crate) receiver: Mutex<Receiver<WorldStartResult>>,
 }
 
+/// Minimum time the world-entry splash stays at full opacity before it is
+/// allowed to fade. Even on instant local loads the splash sticks around
+/// long enough to read, so players always get a clear "we're entering" beat
+/// instead of a single-frame flash. Tuned by feel: short enough to not
+/// feel artificial, long enough to register.
+pub(crate) const WORLD_ENTRY_SPLASH_MIN_HOLD_SECONDS: f32 = 0.9;
+/// Crossfade duration from full splash to fully revealed game scene. Match
+/// the menu backdrop fade so the two transitions feel like one motion.
+pub(crate) const WORLD_ENTRY_SPLASH_FADE_SECONDS: f32 = 0.5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorldEntryKind {
+    Singleplayer,
+    Multiplayer,
+}
+
+/// Overlay shown from the moment the player chooses to enter a world until
+/// the world is actually visible. Owns its own timer + ready flag so the
+/// UI layer can compute alpha without poking session state, and so the
+/// minimum-display contract is honoured even when the world loads in a
+/// single frame.
+#[derive(Debug, Clone)]
+pub(crate) struct WorldEntrySplash {
+    pub(crate) kind: WorldEntryKind,
+    pub(crate) target_label: String,
+    pub(crate) elapsed_seconds: f32,
+    pub(crate) world_ready: bool,
+}
+
+impl WorldEntrySplash {
+    pub(crate) fn new(kind: WorldEntryKind, target_label: impl Into<String>) -> Self {
+        Self {
+            kind,
+            target_label: target_label.into(),
+            elapsed_seconds: 0.0,
+            world_ready: false,
+        }
+    }
+
+    pub(crate) fn title(&self) -> &'static str {
+        match self.kind {
+            WorldEntryKind::Singleplayer => "Entering World",
+            WorldEntryKind::Multiplayer => "Joining Server",
+        }
+    }
+
+    /// Advance the timer and return the splash overlay alpha for this
+    /// frame. Returns `None` once the splash has fully faded so the caller
+    /// can drop it.
+    pub(crate) fn tick(&mut self, delta_seconds: f32) -> Option<u8> {
+        self.elapsed_seconds = (self.elapsed_seconds + delta_seconds.max(0.0)).min(60.0);
+        let hold = WORLD_ENTRY_SPLASH_MIN_HOLD_SECONDS;
+        let fade = WORLD_ENTRY_SPLASH_FADE_SECONDS;
+        if !self.world_ready || self.elapsed_seconds < hold {
+            return Some(u8::MAX);
+        }
+        let into_fade = self.elapsed_seconds - hold;
+        if into_fade >= fade {
+            return None;
+        }
+        let alpha = ((1.0 - into_fade / fade).clamp(0.0, 1.0) * f32::from(u8::MAX)).round() as u8;
+        Some(alpha)
+    }
+}
+
 pub(crate) struct DirectConnectDialog {
     pub(crate) host: String,
     pub(crate) port: String,

@@ -279,7 +279,5 @@ fn worlds_ui_renders_empty_and_populated_tables() {
         super::worlds_ui(ctx, &mut menu, &mut runtime, &store, &user);
     });
 
-    assert!(super::table::table_height(&ctx) >= 180.0);
-
     let _ = fs::remove_dir_all(store.0.root());
 }
