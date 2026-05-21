@@ -3,18 +3,14 @@ use bevy_egui::egui;
 
 use crate::app::state::{ClientSettings, DisplayMode, MenuState, Screen, display_resolutions};
 
-use super::theme::{self, ButtonKind, COMPACT_ROW_HEIGHT};
+use super::theme::{
+    self, BOUNDED_PANEL_VERTICAL_PADDING, BoundedPanelFill, ButtonKind, COMPACT_ROW_HEIGHT,
+};
 
 const OPTIONS_PANEL_WIDTH: f32 = 720.0;
-const OPTIONS_SCREEN_MARGIN_X: f32 = 56.0;
-const OPTIONS_SCREEN_MARGIN_Y: f32 = 24.0;
-const OPTIONS_PANEL_INNER_X: f32 = 48.0;
-const OPTIONS_PANEL_INNER_Y: f32 = 44.0;
 const OPTIONS_HEADER_HEIGHT: f32 = COMPACT_ROW_HEIGHT;
 const OPTIONS_HEADER_GAP: f32 = 12.0;
 const OPTIONS_SCROLL_PADDING_Y: f32 = 8.0;
-const OPTIONS_MIN_BODY_HEIGHT: f32 = 96.0;
-const OPTIONS_FULL_CONTENT_HEIGHT: f32 = 520.0;
 const SETTING_LABEL_WIDTH: f32 = 190.0;
 const SETTING_CONTROL_WIDTH: f32 = 260.0;
 const SETTING_ROW_HEIGHT: f32 = 36.0;
@@ -34,23 +30,32 @@ pub(super) fn options_ui(
 ) {
     theme::screen_scrim(ctx, "options_scrim", 145);
     handle_options_escape(ctx, menu, back_target);
-    options_panel(ctx, |ui| {
-        ui.horizontal(|ui| {
-            ui.set_min_height(OPTIONS_HEADER_HEIGHT);
-            ui.label(theme::section("Options"));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if theme::compact_button(ui, "Back", ButtonKind::Secondary, 78.0).clicked() {
-                    close_options(menu, back_target);
-                }
-                if theme::compact_button(ui, "Reset", ButtonKind::Secondary, 78.0).clicked() {
-                    *settings = ClientSettings::default();
-                }
+    theme::bounded_panel(
+        ctx,
+        "options_panel",
+        OPTIONS_PANEL_WIDTH,
+        BOUNDED_PANEL_VERTICAL_PADDING,
+        BOUNDED_PANEL_VERTICAL_PADDING,
+        BoundedPanelFill::Fill,
+        |ui| {
+            ui.horizontal(|ui| {
+                ui.set_min_height(OPTIONS_HEADER_HEIGHT);
+                ui.label(theme::section("Options"));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if theme::compact_button(ui, "Back", ButtonKind::Secondary, 78.0).clicked() {
+                        close_options(menu, back_target);
+                    }
+                    if theme::compact_button(ui, "Reset", ButtonKind::Secondary, 78.0).clicked() {
+                        *settings = ClientSettings::default();
+                    }
+                });
             });
-        });
 
-        ui.add_space(OPTIONS_HEADER_GAP);
-        let body_height = options_body_max_height(ctx.content_rect().height());
-        if options_body_needs_scroll(body_height) {
+            ui.add_space(OPTIONS_HEADER_GAP);
+            // Fill the remaining bounded inner height with the scrollable
+            // sections list — short viewports get a tight scroller, tall
+            // ones reveal the full content without scrolling.
+            let body_height = ui.available_height();
             egui::ScrollArea::vertical()
                 .id_salt("options_scroll")
                 .max_height(body_height)
@@ -58,38 +63,8 @@ pub(super) fn options_ui(
                 .show(ui, |ui| {
                     options_body_contents(ui, settings, primary_monitor);
                 });
-        } else {
-            options_body_contents(ui, settings, primary_monitor);
-        }
-    });
-}
-
-fn options_panel(ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::Ui)) {
-    let screen = ctx.content_rect();
-    let width = OPTIONS_PANEL_WIDTH.min((screen.width() - OPTIONS_SCREEN_MARGIN_X).max(300.0));
-    egui::Area::new("options_panel".into())
-        .order(egui::Order::Foreground)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .show(ctx, |ui| {
-            ui.set_width(width);
-            theme::panel_frame().show(ui, |ui| {
-                ui.set_width(width - OPTIONS_PANEL_INNER_X);
-                add_contents(ui);
-            });
-        });
-}
-
-fn options_body_max_height(screen_height: f32) -> f32 {
-    (screen_height
-        - OPTIONS_SCREEN_MARGIN_Y * 2.0
-        - OPTIONS_PANEL_INNER_Y
-        - OPTIONS_HEADER_HEIGHT
-        - OPTIONS_HEADER_GAP)
-        .max(OPTIONS_MIN_BODY_HEIGHT)
-}
-
-fn options_body_needs_scroll(body_height: f32) -> bool {
-    body_height < OPTIONS_FULL_CONTENT_HEIGHT
+        },
+    );
 }
 
 fn options_body_contents(
@@ -388,7 +363,9 @@ mod tests {
     }
 
     #[test]
-    fn options_screen_caps_body_height_on_short_viewports() {
+    fn options_screen_renders_on_short_and_tall_viewports() {
+        // Short viewport: the bounded panel + internal scroll area must
+        // still produce some draw commands without panicking.
         let ctx = egui::Context::default();
         let mut menu = MenuState {
             screen: Screen::Options,
@@ -396,7 +373,7 @@ mod tests {
         };
         let mut settings = ClientSettings::default();
 
-        let output = ctx.run(raw_input_with_size(560.0, 320.0), |ctx| {
+        let short = ctx.run(raw_input_with_size(560.0, 320.0), |ctx| {
             options_ui(
                 ctx,
                 &mut menu,
@@ -405,11 +382,20 @@ mod tests {
                 OptionsBackTarget::MainMenu,
             );
         });
+        assert!(!short.shapes.is_empty());
 
-        assert!(!output.shapes.is_empty());
-        assert_eq!(options_body_max_height(320.0), 182.0);
-        assert!(options_body_needs_scroll(options_body_max_height(320.0)));
-        assert!(!options_body_needs_scroll(options_body_max_height(1440.0)));
+        // Tall viewport: same code path, content shouldn't overflow.
+        let ctx = egui::Context::default();
+        let tall = ctx.run(raw_input_with_size(960.0, 1440.0), |ctx| {
+            options_ui(
+                ctx,
+                &mut menu,
+                &mut settings,
+                None,
+                OptionsBackTarget::MainMenu,
+            );
+        });
+        assert!(!tall.shapes.is_empty());
     }
 
     #[test]

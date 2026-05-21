@@ -7,7 +7,7 @@ use crate::{
 
 mod direct_connect;
 
-use super::theme::{self, ButtonKind};
+use super::theme::{self, BOUNDED_PANEL_VERTICAL_PADDING, BoundedPanelFill, ButtonKind};
 use direct_connect::direct_connect_dialog_ui;
 
 pub(super) fn multiplayer_ui(
@@ -18,41 +18,51 @@ pub(super) fn multiplayer_ui(
 ) {
     theme::screen_scrim(ctx, "multiplayer_scrim", 145);
     handle_multiplayer_escape(ctx, menu);
-    theme::anchored_panel(
+    theme::bounded_panel(
         ctx,
         "multiplayer_panel",
         560.0,
-        egui::Align2::CENTER_CENTER,
-        [0.0, -10.0],
+        BOUNDED_PANEL_VERTICAL_PADDING,
+        BOUNDED_PANEL_VERTICAL_PADDING,
+        BoundedPanelFill::ToContent,
         |ui| {
-            draw_multiplayer_header(ui, menu);
+            let body_height = ui.available_height();
+            egui::ScrollArea::vertical()
+                .id_salt("multiplayer_scroll")
+                .max_height(body_height)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    draw_multiplayer_header(ui, menu);
 
-            ui.add_space(16.0);
-            theme::inset_frame().show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.vertical(|ui| {
-                    ui.label(theme::field_label("Steam"));
-                    if theme::game_button(
-                        ui,
-                        "Open Server Browser",
-                        ButtonKind::Primary,
-                        ui.available_width(),
-                    )
-                    .clicked()
-                    {
-                        let steam = OfflineSteamBackend;
-                        menu.status = match steam.open_server_browser() {
-                            Ok(()) => Some("opened Steam server browser".to_owned()),
-                            Err(error) => Some(format!("Steam browser unavailable: {error}")),
-                        };
+                    ui.add_space(16.0);
+                    theme::inset_frame().show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.vertical(|ui| {
+                            ui.label(theme::field_label("Steam"));
+                            if theme::game_button(
+                                ui,
+                                "Open Server Browser",
+                                ButtonKind::Primary,
+                                ui.available_width(),
+                            )
+                            .clicked()
+                            {
+                                let steam = OfflineSteamBackend;
+                                menu.status = match steam.open_server_browser() {
+                                    Ok(()) => Some("opened Steam server browser".to_owned()),
+                                    Err(error) => {
+                                        Some(format!("Steam browser unavailable: {error}"))
+                                    }
+                                };
+                            }
+                        });
+                    });
+
+                    if let Some(status) = &menu.status {
+                        ui.add_space(10.0);
+                        ui.label(theme::status_text(status));
                     }
                 });
-            });
-
-            if let Some(status) = &menu.status {
-                ui.add_space(10.0);
-                ui.label(theme::status_text(status));
-            }
         },
     );
     direct_connect_dialog_ui(ctx, menu, runtime, user);

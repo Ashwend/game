@@ -15,7 +15,7 @@ pub(super) use colors::{
     panel_fill, panel_stroke, text,
 };
 pub(super) use frames::{
-    anchored_panel, apply_game_style, backdrop_cover, bounded_panel, inset_frame, panel_frame,
+    BoundedPanelFill, apply_game_style, backdrop_cover, bounded_panel, inset_frame, panel_frame,
     screen_scrim,
 };
 pub(super) use spacing::{BOUNDED_PANEL_VERTICAL_PADDING, COMPACT_ROW_HEIGHT};

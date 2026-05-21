@@ -8,7 +8,7 @@ use bevy_egui::egui;
 
 use crate::app::state::{ClientRuntime, MenuState, SaveStore, Screen, SteamUser};
 
-use super::theme::{self, BOUNDED_PANEL_VERTICAL_PADDING, ButtonKind};
+use super::theme::{self, BOUNDED_PANEL_VERTICAL_PADDING, BoundedPanelFill, ButtonKind};
 use dialogs::{create_world_dialog_ui, edit_world_dialog_ui, open_create_world_dialog};
 use session::poll_singleplayer_start;
 pub(super) use session::refresh_worlds;
@@ -32,6 +32,7 @@ pub(super) fn worlds_ui(
         920.0,
         BOUNDED_PANEL_VERTICAL_PADDING,
         BOUNDED_PANEL_VERTICAL_PADDING,
+        BoundedPanelFill::Fill,
         |ui| {
             let has_worlds = !menu.worlds.is_empty() || !menu.corrupted_worlds.is_empty();
             let starting_world = menu.world_start.is_some();
