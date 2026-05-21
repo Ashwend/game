@@ -31,3 +31,13 @@ zstd = "0.13.3"
 # opt-level so incremental rebuilds remain fast.
 [profile.dev.package."*"]
 opt-level = 3
+
+# Release profile is for shipped binaries: cross-crate inlining and symbol
+# stripping at the cost of a longer link step. ~30% smaller binaries, a few
+# percent faster runtime, no PDB/symbols leaked into release tarballs.
+# `thin` LTO keeps build times reasonable; `fat` shaves a bit more off but
+# multiplies link time. Switch to `fat` only if profiling justifies it.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

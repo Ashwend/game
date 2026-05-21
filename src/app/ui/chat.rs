@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use bevy_egui::egui;
 
 use crate::{
@@ -79,7 +81,7 @@ fn chat_frame(active: bool) -> egui::Frame {
 
 fn draw_messages(
     ui: &mut egui::Ui,
-    messages: &[ClientLogEntry],
+    messages: &VecDeque<ClientLogEntry>,
     active: bool,
     scroll_enabled: bool,
 ) {
@@ -339,7 +341,7 @@ mod tests {
         ]
     }
 
-    fn many_messages() -> Vec<ClientLogEntry> {
+    fn many_messages() -> VecDeque<ClientLogEntry> {
         (0..20)
             .map(|index| ClientLogEntry {
                 kind: ClientLogKind::System,
@@ -388,7 +390,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut menu = MenuState::default();
         let mut runtime = ClientRuntime {
-            messages: vec![
+            messages: VecDeque::from([
                 ClientLogEntry {
                     kind: ClientLogKind::System,
                     text: "connected".to_owned(),
@@ -403,7 +405,7 @@ mod tests {
                     },
                     text: "hello".to_owned(),
                 },
-            ],
+            ]),
             ..Default::default()
         };
 

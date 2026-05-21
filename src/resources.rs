@@ -182,10 +182,26 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
     },
 ];
 
+/// Build-once `id → definition` lookup over [`RESOURCE_NODE_DEFINITIONS`].
+/// `resource_node_definition` is on the swing/gather hot path; the linear
+/// scan was fine for nine definitions but O(1) is free here.
+fn resource_node_definitions_by_id()
+-> &'static std::collections::HashMap<&'static str, &'static ResourceNodeDefinition> {
+    static INDEX: std::sync::OnceLock<
+        std::collections::HashMap<&'static str, &'static ResourceNodeDefinition>,
+    > = std::sync::OnceLock::new();
+    INDEX.get_or_init(|| {
+        RESOURCE_NODE_DEFINITIONS
+            .iter()
+            .map(|definition| (definition.id, definition))
+            .collect()
+    })
+}
+
 pub fn resource_node_definition(definition_id: &str) -> Option<&'static ResourceNodeDefinition> {
-    RESOURCE_NODE_DEFINITIONS
-        .iter()
-        .find(|definition| definition.id == definition_id)
+    resource_node_definitions_by_id()
+        .get(definition_id)
+        .copied()
 }
 
 pub fn spawn_resource_node(spawn: &WorldResourceNodeSpawn) -> Option<ResourceNodeState> {

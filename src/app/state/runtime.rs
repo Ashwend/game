@@ -1,4 +1,7 @@
-use std::thread::{self, JoinHandle};
+use std::{
+    collections::VecDeque,
+    thread::{self, JoinHandle},
+};
 
 use bevy::prelude::*;
 use uuid::Uuid;
@@ -16,6 +19,10 @@ use crate::{
 };
 
 use super::connection::ConnectionWatch;
+
+/// Knuth golden-ratio multiplier (`2^64 / phi`, odd). Mixes a XOR-of-ids
+/// accumulator into a well-distributed `u64` fingerprint.
+const COLLIDER_SET_HASH_MIX: u64 = 0x9E37_79B9_7F4A_7C15;
 
 /// Cheap order-independent fingerprint of the live collider-bearing
 /// resource node set (trees + ores). Used by the snapshot handler to skip
@@ -36,7 +43,7 @@ fn resource_node_collider_set_version(snapshot: Option<&WorldSnapshot>) -> u64 {
         hash ^= node.id;
         count += 1;
     }
-    hash.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(count)
+    hash.wrapping_mul(COLLIDER_SET_HASH_MIX).wrapping_add(count)
 }
 
 pub(super) const MAX_CLIENT_LOG_MESSAGES: usize = 80;
@@ -94,7 +101,7 @@ pub(crate) struct ClientRuntime {
     pub(crate) world_version: u64,
     pub(crate) snapshot: Option<WorldSnapshot>,
     pub(crate) predicted_local: Option<PlayerController>,
-    pub(crate) messages: Vec<ClientLogEntry>,
+    pub(crate) messages: VecDeque<ClientLogEntry>,
     pub(crate) input_sequence: u64,
     /// Hash of the live collider-bearing resource node set (trees + ores)
     /// used to detect when the `world_grid` needs to be rebuilt. Only
@@ -391,11 +398,9 @@ impl ClientRuntime {
     }
 
     fn push_message(&mut self, message: ClientLogEntry) {
-        self.messages.push(message);
-
-        if self.messages.len() > MAX_CLIENT_LOG_MESSAGES {
-            let drain_count = self.messages.len() - MAX_CLIENT_LOG_MESSAGES;
-            self.messages.drain(0..drain_count);
+        self.messages.push_back(message);
+        while self.messages.len() > MAX_CLIENT_LOG_MESSAGES {
+            self.messages.pop_front();
         }
     }
 

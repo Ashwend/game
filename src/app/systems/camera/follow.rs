@@ -50,7 +50,7 @@ pub(crate) fn camera_follow_system(
 
     motion.advance(time.delta_secs(), horizontal_speed, grounded, fall_speed);
 
-    let feet = Vec3::new(player.position.x, player.position.y, player.position.z);
+    let feet = Vec3::from(player.position);
     let eye = feet + Vec3::Y * EYE_HEIGHT;
     let bob_y = motion.bob_offset_y();
     let dip_y = motion.landing_dip_y();

@@ -43,12 +43,9 @@ pub(super) fn move_with_collisions(
         resolved_axis_position = Some(0.0);
     }
 
-    let candidates: Box<dyn Iterator<Item = usize>> = match axis {
-        Axis::X => Box::new(grid.candidates_for_swept(*position, delta, 0.0)),
-        Axis::Y => Box::new(grid.candidates_for_vertical(*position)),
-        Axis::Z => Box::new(grid.candidates_for_swept(*position, 0.0, delta)),
-    };
-    for index in candidates {
+    // Inline the loop into each match arm so the candidate iterator stays a
+    // concrete type — no `Box<dyn Iterator>` allocation per substep.
+    let mut visit = |index: usize| {
         let block = grid.block(index);
         if let Some(candidate) = swept_axis_collision(*position, attempted, block, axis, delta) {
             result.collided = true;
@@ -59,6 +56,15 @@ pub(super) fn move_with_collisions(
                 delta,
             ));
         }
+    };
+    match axis {
+        Axis::X => grid
+            .candidates_for_swept(*position, delta, 0.0)
+            .for_each(&mut visit),
+        Axis::Y => grid.candidates_for_vertical(*position).for_each(&mut visit),
+        Axis::Z => grid
+            .candidates_for_swept(*position, 0.0, delta)
+            .for_each(&mut visit),
     }
 
     *position = attempted;

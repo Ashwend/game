@@ -34,7 +34,9 @@ use self::{
         ServerConnections, handle_disconnected_clients, receive_client_messages, route_envelopes,
     },
 };
-use super::channels::{LIGHTYEAR_PROTOCOL_ID, LightyearProtocolPlugin, private_key};
+use super::channels::{
+    LIGHTYEAR_PROTOCOL_ID, LightyearProtocolPlugin, PrivateKeyContext, private_key,
+};
 
 const HOST_SLEEP: Duration = Duration::from_millis(1);
 const HOST_START_TIMEOUT: Duration = Duration::from_secs(2);
@@ -90,6 +92,7 @@ pub(super) fn spawn_loopback_server(
                 None,
                 false,
                 Some(startup_tx.clone()),
+                PrivateKeyContext::Loopback,
             ) {
                 let _ = startup_tx.send(Err(format!("{error:#}")));
                 eprintln!("Lightyear game server stopped: {error:#}");
@@ -144,6 +147,7 @@ pub(super) fn run_game_server(
         admin_socket,
         true,
         None,
+        PrivateKeyContext::NetworkExposed,
     )
 }
 
@@ -177,6 +181,7 @@ fn install_admin_socket(_app: &mut App, admin_socket: Option<PathBuf>) -> Result
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_host(
     mut reserved_addr: ReservedUdpAddr,
     save: WorldSave,
@@ -185,6 +190,7 @@ fn run_host(
     admin_socket: Option<PathBuf>,
     install_terminal_shutdown: bool,
     mut startup_tx: Option<mpsc::Sender<std::result::Result<(), String>>>,
+    key_context: PrivateKeyContext,
 ) -> Result<WorldSave> {
     let bind_addr = reserved_addr.addr();
     let mut app = App::new();
@@ -206,7 +212,7 @@ fn run_host(
             server::NetcodeServer::new(
                 server::NetcodeConfig::default()
                     .with_protocol_id(LIGHTYEAR_PROTOCOL_ID)
-                    .with_key(private_key()),
+                    .with_key(private_key(key_context)),
             ),
         ))
         .id();

@@ -4,6 +4,7 @@ use super::super::{
     scene::ImpactEffectAssets,
     state::{GatherInputState, ImpactEffectKind, RemoteImpactEvent},
 };
+use crate::util::hash::hashed_unit;
 
 const IMPACT_GRAVITY: f32 = 5.4;
 // Approximate ground level. The world floor is a flat plane at Y=0, so
@@ -300,31 +301,9 @@ fn advance_chip(transform: &mut Transform, chip: &mut ImpactChip, dt: f32) -> Ch
     ChipStep::Alive
 }
 
-fn hashed_unit(seed: u32) -> f32 {
-    // Cheap deterministic [0, 1) value derived from an integer seed. Keeps the
-    // chip spread reproducible per-swing without dragging in an RNG crate.
-    let mut x = seed.wrapping_add(0x9E3779B9);
-    x ^= x >> 16;
-    x = x.wrapping_mul(0x85EBCA6B);
-    x ^= x >> 13;
-    x = x.wrapping_mul(0xC2B2AE35);
-    x ^= x >> 16;
-    (x & 0x00FF_FFFF) as f32 / 0x0100_0000 as f32
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hashed_unit_stays_in_unit_interval_and_varies() {
-        for seed in 0..200u32 {
-            let value = hashed_unit(seed);
-            assert!((0.0..1.0).contains(&value));
-        }
-        assert_ne!(hashed_unit(1), hashed_unit(2));
-        assert_ne!(hashed_unit(100), hashed_unit(101));
-    }
 
     #[test]
     fn impact_chip_falls_and_shrinks_during_its_lifetime() {

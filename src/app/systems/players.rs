@@ -46,7 +46,7 @@ pub(crate) fn apply_snapshot_system(
         if Some(player.client_id) == local_client_id {
             continue;
         }
-        let feet = Vec3::new(player.position.x, player.position.y, player.position.z);
+        let feet = Vec3::from(player.position);
         let target = Transform::from_translation(player_visual_position(feet))
             .with_rotation(Quat::from_rotation_y(player.yaw));
         if let Some(entity) = entities.0.get(&player.client_id).copied() {

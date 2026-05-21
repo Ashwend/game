@@ -1,4 +1,4 @@
-use bevy::prelude::Reflect;
+use bevy::prelude::{Reflect, Vec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -68,6 +68,18 @@ impl Vec3Net {
     pub fn dot(self, other: Self) -> f32 {
         self.x
             .mul_add(other.x, self.y.mul_add(other.y, self.z * other.z))
+    }
+}
+
+impl From<Vec3Net> for Vec3 {
+    fn from(value: Vec3Net) -> Self {
+        Vec3::new(value.x, value.y, value.z)
+    }
+}
+
+impl From<Vec3> for Vec3Net {
+    fn from(value: Vec3) -> Self {
+        Self::new(value.x, value.y, value.z)
     }
 }
 
@@ -269,10 +281,13 @@ pub struct ResourceNodeState {
     pub respawn_progress: Option<f32>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+/// Per-frame intent emitted by the client controller. Never serialized — the
+/// wire format is `PlayerMovement` (the *result* of integrating the input),
+/// not the input itself. The simulator reads `time.delta_secs()` for the
+/// integration step, so the input carries no time field.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlayerInput {
     pub sequence: u64,
-    pub delta_seconds: f32,
     pub direction: Vec3Net,
     pub sprint: bool,
     pub jump: bool,

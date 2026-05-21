@@ -85,10 +85,9 @@ pub(crate) fn apply_resource_nodes_system(
     let entities = &mut *entities;
     let pop_in_enabled = entities.applied_first_snapshot;
 
-    let player_position = runtime.local_view().map(|view| {
-        Vec3::new(view.position.x, view.position.y, view.position.z)
-            + Vec3::Y * crate::app::EYE_HEIGHT
-    });
+    let player_position = runtime
+        .local_view()
+        .map(|view| Vec3::from(view.position) + Vec3::Y * crate::app::EYE_HEIGHT);
 
     for node in &snapshot.resource_nodes {
         let Some(definition) = resource_node_definition(&node.definition_id) else {
@@ -281,7 +280,7 @@ fn spawn_pop_in_chip_burst(
     node: &ResourceNodeState,
     model: ResourceNodeModel,
 ) {
-    let burst_anchor = Vec3::new(node.position.x, node.position.y + 0.18, node.position.z);
+    let burst_anchor = Vec3::from(node.position) + Vec3::Y * 0.18;
     let kind = if model.is_tree() {
         ImpactEffectKind::WoodChips
     } else {

@@ -37,7 +37,6 @@ pub(crate) fn client_input_system(
     let delta_seconds = time.delta_secs();
     let input = PlayerInput {
         sequence,
-        delta_seconds,
         direction,
         sprint: accepts_movement_input
             && (keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight)),

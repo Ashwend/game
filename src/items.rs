@@ -243,10 +243,22 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
     },
 ];
 
+/// Build-once `id → definition` lookup over [`REGISTERED_ITEMS`]. The slice
+/// itself is the source of truth; this index just gives `item_definition` an
+/// O(1) hit instead of a linear scan, which matters once gather/pickup hits
+/// run every swing.
+fn item_definitions_by_id() -> &'static HashMap<&'static str, &'static ItemDefinition> {
+    static INDEX: OnceLock<HashMap<&'static str, &'static ItemDefinition>> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        REGISTERED_ITEMS
+            .iter()
+            .map(|definition| (definition.id, definition))
+            .collect()
+    })
+}
+
 pub fn item_definition(item_id: &str) -> Option<&'static ItemDefinition> {
-    REGISTERED_ITEMS
-        .iter()
-        .find(|definition| definition.id == item_id)
+    item_definitions_by_id().get(item_id).copied()
 }
 
 pub fn stack_limit(item_id: &str) -> Option<u16> {

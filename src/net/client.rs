@@ -18,7 +18,8 @@ use lightyear::prelude::{
 use crate::{
     net::{
         channels::{
-            LIGHTYEAR_PROTOCOL_ID, LightyearProtocolPlugin, private_key, send_client_message,
+            LIGHTYEAR_PROTOCOL_ID, LightyearProtocolPlugin, PrivateKeyContext, private_key,
+            send_client_message,
         },
         host::{GameServerHandle, spawn_loopback_server},
     },
@@ -134,10 +135,26 @@ impl LightyearGameSession {
             display_name: user.display_name.clone(),
             token: user.token.clone(),
         };
+        // Singleplayer pairs the client with a loopback server we just spun
+        // up — both sides know the (default) key and the link doesn't leave
+        // the box. Remote connections need real key material if the operator
+        // sets `LIGHTYEAR_PRIVATE_KEY`, so they get the warning instead.
+        let key_context = if local_server.is_some() {
+            PrivateKeyContext::Loopback
+        } else {
+            PrivateKeyContext::NetworkExposed
+        };
         let thread = thread::Builder::new()
             .name("lightyear-game-client".to_owned())
             .spawn(move || {
-                match build_client_app(addr, steam_id, auth_message, command_rx, incoming_tx) {
+                match build_client_app(
+                    addr,
+                    steam_id,
+                    auth_message,
+                    command_rx,
+                    incoming_tx,
+                    key_context,
+                ) {
                     Ok(mut app) => {
                         let _ = startup_tx.send(Ok(()));
                         run_client_app(&mut app);
@@ -330,6 +347,7 @@ fn build_client_app(
     auth_message: ClientMessage,
     command_rx: Receiver<ClientCommand>,
     incoming_tx: Sender<ServerMessage>,
+    key_context: PrivateKeyContext,
 ) -> Result<App> {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -348,7 +366,7 @@ fn build_client_app(
                 Authentication::Manual {
                     server_addr,
                     client_id: steam_id,
-                    private_key: private_key(),
+                    private_key: private_key(key_context),
                     protocol_id: LIGHTYEAR_PROTOCOL_ID,
                 },
                 client::NetcodeConfig::default(),
@@ -442,6 +460,15 @@ fn send_client_messages(
         }
     }
 
+    // Any non-heartbeat message implicitly proves the link is alive. Track
+    // whether we sent one this batch so the heartbeat timer only fires when
+    // we'd otherwise go silent — saves ~20 unreliable packets per minute
+    // during normal gameplay.
+    let sent_real_message = pending
+        .0
+        .iter()
+        .any(|message| !matches!(message, ClientMessage::Heartbeat));
+
     for (mut sender, connected) in &mut clients {
         if !connected {
             continue;
@@ -453,7 +480,12 @@ fn send_client_messages(
         while let Some(message) = pending.0.pop_front() {
             send_client_message(&mut sender, message);
         }
-        if auth.sent && heartbeat.tick(time.delta()) {
+        if !auth.sent {
+            continue;
+        }
+        if sent_real_message {
+            heartbeat.note_traffic();
+        } else if heartbeat.tick(time.delta()) {
             send_client_message(&mut sender, ClientMessage::Heartbeat);
         }
     }
@@ -468,6 +500,13 @@ impl ClientHeartbeat {
 
         self.elapsed = Duration::ZERO;
         true
+    }
+
+    /// Reset the silence timer because a real user message went out this
+    /// frame — no heartbeat is needed until we go quiet for a full interval
+    /// again.
+    fn note_traffic(&mut self) {
+        self.elapsed = Duration::ZERO;
     }
 }
 

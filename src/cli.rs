@@ -136,15 +136,23 @@ fn load_server_world(path: Option<PathBuf>) -> Result<ServerWorld> {
                 Err(error) => {
                     // Dedicated servers run unattended — when a save format
                     // version bump (or any other unreadable state) makes the
-                    // existing file unloadable, drop it and start fresh
-                    // rather than crash-looping on every restart. There is no
-                    // migration path for save format bumps yet.
+                    // existing file unloadable, preserve the broken file
+                    // under a `.bak.<unix-ts>` suffix and start fresh.
+                    // Keeping the original means an operator can still pull
+                    // names/positions out of it later, or pin down which
+                    // version it was authored under.
+                    let backup_path = unloadable_save_backup_path(&path);
                     eprintln!(
-                        "could not load world save {}: {error:#}. Replacing with a fresh world.",
-                        path.display()
+                        "could not load world save {}: {error:#}. Renaming to {} and starting fresh.",
+                        path.display(),
+                        backup_path.display(),
                     );
-                    std::fs::remove_file(&path).with_context(|| {
-                        format!("could not remove unloadable world save {}", path.display())
+                    std::fs::rename(&path, &backup_path).with_context(|| {
+                        format!(
+                            "could not move unloadable world save {} to {}",
+                            path.display(),
+                            backup_path.display(),
+                        )
                     })?;
                     let save = WorldSave::new("Dedicated File", None);
                     save_world_file(&path, &save)?;
@@ -170,6 +178,22 @@ fn load_server_world(path: Option<PathBuf>) -> Result<ServerWorld> {
         save,
         persistence: net::DedicatedWorldPersistence::Store(store),
     })
+}
+
+/// Build a sibling path for an unloadable save: `<original>.bak.<unix-ts>`.
+/// The timestamp prevents the next failed boot from clobbering the previous
+/// backup, so an operator can step through successive broken versions.
+fn unloadable_save_backup_path(path: &std::path::Path) -> PathBuf {
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default();
+    let mut file_name = path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_else(|| std::ffi::OsString::from("world.save"));
+    file_name.push(format!(".bak.{suffix}"));
+    path.with_file_name(file_name)
 }
 
 fn run_admin_command(socket: PathBuf, command: AdminCommand) -> Result<()> {
@@ -230,9 +254,43 @@ mod tests {
             load_server_world(Some(path.clone())).expect("unloadable save should be replaced");
 
         // The fresh save should be loadable on a second call, proving the
-        // unreadable file was removed and a valid one written in its place.
+        // unreadable file was renamed and a valid one written in its place.
         let reloaded = load_server_world(Some(path.clone())).expect("fresh save should reload");
         assert_eq!(world.save.id, reloaded.save.id);
+
+        // A `<path>.bak.<ts>` sibling should have been created from the
+        // original garbage so an operator can salvage it later. We don't
+        // pin the exact timestamp; check that at least one matching file
+        // landed next to the active save.
+        let parent = path.parent().expect("temp world has a parent");
+        let stem = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .expect("temp world has a name");
+        let backup_count = fs::read_dir(parent)
+            .expect("temp dir readable")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&format!("{stem}.bak."))
+            })
+            .count();
+        assert!(
+            backup_count >= 1,
+            "expected at least one .bak sibling next to {}, found {backup_count}",
+            path.display()
+        );
+        for entry in fs::read_dir(parent).expect("temp dir readable").flatten() {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{stem}.bak."))
+            {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
 
         let _ = fs::remove_file(&path);
     }

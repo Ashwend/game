@@ -50,7 +50,12 @@ impl ToastState {
         for toast in &mut self.toasts {
             toast.age += delta_seconds;
         }
-        self.toasts.retain(|toast| toast.age < total);
+        // Toasts are inserted in age order, so the oldest sit at the front
+        // and expire first. `pop_front` keeps the eviction O(expired) instead
+        // of `retain`'s O(n) shift.
+        while self.toasts.front().is_some_and(|toast| toast.age >= total) {
+            self.toasts.pop_front();
+        }
     }
 
     pub(crate) fn clear(&mut self) {

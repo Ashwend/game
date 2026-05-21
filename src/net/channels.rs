@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 
 use bevy::prelude::*;
 use lightyear::prelude::{
@@ -60,11 +63,45 @@ pub(super) fn send_server_message(
     }
 }
 
-pub(super) fn private_key() -> [u8; 32] {
-    std::env::var("LIGHTYEAR_PRIVATE_KEY")
-        .ok()
-        .and_then(|value| parse_private_key(&value))
-        .unwrap_or(LIGHTYEAR_PRIVATE_KEY)
+/// Context the caller can pass so the warning only fires when it matters.
+/// Loopback servers (singleplayer host) bind to 127.0.0.1 and can't be
+/// reached over the network, so they don't need the warning. Dedicated
+/// servers and remote clients do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PrivateKeyContext {
+    /// Singleplayer loopback — listener bound to localhost.
+    Loopback,
+    /// Anything reachable from another host (dedicated server, remote
+    /// client). The all-zero default is dangerous here.
+    NetworkExposed,
+}
+
+pub(super) fn private_key(context: PrivateKeyContext) -> [u8; 32] {
+    resolve_private_key(
+        std::env::var("LIGHTYEAR_PRIVATE_KEY").ok().as_deref(),
+        context,
+    )
+}
+
+fn resolve_private_key(env_value: Option<&str>, context: PrivateKeyContext) -> [u8; 32] {
+    if let Some(value) = env_value
+        && let Some(key) = parse_private_key(value)
+    {
+        return key;
+    }
+    if context == PrivateKeyContext::NetworkExposed {
+        // Print once per process so repeat callers (`run_game_server`,
+        // `build_client_app`) don't spam the log.
+        static WARNED: AtomicBool = AtomicBool::new(false);
+        if !WARNED.swap(true, Ordering::Relaxed) {
+            eprintln!(
+                "warning: LIGHTYEAR_PRIVATE_KEY is unset or unparseable — using the all-zero default. \
+                 Anyone on the network can forge connections with this key; set \
+                 LIGHTYEAR_PRIVATE_KEY (32 comma-separated bytes) before exposing this server."
+            );
+        }
+    }
+    LIGHTYEAR_PRIVATE_KEY
 }
 
 fn parse_private_key(value: &str) -> Option<[u8; 32]> {
@@ -86,5 +123,26 @@ mod tests {
         let key = (0..32).map(|_| "7").collect::<Vec<_>>().join(",");
         assert_eq!(parse_private_key(&key), Some([7; 32]));
         assert!(parse_private_key("1,2,3").is_none());
+    }
+
+    #[test]
+    fn resolve_private_key_uses_parsed_env_when_available() {
+        let key = (0..32).map(|_| "9").collect::<Vec<_>>().join(",");
+        assert_eq!(
+            resolve_private_key(Some(&key), PrivateKeyContext::NetworkExposed),
+            [9; 32]
+        );
+    }
+
+    #[test]
+    fn resolve_private_key_falls_back_to_default_when_env_missing() {
+        assert_eq!(
+            resolve_private_key(None, PrivateKeyContext::Loopback),
+            LIGHTYEAR_PRIVATE_KEY
+        );
+        assert_eq!(
+            resolve_private_key(Some("bogus"), PrivateKeyContext::Loopback),
+            LIGHTYEAR_PRIVATE_KEY
+        );
     }
 }

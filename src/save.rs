@@ -14,8 +14,8 @@ use uuid::Uuid;
 
 use crate::{
     protocol::{
-        ClientId, DroppedItemId, DroppedWorldItem, PlayerInventoryState, ResourceNodeState,
-        SteamId, Vec3Net,
+        ClientId, DroppedItemId, DroppedWorldItem, PlayerInventoryState, ResourceNodeId,
+        ResourceNodeState, SteamId, Vec3Net,
     },
     world::MapType,
     world_time::{DEFAULT_START_SECONDS, WorldTime},
@@ -38,7 +38,10 @@ const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 /// `3` added the persistent day/night clock (`world_time_seconds_of_day` and
 /// `world_time_multiplier`) on `WorldStateSave`. Same story as v2: postcard
 /// layout drift, so older saves are rejected with a "couldn't load" banner.
-const SAVE_FORMAT_VERSION: u32 = 3;
+///
+/// `4` added `next_resource_node_id` on `WorldStateSave` so the server can
+/// hand out IDs in O(1) instead of scanning the live node map for the max.
+const SAVE_FORMAT_VERSION: u32 = 4;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
 /// at >100MB/s compression and ~1GB/s decompression.
 const ZSTD_LEVEL: i32 = 5;
@@ -320,6 +323,11 @@ pub struct WorldStateSave {
     pub next_dropped_item_id: DroppedItemId,
     #[serde(default = "default_next_id")]
     pub next_client_id: ClientId,
+    /// Monotonic counter for admin-spawned resource nodes. World-authored
+    /// nodes use their own static IDs from `WorldData::resource_nodes`; this
+    /// counter starts well above them so the two ID spaces don't collide.
+    #[serde(default = "default_next_resource_node_id")]
+    pub next_resource_node_id: ResourceNodeId,
     /// Persisted day/night clock — wall-clock seconds within the in-game
     /// day. Reload picks up wherever the last session left off so the world
     /// doesn't jump back to morning every restart.
@@ -340,6 +348,7 @@ impl Default for WorldStateSave {
             resource_nodes: None,
             next_dropped_item_id: default_next_id(),
             next_client_id: default_next_id(),
+            next_resource_node_id: default_next_resource_node_id(),
             world_time_seconds_of_day: default_world_time_seconds(),
             world_time_multiplier: default_world_time_multiplier(),
         }
@@ -363,6 +372,16 @@ impl WorldStateSave {
 
 fn default_next_id() -> u64 {
     1
+}
+
+/// Bottom of the admin-spawned resource node ID range. The test world reserves
+/// the small integers (1..=72 at last count); starting the counter at 10_000
+/// keeps the two ID spaces disjoint without us having to remember to bump it
+/// every time a new hand-authored node is added.
+const ADMIN_SPAWN_NODE_ID_BASE: ResourceNodeId = 10_000;
+
+fn default_next_resource_node_id() -> ResourceNodeId {
+    ADMIN_SPAWN_NODE_ID_BASE
 }
 
 fn default_world_time_seconds() -> f32 {

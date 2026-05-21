@@ -11,7 +11,6 @@ fn test_world() -> WorldData {
 fn input(sequence: u64, direction: Vec3Net, sprint: bool, jump: bool) -> PlayerInput {
     PlayerInput {
         sequence,
-        delta_seconds: 1.0 / 60.0,
         direction,
         sprint,
         jump,
@@ -56,7 +55,6 @@ fn simulate_integrates_movement_using_the_target_yaw_for_the_whole_frame() {
     let mut controller = PlayerController::spawn();
     controller.apply_input(PlayerInput {
         sequence: 1,
-        delta_seconds: 1.0 / 60.0,
         direction: Vec3Net::new(1.0, 0.0, 0.0),
         sprint: false,
         jump: false,
@@ -260,7 +258,6 @@ fn jump_request_survives_following_non_jump_input_before_tick() {
     let mut controller = PlayerController::spawn();
     controller.apply_input(PlayerInput {
         sequence: 1,
-        delta_seconds: 0.05,
         direction: Vec3Net::ZERO,
         sprint: false,
         jump: true,
@@ -269,7 +266,6 @@ fn jump_request_survives_following_non_jump_input_before_tick() {
     });
     controller.apply_input(PlayerInput {
         sequence: 2,
-        delta_seconds: 0.05,
         direction: Vec3Net::new(0.0, 0.0, 1.0),
         sprint: true,
         jump: false,
@@ -280,4 +276,293 @@ fn jump_request_survives_following_non_jump_input_before_tick() {
 
     assert!(controller.position.y > 0.0);
     assert!(!controller.grounded);
+}
+
+#[test]
+fn early_air_press_still_fires_jump_on_landing() {
+    // A tap on the very first frame of a jump shouldn't get lost just
+    // because the jump arc lasts longer than `JUMP_BUFFER_SECONDS`. The
+    // buffer freezes while airborne so the press persists until the
+    // player touches down and the jump fires immediately.
+    let mut controller = PlayerController::spawn();
+    let world = test_world();
+    let substep = 1.0 / 120.0; // step substep-by-substep for direct observation
+
+    // First press: takes off the ground.
+    controller.apply_input(PlayerInput {
+        sequence: 1,
+        direction: Vec3Net::ZERO,
+        sprint: false,
+        jump: true,
+        yaw: 0.0,
+        pitch: 0.0,
+    });
+    controller.simulate(substep, &world);
+    assert!(!controller.grounded, "first press should leave the ground");
+    // The buffer was consumed by the jump that just fired.
+    assert_eq!(controller.jump_buffer_timer, 0.0);
+
+    // Second press, while still going up — well before any landing.
+    controller.apply_input(PlayerInput {
+        sequence: 2,
+        direction: Vec3Net::ZERO,
+        sprint: false,
+        jump: true,
+        yaw: 0.0,
+        pitch: 0.0,
+    });
+    let buffer_at_air_press = controller.jump_buffer_timer;
+    assert!(buffer_at_air_press > 0.0, "press should refill the buffer");
+
+    // Step the rest of the arc — well past `JUMP_BUFFER_SECONDS` of airtime.
+    // The buffer must NOT decay while airborne; the OLD behaviour would have
+    // chewed it down to zero long before landing.
+    let mut sequence: u64 = 3;
+    let mut saw_rejump = false;
+    for _ in 0..250 {
+        sequence += 1;
+        controller.apply_input(PlayerInput {
+            sequence,
+            direction: Vec3Net::ZERO,
+            sprint: false,
+            jump: false,
+            yaw: 0.0,
+            pitch: 0.0,
+        });
+
+        let pre_velocity_y = controller.velocity.y;
+        let pre_buffer = controller.jump_buffer_timer;
+        controller.simulate(substep, &world);
+
+        // The auto-rejump signal: velocity.y was non-positive (falling or
+        // grounded) before the substep, the buffer was full (we still had
+        // the stored press), and afterwards velocity.y is sharply positive
+        // — the only path to that state is the jump branch firing on a
+        // landing-substep, which also zeros the buffer.
+        if pre_velocity_y <= 0.0
+            && pre_buffer > 0.0
+            && controller.velocity.y > JUMP_SPEED * 0.9
+            && controller.jump_buffer_timer == 0.0
+        {
+            saw_rejump = true;
+            break;
+        }
+
+        // While airborne with no press, the buffer must stay frozen.
+        if !controller.grounded {
+            assert!(
+                (controller.jump_buffer_timer - buffer_at_air_press).abs() < 1e-4,
+                "buffer should freeze in air, got {} (expected {})",
+                controller.jump_buffer_timer,
+                buffer_at_air_press,
+            );
+        }
+    }
+
+    assert!(saw_rejump, "buffered mid-air press should fire on landing");
+}
+
+#[test]
+fn rapid_tap_bunny_hops_on_every_landing() {
+    // Tap-driven bunny-hopping: one fresh `just_pressed` per jump cycle.
+    // We simulate that by sending `jump: true` once at the start, releasing
+    // for one frame (so the next press is a fresh transition), and
+    // tapping again. After 4 s of this rhythm the player should have
+    // jumped multiple times without holding Space.
+    let mut controller = PlayerController::spawn();
+    let world = test_world();
+    let dt = 1.0 / 60.0;
+    let mut jumps_observed = 0u32;
+    let mut was_grounded = controller.grounded;
+    let mut tap_phase = true;
+
+    for sequence in 1u64..=240 {
+        // Tap-release-tap-release. Each `jump: true` here represents a
+        // genuine new keypress from the player's perspective.
+        let jump = tap_phase;
+        tap_phase = !tap_phase;
+        controller.apply_input(PlayerInput {
+            sequence,
+            direction: Vec3Net::ZERO,
+            sprint: false,
+            jump,
+            yaw: 0.0,
+            pitch: 0.0,
+        });
+        controller.simulate(dt, &world);
+
+        if was_grounded && !controller.grounded {
+            jumps_observed += 1;
+        }
+        was_grounded = controller.grounded;
+    }
+
+    assert!(
+        jumps_observed >= 3,
+        "expected at least 3 rapid-tap hops in 4 s, got {jumps_observed}",
+    );
+}
+
+#[test]
+fn fresh_press_after_full_landing_jumps_immediately() {
+    // Reproduces the user-reported scenario: jump once, wait for the
+    // player to fully land and settle on the ground, *then* press Space.
+    // The fresh press must register on the first substep of that frame.
+    let mut controller = PlayerController::spawn();
+    let world = test_world();
+    let dt = 1.0 / 60.0;
+    let mut sequence: u64 = 0;
+
+    // One jump to get airborne.
+    sequence += 1;
+    controller.apply_input(PlayerInput {
+        sequence,
+        direction: Vec3Net::ZERO,
+        sprint: false,
+        jump: true,
+        yaw: 0.0,
+        pitch: 0.0,
+    });
+    controller.simulate(dt, &world);
+    assert!(!controller.grounded, "first press should leave the ground");
+
+    // Wait for the player to land and settle. The arc takes ~0.75 s; 90
+    // frames is well past that.
+    for _ in 0..90 {
+        sequence += 1;
+        controller.apply_input(PlayerInput {
+            sequence,
+            direction: Vec3Net::ZERO,
+            sprint: false,
+            jump: false,
+            yaw: 0.0,
+            pitch: 0.0,
+        });
+        controller.simulate(dt, &world);
+    }
+
+    assert!(
+        controller.grounded,
+        "player should be settled on the ground"
+    );
+    assert!(
+        controller.position.y.abs() < 0.05,
+        "settled player should be near y=0, got {}",
+        controller.position.y,
+    );
+
+    // Now a fresh press, just like the user described.
+    sequence += 1;
+    controller.apply_input(PlayerInput {
+        sequence,
+        direction: Vec3Net::ZERO,
+        sprint: false,
+        jump: true,
+        yaw: 0.0,
+        pitch: 0.0,
+    });
+    let buffer_after_press = controller.jump_buffer_timer;
+    assert!(
+        buffer_after_press > 0.0,
+        "press should fill the buffer, got {buffer_after_press}",
+    );
+
+    let pre_velocity_y = controller.velocity.y;
+    controller.simulate(dt, &world);
+
+    assert!(
+        !controller.grounded,
+        "should be airborne after the press; grounded={}",
+        controller.grounded,
+    );
+    assert!(
+        pre_velocity_y <= 0.0 && controller.velocity.y > JUMP_SPEED * 0.9,
+        "velocity.y should be ~JUMP_SPEED after jumping, was {pre_velocity_y} → {}",
+        controller.velocity.y,
+    );
+}
+
+#[test]
+fn high_framerate_jump_is_not_smothered_by_grounded_clamp() {
+    // Repro for the "press Space and nothing happens" bug at high FPS.
+    // At ~250 FPS each substep advances the player ~3 cm up after a jump
+    // — still inside `GROUND_EPSILON`. The end-of-substep `is_supported`
+    // check therefore latches `grounded = true`, and on the *next*
+    // substep the grounded velocity clamp must NOT wipe the upward
+    // velocity. Pre-fix this happened reliably and the jump silently
+    // vanished.
+    let mut controller = PlayerController::spawn();
+    let world = test_world();
+    let dt = 1.0 / 250.0; // simulate a 250 FPS frame
+
+    controller.apply_input(PlayerInput {
+        sequence: 1,
+        direction: Vec3Net::ZERO,
+        sprint: false,
+        jump: true,
+        yaw: 0.0,
+        pitch: 0.0,
+    });
+    controller.simulate(dt, &world);
+
+    // After one 4-ms substep, the player should still have most of the
+    // upward jump velocity. Even if `grounded` reads true (because we're
+    // within GROUND_EPSILON), `velocity.y` must remain positive — the
+    // jump survived the grounded clamp.
+    assert!(
+        controller.velocity.y > JUMP_SPEED * 0.9,
+        "high-fps jump should not be wiped, got vy={}",
+        controller.velocity.y,
+    );
+
+    // Step many more frames; the player should fully clear the ground
+    // even though they keep reading `grounded = true` for the first frame
+    // or two.
+    for sequence in 2u64..=30 {
+        controller.apply_input(PlayerInput {
+            sequence,
+            direction: Vec3Net::ZERO,
+            sprint: false,
+            jump: false,
+            yaw: 0.0,
+            pitch: 0.0,
+        });
+        controller.simulate(dt, &world);
+    }
+
+    assert!(
+        controller.position.y > 0.3,
+        "player should have climbed well above GROUND_EPSILON, got y={}",
+        controller.position.y,
+    );
+}
+
+#[test]
+fn buffer_does_not_auto_fire_without_a_press() {
+    // Sanity-check the negative: no Space press at all means no jump,
+    // even after the player has been on the ground for a long time.
+    let mut controller = PlayerController::spawn();
+    let world = test_world();
+    let dt = 1.0 / 60.0;
+
+    let mut was_grounded = controller.grounded;
+    let mut transitions = 0u32;
+    for _ in 0..120 {
+        controller.apply_input(PlayerInput {
+            sequence: 1,
+            direction: Vec3Net::ZERO,
+            sprint: false,
+            jump: false,
+            yaw: 0.0,
+            pitch: 0.0,
+        });
+        controller.simulate(dt, &world);
+        if was_grounded && !controller.grounded {
+            transitions += 1;
+        }
+        was_grounded = controller.grounded;
+    }
+
+    assert_eq!(transitions, 0, "no press, no jump");
+    assert!(controller.grounded);
 }

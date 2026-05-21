@@ -211,11 +211,11 @@ fn client_messages_keep_recent_entries_only() {
     }
 
     assert_eq!(runtime.messages.len(), MAX_CLIENT_LOG_MESSAGES);
-    assert_eq!(runtime.messages[0].text, "message 5");
+    assert_eq!(runtime.messages.front().expect("first").text, "message 5");
     assert_eq!(
         runtime
             .messages
-            .last()
+            .back()
             .expect("last message should exist")
             .text,
         format!("message {}", MAX_CLIENT_LOG_MESSAGES + 4)

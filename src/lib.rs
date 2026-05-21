@@ -8,6 +8,7 @@ pub mod resources;
 pub mod save;
 pub mod server;
 pub mod steam;
+pub mod util;
 pub mod world;
 pub mod world_time;
 

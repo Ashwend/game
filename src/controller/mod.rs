@@ -65,7 +65,6 @@ impl PlayerController {
             last_processed_input: 0,
             last_input: PlayerInput {
                 sequence: 0,
-                delta_seconds: 0.0,
                 direction: Vec3Net::ZERO,
                 sprint: false,
                 jump: false,
@@ -79,21 +78,38 @@ impl PlayerController {
     }
 
     pub fn from_player_state(state: &PlayerState) -> Self {
-        let mut controller = Self::spawn();
-        controller.position = state.position;
-        controller.velocity = state.velocity;
-        controller.yaw = state.yaw;
-        controller.pitch = state.pitch;
-        controller.health = state.health;
-        controller.grounded = state.grounded;
-        controller.last_processed_input = state.last_processed_input;
-        controller.last_input.sequence = state.last_processed_input;
-        controller.last_input.yaw = state.yaw;
-        controller.last_input.pitch = state.pitch;
-        controller
+        Self::from_fields(
+            state.position,
+            state.velocity,
+            state.yaw,
+            state.pitch,
+            state.health,
+            state.grounded,
+            state.last_processed_input,
+        )
     }
 
     pub fn from_persisted(
+        position: Vec3Net,
+        velocity: Vec3Net,
+        yaw: f32,
+        pitch: f32,
+        health: f32,
+        grounded: bool,
+        last_processed_input: u64,
+    ) -> Self {
+        Self::from_fields(
+            position,
+            velocity,
+            yaw,
+            pitch,
+            health,
+            grounded,
+            last_processed_input,
+        )
+    }
+
+    fn from_fields(
         position: Vec3Net,
         velocity: Vec3Net,
         yaw: f32,
@@ -206,7 +222,15 @@ impl PlayerController {
             self.grounded = false;
             self.coyote_timer = 0.0;
             self.jump_buffer_timer = 0.0;
-        } else {
+        } else if self.grounded {
+            // Only decay the buffer while the player is on the ground.
+            // Freezing it in mid-air means a press anywhere during the jump
+            // arc (early or late) persists until landing and fires on the
+            // very first substep we touch down — what bunny-hopping needs.
+            // The buffer can't accumulate "ghost" jumps across long
+            // airtime because it's always reset to 0 the instant a jump
+            // fires, and `start_input` only sets it back to the cap when
+            // a fresh `just_pressed` Space arrives.
             self.jump_buffer_timer = (self.jump_buffer_timer - delta_seconds).max(0.0);
         }
 
@@ -228,7 +252,13 @@ impl PlayerController {
         }
 
         if self.grounded {
-            self.velocity.y = self.velocity.y.min(0.0);
+            // Clamp downward velocity to zero (no sinking into the floor) but
+            // leave upward velocity alone. At high frame rates a fresh jump
+            // can still register `grounded = true` here because the substep
+            // only moves the player a few centimetres up — still inside
+            // `GROUND_EPSILON`. Replacing the upward `JUMP_SPEED` with 0
+            // would silently eat the jump.
+            self.velocity.y = self.velocity.y.max(0.0);
         } else {
             self.velocity.y = (self.velocity.y - GRAVITY * delta_seconds).max(-MAX_FALL_SPEED);
         }

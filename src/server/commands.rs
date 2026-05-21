@@ -248,12 +248,10 @@ impl GameServer {
         )
     }
 
-    fn allocate_resource_node_id(&self) -> ResourceNodeId {
-        // The resource node id space is shared with the world's
-        // hand-authored ids. Walking the live map for max() avoids the need
-        // to persist a counter in the save format; admin spawns are rare so
-        // the O(n) walk is invisible in profile.
-        self.resource_nodes.keys().copied().max().unwrap_or(0) + 1
+    fn allocate_resource_node_id(&mut self) -> ResourceNodeId {
+        let id = self.next_resource_node_id;
+        self.next_resource_node_id = self.next_resource_node_id.saturating_add(1);
+        id
     }
 }
 

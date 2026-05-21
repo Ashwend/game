@@ -92,6 +92,7 @@ pub struct GameServer {
     resource_nodes: HashMap<ResourceNodeId, ResourceNodeState>,
     next_dropped_item_id: DroppedItemId,
     next_client_id: ClientId,
+    next_resource_node_id: ResourceNodeId,
     tick: u64,
     /// Authoritative day/night clock. Mirrored to clients via
     /// [`ServerMessage::WorldTime`]. Persisted to the save in `world_save`.
@@ -141,6 +142,13 @@ impl GameServer {
 
         let next_dropped_item_id = save.state.next_dropped_item_id.max(1);
         let next_client_id = save.state.next_client_id.max(1);
+        // Floor at the static-spawn ceiling so a save authored before this
+        // field existed (or one that's been hand-edited) can never hand out
+        // an ID that collides with the world's hand-authored nodes.
+        let next_resource_node_id = save
+            .state
+            .next_resource_node_id
+            .max(resource_nodes.keys().copied().max().unwrap_or(0) + 1);
         let world_time = save.state.world_time();
         let tick = save.state.last_authoritative_tick;
 
@@ -158,6 +166,7 @@ impl GameServer {
             resource_nodes,
             next_dropped_item_id,
             next_client_id,
+            next_resource_node_id,
             world_time,
             last_world_time_broadcast_tick: tick,
         }
@@ -216,6 +225,7 @@ impl GameServer {
             resource_nodes: Some(resource_nodes),
             next_dropped_item_id: self.next_dropped_item_id,
             next_client_id: self.next_client_id,
+            next_resource_node_id: self.next_resource_node_id,
             world_time_seconds_of_day: self.world_time.seconds_of_day,
             world_time_multiplier: self.world_time.multiplier,
         };
@@ -526,30 +536,38 @@ impl GameServer {
         first_id: DroppedItemId,
         second_id: DroppedItemId,
     ) -> Option<(crate::items::ItemId, u16)> {
+        // Compute the merge up-front from immutable reads so we never have
+        // to remove-then-reinsert when a validation step fails. Once `moved`
+        // is finalised the mutation is straight-through.
         let (target_id, source_id) = self.merge_target_and_source(first_id, second_id)?;
-        let mut source = self.dropped_items.remove(&source_id)?;
-        let Some(target) = self.dropped_items.get_mut(&target_id) else {
-            self.dropped_items.insert(source_id, source);
-            return None;
+        let (limit, target_quantity, source_quantity) = {
+            let target = self.dropped_items.get(&target_id)?;
+            let source = self.dropped_items.get(&source_id)?;
+            let limit = stack_limit(&target.item.stack.item_id)?;
+            (
+                limit,
+                target.item.stack.quantity,
+                source.item.stack.quantity,
+            )
         };
-        let Some(limit) = stack_limit(&target.item.stack.item_id) else {
-            self.dropped_items.insert(source_id, source);
-            return None;
-        };
-        let room = limit.saturating_sub(target.item.stack.quantity);
-        let moved = room.min(source.item.stack.quantity);
+        let moved = limit.saturating_sub(target_quantity).min(source_quantity);
         if moved == 0 {
-            self.dropped_items.insert(source_id, source);
             return None;
         }
 
-        target.item.stack.quantity += moved;
-        source.item.stack.quantity -= moved;
-        let item_id = target.item.stack.item_id.clone();
-        if source.item.stack.quantity == 0 {
-            self.dropped_item_physics.remove_body(source.body_handle);
-        } else {
-            self.dropped_items.insert(source_id, source);
+        let item_id = {
+            let target = self.dropped_items.get_mut(&target_id)?;
+            target.item.stack.quantity += moved;
+            target.item.stack.item_id.clone()
+        };
+
+        let drain_source = {
+            let source = self.dropped_items.get_mut(&source_id)?;
+            source.item.stack.quantity -= moved;
+            source.item.stack.quantity == 0
+        };
+        if drain_source && let Some(body) = self.dropped_items.remove(&source_id) {
+            self.dropped_item_physics.remove_body(body.body_handle);
         }
 
         Some((item_id, moved))

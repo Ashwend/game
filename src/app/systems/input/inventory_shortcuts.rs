@@ -231,8 +231,7 @@ fn swing_spray_direction(runtime: &ClientRuntime, anchor: Vec3) -> Vec3 {
     let Some(player) = runtime.local_view() else {
         return Vec3::Y;
     };
-    let eye = Vec3::new(player.position.x, player.position.y, player.position.z)
-        + Vec3::Y * crate::app::EYE_HEIGHT;
+    let eye = Vec3::from(player.position) + Vec3::Y * crate::app::EYE_HEIGHT;
     let to_player = (eye - anchor).normalize_or_zero();
     if to_player.length_squared() < f32::EPSILON {
         Vec3::Y
@@ -241,19 +240,28 @@ fn swing_spray_direction(runtime: &ClientRuntime, anchor: Vec3) -> Vec3 {
     }
 }
 
+/// Direct slot → digit-key map. Kept as a const array (rather than a
+/// `match` ladder) so the table stays in lockstep with `ACTIONBAR_SLOT_COUNT`
+/// when slot counts change. The build will fail loudly via the
+/// `ACTIONBAR_KEYS.len() == ACTIONBAR_SLOT_COUNT` const assertion below.
+const ACTIONBAR_KEYS: [KeyCode; ACTIONBAR_SLOT_COUNT] = [
+    KeyCode::Digit1,
+    KeyCode::Digit2,
+    KeyCode::Digit3,
+    KeyCode::Digit4,
+    KeyCode::Digit5,
+    KeyCode::Digit6,
+    KeyCode::Digit7,
+    KeyCode::Digit8,
+    KeyCode::Digit9,
+];
+
+const _: () = assert!(ACTIONBAR_KEYS.len() == ACTIONBAR_SLOT_COUNT);
+
 fn actionbar_key_pressed(keys: &ButtonInput<KeyCode>, slot: usize) -> bool {
-    match slot {
-        0 => keys.just_pressed(KeyCode::Digit1),
-        1 => keys.just_pressed(KeyCode::Digit2),
-        2 => keys.just_pressed(KeyCode::Digit3),
-        3 => keys.just_pressed(KeyCode::Digit4),
-        4 => keys.just_pressed(KeyCode::Digit5),
-        5 => keys.just_pressed(KeyCode::Digit6),
-        6 => keys.just_pressed(KeyCode::Digit7),
-        7 => keys.just_pressed(KeyCode::Digit8),
-        8 => keys.just_pressed(KeyCode::Digit9),
-        _ => false,
-    }
+    ACTIONBAR_KEYS
+        .get(slot)
+        .is_some_and(|code| keys.just_pressed(*code))
 }
 
 pub(crate) fn send_inventory_command(
