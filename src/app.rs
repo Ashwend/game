@@ -1,7 +1,10 @@
+mod embedded_assets;
 mod scene;
 mod state;
 mod systems;
 mod ui;
+
+pub(crate) use embedded_assets::asset_path as embedded_asset_path;
 
 use std::net::SocketAddr;
 
@@ -181,6 +184,11 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
             }),
         )
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
+        // Self-contained binary: every shipped sound is registered into
+        // Bevy's `embedded` asset source so we don't have to ship a
+        // sibling `assets/` folder. Must come after DefaultPlugins so
+        // AssetPlugin (and therefore `EmbeddedAssetRegistry`) exists.
+        .add_plugins(embedded_assets::EmbeddedAssetsPlugin)
         .add_plugins(EguiPlugin::default())
         .configure_sets(
             PostUpdate,

@@ -224,8 +224,12 @@ pub(crate) struct ButtonSoundAssets {
 
 pub(crate) fn setup_button_sound_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.insert_resource(ButtonSoundAssets {
-        click: asset_server.load(button_sound_path(theme::ButtonSound::Click)),
-        hover: asset_server.load(button_sound_path(theme::ButtonSound::Hover)),
+        click: asset_server.load(super::embedded_asset_path(button_sound_path(
+            theme::ButtonSound::Click,
+        ))),
+        hover: asset_server.load(super::embedded_asset_path(button_sound_path(
+            theme::ButtonSound::Hover,
+        ))),
     });
 }
 

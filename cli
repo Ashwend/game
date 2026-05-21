@@ -37,24 +37,10 @@ copy_release_binary() {
 
   mkdir -p "$out_dir"
   cp "$src" "$out"
-
-  # Bevy's default AssetServer looks for an `assets/` folder next to the
-  # running executable. The dev workflow finds it via CARGO_MANIFEST_DIR, but
-  # a published binary has no such fallback — without the folder beside it,
-  # every asset_server.load(...) silently fails and the build runs with no
-  # audio, no fonts, no textures.
-  if [[ -d assets ]]; then
-    rm -rf "${out_dir}/assets"
-    # Use rsync so the copy stays in sync on repeated runs and skips
-    # macOS junk that would otherwise bloat the bundle.
-    rsync -a --delete \
-      --exclude '.DS_Store' \
-      --exclude '*.swp' \
-      assets/ "${out_dir}/assets/"
-  else
-    echo "warning: assets/ directory missing — published binary will run without sound or art" >&2
-  fi
-
+  # No sibling assets/ folder is needed in published builds: every media
+  # file is baked into the binary via `EmbeddedAssetsPlugin` (see
+  # src/app/embedded_assets.rs). When you add a new media file, add a row
+  # there and the next published build picks it up.
   echo "built ${out}"
 }
 

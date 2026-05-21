@@ -9,7 +9,12 @@ use bevy::{
 use super::super::state::{
     ClientSettings, GatherInputState, ImpactEffectKind, MenuState, RemoteImpactEvent,
 };
+use crate::app::embedded_asset_path;
 
+// All audio is baked into the binary by `EmbeddedAssetsPlugin`. Paths are
+// passed through `embedded_asset_path(...)` so they route to the
+// `embedded` asset source instead of the on-disk `assets/` folder — a
+// published `Game` binary therefore needs no sibling resources.
 const MAIN_MENU_MUSIC_PATH: &str = "main-screen/ambient-music.wav";
 const MAIN_MENU_MUSIC_VOLUME_DECIBELS: f32 = -24.0;
 const MAIN_MENU_MUSIC_FADE_SECONDS: f32 = 1.0;
@@ -72,7 +77,7 @@ pub(crate) fn main_menu_music_system(
             commands.spawn((
                 Name::new("Main Menu Music"),
                 MainMenuMusic,
-                AudioPlayer::new(asset_server.load(MAIN_MENU_MUSIC_PATH)),
+                AudioPlayer::new(asset_server.load(embedded_asset_path(MAIN_MENU_MUSIC_PATH))),
                 PlaybackSettings::LOOP.with_volume(main_menu_music_volume(&settings)),
             ));
         }
@@ -132,8 +137,8 @@ pub(crate) struct ImpactSoundAssets {
 
 pub(crate) fn setup_impact_sound_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.insert_resource(ImpactSoundAssets {
-        hatchet_tree: asset_server.load(HATCHET_TREE_SOUND_PATH),
-        pickaxe_ore: asset_server.load(PICKAXE_ORE_SOUND_PATH),
+        hatchet_tree: asset_server.load(embedded_asset_path(HATCHET_TREE_SOUND_PATH)),
+        pickaxe_ore: asset_server.load(embedded_asset_path(PICKAXE_ORE_SOUND_PATH)),
     });
 }
 
