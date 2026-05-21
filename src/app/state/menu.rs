@@ -6,8 +6,8 @@ use crate::{
 };
 
 use super::{
-    ConfirmationDialog, CreateWorldDialog, DirectConnectDialog, EditWorldDialog, NoticeDialog,
-    WorldEntrySplash, WorldStartAttempt,
+    ConfirmationDialog, CreateWorldDialog, DirectConnectDialog, EditWorldDialog, LoadingSplash,
+    NoticeDialog, WorldStartAttempt,
 };
 
 pub(crate) const DEFAULT_MULTIPLAYER_ADDR: &str = "46.224.101.205:7777";
@@ -47,11 +47,12 @@ pub(crate) struct MenuState {
     pub(crate) edit_world: Option<EditWorldDialog>,
     pub(crate) direct_connect: Option<DirectConnectDialog>,
     pub(crate) world_start: Option<WorldStartAttempt>,
-    /// Brief "Entering World" / "Joining Server" overlay shown from the
-    /// moment a player commits to entering until the loaded scene becomes
-    /// visible. Lives in `MenuState` (not `ClientRuntime`) because it's a
-    /// UI-only artifact: gameplay state advances normally underneath.
-    pub(crate) world_entry_splash: Option<WorldEntrySplash>,
+    /// Loading overlay shown on top of every screen. Set on app launch
+    /// (with the `Startup` kind) and again whenever the player commits
+    /// to entering a world. Lives in `MenuState` (not `ClientRuntime`)
+    /// because it's a UI-only artifact: gameplay state advances normally
+    /// underneath.
+    pub(crate) loading_splash: Option<LoadingSplash>,
     pub(crate) multiplayer_addr: String,
     pub(crate) status: Option<String>,
     pub(crate) pause_open: bool,
@@ -75,7 +76,7 @@ impl Default for MenuState {
             edit_world: None,
             direct_connect: None,
             world_start: None,
-            world_entry_splash: None,
+            loading_splash: Some(LoadingSplash::startup()),
             multiplayer_addr: DEFAULT_MULTIPLAYER_ADDR.to_owned(),
             status: None,
             pause_open: false,

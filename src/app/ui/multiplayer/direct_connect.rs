@@ -9,8 +9,8 @@ use bevy_egui::egui;
 
 use crate::{
     app::state::{
-        ClientRuntime, DirectConnectAttempt, DirectConnectDialog, DirectConnectResult, MenuState,
-        Screen, SteamUser, WorldEntryKind, WorldEntrySplash,
+        ClientRuntime, DirectConnectAttempt, DirectConnectDialog, DirectConnectResult,
+        LoadingSplash, LoadingSplashKind, MenuState, Screen, SteamUser,
     },
     net::ClientSession,
 };
@@ -97,7 +97,7 @@ pub(super) fn direct_connect_dialog_ui(
     }
 
     if let Some(target) = splash_to_start {
-        menu.world_entry_splash = Some(WorldEntrySplash::new(WorldEntryKind::Multiplayer, target));
+        menu.loading_splash = Some(LoadingSplash::new(LoadingSplashKind::JoiningServer, target));
     }
 
     if finished_closing {
@@ -270,8 +270,8 @@ fn finish_direct_connect(
             menu.chat_open = false;
             menu.chat_focus_pending = false;
             menu.status = None;
-            if let Some(splash) = menu.world_entry_splash.as_mut() {
-                splash.world_ready = true;
+            if let Some(splash) = menu.loading_splash.as_mut() {
+                splash.ready = true;
             }
         }
         Err(error) => {
@@ -280,7 +280,7 @@ fn finish_direct_connect(
             } else {
                 menu.status = Some(format!("Connection failed: {error}"));
             }
-            menu.world_entry_splash = None;
+            menu.loading_splash = None;
         }
     }
 }

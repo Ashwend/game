@@ -1,44 +1,55 @@
 use bevy_egui::egui;
 
-use crate::app::state::{MenuState, WorldEntrySplash};
+use crate::app::state::{LoadingSplash, LoadingSplashKind, MenuBackdropVisibility, MenuState};
 
 use super::theme;
 
-/// Renders the world-entry splash overlay on top of every other screen.
-/// Ticks the splash timer using the supplied frame `delta_seconds` and
-/// drops the splash when it has fully faded out. Returns whether the
-/// splash is currently absorbing input (so callers can short-circuit any
-/// extra repaint scheduling).
-pub(super) fn world_entry_splash_ui(ctx: &egui::Context, menu: &mut MenuState, delta_seconds: f32) {
+/// Renders the loading splash overlay on top of every other screen.
+/// Ticks the splash timer using the supplied frame `delta_seconds`, drops
+/// the splash when it has fully faded out, and — for the `Startup`
+/// variant — flips `ready` once the menu backdrop has finished warming up
+/// so the splash and the backdrop crossfade as one motion.
+pub(super) fn loading_splash_ui(
+    ctx: &egui::Context,
+    menu: &mut MenuState,
+    backdrop_visibility: &MenuBackdropVisibility,
+    delta_seconds: f32,
+) {
     let alpha = {
-        let Some(splash) = menu.world_entry_splash.as_mut() else {
+        let Some(splash) = menu.loading_splash.as_mut() else {
             return;
         };
+        if splash.kind == LoadingSplashKind::Startup
+            && !splash.ready
+            && backdrop_visibility.has_finished_warmup()
+        {
+            splash.ready = true;
+        }
         let Some(alpha) = splash.tick(delta_seconds) else {
-            menu.world_entry_splash = None;
+            menu.loading_splash = None;
             ctx.request_repaint();
             return;
         };
         alpha
     };
 
-    // While the splash is on-screen the world is either still loading or
-    // we're holding the minimum-display window — repaint every frame so
-    // the spinner spins and the fade animates smoothly.
+    // While the splash is on-screen the underlying work is either still
+    // running or we're holding the minimum-display window — repaint every
+    // frame so the spinner spins and the fade animates smoothly.
     ctx.request_repaint();
 
     let splash = menu
-        .world_entry_splash
+        .loading_splash
         .as_ref()
         .expect("splash present after tick");
 
     draw_overlay(ctx, splash, alpha);
 }
 
-fn draw_overlay(ctx: &egui::Context, splash: &WorldEntrySplash, alpha: u8) {
+fn draw_overlay(ctx: &egui::Context, splash: &LoadingSplash, alpha: u8) {
     let rect = ctx.content_rect();
     let fill = egui::Color32::from_rgba_unmultiplied(2, 4, 7, alpha);
-    egui::Area::new(egui::Id::new("world_entry_splash"))
+    egui::Area::new(egui::Id::new("loading_splash"))
         // Tooltip order so it sits above every other panel/area, including
         // any dialog that might still be visible at the moment we flip
         // screens.
@@ -48,8 +59,7 @@ fn draw_overlay(ctx: &egui::Context, splash: &WorldEntrySplash, alpha: u8) {
         .show(ctx, |ui| {
             let local_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, rect.size());
             // Swallow clicks so they don't fall through to the screen
-            // underneath (which has already flipped to InGame by the time
-            // we're fading out).
+            // underneath while the overlay is up.
             ui.allocate_rect(local_rect, egui::Sense::click_and_drag());
             ui.painter().rect_filled(local_rect, 0, fill);
 
@@ -57,7 +67,7 @@ fn draw_overlay(ctx: &egui::Context, splash: &WorldEntrySplash, alpha: u8) {
         });
 }
 
-fn draw_panel(ui: &mut egui::Ui, splash: &WorldEntrySplash, screen_rect: egui::Rect, alpha: u8) {
+fn draw_panel(ui: &mut egui::Ui, splash: &LoadingSplash, screen_rect: egui::Rect, alpha: u8) {
     let center = egui::pos2(screen_rect.width() * 0.5, screen_rect.height() * 0.5 - 28.0);
     let title = splash.title();
     let subtitle = splash.target_label.trim();
@@ -92,12 +102,6 @@ fn draw_panel(ui: &mut egui::Ui, splash: &WorldEntrySplash, screen_rect: egui::R
 
     let spinner_center = center + egui::vec2(0.0, 64.0);
     let spinner_rect = egui::Rect::from_center_size(spinner_center, egui::vec2(28.0, 28.0));
-    // Bevy-egui exposes the same spinner widget the loading button uses;
-    // letting it animate gives the player a heartbeat while the world
-    // loads. The fade still applies because the spinner is drawn into
-    // the overlay area which gets the same alpha multiplier visually
-    // (color is multiplied by widget colors which come from style — keep
-    // the spinner subtle by reducing alpha further during the fade-out).
     let mut spinner_ui = ui.new_child(egui::UiBuilder::new().max_rect(spinner_rect).layout(
         egui::Layout::centered_and_justified(egui::Direction::TopDown),
     ));
@@ -111,8 +115,9 @@ fn draw_panel(ui: &mut egui::Ui, splash: &WorldEntrySplash, screen_rect: egui::R
     spinner_ui.add(egui::Spinner::new().size(24.0));
 
     let hint = match splash.kind {
-        crate::app::state::WorldEntryKind::Singleplayer => "Preparing your world…",
-        crate::app::state::WorldEntryKind::Multiplayer => "Establishing connection…",
+        LoadingSplashKind::Startup => "Preparing main menu…",
+        LoadingSplashKind::EnteringWorld => "Preparing your world…",
+        LoadingSplashKind::JoiningServer => "Establishing connection…",
     };
     ui.painter().text(
         spinner_center + egui::vec2(0.0, 36.0),
@@ -136,11 +141,11 @@ fn scale_alpha(alpha: u8, factor: f32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::state::WorldEntryKind;
+    use crate::app::state::LoadingSplashKind;
 
     #[test]
     fn splash_stays_visible_until_ready_and_then_holds_min_duration_before_fading() {
-        let mut splash = WorldEntrySplash::new(WorldEntryKind::Singleplayer, "World");
+        let mut splash = LoadingSplash::new(LoadingSplashKind::EnteringWorld, "World");
 
         // Not ready yet: full alpha no matter how long.
         for _ in 0..20 {
@@ -150,8 +155,8 @@ mod tests {
         // A fast load that finishes well inside the hold window: splash
         // must continue at full alpha for the rest of the hold window
         // before fade-out begins.
-        let mut fast = WorldEntrySplash::new(WorldEntryKind::Multiplayer, "127.0.0.1");
-        fast.world_ready = true;
+        let mut fast = LoadingSplash::new(LoadingSplashKind::JoiningServer, "127.0.0.1");
+        fast.ready = true;
         assert_eq!(fast.tick(0.05), Some(u8::MAX));
         assert_eq!(fast.tick(0.1), Some(u8::MAX));
 
@@ -168,14 +173,14 @@ mod tests {
 
     #[test]
     fn splash_fades_immediately_when_load_took_longer_than_min_hold() {
-        let mut splash = WorldEntrySplash::new(WorldEntryKind::Singleplayer, "Slow World");
+        let mut splash = LoadingSplash::new(LoadingSplashKind::EnteringWorld, "Slow World");
         // Long load that exceeds the min-hold window before the world is
         // ready: the player has already been looking at the splash longer
         // than min, so once ready, fade can start straight away.
         for _ in 0..40 {
             let _ = splash.tick(0.1);
         }
-        splash.world_ready = true;
+        splash.ready = true;
         // Fade should complete within `FADE_SECONDS` from here.
         let mut faded = false;
         for _ in 0..30 {
@@ -188,15 +193,41 @@ mod tests {
     }
 
     #[test]
+    fn startup_splash_flips_ready_once_backdrop_warmup_completes() {
+        let ctx = egui::Context::default();
+        let mut menu = MenuState::default();
+        let mut backdrop = MenuBackdropVisibility::default();
+        // Warm the backdrop past its blur warmup window before the first
+        // splash tick so the readiness signal is true.
+        for _ in 0..40 {
+            let _ = backdrop.cover_alpha(crate::app::state::Screen::MainMenu, 0.1);
+        }
+        assert!(backdrop.has_finished_warmup());
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| loading_splash_ui(ctx, &mut menu, &backdrop, 0.05),
+        );
+        assert!(menu.loading_splash.as_ref().expect("startup splash").ready);
+    }
+
+    #[test]
     fn splash_overlay_renders_in_headless_context() {
         let ctx = egui::Context::default();
         let mut menu = MenuState {
-            world_entry_splash: Some(WorldEntrySplash::new(
-                WorldEntryKind::Multiplayer,
+            loading_splash: Some(LoadingSplash::new(
+                LoadingSplashKind::JoiningServer,
                 "127.0.0.1:7777",
             )),
             ..Default::default()
         };
+        let backdrop = MenuBackdropVisibility::default();
 
         let output = ctx.run(
             egui::RawInput {
@@ -206,10 +237,10 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| world_entry_splash_ui(ctx, &mut menu, 0.016),
+            |ctx| loading_splash_ui(ctx, &mut menu, &backdrop, 0.016),
         );
 
         assert!(!output.shapes.is_empty());
-        assert!(menu.world_entry_splash.is_some());
+        assert!(menu.loading_splash.is_some());
     }
 }

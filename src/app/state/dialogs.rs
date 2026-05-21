@@ -73,49 +73,81 @@ pub(crate) struct WorldStartAttempt {
     pub(crate) receiver: Mutex<Receiver<WorldStartResult>>,
 }
 
-/// Minimum time the world-entry splash stays at full opacity before it is
+/// Minimum time the loading splash stays at full opacity before it is
 /// allowed to fade. Even on instant local loads the splash sticks around
-/// long enough to read, so players always get a clear "we're entering" beat
-/// instead of a single-frame flash. Tuned by feel: short enough to not
-/// feel artificial, long enough to register.
-pub(crate) const WORLD_ENTRY_SPLASH_MIN_HOLD_SECONDS: f32 = 0.9;
-/// Crossfade duration from full splash to fully revealed game scene. Match
+/// long enough to read, so players always get a clear loading beat instead
+/// of a single-frame flash. Tuned by feel: short enough to not feel
+/// artificial, long enough to register.
+///
+/// The `Startup` variant overrides this with [`LOADING_SPLASH_STARTUP_MIN_HOLD_SECONDS`]
+/// so the boot overlay sticks around long enough to cover the menu
+/// backdrop warmup; the world-entry variants use the default.
+pub(crate) const LOADING_SPLASH_MIN_HOLD_SECONDS: f32 = 0.9;
+/// Crossfade duration from full splash to fully revealed scene. Matches
 /// the menu backdrop fade so the two transitions feel like one motion.
-pub(crate) const WORLD_ENTRY_SPLASH_FADE_SECONDS: f32 = 0.5;
+pub(crate) const LOADING_SPLASH_FADE_SECONDS: f32 = 0.5;
+/// Lower bound for the startup splash hold. The actual fade trigger is
+/// the menu backdrop finishing its warmup (see
+/// `MenuBackdropVisibility::has_finished_warmup`), so the splash and the
+/// backdrop crossfade as one motion; this constant just guarantees a
+/// minimum on-screen time even if warmup were to skip.
+pub(crate) const LOADING_SPLASH_STARTUP_MIN_HOLD_SECONDS: f32 = 1.2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WorldEntryKind {
-    Singleplayer,
-    Multiplayer,
+pub(crate) enum LoadingSplashKind {
+    /// Initial app-launch splash. Stays visible while the menu backdrop
+    /// warms up (and, in the future, while Steam authenticates).
+    Startup,
+    /// Local world load between clicking Start and the scene appearing.
+    EnteringWorld,
+    /// Remote connection attempt to a dedicated server.
+    JoiningServer,
 }
 
-/// Overlay shown from the moment the player chooses to enter a world until
-/// the world is actually visible. Owns its own timer + ready flag so the
+/// Generic loading overlay used at app launch and when the player commits
+/// to entering or joining a world. Owns its own timer + ready flag so the
 /// UI layer can compute alpha without poking session state, and so the
-/// minimum-display contract is honoured even when the world loads in a
-/// single frame.
+/// minimum-display contract is honoured even when the underlying work
+/// finishes in a single frame.
 #[derive(Debug, Clone)]
-pub(crate) struct WorldEntrySplash {
-    pub(crate) kind: WorldEntryKind,
+pub(crate) struct LoadingSplash {
+    pub(crate) kind: LoadingSplashKind,
     pub(crate) target_label: String,
     pub(crate) elapsed_seconds: f32,
-    pub(crate) world_ready: bool,
+    pub(crate) ready: bool,
 }
 
-impl WorldEntrySplash {
-    pub(crate) fn new(kind: WorldEntryKind, target_label: impl Into<String>) -> Self {
+impl LoadingSplash {
+    pub(crate) fn new(kind: LoadingSplashKind, target_label: impl Into<String>) -> Self {
         Self {
             kind,
             target_label: target_label.into(),
             elapsed_seconds: 0.0,
-            world_ready: false,
+            ready: false,
         }
+    }
+
+    /// Startup splash shown on app launch. Title text is set immediately;
+    /// the readiness flag is flipped later by the splash UI tick once the
+    /// menu backdrop finishes warming up.
+    pub(crate) fn startup() -> Self {
+        Self::new(LoadingSplashKind::Startup, "Verifying your account…")
     }
 
     pub(crate) fn title(&self) -> &'static str {
         match self.kind {
-            WorldEntryKind::Singleplayer => "Entering World",
-            WorldEntryKind::Multiplayer => "Joining Server",
+            LoadingSplashKind::Startup => "Authenticating",
+            LoadingSplashKind::EnteringWorld => "Entering World",
+            LoadingSplashKind::JoiningServer => "Joining Server",
+        }
+    }
+
+    fn min_hold_seconds(&self) -> f32 {
+        match self.kind {
+            LoadingSplashKind::Startup => LOADING_SPLASH_STARTUP_MIN_HOLD_SECONDS,
+            LoadingSplashKind::EnteringWorld | LoadingSplashKind::JoiningServer => {
+                LOADING_SPLASH_MIN_HOLD_SECONDS
+            }
         }
     }
 
@@ -124,9 +156,9 @@ impl WorldEntrySplash {
     /// can drop it.
     pub(crate) fn tick(&mut self, delta_seconds: f32) -> Option<u8> {
         self.elapsed_seconds = (self.elapsed_seconds + delta_seconds.max(0.0)).min(60.0);
-        let hold = WORLD_ENTRY_SPLASH_MIN_HOLD_SECONDS;
-        let fade = WORLD_ENTRY_SPLASH_FADE_SECONDS;
-        if !self.world_ready || self.elapsed_seconds < hold {
+        let hold = self.min_hold_seconds();
+        let fade = LOADING_SPLASH_FADE_SECONDS;
+        if !self.ready || self.elapsed_seconds < hold {
             return Some(u8::MAX);
         }
         let into_fade = self.elapsed_seconds - hold;
