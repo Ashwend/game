@@ -86,6 +86,13 @@ case "$cmd" in
     cargo fmt --all -- --check
     cargo clippy --all-targets --all-features -- -D warnings
     ;;
+  audit)
+    if ! cargo audit --version >/dev/null 2>&1; then
+      echo "cargo-audit not installed; installing..." >&2
+      cargo install --locked cargo-audit
+    fi
+    cargo audit --deny warnings "$@"
+    ;;
   coverage)
     if cargo llvm-cov --version >/dev/null 2>&1; then
       cargo llvm-cov --all-targets --all-features --text
@@ -125,6 +132,7 @@ Commands:
   check        Run cargo check for all targets.
   test         Run unit/integration tests.
   lint         Run rustfmt check and clippy with warnings denied.
+  audit        Run cargo audit against the RustSec advisory database (installs cargo-audit if missing).
   coverage     Print text coverage when cargo-llvm-cov is installed, otherwise run tests.
   build        Run cargo build with any extra args.
   publish      Build release binaries into builds/ for macOS, Linux, and Windows targets.

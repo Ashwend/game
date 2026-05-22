@@ -2,6 +2,7 @@
 
 [![Quality Gate](https://github.com/danniehansen/game/actions/workflows/quality-gate.yml/badge.svg)](https://github.com/danniehansen/game/actions/workflows/quality-gate.yml)
 [![Coverage Gate](https://github.com/danniehansen/game/actions/workflows/coverage.yml/badge.svg)](https://github.com/danniehansen/game/actions/workflows/coverage.yml)
+[![Dependency Audit](https://github.com/danniehansen/game/actions/workflows/audit.yml/badge.svg)](https://github.com/danniehansen/game/actions/workflows/audit.yml)
 
 A Rust + Bevy first-person prototype. One authoritative server, one shared
 gameplay path, two ways in: loopback singleplayer and direct UDP multiplayer.
@@ -65,6 +66,8 @@ gameplay path, two ways in: loopback singleplayer and direct UDP multiplayer.
   clients and gracefully stop a dedicated server.
 - `./cli check` / `./cli test` / `./cli lint` — `cargo check --all-targets`,
   tests, and rustfmt + clippy.
+- `./cli audit` — run `cargo audit` against the RustSec advisory database
+  (installs `cargo-audit` on first run). Also runs daily on CI at 06:00 UTC.
 - `./cli coverage` — text coverage via `cargo-llvm-cov` when installed.
 - `./cli publish` — release builds for macOS (aarch64 + x86_64), Linux,
   and Windows into `builds/`.
