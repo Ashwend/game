@@ -32,7 +32,7 @@ use self::{
     pause::pause_ui,
     peer_overlay::{PeerOverlay, PeerOverlayParams, collect_peer_overlay_entries, peer_overlay_ui},
     splash::loading_splash_ui,
-    theme::{ButtonKind, game_button},
+    theme::{ButtonKind, MENU_BUTTON_WIDTH, game_button},
     toast::toast_ui,
     worlds::worlds_ui,
 };
@@ -191,15 +191,15 @@ pub(crate) fn ui_system(
 }
 
 fn menu_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    game_button(ui, text, ButtonKind::Secondary, 260.0)
+    game_button(ui, text, ButtonKind::Secondary, MENU_BUTTON_WIDTH)
 }
 
 fn primary_menu_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    game_button(ui, text, ButtonKind::Primary, 260.0)
+    game_button(ui, text, ButtonKind::Primary, MENU_BUTTON_WIDTH)
 }
 
 fn danger_menu_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    game_button(ui, text, ButtonKind::Danger, 260.0)
+    game_button(ui, text, ButtonKind::Danger, MENU_BUTTON_WIDTH)
 }
 
 const BUTTON_CLICK_SOUND_PATH: &str = "ui/button-click.wav";

@@ -7,7 +7,7 @@ use crate::{
 
 use super::{
     danger_menu_button, primary_menu_button,
-    theme::{self, MENU_WIDTH},
+    theme::{self, MENU_BUTTON_WIDTH, MENU_WIDTH},
     worlds::refresh_worlds,
 };
 
@@ -26,8 +26,9 @@ pub(super) fn main_menu_ui(
             ui.vertical_centered(|ui| {
                 ui.label(theme::title("Game", 78.0));
                 ui.add_space(20.0);
-                theme::panel_frame().show(ui, |ui| {
-                    ui.set_width(MENU_WIDTH - 48.0);
+                let panel = theme::panel_frame().inner_margin(egui::Margin::same(24));
+                panel.show(ui, |ui| {
+                    ui.set_width(MENU_BUTTON_WIDTH);
                     ui.vertical_centered(|ui| {
                         if primary_menu_button(ui, "Singleplayer").clicked() {
                             refresh_worlds(menu, store);

@@ -23,3 +23,4 @@ pub(super) use text::{field_label, muted, section, status_text, text_input, titl
 pub(super) use tooltip::{anchored_wow_tooltip, wow_tooltip};
 
 pub(super) const MENU_WIDTH: f32 = 360.0;
+pub(super) const MENU_BUTTON_WIDTH: f32 = 260.0;
