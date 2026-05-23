@@ -33,6 +33,21 @@ impl Plugin for LightyearProtocolPlugin {
         })
         .add_direction(NetworkDirection::Bidirectional);
 
+        // Dedicated channel for voice frames. `UnorderedUnreliable` is the
+        // standard VOIP-over-UDP pick: every delivered Opus packet is
+        // surfaced to the receiver regardless of arrival order, so a frame
+        // that races slightly past its neighbours still gets played rather
+        // than being silently dropped (which is what `Sequenced` would do
+        // and what produced the periodic-flicker symptom in earlier tests).
+        // Higher priority than non-voice unreliable traffic so a noisy
+        // snapshot stream doesn't shoulder voice off the wire under load.
+        app.add_channel::<VoiceChannel>(ChannelSettings {
+            mode: ChannelMode::UnorderedUnreliable,
+            send_frequency: Duration::default(),
+            priority: 8.0,
+        })
+        .add_direction(NetworkDirection::Bidirectional);
+
         app.register_message::<ClientMessage>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<ServerMessage>()
@@ -42,6 +57,7 @@ impl Plugin for LightyearProtocolPlugin {
 
 pub(super) struct ReliableChannel;
 pub(super) struct UnreliableChannel;
+pub(super) struct VoiceChannel;
 
 pub(super) fn send_client_message(
     sender: &mut MessageSender<ClientMessage>,
@@ -50,6 +66,7 @@ pub(super) fn send_client_message(
     match message.delivery() {
         PacketDelivery::Reliable => sender.send::<ReliableChannel>(message),
         PacketDelivery::Unreliable => sender.send::<UnreliableChannel>(message),
+        PacketDelivery::UnreliableUnordered => sender.send::<VoiceChannel>(message),
     }
 }
 
@@ -60,6 +77,7 @@ pub(super) fn send_server_message(
     match message.delivery() {
         PacketDelivery::Reliable => sender.send::<ReliableChannel>(message),
         PacketDelivery::Unreliable => sender.send::<UnreliableChannel>(message),
+        PacketDelivery::UnreliableUnordered => sender.send::<VoiceChannel>(message),
     }
 }
 

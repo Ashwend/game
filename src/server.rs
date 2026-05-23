@@ -36,6 +36,9 @@ mod inventory;
 mod movement;
 mod resource_nodes;
 mod toasts;
+mod voice;
+
+pub use voice::VOICE_AUDIBLE_RANGE;
 
 use self::{
     dropped_items::{
@@ -277,6 +280,7 @@ impl GameServer {
             ClientMessage::Command { text } => self.apply_command(client_id, text),
             ClientMessage::Inventory(command) => self.apply_inventory_command(client_id, command),
             ClientMessage::Gather(command) => self.apply_gather_command(client_id, command),
+            ClientMessage::Voice(voice) => self.apply_voice_frame(client_id, voice),
             ClientMessage::Heartbeat => Vec::new(),
             ClientMessage::Disconnect => self.disconnect(client_id),
         }

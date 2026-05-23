@@ -8,10 +8,12 @@
 
 mod data;
 mod display;
+mod keybindings;
 mod store;
 
 pub(crate) use data::{ClientSettings, DisplayMode, DisplayResolution};
 pub(crate) use display::display_resolutions;
+pub(crate) use keybindings::{KeyAction, KeyBindingCategory, KeyBindingSlot, KeyBindings};
 pub(crate) use store::ClientSettingsStore;
 
 #[cfg(test)]
@@ -92,6 +94,8 @@ mod tests {
                 invert_mouse_y: false,
             },
             hud: HudSettings::default(),
+            voice: Default::default(),
+            keybindings: Default::default(),
         }
         .sanitized();
 

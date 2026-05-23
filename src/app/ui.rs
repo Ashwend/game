@@ -13,6 +13,7 @@ mod theme;
 mod toast;
 mod worlds;
 
+use bevy::input::ButtonInput;
 use bevy::window::{Monitor, PrimaryMonitor};
 use bevy::{
     audio::{AudioPlayer, AudioSource, PlaybackSettings, Volume},
@@ -37,9 +38,10 @@ use self::{
     worlds::worlds_ui,
 };
 use super::state::{
-    ClientErrorToast, ClientRuntime, ClientSettings, MenuBackdropVisibility, MenuState, SaveStore,
-    Screen, SessionShutdownTasks, SteamUser, ToastState,
+    ClientErrorToast, ClientRuntime, ClientSettings, MenuBackdropVisibility, MenuState,
+    OptionsUiState, SaveStore, Screen, SessionShutdownTasks, SteamUser, ToastState,
 };
+use super::voice::VoiceState;
 
 #[derive(SystemParam)]
 pub(crate) struct UiResources<'w, 's> {
@@ -47,6 +49,9 @@ pub(crate) struct UiResources<'w, 's> {
     backdrop_visibility: ResMut<'w, MenuBackdropVisibility>,
     runtime: ResMut<'w, ClientRuntime>,
     settings: ResMut<'w, ClientSettings>,
+    options_ui: ResMut<'w, OptionsUiState>,
+    voice: Res<'w, VoiceState>,
+    physical_keys: Res<'w, ButtonInput<KeyCode>>,
     inventory_ui: ResMut<'w, super::state::InventoryUiState>,
     pickup_target: Res<'w, super::state::PickupTargetState>,
     toasts: Res<'w, ToastState>,
@@ -94,6 +99,8 @@ pub(crate) fn ui_system(
                 ctx,
                 &mut resources.menu,
                 &mut resources.settings,
+                &mut resources.options_ui,
+                &resources.physical_keys,
                 primary_monitor,
                 OptionsBackTarget::MainMenu,
             );
@@ -111,6 +118,8 @@ pub(crate) fn ui_system(
                     ctx,
                     &mut resources.menu,
                     &mut resources.settings,
+                    &mut resources.options_ui,
+                    &resources.physical_keys,
                     primary_monitor,
                     OptionsBackTarget::PauseMenu,
                 );
@@ -120,6 +129,7 @@ pub(crate) fn ui_system(
                     &resources.runtime,
                     &resources.diagnostics,
                     &resources.settings,
+                    &resources.voice,
                 );
                 let snapshot_players = resources
                     .runtime
@@ -131,6 +141,7 @@ pub(crate) fn ui_system(
                     resources.peer_overlay.network_players.iter(),
                     snapshot_players,
                     resources.runtime.client_id,
+                    &resources.voice,
                 );
                 let camera = resources
                     .peer_overlay

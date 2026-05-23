@@ -9,7 +9,7 @@ use crate::{
 pub type ClientId = u64;
 pub type SteamId = u64;
 
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 20;
 pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_CHAT_LEN: usize = 240;
@@ -20,6 +20,20 @@ pub const MAX_HEALTH: f32 = 100.0;
 pub const CHAT_BUBBLE_DURATION_SECONDS: f32 = 6.0;
 pub const INVENTORY_SLOT_COUNT: usize = 40;
 pub const ACTIONBAR_SLOT_COUNT: usize = 9;
+
+/// Sample rate the voice pipeline encodes/decodes at end-to-end. 48 kHz is
+/// the only rate libopus supports natively without resampling at its highest
+/// quality tier, so we standardise both sides on it.
+pub const VOICE_SAMPLE_RATE_HZ: u32 = 48_000;
+/// Number of audio samples in one Opus frame. 960 samples @ 48 kHz = 20 ms,
+/// which is the standard VoIP frame length — long enough to keep the codec
+/// overhead reasonable, short enough to keep mouth-to-ear latency under the
+/// audible-glass-cliff threshold.
+pub const VOICE_FRAME_SAMPLES: usize = 960;
+/// Hard cap on the encoded Opus payload, well above the ~120 byte high-water
+/// mark for the bit-rates we target. Defends the snapshot/voice mux against
+/// a misbehaving (or malicious) client trying to flood the wire.
+pub const MAX_VOICE_FRAME_BYTES: usize = 512;
 
 pub type DroppedItemId = u64;
 pub type ResourceNodeId = u64;
@@ -127,6 +141,10 @@ pub enum ClientMessage {
     },
     Inventory(InventoryCommand),
     Gather(ResourceGatherCommand),
+    /// One Opus-encoded voice frame. Unreliable — losing a 20 ms frame is
+    /// better than waiting for a retransmit. The server routes these to
+    /// peers within audible range only.
+    Voice(VoiceFrame),
     Heartbeat,
     Disconnect,
 }
@@ -140,9 +158,25 @@ impl ClientMessage {
             | Self::Inventory(_)
             | Self::Gather(_)
             | Self::Disconnect => PacketDelivery::Reliable,
+            // Voice frames are each independent (Opus packets carry their own
+            // decoder state) so we want every delivered frame played — *not*
+            // dropped for being slightly out-of-order, which is what
+            // `Sequenced` would do. Movement is the opposite: a newer pose
+            // makes an older one obsolete.
+            Self::Voice(_) => PacketDelivery::UnreliableUnordered,
             Self::Movement(_) | Self::Heartbeat => PacketDelivery::Unreliable,
         }
     }
+}
+
+/// One Opus-encoded voice packet. `sequence` lets the receiver drop reordered
+/// frames; `frame` holds the raw codec bytes (capped at
+/// [`MAX_VOICE_FRAME_BYTES`]). Sample-rate/frame-length are global constants
+/// so the wire format only needs to carry the codec payload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VoiceFrame {
+    pub sequence: u16,
+    pub frame: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -345,6 +379,16 @@ pub enum ServerMessage {
     /// clock or speed. Clients integrate locally between broadcasts using
     /// the same multiplier, so the visible cycle stays smooth.
     WorldTime(WorldTimeSnapshot),
+    /// A voice frame forwarded from `speaker` after the server confirmed
+    /// the listener is within audible range. The position is the speaker's
+    /// authoritative position at send time so the client can apply spatial
+    /// gain even when its last `Snapshot` is a few frames stale.
+    Voice {
+        speaker: ClientId,
+        sequence: u16,
+        position: Vec3Net,
+        frame: Vec<u8>,
+    },
     Heartbeat,
 }
 
@@ -392,6 +436,10 @@ impl ServerMessage {
             // Impact effects are pure cosmetic feedback. Dropping one is
             // far less bad than the extra latency of a reliable resend,
             // and the next swing will queue another regardless.
+            // See the matching comment on `ClientMessage::delivery` —
+            // voice rides an unordered unreliable channel so every
+            // delivered frame is played even if it arrives out of order.
+            Self::Voice { .. } => PacketDelivery::UnreliableUnordered,
             Self::Snapshot(_)
             | Self::Correction(_)
             | Self::ResourceImpact { .. }
@@ -403,8 +451,16 @@ impl ServerMessage {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PacketDelivery {
+    /// Sequenced-unreliable: drop older-than-newest. Right for state where
+    /// only the latest value matters (movement, snapshots, world time).
     Unreliable,
+    /// Reliable-ordered.
     Reliable,
+    /// Unordered-unreliable: deliver every packet that survives the link in
+    /// whatever order they arrive. Right for streams where each packet is
+    /// independent — most notably voice frames, where dropping a frame
+    /// because it arrived a few milliseconds late produces audible holes.
+    UnreliableUnordered,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

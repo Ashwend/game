@@ -13,7 +13,9 @@ Modules:
   - `app/ui/multiplayer`: direct-connect dialog orchestration, connection attempts, and address parsing helpers.
   - `app/ui/worlds`: singleplayer worlds screen split into the screen shell, table rendering, create/edit dialogs, and session actions.
   - `app/ui/theme`: shared egui colors, frames, text, buttons, and tooltips.
-- `server`: shared authoritative game state for loopback singleplayer and dedicated multiplayer, including auth, connected players, movement acceptance, inventory, dropped items, resource nodes, chat, admin state, and snapshots. Connection/auth/snapshot code lives in `server/connection.rs`; inventory, movement, dropped-item, and resource-node helpers live under `server/`.
+  - `app/ui/options`: tabbed options panel — display/audio/voice/controls/keybindings/general subscreens plus shared widgets and the per-tab grid layout.
+  - `app/voice`: client voice chat subsystem — Opus codec wrappers, cpal mic capture, cpal output mixer with per-speaker jitter buffer, and the Bevy systems that bridge the capture/playback worker threads to the network protocol. See [Voice](voice.md).
+- `server`: shared authoritative game state for loopback singleplayer and dedicated multiplayer, including auth, connected players, movement acceptance, inventory, dropped items, resource nodes, chat, admin state, snapshots, and voice frame routing. Connection/auth/snapshot code lives in `server/connection.rs`; inventory, movement, dropped-item, resource-node, and voice helpers live under `server/`.
 - `controller`: shared player movement simulation. `mod.rs` owns `PlayerController`, `movement.rs` owns horizontal movement tuning/math, `collision.rs` owns world-block AABB collision, and `grid.rs` owns a coarse spatial grid built from `WorldData` for fast block queries.
 - `items` and `resources`: item registry, tool profiles, dropped-item helpers, resource-node definitions, and gather-rule logic shared by client UI and server gather processing.
 - `protocol`: serializable client/server messages, packets, snapshots, and `PROTOCOL_VERSION`.
@@ -35,4 +37,7 @@ Singleplayer-only responsibilities are save selection/loading, loopback host lif
 
 Dedicated multiplayer runs the same host wrapper as singleplayer loopback. On graceful terminal shutdown — or in response to an admin shutdown command — it persists to the supplied `--world` file or to the platform `Dedicated` world save. Direct UDP connect is wired through the multiplayer UI. Steam auth/server-browser work is still incomplete: `AuthMode::Steam` rejects until a live SteamGameServer verifier is wired.
 
-Client audio is split between `src/app/systems/audio.rs` for main-menu ambience and `src/app/ui.rs` plus `src/app/ui/theme/buttons.rs` for UI one-shots. Runtime audio assets are WAV files so Bevy/rodio can decode them reliably and button effects can start exactly at the intended transient.
+Client audio is split between `src/app/systems/audio.rs` for main-menu ambience and `src/app/ui.rs` plus `src/app/ui/theme/buttons.rs` for UI one-shots. Runtime audio assets are WAV files so Bevy/rodio can decode them reliably and button effects can start exactly at the intended transient. Voice chat is a separate subsystem under `src/app/voice/` — it runs its own cpal worker threads (cpal `Stream` is `!Send` on macOS) and ships Opus-encoded frames over a dedicated `VoiceChannel`.
+
+Iteration tooling:
+- `./cli multiplayer-test` spawns a dedicated server and two side-by-side client windows that auto-connect, spawn facing each other, and start with the inventory open. See [Multiplayer testing](multiplayer-testing.md). The corresponding `TestModeConfig` resource and apply-once systems live under `src/app/state/test_mode.rs` and `src/app/systems/test_mode.rs`.

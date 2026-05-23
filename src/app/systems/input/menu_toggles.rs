@@ -1,13 +1,20 @@
 use bevy::prelude::*;
 
-use crate::app::state::{InventoryUiState, MenuState, Screen};
+use crate::app::state::{ClientSettings, InventoryUiState, KeyAction, MenuState, Screen};
 
-pub(crate) fn chat_shortcut_system(keys: Res<ButtonInput<KeyCode>>, mut menu: ResMut<MenuState>) {
+pub(crate) fn chat_shortcut_system(
+    keys: Res<ButtonInput<KeyCode>>,
+    settings: Res<ClientSettings>,
+    mut menu: ResMut<MenuState>,
+) {
     if menu.screen != Screen::InGame || menu.pause_open || menu.chat_open {
         return;
     }
 
-    if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::KeyT) {
+    if settings
+        .keybindings
+        .just_pressed(KeyAction::OpenChat, &keys)
+    {
         menu.chat_open = true;
         menu.chat_focus_pending = true;
         menu.chat_input.clear();
@@ -49,6 +56,7 @@ fn handle_pause_escape(menu: &mut MenuState) {
 
 pub(crate) fn toggle_inventory_system(
     keys: Res<ButtonInput<KeyCode>>,
+    settings: Res<ClientSettings>,
     mut menu: ResMut<MenuState>,
     mut inventory_ui: ResMut<InventoryUiState>,
 ) {
@@ -57,7 +65,10 @@ pub(crate) fn toggle_inventory_system(
         return;
     }
 
-    if keys.just_pressed(KeyCode::Tab) {
+    if settings
+        .keybindings
+        .just_pressed(KeyAction::OpenInventory, &keys)
+    {
         menu.inventory_open = !menu.inventory_open;
         if !menu.inventory_open {
             inventory_ui.cancel_drag();

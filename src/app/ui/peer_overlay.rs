@@ -4,7 +4,10 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 
 use crate::{
-    app::scene::{MainCamera, NetworkPlayer, PLAYER_HEAD_TOP_LOCAL_Y},
+    app::{
+        scene::{MainCamera, NetworkPlayer, PLAYER_HEAD_TOP_LOCAL_Y},
+        voice::VoiceState,
+    },
     protocol::{ClientId, MAX_HEALTH, PlayerState},
 };
 
@@ -38,6 +41,10 @@ pub(crate) struct PeerOverlay<'world> {
 pub(crate) struct PeerOverlayEntry<'world> {
     pub(crate) head_world: Vec3,
     pub(crate) state: &'world PlayerState,
+    /// `true` when the peer has spoken within roughly the last 200 ms.
+    /// Drives the small microphone glyph that appears beside the
+    /// nameplate so listeners can tell who's talking.
+    pub(crate) speaking: bool,
 }
 
 /// Draws floating name+health labels and chat bubbles above remote players.
@@ -77,11 +84,17 @@ pub(super) fn peer_overlay_ui(ctx: &egui::Context, overlay: PeerOverlay<'_>) {
         if !visible_rect.contains(egui::pos2(screen.x, screen.y)) {
             continue;
         }
-        draw_peer_label(ctx, screen, distance, peer.state);
+        draw_peer_label(ctx, screen, distance, peer.state, peer.speaking);
     }
 }
 
-fn draw_peer_label(ctx: &egui::Context, screen: Vec2, distance: f32, state: &PlayerState) {
+fn draw_peer_label(
+    ctx: &egui::Context,
+    screen: Vec2,
+    distance: f32,
+    state: &PlayerState,
+    speaking: bool,
+) {
     let id = egui::Id::new(("peer_overlay", state.client_id));
     let fade = distance_fade(distance);
 
@@ -105,12 +118,12 @@ fn draw_peer_label(ctx: &egui::Context, screen: Vec2, distance: f32, state: &Pla
                     chat_bubble(ui, text, fade);
                     ui.add_space(CHAT_BUBBLE_GAP_PX);
                 }
-                nametag(ui, state, fade);
+                nametag(ui, state, fade, speaking);
             });
         });
 }
 
-fn nametag(ui: &mut egui::Ui, state: &PlayerState, fade: f32) {
+fn nametag(ui: &mut egui::Ui, state: &PlayerState, fade: f32, speaking: bool) {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(NAMETAG_WIDTH, NAMETAG_HEIGHT),
         egui::Sense::hover(),
@@ -138,13 +151,21 @@ fn nametag(ui: &mut egui::Ui, state: &PlayerState, fade: f32) {
         rect.min + egui::vec2(8.0, 4.0),
         egui::pos2(rect.right() - 8.0, rect.top() + 20.0),
     );
-    ui.painter().text(
+    let text_rect = ui.painter().text(
         name_rect.center(),
         egui::Align2::CENTER_CENTER,
         truncated_name(&state.name, 22),
         egui::FontId::new(12.5, egui::FontFamily::Proportional),
         with_alpha(name_text_color, scaled(u8::MAX, fade)),
     );
+
+    // Paint the speaking dot AFTER the name so we can anchor it to the
+    // actual rendered text rect — that's how we keep it immediately to the
+    // left of the name (with a small gap) regardless of how long the
+    // player's display name is.
+    if speaking {
+        draw_voice_indicator(ui, text_rect, fade);
+    }
 
     let bar_rect = egui::Rect::from_min_max(
         egui::pos2(rect.left() + 8.0, rect.bottom() - 10.0),
@@ -225,6 +246,47 @@ fn chat_bubble(ui: &mut egui::Ui, text: &str, fade: f32) {
     ui.painter().galley(text_pos, galley, egui::Color32::WHITE);
 }
 
+/// Paints a small pulsing green dot immediately to the left of the player
+/// name to mark a peer who's currently transmitting. Anchored to the
+/// name's actual rendered text rect (not the nameplate frame) so the gap
+/// stays consistent regardless of name length and the dot sits on the
+/// name's vertical centerline. Matches the convention used by
+/// Discord / Mumble / most game voice UIs.
+///
+/// The pulse is a gentle 0.8 Hz sine on alpha so the indicator feels
+/// "live" without competing with the player's name for attention.
+fn draw_voice_indicator(ui: &egui::Ui, name_text_rect: egui::Rect, fade: f32) {
+    /// Pixel gap between the dot's right edge and the first glyph of the
+    /// name. Small enough to read as "part of the name", large enough to
+    /// not visually touch the text.
+    const DOT_TO_NAME_GAP: f32 = 5.0;
+    const DOT_RADIUS: f32 = 3.4;
+    const HALO_RADIUS: f32 = 6.5;
+
+    let cx = name_text_rect.left() - DOT_TO_NAME_GAP - DOT_RADIUS;
+    let cy = name_text_rect.center().y;
+    let painter = ui.painter();
+
+    let time = ui.input(|input| input.time);
+    let pulse = 0.5 + 0.5 * ((time as f32) * std::f32::consts::TAU * 0.8).sin();
+
+    let green = egui::Color32::from_rgb(110, 220, 130);
+    let dot_alpha = scaled((200.0 + pulse * 55.0) as u8, fade);
+    let halo_alpha = scaled((50.0 + pulse * 30.0) as u8, fade);
+
+    // Soft halo behind the dot so it reads against bright/busy backgrounds.
+    painter.circle_filled(
+        egui::pos2(cx, cy),
+        HALO_RADIUS,
+        with_alpha(green, halo_alpha),
+    );
+    // Solid dot.
+    painter.circle_filled(egui::pos2(cx, cy), DOT_RADIUS, with_alpha(green, dot_alpha));
+
+    // Keep the pulse animation smooth between input events.
+    ui.ctx().request_repaint();
+}
+
 fn distance_fade(distance: f32) -> f32 {
     if distance <= PEER_FADE_START_METERS {
         return 1.0;
@@ -271,6 +333,7 @@ pub(crate) fn collect_peer_overlay_entries<'a>(
     network_players: impl IntoIterator<Item = (&'a NetworkPlayer, &'a GlobalTransform)>,
     snapshot_players: impl IntoIterator<Item = &'a PlayerState>,
     local_client_id: Option<ClientId>,
+    voice: &VoiceState,
 ) -> Vec<PeerOverlayEntry<'a>> {
     let mut state_by_id: HashMap<ClientId, &PlayerState> = snapshot_players
         .into_iter()
@@ -285,7 +348,11 @@ pub(crate) fn collect_peer_overlay_entries<'a>(
             let translation = transform.translation();
             let head_world =
                 translation + Vec3::Y * (PLAYER_HEAD_TOP_LOCAL_Y + NAMETAG_HEAD_CLEARANCE_M);
-            Some(PeerOverlayEntry { head_world, state })
+            Some(PeerOverlayEntry {
+                head_world,
+                state,
+                speaking: voice.is_peer_talking(player.client_id),
+            })
         })
         .collect()
 }

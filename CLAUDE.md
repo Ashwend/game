@@ -46,7 +46,9 @@ Open docs only when the task touches that area:
 - [Architecture](docs/architecture.md)
 - [Movement](docs/movement.md)
 - [Networking](docs/networking.md)
+- [Voice](docs/voice.md)
 - [Worlds and saves](docs/worlds-and-saves.md)
 - [UI and client flow](docs/ui-and-client.md)
+- [Multiplayer testing](docs/multiplayer-testing.md)
 
 Keep changes small and preserve module boundaries.

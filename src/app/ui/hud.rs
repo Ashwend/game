@@ -2,7 +2,10 @@ use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy_egui::egui;
 
 use crate::{
-    app::state::{ClientRuntime, ClientSettings},
+    app::{
+        state::{ClientRuntime, ClientSettings},
+        voice::VoiceState,
+    },
     protocol::MAX_HEALTH,
 };
 
@@ -19,6 +22,7 @@ pub(super) fn hud_ui(
     runtime: &ClientRuntime,
     diagnostics: &DiagnosticsStore,
     settings: &ClientSettings,
+    voice: &VoiceState,
 ) {
     if settings.hud.show_fps {
         fps_ui(ctx, diagnostics);
@@ -26,6 +30,8 @@ pub(super) fn hud_ui(
     if runtime.connection_is_lagging() {
         connection_lag_indicator(ctx);
     }
+
+    voice_indicator(ctx, voice);
 
     let Some(player) = runtime.local_view() else {
         return;
@@ -36,6 +42,70 @@ pub(super) fn hud_ui(
         .show(ctx, |ui| {
             health_bar(ui, player.health);
         });
+}
+
+/// Subtle "transmitting" chip anchored under the top-center of the screen.
+/// Stays invisible while idle, eases in when push-to-talk is held, eases
+/// back out a beat after release. Also pulses gently to make it feel alive
+/// without being distracting.
+fn voice_indicator(ctx: &egui::Context, voice: &VoiceState) {
+    if voice.indicator_envelope <= 0.005 {
+        return;
+    }
+    let envelope = voice.indicator_envelope.clamp(0.0, 1.0);
+    let alpha_byte = (envelope * 230.0) as u8;
+    if alpha_byte == 0 {
+        return;
+    }
+
+    // Gentle 0.8 Hz pulse on the mic-glyph color so the indicator reads as
+    // "live" rather than a static label.
+    let time = ctx.input(|input| input.time);
+    let pulse = 0.5 + 0.5 * ((time as f32) * std::f32::consts::TAU * 0.8).sin();
+    let pulse_alpha = (140.0 + pulse * 80.0) as u8;
+    let glyph_color = egui::Color32::from_rgba_unmultiplied(248, 128, 96, pulse_alpha);
+
+    let slide_in = (1.0 - envelope) * 12.0;
+
+    egui::Area::new("voice_indicator".into())
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_TOP, [0.0, 24.0 + slide_in])
+        .show(ctx, |ui| {
+            ui.set_opacity(envelope);
+            egui::Frame::NONE
+                .fill(egui::Color32::from_rgba_unmultiplied(6, 9, 13, alpha_byte))
+                .stroke(egui::Stroke::new(
+                    1.0,
+                    egui::Color32::from_rgba_unmultiplied(248, 128, 96, 96),
+                ))
+                .corner_radius(12)
+                .inner_margin(egui::Margin::symmetric(12, 6))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        // Painter-drawn pulse dot. Using a text glyph like
+                        // "●" rendered as a red tofu box on this machine
+                        // because egui's bundled font doesn't include
+                        // U+25CF — a hand-drawn circle has no font dep.
+                        let dot_radius = 4.5;
+                        let (dot_rect, _) = ui.allocate_exact_size(
+                            egui::vec2(dot_radius * 2.0, dot_radius * 2.0),
+                            egui::Sense::hover(),
+                        );
+                        ui.painter()
+                            .circle_filled(dot_rect.center(), dot_radius, glyph_color);
+                        ui.add_space(2.0);
+                        ui.label(
+                            egui::RichText::new("Voice On")
+                                .size(12.5)
+                                .strong()
+                                .color(theme::text()),
+                        );
+                    });
+                });
+        });
+    if envelope < 0.999 {
+        ctx.request_repaint();
+    }
 }
 
 /// Small chip rendered in the top-left when the session has gone silent
@@ -193,9 +263,16 @@ mod tests {
         let ctx = egui::Context::default();
         let diagnostics = DiagnosticsStore::default();
         let mut runtime = ClientRuntime::default();
+        let voice = VoiceState::default();
 
         let _ = ctx.run(raw_input(), |ctx| {
-            hud_ui(ctx, &runtime, &diagnostics, &ClientSettings::default());
+            hud_ui(
+                ctx,
+                &runtime,
+                &diagnostics,
+                &ClientSettings::default(),
+                &voice,
+            );
         });
 
         runtime.client_id = Some(1);
@@ -207,10 +284,36 @@ mod tests {
         });
 
         let _ = ctx.run(raw_input(), |ctx| {
-            hud_ui(ctx, &runtime, &diagnostics, &ClientSettings::default());
+            hud_ui(
+                ctx,
+                &runtime,
+                &diagnostics,
+                &ClientSettings::default(),
+                &voice,
+            );
         });
 
         assert_eq!(runtime.local_view().expect("local player").health, 75.0);
+    }
+
+    #[test]
+    fn voice_indicator_appears_when_envelope_above_zero() {
+        let ctx = egui::Context::default();
+        let mut voice = VoiceState::default();
+        voice.indicator_envelope = 0.5;
+
+        let output = ctx.run(raw_input(), |ctx| voice_indicator(ctx, &voice));
+        assert!(!output.shapes.is_empty());
+    }
+
+    #[test]
+    fn voice_indicator_hidden_when_idle() {
+        let ctx = egui::Context::default();
+        let voice = VoiceState::default();
+
+        let output = ctx.run(raw_input(), |ctx| voice_indicator(ctx, &voice));
+        // No voice activity → nothing drawn.
+        assert!(output.shapes.is_empty());
     }
 
     #[test]

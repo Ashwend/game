@@ -10,6 +10,7 @@ mod node_death;
 mod players;
 mod quit;
 mod settings;
+mod test_mode;
 
 use bevy::prelude::SystemSet;
 
@@ -41,6 +42,7 @@ pub(crate) use node_death::tick_felling_trees_system;
 pub(crate) use players::{RemotePlayerEntities, apply_snapshot_system};
 pub(crate) use quit::app_quit_system;
 pub(crate) use settings::save_client_settings_system;
+pub(crate) use test_mode::{apply_test_mode_overrides_system, reposition_test_window_system};
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ClientSystemSet {
@@ -73,4 +75,9 @@ pub(crate) enum ClientSystemSet {
     MainMenuMusic,
     MenuBackdropCamera,
     AutoConnect,
+    VoiceTransmit,
+    VoiceReceive,
+    VoiceSettings,
+    TestModeApply,
+    TestWindowReposition,
 }

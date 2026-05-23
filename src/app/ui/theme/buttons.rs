@@ -145,6 +145,19 @@ pub(in crate::app::ui) fn compact_button_in_rect_with_state(
     response
 }
 
+/// Resting-state (fill, stroke, text) palette for a compact button of the
+/// given kind. Lets callers that need pixel-exact sizing build their own
+/// `egui::Button` widget (via `add_sized` / explicit `min_size`) while
+/// staying on-palette with the rest of the UI. Hover/active recolouring
+/// is dropped because most exact-size buttons are inside grids where
+/// rebuilding the button each frame from the live response would jitter
+/// the layout — accept the static appearance, gain the consistency.
+pub(in crate::app::ui) fn button_paint_rest(
+    kind: ButtonKind,
+) -> (egui::Color32, egui::Stroke, egui::Color32) {
+    button_paint(kind, ButtonDensity::Compact, ButtonInteraction::Rest)
+}
+
 pub(in crate::app::ui) fn take_button_sounds(ctx: &egui::Context) -> Vec<ButtonSound> {
     ctx.data_mut(|data| {
         data.remove_temp::<Vec<ButtonSound>>(button_sound_queue_id())

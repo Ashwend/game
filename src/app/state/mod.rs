@@ -5,8 +5,10 @@ mod gather;
 mod inventory;
 mod look;
 mod menu;
+mod options_ui;
 mod runtime;
 mod settings;
+mod test_mode;
 #[cfg(test)]
 mod tests;
 mod toasts;
@@ -27,11 +29,14 @@ pub(crate) use gather::{
 pub(crate) use inventory::{InventoryDrag, InventoryDragButton, InventoryUiState};
 pub(crate) use look::LookState;
 pub(crate) use menu::{MenuState, SaveStore, Screen, SteamUser};
+pub(crate) use options_ui::{OptionsTab, OptionsUiState, PendingRebind};
 pub(crate) use runtime::{
     ClientErrorToast, ClientLogEntry, ClientLogKind, ClientRuntime, ErrorToastSink,
     SessionShutdownTasks,
 };
 pub(crate) use settings::{
-    ClientSettings, ClientSettingsStore, DisplayMode, DisplayResolution, display_resolutions,
+    ClientSettings, ClientSettingsStore, DisplayMode, DisplayResolution, KeyAction,
+    KeyBindingCategory, KeyBindingSlot, KeyBindings, display_resolutions,
 };
+pub(crate) use test_mode::TestModeConfig;
 pub(crate) use toasts::{TOAST_FADE_SECONDS, TOAST_VISIBLE_SECONDS, Toast, ToastState};

@@ -1,10 +1,13 @@
 use bevy::{
+    ecs::system::SystemParam,
     prelude::*,
     window::{PrimaryWindow, Window},
 };
 
 use crate::{
-    app::state::{ClientErrorToast, ClientRuntime, LookState, MenuState},
+    app::state::{
+        ClientErrorToast, ClientRuntime, ClientSettings, KeyAction, LookState, MenuState,
+    },
     protocol::{ClientMessage, PlayerInput, PlayerMovement, Vec3Net},
 };
 
@@ -12,43 +15,58 @@ use super::gating::{
     gameplay_accepts_controls, gameplay_simulation_allowed, primary_window_focused,
 };
 
-pub(crate) fn client_input_system(
-    time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
-    mut runtime: ResMut<ClientRuntime>,
-    menu: Res<MenuState>,
-    look: Res<LookState>,
-    mut error_toasts: MessageWriter<ClientErrorToast>,
-    primary_window: Query<&Window, With<PrimaryWindow>>,
-) {
-    if !gameplay_simulation_allowed(&menu) {
+#[derive(SystemParam)]
+pub(crate) struct ClientInputParams<'w, 's> {
+    time: Res<'w, Time>,
+    keys: Res<'w, ButtonInput<KeyCode>>,
+    settings: Res<'w, ClientSettings>,
+    runtime: ResMut<'w, ClientRuntime>,
+    menu: Res<'w, MenuState>,
+    look: Res<'w, LookState>,
+    error_toasts: MessageWriter<'w, ClientErrorToast>,
+    primary_window: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+}
+
+pub(crate) fn client_input_system(mut params: ClientInputParams) {
+    if !gameplay_simulation_allowed(&params.menu) {
         return;
     }
-    if runtime.client_id.is_none() {
+    if params.runtime.client_id.is_none() {
         return;
     }
 
     let accepts_movement_input =
-        gameplay_accepts_controls(&menu, primary_window_focused(&primary_window));
-    let direction = movement_direction_from_keys(&keys, accepts_movement_input);
+        gameplay_accepts_controls(&params.menu, primary_window_focused(&params.primary_window));
+    let direction = movement_direction_from_keys(
+        &params.keys,
+        &params.settings.keybindings,
+        accepts_movement_input,
+    );
 
-    runtime.input_sequence += 1;
-    let sequence = runtime.input_sequence;
-    let delta_seconds = time.delta_secs();
+    params.runtime.input_sequence += 1;
+    let sequence = params.runtime.input_sequence;
+    let delta_seconds = params.time.delta_secs();
     let input = PlayerInput {
         sequence,
         direction,
         sprint: accepts_movement_input
-            && (keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight)),
-        jump: accepts_movement_input && keys.just_pressed(KeyCode::Space),
-        yaw: look.yaw,
-        pitch: look.pitch,
+            && params
+                .settings
+                .keybindings
+                .pressed(KeyAction::Sprint, &params.keys),
+        jump: accepts_movement_input
+            && params
+                .settings
+                .keybindings
+                .just_pressed(KeyAction::Jump, &params.keys),
+        yaw: params.look.yaw,
+        pitch: params.look.pitch,
     };
 
     // Split-borrow: `world_grid` is read-only here while `predicted_local`
     // is mutated. Reborrowing through `&mut *runtime` lets the compiler see
     // the two fields as disjoint, avoiding a per-frame `BlockGrid` rebuild.
-    let runtime = &mut *runtime;
+    let runtime = &mut *params.runtime;
     let mut movement = None;
     if let (Some(predicted), Some(grid)) = (
         runtime.predicted_local.as_mut(),
@@ -74,13 +92,14 @@ pub(crate) fn client_input_system(
         if let Some(Err(error)) = send_result {
             let text = format!("movement send failed: {error}");
             runtime.push_error_message(text.clone());
-            error_toasts.write(ClientErrorToast::new(text));
+            params.error_toasts.write(ClientErrorToast::new(text));
         }
     }
 }
 
 fn movement_direction_from_keys(
     keys: &ButtonInput<KeyCode>,
+    bindings: &crate::app::state::KeyBindings,
     accepts_movement_input: bool,
 ) -> Vec3Net {
     if !accepts_movement_input {
@@ -88,16 +107,16 @@ fn movement_direction_from_keys(
     }
 
     let mut direction = Vec3Net::ZERO;
-    if keys.pressed(KeyCode::KeyW) {
+    if bindings.pressed(KeyAction::MoveForward, keys) {
         direction.z += 1.0;
     }
-    if keys.pressed(KeyCode::KeyS) {
+    if bindings.pressed(KeyAction::MoveBackward, keys) {
         direction.z -= 1.0;
     }
-    if keys.pressed(KeyCode::KeyA) {
+    if bindings.pressed(KeyAction::StrafeLeft, keys) {
         direction.x -= 1.0;
     }
-    if keys.pressed(KeyCode::KeyD) {
+    if bindings.pressed(KeyAction::StrafeRight, keys) {
         direction.x += 1.0;
     }
     direction
@@ -106,17 +125,22 @@ fn movement_direction_from_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::state::KeyBindings;
 
     #[test]
     fn inventory_open_ignores_directional_movement_input() {
         let mut keys = ButtonInput::default();
         keys.press(KeyCode::KeyW);
         keys.press(KeyCode::KeyD);
+        let bindings = KeyBindings::default();
 
         assert_eq!(
-            movement_direction_from_keys(&keys, true),
+            movement_direction_from_keys(&keys, &bindings, true),
             Vec3Net::new(1.0, 0.0, 1.0)
         );
-        assert_eq!(movement_direction_from_keys(&keys, false), Vec3Net::ZERO);
+        assert_eq!(
+            movement_direction_from_keys(&keys, &bindings, false),
+            Vec3Net::ZERO
+        );
     }
 }

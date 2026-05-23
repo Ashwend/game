@@ -4,7 +4,7 @@ use bevy::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::display::best_video_mode;
+use super::{display::best_video_mode, keybindings::KeyBindings};
 
 #[derive(Resource, Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct ClientSettings {
@@ -13,9 +13,13 @@ pub(crate) struct ClientSettings {
     #[serde(default)]
     pub(crate) audio: AudioSettings,
     #[serde(default)]
+    pub(crate) voice: VoiceSettings,
+    #[serde(default)]
     pub(crate) input: InputSettings,
     #[serde(default)]
     pub(crate) hud: HudSettings,
+    #[serde(default)]
+    pub(crate) keybindings: KeyBindings,
 }
 
 impl ClientSettings {
@@ -24,7 +28,9 @@ impl ClientSettings {
         self.audio.music_volume = self.audio.music_volume.clamp(0.0, 1.0);
         self.audio.ui_volume = self.audio.ui_volume.clamp(0.0, 1.0);
         self.audio.sfx_volume = self.audio.sfx_volume.clamp(0.0, 1.0);
+        self.voice = self.voice.sanitized();
         self.input.mouse_sensitivity = self.input.mouse_sensitivity.clamp(0.25, 3.0);
+        self.keybindings = self.keybindings.sanitized();
         self
     }
 }
@@ -139,6 +145,47 @@ impl Default for AudioSettings {
     }
 }
 
+/// Voice-chat tuning the player can dial in from the options panel. Stored on
+/// disk alongside the other [`ClientSettings`] tabs.
+///
+/// Note: the *audible distance* is intentionally NOT a setting. It's a core
+/// gameplay rule — how far your voice carries is part of the game design,
+/// not a personal preference — and lives as a constant on the server-side
+/// voice module so both halves of the system agree.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub(crate) struct VoiceSettings {
+    /// Whether voice transmit is allowed at all. Disabling here shuts off the
+    /// microphone capture thread on the client.
+    #[serde(default = "default_voice_enabled")]
+    pub(crate) enabled: bool,
+    /// Output gain applied to every incoming voice stream. `0.0` is silent,
+    /// `1.0` is unity gain. The per-stream spatial gain is computed at mix
+    /// time and multiplied on top of this.
+    #[serde(default = "default_volume")]
+    pub(crate) output_volume: f32,
+    /// Input gain applied to the microphone before encoding.
+    #[serde(default = "default_volume")]
+    pub(crate) input_volume: f32,
+}
+
+impl Default for VoiceSettings {
+    fn default() -> Self {
+        Self {
+            enabled: default_voice_enabled(),
+            output_volume: default_volume(),
+            input_volume: default_volume(),
+        }
+    }
+}
+
+impl VoiceSettings {
+    fn sanitized(mut self) -> Self {
+        self.output_volume = self.output_volume.clamp(0.0, 1.0);
+        self.input_volume = self.input_volume.clamp(0.0, 1.0);
+        self
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub(crate) struct InputSettings {
     #[serde(default = "default_mouse_sensitivity")]
@@ -185,5 +232,9 @@ fn default_mouse_sensitivity() -> f32 {
 }
 
 fn default_show_fps() -> bool {
+    true
+}
+
+fn default_voice_enabled() -> bool {
     true
 }

@@ -3,6 +3,7 @@ mod scene;
 mod state;
 mod systems;
 mod ui;
+mod voice;
 
 pub(crate) use embedded_assets::asset_path as embedded_asset_path;
 
@@ -11,7 +12,7 @@ use std::net::SocketAddr;
 use anyhow::Result;
 use bevy::{
     diagnostic::FrameTimeDiagnosticsPlugin, prelude::*, transform::TransformSystems,
-    winit::WinitSettings,
+    window::WindowPosition, winit::WinitSettings,
 };
 use bevy_egui::{EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass};
 
@@ -20,26 +21,33 @@ use crate::{
     steam::{OfflineSteamBackend, SteamBackend},
 };
 
+use self::voice::{
+    IncomingVoiceMessage, apply_voice_settings_system, receive_voice_system, setup_voice_system,
+    transmit_voice_system,
+};
+
 use self::{
     scene::{apply_world_scene_system, setup_scene, update_sky_system},
     state::{
         ClientErrorToast, ClientRuntime, ClientSettingsStore, GatherInputState, InventoryUiState,
-        LookState, MenuBackdropVisibility, MenuState, PickupTargetState, RemoteImpactEvent,
-        SaveStore, SessionShutdownTasks, SteamUser, ToastState, ToolSwapState,
+        LookState, MenuBackdropVisibility, MenuState, OptionsUiState, PickupTargetState,
+        RemoteImpactEvent, SaveStore, SessionShutdownTasks, SteamUser, TestModeConfig, ToastState,
+        ToolSwapState,
     },
     systems::{
         AutoConnectRequest, CameraImpactKick, CameraMotionEffects, ClientSystemSet,
         DroppedItemEntities, RemotePlayerEntities, ResourceNodeEntities, app_quit_system,
         apply_display_settings_system, apply_dropped_items_system, apply_held_item_visual_system,
-        apply_resource_nodes_system, apply_snapshot_system, auto_connect_poll_system,
-        auto_connect_start_system, camera_follow_system, center_cursor_on_focus_system,
-        chat_shortcut_system, client_input_system, gameplay_inventory_shortcuts_system,
-        main_menu_music_system, menu_backdrop_camera_system, mouse_look_system,
-        network_tick_system, play_impact_sounds_system, save_client_settings_system,
-        session_shutdown_poll_system, setup_impact_sound_assets, spawn_impact_effects_system,
-        surface_client_error_toasts_system, tick_felling_trees_system, tick_impact_chips_system,
-        tick_resource_node_pop_in_system, toggle_inventory_system, toggle_pause_system,
-        update_cursor_system, update_pickup_target_system, update_tool_swap_state_system,
+        apply_resource_nodes_system, apply_snapshot_system, apply_test_mode_overrides_system,
+        auto_connect_poll_system, auto_connect_start_system, camera_follow_system,
+        center_cursor_on_focus_system, chat_shortcut_system, client_input_system,
+        gameplay_inventory_shortcuts_system, main_menu_music_system, menu_backdrop_camera_system,
+        mouse_look_system, network_tick_system, play_impact_sounds_system,
+        reposition_test_window_system, save_client_settings_system, session_shutdown_poll_system,
+        setup_impact_sound_assets, spawn_impact_effects_system, surface_client_error_toasts_system,
+        tick_felling_trees_system, tick_impact_chips_system, tick_resource_node_pop_in_system,
+        toggle_inventory_system, toggle_pause_system, update_cursor_system,
+        update_pickup_target_system, update_tool_swap_state_system,
     },
     ui::{ButtonSoundRequests, button_sound_system, setup_button_sound_assets, ui_system},
 };
@@ -94,6 +102,11 @@ const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::ImpactEffectsSpawn,
     ClientSystemSet::ImpactEffectsTick,
     ClientSystemSet::NodeDeathTick,
+    ClientSystemSet::VoiceTransmit,
+    ClientSystemSet::VoiceReceive,
+    ClientSystemSet::VoiceSettings,
+    ClientSystemSet::TestModeApply,
+    ClientSystemSet::TestWindowReposition,
 ];
 
 /// Menu-only systems form their own short chain — independent of the main
@@ -130,6 +143,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         Default::default()
     });
     let window_settings = settings.display;
+    let test_mode = TestModeConfig::from_env();
 
     let mut app = App::new();
     if let Some(addr) = auto_connect {
@@ -141,6 +155,8 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .insert_resource(settings_store)
         .insert_resource(settings)
         .insert_resource(MenuState::default())
+        .insert_resource(OptionsUiState::default())
+        .insert_resource(test_mode.clone())
         .insert_resource(MenuBackdropVisibility::default())
         .insert_resource(ClientRuntime::default())
         .insert_resource(SessionShutdownTasks::default())
@@ -166,17 +182,37 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .init_resource::<ButtonSoundRequests>()
         .add_message::<RemoteImpactEvent>()
         .add_message::<ClientErrorToast>()
+        .add_message::<IncomingVoiceMessage>()
         .add_plugins(
             DefaultPlugins.set(WindowPlugin {
+                // `multiplayer-test` overrides the window resolution via
+                // env vars and the actual position is set after the
+                // primary monitor has been queried — see
+                // `reposition_test_window_system`. Trying to centre at
+                // startup would need a screen-size guess and that's exactly
+                // what we'd get wrong on the dev's actual monitor.
                 primary_window: Some(Window {
                     title: "Game".to_owned(),
-                    resolution: (
-                        window_settings.resolution.width,
-                        window_settings.resolution.height,
-                    )
-                        .into(),
+                    resolution: test_mode
+                        .window
+                        .map(|w| (w.width, w.height).into())
+                        .unwrap_or_else(|| {
+                            (
+                                window_settings.resolution.width,
+                                window_settings.resolution.height,
+                            )
+                                .into()
+                        }),
+                    position: WindowPosition::default(),
                     present_mode: window_settings.present_mode(),
-                    mode: window_settings.window_mode(None),
+                    mode: if test_mode.window.is_some() {
+                        // Test windows always come up in plain windowed
+                        // mode so the post-monitor reposition actually
+                        // applies — fullscreen would ignore it.
+                        bevy::window::WindowMode::Windowed
+                    } else {
+                        window_settings.window_mode(None)
+                    },
                     resizable: false,
                     ..default()
                 }),
@@ -200,6 +236,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
     app.add_systems(Startup, setup_scene)
         .add_systems(Startup, setup_button_sound_assets)
         .add_systems(Startup, setup_impact_sound_assets)
+        .add_systems(Startup, setup_voice_system)
         .add_systems(
             EguiPrimaryContextPass,
             (ui_system, button_sound_system).chain(),
@@ -324,6 +361,26 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
             (auto_connect_start_system, auto_connect_poll_system)
                 .chain()
                 .in_set(ClientSystemSet::AutoConnect),
+        )
+        .add_systems(
+            Update,
+            transmit_voice_system.in_set(ClientSystemSet::VoiceTransmit),
+        )
+        .add_systems(
+            Update,
+            receive_voice_system.in_set(ClientSystemSet::VoiceReceive),
+        )
+        .add_systems(
+            Update,
+            apply_voice_settings_system.in_set(ClientSystemSet::VoiceSettings),
+        )
+        .add_systems(
+            Update,
+            apply_test_mode_overrides_system.in_set(ClientSystemSet::TestModeApply),
+        )
+        .add_systems(
+            Update,
+            reposition_test_window_system.in_set(ClientSystemSet::TestWindowReposition),
         )
         .run();
 

@@ -6,9 +6,9 @@ mod text;
 mod tooltip;
 
 pub(super) use buttons::{
-    ButtonKind, ButtonSound, ButtonState, compact_button, compact_button_in_rect,
-    compact_button_in_rect_with_state, compact_button_with_state, game_button, record_click_sound,
-    take_button_sounds,
+    ButtonKind, ButtonSound, ButtonState, button_paint_rest, compact_button,
+    compact_button_in_rect, compact_button_in_rect_with_state, compact_button_with_state,
+    game_button, record_click_sound, take_button_sounds,
 };
 pub(super) use colors::{
     accent, accent_dark, button_fill, button_hover_fill, button_stroke, input_fill, muted_text,

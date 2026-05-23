@@ -25,6 +25,22 @@ const TEST_STEAM_IDS: [u64; 2] = [76_561_197_960_287_001, 76_561_197_960_287_002
 /// it's ready, so on a warm rebuild this typically takes a few hundred ms.
 const SERVER_READY_TIMEOUT: Duration = Duration::from_secs(45);
 
+/// Pixel size of each test window. Compact enough that two fit side-by-side
+/// on a 1920-wide display with comfortable margins, tall enough to fit the
+/// inventory panel without scrolling. Actual on-screen placement is decided
+/// by the client once it can query the real monitor size; see
+/// `reposition_test_window_system`.
+const TEST_WINDOW_WIDTH: u32 = 880;
+const TEST_WINDOW_HEIGHT: u32 = 620;
+/// Horizontal gap (px) between the two test windows.
+const TEST_WINDOW_GAP: i32 = 24;
+/// Distance in meters each test player is pushed away from the world
+/// spawn point so the two characters face each other across a small gap
+/// (≈ 2 × this value). Tuned so they're close enough to see each other's
+/// nameplate/voice indicators and far enough that movement interpolation
+/// is easy to read.
+const TEST_PLAYER_OFFSET_X: f32 = 1.25;
+
 /// Spawn a fresh local server with an ephemeral test world and two client
 /// windows that auto-connect with distinct identities. Blocks until both
 /// clients exit, then shuts down the server.
@@ -55,10 +71,12 @@ pub(super) fn run_multiplayer_test(port: u16, names_override: Option<Vec<String>
     }
 
     println!("multiplayer-test: server ready — launching clients {names:?}");
+    let layouts = test_client_layouts();
     let mut clients = Vec::new();
     for (index, name) in names.iter().enumerate() {
         let steam_id = TEST_STEAM_IDS[index];
-        let child = spawn_client(&exe, bind, name, steam_id)
+        let layout = layouts[index];
+        let child = spawn_client(&exe, bind, name, steam_id, layout)
             .with_context(|| format!("could not spawn test client {name}"))?;
         clients.push(child);
     }
@@ -210,11 +228,55 @@ fn wait_for_tcp_canary(addr: SocketAddr) {
     thread::sleep(Duration::from_millis(150));
 }
 
+/// Per-client side of the test layout: tile index (resolved against the
+/// real monitor on the client side) plus where the player gets pushed
+/// within the world after Welcome.
+#[derive(Debug, Clone, Copy)]
+struct TestClientLayout {
+    /// 0-based index of this client inside the row of test windows.
+    window_index: u32,
+    /// World-space x offset applied to the predicted player controller as
+    /// soon as the snapshot arrives. Positive pushes east, negative west.
+    spawn_offset_x: f32,
+    /// Yaw (radians) the predicted controller is forced to. Used to make
+    /// the two players face each other from boot.
+    spawn_yaw: f32,
+}
+
+/// Side-by-side layout for the two test clients. Windows are described
+/// abstractly (index 0/1 inside a 2-window row); the client resolves the
+/// actual pixel position once it can query the monitor.
+///
+/// Yaw convention matches the live mouse-look code (`look.yaw -= delta.x`
+/// for "mouse moves right"). On this convention:
+/// - yaw = 0 → look toward -Z.
+/// - yaw = +π/2 → look toward +X.
+/// - yaw = -π/2 → look toward -X.
+///
+/// So the player on the -X side (Alpha, offset = -1.25) needs yaw = +π/2
+/// to look toward +X (at Bravo), and Bravo mirrors it with yaw = -π/2.
+fn test_client_layouts() -> [TestClientLayout; 2] {
+    let half_pi = std::f32::consts::FRAC_PI_2;
+    [
+        TestClientLayout {
+            window_index: 0,
+            spawn_offset_x: -TEST_PLAYER_OFFSET_X,
+            spawn_yaw: half_pi,
+        },
+        TestClientLayout {
+            window_index: 1,
+            spawn_offset_x: TEST_PLAYER_OFFSET_X,
+            spawn_yaw: -half_pi,
+        },
+    ]
+}
+
 fn spawn_client(
     exe: &std::path::Path,
     server_addr: SocketAddr,
     name: &str,
     steam_id: u64,
+    layout: TestClientLayout,
 ) -> Result<Child> {
     let mut command = Command::new(exe);
     command
@@ -223,6 +285,21 @@ fn spawn_client(
         .arg(server_addr.to_string())
         .env("GAME_PLAYER_NAME", name)
         .env("GAME_STEAM_ID", steam_id.to_string())
+        // Mirror the `GAME_TEST_*` keys the client reads in
+        // `state::test_mode::TestModeConfig::from_env`. Centralising them
+        // there means a future field only needs to be wired in once and
+        // here.
+        .env("GAME_TEST_WINDOW_WIDTH", TEST_WINDOW_WIDTH.to_string())
+        .env("GAME_TEST_WINDOW_HEIGHT", TEST_WINDOW_HEIGHT.to_string())
+        .env("GAME_TEST_WINDOW_INDEX", layout.window_index.to_string())
+        .env("GAME_TEST_WINDOW_COUNT", "2")
+        .env("GAME_TEST_WINDOW_GAP", TEST_WINDOW_GAP.to_string())
+        .env(
+            "GAME_TEST_SPAWN_OFFSET_X",
+            layout.spawn_offset_x.to_string(),
+        )
+        .env("GAME_TEST_SPAWN_YAW", layout.spawn_yaw.to_string())
+        .env("GAME_TEST_INVENTORY_OPEN", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
@@ -344,5 +421,22 @@ mod tests {
     fn resolved_names_ignores_whitespace_overrides() {
         let names = resolved_names(Some(vec!["   ".to_owned(), "Echo".to_owned()]));
         assert_eq!(names, ["Alpha".to_owned(), "Echo".to_owned()]);
+    }
+
+    #[test]
+    fn test_client_layouts_are_symmetric_and_offsets_oppose() {
+        let [alpha, bravo] = test_client_layouts();
+        // Windows are distinct tile slots; the actual pixel position is
+        // resolved on the client side once the monitor is known.
+        assert_eq!(alpha.window_index, 0);
+        assert_eq!(bravo.window_index, 1);
+
+        // Spawn offsets are equal-and-opposite so the players land
+        // symmetric around the world spawn point.
+        assert!((alpha.spawn_offset_x + bravo.spawn_offset_x).abs() < f32::EPSILON);
+        assert!(alpha.spawn_offset_x < 0.0 && bravo.spawn_offset_x > 0.0);
+
+        // Yaws are also equal-and-opposite — facing each other.
+        assert!((alpha.spawn_yaw + bravo.spawn_yaw).abs() < f32::EPSILON);
     }
 }

@@ -4,11 +4,16 @@ Networking intentionally has one gameplay path with two bootstraps.
 
 Shared runtime:
 - `ClientSession` has one active variant: `ClientSession::Network(Box<LightyearGameSession>)`.
-- Both local singleplayer and direct multiplayer send `ClientMessage` values over Lightyear channels (`Auth`, `Movement`, `Chat`, `Inventory`, `Gather`, `Heartbeat`, `Disconnect`).
-- Both receive `ServerMessage` values from the same host wrapper (`Welcome`, `AuthRejected`, `Kicked`, `PlayerEvent`, `Snapshot`, `Correction`, `Chat`, `ItemMerged`, `Toast`, `Heartbeat`) and apply them through `ClientRuntime`.
-- Each `ClientMessage`/`ServerMessage` declares its delivery preference via `PacketDelivery::Reliable` or `Unreliable`; the protocol module maps that to the right Lightyear channel.
-- `GameServer` owns the authoritative domain state for auth, players, movement state acceptance, inventory, dropped items, resource nodes, chat, snapshots, and save tick state.
+- Both local singleplayer and direct multiplayer send `ClientMessage` values over Lightyear channels (`Auth`, `Movement`, `Chat`, `Inventory`, `Gather`, `Voice`, `Heartbeat`, `Disconnect`).
+- Both receive `ServerMessage` values from the same host wrapper (`Welcome`, `AuthRejected`, `Kicked`, `PlayerEvent`, `Snapshot`, `Correction`, `Chat`, `ItemMerged`, `Toast`, `ResourceImpact`, `WorldTime`, `Voice`, `Heartbeat`) and apply them through `ClientRuntime`.
+- Each `ClientMessage`/`ServerMessage` declares its delivery preference via `PacketDelivery::Reliable`, `Unreliable`, or `UnreliableUnordered`; the protocol module maps that to the right Lightyear channel.
+- `GameServer` owns the authoritative domain state for auth, players, movement state acceptance, inventory, dropped items, resource nodes, chat, snapshots, voice routing, and save tick state.
 - Movement is client-authoritative by design. Clients send predicted `PlayerMovement` state; the server rejects stale or non-finite movement and snapshots the accepted state. This keeps first-person movement responsive at the cost of stronger cheat resistance.
+
+Channels (registered in `src/net/channels.rs`):
+- `ReliableChannel` (`OrderedReliable`, priority 10): auth, chat, inventory, gather, kick, disconnect — anything where dropping or reordering would corrupt domain state.
+- `UnreliableChannel` (`SequencedUnreliable`, priority 5): movement, snapshots, corrections, heartbeats, resource impacts, world-time broadcasts. Sequenced because for these messages a newer value supersedes the older one — playing back a stale movement after a fresher one has arrived is worse than dropping it.
+- `VoiceChannel` (`UnorderedUnreliable`, priority 8): voice frames only. Unordered because each Opus packet contains unique speech — dropping one because it arrived a few milliseconds late produces audible holes. Higher priority than other unreliable traffic so a noisy snapshot stream can't shoulder voice off the wire under load. See [Voice](voice.md) for the rest of the VOIP pipeline.
 
 Singleplayer bootstrap:
 - `ClientSession::start_singleplayer` loads a `WorldSave`, starts `spawn_loopback_server`, and connects the normal Lightyear client to the reserved loopback UDP address.

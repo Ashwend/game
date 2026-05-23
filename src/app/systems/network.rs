@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, prelude::*};
 
 use crate::{
     app::{
@@ -7,9 +7,20 @@ use crate::{
             RemoteImpactEvent, Screen, SessionShutdownTasks, ToastState,
         },
         ui::ButtonSoundRequests,
+        voice::IncomingVoiceMessage,
     },
     protocol::{ResourceImpactKind, ServerMessage, ToastKind, Vec3Net},
 };
+
+/// Fan-out writers for messages the network tick produces — voice frames,
+/// remote impacts, error toasts. Grouped so the system signature stays
+/// readable.
+#[derive(SystemParam)]
+pub(crate) struct NetworkTickWriters<'w> {
+    pub(crate) remote_impacts: MessageWriter<'w, RemoteImpactEvent>,
+    pub(crate) error_toasts: MessageWriter<'w, ClientErrorToast>,
+    pub(crate) voice_messages: MessageWriter<'w, IncomingVoiceMessage>,
+}
 
 pub(crate) fn network_tick_system(
     time: Res<Time>,
@@ -17,8 +28,7 @@ pub(crate) fn network_tick_system(
     mut menu: ResMut<MenuState>,
     mut button_sound_requests: ResMut<ButtonSoundRequests>,
     mut toasts: ResMut<ToastState>,
-    mut remote_impacts: MessageWriter<RemoteImpactEvent>,
-    mut error_toasts: MessageWriter<ClientErrorToast>,
+    mut writers: NetworkTickWriters,
 ) {
     toasts.tick(time.delta_secs());
 
@@ -41,7 +51,7 @@ pub(crate) fn network_tick_system(
         Some(Err(error)) => {
             let text = format!("network error: {error}");
             runtime.push_error_message(text.clone());
-            error_toasts.write(ClientErrorToast::new(text));
+            writers.error_toasts.write(ClientErrorToast::new(text));
             Vec::new()
         }
         None => Vec::new(),
@@ -66,7 +76,9 @@ pub(crate) fn network_tick_system(
             continue;
         }
         if let ServerMessage::AuthRejected { reason } = &message {
-            error_toasts.write(ClientErrorToast::new(format!("auth rejected: {reason}")));
+            writers
+                .error_toasts
+                .write(ClientErrorToast::new(format!("auth rejected: {reason}")));
         }
         if matches!(message, ServerMessage::ItemMerged { .. }) {
             button_sound_requests.push_hover();
@@ -75,7 +87,23 @@ pub(crate) fn network_tick_system(
             toasts.push_message(payload.clone());
         }
         if let ServerMessage::ResourceImpact { position, kind } = &message {
-            remote_impacts.write(remote_impact_event(*position, *kind));
+            writers
+                .remote_impacts
+                .write(remote_impact_event(*position, *kind));
+        }
+        if let ServerMessage::Voice {
+            speaker,
+            sequence,
+            position,
+            frame,
+        } = &message
+        {
+            writers.voice_messages.write(IncomingVoiceMessage {
+                speaker: *speaker,
+                sequence: *sequence,
+                position: *position,
+                frame: frame.clone(),
+            });
         }
         runtime.apply_message(message);
     }

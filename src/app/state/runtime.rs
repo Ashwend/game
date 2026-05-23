@@ -341,6 +341,11 @@ impl ClientRuntime {
             ServerMessage::WorldTime(snapshot) => {
                 self.apply_world_time_snapshot(snapshot);
             }
+            ServerMessage::Voice { .. } => {
+                // Voice frames are dispatched as `IncomingVoiceMessage`
+                // events by the network tick system before this point —
+                // the runtime keeps no per-frame voice history.
+            }
             ServerMessage::Heartbeat => {}
         }
     }

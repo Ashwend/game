@@ -7,9 +7,9 @@ use bevy::{
 
 use crate::{
     app::state::{
-        ClientErrorToast, ClientRuntime, ErrorToastSink, GatherInputState, ImpactEffectKind,
-        MenuState, PendingAudioCue, PendingImpactEffect, PickupTargetState, SwingAudioCue,
-        SwingImpact, ToolSwapState,
+        ClientErrorToast, ClientRuntime, ClientSettings, ErrorToastSink, GatherInputState,
+        ImpactEffectKind, KeyAction, MenuState, PendingAudioCue, PendingImpactEffect,
+        PickupTargetState, SwingAudioCue, SwingImpact, ToolSwapState,
     },
     items::{ToolKind, ToolProfile, item_definition},
     protocol::{
@@ -32,6 +32,7 @@ pub(crate) struct GameplayInventoryShortcutsParams<'w, 's> {
     menu: Res<'w, MenuState>,
     pickup_target: Res<'w, PickupTargetState>,
     swap_state: Res<'w, ToolSwapState>,
+    settings: Res<'w, ClientSettings>,
     camera_kick: ResMut<'w, crate::app::systems::CameraImpactKick>,
     error_toasts: MessageWriter<'w, ClientErrorToast>,
     primary_window: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
@@ -45,7 +46,7 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
     }
 
     for slot in 0..ACTIONBAR_SLOT_COUNT {
-        if actionbar_key_pressed(&params.keys, slot) {
+        if actionbar_key_pressed(&params.keys, &params.settings, slot) {
             send_inventory_command(
                 &mut params.runtime,
                 &mut params.error_toasts,
@@ -69,7 +70,11 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
         );
     }
 
-    if params.keys.just_pressed(KeyCode::KeyQ) {
+    if params
+        .settings
+        .keybindings
+        .just_pressed(KeyAction::DropItem, &params.keys)
+    {
         let Some(active_actionbar_slot) = params
             .runtime
             .local_player()
@@ -88,7 +93,10 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
         );
     }
 
-    if params.keys.just_pressed(KeyCode::KeyE)
+    if params
+        .settings
+        .keybindings
+        .just_pressed(KeyAction::PickUp, &params.keys)
         && let Some(dropped_item_id) = params.pickup_target.dropped_item_id
     {
         send_inventory_command(
@@ -240,28 +248,31 @@ fn swing_spray_direction(runtime: &ClientRuntime, anchor: Vec3) -> Vec3 {
     }
 }
 
-/// Direct slot → digit-key map. Kept as a const array (rather than a
-/// `match` ladder) so the table stays in lockstep with `ACTIONBAR_SLOT_COUNT`
-/// when slot counts change. The build will fail loudly via the
-/// `ACTIONBAR_KEYS.len() == ACTIONBAR_SLOT_COUNT` const assertion below.
-const ACTIONBAR_KEYS: [KeyCode; ACTIONBAR_SLOT_COUNT] = [
-    KeyCode::Digit1,
-    KeyCode::Digit2,
-    KeyCode::Digit3,
-    KeyCode::Digit4,
-    KeyCode::Digit5,
-    KeyCode::Digit6,
-    KeyCode::Digit7,
-    KeyCode::Digit8,
-    KeyCode::Digit9,
+/// Direct slot → keybinding map. Looks the action up by slot index so the
+/// table stays in lockstep with `ACTIONBAR_SLOT_COUNT` and the bindings the
+/// player can rebind through the options panel.
+const ACTIONBAR_ACTIONS: [KeyAction; ACTIONBAR_SLOT_COUNT] = [
+    KeyAction::ActionbarSlot1,
+    KeyAction::ActionbarSlot2,
+    KeyAction::ActionbarSlot3,
+    KeyAction::ActionbarSlot4,
+    KeyAction::ActionbarSlot5,
+    KeyAction::ActionbarSlot6,
+    KeyAction::ActionbarSlot7,
+    KeyAction::ActionbarSlot8,
+    KeyAction::ActionbarSlot9,
 ];
 
-const _: () = assert!(ACTIONBAR_KEYS.len() == ACTIONBAR_SLOT_COUNT);
+const _: () = assert!(ACTIONBAR_ACTIONS.len() == ACTIONBAR_SLOT_COUNT);
 
-fn actionbar_key_pressed(keys: &ButtonInput<KeyCode>, slot: usize) -> bool {
-    ACTIONBAR_KEYS
+fn actionbar_key_pressed(
+    keys: &ButtonInput<KeyCode>,
+    settings: &ClientSettings,
+    slot: usize,
+) -> bool {
+    ACTIONBAR_ACTIONS
         .get(slot)
-        .is_some_and(|code| keys.just_pressed(*code))
+        .is_some_and(|action| settings.keybindings.just_pressed(*action, keys))
 }
 
 pub(crate) fn send_inventory_command(

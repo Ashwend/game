@@ -24,6 +24,11 @@ gameplay path, two ways in: loopback singleplayer and direct UDP multiplayer.
   animation when you change tools.
 - Talk to other players. Enter or `T` opens chat; messages run through the
   same reliable channel as auth and inventory commands.
+- Hear other players. Hold `V` (rebindable) for push-to-talk; Opus-encoded
+  voice is server-proxied and attenuates with distance so peers within
+  ~50 m can hear you with proper stereo panning. A pulsing dot beside
+  each speaker's nameplate shows who's talking right now. See
+  [docs/voice.md](docs/voice.md).
 - See feedback. Toasts surface pickup totals, gather events, and other
   server-driven notifications; the HUD shows health and the actionbar.
 - Save and resume. Each world is a compressed binary save that captures
@@ -42,6 +47,11 @@ gameplay path, two ways in: loopback singleplayer and direct UDP multiplayer.
   spawns a loopback host on an ephemeral port and connects the same client
   to it; dedicated multiplayer reuses the exact same host wrapper.
 - **Rapier3D** for dropped-item physics bodies.
+- **cpal + libopus** for the voice chat pipeline. Mic capture and speaker
+  output run on dedicated worker threads (cpal `Stream` is `!Send` on
+  macOS) and ship Opus-encoded 20 ms frames over a dedicated
+  `UnorderedUnreliable` Lightyear channel. Requires the system libopus
+  (`brew install opus` on macOS / `apt install libopus-dev` on Linux).
 - **postcard + zstd** for compact, versioned world saves on disk.
 - **Custom first-person controller** with substep collision, jump
   buffering, coyote time, and reconciliation hooks.
@@ -64,6 +74,11 @@ gameplay path, two ways in: loopback singleplayer and direct UDP multiplayer.
   announcement to a running dedicated server.
 - `./cli admin --socket <path> shutdown [--reason ...]` — kick all
   clients and gracefully stop a dedicated server.
+- `./cli multiplayer-test [Alpha Bravo]` — one-shot helper that spawns a
+  dedicated server plus two client windows tiled side-by-side on the
+  primary monitor with the players already facing each other and the
+  inventory open. The fastest way to eyeball voice, interpolation, and
+  shared-state behaviour. See [docs/multiplayer-testing.md](docs/multiplayer-testing.md).
 - `./cli check` / `./cli test` / `./cli lint` — `cargo check --all-targets`,
   tests, and rustfmt + clippy.
 - `./cli audit` — run `cargo audit` against the RustSec advisory database
