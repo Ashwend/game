@@ -2,17 +2,15 @@ use std::collections::HashMap;
 
 use crate::{
     controller::{BlockGrid, PlayerController},
-    items::{can_pick_up, normalize_stack, stack_limit},
     protocol::{
-        ACTIONBAR_SLOT_COUNT, CHAT_BUBBLE_DURATION_SECONDS, ChatMessage, ClientId, ClientMessage,
-        DroppedItemId, DroppedWorldItem, InventoryCommand, ItemStack, PlayerInventoryState,
-        ResourceNodeId, ResourceNodeState, SERVER_TICK_RATE_HZ, ServerMessage, SteamId, Vec3Net,
-        sanitize_chat,
+        CHAT_BUBBLE_DURATION_SECONDS, ChatMessage, ClientId, ClientMessage, DroppedItemId,
+        PlayerInventoryState, ResourceNodeId, ResourceNodeState, SERVER_TICK_RATE_HZ,
+        ServerMessage, SteamId, Vec3Net, sanitize_chat,
     },
-    save::{PersistedPlayer, WorldSave, WorldStateSave},
+    save::{PersistedPlayer, WorldSave},
     steam::AuthMode,
     world::WorldData,
-    world_time::{WorldTime, WorldTimeSnapshot},
+    world_time::WorldTime,
 };
 
 const CLIENT_STALE_TIMEOUT_TICKS: u64 = 20 * 10;
@@ -34,20 +32,17 @@ mod connection;
 mod dropped_items;
 mod inventory;
 mod movement;
+mod persistence;
 mod resource_nodes;
 mod toasts;
 mod voice;
+mod world_time;
 
 pub use voice::VOICE_AUDIBLE_RANGE;
 
 use self::{
-    dropped_items::{
-        DROPPED_ITEM_MERGE_INTERVAL_TICKS, DroppedItemBody, DroppedItemPhysics,
-        nearby_dropped_item_pairs, yaw_rotation,
-    },
-    inventory::{add_stack_to_inventory, move_stack, offset_actionbar_slot, remove_stack},
-    movement::{accept_client_movement, drop_position, drop_velocity, player_eye_position},
-    toasts::{inventory_full_toast_envelopes, item_acquired_toast_envelopes},
+    dropped_items::{DROPPED_ITEM_MERGE_INTERVAL_TICKS, DroppedItemBody, DroppedItemPhysics},
+    movement::accept_client_movement,
 };
 
 #[derive(Debug, Clone)]
@@ -65,6 +60,13 @@ pub enum DeliveryTarget {
     /// client already produced the effect locally via prediction and a
     /// second copy from the server would double-trigger it.
     BroadcastExcept(ClientId),
+    /// Tear down the underlying transport session for this client. Emitted
+    /// after a server-initiated `disconnect()` so the host layer can insert
+    /// Lightyear's `Disconnecting` component and clear its connection map.
+    /// Without this, kicked or stale clients hold their entity until the
+    /// netcode timeout, and reconnects would be rejected as "already
+    /// connected". The `message` field on the carrying envelope is ignored.
+    Disconnect(ClientId),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -175,74 +177,6 @@ impl GameServer {
         }
     }
 
-    pub fn world_time(&self) -> WorldTime {
-        self.world_time
-    }
-
-    /// Builds a fresh wire snapshot of the day/night clock. Used by both
-    /// the routine broadcast and the immediate post-admin-change broadcast.
-    pub(crate) fn world_time_snapshot(&self) -> WorldTimeSnapshot {
-        WorldTimeSnapshot::from_time(&self.world_time, self.tick)
-    }
-
-    /// Admin path: jump the clock to a specific seconds-of-day. Resets the
-    /// routine broadcast cadence so the immediate envelope returned by the
-    /// caller carries the freshest value.
-    pub(crate) fn set_world_time_seconds(&mut self, seconds_of_day: f32) {
-        self.world_time.set_seconds(seconds_of_day);
-        self.last_world_time_broadcast_tick = self.tick;
-    }
-
-    /// Admin path: change the cycle speed. Same routine-broadcast reset as
-    /// `set_world_time_seconds` so clients aren't drifting against the
-    /// stale multiplier for up to a full broadcast interval.
-    pub(crate) fn set_world_time_multiplier(&mut self, multiplier: f32) {
-        self.world_time.set_multiplier(multiplier);
-        self.last_world_time_broadcast_tick = self.tick;
-    }
-
-    pub fn world_save(&self) -> WorldSave {
-        let mut save = self.save.clone();
-        let mut persisted = self.persisted_players.clone();
-        // Capture any currently connected players' live state before writing.
-        for client in self.clients.values() {
-            persisted.insert(client.steam_id, persisted_player_from(client));
-        }
-        let mut players = persisted.into_values().collect::<Vec<_>>();
-        players.sort_by_key(|player| player.steam_id);
-
-        let mut dropped_items = self
-            .dropped_items
-            .values()
-            .map(|body| body.item.clone())
-            .collect::<Vec<_>>();
-        dropped_items.sort_by_key(|item| item.id);
-
-        let mut resource_nodes = self.resource_nodes.values().cloned().collect::<Vec<_>>();
-        resource_nodes.sort_by_key(|node| node.id);
-
-        save.state = WorldStateSave {
-            last_authoritative_tick: self.tick,
-            players,
-            dropped_items,
-            resource_nodes: Some(resource_nodes),
-            next_dropped_item_id: self.next_dropped_item_id,
-            next_client_id: self.next_client_id,
-            next_resource_node_id: self.next_resource_node_id,
-            world_time_seconds_of_day: self.world_time.seconds_of_day,
-            world_time_multiplier: self.world_time.multiplier,
-        };
-        save
-    }
-
-    pub(super) fn take_persisted_player(&mut self, steam_id: SteamId) -> Option<PersistedPlayer> {
-        self.persisted_players.remove(&steam_id)
-    }
-
-    pub(super) fn remember_player(&mut self, player: PersistedPlayer) {
-        self.persisted_players.insert(player.steam_id, player);
-    }
-
     pub fn receive(&mut self, client_id: ClientId, message: ClientMessage) -> Vec<ServerEnvelope> {
         self.mark_client_seen(client_id);
 
@@ -299,27 +233,6 @@ impl GameServer {
             .collect()
     }
 
-    pub fn kick_all(&mut self, reason: impl Into<String>) -> Vec<ServerEnvelope> {
-        let reason = reason.into();
-        let client_ids = self.clients.keys().copied().collect::<Vec<_>>();
-        let mut envelopes = client_ids
-            .iter()
-            .copied()
-            .map(|client_id| ServerEnvelope {
-                target: DeliveryTarget::Client(client_id),
-                message: ServerMessage::Kicked {
-                    reason: reason.clone(),
-                },
-            })
-            .collect::<Vec<_>>();
-
-        for client_id in client_ids {
-            envelopes.extend(self.disconnect(client_id));
-        }
-
-        envelopes
-    }
-
     pub fn tick(&mut self, delta_seconds: f32) -> Vec<ServerEnvelope> {
         self.tick += 1;
         self.save.state.last_authoritative_tick = self.tick;
@@ -373,232 +286,6 @@ impl GameServer {
             {
                 client.chat_bubble = None;
             }
-        }
-    }
-
-    fn mark_client_seen(&mut self, client_id: ClientId) {
-        if let Some(client) = self.clients.get_mut(&client_id) {
-            client.last_seen_tick = self.tick;
-        }
-    }
-
-    fn disconnect_stale_clients(&mut self) -> Vec<ServerEnvelope> {
-        let stale_client_ids = self
-            .clients
-            .values()
-            .filter(|client| {
-                self.tick.saturating_sub(client.last_seen_tick) > CLIENT_STALE_TIMEOUT_TICKS
-            })
-            .map(|client| client.client_id)
-            .collect::<Vec<_>>();
-
-        stale_client_ids
-            .into_iter()
-            .flat_map(|client_id| self.disconnect(client_id))
-            .collect()
-    }
-
-    fn apply_inventory_command(
-        &mut self,
-        client_id: ClientId,
-        command: InventoryCommand,
-    ) -> Vec<ServerEnvelope> {
-        match command {
-            InventoryCommand::Move { from, to, quantity } => {
-                if let Some(client) = self.clients.get_mut(&client_id) {
-                    move_stack(&mut client.inventory, from, to, quantity);
-                }
-                Vec::new()
-            }
-            InventoryCommand::Drop { from, quantity } => {
-                let Some((stack, position, velocity, yaw)) =
-                    self.clients.get_mut(&client_id).and_then(|client| {
-                        remove_stack(&mut client.inventory, from, quantity).map(|stack| {
-                            (
-                                stack,
-                                drop_position(&client.controller),
-                                drop_velocity(&client.controller),
-                                client.controller.yaw,
-                            )
-                        })
-                    })
-                else {
-                    return Vec::new();
-                };
-                self.spawn_dropped_item(stack, position, velocity, yaw);
-                Vec::new()
-            }
-            InventoryCommand::PickUp { dropped_item_id } => {
-                self.pick_up_dropped_item(client_id, dropped_item_id)
-            }
-            InventoryCommand::SelectActionbarSlot { slot } => {
-                if slot < ACTIONBAR_SLOT_COUNT
-                    && let Some(client) = self.clients.get_mut(&client_id)
-                {
-                    client.inventory.active_actionbar_slot = slot;
-                }
-                Vec::new()
-            }
-            InventoryCommand::SelectActionbarOffset { offset } => {
-                if let Some(client) = self.clients.get_mut(&client_id) {
-                    client.inventory.active_actionbar_slot =
-                        offset_actionbar_slot(client.inventory.active_actionbar_slot, offset);
-                }
-                Vec::new()
-            }
-        }
-    }
-
-    fn spawn_dropped_item(
-        &mut self,
-        stack: ItemStack,
-        position: Vec3Net,
-        velocity: Vec3Net,
-        yaw: f32,
-    ) {
-        let Some(stack) = normalize_stack(&stack) else {
-            return;
-        };
-        let id = self.next_dropped_item_id;
-        self.next_dropped_item_id += 1;
-        let physics_body = self
-            .dropped_item_physics
-            .spawn_body(position, velocity, yaw);
-        self.dropped_items.insert(
-            id,
-            DroppedItemBody {
-                item: DroppedWorldItem {
-                    id,
-                    stack,
-                    position,
-                    yaw,
-                    rotation: yaw_rotation(yaw),
-                },
-                body_handle: physics_body.body_handle,
-            },
-        );
-    }
-
-    fn pick_up_dropped_item(
-        &mut self,
-        client_id: ClientId,
-        dropped_item_id: DroppedItemId,
-    ) -> Vec<ServerEnvelope> {
-        let Some(item) = self
-            .dropped_items
-            .get(&dropped_item_id)
-            .map(|body| body.item.clone())
-        else {
-            return Vec::new();
-        };
-        let Some(client) = self.clients.get(&client_id) else {
-            return Vec::new();
-        };
-        if !can_pick_up(
-            player_eye_position(client.controller.position),
-            client.controller.yaw,
-            client.controller.pitch,
-            &item,
-        ) {
-            return Vec::new();
-        }
-
-        let Some(client) = self.clients.get_mut(&client_id) else {
-            return Vec::new();
-        };
-        let requested = item.stack.quantity;
-        let remainder = add_stack_to_inventory(&mut client.inventory, item.stack.clone());
-        let accepted = match &remainder {
-            Some(rem) => requested.saturating_sub(rem.quantity),
-            None => requested,
-        };
-        if remainder.is_none()
-            && let Some(body) = self.dropped_items.remove(&dropped_item_id)
-        {
-            self.dropped_item_physics.remove_body(body.body_handle);
-        }
-        if accepted == 0 {
-            return inventory_full_toast_envelopes(client_id);
-        }
-        item_acquired_toast_envelopes(client_id, &item.stack.item_id, accepted)
-    }
-
-    fn merge_nearby_dropped_items(&mut self) -> Vec<(crate::items::ItemId, u16)> {
-        // Returns the interned `ItemId` (not a fresh `String`) so the
-        // resulting `ServerMessage::ItemMerged` doesn't allocate per merge.
-        let mut merges = Vec::new();
-        for (first_id, second_id) in nearby_dropped_item_pairs(&self.dropped_items) {
-            if let Some(merge) = self.merge_dropped_item_pair(first_id, second_id) {
-                merges.push(merge);
-            }
-        }
-        merges
-    }
-
-    fn merge_dropped_item_pair(
-        &mut self,
-        first_id: DroppedItemId,
-        second_id: DroppedItemId,
-    ) -> Option<(crate::items::ItemId, u16)> {
-        // Compute the merge up-front from immutable reads so we never have
-        // to remove-then-reinsert when a validation step fails. Once `moved`
-        // is finalised the mutation is straight-through.
-        let (target_id, source_id) = self.merge_target_and_source(first_id, second_id)?;
-        let (limit, target_quantity, source_quantity) = {
-            let target = self.dropped_items.get(&target_id)?;
-            let source = self.dropped_items.get(&source_id)?;
-            let limit = stack_limit(&target.item.stack.item_id)?;
-            (
-                limit,
-                target.item.stack.quantity,
-                source.item.stack.quantity,
-            )
-        };
-        let moved = limit.saturating_sub(target_quantity).min(source_quantity);
-        if moved == 0 {
-            return None;
-        }
-
-        let item_id = {
-            let target = self.dropped_items.get_mut(&target_id)?;
-            target.item.stack.quantity += moved;
-            target.item.stack.item_id.clone()
-        };
-
-        let drain_source = {
-            let source = self.dropped_items.get_mut(&source_id)?;
-            source.item.stack.quantity -= moved;
-            source.item.stack.quantity == 0
-        };
-        if drain_source && let Some(body) = self.dropped_items.remove(&source_id) {
-            self.dropped_item_physics.remove_body(body.body_handle);
-        }
-
-        Some((item_id, moved))
-    }
-
-    fn merge_target_and_source(
-        &self,
-        first_id: DroppedItemId,
-        second_id: DroppedItemId,
-    ) -> Option<(DroppedItemId, DroppedItemId)> {
-        let first = self.dropped_items.get(&first_id)?;
-        let second = self.dropped_items.get(&second_id)?;
-        if first.item.stack.item_id != second.item.stack.item_id {
-            return None;
-        }
-
-        let limit = stack_limit(&first.item.stack.item_id)?;
-        let first_room = limit.saturating_sub(first.item.stack.quantity);
-        let second_room = limit.saturating_sub(second.item.stack.quantity);
-        match (first_room > 0, second_room > 0) {
-            (false, false) => None,
-            (true, false) => Some((first_id, second_id)),
-            (false, true) => Some((second_id, first_id)),
-            (true, true) if first.item.stack.quantity >= second.item.stack.quantity => {
-                Some((first_id, second_id))
-            }
-            (true, true) => Some((second_id, first_id)),
         }
     }
 }

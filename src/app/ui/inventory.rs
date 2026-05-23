@@ -2,7 +2,7 @@ mod drag;
 mod pickup;
 mod slot;
 
-use bevy_egui::egui::{self, Align2, Color32, Rect, Sense, Stroke};
+use bevy_egui::egui::{self, Align2, Color32, Stroke};
 
 use crate::{
     app::state::{ClientRuntime, ErrorToastSink, InventoryUiState, MenuState, PickupTargetState},
@@ -14,7 +14,7 @@ use self::{
     pickup::pickup_tooltip,
     slot::{SLOT_SIZE, draw_slot, slot_stack},
 };
-use super::theme;
+use super::{modal::backdrop_layer, theme};
 
 const SLOT_GAP: f32 = 6.0;
 const INVENTORY_COLUMNS: usize = 10;
@@ -58,19 +58,12 @@ pub(super) fn inventory_ui(
 }
 
 fn inventory_backdrop(ctx: &egui::Context) {
-    let screen_rect = ctx.content_rect();
-    egui::Area::new("inventory_backdrop".into())
-        .order(egui::Order::Middle)
-        .fixed_pos(screen_rect.min)
-        .show(ctx, |ui| {
-            let local_rect = Rect::from_min_size(egui::Pos2::ZERO, screen_rect.size());
-            ui.allocate_rect(local_rect, Sense::click());
-            ui.painter().rect_filled(
-                local_rect,
-                0.0,
-                Color32::from_rgba_unmultiplied(1, 3, 7, 190),
-            );
-        });
+    let _ = backdrop_layer(
+        ctx,
+        "inventory_backdrop",
+        egui::Order::Middle,
+        Color32::from_rgba_unmultiplied(1, 3, 7, 190),
+    );
 }
 
 fn draw_inventory_panel(

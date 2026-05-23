@@ -77,14 +77,14 @@ case "$cmd" in
     ./target/debug/game multiplayer-test "$@"
     ;;
   check)
-    cargo check --all-targets
+    cargo check --locked --all-targets
     ;;
   test)
-    cargo test --all-targets
+    cargo test --locked --all-targets
     ;;
   lint)
     cargo fmt --all -- --check
-    cargo clippy --all-targets --all-features -- -D warnings
+    cargo clippy --locked --all-targets --all-features -- -D warnings
     ;;
   audit)
     if ! cargo audit --version >/dev/null 2>&1; then
@@ -102,7 +102,7 @@ case "$cmd" in
     fi
     ;;
   build)
-    cargo build "$@"
+    cargo build --locked "$@"
     ;;
   publish)
     rm -rf builds

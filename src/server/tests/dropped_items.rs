@@ -60,6 +60,48 @@ fn nearby_dropped_items_merge_on_server_interval() {
 }
 
 #[test]
+fn full_stack_does_not_oscillate_with_partial_neighbour() {
+    // TEST_ORE_ID has a stack limit of 20. Drop a full 20 next to a partial
+    // 8 within merge range and tick well past the merge interval. The pair
+    // should stay as 20 + 8 forever (no partial merge → no flip). Before
+    // the partial-merge guard this oscillated 20+8 ↔ 8+20 every merge tick.
+    let mut server = server();
+    server.spawn_dropped_item(
+        ItemStack::new(TEST_ORE_ID, 20),
+        Vec3Net::new(0.0, DROPPED_ITEM_RADIUS, -2.0),
+        Vec3Net::ZERO,
+        0.0,
+    );
+    server.spawn_dropped_item(
+        ItemStack::new(TEST_ORE_ID, 8),
+        Vec3Net::new(DROPPED_ITEM_MERGE_RADIUS * 0.85, DROPPED_ITEM_RADIUS, -2.0),
+        Vec3Net::ZERO,
+        0.0,
+    );
+
+    let mut envelopes = Vec::new();
+    for _ in 0..DROPPED_ITEM_MERGE_INTERVAL_TICKS * 4 {
+        envelopes.extend(server.tick(1.0 / SERVER_TICK_RATE_HZ));
+    }
+
+    let snapshot = server.snapshot();
+    assert_eq!(snapshot.dropped_items.len(), 2);
+    let mut quantities = snapshot
+        .dropped_items
+        .iter()
+        .map(|item| item.stack.quantity)
+        .collect::<Vec<_>>();
+    quantities.sort_unstable();
+    assert_eq!(quantities, vec![8, 20]);
+    assert!(
+        !envelopes
+            .iter()
+            .any(|envelope| matches!(envelope.message, ServerMessage::ItemMerged { .. })),
+        "no ItemMerged envelope should be emitted when the source can't be fully absorbed"
+    );
+}
+
+#[test]
 fn dropped_items_outside_merge_radius_stay_separate() {
     let mut server = server();
     server.spawn_dropped_item(

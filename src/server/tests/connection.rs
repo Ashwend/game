@@ -161,6 +161,13 @@ fn silent_clients_are_disconnected_after_timeout() {
         Some(PlayerEvent::Left { client_id: left_id, name })
             if *left_id == client_id && name == "Host"
     ));
+    assert!(
+        envelopes.iter().any(|envelope| matches!(
+            envelope.target,
+            DeliveryTarget::Disconnect(target_id) if target_id == client_id
+        )),
+        "stale-client eviction must emit a transport-level Disconnect so Lightyear tears the session down"
+    );
     assert!(server.snapshot().players.is_empty());
     assert!(
         server
@@ -200,13 +207,31 @@ fn kick_all_sends_reason_before_disconnects() {
 
     let envelopes = server.kick_all("Server restart");
 
-    assert!(matches!(
-        &envelopes[0],
-        ServerEnvelope {
-            target: DeliveryTarget::Client(target_id),
-            message: ServerMessage::Kicked { reason },
-        } if *target_id == client_id && reason == "Server restart"
-    ));
+    let kicked_index = envelopes
+        .iter()
+        .position(|envelope| {
+            matches!(
+                envelope,
+                ServerEnvelope {
+                    target: DeliveryTarget::Client(target_id),
+                    message: ServerMessage::Kicked { reason },
+                } if *target_id == client_id && reason == "Server restart"
+            )
+        })
+        .expect("Kicked envelope should be emitted for the kicked client");
+    let disconnect_index = envelopes
+        .iter()
+        .position(|envelope| {
+            matches!(
+                envelope.target,
+                DeliveryTarget::Disconnect(target_id) if target_id == client_id
+            )
+        })
+        .expect("DeliveryTarget::Disconnect envelope should be emitted so the host layer can tear down the transport session");
+    assert!(
+        kicked_index < disconnect_index,
+        "Kicked envelope must precede the transport-level Disconnect so the client sees the reason before the connection drops"
+    );
     assert!(envelopes.iter().any(|envelope| {
         matches!(
             &envelope.message,

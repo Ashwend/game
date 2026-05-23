@@ -120,9 +120,61 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  verify_quality_gate:
+    name: Verify Quality Gate is green on base_sha
+    needs: prepare
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+    steps:
+      - name: Require successful Quality Gate run on base_sha
+        run: |
+          set -euo pipefail
+          # The release pipeline builds and ships whatever `base_sha` points
+          # to. Without this gate, a workflow_dispatch could publish a
+          # release of a SHA whose Quality Gate is still red (or never ran).
+          # Auto-deploy then ships the broken artifact to the live server.
+          #
+          # Poll the Actions API for a Quality Gate run on this exact SHA
+          # and require it to have finished with `conclusion=success`. The
+          # short retry loop covers the case where Quality Gate is still
+          # queued or running for a freshly-pushed commit.
+          for attempt in 1 2 3 4 5 6; do
+            payload="$(gh api \
+              -X GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/quality-gate.yml/runs" \
+              -f head_sha="${BASE_SHA}" \
+              -f per_page=10 || true)"
+
+            status="$(printf '%s' "${payload}" | jq -r \
+              '[.workflow_runs[]?] | sort_by(.run_started_at) | reverse | .[0].status // empty')"
+            conclusion="$(printf '%s' "${payload}" | jq -r \
+              '[.workflow_runs[]?] | sort_by(.run_started_at) | reverse | .[0].conclusion // empty')"
+
+            if [ "${status}" = "completed" ] && [ "${conclusion}" = "success" ]; then
+              echo "Quality Gate is green on ${BASE_SHA}"
+              exit 0
+            fi
+
+            if [ "${status}" = "completed" ] && [ -n "${conclusion}" ] && [ "${conclusion}" != "success" ]; then
+              echo "Quality Gate for ${BASE_SHA} concluded with '${conclusion}'; refusing to ship" >&2
+              exit 1
+            fi
+
+            echo "Quality Gate run for ${BASE_SHA} status='${status:-unknown}' conclusion='${conclusion:-none}'; retrying (${attempt}/6)..."
+            sleep 30
+          done
+
+          echo "No completed Quality Gate run found for ${BASE_SHA} after waiting." >&2
+          echo "Ensure Quality Gate has run successfully on the commit you are releasing before retrying." >&2
+          exit 1
+
   build:
     name: Build ${{ matrix.label }}
-    needs: prepare
+    needs:
+      - prepare
+      - verify_quality_gate
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -172,7 +224,36 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y g++ pkg-config libx11-dev libasound2-dev libudev-dev libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev
+          sudo apt-get install -y g++ pkg-config libx11-dev libasound2-dev libudev-dev libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev libopus-dev
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        # The audiopus_sys build script tries pkg-config on cfg(unix) and
+        # falls back to building Opus from its bundled CMakeLists otherwise.
+        # CMake 4.x on the runners refuses that bundled build because the
+        # vendored CMakeLists declares a pre-3.5 minimum. Install opus via
+        # brew and pin PKG_CONFIG_PATH so audiopus_sys finds it first.
+        run: |
+          brew install opus
+          echo "PKG_CONFIG_PATH=$(brew --prefix opus)/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Install Windows dependencies (vcpkg opus)
+        if: runner.os == 'Windows'
+        # `audiopus_sys` only checks pkg-config on `cfg(unix)`, so on Windows
+        # MSVC it falls through to building Opus from its bundled CMakeLists,
+        # which now fails because CMake 4.x removed compatibility with the
+        # < 3.5 `cmake_minimum_required` it declares. Install a pre-built
+        # opus via vcpkg and point audiopus_sys at it via `OPUS_LIB_DIR` so
+        # the bundled cmake build is skipped entirely. Static (`-static-md`)
+        # so the shipped binary doesn't need an opus.dll alongside it.
+        shell: bash
+        run: |
+          "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install opus:x64-windows-static-md
+          opus_root="$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md"
+          # vcpkg ships release artifacts under lib/ and debug ones under
+          # debug/lib/. Cargo's release profile only needs the former.
+          echo "OPUS_LIB_DIR=${opus_root}/lib" >> "$GITHUB_ENV"
+          echo "OPUS_STATIC=1" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
         run: rustup toolchain install --profile minimal --target "${{ matrix.target }}"

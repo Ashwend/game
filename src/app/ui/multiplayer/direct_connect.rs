@@ -10,7 +10,7 @@ use bevy_egui::egui;
 use crate::{
     app::state::{
         ClientRuntime, DirectConnectAttempt, DirectConnectDialog, DirectConnectResult,
-        LoadingSplash, LoadingSplashKind, MenuState, Screen, SteamUser,
+        LoadingSplash, LoadingSplashKind, MenuState, SteamUser,
     },
     net::ClientSession,
 };
@@ -264,15 +264,7 @@ fn finish_direct_connect(
             runtime.start_session(session, None);
             menu.multiplayer_addr = addr.to_string();
             menu.direct_connect = None;
-            menu.screen = Screen::InGame;
-            menu.pause_open = false;
-            menu.pause_options_open = false;
-            menu.chat_open = false;
-            menu.chat_focus_pending = false;
-            menu.status = None;
-            if let Some(splash) = menu.loading_splash.as_mut() {
-                splash.ready = true;
-            }
+            menu.enter_in_game();
         }
         Err(error) => {
             if let Some(dialog) = menu.direct_connect.as_mut() {
@@ -288,6 +280,7 @@ fn finish_direct_connect(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::state::Screen;
 
     fn raw_input_with_events(events: Vec<egui::Event>) -> egui::RawInput {
         egui::RawInput {

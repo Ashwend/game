@@ -10,8 +10,8 @@ use crate::{
 };
 
 use super::{
-    DeliveryTarget, GameServer, ServerClient, ServerEnvelope, inventory::starting_inventory,
-    movement::clean_player_name, persisted_player_from,
+    CLIENT_STALE_TIMEOUT_TICKS, DeliveryTarget, GameServer, ServerClient, ServerEnvelope,
+    inventory::starting_inventory, movement::clean_player_name, persisted_player_from,
 };
 
 impl GameServer {
@@ -119,10 +119,21 @@ impl GameServer {
         let name = client.name;
         self.remember_player(persisted);
 
-        vec![ServerEnvelope {
-            target: DeliveryTarget::Broadcast,
-            message: ServerMessage::PlayerEvent(PlayerEvent::Left { client_id, name }),
-        }]
+        // The trailing Disconnect envelope signals the host transport layer
+        // to insert Lightyear's `Disconnecting` and drop the entity↔client
+        // mapping. The carried message is ignored at routing time but kept
+        // legible for logs in case an envelope dump is dredged out of a bug
+        // report.
+        vec![
+            ServerEnvelope {
+                target: DeliveryTarget::Broadcast,
+                message: ServerMessage::PlayerEvent(PlayerEvent::Left { client_id, name }),
+            },
+            ServerEnvelope {
+                target: DeliveryTarget::Disconnect(client_id),
+                message: ServerMessage::Heartbeat,
+            },
+        ]
     }
 
     /// Snapshot intended for `for_client` — only that client's player gets
@@ -189,5 +200,48 @@ impl GameServer {
 
     fn is_admin(&self, steam_id: SteamId) -> bool {
         self.settings.singleplayer_host == Some(steam_id) || self.save.admins.contains(&steam_id)
+    }
+
+    pub fn kick_all(&mut self, reason: impl Into<String>) -> Vec<ServerEnvelope> {
+        let reason = reason.into();
+        let client_ids = self.clients.keys().copied().collect::<Vec<_>>();
+        let mut envelopes = client_ids
+            .iter()
+            .copied()
+            .map(|client_id| ServerEnvelope {
+                target: DeliveryTarget::Client(client_id),
+                message: ServerMessage::Kicked {
+                    reason: reason.clone(),
+                },
+            })
+            .collect::<Vec<_>>();
+
+        for client_id in client_ids {
+            envelopes.extend(self.disconnect(client_id));
+        }
+
+        envelopes
+    }
+
+    pub(super) fn mark_client_seen(&mut self, client_id: ClientId) {
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.last_seen_tick = self.tick;
+        }
+    }
+
+    pub(super) fn disconnect_stale_clients(&mut self) -> Vec<ServerEnvelope> {
+        let stale_client_ids = self
+            .clients
+            .values()
+            .filter(|client| {
+                self.tick.saturating_sub(client.last_seen_tick) > CLIENT_STALE_TIMEOUT_TICKS
+            })
+            .map(|client| client.client_id)
+            .collect::<Vec<_>>();
+
+        stale_client_ids
+            .into_iter()
+            .flat_map(|client_id| self.disconnect(client_id))
+            .collect()
     }
 }

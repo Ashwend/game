@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     app::state::{
-        ClientRuntime, LoadingSplash, LoadingSplashKind, MenuState, SaveStore, Screen, SteamUser,
+        ClientRuntime, LoadingSplash, LoadingSplashKind, MenuState, SaveStore, SteamUser,
         WorldStartAttempt, WorldStartResult,
     },
     net::ClientSession,
@@ -51,12 +51,7 @@ pub(super) fn start_singleplayer(
     match result {
         Ok(session) => {
             runtime.start_session(session, Some(world_id));
-            menu.screen = Screen::InGame;
-            menu.pause_open = false;
-            menu.pause_options_open = false;
-            menu.chat_open = false;
-            menu.chat_focus_pending = false;
-            menu.status = None;
+            menu.enter_in_game();
         }
         Err(error) => menu.status = Some(format!("start failed: {error}")),
     }
@@ -167,15 +162,7 @@ fn finish_singleplayer_start(
     match result {
         Ok(session) => {
             runtime.start_session(session, Some(world_id));
-            menu.screen = Screen::InGame;
-            menu.pause_open = false;
-            menu.pause_options_open = false;
-            menu.chat_open = false;
-            menu.chat_focus_pending = false;
-            menu.status = None;
-            if let Some(splash) = menu.loading_splash.as_mut() {
-                splash.ready = true;
-            }
+            menu.enter_in_game();
         }
         Err(error) => {
             menu.status = Some(format!("start failed: {error}"));

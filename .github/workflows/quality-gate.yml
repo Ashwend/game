@@ -17,8 +17,32 @@ env:
 
 jobs:
   quality:
-    name: quality
+    name: quality (${{ matrix.label }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Default-features build: what CI actually ships from the release
+          # workflow. Everything is exercised here — fmt, clippy, check, tests.
+          - label: default
+            features: ""
+            run_fmt: true
+            run_tests: true
+          # `steam` feature gates `lightyear/steam`. Without an explicit job
+          # against it, the feature is dead code in CI's eyes and a transitive
+          # break can ship a release with `--features steam` rotten.
+          - label: steam
+            features: "--features steam"
+            run_fmt: false
+            run_tests: true
+          # `--all-features` includes `dev-fast` (bevy/dynamic_linking) which
+          # is a local-iteration shortcut, not something we ship. Keep it
+          # building, but only the cheap check — no need to repeat tests.
+          - label: all-features
+            features: "--all-features"
+            run_fmt: false
+            run_tests: false
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -26,7 +50,7 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y g++ pkg-config libx11-dev libasound2-dev libudev-dev libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev
+          sudo apt-get install -y g++ pkg-config libx11-dev libasound2-dev libudev-dev libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev libopus-dev
 
       - name: Install Rust toolchain
         run: |
@@ -37,16 +61,18 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: quality
-          shared-key: ${{ runner.os }}-${{ runner.arch }}
+          shared-key: ${{ runner.os }}-${{ runner.arch }}-${{ matrix.label }}
 
       - name: Check formatting
+        if: matrix.run_fmt
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets ${{ matrix.features }} -- -D warnings
 
       - name: Check all targets
-        run: cargo check --locked --all-targets --all-features
+        run: cargo check --locked --all-targets ${{ matrix.features }}
 
       - name: Run tests
-        run: cargo test --locked --all-targets --all-features
+        if: matrix.run_tests
+        run: cargo test --locked --all-targets ${{ matrix.features }}

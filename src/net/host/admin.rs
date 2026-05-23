@@ -72,10 +72,11 @@ impl Drop for HostAdminSocket {
 }
 
 pub(super) fn drain_admin_socket(
+    mut commands: Commands,
     socket: Option<Res<HostAdminSocket>>,
     mut shutdown: ResMut<HostShutdown>,
     mut server: ResMut<AuthoritativeServer>,
-    connections: Res<ServerConnections>,
+    mut connections: ResMut<ServerConnections>,
     mut senders: Query<&mut MessageSender<ServerMessage>, With<ClientOf>>,
 ) {
     let Some(socket) = socket else {
@@ -94,9 +95,10 @@ pub(super) fn drain_admin_socket(
 
         handle_admin_stream(
             stream,
+            &mut commands,
             &mut shutdown,
             &mut server,
-            &connections,
+            &mut connections,
             &mut senders,
         );
     }
@@ -104,16 +106,17 @@ pub(super) fn drain_admin_socket(
 
 fn handle_admin_stream(
     mut stream: UnixStream,
+    commands: &mut Commands,
     shutdown: &mut HostShutdown,
     server: &mut AuthoritativeServer,
-    connections: &ServerConnections,
+    connections: &mut ServerConnections,
     senders: &mut Query<&mut MessageSender<ServerMessage>, With<ClientOf>>,
 ) {
     let result = (|| -> Result<String> {
         stream.set_read_timeout(Some(Duration::from_secs(2)))?;
         stream.set_write_timeout(Some(Duration::from_secs(2)))?;
         let request = serde_json::from_reader(&mut stream)?;
-        handle_admin_request(request, shutdown, server, connections, senders)
+        handle_admin_request(request, commands, shutdown, server, connections, senders)
     })();
 
     match result {
@@ -124,9 +127,10 @@ fn handle_admin_stream(
 
 fn handle_admin_request(
     request: DedicatedAdminRequest,
+    commands: &mut Commands,
     shutdown: &mut HostShutdown,
     server: &mut AuthoritativeServer,
-    connections: &ServerConnections,
+    connections: &mut ServerConnections,
     senders: &mut Query<&mut MessageSender<ServerMessage>, With<ClientOf>>,
 ) -> Result<String> {
     match request {
@@ -135,11 +139,11 @@ fn handle_admin_request(
             if envelopes.is_empty() {
                 bail!("announcement text is empty");
             }
-            route_envelopes(connections, senders, envelopes);
+            route_envelopes(commands, connections, senders, envelopes);
             Ok("announcement sent".to_owned())
         }
         DedicatedAdminRequest::Shutdown { reason } => {
-            route_envelopes(connections, senders, server.0.kick_all(reason));
+            route_envelopes(commands, connections, senders, server.0.kick_all(reason));
             shutdown.requested = true;
             Ok("shutdown requested".to_owned())
         }
@@ -147,6 +151,7 @@ fn handle_admin_request(
             server.0.set_world_time_seconds(seconds_of_day);
             let snapshot = server.0.world_time_snapshot();
             route_envelopes(
+                commands,
                 connections,
                 senders,
                 vec![ServerEnvelope {
@@ -164,6 +169,7 @@ fn handle_admin_request(
             let snapshot = server.0.world_time_snapshot();
             let applied = server.0.world_time().multiplier;
             route_envelopes(
+                commands,
                 connections,
                 senders,
                 vec![ServerEnvelope {

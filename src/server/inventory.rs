@@ -1,12 +1,20 @@
 use crate::{
     items::{
         BASIC_HATCHET_ID, BASIC_PICKAXE_ID, TEST_BANDAGE_ID, TEST_ORE_ID, TEST_RELIC_ID,
-        normalize_stack, stack_limit,
+        can_pick_up, normalize_stack, stack_limit,
     },
     protocol::{
-        ACTIONBAR_SLOT_COUNT, INVENTORY_SLOT_COUNT, ItemContainer, ItemContainerSlot, ItemStack,
-        PlayerInventoryState,
+        ACTIONBAR_SLOT_COUNT, ClientId, DroppedItemId, DroppedWorldItem, INVENTORY_SLOT_COUNT,
+        InventoryCommand, ItemContainer, ItemContainerSlot, ItemStack, PlayerInventoryState,
+        Vec3Net,
     },
+};
+
+use super::{
+    GameServer, ServerEnvelope,
+    dropped_items::{DroppedItemBody, yaw_rotation},
+    movement::{drop_position, drop_velocity, player_eye_position},
+    toasts::{inventory_full_toast_envelopes, item_acquired_toast_envelopes},
 };
 
 pub(super) fn starting_inventory() -> PlayerInventoryState {
@@ -178,4 +186,135 @@ fn slot_exists(inventory: &PlayerInventoryState, slot: ItemContainerSlot) -> boo
 
 pub(super) fn offset_actionbar_slot(current: usize, offset: i8) -> usize {
     (current as isize + offset as isize).rem_euclid(ACTIONBAR_SLOT_COUNT as isize) as usize
+}
+
+impl GameServer {
+    pub(super) fn apply_inventory_command(
+        &mut self,
+        client_id: ClientId,
+        command: InventoryCommand,
+    ) -> Vec<ServerEnvelope> {
+        match command {
+            InventoryCommand::Move { from, to, quantity } => {
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    move_stack(&mut client.inventory, from, to, quantity);
+                }
+                Vec::new()
+            }
+            InventoryCommand::Drop { from, quantity } => {
+                let Some((stack, position, velocity, yaw)) =
+                    self.clients.get_mut(&client_id).and_then(|client| {
+                        remove_stack(&mut client.inventory, from, quantity).map(|stack| {
+                            (
+                                stack,
+                                drop_position(&client.controller),
+                                drop_velocity(&client.controller),
+                                client.controller.yaw,
+                            )
+                        })
+                    })
+                else {
+                    return Vec::new();
+                };
+                self.spawn_dropped_item(stack, position, velocity, yaw);
+                Vec::new()
+            }
+            InventoryCommand::PickUp { dropped_item_id } => {
+                self.pick_up_dropped_item(client_id, dropped_item_id)
+            }
+            InventoryCommand::SelectActionbarSlot { slot } => {
+                if slot < ACTIONBAR_SLOT_COUNT
+                    && let Some(client) = self.clients.get_mut(&client_id)
+                {
+                    client.inventory.active_actionbar_slot = slot;
+                }
+                Vec::new()
+            }
+            InventoryCommand::SelectActionbarOffset { offset } => {
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    client.inventory.active_actionbar_slot =
+                        offset_actionbar_slot(client.inventory.active_actionbar_slot, offset);
+                }
+                Vec::new()
+            }
+        }
+    }
+
+    pub(super) fn spawn_dropped_item(
+        &mut self,
+        stack: ItemStack,
+        position: Vec3Net,
+        velocity: Vec3Net,
+        yaw: f32,
+    ) {
+        let Some(stack) = normalize_stack(&stack) else {
+            return;
+        };
+        let id = self.next_dropped_item_id;
+        self.next_dropped_item_id += 1;
+        let physics_body = self
+            .dropped_item_physics
+            .spawn_body(position, velocity, yaw);
+        self.dropped_items.insert(
+            id,
+            DroppedItemBody {
+                item: DroppedWorldItem {
+                    id,
+                    stack,
+                    position,
+                    yaw,
+                    rotation: yaw_rotation(yaw),
+                },
+                body_handle: physics_body.body_handle,
+            },
+        );
+    }
+
+    fn pick_up_dropped_item(
+        &mut self,
+        client_id: ClientId,
+        dropped_item_id: DroppedItemId,
+    ) -> Vec<ServerEnvelope> {
+        let Some(item) = self
+            .dropped_items
+            .get(&dropped_item_id)
+            .map(|body| body.item.clone())
+        else {
+            return Vec::new();
+        };
+        let Some(client) = self.clients.get(&client_id) else {
+            return Vec::new();
+        };
+        if !can_pick_up(
+            player_eye_position(client.controller.position),
+            client.controller.yaw,
+            client.controller.pitch,
+            &item,
+        ) {
+            return Vec::new();
+        }
+
+        let Some(client) = self.clients.get_mut(&client_id) else {
+            return Vec::new();
+        };
+        let requested = item.stack.quantity;
+        let remainder = add_stack_to_inventory(&mut client.inventory, item.stack.clone());
+        let accepted = match &remainder {
+            Some(rem) => requested.saturating_sub(rem.quantity),
+            None => requested,
+        };
+        if remainder.is_none() {
+            if let Some(body) = self.dropped_items.remove(&dropped_item_id) {
+                self.dropped_item_physics.remove_body(body.body_handle);
+            }
+        } else if accepted > 0
+            && let Some(body) = self.dropped_items.get_mut(&dropped_item_id)
+        {
+            body.item.stack.quantity = body.item.stack.quantity.saturating_sub(accepted);
+        }
+        if accepted == 0 {
+            return inventory_full_toast_envelopes(client_id);
+        }
+        item_acquired_toast_envelopes(client_id, &item.stack.item_id, accepted)
+    }
 }

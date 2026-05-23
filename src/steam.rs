@@ -93,7 +93,7 @@ pub fn verify_auth_ticket(
     match mode {
         AuthMode::Offline => {
             let expected = offline_auth_token(steam_id);
-            if token == expected || token == "singleplayer" {
+            if token == expected {
                 Ok(())
             } else {
                 Err(SteamError::AuthRejected(
@@ -171,5 +171,14 @@ mod tests {
     fn offline_auth_matches_claimed_id() {
         assert!(verify_auth_ticket(AuthMode::Offline, 42, &offline_auth_token(42)).is_ok());
         assert!(verify_auth_ticket(AuthMode::Offline, 42, &offline_auth_token(7)).is_err());
+    }
+
+    #[test]
+    fn offline_auth_rejects_wildcard_singleplayer_token() {
+        // The literal "singleplayer" string used to be a wildcard that
+        // accepted any claimed Steam id under AuthMode::Offline. If a dedicated
+        // server were ever launched in Offline mode, a malicious client could
+        // claim any identity with it. Verify the shortcut stays rejected.
+        assert!(verify_auth_ticket(AuthMode::Offline, 42, "singleplayer").is_err());
     }
 }

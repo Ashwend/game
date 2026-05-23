@@ -7,9 +7,12 @@ use rapier3d::prelude::{
 };
 
 use crate::{
+    items::{ItemId, stack_limit},
     protocol::{DroppedItemId, DroppedWorldItem, QuatNet, Vec3Net},
     world::WorldData,
 };
+
+use super::GameServer;
 
 pub(super) const DROPPED_ITEM_RADIUS: f32 = 0.1;
 const DROPPED_ITEM_SPIN_RADIUS: f32 = 0.18;
@@ -244,4 +247,95 @@ fn initial_drop_angular_velocity(velocity: Vec3Net) -> Vector {
         0.0,
         -velocity.x / DROPPED_ITEM_SPIN_RADIUS,
     )
+}
+
+impl GameServer {
+    pub(super) fn merge_nearby_dropped_items(&mut self) -> Vec<(ItemId, u16)> {
+        // Returns the interned `ItemId` (not a fresh `String`) so the
+        // resulting `ServerMessage::ItemMerged` doesn't allocate per merge.
+        let mut merges = Vec::new();
+        for (first_id, second_id) in nearby_dropped_item_pairs(&self.dropped_items) {
+            if let Some(merge) = self.merge_dropped_item_pair(first_id, second_id) {
+                merges.push(merge);
+            }
+        }
+        merges
+    }
+
+    fn merge_dropped_item_pair(
+        &mut self,
+        first_id: DroppedItemId,
+        second_id: DroppedItemId,
+    ) -> Option<(ItemId, u16)> {
+        // Compute the merge up-front from immutable reads so we never have
+        // to remove-then-reinsert when a validation step fails. Once `moved`
+        // is finalised the mutation is straight-through.
+        let (target_id, source_id) = self.merge_target_and_source(first_id, second_id)?;
+        let (limit, target_quantity, source_quantity) = {
+            let target = self.dropped_items.get(&target_id)?;
+            let source = self.dropped_items.get(&source_id)?;
+            let limit = stack_limit(&target.item.stack.item_id)?;
+            (
+                limit,
+                target.item.stack.quantity,
+                source.item.stack.quantity,
+            )
+        };
+        let moved = limit.saturating_sub(target_quantity).min(source_quantity);
+        if moved == 0 {
+            return None;
+        }
+        // Refuse partial merges. If the source can't be fully absorbed (e.g.
+        // 100 + 8 with a 100 stack limit), moving anything just swaps which
+        // body is "full" and which is "small" — both still exist and the
+        // pair is back in `nearby_dropped_item_pairs` on the very next merge
+        // tick, oscillating forever. Leaving the smaller stack alone until
+        // there's room for all of it removes the flip while still letting
+        // genuinely combinable pairs (50 + 50, 99 + 1, …) merge in one shot.
+        if moved < source_quantity {
+            return None;
+        }
+
+        let item_id = {
+            let target = self.dropped_items.get_mut(&target_id)?;
+            target.item.stack.quantity += moved;
+            target.item.stack.item_id.clone()
+        };
+
+        let drain_source = {
+            let source = self.dropped_items.get_mut(&source_id)?;
+            source.item.stack.quantity -= moved;
+            source.item.stack.quantity == 0
+        };
+        if drain_source && let Some(body) = self.dropped_items.remove(&source_id) {
+            self.dropped_item_physics.remove_body(body.body_handle);
+        }
+
+        Some((item_id, moved))
+    }
+
+    fn merge_target_and_source(
+        &self,
+        first_id: DroppedItemId,
+        second_id: DroppedItemId,
+    ) -> Option<(DroppedItemId, DroppedItemId)> {
+        let first = self.dropped_items.get(&first_id)?;
+        let second = self.dropped_items.get(&second_id)?;
+        if first.item.stack.item_id != second.item.stack.item_id {
+            return None;
+        }
+
+        let limit = stack_limit(&first.item.stack.item_id)?;
+        let first_room = limit.saturating_sub(first.item.stack.quantity);
+        let second_room = limit.saturating_sub(second.item.stack.quantity);
+        match (first_room > 0, second_room > 0) {
+            (false, false) => None,
+            (true, false) => Some((first_id, second_id)),
+            (false, true) => Some((second_id, first_id)),
+            (true, true) if first.item.stack.quantity >= second.item.stack.quantity => {
+                Some((first_id, second_id))
+            }
+            (true, true) => Some((second_id, first_id)),
+        }
+    }
 }

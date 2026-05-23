@@ -295,6 +295,66 @@ fn pickup_emits_success_toast_to_requesting_client() {
 }
 
 #[test]
+fn partial_pickup_decrements_dropped_stack_and_keeps_it_in_world() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    let client = server
+        .clients
+        .get_mut(&client_id)
+        .expect("connected host should exist");
+    // Pre-fill every slot with non-stackable relics so no merge target exists,
+    // then leave one ore stack with exactly 5 units of headroom (stack limit
+    // is 20). A pickup of 8 should accept 5 and leave 3 in the world.
+    for slot in client.inventory.inventory_slots.iter_mut() {
+        *slot = Some(ItemStack::new(TEST_RELIC_ID, 1));
+    }
+    for slot in client.inventory.actionbar_slots.iter_mut() {
+        *slot = Some(ItemStack::new(TEST_RELIC_ID, 1));
+    }
+    client.inventory.inventory_slots[0] = Some(ItemStack::new(TEST_ORE_ID, 15));
+
+    server.spawn_dropped_item(
+        ItemStack::new(TEST_ORE_ID, 8),
+        Vec3Net::new(0.0, SERVER_EYE_HEIGHT - 0.28, -2.0),
+        Vec3Net::ZERO,
+        0.0,
+    );
+    let dropped_item_id = server.snapshot().dropped_items[0].id;
+
+    server.receive(
+        client_id,
+        ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
+    );
+
+    let snapshot = server.snapshot_for(client_id);
+    let inventory = snapshot.players[0]
+        .inventory
+        .as_ref()
+        .expect("host inventory should be present");
+    assert_eq!(
+        inventory.inventory_slots[0]
+            .as_ref()
+            .map(|stack| stack.quantity),
+        Some(20)
+    );
+    assert_eq!(snapshot.dropped_items.len(), 1);
+    assert_eq!(
+        snapshot.dropped_items[0].stack.quantity, 3,
+        "remaining dropped quantity should equal original minus accepted (8 - 5 = 3)"
+    );
+
+    // A second pickup with no further headroom must not refund the previously
+    // accepted quantity into the dropped item.
+    server.receive(
+        client_id,
+        ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
+    );
+    let snapshot = server.snapshot_for(client_id);
+    assert_eq!(snapshot.dropped_items.len(), 1);
+    assert_eq!(snapshot.dropped_items[0].stack.quantity, 3);
+}
+
+#[test]
 fn pickup_into_full_inventory_emits_warning_toast() {
     use crate::protocol::{ServerMessage, ToastKind};
 

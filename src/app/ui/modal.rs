@@ -44,6 +44,30 @@ pub(in crate::app::ui) fn confirm_shortcut_pressed(ctx: &egui::Context) -> bool 
     ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
 }
 
+/// Full-screen scrim used as the dim layer underneath pause / inventory /
+/// modal overlays. Returns the response so callers can react to a click on
+/// empty space (e.g. close-on-outside). The scrim itself is opaque to clicks
+/// — that's the whole point of having one — so layering multiple of these
+/// for different overlays is fine as long as each gets a unique `id`.
+pub(in crate::app::ui) fn backdrop_layer(
+    ctx: &egui::Context,
+    id: &'static str,
+    order: Order,
+    color: Color32,
+) -> egui::Response {
+    let screen_rect = ctx.content_rect();
+    egui::Area::new(Id::new(id))
+        .order(order)
+        .fixed_pos(screen_rect.min)
+        .show(ctx, |ui| {
+            let local_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen_rect.size());
+            let response = ui.allocate_rect(local_rect, Sense::click());
+            ui.painter().rect_filled(local_rect, 0.0, color);
+            response
+        })
+        .inner
+}
+
 pub(super) fn modal_shell<T>(
     ctx: &egui::Context,
     id: &'static str,

@@ -2,7 +2,7 @@ use bevy_egui::egui;
 
 use crate::app::state::{ClientRuntime, MenuState, SaveStore, Screen, SessionShutdownTasks};
 
-use super::{danger_menu_button, menu_button, theme};
+use super::{danger_menu_button, menu_button, modal::backdrop_layer, theme};
 
 pub(super) fn pause_ui(
     ctx: &egui::Context,
@@ -11,21 +11,12 @@ pub(super) fn pause_ui(
     shutdown_tasks: &mut SessionShutdownTasks,
     store: &SaveStore,
 ) {
-    let screen_rect = ctx.content_rect();
-    let backdrop_response = egui::Area::new("pause_backdrop".into())
-        .order(egui::Order::Middle)
-        .fixed_pos(screen_rect.min)
-        .show(ctx, |ui| {
-            let local_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen_rect.size());
-            let response = ui.allocate_rect(local_rect, egui::Sense::click());
-            ui.painter().rect_filled(
-                local_rect,
-                0.0,
-                egui::Color32::from_rgba_unmultiplied(1, 3, 7, 190),
-            );
-            response
-        })
-        .inner;
+    let backdrop_response = backdrop_layer(
+        ctx,
+        "pause_backdrop",
+        egui::Order::Middle,
+        egui::Color32::from_rgba_unmultiplied(1, 3, 7, 190),
+    );
 
     if backdrop_response.clicked() {
         menu.pause_open = false;

@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use lightyear::prelude::{Disconnected, MessageReceiver, MessageSender, server::ClientOf};
+use lightyear::{
+    connection::client::Disconnecting,
+    prelude::{Disconnected, MessageReceiver, MessageSender, server::ClientOf},
+};
 
 use super::super::channels::send_server_message;
 use super::AuthoritativeServer;
@@ -17,6 +20,7 @@ pub(super) struct ServerConnections {
 }
 
 pub(super) fn receive_client_messages(
+    mut commands: Commands,
     mut server: ResMut<AuthoritativeServer>,
     mut connections: ResMut<ServerConnections>,
     mut receivers: Query<(Entity, &mut MessageReceiver<ClientMessage>), With<ClientOf>>,
@@ -28,6 +32,7 @@ pub(super) fn receive_client_messages(
             handle_client_message(
                 entity,
                 message,
+                &mut commands,
                 &mut server.0,
                 &mut connections,
                 &mut senders,
@@ -37,6 +42,7 @@ pub(super) fn receive_client_messages(
 }
 
 pub(super) fn handle_disconnected_clients(
+    mut commands: Commands,
     mut server: ResMut<AuthoritativeServer>,
     mut connections: ResMut<ServerConnections>,
     disconnected: Query<Entity, (With<ClientOf>, Added<Disconnected>)>,
@@ -47,12 +53,13 @@ pub(super) fn handle_disconnected_clients(
             continue;
         };
         let envelopes = server.0.disconnect(client_id);
-        route_envelopes(&connections, &mut senders, envelopes);
+        route_envelopes(&mut commands, &mut connections, &mut senders, envelopes);
     }
 }
 
 pub(super) fn route_envelopes(
-    connections: &ServerConnections,
+    commands: &mut Commands,
+    connections: &mut ServerConnections,
     senders: &mut Query<&mut MessageSender<ServerMessage>, With<ClientOf>>,
     envelopes: Vec<ServerEnvelope>,
 ) {
@@ -84,6 +91,20 @@ pub(super) fn route_envelopes(
                     send_to_entity(senders, entity, envelope.message.clone());
                 }
             }
+            DeliveryTarget::Disconnect(client_id) => {
+                if let Some(entity) = connections.client_to_entity.get(&client_id).copied() {
+                    // `Disconnecting` is consumed by
+                    // `lightyear_connection::server::ConnectionPlugin::disconnect`
+                    // in `Last`, which marks the entity `Disconnected` and
+                    // despawns it on the next frame. That fires our
+                    // `handle_disconnected_clients` system on `Added<Disconnected>`,
+                    // but `forget_connection` here makes that call a no-op
+                    // (its early-return path) so the server doesn't try to
+                    // double-disconnect a client we already cleaned up.
+                    commands.entity(entity).insert(Disconnecting);
+                    forget_connection(entity, connections);
+                }
+            }
         }
     }
 }
@@ -91,29 +112,33 @@ pub(super) fn route_envelopes(
 fn handle_client_message(
     entity: Entity,
     message: ClientMessage,
+    commands: &mut Commands,
     server: &mut GameServer,
     connections: &mut ServerConnections,
     senders: &mut Query<&mut MessageSender<ServerMessage>, With<ClientOf>>,
 ) {
     let Some(client_id) = connections.by_entity.get(&entity).copied() else {
-        handle_unauthenticated_message(entity, message, server, connections, senders);
+        handle_unauthenticated_message(entity, message, commands, server, connections, senders);
         return;
     };
 
     if matches!(message, ClientMessage::Disconnect) {
+        // server.disconnect emits a trailing `DeliveryTarget::Disconnect`
+        // envelope; route_envelopes will tear down the connection. No need
+        // to call forget_connection here.
         let envelopes = server.disconnect(client_id);
-        forget_connection(entity, connections);
-        route_envelopes(connections, senders, envelopes);
+        route_envelopes(commands, connections, senders, envelopes);
         return;
     }
 
     let envelopes = server.receive(client_id, message);
-    route_envelopes(connections, senders, envelopes);
+    route_envelopes(commands, connections, senders, envelopes);
 }
 
 fn handle_unauthenticated_message(
     entity: Entity,
     message: ClientMessage,
+    commands: &mut Commands,
     server: &mut GameServer,
     connections: &mut ServerConnections,
     senders: &mut Query<&mut MessageSender<ServerMessage>, With<ClientOf>>,
@@ -146,7 +171,7 @@ fn handle_unauthenticated_message(
         Ok((client_id, envelopes)) => {
             connections.by_entity.insert(entity, client_id);
             connections.client_to_entity.insert(client_id, entity);
-            route_envelopes(connections, senders, envelopes);
+            route_envelopes(commands, connections, senders, envelopes);
         }
         Err(error) => {
             send_to_entity(

@@ -1,0 +1,61 @@
+# cargo-deny configuration. Run via `cargo deny check` (CI runs it as part of
+# the daily Dependency Audit workflow alongside `cargo audit`). The goal is
+# to catch what `cargo audit` misses: license drift, duplicate transitive
+# crates (especially bevy/rapier majors), and dependencies coming from
+# unexpected sources.
+#
+# Reference: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+# Advisory checks are handled by `cargo audit` in a separate job. Leave
+# them on here too so `cargo deny check` on its own is a useful pre-push
+# gate, but downgrade unmaintained crates to warn so unrelated upstream
+# yellow flags don't block a PR while we're still on the same crate
+# version.
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+# Permissive OSS licenses that have been reviewed for compatibility. Anything
+# outside this list must be added explicitly with a one-line justification.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+]
+confidence-threshold = 0.93
+exceptions = []
+
+[bans]
+# Multiple versions of the same major crate are the usual symptom of a
+# transitive bump that nobody noticed. `warn` instead of `deny` because the
+# bevy + lightyear + rapier ecosystem regularly carries short-lived
+# duplicates during version transitions; CI surfaces them in the audit
+# report without blocking merges. Switch to `deny` once those graphs stabilize.
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+allow = []
+deny = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

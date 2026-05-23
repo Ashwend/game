@@ -91,3 +91,22 @@ impl Default for MenuState {
         }
     }
 }
+
+impl MenuState {
+    /// Hand off to the in-game screen after a successful singleplayer or
+    /// multiplayer session start. Resets the modal/chat overlay state and
+    /// flags the loading splash as ready to fade out. Both session-start
+    /// paths (loopback singleplayer and direct multiplayer) funnel through
+    /// here so the two flows can't drift in what they clear or set.
+    pub(crate) fn enter_in_game(&mut self) {
+        self.screen = Screen::InGame;
+        self.pause_open = false;
+        self.pause_options_open = false;
+        self.chat_open = false;
+        self.chat_focus_pending = false;
+        self.status = None;
+        if let Some(splash) = self.loading_splash.as_mut() {
+            splash.ready = true;
+        }
+    }
+}

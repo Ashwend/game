@@ -301,10 +301,11 @@ fn drain_host_commands(
 }
 
 fn tick_authoritative_server(
+    mut commands: Commands,
     time: Res<Time>,
     mut accumulator: ResMut<TickAccumulator>,
     mut server: ResMut<AuthoritativeServer>,
-    connections: Res<ServerConnections>,
+    mut connections: ResMut<ServerConnections>,
     mut senders: Query<&mut MessageSender<ServerMessage>, With<ClientOf>>,
 ) {
     let fixed_delta = Duration::from_secs_f32(1.0 / SERVER_TICK_RATE_HZ);
@@ -313,7 +314,7 @@ fn tick_authoritative_server(
 
     while accumulator.0 >= fixed_delta {
         let envelopes = server.0.tick(fixed_delta.as_secs_f32());
-        route_envelopes(&connections, &mut senders, envelopes);
+        route_envelopes(&mut commands, &mut connections, &mut senders, envelopes);
         accumulator.0 -= fixed_delta;
     }
 }
