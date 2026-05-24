@@ -136,7 +136,10 @@ fn keybinding_row(
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
             ui.add(egui::Label::new(label).wrap_mode(egui::TextWrapMode::Extend));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), add_controls);
+            ui.with_layout(
+                egui::Layout::right_to_left(egui::Align::Center),
+                add_controls,
+            );
         },
     );
 }
@@ -151,8 +154,7 @@ fn action_row(
     let primary = slots.primary;
     let secondary = slots.secondary;
     let default_slots = action.default_slots();
-    let is_default =
-        primary == default_slots.primary && secondary == default_slots.secondary;
+    let is_default = primary == default_slots.primary && secondary == default_slots.secondary;
 
     keybinding_row(ui, theme::muted(action.label()), |ui| {
         // Right-to-left: Reset is rightmost, then Secondary, then Primary.
