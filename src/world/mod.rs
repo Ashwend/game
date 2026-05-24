@@ -10,19 +10,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::protocol::Vec3Net;
 
-/// Fixed seed used by `MapType::Test` so the test world generates the same
-/// layout every load.
+/// Fixed seed used by [`WorldData::test_world`] and the default map so the
+/// generated world is the same every load — handy for tests and for the
+/// loopback menu backdrop.
 pub const TEST_WORLD_SEED: u64 = 0x7E57_5EED_5EED_5EED;
 
-/// Grid dimensions used by `MapType::Test`: 5 × 5 cells, totalling
-/// `5 × CHUNK_SIZE_M` metres on a side.
-pub const TEST_WORLD_DIMS: u32 = 5;
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MapType {
-    #[default]
-    Test,
     Procedural {
         seed: u64,
         #[serde(default)]
@@ -30,29 +25,33 @@ pub enum MapType {
     },
 }
 
+impl Default for MapType {
+    fn default() -> Self {
+        Self::Procedural {
+            seed: TEST_WORLD_SEED,
+            size: ProceduralMapSize::default(),
+        }
+    }
+}
+
 impl MapType {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Test => "Test",
             Self::Procedural { .. } => "Procedural",
         }
     }
 
     pub fn world_data(&self) -> WorldData {
         match self {
-            Self::Test => WorldData::chunk_world(TEST_WORLD_SEED, ChunkDims::new(TEST_WORLD_DIMS)),
             Self::Procedural { seed, size } => {
                 WorldData::chunk_world(*seed, ChunkDims::new(size.dims()))
             }
         }
     }
 
-    /// World seed used by the chunk generator. For `Test` this is the
-    /// fixed [`TEST_WORLD_SEED`]; for `Procedural` it's whichever seed
-    /// the world was created with.
+    /// World seed used by the chunk generator.
     pub fn world_seed(&self) -> u64 {
         match self {
-            Self::Test => TEST_WORLD_SEED,
             Self::Procedural { seed, .. } => *seed,
         }
     }
@@ -60,7 +59,6 @@ impl MapType {
     /// Grid dimensions the world is generated against.
     pub fn chunk_dims(&self) -> ChunkDims {
         match self {
-            Self::Test => ChunkDims::new(TEST_WORLD_DIMS),
             Self::Procedural { size, .. } => ChunkDims::new(size.dims()),
         }
     }
@@ -116,7 +114,7 @@ pub struct WorldData {
 
 impl Default for WorldData {
     fn default() -> Self {
-        Self::chunk_world(TEST_WORLD_SEED, ChunkDims::new(TEST_WORLD_DIMS))
+        MapType::default().world_data()
     }
 }
 
@@ -140,10 +138,10 @@ impl WorldData {
         }
     }
 
-    /// Compatibility alias — older callers (test helpers) ask for
-    /// `test_world()`. Now routes through the chunk generator.
+    /// Convenience helper used by tests and the menu backdrop fallback —
+    /// returns a deterministic small procedural world.
     pub fn test_world() -> Self {
-        Self::chunk_world(TEST_WORLD_SEED, ChunkDims::new(TEST_WORLD_DIMS))
+        MapType::default().world_data()
     }
 
     /// Hand-crafted scene used as the **main menu backdrop**. No
@@ -508,8 +506,13 @@ mod tests {
 
     #[test]
     fn map_type_default_and_labels_are_stable() {
-        assert_eq!(MapType::default(), MapType::Test);
-        assert_eq!(MapType::Test.label(), "Test");
+        assert_eq!(
+            MapType::default(),
+            MapType::Procedural {
+                seed: TEST_WORLD_SEED,
+                size: ProceduralMapSize::default(),
+            }
+        );
         assert_eq!(
             MapType::Procedural {
                 seed: 42,
@@ -522,8 +525,6 @@ mod tests {
 
     #[test]
     fn map_type_exposes_seed_and_dims() {
-        assert_eq!(MapType::Test.world_seed(), TEST_WORLD_SEED);
-        assert_eq!(MapType::Test.chunk_dims().dims, TEST_WORLD_DIMS);
         let procedural = MapType::Procedural {
             seed: 99,
             size: ProceduralMapSize::Large,

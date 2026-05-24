@@ -1,7 +1,7 @@
 use bevy_egui::egui;
 
 use crate::{
-    app::state::{CreateWorldDialog, CreateWorldMapKind, MenuState, SaveStore, SteamUser},
+    app::state::{CreateWorldDialog, MenuState, SaveStore, SteamUser},
     save::validate_world_name,
     world::ProceduralMapSize,
 };
@@ -177,45 +177,29 @@ fn draw_create_world_form(
 
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        field_label(ui, "Map Type");
-        let test_response =
-            ui.selectable_value(&mut dialog.map_kind, CreateWorldMapKind::Test, "Test");
-        theme::record_click_sound(ui, &test_response);
-        let procedural_response = ui.selectable_value(
-            &mut dialog.map_kind,
-            CreateWorldMapKind::Procedural,
-            "Procedural",
-        );
-        theme::record_click_sound(ui, &procedural_response);
+        field_label(ui, "Map Size");
+        for size in ProceduralMapSize::ALL {
+            let response = ui.selectable_value(
+                &mut dialog.procedural_size,
+                size,
+                format!("{} ({:.0})", size.label(), size.floor_size()),
+            );
+            theme::record_click_sound(ui, &response);
+        }
     });
 
-    if dialog.map_kind == CreateWorldMapKind::Procedural {
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            field_label(ui, "Map Size");
-            for size in ProceduralMapSize::ALL {
-                let response = ui.selectable_value(
-                    &mut dialog.procedural_size,
-                    size,
-                    format!("{} ({:.0})", size.label(), size.floor_size()),
-                );
-                theme::record_click_sound(ui, &response);
-            }
-        });
-
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            field_label(ui, "Seed");
-            let seed_width = (ui.available_width() - 92.0).max(120.0);
-            ui.add_sized(
-                [seed_width, COMPACT_ROW_HEIGHT],
-                theme::text_input(&mut dialog.seed).id(egui::Id::new(CREATE_WORLD_SEED_INPUT_ID)),
-            );
-            if theme::compact_button(ui, "Refresh", ButtonKind::Secondary, 82.0).clicked() {
-                dialog.refresh_seed();
-            }
-        });
-    }
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        field_label(ui, "Seed");
+        let seed_width = (ui.available_width() - 92.0).max(120.0);
+        ui.add_sized(
+            [seed_width, COMPACT_ROW_HEIGHT],
+            theme::text_input(&mut dialog.seed).id(egui::Id::new(CREATE_WORLD_SEED_INPUT_ID)),
+        );
+        if theme::compact_button(ui, "Refresh", ButtonKind::Secondary, 82.0).clicked() {
+            dialog.refresh_seed();
+        }
+    });
 
     if let Some(error) = &dialog.error {
         ui.add_space(6.0);

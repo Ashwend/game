@@ -198,7 +198,6 @@ impl DirectConnectDialog {
 #[derive(Debug, Clone)]
 pub(crate) struct CreateWorldDialog {
     pub(crate) name: String,
-    pub(crate) map_kind: CreateWorldMapKind,
     pub(crate) procedural_size: ProceduralMapSize,
     pub(crate) seed: String,
     pub(crate) error: Option<String>,
@@ -216,7 +215,6 @@ impl CreateWorldDialog {
     pub(crate) fn new() -> Self {
         Self {
             name: "New World".to_owned(),
-            map_kind: CreateWorldMapKind::Test,
             procedural_size: ProceduralMapSize::Medium,
             seed: random_seed().to_string(),
             error: None,
@@ -231,27 +229,16 @@ impl CreateWorldDialog {
     }
 
     pub(crate) fn selected_map(&self) -> Result<MapType, &'static str> {
-        match self.map_kind {
-            CreateWorldMapKind::Test => Ok(MapType::Test),
-            CreateWorldMapKind::Procedural => {
-                let seed = self
-                    .seed
-                    .trim()
-                    .parse::<u64>()
-                    .map_err(|_| "Seed must be a whole number.")?;
-                Ok(MapType::Procedural {
-                    seed,
-                    size: self.procedural_size,
-                })
-            }
-        }
+        let seed = self
+            .seed
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| "Seed must be a whole number.")?;
+        Ok(MapType::Procedural {
+            seed,
+            size: self.procedural_size,
+        })
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CreateWorldMapKind {
-    Test,
-    Procedural,
 }
 
 #[derive(Debug, Clone)]

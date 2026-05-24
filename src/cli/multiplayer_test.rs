@@ -12,6 +12,11 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use crate::{
+    save::{WorldSave, save_world_file},
+    world::{MapType, ProceduralMapSize},
+};
+
 /// Default display names for the two spawned test clients. Picked from the
 /// NATO alphabet so the labels read cleanly above each character — the
 /// purpose is debugging, so trivially distinguishable beats clever.
@@ -59,6 +64,19 @@ pub(super) fn run_multiplayer_test(port: u16, names_override: Option<Vec<String>
         "multiplayer-test: temporary world save → {}",
         world_save.display()
     );
+
+    // Pre-create the temp save with the smallest procedural map so the
+    // helper boots into a tiny world — quick to generate, cheap to stream,
+    // and uses the same map path as a real player-created world.
+    let seeded = WorldSave::new_with_map(
+        "Multiplayer Test",
+        None,
+        MapType::Procedural {
+            seed: 0,
+            size: ProceduralMapSize::Small,
+        },
+    );
+    save_world_file(&world_save, &seeded).context("could not seed multiplayer-test world save")?;
 
     let mut server = spawn_server(&exe, &world_save, bind)?;
     if let Err(error) = wait_for_server_ready(&mut server) {

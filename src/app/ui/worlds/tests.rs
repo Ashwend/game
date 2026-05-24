@@ -4,8 +4,7 @@ use bevy_egui::egui;
 
 use crate::{
     app::state::{
-        ClientRuntime, CreateWorldDialog, CreateWorldMapKind, EditWorldDialog, MenuState,
-        SaveStore, Screen, SteamUser,
+        ClientRuntime, CreateWorldDialog, EditWorldDialog, MenuState, SaveStore, Screen, SteamUser,
     },
     save::WorldStore,
     steam::AuthenticatedUser,
@@ -130,7 +129,6 @@ fn create_world_from_dialog_persists_selected_map() {
     let mut menu = MenuState::default();
     let dialog = CreateWorldDialog {
         name: "Generated".to_owned(),
-        map_kind: CreateWorldMapKind::Procedural,
         procedural_size: ProceduralMapSize::Small,
         seed: "1234".to_owned(),
         error: None,
@@ -273,7 +271,7 @@ fn worlds_ui_renders_empty_and_populated_tables() {
         .create_world("Rendered", Some(user.0.steam_id))
         .expect("world should create");
     refresh_worlds(&mut menu, &store);
-    assert_eq!(menu.worlds[0].map, MapType::Test);
+    assert_eq!(menu.worlds[0].map, MapType::default());
 
     let _ = ctx.run(raw_input(), |ctx| {
         super::worlds_ui(ctx, &mut menu, &mut runtime, &store, &user);

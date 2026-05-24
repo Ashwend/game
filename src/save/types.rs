@@ -27,7 +27,7 @@ pub struct WorldSave {
 
 impl WorldSave {
     pub fn new(name: &str, owner_steam_id: Option<SteamId>) -> Self {
-        Self::new_with_map(name, owner_steam_id, MapType::Test)
+        Self::new_with_map(name, owner_steam_id, MapType::default())
     }
 
     pub fn new_with_map(name: &str, owner_steam_id: Option<SteamId>, map: MapType) -> Self {

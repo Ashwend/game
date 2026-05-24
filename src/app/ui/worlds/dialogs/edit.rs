@@ -149,23 +149,22 @@ fn draw_edit_world_form(
         locked_setting(ui, dialog.map.label(), 116.0);
     });
 
-    if let MapType::Procedural { seed, size } = &dialog.map {
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            field_label(ui, "Map Size");
-            locked_setting(
-                ui,
-                &format!("{} ({:.0})", size.label(), size.floor_size()),
-                126.0,
-            );
-        });
+    let MapType::Procedural { seed, size } = &dialog.map;
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        field_label(ui, "Map Size");
+        locked_setting(
+            ui,
+            &format!("{} ({:.0})", size.label(), size.floor_size()),
+            126.0,
+        );
+    });
 
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            field_label(ui, "Seed");
-            locked_setting(ui, &seed.to_string(), ui.available_width());
-        });
-    }
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        field_label(ui, "Seed");
+        locked_setting(ui, &seed.to_string(), ui.available_width());
+    });
 
     if let Some(error) = &dialog.error {
         ui.add_space(6.0);

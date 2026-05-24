@@ -11,7 +11,7 @@
 
 Bump `SAVE_FORMAT_VERSION` in `src/save.rs` on any breaking schema change. There is no migration — older saves are rejected.
 
-`MapType::Test` builds `WorldData::test_world()`: an 80m floor with perimeter stone walls, a movement test obstacle course, ore clusters, and tree groves. `MapType::Procedural { seed, size }` currently builds a flat floor sized by `ProceduralMapSize::{Small, Medium, Large}` (64m / 128m / 256m); the seed is reserved for future generation work.
+`MapType::Procedural { seed, size }` builds a chunk-generated world sized by `ProceduralMapSize::{Small, Medium, Large}` (3×3 / 5×5 / 9×9 chunks at `CHUNK_SIZE_M` per side). The server's `ChunkManager` populates resource nodes per-chunk from the seed via AoI streaming. `WorldData::test_world()` is a convenience helper used by tests and the menu backdrop fallback — it returns the default procedural world.
 
 `WorldStore::platform_default()` stores saves under the platform app-data directory in `worlds/`.
 

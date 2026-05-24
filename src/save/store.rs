@@ -91,7 +91,7 @@ impl WorldStore {
     }
 
     pub fn create_world(&self, name: &str, owner_steam_id: Option<SteamId>) -> Result<WorldSave> {
-        self.create_world_with_map(name, owner_steam_id, MapType::Test)
+        self.create_world_with_map(name, owner_steam_id, MapType::default())
     }
 
     pub fn create_world_with_map(
@@ -179,7 +179,7 @@ mod tests {
             .expect("world should be created");
 
         assert_eq!(save.name, "Test World");
-        assert_eq!(save.map, MapType::Test);
+        assert_eq!(save.map, MapType::default());
         assert_eq!(save.admins, vec![123]);
         assert!(!save.map.world_data().blocks.is_empty());
 

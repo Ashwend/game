@@ -295,9 +295,11 @@ fn create_world_dialog_builds_selected_maps() {
     let mut dialog = CreateWorldDialog::default();
 
     assert_eq!(dialog.name, "New World");
-    assert_eq!(dialog.selected_map().expect("test map"), MapType::Test);
+    assert!(matches!(
+        dialog.selected_map().expect("default procedural map"),
+        MapType::Procedural { .. }
+    ));
 
-    dialog.map_kind = CreateWorldMapKind::Procedural;
     dialog.procedural_size = ProceduralMapSize::Large;
     dialog.seed = "42".to_owned();
     assert_eq!(
@@ -360,7 +362,7 @@ fn apply_message_handles_welcome_chat_events_and_rejections() {
 
     runtime.apply_message(ServerMessage::Welcome {
         client_id: 1,
-        map: MapType::Test,
+        map: MapType::default(),
         world: WorldData::test_world(),
         is_admin: true,
         snapshot,
