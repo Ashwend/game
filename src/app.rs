@@ -56,7 +56,10 @@ use self::{
         toggle_pause_system, toggle_perf_stats_system, update_cursor_system,
         update_pickup_target_system, update_tool_swap_state_system,
     },
-    ui::{ButtonSoundRequests, button_sound_system, ui_system},
+    ui::{
+        ButtonSoundRequests, InventorySoundRequests, button_sound_system, inventory_sound_system,
+        ui_system,
+    },
 };
 
 pub(crate) const EYE_HEIGHT: f32 = 1.62;
@@ -203,6 +206,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         // animation is on-screen.
         .insert_resource(WinitSettings::continuous())
         .init_resource::<ButtonSoundRequests>()
+        .init_resource::<InventorySoundRequests>()
         .add_message::<RemoteImpactEvent>()
         .add_message::<ClientErrorToast>()
         .add_message::<IncomingVoiceMessage>()
@@ -280,7 +284,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .add_systems(Startup, setup_voice_system)
         .add_systems(
             EguiPrimaryContextPass,
-            (ui_system, button_sound_system).chain(),
+            (ui_system, button_sound_system, inventory_sound_system).chain(),
         )
         .add_systems(
             Update,

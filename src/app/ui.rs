@@ -36,8 +36,8 @@ use self::{
     worlds::worlds_ui,
 };
 use super::state::{
-    ClientErrorToast, ClientRuntime, ClientSettings, MenuBackdropVisibility, MenuState,
-    OptionsUiState, SaveStore, Screen, SessionShutdownTasks, SteamUser, ToastState,
+    ClientErrorToast, ClientRuntime, ClientSettings, InventorySoundEvent, MenuBackdropVisibility,
+    MenuState, OptionsUiState, SaveStore, Screen, SessionShutdownTasks, SteamUser, ToastState,
 };
 use super::voice::VoiceState;
 
@@ -55,6 +55,7 @@ pub(crate) struct UiResources<'w, 's> {
     toasts: Res<'w, ToastState>,
     shutdown_tasks: ResMut<'w, SessionShutdownTasks>,
     button_sound_requests: ResMut<'w, ButtonSoundRequests>,
+    inventory_sound_requests: ResMut<'w, InventorySoundRequests>,
     error_toasts: MessageWriter<'w, ClientErrorToast>,
     store: Res<'w, SaveStore>,
     user: Res<'w, SteamUser>,
@@ -156,6 +157,7 @@ pub(crate) fn ui_system(
                     &mut resources.inventory_ui,
                     &resources.pickup_target,
                     &mut resources.error_toasts,
+                    &mut resources.inventory_sound_requests,
                     delta_seconds,
                 );
                 let inventory_open = resources.menu.inventory_open;
@@ -239,6 +241,36 @@ fn button_sound_id(sound: theme::ButtonSound) -> SoundId {
     match sound {
         theme::ButtonSound::Click => SoundId::UiButtonClick,
         theme::ButtonSound::Hover => SoundId::UiButtonHover,
+    }
+}
+
+/// Queue of inventory change cues recorded while the UI observed the
+/// player's inventory snapshot. Drained by [`inventory_sound_system`] in
+/// the same pass as button sounds so all UI-driven cues flow through the
+/// central [`PlaySound`] bus.
+#[derive(Resource, Default)]
+pub(crate) struct InventorySoundRequests(Vec<InventorySoundEvent>);
+
+impl InventorySoundRequests {
+    pub(crate) fn push(&mut self, event: InventorySoundEvent) {
+        self.0.push(event);
+    }
+}
+
+pub(crate) fn inventory_sound_system(
+    mut requests: ResMut<InventorySoundRequests>,
+    mut play: MessageWriter<PlaySound>,
+) {
+    for event in std::mem::take(&mut requests.0) {
+        play.write(PlaySound::non_spatial(inventory_sound_id(event)));
+    }
+}
+
+fn inventory_sound_id(event: InventorySoundEvent) -> SoundId {
+    match event {
+        InventorySoundEvent::Pickup => SoundId::InventoryPickup,
+        InventorySoundEvent::Drop => SoundId::InventoryDrop,
+        InventorySoundEvent::Move => SoundId::InventoryMove,
     }
 }
 

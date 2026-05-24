@@ -25,7 +25,9 @@ pub(crate) use gather::{
     GatherInputState, ImpactEffectKind, PICKUP_TARGET_SCAN_INTERVAL_SECS, PendingAudioCue,
     PendingImpactEffect, PickupTargetState, RemoteImpactEvent, SwingImpact, ToolSwapState,
 };
-pub(crate) use inventory::{InventoryDrag, InventoryDragButton, InventoryUiState};
+pub(crate) use inventory::{
+    InventoryDrag, InventoryDragButton, InventorySoundEvent, InventoryUiState,
+};
 pub(crate) use look::LookState;
 pub(crate) use menu::{MenuState, SaveStore, Screen, SteamUser};
 pub(crate) use options_ui::{OptionsTab, OptionsUiState, PendingRebind};

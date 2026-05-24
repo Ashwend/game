@@ -5,7 +5,10 @@ mod slot;
 use bevy_egui::egui::{self, Align2, Color32, Stroke};
 
 use crate::{
-    app::state::{ClientRuntime, ErrorToastSink, InventoryUiState, MenuState, PickupTargetState},
+    app::{
+        state::{ClientRuntime, ErrorToastSink, InventoryUiState, MenuState, PickupTargetState},
+        ui::InventorySoundRequests,
+    },
     protocol::{ACTIONBAR_SLOT_COUNT, ItemContainerSlot, PlayerState},
 };
 
@@ -22,6 +25,7 @@ const INVENTORY_ROWS: usize = 4;
 const INVENTORY_PANEL_WIDTH: f32 =
     INVENTORY_COLUMNS as f32 * SLOT_SIZE + (INVENTORY_COLUMNS - 1) as f32 * SLOT_GAP + 48.0;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn inventory_ui(
     ctx: &egui::Context,
     menu: &mut MenuState,
@@ -29,12 +33,17 @@ pub(super) fn inventory_ui(
     inventory_ui: &mut InventoryUiState,
     pickup_target: &PickupTargetState,
     error_toasts: &mut dyn ErrorToastSink,
+    inventory_sound_requests: &mut InventorySoundRequests,
     delta_seconds: f32,
 ) {
     inventory_ui.begin_frame();
     inventory_ui.tick_slot_flashes(delta_seconds);
     match runtime.local_player().and_then(PlayerState::inventory) {
-        Some(inventory) => inventory_ui.observe_inventory(inventory),
+        Some(inventory) => {
+            if let Some(event) = inventory_ui.observe_inventory(inventory) {
+                inventory_sound_requests.push(event);
+            }
+        }
         None => inventory_ui.clear_inventory_tracking(),
     }
     if inventory_ui.was_open && !menu.inventory_open {

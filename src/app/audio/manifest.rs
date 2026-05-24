@@ -50,6 +50,11 @@ pub(crate) enum SoundId {
     FootstepWood,
     FootstepConcrete,
     FootstepSand,
+
+    // --- Inventory cues ---
+    InventoryPickup,
+    InventoryDrop,
+    InventoryMove,
 }
 
 /// Returns every defined sound. Useful for the loader at startup so we
@@ -71,6 +76,9 @@ pub(crate) fn all_sound_ids() -> &'static [SoundId] {
         SoundId::FootstepWood,
         SoundId::FootstepConcrete,
         SoundId::FootstepSand,
+        SoundId::InventoryPickup,
+        SoundId::InventoryDrop,
+        SoundId::InventoryMove,
     ]
 }
 
@@ -230,6 +238,37 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
             pitch_jitter: 0.03,
             looped: false,
         },
+
+        // Inventory pickup — sharp, bright, but kept well below impact
+        // cues so it reads as confirmation, not an achievement chime.
+        // ±4 % pitch jitter keeps a rapid-fire pickup burst from sounding
+        // like a metronome.
+        SoundId::InventoryPickup => SoundDefaults {
+            category: SoundCategory::Sfx2d,
+            base_gain_db: -16.0,
+            spatial: None,
+            pitch_jitter: 0.04,
+            looped: false,
+        },
+        // Drop cue — slightly more body, hits a touch quieter than pickup
+        // because dropping is a deliberate negative-feedback action, not
+        // an achievement.
+        SoundId::InventoryDrop => SoundDefaults {
+            category: SoundCategory::Sfx2d,
+            base_gain_db: -18.0,
+            spatial: None,
+            pitch_jitter: 0.04,
+            looped: false,
+        },
+        // Slot-shuffle tick — UI chrome, deliberately quiet so dragging a
+        // stack across the grid doesn't drown out gameplay audio.
+        SoundId::InventoryMove => SoundDefaults {
+            category: SoundCategory::Ui,
+            base_gain_db: -28.0,
+            spatial: None,
+            pitch_jitter: 0.05,
+            looped: false,
+        },
     }
 }
 
@@ -260,6 +299,10 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         "impacts/miss-3.wav",
     ];
 
+    static INVENTORY_PICKUP: [&str; 1] = ["inventory/pickup-item.wav"];
+    static INVENTORY_DROP: [&str; 1] = ["inventory/drop-item.wav"];
+    static INVENTORY_MOVE: [&str; 1] = ["inventory/inventory-move.wav"];
+
     match id {
         SoundId::UiButtonClick => &UI_CLICK,
         SoundId::UiButtonHover => &UI_HOVER,
@@ -280,6 +323,9 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         SoundId::FootstepWood => footstep_paths("wood"),
         SoundId::FootstepConcrete => footstep_paths("concrete"),
         SoundId::FootstepSand => footstep_paths("sand"),
+        SoundId::InventoryPickup => &INVENTORY_PICKUP,
+        SoundId::InventoryDrop => &INVENTORY_DROP,
+        SoundId::InventoryMove => &INVENTORY_MOVE,
     }
 }
 

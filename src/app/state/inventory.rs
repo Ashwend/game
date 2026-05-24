@@ -5,6 +5,23 @@ use bevy_egui::egui;
 
 use crate::protocol::{ItemContainerSlot, ItemStack, PlayerInventoryState};
 
+/// One audible inventory change. Returned by [`InventoryUiState::observe_inventory`]
+/// so the UI layer can play the matching cue without re-diffing the
+/// snapshot. The variants are mutually exclusive; ties go to whichever
+/// change is most informative — gains beat losses, losses beat shuffles —
+/// since a tick that did all three at once is dominated by the "new item
+/// arrived" cue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InventorySoundEvent {
+    /// Total inventory quantity grew — an item entered the player's bag.
+    Pickup,
+    /// Total inventory quantity shrank — an item left the bag (drop, use).
+    Drop,
+    /// Per-slot contents changed but the total stayed the same — a move,
+    /// swap, or partial-stack split inside the grid.
+    Move,
+}
+
 /// Duration of the "you just got items in this slot" highlight. Long enough
 /// to notice in peripheral vision when picking up multiple items in rapid
 /// succession; short enough to not feel laggy.
@@ -56,8 +73,18 @@ impl InventoryUiState {
     /// quantity increase). Drag-driven moves that just shuffle items
     /// between slots also flash the destination, which reads correctly as
     /// "items just landed here".
-    pub(crate) fn observe_inventory(&mut self, inventory: &PlayerInventoryState) {
+    ///
+    /// Returns an [`InventorySoundEvent`] describing the most-informative
+    /// change since the previous observation, or `None` if nothing changed
+    /// or this is the seeding observation. The very first observation
+    /// after (re)connecting never reports a sound, since "every slot
+    /// gained the items it had before disconnect" is not a real pickup.
+    pub(crate) fn observe_inventory(
+        &mut self,
+        inventory: &PlayerInventoryState,
+    ) -> Option<InventorySoundEvent> {
         let last = self.last_seen_inventory.take();
+        let mut event = None;
         if let Some(previous) = &last {
             for (index, current) in inventory.inventory_slots.iter().enumerate() {
                 let previous_stack = previous.inventory_slots.get(index).and_then(Option::as_ref);
@@ -73,8 +100,10 @@ impl InventoryUiState {
                         .insert(ItemContainerSlot::actionbar(index), 0.0);
                 }
             }
+            event = inventory_sound_event(previous, inventory);
         }
         self.last_seen_inventory = Some(inventory.clone());
+        event
     }
 
     /// Returns the flash strength for `slot`, with 1.0 right after the
@@ -94,6 +123,53 @@ impl InventoryUiState {
     pub(crate) fn clear_inventory_tracking(&mut self) {
         self.slot_flashes.clear();
         self.last_seen_inventory = None;
+    }
+}
+
+fn inventory_sound_event(
+    previous: &PlayerInventoryState,
+    current: &PlayerInventoryState,
+) -> Option<InventorySoundEvent> {
+    let previous_total = total_quantity(previous);
+    let current_total = total_quantity(current);
+    if current_total > previous_total {
+        Some(InventorySoundEvent::Pickup)
+    } else if current_total < previous_total {
+        Some(InventorySoundEvent::Drop)
+    } else if slots_rearranged(previous, current) {
+        Some(InventorySoundEvent::Move)
+    } else {
+        None
+    }
+}
+
+fn total_quantity(inventory: &PlayerInventoryState) -> u64 {
+    let sum_slots = |slots: &[Option<ItemStack>]| -> u64 {
+        slots
+            .iter()
+            .flatten()
+            .map(|stack| u64::from(stack.quantity))
+            .sum()
+    };
+    sum_slots(&inventory.inventory_slots) + sum_slots(&inventory.actionbar_slots)
+}
+
+fn slots_rearranged(previous: &PlayerInventoryState, current: &PlayerInventoryState) -> bool {
+    fn diff(previous: &[Option<ItemStack>], current: &[Option<ItemStack>]) -> bool {
+        previous
+            .iter()
+            .zip(current.iter())
+            .any(|(p, c)| !stacks_equal(p.as_ref(), c.as_ref()))
+    }
+    diff(&previous.inventory_slots, &current.inventory_slots)
+        || diff(&previous.actionbar_slots, &current.actionbar_slots)
+}
+
+fn stacks_equal(previous: Option<&ItemStack>, current: Option<&ItemStack>) -> bool {
+    match (previous, current) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.item_id == b.item_id && a.quantity == b.quantity,
+        _ => false,
     }
 }
 
@@ -196,6 +272,52 @@ mod tests {
                 .slot_flashes
                 .contains_key(&ItemContainerSlot::inventory(3))
         );
+    }
+
+    #[test]
+    fn observe_inventory_classifies_total_quantity_changes() {
+        let mut state = InventoryUiState::default();
+
+        // Seed baseline — no event on the first observation.
+        let baseline = PlayerInventoryState::empty();
+        assert_eq!(state.observe_inventory(&baseline), None);
+
+        // Quantity grew → Pickup.
+        let mut after_pickup = baseline.clone();
+        after_pickup.inventory_slots[0] = Some(ItemStack::new("coal", 3));
+        assert_eq!(
+            state.observe_inventory(&after_pickup),
+            Some(InventorySoundEvent::Pickup)
+        );
+
+        // Stack consolidated into the same total → Move (same total,
+        // different per-slot contents).
+        let mut after_move = after_pickup.clone();
+        after_move.inventory_slots[0] = None;
+        after_move.actionbar_slots[0] = Some(ItemStack::new("coal", 3));
+        assert_eq!(
+            state.observe_inventory(&after_move),
+            Some(InventorySoundEvent::Move)
+        );
+
+        // Same snapshot again → no event.
+        assert_eq!(state.observe_inventory(&after_move), None);
+
+        // Quantity shrank → Drop.
+        let mut after_drop = after_move.clone();
+        after_drop.actionbar_slots[0] = Some(ItemStack::new("coal", 1));
+        assert_eq!(
+            state.observe_inventory(&after_drop),
+            Some(InventorySoundEvent::Drop)
+        );
+    }
+
+    #[test]
+    fn observe_inventory_returns_none_when_nothing_changed() {
+        let mut state = InventoryUiState::default();
+        let snapshot = PlayerInventoryState::empty();
+        assert_eq!(state.observe_inventory(&snapshot), None);
+        assert_eq!(state.observe_inventory(&snapshot), None);
     }
 
     #[test]
