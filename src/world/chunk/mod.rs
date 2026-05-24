@@ -106,7 +106,8 @@ impl ChunkDims {
 /// tree variants collapsed into three kinds. Listed in a single enum (vs
 /// using definition-id strings) so the capacity tables and generator
 /// can pattern-match exhaustively at the compiler.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum NodeKind {
     TreeSmall,
     TreeMedium,

@@ -136,7 +136,7 @@ impl GameServer {
         // Resource nodes: trust the saved state once a world has ever been
         // hosted (so harvested resources don't respawn). For brand-new worlds
         // the save has `None` and we seed from the chunk generator.
-        let (chunk_manager, resource_nodes) = match (
+        let (mut chunk_manager, resource_nodes) = match (
             save.state.resource_nodes.take(),
             save.state.chunk_manager.take(),
         ) {
@@ -166,6 +166,11 @@ impl GameServer {
         for item in std::mem::take(&mut save.state.dropped_items) {
             let physics_body =
                 dropped_item_physics.spawn_body(item.position, Vec3Net::ZERO, item.yaw);
+            // Anchor the reloaded drop to its chunk so a returning
+            // player immediately sees it in their snapshot — without
+            // this the item exists server-side but is filtered out of
+            // every AoI ring until something nudges its position.
+            chunk_manager.track_dropped_item(item.id, item.position);
             dropped_items.insert(
                 item.id,
                 DroppedItemBody {
@@ -228,8 +233,17 @@ impl GameServer {
                 },
             }],
             ClientMessage::Movement(movement) => {
-                if let Some(client) = self.clients.get_mut(&client_id) {
+                let new_position = if let Some(client) = self.clients.get_mut(&client_id) {
                     accept_client_movement(&mut client.controller, movement);
+                    Some(client.controller.position)
+                } else {
+                    None
+                };
+                if let Some(position) = new_position {
+                    // Keep the chunk anchor in sync so the next snapshot
+                    // filters every networked entity through the player's
+                    // new AoI ring.
+                    self.chunk_manager.update_player_chunk(client_id, position);
                 }
                 Vec::new()
             }
@@ -285,6 +299,14 @@ impl GameServer {
         self.world_time.advance(delta_seconds);
         self.dropped_item_physics
             .step(delta_seconds, &mut self.dropped_items);
+        // Re-anchor every dropped item now that gravity/friction have
+        // moved them. Items that didn't cross a chunk boundary take the
+        // cheap "already in this chunk" path; only boundary crossers
+        // pay the membership swap.
+        for (id, body) in &self.dropped_items {
+            self.chunk_manager
+                .update_dropped_item_chunk(*id, body.item.position);
+        }
         // Chunk manager owns regrows now — fresh-position spawns 5-15 min
         // after a node is depleted. The result is spliced into the live
         // node map so the snapshot path picks them up automatically.

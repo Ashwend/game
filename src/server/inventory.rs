@@ -273,6 +273,9 @@ impl GameServer {
                 spawn_tick: self.tick,
             },
         );
+        // Anchor the drop to its chunk so the AoI snapshot path picks
+        // it up. Future physics steps will re-anchor if it drifts.
+        self.chunk_manager.track_dropped_item(id, position);
     }
 
     fn pick_up_dropped_item(
@@ -311,6 +314,7 @@ impl GameServer {
         if remainder.is_none() {
             if let Some(body) = self.dropped_items.remove(&dropped_item_id) {
                 self.dropped_item_physics.remove_body(body.body_handle);
+                self.chunk_manager.untrack_dropped_item(dropped_item_id);
             }
         } else if accepted > 0
             && let Some(body) = self.dropped_items.get_mut(&dropped_item_id)

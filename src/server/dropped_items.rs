@@ -286,6 +286,7 @@ impl GameServer {
         for id in expired {
             if let Some(body) = self.dropped_items.remove(&id) {
                 self.dropped_item_physics.remove_body(body.body_handle);
+                self.chunk_manager.untrack_dropped_item(id);
             }
         }
     }
@@ -349,6 +350,7 @@ impl GameServer {
         };
         if drain_source && let Some(body) = self.dropped_items.remove(&source_id) {
             self.dropped_item_physics.remove_body(body.body_handle);
+            self.chunk_manager.untrack_dropped_item(source_id);
         }
 
         Some((item_id, moved))

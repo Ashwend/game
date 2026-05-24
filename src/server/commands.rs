@@ -18,7 +18,7 @@ use crate::{
     resources::{
         COAL_NODE_ID, IRON_NODE_ID, SULFUR_NODE_ID, resource_node_definition, spawn_resource_node,
     },
-    world::WorldResourceNodeSpawn,
+    world::{NodeKind, WorldResourceNodeSpawn},
     world_time::{MAX_MULTIPLIER, MIN_MULTIPLIER, parse_time_token},
 };
 
@@ -240,6 +240,13 @@ impl GameServer {
             .map(|definition| definition.name)
             .unwrap_or("Ore");
 
+        // Register with the chunk anchor index so the snapshot AoI
+        // includes the spawn — without this, admin-spawned nodes are
+        // invisible because per-chunk membership is the AoI source of
+        // truth.
+        let kind = ore_node_kind(ore_id);
+        self.chunk_manager
+            .track_resource_node(node_id, kind, position);
         self.resource_nodes.insert(node_id, node);
 
         reply_success(
@@ -261,6 +268,19 @@ fn parse_ore_token(arg: &str) -> Option<&'static str> {
         "iron" => Some(IRON_NODE_ID),
         "sulfur" | "sulphur" => Some(SULFUR_NODE_ID),
         _ => None,
+    }
+}
+
+/// Map an ore `definition_id` to the matching `NodeKind` for chunk
+/// membership bookkeeping. Defaults to `CoalOre` for unknown ids so the
+/// node still ends up tracked rather than silently invisible — callers
+/// only pass ids that came out of `parse_ore_token`, so the fallback
+/// shouldn't fire in practice.
+fn ore_node_kind(ore_id: &str) -> NodeKind {
+    match ore_id {
+        IRON_NODE_ID => NodeKind::IronOre,
+        SULFUR_NODE_ID => NodeKind::SulfurOre,
+        _ => NodeKind::CoalOre,
     }
 }
 

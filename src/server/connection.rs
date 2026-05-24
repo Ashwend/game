@@ -80,8 +80,14 @@ impl GameServer {
             view_tier: crate::protocol::ViewRadiusTier::default(),
         };
 
+        let initial_position = client.controller.position;
         self.clients.insert(client_id, client);
         self.steam_to_client.insert(steam_id, client_id);
+        // Register the player with the chunk anchor index so the AoI
+        // path can find them. Done before building the welcome snapshot
+        // so peers already in the world see the new arrival on their
+        // next tick.
+        self.chunk_manager.track_player(client_id, initial_position);
 
         let snapshot = self.snapshot_for(client_id);
         let world_time = self.world_time_snapshot();
@@ -117,6 +123,7 @@ impl GameServer {
         // inventory, not the prior persisted copy.
         let persisted = persisted_player_from(&client);
         self.steam_to_client.remove(&client.steam_id);
+        self.chunk_manager.untrack_player(client_id);
         let name = client.name;
         self.remember_player(persisted);
 
@@ -151,9 +158,44 @@ impl GameServer {
     }
 
     fn snapshot_inner(&self, for_client: Option<ClientId>) -> WorldSnapshot {
+        // Single AoI gate: ask the chunk manager which chunks this
+        // client should see, then build every networked-entity vector
+        // from chunk membership. `for_client = None` (tests, the brief
+        // handshake window) means no client to filter against — the
+        // legacy unfiltered behaviour, used so test fixtures aren't
+        // accidentally starved of state.
+        let chunk_filter = for_client
+            .and_then(|cid| self.clients.get(&cid))
+            .map(|client| {
+                self.chunk_manager
+                    .visible_chunks(client.controller.position, client.view_tier)
+            });
+
         let mut players = self
             .clients
             .values()
+            .filter(|client| match (&chunk_filter, for_client) {
+                // No filter (tests / handshake snapshot): include everyone.
+                (None, _) => true,
+                // Always include the local player, regardless of which
+                // chunk their controller currently anchors to.
+                (Some(_), Some(local)) if client.client_id == local => true,
+                // Peers visible only if their anchor chunk falls inside
+                // the local player's AoI ring. Falls back to the raw
+                // controller position if the manager hasn't recorded
+                // the player yet (transient state on connect).
+                (Some(visible), _) => self
+                    .chunk_manager
+                    .player_chunk(client.client_id)
+                    .map(|coord| visible.contains(&coord))
+                    .unwrap_or_else(|| {
+                        let coord = crate::world::ChunkCoord::from_world(
+                            client.controller.position.x,
+                            client.controller.position.z,
+                        );
+                        visible.contains(&coord)
+                    }),
+            })
             .map(|client| {
                 let inventory = if Some(client.client_id) == for_client {
                     Some(client.inventory.clone())
@@ -182,32 +224,38 @@ impl GameServer {
             .collect::<Vec<_>>();
         players.sort_by_key(|player| player.client_id);
 
+        let visible_drops = chunk_filter.as_ref().map(|chunks| {
+            chunks
+                .iter()
+                .flat_map(|coord| self.chunk_manager.dropped_items_in(*coord))
+                .collect::<std::collections::HashSet<_>>()
+        });
         let mut dropped_items = self
             .dropped_items
             .values()
+            .filter(|body| match &visible_drops {
+                None => true,
+                Some(visible) => visible.contains(&body.item.id),
+            })
             .map(|body| body.item.clone())
             .collect::<Vec<_>>();
         dropped_items.sort_by_key(|item| item.id);
-        // AoI filter: only ship the resource nodes inside this client's
-        // loaded grid ring. Calls with `for_client = None` (tests, the
-        // brief handshake window) get the full set so they aren't
-        // accidentally starved of nodes.
-        let visible: Option<std::collections::HashSet<crate::protocol::ResourceNodeId>> =
-            for_client
-                .and_then(|cid| self.clients.get(&cid))
-                .map(|client| {
-                    self.chunk_manager
-                        .nodes_visible_to(client.controller.position, client.view_tier)
-                });
-        let mut resource_nodes = if let Some(filter) = visible {
-            self.resource_nodes
-                .values()
-                .filter(|node| filter.contains(&node.id))
-                .cloned()
-                .collect::<Vec<_>>()
-        } else {
-            self.resource_nodes.values().cloned().collect::<Vec<_>>()
-        };
+
+        let visible_nodes = chunk_filter.as_ref().map(|chunks| {
+            chunks
+                .iter()
+                .flat_map(|coord| self.chunk_manager.nodes_in(*coord))
+                .collect::<std::collections::HashSet<_>>()
+        });
+        let mut resource_nodes = self
+            .resource_nodes
+            .values()
+            .filter(|node| match &visible_nodes {
+                None => true,
+                Some(visible) => visible.contains(&node.id),
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         resource_nodes.sort_by_key(|node| node.id);
 
         WorldSnapshot {

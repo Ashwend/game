@@ -187,6 +187,71 @@ fn dropped_items_despawn_after_their_lifetime() {
 }
 
 #[test]
+fn dropped_items_are_filtered_by_chunk_aoi_in_per_client_snapshots() {
+    // 9×9 chunk world (chunks -4..=4) so we can actually move a player
+    // past the medium-tier AoI ring (radius 2 + 1 buffer = 3 chunks).
+    // In the default 5×5 test world every chunk falls inside the ring,
+    // so AoI filtering is a no-op there.
+    use crate::{
+        save::WorldSave,
+        world::{MapType, ProceduralMapSize},
+    };
+    let mut server = GameServer::new(
+        WorldSave::new_with_map(
+            "AoI",
+            Some(1),
+            MapType::Procedural {
+                seed: 0xC0DE_C0DE,
+                size: ProceduralMapSize::Large,
+            },
+        ),
+        ServerSettings {
+            auth_mode: AuthMode::Offline,
+            singleplayer_host: Some(1),
+        },
+    );
+    let client_id = connect_host(&mut server);
+
+    // Drop an item at the player's spawn (chunk 0,0). Snapshot for the
+    // player — still at chunk 0,0 — should see it.
+    server.spawn_dropped_item(
+        ItemStack::new(TEST_ORE_ID, 1),
+        Vec3Net::new(0.0, DROPPED_ITEM_RADIUS, 0.0),
+        Vec3Net::ZERO,
+        0.0,
+    );
+    let close = server.snapshot_for(client_id);
+    assert_eq!(
+        close.dropped_items.len(),
+        1,
+        "item at the player's chunk must appear in their snapshot"
+    );
+
+    // Move the player to chunk (-4, 0) — Chebyshev distance 4 from the
+    // origin, outside the radius-3 visible ring. The drop should be
+    // filtered out of this player's snapshot.
+    let far_position = Vec3Net::new(-260.0, 0.0, 0.0);
+    server.receive(
+        client_id,
+        ClientMessage::Movement(movement(1, far_position)),
+    );
+    let far = server.snapshot_for(client_id);
+    assert!(
+        far.dropped_items.is_empty(),
+        "drop at the origin chunk should be filtered out when the player is 4 chunks away"
+    );
+
+    // The unfiltered snapshot (the test/handshake path) still sees the
+    // item — proves we filter per-client, not globally.
+    let unfiltered = server.snapshot();
+    assert_eq!(
+        unfiltered.dropped_items.len(),
+        1,
+        "global snapshot should still carry the drop"
+    );
+}
+
+#[test]
 fn dropped_item_physics_settles_on_the_floor() {
     let mut server = server();
     server.spawn_dropped_item(

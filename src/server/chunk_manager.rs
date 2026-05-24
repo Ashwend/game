@@ -1,20 +1,28 @@
 //! Server-side owner of the chunk system.
 //!
+//! Chunks are the single anchor point for AoI streaming. Every networked
+//! entity that lives in the world — resource nodes, dropped items, and
+//! eventually buildings — is registered with the chunk that contains its
+//! position. The snapshot builder asks the manager which chunks a given
+//! player should see, then collects all entities anchored to those
+//! chunks; there is no parallel per-entity AoI path.
+//!
 //! Responsibilities, all server-authoritative:
 //!
 //! 1. **Seeded generation** — builds the initial node spawn list for a
 //!    world from `(world_seed, dims)` by calling the pure chunk generator.
-//! 2. **Identity tracking** — remembers which grid + kind every live
-//!    node belongs to so the regrow scheduler can fire fresh-position
-//!    replacements after a node is depleted.
+//! 2. **Membership tracking** — for every entity type the chunk system
+//!    knows about, the manager remembers which chunk it belongs to so
+//!    snapshots can filter by AoI in O(visible_chunks × members).
+//!    Entities themselves live in their owning collections (resource
+//!    nodes in `GameServer::resource_nodes`, drops in `dropped_items`,
+//!    players in `clients`); the chunk manager only stores ids.
 //! 3. **Regrow scheduling** — when a node is depleted, schedules a fresh
 //!    spawn 5–15 min later (jittered) at a noise-valid position in the
 //!    same grid, up to the chunk's capacity ceiling.
 //! 4. **AoI streaming** — given a player position and view radius tier,
-//!    returns the set of node IDs the player should see. The server's
-//!    snapshot builder uses this to filter `WorldSnapshot.resource_nodes`
-//!    per-player, so the wire only carries nodes inside the player's
-//!    loaded ring.
+//!    returns the set of chunk coords (and per-coord entity ids) the
+//!    player should see. Used to filter every per-player snapshot.
 //! 5. **Persistence** — serializes the per-chunk live counts and pending
 //!    regrow events into [`ChunkManagerSave`], which the save layer
 //!    embeds in `WorldStateSave`. Reload reconstitutes the manager from
@@ -31,7 +39,9 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    protocol::{ResourceNodeId, ResourceNodeState, Vec3Net, ViewRadiusTier},
+    protocol::{
+        ClientId, DroppedItemId, ResourceNodeId, ResourceNodeState, Vec3Net, ViewRadiusTier,
+    },
     resources::spawn_resource_node,
     world::{
         ChunkClassification, ChunkCoord, ChunkDims, ChunkSpawn, ClassificationChannels, NodeKind,
@@ -92,8 +102,9 @@ pub fn view_tier_radius(tier: ViewRadiusTier) -> u32 {
 }
 
 /// Per-grid state carried in memory while the server is running. Most of
-/// it is derived from the seed and live nodes, but the live node set
-/// itself needs explicit tracking since players harvest it.
+/// it is derived from the seed and live nodes, but the live entity sets
+/// themselves need explicit tracking since players harvest nodes, drop
+/// items, and move between chunks.
 #[derive(Debug, Default, Clone)]
 struct ActiveChunkState {
     classification: ChunkClassification,
@@ -104,6 +115,14 @@ struct ActiveChunkState {
     /// Live node ids inside this chunk, grouped by kind. Lets the
     /// scheduler check "is this kind already at cap?" in O(1).
     live_by_kind: HashMap<NodeKind, HashSet<ResourceNodeId>>,
+    /// Dropped items anchored to this chunk. Updated whenever an item
+    /// is spawned, picked up, merged, despawned, or moves across the
+    /// boundary under physics.
+    dropped_items: HashSet<DroppedItemId>,
+    /// Players whose current position falls inside this chunk. Updated
+    /// from accepted movement messages; the per-player anchor is what
+    /// the AoI ring is centred on.
+    players: HashSet<ClientId>,
 }
 
 impl ActiveChunkState {
@@ -184,67 +203,14 @@ pub struct ChunkManagerSave {
 pub struct NodeChunkEntry {
     pub node_id: ResourceNodeId,
     pub coord: ChunkCoord,
-    pub kind: SerializedNodeKind,
+    pub kind: NodeKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PendingRegrowSave {
     pub coord: ChunkCoord,
-    pub kind: SerializedNodeKind,
+    pub kind: NodeKind,
     pub ticks_from_now: u64,
-}
-
-/// Wire-friendly serialized form of [`NodeKind`]. The in-memory enum is
-/// declared in `crate::world` and not annotated with serde for cleanliness;
-/// the conversion lives here so the save module never imports `serde` for
-/// gameplay enums.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SerializedNodeKind {
-    TreeSmall,
-    TreeMedium,
-    TreeLarge,
-    SurfaceStone,
-    BranchPile,
-    HayGrass,
-    CoalOre,
-    IronOre,
-    SulfurOre,
-    StoneVein,
-}
-
-impl From<NodeKind> for SerializedNodeKind {
-    fn from(kind: NodeKind) -> Self {
-        match kind {
-            NodeKind::TreeSmall => Self::TreeSmall,
-            NodeKind::TreeMedium => Self::TreeMedium,
-            NodeKind::TreeLarge => Self::TreeLarge,
-            NodeKind::SurfaceStone => Self::SurfaceStone,
-            NodeKind::BranchPile => Self::BranchPile,
-            NodeKind::HayGrass => Self::HayGrass,
-            NodeKind::CoalOre => Self::CoalOre,
-            NodeKind::IronOre => Self::IronOre,
-            NodeKind::SulfurOre => Self::SulfurOre,
-            NodeKind::StoneVein => Self::StoneVein,
-        }
-    }
-}
-
-impl From<SerializedNodeKind> for NodeKind {
-    fn from(kind: SerializedNodeKind) -> Self {
-        match kind {
-            SerializedNodeKind::TreeSmall => Self::TreeSmall,
-            SerializedNodeKind::TreeMedium => Self::TreeMedium,
-            SerializedNodeKind::TreeLarge => Self::TreeLarge,
-            SerializedNodeKind::SurfaceStone => Self::SurfaceStone,
-            SerializedNodeKind::BranchPile => Self::BranchPile,
-            SerializedNodeKind::HayGrass => Self::HayGrass,
-            SerializedNodeKind::CoalOre => Self::CoalOre,
-            SerializedNodeKind::IronOre => Self::IronOre,
-            SerializedNodeKind::SulfurOre => Self::SulfurOre,
-            SerializedNodeKind::StoneVein => Self::StoneVein,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -253,6 +219,14 @@ pub struct ChunkManager {
     dims: ChunkDims,
     grids: HashMap<ChunkCoord, ActiveChunkState>,
     node_chunks: HashMap<ResourceNodeId, (ChunkCoord, NodeKind)>,
+    /// Reverse index from dropped item id to its current chunk. Lets the
+    /// physics step's update path remove-then-reinsert when an item
+    /// crosses a chunk boundary without scanning every chunk.
+    dropped_item_chunks: HashMap<DroppedItemId, ChunkCoord>,
+    /// Reverse index from connected client to its current chunk.
+    /// Updated whenever an accepted movement message changes the chunk
+    /// the player is standing in.
+    player_chunks: HashMap<ClientId, ChunkCoord>,
     regrow_queue: BinaryHeap<RegrowEvent>,
     next_node_id: u64,
     /// Stir-in counter for regrow RNG so identical re-scheduling on the
@@ -272,36 +246,10 @@ impl ChunkManager {
         // re-run the Poisson sampler with a target multiplier.
         apply_ring_budget(&mut spawns);
 
-        let mut grids: HashMap<ChunkCoord, ActiveChunkState> = HashMap::new();
+        let mut grids = build_empty_grids(world_seed, dims);
         let mut node_chunks: HashMap<ResourceNodeId, (ChunkCoord, NodeKind)> = HashMap::new();
         let mut next_node_id: u64 = 1;
         let mut live_states: Vec<ResourceNodeState> = Vec::with_capacity(spawns.len());
-
-        // Pre-seed the per-chunk capacity table from the classification
-        // sampler so regrows respect the same cap the initial pass used.
-        for coord in dims.coords() {
-            let channels = ClassificationChannels::sample(world_seed, coord);
-            let classification = channels.classify();
-            let mut capacity = HashMap::new();
-            for kind in NodeKind::ALL {
-                // Match the generator's scaling so the cap is the same
-                // count the world was generated at: round(base × (0.55 + ch × 0.7)).
-                let base = base_capacity(classification, kind) as f32;
-                let channel = channels.channel_for(kind);
-                let target = (base * (0.55 + channel * 0.7)).round() as u16;
-                if target > 0 {
-                    capacity.insert(kind, target);
-                }
-            }
-            grids.insert(
-                coord,
-                ActiveChunkState {
-                    classification,
-                    capacity,
-                    live_by_kind: HashMap::new(),
-                },
-            );
-        }
 
         for chunk_spawn in spawns {
             let Some(node) = spawn_resource_node(&chunk_spawn.spawn) else {
@@ -321,6 +269,8 @@ impl ChunkManager {
                 dims,
                 grids,
                 node_chunks,
+                dropped_item_chunks: HashMap::new(),
+                player_chunks: HashMap::new(),
                 regrow_queue: BinaryHeap::new(),
                 next_node_id,
                 placement_counter: splitmix64(world_seed ^ 0x00C0_FFEE_BABE),
@@ -335,35 +285,13 @@ impl ChunkManager {
     /// to the save.
     pub fn from_save(save: ChunkManagerSave, now_tick: u64) -> Self {
         let dims = ChunkDims::new(save.dims);
-        let mut grids: HashMap<ChunkCoord, ActiveChunkState> = HashMap::new();
-        for coord in dims.coords() {
-            let channels = ClassificationChannels::sample(save.world_seed, coord);
-            let classification = channels.classify();
-            let mut capacity = HashMap::new();
-            for kind in NodeKind::ALL {
-                let base = base_capacity(classification, kind) as f32;
-                let channel = channels.channel_for(kind);
-                let target = (base * (0.55 + channel * 0.7)).round() as u16;
-                if target > 0 {
-                    capacity.insert(kind, target);
-                }
-            }
-            grids.insert(
-                coord,
-                ActiveChunkState {
-                    classification,
-                    capacity,
-                    live_by_kind: HashMap::new(),
-                },
-            );
-        }
+        let mut grids = build_empty_grids(save.world_seed, dims);
 
         let mut node_chunks: HashMap<ResourceNodeId, (ChunkCoord, NodeKind)> = HashMap::new();
         for entry in save.node_chunks {
-            let kind: NodeKind = entry.kind.into();
-            node_chunks.insert(entry.node_id, (entry.coord, kind));
+            node_chunks.insert(entry.node_id, (entry.coord, entry.kind));
             if let Some(grid) = grids.get_mut(&entry.coord) {
-                grid.record_live(kind, entry.node_id);
+                grid.record_live(entry.kind, entry.node_id);
             }
         }
 
@@ -373,7 +301,7 @@ impl ChunkManager {
             regrow_queue.push(RegrowEvent {
                 fire_tick,
                 coord: pending.coord,
-                kind: pending.kind.into(),
+                kind: pending.kind,
             });
         }
 
@@ -382,6 +310,8 @@ impl ChunkManager {
             dims,
             grids,
             node_chunks,
+            dropped_item_chunks: HashMap::new(),
+            player_chunks: HashMap::new(),
             regrow_queue,
             next_node_id: save.next_node_id.max(1),
             placement_counter: splitmix64(
@@ -398,7 +328,7 @@ impl ChunkManager {
             .map(|(&node_id, &(coord, kind))| NodeChunkEntry {
                 node_id,
                 coord,
-                kind: kind.into(),
+                kind,
             })
             .collect();
         let pending_regrows = self
@@ -406,7 +336,7 @@ impl ChunkManager {
             .iter()
             .map(|event| PendingRegrowSave {
                 coord: event.coord,
-                kind: event.kind.into(),
+                kind: event.kind,
                 // Save as "ticks from now" so the load path doesn't have
                 // to know the original schedule's wall-clock time.
                 ticks_from_now: event.fire_tick.saturating_sub(now_tick),
@@ -448,6 +378,212 @@ impl ChunkManager {
     /// Total live node count across the world. Used by the perf HUD.
     pub fn live_node_count(&self) -> usize {
         self.node_chunks.len()
+    }
+
+    /// Convert a world position to the chunk coord that contains it,
+    /// clamping into the loaded map. Used by every "where does this
+    /// entity anchor?" call so the rule is in one place — anything that
+    /// drifts outside the world's playable area still gets a legal home
+    /// chunk to live in until it's despawned.
+    fn anchor_chunk_for(&self, position: Vec3Net) -> ChunkCoord {
+        let raw = ChunkCoord::from_world(position.x, position.z);
+        if self.grids.contains_key(&raw) {
+            return raw;
+        }
+        // Out-of-bounds: clamp to the nearest loaded ring so the entity
+        // is still findable. We don't expect this in normal play but a
+        // dropped item physics-launched past the perimeter shouldn't
+        // disappear from snapshots silently.
+        let half = self.dims.dims as i32 / 2;
+        let max = half - (1 - self.dims.dims as i32 % 2);
+        ChunkCoord::new(raw.x.clamp(-half, max), raw.z.clamp(-half, max))
+    }
+
+    /// Register a dropped item with the chunk containing its current
+    /// position. Idempotent — calling twice with the same id is a no-op
+    /// on the second call.
+    pub fn track_dropped_item(&mut self, id: DroppedItemId, position: Vec3Net) {
+        let coord = self.anchor_chunk_for(position);
+        // If the item was previously tracked at a different chunk, move
+        // it. This keeps the membership index consistent with whatever
+        // anchor `update_dropped_item` last recorded.
+        if let Some(&previous) = self.dropped_item_chunks.get(&id) {
+            if previous == coord {
+                return;
+            }
+            if let Some(grid) = self.grids.get_mut(&previous) {
+                grid.dropped_items.remove(&id);
+            }
+        }
+        if let Some(grid) = self.grids.get_mut(&coord) {
+            grid.dropped_items.insert(id);
+        }
+        self.dropped_item_chunks.insert(id, coord);
+    }
+
+    /// Stop tracking a dropped item. Called on pickup, merge, despawn,
+    /// or save shutdown. Safe to call for an unknown id.
+    pub fn untrack_dropped_item(&mut self, id: DroppedItemId) {
+        if let Some(coord) = self.dropped_item_chunks.remove(&id)
+            && let Some(grid) = self.grids.get_mut(&coord)
+        {
+            grid.dropped_items.remove(&id);
+        }
+    }
+
+    /// Re-anchor a dropped item that may have drifted across a chunk
+    /// boundary under physics. Cheap when the chunk hasn't changed
+    /// (one HashMap lookup + comparison) so it's fine to call once per
+    /// item per physics step.
+    pub fn update_dropped_item_chunk(&mut self, id: DroppedItemId, position: Vec3Net) {
+        let new_coord = self.anchor_chunk_for(position);
+        match self.dropped_item_chunks.get(&id).copied() {
+            Some(old_coord) if old_coord == new_coord => {}
+            Some(old_coord) => {
+                if let Some(grid) = self.grids.get_mut(&old_coord) {
+                    grid.dropped_items.remove(&id);
+                }
+                if let Some(grid) = self.grids.get_mut(&new_coord) {
+                    grid.dropped_items.insert(id);
+                }
+                self.dropped_item_chunks.insert(id, new_coord);
+            }
+            None => {
+                // Not previously tracked — fall through to a fresh
+                // registration so a missed `track_dropped_item` call
+                // can't permanently orphan the item.
+                self.track_dropped_item(id, position);
+            }
+        }
+    }
+
+    /// Register a connected client at the chunk containing their current
+    /// position. Called from connect.
+    pub fn track_player(&mut self, id: ClientId, position: Vec3Net) {
+        let coord = self.anchor_chunk_for(position);
+        if let Some(&previous) = self.player_chunks.get(&id) {
+            if previous == coord {
+                return;
+            }
+            if let Some(grid) = self.grids.get_mut(&previous) {
+                grid.players.remove(&id);
+            }
+        }
+        if let Some(grid) = self.grids.get_mut(&coord) {
+            grid.players.insert(id);
+        }
+        self.player_chunks.insert(id, coord);
+    }
+
+    /// Stop tracking a client (disconnect / kick).
+    pub fn untrack_player(&mut self, id: ClientId) {
+        if let Some(coord) = self.player_chunks.remove(&id)
+            && let Some(grid) = self.grids.get_mut(&coord)
+        {
+            grid.players.remove(&id);
+        }
+    }
+
+    /// Update a player's chunk anchor from an accepted movement update.
+    /// Called once per accepted `PlayerMovement`, which is the same path
+    /// the snapshot reads `controller.position` from.
+    pub fn update_player_chunk(&mut self, id: ClientId, position: Vec3Net) {
+        let new_coord = self.anchor_chunk_for(position);
+        match self.player_chunks.get(&id).copied() {
+            Some(old_coord) if old_coord == new_coord => {}
+            Some(old_coord) => {
+                if let Some(grid) = self.grids.get_mut(&old_coord) {
+                    grid.players.remove(&id);
+                }
+                if let Some(grid) = self.grids.get_mut(&new_coord) {
+                    grid.players.insert(id);
+                }
+                self.player_chunks.insert(id, new_coord);
+            }
+            None => {
+                self.track_player(id, position);
+            }
+        }
+    }
+
+    /// Return the chunk currently anchoring a given player. Used by the
+    /// snapshot path so it doesn't have to recompute the chunk from
+    /// world position when the manager already knows.
+    pub fn player_chunk(&self, id: ClientId) -> Option<ChunkCoord> {
+        self.player_chunks.get(&id).copied()
+    }
+
+    /// Snapshot of the chunk coordinates anchoring at least one entity
+    /// or player. Useful for perf overlays; production callers should
+    /// prefer `visible_chunks` so the player's AoI ring is the gate.
+    pub fn loaded_coords(&self) -> impl Iterator<Item = ChunkCoord> + '_ {
+        self.grids.keys().copied()
+    }
+
+    /// The chunk coords a player at `player_pos` should receive
+    /// snapshot data for under the given view tier. Centralizes the AoI
+    /// ring math so every networked entity flows through the same
+    /// chunk-visibility decision.
+    pub fn visible_chunks(&self, player_pos: Vec3Net, tier: ViewRadiusTier) -> HashSet<ChunkCoord> {
+        // Include the load-buffer ring so the client's collider grid is
+        // already populated when the player crosses a boundary — see
+        // `LOAD_BUFFER_RINGS` for the why.
+        let radius = (view_tier_radius(tier) + LOAD_BUFFER_RINGS) as i32;
+        let player_grid = ChunkCoord::from_world(player_pos.x, player_pos.z);
+        let mut visible = HashSet::new();
+        for dx in -radius..=radius {
+            for dz in -radius..=radius {
+                let coord = ChunkCoord::new(player_grid.x + dx, player_grid.z + dz);
+                if self.grids.contains_key(&coord) {
+                    visible.insert(coord);
+                }
+            }
+        }
+        visible
+    }
+
+    /// Live resource node ids anchored to `coord`. Empty iterator for
+    /// unloaded chunks. Cheap — backed by the per-chunk live set.
+    pub fn nodes_in(&self, coord: ChunkCoord) -> impl Iterator<Item = ResourceNodeId> + '_ {
+        self.grids.get(&coord).into_iter().flat_map(|grid| {
+            grid.live_by_kind
+                .values()
+                .flat_map(|set| set.iter().copied())
+        })
+    }
+
+    /// Dropped item ids anchored to `coord`.
+    pub fn dropped_items_in(&self, coord: ChunkCoord) -> impl Iterator<Item = DroppedItemId> + '_ {
+        self.grids
+            .get(&coord)
+            .into_iter()
+            .flat_map(|grid| grid.dropped_items.iter().copied())
+    }
+
+    /// Connected client ids anchored to `coord`.
+    pub fn players_in(&self, coord: ChunkCoord) -> impl Iterator<Item = ClientId> + '_ {
+        self.grids
+            .get(&coord)
+            .into_iter()
+            .flat_map(|grid| grid.players.iter().copied())
+    }
+
+    /// Register an externally-spawned resource node (admin command, etc.)
+    /// so it appears in the AoI snapshot for clients in range. Without
+    /// this, a `/spawn-ore` node would exist in `resource_nodes` but be
+    /// invisible in every snapshot because the per-chunk membership set
+    /// is the AoI source of truth.
+    pub fn track_resource_node(
+        &mut self,
+        node_id: ResourceNodeId,
+        kind: NodeKind,
+        position: Vec3Net,
+    ) {
+        let coord = self.anchor_chunk_for(position);
+        if let Some(grid) = self.grids.get_mut(&coord) {
+            grid.record_live(kind, node_id);
+        }
+        self.node_chunks.insert(node_id, (coord, kind));
     }
 
     /// Called from the gather path when a node has been depleted and
@@ -552,32 +688,45 @@ impl ChunkManager {
         None
     }
 
-    /// Returns the node IDs visible to a player at `player_pos` under
-    /// the given view tier. Anything outside the loaded ring is omitted
-    /// from the per-player snapshot.
+    /// Node ids visible to a player at `player_pos` under the given view
+    /// tier. Thin wrapper around `visible_chunks` + `nodes_in` so the
+    /// AoI ring math stays in one place.
     pub fn nodes_visible_to(
         &self,
         player_pos: Vec3Net,
         tier: ViewRadiusTier,
     ) -> HashSet<ResourceNodeId> {
-        // Include the load-buffer ring so the client's collider grid is
-        // already populated when the player crosses a boundary — see
-        // `LOAD_BUFFER_RINGS` for the why.
-        let radius = (view_tier_radius(tier) + LOAD_BUFFER_RINGS) as i32;
-        let player_grid = ChunkCoord::from_world(player_pos.x, player_pos.z);
-        let mut visible = HashSet::new();
-        for dx in -radius..=radius {
-            for dz in -radius..=radius {
-                let coord = ChunkCoord::new(player_grid.x + dx, player_grid.z + dz);
-                let Some(grid) = self.grids.get(&coord) else {
-                    continue;
-                };
-                for set in grid.live_by_kind.values() {
-                    visible.extend(set.iter().copied());
-                }
-            }
-        }
-        visible
+        self.visible_chunks(player_pos, tier)
+            .into_iter()
+            .flat_map(|coord| self.nodes_in(coord))
+            .collect()
+    }
+
+    /// Dropped item ids visible to a player at `player_pos` under the
+    /// given view tier.
+    pub fn dropped_items_visible_to(
+        &self,
+        player_pos: Vec3Net,
+        tier: ViewRadiusTier,
+    ) -> HashSet<DroppedItemId> {
+        self.visible_chunks(player_pos, tier)
+            .into_iter()
+            .flat_map(|coord| self.dropped_items_in(coord))
+            .collect()
+    }
+
+    /// Client ids visible to a player at `player_pos` under the given
+    /// view tier. The caller decides whether to additionally include
+    /// the player themselves.
+    pub fn players_visible_to(
+        &self,
+        player_pos: Vec3Net,
+        tier: ViewRadiusTier,
+    ) -> HashSet<ClientId> {
+        self.visible_chunks(player_pos, tier)
+            .into_iter()
+            .flat_map(|coord| self.players_in(coord))
+            .collect()
     }
 
     /// World-space classification under the player's feet. Used by the
@@ -586,6 +735,38 @@ impl ChunkManager {
         let coord = ChunkCoord::from_world(position.x, position.z);
         self.grids.get(&coord).map(|g| g.classification)
     }
+}
+
+/// Build the per-chunk capacity tables for every coord in `dims`, leaving
+/// the live entity sets empty. Both `new_for_world` and `from_save` start
+/// here so the cap-derivation formula
+/// `round(base × (0.55 + ch × 0.7))` lives in exactly one place — a save
+/// loaded by code that scaled differently would silently drift on the
+/// next regrow.
+fn build_empty_grids(world_seed: u64, dims: ChunkDims) -> HashMap<ChunkCoord, ActiveChunkState> {
+    let mut grids: HashMap<ChunkCoord, ActiveChunkState> = HashMap::new();
+    for coord in dims.coords() {
+        let channels = ClassificationChannels::sample(world_seed, coord);
+        let classification = channels.classify();
+        let mut capacity = HashMap::new();
+        for kind in NodeKind::ALL {
+            let base = base_capacity(classification, kind) as f32;
+            let channel = channels.channel_for(kind);
+            let target = (base * (0.55 + channel * 0.7)).round() as u16;
+            if target > 0 {
+                capacity.insert(kind, target);
+            }
+        }
+        grids.insert(
+            coord,
+            ActiveChunkState {
+                classification,
+                capacity,
+                ..ActiveChunkState::default()
+            },
+        );
+    }
+    grids
 }
 
 /// Reusable helper: produce a sequence of candidate spawn positions for
@@ -752,5 +933,79 @@ mod tests {
     fn view_tier_radius_is_monotonic() {
         assert!(view_tier_radius(ViewRadiusTier::Low) < view_tier_radius(ViewRadiusTier::Medium));
         assert!(view_tier_radius(ViewRadiusTier::Medium) < view_tier_radius(ViewRadiusTier::High));
+    }
+
+    #[test]
+    fn dropped_item_anchor_moves_when_position_crosses_chunk_boundary() {
+        // Use a wider world so we can move across a chunk boundary
+        // without falling off the playable map.
+        let (mut manager, _nodes) = ChunkManager::new_for_world(0xCAFE, ChunkDims::new(5));
+        let id: DroppedItemId = 42;
+
+        manager.track_dropped_item(id, Vec3Net::new(8.0, 0.0, 0.0));
+        let initial: Vec<_> = manager.dropped_items_in(ChunkCoord::new(0, 0)).collect();
+        assert!(
+            initial.contains(&id),
+            "item should anchor in its origin chunk"
+        );
+
+        // 70m crosses into chunk x=1 (chunks are 64m wide).
+        manager.update_dropped_item_chunk(id, Vec3Net::new(70.0, 0.0, 0.0));
+        let after_origin: Vec<_> = manager.dropped_items_in(ChunkCoord::new(0, 0)).collect();
+        let after_dest: Vec<_> = manager.dropped_items_in(ChunkCoord::new(1, 0)).collect();
+        assert!(
+            after_origin.is_empty(),
+            "item must be removed from its old chunk after crossing the boundary"
+        );
+        assert!(
+            after_dest.contains(&id),
+            "item must appear in the new chunk after crossing the boundary"
+        );
+
+        manager.untrack_dropped_item(id);
+        let after_untrack: Vec<_> = manager.dropped_items_in(ChunkCoord::new(1, 0)).collect();
+        assert!(
+            after_untrack.is_empty(),
+            "untracking must drop the item from the chunk membership index"
+        );
+    }
+
+    #[test]
+    fn player_anchor_follows_position_updates() {
+        let (mut manager, _nodes) = ChunkManager::new_for_world(0xCAFE, ChunkDims::new(5));
+        let client_id: ClientId = 7;
+
+        manager.track_player(client_id, Vec3Net::ZERO);
+        assert_eq!(manager.player_chunk(client_id), Some(ChunkCoord::new(0, 0)));
+
+        // 200m in +x and +z lands in chunk (3, 3).
+        manager.update_player_chunk(client_id, Vec3Net::new(200.0, 0.0, 200.0));
+        assert_eq!(
+            manager.player_chunk(client_id),
+            // 200/64 = 3.125 → floor → 3, but the test world is 5x5
+            // (chunks -2..=2) so the out-of-bounds clamp pins it to 2.
+            Some(ChunkCoord::new(2, 2))
+        );
+
+        manager.untrack_player(client_id);
+        assert_eq!(manager.player_chunk(client_id), None);
+    }
+
+    #[test]
+    fn visible_chunks_centers_on_player_and_excludes_unloaded_coords() {
+        let (manager, _nodes) = ChunkManager::new_for_world(0xCAFE, ChunkDims::new(5));
+        let visible_at_origin = manager.visible_chunks(Vec3Net::ZERO, ViewRadiusTier::Low);
+        // Low tier + load buffer = radius 2; in a 5x5 world that's the
+        // entire grid (chunks -2..=2).
+        assert_eq!(visible_at_origin.len(), 25);
+
+        // A player parked at the corner can only see chunks that exist.
+        let corner = manager.visible_chunks(Vec3Net::new(128.0, 0.0, 128.0), ViewRadiusTier::Low);
+        for coord in &corner {
+            assert!(
+                coord.x.abs() <= 2 && coord.z.abs() <= 2,
+                "visible chunk {coord:?} is outside the loaded grid"
+            );
+        }
     }
 }
