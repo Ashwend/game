@@ -246,13 +246,15 @@ jobs:
         # opus via vcpkg and point audiopus_sys at it via `OPUS_LIB_DIR` so
         # the bundled cmake build is skipped entirely. Static (`-static-md`)
         # so the shipped binary doesn't need an opus.dll alongside it.
+        #
+        # `OPUS_LIB_DIR` is a prefix: audiopus_sys's build script appends
+        # `/lib` itself when emitting `rustc-link-search=native=`, so pass
+        # the vcpkg triplet root rather than its `lib/` subfolder.
         shell: bash
         run: |
           "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install opus:x64-windows-static-md
           opus_root="$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md"
-          # vcpkg ships release artifacts under lib/ and debug ones under
-          # debug/lib/. Cargo's release profile only needs the former.
-          echo "OPUS_LIB_DIR=${opus_root}/lib" >> "$GITHUB_ENV"
+          echo "OPUS_LIB_DIR=${opus_root}" >> "$GITHUB_ENV"
           echo "OPUS_STATIC=1" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
