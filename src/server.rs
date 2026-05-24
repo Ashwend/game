@@ -41,7 +41,10 @@ mod world_time;
 pub use voice::VOICE_AUDIBLE_RANGE;
 
 use self::{
-    dropped_items::{DROPPED_ITEM_MERGE_INTERVAL_TICKS, DroppedItemBody, DroppedItemPhysics},
+    dropped_items::{
+        DROPPED_ITEM_CLEANUP_INTERVAL_TICKS, DROPPED_ITEM_MERGE_INTERVAL_TICKS, DroppedItemBody,
+        DroppedItemPhysics,
+    },
     movement::accept_client_movement,
 };
 
@@ -128,6 +131,7 @@ impl GameServer {
         };
 
         let mut dropped_items = HashMap::new();
+        let load_tick = save.state.last_authoritative_tick;
         for item in std::mem::take(&mut save.state.dropped_items) {
             let physics_body =
                 dropped_item_physics.spawn_body(item.position, Vec3Net::ZERO, item.yaw);
@@ -136,6 +140,9 @@ impl GameServer {
                 DroppedItemBody {
                     item,
                     body_handle: physics_body.body_handle,
+                    // Reset the timer on load so a returning player doesn't
+                    // find every dropped item already past its expiry.
+                    spawn_tick: load_tick,
                 },
             );
         }
@@ -250,6 +257,15 @@ impl GameServer {
                     message: ServerMessage::ItemMerged { item_id, quantity },
                 },
             ));
+        }
+        if self
+            .tick
+            .is_multiple_of(DROPPED_ITEM_CLEANUP_INTERVAL_TICKS)
+        {
+            // Removal is silent — the next per-client snapshot omits the
+            // expired ids and the client's snapshot-diff system despawns the
+            // visuals, the same lifecycle path used for pickups and merges.
+            self.despawn_aging_dropped_items();
         }
 
         if self

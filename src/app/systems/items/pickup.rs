@@ -29,7 +29,9 @@ pub(crate) fn update_pickup_target_system(
     // Re-project the existing target's world anchor every frame so the
     // tooltip stays glued to the world position as the camera moves. The
     // O(N×M) target selection below stays throttled; only the cheap
-    // viewport projection runs each frame.
+    // viewport projection (and, for dropped items, a single entity lookup
+    // to pick up the interpolated transform) runs each frame.
+    refresh_dropped_target_anchor(&mut pickup_target, &dropped_entities);
     reproject_screen_position(&mut pickup_target, &camera);
 
     // Throttle the O(N×M) sweep over dropped items and resource nodes to a
@@ -85,6 +87,32 @@ fn reproject_screen_position(
     if let Some(anchor) = pickup_target.world_position {
         pickup_target.screen_position = viewport_position(camera, anchor);
     }
+}
+
+/// Follow a dropped item's interpolated transform every frame so the tooltip
+/// doesn't lag behind a falling stack. The target *selection* still runs on
+/// the throttled scan, but as long as the same item stays selected we re-read
+/// its current entity transform here. Resource nodes don't move, so their
+/// cached anchor is left alone.
+fn refresh_dropped_target_anchor(
+    pickup_target: &mut PickupTargetState,
+    dropped_entities: &Query<(&NetworkDroppedItem, &Transform)>,
+) {
+    let Some(id) = pickup_target.dropped_item_id else {
+        return;
+    };
+    let Some((_, transform)) = dropped_entities
+        .iter()
+        .find(|(dropped, _)| dropped.id == id)
+    else {
+        return;
+    };
+    pickup_target.world_position =
+        Some(pickup_anchor_from_position(crate::protocol::Vec3Net::new(
+            transform.translation.x,
+            transform.translation.y,
+            transform.translation.z,
+        )));
 }
 
 fn set_dropped_pickup_target(

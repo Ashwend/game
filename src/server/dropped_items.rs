@@ -8,7 +8,7 @@ use rapier3d::prelude::{
 
 use crate::{
     items::{ItemId, stack_limit},
-    protocol::{DroppedItemId, DroppedWorldItem, QuatNet, Vec3Net},
+    protocol::{DroppedItemId, DroppedWorldItem, QuatNet, SERVER_TICK_RATE_HZ, Vec3Net},
     world::WorldData,
 };
 
@@ -28,10 +28,27 @@ const DROPPED_ITEM_MAX_SIMULATION_STEP: f32 = 1.0 / 120.0;
 pub(super) const DROPPED_ITEM_MERGE_INTERVAL_TICKS: u64 = 5;
 pub(super) const DROPPED_ITEM_MERGE_RADIUS: f32 = 1.0;
 
+/// How long a dropped item is allowed to sit in the world before the server
+/// despawns it to keep long-running sessions from accumulating stale stacks.
+/// Three minutes is generous enough that a player can travel a short distance
+/// and come back for what they dropped, but tight enough that abandoned loot
+/// doesn't bloat the snapshot indefinitely.
+pub(super) const DROPPED_ITEM_LIFETIME_SECONDS: f32 = 180.0;
+pub(super) const DROPPED_ITEM_LIFETIME_TICKS: u64 =
+    (DROPPED_ITEM_LIFETIME_SECONDS * SERVER_TICK_RATE_HZ) as u64;
+/// Cadence of the lifetime sweep. One pass per second is plenty — the
+/// timeout has second-scale granularity and the sweep is O(N).
+pub(super) const DROPPED_ITEM_CLEANUP_INTERVAL_TICKS: u64 = SERVER_TICK_RATE_HZ as u64;
+
 #[derive(Debug)]
 pub(super) struct DroppedItemBody {
     pub(super) item: DroppedWorldItem,
     pub(super) body_handle: RigidBodyHandle,
+    /// Tick at which this body entered the world. In-memory only — items
+    /// reloaded from a save are stamped with the load-time tick so a player
+    /// returning after a long absence isn't greeted by a wave of instant
+    /// despawns.
+    pub(super) spawn_tick: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -250,6 +267,29 @@ fn initial_drop_angular_velocity(velocity: Vec3Net) -> Vector {
 }
 
 impl GameServer {
+    /// Remove dropped items whose age has exceeded
+    /// [`DROPPED_ITEM_LIFETIME_TICKS`]. Runs from the routine cleanup tick
+    /// (see [`DROPPED_ITEM_CLEANUP_INTERVAL_TICKS`]) so the cost is amortized
+    /// to ~once a second regardless of how many items are on the ground.
+    /// Clients learn about the removal through the next snapshot, the same
+    /// path used when an item is picked up or fully merged.
+    pub(super) fn despawn_aging_dropped_items(&mut self) {
+        let current_tick = self.tick;
+        let expired: Vec<DroppedItemId> = self
+            .dropped_items
+            .iter()
+            .filter_map(|(id, body)| {
+                let age = current_tick.saturating_sub(body.spawn_tick);
+                (age >= DROPPED_ITEM_LIFETIME_TICKS).then_some(*id)
+            })
+            .collect();
+        for id in expired {
+            if let Some(body) = self.dropped_items.remove(&id) {
+                self.dropped_item_physics.remove_body(body.body_handle);
+            }
+        }
+    }
+
     pub(super) fn merge_nearby_dropped_items(&mut self) -> Vec<(ItemId, u16)> {
         // Returns the interned `ItemId` (not a fresh `String`) so the
         // resulting `ServerMessage::ItemMerged` doesn't allocate per merge.

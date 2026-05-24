@@ -154,6 +154,39 @@ fn dropped_items_use_rapier_gravity_and_floor_collision() {
 }
 
 #[test]
+fn dropped_items_despawn_after_their_lifetime() {
+    let mut server = server();
+    server.spawn_dropped_item(
+        ItemStack::new(TEST_ORE_ID, 4),
+        Vec3Net::new(0.0, DROPPED_ITEM_RADIUS, -2.0),
+        Vec3Net::ZERO,
+        0.0,
+    );
+    assert_eq!(server.snapshot().dropped_items.len(), 1);
+
+    // Tick just up to one cleanup boundary short of the lifetime — the item
+    // should still be present.
+    let stable_ticks = DROPPED_ITEM_LIFETIME_TICKS - DROPPED_ITEM_CLEANUP_INTERVAL_TICKS;
+    for _ in 0..stable_ticks {
+        server.tick(1.0 / SERVER_TICK_RATE_HZ);
+    }
+    assert_eq!(
+        server.snapshot().dropped_items.len(),
+        1,
+        "item should still be in the world just before the lifetime expires"
+    );
+
+    // Tick through the next cleanup boundary; the item should be gone.
+    for _ in 0..DROPPED_ITEM_CLEANUP_INTERVAL_TICKS * 2 {
+        server.tick(1.0 / SERVER_TICK_RATE_HZ);
+    }
+    assert!(
+        server.snapshot().dropped_items.is_empty(),
+        "item past its lifetime should be despawned by the cleanup sweep"
+    );
+}
+
+#[test]
 fn dropped_item_physics_collides_with_world_blocks() {
     let mut server = server();
     server.spawn_dropped_item(

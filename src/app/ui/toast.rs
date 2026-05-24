@@ -1,6 +1,7 @@
 use bevy_egui::egui::{
-    self, Align2, Color32, CornerRadius, FontFamily, FontId, Id, LayerId, Order, Pos2, Rect,
-    Stroke, StrokeKind,
+    self, Color32, CornerRadius, FontFamily, FontId, Id, LayerId, Order, Pos2, Rect, Stroke,
+    StrokeKind,
+    text::{LayoutJob, TextFormat, TextWrapping},
 };
 
 use crate::{
@@ -10,16 +11,26 @@ use crate::{
 
 use super::theme::{self, COMPACT_ROW_HEIGHT};
 
-const TOAST_WIDTH: f32 = 280.0;
+const TOAST_MAX_WIDTH: f32 = 280.0;
+/// Floor for the toast width on cramped screens. Anything narrower would
+/// only fit a couple of glyphs before the ellipsis kicks in, so we stop
+/// shrinking here and let the bar overlap rather than render an unreadable
+/// stub.
+const TOAST_MIN_WIDTH: f32 = 140.0;
 const TOAST_HEIGHT: f32 = COMPACT_ROW_HEIGHT;
 const TOAST_GAP: f32 = 6.0;
 const RIGHT_MARGIN: f32 = 18.0;
 const BOTTOM_MARGIN: f32 = 64.0;
 const SLIDE_DISTANCE: f32 = 38.0;
 const TEXT_LEFT_PADDING: f32 = 14.0;
+const TEXT_RIGHT_PADDING: f32 = 10.0;
+/// Minimum horizontal gap between the toast stack's left edge and the
+/// actionbar's outer-right edge.
+const TOAST_ACTIONBAR_GAP: f32 = 16.0;
+const TOAST_FONT_SIZE: f32 = 13.5;
 const CORNER_RADIUS: u8 = 5;
 
-pub(super) fn toast_ui(ctx: &egui::Context, toasts: &ToastState) {
+pub(super) fn toast_ui(ctx: &egui::Context, toasts: &ToastState, actionbar_rect: Option<Rect>) {
     if toasts.is_empty() {
         return;
     }
@@ -27,6 +38,7 @@ pub(super) fn toast_ui(ctx: &egui::Context, toasts: &ToastState) {
     let screen_rect = ctx.content_rect();
     let right_edge = screen_rect.right() - RIGHT_MARGIN;
     let bottom_edge = screen_rect.bottom() - BOTTOM_MARGIN;
+    let toast_width = effective_toast_width(right_edge, actionbar_rect);
     let painter = ctx.layer_painter(LayerId::new(Order::Tooltip, Id::new("toast_stack")));
 
     let mut cumulative = 0.0_f32;
@@ -41,10 +53,10 @@ pub(super) fn toast_ui(ctx: &egui::Context, toasts: &ToastState) {
         let y_bottom = bottom_edge - cumulative;
         let y_top = y_bottom - TOAST_HEIGHT;
         let x_right = right_edge + lifecycle.slide_x;
-        let x_left = x_right - TOAST_WIDTH;
+        let x_left = x_right - toast_width;
         let rect = Rect::from_min_max(Pos2::new(x_left, y_top), Pos2::new(x_right, y_bottom));
 
-        paint_toast(&painter, toast, rect, lifecycle.alpha);
+        paint_toast(ctx, &painter, toast, rect, lifecycle.alpha);
 
         // The slot the toast occupies in the layout shrinks during exit so
         // older toasts above it animate downward. The toast's painted rect
@@ -60,6 +72,17 @@ pub(super) fn toast_ui(ctx: &egui::Context, toasts: &ToastState) {
     if needs_repaint {
         ctx.request_repaint();
     }
+}
+
+/// Shrink the toast width so its left edge stays at least
+/// `TOAST_ACTIONBAR_GAP` to the right of the actionbar's outer-right edge.
+/// Falls back to the full width when the actionbar hasn't been laid out yet.
+fn effective_toast_width(right_edge: f32, actionbar_rect: Option<Rect>) -> f32 {
+    let Some(rect) = actionbar_rect else {
+        return TOAST_MAX_WIDTH;
+    };
+    let usable = right_edge - rect.right() - TOAST_ACTIONBAR_GAP;
+    usable.clamp(TOAST_MIN_WIDTH, TOAST_MAX_WIDTH)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -100,7 +123,13 @@ fn toast_lifecycle(age: f32) -> Lifecycle {
     }
 }
 
-fn paint_toast(painter: &egui::Painter, toast: &Toast, rect: Rect, alpha: f32) {
+fn paint_toast(
+    ctx: &egui::Context,
+    painter: &egui::Painter,
+    toast: &Toast,
+    rect: Rect,
+    alpha: f32,
+) {
     if alpha <= 0.001 {
         return;
     }
@@ -132,13 +161,36 @@ fn paint_toast(painter: &egui::Painter, toast: &Toast, rect: Rect, alpha: f32) {
     }
 
     let text_pos = Pos2::new(rect.left() + TEXT_LEFT_PADDING, rect.center().y);
-    painter.text(
-        text_pos,
-        Align2::LEFT_CENTER,
-        &toast.text,
-        FontId::new(13.5, FontFamily::Proportional),
-        text_color,
+    let text_max_width = (rect.width() - TEXT_LEFT_PADDING - TEXT_RIGHT_PADDING).max(0.0);
+    let galley = layout_single_line(ctx, &toast.text, text_color, text_max_width);
+    let galley_pos = Pos2::new(text_pos.x, text_pos.y - galley.size().y * 0.5);
+    painter.galley(galley_pos, galley, text_color);
+}
+
+/// Lay the toast text out as a single line, truncating with an ellipsis when
+/// it doesn't fit in the available width. The single-line + break-anywhere
+/// combo is what egui's docs recommend for one-row elision.
+fn layout_single_line(
+    ctx: &egui::Context,
+    text: &str,
+    color: Color32,
+    max_width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = LayoutJob::single_section(
+        text.to_owned(),
+        TextFormat {
+            font_id: FontId::new(TOAST_FONT_SIZE, FontFamily::Proportional),
+            color,
+            ..Default::default()
+        },
     );
+    job.wrap = TextWrapping {
+        max_width,
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('…'),
+    };
+    ctx.fonts_mut(|fonts| fonts.layout_job(job))
 }
 
 fn with_alpha(color: Color32, alpha: f32) -> Color32 {
@@ -233,5 +285,56 @@ mod tests {
         assert_ne!(info, success);
         assert_ne!(success, warning);
         assert_ne!(warning, error);
+    }
+
+    #[test]
+    fn effective_toast_width_uses_max_when_actionbar_unknown() {
+        let right_edge = 1280.0;
+        assert_eq!(effective_toast_width(right_edge, None), TOAST_MAX_WIDTH);
+    }
+
+    #[test]
+    fn effective_toast_width_shrinks_to_keep_actionbar_gap() {
+        let right_edge = 1280.0;
+        let crowded = Rect::from_min_max(Pos2::new(380.0, 600.0), Pos2::new(1040.0, 700.0));
+        let width = effective_toast_width(right_edge, Some(crowded));
+        assert!(width < TOAST_MAX_WIDTH);
+        // The toast left edge must sit `TOAST_ACTIONBAR_GAP` past the bar.
+        let toast_left = right_edge - width;
+        assert!((toast_left - crowded.right() - TOAST_ACTIONBAR_GAP).abs() <= 0.001);
+    }
+
+    #[test]
+    fn effective_toast_width_floors_at_minimum() {
+        let right_edge = 800.0;
+        let cramped = Rect::from_min_max(Pos2::new(120.0, 500.0), Pos2::new(760.0, 600.0));
+        assert_eq!(
+            effective_toast_width(right_edge, Some(cramped)),
+            TOAST_MIN_WIDTH
+        );
+    }
+
+    #[test]
+    fn long_toast_text_is_truncated_with_ellipsis_in_narrow_width() {
+        let ctx = egui::Context::default();
+        let color = Color32::WHITE;
+        let _ = ctx.run(egui::RawInput::default(), |_| {});
+        let galley = layout_single_line(
+            &ctx,
+            "this is a very long toast message that should not fit in a small width",
+            color,
+            80.0,
+        );
+        assert!(galley.elided, "narrow toast should mark galley as elided");
+        assert!(galley.rect.width() <= 80.0 + 0.5);
+    }
+
+    #[test]
+    fn short_toast_text_is_not_truncated_with_room_to_spare() {
+        let ctx = egui::Context::default();
+        let color = Color32::WHITE;
+        let _ = ctx.run(egui::RawInput::default(), |_| {});
+        let galley = layout_single_line(&ctx, "ok", color, 200.0);
+        assert!(!galley.elided);
     }
 }

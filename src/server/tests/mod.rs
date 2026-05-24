@@ -1,6 +1,6 @@
 use super::*;
 use super::{
-    dropped_items::{DROPPED_ITEM_MERGE_RADIUS, DROPPED_ITEM_RADIUS},
+    dropped_items::{DROPPED_ITEM_LIFETIME_TICKS, DROPPED_ITEM_MERGE_RADIUS, DROPPED_ITEM_RADIUS},
     movement::SERVER_EYE_HEIGHT,
 };
 use crate::{

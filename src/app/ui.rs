@@ -159,14 +159,16 @@ pub(crate) fn ui_system(
                     delta_seconds,
                 );
                 let inventory_open = resources.menu.inventory_open;
+                let actionbar_rect = resources.inventory_ui.actionbar_rect;
                 chat_ui(
                     ctx,
                     &mut resources.menu,
                     &mut resources.runtime,
                     &mut resources.error_toasts,
                     inventory_open,
+                    actionbar_rect,
                 );
-                toast_ui(ctx, &resources.toasts);
+                toast_ui(ctx, &resources.toasts, actionbar_rect);
             }
             if resources.menu.pause_open && !resources.menu.pause_options_open {
                 pause_ui(

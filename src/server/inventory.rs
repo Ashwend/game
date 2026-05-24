@@ -266,6 +266,7 @@ impl GameServer {
                     rotation: yaw_rotation(yaw),
                 },
                 body_handle: physics_body.body_handle,
+                spawn_tick: self.tick,
             },
         );
     }

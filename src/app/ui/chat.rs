@@ -9,11 +9,24 @@ use crate::{
 
 use super::theme;
 
-const CHAT_WIDTH: f32 = 430.0;
+const CHAT_MAX_WIDTH: f32 = 430.0;
+/// Floor so the chat stays usable on small screens even if the actionbar
+/// would otherwise push it narrower than this.
+const CHAT_MIN_WIDTH: f32 = 220.0;
+/// The chat Area is anchored to the left edge with this inset; the frame's
+/// outer-left x sits at this value.
+const CHAT_LEFT_ANCHOR: f32 = 18.0;
+/// Sum of left + right inner margins on `chat_frame`. The Area sizes itself
+/// to content, so this is the gap between the inner content width and the
+/// frame's outer width.
+const CHAT_FRAME_HORIZONTAL_PADDING: f32 = 22.0;
+/// Minimum horizontal gap between the chat frame's outer-right edge and the
+/// actionbar's outer-left edge.
+const CHAT_ACTIONBAR_GAP: f32 = 16.0;
 const CHAT_INACTIVE_MESSAGE_HEIGHT: f32 = 122.0;
 const CHAT_ACTIVE_MESSAGE_HEIGHT: f32 = 156.0;
-const CHAT_INPUT_WIDTH: f32 = CHAT_WIDTH - 22.0;
 const CHAT_INPUT_HEIGHT: f32 = 30.0;
+const CHAT_INPUT_HORIZONTAL_INSET: f32 = 22.0;
 const CHAT_INPUT_ID: &str = "game_chat_input";
 
 pub(super) fn chat_ui(
@@ -22,27 +35,50 @@ pub(super) fn chat_ui(
     runtime: &mut ClientRuntime,
     error_toasts: &mut dyn ErrorToastSink,
     inventory_open: bool,
+    actionbar_rect: Option<egui::Rect>,
 ) {
     let opened_this_frame = handle_chat_shortcuts(ctx, menu);
     let active = menu.chat_open && !menu.pause_open;
     let allow_pointer_interaction = active || inventory_open;
+    let width = effective_chat_width(actionbar_rect);
 
     egui::Area::new("chat".into())
         .order(egui::Order::Foreground)
         .interactable(allow_pointer_interaction)
-        .anchor(egui::Align2::LEFT_BOTTOM, [18.0, -18.0])
+        .anchor(egui::Align2::LEFT_BOTTOM, [CHAT_LEFT_ANCHOR, -18.0])
         .show(ctx, |ui| {
             chat_frame(active).show(ui, |ui| {
-                ui.set_width(CHAT_WIDTH);
-                draw_messages(ui, &runtime.messages, active, allow_pointer_interaction);
+                ui.set_width(width);
+                draw_messages(
+                    ui,
+                    &runtime.messages,
+                    active,
+                    allow_pointer_interaction,
+                    width,
+                );
                 ui.add_space(8.0);
                 if active {
-                    draw_active_input(ui, menu, runtime, error_toasts, opened_this_frame);
+                    draw_active_input(ui, menu, runtime, error_toasts, opened_this_frame, width);
                 } else {
-                    draw_inactive_input(ui, menu, allow_pointer_interaction);
+                    draw_inactive_input(ui, menu, allow_pointer_interaction, width);
                 }
             });
         });
+}
+
+/// Shrink the chat to keep a minimum gap from the actionbar's outer-left edge.
+/// The chat frame extends from `CHAT_LEFT_ANCHOR` to
+/// `CHAT_LEFT_ANCHOR + width + CHAT_FRAME_HORIZONTAL_PADDING`, and that
+/// right edge must stay at least `CHAT_ACTIONBAR_GAP` to the left of the
+/// actionbar. Falls back to the full width when the actionbar hasn't been
+/// laid out yet (e.g. before the local inventory has arrived).
+fn effective_chat_width(actionbar_rect: Option<egui::Rect>) -> f32 {
+    let Some(rect) = actionbar_rect else {
+        return CHAT_MAX_WIDTH;
+    };
+    let usable =
+        rect.left() - CHAT_ACTIONBAR_GAP - CHAT_LEFT_ANCHOR - CHAT_FRAME_HORIZONTAL_PADDING;
+    usable.clamp(CHAT_MIN_WIDTH, CHAT_MAX_WIDTH)
 }
 
 fn handle_chat_shortcuts(ctx: &egui::Context, menu: &mut MenuState) -> bool {
@@ -84,6 +120,7 @@ fn draw_messages(
     messages: &VecDeque<ClientLogEntry>,
     active: bool,
     scroll_enabled: bool,
+    width: f32,
 ) {
     let max_height = if active {
         CHAT_ACTIVE_MESSAGE_HEIGHT
@@ -110,7 +147,7 @@ fn draw_messages(
     }
 
     scroll_area.show(ui, |ui| {
-        ui.set_width(CHAT_WIDTH - 22.0);
+        ui.set_width((width - CHAT_INPUT_HORIZONTAL_INSET).max(0.0));
         for message in messages {
             draw_message(ui, message);
         }
@@ -169,9 +206,10 @@ fn draw_active_input(
     runtime: &mut ClientRuntime,
     error_toasts: &mut dyn ErrorToastSink,
     opened_this_frame: bool,
+    width: f32,
 ) {
     let input_id = egui::Id::new(CHAT_INPUT_ID);
-    let rect = allocate_input_rect(ui);
+    let rect = allocate_input_rect(ui, width);
     paint_input_background(ui, rect);
     let response = ui.put(
         input_text_rect(rect),
@@ -199,8 +237,8 @@ fn draw_active_input(
     }
 }
 
-fn draw_inactive_input(ui: &mut egui::Ui, menu: &mut MenuState, interactive: bool) {
-    let rect = allocate_input_rect(ui);
+fn draw_inactive_input(ui: &mut egui::Ui, menu: &mut MenuState, interactive: bool, width: f32) {
+    let rect = allocate_input_rect(ui, width);
     paint_input_background(ui, rect);
     ui.put(
         input_text_rect(rect),
@@ -227,9 +265,10 @@ fn draw_inactive_input(ui: &mut egui::Ui, menu: &mut MenuState, interactive: boo
     }
 }
 
-fn allocate_input_rect(ui: &mut egui::Ui) -> egui::Rect {
+fn allocate_input_rect(ui: &mut egui::Ui, width: f32) -> egui::Rect {
+    let input_width = (width - CHAT_INPUT_HORIZONTAL_INSET).max(0.0);
     ui.allocate_exact_size(
-        egui::vec2(CHAT_INPUT_WIDTH, CHAT_INPUT_HEIGHT),
+        egui::vec2(input_width, CHAT_INPUT_HEIGHT),
         egui::Sense::hover(),
     )
     .0
@@ -416,6 +455,7 @@ mod tests {
                 &mut runtime,
                 &mut Vec::<String>::new(),
                 false,
+                None,
             );
         });
 
@@ -428,6 +468,7 @@ mod tests {
                 &mut runtime,
                 &mut Vec::<String>::new(),
                 false,
+                None,
             );
         });
 
@@ -452,6 +493,7 @@ mod tests {
                 &mut runtime,
                 &mut Vec::<String>::new(),
                 false,
+                None,
             );
         });
         let _ = ctx.run(raw_input(pointer_scroll_over_chat()), |ctx| {
@@ -461,6 +503,7 @@ mod tests {
                 &mut runtime,
                 &mut Vec::<String>::new(),
                 false,
+                None,
             );
             wants_pointer = ctx.wants_pointer_input();
             scroll_delta = ctx.input(|input| input.smooth_scroll_delta);
@@ -487,6 +530,7 @@ mod tests {
                 &mut runtime,
                 &mut Vec::<String>::new(),
                 true,
+                None,
             );
         });
         let _ = ctx.run(raw_input(pointer_scroll_over_chat()), |ctx| {
@@ -496,6 +540,7 @@ mod tests {
                 &mut runtime,
                 &mut Vec::<String>::new(),
                 true,
+                None,
             );
             wants_pointer = ctx.wants_pointer_input();
         });
@@ -552,5 +597,32 @@ mod tests {
         assert_eq!(text_rect.right(), rect.right() - 10.0);
         assert_eq!(chat_frame(true).fill.a(), 224);
         assert_eq!(chat_frame(false).fill.a(), 150);
+    }
+
+    #[test]
+    fn effective_chat_width_uses_max_when_actionbar_unknown() {
+        assert_eq!(effective_chat_width(None), CHAT_MAX_WIDTH);
+    }
+
+    #[test]
+    fn effective_chat_width_shrinks_to_keep_actionbar_gap() {
+        // Actionbar that leaves plenty of room.
+        let wide = egui::Rect::from_min_max(egui::pos2(900.0, 600.0), egui::pos2(1500.0, 700.0));
+        assert_eq!(effective_chat_width(Some(wide)), CHAT_MAX_WIDTH);
+
+        // Actionbar that crowds the chat — width should be reduced so the
+        // frame's outer-right edge sits `CHAT_ACTIONBAR_GAP` before the bar.
+        let crowded = egui::Rect::from_min_max(egui::pos2(360.0, 600.0), egui::pos2(900.0, 700.0));
+        let width = effective_chat_width(Some(crowded));
+        assert!(width < CHAT_MAX_WIDTH);
+        let outer_right =
+            CHAT_LEFT_ANCHOR + width + CHAT_FRAME_HORIZONTAL_PADDING + CHAT_ACTIONBAR_GAP;
+        assert!((outer_right - crowded.left()).abs() <= 0.001);
+    }
+
+    #[test]
+    fn effective_chat_width_floors_at_minimum_on_tiny_screens() {
+        let cramped = egui::Rect::from_min_max(egui::pos2(80.0, 600.0), egui::pos2(400.0, 700.0));
+        assert_eq!(effective_chat_width(Some(cramped)), CHAT_MIN_WIDTH);
     }
 }
