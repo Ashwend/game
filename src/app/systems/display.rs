@@ -2,6 +2,7 @@ use bevy::{
     prelude::*,
     window::{Monitor, MonitorSelection, PrimaryMonitor, PrimaryWindow, Window, WindowPosition},
 };
+use bevy_framepace::{FramepaceSettings, Limiter};
 
 use super::super::state::{ClientSettings, DisplayMode, DisplayResolution};
 
@@ -12,6 +13,7 @@ pub(crate) fn apply_display_settings_system(
     mut settings: ResMut<ClientSettings>,
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
     primary_monitor: Query<&Monitor, With<PrimaryMonitor>>,
+    mut framepace: ResMut<FramepaceSettings>,
     mut previous_mode: Local<Option<DisplayMode>>,
 ) {
     let Ok(mut window) = primary_window.single_mut() else {
@@ -34,6 +36,14 @@ pub(crate) fn apply_display_settings_system(
         window.present_mode = settings.display.present_mode();
     }
 
+    // Software-side frame cap follows the vsync toggle. `Limiter::Auto`
+    // queries the active monitor's refresh rate; `Limiter::Off` runs
+    // uncapped. Cheap comparison every frame, no allocation.
+    let target_limiter = settings.display.frame_limiter();
+    if !limiters_eq(&framepace.limiter, &target_limiter) {
+        framepace.limiter = target_limiter;
+    }
+
     if window.resizable {
         window.resizable = false;
     }
@@ -54,6 +64,17 @@ pub(crate) fn apply_display_settings_system(
     }
 }
 
+/// `Limiter` doesn't derive `PartialEq` in `bevy_framepace`. We only
+/// ever swap between `Auto` and `Off` — `Manual` isn't used — so a
+/// match on the variant pair is enough to skip the change-detection
+/// trigger on frames where the user didn't touch vsync.
+fn limiters_eq(a: &Limiter, b: &Limiter) -> bool {
+    matches!(
+        (a, b),
+        (Limiter::Auto, Limiter::Auto) | (Limiter::Off, Limiter::Off)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,6 +84,9 @@ mod tests {
     fn display_settings_apply_to_primary_window() {
         let mut app = App::new();
         app.insert_resource(ClientSettings::default());
+        app.insert_resource(FramepaceSettings {
+            limiter: Limiter::Off,
+        });
         app.world_mut().spawn((
             PrimaryWindow,
             Window {
@@ -81,10 +105,18 @@ mod tests {
             .query_filtered::<&Window, With<PrimaryWindow>>()
             .single(app.world())
             .expect("primary window");
-        assert_eq!(window.present_mode, PresentMode::AutoVsync);
+        // Always `Immediate`: GPU vsync is handled by `bevy_framepace`
+        // on the CPU side, not by the wgpu present mode. See the
+        // doc comment on `DisplaySettings::present_mode`.
+        assert_eq!(window.present_mode, PresentMode::Immediate);
         assert!(!window.resizable);
         assert_eq!(window.resolution.physical_width(), 1280);
         assert_eq!(window.resolution.physical_height(), 720);
+
+        // Default `vsync: true` should have raised the framepace limiter
+        // to `Auto` so the frame rate is capped to the display refresh.
+        let limiter = &app.world().resource::<FramepaceSettings>().limiter;
+        assert!(matches!(limiter, Limiter::Auto));
     }
 
     #[test]
@@ -94,6 +126,9 @@ mod tests {
         settings.display.mode = DisplayMode::Fullscreen;
         settings.display.resolution = DisplayResolution::new(2560, 1440);
         app.insert_resource(settings);
+        app.insert_resource(FramepaceSettings {
+            limiter: Limiter::Off,
+        });
         app.world_mut().spawn((
             PrimaryWindow,
             Window {

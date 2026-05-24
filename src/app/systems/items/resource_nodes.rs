@@ -13,6 +13,18 @@ use crate::{
     resources::{ResourceNodeModel, resource_node_definition},
 };
 
+/// Per-frame cap on resource-node *spawns*. Crossing a chunk boundary
+/// can pull tens of trees and ores into view in one snapshot tick. Doing
+/// every fresh `commands.spawn(...)` in the same frame produces a
+/// command-buffer / GPU-upload stall the player sees as a hitch — the
+/// "feels like 40 FPS even at 500 FPS" pattern. Anything past the budget
+/// is left untouched in `previous_progress` so the *next* frame still
+/// classifies it as fresh and runs its pop-in animation. The snapshot
+/// stays valid until the next server tick (~50 ms), giving plenty of
+/// frames to drain a backlog. Existing-entity transform updates and
+/// despawns are uncapped — only first-time spawns are budgeted.
+const MAX_RESOURCE_NODE_SPAWNS_PER_FRAME: usize = 8;
+
 /// How long the "node emerges from the ground" animation runs. Short
 /// enough to feel like a pop rather than a slow grow, long enough to
 /// register as something happening.
@@ -105,6 +117,11 @@ pub(crate) fn apply_resource_nodes_system(
         .as_ref()
         .map(|snapshot| snapshot.resource_nodes.clone())
         .unwrap_or_default();
+    let mut spawn_budget = MAX_RESOURCE_NODE_SPAWNS_PER_FRAME;
+    // IDs whose state we want `commit_progress` to record this frame.
+    // Budget-deferred fresh spawns are deliberately excluded so they
+    // stay "unknown" and replay the pop-in once they finally spawn.
+    let mut processed_ids: HashSet<ResourceNodeId> = HashSet::new();
     for node in &snapshot_resource_nodes {
         let Some(definition) = resource_node_definition(&node.definition_id) else {
             continue;
@@ -128,6 +145,7 @@ pub(crate) fn apply_resource_nodes_system(
         // Regenerating nodes have no on-screen presence — skip any
         // entity creation or transform updates this frame.
         if node.respawn_progress.is_some() {
+            processed_ids.insert(node.id);
             continue;
         }
 
@@ -141,8 +159,18 @@ pub(crate) fn apply_resource_nodes_system(
             if !popping_in.contains(entity) {
                 commands.entity(entity).insert(target_transform);
             }
+            processed_ids.insert(node.id);
             continue;
         }
+
+        if spawn_budget == 0 {
+            // Defer to a later frame. Skip `processed_ids` insert so
+            // `commit_progress` leaves `previous_progress` untouched
+            // for this id — next frame `classify` will still mark it
+            // as fresh and the pop-in animation runs as intended.
+            continue;
+        }
+        spawn_budget -= 1;
 
         spawn_resource_node_entity(
             &mut commands,
@@ -154,6 +182,7 @@ pub(crate) fn apply_resource_nodes_system(
             target_transform,
             transition.should_pop_in,
         );
+        processed_ids.insert(node.id);
     }
 
     let consumed = despawn_nodes_missing_from_snapshot(
@@ -169,7 +198,7 @@ pub(crate) fn apply_resource_nodes_system(
         player_position,
     );
 
-    entities.commit_progress(&snapshot_resource_nodes, &snapshot_ids);
+    entities.commit_progress(&snapshot_resource_nodes, &snapshot_ids, &processed_ids);
 
     // Clear the consumed depletion ids so they don't fire twice if the
     // same id is somehow re-emitted later (it won't, but keeping the
@@ -218,14 +247,24 @@ impl ResourceNodeEntities {
 
     /// Refresh the progress map after a tick, dropping ids that left the
     /// snapshot so it can't grow without bound across long sessions.
+    ///
+    /// `processed_ids` is the set the system actually handled this frame
+    /// (spawned, updated, or saw mid-regen). Anything in `nodes` but not
+    /// in `processed_ids` was deferred by the per-frame spawn budget and
+    /// is intentionally left unrecorded so the next frame still treats
+    /// it as a fresh arrival (full pop-in animation, just one tick later).
     fn commit_progress(
         &mut self,
         nodes: &[ResourceNodeState],
         snapshot_ids: &HashSet<ResourceNodeId>,
+        processed_ids: &HashSet<ResourceNodeId>,
     ) {
         self.previous_progress
             .retain(|id, _| snapshot_ids.contains(id));
         for node in nodes {
+            if !processed_ids.contains(&node.id) {
+                continue;
+            }
             self.previous_progress
                 .insert(node.id, node.respawn_progress);
         }

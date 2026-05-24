@@ -15,6 +15,14 @@ dev-fast = ["bevy/dynamic_linking"]
 anyhow = "1.0.102"
 bevy = { version = "0.18.1", features = ["mp3", "wav"] }
 bevy_egui = "0.39.1"
+# Software frame-pacer. Caps the frame rate to the display refresh by
+# sleeping on the CPU before each frame is presented. We rely on this
+# rather than the GPU's vsync (`PresentMode::Fifo`/`AutoVsync`) because
+# macOS Metal's Fifo implementation has long-standing pacing/flicker bugs
+# in wgpu — software pacing produces stable frame times where Fifo does
+# not. The `framepace_debug` feature would add a debug overlay we don't
+# need, so default features are off.
+bevy_framepace = { version = "0.21", default-features = false }
 clap = { version = "4.6.1", features = ["derive"] }
 # Cross-platform microphone capture + speaker output for the voice pipeline.
 # Pulls native APIs (CoreAudio on darwin, WASAPI on Windows, ALSA on Linux).

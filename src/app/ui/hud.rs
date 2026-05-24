@@ -136,11 +136,52 @@ fn connection_lag_indicator(ctx: &egui::Context) {
         });
 }
 
-fn perf_stats_ui(ctx: &egui::Context, runtime: &ClientRuntime, diagnostics: &DiagnosticsStore) {
+/// Frame-pacing snapshot drawn by the perf overlay. The smoothed FPS that
+/// Bevy exposes by default hides periodic stalls — a stream of
+/// `[2 ms, 2 ms, 2 ms, 30 ms]` reads as "~120 FPS" but feels like a 30 ms
+/// hitch every fourth frame. `p99_ms` and `max_ms` are the actual signal
+/// for "the game *feels* slow".
+struct FrameTimeStats {
+    fps: f64,
+    last_ms: f64,
+    p99_ms: f64,
+    max_ms: f64,
+}
+
+fn frame_time_stats(diagnostics: &DiagnosticsStore) -> FrameTimeStats {
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|diagnostic| diagnostic.smoothed())
+        .unwrap_or(0.0);
+
+    let frame_time = diagnostics.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME);
+    let last_ms = frame_time.and_then(|d| d.value()).unwrap_or(0.0);
+
+    let mut samples: Vec<f64> = frame_time
+        .map(|d| d.values().copied().collect())
         .unwrap_or_default();
+
+    let (p99_ms, max_ms) = if samples.is_empty() {
+        (0.0, 0.0)
+    } else {
+        // Partial sort is overkill for ~480 samples; full sort is fast
+        // enough and the path only runs while the overlay is visible.
+        samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let n = samples.len();
+        let p99_index = (((n as f64) * 0.99) as usize).min(n - 1);
+        (samples[p99_index], *samples.last().unwrap_or(&0.0))
+    };
+
+    FrameTimeStats {
+        fps,
+        last_ms,
+        p99_ms,
+        max_ms,
+    }
+}
+
+fn perf_stats_ui(ctx: &egui::Context, runtime: &ClientRuntime, diagnostics: &DiagnosticsStore) {
+    let frame = frame_time_stats(diagnostics);
 
     egui::Area::new("perf_stats".into())
         .anchor(egui::Align2::RIGHT_TOP, [-16.0, 14.0])
@@ -194,7 +235,16 @@ fn perf_stats_ui(ctx: &egui::Context, runtime: &ClientRuntime, diagnostics: &Dia
                             .color(theme::text()),
                     );
                     ui.add_space(2.0);
-                    label(ui, "FPS", format!("{fps:.0}"));
+                    label(ui, "FPS", format!("{:.0}", frame.fps));
+                    // Frame-time triplet exposes the hitches the smoothed
+                    // FPS number hides. `now` is the most recent frame in
+                    // ms; `p99` and `max` are computed over the diagnostic
+                    // history window (~1 s at 500 FPS). If p99/max diverge
+                    // from `now` you are seeing periodic stalls even when
+                    // the FPS readout looks healthy.
+                    label(ui, "Frame", format!("{:.2} ms", frame.last_ms));
+                    label(ui, "p99 frame", format!("{:.2} ms", frame.p99_ms));
+                    label(ui, "max frame", format!("{:.2} ms", frame.max_ms));
                     match runtime.perf_stats {
                         Some(stats) => {
                             label(

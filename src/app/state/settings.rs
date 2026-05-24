@@ -54,7 +54,7 @@ mod tests {
             settings.display.resolution,
             DisplayResolution::new(1280, 720)
         );
-        assert_eq!(settings.display.present_mode(), PresentMode::AutoVsync);
+        assert_eq!(settings.display.present_mode(), PresentMode::Immediate);
         assert!(!settings.hud.show_perf_stats);
     }
 

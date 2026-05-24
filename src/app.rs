@@ -16,6 +16,7 @@ use bevy::{
     window::WindowPosition, winit::WinitSettings,
 };
 use bevy_egui::{EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass};
+use bevy_framepace::{FramepacePlugin, FramepaceSettings};
 
 use crate::{
     save::WorldStore,
@@ -241,7 +242,11 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
                 ..default()
             }),
         )
-        .add_plugins(FrameTimeDiagnosticsPlugin::default())
+        // 480 sample history: ~1 second at 500 FPS, ~4 seconds at 120 FPS.
+        // The perf HUD pulls p99/max from this window so the player sees
+        // hitches that the smoothed FPS number hides — 120 samples (default)
+        // at 500 FPS is only 0.24 s, too short to catch periodic stalls.
+        .add_plugins(FrameTimeDiagnosticsPlugin::new(480))
         // Self-contained binary: every shipped sound is registered into
         // Bevy's `embedded` asset source so we don't have to ship a
         // sibling `assets/` folder. Must come after DefaultPlugins so
@@ -253,6 +258,17 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         // resolve through the embedded source.
         .add_plugins(AudioPlugin)
         .add_plugins(EguiPlugin::default())
+        // Software frame pacing. With this plugin running we can leave
+        // `PresentMode` at `Immediate` everywhere and rely on a CPU-side
+        // sleep to cap the frame rate — `Fifo`/`AutoVsync` are not
+        // reliable on macOS Metal (flicker, no cap respectively). The
+        // limiter starts in whatever state the saved settings ask for;
+        // `apply_display_settings_system` keeps it in sync when the user
+        // toggles vsync at runtime.
+        .add_plugins(FramepacePlugin)
+        .insert_resource(FramepaceSettings {
+            limiter: window_settings.frame_limiter(),
+        })
         .configure_sets(
             PostUpdate,
             EguiPostUpdateSet::EndPass.before(TransformSystems::Propagate),

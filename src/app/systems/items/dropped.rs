@@ -12,6 +12,15 @@ use crate::{
 
 const DROPPED_ITEM_INTERPOLATION_SECONDS: f32 = 0.1;
 const DROPPED_ITEM_INTERPOLATION_SNAP_DISTANCE: f32 = 6.0;
+/// Per-frame cap on fresh dropped-item spawns. A chest spill or player
+/// death can produce a burst of dozens of drops in a single snapshot; if
+/// every visual entity is created the same frame the snapshot lands the
+/// command-buffer flush stalls the main thread. Updates to existing
+/// drops and despawns are uncapped — only first-time spawns are
+/// budgeted. The remainder appears the next frame; at 50 ms snapshot
+/// cadence and 16-per-frame, even a 200-item burst drains in under a
+/// snapshot interval.
+const MAX_DROPPED_ITEM_SPAWNS_PER_FRAME: usize = 16;
 /// Beyond this many metres from the camera, dropped items skip the
 /// per-frame lerp/slerp blend and just snap to their target transform.
 /// At that distance the sub-frame interpolation is invisible (the item
@@ -59,6 +68,7 @@ pub(crate) fn apply_dropped_items_system(
     let interp_threshold_sq =
         DROPPED_ITEM_INTERPOLATION_MAX_DISTANCE_M * DROPPED_ITEM_INTERPOLATION_MAX_DISTANCE_M;
 
+    let mut spawn_budget = MAX_DROPPED_ITEM_SPAWNS_PER_FRAME;
     for item in &snapshot.dropped_items {
         let target = dropped_item_transform(item);
         if let Some(entity) = entities.0.get(&item.id).copied() {
@@ -79,6 +89,15 @@ pub(crate) fn apply_dropped_items_system(
                 commands.entity(entity).insert(transform);
             }
         } else {
+            if spawn_budget == 0 {
+                // Defer to a later frame. The snapshot stays valid
+                // until the next server tick (~50 ms), and the cleanup
+                // pass below only despawns ids that left the snapshot —
+                // not ids we simply haven't spawned yet — so the item
+                // is picked up by a subsequent invocation.
+                continue;
+            }
+            spawn_budget -= 1;
             let entity = commands
                 .spawn((
                     Name::new(format!("Dropped Item {}", item.id)),

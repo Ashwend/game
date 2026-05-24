@@ -2,6 +2,7 @@ use bevy::{
     prelude::*,
     window::{Monitor, MonitorSelection, PresentMode, VideoModeSelection, WindowMode},
 };
+use bevy_framepace::Limiter;
 use serde::{Deserialize, Serialize};
 
 use super::{display::best_video_mode, keybindings::KeyBindings};
@@ -56,11 +57,28 @@ impl Default for DisplaySettings {
 }
 
 impl DisplaySettings {
+    /// The wgpu present mode for the primary window.
+    ///
+    /// Always `Immediate` regardless of the user's vsync preference: GPU
+    /// vsync (`Fifo`/`AutoVsync`) misbehaves on macOS Metal — `Fifo`
+    /// flickers, `AutoVsync` fails to cap the frame rate at all. Frame
+    /// limiting is handled CPU-side by `bevy_framepace`, which works
+    /// reliably across platforms. See [`Self::frame_limiter`].
     pub(crate) fn present_mode(self) -> PresentMode {
+        PresentMode::Immediate
+    }
+
+    /// The CPU-side frame limiter applied by `bevy_framepace`.
+    ///
+    /// `vsync: true` caps the frame rate to the display's refresh by
+    /// putting the main thread to sleep just before the next frame is
+    /// presented. `vsync: false` runs uncapped (tearing is possible but
+    /// frames are still individually fast).
+    pub(crate) fn frame_limiter(self) -> Limiter {
         if self.vsync {
-            PresentMode::AutoVsync
+            Limiter::Auto
         } else {
-            PresentMode::AutoNoVsync
+            Limiter::Off
         }
     }
 
