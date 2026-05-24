@@ -77,6 +77,7 @@ impl GameServer {
             last_seen_tick: self.tick,
             next_gather_tick: self.tick,
             chat_bubble: None,
+            view_tier: crate::protocol::ViewRadiusTier::default(),
         };
 
         self.clients.insert(client_id, client);
@@ -187,7 +188,26 @@ impl GameServer {
             .map(|body| body.item.clone())
             .collect::<Vec<_>>();
         dropped_items.sort_by_key(|item| item.id);
-        let mut resource_nodes = self.resource_nodes.values().cloned().collect::<Vec<_>>();
+        // AoI filter: only ship the resource nodes inside this client's
+        // loaded grid ring. Calls with `for_client = None` (tests, the
+        // brief handshake window) get the full set so they aren't
+        // accidentally starved of nodes.
+        let visible: Option<std::collections::HashSet<crate::protocol::ResourceNodeId>> =
+            for_client
+                .and_then(|cid| self.clients.get(&cid))
+                .map(|client| {
+                    self.chunk_manager
+                        .nodes_visible_to(client.controller.position, client.view_tier)
+                });
+        let mut resource_nodes = if let Some(filter) = visible {
+            self.resource_nodes
+                .values()
+                .filter(|node| filter.contains(&node.id))
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            self.resource_nodes.values().cloned().collect::<Vec<_>>()
+        };
         resource_nodes.sort_by_key(|node| node.id);
 
         WorldSnapshot {

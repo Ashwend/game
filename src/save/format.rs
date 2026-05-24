@@ -26,7 +26,13 @@ pub(super) const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 ///
 /// `4` added `next_resource_node_id` on `WorldStateSave` so the server can
 /// hand out IDs in O(1) instead of scanning the live node map for the max.
-pub(super) const SAVE_FORMAT_VERSION: u32 = 4;
+///
+/// `5` switched the test/procedural worlds to a chunk-based generator and
+/// embeds `ChunkManagerSave` (per-chunk capacities + pending fresh-position
+/// regrows) on `WorldStateSave`. Old saves don't carry the chunk state,
+/// and the test-world layout changed, so older saves wouldn't map onto
+/// the new world geometry — they're rejected at load.
+pub(super) const SAVE_FORMAT_VERSION: u32 = 5;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
 /// at >100MB/s compression and ~1GB/s decompression.
 const ZSTD_LEVEL: i32 = 5;

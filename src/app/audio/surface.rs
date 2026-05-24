@@ -60,6 +60,14 @@ pub(crate) fn surface_for_resource_model(model: ResourceNodeModel) -> SurfaceMat
         ResourceNodeModel::CoalOre => SurfaceMaterial::Coal,
         ResourceNodeModel::IronOre => SurfaceMaterial::Iron,
         ResourceNodeModel::SulfurOre => SurfaceMaterial::Sulfur,
+        // Plain rock vein — same impact pool as the small surface
+        // stones, just at the heavier per-swing strike.
+        ResourceNodeModel::StoneVein => SurfaceMaterial::Stone,
+        // Crude materials: branches read as wood, surface stone as stone,
+        // hay tufts as dirt (closest "soft scrape" in the surface taxonomy).
+        ResourceNodeModel::BranchPile => SurfaceMaterial::Wood,
+        ResourceNodeModel::SurfaceStone => SurfaceMaterial::Stone,
+        ResourceNodeModel::HayGrass => SurfaceMaterial::Dirt,
     }
 }
 

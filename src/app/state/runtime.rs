@@ -116,6 +116,17 @@ pub(crate) struct ClientRuntime {
     /// the periodic `WorldTime` server broadcast plus per-frame local
     /// integration so the sun/moon position stays smooth between snapshots.
     pub(crate) world_time: WorldTime,
+    /// Latest `ServerMessage::PerfStats` payload. Rendered by the perf
+    /// HUD overlay when the user enables it in settings. `None` until the
+    /// first broadcast arrives.
+    pub(crate) perf_stats: Option<crate::protocol::PerfStatsSnapshot>,
+    /// IDs of resource nodes the server has told us *actually* depleted
+    /// (gathered out, picked up, admin-removed). Consumed by
+    /// `apply_resource_nodes_system` to decide whether a snapshot-diff
+    /// despawn should fire a death animation (tree-fell, ore shatter,
+    /// crude pickup burst) or just silently disappear because the node
+    /// only left this client's AoI ring.
+    pub(crate) depleted_node_ids: std::collections::HashSet<crate::protocol::ResourceNodeId>,
 }
 
 /// Surfaces a client-side error string as a toast. Emitted by any system
@@ -229,6 +240,7 @@ impl ClientRuntime {
         self.messages.clear();
         self.input_sequence = 0;
         self.resource_node_collider_version = 0;
+        self.depleted_node_ids.clear();
         self.connection.reset();
         self.world_time = WorldTime::default();
     }
@@ -255,6 +267,7 @@ impl ClientRuntime {
         self.predicted_local = None;
         self.is_admin = false;
         self.resource_node_collider_version = 0;
+        self.depleted_node_ids.clear();
         self.connection.reset();
     }
 
@@ -351,6 +364,17 @@ impl ClientRuntime {
             }
             ServerMessage::WorldTime(snapshot) => {
                 self.apply_world_time_snapshot(snapshot);
+            }
+            ServerMessage::PerfStats(stats) => {
+                self.perf_stats = Some(stats);
+            }
+            ServerMessage::ResourceNodeDepleted { id } => {
+                // Mark for "real" death animation. The consumer
+                // (`apply_resource_nodes_system`) removes the ID when it
+                // processes the despawn; anything left over (e.g., the
+                // node already left AoI when this arrived) lingers
+                // harmlessly until the player reconnects.
+                self.depleted_node_ids.insert(id);
             }
             ServerMessage::Voice { .. } => {
                 // Voice frames are dispatched as `IncomingVoiceMessage`

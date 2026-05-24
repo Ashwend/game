@@ -2,6 +2,22 @@ use bevy::prelude::*;
 
 use crate::app::state::{ClientSettings, InventoryUiState, KeyAction, MenuState, Screen};
 
+/// Hardcoded F2 toggle for the performance overlay. Not rebindable in the
+/// keybind UI — the FPS/perf overlay sits in the "debug toggles" bucket
+/// where a fixed key is easier than a configurable one.
+pub(crate) fn toggle_perf_stats_system(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut settings: ResMut<ClientSettings>,
+    menu: Res<MenuState>,
+) {
+    if menu.screen != Screen::InGame || menu.pause_open || menu.chat_open {
+        return;
+    }
+    if keys.just_pressed(KeyCode::F2) {
+        settings.hud.show_perf_stats = !settings.hud.show_perf_stats;
+    }
+}
+
 pub(crate) fn chat_shortcut_system(
     keys: Res<ButtonInput<KeyCode>>,
     settings: Res<ClientSettings>,

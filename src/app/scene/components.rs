@@ -47,8 +47,13 @@ pub(crate) fn tree_mesh_height(model: ResourceNodeModel) -> Option<f32> {
         ResourceNodeModel::BirchTreeSmall => Some(3.60),
         ResourceNodeModel::BirchTreeMedium => Some(5.30),
         ResourceNodeModel::BirchTreeLarge => Some(7.15),
-        ResourceNodeModel::CoalOre | ResourceNodeModel::IronOre | ResourceNodeModel::SulfurOre => {
-            None
-        }
+        // Non-tree models don't fall, so they don't carry a mesh height.
+        ResourceNodeModel::CoalOre
+        | ResourceNodeModel::IronOre
+        | ResourceNodeModel::SulfurOre
+        | ResourceNodeModel::StoneVein
+        | ResourceNodeModel::SurfaceStone
+        | ResourceNodeModel::BranchPile
+        | ResourceNodeModel::HayGrass => None,
     }
 }

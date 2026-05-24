@@ -59,7 +59,7 @@ fn test_world_spawns_authoritative_resource_nodes() {
 }
 
 #[test]
-fn pickaxe_gathers_materials_and_starts_node_respawn() {
+fn pickaxe_depletes_node_and_removes_it_from_the_world() {
     let mut server = server();
     let client_id = connect_host(&mut server);
     server.resource_nodes.clear();
@@ -82,14 +82,13 @@ fn pickaxe_gathers_materials_and_starts_node_respawn() {
         .inventory
         .as_ref()
         .expect("host inventory should be present");
-    // The node is now a ghost waiting to regrow rather than being deleted.
-    // It still appears in the snapshot so the client can render the ghost
-    // and the respawn timer can advance.
-    assert_eq!(snapshot.resource_nodes.len(), 1);
-    let remaining = &snapshot.resource_nodes[0];
-    assert_eq!(remaining.id, 99);
-    assert!(remaining.storage.iter().all(|stack| stack.quantity == 0));
-    assert_eq!(remaining.respawn_progress, Some(0.0));
+    // Depleted nodes are removed from the world entirely — the chunk
+    // manager schedules a fresh-position respawn 5-15 minutes later. The
+    // snapshot should no longer contain this node id.
+    assert!(
+        snapshot.resource_nodes.iter().all(|node| node.id != 99),
+        "depleted node should be removed from the live snapshot"
+    );
     assert!(inventory.inventory_slots.iter().any(|slot| {
         slot.as_ref()
             .is_some_and(|stack| stack.item_id.as_ref() == COAL_ID && stack.quantity == 3)
@@ -97,7 +96,7 @@ fn pickaxe_gathers_materials_and_starts_node_respawn() {
 }
 
 #[test]
-fn regenerating_node_rejects_further_gathers_and_then_restocks() {
+fn second_gather_on_removed_node_is_silently_dropped() {
     let mut server = server();
     let client_id = connect_host(&mut server);
     server.resource_nodes.clear();
@@ -108,19 +107,17 @@ fn regenerating_node_rejects_further_gathers_and_then_restocks() {
         ClientMessage::Inventory(InventoryCommand::SelectActionbarSlot { slot: 1 }),
     );
 
-    // First gather depletes the storage and flips the node into the
-    // regenerating state.
+    // First gather depletes the node — it's gone from the live map.
     server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
         }),
     );
-    let after_first = server.snapshot();
-    assert_eq!(after_first.resource_nodes[0].respawn_progress, Some(0.0));
+    assert!(!server.resource_nodes.contains_key(&99));
 
-    // A second gather attempt against the same ghost should produce no
-    // toasts, no impacts, no inventory change.
+    // Any further gather attempts against the removed id produce nothing
+    // — no toasts, no impacts, no inventory change.
     let inventory_before = {
         let client = server.clients.get(&client_id).expect("host client");
         client.inventory.clone()
@@ -133,33 +130,12 @@ fn regenerating_node_rejects_further_gathers_and_then_restocks() {
     );
     assert!(
         envelopes.is_empty(),
-        "regenerating node must not respond to gather"
+        "gather against a removed node must produce no envelopes"
     );
     {
         let client = server.clients.get(&client_id).expect("host client");
         assert_eq!(client.inventory, inventory_before);
     }
-
-    // Driving the tick fast enough times eventually completes the regrow.
-    // RESPAWN_DURATION_SECONDS is private; use a clearly-large dt budget.
-    for _ in 0..2000 {
-        server.tick(0.05);
-        if server.snapshot().resource_nodes[0]
-            .respawn_progress
-            .is_none()
-        {
-            break;
-        }
-    }
-    let restocked = &server.snapshot().resource_nodes[0];
-    assert!(
-        restocked.respawn_progress.is_none(),
-        "respawn should finish"
-    );
-    assert!(
-        restocked.storage.iter().any(|stack| stack.quantity > 0),
-        "storage should refill from the definition once the node is ready"
-    );
 }
 
 #[test]
@@ -392,7 +368,7 @@ fn resource_gathering_requires_matching_tool_and_server_cooldown() {
             .get(&99)
             .and_then(|node| node.storage.first())
             .map(|stack| stack.quantity),
-        Some(6)
+        Some(3)
     );
 
     server.receive(
@@ -407,6 +383,6 @@ fn resource_gathering_requires_matching_tool_and_server_cooldown() {
             .get(&99)
             .and_then(|node| node.storage.first())
             .map(|stack| stack.quantity),
-        Some(6)
+        Some(3)
     );
 }

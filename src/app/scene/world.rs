@@ -1,7 +1,12 @@
 use bevy::prelude::*;
 
 use crate::{
-    app::state::{ClientRuntime, MenuState, Screen},
+    app::{
+        scene::ResourceVisualAssets,
+        state::{ClientRuntime, MenuState, Screen},
+        systems::{resource_node_transform, resource_node_visual},
+    },
+    resources::{resource_node_definition, spawn_resource_node},
     world::{BlockKind, WorldData},
 };
 
@@ -30,6 +35,7 @@ pub(crate) struct WorldSceneState {
     applied: WorldSceneSelection,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_world_scene_system(
     mut commands: Commands,
     mut scene_state: ResMut<WorldSceneState>,
@@ -37,6 +43,7 @@ pub(crate) fn apply_world_scene_system(
     menu: Res<MenuState>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    resource_assets: Option<Res<ResourceVisualAssets>>,
     geometry: Query<Entity, With<WorldGeometry>>,
 ) {
     let desired = scene_selection(&runtime, menu.screen);
@@ -51,12 +58,14 @@ pub(crate) fn apply_world_scene_system(
     match desired {
         WorldSceneSelection::None => {}
         WorldSceneSelection::MenuBackdrop => {
-            spawn_world_geometry(
-                &mut commands,
-                &mut meshes,
-                &mut materials,
-                &WorldData::test_world(),
-            );
+            let backdrop = WorldData::menu_backdrop_world();
+            spawn_world_geometry(&mut commands, &mut meshes, &mut materials, &backdrop);
+            // The session path renders resource nodes from snapshots, but
+            // the menu has no session — spawn them directly so the splash
+            // camera has something interesting to look at.
+            if let Some(assets) = resource_assets.as_deref() {
+                spawn_menu_resource_nodes(&mut commands, assets, &backdrop);
+            }
         }
         WorldSceneSelection::Live { .. } => {
             if let Some(world) = runtime.world.as_ref() {
@@ -65,6 +74,34 @@ pub(crate) fn apply_world_scene_system(
         }
     }
     scene_state.applied = desired;
+}
+
+/// Spawn static resource-node visuals as `WorldGeometry` so they live
+/// alongside the menu floor and despawn when the player enters a real
+/// session. Reuses the same mesh + material handles the session path
+/// uses, so the menu and in-game art stay in lockstep.
+fn spawn_menu_resource_nodes(
+    commands: &mut Commands,
+    assets: &ResourceVisualAssets,
+    world: &WorldData,
+) {
+    for spawn in &world.resource_nodes {
+        let Some(node) = spawn_resource_node(spawn) else {
+            continue;
+        };
+        let Some(definition) = resource_node_definition(&node.definition_id) else {
+            continue;
+        };
+        let (mesh, material) = resource_node_visual(assets, &node, definition.model);
+        let transform = resource_node_transform(&node, definition.model);
+        commands.spawn((
+            Name::new(format!("Menu Resource Node {}", node.id)),
+            WorldGeometry,
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
+            transform,
+        ));
+    }
 }
 
 fn scene_selection(runtime: &ClientRuntime, screen: Screen) -> WorldSceneSelection {

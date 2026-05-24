@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use bevy::prelude::*;
+use bevy::{light::NotShadowCaster, prelude::*};
 
 use crate::{
     app::{
@@ -62,6 +62,12 @@ pub(crate) fn apply_dropped_items_system(
                     MeshMaterial3d(assets.dropped_material.clone()),
                     target,
                     Visibility::Visible,
+                    // Dropped items are tiny ground clutter — a sun-cast
+                    // shadow on a 25 cm bag adds almost no visual signal
+                    // but every drop in the world pays the shadow-pass
+                    // draw call. Skip it entirely; the lighting on the
+                    // bag itself still tracks the sun.
+                    NotShadowCaster,
                 ))
                 .id();
             entities.0.insert(item.id, entity);

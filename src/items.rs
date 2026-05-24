@@ -13,6 +13,7 @@ pub const STONE_ID: &str = "stone";
 pub const COAL_ID: &str = "coal";
 pub const IRON_ORE_ID: &str = "iron_ore";
 pub const SULFUR_ORE_ID: &str = "sulfur_ore";
+pub const FIBER_ID: &str = "fiber";
 pub const BASIC_HATCHET_ID: &str = "wood_stone_hatchet";
 pub const BASIC_PICKAXE_ID: &str = "wood_stone_pickaxe";
 
@@ -74,6 +75,12 @@ pub enum ItemModel {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolKind {
+    /// No tool equipped. Synthesized via [`HANDS_TOOL`] when the active
+    /// actionbar slot has no tool. Crude pickup nodes carry a
+    /// `ToolRequirement` of `Hands` to mark themselves as
+    /// E-pickup-only — no tool (including bare hands) can gather them
+    /// by swinging. See [`crate::resources::ToolRequirement::allows`].
+    Hands,
     Axe,
     Pickaxe,
 }
@@ -81,6 +88,7 @@ pub enum ToolKind {
 impl ToolKind {
     pub const fn label(self) -> &'static str {
         match self {
+            Self::Hands => "Bare hands",
             Self::Axe => "Hatchet",
             Self::Pickaxe => "Pickaxe",
         }
@@ -94,6 +102,19 @@ pub struct ToolProfile {
     pub gather_amount: u16,
     pub cooldown_ticks: u64,
 }
+
+/// Synthesized tool profile used when no actionbar item is held. The
+/// server substitutes this in when the active stack carries no tool
+/// definition so the gather pipeline always has a `ToolProfile` to read.
+/// It's never accepted as a valid gather tool — crude nodes are E-pickup
+/// only and the tool-required nodes reject Hands explicitly — but it
+/// keeps the cooldown/payout math uniform across the gather path.
+pub const HANDS_TOOL: ToolProfile = ToolProfile {
+    kind: ToolKind::Hands,
+    tier: 0,
+    gather_amount: 1,
+    cooldown_ticks: 10,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ItemTint {
@@ -165,7 +186,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         id: WOOD_ID,
         name: "Wood",
         description: "A common building material gathered from trees.",
-        stack_size: 100,
+        stack_size: 200,
         equipable: false,
         model: ItemModel::Bag,
         tint: ItemTint::new(139, 95, 56),
@@ -175,7 +196,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         id: STONE_ID,
         name: "Stone",
         description: "A rough stone material used for primitive tools.",
-        stack_size: 100,
+        stack_size: 200,
         equipable: false,
         model: ItemModel::Bag,
         tint: ItemTint::new(122, 128, 126),
@@ -185,7 +206,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         id: COAL_ID,
         name: "Coal",
         description: "A fuel-rich mineral gathered from coal nodes.",
-        stack_size: 100,
+        stack_size: 200,
         equipable: false,
         model: ItemModel::Bag,
         tint: ItemTint::new(42, 45, 48),
@@ -195,7 +216,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         id: IRON_ORE_ID,
         name: "Iron Ore",
         description: "Raw iron-bearing rock ready for later smelting systems.",
-        stack_size: 100,
+        stack_size: 200,
         equipable: false,
         model: ItemModel::Bag,
         tint: ItemTint::new(155, 120, 94),
@@ -205,10 +226,20 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         id: SULFUR_ORE_ID,
         name: "Sulfur Ore",
         description: "A yellow mineral gathered from sulfur nodes.",
-        stack_size: 100,
+        stack_size: 200,
         equipable: false,
         model: ItemModel::Bag,
         tint: ItemTint::new(218, 189, 73),
+        tool: None,
+    },
+    ItemDefinition {
+        id: FIBER_ID,
+        name: "Plant Fiber",
+        description: "Coarse fibers pulled from grass tufts. Used for crude bindings.",
+        stack_size: 200,
+        equipable: false,
+        model: ItemModel::Bag,
+        tint: ItemTint::new(168, 184, 96),
         tool: None,
     },
     ItemDefinition {
@@ -222,7 +253,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         tool: Some(ToolProfile {
             kind: ToolKind::Axe,
             tier: 1,
-            gather_amount: 4,
+            gather_amount: 6,
             cooldown_ticks: 6,
         }),
     },
@@ -237,7 +268,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         tool: Some(ToolProfile {
             kind: ToolKind::Pickaxe,
             tier: 1,
-            gather_amount: 3,
+            gather_amount: 6,
             cooldown_ticks: 6,
         }),
     },

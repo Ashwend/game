@@ -46,13 +46,14 @@ use self::{
         apply_display_settings_system, apply_dropped_items_system, apply_held_item_visual_system,
         apply_resource_nodes_system, apply_snapshot_system, apply_test_mode_overrides_system,
         auto_connect_poll_system, auto_connect_start_system, camera_follow_system,
-        center_cursor_on_focus_system, chat_shortcut_system, client_input_system,
-        gameplay_inventory_shortcuts_system, menu_backdrop_camera_system, mouse_look_system,
-        network_tick_system, reposition_test_window_system, save_client_settings_system,
-        session_shutdown_poll_system, spawn_impact_effects_system,
-        surface_client_error_toasts_system, tick_felling_trees_system, tick_impact_chips_system,
-        tick_resource_node_pop_in_system, toggle_inventory_system, toggle_pause_system,
-        update_cursor_system, update_pickup_target_system, update_tool_swap_state_system,
+        center_cursor_on_focus_system, chat_shortcut_system, chunk_overlay_system,
+        client_input_system, gameplay_inventory_shortcuts_system, menu_backdrop_camera_system,
+        mouse_look_system, network_tick_system, reposition_test_window_system,
+        save_client_settings_system, session_shutdown_poll_system, spawn_impact_effects_system,
+        surface_client_error_toasts_system, sync_view_radius_system, tick_felling_trees_system,
+        tick_impact_chips_system, tick_resource_node_pop_in_system, toggle_inventory_system,
+        toggle_pause_system, toggle_perf_stats_system, update_cursor_system,
+        update_pickup_target_system, update_tool_swap_state_system,
     },
     ui::{ButtonSoundRequests, button_sound_system, ui_system},
 };
@@ -277,6 +278,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
             Update,
             toggle_inventory_system.in_set(ClientSystemSet::InventoryToggle),
         )
+        .add_systems(Update, toggle_perf_stats_system)
         .add_systems(
             Update,
             center_cursor_on_focus_system.in_set(ClientSystemSet::Focus),
@@ -316,6 +318,8 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
             Update,
             save_client_settings_system.in_set(ClientSystemSet::SettingsSave),
         )
+        .add_systems(Update, sync_view_radius_system)
+        .add_systems(Update, chunk_overlay_system)
         .add_systems(
             Update,
             apply_world_scene_system.in_set(ClientSystemSet::WorldScene),

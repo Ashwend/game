@@ -7,7 +7,7 @@ use crate::{
 
 use super::{PLAYER_HEIGHT, PLAYER_RADIUS};
 
-/// Edge length of one grid cell, in world units. Chosen to be a few times
+/// Edge length of one chunk cell, in world units. Chosen to be a few times
 /// larger than the player radius so a typical player query touches at most
 /// four cells. Increase if blocks tend to be much larger than this; decrease
 /// for very dense fields of small blocks.
@@ -30,7 +30,7 @@ impl BlockGrid {
         Self::build_with_extras(world, &[])
     }
 
-    /// Same as [`build`] but mixes additional collider blocks into the grid.
+    /// Same as [`build`] but mixes additional collider blocks into the chunk.
     /// Use this on the client to compose static world geometry with
     /// per-frame dynamic colliders such as live tree trunks.
     pub fn build_with_extras(world: &WorldData, extras: &[WorldBlock]) -> Self {

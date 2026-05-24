@@ -187,7 +187,7 @@ fn dropped_items_despawn_after_their_lifetime() {
 }
 
 #[test]
-fn dropped_item_physics_collides_with_world_blocks() {
+fn dropped_item_physics_settles_on_the_floor() {
     let mut server = server();
     server.spawn_dropped_item(
         ItemStack::new(TEST_ORE_ID, 1),
@@ -200,7 +200,9 @@ fn dropped_item_physics_collides_with_world_blocks() {
         server.tick(1.0 / SERVER_TICK_RATE_HZ);
     }
 
+    // Grid-generated worlds have no internal blocks — items settle on
+    // the floor at y = DROPPED_ITEM_RADIUS plus a small jitter.
     let item = &server.snapshot().dropped_items[0];
-    assert!(item.position.y >= 0.5 + DROPPED_ITEM_RADIUS - 0.03);
-    assert!(item.position.y <= 0.5 + DROPPED_ITEM_RADIUS + 0.12);
+    assert!(item.position.y >= DROPPED_ITEM_RADIUS - 0.03);
+    assert!(item.position.y <= DROPPED_ITEM_RADIUS + 0.12);
 }

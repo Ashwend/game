@@ -1,13 +1,14 @@
 use crate::{
     items::{
-        BASIC_HATCHET_ID, BASIC_PICKAXE_ID, TEST_BANDAGE_ID, TEST_ORE_ID, TEST_RELIC_ID,
+        BASIC_HATCHET_ID, BASIC_PICKAXE_ID, TEST_BANDAGE_ID, TEST_ORE_ID, TEST_RELIC_ID, ToolKind,
         can_pick_up, normalize_stack, stack_limit,
     },
     protocol::{
         ACTIONBAR_SLOT_COUNT, ClientId, DroppedItemId, DroppedWorldItem, INVENTORY_SLOT_COUNT,
         InventoryCommand, ItemContainer, ItemContainerSlot, ItemStack, PlayerInventoryState,
-        Vec3Net,
+        ResourceNodeId, Vec3Net,
     },
+    resources::{can_gather_resource_node, resource_node_definition},
 };
 
 use super::{
@@ -222,6 +223,9 @@ impl GameServer {
             InventoryCommand::PickUp { dropped_item_id } => {
                 self.pick_up_dropped_item(client_id, dropped_item_id)
             }
+            InventoryCommand::PickUpResourceNode { resource_node_id } => {
+                self.pick_up_resource_node(client_id, resource_node_id)
+            }
             InventoryCommand::SelectActionbarSlot { slot } => {
                 if slot < ACTIONBAR_SLOT_COUNT
                     && let Some(client) = self.clients.get_mut(&client_id)
@@ -317,5 +321,98 @@ impl GameServer {
             return inventory_full_toast_envelopes(client_id);
         }
         item_acquired_toast_envelopes(client_id, &item.stack.item_id, accepted)
+    }
+
+    /// Quick-pickup path for crude resource nodes: drains storage straight
+    /// into the player's inventory, removes the node if fully emptied
+    /// (and schedules a fresh-position respawn via the chunk manager), and
+    /// returns toasts mirroring the per-item gather path. Server-side
+    /// gate: rejects nodes whose `required_tool` is anything other than
+    /// `Hands` — trees and ore veins still require a tool swing.
+    fn pick_up_resource_node(
+        &mut self,
+        client_id: ClientId,
+        resource_node_id: ResourceNodeId,
+    ) -> Vec<ServerEnvelope> {
+        let Some(node) = self.resource_nodes.get(&resource_node_id).cloned() else {
+            return Vec::new();
+        };
+        let Some(definition) = resource_node_definition(&node.definition_id) else {
+            return Vec::new();
+        };
+        if definition.required_tool.kind != ToolKind::Hands {
+            return Vec::new();
+        }
+        let Some(client) = self.clients.get(&client_id) else {
+            return Vec::new();
+        };
+        // Same view-ray gate as the gather path: the player must be
+        // looking at the node and within range.
+        if !can_gather_resource_node(
+            player_eye_position(client.controller.position),
+            client.controller.yaw,
+            client.controller.pitch,
+            &node,
+        ) {
+            return Vec::new();
+        }
+
+        let Some(client) = self.clients.get_mut(&client_id) else {
+            return Vec::new();
+        };
+        let mut accepted_per_item: Vec<(crate::items::ItemId, u16)> = Vec::new();
+        let mut new_storage: Vec<ItemStack> = Vec::new();
+        let mut any_leftover = false;
+        for stack in &node.storage {
+            if stack.quantity == 0 {
+                continue;
+            }
+            let requested = stack.quantity;
+            let remainder = add_stack_to_inventory(&mut client.inventory, stack.clone());
+            let accepted = match &remainder {
+                Some(rem) => requested.saturating_sub(rem.quantity),
+                None => requested,
+            };
+            if accepted > 0 {
+                accepted_per_item.push((stack.item_id.clone(), accepted));
+            }
+            if let Some(rem) = remainder
+                && rem.quantity > 0
+            {
+                new_storage.push(rem);
+                any_leftover = true;
+            }
+        }
+
+        let mut envelopes = Vec::new();
+        if !any_leftover {
+            // Node fully picked up — remove and schedule the fresh-position
+            // respawn the gather path uses on depletion. Broadcast a
+            // `ResourceNodeDepleted` so clients can run the death effect
+            // (the snapshot diff can't otherwise distinguish a real
+            // depletion from an AoI-leave).
+            self.resource_nodes.remove(&resource_node_id);
+            self.chunk_manager
+                .handle_node_depleted(resource_node_id, self.tick);
+            envelopes.push(ServerEnvelope {
+                target: super::DeliveryTarget::Broadcast,
+                message: crate::protocol::ServerMessage::ResourceNodeDepleted {
+                    id: resource_node_id,
+                },
+            });
+        } else if let Some(node_mut) = self.resource_nodes.get_mut(&resource_node_id) {
+            // Partial pickup — leave the rest in the node's storage so
+            // the player can come back with a bigger bag.
+            node_mut.storage = new_storage;
+        }
+
+        if accepted_per_item.is_empty() {
+            envelopes.extend(inventory_full_toast_envelopes(client_id));
+            return envelopes;
+        }
+        for (item_id, quantity) in accepted_per_item {
+            envelopes.extend(item_acquired_toast_envelopes(client_id, &item_id, quantity));
+        }
+        envelopes
     }
 }

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use bevy::prelude::*;
+use bevy::{light::NotShadowCaster, prelude::*};
 
 use crate::{
     app::{
@@ -67,7 +67,7 @@ type ResourceEntityQuery<'w, 's> = Query<
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_resource_nodes_system(
     mut commands: Commands,
-    runtime: Res<ClientRuntime>,
+    mut runtime: ResMut<ClientRuntime>,
     assets: Res<ResourceVisualAssets>,
     impact_assets: Res<ImpactEffectAssets>,
     mut play: MessageWriter<PlaySound>,
@@ -77,13 +77,16 @@ pub(crate) fn apply_resource_nodes_system(
     resource_entities: ResourceEntityQuery,
     popping_in: Query<(), With<ResourceNodePopIn>>,
 ) {
-    let Some(snapshot) = &runtime.snapshot else {
+    if runtime.snapshot.is_none() {
         clear_all_tracked_nodes(&mut commands, &mut entities);
         return;
-    };
+    }
 
-    let snapshot_ids: HashSet<ResourceNodeId> =
-        snapshot.resource_nodes.iter().map(|node| node.id).collect();
+    let snapshot_ids: HashSet<ResourceNodeId> = runtime
+        .snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.resource_nodes.iter().map(|node| node.id).collect())
+        .unwrap_or_default();
     let entities = &mut *entities;
     let pop_in_enabled = entities.applied_first_snapshot;
 
@@ -91,7 +94,18 @@ pub(crate) fn apply_resource_nodes_system(
         .local_view()
         .map(|view| Vec3::from(view.position) + Vec3::Y * crate::app::EYE_HEIGHT);
 
-    for node in &snapshot.resource_nodes {
+    // Snapshot the depleted-id set for this frame: nodes the server told us
+    // are *actually* gone (gathered out, picked up). Anything that drops
+    // from the snapshot but isn't in this set just left the player's AoI
+    // and should despawn silently — no death animation, no camera kick.
+    let depleted_this_frame: HashSet<ResourceNodeId> = runtime.depleted_node_ids.clone();
+
+    let snapshot_resource_nodes = runtime
+        .snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.resource_nodes.clone())
+        .unwrap_or_default();
+    for node in &snapshot_resource_nodes {
         let Some(definition) = resource_node_definition(&node.definition_id) else {
             continue;
         };
@@ -142,7 +156,7 @@ pub(crate) fn apply_resource_nodes_system(
         );
     }
 
-    despawn_nodes_missing_from_snapshot(
+    let consumed = despawn_nodes_missing_from_snapshot(
         &mut commands,
         &impact_assets,
         &mut play,
@@ -151,10 +165,18 @@ pub(crate) fn apply_resource_nodes_system(
         &resource_entities,
         entities,
         &snapshot_ids,
+        &depleted_this_frame,
         player_position,
     );
 
-    entities.commit_progress(&snapshot.resource_nodes, &snapshot_ids);
+    entities.commit_progress(&snapshot_resource_nodes, &snapshot_ids);
+
+    // Clear the consumed depletion ids so they don't fire twice if the
+    // same id is somehow re-emitted later (it won't, but keeping the
+    // set tight makes the invariant local rather than global).
+    for id in consumed {
+        runtime.depleted_node_ids.remove(&id);
+    }
 }
 
 /// First-pass cleanup when the snapshot disappears (disconnect, world swap).
@@ -263,6 +285,15 @@ fn spawn_resource_node_entity(
         target_transform,
         Visibility::Visible,
     ));
+    // Crude clutter (branch piles, surface stones, hay grass) spawns
+    // densely — up to ~30 per chunk in Forest/Rocky — and each casts a
+    // negligible-size shadow under its own footprint. Skipping the
+    // shadow pass for these gets us a meaningful per-frame win in
+    // populated areas without losing readable silhouettes (trees and
+    // veins still cast).
+    if model.is_crude() {
+        spawn_command.insert(NotShadowCaster);
+    }
     if should_pop_in {
         spawn_command.insert(ResourceNodePopIn {
             elapsed: 0.0,
@@ -278,8 +309,9 @@ fn spawn_resource_node_entity(
 }
 
 /// A short upward chip burst sells the "fresh from the ground" moment.
-/// Trees throw wood chips, ores throw stone shards — same palette as gather
-/// impacts so the visual language stays consistent.
+/// Trees throw wood chips, ores throw stone shards, crude nodes throw
+/// their own small per-kind burst — same palette as gather impacts so
+/// the visual language stays consistent.
 fn spawn_pop_in_chip_burst(
     commands: &mut Commands,
     impact_assets: &ImpactEffectAssets,
@@ -287,11 +319,7 @@ fn spawn_pop_in_chip_burst(
     model: ResourceNodeModel,
 ) {
     let burst_anchor = Vec3::from(node.position) + Vec3::Y * 0.18;
-    let kind = if model.is_tree() {
-        ImpactEffectKind::WoodChips
-    } else {
-        ImpactEffectKind::StoneShards
-    };
+    let kind = ImpactEffectKind::for_resource_model(model);
     let seed = (node.id as u32).wrapping_mul(0x9E37_79B1);
     spawn_impact_burst(
         commands,
@@ -305,9 +333,19 @@ fn spawn_pop_in_chip_burst(
 }
 
 /// Sweeps the tracked-entities map for ids that no longer appear in the
-/// snapshot — admin `/clear`, hot-reload, etc. Each one gets the standard
-/// death effect at its final transform before despawning, so the world
-/// doesn't simply blink empty.
+/// snapshot. Two paths:
+///
+/// - The id is in `depleted_this_frame` → the server told us the node
+///   was actually gathered/picked-up, so play the full death effect
+///   (tree fell, ore shatter, crude pickup burst).
+/// - The id is *only* missing from the snapshot → it just left the
+///   player's AoI ring. Silent despawn: no particles, no camera kick,
+///   no sound. Otherwise every chunk-boundary crossing would animate
+///   the death of every node dropping out of view (the boundary-
+///   crossing "spasm" that this branch fixes).
+///
+/// Returns the ids whose depletion was consumed so the caller can clear
+/// them from the runtime's pending set.
 #[allow(clippy::too_many_arguments)]
 fn despawn_nodes_missing_from_snapshot(
     commands: &mut Commands,
@@ -318,27 +356,36 @@ fn despawn_nodes_missing_from_snapshot(
     resource_entities: &ResourceEntityQuery,
     entities: &mut ResourceNodeEntities,
     snapshot_ids: &HashSet<ResourceNodeId>,
+    depleted_this_frame: &HashSet<ResourceNodeId>,
     player_position: Option<Vec3>,
-) {
+) -> Vec<ResourceNodeId> {
     let to_remove: Vec<ResourceNodeId> = entities
         .entities
         .iter()
         .filter(|(id, _)| !snapshot_ids.contains(id))
         .map(|(id, _)| *id)
         .collect();
+    let mut consumed = Vec::new();
     for id in to_remove {
         let entity = entities.entities.remove(&id);
-        despawn_with_death_effect(
-            commands,
-            impact_assets,
-            play,
-            materials,
-            camera_kick,
-            resource_entities,
-            player_position,
-            entity,
-        );
+        if depleted_this_frame.contains(&id) {
+            consumed.push(id);
+            despawn_with_death_effect(
+                commands,
+                impact_assets,
+                play,
+                materials,
+                camera_kick,
+                resource_entities,
+                player_position,
+                entity,
+            );
+        } else if let Some(entity) = entity {
+            // AoI-leave: silent despawn. Just drop the entity.
+            commands.entity(entity).despawn();
+        }
     }
+    consumed
 }
 
 /// Drives the "emerge from the ground" animation attached to freshly
@@ -392,7 +439,7 @@ fn ease_out_cubic(t: f32) -> f32 {
     1.0 - inv * inv * inv
 }
 
-pub(super) fn resource_node_transform(
+pub(crate) fn resource_node_transform(
     node: &ResourceNodeState,
     model: ResourceNodeModel,
 ) -> Transform {
@@ -406,12 +453,18 @@ pub(super) fn resource_node_transform(
         ResourceNodeModel::CoalOre => (0.0, Vec3::new(1.0, 1.0, 1.0)),
         ResourceNodeModel::IronOre => (0.0, Vec3::new(1.1, 1.05, 0.95)),
         ResourceNodeModel::SulfurOre => (0.0, Vec3::new(0.96, 0.92, 1.06)),
+        // Stone veins are wider/flatter than ore mounds — they read as
+        // an outcrop rather than a focused deposit.
+        ResourceNodeModel::StoneVein => (0.0, Vec3::new(1.18, 0.86, 1.08)),
         ResourceNodeModel::PineTreeSmall
         | ResourceNodeModel::PineTreeMedium
         | ResourceNodeModel::PineTreeLarge
         | ResourceNodeModel::BirchTreeSmall
         | ResourceNodeModel::BirchTreeMedium
         | ResourceNodeModel::BirchTreeLarge => (0.0, Vec3::ONE),
+        ResourceNodeModel::SurfaceStone => (0.0, Vec3::new(0.9, 0.9, 0.9)),
+        ResourceNodeModel::BranchPile => (0.0, Vec3::ONE),
+        ResourceNodeModel::HayGrass => (0.0, Vec3::ONE),
     };
     Transform::from_xyz(
         node.position.x,
@@ -422,7 +475,7 @@ pub(super) fn resource_node_transform(
     .with_scale(scale)
 }
 
-fn resource_node_visual(
+pub(crate) fn resource_node_visual(
     assets: &ResourceVisualAssets,
     _node: &ResourceNodeState,
     model: ResourceNodeModel,
@@ -433,6 +486,10 @@ fn resource_node_visual(
         ResourceNodeModel::SulfurOre => (
             assets.sulfur_node_mesh.clone(),
             assets.sulfur_material.clone(),
+        ),
+        ResourceNodeModel::StoneVein => (
+            assets.stone_vein_mesh.clone(),
+            assets.stone_vein_material.clone(),
         ),
         ResourceNodeModel::PineTreeSmall => (
             assets.pine_tree_small_mesh.clone(),
@@ -456,6 +513,18 @@ fn resource_node_visual(
         ),
         ResourceNodeModel::BirchTreeLarge => (
             assets.birch_tree_large_mesh.clone(),
+            assets.vertex_material.clone(),
+        ),
+        ResourceNodeModel::SurfaceStone => (
+            assets.surface_stone_mesh.clone(),
+            assets.vertex_material.clone(),
+        ),
+        ResourceNodeModel::BranchPile => (
+            assets.branch_pile_mesh.clone(),
+            assets.vertex_material.clone(),
+        ),
+        ResourceNodeModel::HayGrass => (
+            assets.hay_grass_mesh.clone(),
             assets.vertex_material.clone(),
         ),
     }

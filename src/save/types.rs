@@ -8,6 +8,7 @@ use crate::{
         ClientId, DroppedItemId, DroppedWorldItem, PlayerInventoryState, ResourceNodeId,
         ResourceNodeState, SteamId, Vec3Net,
     },
+    server::ChunkManagerSave,
     world::MapType,
     world_time::{DEFAULT_START_SECONDS, WorldTime},
 };
@@ -55,6 +56,11 @@ pub struct WorldStateSave {
     /// `None` while the world has never been hosted; once a server runs, this
     /// is always `Some` (even if empty) so harvested resources don't respawn.
     pub resource_nodes: Option<Vec<ResourceNodeState>>,
+    /// Chunk manager state — per-chunk capacity tracking + pending fresh-position
+    /// regrows. `None` for brand-new worlds (the server boots a fresh manager
+    /// from the seed).
+    #[serde(default)]
+    pub chunk_manager: Option<ChunkManagerSave>,
     #[serde(default = "default_next_id")]
     pub next_dropped_item_id: DroppedItemId,
     #[serde(default = "default_next_id")]
@@ -82,6 +88,7 @@ impl Default for WorldStateSave {
             players: Vec::new(),
             dropped_items: Vec::new(),
             resource_nodes: None,
+            chunk_manager: None,
             next_dropped_item_id: default_next_id(),
             next_client_id: default_next_id(),
             next_resource_node_id: default_next_resource_node_id(),

@@ -203,16 +203,21 @@ impl Default for InputSettings {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct HudSettings {
-    #[serde(default = "default_show_fps")]
-    pub(crate) show_fps: bool,
-}
-
-impl Default for HudSettings {
-    fn default() -> Self {
-        Self { show_fps: true }
-    }
+    /// Toggles the perf overlay (FPS, chunk position, loaded chunks, live
+    /// nodes, regrow queue, AoI count). Bound to F2 in-game.
+    #[serde(default)]
+    pub(crate) show_perf_stats: bool,
+    /// Debug overlay that draws the 64 m world-chunk boundaries around
+    /// the player as vertical fading walls. Useful when diagnosing AoI
+    /// streaming behaviour or boundary-crossing glitches.
+    #[serde(default)]
+    pub(crate) show_chunk_overlay: bool,
+    /// AoI view tier sent to the server. Low/Medium/High map to a
+    /// concentric Chebyshev ring of 1/2/3 chunks around the player.
+    #[serde(default)]
+    pub(crate) view_radius: crate::protocol::ViewRadiusTier,
 }
 
 pub(super) fn default_resolution() -> DisplayResolution {
@@ -229,10 +234,6 @@ fn default_volume() -> f32 {
 
 fn default_mouse_sensitivity() -> f32 {
     1.0
-}
-
-fn default_show_fps() -> bool {
-    true
 }
 
 fn default_voice_enabled() -> bool {

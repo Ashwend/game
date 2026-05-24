@@ -7,11 +7,12 @@ use bevy::{
 use super::{
     components::MainCamera,
     mesh::{
-        COAL_ORE, IRON_ORE, SULFUR_ORE, impact_stone_shard_mesh, impact_wood_chip_mesh,
+        COAL_ORE, IRON_ORE, STONE_VEIN, SULFUR_ORE, impact_stone_shard_mesh, impact_wood_chip_mesh,
         low_poly_bag_mesh, low_poly_birch_tree_large_mesh, low_poly_birch_tree_medium_mesh,
-        low_poly_birch_tree_small_mesh, low_poly_hatchet_mesh, low_poly_ore_node_mesh,
-        low_poly_pickaxe_mesh, low_poly_pine_tree_large_mesh, low_poly_pine_tree_medium_mesh,
-        low_poly_pine_tree_small_mesh, low_poly_player_mesh,
+        low_poly_birch_tree_small_mesh, low_poly_branch_pile_mesh, low_poly_hatchet_mesh,
+        low_poly_hay_grass_mesh, low_poly_ore_node_mesh, low_poly_pickaxe_mesh,
+        low_poly_pine_tree_large_mesh, low_poly_pine_tree_medium_mesh,
+        low_poly_pine_tree_small_mesh, low_poly_player_mesh, low_poly_surface_stone_mesh,
     },
     sky::{initial_distance_fog, setup_sky},
 };
@@ -45,15 +46,20 @@ pub(crate) struct ResourceVisualAssets {
     pub(crate) coal_node_mesh: Handle<Mesh>,
     pub(crate) iron_node_mesh: Handle<Mesh>,
     pub(crate) sulfur_node_mesh: Handle<Mesh>,
+    pub(crate) stone_vein_mesh: Handle<Mesh>,
     pub(crate) pine_tree_small_mesh: Handle<Mesh>,
     pub(crate) pine_tree_medium_mesh: Handle<Mesh>,
     pub(crate) pine_tree_large_mesh: Handle<Mesh>,
     pub(crate) birch_tree_small_mesh: Handle<Mesh>,
     pub(crate) birch_tree_medium_mesh: Handle<Mesh>,
     pub(crate) birch_tree_large_mesh: Handle<Mesh>,
+    pub(crate) surface_stone_mesh: Handle<Mesh>,
+    pub(crate) branch_pile_mesh: Handle<Mesh>,
+    pub(crate) hay_grass_mesh: Handle<Mesh>,
     pub(crate) coal_material: Handle<StandardMaterial>,
     pub(crate) iron_material: Handle<StandardMaterial>,
     pub(crate) sulfur_material: Handle<StandardMaterial>,
+    pub(crate) stone_vein_material: Handle<StandardMaterial>,
     pub(crate) vertex_material: Handle<StandardMaterial>,
 }
 
@@ -63,6 +69,11 @@ pub(crate) struct ImpactEffectAssets {
     pub(crate) stone_shard_mesh: Handle<Mesh>,
     pub(crate) wood_chip_material: Handle<StandardMaterial>,
     pub(crate) stone_shard_material: Handle<StandardMaterial>,
+    /// Green-tinted material used for the `GrassBlades` particle burst.
+    /// The mesh is reused from the stone shard so we don't pay for a
+    /// second tiny mesh — the base-colour shift is enough to read as
+    /// grass debris.
+    pub(crate) grass_blade_material: Handle<StandardMaterial>,
 }
 
 pub(crate) fn setup_scene(
@@ -141,12 +152,16 @@ pub(crate) fn setup_scene(
         coal_node_mesh: meshes.add(low_poly_ore_node_mesh(COAL_ORE)),
         iron_node_mesh: meshes.add(low_poly_ore_node_mesh(IRON_ORE)),
         sulfur_node_mesh: meshes.add(low_poly_ore_node_mesh(SULFUR_ORE)),
+        stone_vein_mesh: meshes.add(low_poly_ore_node_mesh(STONE_VEIN)),
         pine_tree_small_mesh: meshes.add(low_poly_pine_tree_small_mesh()),
         pine_tree_medium_mesh: meshes.add(low_poly_pine_tree_medium_mesh()),
         pine_tree_large_mesh: meshes.add(low_poly_pine_tree_large_mesh()),
         birch_tree_small_mesh: meshes.add(low_poly_birch_tree_small_mesh()),
         birch_tree_medium_mesh: meshes.add(low_poly_birch_tree_medium_mesh()),
         birch_tree_large_mesh: meshes.add(low_poly_birch_tree_large_mesh()),
+        surface_stone_mesh: meshes.add(low_poly_surface_stone_mesh()),
+        branch_pile_mesh: meshes.add(low_poly_branch_pile_mesh()),
+        hay_grass_mesh: meshes.add(low_poly_hay_grass_mesh()),
         coal_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.98,
@@ -161,6 +176,11 @@ pub(crate) fn setup_scene(
         sulfur_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.62,
+            ..default()
+        }),
+        stone_vein_material: materials.add(StandardMaterial {
+            base_color: VERTEX_MATERIAL_COLOR,
+            perceptual_roughness: 0.95,
             ..default()
         }),
         vertex_material: materials.add(StandardMaterial {
@@ -180,6 +200,14 @@ pub(crate) fn setup_scene(
         stone_shard_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.88,
+            ..default()
+        }),
+        grass_blade_material: materials.add(StandardMaterial {
+            // Multiplies through the mesh vertex colours, so we still
+            // get the per-face lighting variety from the shard mesh but
+            // tinted toward fresh-grass green.
+            base_color: Color::srgb(0.42, 0.62, 0.22),
+            perceptual_roughness: 0.92,
             ..default()
         }),
     });

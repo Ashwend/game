@@ -1,5 +1,8 @@
 use crate::{
-    items::{COAL_ID, IRON_ORE_ID, SULFUR_ORE_ID, ToolKind, ToolProfile, WOOD_ID, look_forward},
+    items::{
+        COAL_ID, FIBER_ID, IRON_ORE_ID, STONE_ID, SULFUR_ORE_ID, ToolKind, ToolProfile, WOOD_ID,
+        look_forward,
+    },
     protocol::{ItemStack, ResourceNodeState, Vec3Net},
     world::{WorldBlock, WorldResourceNodeSpawn},
 };
@@ -7,6 +10,11 @@ use crate::{
 pub const COAL_NODE_ID: &str = "coal_node";
 pub const IRON_NODE_ID: &str = "iron_node";
 pub const SULFUR_NODE_ID: &str = "sulfur_node";
+/// Mineable bare-rock vein. Visually a chunkless ore pile (all stone),
+/// pickaxe-required, more frequent than coal/iron/sulfur veins. Bridges
+/// the "1 stone from hand-pickup" → "you need a steady stone supply"
+/// gap before the player has access to an ore vein.
+pub const STONE_NODE_ID: &str = "stone_node";
 // Tree IDs: the un-suffixed names (`pine_tree`, `birch_tree`) are the
 // medium variants. Old saves that referenced these IDs before size
 // variants existed continue to load as medium without migration.
@@ -16,6 +24,11 @@ pub const PINE_TREE_LARGE_NODE_ID: &str = "pine_tree_large";
 pub const BIRCH_TREE_SMALL_NODE_ID: &str = "birch_tree_small";
 pub const BIRCH_TREE_NODE_ID: &str = "birch_tree";
 pub const BIRCH_TREE_LARGE_NODE_ID: &str = "birch_tree_large";
+/// Hand-harvestable starter materials so a fresh player can craft their
+/// first crude tools without already owning a tool.
+pub const SURFACE_STONE_NODE_ID: &str = "surface_stone";
+pub const BRANCH_PILE_NODE_ID: &str = "branch_pile";
+pub const HAY_GRASS_NODE_ID: &str = "hay_grass";
 
 pub const RESOURCE_GATHER_RANGE: f32 = 3.75;
 const DEFAULT_RESOURCE_RAY_RADIUS: f32 = 0.7;
@@ -29,12 +42,22 @@ pub enum ResourceNodeModel {
     CoalOre,
     IronOre,
     SulfurOre,
+    /// Bare-rock vein — pickaxe-mineable, yields plain `stone`. Same
+    /// silhouette as the ore variants but no embedded coal/iron/sulfur
+    /// chunks on top, so it reads as "the rock under the ore".
+    StoneVein,
     PineTreeSmall,
     PineTreeMedium,
     PineTreeLarge,
     BirchTreeSmall,
     BirchTreeMedium,
     BirchTreeLarge,
+    /// Small rock lump sitting on the ground. E-pickup only.
+    SurfaceStone,
+    /// Bundle of fallen sticks. E-pickup only.
+    BranchPile,
+    /// Tuft of long grass. E-pickup only.
+    HayGrass,
 }
 
 impl ResourceNodeModel {
@@ -53,6 +76,13 @@ impl ResourceNodeModel {
     pub fn is_ore(self) -> bool {
         matches!(self, Self::CoalOre | Self::IronOre | Self::SulfurOre)
     }
+
+    /// Crude, hand-harvestable starter resource (branch pile, surface
+    /// stone, hay tuft). Used by the gather pipeline to skip tool checks
+    /// and by the renderer to scale meshes smaller than full trees/ore.
+    pub fn is_crude(self) -> bool {
+        matches!(self, Self::SurfaceStone | Self::BranchPile | Self::HayGrass)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,10 +97,21 @@ impl ToolRequirement {
     }
 
     pub fn allows(self, tool: ToolProfile) -> bool {
+        // A `Hands` requirement means "this node can't be swung at — pick
+        // it up with E". Swinging any tool (or empty hands) at a Hands
+        // node is rejected so the player learns to use the quick-pickup
+        // key for crude clutter. The matching `kind == Hands` check is
+        // still what gates the E pickup path on both client and server.
+        if self.kind == ToolKind::Hands {
+            return false;
+        }
         tool.kind == self.kind && tool.tier >= self.min_tier
     }
 
     pub fn label(self) -> String {
+        if self.kind == ToolKind::Hands {
+            return "Pick up with E".to_owned();
+        }
         format!("{} tier {}", self.kind.label(), self.min_tier)
     }
 }
@@ -104,7 +145,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         name: "Coal Node",
         model: ResourceNodeModel::CoalOre,
         required_tool: ToolRequirement::new(ToolKind::Pickaxe, 1),
-        storage: &[ResourceMaterial::new(COAL_ID, 24)],
+        storage: &[ResourceMaterial::new(COAL_ID, 72)],
         anchor_height: 0.62,
         ray_radius: 0.72,
     },
@@ -113,7 +154,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         name: "Iron Node",
         model: ResourceNodeModel::IronOre,
         required_tool: ToolRequirement::new(ToolKind::Pickaxe, 1),
-        storage: &[ResourceMaterial::new(IRON_ORE_ID, 24)],
+        storage: &[ResourceMaterial::new(IRON_ORE_ID, 72)],
         anchor_height: 0.66,
         ray_radius: 0.72,
     },
@@ -122,8 +163,20 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         name: "Sulfur Node",
         model: ResourceNodeModel::SulfurOre,
         required_tool: ToolRequirement::new(ToolKind::Pickaxe, 1),
-        storage: &[ResourceMaterial::new(SULFUR_ORE_ID, 24)],
+        storage: &[ResourceMaterial::new(SULFUR_ORE_ID, 72)],
         anchor_height: 0.58,
+        ray_radius: 0.72,
+    },
+    ResourceNodeDefinition {
+        id: STONE_NODE_ID,
+        name: "Stone Vein",
+        model: ResourceNodeModel::StoneVein,
+        required_tool: ToolRequirement::new(ToolKind::Pickaxe, 1),
+        // Bigger than ore (96 stone = 16 swings at 6/swing) so the player
+        // can stock up on stone for crafting without juggling pickup
+        // rocks, but still finite enough to require moving around.
+        storage: &[ResourceMaterial::new(STONE_ID, 96)],
+        anchor_height: 0.60,
         ray_radius: 0.72,
     },
     ResourceNodeDefinition {
@@ -131,7 +184,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         name: "Pine Sapling",
         model: ResourceNodeModel::PineTreeSmall,
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
-        storage: &[ResourceMaterial::new(WOOD_ID, 16)],
+        storage: &[ResourceMaterial::new(WOOD_ID, 24)],
         anchor_height: 1.35,
         ray_radius: 0.72,
     },
@@ -140,7 +193,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         name: "Pine Tree",
         model: ResourceNodeModel::PineTreeMedium,
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
-        storage: &[ResourceMaterial::new(WOOD_ID, 32)],
+        storage: &[ResourceMaterial::new(WOOD_ID, 48)],
         anchor_height: 1.45,
         ray_radius: 0.86,
     },
@@ -149,7 +202,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         name: "Old Pine",
         model: ResourceNodeModel::PineTreeLarge,
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
-        storage: &[ResourceMaterial::new(WOOD_ID, 56)],
+        storage: &[ResourceMaterial::new(WOOD_ID, 84)],
         anchor_height: 1.55,
         ray_radius: 1.05,
     },
@@ -158,7 +211,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         name: "Birch Sapling",
         model: ResourceNodeModel::BirchTreeSmall,
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
-        storage: &[ResourceMaterial::new(WOOD_ID, 14)],
+        storage: &[ResourceMaterial::new(WOOD_ID, 18)],
         anchor_height: 1.25,
         ray_radius: 0.68,
     },
@@ -167,7 +220,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         name: "Birch Tree",
         model: ResourceNodeModel::BirchTreeMedium,
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
-        storage: &[ResourceMaterial::new(WOOD_ID, 28)],
+        storage: &[ResourceMaterial::new(WOOD_ID, 42)],
         anchor_height: 1.40,
         ray_radius: 0.82,
     },
@@ -176,9 +229,36 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         name: "Old Birch",
         model: ResourceNodeModel::BirchTreeLarge,
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
-        storage: &[ResourceMaterial::new(WOOD_ID, 48)],
+        storage: &[ResourceMaterial::new(WOOD_ID, 72)],
         anchor_height: 1.50,
         ray_radius: 0.98,
+    },
+    ResourceNodeDefinition {
+        id: SURFACE_STONE_NODE_ID,
+        name: "Loose Stone",
+        model: ResourceNodeModel::SurfaceStone,
+        required_tool: ToolRequirement::new(ToolKind::Hands, 0),
+        storage: &[ResourceMaterial::new(STONE_ID, 1)],
+        anchor_height: 0.18,
+        ray_radius: 0.55,
+    },
+    ResourceNodeDefinition {
+        id: BRANCH_PILE_NODE_ID,
+        name: "Branch Pile",
+        model: ResourceNodeModel::BranchPile,
+        required_tool: ToolRequirement::new(ToolKind::Hands, 0),
+        storage: &[ResourceMaterial::new(WOOD_ID, 1)],
+        anchor_height: 0.16,
+        ray_radius: 0.55,
+    },
+    ResourceNodeDefinition {
+        id: HAY_GRASS_NODE_ID,
+        name: "Tall Grass",
+        model: ResourceNodeModel::HayGrass,
+        required_tool: ToolRequirement::new(ToolKind::Hands, 0),
+        storage: &[ResourceMaterial::new(FIBER_ID, 1)],
+        anchor_height: 0.22,
+        ray_radius: 0.45,
     },
 ];
 
@@ -352,9 +432,15 @@ pub fn resource_node_collider(node: &ResourceNodeState) -> Option<WorldBlock> {
         | ResourceNodeModel::BirchTreeSmall
         | ResourceNodeModel::BirchTreeMedium
         | ResourceNodeModel::BirchTreeLarge => Some(tree_collider_block(node, definition.model)),
-        ResourceNodeModel::CoalOre | ResourceNodeModel::IronOre | ResourceNodeModel::SulfurOre => {
-            Some(ore_collider_block(node))
-        }
+        ResourceNodeModel::CoalOre
+        | ResourceNodeModel::IronOre
+        | ResourceNodeModel::SulfurOre
+        | ResourceNodeModel::StoneVein => Some(ore_collider_block(node)),
+        ResourceNodeModel::SurfaceStone => Some(surface_stone_collider_block(node)),
+        // Branch piles and grass tufts are walk-through — small enough that
+        // a collider would feel buggy, and the player needs to be able to
+        // stand right on top of them to interact.
+        ResourceNodeModel::BranchPile | ResourceNodeModel::HayGrass => None,
     }
 }
 
@@ -377,6 +463,16 @@ fn tree_collider_block(node: &ResourceNodeState, model: ResourceNodeModel) -> Wo
 fn ore_collider_block(node: &ResourceNodeState) -> WorldBlock {
     let half_width = 0.55;
     let half_height = 0.32;
+    let center = Vec3Net::new(node.position.x, half_height, node.position.z);
+    let half_extents = Vec3Net::new(half_width, half_height, half_width);
+    WorldBlock::new(center, half_extents)
+}
+
+fn surface_stone_collider_block(node: &ResourceNodeState) -> WorldBlock {
+    // Smaller than an ore node — a single low rock the player has to step
+    // over rather than walk through.
+    let half_width = 0.30;
+    let half_height = 0.18;
     let center = Vec3Net::new(node.position.x, half_height, node.position.z);
     let half_extents = Vec3Net::new(half_width, half_height, half_width);
     WorldBlock::new(center, half_extents)

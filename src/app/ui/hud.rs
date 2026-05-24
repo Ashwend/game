@@ -14,8 +14,11 @@ use super::theme;
 const HEALTH_WIDTH: f32 = 192.0;
 const HEALTH_HEIGHT: f32 = 30.0;
 const HEALTH_ICON_WIDTH: f32 = 30.0;
-const FPS_COUNTER_WIDTH: f32 = 58.0;
-const FPS_COUNTER_HEIGHT: f32 = 16.0;
+/// Fixed width of the perf overlay so chunk labels like
+/// `(-99, -99) Rocky outcrop` don't push the values column around.
+const PERF_BOX_WIDTH: f32 = 240.0;
+const PERF_LABEL_WIDTH: f32 = 96.0;
+const PERF_VALUE_WIDTH: f32 = 124.0;
 
 pub(super) fn hud_ui(
     ctx: &egui::Context,
@@ -24,8 +27,8 @@ pub(super) fn hud_ui(
     settings: &ClientSettings,
     voice: &VoiceState,
 ) {
-    if settings.hud.show_fps {
-        fps_ui(ctx, diagnostics);
+    if settings.hud.show_perf_stats {
+        perf_stats_ui(ctx, runtime, diagnostics);
     }
     if runtime.connection_is_lagging() {
         connection_lag_indicator(ctx);
@@ -133,35 +136,92 @@ fn connection_lag_indicator(ctx: &egui::Context) {
         });
 }
 
-fn fps_ui(ctx: &egui::Context, diagnostics: &DiagnosticsStore) {
+fn perf_stats_ui(ctx: &egui::Context, runtime: &ClientRuntime, diagnostics: &DiagnosticsStore) {
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|diagnostic| diagnostic.smoothed())
         .unwrap_or_default();
 
-    egui::Area::new("fps_counter".into())
+    egui::Area::new("perf_stats".into())
         .anchor(egui::Align2::RIGHT_TOP, [-16.0, 14.0])
         .show(ctx, |ui| {
             egui::Frame::NONE
-                .fill(egui::Color32::from_rgba_unmultiplied(6, 9, 13, 150))
+                .fill(egui::Color32::from_rgba_unmultiplied(6, 9, 13, 170))
                 .stroke(egui::Stroke::new(
                     1.0,
                     egui::Color32::from_rgba_unmultiplied(115, 132, 151, 60),
                 ))
                 .corner_radius(5)
-                .inner_margin(egui::Margin::symmetric(9, 5))
+                .inner_margin(egui::Margin::symmetric(10, 7))
                 .show(ui, |ui| {
-                    ui.set_min_size(egui::vec2(FPS_COUNTER_WIDTH, FPS_COUNTER_HEIGHT));
-                    ui.add_sized(
-                        [FPS_COUNTER_WIDTH, FPS_COUNTER_HEIGHT],
-                        egui::Label::new(
-                            egui::RichText::new(format!("{fps:.0} FPS"))
-                                .monospace()
-                                .size(12.0)
-                                .color(theme::muted_text()),
-                        )
-                        .wrap_mode(egui::TextWrapMode::Extend),
+                    ui.set_width(PERF_BOX_WIDTH);
+                    // `add_sized` centers the inner widget within its cell,
+                    // which left short values floating mid-column. Pin both
+                    // cells to a left-to-right inner layout so each text
+                    // anchors flush against the left edge of its cell.
+                    let label = |ui: &mut egui::Ui, name: &str, value: String| {
+                        ui.horizontal(|ui| {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(PERF_LABEL_WIDTH, 14.0),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new(name)
+                                            .size(11.5)
+                                            .color(theme::muted_text())
+                                            .monospace(),
+                                    );
+                                },
+                            );
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(PERF_VALUE_WIDTH, 14.0),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new(value)
+                                            .size(11.5)
+                                            .color(theme::text())
+                                            .monospace(),
+                                    );
+                                },
+                            );
+                        });
+                    };
+                    ui.label(
+                        egui::RichText::new("Performance")
+                            .size(11.5)
+                            .strong()
+                            .color(theme::text()),
                     );
+                    ui.add_space(2.0);
+                    label(ui, "FPS", format!("{fps:.0}"));
+                    match runtime.perf_stats {
+                        Some(stats) => {
+                            label(
+                                ui,
+                                "Chunk",
+                                format!(
+                                    "({}, {}) {}",
+                                    stats.player_chunk_x,
+                                    stats.player_chunk_z,
+                                    stats.player_classification.label()
+                                ),
+                            );
+                            label(ui, "Loaded", stats.loaded_chunks.to_string());
+                            label(ui, "Live nodes", stats.live_nodes.to_string());
+                            label(ui, "Visible", stats.aoi_visible_nodes.to_string());
+                            label(ui, "Regrow queue", stats.pending_regrows.to_string());
+                        }
+                        None => {
+                            ui.add_space(2.0);
+                            ui.label(
+                                egui::RichText::new("waiting for server…")
+                                    .size(11.0)
+                                    .italics()
+                                    .color(theme::muted_text()),
+                            );
+                        }
+                    }
                 });
         });
 }

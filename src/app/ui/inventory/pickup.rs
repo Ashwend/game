@@ -2,7 +2,7 @@ use bevy_egui::egui::{self, pos2};
 
 use crate::{
     app::state::{MenuState, PickupTargetState},
-    items::{ItemDefinition, item_definition},
+    items::{ItemDefinition, ToolKind, item_definition},
     resources::resource_node_definition,
 };
 
@@ -65,11 +65,17 @@ fn pickup_tooltip_text(pickup_target: &PickupTargetState) -> Option<(String, Str
             .collect::<Vec<_>>()
             .join("\n")
     };
-    let body = format!(
-        "Hold Left Mouse to gather\nRequires: {}\nContents:\n{}",
-        definition.required_tool.label(),
-        contents
-    );
+    // Crude nodes (branches, surface stones, grass tufts) are quick-grab
+    // only — swinging at them does nothing, so the tooltip only mentions E.
+    let action_line = if definition.required_tool.kind == ToolKind::Hands {
+        "Press E to pick up".to_owned()
+    } else {
+        format!(
+            "Hold Left Mouse to gather\nRequires: {}",
+            definition.required_tool.label()
+        )
+    };
+    let body = format!("{action_line}\nContents:\n{contents}");
     Some((definition.name.to_owned(), body))
 }
 

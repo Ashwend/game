@@ -53,11 +53,10 @@ pub(crate) fn spawn_impact_effects_system(
         // Remote impacts have no view of which way the swinger was facing.
         // An upward spray reads as a clean "hit landed here" without needing
         // that information, and keeps the burst symmetric.
-        let kind = ImpactEffectKind::for_surface(event.surface);
         spawn_impact_burst(
             &mut commands,
             &assets,
-            kind,
+            event.effect_kind,
             event.anchor,
             Vec3::Y,
             event.seed,
@@ -170,6 +169,39 @@ pub(crate) fn spawn_impact_burst(
                 0.70,
                 1.0,
                 2.0,
+            ),
+            // Crude pickups (branches, surface stones, grass) are
+            // hand-harvested — the burst should feel like flicking up
+            // a handful of debris rather than a tool strike. Fewer
+            // chips, smaller, shorter-lived. Grass also gets a green
+            // material so the tuft visibly bursts into leaves rather
+            // than gray pebbles.
+            ImpactEffectKind::Sticks => (
+                assets.wood_chip_mesh.clone(),
+                assets.wood_chip_material.clone(),
+                3.0,
+                1.6,
+                0.40,
+                0.55,
+                1.6,
+            ),
+            ImpactEffectKind::Pebbles => (
+                assets.stone_shard_mesh.clone(),
+                assets.stone_shard_material.clone(),
+                3.0,
+                1.7,
+                0.42,
+                0.55,
+                2.0,
+            ),
+            ImpactEffectKind::GrassBlades => (
+                assets.stone_shard_mesh.clone(),
+                assets.grass_blade_material.clone(),
+                3.0,
+                1.4,
+                0.35,
+                0.45,
+                1.4,
             ),
         };
 

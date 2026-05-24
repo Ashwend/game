@@ -11,6 +11,12 @@ const AXE_KICK_DURATION: f32 = 0.08;
 const PICKAXE_KICK_PITCH: f32 = 0.038;
 const PICKAXE_KICK_DOWN: f32 = 0.024;
 const PICKAXE_KICK_DURATION: f32 = 0.18;
+// Bare-hand kick: lighter than an axe; you feel the swing but the camera
+// barely shifts. Keeps hand harvesting from feeling weightier than tool
+// harvesting.
+const HANDS_KICK_PITCH: f32 = 0.005;
+const HANDS_KICK_DOWN: f32 = 0.002;
+const HANDS_KICK_DURATION: f32 = 0.06;
 
 // Head bob: walk-speed cadence is ~2 footsteps/sec, which is one full sine
 // cycle per second (a step is half a cycle). BOB_FREQ_CYCLES_PER_METER *
@@ -155,6 +161,7 @@ pub(crate) struct CameraImpactKick {
 impl CameraImpactKick {
     pub(crate) fn trigger(&mut self, tool: ToolKind) {
         let (pitch, down, duration) = match tool {
+            ToolKind::Hands => (HANDS_KICK_PITCH, HANDS_KICK_DOWN, HANDS_KICK_DURATION),
             ToolKind::Axe => (AXE_KICK_PITCH, AXE_KICK_DOWN, AXE_KICK_DURATION),
             ToolKind::Pickaxe => (PICKAXE_KICK_PITCH, PICKAXE_KICK_DOWN, PICKAXE_KICK_DURATION),
         };

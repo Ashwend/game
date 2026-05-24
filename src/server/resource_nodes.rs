@@ -1,17 +1,10 @@
-use std::collections::HashMap;
-
 use crate::{
-    items::item_definition,
-    protocol::{
-        ClientId, ItemStack, ResourceGatherCommand, ResourceImpactKind, ResourceNodeId,
-        ResourceNodeState, ServerMessage,
-    },
+    items::{HANDS_TOOL, ToolProfile, item_definition},
+    protocol::{ClientId, ItemStack, ResourceGatherCommand, ResourceImpactKind, ServerMessage},
     resources::{
-        ResourceNodeModel, can_gather_resource_node, definition_storage_stacks,
-        next_resource_payout, remove_resource_from_storage, resource_node_definition,
-        resource_storage_is_empty, spawn_resource_node,
+        ResourceNodeModel, can_gather_resource_node, next_resource_payout,
+        remove_resource_from_storage, resource_node_definition, resource_storage_is_empty,
     },
-    world::WorldData,
 };
 
 use super::{
@@ -20,28 +13,6 @@ use super::{
     movement::player_eye_position,
     toasts::{inventory_full_toast_envelopes, item_acquired_toast_envelopes},
 };
-
-/// How long a depleted resource node takes to fully regenerate. Picked so
-/// the loop has rhythm without making the map feel cluttered with timers:
-/// long enough that a "first-clear" of the starting zone still feels
-/// earned, short enough that returning to the area later finds things
-/// regrown.
-pub(super) const RESPAWN_DURATION_SECONDS: f32 = 75.0;
-/// Floor on a per-tick respawn step. Fixed-rate tick (~20 Hz) keeps step
-/// noise low; this clamp just guards against an absurd `delta_seconds`
-/// stalling progress.
-const MAX_RESPAWN_STEP: f32 = 0.1;
-
-pub(super) fn initial_resource_nodes(
-    world: &WorldData,
-) -> HashMap<ResourceNodeId, ResourceNodeState> {
-    world
-        .resource_nodes
-        .iter()
-        .filter_map(spawn_resource_node)
-        .map(|node| (node.id, node))
-        .collect()
-}
 
 impl GameServer {
     pub(super) fn apply_gather_command(
@@ -68,14 +39,18 @@ impl GameServer {
             return Vec::new();
         }
 
-        let Some(active_stack) = client.inventory.active_actionbar_stack() else {
-            return Vec::new();
-        };
-        let Some(tool) =
-            item_definition(&active_stack.item_id).and_then(|definition| definition.tool)
-        else {
-            return Vec::new();
-        };
+        // Hand-harvest fallback: if the active slot has no tool definition
+        // (empty, or holding a non-tool item), use the synthesized
+        // `HANDS_TOOL` profile. The node's `required_tool` decides whether
+        // hands are actually accepted — crude nodes (branch piles, surface
+        // stones, grass) use `ToolKind::Hands` which is satisfied by any
+        // tool *or* by hands; tree/ore nodes only by the matching tool.
+        let tool: ToolProfile = client
+            .inventory
+            .active_actionbar_stack()
+            .and_then(|stack| item_definition(&stack.item_id))
+            .and_then(|definition| definition.tool)
+            .unwrap_or(HANDS_TOOL);
         if !node_definition.required_tool.allows(tool) {
             return Vec::new();
         }
@@ -108,16 +83,31 @@ impl GameServer {
         client.next_gather_tick = self.tick + tool.cooldown_ticks.max(1);
 
         let payout_id = payout.item_id.clone();
+        let mut depleted = false;
         if let Some(node) = self.resource_nodes.get_mut(&command.resource_node_id) {
             remove_resource_from_storage(node, &payout_id, accepted_quantity);
-            if resource_storage_is_empty(node) {
-                // Don't delete — start the respawn timer instead. The
-                // ghost remains visible to clients while it regrows.
-                node.respawn_progress = Some(0.0);
-            }
+            depleted = resource_storage_is_empty(node);
+        }
+        let mut envelopes = item_acquired_toast_envelopes(client_id, &payout_id, accepted_quantity);
+        if depleted {
+            // Remove the node entirely — the chunk manager schedules a
+            // fresh-position respawn 5-15 min later in the same grid.
+            // Broadcast a `ResourceNodeDepleted` so clients can run the
+            // death animation; without that, the snapshot diff can't
+            // tell "node depleted" apart from "node left this client's
+            // AoI" and would falsely animate the death of every node
+            // dropping out of view at every chunk-boundary crossing.
+            self.resource_nodes.remove(&command.resource_node_id);
+            self.chunk_manager
+                .handle_node_depleted(command.resource_node_id, self.tick);
+            envelopes.push(ServerEnvelope {
+                target: DeliveryTarget::Broadcast,
+                message: ServerMessage::ResourceNodeDepleted {
+                    id: command.resource_node_id,
+                },
+            });
         }
 
-        let mut envelopes = item_acquired_toast_envelopes(client_id, &payout_id, accepted_quantity);
         envelopes.push(ServerEnvelope {
             // Skip the swinger — their client already played the impact via
             // local prediction. Sending a second copy from the server would
@@ -130,34 +120,9 @@ impl GameServer {
         });
         envelopes
     }
-
-    /// Advance every regenerating node by `delta_seconds`. When a node
-    /// finishes regrowing, its storage is restocked from the definition
-    /// and the `respawn_progress` flag is cleared so the next gather
-    /// finds it ready. Called from `tick()` once per server step.
-    pub(super) fn tick_resource_node_respawn(&mut self, delta_seconds: f32) {
-        let step = delta_seconds.clamp(0.0, MAX_RESPAWN_STEP) / RESPAWN_DURATION_SECONDS;
-        if step <= 0.0 {
-            return;
-        }
-        for node in self.resource_nodes.values_mut() {
-            let Some(progress) = node.respawn_progress else {
-                continue;
-            };
-            let next = progress + step;
-            if next >= 1.0 {
-                if let Some(definition) = resource_node_definition(&node.definition_id) {
-                    node.storage = definition_storage_stacks(definition);
-                }
-                node.respawn_progress = None;
-            } else {
-                node.respawn_progress = Some(next);
-            }
-        }
-    }
 }
 
-fn resource_impact_kind(model: ResourceNodeModel) -> ResourceImpactKind {
+pub(super) fn resource_impact_kind(model: ResourceNodeModel) -> ResourceImpactKind {
     match model {
         ResourceNodeModel::PineTreeSmall
         | ResourceNodeModel::PineTreeMedium
@@ -168,6 +133,10 @@ fn resource_impact_kind(model: ResourceNodeModel) -> ResourceImpactKind {
         ResourceNodeModel::CoalOre => ResourceImpactKind::CoalOre,
         ResourceNodeModel::IronOre => ResourceImpactKind::IronOre,
         ResourceNodeModel::SulfurOre => ResourceImpactKind::SulfurOre,
+        ResourceNodeModel::StoneVein => ResourceImpactKind::StoneVein,
+        ResourceNodeModel::BranchPile => ResourceImpactKind::Branches,
+        ResourceNodeModel::SurfaceStone => ResourceImpactKind::SurfaceStone,
+        ResourceNodeModel::HayGrass => ResourceImpactKind::HayGrass,
     }
 }
 
@@ -188,13 +157,12 @@ mod tests {
     use crate::{
         items::{BASIC_PICKAXE_ID, COAL_ID},
         protocol::ItemStack,
-        resources::COAL_NODE_ID,
     };
 
     #[test]
     fn accepted_quantity_reports_partial_inventory_insert() {
         let mut inventory = crate::protocol::PlayerInventoryState::empty();
-        inventory.inventory_slots[0] = Some(ItemStack::new(COAL_ID, 99));
+        inventory.inventory_slots[0] = Some(ItemStack::new(COAL_ID, 199));
         for slot in inventory.inventory_slots.iter_mut().skip(1) {
             *slot = Some(ItemStack::new(BASIC_PICKAXE_ID, 1));
         }
@@ -207,29 +175,7 @@ mod tests {
             inventory.inventory_slots[0]
                 .as_ref()
                 .map(|stack| stack.quantity),
-            Some(100)
-        );
-    }
-
-    #[test]
-    fn initial_nodes_are_spawned_from_world_data() {
-        let world = WorldData {
-            floor_size: 16.0,
-            blocks: Vec::new(),
-            resource_nodes: vec![crate::world::WorldResourceNodeSpawn::new(
-                7,
-                COAL_NODE_ID,
-                crate::protocol::Vec3Net::ZERO,
-                0.0,
-            )],
-        };
-
-        let nodes = initial_resource_nodes(&world);
-
-        assert_eq!(nodes.len(), 1);
-        assert_eq!(
-            nodes.get(&7).map(|node| node.definition_id.as_str()),
-            Some(COAL_NODE_ID)
+            Some(200)
         );
     }
 }

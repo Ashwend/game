@@ -71,6 +71,9 @@ pub(crate) fn spawn_node_death(
             material,
             player_position,
         );
+    } else if model.is_crude() {
+        let _ = (mesh, material);
+        spawn_crude_pickup_burst(commands, impact_assets, node_id, model, transform);
     } else {
         let _ = (mesh, material);
         spawn_ore_shatter(
@@ -82,6 +85,34 @@ pub(crate) fn spawn_node_death(
             player_position,
         );
     }
+}
+
+/// Small upward burst for the "pickup completed" frame of a crude node
+/// (branch pile / surface stone / hay tuft). No camera kick — the player
+/// is just snatching something off the ground — and the per-model
+/// [`ImpactEffectKind`] gives each kind its own colour and footprint.
+fn spawn_crude_pickup_burst(
+    commands: &mut Commands,
+    impact_assets: &ImpactEffectAssets,
+    node_id: ResourceNodeId,
+    model: ResourceNodeModel,
+    transform: Transform,
+) {
+    let burst_anchor = transform.translation + Vec3::Y * 0.12;
+    let kind = ImpactEffectKind::for_resource_model(model);
+    spawn_impact_burst(
+        commands,
+        impact_assets,
+        kind,
+        burst_anchor,
+        Vec3::Y,
+        (node_id as u32).wrapping_mul(0xC2B2AE35),
+        // Bump intensity a touch above 1.0 so the pickup-completed
+        // burst reads as "finished" rather than identical to a per-hit
+        // chip. Still scales off the small `Sticks`/`Pebbles`/`GrassBlades`
+        // base counts, so we don't get a stone-shatter level explosion.
+        1.5,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]

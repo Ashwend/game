@@ -131,6 +131,7 @@ fn remote_impact_event(position: Vec3Net, kind: ResourceImpactKind) -> RemoteImp
         anchor: Vec3::new(position.x, position.y, position.z),
         tool,
         surface,
+        effect_kind: crate::app::state::ImpactEffectKind::for_resource_impact(kind),
         // Remote impacts have no client-side swing seed; pick something
         // stable per-event so the chip burst is deterministic but varies
         // between consecutive hits.
@@ -139,14 +140,18 @@ fn remote_impact_event(position: Vec3Net, kind: ResourceImpactKind) -> RemoteImp
 }
 
 fn remote_impact_tool_and_surface(kind: ResourceImpactKind) -> (ToolKind, SurfaceMaterial) {
-    // The server enforces tool requirements (axe → trees, pickaxe → ores),
-    // so the kind uniquely determines the (tool, surface) pair the
-    // swinger must have used.
+    // The server enforces tool requirements (axe → trees, pickaxe → ores,
+    // hands → crude materials), so the kind uniquely determines the
+    // (tool, surface) pair the swinger must have used.
     match kind {
         ResourceImpactKind::Tree => (ToolKind::Axe, SurfaceMaterial::Wood),
         ResourceImpactKind::CoalOre => (ToolKind::Pickaxe, SurfaceMaterial::Coal),
         ResourceImpactKind::IronOre => (ToolKind::Pickaxe, SurfaceMaterial::Iron),
         ResourceImpactKind::SulfurOre => (ToolKind::Pickaxe, SurfaceMaterial::Sulfur),
+        ResourceImpactKind::StoneVein => (ToolKind::Pickaxe, SurfaceMaterial::Stone),
+        ResourceImpactKind::Branches => (ToolKind::Hands, SurfaceMaterial::Wood),
+        ResourceImpactKind::SurfaceStone => (ToolKind::Hands, SurfaceMaterial::Stone),
+        ResourceImpactKind::HayGrass => (ToolKind::Hands, SurfaceMaterial::Dirt),
     }
 }
 

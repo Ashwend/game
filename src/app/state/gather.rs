@@ -15,19 +15,38 @@ const AXE_SWING_SECONDS: f32 = 0.50;
 const AXE_IMPACT_FRACTION: f32 = 0.50;
 const PICKAXE_SWING_SECONDS: f32 = 1.60;
 const PICKAXE_IMPACT_FRACTION: f32 = 0.68;
+// Bare-hand "punch" — short, snappy. Sits between the axe and the
+// pickaxe so a sequence of hand-picks feels purposeful but doesn't lose
+// rhythm next to a hatchet swing.
+const HANDS_SWING_SECONDS: f32 = 0.42;
+const HANDS_IMPACT_FRACTION: f32 = 0.55;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ImpactEffectKind {
+    /// Heavy wood-chip burst — full tree-felling palette, used when a
+    /// hatchet bites into a trunk or for branch-pile *deaths* if those
+    /// ever scaled up.
     WoodChips,
+    /// Heavy stone-shard burst — full ore-pickaxe palette.
     StoneShards,
+    /// Small wood-toned burst for branch piles. Same palette as
+    /// `WoodChips` but lower count/size/lifetime so picking up a
+    /// stick pile feels lighter than felling a tree.
+    Sticks,
+    /// Small stone-toned burst for surface rocks. Same palette as
+    /// `StoneShards` but lower count/size/lifetime.
+    Pebbles,
+    /// Tiny green burst for hay/grass tufts — uses a dedicated
+    /// grass-coloured material and a very small footprint.
+    GrassBlades,
 }
 
 impl ImpactEffectKind {
-    /// Map a surface material to the visual particle palette to spray on
-    /// impact. Wood-bearing surfaces fly as wood chips; everything else
-    /// as stone shards. Add new arms here when a new particle palette is
-    /// authored (snow puffs, bone splinters, …) and the audio side stays
-    /// untouched.
+    /// Map a surface material to the visual particle palette. Used by
+    /// remote-impact events that only carry the surface; the
+    /// crude-material variants are unreachable through this entry point
+    /// because their nodes route through
+    /// [`ImpactEffectKind::for_resource_impact`] instead.
     pub(crate) fn for_surface(surface: SurfaceMaterial) -> Self {
         match surface {
             SurfaceMaterial::Wood => Self::WoodChips,
@@ -38,6 +57,40 @@ impl ImpactEffectKind {
             | SurfaceMaterial::Iron
             | SurfaceMaterial::Coal
             | SurfaceMaterial::Sulfur => Self::StoneShards,
+        }
+    }
+
+    /// Map a resource node model to the visual particle palette. Used at
+    /// the swing-impact site because the model carries enough information
+    /// to distinguish a full tree (heavy WoodChips) from a branch pile
+    /// (light Sticks), an ore vein from a surface rock, and grass tufts
+    /// from anything else.
+    pub(crate) fn for_resource_model(model: crate::resources::ResourceNodeModel) -> Self {
+        use crate::resources::ResourceNodeModel::*;
+        match model {
+            PineTreeSmall | PineTreeMedium | PineTreeLarge | BirchTreeSmall | BirchTreeMedium
+            | BirchTreeLarge => Self::WoodChips,
+            CoalOre | IronOre | SulfurOre | StoneVein => Self::StoneShards,
+            BranchPile => Self::Sticks,
+            SurfaceStone => Self::Pebbles,
+            HayGrass => Self::GrassBlades,
+        }
+    }
+
+    /// Map a wire-side `ResourceImpactKind` to the visual palette. Used
+    /// at the remote-impact receive site, which has the protocol kind
+    /// directly without going through model/surface lookups.
+    pub(crate) fn for_resource_impact(kind: crate::protocol::ResourceImpactKind) -> Self {
+        use crate::protocol::ResourceImpactKind;
+        match kind {
+            ResourceImpactKind::Tree => Self::WoodChips,
+            ResourceImpactKind::CoalOre
+            | ResourceImpactKind::IronOre
+            | ResourceImpactKind::SulfurOre
+            | ResourceImpactKind::StoneVein => Self::StoneShards,
+            ResourceImpactKind::Branches => Self::Sticks,
+            ResourceImpactKind::SurfaceStone => Self::Pebbles,
+            ResourceImpactKind::HayGrass => Self::GrassBlades,
         }
     }
 }
@@ -56,18 +109,23 @@ pub(crate) struct PendingImpactEffect {
 /// produce locally — minus the camera kick, which belongs to the swinger.
 ///
 /// `tool` + `surface` drive the audio system's per-pair impact pool
-/// lookup; the visual particle system derives its [`ImpactEffectKind`]
-/// from `surface` so the chip burst still matches the material.
+/// lookup; the visual `effect_kind` is computed at the receive site
+/// from the wire [`crate::protocol::ResourceImpactKind`] so crude
+/// materials (branch piles, surface stones, hay tufts) can still get
+/// their dedicated small bursts even though they share surfaces with
+/// the heavier tree/ore types.
 #[derive(Message, Debug, Clone, Copy)]
 pub(crate) struct RemoteImpactEvent {
     pub(crate) anchor: Vec3,
     pub(crate) tool: ToolKind,
     pub(crate) surface: SurfaceMaterial,
+    pub(crate) effect_kind: ImpactEffectKind,
     pub(crate) seed: u32,
 }
 
 pub(crate) fn swing_duration_seconds(tool: ToolKind) -> f32 {
     match tool {
+        ToolKind::Hands => HANDS_SWING_SECONDS,
         ToolKind::Axe => AXE_SWING_SECONDS,
         ToolKind::Pickaxe => PICKAXE_SWING_SECONDS,
     }
@@ -75,6 +133,7 @@ pub(crate) fn swing_duration_seconds(tool: ToolKind) -> f32 {
 
 pub(crate) fn swing_impact_fraction(tool: ToolKind) -> f32 {
     match tool {
+        ToolKind::Hands => HANDS_IMPACT_FRACTION,
         ToolKind::Axe => AXE_IMPACT_FRACTION,
         ToolKind::Pickaxe => PICKAXE_IMPACT_FRACTION,
     }

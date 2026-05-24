@@ -31,6 +31,7 @@ impl GameServer {
             players,
             dropped_items,
             resource_nodes: Some(resource_nodes),
+            chunk_manager: Some(self.chunk_manager.to_save(self.tick)),
             next_dropped_item_id: self.next_dropped_item_id,
             next_client_id: self.next_client_id,
             next_resource_node_id: self.next_resource_node_id,

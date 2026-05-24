@@ -31,6 +31,16 @@ pub(crate) const SULFUR_ORE: OreNodeStyle = OreNodeStyle {
     chunk_highlight: [1.00, 0.92, 0.36, 1.0],
 };
 
+/// Plain rock vein — same silhouette as the ore variants, but the
+/// "chunks" embedded in the top are just darker rock instead of a
+/// metallic/coal/sulfur colour. Reads as "weathered exposed stone".
+pub(crate) const STONE_VEIN: OreNodeStyle = OreNodeStyle {
+    base_color: [0.58, 0.56, 0.52, 1.0],
+    accent_color: [0.46, 0.44, 0.41, 1.0],
+    chunk_color: [0.42, 0.40, 0.38, 1.0],
+    chunk_highlight: [0.66, 0.64, 0.60, 1.0],
+};
+
 pub(crate) fn low_poly_ore_node_mesh(style: OreNodeStyle) -> Mesh {
     let mut builder = LowPolyMeshBuilder::default();
     // Layered base rock mound — bigger central mass plus smaller flanking stones.

@@ -170,15 +170,15 @@ impl PlayerController {
 
     pub fn simulate(&mut self, delta_seconds: f32, world: &WorldData) {
         // Build the spatial index once per simulate() call. For procedural
-        // worlds the substep loop hits the grid many times, so amortising
+        // worlds the substep loop hits the chunk many times, so amortising
         // a single build across all of them is a big win.
         let grid = BlockGrid::build(world);
         self.simulate_with_grid(delta_seconds, &grid);
     }
 
     /// Same as [`simulate`] but takes a pre-built [`BlockGrid`]. Use this from
-    /// hot loops (server tick, client prediction) that already keep a grid
-    /// alongside their world data — avoids rebuilding the grid every call.
+    /// hot loops (server tick, client prediction) that already keep a chunk
+    /// alongside their world data — avoids rebuilding the chunk every call.
     pub fn simulate_with_grid(&mut self, delta_seconds: f32, grid: &BlockGrid) {
         let mut remaining = if delta_seconds.is_finite() {
             delta_seconds.clamp(0.0, MAX_SIMULATION_DELTA)

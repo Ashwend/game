@@ -141,12 +141,43 @@ pub enum ClientMessage {
     },
     Inventory(InventoryCommand),
     Gather(ResourceGatherCommand),
+    /// Client's view-radius preference (Low/Medium/High). The server uses
+    /// this to decide how many concentric chunk rings to include in this
+    /// client's per-tick snapshot. Sent on connect and whenever the
+    /// player changes the setting in-game.
+    SetViewRadius {
+        tier: ViewRadiusTier,
+    },
     /// One Opus-encoded voice frame. Unreliable — losing a 20 ms frame is
     /// better than waiting for a retransmit. The server routes these to
     /// peers within audible range only.
     Voice(VoiceFrame),
     Heartbeat,
     Disconnect,
+}
+
+/// Player-controlled view radius for chunk AoI streaming. Resolved to a
+/// concentric chunk-ring size server-side. Living in the protocol layer
+/// keeps the wire type free of server-internal details.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewRadiusTier {
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+
+impl ViewRadiusTier {
+    pub const ALL: [Self; 3] = [Self::Low, Self::Medium, Self::High];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Low => "Low",
+            Self::Medium => "Medium",
+            Self::High => "High",
+        }
+    }
 }
 
 impl ClientMessage {
@@ -157,6 +188,7 @@ impl ClientMessage {
             | Self::Command { .. }
             | Self::Inventory(_)
             | Self::Gather(_)
+            | Self::SetViewRadius { .. }
             | Self::Disconnect => PacketDelivery::Reliable,
             // Voice frames are each independent (Opus packets carry their own
             // decoder state) so we want every delivered frame played — *not*
@@ -244,6 +276,15 @@ pub enum InventoryCommand {
     },
     PickUp {
         dropped_item_id: DroppedItemId,
+    },
+    /// Quick-pick a crude (hand-harvestable) resource node — surface
+    /// stones, branch piles, grass tufts. Server treats this as an
+    /// instant full drain: as much of the node's storage as fits flows
+    /// straight into the player's inventory, and the node despawns if
+    /// fully emptied. Rejected server-side for non-crude nodes (trees,
+    /// ore veins) — those still require a tool swing.
+    PickUpResourceNode {
+        resource_node_id: ResourceNodeId,
     },
     SelectActionbarSlot {
         slot: usize,
@@ -374,6 +415,16 @@ pub enum ServerMessage {
         position: Vec3Net,
         kind: ResourceImpactKind,
     },
+    /// A resource node was actually depleted (storage drained, node
+    /// removed) — distinct from "the node just left this player's
+    /// AoI". The client uses this to decide whether a node disappearing
+    /// from the snapshot deserves a death animation (tree felling, ore
+    /// shatter, crude pickup burst, …). Without this signal, every
+    /// chunk-boundary crossing animated the death of every node leaving
+    /// the player's view ring.
+    ResourceNodeDepleted {
+        id: ResourceNodeId,
+    },
     /// Authoritative day/night clock. Sent every ~60 s as a routine drift
     /// realignment, and immediately after an admin command changes the
     /// clock or speed. Clients integrate locally between broadcasts using
@@ -389,7 +440,51 @@ pub enum ServerMessage {
         position: Vec3Net,
         frame: Vec<u8>,
     },
+    /// Server-side perf stats payload, broadcast on a slow tick (~1 Hz)
+    /// when the perf HUD is being shown. The client uses this for the
+    /// overlay panel; it doesn't affect gameplay.
+    PerfStats(PerfStatsSnapshot),
     Heartbeat,
+}
+
+/// Snapshot of server-side perf counters relevant to the chunk system —
+/// loaded chunks, live nodes, scheduled regrows, plus the requesting
+/// player's classification and AoI count.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PerfStatsSnapshot {
+    pub loaded_chunks: u32,
+    pub live_nodes: u32,
+    pub pending_regrows: u32,
+    pub aoi_visible_nodes: u32,
+    pub player_chunk_x: i32,
+    pub player_chunk_z: i32,
+    pub player_classification: PerfClassificationId,
+}
+
+/// Wire-friendly enum mirror of [`crate::world::ChunkClassification`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PerfClassificationId {
+    Forest,
+    RockyOutcrop,
+    OreVein,
+    Plains,
+    Mixed,
+    /// Player isn't inside a loaded chunk (off-world / between chunks).
+    None,
+}
+
+impl PerfClassificationId {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Forest => "Forest",
+            Self::RockyOutcrop => "Rocky outcrop",
+            Self::OreVein => "Ore vein",
+            Self::Plains => "Plains",
+            Self::Mixed => "Mixed",
+            Self::None => "—",
+        }
+    }
 }
 
 /// Which class of resource a `ResourceImpact` was produced on. The
@@ -403,6 +498,18 @@ pub enum ResourceImpactKind {
     CoalOre,
     IronOre,
     SulfurOre,
+    /// Bare-rock vein — same stone-shard burst as the ore variants but
+    /// the audio cue routes through the plain-stone surface instead of
+    /// an ore-specific one.
+    StoneVein,
+    /// Crude wood material (branch pile). Lighter wood chip burst than a
+    /// felled tree.
+    Branches,
+    /// Crude stone material (surface rock). Lighter stone shard burst
+    /// than an ore vein.
+    SurfaceStone,
+    /// Plant fibres (hay tuft). Soft thud, no particle burst yet.
+    HayGrass,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -437,6 +544,7 @@ impl ServerMessage {
             | Self::PlayerEvent(_)
             | Self::Chat(_)
             | Self::ItemMerged { .. }
+            | Self::ResourceNodeDepleted { .. }
             | Self::Toast(_) => PacketDelivery::Reliable,
             // Impact effects are pure cosmetic feedback. Dropping one is
             // far less bad than the extra latency of a reliable resend,
@@ -449,6 +557,7 @@ impl ServerMessage {
             | Self::Correction(_)
             | Self::ResourceImpact { .. }
             | Self::WorldTime(_)
+            | Self::PerfStats(_)
             | Self::Heartbeat => PacketDelivery::Unreliable,
         }
     }

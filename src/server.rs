@@ -27,6 +27,12 @@ const CHAT_BUBBLE_DURATION_TICKS: u64 = (CHAT_BUBBLE_DURATION_SECONDS * SERVER_T
 /// multiplier, so the visible cycle stays smooth in between.
 const WORLD_TIME_BROADCAST_INTERVAL_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 60;
 
+/// Cadence of the routine [`ServerMessage::PerfStats`] broadcast — one
+/// per second. The HUD never needs sub-second resolution and the
+/// payload is tiny, so 1 Hz keeps bandwidth negligible.
+const PERF_STATS_BROADCAST_INTERVAL_TICKS: u64 = SERVER_TICK_RATE_HZ as u64;
+
+pub mod chunk_manager;
 mod commands;
 mod connection;
 mod dropped_items;
@@ -38,6 +44,7 @@ mod toasts;
 mod voice;
 mod world_time;
 
+pub use chunk_manager::{ChunkManager, ChunkManagerSave, view_tier_radius};
 pub use voice::VOICE_AUDIBLE_RANGE;
 
 use self::{
@@ -84,7 +91,7 @@ pub struct GameServer {
     world: WorldData,
     /// Spatial index over `world.blocks`. Built once at construction. Movement
     /// is currently client-authoritative so the server doesn't simulate, but
-    /// the grid is here for the next time a server-side collision check (e.g.
+    /// the chunk is here for the next time a server-side collision check (e.g.
     /// drop validation, future server-authoritative movement) is wired in.
     #[allow(dead_code)]
     world_grid: BlockGrid,
@@ -98,6 +105,9 @@ pub struct GameServer {
     dropped_items: HashMap<DroppedItemId, DroppedItemBody>,
     dropped_item_physics: DroppedItemPhysics,
     resource_nodes: HashMap<ResourceNodeId, ResourceNodeState>,
+    /// Server-authoritative chunk system. Owns per-chunk capacity, AoI
+    /// visibility, and the fresh-position regrow scheduler.
+    pub(crate) chunk_manager: ChunkManager,
     next_dropped_item_id: DroppedItemId,
     next_client_id: ClientId,
     next_resource_node_id: ResourceNodeId,
@@ -122,12 +132,33 @@ impl GameServer {
         let world_grid = BlockGrid::build(&world);
         let mut dropped_item_physics = DroppedItemPhysics::new(&world);
 
+        let load_tick_for_chunk = save.state.last_authoritative_tick;
         // Resource nodes: trust the saved state once a world has ever been
         // hosted (so harvested resources don't respawn). For brand-new worlds
-        // the save has `None` and we seed from the world definition.
-        let resource_nodes = match save.state.resource_nodes.take() {
-            Some(saved) => saved.into_iter().map(|node| (node.id, node)).collect(),
-            None => resource_nodes::initial_resource_nodes(&world),
+        // the save has `None` and we seed from the chunk generator.
+        let (chunk_manager, resource_nodes) = match (
+            save.state.resource_nodes.take(),
+            save.state.chunk_manager.take(),
+        ) {
+            (Some(saved_nodes), Some(saved_chunk)) => {
+                let nodes: HashMap<ResourceNodeId, ResourceNodeState> = saved_nodes
+                    .into_iter()
+                    .map(|node| (node.id, node))
+                    .collect();
+                let manager = ChunkManager::from_save(saved_chunk, load_tick_for_chunk);
+                (manager, nodes)
+            }
+            _ => {
+                // Brand-new world: generate from seed + dims. Any partial
+                // save without grid state would also fall here, but
+                // that's prevented at the save-format level (version
+                // bumps are not migrated).
+                let (manager, spawns) =
+                    ChunkManager::new_for_world(save.map.world_seed(), save.map.chunk_dims());
+                let nodes: HashMap<ResourceNodeId, ResourceNodeState> =
+                    spawns.into_iter().map(|node| (node.id, node)).collect();
+                (manager, nodes)
+            }
         };
 
         let mut dropped_items = HashMap::new();
@@ -154,13 +185,14 @@ impl GameServer {
 
         let next_dropped_item_id = save.state.next_dropped_item_id.max(1);
         let next_client_id = save.state.next_client_id.max(1);
-        // Floor at the static-spawn ceiling so a save authored before this
-        // field existed (or one that's been hand-edited) can never hand out
-        // an ID that collides with the world's hand-authored nodes.
-        let next_resource_node_id = save
-            .state
-            .next_resource_node_id
-            .max(resource_nodes.keys().copied().max().unwrap_or(0) + 1);
+        // Floor at the chunk-generator's high-water mark so admin-spawned
+        // ids can't collide with chunk-issued node ids, regardless of how
+        // many nodes the world generator produced.
+        let next_resource_node_id = save.state.next_resource_node_id.max(
+            chunk_manager
+                .next_node_id()
+                .max(resource_nodes.keys().copied().max().unwrap_or(0) + 1),
+        );
         let world_time = save.state.world_time();
         let tick = save.state.last_authoritative_tick;
 
@@ -176,6 +208,7 @@ impl GameServer {
             dropped_items,
             dropped_item_physics,
             resource_nodes,
+            chunk_manager,
             next_dropped_item_id,
             next_client_id,
             next_resource_node_id,
@@ -221,6 +254,12 @@ impl GameServer {
             ClientMessage::Command { text } => self.apply_command(client_id, text),
             ClientMessage::Inventory(command) => self.apply_inventory_command(client_id, command),
             ClientMessage::Gather(command) => self.apply_gather_command(client_id, command),
+            ClientMessage::SetViewRadius { tier } => {
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    client.view_tier = tier;
+                }
+                Vec::new()
+            }
             ClientMessage::Voice(voice) => self.apply_voice_frame(client_id, voice),
             ClientMessage::Heartbeat => Vec::new(),
             ClientMessage::Disconnect => self.disconnect(client_id),
@@ -246,7 +285,13 @@ impl GameServer {
         self.world_time.advance(delta_seconds);
         self.dropped_item_physics
             .step(delta_seconds, &mut self.dropped_items);
-        self.tick_resource_node_respawn(delta_seconds);
+        // Chunk manager owns regrows now — fresh-position spawns 5-15 min
+        // after a node is depleted. The result is spliced into the live
+        // node map so the snapshot path picks them up automatically.
+        let regrow = self.chunk_manager.tick(self.tick, &self.resource_nodes);
+        for node in regrow.spawned {
+            self.resource_nodes.insert(node.id, node);
+        }
         self.expire_chat_bubbles();
 
         let mut envelopes = self.disconnect_stale_clients();
@@ -285,13 +330,64 @@ impl GameServer {
         // hotbar contents private without needing a separate inventory
         // message channel.
         let client_ids = self.clients.keys().copied().collect::<Vec<_>>();
-        for client_id in client_ids {
+        for client_id in &client_ids {
             envelopes.push(ServerEnvelope {
-                target: DeliveryTarget::Client(client_id),
-                message: ServerMessage::Snapshot(self.snapshot_for(client_id)),
+                target: DeliveryTarget::Client(*client_id),
+                message: ServerMessage::Snapshot(self.snapshot_for(*client_id)),
             });
         }
+        if self
+            .tick
+            .is_multiple_of(PERF_STATS_BROADCAST_INTERVAL_TICKS)
+        {
+            for client_id in client_ids {
+                envelopes.push(ServerEnvelope {
+                    target: DeliveryTarget::Client(client_id),
+                    message: ServerMessage::PerfStats(self.perf_stats_for(client_id)),
+                });
+            }
+        }
         envelopes
+    }
+
+    /// Build the perf-stats payload for one client — covers the player's
+    /// own AoI count plus the world-wide chunk bookkeeping. The classification
+    /// is sampled at the player's feet so the HUD shows the biome under them.
+    fn perf_stats_for(&self, client_id: ClientId) -> crate::protocol::PerfStatsSnapshot {
+        use crate::protocol::{PerfClassificationId, PerfStatsSnapshot};
+        use crate::world::ChunkCoord;
+        let (position, view_tier) = self
+            .clients
+            .get(&client_id)
+            .map(|client| (client.controller.position, client.view_tier))
+            .unwrap_or((Vec3Net::ZERO, crate::protocol::ViewRadiusTier::default()));
+        let coord = ChunkCoord::from_world(position.x, position.z);
+        let classification = self
+            .chunk_manager
+            .classification_at(position)
+            .map(|c| match c {
+                crate::world::ChunkClassification::Forest => PerfClassificationId::Forest,
+                crate::world::ChunkClassification::RockyOutcrop => {
+                    PerfClassificationId::RockyOutcrop
+                }
+                crate::world::ChunkClassification::OreVein => PerfClassificationId::OreVein,
+                crate::world::ChunkClassification::Plains => PerfClassificationId::Plains,
+                crate::world::ChunkClassification::Mixed => PerfClassificationId::Mixed,
+            })
+            .unwrap_or(PerfClassificationId::None);
+        let aoi_visible_nodes = self
+            .chunk_manager
+            .nodes_visible_to(position, view_tier)
+            .len() as u32;
+        PerfStatsSnapshot {
+            loaded_chunks: self.chunk_manager.loaded_chunk_count() as u32,
+            live_nodes: self.chunk_manager.live_node_count() as u32,
+            pending_regrows: self.chunk_manager.pending_regrow_count() as u32,
+            aoi_visible_nodes,
+            player_chunk_x: coord.x,
+            player_chunk_z: coord.z,
+            player_classification: classification,
+        }
     }
 
     fn expire_chat_bubbles(&mut self) {
@@ -320,6 +416,10 @@ pub(super) struct ServerClient {
     /// outside the bubble window. Snapshots copy `text` so peer clients can
     /// render speech bubbles above the speaker's head.
     pub(super) chat_bubble: Option<ChatBubble>,
+    /// AoI view radius requested by this client. Snapshot construction
+    /// uses this to pick how many concentric chunk rings of resource nodes
+    /// the client receives.
+    pub(super) view_tier: crate::protocol::ViewRadiusTier,
 }
 
 #[derive(Debug, Clone)]
