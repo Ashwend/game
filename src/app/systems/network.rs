@@ -2,13 +2,15 @@ use bevy::{ecs::system::SystemParam, prelude::*};
 
 use crate::{
     app::{
+        audio::surface::SurfaceMaterial,
         state::{
-            ClientErrorToast, ClientRuntime, ImpactEffectKind, MenuState, NoticeDialog,
-            RemoteImpactEvent, Screen, SessionShutdownTasks, ToastState,
+            ClientErrorToast, ClientRuntime, MenuState, NoticeDialog, RemoteImpactEvent, Screen,
+            SessionShutdownTasks, ToastState,
         },
         ui::ButtonSoundRequests,
         voice::IncomingVoiceMessage,
     },
+    items::ToolKind,
     protocol::{ResourceImpactKind, ServerMessage, ToastKind, Vec3Net},
 };
 
@@ -124,16 +126,27 @@ pub(crate) fn surface_client_error_toasts_system(
 }
 
 fn remote_impact_event(position: Vec3Net, kind: ResourceImpactKind) -> RemoteImpactEvent {
+    let (tool, surface) = remote_impact_tool_and_surface(kind);
     RemoteImpactEvent {
         anchor: Vec3::new(position.x, position.y, position.z),
-        kind: match kind {
-            ResourceImpactKind::Tree => ImpactEffectKind::WoodChips,
-            ResourceImpactKind::OreNode => ImpactEffectKind::StoneShards,
-        },
+        tool,
+        surface,
         // Remote impacts have no client-side swing seed; pick something
         // stable per-event so the chip burst is deterministic but varies
         // between consecutive hits.
         seed: position_seed(position),
+    }
+}
+
+fn remote_impact_tool_and_surface(kind: ResourceImpactKind) -> (ToolKind, SurfaceMaterial) {
+    // The server enforces tool requirements (axe → trees, pickaxe → ores),
+    // so the kind uniquely determines the (tool, surface) pair the
+    // swinger must have used.
+    match kind {
+        ResourceImpactKind::Tree => (ToolKind::Axe, SurfaceMaterial::Wood),
+        ResourceImpactKind::CoalOre => (ToolKind::Pickaxe, SurfaceMaterial::Coal),
+        ResourceImpactKind::IronOre => (ToolKind::Pickaxe, SurfaceMaterial::Iron),
+        ResourceImpactKind::SulfurOre => (ToolKind::Pickaxe, SurfaceMaterial::Sulfur),
     }
 }
 

@@ -1,13 +1,11 @@
-mod audio;
 mod auto_connect;
 mod camera;
 mod display;
 pub(crate) mod effects;
-mod footsteps;
 mod input;
 mod items;
 mod network;
-mod node_death;
+pub(crate) mod node_death;
 mod players;
 mod quit;
 mod settings;
@@ -15,10 +13,6 @@ mod test_mode;
 
 use bevy::prelude::SystemSet;
 
-pub(crate) use audio::{
-    TreeFallSoundAsset, main_menu_music_system, play_impact_sounds_system,
-    setup_impact_sound_assets, setup_tree_fall_sound_asset, spawn_tree_fall_sound,
-};
 pub(crate) use auto_connect::{
     AutoConnectRequest, auto_connect_poll_system, auto_connect_start_system,
 };
@@ -27,7 +21,6 @@ pub(crate) use camera::{
 };
 pub(crate) use display::apply_display_settings_system;
 pub(crate) use effects::{spawn_impact_effects_system, tick_impact_chips_system};
-pub(crate) use footsteps::{FootstepState, play_footsteps_system, setup_footstep_assets};
 pub(crate) use input::{
     center_cursor_on_focus_system, chat_shortcut_system, client_input_system,
     gameplay_inventory_shortcuts_system, mouse_look_system, send_inventory_command,
@@ -75,6 +68,10 @@ pub(crate) enum ClientSystemSet {
     ImpactEffectsSpawn,
     ImpactEffectsTick,
     ImpactSounds,
+    PlaySounds,
+    AudioFaderTick,
+    AmbientBeds,
+    AmbientEmitters,
     NodeDeathTick,
     MainMenuMusic,
     MenuBackdropCamera,

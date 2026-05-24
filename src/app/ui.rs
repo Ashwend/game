@@ -15,12 +15,10 @@ mod worlds;
 
 use bevy::input::ButtonInput;
 use bevy::window::{Monitor, PrimaryMonitor};
-use bevy::{
-    audio::{AudioPlayer, AudioSource, PlaybackSettings, Volume},
-    diagnostic::DiagnosticsStore,
-};
-use bevy::{ecs::system::SystemParam, prelude::*};
+use bevy::{diagnostic::DiagnosticsStore, ecs::system::SystemParam, prelude::*};
 use bevy_egui::{EguiContexts, egui};
+
+use super::audio::{PlaySound, SoundId};
 
 use self::{
     chat::chat_ui,
@@ -213,11 +211,10 @@ fn danger_menu_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     game_button(ui, text, ButtonKind::Danger, MENU_BUTTON_WIDTH)
 }
 
-const BUTTON_CLICK_SOUND_PATH: &str = "ui/button-click.wav";
-const BUTTON_HOVER_SOUND_PATH: &str = "ui/button-hover.wav";
-const BUTTON_CLICK_VOLUME_DECIBELS: f32 = -12.0;
-const BUTTON_HOVER_VOLUME_DECIBELS: f32 = -30.0;
-
+/// Queue of [`theme::ButtonSound`] events the egui middleware recorded
+/// during the frame's draw pass. `ui_system` flushes them via
+/// [`button_sound_system`], which translates each into a [`PlaySound`]
+/// event for the central audio bus.
 #[derive(Resource, Default)]
 pub(crate) struct ButtonSoundRequests(Vec<theme::ButtonSound>);
 
@@ -227,61 +224,20 @@ impl ButtonSoundRequests {
     }
 }
 
-#[derive(Resource)]
-pub(crate) struct ButtonSoundAssets {
-    click: Handle<AudioSource>,
-    hover: Handle<AudioSource>,
-}
-
-pub(crate) fn setup_button_sound_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
-    commands.insert_resource(ButtonSoundAssets {
-        click: asset_server.load(super::embedded_asset_path(button_sound_path(
-            theme::ButtonSound::Click,
-        ))),
-        hover: asset_server.load(super::embedded_asset_path(button_sound_path(
-            theme::ButtonSound::Hover,
-        ))),
-    });
-}
-
 pub(crate) fn button_sound_system(
-    mut commands: Commands,
     mut requests: ResMut<ButtonSoundRequests>,
-    assets: Res<ButtonSoundAssets>,
-    settings: Res<ClientSettings>,
+    mut play: MessageWriter<PlaySound>,
 ) {
     for sound in std::mem::take(&mut requests.0) {
-        commands.spawn((
-            Name::new(format!("Button {:?} Sound", sound)),
-            AudioPlayer::new(button_sound_handle(sound, &assets)),
-            PlaybackSettings::DESPAWN.with_volume(button_sound_volume(sound, &settings)),
-        ));
+        play.write(PlaySound::non_spatial(button_sound_id(sound)));
     }
 }
 
-fn button_sound_handle(
-    sound: theme::ButtonSound,
-    assets: &ButtonSoundAssets,
-) -> Handle<AudioSource> {
+fn button_sound_id(sound: theme::ButtonSound) -> SoundId {
     match sound {
-        theme::ButtonSound::Click => assets.click.clone(),
-        theme::ButtonSound::Hover => assets.hover.clone(),
+        theme::ButtonSound::Click => SoundId::UiButtonClick,
+        theme::ButtonSound::Hover => SoundId::UiButtonHover,
     }
-}
-
-fn button_sound_path(sound: theme::ButtonSound) -> &'static str {
-    match sound {
-        theme::ButtonSound::Click => BUTTON_CLICK_SOUND_PATH,
-        theme::ButtonSound::Hover => BUTTON_HOVER_SOUND_PATH,
-    }
-}
-
-fn button_sound_volume(sound: theme::ButtonSound, settings: &ClientSettings) -> Volume {
-    let base = match sound {
-        theme::ButtonSound::Click => Volume::Decibels(BUTTON_CLICK_VOLUME_DECIBELS),
-        theme::ButtonSound::Hover => Volume::Decibels(BUTTON_HOVER_VOLUME_DECIBELS),
-    };
-    Volume::Linear(base.to_linear() * settings.audio.ui_volume.clamp(0.0, 1.0))
 }
 
 #[cfg(test)]
@@ -289,19 +245,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn button_hover_sound_is_subtler_than_click() {
+    fn button_sounds_map_to_distinct_ui_pool_ids() {
         assert_eq!(
-            button_sound_path(theme::ButtonSound::Click),
-            BUTTON_CLICK_SOUND_PATH
+            button_sound_id(theme::ButtonSound::Click),
+            SoundId::UiButtonClick
         );
         assert_eq!(
-            button_sound_path(theme::ButtonSound::Hover),
-            BUTTON_HOVER_SOUND_PATH
-        );
-        assert!(
-            button_sound_volume(theme::ButtonSound::Hover, &ClientSettings::default()).to_linear()
-                < button_sound_volume(theme::ButtonSound::Click, &ClientSettings::default())
-                    .to_linear()
+            button_sound_id(theme::ButtonSound::Hover),
+            SoundId::UiButtonHover
         );
     }
 }

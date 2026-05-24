@@ -21,6 +21,11 @@ clap = { version = "4.6.1", features = ["derive"] }
 cpal = "0.16"
 crossbeam-channel = "0.5"
 directories = "6.0.0"
+# Compile-time tree of `assets/` baked into the binary. The audio system walks
+# this at startup to register every shipped sound with Bevy's embedded asset
+# source — adding a new clip is now "drop the file in `assets/`", no per-file
+# `include_bytes!` row to maintain.
+include_dir = "0.7"
 lightyear = { version = "0.26.4", default-features = false, features = ["client", "server", "netcode", "udp"] }
 # Opus codec bindings. The system libopus (`brew install opus` /
 # `apt install libopus-dev`) is required at build time. Picked over a pure-Rust

@@ -392,12 +392,17 @@ pub enum ServerMessage {
     Heartbeat,
 }
 
-/// Which class of resource a `ResourceImpact` was produced on. Trees play
-/// the hatchet/wood cue; ore nodes play the pickaxe/stone cue.
+/// Which class of resource a `ResourceImpact` was produced on. The
+/// client derives both the visual particle effect and the impact-audio
+/// `(tool, surface)` pair from this. New ore types should each get their
+/// own variant so they can have distinct audio without a follow-up
+/// protocol change.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ResourceImpactKind {
     Tree,
-    OreNode,
+    CoalOre,
+    IronOre,
+    SulfurOre,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]

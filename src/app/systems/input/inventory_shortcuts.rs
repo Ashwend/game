@@ -6,10 +6,13 @@ use bevy::{
 };
 
 use crate::{
-    app::state::{
-        ClientErrorToast, ClientRuntime, ClientSettings, ErrorToastSink, GatherInputState,
-        ImpactEffectKind, KeyAction, MenuState, PendingAudioCue, PendingImpactEffect,
-        PickupTargetState, SwingImpact, ToolSwapState,
+    app::{
+        audio::surface::{SurfaceMaterial, surface_for_resource_model},
+        state::{
+            ClientErrorToast, ClientRuntime, ClientSettings, ErrorToastSink, GatherInputState,
+            ImpactEffectKind, KeyAction, MenuState, PendingAudioCue, PendingImpactEffect,
+            PickupTargetState, SwingImpact, ToolSwapState,
+        },
     },
     items::{ToolKind, ToolProfile, item_definition},
     protocol::{
@@ -164,10 +167,11 @@ fn dispatch_swing_impact(params: &mut GameplayInventoryShortcutsParams, impact: 
         params.gather_input.set_pending_miss_audio();
         return;
     };
-    let Some(kind) = resource_target_effect_kind(&params.pickup_target) else {
+    let Some(surface) = resource_target_surface(&params.pickup_target) else {
         params.gather_input.set_pending_miss_audio();
         return;
     };
+    let kind = ImpactEffectKind::for_surface(surface);
 
     let spray_direction = swing_spray_direction(&params.runtime, anchor);
     let seed = params.gather_input.current_swing_seed();
@@ -177,9 +181,11 @@ fn dispatch_swing_impact(params: &mut GameplayInventoryShortcutsParams, impact: 
         kind,
         seed,
     });
-    params
-        .gather_input
-        .set_pending_audio_cue(PendingAudioCue { anchor, kind });
+    params.gather_input.set_pending_audio_cue(PendingAudioCue {
+        anchor,
+        tool: impact.tool,
+        surface,
+    });
 
     params.camera_kick.trigger(impact.tool);
 
@@ -214,14 +220,10 @@ fn resource_target_anchor(target: &PickupTargetState, node_id: u64) -> Option<Ve
     Some(Vec3::new(position.x, position.y, position.z))
 }
 
-fn resource_target_effect_kind(target: &PickupTargetState) -> Option<ImpactEffectKind> {
+fn resource_target_surface(target: &PickupTargetState) -> Option<SurfaceMaterial> {
     let definition_id = target.resource_definition_id.as_deref()?;
     let definition = resource_node_definition(definition_id)?;
-    Some(if definition.model.is_tree() {
-        ImpactEffectKind::WoodChips
-    } else {
-        ImpactEffectKind::StoneShards
-    })
+    Some(surface_for_resource_model(definition.model))
 }
 
 fn swing_spray_direction(runtime: &ClientRuntime, anchor: Vec3) -> Vec3 {

@@ -158,10 +158,16 @@ impl GameServer {
 }
 
 fn resource_impact_kind(model: ResourceNodeModel) -> ResourceImpactKind {
-    if model.is_tree() {
-        ResourceImpactKind::Tree
-    } else {
-        ResourceImpactKind::OreNode
+    match model {
+        ResourceNodeModel::PineTreeSmall
+        | ResourceNodeModel::PineTreeMedium
+        | ResourceNodeModel::PineTreeLarge
+        | ResourceNodeModel::BirchTreeSmall
+        | ResourceNodeModel::BirchTreeMedium
+        | ResourceNodeModel::BirchTreeLarge => ResourceImpactKind::Tree,
+        ResourceNodeModel::CoalOre => ResourceImpactKind::CoalOre,
+        ResourceNodeModel::IronOre => ResourceImpactKind::IronOre,
+        ResourceNodeModel::SulfurOre => ResourceImpactKind::SulfurOre,
     }
 }
 

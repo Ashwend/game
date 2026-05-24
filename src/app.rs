@@ -1,3 +1,4 @@
+mod audio;
 mod embedded_assets;
 mod scene;
 mod state;
@@ -27,6 +28,11 @@ use self::voice::{
 };
 
 use self::{
+    audio::{
+        AudioPlugin, main_menu_music_system, manage_ambient_beds_system,
+        manage_ambient_emitters_system, play_footsteps_system, play_impact_sounds_system,
+        play_sounds_system, tick_audio_faders_system,
+    },
     scene::{apply_world_scene_system, setup_scene, update_sky_system},
     state::{
         ClientErrorToast, ClientRuntime, ClientSettingsStore, GatherInputState, InventoryUiState,
@@ -36,21 +42,19 @@ use self::{
     },
     systems::{
         AutoConnectRequest, CameraImpactKick, CameraMotionEffects, ClientSystemSet,
-        DroppedItemEntities, FootstepState, RemotePlayerEntities, ResourceNodeEntities,
-        app_quit_system, apply_display_settings_system, apply_dropped_items_system,
-        apply_held_item_visual_system, apply_resource_nodes_system, apply_snapshot_system,
-        apply_test_mode_overrides_system, auto_connect_poll_system, auto_connect_start_system,
-        camera_follow_system, center_cursor_on_focus_system, chat_shortcut_system,
-        client_input_system, gameplay_inventory_shortcuts_system, main_menu_music_system,
-        menu_backdrop_camera_system, mouse_look_system, network_tick_system, play_footsteps_system,
-        play_impact_sounds_system, reposition_test_window_system, save_client_settings_system,
-        session_shutdown_poll_system, setup_footstep_assets, setup_impact_sound_assets,
-        setup_tree_fall_sound_asset, spawn_impact_effects_system,
+        DroppedItemEntities, RemotePlayerEntities, ResourceNodeEntities, app_quit_system,
+        apply_display_settings_system, apply_dropped_items_system, apply_held_item_visual_system,
+        apply_resource_nodes_system, apply_snapshot_system, apply_test_mode_overrides_system,
+        auto_connect_poll_system, auto_connect_start_system, camera_follow_system,
+        center_cursor_on_focus_system, chat_shortcut_system, client_input_system,
+        gameplay_inventory_shortcuts_system, menu_backdrop_camera_system, mouse_look_system,
+        network_tick_system, reposition_test_window_system, save_client_settings_system,
+        session_shutdown_poll_system, spawn_impact_effects_system,
         surface_client_error_toasts_system, tick_felling_trees_system, tick_impact_chips_system,
         tick_resource_node_pop_in_system, toggle_inventory_system, toggle_pause_system,
         update_cursor_system, update_pickup_target_system, update_tool_swap_state_system,
     },
-    ui::{ButtonSoundRequests, button_sound_system, setup_button_sound_assets, ui_system},
+    ui::{ButtonSoundRequests, button_sound_system, ui_system},
 };
 
 pub(crate) const EYE_HEIGHT: f32 = 1.62;
@@ -104,6 +108,15 @@ const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::ImpactEffectsSpawn,
     ClientSystemSet::ImpactEffectsTick,
     ClientSystemSet::NodeDeathTick,
+    // Audio drain phase: every system that emits PlaySound has run by
+    // now (impact, footsteps, node death, UI button), so a single
+    // play_sounds_system pass empties the queue and spawns the entities.
+    // The fader/ambient systems follow so any sink they touch is the
+    // sink play_sounds_system just spawned.
+    ClientSystemSet::PlaySounds,
+    ClientSystemSet::AudioFaderTick,
+    ClientSystemSet::AmbientBeds,
+    ClientSystemSet::AmbientEmitters,
     ClientSystemSet::VoiceCaptureManage,
     ClientSystemSet::VoiceTransmit,
     ClientSystemSet::VoiceReceive,
@@ -166,7 +179,6 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .insert_resource(InventoryUiState::default())
         .insert_resource(PickupTargetState::default())
         .insert_resource(GatherInputState::default())
-        .insert_resource(FootstepState::default())
         .insert_resource(ToolSwapState::default())
         .insert_resource(CameraImpactKick::default())
         .insert_resource(CameraMotionEffects::default())
@@ -229,6 +241,11 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         // sibling `assets/` folder. Must come after DefaultPlugins so
         // AssetPlugin (and therefore `EmbeddedAssetRegistry`) exists.
         .add_plugins(embedded_assets::EmbeddedAssetsPlugin)
+        // Audio: registers PlaySound event, SoundLibrary, FootstepState,
+        // and the global ambient-zone resource. Must come after
+        // EmbeddedAssetsPlugin so the asset paths it loads at startup
+        // resolve through the embedded source.
+        .add_plugins(AudioPlugin)
         .add_plugins(EguiPlugin::default())
         .configure_sets(
             PostUpdate,
@@ -238,10 +255,6 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
     configure_client_schedule(&mut app);
 
     app.add_systems(Startup, setup_scene)
-        .add_systems(Startup, setup_button_sound_assets)
-        .add_systems(Startup, setup_impact_sound_assets)
-        .add_systems(Startup, setup_tree_fall_sound_asset)
-        .add_systems(Startup, setup_footstep_assets)
         .add_systems(Startup, setup_voice_system)
         .add_systems(
             EguiPrimaryContextPass,
@@ -338,6 +351,26 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .add_systems(
             Update,
             play_footsteps_system.in_set(ClientSystemSet::Footsteps),
+        )
+        // Central audio bus: drains PlaySound events and spawns the
+        // audio entities. Must run after every system that writes
+        // PlaySound (impact, footsteps, node death, button) so a single
+        // frame's worth of events is one round-trip.
+        .add_systems(
+            Update,
+            play_sounds_system.in_set(ClientSystemSet::PlaySounds),
+        )
+        .add_systems(
+            Update,
+            tick_audio_faders_system.in_set(ClientSystemSet::AudioFaderTick),
+        )
+        .add_systems(
+            Update,
+            manage_ambient_beds_system.in_set(ClientSystemSet::AmbientBeds),
+        )
+        .add_systems(
+            Update,
+            manage_ambient_emitters_system.in_set(ClientSystemSet::AmbientEmitters),
         )
         .add_systems(
             Update,

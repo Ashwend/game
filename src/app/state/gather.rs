@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::{
+    app::audio::surface::SurfaceMaterial,
     items::{ItemModel, ToolKind},
     protocol::{DroppedItemId, ItemStack, ResourceNodeId, Vec3Net},
 };
@@ -21,6 +22,26 @@ pub(crate) enum ImpactEffectKind {
     StoneShards,
 }
 
+impl ImpactEffectKind {
+    /// Map a surface material to the visual particle palette to spray on
+    /// impact. Wood-bearing surfaces fly as wood chips; everything else
+    /// as stone shards. Add new arms here when a new particle palette is
+    /// authored (snow puffs, bone splinters, …) and the audio side stays
+    /// untouched.
+    pub(crate) fn for_surface(surface: SurfaceMaterial) -> Self {
+        match surface {
+            SurfaceMaterial::Wood => Self::WoodChips,
+            SurfaceMaterial::Dirt
+            | SurfaceMaterial::Concrete
+            | SurfaceMaterial::Sand
+            | SurfaceMaterial::Stone
+            | SurfaceMaterial::Iron
+            | SurfaceMaterial::Coal
+            | SurfaceMaterial::Sulfur => Self::StoneShards,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PendingImpactEffect {
     pub(crate) anchor: Vec3,
@@ -33,10 +54,15 @@ pub(crate) struct PendingImpactEffect {
 /// network tick when a `ServerMessage::ResourceImpact` arrives so the
 /// audio and visual effect systems can render the same hit feedback we
 /// produce locally — minus the camera kick, which belongs to the swinger.
+///
+/// `tool` + `surface` drive the audio system's per-pair impact pool
+/// lookup; the visual particle system derives its [`ImpactEffectKind`]
+/// from `surface` so the chip burst still matches the material.
 #[derive(Message, Debug, Clone, Copy)]
 pub(crate) struct RemoteImpactEvent {
     pub(crate) anchor: Vec3,
-    pub(crate) kind: ImpactEffectKind,
+    pub(crate) tool: ToolKind,
+    pub(crate) surface: SurfaceMaterial,
     pub(crate) seed: u32,
 }
 
@@ -184,12 +210,15 @@ pub(crate) struct SwingImpact {
     pub(crate) tool: ToolKind,
 }
 
-/// Anchor + kind for a hit sound queued from the impact dispatcher. The audio
-/// system drains it the same frame to spawn a spatial sound.
+/// Anchor + (tool, surface) for a hit sound queued from the impact
+/// dispatcher. The audio system drains it the same frame to spawn a
+/// spatial sound — the pair drives selection of the per-tool, per-surface
+/// impact pool independently of the visual particle kind.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PendingAudioCue {
     pub(crate) anchor: Vec3,
-    pub(crate) kind: ImpactEffectKind,
+    pub(crate) tool: ToolKind,
+    pub(crate) surface: SurfaceMaterial,
 }
 
 impl GatherInputState {

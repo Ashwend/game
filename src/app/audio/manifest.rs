@@ -1,0 +1,376 @@
+//! The audio manifest: one enum, one defaults table, one paths function.
+//!
+//! Adding a sound is now:
+//! 1. Drop the WAV/OGG file(s) under `assets/<subdir>/`.
+//! 2. Add a `SoundId` variant.
+//! 3. Add one row to [`sound_defaults`] for the mix defaults.
+//! 4. Add one row to [`sound_paths`] for the asset path(s).
+//!
+//! Variant pools are declared as a static slice of `&'static str` paths.
+//! For sequentially-numbered pools (e.g. `footstep-dirt-01.wav` … `-12.wav`)
+//! [`numbered_pool`] generates the path list at compile time so adding more
+//! variants is "drop the new files, change the count".
+
+use std::sync::OnceLock;
+
+use crate::items::ToolKind;
+
+use super::{category::SoundCategory, surface::SurfaceMaterial};
+
+/// Every sound the client can play. Compile-time exhaustive so missing a
+/// case in [`sound_defaults`] / [`sound_paths`] is a build error, not a
+/// runtime silent-failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum SoundId {
+    // --- UI ---
+    UiButtonClick,
+    UiButtonHover,
+
+    // --- Music ---
+    MainMenuMusic,
+
+    // --- World one-shots ---
+    TreeFall,
+
+    // --- Tool impacts: (tool, surface successfully struck) ---
+    ImpactAxeOnWood,
+    ImpactPickaxeOnStone,
+    ImpactPickaxeOnCoal,
+    ImpactPickaxeOnIron,
+    ImpactPickaxeOnSulfur,
+
+    // --- Swing whoosh (tool swung but no target) ---
+    SwingMiss,
+
+    // --- Footsteps per surface ---
+    FootstepDirt,
+    FootstepWood,
+    FootstepConcrete,
+    FootstepSand,
+}
+
+/// Returns every defined sound. Useful for the loader at startup so we
+/// can warm decoder handles for the full set in one pass.
+pub(crate) fn all_sound_ids() -> &'static [SoundId] {
+    &[
+        SoundId::UiButtonClick,
+        SoundId::UiButtonHover,
+        SoundId::MainMenuMusic,
+        SoundId::TreeFall,
+        SoundId::ImpactAxeOnWood,
+        SoundId::ImpactPickaxeOnStone,
+        SoundId::ImpactPickaxeOnCoal,
+        SoundId::ImpactPickaxeOnIron,
+        SoundId::ImpactPickaxeOnSulfur,
+        SoundId::SwingMiss,
+        SoundId::FootstepDirt,
+        SoundId::FootstepWood,
+        SoundId::FootstepConcrete,
+        SoundId::FootstepSand,
+    ]
+}
+
+/// Mix-bus defaults for a sound. Carried by the pool so the per-fire
+/// `PlaySound` call only needs to supply optional overrides.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SoundDefaults {
+    pub(crate) category: SoundCategory,
+    /// Reference gain in dB before slider scaling. Lands the *peak* of the
+    /// recording at this level when the user's slider sits at 1.0.
+    pub(crate) base_gain_db: f32,
+    /// Spatial parameters; `None` for non-spatial one-shots and 2D loops.
+    pub(crate) spatial: Option<SpatialDefaults>,
+    /// Per-fire random pitch range, applied as a multiplicative speed
+    /// factor: `speed = 1.0 + uniform(-pitch_jitter, +pitch_jitter)`. `0.0`
+    /// disables. Heavy one-shots (tree-fall, music) should stay at `0.0`
+    /// so they don't sound off-pitch on replay.
+    pub(crate) pitch_jitter: f32,
+    /// Whether the sound loops. Looped sounds skip the polyphony cap and
+    /// produce a long-lived entity the caller can despawn.
+    pub(crate) looped: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SpatialDefaults {
+    /// Rodio's spatial scale (gain = (1 / (scale·d)²).min(1.0)). Lower
+    /// values extend the full-volume zone. 0.06 ≈ ~16 m of full gain.
+    pub(crate) scale: f32,
+    /// Vertical offset above the supplied anchor, in metres. Lifts the
+    /// source closer to ear height so it doesn't sound like it's coming
+    /// from the floor.
+    pub(crate) height_offset: f32,
+}
+
+/// Match each variant to its mix defaults. Compile-time exhaustive — add
+/// a `SoundId` variant and the compiler points at the missing arm here.
+pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
+    match id {
+        // Chrome cues sit well below the mix; the click is more present
+        // than the hover so menu interactions feel weighty.
+        SoundId::UiButtonClick => SoundDefaults {
+            category: SoundCategory::Ui,
+            base_gain_db: -12.0,
+            spatial: None,
+            pitch_jitter: 0.0,
+            looped: false,
+        },
+        SoundId::UiButtonHover => SoundDefaults {
+            category: SoundCategory::Ui,
+            base_gain_db: -30.0,
+            spatial: None,
+            pitch_jitter: 0.0,
+            looped: false,
+        },
+
+        // Menu music sits at -24 dB to leave headroom for hover/click cues
+        // playing over it.
+        SoundId::MainMenuMusic => SoundDefaults {
+            category: SoundCategory::Music,
+            base_gain_db: -24.0,
+            spatial: None,
+            pitch_jitter: 0.0,
+            looped: true,
+        },
+
+        // Tree-fall is the most significant world event in the second it
+        // plays, but loud enough at 0 dBFS in the source to overpower the
+        // mix; -12 dB lands the crash near impact-cue loudness. The crash
+        // anchors at the trunk base; lifting the source 1.5 m puts it
+        // closer to ear height.
+        SoundId::TreeFall => SoundDefaults {
+            category: SoundCategory::Sfx3d,
+            base_gain_db: -12.0,
+            spatial: Some(SpatialDefaults {
+                scale: 0.06,
+                height_offset: 1.5,
+            }),
+            pitch_jitter: 0.0,
+            looped: false,
+        },
+
+        // Per-hit impact cues — short, sharp transients. Pitch jitter ±5%
+        // gives every swing audible variety without a third pre-rendered
+        // variant per pool.
+        SoundId::ImpactAxeOnWood
+        | SoundId::ImpactPickaxeOnStone
+        | SoundId::ImpactPickaxeOnCoal
+        | SoundId::ImpactPickaxeOnIron
+        | SoundId::ImpactPickaxeOnSulfur => SoundDefaults {
+            category: SoundCategory::Sfx3d,
+            base_gain_db: -10.0,
+            spatial: Some(SpatialDefaults {
+                scale: 0.06,
+                height_offset: 1.0,
+            }),
+            pitch_jitter: 0.05,
+            looped: false,
+        },
+
+        // Miss whoosh belongs to the local swinger — non-spatial so
+        // distance falloff can't quiet the player's own swing.
+        SoundId::SwingMiss => SoundDefaults {
+            category: SoundCategory::Sfx2d,
+            base_gain_db: -10.0,
+            spatial: None,
+            pitch_jitter: 0.05,
+            looped: false,
+        },
+
+        // Footsteps cover their per-material loudness offset via the
+        // base_gain_db here. Each material's pool was captured at a
+        // different level; baking it into the manifest replaces a parallel
+        // gain-offset switch. Pitch jitter ±3% gives subtle variation that
+        // reads as natural footfall rather than identical repeats.
+        SoundId::FootstepDirt => SoundDefaults {
+            category: SoundCategory::Sfx2d,
+            base_gain_db: -8.0 + 13.0,
+            spatial: None,
+            pitch_jitter: 0.03,
+            looped: false,
+        },
+        SoundId::FootstepWood => SoundDefaults {
+            category: SoundCategory::Sfx2d,
+            base_gain_db: -8.0 + -7.0,
+            spatial: None,
+            pitch_jitter: 0.03,
+            looped: false,
+        },
+        SoundId::FootstepConcrete => SoundDefaults {
+            category: SoundCategory::Sfx2d,
+            base_gain_db: -8.0 + 3.0,
+            spatial: None,
+            pitch_jitter: 0.03,
+            looped: false,
+        },
+        SoundId::FootstepSand => SoundDefaults {
+            category: SoundCategory::Sfx2d,
+            base_gain_db: -8.0 + 12.0,
+            spatial: None,
+            pitch_jitter: 0.03,
+            looped: false,
+        },
+    }
+}
+
+/// Returns the asset paths for a sound's variant pool. Each path is
+/// relative to `assets/`. The same path appearing twice means deliberate
+/// duplication — but in practice every entry is a separate recording or a
+/// pre-rendered variant.
+pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
+    static UI_CLICK: [&str; 1] = ["ui/button-click.wav"];
+    static UI_HOVER: [&str; 1] = ["ui/button-hover.wav"];
+    static MENU_MUSIC: [&str; 1] = ["main-screen/ambient-music.wav"];
+    static TREE_FALL: [&str; 1] = ["world/tree-fall.wav"];
+
+    static AXE_TREE: [&str; 3] = [
+        "items/hatchet-tree-1.wav",
+        "items/hatchet-tree-2.wav",
+        "items/hatchet-tree-3.wav",
+    ];
+    static PICKAXE_ORE: [&str; 3] = [
+        "items/pickaxe-ore-node-1.wav",
+        "items/pickaxe-ore-node-2.wav",
+        "items/pickaxe-ore-node-3.wav",
+    ];
+    static MISS: [&str; 3] = ["items/miss-1.wav", "items/miss-2.wav", "items/miss-3.wav"];
+
+    match id {
+        SoundId::UiButtonClick => &UI_CLICK,
+        SoundId::UiButtonHover => &UI_HOVER,
+        SoundId::MainMenuMusic => &MENU_MUSIC,
+        SoundId::TreeFall => &TREE_FALL,
+        SoundId::ImpactAxeOnWood => &AXE_TREE,
+        // Until each ore has its own captured impact pool, every pickaxe
+        // ore-hit shares the existing ore-node recording. New pools land
+        // by adding files under `assets/items/` and pointing this match
+        // arm at them.
+        SoundId::ImpactPickaxeOnStone
+        | SoundId::ImpactPickaxeOnCoal
+        | SoundId::ImpactPickaxeOnIron
+        | SoundId::ImpactPickaxeOnSulfur => &PICKAXE_ORE,
+        SoundId::SwingMiss => &MISS,
+        SoundId::FootstepDirt => footstep_paths("dirt"),
+        SoundId::FootstepWood => footstep_paths("wood"),
+        SoundId::FootstepConcrete => footstep_paths("concrete"),
+        SoundId::FootstepSand => footstep_paths("sand"),
+    }
+}
+
+/// Map a (tool, surface) pair to the impact `SoundId` to play. Returns
+/// `None` for pairs that have no dedicated sound — callers should fall
+/// back to the swing whoosh in that case.
+///
+/// New combinations slot in by adding a row here. The audio-selection
+/// table replaces the old `ImpactEffectKind`-keyed dispatch, which was
+/// stuck at "tree → wood chips, anything else → stone shards".
+pub(crate) fn impact_sound_for(tool: ToolKind, surface: SurfaceMaterial) -> Option<SoundId> {
+    match (tool, surface) {
+        (ToolKind::Axe, SurfaceMaterial::Wood) => Some(SoundId::ImpactAxeOnWood),
+        (ToolKind::Pickaxe, SurfaceMaterial::Stone) => Some(SoundId::ImpactPickaxeOnStone),
+        (ToolKind::Pickaxe, SurfaceMaterial::Coal) => Some(SoundId::ImpactPickaxeOnCoal),
+        (ToolKind::Pickaxe, SurfaceMaterial::Iron) => Some(SoundId::ImpactPickaxeOnIron),
+        (ToolKind::Pickaxe, SurfaceMaterial::Sulfur) => Some(SoundId::ImpactPickaxeOnSulfur),
+        _ => None,
+    }
+}
+
+/// Lazily-built `Vec<String>` of `movement/footstep-<material>-01.wav` …
+/// `-12.wav`. Cached behind a `OnceLock` per material so the pool array
+/// is built exactly once per process. The pool size matches the embedded
+/// asset count — drop more files in and bump `12`.
+fn footstep_paths(material: &'static str) -> &'static [&'static str] {
+    fn pool_for(material: &'static str) -> &'static [&'static str] {
+        // Twelve variants per material; the anti-repeat picker can't
+        // produce an audible loop at running cadence with a pool this big.
+        let strings: Vec<&'static str> = (1..=12)
+            .map(|n| {
+                let owned = format!("movement/footstep-{material}-{n:02}.wav");
+                // Leak: cheap, one-time per material at startup. Returning
+                // `&'static str` keeps the call site allocation-free.
+                Box::leak(owned.into_boxed_str()) as &'static str
+            })
+            .collect();
+        Box::leak(strings.into_boxed_slice())
+    }
+
+    static DIRT: OnceLock<&'static [&'static str]> = OnceLock::new();
+    static WOOD: OnceLock<&'static [&'static str]> = OnceLock::new();
+    static CONCRETE: OnceLock<&'static [&'static str]> = OnceLock::new();
+    static SAND: OnceLock<&'static [&'static str]> = OnceLock::new();
+
+    let slot = match material {
+        "dirt" => &DIRT,
+        "wood" => &WOOD,
+        "concrete" => &CONCRETE,
+        "sand" => &SAND,
+        other => panic!("footstep_paths called with unknown material {other:?}"),
+    };
+    slot.get_or_init(|| pool_for(material))
+}
+
+/// Map a [`SurfaceMaterial`] to the footstep `SoundId` that plays when
+/// standing on it. Surfaces without a dedicated pool fall back to dirt.
+pub(crate) fn footstep_sound_for(surface: SurfaceMaterial) -> SoundId {
+    match surface {
+        SurfaceMaterial::Dirt => SoundId::FootstepDirt,
+        SurfaceMaterial::Wood => SoundId::FootstepWood,
+        SurfaceMaterial::Concrete => SoundId::FootstepConcrete,
+        SurfaceMaterial::Sand => SoundId::FootstepSand,
+        // Ores and stone fall back to dirt until they get their own pool.
+        SurfaceMaterial::Stone
+        | SurfaceMaterial::Iron
+        | SurfaceMaterial::Coal
+        | SurfaceMaterial::Sulfur => SoundId::FootstepDirt,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_sound_id_has_at_least_one_path() {
+        for id in all_sound_ids() {
+            let paths = sound_paths(*id);
+            assert!(!paths.is_empty(), "{id:?} has no paths declared");
+        }
+    }
+
+    #[test]
+    fn looped_sounds_skip_pitch_jitter() {
+        // Music and ambient loops must never randomly pitch-shift — it
+        // would sound wrong on every cycle. Enforce that the manifest
+        // never accidentally configures them with jitter.
+        for id in all_sound_ids() {
+            let defaults = sound_defaults(*id);
+            if defaults.looped {
+                assert_eq!(
+                    defaults.pitch_jitter, 0.0,
+                    "{id:?} is looped but has pitch_jitter — would warble"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn footstep_paths_contain_twelve_numbered_variants() {
+        let dirt = sound_paths(SoundId::FootstepDirt);
+        assert_eq!(dirt.len(), 12);
+        assert_eq!(dirt[0], "movement/footstep-dirt-01.wav");
+        assert_eq!(dirt[11], "movement/footstep-dirt-12.wav");
+    }
+
+    #[test]
+    fn impact_table_covers_canonical_pairs() {
+        assert_eq!(
+            impact_sound_for(ToolKind::Axe, SurfaceMaterial::Wood),
+            Some(SoundId::ImpactAxeOnWood)
+        );
+        assert_eq!(
+            impact_sound_for(ToolKind::Pickaxe, SurfaceMaterial::Iron),
+            Some(SoundId::ImpactPickaxeOnIron)
+        );
+        // No table entry → None (caller falls back to miss whoosh).
+        assert_eq!(impact_sound_for(ToolKind::Axe, SurfaceMaterial::Iron), None);
+    }
+}

@@ -3,17 +3,17 @@ use std::f32::consts::FRAC_PI_2;
 use bevy::prelude::*;
 
 use crate::{
+    app::audio::{PlaySound, SoundId},
     app::scene::{ImpactEffectAssets, tree_mesh_height},
-    app::state::{ClientSettings, ImpactEffectKind},
+    app::state::ImpactEffectKind,
     items::ToolKind,
     protocol::ResourceNodeId,
     resources::ResourceNodeModel,
 };
 
 use super::{
-    CameraImpactKick, TreeFallSoundAsset,
+    CameraImpactKick,
     effects::{spawn_impact_burst, spawn_ore_shatter_burst},
-    spawn_tree_fall_sound,
 };
 
 // Tree felling tuning.
@@ -49,8 +49,7 @@ pub(crate) struct FellingTree {
 pub(crate) fn spawn_node_death(
     commands: &mut Commands,
     impact_assets: &ImpactEffectAssets,
-    tree_fall_audio: &TreeFallSoundAsset,
-    settings: &ClientSettings,
+    play: &mut MessageWriter<PlaySound>,
     materials: &mut Assets<StandardMaterial>,
     camera_kick: &mut CameraImpactKick,
     node_id: ResourceNodeId,
@@ -63,8 +62,7 @@ pub(crate) fn spawn_node_death(
     if model.is_tree() {
         spawn_tree_felling(
             commands,
-            tree_fall_audio,
-            settings,
+            play,
             materials,
             node_id,
             model,
@@ -89,8 +87,7 @@ pub(crate) fn spawn_node_death(
 #[allow(clippy::too_many_arguments)]
 fn spawn_tree_felling(
     commands: &mut Commands,
-    tree_fall_audio: &TreeFallSoundAsset,
-    settings: &ClientSettings,
+    play: &mut MessageWriter<PlaySound>,
     materials: &mut Assets<StandardMaterial>,
     node_id: ResourceNodeId,
     model: ResourceNodeModel,
@@ -109,7 +106,7 @@ fn spawn_tree_felling(
     // typical tree — tall trees fall a little slower so the crash lands
     // slightly early, short trees a little late, but the lead-in noise
     // hides the small mismatch.
-    spawn_tree_fall_sound(commands, tree_fall_audio, settings, transform.translation);
+    play.write(PlaySound::at(SoundId::TreeFall, transform.translation));
 
     let fall_direction =
         compute_horizontal_fall_direction(player_position, transform.translation, node_id);

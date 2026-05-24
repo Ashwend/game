@@ -1,272 +1,22 @@
 use bevy::{asset::io::embedded::EmbeddedAssetRegistry, prelude::*};
+use include_dir::{Dir, include_dir};
 use std::path::{Path, PathBuf};
 
-/// Bakes every audio file into the binary at compile time so a published
-/// build is a single self-contained executable — no sibling `assets/`
-/// folder to ship, no platform-specific resource bundles. Each file is
-/// registered into Bevy's `embedded` [`AssetSource`] under its original
-/// path, exposed to the rest of the engine via the `embedded://<path>`
-/// URI.
+/// Compile-time snapshot of the entire `assets/` tree, baked into the
+/// binary. Every file under `assets/` is registered into Bevy's
+/// [`EmbeddedAssetRegistry`] at startup, exposed to the rest of the engine
+/// as `embedded://<relative-path>`.
 ///
 /// To embed a new asset:
 /// 1. Drop the file under `assets/<subdir>/<name>.<ext>`.
-/// 2. Add a row to [`EMBEDDED_ASSETS`] below.
-/// 3. Reference it from gameplay code as `embedded://<subdir>/<name>.<ext>`
-///    via [`asset_path`].
+/// 2. That's it — `include_dir!` picks it up at the next build.
 ///
-/// The `include_bytes!` paths are relative to *this* file
-/// (`src/app/embedded_assets.rs`), hence the `../../assets/...` prefix.
-struct EmbeddedAsset {
-    asset_path: &'static str,
-    bytes: &'static [u8],
-}
-
-const EMBEDDED_ASSETS: &[EmbeddedAsset] = &[
-    EmbeddedAsset {
-        asset_path: "ui/button-click.wav",
-        bytes: include_bytes!("../../assets/ui/button-click.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "ui/button-hover.wav",
-        bytes: include_bytes!("../../assets/ui/button-hover.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "main-screen/ambient-music.wav",
-        bytes: include_bytes!("../../assets/main-screen/ambient-music.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "items/hatchet-tree-1.wav",
-        bytes: include_bytes!("../../assets/items/hatchet-tree-1.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "items/hatchet-tree-2.wav",
-        bytes: include_bytes!("../../assets/items/hatchet-tree-2.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "items/hatchet-tree-3.wav",
-        bytes: include_bytes!("../../assets/items/hatchet-tree-3.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "items/pickaxe-ore-node-1.wav",
-        bytes: include_bytes!("../../assets/items/pickaxe-ore-node-1.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "items/pickaxe-ore-node-2.wav",
-        bytes: include_bytes!("../../assets/items/pickaxe-ore-node-2.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "items/pickaxe-ore-node-3.wav",
-        bytes: include_bytes!("../../assets/items/pickaxe-ore-node-3.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "items/miss-1.wav",
-        bytes: include_bytes!("../../assets/items/miss-1.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "items/miss-2.wav",
-        bytes: include_bytes!("../../assets/items/miss-2.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "items/miss-3.wav",
-        bytes: include_bytes!("../../assets/items/miss-3.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "world/tree-fall.wav",
-        bytes: include_bytes!("../../assets/world/tree-fall.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-dirt-01.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-dirt-01.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-dirt-02.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-dirt-02.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-dirt-03.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-dirt-03.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-dirt-04.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-dirt-04.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-dirt-05.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-dirt-05.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-dirt-06.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-dirt-06.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-dirt-07.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-dirt-07.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-dirt-08.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-dirt-08.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-dirt-09.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-dirt-09.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-dirt-10.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-dirt-10.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-dirt-11.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-dirt-11.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-dirt-12.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-dirt-12.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-wood-01.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-wood-01.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-wood-02.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-wood-02.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-wood-03.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-wood-03.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-wood-04.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-wood-04.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-wood-05.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-wood-05.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-wood-06.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-wood-06.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-wood-07.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-wood-07.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-wood-08.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-wood-08.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-wood-09.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-wood-09.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-wood-10.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-wood-10.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-wood-11.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-wood-11.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-wood-12.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-wood-12.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-concrete-01.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-concrete-01.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-concrete-02.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-concrete-02.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-concrete-03.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-concrete-03.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-concrete-04.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-concrete-04.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-concrete-05.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-concrete-05.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-concrete-06.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-concrete-06.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-concrete-07.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-concrete-07.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-concrete-08.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-concrete-08.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-concrete-09.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-concrete-09.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-concrete-10.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-concrete-10.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-concrete-11.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-concrete-11.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-concrete-12.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-concrete-12.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-sand-01.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-sand-01.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-sand-02.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-sand-02.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-sand-03.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-sand-03.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-sand-04.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-sand-04.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-sand-05.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-sand-05.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-sand-06.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-sand-06.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-sand-07.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-sand-07.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-sand-08.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-sand-08.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-sand-09.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-sand-09.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-sand-10.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-sand-10.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-sand-11.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-sand-11.wav"),
-    },
-    EmbeddedAsset {
-        asset_path: "movement/footstep-sand-12.wav",
-        bytes: include_bytes!("../../assets/movement/footstep-sand-12.wav"),
-    },
-];
+/// The previous per-file `include_bytes!` table was a maintenance tax that
+/// scaled linearly with the clip count. With a directory tree of footstep
+/// pools, item impact pools, ambient loops, and UI cues, that table would
+/// have grown unbounded; the `include_dir` crate gives us the whole tree
+/// for one line of source.
+static EMBEDDED_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets");
 
 /// URI prefix all embedded asset paths share. Loading `embedded://foo.wav`
 /// routes through [`EmbeddedAssetRegistry`] instead of the filesystem.
@@ -278,6 +28,25 @@ pub(crate) const EMBEDDED_ASSET_PREFIX: &str = "embedded://";
 /// "subdir/file.ext" tokens.
 pub(crate) fn asset_path(path: &str) -> String {
     format!("{EMBEDDED_ASSET_PREFIX}{path}")
+}
+
+/// Iterate every embedded asset's `(relative_path, bytes)` pair. Used by
+/// the audio manifest to glob pools at startup (e.g. all
+/// `movement/footstep-dirt-*.wav`) without re-listing files in source.
+pub(crate) fn iter_embedded_assets() -> impl Iterator<Item = (&'static str, &'static [u8])> {
+    fn walk(dir: &'static Dir<'static>, out: &mut Vec<(&'static str, &'static [u8])>) {
+        for file in dir.files() {
+            if let Some(path) = file.path().to_str() {
+                out.push((path, file.contents()));
+            }
+        }
+        for sub in dir.dirs() {
+            walk(sub, out);
+        }
+    }
+    let mut entries = Vec::new();
+    walk(&EMBEDDED_DIR, &mut entries);
+    entries.into_iter()
 }
 
 pub(crate) struct EmbeddedAssetsPlugin;
@@ -293,12 +62,17 @@ impl Plugin for EmbeddedAssetsPlugin {
             .expect(
                 "EmbeddedAssetRegistry missing — add EmbeddedAssetsPlugin after DefaultPlugins",
             );
-        for asset in EMBEDDED_ASSETS {
+        for (path, bytes) in iter_embedded_assets() {
+            // Skip macOS finder droppings that sneak in from working
+            // directories; they're harmless but pollute the registry.
+            if Path::new(path).file_name() == Some(std::ffi::OsStr::new(".DS_Store")) {
+                continue;
+            }
             // `full_path` only matters when the `embedded_watcher` feature is
             // enabled (we never enable it). Passing the asset path twice
             // keeps the entry self-describing in any debug dump.
-            let asset_path = Path::new(asset.asset_path);
-            registry.insert_asset(PathBuf::from(asset.asset_path), asset_path, asset.bytes);
+            let asset_path = Path::new(path);
+            registry.insert_asset(PathBuf::from(path), asset_path, bytes);
         }
     }
 }
@@ -308,30 +82,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_embedded_asset_carries_some_bytes() {
-        for asset in EMBEDDED_ASSETS {
-            assert!(
-                !asset.bytes.is_empty(),
-                "{} embedded with zero bytes — include_bytes! source likely missing",
-                asset.asset_path
-            );
-        }
-    }
-
-    #[test]
     fn asset_path_prepends_embedded_scheme() {
         assert_eq!(asset_path("ui/click.wav"), "embedded://ui/click.wav");
     }
 
     #[test]
-    fn embedded_asset_paths_are_unique() {
-        let mut seen = std::collections::HashSet::new();
-        for asset in EMBEDDED_ASSETS {
-            assert!(
-                seen.insert(asset.asset_path),
-                "duplicate embedded asset path: {}",
-                asset.asset_path
-            );
+    fn embedded_tree_contains_at_least_one_audio_asset() {
+        // Smoke check: the include_dir! macro found *something* under
+        // assets/. If this fails, the macro path is wrong or assets/ is
+        // empty in this checkout.
+        let has_audio = iter_embedded_assets()
+            .any(|(path, _)| path.ends_with(".wav") || path.ends_with(".ogg"));
+        assert!(
+            has_audio,
+            "include_dir!(assets) produced no audio files — check CARGO_MANIFEST_DIR/assets exists"
+        );
+    }
+
+    #[test]
+    fn embedded_asset_bytes_are_non_empty() {
+        for (path, bytes) in iter_embedded_assets() {
+            // .DS_Store is skipped at registry time but `include_dir!`
+            // still picks it up; tolerate it here.
+            if path.ends_with(".DS_Store") {
+                continue;
+            }
+            assert!(!bytes.is_empty(), "{path} embedded with zero bytes");
         }
     }
 }

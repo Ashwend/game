@@ -53,10 +53,11 @@ pub(crate) fn spawn_impact_effects_system(
         // Remote impacts have no view of which way the swinger was facing.
         // An upward spray reads as a clean "hit landed here" without needing
         // that information, and keeps the burst symmetric.
+        let kind = ImpactEffectKind::for_surface(event.surface);
         spawn_impact_burst(
             &mut commands,
             &assets,
-            event.kind,
+            kind,
             event.anchor,
             Vec3::Y,
             event.seed,

@@ -323,7 +323,7 @@ fn successful_gather_broadcasts_impact_to_peers_only() {
         "the swinger's client already played the impact locally; the echo \
          must skip them",
     );
-    assert_eq!(kind, ResourceImpactKind::OreNode);
+    assert_eq!(kind, ResourceImpactKind::CoalOre);
     assert_eq!(position, Vec3Net::new(0.0, 0.0, -2.2));
 }
 
