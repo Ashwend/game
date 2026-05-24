@@ -205,6 +205,17 @@ impl SessionShutdownTasks {
 }
 
 impl ClientRuntime {
+    /// True while a session is connected to a *remote* server. The signal is
+    /// `session is some + active_world_id is none` because singleplayer
+    /// always carries the loopback world's UUID; multiplayer never does.
+    /// Used by the voice subsystem to gate microphone capture so it only
+    /// opens when there's actually someone on the other end (which also
+    /// keeps Bluetooth headsets in their high-quality A2DP profile while
+    /// the player is in menus / singleplayer).
+    pub(crate) fn is_multiplayer_session(&self) -> bool {
+        self.session.is_some() && self.active_world_id.is_none()
+    }
+
     pub(crate) fn start_session(&mut self, session: ClientSession, world_id: Option<Uuid>) {
         self.session = Some(session);
         self.active_world_id = world_id;

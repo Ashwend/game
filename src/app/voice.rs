@@ -12,6 +12,6 @@ pub(crate) mod playback;
 pub(crate) mod systems;
 
 pub(crate) use systems::{
-    IncomingVoiceMessage, VoiceState, apply_voice_settings_system, receive_voice_system,
-    setup_voice_system, transmit_voice_system,
+    IncomingVoiceMessage, VoiceState, apply_voice_settings_system, manage_voice_capture_system,
+    receive_voice_system, setup_voice_system, transmit_voice_system,
 };

@@ -35,12 +35,16 @@ const EMBEDDED_ASSETS: &[EmbeddedAsset] = &[
         bytes: include_bytes!("../../assets/main-screen/ambient-music.wav"),
     },
     EmbeddedAsset {
-        asset_path: "items/hatchet-tree.mp3",
-        bytes: include_bytes!("../../assets/items/hatchet-tree.mp3"),
+        asset_path: "items/hatchet-tree.wav",
+        bytes: include_bytes!("../../assets/items/hatchet-tree.wav"),
     },
     EmbeddedAsset {
-        asset_path: "items/pickaxe-ore-node.mp3",
-        bytes: include_bytes!("../../assets/items/pickaxe-ore-node.mp3"),
+        asset_path: "items/pickaxe-ore-node.wav",
+        bytes: include_bytes!("../../assets/items/pickaxe-ore-node.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "items/miss.wav",
+        bytes: include_bytes!("../../assets/items/miss.wav"),
     },
 ];
 

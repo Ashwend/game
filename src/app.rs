@@ -22,8 +22,8 @@ use crate::{
 };
 
 use self::voice::{
-    IncomingVoiceMessage, apply_voice_settings_system, receive_voice_system, setup_voice_system,
-    transmit_voice_system,
+    IncomingVoiceMessage, apply_voice_settings_system, manage_voice_capture_system,
+    receive_voice_system, setup_voice_system, transmit_voice_system,
 };
 
 use self::{
@@ -102,6 +102,7 @@ const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::ImpactEffectsSpawn,
     ClientSystemSet::ImpactEffectsTick,
     ClientSystemSet::NodeDeathTick,
+    ClientSystemSet::VoiceCaptureManage,
     ClientSystemSet::VoiceTransmit,
     ClientSystemSet::VoiceReceive,
     ClientSystemSet::VoiceSettings,
@@ -361,6 +362,10 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
             (auto_connect_start_system, auto_connect_poll_system)
                 .chain()
                 .in_set(ClientSystemSet::AutoConnect),
+        )
+        .add_systems(
+            Update,
+            manage_voice_capture_system.in_set(ClientSystemSet::VoiceCaptureManage),
         )
         .add_systems(
             Update,

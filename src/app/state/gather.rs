@@ -5,18 +5,15 @@ use crate::{
     protocol::{DroppedItemId, ItemStack, ResourceNodeId, Vec3Net},
 };
 
+// Each tool has its own swing length and impact moment. Pickaxe swings are
+// slower and connect later in their arc than the lighter hatchet. Audio
+// (both hit and miss whoosh) and visual feedback all fire from the same
+// impact crossing, so there's exactly one decision per swing and the two
+// sounds can never play together.
 const AXE_SWING_SECONDS: f32 = 0.50;
 const AXE_IMPACT_FRACTION: f32 = 0.50;
 const PICKAXE_SWING_SECONDS: f32 = 1.60;
 const PICKAXE_IMPACT_FRACTION: f32 = 0.68;
-
-// Per-hit impact sounds have a short attack envelope before the perceived
-// "thud" — if we fired audio on the same frame as the visual impact, the
-// transient peak would land a hair late and feel off-sync. Triggering the
-// sound this many seconds before the visual hit lines the audible impact up
-// with the moment the tool lands.
-const AXE_AUDIO_LEAD_SECONDS: f32 = 0.06;
-const PICKAXE_AUDIO_LEAD_SECONDS: f32 = 0.03;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ImpactEffectKind {
@@ -54,13 +51,6 @@ pub(crate) fn swing_impact_fraction(tool: ToolKind) -> f32 {
     match tool {
         ToolKind::Axe => AXE_IMPACT_FRACTION,
         ToolKind::Pickaxe => PICKAXE_IMPACT_FRACTION,
-    }
-}
-
-pub(crate) fn swing_audio_lead_seconds(tool: ToolKind) -> f32 {
-    match tool {
-        ToolKind::Axe => AXE_AUDIO_LEAD_SECONDS,
-        ToolKind::Pickaxe => PICKAXE_AUDIO_LEAD_SECONDS,
     }
 }
 
@@ -174,6 +164,7 @@ pub(crate) struct GatherInputState {
     active: Option<ActiveSwing>,
     pending_impact: Option<PendingImpactEffect>,
     pending_audio_cue: Option<PendingAudioCue>,
+    pending_miss_audio: bool,
     swing_seed: u32,
 }
 
@@ -182,10 +173,8 @@ struct ActiveSwing {
     tool: ToolKind,
     duration: f32,
     impact_time: f32,
-    audio_impact_time: f32,
     elapsed: f32,
     impact_handled: bool,
-    audio_handled: bool,
     seed: u32,
 }
 
@@ -195,37 +184,22 @@ pub(crate) struct SwingImpact {
     pub(crate) tool: ToolKind,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct SwingAudioCue {
-    pub(crate) target: Option<ResourceNodeId>,
-}
-
-/// Anchor + kind for an impact sound queued ahead of the visual hit. Set when
-/// the swing crosses its audio-lead threshold; the audio system drains it on
-/// the next frame to spawn a spatial sound.
+/// Anchor + kind for a hit sound queued from the impact dispatcher. The audio
+/// system drains it the same frame to spawn a spatial sound.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PendingAudioCue {
     pub(crate) anchor: Vec3,
     pub(crate) kind: ImpactEffectKind,
 }
 
-/// Per-tick swing crossings produced by [`GatherInputState::update`]. The
-/// audio cue fires a few frames before the visual impact so the MP3's attack
-/// envelope lines up with the moment the tool lands.
-#[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct SwingTick {
-    pub(crate) audio_cue: Option<SwingAudioCue>,
-    pub(crate) impact: Option<SwingImpact>,
-}
-
 impl GatherInputState {
     /// Drive the swing animation and resolve impacts.
     ///
     /// The tool always swings on left-click as long as a tool is equipped.
-    /// On the impact frame, the swing emits a [`SwingImpact`] whose `target`
-    /// is `Some` only if a valid resource target is in view — that is the
-    /// signal to dispatch a gather command. Visual impact effects are
-    /// queued separately via [`Self::set_pending_impact`].
+    /// At the impact frame the swing emits one [`SwingImpact`] whose `target`
+    /// is `Some` for a hit and `None` for a miss. The dispatcher decides hit
+    /// vs. miss feedback (audio + visual + gather command) from that single
+    /// event, so there's no separate audio path that could double-fire.
     pub(crate) fn update(
         &mut self,
         delta_seconds: f32,
@@ -233,7 +207,7 @@ impl GatherInputState {
         pressed: bool,
         equipped_tool: Option<ToolKind>,
         target: Option<ResourceNodeId>,
-    ) -> SwingTick {
+    ) -> Option<SwingImpact> {
         if self.active.is_none()
             && (just_pressed || pressed)
             && let Some(tool) = equipped_tool
@@ -241,21 +215,9 @@ impl GatherInputState {
             self.start_swing(tool);
         }
 
-        let Some(mut active) = self.active else {
-            return SwingTick::default();
-        };
+        let mut active = self.active?;
         let previous_elapsed = active.elapsed;
         active.elapsed = (active.elapsed + delta_seconds.max(0.0)).min(active.duration);
-
-        let crossed_audio = !active.audio_handled
-            && previous_elapsed < active.audio_impact_time
-            && active.elapsed >= active.audio_impact_time;
-        let audio_cue = if crossed_audio {
-            active.audio_handled = true;
-            Some(SwingAudioCue { target })
-        } else {
-            None
-        };
 
         let crossed_impact = !active.impact_handled
             && previous_elapsed < active.impact_time
@@ -270,42 +232,38 @@ impl GatherInputState {
             None
         };
 
-        let tick = SwingTick { audio_cue, impact };
-
         if active.elapsed >= active.duration {
             if pressed && let Some(tool) = equipped_tool {
                 // Continue swinging while LMB is held.
                 self.start_swing(tool);
             } else {
                 self.active = None;
-                return tick;
+                return impact;
             }
         } else {
             self.active = Some(active);
         }
 
-        tick
+        impact
     }
 
     pub(crate) fn cancel(&mut self) {
         self.active = None;
         self.pending_impact = None;
         self.pending_audio_cue = None;
+        self.pending_miss_audio = false;
     }
 
     fn start_swing(&mut self, tool: ToolKind) {
         self.swing_seed = self.swing_seed.wrapping_add(1);
         let duration = swing_duration_seconds(tool);
         let impact_time = duration * swing_impact_fraction(tool);
-        let audio_impact_time = (impact_time - swing_audio_lead_seconds(tool)).max(0.0);
         self.active = Some(ActiveSwing {
             tool,
             duration,
             impact_time,
-            audio_impact_time,
             elapsed: 0.0,
             impact_handled: false,
-            audio_handled: false,
             seed: self.swing_seed,
         });
     }
@@ -333,6 +291,14 @@ impl GatherInputState {
 
     pub(crate) fn take_pending_audio_cue(&mut self) -> Option<PendingAudioCue> {
         self.pending_audio_cue.take()
+    }
+
+    pub(crate) fn set_pending_miss_audio(&mut self) {
+        self.pending_miss_audio = true;
+    }
+
+    pub(crate) fn take_pending_miss_audio(&mut self) -> bool {
+        std::mem::take(&mut self.pending_miss_audio)
     }
 
     pub(crate) fn current_swing_seed(&self) -> u32 {
@@ -379,21 +345,21 @@ mod tests {
         let impact_time = duration * swing_impact_fraction(tool);
 
         let tick = state.update(0.01, true, true, Some(tool), Some(4));
-        assert!(tick.impact.is_none());
-        assert!(tick.audio_cue.is_none());
+        assert!(tick.is_none());
         assert!(state.swing_fraction() > 0.0);
 
-        let tick = state.update(impact_time, false, true, Some(tool), Some(4));
-        let impact = tick
-            .impact
+        let impact = state
+            .update(impact_time, false, true, Some(tool), Some(4))
             .expect("impact should emit at the impact fraction of the swing");
         assert_eq!(impact.target, Some(4));
         assert_eq!(impact.tool, tool);
-        // Audio cue fires before or with the visual hit; by the time we land
-        // here it has already been drained.
-        let tick = state.update(0.01, false, true, Some(tool), Some(4));
-        assert!(tick.impact.is_none());
-        assert!(tick.audio_cue.is_none());
+
+        // Same swing — no second impact even though we step further.
+        assert!(
+            state
+                .update(0.01, false, true, Some(tool), Some(4))
+                .is_none()
+        );
 
         let _ = state.update(duration, false, true, Some(tool), Some(5));
         // Swing rolled over into a new swing while LMB is held.
@@ -401,34 +367,33 @@ mod tests {
     }
 
     #[test]
-    fn gather_input_audio_cue_fires_before_visual_impact() {
+    fn gather_input_emits_exactly_one_impact_event_at_impact_fraction() {
         let mut state = GatherInputState::default();
-        let tool = ToolKind::Axe;
+        let tool = ToolKind::Pickaxe;
         let duration = swing_duration_seconds(tool);
         let impact_time = duration * swing_impact_fraction(tool);
-        let audio_lead = swing_audio_lead_seconds(tool);
-        // The audio lead must actually fit inside the swing's pre-impact window
-        // for this test to mean anything.
-        assert!(audio_lead > 0.0);
-        assert!(audio_lead < impact_time);
 
-        // Step just past the audio threshold but not yet to the visual impact.
-        let pre_audio = impact_time - audio_lead - 0.001;
-        let tick = state.update(pre_audio, true, true, Some(tool), Some(7));
-        assert!(tick.audio_cue.is_none());
-        assert!(tick.impact.is_none());
+        // Up to one frame before the impact threshold: nothing fires.
+        let pre_impact = impact_time - 0.001;
+        assert!(
+            state
+                .update(pre_impact, true, true, Some(tool), Some(7))
+                .is_none()
+        );
 
-        let tick = state.update(0.005, false, true, Some(tool), Some(7));
-        let cue = tick
-            .audio_cue
-            .expect("audio cue should fire before the visual impact");
-        assert_eq!(cue.target, Some(7));
-        assert!(tick.impact.is_none());
+        // Crossing the impact threshold emits exactly one event.
+        let impact = state
+            .update(0.005, false, true, Some(tool), Some(7))
+            .expect("impact should emit once we cross the impact fraction");
+        assert_eq!(impact.target, Some(7));
+        assert_eq!(impact.tool, tool);
 
-        // Driving forward to the visual impact still emits it once.
-        let tick = state.update(audio_lead + 0.005, false, true, Some(tool), Some(7));
-        assert!(tick.audio_cue.is_none());
-        assert!(tick.impact.is_some());
+        // No duplicate impact for the remainder of the swing.
+        assert!(
+            state
+                .update(duration * 0.1, false, false, Some(tool), Some(7))
+                .is_none()
+        );
     }
 
     #[test]
@@ -443,8 +408,9 @@ mod tests {
         assert!(state.swing_fraction() > 0.0);
 
         // Crossing the impact fraction emits a SwingImpact with no target.
-        let tick = state.update(impact_time, false, true, Some(tool), None);
-        let impact = tick.impact.expect("impact frame should still fire");
+        let impact = state
+            .update(impact_time, false, true, Some(tool), None)
+            .expect("impact frame should still fire");
         assert!(impact.target.is_none());
         assert_eq!(impact.tool, tool);
     }
@@ -452,9 +418,7 @@ mod tests {
     #[test]
     fn gather_input_does_nothing_without_a_tool_equipped() {
         let mut state = GatherInputState::default();
-        let tick = state.update(0.01, true, true, None, Some(4));
-        assert!(tick.impact.is_none());
-        assert!(tick.audio_cue.is_none());
+        assert!(state.update(0.01, true, true, None, Some(4)).is_none());
         assert_eq!(state.swing_fraction(), 0.0);
     }
 }

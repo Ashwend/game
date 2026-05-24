@@ -9,7 +9,7 @@ use crate::{
     app::state::{
         ClientErrorToast, ClientRuntime, ClientSettings, ErrorToastSink, GatherInputState,
         ImpactEffectKind, KeyAction, MenuState, PendingAudioCue, PendingImpactEffect,
-        PickupTargetState, SwingAudioCue, SwingImpact, ToolSwapState,
+        PickupTargetState, SwingImpact, ToolSwapState,
     },
     items::{ToolKind, ToolProfile, item_definition},
     protocol::{
@@ -114,17 +114,21 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
     } else {
         equipped_tool_kind(&params.runtime)
     };
-    let tick = params.gather_input.update(
+    // Treat an unharvestable target (wrong tool for this node) as no
+    // target at all so the impact frame resolves to a clean miss instead
+    // of a hit attempt the server would just reject.
+    let target = params
+        .pickup_target
+        .resource_node_id
+        .filter(|_| equipped_tool_can_harvest_target(&params.runtime, &params.pickup_target));
+    let impact = params.gather_input.update(
         params.time.delta_secs(),
         params.mouse_buttons.just_pressed(MouseButton::Left),
         params.mouse_buttons.pressed(MouseButton::Left),
         equipped_tool,
-        params.pickup_target.resource_node_id,
+        target,
     );
-    if let Some(cue) = tick.audio_cue {
-        dispatch_swing_audio_cue(&mut params, cue);
-    }
-    if let Some(impact) = tick.impact {
+    if let Some(impact) = impact {
         dispatch_swing_impact(&mut params, impact);
     }
 }
@@ -142,55 +146,40 @@ fn equipped_tool_profile(runtime: &ClientRuntime) -> Option<ToolProfile> {
     item_definition(&stack.item_id).and_then(|definition| definition.tool)
 }
 
-// Queue the spatial impact sound a few frames before the visual hit so the
-// MP3's attack envelope lines up with the moment the tool lands. Mirrors the
-// "must aim at a valid, harvestable target" gate used for visual chips —
-// otherwise the player would hear thuds for clean misses.
-fn dispatch_swing_audio_cue(params: &mut GameplayInventoryShortcutsParams, cue: SwingAudioCue) {
-    let Some(node_id) = cue.target else {
+// Single decision point for the swing: a miss queues only the whoosh, a hit
+// queues the spatial impact sound, visual chips, camera kick, and the gather
+// command. The swing state guarantees at most one impact event per swing, so
+// hit and miss audio can never both play.
+fn dispatch_swing_impact(params: &mut GameplayInventoryShortcutsParams, impact: SwingImpact) {
+    let Some(node_id) = impact.target else {
+        params.gather_input.set_pending_miss_audio();
         return;
     };
-    if !equipped_tool_can_harvest_target(&params.runtime, &params.pickup_target) {
-        return;
-    }
+
+    // Target was harvestable when the swing tick read it, but the resource
+    // node's anchor / kind metadata could still be missing if the entity
+    // was despawned this same frame. Treat that as a miss — better a
+    // whoosh than a silent swing.
     let Some(anchor) = resource_target_anchor(&params.pickup_target, node_id) else {
+        params.gather_input.set_pending_miss_audio();
         return;
     };
     let Some(kind) = resource_target_effect_kind(&params.pickup_target) else {
+        params.gather_input.set_pending_miss_audio();
         return;
     };
+
+    let spray_direction = swing_spray_direction(&params.runtime, anchor);
+    let seed = params.gather_input.current_swing_seed();
+    params.gather_input.set_pending_impact(PendingImpactEffect {
+        anchor,
+        spray_direction,
+        kind,
+        seed,
+    });
     params
         .gather_input
         .set_pending_audio_cue(PendingAudioCue { anchor, kind });
-}
-
-fn dispatch_swing_impact(params: &mut GameplayInventoryShortcutsParams, impact: SwingImpact) {
-    let Some(node_id) = impact.target else {
-        return;
-    };
-
-    // Only emit hit feedback (chips, camera kick, gather command) when the
-    // equipped tool can actually harvest this resource. Swinging an axe at
-    // an iron node should look like a clean miss, not a bounced chip burst.
-    if !equipped_tool_can_harvest_target(&params.runtime, &params.pickup_target) {
-        return;
-    }
-
-    let target_anchor = resource_target_anchor(&params.pickup_target, node_id);
-    let target_kind = resource_target_effect_kind(&params.pickup_target);
-
-    if let Some(anchor) = target_anchor
-        && let Some(kind) = target_kind
-    {
-        let spray_direction = swing_spray_direction(&params.runtime, anchor);
-        let seed = params.gather_input.current_swing_seed();
-        params.gather_input.set_pending_impact(PendingImpactEffect {
-            anchor,
-            spray_direction,
-            kind,
-            seed,
-        });
-    }
 
     params.camera_kick.trigger(impact.tool);
 

@@ -87,13 +87,11 @@ impl VoiceState {
 }
 
 pub(crate) fn setup_voice_system(mut commands: Commands) {
-    let capture = match VoiceCapture::spawn() {
-        Ok(capture) => Some(capture),
-        Err(error) => {
-            warn!("voice capture unavailable: {error:#}");
-            None
-        }
-    };
+    // Playback is cheap to leave open — it's an output-only audio stream
+    // and (crucially) doesn't trigger Bluetooth profile switching the way
+    // an open input stream does. Mic capture is started lazily by
+    // `manage_voice_capture_system` only while the player is actually in
+    // a multiplayer session with voice enabled.
     let playback = match VoicePlayback::spawn() {
         Ok(playback) => Some(playback),
         Err(error) => {
@@ -101,16 +99,63 @@ pub(crate) fn setup_voice_system(mut commands: Commands) {
             None
         }
     };
-    let available = capture.is_some() && playback.is_some();
     commands.insert_resource(VoiceState {
-        capture,
+        capture: None,
         playback,
         next_sequence: 0,
         transmitting: false,
         indicator_envelope: 0.0,
-        available,
+        available: false,
         peer_talk_envelope: HashMap::new(),
     });
+}
+
+/// Opens and closes the microphone capture stream based on whether voice
+/// is wanted *right now*. Three conditions have to be true:
+/// 1. The player is in-game on a *multiplayer* session (singleplayer or
+///    the main menu don't need the mic and shouldn't hold the BT profile).
+/// 2. Voice chat is enabled in the user settings.
+/// 3. The cpal/Opus init actually succeeds.
+///
+/// When any of these flips off, the capture is dropped — its `Drop` impl
+/// joins the worker thread and closes the cpal stream, which on macOS is
+/// what makes a Bluetooth headset switch back from HSP/HFP (call quality,
+/// mono) to A2DP (stereo, full quality).
+pub(crate) fn manage_voice_capture_system(
+    settings: Res<ClientSettings>,
+    runtime: Res<ClientRuntime>,
+    menu: Res<MenuState>,
+    mut voice: ResMut<VoiceState>,
+) {
+    let want_capture =
+        settings.voice.enabled && menu.screen == Screen::InGame && runtime.is_multiplayer_session();
+
+    match (want_capture, voice.capture.is_some()) {
+        (true, false) => match VoiceCapture::spawn() {
+            Ok(capture) => {
+                info!("voice capture started for multiplayer session");
+                capture.set_input_gain(settings.voice.input_volume);
+                voice.capture = Some(capture);
+                voice.available = voice.playback.is_some();
+            }
+            Err(error) => {
+                warn!("voice capture failed to start: {error:#}");
+                voice.available = false;
+            }
+        },
+        (false, true) => {
+            // Drop the capture handle — `VoiceCapture::Drop` joins the
+            // worker thread and closes the cpal stream so the OS releases
+            // the microphone (and the Bluetooth profile switches back).
+            info!("voice capture stopped; releasing microphone");
+            voice.capture = None;
+            voice.available = false;
+            voice.transmitting = false;
+            // Indicator decays naturally in `transmit_voice_system`; no
+            // need to slam it to 0 here.
+        }
+        _ => {}
+    }
 }
 
 pub(crate) fn transmit_voice_system(
@@ -122,21 +167,26 @@ pub(crate) fn transmit_voice_system(
     mut voice: ResMut<VoiceState>,
     mut error_toasts: MessageWriter<ClientErrorToast>,
 ) {
-    // Two booleans on purpose: the indicator should follow the *key* (so the
-    // player sees feedback the moment they press PTT, even if voice setup
-    // failed), while the actual network send is gated on `transmitting` (the
-    // key plus voice actually being usable + an active gameplay session).
+    // The capture stream is opened lazily by `manage_voice_capture_system`,
+    // so `voice.capture.is_some()` is the single source of truth for "the
+    // mic is hot right now". Indicator follows `key_held && mic_open` so
+    // the chip doesn't tease the player with "transmitting" in
+    // singleplayer or before the cpal stream has finished warming up.
     let in_gameplay = menu.screen == Screen::InGame
         && !menu.chat_open
         && !menu.pause_open
         && !menu.pause_options_open
         && !menu.inventory_open;
     let key_held = in_gameplay && settings.keybindings.pressed(KeyAction::PushToTalk, &keys);
-    let voice_enabled = settings.voice.enabled && voice.available;
-    let transmitting = key_held && voice_enabled;
+    let mic_open = voice.capture.is_some();
+    let transmitting = key_held && mic_open && settings.voice.enabled;
 
     voice.transmitting = transmitting;
-    voice.indicator_envelope = ease_envelope(voice.indicator_envelope, key_held, time.delta_secs());
+    voice.indicator_envelope = ease_envelope(
+        voice.indicator_envelope,
+        key_held && mic_open,
+        time.delta_secs(),
+    );
 
     // Decay per-peer talking envelopes so the nameplate mic icon fades out
     // once packets stop arriving from that peer. Pruning the map keeps it

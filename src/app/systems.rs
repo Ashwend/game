@@ -75,6 +75,7 @@ pub(crate) enum ClientSystemSet {
     MainMenuMusic,
     MenuBackdropCamera,
     AutoConnect,
+    VoiceCaptureManage,
     VoiceTransmit,
     VoiceReceive,
     VoiceSettings,

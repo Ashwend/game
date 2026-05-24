@@ -47,6 +47,7 @@ runtime_packages=(
   ca-certificates
   tar
   libasound2t64
+  libopus0
   libudev1
   libwayland-client0
   libwayland-cursor0

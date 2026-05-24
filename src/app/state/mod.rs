@@ -23,8 +23,7 @@ pub(crate) use dialogs::{
 };
 pub(crate) use gather::{
     GatherInputState, ImpactEffectKind, PICKUP_TARGET_SCAN_INTERVAL_SECS, PendingAudioCue,
-    PendingImpactEffect, PickupTargetState, RemoteImpactEvent, SwingAudioCue, SwingImpact,
-    ToolSwapState,
+    PendingImpactEffect, PickupTargetState, RemoteImpactEvent, SwingImpact, ToolSwapState,
 };
 pub(crate) use inventory::{InventoryDrag, InventoryDragButton, InventoryUiState};
 pub(crate) use look::LookState;

@@ -19,8 +19,9 @@ const MAIN_MENU_MUSIC_PATH: &str = "main-screen/ambient-music.wav";
 const MAIN_MENU_MUSIC_VOLUME_DECIBELS: f32 = -24.0;
 const MAIN_MENU_MUSIC_FADE_SECONDS: f32 = 1.0;
 
-const HATCHET_TREE_SOUND_PATH: &str = "items/hatchet-tree.mp3";
-const PICKAXE_ORE_SOUND_PATH: &str = "items/pickaxe-ore-node.mp3";
+const HATCHET_TREE_SOUND_PATH: &str = "items/hatchet-tree.wav";
+const PICKAXE_ORE_SOUND_PATH: &str = "items/pickaxe-ore-node.wav";
+const MISS_SOUND_PATH: &str = "items/miss.wav";
 
 // Per-hit impact sounds are short, sharp transients — playing them anywhere
 // near the recorded peak would clip and drown out everything else. -10 dB
@@ -133,12 +134,14 @@ fn main_menu_music_volume(settings: &ClientSettings) -> Volume {
 pub(crate) struct ImpactSoundAssets {
     pub(crate) hatchet_tree: Handle<AudioSource>,
     pub(crate) pickaxe_ore: Handle<AudioSource>,
+    pub(crate) miss: Handle<AudioSource>,
 }
 
 pub(crate) fn setup_impact_sound_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.insert_resource(ImpactSoundAssets {
         hatchet_tree: asset_server.load(embedded_asset_path(HATCHET_TREE_SOUND_PATH)),
         pickaxe_ore: asset_server.load(embedded_asset_path(PICKAXE_ORE_SOUND_PATH)),
+        miss: asset_server.load(embedded_asset_path(MISS_SOUND_PATH)),
     });
 }
 
@@ -157,6 +160,9 @@ pub(crate) fn play_impact_sounds_system(
 ) {
     if let Some(cue) = gather_input.take_pending_audio_cue() {
         spawn_impact_sound(&mut commands, &assets, &settings, cue.anchor, cue.kind);
+    }
+    if gather_input.take_pending_miss_audio() {
+        spawn_miss_sound(&mut commands, &assets, &settings);
     }
     for event in remote_impacts.read() {
         spawn_impact_sound(&mut commands, &assets, &settings, event.anchor, event.kind);
@@ -188,6 +194,21 @@ fn spawn_impact_sound(
 fn impact_sound_volume(settings: &ClientSettings) -> Volume {
     let base = Volume::Decibels(IMPACT_SOUND_VOLUME_DECIBELS);
     Volume::Linear(base.to_linear() * settings.audio.sfx_volume.clamp(0.0, 1.0))
+}
+
+// Miss whooshes belong to the local swinger — there's no world anchor the
+// sound originates from, so play it non-spatially. That also avoids any
+// distance falloff making the player's own swing feel quiet.
+fn spawn_miss_sound(
+    commands: &mut Commands,
+    assets: &ImpactSoundAssets,
+    settings: &ClientSettings,
+) {
+    commands.spawn((
+        Name::new("Miss Sound"),
+        AudioPlayer::new(assets.miss.clone()),
+        PlaybackSettings::DESPAWN.with_volume(impact_sound_volume(settings)),
+    ));
 }
 
 fn faded_main_menu_music_volume(fade_progress: f32, settings: &ClientSettings) -> Volume {

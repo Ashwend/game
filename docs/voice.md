@@ -84,10 +84,17 @@ mismatch:
 
 - PTT is a rebindable keyboard action (`KeyAction::PushToTalk`, default `V`)
   — see the keybindings system in `src/app/state/settings/keybindings.rs`.
-- The capture stream runs continuously while voice is enabled; only the
-  network send is gated. This matches Discord/CS2/Apex behaviour and avoids
-  the ~100 ms clip-off you'd get from starting the OS audio graph on every
-  press.
+- The capture stream is opened **lazily** by `manage_voice_capture_system`
+  only while *all three* of these are true: voice is enabled in settings,
+  the player is in-game, and the session is a **multiplayer** session
+  (not singleplayer loopback, not the main menu). The moment any of those
+  flips off, the capture handle is dropped and the cpal input stream
+  closes — which is what makes a Bluetooth headset switch back from
+  HSP/HFP (call-quality mono) to A2DP (stereo high-quality). Within an
+  active multiplayer session the stream stays open continuously and only
+  the network send is gated on PTT, matching Discord/CS2/Apex behaviour
+  and avoiding the ~100 ms clip-off you'd get from starting the OS audio
+  graph on every press.
 - HUD indicator: a pulsing dot + "Voice On" chip anchored top-center while
   PTT is held. Painted with `painter.circle_filled` rather than a Unicode
   glyph so it renders identically regardless of font fallback. Lives in
@@ -165,11 +172,14 @@ key registered — they just can't be heard.
 
 ## Why these choices
 
-- **Always-on capture, gated send**: industry-standard for game voice
-  (Discord, CS2, Valorant, Apex). Trades a continuously-lit OS mic
-  indicator for zero PTT-onset latency. The pause-and-resume hybrid is
-  documented but not implemented — it adds ~30 ms to the first frame
-  after a press, which is a real cost.
+- **Lazy capture, gated by multiplayer session + voice-enabled**: within
+  a session the mic stays open continuously (zero PTT-onset latency, the
+  Discord/CS2 model); outside a multiplayer session it's fully released
+  so Bluetooth headsets stay in their high-quality A2DP profile and the
+  OS mic indicator stays off in singleplayer / menus. The one-time cost
+  per session is the ~100 ms of cpal stream startup the first time the
+  player presses PTT after joining — well below the keypress→press-release
+  haptic window.
 - **`UnorderedUnreliable` over `SequencedUnreliable`**: this was the
   load-bearing fix for the original "audio flickers" bug. Sequenced
   drops out-of-order packets, which is right for *movement* (the latest
