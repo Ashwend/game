@@ -225,3 +225,27 @@ pub(super) fn is_supported(position: Vec3Net, grid: &BlockGrid) -> bool {
     )
     .is_some()
 }
+
+/// The topmost block whose top surface is right under the player's feet,
+/// if any. Used by the footstep system to look up the material of the
+/// surface the player is standing on. Returns `None` when the player is
+/// standing on the world floor (i.e. no block directly under them) or is
+/// airborne — callers can substitute their own fallback in either case.
+pub fn block_under_feet(position: Vec3Net, grid: &BlockGrid) -> Option<WorldBlock> {
+    let mut best: Option<WorldBlock> = None;
+    for index in grid.candidates_for_player(position) {
+        let block = grid.block(index);
+        let top = block.max().y;
+        if top > position.y + GROUND_EPSILON || top < position.y - GROUND_EPSILON {
+            continue;
+        }
+        if !player_horizontally_overlaps_block(position, block) {
+            continue;
+        }
+        best = Some(match best {
+            Some(prev) if prev.max().y >= top => prev,
+            _ => block,
+        });
+    }
+    best
+}

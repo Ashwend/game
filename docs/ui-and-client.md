@@ -51,11 +51,11 @@ Input systems live in `src/app/systems/input/`:
 - `menu_toggles.rs`: chat-open / inventory-toggle shortcuts (defaults: Enter/T for chat, Tab for inventory). Escape always toggles pause and is intentionally not rebindable.
 - `cursor.rs`: cursor capture and centering on focus.
 - `look.rs`: mouse-look integration into `LookState`/`PlayerController`.
-- `movement.rs`: directional + jump + sprint input into predicted `PlayerInput`. Reads through `settings.keybindings` so rebound keys take effect immediately.
+- `movement.rs`: directional + jump + run input into predicted `PlayerInput`. Reads through `settings.keybindings` so rebound keys take effect immediately.
 - `inventory_shortcuts.rs`: actionbar slot keys, scroll-wheel offset selection, drop / pickup / swing. Slot keys are bound through the keybindings system rather than a hardcoded digit table.
 
 Keybindings (`src/app/state/settings/keybindings.rs`):
-- One `KeyAction` enum lists every rebindable gameplay action (movement, jump, sprint, drop, pickup, chat, inventory, push-to-talk, actionbar 1–9).
+- One `KeyAction` enum lists every rebindable gameplay action (movement, jump, run, drop, pickup, chat, inventory, push-to-talk, actionbar 1–9).
 - Each action has a primary and optional secondary slot, queryable via `KeyBindings::pressed` / `just_pressed`. Input systems should always go through these helpers rather than touch `KeyCode` directly so the rebind UI stays authoritative.
 - Defaults live with each action (`KeyAction::default_slots`) and are also used to drive the per-row "Reset" button on the keybindings tab.
 - On disk, slots serialise as stable string identifiers (`"KeyW"`, `"ShiftLeft"`, …) — survives a Bevy `KeyCode` reshuffle. Missing actions on load are backfilled with their defaults via `KeyBindings::sanitized`.

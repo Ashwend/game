@@ -17,8 +17,9 @@ use self::movement::{
     clamped_local_move_input, desired_horizontal_velocity, horizontal_dot, horizontal_length,
 };
 
+pub use self::collision::block_under_feet;
 pub use self::grid::BlockGrid;
-pub use self::movement::{SPRINT_SPEED, WALK_SPEED, first_person_move_direction};
+pub use self::movement::{RUN_SPEED, WALK_SPEED, first_person_move_direction};
 
 pub const MAX_LOOK_PITCH: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 const GRAVITY: f32 = 18.0;
@@ -30,8 +31,13 @@ const STEP_HEIGHT: f32 = 0.45;
 const STEP_VIEW_SMOOTH_SPEED: f32 = 5.5;
 const MAX_STEP_VIEW_OFFSET: f32 = 1.0;
 const LEAP_FORWARD_INPUT_THRESHOLD: f32 = 0.2;
-const LEAP_TAKEOFF_SPEED: f32 = 8.65;
-const LEAP_MAX_HORIZONTAL_SPEED: f32 = 8.8;
+// Leap caps are deliberately just above `RUN_SPEED` so a running jump
+// gives a small, satisfying forward boost without becoming a movement
+// exploit. Scaled together with the run-speed reduction (was 8.65 / 8.8
+// when `RUN_SPEED` was 8.4); the same ~0.25 / ~0.4 m/s deltas above the
+// run speed preserve the leap's "modest boost" feel.
+const LEAP_TAKEOFF_SPEED: f32 = 7.25;
+const LEAP_MAX_HORIZONTAL_SPEED: f32 = 7.4;
 const JUMP_BUFFER_SECONDS: f32 = 0.18;
 const COYOTE_TIME_SECONDS: f32 = 0.1;
 const GROUND_EPSILON: f32 = 0.04;
@@ -66,7 +72,7 @@ impl PlayerController {
             last_input: PlayerInput {
                 sequence: 0,
                 direction: Vec3Net::ZERO,
-                sprint: false,
+                run: false,
                 jump: false,
                 yaw: 0.0,
                 pitch: 0.0,
@@ -209,11 +215,8 @@ impl PlayerController {
         }
 
         let local_input = clamped_local_move_input(self.last_input.direction);
-        let target_velocity = desired_horizontal_velocity(
-            self.last_input.direction,
-            self.yaw,
-            self.last_input.sprint,
-        );
+        let target_velocity =
+            desired_horizontal_velocity(self.last_input.direction, self.yaw, self.last_input.run);
 
         if self.jump_buffer_timer > 0.0 && self.coyote_timer > 0.0 {
             self.velocity.y = JUMP_SPEED;
@@ -366,7 +369,7 @@ impl PlayerController {
     }
 
     fn apply_leap_takeoff(&mut self, local_input: Vec3Net, target_velocity: Vec3Net) {
-        if !self.last_input.sprint || local_input.z < LEAP_FORWARD_INPUT_THRESHOLD {
+        if !self.last_input.run || local_input.z < LEAP_FORWARD_INPUT_THRESHOLD {
             return;
         }
 

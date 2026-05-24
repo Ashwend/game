@@ -323,7 +323,7 @@ pub struct ResourceNodeState {
 pub struct PlayerInput {
     pub sequence: u64,
     pub direction: Vec3Net,
-    pub sprint: bool,
+    pub run: bool,
     pub jump: bool,
     pub yaw: f32,
     pub pitch: f32,

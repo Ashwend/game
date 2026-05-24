@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::{
-    controller::{SPRINT_SPEED, WALK_SPEED},
+    controller::{RUN_SPEED, WALK_SPEED},
     items::ToolKind,
 };
 
@@ -16,18 +16,18 @@ const PICKAXE_KICK_DURATION: f32 = 0.18;
 // cycle per second (a step is half a cycle). BOB_FREQ_CYCLES_PER_METER *
 // walk_speed ≈ 1.0 cycle/sec keeps the bob in step with the player's gait.
 const BOB_FREQ_CYCLES_PER_METER: f32 = 0.192;
-// Peak bob displacement at walk speed. Sprint scales up linearly until
+// Peak bob displacement at walk speed. Running scales up linearly until
 // `BOB_AMP_SPEED_CAP_FRACTION` of walk speed, then plateaus so very fast
 // motion doesn't shake the camera apart.
 const BOB_BASE_AMP_METERS: f32 = 0.012;
 const BOB_AMP_SPEED_CAP_FRACTION: f32 = 1.5;
 const BOB_AMP_LERP_RATE: f32 = 12.0;
 
-// Sprint FOV: full +SPRINT_FOV_BOOST_DEG when horizontal speed reaches
-// SPRINT_SPEED, linear ramp from WALK_SPEED upward. The boost is small on
+// Run FOV: full +RUN_FOV_BOOST_DEG when horizontal speed reaches
+// RUN_SPEED, linear ramp from WALK_SPEED upward. The boost is small on
 // purpose — enough to register peripherally without warping the geometry.
 pub(super) const BASE_FOV_DEG: f32 = 65.0;
-pub(super) const SPRINT_FOV_BOOST_DEG: f32 = 5.0;
+pub(super) const RUN_FOV_BOOST_DEG: f32 = 5.0;
 const FOV_LERP_RATE: f32 = 8.0;
 
 // Landing dip: half-sine pulse on touchdown. Triggered when the player goes
@@ -98,8 +98,8 @@ impl CameraMotionEffects {
 
         let speed_above_walk = (horizontal_speed - WALK_SPEED).max(0.0);
         let speed_fraction =
-            (speed_above_walk / (SPRINT_SPEED - WALK_SPEED).max(f32::EPSILON)).clamp(0.0, 1.0);
-        let fov_target = SPRINT_FOV_BOOST_DEG * speed_fraction;
+            (speed_above_walk / (RUN_SPEED - WALK_SPEED).max(f32::EPSILON)).clamp(0.0, 1.0);
+        let fov_target = RUN_FOV_BOOST_DEG * speed_fraction;
         let fov_lerp = (FOV_LERP_RATE * dt).clamp(0.0, 1.0);
         self.fov_offset_deg += (fov_target - self.fov_offset_deg) * fov_lerp;
 
@@ -238,11 +238,11 @@ mod tests {
         let walking_amp = motion.bob_amp_smooth;
         assert!(walking_amp > 0.0);
 
-        let mut sprinting = CameraMotionEffects::default();
+        let mut running = CameraMotionEffects::default();
         for _ in 0..40 {
-            sprinting.advance(1.0 / 60.0, SPRINT_SPEED, true, 0.0);
+            running.advance(1.0 / 60.0, RUN_SPEED, true, 0.0);
         }
-        assert!(sprinting.bob_amp_smooth > walking_amp);
+        assert!(running.bob_amp_smooth > walking_amp);
     }
 
     #[test]
@@ -261,12 +261,12 @@ mod tests {
     }
 
     #[test]
-    fn sprint_fov_offset_ramps_up_with_speed() {
+    fn run_fov_offset_ramps_up_with_speed() {
         let mut motion = CameraMotionEffects::default();
         for _ in 0..120 {
-            motion.advance(1.0 / 60.0, SPRINT_SPEED, true, 0.0);
+            motion.advance(1.0 / 60.0, RUN_SPEED, true, 0.0);
         }
-        assert!(motion.fov_offset_deg > SPRINT_FOV_BOOST_DEG * 0.85);
+        assert!(motion.fov_offset_deg > RUN_FOV_BOOST_DEG * 0.85);
 
         for _ in 0..120 {
             motion.advance(1.0 / 60.0, WALK_SPEED, true, 0.0);

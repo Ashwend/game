@@ -8,11 +8,11 @@ fn test_world() -> WorldData {
     WorldData::test_world()
 }
 
-fn input(sequence: u64, direction: Vec3Net, sprint: bool, jump: bool) -> PlayerInput {
+fn input(sequence: u64, direction: Vec3Net, run: bool, jump: bool) -> PlayerInput {
     PlayerInput {
         sequence,
         direction,
-        sprint,
+        run,
         jump,
         yaw: 0.0,
         pitch: 0.0,
@@ -37,15 +37,19 @@ fn movement_direction_matches_bevy_camera_yaw() {
 }
 
 #[test]
-fn sprinting_is_forward_weighted_and_sidewalking_is_slower() {
+fn running_is_forward_weighted_and_sidewalking_is_slower() {
     let forward = desired_horizontal_velocity(Vec3Net::new(0.0, 0.0, 1.0), 0.0, true);
     let side = desired_horizontal_velocity(Vec3Net::new(1.0, 0.0, 0.0), 0.0, true);
     let back = desired_horizontal_velocity(Vec3Net::new(0.0, 0.0, -1.0), 0.0, true);
     let diagonal = desired_horizontal_velocity(Vec3Net::new(1.0, 0.0, 1.0), 0.0, true);
 
-    assert!(horizontal_length(forward) > horizontal_length(side) + 3.0);
+    // Forward run should still be clearly faster than walking strafe.
+    // The exact gap shrunk with the run-speed reduction (8.4 → 7.0); 2.0
+    // m/s preserves the property "forward is the dominant axis" without
+    // pinning to the previous tuning.
+    assert!(horizontal_length(forward) > horizontal_length(side) + 2.0);
     assert!(horizontal_length(side) > horizontal_length(back));
-    assert!(horizontal_length(diagonal) <= SPRINT_SPEED);
+    assert!(horizontal_length(diagonal) <= RUN_SPEED);
     assert!(diagonal.x > 0.0);
     assert!(diagonal.z < 0.0);
 }
@@ -56,7 +60,7 @@ fn simulate_integrates_movement_using_the_target_yaw_for_the_whole_frame() {
     controller.apply_input(PlayerInput {
         sequence: 1,
         direction: Vec3Net::new(1.0, 0.0, 0.0),
-        sprint: false,
+        run: false,
         jump: false,
         yaw: -std::f32::consts::FRAC_PI_2,
         pitch: 0.0,
@@ -72,17 +76,17 @@ fn simulate_integrates_movement_using_the_target_yaw_for_the_whole_frame() {
 }
 
 #[test]
-fn sprint_jump_creates_modest_forward_boost() {
+fn run_jump_creates_modest_forward_boost() {
     let mut controller = PlayerController::spawn();
     controller.apply_input(input(1, Vec3Net::new(0.0, 0.0, 1.0), true, true));
     controller.simulate(1.0 / 60.0, &test_world());
 
     assert!(controller.position.y > 0.0);
     assert!(!controller.grounded);
-    assert!(horizontal_length(controller.velocity) > SPRINT_SPEED + 0.1);
-    assert!(horizontal_length(controller.velocity) < SPRINT_SPEED + 0.6);
+    assert!(horizontal_length(controller.velocity) > RUN_SPEED + 0.1);
+    assert!(horizontal_length(controller.velocity) < RUN_SPEED + 0.6);
     assert!(controller.velocity.y > JUMP_SPEED - 0.4);
-    assert!(controller.velocity.z < -SPRINT_SPEED - 0.1);
+    assert!(controller.velocity.z < -RUN_SPEED - 0.1);
 }
 
 #[test]
@@ -259,7 +263,7 @@ fn jump_request_survives_following_non_jump_input_before_tick() {
     controller.apply_input(PlayerInput {
         sequence: 1,
         direction: Vec3Net::ZERO,
-        sprint: false,
+        run: false,
         jump: true,
         yaw: 0.0,
         pitch: 0.0,
@@ -267,7 +271,7 @@ fn jump_request_survives_following_non_jump_input_before_tick() {
     controller.apply_input(PlayerInput {
         sequence: 2,
         direction: Vec3Net::new(0.0, 0.0, 1.0),
-        sprint: true,
+        run: true,
         jump: false,
         yaw: 0.0,
         pitch: 0.0,
@@ -292,7 +296,7 @@ fn early_air_press_still_fires_jump_on_landing() {
     controller.apply_input(PlayerInput {
         sequence: 1,
         direction: Vec3Net::ZERO,
-        sprint: false,
+        run: false,
         jump: true,
         yaw: 0.0,
         pitch: 0.0,
@@ -306,7 +310,7 @@ fn early_air_press_still_fires_jump_on_landing() {
     controller.apply_input(PlayerInput {
         sequence: 2,
         direction: Vec3Net::ZERO,
-        sprint: false,
+        run: false,
         jump: true,
         yaw: 0.0,
         pitch: 0.0,
@@ -324,7 +328,7 @@ fn early_air_press_still_fires_jump_on_landing() {
         controller.apply_input(PlayerInput {
             sequence,
             direction: Vec3Net::ZERO,
-            sprint: false,
+            run: false,
             jump: false,
             yaw: 0.0,
             pitch: 0.0,
@@ -384,7 +388,7 @@ fn rapid_tap_bunny_hops_on_every_landing() {
         controller.apply_input(PlayerInput {
             sequence,
             direction: Vec3Net::ZERO,
-            sprint: false,
+            run: false,
             jump,
             yaw: 0.0,
             pitch: 0.0,
@@ -418,7 +422,7 @@ fn fresh_press_after_full_landing_jumps_immediately() {
     controller.apply_input(PlayerInput {
         sequence,
         direction: Vec3Net::ZERO,
-        sprint: false,
+        run: false,
         jump: true,
         yaw: 0.0,
         pitch: 0.0,
@@ -433,7 +437,7 @@ fn fresh_press_after_full_landing_jumps_immediately() {
         controller.apply_input(PlayerInput {
             sequence,
             direction: Vec3Net::ZERO,
-            sprint: false,
+            run: false,
             jump: false,
             yaw: 0.0,
             pitch: 0.0,
@@ -456,7 +460,7 @@ fn fresh_press_after_full_landing_jumps_immediately() {
     controller.apply_input(PlayerInput {
         sequence,
         direction: Vec3Net::ZERO,
-        sprint: false,
+        run: false,
         jump: true,
         yaw: 0.0,
         pitch: 0.0,
@@ -498,7 +502,7 @@ fn high_framerate_jump_is_not_smothered_by_grounded_clamp() {
     controller.apply_input(PlayerInput {
         sequence: 1,
         direction: Vec3Net::ZERO,
-        sprint: false,
+        run: false,
         jump: true,
         yaw: 0.0,
         pitch: 0.0,
@@ -522,7 +526,7 @@ fn high_framerate_jump_is_not_smothered_by_grounded_clamp() {
         controller.apply_input(PlayerInput {
             sequence,
             direction: Vec3Net::ZERO,
-            sprint: false,
+            run: false,
             jump: false,
             yaw: 0.0,
             pitch: 0.0,
@@ -551,7 +555,7 @@ fn buffer_does_not_auto_fire_without_a_press() {
         controller.apply_input(PlayerInput {
             sequence: 1,
             direction: Vec3Net::ZERO,
-            sprint: false,
+            run: false,
             jump: false,
             yaw: 0.0,
             pitch: 0.0,

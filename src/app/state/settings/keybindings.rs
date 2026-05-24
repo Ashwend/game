@@ -25,7 +25,11 @@ pub(crate) enum KeyAction {
     StrafeLeft,
     StrafeRight,
     Jump,
-    Sprint,
+    /// The `serde(alias = "Sprint")` keeps `settings.json` files written
+    /// before the rename (when this action was called `Sprint`) loading
+    /// cleanly — any custom keybinding the player saved survives.
+    #[serde(alias = "Sprint")]
+    Run,
     OpenChat,
     OpenInventory,
     DropItem,
@@ -69,7 +73,7 @@ impl KeyAction {
         Self::StrafeLeft,
         Self::StrafeRight,
         Self::Jump,
-        Self::Sprint,
+        Self::Run,
         Self::PickUp,
         Self::DropItem,
         Self::OpenInventory,
@@ -93,7 +97,7 @@ impl KeyAction {
             Self::StrafeLeft => "Strafe Left",
             Self::StrafeRight => "Strafe Right",
             Self::Jump => "Jump",
-            Self::Sprint => "Sprint",
+            Self::Run => "Run",
             Self::OpenChat => "Open Chat",
             Self::OpenInventory => "Toggle Inventory",
             Self::DropItem => "Drop Held Item",
@@ -116,7 +120,7 @@ impl KeyAction {
             Self::MoveForward | Self::MoveBackward | Self::StrafeLeft | Self::StrafeRight => {
                 KeyBindingCategory::Movement
             }
-            Self::Jump | Self::Sprint => KeyBindingCategory::Movement,
+            Self::Jump | Self::Run => KeyBindingCategory::Movement,
             Self::PickUp | Self::DropItem | Self::OpenInventory => KeyBindingCategory::Inventory,
             Self::OpenChat | Self::PushToTalk => KeyBindingCategory::Communication,
             Self::ActionbarSlot1
@@ -138,7 +142,7 @@ impl KeyAction {
             Self::StrafeLeft => (KeyCode::KeyA, None),
             Self::StrafeRight => (KeyCode::KeyD, None),
             Self::Jump => (KeyCode::Space, None),
-            Self::Sprint => (KeyCode::ShiftLeft, Some(KeyCode::ShiftRight)),
+            Self::Run => (KeyCode::ShiftLeft, Some(KeyCode::ShiftRight)),
             Self::OpenChat => (KeyCode::KeyT, Some(KeyCode::Enter)),
             Self::OpenInventory => (KeyCode::Tab, None),
             Self::DropItem => (KeyCode::KeyQ, None),
@@ -538,9 +542,9 @@ mod tests {
     }
 
     #[test]
-    fn sprint_has_left_and_right_shift_by_default() {
+    fn run_has_left_and_right_shift_by_default() {
         let bindings = KeyBindings::default();
-        let slots = bindings.slots(KeyAction::Sprint);
+        let slots = bindings.slots(KeyAction::Run);
         assert_eq!(slots.primary, Some(KeyCode::ShiftLeft));
         assert_eq!(slots.secondary, Some(KeyCode::ShiftRight));
     }
@@ -566,7 +570,7 @@ mod tests {
         let mut keys = ButtonInput::default();
         keys.press(KeyCode::ShiftRight);
         let bindings = KeyBindings::default();
-        assert!(bindings.pressed(KeyAction::Sprint, &keys));
+        assert!(bindings.pressed(KeyAction::Run, &keys));
     }
 
     #[test]

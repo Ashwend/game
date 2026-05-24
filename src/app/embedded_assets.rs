@@ -46,6 +46,198 @@ const EMBEDDED_ASSETS: &[EmbeddedAsset] = &[
         asset_path: "items/miss.wav",
         bytes: include_bytes!("../../assets/items/miss.wav"),
     },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-dirt-01.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-dirt-01.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-dirt-02.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-dirt-02.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-dirt-03.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-dirt-03.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-dirt-04.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-dirt-04.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-dirt-05.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-dirt-05.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-dirt-06.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-dirt-06.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-dirt-07.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-dirt-07.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-dirt-08.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-dirt-08.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-dirt-09.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-dirt-09.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-dirt-10.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-dirt-10.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-dirt-11.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-dirt-11.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-dirt-12.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-dirt-12.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-wood-01.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-wood-01.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-wood-02.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-wood-02.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-wood-03.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-wood-03.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-wood-04.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-wood-04.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-wood-05.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-wood-05.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-wood-06.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-wood-06.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-wood-07.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-wood-07.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-wood-08.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-wood-08.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-wood-09.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-wood-09.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-wood-10.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-wood-10.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-wood-11.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-wood-11.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-wood-12.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-wood-12.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-concrete-01.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-concrete-01.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-concrete-02.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-concrete-02.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-concrete-03.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-concrete-03.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-concrete-04.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-concrete-04.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-concrete-05.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-concrete-05.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-concrete-06.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-concrete-06.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-concrete-07.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-concrete-07.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-concrete-08.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-concrete-08.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-concrete-09.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-concrete-09.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-concrete-10.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-concrete-10.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-concrete-11.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-concrete-11.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-concrete-12.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-concrete-12.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-sand-01.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-sand-01.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-sand-02.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-sand-02.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-sand-03.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-sand-03.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-sand-04.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-sand-04.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-sand-05.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-sand-05.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-sand-06.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-sand-06.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-sand-07.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-sand-07.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-sand-08.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-sand-08.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-sand-09.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-sand-09.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-sand-10.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-sand-10.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-sand-11.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-sand-11.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "movement/footstep-sand-12.wav",
+        bytes: include_bytes!("../../assets/movement/footstep-sand-12.wav"),
+    },
 ];
 
 /// URI prefix all embedded asset paths share. Loading `embedded://foo.wav`

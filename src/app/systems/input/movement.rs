@@ -49,11 +49,11 @@ pub(crate) fn client_input_system(mut params: ClientInputParams) {
     let input = PlayerInput {
         sequence,
         direction,
-        sprint: accepts_movement_input
+        run: accepts_movement_input
             && params
                 .settings
                 .keybindings
-                .pressed(KeyAction::Sprint, &params.keys),
+                .pressed(KeyAction::Run, &params.keys),
         jump: accepts_movement_input
             && params
                 .settings

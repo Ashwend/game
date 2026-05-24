@@ -1,9 +1,17 @@
 use crate::protocol::Vec3Net;
 
 pub const WALK_SPEED: f32 = 5.2;
-pub const SPRINT_SPEED: f32 = 8.4;
+// Boosted speed when holding the run key. Sized to feel like a grounded
+// run rather than a full-out sprint — at 8.4 m/s (the previous tuning)
+// the camera and terrain whipped past in a way that read as
+// teleporting. 7.0 m/s keeps a clear speed delta from `WALK_SPEED`
+// without losing the player's sense of scale.
+pub const RUN_SPEED: f32 = 7.0;
 const SIDE_WALK_SPEED: f32 = 4.4;
-const SPRINT_STRAFE_SPEED: f32 = 6.4;
+// Scaled proportionally with `RUN_SPEED` so diagonal running keeps
+// roughly the same forward-vs-strafe character it had before the
+// run-speed reduction.
+const RUN_STRAFE_SPEED: f32 = 5.3;
 const BACKPEDAL_SPEED: f32 = 3.8;
 const GROUND_ACCELERATION: f32 = 68.0;
 const GROUND_DECELERATION: f32 = 76.0;
@@ -19,7 +27,7 @@ pub fn first_person_move_direction(input: Vec3Net, yaw: f32) -> Vec3Net {
     rotate_local_horizontal(input, yaw).normalize_or_zero()
 }
 
-pub(super) fn desired_horizontal_velocity(input: Vec3Net, yaw: f32, sprint: bool) -> Vec3Net {
+pub(super) fn desired_horizontal_velocity(input: Vec3Net, yaw: f32, run: bool) -> Vec3Net {
     let input = clamped_local_move_input(input);
     if input.length_squared() == 0.0 {
         return Vec3Net::ZERO;
@@ -27,13 +35,13 @@ pub(super) fn desired_horizontal_velocity(input: Vec3Net, yaw: f32, sprint: bool
 
     let forward_speed = if input.z < 0.0 {
         BACKPEDAL_SPEED
-    } else if sprint && input.z > 0.0 {
-        SPRINT_SPEED
+    } else if run && input.z > 0.0 {
+        RUN_SPEED
     } else {
         WALK_SPEED
     };
-    let side_speed = if sprint && input.z > 0.0 {
-        SPRINT_STRAFE_SPEED
+    let side_speed = if run && input.z > 0.0 {
+        RUN_STRAFE_SPEED
     } else {
         SIDE_WALK_SPEED
     };

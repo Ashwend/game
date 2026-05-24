@@ -4,9 +4,9 @@ use super::*;
 fn dropped_items_spawn_near_head_and_inherit_player_velocity() {
     let mut server = server();
     let client_id = connect_host(&mut server);
-    let mut sprinting = movement(1, Vec3Net::ZERO);
-    sprinting.velocity = Vec3Net::new(0.0, 0.0, -8.0);
-    server.receive(client_id, ClientMessage::Movement(sprinting));
+    let mut running = movement(1, Vec3Net::ZERO);
+    running.velocity = Vec3Net::new(0.0, 0.0, -8.0);
+    server.receive(client_id, ClientMessage::Movement(running));
 
     server.receive(
         client_id,

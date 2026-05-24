@@ -1,7 +1,7 @@
 //! Camera systems split by concern:
 //!
 //! - [`effects`] owns the per-frame motion modifiers (impact kick, head bob,
-//!   sprint FOV, landing dip) as plain `Resource`s.
+//!   run FOV, landing dip) as plain `Resource`s.
 //! - [`follow`] owns the in-game first-person follow system that consumes
 //!   those effects and the latest predicted-pose snapshot.
 //! - [`menu_backdrop`] owns the menu-screen panning camera plus its

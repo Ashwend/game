@@ -36,18 +36,19 @@ use self::{
     },
     systems::{
         AutoConnectRequest, CameraImpactKick, CameraMotionEffects, ClientSystemSet,
-        DroppedItemEntities, RemotePlayerEntities, ResourceNodeEntities, app_quit_system,
-        apply_display_settings_system, apply_dropped_items_system, apply_held_item_visual_system,
-        apply_resource_nodes_system, apply_snapshot_system, apply_test_mode_overrides_system,
-        auto_connect_poll_system, auto_connect_start_system, camera_follow_system,
-        center_cursor_on_focus_system, chat_shortcut_system, client_input_system,
-        gameplay_inventory_shortcuts_system, main_menu_music_system, menu_backdrop_camera_system,
-        mouse_look_system, network_tick_system, play_impact_sounds_system,
-        reposition_test_window_system, save_client_settings_system, session_shutdown_poll_system,
-        setup_impact_sound_assets, spawn_impact_effects_system, surface_client_error_toasts_system,
-        tick_felling_trees_system, tick_impact_chips_system, tick_resource_node_pop_in_system,
-        toggle_inventory_system, toggle_pause_system, update_cursor_system,
-        update_pickup_target_system, update_tool_swap_state_system,
+        DroppedItemEntities, FootstepState, RemotePlayerEntities, ResourceNodeEntities,
+        app_quit_system, apply_display_settings_system, apply_dropped_items_system,
+        apply_held_item_visual_system, apply_resource_nodes_system, apply_snapshot_system,
+        apply_test_mode_overrides_system, auto_connect_poll_system, auto_connect_start_system,
+        camera_follow_system, center_cursor_on_focus_system, chat_shortcut_system,
+        client_input_system, gameplay_inventory_shortcuts_system, main_menu_music_system,
+        menu_backdrop_camera_system, mouse_look_system, network_tick_system, play_footsteps_system,
+        play_impact_sounds_system, reposition_test_window_system, save_client_settings_system,
+        session_shutdown_poll_system, setup_footstep_assets, setup_impact_sound_assets,
+        spawn_impact_effects_system, surface_client_error_toasts_system, tick_felling_trees_system,
+        tick_impact_chips_system, tick_resource_node_pop_in_system, toggle_inventory_system,
+        toggle_pause_system, update_cursor_system, update_pickup_target_system,
+        update_tool_swap_state_system,
     },
     ui::{ButtonSoundRequests, button_sound_system, setup_button_sound_assets, ui_system},
 };
@@ -99,6 +100,7 @@ const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::Sky,
     ClientSystemSet::PickupTarget,
     ClientSystemSet::ImpactSounds,
+    ClientSystemSet::Footsteps,
     ClientSystemSet::ImpactEffectsSpawn,
     ClientSystemSet::ImpactEffectsTick,
     ClientSystemSet::NodeDeathTick,
@@ -164,6 +166,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .insert_resource(InventoryUiState::default())
         .insert_resource(PickupTargetState::default())
         .insert_resource(GatherInputState::default())
+        .insert_resource(FootstepState::default())
         .insert_resource(ToolSwapState::default())
         .insert_resource(CameraImpactKick::default())
         .insert_resource(CameraMotionEffects::default())
@@ -237,6 +240,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
     app.add_systems(Startup, setup_scene)
         .add_systems(Startup, setup_button_sound_assets)
         .add_systems(Startup, setup_impact_sound_assets)
+        .add_systems(Startup, setup_footstep_assets)
         .add_systems(Startup, setup_voice_system)
         .add_systems(
             EguiPrimaryContextPass,
@@ -329,6 +333,10 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .add_systems(
             Update,
             play_impact_sounds_system.in_set(ClientSystemSet::ImpactSounds),
+        )
+        .add_systems(
+            Update,
+            play_footsteps_system.in_set(ClientSystemSet::Footsteps),
         )
         .add_systems(
             Update,

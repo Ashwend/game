@@ -3,6 +3,7 @@ mod auto_connect;
 mod camera;
 mod display;
 pub(crate) mod effects;
+mod footsteps;
 mod input;
 mod items;
 mod network;
@@ -25,6 +26,7 @@ pub(crate) use camera::{
 };
 pub(crate) use display::apply_display_settings_system;
 pub(crate) use effects::{spawn_impact_effects_system, tick_impact_chips_system};
+pub(crate) use footsteps::{FootstepState, play_footsteps_system, setup_footstep_assets};
 pub(crate) use input::{
     center_cursor_on_focus_system, chat_shortcut_system, client_input_system,
     gameplay_inventory_shortcuts_system, mouse_look_system, send_inventory_command,
@@ -68,6 +70,7 @@ pub(crate) enum ClientSystemSet {
     HeldItem,
     Sky,
     PickupTarget,
+    Footsteps,
     ImpactEffectsSpawn,
     ImpactEffectsTick,
     ImpactSounds,
