@@ -19,8 +19,10 @@ Start here:
 - `src/net/client.rs`: Lightyear client session wrapper used by singleplayer and direct multiplayer.
 - `src/net/host.rs` and `src/net/host/`: Lightyear host wrapper, handle/shutdown helpers, routing around `GameServer`, and the optional Unix admin socket used by `./cli admin`.
 - `src/net/dedicated/`: CLI-facing dedicated server entry point and admin request types.
-- `src/save.rs`: world persistence (`WorldStore`, `WorldSave`, atomic writes, format version).
-- `src/world.rs`: `MapType`, world block geometry, and resource node spawns.
+- `src/save/`: world persistence (`WorldStore`, `WorldSave`, atomic writes, format version).
+- `src/world/`: `MapType`, world block geometry, perimeter walls, and the chunk-based generation pipeline under `src/world/chunk/` (classification, value noise, Poisson-disk spawn generator).
+- `src/server/chunk_manager.rs`: server-side owner of the chunk grid — every networked entity (resource nodes, drops, eventually buildings) is anchored to a chunk and snapshots filter by AoI ring around each player. Also schedules 5–15 min node respawns and persists per-chunk live counts.
+- `src/app/scene/assets.rs` and `src/app/scene/world.rs`: shared `StandardMaterial` setup for players, items, resource nodes, ground, and stone walls. See [Materials](docs/materials.md) before adding or tuning a material.
 
 Use `./cli check`, `./cli test`, and `./cli lint`.
 
@@ -50,5 +52,6 @@ Open docs only when the task touches that area:
 - [Worlds and saves](docs/worlds-and-saves.md)
 - [UI and client flow](docs/ui-and-client.md)
 - [Multiplayer testing](docs/multiplayer-testing.md)
+- [Materials](docs/materials.md) — PBR conventions for the scene (reflectance, roughness, metallic). Consult before adding a new `StandardMaterial` or tweaking an existing one.
 
 Keep changes small and preserve module boundaries.

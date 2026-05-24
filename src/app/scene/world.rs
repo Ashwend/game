@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{mesh::VertexAttributeValues, prelude::*};
 
 use crate::{
     app::{
@@ -125,17 +125,11 @@ fn spawn_world_geometry(
     commands.spawn((
         Name::new("Authoritative Plane"),
         WorldGeometry,
-        Mesh3d(
-            meshes.add(
-                Plane3d::default()
-                    .mesh()
-                    .size(world.floor_size, world.floor_size)
-                    .subdivisions(16),
-            ),
-        ),
+        Mesh3d(meshes.add(build_ground_mesh(world.floor_size))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: WORLD_COLOR,
-            perceptual_roughness: 0.9,
+            perceptual_roughness: 1.0,
+            reflectance: 0.0,
             cull_mode: None,
             ..default()
         })),
@@ -150,6 +144,7 @@ fn spawn_world_geometry(
     let stone_material = materials.add(StandardMaterial {
         base_color: STONE_WALL_COLOR,
         perceptual_roughness: 0.95,
+        reflectance: 0.1,
         ..default()
     });
     for (index, block) in world.blocks.iter().enumerate() {
@@ -170,4 +165,44 @@ fn spawn_world_geometry(
             Transform::from_xyz(block.center.x, block.center.y, block.center.z),
         ));
     }
+}
+
+/// Plane mesh for the ground with per-vertex normals jittered by deterministic
+/// multi-frequency noise. Positions are untouched so the floor stays flat for
+/// movement/collision; only shading normals vary, which breaks up the otherwise
+/// mirror-uniform specular highlight that made the ground look like wet glass
+/// when the sun was low.
+fn build_ground_mesh(floor_size: f32) -> Mesh {
+    // Aim for ~2–4 m per quad so the normal jitter resolves across the size of
+    // a typical highlight footprint without exploding vertex count on the
+    // largest (576 m) maps.
+    let subdivisions = 128;
+    let mut mesh: Mesh = Plane3d::default()
+        .mesh()
+        .size(floor_size, floor_size)
+        .subdivisions(subdivisions)
+        .build();
+
+    let Some(VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION).cloned()
+    else {
+        return mesh;
+    };
+    if let Some(VertexAttributeValues::Float32x3(normals)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_NORMAL)
+    {
+        for (normal, position) in normals.iter_mut().zip(positions.iter()) {
+            let x = position[0];
+            let z = position[2];
+            let nx = (x * 0.43).sin() * 0.06
+                + (x * 1.27 + z * 0.91).sin() * 0.04
+                + (x * 3.79 - z * 2.51).sin() * 0.02;
+            let nz = (z * 0.51).cos() * 0.06
+                + (z * 1.43 + x * 0.83).cos() * 0.04
+                + (z * 3.97 + x * 2.71).cos() * 0.02;
+            let tilted = Vec3::new(nx, 1.0, nz).normalize();
+            *normal = [tilted.x, tilted.y, tilted.z];
+        }
+    }
+    mesh
 }

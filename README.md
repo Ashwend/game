@@ -16,8 +16,15 @@ gameplay path, two ways in: loopback singleplayer and direct UDP multiplayer.
   collision against the world geometry.
 - Gather resources. Stone hatchets chop pine, birch, and dead trees (three
   size variants each) for wood; stone pickaxes mine coal, iron, and sulfur
-  ore nodes. Tools have tiers, cooldowns, and per-swing yields; the world
-  remembers which nodes are spent.
+  ore nodes. Surface stones, branch piles, and hay grass scattered across
+  the world give early-game stone, sticks, and fibre. Tools have tiers,
+  cooldowns, and per-swing yields; the world remembers which nodes are
+  spent and respawns them on a 5–15 min jittered timer.
+- Explore a chunk-generated world. The map is partitioned into 64 m grids;
+  each grid is independently classified as forest, rocky outcrop, ore vein,
+  plains, or mixed from a seeded noise stack, and resource nodes are
+  populated by Poisson-disk sampling against the classification's base
+  capacity. Same `(seed, dims)` always generates the same world.
 - Carry it home. A 40-slot inventory plus a 9-slot actionbar with hotkey
   switching, scroll-wheel cycling, click-drag and split-stack moves,
   drop-on-floor, line-of-sight pickup tooltips, and a held-item swap
@@ -103,8 +110,14 @@ gameplay path, two ways in: loopback singleplayer and direct UDP multiplayer.
 - **Items + resources** (`src/items.rs`, `src/resources.rs`): item
   definitions, tool profiles, resource node definitions, and gather
   rules.
-- **World + save** (`src/world.rs`, `src/save.rs`): map types, blocks,
-  resource spawns, and the on-disk save format.
+- **World + save** (`src/world/`, `src/save/`): map types, perimeter
+  geometry, the chunk-based generation pipeline (classification, noise,
+  spawn generator) under `world/chunk/`, and the on-disk save format.
+- **Chunk manager** (`src/server/chunk_manager.rs`): server-side owner of
+  the chunk grid — anchors every networked entity (resource nodes, dropped
+  items, eventually buildings) to its containing chunk, drives AoI
+  streaming on a per-view-tier ring around each player, schedules node
+  regrow events, and persists per-chunk live counts plus pending regrows.
 - **Steam shim** (`src/steam.rs`): offline auth backend now; the `steam`
   cargo feature is the integration hook when a live verifier lands.
 
@@ -114,7 +127,13 @@ gameplay path, two ways in: loopback singleplayer and direct UDP multiplayer.
   the server validates sequence/finite values and republishes snapshots.
 - Steam auth and the Steam server browser are placeholders — `AuthMode::Steam`
   currently rejects until a real `SteamGameServer` verifier is wired in.
-- Procedural maps are a sized flat floor for now; the test world has the
-  full obstacle course, perimeter walls, ore clusters, and tree groves.
+- Worlds are chunk-generated against a seed: each 64 m grid gets a biome
+  classification and Poisson-disk-sampled resource nodes. Perimeter walls
+  enclose the playable area. Visible content is streamed per-player via a
+  Chebyshev AoI ring around the player's current chunk (tunable per view
+  tier). See [docs/worlds-and-saves.md](docs/worlds-and-saves.md).
+- Material/PBR conventions for new meshes (reflectance, roughness,
+  metallic) live in [docs/materials.md](docs/materials.md) — consult before
+  adding a new `StandardMaterial`.
 
 See `CLAUDE.md` and the `docs/` folder for deeper context.

@@ -124,6 +124,7 @@ pub(crate) fn setup_scene(
         remote_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.92,
+            reflectance: 0.2,
             ..default()
         }),
     });
@@ -135,16 +136,19 @@ pub(crate) fn setup_scene(
         dropped_material: materials.add(StandardMaterial {
             base_color: DROPPED_BAG_COLOR,
             perceptual_roughness: 0.95,
+            reflectance: 0.15,
             ..default()
         }),
         held_bag_material: materials.add(StandardMaterial {
             base_color: HELD_BAG_COLOR,
             perceptual_roughness: 0.88,
+            reflectance: 0.15,
             ..default()
         }),
         held_tool_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.92,
+            reflectance: 0.15,
             ..default()
         }),
     });
@@ -165,6 +169,7 @@ pub(crate) fn setup_scene(
         coal_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.98,
+            reflectance: 0.12,
             ..default()
         }),
         iron_material: materials.add(StandardMaterial {
@@ -175,17 +180,20 @@ pub(crate) fn setup_scene(
         }),
         sulfur_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
-            perceptual_roughness: 0.62,
+            perceptual_roughness: 0.88,
+            reflectance: 0.12,
             ..default()
         }),
         stone_vein_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.95,
+            reflectance: 0.12,
             ..default()
         }),
         vertex_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.98,
+            reflectance: 0.12,
             ..default()
         }),
     });
@@ -195,11 +203,13 @@ pub(crate) fn setup_scene(
         wood_chip_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.95,
+            reflectance: 0.12,
             ..default()
         }),
         stone_shard_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.88,
+            reflectance: 0.12,
             ..default()
         }),
         grass_blade_material: materials.add(StandardMaterial {
@@ -208,6 +218,7 @@ pub(crate) fn setup_scene(
             // tinted toward fresh-grass green.
             base_color: Color::srgb(0.42, 0.62, 0.22),
             perceptual_roughness: 0.92,
+            reflectance: 0.12,
             ..default()
         }),
     });
