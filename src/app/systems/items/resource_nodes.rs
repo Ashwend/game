@@ -5,8 +5,8 @@ use bevy::prelude::*;
 use crate::{
     app::{
         scene::{ImpactEffectAssets, NetworkResourceNode, ResourceVisualAssets},
-        state::{ClientRuntime, ImpactEffectKind},
-        systems::effects::spawn_impact_burst,
+        state::{ClientRuntime, ClientSettings, ImpactEffectKind},
+        systems::{TreeFallSoundAsset, effects::spawn_impact_burst},
     },
     protocol::{ResourceNodeId, ResourceNodeState},
     resources::{ResourceNodeModel, resource_node_definition},
@@ -69,6 +69,8 @@ pub(crate) fn apply_resource_nodes_system(
     runtime: Res<ClientRuntime>,
     assets: Res<ResourceVisualAssets>,
     impact_assets: Res<ImpactEffectAssets>,
+    tree_fall_audio: Res<TreeFallSoundAsset>,
+    settings: Res<ClientSettings>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut camera_kick: ResMut<crate::app::systems::CameraImpactKick>,
     mut entities: ResMut<ResourceNodeEntities>,
@@ -100,6 +102,8 @@ pub(crate) fn apply_resource_nodes_system(
             despawn_with_death_effect(
                 &mut commands,
                 &impact_assets,
+                &tree_fall_audio,
+                &settings,
                 &mut materials,
                 &mut camera_kick,
                 &resource_entities,
@@ -142,6 +146,8 @@ pub(crate) fn apply_resource_nodes_system(
     despawn_nodes_missing_from_snapshot(
         &mut commands,
         &impact_assets,
+        &tree_fall_audio,
+        &settings,
         &mut materials,
         &mut camera_kick,
         &resource_entities,
@@ -211,6 +217,8 @@ impl ResourceNodeEntities {
 fn despawn_with_death_effect(
     commands: &mut Commands,
     impact_assets: &ImpactEffectAssets,
+    tree_fall_audio: &TreeFallSoundAsset,
+    settings: &ClientSettings,
     materials: &mut Assets<StandardMaterial>,
     camera_kick: &mut crate::app::systems::CameraImpactKick,
     resource_entities: &ResourceEntityQuery,
@@ -224,6 +232,8 @@ fn despawn_with_death_effect(
         crate::app::systems::node_death::spawn_node_death(
             commands,
             impact_assets,
+            tree_fall_audio,
+            settings,
             materials,
             camera_kick,
             resource.id,
@@ -306,6 +316,8 @@ fn spawn_pop_in_chip_burst(
 fn despawn_nodes_missing_from_snapshot(
     commands: &mut Commands,
     impact_assets: &ImpactEffectAssets,
+    tree_fall_audio: &TreeFallSoundAsset,
+    settings: &ClientSettings,
     materials: &mut Assets<StandardMaterial>,
     camera_kick: &mut crate::app::systems::CameraImpactKick,
     resource_entities: &ResourceEntityQuery,
@@ -324,6 +336,8 @@ fn despawn_nodes_missing_from_snapshot(
         despawn_with_death_effect(
             commands,
             impact_assets,
+            tree_fall_audio,
+            settings,
             materials,
             camera_kick,
             resource_entities,

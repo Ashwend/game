@@ -35,16 +35,44 @@ const EMBEDDED_ASSETS: &[EmbeddedAsset] = &[
         bytes: include_bytes!("../../assets/main-screen/ambient-music.wav"),
     },
     EmbeddedAsset {
-        asset_path: "items/hatchet-tree.wav",
-        bytes: include_bytes!("../../assets/items/hatchet-tree.wav"),
+        asset_path: "items/hatchet-tree-1.wav",
+        bytes: include_bytes!("../../assets/items/hatchet-tree-1.wav"),
     },
     EmbeddedAsset {
-        asset_path: "items/pickaxe-ore-node.wav",
-        bytes: include_bytes!("../../assets/items/pickaxe-ore-node.wav"),
+        asset_path: "items/hatchet-tree-2.wav",
+        bytes: include_bytes!("../../assets/items/hatchet-tree-2.wav"),
     },
     EmbeddedAsset {
-        asset_path: "items/miss.wav",
-        bytes: include_bytes!("../../assets/items/miss.wav"),
+        asset_path: "items/hatchet-tree-3.wav",
+        bytes: include_bytes!("../../assets/items/hatchet-tree-3.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "items/pickaxe-ore-node-1.wav",
+        bytes: include_bytes!("../../assets/items/pickaxe-ore-node-1.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "items/pickaxe-ore-node-2.wav",
+        bytes: include_bytes!("../../assets/items/pickaxe-ore-node-2.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "items/pickaxe-ore-node-3.wav",
+        bytes: include_bytes!("../../assets/items/pickaxe-ore-node-3.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "items/miss-1.wav",
+        bytes: include_bytes!("../../assets/items/miss-1.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "items/miss-2.wav",
+        bytes: include_bytes!("../../assets/items/miss-2.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "items/miss-3.wav",
+        bytes: include_bytes!("../../assets/items/miss-3.wav"),
+    },
+    EmbeddedAsset {
+        asset_path: "world/tree-fall.wav",
+        bytes: include_bytes!("../../assets/world/tree-fall.wav"),
     },
     EmbeddedAsset {
         asset_path: "movement/footstep-dirt-01.wav",

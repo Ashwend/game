@@ -9,7 +9,7 @@ use super::super::state::ClientRuntime;
 use crate::{
     app::{embedded_asset_path, state::ClientSettings},
     controller::{PlayerController, RUN_SPEED, WALK_SPEED, block_under_feet},
-    util::hash::mix32,
+    util::variation::pick_variant_index,
     world::BlockKind,
 };
 
@@ -246,7 +246,16 @@ pub(crate) fn play_footsteps_system(
             // Setup error — no clips even for the default material.
             return;
         };
-        let clip = pick_clip(&mut state, clips.len());
+        // ResMut's DerefMut blocks the borrow checker from seeing
+        // `fire_count` and `last_clip_index` as disjoint fields when both
+        // are passed to one call. Rebinding to a plain `&mut` re-enables
+        // the split-borrow rule.
+        let state: &mut FootstepState = &mut state;
+        let clip = pick_variant_index(
+            &mut state.fire_count,
+            &mut state.last_clip_index,
+            clips.len(),
+        );
         let handle = clips[clip].clone();
         let volume = footstep_volume(material, horizontal_speed, &settings);
         commands.spawn((
@@ -283,29 +292,6 @@ fn material_for_block_kind(kind: BlockKind) -> FootstepMaterial {
     }
 }
 
-/// Pick a footstep clip index that isn't the same as the previous one.
-/// `mix32` gives a deterministic stream off `fire_count`; mapping into
-/// `count - 1` and then skipping the previous index gives a uniform pick
-/// across the remaining clips without ever repeating consecutively.
-fn pick_clip(state: &mut FootstepState, count: usize) -> usize {
-    state.fire_count = state.fire_count.wrapping_add(1);
-    if count <= 1 {
-        state.last_clip_index = Some(0);
-        return 0;
-    }
-    let hashed = mix32(state.fire_count) as usize;
-    let mut pick = hashed % count;
-    if let Some(last) = state.last_clip_index
-        && pick == last
-    {
-        // Collapse the "same as last" slot onto the wrap-around end so
-        // each of the other `count - 1` clips still has equal weight.
-        pick = (pick + 1) % count;
-    }
-    state.last_clip_index = Some(pick);
-    pick
-}
-
 fn material_gain_db(material: FootstepMaterial) -> f32 {
     match material {
         FootstepMaterial::Dirt => DIRT_GAIN_DB,
@@ -330,50 +316,6 @@ fn footstep_volume(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn dirt_clip_count() -> usize {
-        MATERIAL_CLIPS
-            .iter()
-            .find(|(m, _)| *m == FootstepMaterial::Dirt)
-            .map(|(_, paths)| paths.len())
-            .expect("dirt must have a clip set declared")
-    }
-
-    #[test]
-    fn pick_clip_never_repeats_consecutively() {
-        let mut state = FootstepState::default();
-        let count = dirt_clip_count();
-        let mut previous = pick_clip(&mut state, count);
-        for _ in 0..200 {
-            let pick = pick_clip(&mut state, count);
-            assert_ne!(pick, previous, "footstep clip repeated consecutively");
-            assert!(pick < count);
-            previous = pick;
-        }
-    }
-
-    #[test]
-    fn pick_clip_visits_every_variant_over_time() {
-        let mut state = FootstepState::default();
-        let count = dirt_clip_count();
-        let mut seen = std::collections::HashSet::new();
-        for _ in 0..500 {
-            seen.insert(pick_clip(&mut state, count));
-        }
-        assert_eq!(
-            seen.len(),
-            count,
-            "pick_clip should cover every variant across many fires"
-        );
-    }
-
-    #[test]
-    fn pick_clip_handles_single_variant_pool() {
-        let mut state = FootstepState::default();
-        for _ in 0..10 {
-            assert_eq!(pick_clip(&mut state, 1), 0);
-        }
-    }
 
     #[test]
     fn footstep_volume_scales_between_walk_and_run() {

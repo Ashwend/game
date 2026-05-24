@@ -3,3 +3,4 @@
 //! the client tree without pulling in heavy crates.
 
 pub mod hash;
+pub mod variation;

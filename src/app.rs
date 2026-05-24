@@ -45,10 +45,10 @@ use self::{
         menu_backdrop_camera_system, mouse_look_system, network_tick_system, play_footsteps_system,
         play_impact_sounds_system, reposition_test_window_system, save_client_settings_system,
         session_shutdown_poll_system, setup_footstep_assets, setup_impact_sound_assets,
-        spawn_impact_effects_system, surface_client_error_toasts_system, tick_felling_trees_system,
-        tick_impact_chips_system, tick_resource_node_pop_in_system, toggle_inventory_system,
-        toggle_pause_system, update_cursor_system, update_pickup_target_system,
-        update_tool_swap_state_system,
+        setup_tree_fall_sound_asset, spawn_impact_effects_system,
+        surface_client_error_toasts_system, tick_felling_trees_system, tick_impact_chips_system,
+        tick_resource_node_pop_in_system, toggle_inventory_system, toggle_pause_system,
+        update_cursor_system, update_pickup_target_system, update_tool_swap_state_system,
     },
     ui::{ButtonSoundRequests, button_sound_system, setup_button_sound_assets, ui_system},
 };
@@ -240,6 +240,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
     app.add_systems(Startup, setup_scene)
         .add_systems(Startup, setup_button_sound_assets)
         .add_systems(Startup, setup_impact_sound_assets)
+        .add_systems(Startup, setup_tree_fall_sound_asset)
         .add_systems(Startup, setup_footstep_assets)
         .add_systems(Startup, setup_voice_system)
         .add_systems(
