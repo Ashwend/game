@@ -29,6 +29,9 @@ pub(crate) enum SoundId {
     // --- Music ---
     MainMenuMusic,
 
+    // --- Transitions (one-shot stingers for game-state changes) ---
+    WorldJoin,
+
     // --- World one-shots ---
     TreeFall,
 
@@ -56,6 +59,7 @@ pub(crate) fn all_sound_ids() -> &'static [SoundId] {
         SoundId::UiButtonClick,
         SoundId::UiButtonHover,
         SoundId::MainMenuMusic,
+        SoundId::WorldJoin,
         SoundId::TreeFall,
         SoundId::ImpactAxeOnWood,
         SoundId::ImpactPickaxeOnStone,
@@ -130,6 +134,23 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
             spatial: None,
             pitch_jitter: 0.0,
             looped: true,
+        },
+
+        // Transition stinger when the player enters a world (singleplayer
+        // or multiplayer). Mixed at the same loudness reference as the
+        // menu music so it doesn't blow the level when the music is
+        // still fading out beneath it. Music-category routing keeps it
+        // off the SFX slider — players adjust this with the same control
+        // they use for the soundtrack, since it's a "scoring" cue, not a
+        // gameplay event. Non-spatial, no pitch jitter (a signature
+        // sound should always play the same way), uncapped polyphony
+        // (only one entry transition happens at a time anyway).
+        SoundId::WorldJoin => SoundDefaults {
+            category: SoundCategory::Music,
+            base_gain_db: -6.0,
+            spatial: None,
+            pitch_jitter: 0.0,
+            looped: false,
         },
 
         // Tree-fall is the most significant world event in the second it
@@ -219,27 +240,33 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
 pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
     static UI_CLICK: [&str; 1] = ["ui/button-click.wav"];
     static UI_HOVER: [&str; 1] = ["ui/button-hover.wav"];
-    static MENU_MUSIC: [&str; 1] = ["main-screen/ambient-music.wav"];
+    static MENU_MUSIC: [&str; 1] = ["music/main-menu.wav"];
+    static WORLD_JOIN: [&str; 1] = ["transitions/world-join.wav"];
     static TREE_FALL: [&str; 1] = ["world/tree-fall.wav"];
 
-    static AXE_TREE: [&str; 3] = [
-        "items/hatchet-tree-1.wav",
-        "items/hatchet-tree-2.wav",
-        "items/hatchet-tree-3.wav",
+    static AXE_WOOD: [&str; 3] = [
+        "impacts/axe-wood-1.wav",
+        "impacts/axe-wood-2.wav",
+        "impacts/axe-wood-3.wav",
     ];
     static PICKAXE_ORE: [&str; 3] = [
-        "items/pickaxe-ore-node-1.wav",
-        "items/pickaxe-ore-node-2.wav",
-        "items/pickaxe-ore-node-3.wav",
+        "impacts/pickaxe-ore-1.wav",
+        "impacts/pickaxe-ore-2.wav",
+        "impacts/pickaxe-ore-3.wav",
     ];
-    static MISS: [&str; 3] = ["items/miss-1.wav", "items/miss-2.wav", "items/miss-3.wav"];
+    static MISS: [&str; 3] = [
+        "impacts/miss-1.wav",
+        "impacts/miss-2.wav",
+        "impacts/miss-3.wav",
+    ];
 
     match id {
         SoundId::UiButtonClick => &UI_CLICK,
         SoundId::UiButtonHover => &UI_HOVER,
         SoundId::MainMenuMusic => &MENU_MUSIC,
+        SoundId::WorldJoin => &WORLD_JOIN,
         SoundId::TreeFall => &TREE_FALL,
-        SoundId::ImpactAxeOnWood => &AXE_TREE,
+        SoundId::ImpactAxeOnWood => &AXE_WOOD,
         // Until each ore has its own captured impact pool, every pickaxe
         // ore-hit shares the existing ore-node recording. New pools land
         // by adding files under `assets/items/` and pointing this match
@@ -284,7 +311,7 @@ fn footstep_paths(material: &'static str) -> &'static [&'static str] {
         // produce an audible loop at running cadence with a pool this big.
         let strings: Vec<&'static str> = (1..=12)
             .map(|n| {
-                let owned = format!("movement/footstep-{material}-{n:02}.wav");
+                let owned = format!("footsteps/{material}-{n:02}.wav");
                 // Leak: cheap, one-time per material at startup. Returning
                 // `&'static str` keeps the call site allocation-free.
                 Box::leak(owned.into_boxed_str()) as &'static str
@@ -356,8 +383,8 @@ mod tests {
     fn footstep_paths_contain_twelve_numbered_variants() {
         let dirt = sound_paths(SoundId::FootstepDirt);
         assert_eq!(dirt.len(), 12);
-        assert_eq!(dirt[0], "movement/footstep-dirt-01.wav");
-        assert_eq!(dirt[11], "movement/footstep-dirt-12.wav");
+        assert_eq!(dirt[0], "footsteps/dirt-01.wav");
+        assert_eq!(dirt[11], "footsteps/dirt-12.wav");
     }
 
     #[test]

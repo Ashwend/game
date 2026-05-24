@@ -68,6 +68,7 @@ pub(crate) enum ClientSystemSet {
     ImpactEffectsSpawn,
     ImpactEffectsTick,
     ImpactSounds,
+    TransitionStingers,
     PlaySounds,
     AudioFaderTick,
     AmbientBeds,

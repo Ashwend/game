@@ -36,6 +36,7 @@ pub(crate) mod library;
 pub(crate) mod manifest;
 pub(crate) mod music;
 pub(crate) mod surface;
+pub(crate) mod transitions;
 
 // Re-exports kept as the audio module's public surface. Items marked
 // `#[allow(unused_imports)]` are part of the API gameplay code consumes
@@ -60,6 +61,7 @@ pub(crate) use library::{PlaySound, SoundLibrary, play_sounds_system, setup_soun
 pub(crate) use manifest::SoundId;
 #[allow(unused_imports)]
 pub(crate) use music::{MainMenuMusic, main_menu_music_system};
+pub(crate) use transitions::{ScreenTransitionWatch, play_transition_stingers_system};
 
 /// Bevy plugin wiring up audio resources, events, and startup loaders.
 ///
@@ -72,6 +74,7 @@ impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FootstepState>()
             .init_resource::<CurrentAmbientZone>()
+            .init_resource::<ScreenTransitionWatch>()
             .add_message::<PlaySound>()
             .add_systems(Startup, setup_sound_library);
     }

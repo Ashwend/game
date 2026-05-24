@@ -5,12 +5,12 @@
 //! binding, any other action holding the same key is automatically
 //! cleared, and the player can press Escape to bail.
 //!
-//! Layout uses [`egui::Grid`] so the four columns (action label / primary /
-//! secondary / reset) line up consistently regardless of label or key-name
-//! length. Each cell renders a widget with an explicit `min_size`, which is
-//! what guarantees identical column widths across rows; earlier iterations
-//! relied on `allocate_ui` which only reserves space and let cells visibly
-//! stagger when labels differed in length (e.g. `KeyW` vs `ShiftLeft`).
+//! Layout mirrors the rest of the options tabs: each row is a horizontal
+//! strip with the action label hugging the left edge and the
+//! primary/secondary/reset controls packed against the right edge via a
+//! `right_to_left` sub-layout. The label fills whatever space is left in
+//! between, so resizing the panel just stretches the gap rather than
+//! shifting any column.
 
 use bevy::input::ButtonInput;
 use bevy::prelude::KeyCode;
@@ -26,11 +26,10 @@ use crate::app::{
 
 use super::widgets::{SETTING_ROW_HEIGHT, section_label};
 
-const KEY_LABEL_WIDTH: f32 = 200.0;
 const KEY_SLOT_WIDTH: f32 = 140.0;
 const RESET_BUTTON_WIDTH: f32 = 72.0;
-const GRID_COLUMN_SPACING: f32 = 14.0;
-const GRID_ROW_SPACING: f32 = 6.0;
+const COLUMN_SPACING: f32 = 8.0;
+const ROW_SPACING: f32 = 6.0;
 
 pub(super) fn render(
     ui: &mut egui::Ui,
@@ -52,9 +51,13 @@ pub(super) fn render(
             ui.add_space(10.0);
         }
         theme::inset_frame().show(ui, |ui| {
+            // Force the section to fill the panel so every category frame is
+            // the same width. Without this the frame shrinks to fit its
+            // contents and visibly floats inside the panel.
+            ui.set_width(ui.available_width());
             ui.label(section_label(category.label()));
             ui.add_space(6.0);
-            render_category_grid(ui, settings, options_ui_state, *category);
+            render_category_rows(ui, settings, options_ui_state, *category);
         });
     }
 
@@ -71,65 +74,69 @@ pub(super) fn render(
     });
 }
 
-fn render_category_grid(
+fn render_category_rows(
     ui: &mut egui::Ui,
     settings: &mut ClientSettings,
     options_ui_state: &mut OptionsUiState,
     category: KeyBindingCategory,
 ) {
-    egui::Grid::new(format!("keybindings_grid_{:?}", category))
-        .num_columns(4)
-        .spacing([GRID_COLUMN_SPACING, GRID_ROW_SPACING])
-        .min_col_width(0.0)
-        .min_row_height(SETTING_ROW_HEIGHT)
-        .show(ui, |ui| {
-            header_cells(ui);
-            ui.end_row();
-
-            for action in KeyAction::ALL {
-                if action.category() != category {
-                    continue;
-                }
-                action_row(ui, &mut settings.keybindings, options_ui_state, *action);
-                ui.end_row();
-            }
-        });
+    column_header_row(ui);
+    for action in KeyAction::ALL {
+        if action.category() != category {
+            continue;
+        }
+        ui.add_space(ROW_SPACING);
+        action_row(ui, &mut settings.keybindings, options_ui_state, *action);
+    }
 }
 
-fn header_cells(ui: &mut egui::Ui) {
-    header_label(ui, "Action", KEY_LABEL_WIDTH);
-    header_label(ui, "Primary", KEY_SLOT_WIDTH);
-    header_label(ui, "Secondary", KEY_SLOT_WIDTH);
-    // Empty cell over the reset column keeps the grid four-wide.
+/// Header strip above the action rows. Mirrors the action row layout so the
+/// "Primary" / "Secondary" captions sit directly above their button columns.
+/// The action column itself is intentionally unlabeled — the label text is
+/// self-evident from each row.
+fn column_header_row(ui: &mut egui::Ui) {
+    keybinding_row(ui, "", |ui| {
+        // Right-to-left, so add in reverse visual order. The empty allocation
+        // over the reset column keeps "Secondary" aligned with the secondary
+        // button column below.
+        ui.allocate_space(egui::vec2(RESET_BUTTON_WIDTH, SETTING_ROW_HEIGHT));
+        ui.add_space(COLUMN_SPACING);
+        column_header_cell(ui, "Secondary");
+        ui.add_space(COLUMN_SPACING);
+        column_header_cell(ui, "Primary");
+    });
+}
+
+fn column_header_cell(ui: &mut egui::Ui, text: &str) {
     ui.allocate_ui_with_layout(
-        egui::vec2(RESET_BUTTON_WIDTH, SETTING_ROW_HEIGHT),
+        egui::vec2(KEY_SLOT_WIDTH, SETTING_ROW_HEIGHT),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            ui.label("");
+            ui.label(
+                egui::RichText::new(text)
+                    .size(12.0)
+                    .color(theme::muted_text())
+                    .strong(),
+            );
         },
     );
 }
 
-fn header_label(ui: &mut egui::Ui, text: &str, width: f32) {
-    let label = egui::RichText::new(text)
-        .size(12.0)
-        .color(theme::muted_text())
-        .strong();
-    left_aligned_label(ui, label, width);
-}
-
-/// Render a label that fills a cell of `[width, SETTING_ROW_HEIGHT]` and
-/// keeps the text pinned to the left edge. `add_sized` would center the
-/// label widget in the cell — fine for headings but visually ragged for a
-/// table of action labels that differ in length ("Jump" vs "Move Forward"
-/// would float to different x-positions). The explicit left-to-right
-/// sub-layout used here anchors every label to the same column edge.
-fn left_aligned_label(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, width: f32) {
+/// One label-left / controls-right row. `add_controls` runs inside a
+/// right-to-left sub-layout, so widgets must be added in **reverse visual
+/// order** (rightmost first).
+fn keybinding_row(
+    ui: &mut egui::Ui,
+    label: impl Into<egui::WidgetText>,
+    add_controls: impl FnOnce(&mut egui::Ui),
+) {
+    let row_width = ui.available_width();
     ui.allocate_ui_with_layout(
-        egui::vec2(width, SETTING_ROW_HEIGHT),
+        egui::vec2(row_width, SETTING_ROW_HEIGHT),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            ui.add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend));
+            ui.add(egui::Label::new(label).wrap_mode(egui::TextWrapMode::Extend));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), add_controls);
         },
     );
 }
@@ -141,49 +148,48 @@ fn action_row(
     action: KeyAction,
 ) {
     let slots = bindings.slots(action);
-
-    // Action label cell — left-aligned so labels of different lengths
-    // ("Jump" vs "Move Forward") all start at the same x.
-    left_aligned_label(ui, theme::muted(action.label()), KEY_LABEL_WIDTH);
-
-    // Primary + secondary slot buttons.
-    slot_button(
-        ui,
-        bindings,
-        options_ui_state,
-        action,
-        KeyBindingSlot::Primary,
-        slots.primary,
-    );
-    slot_button(
-        ui,
-        bindings,
-        options_ui_state,
-        action,
-        KeyBindingSlot::Secondary,
-        slots.secondary,
-    );
-
-    // Reset cell. Disabled when this row is already at its default mapping
-    // so the player isn't tempted into a no-op.
+    let primary = slots.primary;
+    let secondary = slots.secondary;
     let default_slots = action.default_slots();
     let is_default =
-        slots.primary == default_slots.primary && slots.secondary == default_slots.secondary;
-    let reset_clicked = ui
-        .add_enabled_ui(!is_default, |ui| {
-            slot_styled_button(
-                ui,
-                "Reset",
-                theme::ButtonKind::Secondary,
-                RESET_BUTTON_WIDTH,
-            )
-        })
-        .inner
-        .clicked();
-    if reset_clicked {
-        bindings.reset(action);
-        options_ui_state.pending_rebind = None;
-    }
+        primary == default_slots.primary && secondary == default_slots.secondary;
+
+    keybinding_row(ui, theme::muted(action.label()), |ui| {
+        // Right-to-left: Reset is rightmost, then Secondary, then Primary.
+        let reset_clicked = ui
+            .add_enabled_ui(!is_default, |ui| {
+                slot_styled_button(
+                    ui,
+                    "Reset",
+                    theme::ButtonKind::Secondary,
+                    RESET_BUTTON_WIDTH,
+                )
+            })
+            .inner
+            .clicked();
+        if reset_clicked {
+            bindings.reset(action);
+            options_ui_state.pending_rebind = None;
+        }
+        ui.add_space(COLUMN_SPACING);
+        slot_button(
+            ui,
+            bindings,
+            options_ui_state,
+            action,
+            KeyBindingSlot::Secondary,
+            secondary,
+        );
+        ui.add_space(COLUMN_SPACING);
+        slot_button(
+            ui,
+            bindings,
+            options_ui_state,
+            action,
+            KeyBindingSlot::Primary,
+            primary,
+        );
+    });
 }
 
 fn slot_button(

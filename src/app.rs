@@ -31,7 +31,7 @@ use self::{
     audio::{
         AudioPlugin, main_menu_music_system, manage_ambient_beds_system,
         manage_ambient_emitters_system, play_footsteps_system, play_impact_sounds_system,
-        play_sounds_system, tick_audio_faders_system,
+        play_sounds_system, play_transition_stingers_system, tick_audio_faders_system,
     },
     scene::{apply_world_scene_system, setup_scene, update_sky_system},
     state::{
@@ -108,11 +108,16 @@ const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::ImpactEffectsSpawn,
     ClientSystemSet::ImpactEffectsTick,
     ClientSystemSet::NodeDeathTick,
+    // Transition stingers (e.g. world-join) ride on `MenuState`
+    // edge-detection, not on the gameplay event stream — slotted just
+    // before the drain so the cue arrives in the same frame as the
+    // screen change.
+    ClientSystemSet::TransitionStingers,
     // Audio drain phase: every system that emits PlaySound has run by
-    // now (impact, footsteps, node death, UI button), so a single
-    // play_sounds_system pass empties the queue and spawns the entities.
-    // The fader/ambient systems follow so any sink they touch is the
-    // sink play_sounds_system just spawned.
+    // now (impact, footsteps, node death, UI button, transitions), so
+    // a single play_sounds_system pass empties the queue and spawns
+    // the entities. The fader/ambient systems follow so any sink they
+    // touch is the sink play_sounds_system just spawned.
     ClientSystemSet::PlaySounds,
     ClientSystemSet::AudioFaderTick,
     ClientSystemSet::AmbientBeds,
@@ -347,6 +352,10 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .add_systems(
             Update,
             play_impact_sounds_system.in_set(ClientSystemSet::ImpactSounds),
+        )
+        .add_systems(
+            Update,
+            play_transition_stingers_system.in_set(ClientSystemSet::TransitionStingers),
         )
         .add_systems(
             Update,

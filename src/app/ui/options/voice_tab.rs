@@ -1,19 +1,10 @@
 //! Voice tab: enable/disable transmit, microphone gain, output gain.
-//!
-//! The audible-distance range is intentionally *not* a setting — it's a
-//! gameplay rule fixed at [`crate::server::VOICE_AUDIBLE_RANGE`] so a
-//! player can't extend or shrink it to gain a tactical advantage. The
-//! "Audible Range" line below renders that value as static info so the
-//! player can see what to expect without being able to edit it.
 
 use bevy_egui::egui;
 
-use crate::{
-    app::{
-        state::{ClientSettings, KeyAction, KeyBindings},
-        ui::theme,
-    },
-    server::VOICE_AUDIBLE_RANGE,
+use crate::app::{
+    state::{ClientSettings, KeyAction, KeyBindings},
+    ui::theme,
 };
 
 use super::widgets::{
@@ -33,19 +24,25 @@ pub(super) fn render(ui: &mut egui::Ui, settings: &mut ClientSettings) {
             percent_slider_row(ui, "Output Volume", &mut settings.voice.output_volume);
             percent_slider_row(ui, "Microphone Gain", &mut settings.voice.input_volume);
         });
-        ui.add_space(4.0);
-        setting_row(ui, "Audible Range", |ui| {
-            ui.label(
-                egui::RichText::new(format!("{:.0} m (game rule)", VOICE_AUDIBLE_RANGE))
-                    .color(theme::muted_text()),
-            );
-        });
     });
 }
 
 fn push_to_talk_hint(bindings: &KeyBindings) -> String {
-    let label = KeyBindings::slot_label(bindings.primary(KeyAction::PushToTalk));
+    let Some(code) = bindings.primary(KeyAction::PushToTalk) else {
+        return "Push To Talk is unbound. Assign a key on the Keybindings tab to transmit. Voices fade with distance and are only transmitted to players close enough to hear them.".to_owned();
+    };
+    let raw = KeyBindings::slot_label(Some(code));
+    let label = humanize_key_label(&raw);
     format!(
-        "Hold {label} to transmit. Re-bind it on the Keybindings tab. Voices fade with distance and are only transmitted to players close enough to hear them."
+        "Hold the {label} key to transmit. Re-bind it on the Keybindings tab. Voices fade with distance and are only transmitted to players close enough to hear them."
     )
+}
+
+/// Strip Bevy's `KeyCode` naming prefixes so a setting reads like a key on a
+/// keyboard ("V", "3") instead of like an enum variant ("KeyV", "Digit3").
+fn humanize_key_label(raw: &str) -> String {
+    raw.strip_prefix("Key")
+        .or_else(|| raw.strip_prefix("Digit"))
+        .unwrap_or(raw)
+        .to_owned()
 }
