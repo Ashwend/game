@@ -10,8 +10,8 @@ use crate::{
         audio::surface::{SurfaceMaterial, surface_for_resource_model},
         state::{
             ClientErrorToast, ClientRuntime, ClientSettings, ErrorToastSink, GatherInputState,
-            ImpactEffectKind, KeyAction, MenuState, PendingAudioCue, PendingImpactEffect,
-            PickupTargetState, SwingImpact, ToolSwapState,
+            ImpactEffectKind, InventoryUiState, KeyAction, MenuState, PendingAudioCue,
+            PendingImpactEffect, PickupTargetState, SwingImpact, ToolSwapState,
         },
     },
     items::{HANDS_TOOL, ToolKind, ToolProfile, item_definition},
@@ -32,6 +32,7 @@ pub(crate) struct GameplayInventoryShortcutsParams<'w, 's> {
     mouse_wheel: MessageReader<'w, 's, MouseWheel>,
     runtime: ResMut<'w, ClientRuntime>,
     gather_input: ResMut<'w, GatherInputState>,
+    inventory_ui: ResMut<'w, InventoryUiState>,
     menu: Res<'w, MenuState>,
     pickup_target: Res<'w, PickupTargetState>,
     swap_state: Res<'w, ToolSwapState>,
@@ -107,6 +108,7 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
                 &mut params.error_toasts,
                 InventoryCommand::PickUp { dropped_item_id },
             );
+            params.inventory_ui.note_pickup_intent();
         } else if let Some(resource_node_id) = params.pickup_target.resource_node_id
             && resource_target_is_crude(&params.pickup_target)
         {
@@ -118,6 +120,7 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
                 &mut params.error_toasts,
                 InventoryCommand::PickUpResourceNode { resource_node_id },
             );
+            params.inventory_ui.note_pickup_intent();
         }
     }
 

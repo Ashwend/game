@@ -27,6 +27,14 @@ pub(crate) enum InventorySoundEvent {
 /// succession; short enough to not feel laggy.
 pub(crate) const SLOT_FLASH_DURATION_SECS: f32 = 0.55;
 
+/// How long after the client sends a pickup command an inventory gain
+/// still counts as "the player picked something up." Anything beyond this
+/// window is treated as a harvest payout or a server-side grant and stays
+/// silent — pressing E is the only thing that should trigger the pickup
+/// cue. Covers a typical loopback round-trip plus a snapshot interval
+/// with margin to spare.
+const PICKUP_INTENT_WINDOW_SECS: f32 = 0.6;
+
 #[derive(Resource, Default)]
 pub(crate) struct InventoryUiState {
     pub(crate) drag: Option<InventoryDrag>,
@@ -43,6 +51,13 @@ pub(crate) struct InventoryUiState {
     /// the full state because comparing slot-by-slot in a single pass is
     /// faster than maintaining a parallel slot map.
     pub(crate) last_seen_inventory: Option<PlayerInventoryState>,
+    /// Seconds remaining in the "the player just asked to pick something
+    /// up" window. Set by [`Self::note_pickup_intent`] when a
+    /// `PickUp`/`PickUpResourceNode` command goes out and counted down
+    /// each frame. While positive, an inventory total increase is
+    /// attributed to that pickup and consumes the timer; once it expires,
+    /// inventory gains are silent (tool harvesting, server grants).
+    pickup_intent_secs_remaining: f32,
 }
 
 impl InventoryUiState {
@@ -59,13 +74,28 @@ impl InventoryUiState {
     /// Tick flash timers forward and drop any that have completed.
     pub(crate) fn tick_slot_flashes(&mut self, delta_seconds: f32) {
         let delta = delta_seconds.max(0.0);
-        if delta == 0.0 || self.slot_flashes.is_empty() {
+        if delta == 0.0 {
             return;
         }
-        self.slot_flashes.retain(|_, elapsed| {
-            *elapsed += delta;
-            *elapsed < SLOT_FLASH_DURATION_SECS
-        });
+        if !self.slot_flashes.is_empty() {
+            self.slot_flashes.retain(|_, elapsed| {
+                *elapsed += delta;
+                *elapsed < SLOT_FLASH_DURATION_SECS
+            });
+        }
+        if self.pickup_intent_secs_remaining > 0.0 {
+            self.pickup_intent_secs_remaining =
+                (self.pickup_intent_secs_remaining - delta).max(0.0);
+        }
+    }
+
+    /// Mark that the player just sent a pickup command. The next
+    /// inventory total increase observed within
+    /// [`PICKUP_INTENT_WINDOW_SECS`] is treated as the matching pickup and
+    /// fires the cue; later increases (harvest payouts, server grants)
+    /// stay silent.
+    pub(crate) fn note_pickup_intent(&mut self) {
+        self.pickup_intent_secs_remaining = PICKUP_INTENT_WINDOW_SECS;
     }
 
     /// Diff `inventory` against [`Self::last_seen_inventory`] and start a
@@ -101,6 +131,18 @@ impl InventoryUiState {
                 }
             }
             event = inventory_sound_event(previous, inventory);
+            // Inventory gains the player didn't ask for (harvest payouts,
+            // admin grants) should stay silent. A real pickup has a
+            // matching command sent within the last few frames; consume
+            // the intent flag so a delayed harvest delta that arrives
+            // after a successful pickup doesn't replay the cue.
+            if matches!(event, Some(InventorySoundEvent::Pickup)) {
+                if self.pickup_intent_secs_remaining > 0.0 {
+                    self.pickup_intent_secs_remaining = 0.0;
+                } else {
+                    event = None;
+                }
+            }
         }
         self.last_seen_inventory = Some(inventory.clone());
         event
@@ -123,6 +165,7 @@ impl InventoryUiState {
     pub(crate) fn clear_inventory_tracking(&mut self) {
         self.slot_flashes.clear();
         self.last_seen_inventory = None;
+        self.pickup_intent_secs_remaining = 0.0;
     }
 }
 
@@ -223,6 +266,7 @@ mod tests {
             was_open: true,
             slot_flashes: HashMap::new(),
             last_seen_inventory: None,
+            pickup_intent_secs_remaining: 0.0,
         };
 
         state.begin_frame();
@@ -282,7 +326,9 @@ mod tests {
         let baseline = PlayerInventoryState::empty();
         assert_eq!(state.observe_inventory(&baseline), None);
 
-        // Quantity grew → Pickup.
+        // A noted pickup intent followed by a quantity gain reads as
+        // Pickup. Without the intent, the same gain would be silent.
+        state.note_pickup_intent();
         let mut after_pickup = baseline.clone();
         after_pickup.inventory_slots[0] = Some(ItemStack::new("coal", 3));
         assert_eq!(
@@ -317,6 +363,52 @@ mod tests {
         let mut state = InventoryUiState::default();
         let snapshot = PlayerInventoryState::empty();
         assert_eq!(state.observe_inventory(&snapshot), None);
+        assert_eq!(state.observe_inventory(&snapshot), None);
+    }
+
+    #[test]
+    fn observe_inventory_suppresses_pickup_without_intent() {
+        let mut state = InventoryUiState::default();
+        let baseline = PlayerInventoryState::empty();
+        state.observe_inventory(&baseline);
+
+        // No `note_pickup_intent` — a quantity gain here is a harvest
+        // payout, not a pickup, and must stay silent.
+        let mut grew = baseline.clone();
+        grew.inventory_slots[0] = Some(ItemStack::new("wood", 1));
+        assert_eq!(state.observe_inventory(&grew), None);
+    }
+
+    #[test]
+    fn pickup_intent_expires_after_window() {
+        let mut state = InventoryUiState::default();
+        state.note_pickup_intent();
+        // Tick past the intent window so the next gain reads as harvest.
+        state.tick_slot_flashes(PICKUP_INTENT_WINDOW_SECS + 0.05);
+
+        let baseline = PlayerInventoryState::empty();
+        state.observe_inventory(&baseline);
+        let mut grew = baseline.clone();
+        grew.inventory_slots[0] = Some(ItemStack::new("stone", 1));
+        assert_eq!(state.observe_inventory(&grew), None);
+    }
+
+    #[test]
+    fn pickup_intent_is_consumed_so_later_gain_stays_silent() {
+        let mut state = InventoryUiState::default();
+        let mut snapshot = PlayerInventoryState::empty();
+        state.observe_inventory(&snapshot);
+
+        state.note_pickup_intent();
+        snapshot.inventory_slots[0] = Some(ItemStack::new("ore", 2));
+        assert_eq!(
+            state.observe_inventory(&snapshot),
+            Some(InventorySoundEvent::Pickup)
+        );
+
+        // A second gain in the same window (e.g. a harvest tick that
+        // landed right after) must not piggyback on the spent intent.
+        snapshot.inventory_slots[0] = Some(ItemStack::new("ore", 5));
         assert_eq!(state.observe_inventory(&snapshot), None);
     }
 
