@@ -4,7 +4,7 @@ use super::{
     movement::SERVER_EYE_HEIGHT,
 };
 use crate::{
-    items::{BASIC_HATCHET_ID, BASIC_PICKAXE_ID, COAL_ID, TEST_ORE_ID, TEST_RELIC_ID},
+    items::{BASIC_HATCHET_ID, BASIC_PICKAXE_ID, COAL_ID},
     protocol::{
         ChatMessage, ClientMessage, GAME_VERSION, InventoryCommand, ItemContainerSlot, ItemStack,
         PROTOCOL_VERSION, PlayerEvent, PlayerMovement, ResourceGatherCommand, ResourceNodeState,
@@ -47,6 +47,17 @@ fn connect_host(server: &mut GameServer) -> ClientId {
         )
         .expect("host should connect")
         .0
+}
+
+/// Tests start from an empty inventory; helpers below seed the items each
+/// scenario needs without taking a dependency on production starting state.
+fn equip_basic_tools(server: &mut GameServer, client_id: ClientId) {
+    let client = server
+        .clients
+        .get_mut(&client_id)
+        .expect("connected host should exist");
+    client.inventory.actionbar_slots[0] = Some(ItemStack::new(BASIC_HATCHET_ID, 1));
+    client.inventory.actionbar_slots[1] = Some(ItemStack::new(BASIC_PICKAXE_ID, 1));
 }
 
 mod commands;

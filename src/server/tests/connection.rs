@@ -246,6 +246,7 @@ fn kick_all_sends_reason_before_disconnects() {
 fn world_save_round_trips_player_inventory_and_position() {
     let mut server = server();
     let client_id = connect_host(&mut server);
+    equip_basic_tools(&mut server, client_id);
 
     let pose = PlayerMovement {
         sequence: 1,

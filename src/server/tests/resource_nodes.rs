@@ -18,31 +18,6 @@ fn look_at_test_node(server: &mut GameServer, client_id: ClientId) {
 }
 
 #[test]
-fn connect_seeds_hatchet_and_pickaxe_on_actionbar() {
-    let mut server = server();
-    let client_id = connect_host(&mut server);
-
-    let snapshot = server.snapshot_for(client_id);
-    let inventory = snapshot.players[0]
-        .inventory
-        .as_ref()
-        .expect("host inventory should be present");
-
-    assert_eq!(
-        inventory.actionbar_slots[0]
-            .as_ref()
-            .map(|stack| stack.item_id.as_ref()),
-        Some(BASIC_HATCHET_ID)
-    );
-    assert_eq!(
-        inventory.actionbar_slots[1]
-            .as_ref()
-            .map(|stack| stack.item_id.as_ref()),
-        Some(BASIC_PICKAXE_ID)
-    );
-}
-
-#[test]
 fn test_world_spawns_authoritative_resource_nodes() {
     let mut server = server();
     connect_host(&mut server);
@@ -62,6 +37,7 @@ fn test_world_spawns_authoritative_resource_nodes() {
 fn pickaxe_depletes_node_and_removes_it_from_the_world() {
     let mut server = server();
     let client_id = connect_host(&mut server);
+    equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
     server.resource_nodes.insert(99, coal_node(99, 3));
     look_at_test_node(&mut server, client_id);
@@ -99,6 +75,7 @@ fn pickaxe_depletes_node_and_removes_it_from_the_world() {
 fn second_gather_on_removed_node_is_silently_dropped() {
     let mut server = server();
     let client_id = connect_host(&mut server);
+    equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
     server.resource_nodes.insert(99, coal_node(99, 1));
     look_at_test_node(&mut server, client_id);
@@ -144,6 +121,7 @@ fn successful_gather_emits_success_toast_to_requesting_client() {
 
     let mut server = server();
     let client_id = connect_host(&mut server);
+    equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
     server.resource_nodes.insert(99, coal_node(99, 5));
     look_at_test_node(&mut server, client_id);
@@ -182,6 +160,7 @@ fn gather_into_full_inventory_emits_warning_toast_and_locks_cooldown() {
 
     let mut server = server();
     let client_id = connect_host(&mut server);
+    equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
     server.resource_nodes.insert(99, coal_node(99, 5));
     look_at_test_node(&mut server, client_id);
@@ -191,20 +170,19 @@ fn gather_into_full_inventory_emits_warning_toast_and_locks_cooldown() {
     );
 
     // Saturate every inventory slot with a non-stackable item so the coal
-    // payout has nowhere to land.
+    // payout has nowhere to land. Keep the pickaxe equipped on slot 1.
     let client = server
         .clients
         .get_mut(&client_id)
         .expect("connected host should exist");
     for slot in client.inventory.inventory_slots.iter_mut() {
-        *slot = Some(ItemStack::new(TEST_RELIC_ID, 1));
+        *slot = Some(ItemStack::new(BASIC_HATCHET_ID, 1));
     }
     for (index, slot) in client.inventory.actionbar_slots.iter_mut().enumerate() {
         if index == 1 {
-            // Keep the pickaxe equipped on slot 1.
             continue;
         }
-        *slot = Some(ItemStack::new(TEST_RELIC_ID, 1));
+        *slot = Some(ItemStack::new(BASIC_HATCHET_ID, 1));
     }
     let tick_before = server.tick;
 
@@ -241,6 +219,7 @@ fn failed_gather_emits_no_toast() {
 
     let mut server = server();
     let client_id = connect_host(&mut server);
+    equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
     server.resource_nodes.insert(99, coal_node(99, 5));
     look_at_test_node(&mut server, client_id);
@@ -268,6 +247,7 @@ fn successful_gather_broadcasts_impact_to_peers_only() {
 
     let mut server = server();
     let client_id = connect_host(&mut server);
+    equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
     server.resource_nodes.insert(99, coal_node(99, 5));
     look_at_test_node(&mut server, client_id);
@@ -309,6 +289,7 @@ fn failed_gather_emits_no_impact_broadcast() {
 
     let mut server = server();
     let client_id = connect_host(&mut server);
+    equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
     server.resource_nodes.insert(99, coal_node(99, 5));
     look_at_test_node(&mut server, client_id);
@@ -333,6 +314,7 @@ fn failed_gather_emits_no_impact_broadcast() {
 fn resource_gathering_requires_matching_tool_and_server_cooldown() {
     let mut server = server();
     let client_id = connect_host(&mut server);
+    equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
     server.resource_nodes.insert(99, coal_node(99, 9));
     look_at_test_node(&mut server, client_id);

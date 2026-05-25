@@ -1,8 +1,5 @@
 use crate::{
-    items::{
-        BASIC_HATCHET_ID, BASIC_PICKAXE_ID, TEST_BANDAGE_ID, TEST_ORE_ID, TEST_RELIC_ID, ToolKind,
-        can_pick_up, normalize_stack, stack_limit,
-    },
+    items::{ToolKind, can_pick_up, normalize_stack, stack_limit},
     protocol::{
         ACTIONBAR_SLOT_COUNT, ClientId, DroppedItemId, DroppedWorldItem, INVENTORY_SLOT_COUNT,
         InventoryCommand, ItemContainer, ItemContainerSlot, ItemStack, PlayerInventoryState,
@@ -19,13 +16,7 @@ use super::{
 };
 
 pub(super) fn starting_inventory() -> PlayerInventoryState {
-    let mut inventory = PlayerInventoryState::empty();
-    inventory.inventory_slots[0] = Some(ItemStack::new(TEST_ORE_ID, 12));
-    inventory.inventory_slots[1] = Some(ItemStack::new(TEST_BANDAGE_ID, 5));
-    inventory.inventory_slots[2] = Some(ItemStack::new(TEST_RELIC_ID, 1));
-    inventory.actionbar_slots[0] = Some(ItemStack::new(BASIC_HATCHET_ID, 1));
-    inventory.actionbar_slots[1] = Some(ItemStack::new(BASIC_PICKAXE_ID, 1));
-    inventory
+    PlayerInventoryState::empty()
 }
 
 pub(super) fn move_stack(

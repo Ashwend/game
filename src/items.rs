@@ -5,9 +5,6 @@ use std::{
 
 use crate::protocol::{DroppedWorldItem, ItemStack, Vec3Net};
 
-pub const TEST_ORE_ID: &str = "test_ore";
-pub const TEST_BANDAGE_ID: &str = "test_bandage";
-pub const TEST_RELIC_ID: &str = "test_relic";
 pub const WOOD_ID: &str = "wood";
 pub const STONE_ID: &str = "stone";
 pub const COAL_ID: &str = "coal";
@@ -152,36 +149,6 @@ impl ItemDefinition {
 }
 
 pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
-    ItemDefinition {
-        id: TEST_ORE_ID,
-        name: "Test Ore",
-        description: "A stackable mineral used to exercise inventory merging.",
-        stack_size: 20,
-        equipable: false,
-        model: ItemModel::Bag,
-        tint: ItemTint::new(111, 174, 226),
-        tool: None,
-    },
-    ItemDefinition {
-        id: TEST_BANDAGE_ID,
-        name: "Test Bandage",
-        description: "A compact stackable utility item for split-stack controls.",
-        stack_size: 8,
-        equipable: false,
-        model: ItemModel::Bag,
-        tint: ItemTint::new(226, 202, 143),
-        tool: None,
-    },
-    ItemDefinition {
-        id: TEST_RELIC_ID,
-        name: "Test Relic",
-        description: "An equipable placeholder item that renders in first person.",
-        stack_size: 99,
-        equipable: true,
-        model: ItemModel::Bag,
-        tint: ItemTint::new(183, 136, 229),
-        tool: None,
-    },
     ItemDefinition {
         id: WOOD_ID,
         name: "Wood",
@@ -367,11 +334,11 @@ mod tests {
 
     #[test]
     fn equipable_items_force_stack_size_one() {
-        assert_eq!(stack_limit(TEST_RELIC_ID), Some(1));
-        assert_eq!(stack_limit(TEST_ORE_ID), Some(20));
+        assert_eq!(stack_limit(BASIC_HATCHET_ID), Some(1));
+        assert_eq!(stack_limit(COAL_ID), Some(200));
         assert_eq!(
-            normalize_stack(&ItemStack::new(TEST_RELIC_ID, 40)),
-            Some(ItemStack::new(TEST_RELIC_ID, 1))
+            normalize_stack(&ItemStack::new(BASIC_HATCHET_ID, 40)),
+            Some(ItemStack::new(BASIC_HATCHET_ID, 1))
         );
     }
 
@@ -379,7 +346,7 @@ mod tests {
     fn pickup_target_uses_view_ray_and_range() {
         let item = DroppedWorldItem {
             id: 1,
-            stack: ItemStack::new(TEST_ORE_ID, 1),
+            stack: ItemStack::new(COAL_ID, 1),
             position: Vec3Net::new(0.0, 0.0, -2.0),
             yaw: 0.0,
             rotation: QuatNet::IDENTITY,

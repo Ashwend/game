@@ -250,7 +250,7 @@ fn split_quantity(quantity: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{items::TEST_ORE_ID, protocol::INVENTORY_SLOT_COUNT};
+    use crate::{items::COAL_ID, protocol::INVENTORY_SLOT_COUNT};
 
     #[test]
     fn right_drag_takes_half_rounded_up() {
@@ -261,8 +261,8 @@ mod tests {
 
     #[test]
     fn tooltip_body_uses_registry_stack_limits() {
-        let body = item_tooltip_body(&ItemStack::new(TEST_ORE_ID, 3));
-        assert!(body.contains("3/20"));
+        let body = item_tooltip_body(&ItemStack::new(COAL_ID, 3));
+        assert!(body.contains("3/200"));
     }
 
     #[test]

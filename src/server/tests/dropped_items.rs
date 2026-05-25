@@ -4,6 +4,13 @@ use super::*;
 fn dropped_items_spawn_near_head_and_inherit_player_velocity() {
     let mut server = server();
     let client_id = connect_host(&mut server);
+    {
+        let client = server
+            .clients
+            .get_mut(&client_id)
+            .expect("connected host should exist");
+        client.inventory.inventory_slots[2] = Some(ItemStack::new(BASIC_HATCHET_ID, 1));
+    }
     let mut running = movement(1, Vec3Net::ZERO);
     running.velocity = Vec3Net::new(0.0, 0.0, -8.0);
     server.receive(client_id, ClientMessage::Movement(running));
@@ -30,13 +37,13 @@ fn dropped_items_spawn_near_head_and_inherit_player_velocity() {
 fn nearby_dropped_items_merge_on_server_interval() {
     let mut server = server();
     server.spawn_dropped_item(
-        ItemStack::new(TEST_ORE_ID, 12),
+        ItemStack::new(COAL_ID, 12),
         Vec3Net::new(0.0, DROPPED_ITEM_RADIUS, -2.0),
         Vec3Net::ZERO,
         0.0,
     );
     server.spawn_dropped_item(
-        ItemStack::new(TEST_ORE_ID, 8),
+        ItemStack::new(COAL_ID, 8),
         Vec3Net::new(DROPPED_ITEM_MERGE_RADIUS * 0.85, DROPPED_ITEM_RADIUS, -2.0),
         Vec3Net::ZERO,
         0.0,
@@ -54,26 +61,26 @@ fn nearby_dropped_items_merge_on_server_interval() {
         matches!(
             &envelope.message,
             ServerMessage::ItemMerged { item_id, quantity }
-                if item_id.as_ref() == TEST_ORE_ID && *quantity == 8
+                if item_id.as_ref() == COAL_ID && *quantity == 8
         )
     }));
 }
 
 #[test]
 fn full_stack_does_not_oscillate_with_partial_neighbour() {
-    // TEST_ORE_ID has a stack limit of 20. Drop a full 20 next to a partial
+    // COAL_ID has a stack limit of 200. Drop a full 200 next to a partial
     // 8 within merge range and tick well past the merge interval. The pair
-    // should stay as 20 + 8 forever (no partial merge → no flip). Before
-    // the partial-merge guard this oscillated 20+8 ↔ 8+20 every merge tick.
+    // should stay as 200 + 8 forever (no partial merge → no flip). Before
+    // the partial-merge guard this oscillated 200+8 ↔ 8+200 every merge tick.
     let mut server = server();
     server.spawn_dropped_item(
-        ItemStack::new(TEST_ORE_ID, 20),
+        ItemStack::new(COAL_ID, 200),
         Vec3Net::new(0.0, DROPPED_ITEM_RADIUS, -2.0),
         Vec3Net::ZERO,
         0.0,
     );
     server.spawn_dropped_item(
-        ItemStack::new(TEST_ORE_ID, 8),
+        ItemStack::new(COAL_ID, 8),
         Vec3Net::new(DROPPED_ITEM_MERGE_RADIUS * 0.85, DROPPED_ITEM_RADIUS, -2.0),
         Vec3Net::ZERO,
         0.0,
@@ -92,7 +99,7 @@ fn full_stack_does_not_oscillate_with_partial_neighbour() {
         .map(|item| item.stack.quantity)
         .collect::<Vec<_>>();
     quantities.sort_unstable();
-    assert_eq!(quantities, vec![8, 20]);
+    assert_eq!(quantities, vec![8, 200]);
     assert!(
         !envelopes
             .iter()
@@ -105,13 +112,13 @@ fn full_stack_does_not_oscillate_with_partial_neighbour() {
 fn dropped_items_outside_merge_radius_stay_separate() {
     let mut server = server();
     server.spawn_dropped_item(
-        ItemStack::new(TEST_ORE_ID, 12),
+        ItemStack::new(COAL_ID, 12),
         Vec3Net::new(0.0, DROPPED_ITEM_RADIUS, -2.0),
         Vec3Net::ZERO,
         0.0,
     );
     server.spawn_dropped_item(
-        ItemStack::new(TEST_ORE_ID, 8),
+        ItemStack::new(COAL_ID, 8),
         Vec3Net::new(DROPPED_ITEM_MERGE_RADIUS + 0.25, DROPPED_ITEM_RADIUS, -2.0),
         Vec3Net::ZERO,
         0.0,
@@ -128,6 +135,13 @@ fn dropped_items_outside_merge_radius_stay_separate() {
 fn dropped_items_use_rapier_gravity_and_floor_collision() {
     let mut server = server();
     let client_id = connect_host(&mut server);
+    {
+        let client = server
+            .clients
+            .get_mut(&client_id)
+            .expect("connected host should exist");
+        client.inventory.inventory_slots[2] = Some(ItemStack::new(BASIC_HATCHET_ID, 1));
+    }
     server.receive(
         client_id,
         ClientMessage::Movement(movement(1, Vec3Net::new(0.0, 4.0, 0.0))),
@@ -157,7 +171,7 @@ fn dropped_items_use_rapier_gravity_and_floor_collision() {
 fn dropped_items_despawn_after_their_lifetime() {
     let mut server = server();
     server.spawn_dropped_item(
-        ItemStack::new(TEST_ORE_ID, 4),
+        ItemStack::new(COAL_ID, 4),
         Vec3Net::new(0.0, DROPPED_ITEM_RADIUS, -2.0),
         Vec3Net::ZERO,
         0.0,
@@ -215,7 +229,7 @@ fn dropped_items_are_filtered_by_chunk_aoi_in_per_client_snapshots() {
     // Drop an item at the player's spawn (chunk 0,0). Snapshot for the
     // player — still at chunk 0,0 — should see it.
     server.spawn_dropped_item(
-        ItemStack::new(TEST_ORE_ID, 1),
+        ItemStack::new(COAL_ID, 1),
         Vec3Net::new(0.0, DROPPED_ITEM_RADIUS, 0.0),
         Vec3Net::ZERO,
         0.0,
@@ -255,7 +269,7 @@ fn dropped_items_are_filtered_by_chunk_aoi_in_per_client_snapshots() {
 fn dropped_item_physics_settles_on_the_floor() {
     let mut server = server();
     server.spawn_dropped_item(
-        ItemStack::new(TEST_ORE_ID, 1),
+        ItemStack::new(COAL_ID, 1),
         Vec3Net::new(0.0, 3.0, -6.0),
         Vec3Net::ZERO,
         0.0,

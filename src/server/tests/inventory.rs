@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn connect_seeds_authoritative_inventory_with_dummy_items() {
+fn connect_seeds_empty_authoritative_inventory() {
     let mut server = server();
     let client_id = connect_host(&mut server);
 
@@ -13,24 +13,19 @@ fn connect_seeds_authoritative_inventory_with_dummy_items() {
 
     assert_eq!(inventory.inventory_slots.len(), 40);
     assert_eq!(inventory.actionbar_slots.len(), 9);
-    assert_eq!(
-        inventory.inventory_slots[0]
-            .as_ref()
-            .map(|stack| stack.item_id.as_ref()),
-        Some(TEST_ORE_ID)
+    assert!(
+        inventory
+            .inventory_slots
+            .iter()
+            .all(std::option::Option::is_none),
+        "new players should spawn with an empty inventory"
     );
-    assert_eq!(
-        inventory.inventory_slots[0]
-            .as_ref()
-            .map(|stack| stack.quantity),
-        Some(12)
-    );
-    assert!(inventory.inventory_slots[1].is_some());
-    assert_eq!(
-        inventory.inventory_slots[2]
-            .as_ref()
-            .map(|stack| stack.item_id.as_ref()),
-        Some(TEST_RELIC_ID)
+    assert!(
+        inventory
+            .actionbar_slots
+            .iter()
+            .all(std::option::Option::is_none),
+        "new players should spawn with an empty actionbar"
     );
 }
 
@@ -38,6 +33,13 @@ fn connect_seeds_authoritative_inventory_with_dummy_items() {
 fn inventory_move_splits_merges_and_populates_actionbar() {
     let mut server = server();
     let client_id = connect_host(&mut server);
+    {
+        let client = server
+            .clients
+            .get_mut(&client_id)
+            .expect("connected host should exist");
+        client.inventory.inventory_slots[0] = Some(ItemStack::new(COAL_ID, 12));
+    }
 
     server.receive(
         client_id,
@@ -93,6 +95,13 @@ fn inventory_move_splits_merges_and_populates_actionbar() {
 fn actionbar_selection_and_drop_are_server_authoritative() {
     let mut server = server();
     let client_id = connect_host(&mut server);
+    {
+        let client = server
+            .clients
+            .get_mut(&client_id)
+            .expect("connected host should exist");
+        client.inventory.inventory_slots[2] = Some(ItemStack::new(BASIC_HATCHET_ID, 1));
+    }
 
     server.receive(
         client_id,
@@ -124,7 +133,7 @@ fn actionbar_selection_and_drop_are_server_authoritative() {
     assert_eq!(snapshot.dropped_items.len(), 1);
     assert_eq!(
         snapshot.dropped_items[0].stack.item_id.as_ref(),
-        TEST_RELIC_ID
+        BASIC_HATCHET_ID
     );
 }
 
@@ -132,6 +141,13 @@ fn actionbar_selection_and_drop_are_server_authoritative() {
 fn actionbar_q_style_drop_removes_one_item_from_stack() {
     let mut server = server();
     let client_id = connect_host(&mut server);
+    {
+        let client = server
+            .clients
+            .get_mut(&client_id)
+            .expect("connected host should exist");
+        client.inventory.inventory_slots[0] = Some(ItemStack::new(COAL_ID, 12));
+    }
 
     server.receive(
         client_id,
@@ -171,11 +187,10 @@ fn pickup_merges_actionbar_stacks_before_inventory() {
         .clients
         .get_mut(&client_id)
         .expect("connected host should exist");
-    client.inventory.inventory_slots[0] = None;
-    client.inventory.actionbar_slots[0] = Some(ItemStack::new(TEST_ORE_ID, 18));
+    client.inventory.actionbar_slots[0] = Some(ItemStack::new(COAL_ID, 198));
 
     server.spawn_dropped_item(
-        ItemStack::new(TEST_ORE_ID, 8),
+        ItemStack::new(COAL_ID, 8),
         Vec3Net::new(0.0, SERVER_EYE_HEIGHT - 0.28, -2.0),
         Vec3Net::ZERO,
         0.0,
@@ -197,7 +212,7 @@ fn pickup_merges_actionbar_stacks_before_inventory() {
         inventory.actionbar_slots[0]
             .as_ref()
             .map(|stack| stack.quantity),
-        Some(20)
+        Some(200)
     );
     assert_eq!(
         inventory.inventory_slots[0]
@@ -211,6 +226,13 @@ fn pickup_merges_actionbar_stacks_before_inventory() {
 fn pickup_requires_looking_at_dropped_item_and_restores_inventory() {
     let mut server = server();
     let client_id = connect_host(&mut server);
+    {
+        let client = server
+            .clients
+            .get_mut(&client_id)
+            .expect("connected host should exist");
+        client.inventory.inventory_slots[2] = Some(ItemStack::new(BASIC_HATCHET_ID, 1));
+    }
 
     server.receive(
         client_id,
@@ -243,11 +265,14 @@ fn pickup_requires_looking_at_dropped_item_and_restores_inventory() {
         .as_ref()
         .expect("host inventory should be present");
     assert!(snapshot.dropped_items.is_empty());
-    assert_eq!(
-        inventory.inventory_slots[2]
+    assert!(
+        inventory.inventory_slots.iter().any(|slot| slot
             .as_ref()
-            .map(|stack| stack.item_id.as_ref()),
-        Some(TEST_RELIC_ID)
+            .is_some_and(|stack| stack.item_id.as_ref() == BASIC_HATCHET_ID))
+            || inventory.actionbar_slots.iter().any(|slot| slot
+                .as_ref()
+                .is_some_and(|stack| stack.item_id.as_ref() == BASIC_HATCHET_ID)),
+        "picked-up hatchet should land back in the player's inventory"
     );
 }
 
@@ -257,15 +282,9 @@ fn pickup_emits_success_toast_to_requesting_client() {
 
     let mut server = server();
     let client_id = connect_host(&mut server);
-    let client = server
-        .clients
-        .get_mut(&client_id)
-        .expect("connected host should exist");
-    client.inventory.inventory_slots[0] = None;
-    client.inventory.actionbar_slots[0] = None;
 
     server.spawn_dropped_item(
-        ItemStack::new(TEST_ORE_ID, 5),
+        ItemStack::new(COAL_ID, 5),
         Vec3Net::new(0.0, SERVER_EYE_HEIGHT - 0.28, -2.0),
         Vec3Net::ZERO,
         0.0,
@@ -302,19 +321,19 @@ fn partial_pickup_decrements_dropped_stack_and_keeps_it_in_world() {
         .clients
         .get_mut(&client_id)
         .expect("connected host should exist");
-    // Pre-fill every slot with non-stackable relics so no merge target exists,
-    // then leave one ore stack with exactly 5 units of headroom (stack limit
-    // is 20). A pickup of 8 should accept 5 and leave 3 in the world.
+    // Pre-fill every slot with non-stackable hatchets so no merge target exists,
+    // then leave one coal stack with exactly 5 units of headroom (stack limit
+    // is 200). A pickup of 8 should accept 5 and leave 3 in the world.
     for slot in client.inventory.inventory_slots.iter_mut() {
-        *slot = Some(ItemStack::new(TEST_RELIC_ID, 1));
+        *slot = Some(ItemStack::new(BASIC_HATCHET_ID, 1));
     }
     for slot in client.inventory.actionbar_slots.iter_mut() {
-        *slot = Some(ItemStack::new(TEST_RELIC_ID, 1));
+        *slot = Some(ItemStack::new(BASIC_HATCHET_ID, 1));
     }
-    client.inventory.inventory_slots[0] = Some(ItemStack::new(TEST_ORE_ID, 15));
+    client.inventory.inventory_slots[0] = Some(ItemStack::new(COAL_ID, 195));
 
     server.spawn_dropped_item(
-        ItemStack::new(TEST_ORE_ID, 8),
+        ItemStack::new(COAL_ID, 8),
         Vec3Net::new(0.0, SERVER_EYE_HEIGHT - 0.28, -2.0),
         Vec3Net::ZERO,
         0.0,
@@ -335,7 +354,7 @@ fn partial_pickup_decrements_dropped_stack_and_keeps_it_in_world() {
         inventory.inventory_slots[0]
             .as_ref()
             .map(|stack| stack.quantity),
-        Some(20)
+        Some(200)
     );
     assert_eq!(snapshot.dropped_items.len(), 1);
     assert_eq!(
@@ -367,14 +386,14 @@ fn pickup_into_full_inventory_emits_warning_toast() {
     // Saturate every slot with a non-stackable item so the incoming ore can
     // never find room.
     for slot in client.inventory.inventory_slots.iter_mut() {
-        *slot = Some(ItemStack::new(TEST_RELIC_ID, 1));
+        *slot = Some(ItemStack::new(BASIC_HATCHET_ID, 1));
     }
     for slot in client.inventory.actionbar_slots.iter_mut() {
-        *slot = Some(ItemStack::new(TEST_RELIC_ID, 1));
+        *slot = Some(ItemStack::new(BASIC_HATCHET_ID, 1));
     }
 
     server.spawn_dropped_item(
-        ItemStack::new(TEST_ORE_ID, 3),
+        ItemStack::new(COAL_ID, 3),
         Vec3Net::new(0.0, SERVER_EYE_HEIGHT - 0.28, -2.0),
         Vec3Net::ZERO,
         0.0,
@@ -410,7 +429,7 @@ fn failed_pickup_emits_no_toast() {
     let client_id = connect_host(&mut server);
 
     server.spawn_dropped_item(
-        ItemStack::new(TEST_ORE_ID, 3),
+        ItemStack::new(COAL_ID, 3),
         Vec3Net::new(0.0, SERVER_EYE_HEIGHT - 0.28, -2.0),
         Vec3Net::ZERO,
         0.0,
