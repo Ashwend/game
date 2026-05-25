@@ -1,22 +1,23 @@
-mod drag;
+pub(super) mod drag;
 mod pickup;
-mod slot;
+pub(super) mod slot;
 
 use bevy_egui::egui::{self, Align2, Color32, Stroke};
 
 use crate::{
     app::{
-        state::{ClientRuntime, ErrorToastSink, InventoryUiState, MenuState, PickupTargetState},
+        state::{ClientRuntime, InventoryUiState, MenuState, PickupTargetState, UnifiedSlotRef},
         ui::InventorySoundRequests,
     },
     protocol::{ACTIONBAR_SLOT_COUNT, ItemContainerSlot, PlayerState},
 };
 
 use self::{
-    drag::{draw_drag_preview, handle_drag_release},
     pickup::pickup_tooltip,
     slot::{SLOT_SIZE, draw_slot, slot_stack},
 };
+
+pub(super) use self::drag::{draw_drag_preview, handle_drag_release};
 use super::{modal::backdrop_layer, theme};
 
 const SLOT_GAP: f32 = 6.0;
@@ -32,7 +33,6 @@ pub(super) fn inventory_ui(
     runtime: &mut ClientRuntime,
     inventory_ui: &mut InventoryUiState,
     pickup_target: &PickupTargetState,
-    error_toasts: &mut dyn ErrorToastSink,
     inventory_sound_requests: &mut InventorySoundRequests,
     delta_seconds: f32,
 ) {
@@ -57,12 +57,27 @@ pub(super) fn inventory_ui(
     }
 
     if !menu.pause_open {
-        draw_actionbar(ctx, runtime, inventory_ui, menu.inventory_open);
+        // Shift+click quick-transfer is only meaningful when a destination
+        // container is open. The bag and the furnace are mutually
+        // exclusive (opening one closes the other), so the actionbar's
+        // shift-click destination is "the furnace, if it's up." Closing
+        // the furnace immediately disables the gesture again.
+        draw_actionbar(
+            ctx,
+            runtime,
+            inventory_ui,
+            menu.inventory_open,
+            menu.furnace_open,
+        );
     }
 
     pickup_tooltip(ctx, menu, pickup_target);
-    handle_drag_release(ctx, menu, runtime, inventory_ui, error_toasts);
-    draw_drag_preview(ctx, inventory_ui);
+    // Drag release + preview deliberately run later in the top-level
+    // `ui_system` so they see slots/rects painted by the furnace modal
+    // too. Doing it here would race with the furnace UI's
+    // `hovered_slot` write and turn an inventory↔inventory drag,
+    // while the furnace is open, into a "drop on the ground" because
+    // no rect has been recorded yet this frame.
     inventory_ui.was_open = menu.inventory_open;
 }
 
@@ -108,7 +123,19 @@ fn draw_inventory_grid(
                 let index = row * INVENTORY_COLUMNS + column;
                 let slot = ItemContainerSlot::inventory(index);
                 let stack = inventory.and_then(|inventory| slot_stack(inventory, slot));
-                draw_slot(ui, slot, stack, None, false, true, inventory_ui);
+                draw_slot(
+                    ui,
+                    UnifiedSlotRef::Player(slot),
+                    stack,
+                    None,
+                    false,
+                    true,
+                    // Bag and furnace are mutually exclusive surfaces;
+                    // shift+click out of the bag has no destination, so
+                    // the gesture falls through to the normal drag.
+                    false,
+                    inventory_ui,
+                );
             }
         });
         if row + 1 < INVENTORY_ROWS {
@@ -122,6 +149,7 @@ fn draw_actionbar(
     runtime: &ClientRuntime,
     inventory_ui: &mut InventoryUiState,
     inventory_open: bool,
+    furnace_open: bool,
 ) {
     let Some(inventory) = runtime.local_player().and_then(PlayerState::inventory) else {
         return;
@@ -140,11 +168,12 @@ fn draw_actionbar(
                         let stack = slot_stack(inventory, slot);
                         draw_slot(
                             ui,
-                            slot,
+                            UnifiedSlotRef::Player(slot),
                             stack,
                             Some((index + 1).to_string()),
                             index == inventory.active_actionbar_slot,
                             inventory_open,
+                            furnace_open,
                             inventory_ui,
                         );
                     }

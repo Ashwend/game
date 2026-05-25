@@ -1,6 +1,7 @@
 pub(crate) mod bag;
 pub(crate) mod builder;
 pub(crate) mod crude;
+pub(crate) mod deployables;
 pub(crate) mod impact;
 pub(crate) mod ore;
 pub(crate) mod player;
@@ -11,6 +12,7 @@ pub(crate) use bag::low_poly_bag_mesh;
 pub(crate) use crude::{
     low_poly_branch_pile_mesh, low_poly_hay_grass_mesh, low_poly_surface_stone_mesh,
 };
+pub(crate) use deployables::{low_poly_crude_furnace_mesh, low_poly_workbench_mesh};
 pub(crate) use impact::{impact_stone_shard_mesh, impact_wood_chip_mesh};
 pub(crate) use ore::{COAL_ORE, IRON_ORE, STONE_VEIN, SULFUR_ORE, low_poly_ore_node_mesh};
 pub(crate) use player::{PLAYER_HEAD_TOP_LOCAL_Y, low_poly_player_mesh};

@@ -18,10 +18,20 @@ pub(crate) struct CraftingUiState {
     /// When true, hide recipes the player cannot currently craft. Quietly
     /// useful once the registry grows past a screenful.
     pub(crate) only_craftable: bool,
-    /// Set by the toggle system when the crafting screen is opened; the
-    /// UI calls `request_focus` on the search field and clears it on the
-    /// next render. Mirrors `MenuState::chat_focus_pending`.
-    pub(crate) focus_search_pending: bool,
+    /// Reset on each open of the crafting screen. Used by the renderer to
+    /// scroll the recipe list back to the top — without this, a player
+    /// who scrolled mid-list, closed, then reopened would re-enter at
+    /// their last scroll position which feels disorienting.
+    pub(crate) scroll_reset_pending: bool,
+    /// Per-recipe batch-quantity buffer. Stored as a `String` (not a
+    /// `u16`) so the player can type freely — including transiently
+    /// invalid values like an empty string or a number that exceeds
+    /// what's currently craftable. The recipe row parses the buffer on
+    /// each frame, clamps it where the +/- buttons act, and disables the
+    /// Craft button when the typed value can't be honoured. Keyed by the
+    /// recipe's `&'static str` id so the row doesn't allocate when it
+    /// only needs to *read* the current quantity.
+    pub(crate) quantities: HashMap<&'static str, String>,
 }
 
 /// Client-only smoothing state for the queue HUD progress bars.

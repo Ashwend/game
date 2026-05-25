@@ -18,6 +18,7 @@ pub(super) fn gameplay_accepts_controls(menu: &MenuState, window_focused: bool) 
         && !menu.pause_open
         && !menu.inventory_open
         && !menu.crafting_open
+        && !menu.furnace_open
 }
 
 pub(super) fn primary_window_focused(primary_window: &Query<&Window, With<PrimaryWindow>>) -> bool {

@@ -81,6 +81,7 @@ impl GameServer {
             view_tier: crate::protocol::ViewRadiusTier::default(),
             crafting: starting_crafting_state(),
             next_craft_job_id: 1,
+            open_furnace: None,
         };
 
         let initial_position = client.controller.position;
@@ -121,6 +122,9 @@ impl GameServer {
         // persisted state — the player shouldn't pay for jobs that never
         // finished. Overflow lands as drops at their last position.
         self.cancel_all_jobs_for_disconnect(client_id);
+        // Drop any open-furnace reference so the next snapshot for any
+        // peer doesn't reach into a stale client entry.
+        self.close_furnace(client_id);
 
         let Some(client) = self.clients.remove(&client_id) else {
             return Vec::new();
@@ -219,6 +223,14 @@ impl GameServer {
                 } else {
                     None
                 };
+                // Furnace view is owner-only too — peers can see the
+                // structure's public `active` flag via the deployable
+                // snapshot, but the inventory itself stays private.
+                let open_furnace = if is_local {
+                    self.open_furnace_view_for(client.client_id)
+                } else {
+                    None
+                };
                 PlayerState {
                     client_id: client.client_id,
                     steam_id: client.steam_id,
@@ -237,6 +249,7 @@ impl GameServer {
                         .map(|bubble| bubble.text.clone()),
                     inventory,
                     crafting,
+                    open_furnace,
                 }
             })
             .collect::<Vec<_>>();
@@ -276,11 +289,20 @@ impl GameServer {
             .collect::<Vec<_>>();
         resource_nodes.sort_by_key(|node| node.id);
 
+        let visible_deployables = chunk_filter.as_ref().map(|chunks| {
+            chunks
+                .iter()
+                .flat_map(|coord| self.chunk_manager.deployed_entities_in(*coord))
+                .collect::<std::collections::HashSet<_>>()
+        });
+        let deployed_entities = self.deployed_entities_for_snapshot(visible_deployables.as_ref());
+
         WorldSnapshot {
             tick: self.tick,
             players,
             dropped_items,
             resource_nodes,
+            deployed_entities,
         }
     }
 

@@ -37,6 +37,8 @@ impl GameServer {
             next_resource_node_id: self.next_resource_node_id,
             world_time_seconds_of_day: self.world_time.seconds_of_day,
             world_time_multiplier: self.world_time.multiplier,
+            deployed_entities: self.persisted_deployed_entities(),
+            next_deployed_entity_id: self.next_deployed_entity_id,
         };
         save
     }

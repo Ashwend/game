@@ -11,13 +11,13 @@ use crate::{
         state::{
             ClientErrorToast, ClientRuntime, ClientSettings, ErrorToastSink, GatherInputState,
             ImpactEffectKind, InventoryUiState, KeyAction, MenuState, PendingAudioCue,
-            PendingImpactEffect, PickupTargetState, SwingImpact, ToolSwapState,
+            PendingImpactEffect, PickupTargetState, SwingImpact, SwingTarget, ToolSwapState,
         },
     },
     items::{HANDS_TOOL, ToolKind, ToolProfile, item_definition},
     protocol::{
-        ACTIONBAR_SLOT_COUNT, ClientMessage, InventoryCommand, ItemContainerSlot,
-        ResourceGatherCommand,
+        ACTIONBAR_SLOT_COUNT, ClientMessage, DamageDeployableCommand, InventoryCommand,
+        ItemContainerSlot, ResourceGatherCommand,
     },
     resources::resource_node_definition,
 };
@@ -33,7 +33,8 @@ pub(crate) struct GameplayInventoryShortcutsParams<'w, 's> {
     runtime: ResMut<'w, ClientRuntime>,
     gather_input: ResMut<'w, GatherInputState>,
     inventory_ui: ResMut<'w, InventoryUiState>,
-    menu: Res<'w, MenuState>,
+    menu: ResMut<'w, MenuState>,
+    crafting_ui: ResMut<'w, crate::app::state::CraftingUiState>,
     pickup_target: Res<'w, PickupTargetState>,
     swap_state: Res<'w, ToolSwapState>,
     settings: Res<'w, ClientSettings>,
@@ -121,6 +122,32 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
                 InventoryCommand::PickUpResourceNode { resource_node_id },
             );
             params.inventory_ui.note_pickup_intent();
+        } else if let Some(id) = params.pickup_target.deployable_id {
+            // Same key, different intent: opening a placed structure's
+            // UI. Furnace opens its server-side interactive view;
+            // workbench is a client-only convenience that opens the
+            // crafting modal (the workbench is otherwise just a
+            // proximity gate). Other deployable kinds no-op for now.
+            use crate::items::DeployableKind;
+            match params.pickup_target.deployable_kind {
+                Some(DeployableKind::Furnace { .. }) => {
+                    send_place_deployable_or_furnace_open(
+                        &mut params.runtime,
+                        &mut params.error_toasts,
+                        id,
+                    );
+                }
+                Some(DeployableKind::Workbench { .. }) => {
+                    crate::app::systems::input::open_crafting_modal(
+                        &mut params.menu,
+                        &mut params.inventory_ui,
+                        &mut params.crafting_ui,
+                        &mut params.runtime,
+                        &mut params.error_toasts,
+                    );
+                }
+                None => {}
+            }
         }
     }
 
@@ -132,13 +159,30 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
     } else {
         equipped_tool_kind(&params.runtime)
     };
-    // Treat an unharvestable target (wrong tool for this node) as no
-    // target at all so the impact frame resolves to a clean miss instead
-    // of a hit attempt the server would just reject.
-    let target = params
+    // Pick the swing target. Priority:
+    //  1. A resource node the held tool can actually harvest. Wrong-
+    //     tool nodes turn into "no target" so the impact frame resolves
+    //     to a clean miss instead of a hit the server would reject.
+    //  2. A placed structure the player is aimed at, *iff* they're
+    //     swinging a real tool (Hands don't damage furnaces/workbenches —
+    //     bare hands on stone feel wrong, and the no-tool case would
+    //     swing on every left-click which is jarring near placed
+    //     buildings the player is just standing next to).
+    let target = if let Some(node_id) = params
         .pickup_target
         .resource_node_id
-        .filter(|_| equipped_tool_can_harvest_target(&params.runtime, &params.pickup_target));
+        .filter(|_| equipped_tool_can_harvest_target(&params.runtime, &params.pickup_target))
+    {
+        Some(SwingTarget::ResourceNode(node_id))
+    } else if let Some(deployable_id) = params.pickup_target.deployable_id
+        && equipped_tool
+            .map(|kind| kind != ToolKind::Hands)
+            .unwrap_or(false)
+    {
+        Some(SwingTarget::Deployable(deployable_id))
+    } else {
+        None
+    };
     let impact = params.gather_input.update(
         params.time.delta_secs(),
         params.mouse_buttons.just_pressed(MouseButton::Left),
@@ -175,11 +219,18 @@ fn equipped_tool_profile(runtime: &ClientRuntime) -> ToolProfile {
 // command. The swing state guarantees at most one impact event per swing, so
 // hit and miss audio can never both play.
 fn dispatch_swing_impact(params: &mut GameplayInventoryShortcutsParams, impact: SwingImpact) {
-    let Some(node_id) = impact.target else {
-        params.gather_input.set_pending_miss_audio();
-        return;
-    };
+    match impact.target {
+        Some(SwingTarget::ResourceNode(id)) => dispatch_resource_swing(params, impact, id),
+        Some(SwingTarget::Deployable(id)) => dispatch_deployable_swing(params, impact, id),
+        None => params.gather_input.set_pending_miss_audio(),
+    }
+}
 
+fn dispatch_resource_swing(
+    params: &mut GameplayInventoryShortcutsParams,
+    impact: SwingImpact,
+    node_id: u64,
+) {
     // Target was harvestable when the swing tick read it, but the resource
     // node's anchor / kind metadata could still be missing if the entity
     // was despawned this same frame. Treat that as a miss — better a
@@ -223,6 +274,58 @@ fn dispatch_swing_impact(params: &mut GameplayInventoryShortcutsParams, impact: 
             resource_node_id: node_id,
         }),
         "gather command",
+    );
+}
+
+/// Damage swing on a placed structure: same camera kick + per-tool
+/// surface cue + spark visual as a resource hit, but the network
+/// payload is `DamageDeployable` (no inventory payout, just HP).
+fn dispatch_deployable_swing(
+    params: &mut GameplayInventoryShortcutsParams,
+    impact: SwingImpact,
+    deployable_id: u64,
+) {
+    let Some(anchor) = params
+        .pickup_target
+        .world_position
+        .filter(|_| params.pickup_target.deployable_id == Some(deployable_id))
+        .map(|pos| bevy::prelude::Vec3::new(pos.x, pos.y, pos.z))
+    else {
+        params.gather_input.set_pending_miss_audio();
+        return;
+    };
+
+    // Surface picks the impact sound + chip palette. Wood for the
+    // workbench, stone for the furnace. Future deployables can map
+    // through `DeployableKind` here.
+    let surface = match params.pickup_target.deployable_kind {
+        Some(crate::items::DeployableKind::Workbench { .. }) => SurfaceMaterial::Wood,
+        Some(crate::items::DeployableKind::Furnace { .. }) => SurfaceMaterial::Stone,
+        None => SurfaceMaterial::Stone,
+    };
+    let visual_kind = ImpactEffectKind::for_surface(surface);
+
+    let spray_direction = swing_spray_direction(&params.runtime, anchor);
+    let seed = params.gather_input.current_swing_seed();
+    params.gather_input.set_pending_impact(PendingImpactEffect {
+        anchor,
+        spray_direction,
+        kind: visual_kind,
+        seed,
+    });
+    params.gather_input.set_pending_audio_cue(PendingAudioCue {
+        anchor,
+        tool: impact.tool,
+        surface,
+    });
+
+    params.camera_kick.trigger(impact.tool);
+
+    send_gameplay_message(
+        &mut params.runtime,
+        &mut params.error_toasts,
+        ClientMessage::DamageDeployable(DamageDeployableCommand { id: deployable_id }),
+        "damage command",
     );
 }
 
@@ -338,6 +441,48 @@ pub(crate) fn send_crafting_command(
         error_toasts,
         ClientMessage::Crafting(command),
         "crafting command",
+    );
+}
+
+pub(crate) fn send_place_deployable_command(
+    runtime: &mut ClientRuntime,
+    error_toasts: &mut dyn ErrorToastSink,
+    command: crate::protocol::PlaceDeployableCommand,
+) {
+    send_gameplay_message(
+        runtime,
+        error_toasts,
+        ClientMessage::PlaceDeployable(command),
+        "place command",
+    );
+}
+
+pub(crate) fn send_furnace_command(
+    runtime: &mut ClientRuntime,
+    error_toasts: &mut dyn ErrorToastSink,
+    command: crate::protocol::FurnaceCommand,
+) {
+    send_gameplay_message(
+        runtime,
+        error_toasts,
+        ClientMessage::Furnace(command),
+        "furnace command",
+    );
+}
+
+/// Wrapper used by the E-interact handler so the call site reads as
+/// "open this furnace" instead of a generic enum constructor. Inline-
+/// only convenience — feel free to inline it if the call site is the
+/// last consumer.
+fn send_place_deployable_or_furnace_open(
+    runtime: &mut ClientRuntime,
+    error_toasts: &mut dyn ErrorToastSink,
+    id: crate::protocol::DeployedEntityId,
+) {
+    send_furnace_command(
+        runtime,
+        error_toasts,
+        crate::protocol::FurnaceCommand::Open { id },
     );
 }
 

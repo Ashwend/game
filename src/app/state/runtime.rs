@@ -25,11 +25,11 @@ use super::connection::ConnectionWatch;
 const COLLIDER_SET_HASH_MIX: u64 = 0x9E37_79B9_7F4A_7C15;
 
 /// Cheap order-independent fingerprint of the live collider-bearing
-/// resource node set (trees + ores). Used by the snapshot handler to skip
-/// rebuilding the collision grid when the set didn't change. XOR of node
-/// IDs + count is good enough — the only way it collides in practice is
-/// two nodes being added and two different nodes being removed in the
-/// same tick, which can't happen during play.
+/// entity set (trees + ores + placed deployables). Used by the snapshot
+/// handler to skip rebuilding the collision grid when the set didn't
+/// change. XOR of ids + count is good enough — the only way it collides
+/// in practice is two entities being added and two different entities
+/// being removed in the same tick, which can't happen during play.
 fn resource_node_collider_set_version(snapshot: Option<&WorldSnapshot>) -> u64 {
     let Some(snapshot) = snapshot else {
         return 0;
@@ -43,7 +43,34 @@ fn resource_node_collider_set_version(snapshot: Option<&WorldSnapshot>) -> u64 {
         hash ^= node.id;
         count += 1;
     }
+    for entity in &snapshot.deployed_entities {
+        // Same-id-space collision is impossible because deployables
+        // and resource nodes draw from different counters server-side,
+        // but flipping a bit keeps the two halves of the fingerprint
+        // from accidentally cancelling out if they ever did share ids.
+        hash ^= entity.id ^ 0xD9E3_F1A7_5B6C_8024;
+        count += 1;
+    }
     hash.wrapping_mul(COLLIDER_SET_HASH_MIX).wrapping_add(count)
+}
+
+/// AABB collider for a placed structure. Returns `None` if the item id
+/// no longer resolves (e.g. a server using a newer item table than this
+/// client knows about — in which case skip the collider rather than
+/// crash, the renderer will still draw the structure).
+fn deployable_collider(state: &crate::protocol::DeployedEntityState) -> Option<WorldBlock> {
+    let profile = crate::items::item_definition(&state.item_id)?.deployable?;
+    let center = Vec3Net::new(
+        state.position.x,
+        state.position.y + profile.collider_half_height,
+        state.position.z,
+    );
+    let half = Vec3Net::new(
+        profile.collider_half_width,
+        profile.collider_half_height,
+        profile.collider_half_width,
+    );
+    Some(WorldBlock::new(center, half))
 }
 
 pub(super) const MAX_CLIENT_LOG_MESSAGES: usize = 80;
@@ -285,11 +312,18 @@ impl ClientRuntime {
             .snapshot
             .as_ref()
             .map(|snapshot| {
-                snapshot
+                let nodes = snapshot
                     .resource_nodes
                     .iter()
-                    .filter_map(resource_node_collider)
-                    .collect()
+                    .filter_map(resource_node_collider);
+                // Placed structures also block player movement. We
+                // build the AABB from each structure's item profile so
+                // the half-extents match the server-side overlap test.
+                let deployables = snapshot
+                    .deployed_entities
+                    .iter()
+                    .filter_map(deployable_collider);
+                nodes.chain(deployables).collect()
             })
             .unwrap_or_default();
         self.world_grid = Some(BlockGrid::build_with_extras(world, &extras));
@@ -451,6 +485,17 @@ impl ClientRuntime {
             .players
             .iter()
             .find(|player| player.client_id == client_id)
+    }
+
+    /// Best-known world-space position of the local player's feet.
+    /// Prefers the predicted controller (zero-latency placement preview)
+    /// and falls back to the last server snapshot.
+    pub(crate) fn local_player_position(&self) -> Option<Vec3> {
+        if let Some(predicted) = &self.predicted_local {
+            return Some(predicted.position.into());
+        }
+        let player = self.local_player()?;
+        Some(player.position.into())
     }
 
     pub(crate) fn local_view(&self) -> Option<LocalPlayerView> {

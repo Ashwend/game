@@ -1,6 +1,8 @@
 mod chat;
 mod confirm;
 mod crafting;
+mod deployable_overlay;
+mod furnace;
 mod hud;
 mod inventory;
 mod menu;
@@ -25,8 +27,13 @@ use self::{
     chat::chat_ui,
     confirm::{confirmation_ui, notice_ui},
     crafting::{crafting_queue_hud, crafting_ui},
+    deployable_overlay::{
+        DeployableOverlay, DeployableOverlayParams, collect_deployable_overlay_entries,
+        deployable_overlay_ui,
+    },
+    furnace::furnace_ui,
     hud::hud_ui,
-    inventory::inventory_ui,
+    inventory::{draw_drag_preview, handle_drag_release, inventory_ui},
     menu::main_menu_ui,
     multiplayer::multiplayer_ui,
     options::{OptionsBackTarget, options_ui},
@@ -37,6 +44,7 @@ use self::{
     toast::toast_ui,
     worlds::worlds_ui,
 };
+
 use super::state::{
     ClientErrorToast, ClientRuntime, ClientSettings, CraftingHudState, CraftingUiState,
     InventorySoundEvent, MenuBackdropVisibility, MenuState, OptionsUiState, SaveStore, Screen,
@@ -68,6 +76,7 @@ pub(crate) struct UiResources<'w, 's> {
     diagnostics: Res<'w, DiagnosticsStore>,
     primary_monitor: Query<'w, 's, &'static Monitor, With<PrimaryMonitor>>,
     peer_overlay: PeerOverlayParams<'w, 's>,
+    deployable_overlay: DeployableOverlayParams<'w, 's>,
 }
 
 pub(crate) fn ui_system(
@@ -155,13 +164,28 @@ pub(crate) fn ui_system(
                     .map(|(camera, transform)| (camera, *transform));
                 peer_overlay_ui(ctx, PeerOverlay { camera, peers });
 
+                // Deployable overlay rides on the same `(camera,
+                // transform)` projection as the peer overlay so the
+                // labels sit in the same projected space — they
+                // share the in-world feel.
+                let snapshot_deployables = resources
+                    .runtime
+                    .snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.deployed_entities.as_slice())
+                    .unwrap_or(&[]);
+                let entries = collect_deployable_overlay_entries(
+                    resources.deployable_overlay.placed.iter(),
+                    snapshot_deployables,
+                );
+                deployable_overlay_ui(ctx, DeployableOverlay { camera, entries });
+
                 inventory_ui(
                     ctx,
                     &mut resources.menu,
                     &mut resources.runtime,
                     &mut resources.inventory_ui,
                     &resources.pickup_target,
-                    &mut resources.error_toasts,
                     &mut resources.inventory_sound_requests,
                     delta_seconds,
                 );
@@ -172,6 +196,28 @@ pub(crate) fn ui_system(
                     &mut resources.crafting_ui,
                     &mut resources.error_toasts,
                 );
+                furnace_ui(
+                    ctx,
+                    &mut resources.menu,
+                    &mut resources.runtime,
+                    &mut resources.inventory_ui,
+                    &mut resources.error_toasts,
+                );
+                // Drag release + preview run after every slot-drawing
+                // surface (inventory, furnace) so the release decision
+                // sees `hovered_slot` and the panel rects populated by
+                // *this* frame. Without this ordering, a drag inside
+                // the inventory while the furnace is open releases on
+                // a `None` hovered_slot and falls through to the
+                // drop-on-ground branch.
+                handle_drag_release(
+                    ctx,
+                    &resources.menu,
+                    &mut resources.runtime,
+                    &mut resources.inventory_ui,
+                    &mut resources.error_toasts,
+                );
+                draw_drag_preview(ctx, &resources.inventory_ui);
                 // The queue HUD is always visible while jobs exist —
                 // closing the crafting browser must not hide it, that
                 // would defeat the point of the queue being persistent.

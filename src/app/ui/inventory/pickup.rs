@@ -2,7 +2,7 @@ use bevy_egui::egui::{self, pos2};
 
 use crate::{
     app::state::{MenuState, PickupTargetState},
-    items::{ItemDefinition, ToolKind, item_definition},
+    items::{DeployableKind, ItemDefinition, ToolKind, item_definition},
     resources::resource_node_definition,
 };
 
@@ -13,7 +13,17 @@ pub(super) fn pickup_tooltip(
     menu: &MenuState,
     pickup_target: &PickupTargetState,
 ) {
-    if menu.pause_open || menu.inventory_open || menu.chat_open {
+    // Any full-screen modal hides the world tooltip. Even though the
+    // scrim is opaque on top, egui's foreground-area tooltip would
+    // still paint over it — the modal also blocks the input that would
+    // act on the target, so the tooltip would be lying about what
+    // pressing E does.
+    if menu.pause_open
+        || menu.inventory_open
+        || menu.crafting_open
+        || menu.furnace_open
+        || menu.chat_open
+    {
         return;
     }
 
@@ -48,6 +58,16 @@ fn pickup_tooltip_text(pickup_target: &PickupTargetState) -> Option<(String, Str
         return Some((title, body));
     }
 
+    // Placed structures fall through next so the player can see the
+    // "Press E to open" affordance the same way they see "Press E to
+    // pick up" on dropped items. Workbenches have no interactive view
+    // yet — they show a passive "in range" status instead so the
+    // player understands what the structure does without us inventing
+    // an interaction that doesn't exist.
+    if let Some(kind) = pickup_target.deployable_kind {
+        return Some(deployable_tooltip_text(kind));
+    }
+
     let definition_id = pickup_target.resource_definition_id.as_ref()?;
     let definition = resource_node_definition(definition_id)?;
     let contents = if pickup_target.resource_storage.is_empty() {
@@ -77,6 +97,19 @@ fn pickup_tooltip_text(pickup_target: &PickupTargetState) -> Option<(String, Str
     };
     let body = format!("{action_line}\nContents:\n{contents}");
     Some((definition.name.to_owned(), body))
+}
+
+fn deployable_tooltip_text(kind: DeployableKind) -> (String, String) {
+    match kind {
+        DeployableKind::Furnace { tier } => (
+            format!("Furnace T{tier}"),
+            "Press E to open\nLoad fuel + smeltable ore".to_owned(),
+        ),
+        DeployableKind::Workbench { tier } => (
+            format!("Workbench lvl {tier}"),
+            "Crafting station. Tier-1 recipes unlock while you're in range.".to_owned(),
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -119,22 +152,38 @@ mod tests {
 
     #[test]
     fn pickup_tooltip_is_hidden_when_ui_blocks_pickup() {
-        let ctx = egui::Context::default();
-        let menu = MenuState {
-            inventory_open: true,
-            ..Default::default()
-        };
-        let pickup_target = PickupTargetState {
-            stack: Some(ItemStack::new("unknown-item", 1)),
-            screen_position: Some(Vec2::new(100.0, 120.0)),
-            ..Default::default()
-        };
+        // Every modal that gates pickup input should also hide the
+        // tooltip — otherwise the world-anchored label leaks through
+        // the scrim and tells the player to press a key that no
+        // longer does anything.
+        type SetFlag = fn(&mut MenuState);
+        let cases: &[(&str, SetFlag)] = &[
+            ("inventory_open", |m| m.inventory_open = true),
+            ("crafting_open", |m| m.crafting_open = true),
+            ("furnace_open", |m| m.furnace_open = true),
+            ("chat_open", |m| m.chat_open = true),
+            ("pause_open", |m| m.pause_open = true),
+        ];
+        for (label, set_flag) in cases {
+            let mut menu = MenuState::default();
+            set_flag(&mut menu);
 
-        let output = ctx.run(raw_input(), |ctx| {
-            pickup_tooltip(ctx, &menu, &pickup_target);
-        });
+            let ctx = egui::Context::default();
+            let pickup_target = PickupTargetState {
+                stack: Some(ItemStack::new("unknown-item", 1)),
+                screen_position: Some(Vec2::new(100.0, 120.0)),
+                ..Default::default()
+            };
 
-        assert!(output.shapes.is_empty());
+            let output = ctx.run(raw_input(), |ctx| {
+                pickup_tooltip(ctx, &menu, &pickup_target);
+            });
+
+            assert!(
+                output.shapes.is_empty(),
+                "tooltip should be hidden for {label}",
+            );
+        }
     }
 
     #[test]

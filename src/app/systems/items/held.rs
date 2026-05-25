@@ -101,7 +101,10 @@ fn held_item_visual(
     model: ItemModel,
 ) -> (Handle<Mesh>, Handle<StandardMaterial>) {
     match model {
-        ItemModel::Bag => (
+        // Deployables fall back to the bag visual in the player's hand —
+        // the structure mesh is what gets dropped into the world on
+        // placement, not what's held.
+        ItemModel::Bag | ItemModel::Deployable => (
             assets.held_bag_mesh.clone(),
             assets.held_bag_material.clone(),
         ),
@@ -123,12 +126,12 @@ fn held_item_local_transform(
 ) -> Transform {
     let phase = swing_fraction.clamp(0.0, 1.0);
     let model_down_offset = match model {
-        ItemModel::Bag => HELD_ITEM_DOWN_OFFSET,
+        ItemModel::Bag | ItemModel::Deployable => HELD_ITEM_DOWN_OFFSET,
         ItemModel::Hatchet | ItemModel::Pickaxe => HELD_ITEM_DOWN_OFFSET - 0.03,
     };
 
     let (pose, model_rotation): (ToolSwingPose, Quat) = match model {
-        ItemModel::Bag => (bag_idle_pose(phase), Quat::IDENTITY),
+        ItemModel::Bag | ItemModel::Deployable => (bag_idle_pose(phase), Quat::IDENTITY),
         ItemModel::Hatchet => (hatchet_swing_pose(phase), Quat::from_rotation_y(PI * 0.5)),
         ItemModel::Pickaxe => (pickaxe_swing_pose(phase), Quat::from_rotation_y(PI * 0.5)),
     };
@@ -152,7 +155,7 @@ fn held_item_local_transform(
     }
 
     let (drop, back, pitch_lag) = match model {
-        ItemModel::Bag => (0.40, 0.04, -0.30),
+        ItemModel::Bag | ItemModel::Deployable => (0.40, 0.04, -0.30),
         ItemModel::Hatchet => (0.50, 0.05, -0.40),
         ItemModel::Pickaxe => (0.68, 0.06, -0.55),
     };

@@ -1,6 +1,7 @@
 mod backdrop;
 mod connection;
 mod crafting;
+mod deployable;
 mod dialogs;
 mod gather;
 mod inventory;
@@ -18,6 +19,7 @@ pub(crate) use backdrop::MenuBackdropVisibility;
 #[cfg(test)]
 pub(crate) use connection::CONNECTION_LAG_WARNING_SECONDS;
 pub(crate) use crafting::{CraftingHudState, CraftingUiState, ProgressBaseline};
+pub(crate) use deployable::DeployablePlacementState;
 pub(crate) use dialogs::{
     ConfirmationAction, ConfirmationDialog, CreateWorldDialog, DirectConnectAttempt,
     DirectConnectDialog, DirectConnectResult, EditWorldDialog, LoadingSplash, LoadingSplashKind,
@@ -25,10 +27,11 @@ pub(crate) use dialogs::{
 };
 pub(crate) use gather::{
     GatherInputState, ImpactEffectKind, PICKUP_TARGET_SCAN_INTERVAL_SECS, PendingAudioCue,
-    PendingImpactEffect, PickupTargetState, RemoteImpactEvent, SwingImpact, ToolSwapState,
+    PendingImpactEffect, PickupTargetState, RemoteImpactEvent, SwingImpact, SwingTarget,
+    ToolSwapState,
 };
 pub(crate) use inventory::{
-    InventoryDrag, InventoryDragButton, InventorySoundEvent, InventoryUiState,
+    InventoryDrag, InventoryDragButton, InventorySoundEvent, InventoryUiState, UnifiedSlotRef,
 };
 pub(crate) use look::LookState;
 pub(crate) use menu::{MenuState, SaveStore, Screen, SteamUser};

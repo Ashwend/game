@@ -18,13 +18,53 @@ use std::{
 };
 
 use crate::items::{
-    BASIC_HATCHET_ID, BASIC_PICKAXE_ID, FIBER_ID, PLANT_TWINE_ID, STONE_ID, WOOD_ID,
-    item_definition,
+    BASIC_HATCHET_ID, BASIC_PICKAXE_ID, CRUDE_FURNACE_ID, DeployableKind, FIBER_ID, PLANT_TWINE_ID,
+    STONE_ID, WOOD_ID, WORKBENCH_T1_ID, item_definition,
 };
 
 pub const PLANT_TWINE_RECIPE_ID: &str = "plant_twine";
 pub const STONE_HATCHET_RECIPE_ID: &str = "wood_stone_hatchet";
 pub const STONE_PICKAXE_RECIPE_ID: &str = "wood_stone_pickaxe";
+pub const WORKBENCH_T1_RECIPE_ID: &str = "workbench_t1";
+pub const CRUDE_FURNACE_RECIPE_ID: &str = "crude_furnace";
+
+/// Crafting station a recipe needs to be in range of. Cheap value type so
+/// it lives next to the recipe definition without a registry lookup. The
+/// server resolves "in range" by walking the local player's nearby placed
+/// deployables; client UIs surface the requirement so the player knows
+/// what to build first.
+///
+/// Furnace-style "machine inside an entity" operations are intentionally
+/// not represented here — smelting happens inside the furnace's own UI,
+/// not via the recipe registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecipeStation {
+    /// Hand-craftable — no nearby structure required.
+    None,
+    /// A `DeployableKind::Workbench { tier }` with `tier >= min_tier`
+    /// must be within its `station_radius` of the player.
+    Workbench { min_tier: u8 },
+}
+
+impl RecipeStation {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::None => "Hand craft",
+            Self::Workbench { .. } => "Workbench",
+        }
+    }
+
+    /// True when `kind` (a placed deployable) satisfies this requirement.
+    /// Workbench tier 2 also satisfies a Workbench tier 1 requirement,
+    /// same as how higher-tier tools satisfy lower-tier gather rules.
+    pub fn satisfied_by(self, kind: DeployableKind) -> bool {
+        match (self, kind) {
+            (Self::None, _) => true,
+            (Self::Workbench { min_tier }, DeployableKind::Workbench { tier }) => tier >= min_tier,
+            _ => false,
+        }
+    }
+}
 
 /// Interned identifier shared between protocol messages, server state, and
 /// the UI. Same `Arc<str>` story as [`crate::items::ItemId`] — clones are a
@@ -38,11 +78,11 @@ pub const MAX_CRAFTING_QUEUE_LEN: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RecipeCategory {
-    /// Raw-material refinements (e.g. fiber → twine).
+    /// Raw-material refinements (e.g. fiber → twine, iron ore → bar).
     Materials,
     /// Equipable tools and weapons.
     Tools,
-    /// Placeables and structures (reserved — no recipes yet).
+    /// Placeable structures (workbench, furnace, …).
     Building,
     /// Catch-all so the enum doesn't need a protocol bump for one-offs.
     Misc,
@@ -91,6 +131,9 @@ pub struct RecipeDefinition {
     /// `0` = primitive material processing (e.g. plant twine), `1` =
     /// stone-age tools, `2` = iron, and so on.
     pub tier: u8,
+    /// Crafting station the player must stand next to. Defaults to
+    /// `RecipeStation::None` for hand-craftable recipes.
+    pub station: RecipeStation,
 }
 
 /// Static recipe table. Append-only — entries must keep stable ids so saves
@@ -106,6 +149,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         output_quantity: 1,
         craft_seconds: 3.0,
         tier: 0,
+        station: RecipeStation::None,
     },
     RecipeDefinition {
         id: STONE_HATCHET_RECIPE_ID,
@@ -121,6 +165,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         output_quantity: 1,
         craft_seconds: 8.0,
         tier: 1,
+        station: RecipeStation::None,
     },
     RecipeDefinition {
         id: STONE_PICKAXE_RECIPE_ID,
@@ -136,6 +181,39 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         output_quantity: 1,
         craft_seconds: 10.0,
         tier: 1,
+        station: RecipeStation::None,
+    },
+    RecipeDefinition {
+        id: WORKBENCH_T1_RECIPE_ID,
+        name: "Workbench lvl 1",
+        description: "A sturdy crafting table. Stand near one to unlock its tier-1 recipes.",
+        category: RecipeCategory::Building,
+        inputs: &[
+            CraftingInput::new(WOOD_ID, 50),
+            CraftingInput::new(STONE_ID, 20),
+            CraftingInput::new(PLANT_TWINE_ID, 4),
+        ],
+        output_item: WORKBENCH_T1_ID,
+        output_quantity: 1,
+        craft_seconds: 14.0,
+        tier: 1,
+        station: RecipeStation::None,
+    },
+    RecipeDefinition {
+        id: CRUDE_FURNACE_RECIPE_ID,
+        name: "Furnace",
+        description: "A stone furnace. Place one and press E to load fuel and smelt ore.",
+        category: RecipeCategory::Building,
+        inputs: &[
+            CraftingInput::new(STONE_ID, 60),
+            CraftingInput::new(WOOD_ID, 10),
+            CraftingInput::new(PLANT_TWINE_ID, 2),
+        ],
+        output_item: CRUDE_FURNACE_ID,
+        output_quantity: 1,
+        craft_seconds: 18.0,
+        tier: 2,
+        station: RecipeStation::Workbench { min_tier: 1 },
     },
 ];
 

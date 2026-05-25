@@ -63,6 +63,12 @@ pub(crate) struct MenuState {
     /// does not pause gameplay or the network tick. The server keeps
     /// progressing the queue regardless of this flag.
     pub(crate) crafting_open: bool,
+    /// Mirrors `local_player.open_furnace.is_some()` from the snapshot.
+    /// Used by the input gating helpers to suppress movement/look while
+    /// the furnace modal is up, without those helpers having to reach
+    /// into the snapshot themselves. Synced by
+    /// [`crate::app::systems::sync_furnace_open_flag_system`].
+    pub(crate) furnace_open: bool,
     pub(crate) chat_open: bool,
     pub(crate) chat_focus_pending: bool,
     pub(crate) chat_input: String,
@@ -88,6 +94,7 @@ impl Default for MenuState {
             pause_options_open: false,
             inventory_open: false,
             crafting_open: false,
+            furnace_open: false,
             chat_open: false,
             chat_focus_pending: false,
             chat_input: String::new(),
@@ -109,6 +116,7 @@ impl MenuState {
         self.pause_open = false;
         self.pause_options_open = false;
         self.crafting_open = false;
+        self.furnace_open = false;
         self.chat_open = false;
         self.chat_focus_pending = false;
         self.status = None;

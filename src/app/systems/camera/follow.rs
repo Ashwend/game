@@ -94,6 +94,7 @@ mod tests {
             chat_bubble: None,
             inventory: None,
             crafting: None,
+            open_furnace: None,
         }
     }
 

@@ -34,8 +34,8 @@ use crate::{
     },
     items::{ItemTint, item_definition},
     protocol::{
-        CraftingCommand, CraftingJob, PlayerCraftingState, PlayerInventoryState, PlayerState,
-        SERVER_TICK_RATE_HZ,
+        CraftingCommand, CraftingJob, MAX_CRAFT_BATCH_SIZE, PlayerCraftingState,
+        PlayerInventoryState, PlayerState, SERVER_TICK_RATE_HZ,
     },
 };
 
@@ -138,7 +138,18 @@ fn draw_panel_contents(
     draw_filter_row(ui, crafting_ui);
     ui.add_space(10.0);
 
+    // Scroll-reset trick: egui keeps the scroll offset per `Id`, so a
+    // pending reset is implemented by swapping to a fresh id for one
+    // frame. The next frame returns to the stable id so the player's
+    // mid-session scrolling survives until they reopen.
+    let scroll_id_salt: u64 = if crafting_ui.scroll_reset_pending {
+        crafting_ui.scroll_reset_pending = false;
+        1
+    } else {
+        0
+    };
     egui::ScrollArea::vertical()
+        .id_salt(("crafting_recipes_scroll", scroll_id_salt))
         .max_height(CRAFTING_PANEL_HEIGHT - 110.0)
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -162,6 +173,7 @@ fn draw_panel_contents(
                     inventory,
                     entry.craftable,
                     queue_full,
+                    crafting_ui,
                     runtime,
                     error_toasts,
                 );
@@ -238,16 +250,16 @@ fn draw_filter_row(ui: &mut egui::Ui, crafting_ui: &mut CraftingUiState) {
         // frames — egui auto-ids are stable enough here, but a named id
         // also lets future "Ctrl+F to focus search"-style shortcuts hit
         // the same widget without scraping memory.
-        let search_response = ui.add_sized(
+        // Search field is *not* auto-focused on open — players use the
+        // crafting screen mostly via category chips and clicking, not
+        // typing. Clicking the field still focuses it normally. See the
+        // toggle system for the rationale.
+        let _ = ui.add_sized(
             [260.0, theme::COMPACT_ROW_HEIGHT],
             theme::text_input(&mut crafting_ui.search)
                 .id(egui::Id::new("crafting_search_input"))
                 .hint_text("Recipe or material…"),
         );
-        if crafting_ui.focus_search_pending {
-            search_response.request_focus();
-            crafting_ui.focus_search_pending = false;
-        }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.checkbox(&mut crafting_ui.only_craftable, "Only craftable");
         });
@@ -288,6 +300,7 @@ fn draw_recipe_row(
     inventory: Option<&PlayerInventoryState>,
     craftable: bool,
     queue_full: bool,
+    crafting_ui: &mut CraftingUiState,
     runtime: &mut ClientRuntime,
     error_toasts: &mut dyn ErrorToastSink,
 ) {
@@ -315,12 +328,55 @@ fn draw_recipe_row(
     );
     paint_recipe_icon(&painter, icon_rect, recipe);
 
-    let text_left = icon_rect.right() + 12.0;
-    // Right edge of the text column — stops short of the craft button so
-    // long input lines elide cleanly instead of slipping under it.
-    let button_width = 110.0;
-    let text_right_edge = rect.right() - 12.0 - button_width - 14.0;
+    // The right-side controls cluster — minus, quantity input, plus, then
+    // Craft. We need their total width to know where the text column
+    // ends, so compute the cluster width first and lay everything out
+    // from the right edge.
+    let craft_button_width = 90.0;
+    let qty_button_width = 28.0;
+    let qty_input_width = 48.0;
+    let inter_widget_gap = 4.0;
+    let cluster_to_craft_gap = 8.0;
+    let cluster_width = qty_button_width
+        + inter_widget_gap
+        + qty_input_width
+        + inter_widget_gap
+        + qty_button_width
+        + cluster_to_craft_gap
+        + craft_button_width;
 
+    let text_left = icon_rect.right() + 12.0;
+    // Stops short of the cluster so long input lines elide cleanly
+    // instead of slipping under it.
+    let text_right_edge = rect.right() - inner_padding - cluster_width - 14.0;
+
+    // --- Quantity state (lives in CraftingUiState so it survives a row
+    // re-render and per-recipe edits don't leak between recipes). ---
+    let max_batch = max_craftable_batch(inventory, recipe);
+    // `or_insert_with` so the *first* render seeds "1" without forcing
+    // every recipe row to write to the map every frame.
+    let buffer = crafting_ui
+        .quantities
+        .entry(recipe.id)
+        .or_insert_with(|| "1".to_owned());
+    // Strip non-digits before parsing - the input widget catches most of
+    // them, but a pasted "12x" or leading whitespace would otherwise
+    // make every frame's parse fail and silently disable the Craft
+    // button.
+    buffer.retain(|c| c.is_ascii_digit());
+    if buffer.is_empty() {
+        // Don't auto-substitute "1" while the player is mid-edit; an
+        // empty buffer is treated as "no valid quantity" further down so
+        // the Craft button disables and the +/− buttons key off the
+        // last known value.
+    }
+    let typed_qty: Option<u16> = buffer.trim().parse::<u16>().ok().filter(|n| *n > 0);
+    let display_qty = typed_qty.unwrap_or(1).min(MAX_CRAFT_BATCH_SIZE);
+
+    // Title: includes the recipe's per-craft output multiplier (a recipe
+    // that crafts ×4 per click is labelled "Plant Twine ×4"). The
+    // *batch* multiplier lives in the quantity input below and is shown
+    // separately on the queue card.
     let title = if recipe.output_quantity > 1 {
         format!("{} ×{}", recipe.name, recipe.output_quantity)
     } else {
@@ -334,53 +390,236 @@ fn draw_recipe_row(
         theme::text(),
     );
     let category = recipe.category.label();
+    let total_seconds = recipe.craft_seconds * display_qty as f32;
+    let time_text = if display_qty > 1 {
+        format!("{category} • {:.0}s × {}", recipe.craft_seconds, display_qty)
+    } else {
+        format!("{category} • {:.0}s", recipe.craft_seconds)
+    };
     painter.text(
         Pos2::new(text_left, rect.top() + 28.0),
         Align2::LEFT_TOP,
-        format!("{category} • {:.0}s", recipe.craft_seconds),
+        time_text,
         FontId::new(11.5, FontFamily::Proportional),
         theme::muted_text(),
     );
-    let inputs_galley =
-        build_inputs_galley(ui.ctx(), recipe, inventory, text_right_edge - text_left);
+    let _ = total_seconds; // kept for future "total: Xs" callouts
+    let inputs_galley = build_inputs_galley(
+        ui.ctx(),
+        recipe,
+        inventory,
+        display_qty,
+        text_right_edge - text_left,
+    );
     let inputs_pos = Pos2::new(text_left, rect.top() + 44.0);
     painter.galley(inputs_pos, inputs_galley, theme::text());
 
-    // Right-aligned craft button.
+    // --- Right-cluster layout (right-to-left). ---
     let button_height = 32.0;
-    let button_rect = Rect::from_min_size(
-        Pos2::new(
-            rect.right() - inner_padding - button_width,
-            rect.center().y - button_height * 0.5,
-        ),
-        Vec2::new(button_width, button_height),
+    let cluster_top = rect.center().y - button_height * 0.5;
+    let craft_rect = Rect::from_min_size(
+        Pos2::new(rect.right() - inner_padding - craft_button_width, cluster_top),
+        Vec2::new(craft_button_width, button_height),
     );
-    let (button_label, button_kind) = if !craftable {
+    let plus_rect = Rect::from_min_size(
+        Pos2::new(
+            craft_rect.left() - cluster_to_craft_gap - qty_button_width,
+            cluster_top,
+        ),
+        Vec2::new(qty_button_width, button_height),
+    );
+    let input_rect = Rect::from_min_size(
+        Pos2::new(
+            plus_rect.left() - inter_widget_gap - qty_input_width,
+            cluster_top,
+        ),
+        Vec2::new(qty_input_width, button_height),
+    );
+    let minus_rect = Rect::from_min_size(
+        Pos2::new(
+            input_rect.left() - inter_widget_gap - qty_button_width,
+            cluster_top,
+        ),
+        Vec2::new(qty_button_width, button_height),
+    );
+
+    // --- Minus button. ---
+    let minus_can_decrement = display_qty > 1;
+    let minus_response = theme::compact_button_in_rect(
+        ui,
+        ("crafting_qty_minus", recipe.id),
+        minus_rect,
+        "−",
+        theme::ButtonKind::Secondary,
+    );
+    if minus_response.clicked() && minus_can_decrement {
+        let next = display_qty.saturating_sub(1).max(1);
+        *crafting_ui
+            .quantities
+            .entry(recipe.id)
+            .or_insert_with(|| "1".to_owned()) = next.to_string();
+    }
+
+    // --- Quantity input field. ---
+    // Re-grab the buffer mutably: the minus click above may have just
+    // replaced it. Using the entry API avoids a second lookup on the
+    // happy path.
+    let buffer_mut = crafting_ui
+        .quantities
+        .entry(recipe.id)
+        .or_insert_with(|| "1".to_owned());
+    let input_response = ui.put(
+        input_rect,
+        theme::text_input(buffer_mut)
+            .id(egui::Id::new(("crafting_qty_input", recipe.id)))
+            .desired_width(qty_input_width - 16.0)
+            .horizontal_align(egui::Align::Center),
+    );
+    if input_response.changed() {
+        // Filter again post-edit. The widget itself doesn't filter chars
+        // so a paste can sneak letters in, which would silently fail the
+        // parse below.
+        buffer_mut.retain(|c| c.is_ascii_digit());
+    }
+
+    // Re-parse after the input edit so the +/Craft buttons see the
+    // freshly typed value this frame.
+    let buffer_snapshot = buffer_mut.clone();
+    let typed_qty_post: Option<u16> = buffer_snapshot
+        .trim()
+        .parse::<u16>()
+        .ok()
+        .filter(|n| *n > 0);
+
+    // --- Plus button. ---
+    // Only enabled while the typed quantity is below the max-craftable
+    // ceiling. We *don't* silently clamp; the player can still type a
+    // higher number to see the shortfall in the inputs row, but the +
+    // button itself stops working at the limit.
+    let plus_can_increment = typed_qty_post
+        .map(|q| q < max_batch && q < MAX_CRAFT_BATCH_SIZE)
+        .unwrap_or(false);
+    let plus_response = theme::compact_button_in_rect(
+        ui,
+        ("crafting_qty_plus", recipe.id),
+        plus_rect,
+        "+",
+        theme::ButtonKind::Secondary,
+    );
+    if plus_response.clicked() && plus_can_increment {
+        let next = typed_qty_post
+            .unwrap_or(1)
+            .saturating_add(1)
+            .min(max_batch)
+            .min(MAX_CRAFT_BATCH_SIZE);
+        *crafting_ui
+            .quantities
+            .entry(recipe.id)
+            .or_insert_with(|| "1".to_owned()) = next.to_string();
+    }
+
+    // --- Craft button + disabled tooltip. ---
+    // Priority order: queue-full first (a global blocker), then per-
+    // recipe checks. The "Missing" label is reserved for the case where
+    // the player can't even craft *one*; the "exceeds max" case keeps
+    // the "Craft" label and surfaces the explanation in a tooltip so
+    // the player connects the disabled button to the typed number.
+    let craft_disabled: Option<String> = if queue_full {
+        Some("The crafting queue is full.".to_owned())
+    } else if !craftable {
+        Some(format!(
+            "You don't have the materials to craft {}.",
+            recipe.name
+        ))
+    } else if let Some(qty) = typed_qty_post {
+        // Order matters: the per-recipe ceiling is usually lower than
+        // the global cap, so we explain that case first to point the
+        // player at the *real* blocker (missing materials, not protocol
+        // limits).
+        if qty > max_batch {
+            Some(format!(
+                "You can only craft {} of {} with what you've got.",
+                max_batch, recipe.name
+            ))
+        } else if qty > MAX_CRAFT_BATCH_SIZE {
+            Some(format!(
+                "Batch is capped at {MAX_CRAFT_BATCH_SIZE} per craft."
+            ))
+        } else {
+            None
+        }
+    } else {
+        Some(format!(
+            "Enter a quantity between 1 and {} (max you can craft right now).",
+            max_batch
+        ))
+    };
+
+    let (craft_label, craft_kind) = if !craftable {
         ("Missing", theme::ButtonKind::Secondary)
     } else if queue_full {
         ("Queue full", theme::ButtonKind::Secondary)
+    } else if craft_disabled.is_some() {
+        ("Craft", theme::ButtonKind::Secondary)
     } else {
         ("Craft", theme::ButtonKind::Primary)
     };
-    let response = theme::compact_button_in_rect(
+    let craft_response = theme::compact_button_in_rect(
         ui,
         ("crafting_craft_button", recipe.id),
-        button_rect,
-        button_label,
-        button_kind,
+        craft_rect,
+        craft_label,
+        craft_kind,
     );
-    if response.clicked() && craftable && !queue_full {
-        theme::record_click_sound(ui, &response);
+    if let Some(ref reason) = craft_disabled {
+        let _ = craft_response.clone().on_hover_text(reason);
+    }
+    if craft_response.clicked()
+        && craft_disabled.is_none()
+        && let Some(qty) = typed_qty_post
+    {
+        theme::record_click_sound(ui, &craft_response);
         send_crafting_command(
             runtime,
             error_toasts,
             CraftingCommand::Enqueue {
                 recipe_id: recipe.id.to_owned(),
+                quantity: qty,
             },
         );
     }
 
     ui.add_space(6.0);
+}
+
+/// Compute the largest batch quantity the player can currently afford
+/// for a given recipe, capped at [`MAX_CRAFT_BATCH_SIZE`].
+///
+/// `0` means "can't even craft one" — the same condition the existing
+/// `craftable` flag tracks, but expressed as a batch-aware ceiling so
+/// the recipe row can also disable the `+` button at the actual limit.
+fn max_craftable_batch(
+    inventory: Option<&PlayerInventoryState>,
+    recipe: &RecipeDefinition,
+) -> u16 {
+    let Some(inventory) = inventory else {
+        return 0;
+    };
+    if recipe.inputs.is_empty() {
+        // No-input recipes never gate on materials, so the only ceiling
+        // is the protocol's per-message cap.
+        return MAX_CRAFT_BATCH_SIZE;
+    }
+    let mut max = MAX_CRAFT_BATCH_SIZE as u32;
+    for input in recipe.inputs {
+        if input.quantity == 0 {
+            continue;
+        }
+        let have = count_in_inventory(inventory, input.item_id) as u32;
+        let possible = have / input.quantity as u32;
+        max = max.min(possible);
+    }
+    max.min(MAX_CRAFT_BATCH_SIZE as u32) as u16
 }
 
 fn paint_recipe_icon(painter: &egui::Painter, rect: Rect, recipe: &RecipeDefinition) {
@@ -455,15 +694,22 @@ fn count_in_inventory(inventory: &PlayerInventoryState, item_id: &str) -> u16 {
 }
 
 /// Build the per-recipe input line as a multi-color `Galley`. Each input
-/// becomes a `"×N Name"` chunk separated by `"  ·  "`. Missing inputs are
-/// painted in [`INPUT_MISSING_COLOR`] so the player can pick out what's
-/// short at a glance. Built via `LayoutJob` because `painter.text` only
-/// supports one color per call — switching gives us free font shaping,
-/// proper kerning, and single-line ellipsis when the row is narrow.
+/// reads as `"×needed Name  (need N more)"` when the player is short,
+/// or `"×needed Name  (have/needed)"` when they're not — the recipe cost
+/// is always visible, but the shortfall is what the player actually
+/// needs to act on, so it gets the red "(need N more)" callout. Built
+/// via `LayoutJob` because `painter.text` only supports one color per
+/// call.
+///
+/// `multiplier` scales the per-input quantities by the requested batch
+/// size: a `multiplier = 3` on a recipe that needs 2 wood per craft
+/// renders the input as `×6 Wood` so the player sees the *batch* cost
+/// matching what the server will deduct.
 fn build_inputs_galley(
     ctx: &egui::Context,
     recipe: &RecipeDefinition,
     inventory: Option<&PlayerInventoryState>,
+    multiplier: u16,
     max_width: f32,
 ) -> std::sync::Arc<egui::Galley> {
     let font = FontId::new(11.5, FontFamily::Proportional);
@@ -473,6 +719,7 @@ fn build_inputs_galley(
         ..Default::default()
     };
 
+    let multiplier = multiplier.max(1);
     let mut job = LayoutJob::default();
     for (index, input) in recipe.inputs.iter().enumerate() {
         if index > 0 {
@@ -484,21 +731,50 @@ fn build_inputs_galley(
         let have = inventory
             .map(|inv| count_in_inventory(inv, input.item_id))
             .unwrap_or(0);
-        let missing = have < input.quantity;
-        let chunk = format!("×{} {name}", input.quantity);
+        // Saturate at `u16::MAX` so an absurd batch size doesn't wrap
+        // around and silently understate the cost the row claims.
+        let needed = (input.quantity as u32)
+            .saturating_mul(multiplier as u32)
+            .min(u16::MAX as u32) as u16;
+        let shortfall = needed.saturating_sub(have);
+
+        // The base "×needed Name" chunk stays in the primary text colour
+        // even when short — the player can always read the actual cost.
+        let base_chunk = format!("×{needed} {name}");
         job.append(
-            &chunk,
+            &base_chunk,
             0.0,
             TextFormat {
                 font_id: font.clone(),
-                color: if missing {
-                    INPUT_MISSING_COLOR
-                } else {
-                    theme::text()
-                },
+                color: theme::text(),
                 ..Default::default()
             },
         );
+
+        if shortfall > 0 {
+            // Red shortfall: the actionable bit of information.
+            job.append(
+                &format!("  (need {shortfall} more)"),
+                0.0,
+                TextFormat {
+                    font_id: font.clone(),
+                    color: INPUT_MISSING_COLOR,
+                    ..Default::default()
+                },
+            );
+        } else {
+            // Quiet "have/need" so the player can still see their margin
+            // without it competing with the cost.
+            job.append(
+                &format!("  ({have}/{needed})"),
+                0.0,
+                TextFormat {
+                    font_id: font.clone(),
+                    color: theme::muted_text(),
+                    ..Default::default()
+                },
+            );
+        }
     }
     job.wrap = TextWrapping {
         max_width: max_width.max(0.0),
@@ -519,6 +795,15 @@ const QUEUE_CARD_GAP: f32 = 8.0;
 const QUEUE_TOP_MARGIN: f32 = 24.0;
 const QUEUE_RIGHT_MARGIN: f32 = 24.0;
 const QUEUE_CANCEL_BUTTON_SIZE: f32 = 22.0;
+/// Number of queue cards rendered (with a graduated fade) before the
+/// HUD switches to a compact "+N more" overflow bar. Beyond this we
+/// don't paint per-job cards at all — the always-open recipe browser
+/// shows the full queue if the player wants the rest.
+const QUEUE_VISIBLE_CARDS: usize = 3;
+/// Height of the compact "+N more" overflow indicator drawn below the
+/// last visible queue card. Shorter than a full card on purpose so it
+/// reads as a secondary "there's more" hint, not another job entry.
+const QUEUE_OVERFLOW_BAR_HEIGHT: f32 = 22.0;
 
 pub(super) fn crafting_queue_hud(
     ctx: &egui::Context,
@@ -562,7 +847,16 @@ pub(super) fn crafting_queue_hud(
     // whether anything else moved.
     ctx.request_repaint();
 
+    let visible_count = jobs.len().min(QUEUE_VISIBLE_CARDS);
+    let hidden_count = jobs.len().saturating_sub(QUEUE_VISIBLE_CARDS);
     for (index, job) in jobs.iter().enumerate() {
+        let alpha = queue_card_alpha(index);
+        if alpha <= 0.0 {
+            // Past the visible window — don't draw an interactable card
+            // the player can't see. The "+N more" overflow bar drawn
+            // after this loop covers those.
+            continue;
+        }
         let is_head = index == 0;
         let fraction = smoothed_fraction(hud_state, job, now_secs, is_head);
         let y_top = screen_rect.top()
@@ -575,10 +869,39 @@ pub(super) fn crafting_queue_hud(
         let area_response = egui::Area::new(Id::new(("crafting_queue_card", job.job_id)))
             .order(Order::Foreground)
             .fixed_pos(rect.min)
-            .show(ctx, |ui| draw_queue_card(ui, rect, job, is_head, fraction));
+            .show(ctx, |ui| {
+                // egui Ui-level opacity multiplier — applies to every
+                // paint + widget inside the area. One knob, everything
+                // (background, stroke, text, progress bar, cancel
+                // button) fades together.
+                ui.multiply_opacity(alpha);
+                draw_queue_card(ui, rect, job, is_head, fraction)
+            });
         if area_response.inner.cancel_clicked {
             cancel_target = Some(job.job_id);
         }
+    }
+
+    // Compact "+N more" overflow indicator under the last visible card.
+    // Anchored to the bottom of the last *rendered* card so a queue of
+    // exactly QUEUE_VISIBLE_CARDS doesn't show one, while a queue with
+    // any hidden jobs does. Sits at the same x extents as the cards so
+    // the column reads as a single stack.
+    if hidden_count > 0 && visible_count > 0 {
+        let last_visible_bottom = screen_rect.top()
+            + QUEUE_TOP_MARGIN
+            + (visible_count - 1) as f32 * (QUEUE_CARD_HEIGHT + QUEUE_CARD_GAP)
+            + QUEUE_CARD_HEIGHT;
+        let bar_rect = Rect::from_min_size(
+            Pos2::new(card_x_left, last_visible_bottom + QUEUE_CARD_GAP * 0.5),
+            Vec2::new(QUEUE_CARD_WIDTH, QUEUE_OVERFLOW_BAR_HEIGHT),
+        );
+        egui::Area::new(Id::new("crafting_queue_overflow"))
+            .order(Order::Foreground)
+            .fixed_pos(bar_rect.min)
+            .show(ctx, |ui| {
+                draw_queue_overflow(ui, bar_rect, hidden_count);
+            });
     }
 
     if let Some(job_id) = cancel_target {
@@ -637,6 +960,19 @@ fn smoothed_fraction(
     (projected / baseline.total_ticks as f32).clamp(0.0, 1.0)
 }
 
+/// Whether a queue card at `index` is rendered. Cards within the
+/// visible window paint at full opacity; anything past the window is
+/// represented by the compact "+N more" overflow bar instead. Kept as a
+/// helper (rather than inline) so the fade rule has one place to live
+/// if we ever want to bring graduated opacity back.
+fn queue_card_alpha(index: usize) -> f32 {
+    if index < QUEUE_VISIBLE_CARDS {
+        1.0
+    } else {
+        0.0
+    }
+}
+
 fn baseline_from(job: &CraftingJob, now_secs: f64) -> ProgressBaseline {
     ProgressBaseline {
         observed_ticks: job.progress_ticks,
@@ -647,6 +983,43 @@ fn baseline_from(job: &CraftingJob, now_secs: f64) -> ProgressBaseline {
 
 struct QueueCardResponse {
     cancel_clicked: bool,
+}
+
+/// Slim "+N more" pill drawn under the last visible queue card when the
+/// queue runs deeper than [`QUEUE_VISIBLE_CARDS`]. Non-interactive on
+/// purpose — clicking it doesn't open or expand anything, since the
+/// crafting modal already exposes the full queue count. The goal is a
+/// silent visual hint, not another button.
+fn draw_queue_overflow(ui: &mut egui::Ui, rect: Rect, hidden_count: usize) {
+    let _ = ui.allocate_rect(rect, Sense::hover());
+    let painter = ui.painter().clone();
+
+    let corner = CornerRadius::same(4);
+    // Same panel fill the cards use but at a reduced alpha — the bar is
+    // a secondary cue, not the primary HUD element. egui's
+    // `multiply_opacity` would dim text and stroke too; we want the
+    // text legible so we modulate just the background here.
+    let fill = theme::panel_fill().gamma_multiply(0.65);
+    painter.rect_filled(rect, corner, fill);
+    painter.rect_stroke(
+        rect,
+        corner,
+        Stroke::new(1.0, theme::panel_stroke()),
+        StrokeKind::Inside,
+    );
+
+    let label = if hidden_count == 1 {
+        "+1 more queued".to_owned()
+    } else {
+        format!("+{hidden_count} more queued")
+    };
+    painter.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        label,
+        FontId::new(11.5, FontFamily::Proportional),
+        theme::muted_text(),
+    );
 }
 
 fn draw_queue_card(
@@ -671,7 +1044,14 @@ fn draw_queue_card(
     );
 
     let recipe = crate::crafting::recipe_definition(&job.recipe_id);
-    let display_name = recipe.map(|r| r.name).unwrap_or("Unknown recipe");
+    let recipe_name = recipe.map(|r| r.name).unwrap_or("Unknown recipe");
+    // Batch jobs get a "×N" suffix so the queue HUD makes it obvious why
+    // a single card has a long progress bar.
+    let display_name = if job.quantity > 1 {
+        format!("{recipe_name} ×{}", job.quantity)
+    } else {
+        recipe_name.to_owned()
+    };
     let tint = recipe
         .and_then(|r| item_definition(r.output_item))
         .map(|definition| definition.tint)
@@ -697,7 +1077,7 @@ fn draw_queue_card(
     painter.text(
         Pos2::new(rect.left() + 32.0, row_center_y),
         Align2::LEFT_CENTER,
-        display_name,
+        &display_name,
         FontId::new(13.5, FontFamily::Proportional),
         theme::text(),
     );
@@ -782,5 +1162,54 @@ fn draw_queue_card(
 
     QueueCardResponse {
         cancel_clicked: cancel_response.clicked(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        crafting::{PLANT_TWINE_RECIPE_ID, recipe_definition},
+        items::FIBER_ID,
+        protocol::{ItemStack, PlayerInventoryState},
+    };
+
+    fn inventory_with(item: &str, qty: u16) -> PlayerInventoryState {
+        let mut inv = PlayerInventoryState::empty();
+        inv.inventory_slots[0] = Some(ItemStack::new(item, qty));
+        inv
+    }
+
+    #[test]
+    fn queue_card_alpha_shows_first_three_only() {
+        // Top three render at full opacity, anything deeper is handled
+        // by the "+N more" overflow bar drawn beneath them.
+        assert!((queue_card_alpha(0) - 1.0).abs() < f32::EPSILON);
+        assert!((queue_card_alpha(1) - 1.0).abs() < f32::EPSILON);
+        assert!((queue_card_alpha(2) - 1.0).abs() < f32::EPSILON);
+        assert!(queue_card_alpha(3) <= 0.0);
+        assert!(queue_card_alpha(15) <= 0.0);
+    }
+
+    #[test]
+    fn max_craftable_batch_returns_zero_without_inventory() {
+        let recipe = recipe_definition(PLANT_TWINE_RECIPE_ID).expect("recipe");
+        assert_eq!(max_craftable_batch(None, recipe), 0);
+    }
+
+    #[test]
+    fn max_craftable_batch_floors_to_fewest_complete_set() {
+        let recipe = recipe_definition(PLANT_TWINE_RECIPE_ID).expect("recipe");
+        // Plant twine needs 3 fiber; 11 fiber → 3 twine craftable.
+        let inv = inventory_with(FIBER_ID, 11);
+        assert_eq!(max_craftable_batch(Some(&inv), recipe), 3);
+    }
+
+    #[test]
+    fn max_craftable_batch_clamps_at_protocol_max() {
+        let recipe = recipe_definition(PLANT_TWINE_RECIPE_ID).expect("recipe");
+        // 65535 fiber would naively give 21845, well above the 100 cap.
+        let inv = inventory_with(FIBER_ID, u16::MAX);
+        assert_eq!(max_craftable_batch(Some(&inv), recipe), MAX_CRAFT_BATCH_SIZE);
     }
 }

@@ -4,7 +4,7 @@ use crate::{
     controller::{BlockGrid, PlayerController},
     protocol::{
         CHAT_BUBBLE_DURATION_SECONDS, ChatMessage, ClientId, ClientMessage, CraftingJobId,
-        DroppedItemId, PlayerCraftingState, PlayerInventoryState, ResourceNodeId,
+        DeployedEntityId, DroppedItemId, PlayerCraftingState, PlayerInventoryState, ResourceNodeId,
         ResourceNodeState, SERVER_TICK_RATE_HZ, ServerMessage, SteamId, Vec3Net, sanitize_chat,
     },
     save::{PersistedPlayer, WorldSave},
@@ -36,9 +36,11 @@ pub mod chunk_manager;
 mod commands;
 mod connection;
 mod crafting;
+mod deployables;
 mod dropped_items;
+mod furnace;
 mod inventory;
-mod movement;
+pub(crate) mod movement;
 mod persistence;
 mod resource_nodes;
 mod toasts;
@@ -109,9 +111,14 @@ pub struct GameServer {
     /// Server-authoritative chunk system. Owns per-chunk capacity, AoI
     /// visibility, and the fresh-position regrow scheduler.
     pub(crate) chunk_manager: ChunkManager,
+    /// Placed structures (workbench, furnace, …) keyed by id. Anchor
+    /// chunks are owned by `chunk_manager` so AoI filtering matches the
+    /// same pipeline as resource nodes and dropped items.
+    pub(super) deployed_entities: HashMap<DeployedEntityId, deployables::DeployedEntity>,
     next_dropped_item_id: DroppedItemId,
     next_client_id: ClientId,
     next_resource_node_id: ResourceNodeId,
+    next_deployed_entity_id: DeployedEntityId,
     tick: u64,
     /// Authoritative day/night clock. Mirrored to clients via
     /// [`ServerMessage::WorldTime`]. Persisted to the save in `world_save`.
@@ -199,6 +206,23 @@ impl GameServer {
                 .next_node_id()
                 .max(resource_nodes.keys().copied().max().unwrap_or(0) + 1),
         );
+        // Deployables: restore from save and re-anchor to their chunks
+        // so the next snapshot picks them up immediately. The id counter
+        // floors above the highest known id so a future place can't
+        // collide with a persisted one.
+        let persisted_deployables = std::mem::take(&mut save.state.deployed_entities);
+        let deployed_entities = Self::restore_deployed_entities(persisted_deployables);
+        for entity in deployed_entities.values() {
+            chunk_manager.track_deployed_entity(entity.id, entity.position);
+        }
+        let next_deployed_entity_id = save.state.next_deployed_entity_id.max(
+            deployed_entities
+                .keys()
+                .copied()
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1),
+        );
         let world_time = save.state.world_time();
         let tick = save.state.last_authoritative_tick;
 
@@ -215,9 +239,11 @@ impl GameServer {
             dropped_item_physics,
             resource_nodes,
             chunk_manager,
+            deployed_entities,
             next_dropped_item_id,
             next_client_id,
             next_resource_node_id,
+            next_deployed_entity_id,
             world_time,
             last_world_time_broadcast_tick: tick,
         }
@@ -270,6 +296,13 @@ impl GameServer {
             ClientMessage::Inventory(command) => self.apply_inventory_command(client_id, command),
             ClientMessage::Crafting(command) => self.apply_crafting_command(client_id, command),
             ClientMessage::Gather(command) => self.apply_gather_command(client_id, command),
+            ClientMessage::PlaceDeployable(command) => {
+                self.apply_place_deployable_command(client_id, command)
+            }
+            ClientMessage::Furnace(command) => self.apply_furnace_command(client_id, command),
+            ClientMessage::DamageDeployable(command) => {
+                self.apply_damage_deployable_command(client_id, command)
+            }
             ClientMessage::SetViewRadius { tier } => {
                 if let Some(client) = self.clients.get_mut(&client_id) {
                     client.view_tier = tier;
@@ -316,6 +349,7 @@ impl GameServer {
         for node in regrow.spawned {
             self.resource_nodes.insert(node.id, node);
         }
+        self.tick_furnaces();
         self.expire_chat_bubbles();
 
         let mut envelopes = self.tick_crafting();
@@ -452,6 +486,10 @@ pub(super) struct ServerClient {
     /// which won't happen — it's a u64 so the wrap is harmless even if
     /// the player runs a crafting macro for years.
     pub(super) next_craft_job_id: CraftingJobId,
+    /// The furnace the player currently has open, if any. Only one
+    /// open at a time — opening a new furnace closes the previous.
+    /// Cleared on disconnect.
+    pub(super) open_furnace: Option<DeployedEntityId>,
 }
 
 #[derive(Debug, Clone)]

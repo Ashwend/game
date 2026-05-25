@@ -9,10 +9,11 @@ use super::{
     mesh::{
         COAL_ORE, IRON_ORE, STONE_VEIN, SULFUR_ORE, impact_stone_shard_mesh, impact_wood_chip_mesh,
         low_poly_bag_mesh, low_poly_birch_tree_large_mesh, low_poly_birch_tree_medium_mesh,
-        low_poly_birch_tree_small_mesh, low_poly_branch_pile_mesh, low_poly_hatchet_mesh,
-        low_poly_hay_grass_mesh, low_poly_ore_node_mesh, low_poly_pickaxe_mesh,
-        low_poly_pine_tree_large_mesh, low_poly_pine_tree_medium_mesh,
+        low_poly_birch_tree_small_mesh, low_poly_branch_pile_mesh, low_poly_crude_furnace_mesh,
+        low_poly_hatchet_mesh, low_poly_hay_grass_mesh, low_poly_ore_node_mesh,
+        low_poly_pickaxe_mesh, low_poly_pine_tree_large_mesh, low_poly_pine_tree_medium_mesh,
         low_poly_pine_tree_small_mesh, low_poly_player_mesh, low_poly_surface_stone_mesh,
+        low_poly_workbench_mesh,
     },
     sky::{initial_distance_fog, setup_sky},
 };
@@ -61,6 +62,23 @@ pub(crate) struct ResourceVisualAssets {
     pub(crate) sulfur_material: Handle<StandardMaterial>,
     pub(crate) stone_vein_material: Handle<StandardMaterial>,
     pub(crate) vertex_material: Handle<StandardMaterial>,
+}
+
+#[derive(Resource, Clone)]
+pub(crate) struct DeployableVisualAssets {
+    pub(crate) workbench_mesh: Handle<Mesh>,
+    pub(crate) furnace_mesh: Handle<Mesh>,
+    /// Shared material used for placed structures. Vertex colours from
+    /// the mesh do the heavy lifting; the material just supplies PBR
+    /// reflectance + roughness so the wood/stone reads correctly under
+    /// the day/night sun.
+    pub(crate) material: Handle<StandardMaterial>,
+    /// Semi-transparent green tint used by the placement ghost when the
+    /// slot is valid. Mirrors the convention from popular survival games
+    /// — green means "click to place", we pair it with a slight pulse.
+    pub(crate) ghost_valid_material: Handle<StandardMaterial>,
+    /// Red variant for invalid placement (out of reach, overlapping).
+    pub(crate) ghost_invalid_material: Handle<StandardMaterial>,
 }
 
 #[derive(Resource, Clone)]
@@ -194,6 +212,36 @@ pub(crate) fn setup_scene(
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.98,
             reflectance: 0.12,
+            ..default()
+        }),
+    });
+    commands.insert_resource(DeployableVisualAssets {
+        workbench_mesh: meshes.add(low_poly_workbench_mesh()),
+        furnace_mesh: meshes.add(low_poly_crude_furnace_mesh()),
+        material: materials.add(StandardMaterial {
+            base_color: VERTEX_MATERIAL_COLOR,
+            perceptual_roughness: 0.92,
+            reflectance: 0.15,
+            ..default()
+        }),
+        ghost_valid_material: materials.add(StandardMaterial {
+            // Translucent green: visible against grass + stone without
+            // hiding the surface under the ghost. Alpha blending only —
+            // no shadow casting, set on spawn so the preview never bakes
+            // into the lighting pass.
+            base_color: Color::srgba(0.36, 0.92, 0.42, 0.38),
+            emissive: Color::srgb(0.06, 0.30, 0.10).into(),
+            alpha_mode: AlphaMode::Blend,
+            perceptual_roughness: 0.85,
+            reflectance: 0.10,
+            ..default()
+        }),
+        ghost_invalid_material: materials.add(StandardMaterial {
+            base_color: Color::srgba(0.96, 0.32, 0.32, 0.42),
+            emissive: Color::srgb(0.40, 0.06, 0.06).into(),
+            alpha_mode: AlphaMode::Blend,
+            perceptual_roughness: 0.85,
+            reflectance: 0.10,
             ..default()
         }),
     });

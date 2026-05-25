@@ -2,8 +2,8 @@ use bevy::prelude::*;
 
 use crate::{
     app::audio::surface::SurfaceMaterial,
-    items::{ItemModel, ToolKind},
-    protocol::{DroppedItemId, ItemStack, ResourceNodeId, Vec3Net},
+    items::{DeployableKind, ItemModel, ToolKind},
+    protocol::{DeployedEntityId, DroppedItemId, ItemStack, ResourceNodeId, Vec3Net},
 };
 
 // Each tool has its own swing length and impact moment. Pickaxe swings are
@@ -148,7 +148,9 @@ const SWAP_DURATION_PICKAXE: f32 = 0.42;
 
 pub(crate) fn swap_duration_for_model(model: ItemModel) -> f32 {
     match model {
-        ItemModel::Bag => SWAP_DURATION_BAG,
+        // Deployables are bulky like the bag — same lift cadence keeps
+        // them feeling consistent without a bespoke pose.
+        ItemModel::Bag | ItemModel::Deployable => SWAP_DURATION_BAG,
         ItemModel::Hatchet => SWAP_DURATION_HATCHET,
         ItemModel::Pickaxe => SWAP_DURATION_PICKAXE,
     }
@@ -221,6 +223,11 @@ pub(crate) struct PickupTargetState {
     pub(crate) resource_storage: Vec<ItemStack>,
     pub(crate) world_position: Option<Vec3Net>,
     pub(crate) screen_position: Option<Vec2>,
+    /// Placed structure the player is currently looking at (workbench,
+    /// furnace, …). Used by the interact handler to route the E key to
+    /// the right entity-specific action (e.g. open furnace UI).
+    pub(crate) deployable_id: Option<DeployedEntityId>,
+    pub(crate) deployable_kind: Option<DeployableKind>,
     /// Seconds since the last full pickup-target scan. The scan is throttled
     /// to ~33 ms (≈ 30 Hz) — that's well above the cadence a player can
     /// react to a tooltip highlight and saves an O(N×M) sweep over every
@@ -241,6 +248,8 @@ impl PickupTargetState {
         self.resource_storage.clear();
         self.world_position = None;
         self.screen_position = None;
+        self.deployable_id = None;
+        self.deployable_kind = None;
     }
 }
 
@@ -263,9 +272,19 @@ struct ActiveSwing {
     seed: u32,
 }
 
+/// What the swing connected with at its impact frame. Resource nodes
+/// run through the existing gather command (item payout + node
+/// shrink); placed structures run through a damage command (no
+/// payout, just HP decrement + auto-destroy on 0).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SwingTarget {
+    ResourceNode(ResourceNodeId),
+    Deployable(DeployedEntityId),
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SwingImpact {
-    pub(crate) target: Option<ResourceNodeId>,
+    pub(crate) target: Option<SwingTarget>,
     pub(crate) tool: ToolKind,
 }
 
@@ -294,7 +313,7 @@ impl GatherInputState {
         just_pressed: bool,
         pressed: bool,
         equipped_tool: Option<ToolKind>,
-        target: Option<ResourceNodeId>,
+        target: Option<SwingTarget>,
     ) -> Option<SwingImpact> {
         if self.active.is_none()
             && (just_pressed || pressed)
@@ -411,6 +430,8 @@ mod tests {
             resource_storage: vec![ItemStack::new("wood", 2)],
             world_position: Some(Vec3Net::new(1.0, 2.0, 3.0)),
             screen_position: Some(Vec2::new(10.0, 20.0)),
+            deployable_id: Some(42),
+            deployable_kind: Some(crate::items::DeployableKind::Furnace { tier: 1 }),
             elapsed_since_scan: 0.0,
         };
 
@@ -432,24 +453,48 @@ mod tests {
         let duration = swing_duration_seconds(tool);
         let impact_time = duration * swing_impact_fraction(tool);
 
-        let tick = state.update(0.01, true, true, Some(tool), Some(4));
+        let tick = state.update(
+            0.01,
+            true,
+            true,
+            Some(tool),
+            Some(SwingTarget::ResourceNode(4)),
+        );
         assert!(tick.is_none());
         assert!(state.swing_fraction() > 0.0);
 
         let impact = state
-            .update(impact_time, false, true, Some(tool), Some(4))
+            .update(
+                impact_time,
+                false,
+                true,
+                Some(tool),
+                Some(SwingTarget::ResourceNode(4)),
+            )
             .expect("impact should emit at the impact fraction of the swing");
-        assert_eq!(impact.target, Some(4));
+        assert_eq!(impact.target, Some(SwingTarget::ResourceNode(4)));
         assert_eq!(impact.tool, tool);
 
         // Same swing — no second impact even though we step further.
         assert!(
             state
-                .update(0.01, false, true, Some(tool), Some(4))
+                .update(
+                    0.01,
+                    false,
+                    true,
+                    Some(tool),
+                    Some(SwingTarget::ResourceNode(4))
+                )
                 .is_none()
         );
 
-        let _ = state.update(duration, false, true, Some(tool), Some(5));
+        let _ = state.update(
+            duration,
+            false,
+            true,
+            Some(tool),
+            Some(SwingTarget::ResourceNode(5)),
+        );
         // Swing rolled over into a new swing while LMB is held.
         assert!(state.swing_fraction() < 0.2);
     }
@@ -465,21 +510,39 @@ mod tests {
         let pre_impact = impact_time - 0.001;
         assert!(
             state
-                .update(pre_impact, true, true, Some(tool), Some(7))
+                .update(
+                    pre_impact,
+                    true,
+                    true,
+                    Some(tool),
+                    Some(SwingTarget::ResourceNode(7))
+                )
                 .is_none()
         );
 
         // Crossing the impact threshold emits exactly one event.
         let impact = state
-            .update(0.005, false, true, Some(tool), Some(7))
+            .update(
+                0.005,
+                false,
+                true,
+                Some(tool),
+                Some(SwingTarget::ResourceNode(7)),
+            )
             .expect("impact should emit once we cross the impact fraction");
-        assert_eq!(impact.target, Some(7));
+        assert_eq!(impact.target, Some(SwingTarget::ResourceNode(7)));
         assert_eq!(impact.tool, tool);
 
         // No duplicate impact for the remainder of the swing.
         assert!(
             state
-                .update(duration * 0.1, false, false, Some(tool), Some(7))
+                .update(
+                    duration * 0.1,
+                    false,
+                    false,
+                    Some(tool),
+                    Some(SwingTarget::ResourceNode(7))
+                )
                 .is_none()
         );
     }
@@ -506,7 +569,11 @@ mod tests {
     #[test]
     fn gather_input_does_nothing_without_a_tool_equipped() {
         let mut state = GatherInputState::default();
-        assert!(state.update(0.01, true, true, None, Some(4)).is_none());
+        assert!(
+            state
+                .update(0.01, true, true, None, Some(SwingTarget::ResourceNode(4)))
+                .is_none()
+        );
         assert_eq!(state.swing_fraction(), 0.0);
     }
 }

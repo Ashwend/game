@@ -146,6 +146,7 @@ mod tests {
             chat_bubble: None,
             inventory: None,
             crafting: None,
+            open_furnace: None,
         }
     }
 
@@ -177,6 +178,7 @@ mod tests {
                 ],
                 dropped_items: Vec::new(),
                 resource_nodes: Vec::new(),
+                deployed_entities: Vec::new(),
             }),
             Some(1),
         );
@@ -199,6 +201,7 @@ mod tests {
             players: vec![player(2, 2, Vec3Net::new(4.0, 0.0, 0.0), 0.5)],
             dropped_items: Vec::new(),
             resource_nodes: Vec::new(),
+            deployed_entities: Vec::new(),
         });
         app.update();
 

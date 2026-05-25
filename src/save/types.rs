@@ -4,9 +4,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
+    items::DeployableKind,
     protocol::{
-        ClientId, DroppedItemId, DroppedWorldItem, PlayerInventoryState, ResourceNodeId,
-        ResourceNodeState, SteamId, Vec3Net,
+        ClientId, DeployedEntityId, DroppedItemId, DroppedWorldItem, ItemStack,
+        PlayerInventoryState, ResourceNodeId, ResourceNodeState, SteamId, Vec3Net,
     },
     server::ChunkManagerSave,
     world::MapType,
@@ -79,6 +80,14 @@ pub struct WorldStateSave {
     /// `/speed` command; the value survives a save round-trip.
     #[serde(default = "default_world_time_multiplier")]
     pub world_time_multiplier: f32,
+    /// Structures placed in the world (workbenches, furnaces, …). Each
+    /// entry carries the position, kind, current health, and the item-id
+    /// it was placed from so the client can pick the right mesh on load.
+    #[serde(default)]
+    pub deployed_entities: Vec<PersistedDeployedEntity>,
+    /// Monotonic counter for placed-entity ids.
+    #[serde(default = "default_next_id")]
+    pub next_deployed_entity_id: DeployedEntityId,
 }
 
 impl Default for WorldStateSave {
@@ -94,8 +103,41 @@ impl Default for WorldStateSave {
             next_resource_node_id: default_next_resource_node_id(),
             world_time_seconds_of_day: default_world_time_seconds(),
             world_time_multiplier: default_world_time_multiplier(),
+            deployed_entities: Vec::new(),
+            next_deployed_entity_id: default_next_id(),
         }
     }
+}
+
+/// On-disk shape of a placed structure. We persist the item id (so the
+/// client picks the right mesh on load even if `DeployableKind` ever
+/// grows new variants) plus the wire kind so legacy items still load if
+/// the registry is reshuffled.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PersistedDeployedEntity {
+    pub id: DeployedEntityId,
+    pub item_id: String,
+    pub kind: DeployableKind,
+    pub position: Vec3Net,
+    pub yaw: f32,
+    pub health: u32,
+    pub max_health: u32,
+    /// Furnace-only sub-state. `None` for kinds that aren't furnaces
+    /// (workbench). Keeps the per-kind shape out of the top-level
+    /// struct so adding more deployable types later doesn't grow it.
+    pub furnace: Option<PersistedFurnaceState>,
+}
+
+/// Persisted furnace state — fuel slot + item slots + active flag +
+/// in-flight burn/smelt timers. Reloading restores these so a player
+/// who shuts the host down mid-smelt picks up where they left off.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PersistedFurnaceState {
+    pub fuel: Option<ItemStack>,
+    pub items: Vec<Option<ItemStack>>,
+    pub active: bool,
+    pub fuel_burn_ticks_left: u32,
+    pub smelt_progress_ticks: u32,
 }
 
 impl WorldStateSave {

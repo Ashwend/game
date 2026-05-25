@@ -153,9 +153,14 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
         // gameplay event. Non-spatial, no pitch jitter (a signature
         // sound should always play the same way), uncapped polyphony
         // (only one entry transition happens at a time anyway).
+        //
+        // -9 dB lands the stinger at ~70% of the original -6 dB level
+        // (20·log10(0.7) ≈ -3.1 dB). Earlier mixes at -6 dB rode a bit
+        // hot over the fading menu music; the trim leaves headroom for
+        // the in-game ambience swelling under it.
         SoundId::WorldJoin => SoundDefaults {
             category: SoundCategory::Music,
-            base_gain_db: -6.0,
+            base_gain_db: -9.0,
             spatial: None,
             pitch_jitter: 0.0,
             looped: false,

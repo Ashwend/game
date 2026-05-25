@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 
 use crate::{
-    protocol::{ClientId, DroppedItemId, ResourceNodeId},
+    items::DeployableKind,
+    protocol::{ClientId, DeployedEntityId, DroppedItemId, ResourceNodeId},
     resources::ResourceNodeModel,
 };
 
@@ -24,6 +25,32 @@ pub(crate) struct NetworkResourceNode {
     pub(crate) id: ResourceNodeId,
     pub(crate) model: ResourceNodeModel,
 }
+
+/// Marker for a placed structure entity (workbench, furnace, …).
+/// The kind drives mesh/material lookups and the nameplate UI uses
+/// `id` to match snapshot health updates.
+#[derive(Component)]
+pub(crate) struct NetworkDeployedEntity {
+    pub(crate) id: DeployedEntityId,
+    // The nameplate overlay reads `kind` to label the structure; the
+    // mesh selection has already happened by spawn time. Kept on the
+    // component so the overlay doesn't have to walk the snapshot to
+    // recover it.
+    #[allow(dead_code)]
+    pub(crate) kind: DeployableKind,
+}
+
+/// Marker for the client-only ghost preview rendered while the player
+/// has a deployable selected. Single instance — the placement system
+/// despawns and respawns when the kind changes.
+#[derive(Component)]
+pub(crate) struct DeployablePlacementGhost;
+
+/// Child entity attached to an active furnace, carrying the warm
+/// orange `PointLight` that pours out of the mouth. Despawned when the
+/// snapshot says the furnace is inactive.
+#[derive(Component)]
+pub(crate) struct FurnaceMouthLight;
 
 #[derive(Component)]
 pub(crate) struct HeldItemVisual {

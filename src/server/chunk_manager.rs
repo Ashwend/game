@@ -40,7 +40,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     protocol::{
-        ClientId, DroppedItemId, ResourceNodeId, ResourceNodeState, Vec3Net, ViewRadiusTier,
+        ClientId, DeployedEntityId, DroppedItemId, ResourceNodeId, ResourceNodeState, Vec3Net,
+        ViewRadiusTier,
     },
     resources::spawn_resource_node,
     world::{
@@ -123,6 +124,10 @@ struct ActiveChunkState {
     /// from accepted movement messages; the per-player anchor is what
     /// the AoI ring is centred on.
     players: HashSet<ClientId>,
+    /// Placed structures (workbenches, furnaces, future deployables)
+    /// rooted to this chunk. Anchored once at place time — deployables
+    /// do not move under physics.
+    deployed_entities: HashSet<DeployedEntityId>,
 }
 
 impl ActiveChunkState {
@@ -227,6 +232,9 @@ pub struct ChunkManager {
     /// Updated whenever an accepted movement message changes the chunk
     /// the player is standing in.
     player_chunks: HashMap<ClientId, ChunkCoord>,
+    /// Reverse index from placed-structure id to its anchor chunk. Lets
+    /// despawn/destroy paths swap the membership in O(1).
+    deployed_entity_chunks: HashMap<DeployedEntityId, ChunkCoord>,
     regrow_queue: BinaryHeap<RegrowEvent>,
     next_node_id: u64,
     /// Stir-in counter for regrow RNG so identical re-scheduling on the
@@ -271,6 +279,7 @@ impl ChunkManager {
                 node_chunks,
                 dropped_item_chunks: HashMap::new(),
                 player_chunks: HashMap::new(),
+                deployed_entity_chunks: HashMap::new(),
                 regrow_queue: BinaryHeap::new(),
                 next_node_id,
                 placement_counter: splitmix64(world_seed ^ 0x00C0_FFEE_BABE),
@@ -312,6 +321,7 @@ impl ChunkManager {
             node_chunks,
             dropped_item_chunks: HashMap::new(),
             player_chunks: HashMap::new(),
+            deployed_entity_chunks: HashMap::new(),
             regrow_queue,
             next_node_id: save.next_node_id.max(1),
             placement_counter: splitmix64(
@@ -568,6 +578,45 @@ impl ChunkManager {
             .flat_map(|grid| grid.players.iter().copied())
     }
 
+    /// Placed-structure ids anchored to `coord`.
+    pub fn deployed_entities_in(
+        &self,
+        coord: ChunkCoord,
+    ) -> impl Iterator<Item = DeployedEntityId> + '_ {
+        self.grids
+            .get(&coord)
+            .into_iter()
+            .flat_map(|grid| grid.deployed_entities.iter().copied())
+    }
+
+    /// Register a freshly-placed structure at the chunk containing its
+    /// world position. Idempotent — repeat calls with the same id move
+    /// the membership rather than duplicating it.
+    pub fn track_deployed_entity(&mut self, id: DeployedEntityId, position: Vec3Net) {
+        let coord = self.anchor_chunk_for(position);
+        if let Some(&previous) = self.deployed_entity_chunks.get(&id) {
+            if previous == coord {
+                return;
+            }
+            if let Some(grid) = self.grids.get_mut(&previous) {
+                grid.deployed_entities.remove(&id);
+            }
+        }
+        if let Some(grid) = self.grids.get_mut(&coord) {
+            grid.deployed_entities.insert(id);
+        }
+        self.deployed_entity_chunks.insert(id, coord);
+    }
+
+    /// Stop tracking a placed structure (destroyed, save shutdown).
+    pub fn untrack_deployed_entity(&mut self, id: DeployedEntityId) {
+        if let Some(coord) = self.deployed_entity_chunks.remove(&id)
+            && let Some(grid) = self.grids.get_mut(&coord)
+        {
+            grid.deployed_entities.remove(&id);
+        }
+    }
+
     /// Register an externally-spawned resource node (admin command, etc.)
     /// so it appears in the AoI snapshot for clients in range. Without
     /// this, a `/spawn-ore` node would exist in `resource_nodes` but be
@@ -726,6 +775,18 @@ impl ChunkManager {
         self.visible_chunks(player_pos, tier)
             .into_iter()
             .flat_map(|coord| self.players_in(coord))
+            .collect()
+    }
+
+    /// Placed-structure ids visible to a player at `player_pos`.
+    pub fn deployed_entities_visible_to(
+        &self,
+        player_pos: Vec3Net,
+        tier: ViewRadiusTier,
+    ) -> HashSet<DeployedEntityId> {
+        self.visible_chunks(player_pos, tier)
+            .into_iter()
+            .flat_map(|coord| self.deployed_entities_in(coord))
             .collect()
     }
 

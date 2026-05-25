@@ -33,6 +33,7 @@ fn player_state(client_id: ClientId, position: Vec3Net) -> PlayerState {
         chat_bubble: None,
         inventory: None,
         crafting: None,
+        open_furnace: None,
     }
 }
 
@@ -51,6 +52,7 @@ fn welcome_seeds_local_prediction_from_snapshot() {
             players: vec![server_player],
             dropped_items: Vec::new(),
             resource_nodes: Vec::new(),
+            deployed_entities: Vec::new(),
         },
         true,
     );
@@ -76,6 +78,7 @@ fn snapshots_do_not_overwrite_existing_local_prediction() {
         players: vec![player_state(1, Vec3Net::ZERO)],
         dropped_items: Vec::new(),
         resource_nodes: Vec::new(),
+        deployed_entities: Vec::new(),
     }));
 
     let predicted = runtime.predicted_local.expect("prediction should exist");
@@ -95,6 +98,7 @@ fn snapshots_do_not_seed_local_prediction_after_welcome() {
         players: vec![player_state(1, Vec3Net::new(5.0, 0.0, 0.0))],
         dropped_items: Vec::new(),
         resource_nodes: Vec::new(),
+        deployed_entities: Vec::new(),
     }));
 
     assert!(runtime.predicted_local.is_none());
@@ -111,6 +115,7 @@ fn stale_snapshots_are_ignored() {
         players: vec![player_state(1, Vec3Net::new(5.0, 0.0, 0.0))],
         dropped_items: Vec::new(),
         resource_nodes: Vec::new(),
+        deployed_entities: Vec::new(),
     };
     let mut runtime = ClientRuntime {
         client_id: Some(1),
@@ -126,6 +131,7 @@ fn stale_snapshots_are_ignored() {
         players: vec![player_state(1, Vec3Net::ZERO)],
         dropped_items: Vec::new(),
         resource_nodes: Vec::new(),
+        deployed_entities: Vec::new(),
     }));
 
     let predicted = runtime.predicted_local.expect("prediction should exist");
@@ -358,6 +364,7 @@ fn apply_message_handles_welcome_chat_events_and_rejections() {
         players: vec![player_state(1, Vec3Net::new(1.0, 2.0, 3.0))],
         dropped_items: Vec::new(),
         resource_nodes: Vec::new(),
+        deployed_entities: Vec::new(),
     };
     let mut runtime = ClientRuntime::default();
 
@@ -456,6 +463,7 @@ fn local_view_falls_back_to_snapshot_when_prediction_is_missing() {
             players: vec![server_player],
             dropped_items: Vec::new(),
             resource_nodes: Vec::new(),
+            deployed_entities: Vec::new(),
         }),
         ..Default::default()
     };
@@ -493,6 +501,7 @@ fn local_view_uses_predicted_orientation_with_predicted_position() {
             players: vec![snapshot_player],
             dropped_items: Vec::new(),
             resource_nodes: Vec::new(),
+            deployed_entities: Vec::new(),
         }),
         ..Default::default()
     };
@@ -534,6 +543,7 @@ fn correction_and_snapshot_ignore_non_matching_players() {
             players: vec![player_state(1, Vec3Net::ZERO)],
             dropped_items: Vec::new(),
             resource_nodes: Vec::new(),
+            deployed_entities: Vec::new(),
         },
         true,
     );

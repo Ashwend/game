@@ -75,7 +75,7 @@ pub(super) fn remove_stack(
     Some(ItemStack::new(item_id, amount))
 }
 
-fn insert_stack_at(
+pub(super) fn insert_stack_at(
     inventory: &mut PlayerInventoryState,
     slot: ItemContainerSlot,
     mut moving: ItemStack,

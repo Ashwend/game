@@ -366,6 +366,7 @@ mod tests {
             chat_bubble: None,
             inventory: None,
             crafting: None,
+            open_furnace: None,
         }
     }
 
@@ -392,6 +393,7 @@ mod tests {
             players: vec![player(75.0)],
             dropped_items: Vec::new(),
             resource_nodes: Vec::new(),
+            deployed_entities: Vec::new(),
         });
 
         let _ = ctx.run(raw_input(), |ctx| {

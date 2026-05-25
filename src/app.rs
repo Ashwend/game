@@ -37,24 +37,26 @@ use self::{
     scene::{apply_world_scene_system, setup_scene, update_sky_system},
     state::{
         ClientErrorToast, ClientRuntime, ClientSettingsStore, CraftingHudState, CraftingUiState,
-        GatherInputState, InventoryUiState, LookState, MenuBackdropVisibility, MenuState,
-        OptionsUiState, PickupTargetState, RemoteImpactEvent, SaveStore, SessionShutdownTasks,
-        SteamUser, TestModeConfig, ToastState, ToolSwapState,
+        DeployablePlacementState, GatherInputState, InventoryUiState, LookState,
+        MenuBackdropVisibility, MenuState, OptionsUiState, PickupTargetState, RemoteImpactEvent,
+        SaveStore, SessionShutdownTasks, SteamUser, TestModeConfig, ToastState, ToolSwapState,
     },
     systems::{
         AutoConnectRequest, CameraImpactKick, CameraMotionEffects, ClientSystemSet,
         DroppedItemEntities, RemotePlayerEntities, ResourceNodeEntities, app_quit_system,
-        apply_display_settings_system, apply_dropped_items_system, apply_held_item_visual_system,
-        apply_resource_nodes_system, apply_snapshot_system, apply_test_mode_overrides_system,
-        auto_connect_poll_system, auto_connect_start_system, camera_follow_system,
-        center_cursor_on_focus_system, chat_shortcut_system, chunk_overlay_system,
-        client_input_system, gameplay_inventory_shortcuts_system, menu_backdrop_camera_system,
-        mouse_look_system, network_tick_system, reposition_test_window_system,
+        apply_deployed_entities_system, apply_display_settings_system, apply_dropped_items_system,
+        apply_held_item_visual_system, apply_resource_nodes_system, apply_snapshot_system,
+        apply_test_mode_overrides_system, auto_connect_poll_system, auto_connect_start_system,
+        camera_follow_system, center_cursor_on_focus_system, chat_shortcut_system,
+        chunk_overlay_system, client_input_system, close_furnace_on_escape_system,
+        gameplay_inventory_shortcuts_system, menu_backdrop_camera_system, mouse_look_system,
+        network_tick_system, placement_input_system, reposition_test_window_system,
         save_client_settings_system, session_shutdown_poll_system, spawn_impact_effects_system,
-        surface_client_error_toasts_system, sync_view_radius_system, tick_felling_trees_system,
-        tick_impact_chips_system, tick_resource_node_pop_in_system, toggle_crafting_system,
-        toggle_inventory_system, toggle_pause_system, toggle_perf_stats_system,
-        update_cursor_system, update_pickup_target_system, update_tool_swap_state_system,
+        surface_client_error_toasts_system, sync_furnace_open_flag_system, sync_view_radius_system,
+        tick_felling_trees_system, tick_impact_chips_system, tick_resource_node_pop_in_system,
+        toggle_crafting_system, toggle_inventory_system, toggle_pause_system,
+        toggle_perf_stats_system, update_cursor_system, update_pickup_target_system,
+        update_placement_ghost_system, update_tool_swap_state_system,
     },
     ui::{
         ButtonSoundRequests, InventorySoundRequests, button_sound_system, inventory_sound_system,
@@ -105,6 +107,13 @@ const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::Players,
     ClientSystemSet::DroppedItems,
     ClientSystemSet::ResourceNodes,
+    ClientSystemSet::DeployedEntities,
+    // Placement preview / input rides after the snapshot has been
+    // applied (so the local-player position used for reach checks is
+    // current) but before the camera follow runs (so a fresh place
+    // command doesn't double-process the same click frame).
+    ClientSystemSet::PlacementInput,
+    ClientSystemSet::PlacementGhost,
     ClientSystemSet::Camera,
     ClientSystemSet::HeldItem,
     ClientSystemSet::Sky,
@@ -190,6 +199,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .insert_resource(InventoryUiState::default())
         .insert_resource(CraftingUiState::default())
         .insert_resource(CraftingHudState::default())
+        .insert_resource(DeployablePlacementState::default())
         .insert_resource(PickupTargetState::default())
         .insert_resource(GatherInputState::default())
         .insert_resource(ToolSwapState::default())
@@ -297,6 +307,16 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
             Update,
             toggle_pause_system.in_set(ClientSystemSet::PauseToggle),
         )
+        // Both run alongside the pause toggle so they share its place
+        // in the schedule (input intake before gameplay simulation).
+        .add_systems(
+            Update,
+            (
+                sync_furnace_open_flag_system,
+                close_furnace_on_escape_system,
+            )
+                .in_set(ClientSystemSet::PauseToggle),
+        )
         .add_systems(
             Update,
             toggle_inventory_system.in_set(ClientSystemSet::InventoryToggle),
@@ -362,6 +382,18 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .add_systems(
             Update,
             apply_resource_nodes_system.in_set(ClientSystemSet::ResourceNodes),
+        )
+        .add_systems(
+            Update,
+            apply_deployed_entities_system.in_set(ClientSystemSet::DeployedEntities),
+        )
+        .add_systems(
+            Update,
+            placement_input_system.in_set(ClientSystemSet::PlacementInput),
+        )
+        .add_systems(
+            Update,
+            update_placement_ghost_system.in_set(ClientSystemSet::PlacementGhost),
         )
         // Camera follow runs only in PostUpdate, before transform propagation.
         // Running in both Update and PostUpdate would advance the impact-kick

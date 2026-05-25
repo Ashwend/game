@@ -1,9 +1,10 @@
 mod auto_connect;
 mod camera;
 mod chunk_overlay;
+mod deployables;
 mod display;
 pub(crate) mod effects;
-mod input;
+pub(crate) mod input;
 mod items;
 mod network;
 pub(crate) mod node_death;
@@ -21,13 +22,17 @@ pub(crate) use camera::{
     CameraImpactKick, CameraMotionEffects, camera_follow_system, menu_backdrop_camera_system,
 };
 pub(crate) use chunk_overlay::chunk_overlay_system;
+pub(crate) use deployables::{
+    apply_deployed_entities_system, placement_input_system, update_placement_ghost_system,
+};
 pub(crate) use display::apply_display_settings_system;
 pub(crate) use effects::{spawn_impact_effects_system, tick_impact_chips_system};
 pub(crate) use input::{
     center_cursor_on_focus_system, chat_shortcut_system, client_input_system,
-    gameplay_inventory_shortcuts_system, mouse_look_system, send_crafting_command,
-    send_inventory_command, toggle_crafting_system, toggle_inventory_system, toggle_pause_system,
-    toggle_perf_stats_system, update_cursor_system,
+    close_furnace_on_escape_system, gameplay_inventory_shortcuts_system, mouse_look_system,
+    send_crafting_command, send_furnace_command, send_inventory_command,
+    sync_furnace_open_flag_system, toggle_crafting_system, toggle_inventory_system,
+    toggle_pause_system, toggle_perf_stats_system, update_cursor_system,
 };
 pub(crate) use items::{
     DroppedItemEntities, ResourceNodeEntities, apply_dropped_items_system,
@@ -65,6 +70,9 @@ pub(crate) enum ClientSystemSet {
     Players,
     DroppedItems,
     ResourceNodes,
+    DeployedEntities,
+    PlacementGhost,
+    PlacementInput,
     Camera,
     HeldItem,
     Sky,

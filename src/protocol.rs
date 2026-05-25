@@ -9,7 +9,7 @@ use crate::{
 pub type ClientId = u64;
 pub type SteamId = u64;
 
-pub const PROTOCOL_VERSION: u32 = 21;
+pub const PROTOCOL_VERSION: u32 = 26;
 pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_CHAT_LEN: usize = 240;
@@ -20,6 +20,12 @@ pub const MAX_HEALTH: f32 = 100.0;
 pub const CHAT_BUBBLE_DURATION_SECONDS: f32 = 6.0;
 pub const INVENTORY_SLOT_COUNT: usize = 40;
 pub const ACTIONBAR_SLOT_COUNT: usize = 9;
+/// Number of input/output slots in a furnace. Small enough to fit on
+/// one row of the furnace UI and to keep the auto-smelt loop fast (the
+/// server walks every slot each tick the head item completes), but
+/// roomy enough that the player can preload a stack of ore and walk
+/// away. The fuel slot is separate and not counted here.
+pub const FURNACE_ITEM_SLOT_COUNT: usize = 6;
 
 /// Sample rate the voice pipeline encodes/decodes at end-to-end. 48 kHz is
 /// the only rate libopus supports natively without resampling at its highest
@@ -41,6 +47,11 @@ pub type ResourceNodeId = u64;
 /// Stable for the job's lifetime so the client can target it with
 /// [`CraftingCommand::Cancel`] without worrying about queue reordering.
 pub type CraftingJobId = u64;
+/// Identifier for a structure the player has placed in the world
+/// (workbench, furnace, …). Stable for the entity's lifetime; the server
+/// assigns it at place time and uses it to target health updates and
+/// future destroy commands.
+pub type DeployedEntityId = u64;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Reflect)]
 pub struct Vec3Net {
@@ -146,6 +157,19 @@ pub enum ClientMessage {
     Inventory(InventoryCommand),
     Crafting(CraftingCommand),
     Gather(ResourceGatherCommand),
+    /// Place the active actionbar deployable at `position` with the given
+    /// yaw. Server validates that the player actually holds a stack of
+    /// that item, that the placement is in reach, and that nothing
+    /// already occupies the footprint. One item is consumed on success.
+    PlaceDeployable(PlaceDeployableCommand),
+    /// Open/close/operate a furnace the player is standing next to. The
+    /// server tracks at most one open furnace per client; opening a new
+    /// one auto-closes the previous.
+    Furnace(FurnaceCommand),
+    /// Damage a placed structure (workbench, furnace, …). Server
+    /// validates the active tool, the target's range/cone, and applies
+    /// per-tool damage; the structure despawns when health reaches 0.
+    DamageDeployable(DamageDeployableCommand),
     /// Client's view-radius preference (Low/Medium/High). The server uses
     /// this to decide how many concentric chunk rings to include in this
     /// client's per-tick snapshot. Sent on connect and whenever the
@@ -194,6 +218,9 @@ impl ClientMessage {
             | Self::Inventory(_)
             | Self::Crafting(_)
             | Self::Gather(_)
+            | Self::PlaceDeployable(_)
+            | Self::Furnace(_)
+            | Self::DamageDeployable(_)
             | Self::SetViewRadius { .. }
             | Self::Disconnect => PacketDelivery::Reliable,
             // Voice frames are each independent (Opus packets carry their own
@@ -305,21 +332,129 @@ pub struct ResourceGatherCommand {
     pub resource_node_id: ResourceNodeId,
 }
 
-/// Client → server crafting intent. Enqueue costs the listed inputs
-/// immediately; cancel refunds whatever's left of them. The recipe id is
-/// shipped as a plain `String` on the wire and resolved against
-/// [`crate::crafting`] server-side.
+/// Client → server placement intent for a deployable structure. The
+/// server re-validates that `position` is a legal placement; the client
+/// is only responsible for sending a reasonable best-guess pose so the
+/// player sees instant feedback (placement preview moves where they aim).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PlaceDeployableCommand {
+    #[serde(deserialize_with = "deserialize_interned_item_id")]
+    pub item_id: crate::items::ItemId,
+    pub position: Vec3Net,
+    pub yaw: f32,
+}
+
+/// Client → server damage intent for a placed structure. Server picks
+/// the damage amount from the player's currently-equipped tool — no
+/// damage payload on the wire so clients can't lie about how hard they
+/// hit.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DamageDeployableCommand {
+    pub id: DeployedEntityId,
+}
+
+/// Client → server messages for furnace interaction. The server gates
+/// `Move`/`SetActive` on the player currently having `id` open; this
+/// keeps the per-message validation cheap and means a player can't
+/// stuff items into a furnace they aren't standing next to.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum FurnaceCommand {
+    /// Open the furnace UI on the server side. The server replies by
+    /// including `open_furnace` in the next snapshot for this client.
+    Open { id: DeployedEntityId },
+    /// Close the active furnace, if any. Idempotent — no-op when the
+    /// player has no furnace open.
+    Close,
+    /// Toggle the furnace's burn state. Auto-shutoff still applies on
+    /// server-side ticks, so a `SetActive { active: true }` with no
+    /// fuel just flips back to `false` on the next idle tick.
+    SetActive { active: bool },
+    /// Move items between player containers and the furnace. The server
+    /// validates that the player has the targeted furnace open before
+    /// applying the move.
+    Move {
+        from: FurnaceSlotRef,
+        to: FurnaceSlotRef,
+        quantity: Option<u16>,
+    },
+    /// Shift+click "send this somewhere useful" intent.
+    ///
+    /// Server resolves the destination based on the source location and
+    /// the item kind:
+    /// - From a player slot, fuel items go to the fuel slot (swapping if
+    ///   it's a different fuel), everything else fills the furnace items
+    ///   grid (merge into a matching stack first, else first empty).
+    /// - From a furnace slot, the stack flows back into the player's
+    ///   inventory (matching stacks first, then first empty inventory
+    ///   slot).
+    ///
+    /// Authoritative item-kind detection lives server-side so the client
+    /// doesn't have to duplicate `fuel_burn_ticks_for` or smelt-recipe
+    /// tables — saves one wire format coupling per added fuel/recipe.
+    QuickTransfer { from: FurnaceSlotRef },
+}
+
+/// Addressable slot used by [`FurnaceCommand::Move`]. Refers either to
+/// a slot in the player's own inventory/actionbar or to one of the
+/// furnace's slots — both endpoints flow through one move command.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum FurnaceSlotRef {
+    PlayerInventory(usize),
+    PlayerActionbar(usize),
+    /// The furnace's single fuel slot.
+    Fuel,
+    /// One of `FURNACE_ITEM_SLOT_COUNT` smelt input/output slots.
+    Item(usize),
+}
+
+/// Per-client snapshot of the furnace currently open on the server.
+/// `progress_fraction` is the smelt timer of the head input slot for
+/// quick UI rendering — the per-slot inputs themselves are not split
+/// into separate "input vs output" lists since items in a furnace slot
+/// can be either, depending on whether they're smeltable.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OpenFurnaceView {
+    pub id: DeployedEntityId,
+    pub fuel: Option<ItemStack>,
+    pub items: Vec<Option<ItemStack>>,
+    pub active: bool,
+    /// 0.0..1.0 — fraction of the current smelt operation. 0 when idle.
+    pub smelt_fraction: f32,
+    /// 0.0..1.0 — fraction of the currently-burning fuel unit. 0 when
+    /// no fuel is burning. Drives the small "fuel" indicator in the UI.
+    pub fuel_fraction: f32,
+}
+
+/// Client → server crafting intent. Enqueue costs `inputs × quantity` of
+/// the recipe's inputs immediately; cancel refunds whatever's left of them.
+/// The recipe id is shipped as a plain `String` on the wire and resolved
+/// against [`crate::crafting`] server-side. `quantity` is the batch size
+/// for the job — a quantity of 5 takes 5× the inputs, 5× the total tick
+/// time, and produces 5× the output in a single completion event. Server
+/// clamps to `[1, MAX_CRAFT_BATCH_SIZE]`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum CraftingCommand {
-    Enqueue { recipe_id: String },
+    Enqueue { recipe_id: String, quantity: u16 },
     Cancel { job_id: CraftingJobId },
 }
 
+/// Hard cap on the per-job batch size accepted by `Enqueue`. Anything
+/// larger is clamped server-side. Chosen so the longest tier-1 recipe
+/// (~14 s) at the cap finishes inside a few minutes, but a malicious
+/// client can't queue years of work in one message.
+pub const MAX_CRAFT_BATCH_SIZE: u16 = 100;
+
 /// One in-progress crafting job. `progress_ticks` advances toward
 /// `total_ticks`; when they meet the server grants the recipe's output
-/// and pops the job. Inputs are not echoed back — they were taken at
-/// enqueue time and the recipe id lets the client reconstruct everything
-/// else from the static registry.
+/// (multiplied by `quantity`) and pops the job. Inputs are not echoed back
+/// — they were taken at enqueue time and the recipe id lets the client
+/// reconstruct everything else from the static registry.
+///
+/// `quantity` is the batch size. A job with `quantity = 3` ran with
+/// 3× the inputs at enqueue time, has `total_ticks = ticks_per_unit × 3`,
+/// and on completion grants `output_quantity × 3` of the output item in a
+/// single grant. The UI uses `quantity > 1` to render `×N` next to the
+/// job's name in the queue HUD.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CraftingJob {
     pub job_id: CraftingJobId,
@@ -327,15 +462,22 @@ pub struct CraftingJob {
     pub recipe_id: crate::crafting::RecipeId,
     pub progress_ticks: u32,
     pub total_ticks: u32,
+    pub quantity: u16,
 }
 
 impl CraftingJob {
-    pub fn new(job_id: CraftingJobId, recipe_id: impl AsRef<str>, total_ticks: u32) -> Self {
+    pub fn new(
+        job_id: CraftingJobId,
+        recipe_id: impl AsRef<str>,
+        total_ticks: u32,
+        quantity: u16,
+    ) -> Self {
         Self {
             job_id,
             recipe_id: crate::crafting::intern_recipe_id(recipe_id.as_ref()),
             progress_ticks: 0,
             total_ticks,
+            quantity,
         }
     }
 
@@ -412,6 +554,26 @@ pub struct DroppedWorldItem {
     pub yaw: f32,
     #[serde(default)]
     pub rotation: QuatNet,
+}
+
+/// Wire-shape of a placed structure (workbench, furnace, …). Carries the
+/// kind + tier so the client can pick the right mesh and the right
+/// crafting-station match without a separate registry lookup.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DeployedEntityState {
+    pub id: DeployedEntityId,
+    #[serde(deserialize_with = "deserialize_interned_item_id")]
+    pub item_id: crate::items::ItemId,
+    pub kind: crate::items::DeployableKind,
+    pub position: Vec3Net,
+    pub yaw: f32,
+    pub health: u32,
+    pub max_health: u32,
+    /// Public "is it doing work?" flag — for furnaces this drives the
+    /// glow/smoke and tells nearby players the structure is on. Always
+    /// `false` for kinds that have no active state (workbench).
+    #[serde(default)]
+    pub active: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -558,7 +720,7 @@ impl PerfClassificationId {
             Self::OreVein => "Ore vein",
             Self::Plains => "Plains",
             Self::Mixed => "Mixed",
-            Self::None => "—",
+            Self::None => "-",
         }
     }
 }
@@ -672,6 +834,8 @@ pub struct WorldSnapshot {
     pub dropped_items: Vec<DroppedWorldItem>,
     #[serde(default)]
     pub resource_nodes: Vec<ResourceNodeState>,
+    #[serde(default)]
+    pub deployed_entities: Vec<DeployedEntityState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -703,6 +867,11 @@ pub struct PlayerState {
     /// each other's queues nor see their contents.
     #[serde(default)]
     pub crafting: Option<PlayerCraftingState>,
+    /// Currently-opened furnace's full state, if any. Populated only
+    /// for the owning client (mirrors `inventory` / `crafting` privacy).
+    /// `None` when the player has no furnace open.
+    #[serde(default)]
+    pub open_furnace: Option<OpenFurnaceView>,
 }
 
 impl PlayerState {
@@ -712,6 +881,10 @@ impl PlayerState {
 
     pub fn crafting(&self) -> Option<&PlayerCraftingState> {
         self.crafting.as_ref()
+    }
+
+    pub fn open_furnace(&self) -> Option<&OpenFurnaceView> {
+        self.open_furnace.as_ref()
     }
 }
 

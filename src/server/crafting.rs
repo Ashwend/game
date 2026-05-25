@@ -12,11 +12,11 @@
 //! the same refund-then-drop rule for inputs.
 
 use crate::{
-    crafting::{MAX_CRAFTING_QUEUE_LEN, RecipeDefinition, recipe_definition},
+    crafting::{MAX_CRAFTING_QUEUE_LEN, RecipeDefinition, RecipeStation, recipe_definition},
     items::{intern_item_id, item_definition},
     protocol::{
-        ClientId, CraftingCommand, CraftingJob, CraftingJobId, ItemStack, PlayerCraftingState,
-        SERVER_TICK_RATE_HZ, ServerMessage, ToastKind, ToastMessage, Vec3Net,
+        ClientId, CraftingCommand, CraftingJob, CraftingJobId, ItemStack, MAX_CRAFT_BATCH_SIZE,
+        PlayerCraftingState, SERVER_TICK_RATE_HZ, ServerMessage, ToastKind, ToastMessage, Vec3Net,
     },
 };
 
@@ -26,13 +26,30 @@ use super::{
     movement::{drop_position, drop_velocity},
 };
 
-/// Convert a recipe's wall-clock duration into a tick count. Always at least
-/// one tick so a zero-duration recipe still appears in the queue for a frame
-/// — the UI relies on the head job being visible long enough for the player
-/// to see *something* happen.
+/// Convert a recipe's wall-clock duration into a tick count for a single
+/// unit. Always at least one tick so a zero-duration recipe still appears
+/// in the queue for a frame — the UI relies on the head job being visible
+/// long enough for the player to see *something* happen.
 pub(super) fn craft_total_ticks(recipe: &RecipeDefinition) -> u32 {
     let ticks = (recipe.craft_seconds * SERVER_TICK_RATE_HZ).round() as u32;
     ticks.max(1)
+}
+
+/// Scale a single-unit tick count by the batch quantity, saturating at
+/// `u32::MAX` so an absurd quantity can't underflow the math. The actual
+/// per-message clamp lives on `MAX_CRAFT_BATCH_SIZE` — this is the
+/// belt-and-braces guard.
+pub(super) fn batch_total_ticks(recipe: &RecipeDefinition, quantity: u16) -> u32 {
+    craft_total_ticks(recipe).saturating_mul(quantity.max(1) as u32)
+}
+
+/// Multiply an input quantity by the batch size, saturating at
+/// `u16::MAX`. We clamp the *requested* batch to `MAX_CRAFT_BATCH_SIZE` so
+/// this rarely saturates in practice, but the explicit guard keeps a
+/// recipe with a giant per-unit input from wrapping around.
+fn batch_input_quantity(per_unit: u16, quantity: u16) -> u16 {
+    let total = (per_unit as u32).saturating_mul(quantity.max(1) as u32);
+    total.min(u16::MAX as u32) as u16
 }
 
 impl GameServer {
@@ -42,12 +59,20 @@ impl GameServer {
         command: CraftingCommand,
     ) -> Vec<ServerEnvelope> {
         match command {
-            CraftingCommand::Enqueue { recipe_id } => self.enqueue_craft(client_id, &recipe_id),
+            CraftingCommand::Enqueue {
+                recipe_id,
+                quantity,
+            } => self.enqueue_craft(client_id, &recipe_id, quantity),
             CraftingCommand::Cancel { job_id } => self.cancel_craft(client_id, job_id),
         }
     }
 
-    fn enqueue_craft(&mut self, client_id: ClientId, recipe_id: &str) -> Vec<ServerEnvelope> {
+    fn enqueue_craft(
+        &mut self,
+        client_id: ClientId,
+        recipe_id: &str,
+        requested_quantity: u16,
+    ) -> Vec<ServerEnvelope> {
         let Some(recipe) = recipe_definition(recipe_id) else {
             return craft_toast(
                 client_id,
@@ -55,6 +80,28 @@ impl GameServer {
                 format!("Unknown recipe: {recipe_id}"),
             );
         };
+
+        // Clamp the requested batch before any input math: a stray 0 or a
+        // hostile huge value would otherwise either let a zero-cost craft
+        // through or overflow the per-input multiplication below. The
+        // clamp uses the protocol-side cap so the UI's "+ button stops at
+        // max" rule is enforced authoritatively as well.
+        let quantity = requested_quantity.clamp(1, MAX_CRAFT_BATCH_SIZE);
+
+        // Station gate — check before borrowing `clients` mutably so the
+        // immutable scan inside `station_in_range` doesn't fight the
+        // borrow checker.
+        if !self.station_in_range(client_id, recipe.station) {
+            let station_label = match recipe.station {
+                RecipeStation::None => "a station",
+                RecipeStation::Workbench { .. } => "a workbench",
+            };
+            return craft_toast(
+                client_id,
+                ToastKind::Warning,
+                format!("You need to be near {station_label}"),
+            );
+        }
 
         let Some(client) = self.clients.get_mut(&client_id) else {
             return Vec::new();
@@ -68,7 +115,7 @@ impl GameServer {
             );
         }
 
-        if !has_inputs(client, recipe) {
+        if !has_inputs(client, recipe, quantity) {
             return craft_toast(
                 client_id,
                 ToastKind::Warning,
@@ -78,12 +125,14 @@ impl GameServer {
 
         // Inputs are taken now and not refunded if the client disappears
         // mid-craft. The refund path is `Cancel` (above) and disconnect
-        // cleanup (see `cancel_all_jobs_for_disconnect`).
+        // cleanup (see `cancel_all_jobs_for_disconnect`). Batched: take
+        // `per_unit × quantity` once, not in a loop, so a partial failure
+        // mode can't leave the inventory half-debited.
         for input in recipe.inputs {
-            let removed =
-                take_items_from_inventory(&mut client.inventory, input.item_id, input.quantity);
+            let needed = batch_input_quantity(input.quantity, quantity);
+            let removed = take_items_from_inventory(&mut client.inventory, input.item_id, needed);
             debug_assert_eq!(
-                removed, input.quantity,
+                removed, needed,
                 "has_inputs gate should guarantee the take succeeds"
             );
             let _ = removed;
@@ -91,7 +140,7 @@ impl GameServer {
 
         let job_id = client.next_craft_job_id;
         client.next_craft_job_id = client.next_craft_job_id.wrapping_add(1);
-        let job = CraftingJob::new(job_id, recipe.id, craft_total_ticks(recipe));
+        let job = CraftingJob::new(job_id, recipe.id, batch_total_ticks(recipe, quantity), quantity);
         client.crafting.jobs.push(job);
         Vec::new()
     }
@@ -118,11 +167,15 @@ impl GameServer {
             return Vec::new();
         };
 
+        // Refund the full batch worth of inputs. add_stack_to_inventory
+        // already handles stack-limit overflow per item, so a quantity
+        // that would saturate `u16` still lands the bulk in the player's
+        // bag and the excess at their feet.
         let mut overflow = Vec::new();
         for input in recipe.inputs {
             let stack = ItemStack {
                 item_id: intern_item_id(input.item_id),
-                quantity: input.quantity,
+                quantity: batch_input_quantity(input.quantity, job.quantity),
             };
             if let Some(remainder) = add_stack_to_inventory(&mut client.inventory, stack) {
                 overflow.push(remainder);
@@ -150,7 +203,7 @@ impl GameServer {
         // Pull the head job's outcome out under the borrow scope, then
         // grant the output + emit the toast outside it. Keeps the
         // borrow checker happy without cloning the whole client.
-        let mut completed: Option<&'static RecipeDefinition> = None;
+        let mut completed: Option<(&'static RecipeDefinition, u16)> = None;
         let mut drop_origin = None;
         {
             let Some(client) = self.clients.get_mut(&client_id) else {
@@ -162,15 +215,15 @@ impl GameServer {
             head.progress_ticks = head.progress_ticks.saturating_add(1);
             if head.progress_ticks >= head.total_ticks {
                 if let Some(recipe) = recipe_definition(&head.recipe_id) {
-                    completed = Some(recipe);
+                    completed = Some((recipe, head.quantity));
                     drop_origin = Some(drop_origin_for(client));
                 }
                 client.crafting.jobs.remove(0);
             }
         }
 
-        if let (Some(recipe), Some(drop_origin)) = (completed, drop_origin) {
-            self.grant_craft_output(client_id, recipe, drop_origin, envelopes);
+        if let (Some((recipe, quantity)), Some(drop_origin)) = (completed, drop_origin) {
+            self.grant_craft_output(client_id, recipe, quantity, drop_origin, envelopes);
         }
     }
 
@@ -178,24 +231,35 @@ impl GameServer {
         &mut self,
         client_id: ClientId,
         recipe: &'static RecipeDefinition,
+        quantity: u16,
         drop_origin: DropOrigin,
         envelopes: &mut Vec<ServerEnvelope>,
     ) {
-        let stack = ItemStack {
-            item_id: intern_item_id(recipe.output_item),
-            quantity: recipe.output_quantity,
-        };
+        let total_output =
+            (recipe.output_quantity as u32).saturating_mul(quantity.max(1) as u32);
         let mut overflow = Vec::new();
-        if let Some(client) = self.clients.get_mut(&client_id)
-            && let Some(remainder) = add_stack_to_inventory(&mut client.inventory, stack)
-        {
-            overflow.push(remainder);
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            // Output can exceed `u16::MAX` for huge batches of stackable
+            // items. Hand it to the inventory in `u16`-sized chunks so a
+            // single oversized stack doesn't get silently truncated.
+            let mut remaining = total_output;
+            while remaining > 0 {
+                let chunk = remaining.min(u16::MAX as u32) as u16;
+                remaining -= chunk as u32;
+                let stack = ItemStack {
+                    item_id: intern_item_id(recipe.output_item),
+                    quantity: chunk,
+                };
+                if let Some(remainder) = add_stack_to_inventory(&mut client.inventory, stack) {
+                    overflow.push(remainder);
+                }
+            }
         }
         let granted_message = match item_definition(recipe.output_item) {
-            Some(definition) if recipe.output_quantity == 1 => {
+            Some(definition) if total_output == 1 => {
                 format!("Crafted {}", definition.name)
             }
-            Some(definition) => format!("Crafted {} ×{}", definition.name, recipe.output_quantity),
+            Some(definition) => format!("Crafted {} ×{}", definition.name, total_output),
             None => format!("Crafted {}", recipe.name),
         };
         envelopes.push(ServerEnvelope {
@@ -235,7 +299,7 @@ impl GameServer {
             for input in recipe.inputs {
                 let stack = ItemStack {
                     item_id: intern_item_id(input.item_id),
-                    quantity: input.quantity,
+                    quantity: batch_input_quantity(input.quantity, job.quantity),
                 };
                 if let Some(remainder) = add_stack_to_inventory(&mut client.inventory, stack) {
                     overflow.push(remainder);
@@ -253,13 +317,14 @@ fn craft_toast(client_id: ClientId, kind: ToastKind, text: String) -> Vec<Server
     }]
 }
 
-/// Does the client's inventory currently hold every input the recipe needs?
-/// Walks the inventory + actionbar slots once per input and sums matching
-/// stacks. Acceptable for the early game; if the inventory grows to
-/// thousands of slots we'd cache an `item_id → quantity` map.
-fn has_inputs(client: &ServerClient, recipe: &RecipeDefinition) -> bool {
+/// Does the client's inventory currently hold every input the recipe needs
+/// for a batch of `quantity` units? Walks the inventory + actionbar slots
+/// once per input and sums matching stacks. Acceptable for the early game;
+/// if the inventory grows to thousands of slots we'd cache an
+/// `item_id → quantity` map.
+fn has_inputs(client: &ServerClient, recipe: &RecipeDefinition, quantity: u16) -> bool {
     for input in recipe.inputs {
-        let needed = input.quantity;
+        let needed = batch_input_quantity(input.quantity, quantity);
         let available = count_item_in_inventory(client, input.item_id);
         if available < needed {
             return false;
@@ -359,6 +424,7 @@ mod tests {
             client_id,
             CraftingCommand::Enqueue {
                 recipe_id: PLANT_TWINE_RECIPE_ID.to_owned(),
+                quantity: 1,
             },
         );
 
@@ -378,6 +444,7 @@ mod tests {
             client_id,
             CraftingCommand::Enqueue {
                 recipe_id: PLANT_TWINE_RECIPE_ID.to_owned(),
+                quantity: 1,
             },
         );
 
@@ -398,6 +465,7 @@ mod tests {
             client_id,
             CraftingCommand::Enqueue {
                 recipe_id: STONE_HATCHET_RECIPE_ID.to_owned(),
+                quantity: 1,
             },
         );
         let job_id = server.clients[&client_id].crafting.jobs[0].job_id;
@@ -421,6 +489,7 @@ mod tests {
             client_id,
             CraftingCommand::Enqueue {
                 recipe_id: STONE_HATCHET_RECIPE_ID.to_owned(),
+                quantity: 1,
             },
         );
 
@@ -436,6 +505,126 @@ mod tests {
     }
 
     #[test]
+    fn enqueue_with_quantity_takes_inputs_and_scales_total_ticks() {
+        let mut server = make_server();
+        let client_id = add_test_client(&mut server);
+        give_items(&mut server, client_id, FIBER_ID, 9);
+
+        server.apply_crafting_command(
+            client_id,
+            CraftingCommand::Enqueue {
+                recipe_id: PLANT_TWINE_RECIPE_ID.to_owned(),
+                quantity: 3,
+            },
+        );
+
+        let client = server.clients.get(&client_id).expect("client");
+        // 3 fiber per twine × 3 twine = 9 consumed.
+        assert_eq!(count_item_in_inventory(client, FIBER_ID), 0);
+        assert_eq!(client.crafting.jobs.len(), 1);
+        let job = &client.crafting.jobs[0];
+        assert_eq!(job.quantity, 3);
+        let recipe = recipe_definition(PLANT_TWINE_RECIPE_ID).expect("recipe");
+        assert_eq!(job.total_ticks, craft_total_ticks(recipe) * 3);
+    }
+
+    #[test]
+    fn enqueue_quantity_rejected_when_inputs_short_for_full_batch() {
+        let mut server = make_server();
+        let client_id = add_test_client(&mut server);
+        // Enough for 2 twine (6 fiber), but the player asks for 3.
+        give_items(&mut server, client_id, FIBER_ID, 6);
+
+        server.apply_crafting_command(
+            client_id,
+            CraftingCommand::Enqueue {
+                recipe_id: PLANT_TWINE_RECIPE_ID.to_owned(),
+                quantity: 3,
+            },
+        );
+
+        let client = server.clients.get(&client_id).expect("client");
+        // No partial debit — nothing was taken because the full batch
+        // didn't fit.
+        assert_eq!(count_item_in_inventory(client, FIBER_ID), 6);
+        assert!(client.crafting.jobs.is_empty());
+    }
+
+    #[test]
+    fn batch_completion_grants_full_output_stack() {
+        let mut server = make_server();
+        let client_id = add_test_client(&mut server);
+        give_items(&mut server, client_id, FIBER_ID, 12);
+
+        server.apply_crafting_command(
+            client_id,
+            CraftingCommand::Enqueue {
+                recipe_id: PLANT_TWINE_RECIPE_ID.to_owned(),
+                quantity: 4,
+            },
+        );
+
+        let total = server.clients[&client_id].crafting.jobs[0].total_ticks;
+        for _ in 0..total {
+            let mut envelopes = Vec::new();
+            server.tick_client_crafting(client_id, &mut envelopes);
+        }
+
+        let client = server.clients.get(&client_id).expect("client");
+        assert!(client.crafting.jobs.is_empty());
+        // 4 twine in one completion.
+        assert_eq!(count_item_in_inventory(client, PLANT_TWINE_ID), 4);
+    }
+
+    #[test]
+    fn cancel_refunds_full_batch_quantity() {
+        let mut server = make_server();
+        let client_id = add_test_client(&mut server);
+        give_items(&mut server, client_id, FIBER_ID, 15);
+
+        server.apply_crafting_command(
+            client_id,
+            CraftingCommand::Enqueue {
+                recipe_id: PLANT_TWINE_RECIPE_ID.to_owned(),
+                quantity: 5,
+            },
+        );
+        assert_eq!(
+            count_item_in_inventory(&server.clients[&client_id], FIBER_ID),
+            0
+        );
+
+        let job_id = server.clients[&client_id].crafting.jobs[0].job_id;
+        server.apply_crafting_command(client_id, CraftingCommand::Cancel { job_id });
+
+        let client = server.clients.get(&client_id).expect("client");
+        assert!(client.crafting.jobs.is_empty());
+        // Full 15 fiber refunded.
+        assert_eq!(count_item_in_inventory(client, FIBER_ID), 15);
+    }
+
+    #[test]
+    fn enqueue_clamps_zero_quantity_to_one() {
+        let mut server = make_server();
+        let client_id = add_test_client(&mut server);
+        give_items(&mut server, client_id, FIBER_ID, 5);
+
+        server.apply_crafting_command(
+            client_id,
+            CraftingCommand::Enqueue {
+                recipe_id: PLANT_TWINE_RECIPE_ID.to_owned(),
+                quantity: 0,
+            },
+        );
+
+        let client = server.clients.get(&client_id).expect("client");
+        // Treated as quantity = 1, so 3 fiber consumed and one job queued.
+        assert_eq!(count_item_in_inventory(client, FIBER_ID), 2);
+        assert_eq!(client.crafting.jobs.len(), 1);
+        assert_eq!(client.crafting.jobs[0].quantity, 1);
+    }
+
+    #[test]
     fn disconnect_refunds_queued_inputs() {
         let mut server = make_server();
         let client_id = add_test_client(&mut server);
@@ -444,6 +633,7 @@ mod tests {
             client_id,
             CraftingCommand::Enqueue {
                 recipe_id: PLANT_TWINE_RECIPE_ID.to_owned(),
+                quantity: 1,
             },
         );
         assert_eq!(

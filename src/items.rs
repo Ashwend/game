@@ -9,11 +9,14 @@ pub const WOOD_ID: &str = "wood";
 pub const STONE_ID: &str = "stone";
 pub const COAL_ID: &str = "coal";
 pub const IRON_ORE_ID: &str = "iron_ore";
+pub const IRON_BAR_ID: &str = "iron_bar";
 pub const SULFUR_ORE_ID: &str = "sulfur_ore";
 pub const FIBER_ID: &str = "fiber";
 pub const PLANT_TWINE_ID: &str = "plant_twine";
 pub const BASIC_HATCHET_ID: &str = "wood_stone_hatchet";
 pub const BASIC_PICKAXE_ID: &str = "wood_stone_pickaxe";
+pub const WORKBENCH_T1_ID: &str = "workbench_t1";
+pub const CRUDE_FURNACE_ID: &str = "crude_furnace";
 
 /// Identifier shared between `ItemStack`, `ItemMerged`, and item definitions.
 /// Backed by `Arc<str>` so clones are a refcount bump instead of a heap copy.
@@ -69,6 +72,9 @@ pub enum ItemModel {
     Bag,
     Hatchet,
     Pickaxe,
+    /// Deployable items render as the bag silhouette in the held-item
+    /// slot — the actual structure mesh is what gets placed in the world.
+    Deployable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,7 +133,46 @@ impl ItemTint {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What kind of structure a deployable item places. The tier travels with
+/// the kind so a single `RecipeStation::Workbench { min_tier }` check can
+/// match any equal-or-higher workbench in range — same idea behind tool
+/// tiers (`ToolProfile`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DeployableKind {
+    Workbench { tier: u8 },
+    Furnace { tier: u8 },
+}
+
+impl DeployableKind {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Workbench { .. } => "Workbench",
+            Self::Furnace { .. } => "Furnace",
+        }
+    }
+}
+
+/// Footprint + health profile for items that drop into the world as
+/// placed structures. Lives on `ItemDefinition` so item-aware UIs (action
+/// bar, inventory tooltip) can show "placeable" affordances without a
+/// separate registry, mirroring `ToolProfile`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DeployableProfile {
+    pub kind: DeployableKind,
+    /// Spawn HP for the placed structure. Persisted in the world save.
+    pub max_health: u32,
+    /// Horizontal half-extent of the structure's AABB collider. The
+    /// vertical extent is taken from `collider_half_height` and the
+    /// collider is anchored on the ground.
+    pub collider_half_width: f32,
+    pub collider_half_height: f32,
+    /// Range, in metres, within which a `RecipeStation` of this kind +
+    /// tier is considered "in reach" for a player who placed it.
+    /// `0.0` means the deployable does not act as a crafting station.
+    pub station_radius: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ItemDefinition {
     pub id: &'static str,
     pub name: &'static str,
@@ -137,6 +182,7 @@ pub struct ItemDefinition {
     pub model: ItemModel,
     pub tint: ItemTint,
     pub tool: Option<ToolProfile>,
+    pub deployable: Option<DeployableProfile>,
 }
 
 impl ItemDefinition {
@@ -159,6 +205,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         model: ItemModel::Bag,
         tint: ItemTint::new(139, 95, 56),
         tool: None,
+        deployable: None,
     },
     ItemDefinition {
         id: STONE_ID,
@@ -169,6 +216,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         model: ItemModel::Bag,
         tint: ItemTint::new(122, 128, 126),
         tool: None,
+        deployable: None,
     },
     ItemDefinition {
         id: COAL_ID,
@@ -179,6 +227,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         model: ItemModel::Bag,
         tint: ItemTint::new(42, 45, 48),
         tool: None,
+        deployable: None,
     },
     ItemDefinition {
         id: IRON_ORE_ID,
@@ -189,6 +238,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         model: ItemModel::Bag,
         tint: ItemTint::new(155, 120, 94),
         tool: None,
+        deployable: None,
     },
     ItemDefinition {
         id: SULFUR_ORE_ID,
@@ -199,6 +249,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         model: ItemModel::Bag,
         tint: ItemTint::new(218, 189, 73),
         tool: None,
+        deployable: None,
     },
     ItemDefinition {
         id: FIBER_ID,
@@ -209,16 +260,29 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         model: ItemModel::Bag,
         tint: ItemTint::new(168, 184, 96),
         tool: None,
+        deployable: None,
     },
     ItemDefinition {
         id: PLANT_TWINE_ID,
         name: "Plant Twine",
-        description: "Twisted plant fibers — the binding that holds primitive tools together.",
+        description: "Twisted plant fibers. The binding that holds primitive tools together.",
         stack_size: 200,
         equipable: false,
         model: ItemModel::Bag,
         tint: ItemTint::new(196, 176, 110),
         tool: None,
+        deployable: None,
+    },
+    ItemDefinition {
+        id: IRON_BAR_ID,
+        name: "Iron Bar",
+        description: "Refined iron, smelted from raw ore in a furnace.",
+        stack_size: 100,
+        equipable: false,
+        model: ItemModel::Bag,
+        tint: ItemTint::new(196, 198, 204),
+        tool: None,
+        deployable: None,
     },
     ItemDefinition {
         id: BASIC_HATCHET_ID,
@@ -234,6 +298,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
             gather_amount: 6,
             cooldown_ticks: 6,
         }),
+        deployable: None,
     },
     ItemDefinition {
         id: BASIC_PICKAXE_ID,
@@ -248,6 +313,43 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
             tier: 1,
             gather_amount: 6,
             cooldown_ticks: 6,
+        }),
+        deployable: None,
+    },
+    ItemDefinition {
+        id: WORKBENCH_T1_ID,
+        name: "Workbench lvl 1",
+        description: "A sturdy table for assembling tier-1 crafted goods. \
+                      Place it in the world and craft within ~5m of it.",
+        stack_size: 1,
+        equipable: true,
+        model: ItemModel::Deployable,
+        tint: ItemTint::new(136, 96, 56),
+        tool: None,
+        deployable: Some(DeployableProfile {
+            kind: DeployableKind::Workbench { tier: 1 },
+            max_health: 500,
+            collider_half_width: 0.55,
+            collider_half_height: 0.45,
+            station_radius: 5.0,
+        }),
+    },
+    ItemDefinition {
+        id: CRUDE_FURNACE_ID,
+        name: "Furnace",
+        description: "A stone furnace for smelting ore into bars. \
+                      Requires a workbench nearby to build.",
+        stack_size: 1,
+        equipable: true,
+        model: ItemModel::Deployable,
+        tint: ItemTint::new(102, 92, 84),
+        tool: None,
+        deployable: Some(DeployableProfile {
+            kind: DeployableKind::Furnace { tier: 1 },
+            max_health: 800,
+            collider_half_width: 0.50,
+            collider_half_height: 0.60,
+            station_radius: 5.0,
         }),
     },
 ];

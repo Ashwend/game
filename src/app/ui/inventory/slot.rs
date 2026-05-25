@@ -3,25 +3,43 @@ use bevy_egui::egui::{
 };
 
 use crate::{
-    app::state::{InventoryDrag, InventoryDragButton, InventoryUiState},
+    app::state::{InventoryDrag, InventoryDragButton, InventoryUiState, UnifiedSlotRef},
     items::{item_definition, stack_limit},
     protocol::{ItemContainer, ItemContainerSlot, ItemStack, PlayerInventoryState},
 };
 
 use super::super::theme;
 
-pub(super) const SLOT_SIZE: f32 = 56.0;
+pub(crate) const SLOT_SIZE: f32 = 56.0;
 
-pub(super) fn draw_slot(
+/// Draw one inventory-style slot. Used by both the main inventory and
+/// the furnace modal — `slot` is a `UnifiedSlotRef` so a drag can move
+/// items across either container without the widget needing to know
+/// the difference.
+///
+/// `shift_transfer_enabled` is set by callers that have a destination
+/// container open (e.g. the furnace modal). When true, Shift+LMB on a
+/// non-empty slot records a [`InventoryUiState::pending_quick_transfer`]
+/// instead of starting a drag; the parent surface is then responsible
+/// for routing that intent to the appropriate network command.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_slot(
     ui: &mut egui::Ui,
-    slot: ItemContainerSlot,
+    slot: UnifiedSlotRef,
     stack: Option<&ItemStack>,
     label: Option<String>,
     active: bool,
     interactive: bool,
+    shift_transfer_enabled: bool,
     inventory_ui: &mut InventoryUiState,
 ) {
-    let flash_strength = inventory_ui.slot_flash_strength(slot);
+    // Slot flashes are only tracked for player slots — they highlight
+    // "you just gained items here", which is a property of the player's
+    // inventory. The furnace's own slots don't flash.
+    let flash_strength = match slot {
+        UnifiedSlotRef::Player(container_slot) => inventory_ui.slot_flash_strength(container_slot),
+        UnifiedSlotRef::Furnace(_) => 0.0,
+    };
 
     if !interactive {
         let (_, rect) = ui.allocate_space(Vec2::splat(SLOT_SIZE));
@@ -69,9 +87,19 @@ pub(super) fn draw_slot(
         && inventory_ui.drag.is_none()
     {
         let _ = item_tooltip(response, stack);
-        if pointer_over_slot
-            && ui.input(|input| input.pointer.button_pressed(PointerButton::Primary))
-        {
+        let shift_held = ui.input(|input| input.modifiers.shift);
+        let primary_pressed = pointer_over_slot
+            && ui.input(|input| input.pointer.button_pressed(PointerButton::Primary));
+        let secondary_pressed = pointer_over_slot
+            && ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary));
+        // Shift+LMB short-circuits the drag path entirely: the caller
+        // surface (furnace modal today) consumes
+        // `pending_quick_transfer` and turns it into a network command.
+        // Without the early return we'd start a drag the same frame,
+        // which then bounces back when released over nothing.
+        if primary_pressed && shift_held && shift_transfer_enabled {
+            inventory_ui.pending_quick_transfer = Some(slot);
+        } else if primary_pressed {
             begin_drag(
                 inventory_ui,
                 slot,
@@ -79,9 +107,7 @@ pub(super) fn draw_slot(
                 stack.quantity,
                 InventoryDragButton::Primary,
             );
-        } else if pointer_over_slot
-            && ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary))
-        {
+        } else if secondary_pressed {
             begin_drag(
                 inventory_ui,
                 slot,
@@ -94,7 +120,7 @@ pub(super) fn draw_slot(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn paint_slot(
+pub(crate) fn paint_slot(
     ui: &egui::Ui,
     rect: Rect,
     stack: Option<&ItemStack>,
@@ -219,7 +245,7 @@ fn item_tooltip_body(stack: &ItemStack) -> String {
 
 fn begin_drag(
     inventory_ui: &mut InventoryUiState,
-    source: ItemContainerSlot,
+    source: UnifiedSlotRef,
     stack: &ItemStack,
     quantity: u16,
     button: InventoryDragButton,
@@ -232,7 +258,7 @@ fn begin_drag(
     });
 }
 
-pub(super) fn slot_stack(
+pub(crate) fn slot_stack(
     inventory: &PlayerInventoryState,
     slot: ItemContainerSlot,
 ) -> Option<&ItemStack> {

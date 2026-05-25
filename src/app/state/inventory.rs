@@ -3,7 +3,47 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-use crate::protocol::{ItemContainerSlot, ItemStack, PlayerInventoryState};
+use crate::protocol::{FurnaceSlotRef, ItemContainerSlot, ItemStack, PlayerInventoryState};
+
+/// Either-or addressable slot used by the unified drag pipeline. The
+/// main inventory and the furnace UI both speak this type so a drag
+/// originating in either container can be dropped on a slot in either
+/// container; the dispatch in `handle_drag_release` translates it back
+/// into the matching wire command (`InventoryCommand::Move` for
+/// player↔player, `FurnaceCommand::Move` for anything touching a
+/// furnace slot).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum UnifiedSlotRef {
+    /// A slot in the player's own inventory or actionbar.
+    Player(ItemContainerSlot),
+    /// A slot inside the currently-open furnace (fuel slot or one of
+    /// the smelt-grid slots).
+    Furnace(FurnaceSlotRef),
+}
+
+impl UnifiedSlotRef {
+    pub(crate) fn is_player(self) -> bool {
+        matches!(self, Self::Player(_))
+    }
+
+    /// Map this unified ref to its `FurnaceSlotRef` form. Player slots
+    /// pass through via the matching `FurnaceSlotRef::PlayerInventory`
+    /// / `FurnaceSlotRef::PlayerActionbar` variants so a cross-
+    /// container move can be expressed as one `FurnaceCommand::Move`.
+    pub(crate) fn as_furnace_ref(self) -> FurnaceSlotRef {
+        match self {
+            Self::Furnace(slot) => slot,
+            Self::Player(slot) => match slot.container {
+                crate::protocol::ItemContainer::Inventory => {
+                    FurnaceSlotRef::PlayerInventory(slot.slot)
+                }
+                crate::protocol::ItemContainer::Actionbar => {
+                    FurnaceSlotRef::PlayerActionbar(slot.slot)
+                }
+            },
+        }
+    }
+}
 
 /// One audible inventory change. Returned by [`InventoryUiState::observe_inventory`]
 /// so the UI layer can play the matching cue without re-diffing the
@@ -38,9 +78,21 @@ const PICKUP_INTENT_WINDOW_SECS: f32 = 0.6;
 #[derive(Resource, Default)]
 pub(crate) struct InventoryUiState {
     pub(crate) drag: Option<InventoryDrag>,
-    pub(crate) hovered_slot: Option<ItemContainerSlot>,
+    pub(crate) hovered_slot: Option<UnifiedSlotRef>,
     pub(crate) inventory_rect: Option<egui::Rect>,
     pub(crate) actionbar_rect: Option<egui::Rect>,
+    /// Tracks the rect of any open furnace surface so a player-side
+    /// drag released over the furnace doesn't fall through to the
+    /// "drop on the ground" path. `None` when the furnace UI isn't
+    /// up.
+    pub(crate) furnace_rect: Option<egui::Rect>,
+    /// Single-frame inbox for shift+click "quick transfer" intents.
+    /// The slot widget sets this when the player Shift+LMBs a slot
+    /// while a container surface (furnace today) is up; the container's
+    /// UI consumes it, sends the network command, and clears the
+    /// field. Cleared at frame start by [`begin_frame`] so a stale
+    /// click from a previous frame can never fire twice.
+    pub(crate) pending_quick_transfer: Option<UnifiedSlotRef>,
     pub(crate) was_open: bool,
     /// Per-slot flash elapsed time. A slot is inserted with elapsed = 0
     /// whenever its quantity grows (or a new stack lands in an empty slot)
@@ -65,6 +117,12 @@ impl InventoryUiState {
         self.hovered_slot = None;
         self.inventory_rect = None;
         self.actionbar_rect = None;
+        self.furnace_rect = None;
+        // Last frame's shift+click should have been consumed by now.
+        // Clearing here makes the field strictly single-frame so a
+        // surface that opens after the click was recorded can't pick up
+        // a phantom intent.
+        self.pending_quick_transfer = None;
     }
 
     pub(crate) fn cancel_drag(&mut self) {
@@ -228,7 +286,7 @@ fn stack_gained_items(previous: Option<&ItemStack>, current: Option<&ItemStack>)
 
 #[derive(Debug, Clone)]
 pub(crate) struct InventoryDrag {
-    pub(crate) source: ItemContainerSlot,
+    pub(crate) source: UnifiedSlotRef,
     pub(crate) stack: ItemStack,
     pub(crate) quantity: u16,
     pub(crate) button: InventoryDragButton,
@@ -249,12 +307,12 @@ mod tests {
     fn inventory_ui_state_resets_frame_and_drag_state() {
         let mut state = InventoryUiState {
             drag: Some(InventoryDrag {
-                source: ItemContainerSlot::inventory(2),
+                source: UnifiedSlotRef::Player(ItemContainerSlot::inventory(2)),
                 stack: ItemStack::new("ore", 4),
                 quantity: 2,
                 button: InventoryDragButton::Secondary,
             }),
-            hovered_slot: Some(ItemContainerSlot::actionbar(1)),
+            hovered_slot: Some(UnifiedSlotRef::Player(ItemContainerSlot::actionbar(1))),
             inventory_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 egui::vec2(10.0, 10.0),
@@ -263,6 +321,8 @@ mod tests {
                 egui::Pos2::ZERO,
                 egui::vec2(5.0, 5.0),
             )),
+            furnace_rect: None,
+            pending_quick_transfer: Some(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0))),
             was_open: true,
             slot_flashes: HashMap::new(),
             last_seen_inventory: None,
@@ -274,6 +334,9 @@ mod tests {
         assert!(state.hovered_slot.is_none());
         assert!(state.inventory_rect.is_none());
         assert!(state.actionbar_rect.is_none());
+        // Single-frame intents reset at begin_frame so a stale shift-
+        // click can't fire twice.
+        assert!(state.pending_quick_transfer.is_none());
         assert!(state.drag.is_some());
         assert!(state.was_open);
 

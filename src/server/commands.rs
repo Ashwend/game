@@ -12,8 +12,13 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
+    items::{
+        BASIC_HATCHET_ID, BASIC_PICKAXE_ID, COAL_ID, CRUDE_FURNACE_ID, FIBER_ID, IRON_BAR_ID,
+        IRON_ORE_ID, PLANT_TWINE_ID, STONE_ID, SULFUR_ORE_ID, WOOD_ID, WORKBENCH_T1_ID,
+    },
     protocol::{
-        ChatMessage, ClientId, ResourceNodeId, ServerMessage, ToastKind, ToastMessage, Vec3Net,
+        ChatMessage, ClientId, ItemStack, ResourceNodeId, ServerMessage, ToastKind, ToastMessage,
+        Vec3Net,
     },
     resources::{
         COAL_NODE_ID, IRON_NODE_ID, SULFUR_NODE_ID, resource_node_definition, spawn_resource_node,
@@ -22,7 +27,7 @@ use crate::{
     world_time::{MAX_MULTIPLIER, MIN_MULTIPLIER, parse_time_token},
 };
 
-use super::{DeliveryTarget, GameServer, ServerEnvelope};
+use super::{DeliveryTarget, GameServer, ServerEnvelope, inventory::add_stack_to_inventory};
 
 /// Hard limit on `/spawn-ore` radius. Keeps an admin debug command from
 /// accidentally placing a node hundreds of meters away in a flat world.
@@ -54,6 +59,7 @@ impl GameServer {
             "spawn-ore" | "spawnore" => self.command_spawn_ore(client_id, &args),
             "time" => self.command_set_time(client_id, &args),
             "speed" | "timescale" => self.command_set_time_multiplier(client_id, &args),
+            "test-kit" | "testkit" => self.command_test_kit(client_id),
             "help" => self.command_help(client_id),
             other => reply_warning(client_id, format!("unknown command: /{other}")),
         }
@@ -73,25 +79,31 @@ impl GameServer {
             .unwrap_or(false);
 
         let mut lines: Vec<String> = vec!["Available commands:".to_owned()];
-        lines.push("  /help — show this list".to_owned());
+        lines.push("  /help: show this list".to_owned());
         let spawn_ore_line = if is_admin {
-            "  /spawn-ore [coal|iron|sulfur] [radius] — drop a fresh ore node nearby"
+            "  /spawn-ore [coal|iron|sulfur] [radius]: drop a fresh ore node nearby"
         } else {
-            "  /spawn-ore [coal|iron|sulfur] [radius] — admin only"
+            "  /spawn-ore [coal|iron|sulfur] [radius]: admin only"
         };
         lines.push(spawn_ore_line.to_owned());
         let time_line = if is_admin {
-            "  /time <HH:MM|hour> — set the time of day"
+            "  /time <HH:MM|hour>: set the time of day"
         } else {
-            "  /time <HH:MM|hour> — admin only"
+            "  /time <HH:MM|hour>: admin only"
         };
         lines.push(time_line.to_owned());
         let speed_line = if is_admin {
-            "  /speed <multiplier> — set the day/night speed (0 to 240)"
+            "  /speed <multiplier>: set the day/night speed (0 to 240)"
         } else {
-            "  /speed <multiplier> — admin only"
+            "  /speed <multiplier>: admin only"
         };
         lines.push(speed_line.to_owned());
+        let test_kit_line = if is_admin {
+            "  /test-kit: grant every tool + 100 of each resource + 1 workbench + 1 furnace"
+        } else {
+            "  /test-kit: admin only"
+        };
+        lines.push(test_kit_line.to_owned());
 
         lines
             .into_iter()
@@ -230,7 +242,7 @@ impl GameServer {
             rng.next_f32() * std::f32::consts::TAU,
         );
         let Some(node) = spawn_resource_node(&spawn) else {
-            return reply_warning(client_id, "could not build node — unknown ore type");
+            return reply_warning(client_id, "could not build node: unknown ore type");
         };
 
         let distance = ((position.x - player_position.x).powi(2)
@@ -253,6 +265,98 @@ impl GameServer {
             client_id,
             format!("spawned {label} {distance:.1}m away (id {node_id})"),
         )
+    }
+
+    /// `/test-kit` — debug shortcut that fills the player's bag with the
+    /// full early-game kit:
+    ///
+    /// - Equipables (tools + deployables) → first empty actionbar slot,
+    ///   falling back to inventory if the actionbar is already packed.
+    /// - Resources (100 of each material) → first empty inventory slot
+    ///   so they don't shove existing actionbar contents around.
+    ///
+    /// Admin only. Any items that can't fit (e.g. inventory full from
+    /// earlier kits) are reported in the success toast — no silent loss.
+    fn command_test_kit(&mut self, client_id: ClientId) -> Vec<ServerEnvelope> {
+        let Some(client) = self.clients.get_mut(&client_id) else {
+            return Vec::new();
+        };
+        if !client.is_admin {
+            return reply_warning(client_id, "admin only");
+        }
+
+        // (item_id, quantity) tuples. Tools + deployables are equipables
+        // and go to the actionbar first; resources go straight to the
+        // inventory grid.
+        const EQUIPABLES: &[&str] = &[
+            BASIC_HATCHET_ID,
+            BASIC_PICKAXE_ID,
+            WORKBENCH_T1_ID,
+            CRUDE_FURNACE_ID,
+        ];
+        const RESOURCES: &[&str] = &[
+            WOOD_ID,
+            STONE_ID,
+            COAL_ID,
+            IRON_ORE_ID,
+            SULFUR_ORE_ID,
+            FIBER_ID,
+            PLANT_TWINE_ID,
+            IRON_BAR_ID,
+        ];
+        const RESOURCE_QUANTITY: u16 = 100;
+
+        let mut placed = 0u32;
+        let mut overflow = 0u32;
+
+        // Equipables: actionbar first → inventory fallback. Each one
+        // is a stack of 1 (tools and deployables are equipable), so
+        // we never need to merge them with an existing matching stack.
+        for item_id in EQUIPABLES {
+            let stack = ItemStack::new(*item_id, 1);
+            if let Some(slot) = client
+                .inventory
+                .actionbar_slots
+                .iter()
+                .position(Option::is_none)
+            {
+                client.inventory.actionbar_slots[slot] = Some(stack);
+                placed += 1;
+            } else if add_stack_to_inventory(&mut client.inventory, stack).is_some() {
+                overflow += 1;
+            } else {
+                placed += 1;
+            }
+        }
+
+        // Resources: inventory only. Stack of 100 fits inside every
+        // resource's stack limit (twine/wood/stone/etc cap at 200,
+        // iron_bar caps at 100). We pick the first empty inventory
+        // slot directly so granting a kit doesn't merge into the
+        // player's existing piles in unpredictable order.
+        for item_id in RESOURCES {
+            let stack = ItemStack::new(*item_id, RESOURCE_QUANTITY);
+            if let Some(slot) = client
+                .inventory
+                .inventory_slots
+                .iter()
+                .position(Option::is_none)
+            {
+                client.inventory.inventory_slots[slot] = Some(stack);
+                placed += 1;
+            } else {
+                overflow += 1;
+            }
+        }
+
+        let message = if overflow == 0 {
+            format!("test kit granted ({placed} items)")
+        } else {
+            format!(
+                "test kit granted ({placed} items, {overflow} couldn't fit; clear some inventory)"
+            )
+        };
+        reply_success(client_id, message)
     }
 
     fn allocate_resource_node_id(&mut self) -> ResourceNodeId {
@@ -396,5 +500,136 @@ mod tests {
         let first = rng.next_u32();
         let second = rng.next_u32();
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn test_kit_command_grants_full_kit_and_routes_equipables_to_actionbar() {
+        use crate::{
+            protocol::{GAME_VERSION, PROTOCOL_VERSION},
+            save::WorldSave,
+            server::ServerSettings,
+            steam::{AuthMode, offline_auth_token},
+        };
+        let mut server = crate::server::GameServer::new(
+            WorldSave::new("Test", Some(1)),
+            ServerSettings {
+                auth_mode: AuthMode::Offline,
+                singleplayer_host: Some(1),
+            },
+        );
+        let (client_id, _) = server
+            .connect(
+                PROTOCOL_VERSION,
+                Some(GAME_VERSION.to_owned()),
+                1,
+                "Tester".to_owned(),
+                offline_auth_token(1),
+            )
+            .expect("connect ok");
+
+        // The singleplayer host gets admin status implicitly, so the
+        // command should succeed on this freshly-connected client.
+        let envelopes = server.apply_command(client_id, "/test-kit".to_owned());
+        assert!(
+            envelopes.iter().any(|envelope| matches!(
+                &envelope.message,
+                ServerMessage::Toast(toast) if matches!(toast.kind, ToastKind::Success)
+            )),
+            "test-kit should reply with a success toast"
+        );
+
+        let client = server
+            .clients
+            .get(&client_id)
+            .expect("client still connected");
+
+        // Tools + structures landed in the actionbar.
+        let actionbar_ids: Vec<_> = client
+            .inventory
+            .actionbar_slots
+            .iter()
+            .filter_map(|slot| slot.as_ref().map(|s| s.item_id.as_ref().to_owned()))
+            .collect();
+        for required in [
+            BASIC_HATCHET_ID,
+            BASIC_PICKAXE_ID,
+            WORKBENCH_T1_ID,
+            CRUDE_FURNACE_ID,
+        ] {
+            assert!(
+                actionbar_ids.iter().any(|id| id == required),
+                "actionbar should contain {required}, got {actionbar_ids:?}",
+            );
+        }
+
+        // Every resource type sits in the main inventory at the kit
+        // quantity. Iron bar is capped at 100, others at 200, so 100
+        // is always intact.
+        for resource in [
+            WOOD_ID,
+            STONE_ID,
+            COAL_ID,
+            IRON_ORE_ID,
+            SULFUR_ORE_ID,
+            FIBER_ID,
+            PLANT_TWINE_ID,
+            IRON_BAR_ID,
+        ] {
+            let stack = client
+                .inventory
+                .inventory_slots
+                .iter()
+                .filter_map(|slot| slot.as_ref())
+                .find(|stack| stack.item_id.as_ref() == resource)
+                .unwrap_or_else(|| panic!("inventory should contain {resource}"));
+            assert_eq!(stack.quantity, 100, "{resource} should be granted as 100");
+        }
+    }
+
+    #[test]
+    fn test_kit_command_refused_for_non_admin() {
+        use crate::{
+            protocol::{GAME_VERSION, PROTOCOL_VERSION},
+            save::WorldSave,
+            server::ServerSettings,
+            steam::{AuthMode, offline_auth_token},
+        };
+        // Singleplayer host is admin; spin up a server with NO host so
+        // the connecting client is a plain non-admin.
+        let mut server = crate::server::GameServer::new(
+            WorldSave::new("Test", None),
+            ServerSettings {
+                auth_mode: AuthMode::Offline,
+                singleplayer_host: None,
+            },
+        );
+        let (client_id, _) = server
+            .connect(
+                PROTOCOL_VERSION,
+                Some(GAME_VERSION.to_owned()),
+                7,
+                "Tester".to_owned(),
+                offline_auth_token(7),
+            )
+            .expect("connect ok");
+
+        let envelopes = server.apply_command(client_id, "/test-kit".to_owned());
+        assert!(
+            envelopes.iter().any(|envelope| matches!(
+                &envelope.message,
+                ServerMessage::Toast(toast) if matches!(toast.kind, ToastKind::Warning)
+            )),
+            "non-admin should be rejected with a warning toast",
+        );
+
+        // Confirm no inventory mutation happened.
+        let client = server.clients.get(&client_id).unwrap();
+        let granted = client
+            .inventory
+            .inventory_slots
+            .iter()
+            .chain(client.inventory.actionbar_slots.iter())
+            .any(|slot| slot.is_some());
+        assert!(!granted, "non-admin must not have received any items");
     }
 }

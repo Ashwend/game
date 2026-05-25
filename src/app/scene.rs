@@ -17,12 +17,12 @@ mod sky;
 mod world;
 
 pub(crate) use assets::{
-    ImpactEffectAssets, ItemVisualAssets, PlayerVisualAssets, ResourceVisualAssets,
-    menu_backdrop_depth_of_field, player_visual_position, setup_scene,
+    DeployableVisualAssets, ImpactEffectAssets, ItemVisualAssets, PlayerVisualAssets,
+    ResourceVisualAssets, menu_backdrop_depth_of_field, player_visual_position, setup_scene,
 };
 pub(crate) use components::{
-    HeldItemVisual, MainCamera, NetworkDroppedItem, NetworkPlayer, NetworkResourceNode,
-    tree_mesh_height,
+    DeployablePlacementGhost, FurnaceMouthLight, HeldItemVisual, MainCamera, NetworkDeployedEntity,
+    NetworkDroppedItem, NetworkPlayer, NetworkResourceNode, tree_mesh_height,
 };
 pub(crate) use mesh::PLAYER_HEAD_TOP_LOCAL_Y;
 pub(crate) use sky::update_sky_system;
@@ -203,9 +203,11 @@ mod tests {
                 chat_bubble: None,
                 inventory: None,
                 crafting: None,
+                open_furnace: None,
             }],
             dropped_items: Vec::new(),
             resource_nodes: Vec::new(),
+            deployed_entities: Vec::new(),
         };
 
         assert_eq!(snapshot.players[0].client_id, player.client_id);

@@ -32,7 +32,16 @@ pub(super) const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 /// regrows) on `WorldStateSave`. Old saves don't carry the chunk state,
 /// and the test-world layout changed, so older saves wouldn't map onto
 /// the new world geometry — they're rejected at load.
-pub(super) const SAVE_FORMAT_VERSION: u32 = 5;
+///
+/// `6` added persisted deployable entities (workbenches, furnaces) on
+/// `WorldStateSave::deployed_entities` plus the `next_deployed_entity_id`
+/// counter. Postcard is positional so old saves wouldn't line up.
+///
+/// `7` added per-deployable furnace state (fuel slot + smelt slots +
+/// active flag + burn/smelt timers). Old v6 saves don't carry this
+/// field — rejected and surfaced in the worlds-screen "couldn't load"
+/// banner.
+pub(super) const SAVE_FORMAT_VERSION: u32 = 7;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
 /// at >100MB/s compression and ~1GB/s decompression.
 const ZSTD_LEVEL: i32 = 5;
