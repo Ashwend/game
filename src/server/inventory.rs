@@ -120,6 +120,52 @@ fn restore_stack(inventory: &mut PlayerInventoryState, slot: ItemContainerSlot, 
     }
 }
 
+/// Pull up to `quantity` units of `item_id` out of the inventory + actionbar.
+/// Walks slots in `actionbar → inventory` order (so the toolbar drains last,
+/// leaving the player's quick-access items intact when the bag has the same
+/// material). Returns the actual amount removed; less than `quantity` means
+/// there wasn't enough to satisfy the request.
+///
+/// Designed for the crafting consume path. The caller is expected to verify
+/// totals up-front so the partial case shouldn't fire in practice — but the
+/// function still drains what it can, since refusing to remove anything
+/// would leave the inventory in a worse state if a recipe definition ever
+/// goes out of sync with the take.
+pub(super) fn take_items_from_inventory(
+    inventory: &mut PlayerInventoryState,
+    item_id: &str,
+    quantity: u16,
+) -> u16 {
+    let mut remaining = quantity;
+    if remaining == 0 {
+        return 0;
+    }
+
+    for slot in inventory
+        .actionbar_slots
+        .iter_mut()
+        .chain(inventory.inventory_slots.iter_mut())
+    {
+        if remaining == 0 {
+            break;
+        }
+        let Some(stack) = slot.as_mut() else {
+            continue;
+        };
+        if stack.item_id.as_ref() != item_id {
+            continue;
+        }
+        let take = remaining.min(stack.quantity);
+        stack.quantity -= take;
+        remaining -= take;
+        if stack.quantity == 0 {
+            *slot = None;
+        }
+    }
+
+    quantity - remaining
+}
+
 pub(super) fn add_stack_to_inventory(
     inventory: &mut PlayerInventoryState,
     stack: ItemStack,

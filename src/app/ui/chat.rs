@@ -82,7 +82,11 @@ fn effective_chat_width(actionbar_rect: Option<egui::Rect>) -> f32 {
 }
 
 fn handle_chat_shortcuts(ctx: &egui::Context, menu: &mut MenuState) -> bool {
-    if menu.pause_open || menu.chat_open {
+    // Mirror `chat_shortcut_system`'s modal gating. Without
+    // `crafting_open` here, typing `T` into the crafting search would
+    // open the chat *from the UI side* even after the Bevy keybind
+    // bailed — chat has two open-paths and they must agree.
+    if menu.pause_open || menu.chat_open || menu.crafting_open || menu.inventory_open {
         return false;
     }
 

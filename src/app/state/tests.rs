@@ -32,6 +32,7 @@ fn player_state(client_id: ClientId, position: Vec3Net) -> PlayerState {
         is_admin: false,
         chat_bubble: None,
         inventory: None,
+        crafting: None,
     }
 }
 

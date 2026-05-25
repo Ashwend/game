@@ -9,7 +9,7 @@ use crate::{
 pub type ClientId = u64;
 pub type SteamId = u64;
 
-pub const PROTOCOL_VERSION: u32 = 20;
+pub const PROTOCOL_VERSION: u32 = 21;
 pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_CHAT_LEN: usize = 240;
@@ -37,6 +37,10 @@ pub const MAX_VOICE_FRAME_BYTES: usize = 512;
 
 pub type DroppedItemId = u64;
 pub type ResourceNodeId = u64;
+/// Identifier assigned by the server when a crafting job enters the queue.
+/// Stable for the job's lifetime so the client can target it with
+/// [`CraftingCommand::Cancel`] without worrying about queue reordering.
+pub type CraftingJobId = u64;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Reflect)]
 pub struct Vec3Net {
@@ -140,6 +144,7 @@ pub enum ClientMessage {
         text: String,
     },
     Inventory(InventoryCommand),
+    Crafting(CraftingCommand),
     Gather(ResourceGatherCommand),
     /// Client's view-radius preference (Low/Medium/High). The server uses
     /// this to decide how many concentric chunk rings to include in this
@@ -187,6 +192,7 @@ impl ClientMessage {
             | Self::Chat { .. }
             | Self::Command { .. }
             | Self::Inventory(_)
+            | Self::Crafting(_)
             | Self::Gather(_)
             | Self::SetViewRadius { .. }
             | Self::Disconnect => PacketDelivery::Reliable,
@@ -297,6 +303,76 @@ pub enum InventoryCommand {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResourceGatherCommand {
     pub resource_node_id: ResourceNodeId,
+}
+
+/// Client → server crafting intent. Enqueue costs the listed inputs
+/// immediately; cancel refunds whatever's left of them. The recipe id is
+/// shipped as a plain `String` on the wire and resolved against
+/// [`crate::crafting`] server-side.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CraftingCommand {
+    Enqueue { recipe_id: String },
+    Cancel { job_id: CraftingJobId },
+}
+
+/// One in-progress crafting job. `progress_ticks` advances toward
+/// `total_ticks`; when they meet the server grants the recipe's output
+/// and pops the job. Inputs are not echoed back — they were taken at
+/// enqueue time and the recipe id lets the client reconstruct everything
+/// else from the static registry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CraftingJob {
+    pub job_id: CraftingJobId,
+    #[serde(deserialize_with = "deserialize_interned_recipe_id")]
+    pub recipe_id: crate::crafting::RecipeId,
+    pub progress_ticks: u32,
+    pub total_ticks: u32,
+}
+
+impl CraftingJob {
+    pub fn new(job_id: CraftingJobId, recipe_id: impl AsRef<str>, total_ticks: u32) -> Self {
+        Self {
+            job_id,
+            recipe_id: crate::crafting::intern_recipe_id(recipe_id.as_ref()),
+            progress_ticks: 0,
+            total_ticks,
+        }
+    }
+
+    /// Fraction of the head job's craft time that has elapsed, in `[0.0, 1.0]`.
+    /// Returns `1.0` for zero-duration recipes so the UI doesn't divide by
+    /// zero or stall on a permanent empty bar.
+    pub fn progress_fraction(&self) -> f32 {
+        if self.total_ticks == 0 {
+            return 1.0;
+        }
+        (self.progress_ticks as f32 / self.total_ticks as f32).clamp(0.0, 1.0)
+    }
+}
+
+fn deserialize_interned_recipe_id<'de, D>(
+    deserializer: D,
+) -> Result<crate::crafting::RecipeId, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = <String as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(crate::crafting::intern_recipe_id(&raw))
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlayerCraftingState {
+    pub jobs: Vec<CraftingJob>,
+}
+
+impl PlayerCraftingState {
+    pub fn is_empty(&self) -> bool {
+        self.jobs.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.jobs.len()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -622,11 +698,20 @@ pub struct PlayerState {
     /// adds up fast) and to avoid leaking other players' contents.
     #[serde(default)]
     pub inventory: Option<PlayerInventoryState>,
+    /// In-flight crafting queue for the receiving client. Like
+    /// `inventory`, peer entries omit this — peers neither need to render
+    /// each other's queues nor see their contents.
+    #[serde(default)]
+    pub crafting: Option<PlayerCraftingState>,
 }
 
 impl PlayerState {
     pub fn inventory(&self) -> Option<&PlayerInventoryState> {
         self.inventory.as_ref()
+    }
+
+    pub fn crafting(&self) -> Option<&PlayerCraftingState> {
+        self.crafting.as_ref()
     }
 }
 

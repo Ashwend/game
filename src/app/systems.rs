@@ -25,8 +25,9 @@ pub(crate) use display::apply_display_settings_system;
 pub(crate) use effects::{spawn_impact_effects_system, tick_impact_chips_system};
 pub(crate) use input::{
     center_cursor_on_focus_system, chat_shortcut_system, client_input_system,
-    gameplay_inventory_shortcuts_system, mouse_look_system, send_inventory_command,
-    toggle_inventory_system, toggle_pause_system, toggle_perf_stats_system, update_cursor_system,
+    gameplay_inventory_shortcuts_system, mouse_look_system, send_crafting_command,
+    send_inventory_command, toggle_crafting_system, toggle_inventory_system, toggle_pause_system,
+    toggle_perf_stats_system, update_cursor_system,
 };
 pub(crate) use items::{
     DroppedItemEntities, ResourceNodeEntities, apply_dropped_items_system,
@@ -49,6 +50,7 @@ pub(crate) enum ClientSystemSet {
     ChatShortcut,
     PauseToggle,
     InventoryToggle,
+    CraftingToggle,
     Cursor,
     Look,
     Input,

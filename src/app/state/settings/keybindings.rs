@@ -32,6 +32,7 @@ pub(crate) enum KeyAction {
     Run,
     OpenChat,
     OpenInventory,
+    OpenCrafting,
     DropItem,
     PickUp,
     PushToTalk,
@@ -77,6 +78,7 @@ impl KeyAction {
         Self::PickUp,
         Self::DropItem,
         Self::OpenInventory,
+        Self::OpenCrafting,
         Self::OpenChat,
         Self::PushToTalk,
         Self::ActionbarSlot1,
@@ -100,6 +102,7 @@ impl KeyAction {
             Self::Run => "Run",
             Self::OpenChat => "Open Chat",
             Self::OpenInventory => "Toggle Inventory",
+            Self::OpenCrafting => "Toggle Crafting",
             Self::DropItem => "Drop Held Item",
             Self::PickUp => "Pick Up Item",
             Self::PushToTalk => "Push To Talk",
@@ -121,7 +124,9 @@ impl KeyAction {
                 KeyBindingCategory::Movement
             }
             Self::Jump | Self::Run => KeyBindingCategory::Movement,
-            Self::PickUp | Self::DropItem | Self::OpenInventory => KeyBindingCategory::Inventory,
+            Self::PickUp | Self::DropItem | Self::OpenInventory | Self::OpenCrafting => {
+                KeyBindingCategory::Inventory
+            }
             Self::OpenChat | Self::PushToTalk => KeyBindingCategory::Communication,
             Self::ActionbarSlot1
             | Self::ActionbarSlot2
@@ -145,6 +150,7 @@ impl KeyAction {
             Self::Run => (KeyCode::ShiftLeft, Some(KeyCode::ShiftRight)),
             Self::OpenChat => (KeyCode::KeyT, Some(KeyCode::Enter)),
             Self::OpenInventory => (KeyCode::Tab, None),
+            Self::OpenCrafting => (KeyCode::KeyC, None),
             Self::DropItem => (KeyCode::KeyQ, None),
             Self::PickUp => (KeyCode::KeyE, None),
             Self::PushToTalk => (KeyCode::KeyV, None),
@@ -274,7 +280,7 @@ impl KeyBindings {
     }
 }
 
-const _: () = assert!(KeyAction::ALL.len() == 11 + ACTIONBAR_SLOT_COUNT);
+const _: () = assert!(KeyAction::ALL.len() == 12 + ACTIONBAR_SLOT_COUNT);
 
 fn any_key(
     keys: &ButtonInput<KeyCode>,

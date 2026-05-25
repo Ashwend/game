@@ -1,5 +1,6 @@
 mod backdrop;
 mod connection;
+mod crafting;
 mod dialogs;
 mod gather;
 mod inventory;
@@ -16,6 +17,7 @@ mod toasts;
 pub(crate) use backdrop::MenuBackdropVisibility;
 #[cfg(test)]
 pub(crate) use connection::CONNECTION_LAG_WARNING_SECONDS;
+pub(crate) use crafting::{CraftingHudState, CraftingUiState, ProgressBaseline};
 pub(crate) use dialogs::{
     ConfirmationAction, ConfirmationDialog, CreateWorldDialog, DirectConnectAttempt,
     DirectConnectDialog, DirectConnectResult, EditWorldDialog, LoadingSplash, LoadingSplashKind,

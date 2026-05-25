@@ -328,6 +328,19 @@ pub(crate) fn send_inventory_command(
     );
 }
 
+pub(crate) fn send_crafting_command(
+    runtime: &mut ClientRuntime,
+    error_toasts: &mut dyn ErrorToastSink,
+    command: crate::protocol::CraftingCommand,
+) {
+    send_gameplay_message(
+        runtime,
+        error_toasts,
+        ClientMessage::Crafting(command),
+        "crafting command",
+    );
+}
+
 fn send_gameplay_message(
     runtime: &mut ClientRuntime,
     error_toasts: &mut dyn ErrorToastSink,

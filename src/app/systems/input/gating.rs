@@ -13,7 +13,11 @@ pub(super) fn gameplay_simulation_allowed(menu: &MenuState) -> bool {
 /// Stricter than `gameplay_simulation_allowed` — the window must be focused
 /// and no modal UI (pause menu, inventory) can be in the way.
 pub(super) fn gameplay_accepts_controls(menu: &MenuState, window_focused: bool) -> bool {
-    window_focused && gameplay_simulation_allowed(menu) && !menu.pause_open && !menu.inventory_open
+    window_focused
+        && gameplay_simulation_allowed(menu)
+        && !menu.pause_open
+        && !menu.inventory_open
+        && !menu.crafting_open
 }
 
 pub(super) fn primary_window_focused(primary_window: &Query<&Window, With<PrimaryWindow>>) -> bool {

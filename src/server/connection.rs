@@ -11,7 +11,8 @@ use crate::{
 
 use super::{
     CLIENT_STALE_TIMEOUT_TICKS, DeliveryTarget, GameServer, ServerClient, ServerEnvelope,
-    inventory::starting_inventory, movement::clean_player_name, persisted_player_from,
+    crafting::starting_crafting_state, inventory::starting_inventory, movement::clean_player_name,
+    persisted_player_from,
 };
 
 impl GameServer {
@@ -78,6 +79,8 @@ impl GameServer {
             next_gather_tick: self.tick,
             chat_bubble: None,
             view_tier: crate::protocol::ViewRadiusTier::default(),
+            crafting: starting_crafting_state(),
+            next_craft_job_id: 1,
         };
 
         let initial_position = client.controller.position;
@@ -114,6 +117,11 @@ impl GameServer {
     }
 
     pub fn disconnect(&mut self, client_id: ClientId) -> Vec<ServerEnvelope> {
+        // Refund any queued crafting inputs before we snapshot the
+        // persisted state — the player shouldn't pay for jobs that never
+        // finished. Overflow lands as drops at their last position.
+        self.cancel_all_jobs_for_disconnect(client_id);
+
         let Some(client) = self.clients.remove(&client_id) else {
             return Vec::new();
         };
@@ -197,8 +205,17 @@ impl GameServer {
                     }),
             })
             .map(|client| {
-                let inventory = if Some(client.client_id) == for_client {
+                let is_local = Some(client.client_id) == for_client;
+                let inventory = if is_local {
                     Some(client.inventory.clone())
+                } else {
+                    None
+                };
+                // Same reasoning as inventory: only the owning client
+                // needs to render their own crafting queue, and peers
+                // shouldn't see what someone else is building.
+                let crafting = if is_local {
+                    Some(client.crafting.clone())
                 } else {
                     None
                 };
@@ -219,6 +236,7 @@ impl GameServer {
                         .as_ref()
                         .map(|bubble| bubble.text.clone()),
                     inventory,
+                    crafting,
                 }
             })
             .collect::<Vec<_>>();

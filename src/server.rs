@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use crate::{
     controller::{BlockGrid, PlayerController},
     protocol::{
-        CHAT_BUBBLE_DURATION_SECONDS, ChatMessage, ClientId, ClientMessage, DroppedItemId,
-        PlayerInventoryState, ResourceNodeId, ResourceNodeState, SERVER_TICK_RATE_HZ,
-        ServerMessage, SteamId, Vec3Net, sanitize_chat,
+        CHAT_BUBBLE_DURATION_SECONDS, ChatMessage, ClientId, ClientMessage, CraftingJobId,
+        DroppedItemId, PlayerCraftingState, PlayerInventoryState, ResourceNodeId,
+        ResourceNodeState, SERVER_TICK_RATE_HZ, ServerMessage, SteamId, Vec3Net, sanitize_chat,
     },
     save::{PersistedPlayer, WorldSave},
     steam::AuthMode,
@@ -35,6 +35,7 @@ const PERF_STATS_BROADCAST_INTERVAL_TICKS: u64 = SERVER_TICK_RATE_HZ as u64;
 pub mod chunk_manager;
 mod commands;
 mod connection;
+mod crafting;
 mod dropped_items;
 mod inventory;
 mod movement;
@@ -267,6 +268,7 @@ impl GameServer {
             }
             ClientMessage::Command { text } => self.apply_command(client_id, text),
             ClientMessage::Inventory(command) => self.apply_inventory_command(client_id, command),
+            ClientMessage::Crafting(command) => self.apply_crafting_command(client_id, command),
             ClientMessage::Gather(command) => self.apply_gather_command(client_id, command),
             ClientMessage::SetViewRadius { tier } => {
                 if let Some(client) = self.clients.get_mut(&client_id) {
@@ -316,7 +318,8 @@ impl GameServer {
         }
         self.expire_chat_bubbles();
 
-        let mut envelopes = self.disconnect_stale_clients();
+        let mut envelopes = self.tick_crafting();
+        envelopes.extend(self.disconnect_stale_clients());
         if self.tick.is_multiple_of(DROPPED_ITEM_MERGE_INTERVAL_TICKS) {
             envelopes.extend(self.merge_nearby_dropped_items().into_iter().map(
                 |(item_id, quantity)| ServerEnvelope {
@@ -442,6 +445,13 @@ pub(super) struct ServerClient {
     /// uses this to pick how many concentric chunk rings of resource nodes
     /// the client receives.
     pub(super) view_tier: crate::protocol::ViewRadiusTier,
+    /// Active crafting queue. Inputs already debited; outputs pending.
+    /// Snapshots send a clone of this to the owning client only.
+    pub(super) crafting: PlayerCraftingState,
+    /// Next id handed out for [`crafting::jobs`]. Wraps after 2^64 jobs,
+    /// which won't happen — it's a u64 so the wrap is harmless even if
+    /// the player runs a crafting macro for years.
+    pub(super) next_craft_job_id: CraftingJobId,
 }
 
 #[derive(Debug, Clone)]

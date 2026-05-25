@@ -93,6 +93,7 @@ mod tests {
             is_admin: false,
             chat_bubble: None,
             inventory: None,
+            crafting: None,
         }
     }
 

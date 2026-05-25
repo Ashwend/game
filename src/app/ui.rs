@@ -1,5 +1,6 @@
 mod chat;
 mod confirm;
+mod crafting;
 mod hud;
 mod inventory;
 mod menu;
@@ -23,6 +24,7 @@ use super::audio::{PlaySound, SoundId};
 use self::{
     chat::chat_ui,
     confirm::{confirmation_ui, notice_ui},
+    crafting::{crafting_queue_hud, crafting_ui},
     hud::hud_ui,
     inventory::inventory_ui,
     menu::main_menu_ui,
@@ -36,8 +38,9 @@ use self::{
     worlds::worlds_ui,
 };
 use super::state::{
-    ClientErrorToast, ClientRuntime, ClientSettings, InventorySoundEvent, MenuBackdropVisibility,
-    MenuState, OptionsUiState, SaveStore, Screen, SessionShutdownTasks, SteamUser, ToastState,
+    ClientErrorToast, ClientRuntime, ClientSettings, CraftingHudState, CraftingUiState,
+    InventorySoundEvent, MenuBackdropVisibility, MenuState, OptionsUiState, SaveStore, Screen,
+    SessionShutdownTasks, SteamUser, ToastState,
 };
 use super::voice::VoiceState;
 
@@ -51,6 +54,8 @@ pub(crate) struct UiResources<'w, 's> {
     voice: Res<'w, VoiceState>,
     physical_keys: Res<'w, ButtonInput<KeyCode>>,
     inventory_ui: ResMut<'w, super::state::InventoryUiState>,
+    crafting_ui: ResMut<'w, CraftingUiState>,
+    crafting_hud: ResMut<'w, CraftingHudState>,
     pickup_target: Res<'w, super::state::PickupTargetState>,
     toasts: Res<'w, ToastState>,
     shutdown_tasks: ResMut<'w, SessionShutdownTasks>,
@@ -159,6 +164,22 @@ pub(crate) fn ui_system(
                     &mut resources.error_toasts,
                     &mut resources.inventory_sound_requests,
                     delta_seconds,
+                );
+                crafting_ui(
+                    ctx,
+                    &mut resources.menu,
+                    &mut resources.runtime,
+                    &mut resources.crafting_ui,
+                    &mut resources.error_toasts,
+                );
+                // The queue HUD is always visible while jobs exist —
+                // closing the crafting browser must not hide it, that
+                // would defeat the point of the queue being persistent.
+                crafting_queue_hud(
+                    ctx,
+                    &mut resources.runtime,
+                    &mut resources.crafting_hud,
+                    &mut resources.error_toasts,
                 );
                 let inventory_open = resources.menu.inventory_open;
                 let actionbar_rect = resources.inventory_ui.actionbar_rect;

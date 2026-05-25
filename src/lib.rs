@@ -1,6 +1,7 @@
 pub mod app;
 pub mod cli;
 pub mod controller;
+pub mod crafting;
 pub mod items;
 pub mod net;
 pub mod protocol;

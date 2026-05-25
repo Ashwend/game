@@ -58,6 +58,11 @@ pub(crate) struct MenuState {
     pub(crate) pause_open: bool,
     pub(crate) pause_options_open: bool,
     pub(crate) inventory_open: bool,
+    /// Whether the dedicated crafting screen is up. Like
+    /// `inventory_open`, this only frees the cursor and gates input — it
+    /// does not pause gameplay or the network tick. The server keeps
+    /// progressing the queue regardless of this flag.
+    pub(crate) crafting_open: bool,
     pub(crate) chat_open: bool,
     pub(crate) chat_focus_pending: bool,
     pub(crate) chat_input: String,
@@ -82,6 +87,7 @@ impl Default for MenuState {
             pause_open: false,
             pause_options_open: false,
             inventory_open: false,
+            crafting_open: false,
             chat_open: false,
             chat_focus_pending: false,
             chat_input: String::new(),
@@ -102,6 +108,7 @@ impl MenuState {
         self.screen = Screen::InGame;
         self.pause_open = false;
         self.pause_options_open = false;
+        self.crafting_open = false;
         self.chat_open = false;
         self.chat_focus_pending = false;
         self.status = None;

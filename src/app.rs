@@ -36,10 +36,10 @@ use self::{
     },
     scene::{apply_world_scene_system, setup_scene, update_sky_system},
     state::{
-        ClientErrorToast, ClientRuntime, ClientSettingsStore, GatherInputState, InventoryUiState,
-        LookState, MenuBackdropVisibility, MenuState, OptionsUiState, PickupTargetState,
-        RemoteImpactEvent, SaveStore, SessionShutdownTasks, SteamUser, TestModeConfig, ToastState,
-        ToolSwapState,
+        ClientErrorToast, ClientRuntime, ClientSettingsStore, CraftingHudState, CraftingUiState,
+        GatherInputState, InventoryUiState, LookState, MenuBackdropVisibility, MenuState,
+        OptionsUiState, PickupTargetState, RemoteImpactEvent, SaveStore, SessionShutdownTasks,
+        SteamUser, TestModeConfig, ToastState, ToolSwapState,
     },
     systems::{
         AutoConnectRequest, CameraImpactKick, CameraMotionEffects, ClientSystemSet,
@@ -52,9 +52,9 @@ use self::{
         mouse_look_system, network_tick_system, reposition_test_window_system,
         save_client_settings_system, session_shutdown_poll_system, spawn_impact_effects_system,
         surface_client_error_toasts_system, sync_view_radius_system, tick_felling_trees_system,
-        tick_impact_chips_system, tick_resource_node_pop_in_system, toggle_inventory_system,
-        toggle_pause_system, toggle_perf_stats_system, update_cursor_system,
-        update_pickup_target_system, update_tool_swap_state_system,
+        tick_impact_chips_system, tick_resource_node_pop_in_system, toggle_crafting_system,
+        toggle_inventory_system, toggle_pause_system, toggle_perf_stats_system,
+        update_cursor_system, update_pickup_target_system, update_tool_swap_state_system,
     },
     ui::{
         ButtonSoundRequests, InventorySoundRequests, button_sound_system, inventory_sound_system,
@@ -90,6 +90,7 @@ const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::ChatShortcut,
     ClientSystemSet::PauseToggle,
     ClientSystemSet::InventoryToggle,
+    ClientSystemSet::CraftingToggle,
     ClientSystemSet::Cursor,
     ClientSystemSet::Look,
     ClientSystemSet::Input,
@@ -187,6 +188,8 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .insert_resource(ClientRuntime::default())
         .insert_resource(SessionShutdownTasks::default())
         .insert_resource(InventoryUiState::default())
+        .insert_resource(CraftingUiState::default())
+        .insert_resource(CraftingHudState::default())
         .insert_resource(PickupTargetState::default())
         .insert_resource(GatherInputState::default())
         .insert_resource(ToolSwapState::default())
@@ -297,6 +300,10 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .add_systems(
             Update,
             toggle_inventory_system.in_set(ClientSystemSet::InventoryToggle),
+        )
+        .add_systems(
+            Update,
+            toggle_crafting_system.in_set(ClientSystemSet::CraftingToggle),
         )
         .add_systems(Update, toggle_perf_stats_system)
         .add_systems(

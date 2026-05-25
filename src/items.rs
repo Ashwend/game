@@ -11,6 +11,7 @@ pub const COAL_ID: &str = "coal";
 pub const IRON_ORE_ID: &str = "iron_ore";
 pub const SULFUR_ORE_ID: &str = "sulfur_ore";
 pub const FIBER_ID: &str = "fiber";
+pub const PLANT_TWINE_ID: &str = "plant_twine";
 pub const BASIC_HATCHET_ID: &str = "wood_stone_hatchet";
 pub const BASIC_PICKAXE_ID: &str = "wood_stone_pickaxe";
 
@@ -207,6 +208,16 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         equipable: false,
         model: ItemModel::Bag,
         tint: ItemTint::new(168, 184, 96),
+        tool: None,
+    },
+    ItemDefinition {
+        id: PLANT_TWINE_ID,
+        name: "Plant Twine",
+        description: "Twisted plant fibers — the binding that holds primitive tools together.",
+        stack_size: 200,
+        equipable: false,
+        model: ItemModel::Bag,
+        tint: ItemTint::new(196, 176, 110),
         tool: None,
     },
     ItemDefinition {
