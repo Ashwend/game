@@ -249,8 +249,7 @@ impl GameServer {
 
         // Take the whole source stack up front. We restore any remainder
         // at the end so a partial fit doesn't silently delete items.
-        let Some((mut taken, _)) =
-            self.take_from_furnace_slot(client_id, furnace_id, from, None)
+        let Some((mut taken, _)) = self.take_from_furnace_slot(client_id, furnace_id, from, None)
         else {
             return;
         };
@@ -295,8 +294,7 @@ impl GameServer {
         // Furnace → player: drain the source, run it through the
         // existing inventory adder which handles matching-stack + first-
         // empty-slot in one shot.
-        let Some((taken, _)) =
-            self.take_from_furnace_slot(client_id, furnace_id, from, None)
+        let Some((taken, _)) = self.take_from_furnace_slot(client_id, furnace_id, from, None)
         else {
             return;
         };
@@ -910,11 +908,7 @@ fn inventory_has_room_for(client: Option<&ServerClient>, stack: &ItemStack) -> b
     }
     // First-empty-slot fallback mirrors `add_stack_to_inventory`: only
     // the bag's empty slots count, not the actionbar's.
-    client
-        .inventory
-        .inventory_slots
-        .iter()
-        .any(Option::is_none)
+    client.inventory.inventory_slots.iter().any(Option::is_none)
 }
 
 fn merge_into_optional_slot(
@@ -1418,8 +1412,12 @@ mod tests {
     #[test]
     fn quick_transfer_routes_fuel_from_player_to_fuel_slot() {
         let (mut server, client_id, entity_id) = furnace_test_fixture();
-        server.clients.get_mut(&client_id).unwrap().inventory.inventory_slots[2] =
-            Some(ItemStack::new(WOOD_ID, 12));
+        server
+            .clients
+            .get_mut(&client_id)
+            .unwrap()
+            .inventory
+            .inventory_slots[2] = Some(ItemStack::new(WOOD_ID, 12));
 
         server.apply_furnace_command(
             client_id,
@@ -1437,8 +1435,12 @@ mod tests {
     #[test]
     fn quick_transfer_routes_smeltable_from_player_to_first_empty_item_slot() {
         let (mut server, client_id, entity_id) = furnace_test_fixture();
-        server.clients.get_mut(&client_id).unwrap().inventory.inventory_slots[5] =
-            Some(ItemStack::new(IRON_ORE_ID, 8));
+        server
+            .clients
+            .get_mut(&client_id)
+            .unwrap()
+            .inventory
+            .inventory_slots[5] = Some(ItemStack::new(IRON_ORE_ID, 8));
 
         server.apply_furnace_command(
             client_id,
@@ -1458,12 +1460,21 @@ mod tests {
         let (mut server, client_id, entity_id) = furnace_test_fixture();
         // Furnace already has 50 ore in slot 1; player has 30 more.
         {
-            let furnace = server.deployed_entities.get_mut(&entity_id).unwrap()
-                .furnace.as_mut().unwrap();
+            let furnace = server
+                .deployed_entities
+                .get_mut(&entity_id)
+                .unwrap()
+                .furnace
+                .as_mut()
+                .unwrap();
             furnace.items[1] = Some(ItemStack::new(IRON_ORE_ID, 50));
         }
-        server.clients.get_mut(&client_id).unwrap().inventory.inventory_slots[0] =
-            Some(ItemStack::new(IRON_ORE_ID, 30));
+        server
+            .clients
+            .get_mut(&client_id)
+            .unwrap()
+            .inventory
+            .inventory_slots[0] = Some(ItemStack::new(IRON_ORE_ID, 30));
 
         server.apply_furnace_command(
             client_id,
@@ -1487,13 +1498,22 @@ mod tests {
         let (mut server, client_id, entity_id) = furnace_test_fixture();
         // Furnace has coal; player has wood.
         {
-            let furnace = server.deployed_entities.get_mut(&entity_id).unwrap()
-                .furnace.as_mut().unwrap();
+            let furnace = server
+                .deployed_entities
+                .get_mut(&entity_id)
+                .unwrap()
+                .furnace
+                .as_mut()
+                .unwrap();
             furnace.fuel = Some(ItemStack::new(COAL_ID, 4));
             furnace.fuel_burn_ticks_left = 200;
         }
-        server.clients.get_mut(&client_id).unwrap().inventory.inventory_slots[0] =
-            Some(ItemStack::new(WOOD_ID, 5));
+        server
+            .clients
+            .get_mut(&client_id)
+            .unwrap()
+            .inventory
+            .inventory_slots[0] = Some(ItemStack::new(WOOD_ID, 5));
 
         server.apply_furnace_command(
             client_id,
@@ -1506,7 +1526,10 @@ mod tests {
         // and the in-flight burn timer was reset (a different fuel
         // changes the denominator of the burn bar).
         assert_eq!(
-            furnace_fuel_slot(&server, entity_id).unwrap().item_id.as_ref(),
+            furnace_fuel_slot(&server, entity_id)
+                .unwrap()
+                .item_id
+                .as_ref(),
             WOOD_ID,
         );
         // Coal landed somewhere in the player's bag.
@@ -1521,7 +1544,11 @@ mod tests {
             .sum();
         assert_eq!(coal_total, 4);
         assert_eq!(
-            server.deployed_entities[&entity_id].furnace.as_ref().unwrap().fuel_burn_ticks_left,
+            server.deployed_entities[&entity_id]
+                .furnace
+                .as_ref()
+                .unwrap()
+                .fuel_burn_ticks_left,
             0,
             "swap should reset the in-flight burn timer",
         );
@@ -1549,8 +1576,13 @@ mod tests {
             inv.actionbar_slots[3] = Some(ItemStack::new(WOOD_ID, 5));
         }
         {
-            let furnace = server.deployed_entities.get_mut(&entity_id).unwrap()
-                .furnace.as_mut().unwrap();
+            let furnace = server
+                .deployed_entities
+                .get_mut(&entity_id)
+                .unwrap()
+                .furnace
+                .as_mut()
+                .unwrap();
             furnace.fuel = Some(ItemStack::new(COAL_ID, 4));
         }
 
@@ -1564,7 +1596,10 @@ mod tests {
         // Swap aborted: fuel slot still has coal, source slot still has
         // wood. No silent drop, no orphaned items.
         assert_eq!(
-            furnace_fuel_slot(&server, entity_id).unwrap().item_id.as_ref(),
+            furnace_fuel_slot(&server, entity_id)
+                .unwrap()
+                .item_id
+                .as_ref(),
             COAL_ID,
         );
         assert_eq!(
@@ -1581,8 +1616,13 @@ mod tests {
     fn quick_transfer_routes_furnace_item_back_into_player_inventory() {
         let (mut server, client_id, entity_id) = furnace_test_fixture();
         {
-            let furnace = server.deployed_entities.get_mut(&entity_id).unwrap()
-                .furnace.as_mut().unwrap();
+            let furnace = server
+                .deployed_entities
+                .get_mut(&entity_id)
+                .unwrap()
+                .furnace
+                .as_mut()
+                .unwrap();
             furnace.items[2] = Some(ItemStack::new(IRON_BAR_ID, 7));
         }
 

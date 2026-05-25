@@ -392,7 +392,10 @@ fn draw_recipe_row(
     let category = recipe.category.label();
     let total_seconds = recipe.craft_seconds * display_qty as f32;
     let time_text = if display_qty > 1 {
-        format!("{category} • {:.0}s × {}", recipe.craft_seconds, display_qty)
+        format!(
+            "{category} • {:.0}s × {}",
+            recipe.craft_seconds, display_qty
+        )
     } else {
         format!("{category} • {:.0}s", recipe.craft_seconds)
     };
@@ -418,7 +421,10 @@ fn draw_recipe_row(
     let button_height = 32.0;
     let cluster_top = rect.center().y - button_height * 0.5;
     let craft_rect = Rect::from_min_size(
-        Pos2::new(rect.right() - inner_padding - craft_button_width, cluster_top),
+        Pos2::new(
+            rect.right() - inner_padding - craft_button_width,
+            cluster_top,
+        ),
         Vec2::new(craft_button_width, button_height),
     );
     let plus_rect = Rect::from_min_size(
@@ -598,10 +604,7 @@ fn draw_recipe_row(
 /// `0` means "can't even craft one" — the same condition the existing
 /// `craftable` flag tracks, but expressed as a batch-aware ceiling so
 /// the recipe row can also disable the `+` button at the actual limit.
-fn max_craftable_batch(
-    inventory: Option<&PlayerInventoryState>,
-    recipe: &RecipeDefinition,
-) -> u16 {
+fn max_craftable_batch(inventory: Option<&PlayerInventoryState>, recipe: &RecipeDefinition) -> u16 {
     let Some(inventory) = inventory else {
         return 0;
     };
@@ -1210,6 +1213,9 @@ mod tests {
         let recipe = recipe_definition(PLANT_TWINE_RECIPE_ID).expect("recipe");
         // 65535 fiber would naively give 21845, well above the 100 cap.
         let inv = inventory_with(FIBER_ID, u16::MAX);
-        assert_eq!(max_craftable_batch(Some(&inv), recipe), MAX_CRAFT_BATCH_SIZE);
+        assert_eq!(
+            max_craftable_batch(Some(&inv), recipe),
+            MAX_CRAFT_BATCH_SIZE
+        );
     }
 }

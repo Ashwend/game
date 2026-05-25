@@ -140,7 +140,12 @@ impl GameServer {
 
         let job_id = client.next_craft_job_id;
         client.next_craft_job_id = client.next_craft_job_id.wrapping_add(1);
-        let job = CraftingJob::new(job_id, recipe.id, batch_total_ticks(recipe, quantity), quantity);
+        let job = CraftingJob::new(
+            job_id,
+            recipe.id,
+            batch_total_ticks(recipe, quantity),
+            quantity,
+        );
         client.crafting.jobs.push(job);
         Vec::new()
     }
@@ -235,8 +240,7 @@ impl GameServer {
         drop_origin: DropOrigin,
         envelopes: &mut Vec<ServerEnvelope>,
     ) {
-        let total_output =
-            (recipe.output_quantity as u32).saturating_mul(quantity.max(1) as u32);
+        let total_output = (recipe.output_quantity as u32).saturating_mul(quantity.max(1) as u32);
         let mut overflow = Vec::new();
         if let Some(client) = self.clients.get_mut(&client_id) {
             // Output can exceed `u16::MAX` for huge batches of stackable
