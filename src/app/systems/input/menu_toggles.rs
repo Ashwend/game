@@ -102,10 +102,7 @@ pub(crate) fn toggle_inventory_system(
     // crafting search input swallows the tab character itself (egui
     // never types a literal `\t`), so the only visible effect is the
     // screen swap below.
-    if menu.screen != Screen::InGame
-        || menu.pause_open
-        || menu.pause_options_open
-        || menu.chat_open
+    if menu.screen != Screen::InGame || menu.pause_open || menu.pause_options_open || menu.chat_open
     {
         return;
     }
