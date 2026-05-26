@@ -10,6 +10,13 @@ default = []
 steam = ["lightyear/steam"]
 # Dev-only. Speeds up local iteration; do not enable for release builds.
 dev-fast = ["bevy/dynamic_linking"]
+# Dev-only. Emits a Chrome tracing JSON (`trace-<unix-ms>.json` in cwd) with
+# per-system, per-schedule, and render-pass spans, plus enables extra runtime
+# diagnostics (FPS/frame time/entity count/CPU/RAM) logged to stdout. Use via
+# `./cli profile` and feed the resulting trace into chrome://tracing or
+# ui.perfetto.dev. Do not enable for release builds — tracing has a perf
+# cost and the trace file grows fast.
+profile = ["bevy/trace_chrome"]
 
 [dependencies]
 anyhow = "1.0.102"

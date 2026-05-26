@@ -65,6 +65,16 @@ case "$cmd" in
     close_existing_game
     cargo run --features dev-fast --bin game -- client "$@"
     ;;
+  profile)
+    close_existing_game
+    # `--features profile` enables `bevy/trace_chrome` plus the extra
+    # diagnostics plugins. Bevy writes `trace-<unix-ms>.json` to the
+    # working directory on exit; load it in chrome://tracing or
+    # ui.perfetto.dev. Run release-ish opt levels so the trace reflects
+    # something close to shipped perf — `[profile.dev.package."*"]` already
+    # builds deps at opt-level 3, so a plain dev build is acceptable here.
+    cargo run --features profile --bin game -- client "$@"
+    ;;
   server)
     cargo run --bin game -- server "$@"
     ;;
@@ -125,6 +135,7 @@ Usage: ./cli <command> [args]
 Commands:
   dev          Close existing Game windows and run the Bevy client.
   dev-fast     Like dev, but with bevy/dynamic_linking for faster rebuilds.
+  profile      Like dev, with Chrome tracing + extra diagnostics. Writes trace-*.json on exit.
   server       Run a dedicated authoritative server. Pass --help after server for flags.
   admin        Send an announcement or shutdown command to a dedicated server admin socket.
   multiplayer-test

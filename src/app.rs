@@ -11,6 +11,10 @@ pub(crate) use embedded_assets::asset_path as embedded_asset_path;
 use std::net::SocketAddr;
 
 use anyhow::Result;
+#[cfg(feature = "profile")]
+use bevy::diagnostic::{
+    EntityCountDiagnosticsPlugin, LogDiagnosticsPlugin, SystemInformationDiagnosticsPlugin,
+};
 use bevy::{
     diagnostic::FrameTimeDiagnosticsPlugin, prelude::*, transform::TransformSystems,
     window::WindowPosition, winit::WinitSettings,
@@ -263,7 +267,21 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         // The perf HUD pulls p99/max from this window so the player sees
         // hitches that the smoothed FPS number hides — 120 samples (default)
         // at 500 FPS is only 0.24 s, too short to catch periodic stalls.
-        .add_plugins(FrameTimeDiagnosticsPlugin::new(480))
+        .add_plugins(FrameTimeDiagnosticsPlugin::new(480));
+    // `./cli profile` (Cargo feature `profile`): pair the Chrome trace
+    // emitted by `bevy/trace_chrome` with text diagnostics so the log shows
+    // FPS, frame time, entity count, and CPU/RAM alongside the spans. Gated
+    // because `SystemInformationDiagnosticsPlugin` samples `sysinfo` on a
+    // background thread and we don't want that cost in shipped builds.
+    #[cfg(feature = "profile")]
+    {
+        app.add_plugins(LogDiagnosticsPlugin::default())
+            .add_plugins(EntityCountDiagnosticsPlugin {
+                max_history_length: 480,
+            })
+            .add_plugins(SystemInformationDiagnosticsPlugin);
+    }
+    app
         // Self-contained binary: every shipped sound is registered into
         // Bevy's `embedded` asset source so we don't have to ship a
         // sibling `assets/` folder. Must come after DefaultPlugins so
