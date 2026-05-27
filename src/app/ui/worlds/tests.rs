@@ -6,6 +6,7 @@ use crate::{
     app::state::{
         ClientRuntime, CreateWorldDialog, EditWorldDialog, MenuState, SaveStore, Screen, SteamUser,
     },
+    net::ClientNetwork,
     save::WorldStore,
     steam::AuthenticatedUser,
     world::{MapType, ProceduralMapSize},
@@ -103,7 +104,8 @@ fn start_singleplayer_updates_runtime_or_reports_load_error() {
     let mut menu = MenuState::default();
     let mut runtime = ClientRuntime::default();
 
-    start_singleplayer(&mut menu, &mut runtime, &store, &user, save.id);
+    let network = ClientNetwork::default();
+    start_singleplayer(&mut menu, &mut runtime, &store, &user, &network, save.id);
 
     assert_eq!(menu.screen, Screen::InGame);
     assert!(!menu.pause_open);
@@ -111,7 +113,14 @@ fn start_singleplayer_updates_runtime_or_reports_load_error() {
     assert_eq!(runtime.active_world_id, Some(save.id));
     assert!(runtime.session.is_some());
 
-    start_singleplayer(&mut menu, &mut runtime, &store, &user, uuid::Uuid::new_v4());
+    start_singleplayer(
+        &mut menu,
+        &mut runtime,
+        &store,
+        &user,
+        &network,
+        uuid::Uuid::new_v4(),
+    );
 
     assert!(
         menu.status
@@ -237,6 +246,7 @@ fn enter_confirms_create_world_modal() {
     let ctx = egui::Context::default();
     let store = temp_store();
     let user = steam_user();
+    let network = ClientNetwork::default();
     let mut menu = MenuState {
         screen: Screen::Worlds,
         create_world: Some(CreateWorldDialog::new()),
@@ -253,6 +263,7 @@ fn enter_confirms_create_world_modal() {
                 &mut runtime,
                 &store,
                 &user,
+                &network,
                 &crate::analytics::Analytics::disabled(),
             );
         },
@@ -272,6 +283,7 @@ fn worlds_ui_renders_empty_and_populated_tables() {
     let ctx = egui::Context::default();
     let store = temp_store();
     let user = steam_user();
+    let network = ClientNetwork::default();
     let mut menu = MenuState::default();
     let mut runtime = ClientRuntime::default();
 
@@ -282,6 +294,7 @@ fn worlds_ui_renders_empty_and_populated_tables() {
             &mut runtime,
             &store,
             &user,
+            &network,
             &crate::analytics::Analytics::disabled(),
         );
     });
@@ -300,6 +313,7 @@ fn worlds_ui_renders_empty_and_populated_tables() {
             &mut runtime,
             &store,
             &user,
+            &network,
             &crate::analytics::Analytics::disabled(),
         );
     });

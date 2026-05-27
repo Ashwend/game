@@ -54,24 +54,33 @@ startup, host admin assignment, and local save persistence.
 - Bevy `0.18.1`
 - Lightyear `0.26.4`, features `["client", "server", "netcode", "udp"]`
 
-### Current network architecture (pre-migration)
+### Current network architecture
 
 - **Server**: runs as a separate thread with its own Bevy `App` (`MinimalPlugins`
   + `server::ServerPlugins` + `LightyearProtocolPlugin`). Authoritative game
   state lives in `GameServer` (a Bevy `Resource` inside that App). 20 Hz fixed
   tick.
-- **Client**: also runs as a separate thread with its own Bevy `App`
-  (`MinimalPlugins` + `client::ClientPlugins`). Talks to the main rendering/UI
-  Bevy app over MPSC channels (`ClientCommandInbox` for outgoing,
-  `Receiver<ServerMessage>` for incoming).
-- **Loopback host (SP)**: same dedicated-server thread, bound to `127.0.0.1`.
-- **State delivery**: per-client `ServerMessage::Snapshot(WorldSnapshot)` every
-  tick. Full state vectors for visible players, dropped items, resource nodes,
-  deployables. No delta encoding. AoI by chunk ring.
+- **Client**: lives in the main rendering/UI Bevy app since Phase 3.
+  `client::ClientPlugins` + `LightyearProtocolPlugin` + `ClientNetworkPlugin`
+  are installed in `src/app.rs` alongside `DefaultPlugins`. The connection
+  lifecycle (spawn entity → `Connect` → handshake → `Connected` → Welcome →
+  `Disconnect`) runs in `Update` driven by the systems registered by
+  `ClientNetworkPlugin`. Gameplay code talks to it through the shared
+  `ClientNetwork` resource (Arc-backed `outbox` / `inbox` / `status`).
+  `ClientSession` is now a thin handle stored in
+  `ClientRuntime::session`.
+- **Loopback host (SP)**: still its own dedicated-server thread, bound to
+  `127.0.0.1`. Spawned by `start_singleplayer` and held by `ClientSession`
+  for shutdown.
+- **State delivery**: per-client `ServerMessage::Snapshot(WorldSnapshot)`
+  every tick. Full state vectors for visible players, dropped items,
+  resource nodes, deployables. No delta encoding. AoI by chunk ring.
+  Phases 4 / 5 move entity state onto Lightyear's room replication;
+  Phase 6 deletes the snapshot path.
 - **Entity storage** (server): all authoritative state in `HashMap`s on
-  `GameServer` (`clients`, `resource_nodes`, `dropped_items`, `deployed_entities`).
-  Mirror ECS entities now exist alongside (Phases 1, 2) — kept in sync by
-  exclusive systems in `net/host.rs`.
+  `GameServer` (`clients`, `resource_nodes`, `dropped_items`,
+  `deployed_entities`). Mirror ECS entities now exist alongside
+  (Phases 1, 2) — kept in sync by exclusive systems in `net/host.rs`.
 
 ### Lightyear 0.26 replication model (what we're moving toward)
 
@@ -122,7 +131,7 @@ Docs:
 | 0   | Tracing spans for server snapshot path                         | ✅ done     |
 | 1   | ECS mirror for resource nodes                                  | ✅ done     |
 | 2   | ECS mirror for dropped items, deployables, players             | ✅ done     |
-| 3   | Merge Lightyear client into main Bevy app                      | ⏳ pending  |
+| 3   | Merge Lightyear client into main Bevy app                      | ✅ done     |
 | 4   | Wire chunk rooms for resource nodes                            | ⏳ pending  |
 | 5   | Chunk rooms for dropped items, deployables, players            | ⏳ pending  |
 | 6   | Delete `WorldSnapshot`, save-version bump, cleanup             | ⏳ pending  |
@@ -296,141 +305,143 @@ GameServer iterators added: `dropped_items_iter`, `deployables_iter`,
 
 ## Phase 3 — Merge Lightyear client into main Bevy app
 
-**Status**: ⏳ pending · single dedicated session
+**Status**: ✅ done
 
-### Goal
+### What landed
 
-Move the Lightyear client App from its current separate thread into the main
-rendering/UI Bevy app, so replicated entities (delivered in Phase 4) materialize
-in the same ECS as gameplay systems.
+The Lightyear client now lives in the main Bevy `App`. The dedicated
+`lightyear-game-client` thread, MPSC command channel, and the
+Welcome-blocking-on-startup are all gone. The connection lifecycle runs
+in the main `Update` schedule and gameplay code talks to it through a
+shared `ClientNetwork` resource.
 
-After this phase, `apply_resource_nodes_system` and friends will be able to
-query replicated entities directly via `Query<&ResourceNode, &ResourceNodeStorage>`
-instead of reading from `ClientRuntime::snapshot`.
+New module surface in [src/net/client.rs](src/net/client.rs):
 
-### Why this needs its own session
+- `ClientNetwork` — `Resource + Clone` (it's an `Arc<Inner>`). Holds the
+  `outbox`, `inbox`, `status`, `pending_connect`, and the two shutdown
+  flags. Cloning the resource gives worker threads
+  (`singleplayer-start`, `direct-connect-attempt`, `auto-connect-attempt`,
+  `game-session-shutdown`) a handle to the same shared state.
+- `ClientConnectionStatus` enum
+  (`Idle | Connecting | Connected | Disconnected(reason)`). Flipped by the
+  Lightyear-driving systems; available to the UI via
+  `ClientNetwork::status()` (no UI consumer yet — see "Open / deferred").
+- `ClientNetworkPlugin` — registers the resource and the chained `Update`
+  systems: `process_pending_connect_system`, `send_client_messages_system`,
+  `receive_server_messages_system`, `report_client_disconnect_system`,
+  `drive_shutdown_system`.
+- `client_plugins()` — returns the configured `client::ClientPlugins` so
+  `app.rs` doesn't need to know the protocol tick-rate constant.
 
-There is no useful intermediate state. The Lightyear plugins, the connection
-state machine, the `ClientSession` API change, and the ~5 call-site updates
-have to land together. Adding the plugins to the main app without using them
-is dead code — the thread still owns the connection, so Phase 4 entities would
-still materialize in the wrong world.
+`ClientSession` shrinks to a thin handle: the shared `ClientNetwork` clone
+plus an `Option<GameServerHandle>` for the loopback server. Its `send`,
+`tick`, `shutdown` methods are preserved (Option B from the plan, minimal
+call-site churn): `send` pushes to the shared outbox, `tick` drains the
+shared inbox, `shutdown` sets the shutdown flag and blocks the worker
+thread on `shutdown_complete` while the main app drives the multi-tick
+flush.
 
-### Required surgery (read this before starting)
+`start_singleplayer` / `connect` now return as soon as the loopback server
+is up; they install a `PendingConnect` in the shared state and the main
+app's `process_pending_connect_system` picks it up on the next `Update` to
+spawn the Lightyear client entity and trigger `client::Connect`.
 
-1. **Plugin install** — add `client::ClientPlugins { tick_duration: ... }` and
-   `LightyearProtocolPlugin` to the main app in
-   [src/app.rs:240](src/app.rs:240) (alongside the `DefaultPlugins` block).
-   Both are currently `pub(super)` inside `crate::net`; bump them (and
-   `LIGHTYEAR_PROTOCOL_ID`, `PrivateKeyContext`, `private_key`) to
-   `pub(crate)` so `app.rs` can see them.
-2. **Resource move** — move the thread-local resources from
-   [src/net/client.rs:299](src/net/client.rs:299) to main app resources:
-   - `PendingClientMessages`
-   - `ClientHeartbeat`
-   - `ClientShutdown`
-   - `ClientAuth` (becomes optional; set when a session begins)
-   - **New**: `ClientConnectionState` enum
-     (`Idle | Connecting | Connected | Disconnected`) so the UI can poll
-     progress.
-3. **System move** — move the Update systems to the main app:
-   - `send_client_messages`
-   - `receive_server_messages`
-   - `report_client_disconnect`
-   - `drive_shutdown`
-4. **Connection lifecycle pivot — this is the load-bearing change.** Today
-   `ClientSession::start_singleplayer` and `connect` block on a thread that
-   spawns its own Lightyear client App and waits for `Welcome`. After this
-   phase:
-   - The "singleplayer-start" thread spawns only the **loopback server** and
-     signals readiness with its bind address.
-   - The main app picks up that signal, spawns the Lightyear client entity in
-     its own World, and triggers `client::Connect`.
-   - The main app's Update loop drives the handshake.
-   - The UI polls `ClientConnectionState`; when it flips to `Connected`
-     (Welcome received), transition to `Screen::InGame`.
+`app.rs` installs the new plugins alongside `DefaultPlugins`:
 
-   This is an async state machine. Direct-connect (MP) follows the same shape
-   but skips the loopback-server spawn.
-5. **`ClientSession` shape** — becomes a thin handle stored in
-   `ClientRuntime::session`. It no longer owns a thread or MPSC channels.
-   - `session.tick(delta)` — drains a `Vec<ServerMessage>` from a Bevy
-     resource that `receive_server_messages` writes to. Or — cleaner —
-     replace `session.tick` consumption with a Bevy `MessageReader` /
-     resource read inside [`network_tick_system`](src/app/systems/network.rs).
-   - `session.send(msg)` — needs Bevy system access. Either:
-     - **Option A**: introduce a `ClientMessageSender` `SystemParam` wrapper
-       around `ResMut<PendingClientMessages>`, and change call sites:
-       - [src/app/voice/systems.rs:218](src/app/voice/systems.rs:218)
-       - [src/app/systems/input/movement.rs:91](src/app/systems/input/movement.rs:91)
-       - [src/app/systems/input/inventory_shortcuts.rs:507](src/app/systems/input/inventory_shortcuts.rs:507)
-       - Anywhere else `runtime.session.as_mut().map(|s| s.send(...))` appears
-     - **Option B**: keep the `session.send(msg)` method but have it just
-       queue to a `Mutex<VecDeque>` field on `ClientSession`; a Bevy system
-       drains it.
-     Option A is more idiomatic; Option B is less call-site churn.
-6. **Visibility bumps** — see (1).
-7. **Test fixtures** — the SP flow tests in
-   `src/app/ui/worlds/tests.rs` exercise `start_singleplayer`. They'll need
-   to await `ClientConnectionState::Connected` rather than expecting an
-   immediate ready `ClientSession`. The 466 existing tests pass today —
-   keep that.
+```rust
+.add_plugins(client_plugins())
+.add_plugins(LightyearProtocolPlugin)
+.add_plugins(ClientNetworkPlugin);
+```
 
-### Key design decisions to make during the phase
+`LIGHTYEAR_PROTOCOL_ID`, `LightyearProtocolPlugin`, `PrivateKeyContext`,
+`private_key`, `send_client_message`, `send_server_message`, and the
+channel markers were promoted from `pub(super)` to `pub(crate)` so the
+plugin install and the new systems can see them.
 
-- **Option A vs B for `session.send`**: lean **A** for idiomatic Bevy, B if
-  the call-site churn looks bad once you start.
-- **How the UI awaits connection**: the existing "loading splash" pattern
-  already polls a `WorldStartAttempt` receiver in
-  [src/app/ui/worlds/session.rs:60](src/app/ui/worlds/session.rs:60). Reuse
-  it — the receiver becomes "I'm watching `ClientConnectionState`" instead
-  of "I'm watching a thread's MPSC".
-- **Heartbeat timing**: the existing heartbeat fires on idle to prove
-  liveness. With the client in the main app, the heartbeat tick is driven by
-  main-app `Update` (variable rate, typically 60+ FPS) instead of the
-  thread's 5 ms sleep loop. The 1-second interval still applies; the
-  `Time::delta` accumulation handles the variable rate correctly. Don't
-  change the interval.
+UI flow: `UiResources` gained a `client_network: Res<ClientNetwork>` field
+and threads it through `worlds_ui` / `multiplayer_ui`. The three connect
+entry points (`worlds/session.rs::start_singleplayer_in_background`,
+`multiplayer/direct_connect.rs::start_direct_connect_attempt`,
+`systems/auto_connect.rs::auto_connect_start_system`) clone the resource
+and hand it to the worker.
+
+Test fixtures in [src/net/tests.rs](src/net/tests.rs) were rewritten
+around a small `TestRig` that pairs a `ClientSession` with a minimal
+Bevy `App` (`MinimalPlugins` + `client_plugins()` +
+`LightyearProtocolPlugin` + `ClientNetworkPlugin`), then drives
+`app.update()` to advance the handshake.
+
+Files touched:
+
+- [src/net/client.rs](src/net/client.rs) — full rewrite (thread removed)
+- [src/net/channels.rs](src/net/channels.rs) — visibility bumps
+- [src/net.rs](src/net.rs) — re-exports
+- [src/app.rs](src/app.rs) — plugin install
+- [src/app/ui.rs](src/app/ui.rs),
+  [src/app/ui/worlds/{mod,session,table,tests}.rs](src/app/ui/worlds/),
+  [src/app/ui/multiplayer.rs](src/app/ui/multiplayer.rs),
+  [src/app/ui/multiplayer/direct_connect.rs](src/app/ui/multiplayer/direct_connect.rs),
+  [src/app/systems/auto_connect.rs](src/app/systems/auto_connect.rs) —
+  thread `ClientNetwork` through UI / connect entry points
+- [src/net/tests.rs](src/net/tests.rs) — `TestRig` rewrite
+
+466 tests pass; `./cli check`, `./cli lint`, `./cli test` all clean.
+
+### Design decisions
+
+- **Option B for `session.send`.** Kept `ClientSession::send/tick/shutdown`
+  as methods (Option B from the plan): `send` pushes to the shared
+  `Arc<Mutex<VecDeque<ClientMessage>>>` outbox; `tick` drains the inbox
+  side. The alternative was a `ClientMessageSender` `SystemParam` wrapper
+  at every call site (~5 sites). Option B is less idiomatic Bevy but
+  zero churn for `voice/systems.rs`, `input/movement.rs`,
+  `input/inventory_shortcuts.rs`, `ui/chat.rs`, `systems/settings.rs`,
+  and `apply_message` consumption inside `network_tick_system`.
+- **Auth is queued, not pumped separately.** `process_pending_connect`
+  `push_front`s the `ClientMessage::Auth` onto the outbox. Once the
+  `Connected` component appears on the client entity,
+  `send_client_messages_system` drains the outbox in order, so auth
+  rides ahead of anything gameplay queued during the handshake.
+- **`network_tick_allowed` still gates on `Screen::InGame`.** The Welcome
+  arrives via the inbox while the loading splash is still up; it just
+  sits there until the UI transitions to `InGame`, at which point
+  `network_tick_system` drains and applies it. No need for a "process
+  Welcome out-of-screen" branch.
+- **`app.finish()` + `app.cleanup()` in the test rig is load-bearing.**
+  Without them Lightyear's UDP receive path never delivers inbound
+  packets, even though sends still work. The original standalone client
+  App called them too — easy to miss when porting to a test rig.
+- **`ClientSession` kept as a thin marker.** Per the original plan's
+  recommendation. `ClientRuntime::session: Option<ClientSession>` is
+  still the "are we in a session?" gate everywhere; ripping it out would
+  touch ~20 sites for no benefit.
 
 ### Open / deferred
 
-- **Should `ClientSession` exist at all after this phase?** It becomes a
-  near-empty marker. Keeping it preserves `runtime.session: Option<...>` as
-  the "are we in a session?" check. Removing it forces every site to query
-  `ClientConnectionState` directly. **Recommendation: keep as a thin marker
-  for now**, revisit if it ends up genuinely unused.
-- **Shutdown semantics**: today `ClientSession::shutdown` blocks for several
-  Update ticks to drain DISCONNECT packets. After Phase 3 the main app's
-  Update is what drains them, so shutdown becomes "set a flag and poll
-  state". Treat it the same way the connection start works.
-
-### Files touched (expected)
-
-- [src/app.rs](src/app.rs) — plugin install, system registration
-- [src/net/client.rs](src/net/client.rs) — major rewrite, thread removed
-- [src/net/channels.rs](src/net/channels.rs) — visibility bumps
-- [src/net/mod.rs](src/net/mod.rs) — re-exports
-- [src/app/state/runtime.rs](src/app/state/runtime.rs) — `ClientSession` shape
-- [src/app/systems/network.rs](src/app/systems/network.rs) — tick consumer
-- [src/app/ui/worlds/session.rs](src/app/ui/worlds/session.rs) — connection flow
-- [src/app/voice/systems.rs](src/app/voice/systems.rs) — send call site
-- [src/app/systems/input/movement.rs](src/app/systems/input/movement.rs) — send call site
-- [src/app/systems/input/inventory_shortcuts.rs](src/app/systems/input/inventory_shortcuts.rs) — send call site
-- [src/app/systems/auto_connect.rs](src/app/systems/auto_connect.rs) — MP entry
-- [src/app/ui/multiplayer/direct_connect.rs](src/app/ui/multiplayer/direct_connect.rs) — MP entry
-
-### Verification
-
-- `./cli check && ./cli test && ./cli lint` clean
-- Manual: start singleplayer, connect, walk around, gather a node, see
-  inventory update, save & quit. Then start multiplayer (or a second
-  loopback) and same.
+- **UI doesn't poll `ClientConnectionStatus` yet.** Today the UI calls
+  `menu.enter_in_game()` the moment the worker thread returns OK
+  (loopback server up). The handshake then completes a few frames later
+  while the loading splash is still at full opacity. This is fine for
+  loopback SP and direct MP on a local network, but for slow remote MP
+  the splash will hold visibly longer than today's "block until Welcome"
+  worker did. When that becomes noticeable, add a system that watches
+  `ClientNetwork::status()` and either (a) flips
+  `LoadingSplash::ready = true` only on `Connected` or (b) reverts to
+  the menu on `Disconnected(reason)`. Hook the same status to drive a
+  "Connecting…" indicator on the direct-connect modal.
+- **Shutdown timeout fallback.** `ClientSession::shutdown` polls
+  `shutdown_complete` for up to 5 s. If the main app is genuinely stuck
+  (paused frame loop, hung system), the worker still bails after the
+  timeout and tears down the loopback server. No retry — the on-disk
+  save is the only durable state. Revisit if real bug reports show up
+  here.
 
 ---
 
 ## Phase 4 — Wire chunk rooms for resource nodes
 
-**Status**: ⏳ pending · blocked by Phase 3
+**Status**: ⏳ pending · unblocked by Phase 3
 
 ### Goal
 
@@ -439,6 +450,11 @@ First real bandwidth win. Add Lightyear's `RoomPlugin`, lazy-allocate one
 subscribe each client's sender entity to its visible-chunk rooms. Lightyear
 delta-encodes component changes and auto-spawn/despawns entities on the client
 when room membership changes.
+
+Phase 3 left the Lightyear client entity in the main app's `World`, so
+the consumer side of this phase (rewriting `apply_resource_nodes_system`)
+can query replicated entities directly via `Query<&ResourceNode,
+&ResourceNodeStorage>` instead of reading `ClientRuntime::snapshot`.
 
 A/B against the existing `WorldSnapshot.resource_nodes` path under a feature
 flag during the soak; Phase 6 removes the snapshot path once Phase 5 is in.
@@ -724,6 +740,17 @@ pattern.
   visibility, and regrow scheduling.
 - **`ClientId`** — Server-assigned `u64` per connected client. Wire-stable
   for the session.
+- **`ClientConnectionStatus`** — Lightyear lifecycle as observed by the
+  main app: `Idle | Connecting | Connected | Disconnected(reason)`.
+  Defined in `src/net/client.rs`. Polled via `ClientNetwork::status()`.
+- **`ClientNetwork`** — `Resource + Clone` (Arc-backed) that
+  `ClientNetworkPlugin` registers. Holds the shared `outbox`, `inbox`,
+  `status`, `pending_connect`, and shutdown flags between the main app's
+  Lightyear-driving systems and `ClientSession` (which is also held by
+  worker threads). Defined in `src/net/client.rs`.
+- **`ClientSession`** — Thin handle stored in `ClientRuntime::session`
+  with three methods (`send`, `tick`, `shutdown`) that go through
+  `ClientNetwork`. Owns the loopback server's `GameServerHandle` in SP.
 - **`GameServer`** — The authoritative server-side game state struct,
   currently stored as a `Resource` inside `AuthoritativeServer`.
 - **Mirror system** — An exclusive Bevy system (`fn(&mut World)`) that

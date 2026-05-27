@@ -1,5 +1,7 @@
 use std::{thread, time::Duration};
 
+use bevy::prelude::*;
+
 use super::*;
 use crate::{
     protocol::{ClientMessage, ServerMessage},
@@ -22,19 +24,71 @@ fn temp_store() -> WorldStore {
     )
 }
 
-fn start_session() -> ClientSession {
-    let user = user();
-    ClientSession::start_singleplayer(WorldSave::new("Local", Some(user.steam_id)), &user)
-        .expect("network session should start")
+/// Test rig: a minimal Bevy `App` with the Lightyear client plugins, paired
+/// with a `ClientSession`. After Phase 3 of the replication migration the
+/// connection lifecycle lives in the main app's `Update` schedule, so each
+/// test now drives `app.update()` on this rig to make handshake progress.
+struct TestRig {
+    app: App,
+    session: ClientSession,
+}
+
+impl TestRig {
+    fn singleplayer() -> Self {
+        let user = user();
+        let app = build_test_app();
+        let network = app.world().resource::<ClientNetwork>().clone();
+        let session = ClientSession::start_singleplayer(
+            WorldSave::new("Local", Some(user.steam_id)),
+            &user,
+            network,
+        )
+        .expect("network session should start");
+        Self { app, session }
+    }
+
+    fn direct(addr: std::net::SocketAddr) -> Self {
+        let user = user();
+        let app = build_test_app();
+        let network = app.world().resource::<ClientNetwork>().clone();
+        let session = ClientSession::connect(addr, &user, network)
+            .expect("direct network session should connect");
+        Self { app, session }
+    }
+
+    /// Drive the main app forward one frame.
+    fn tick_app(&mut self) {
+        self.app.update();
+    }
+
+    /// Tick the app and drain anything the receive system pushed into the
+    /// shared inbox. Mirrors the shape of the old standalone `session.tick`.
+    fn poll(&mut self) -> Vec<ServerMessage> {
+        self.tick_app();
+        self.session
+            .tick(0.0)
+            .expect("session should drain its inbox")
+    }
+}
+
+fn build_test_app() -> App {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(client_plugins());
+    app.add_plugins(LightyearProtocolPlugin);
+    app.add_plugins(ClientNetworkPlugin);
+    app.finish();
+    app.cleanup();
+    app
 }
 
 fn collect_until(
-    session: &mut ClientSession,
+    rig: &mut TestRig,
     accepts: impl Fn(&[ServerMessage]) -> bool,
 ) -> Vec<ServerMessage> {
     let mut messages = Vec::new();
-    for _ in 0..100 {
-        messages.extend(session.tick(0.0).expect("session should tick"));
+    for _ in 0..200 {
+        messages.extend(rig.poll());
         if accepts(&messages) {
             return messages;
         }
@@ -45,28 +99,36 @@ fn collect_until(
 
 #[test]
 fn singleplayer_session_connects_through_loopback_server() {
-    let mut session = start_session();
+    let mut rig = TestRig::singleplayer();
 
-    let initial = session.tick(0.0).expect("session should tick");
-    assert!(matches!(initial[0], ServerMessage::Welcome { .. }));
+    let messages = collect_until(&mut rig, |messages| {
+        messages
+            .iter()
+            .any(|message| matches!(message, ServerMessage::Welcome { .. }))
+    });
+    assert!(
+        messages
+            .iter()
+            .any(|message| matches!(message, ServerMessage::Welcome { .. }))
+    );
 
-    let tick = collect_until(&mut session, |messages| {
+    let snapshots = collect_until(&mut rig, |messages| {
         messages
             .iter()
             .any(|message| matches!(message, ServerMessage::Snapshot(_)))
     });
     assert!(
-        tick.iter()
+        snapshots
+            .iter()
             .any(|message| matches!(message, ServerMessage::Snapshot(_)))
     );
 }
 
 #[test]
 fn singleplayer_session_receives_authoritative_snapshots_from_loopback_host() {
-    let mut session = start_session();
-    let _ = session.tick(0.0);
+    let mut rig = TestRig::singleplayer();
 
-    let messages = collect_until(&mut session, |messages| {
+    let messages = collect_until(&mut rig, |messages| {
         messages
             .iter()
             .any(|message| matches!(message, ServerMessage::Snapshot(_)))
@@ -81,16 +143,22 @@ fn singleplayer_session_receives_authoritative_snapshots_from_loopback_host() {
 
 #[test]
 fn singleplayer_chat_round_trips_through_network_server() {
-    let mut session = start_session();
-    let _ = session.tick(0.0);
+    let mut rig = TestRig::singleplayer();
 
-    session
+    // Make sure we've got Welcome and a connected client before sending.
+    let _ = collect_until(&mut rig, |messages| {
+        messages
+            .iter()
+            .any(|message| matches!(message, ServerMessage::Welcome { .. }))
+    });
+
+    rig.session
         .send(ClientMessage::Chat {
             text: "  hello  ".to_owned(),
         })
         .expect("chat should send");
 
-    let messages = collect_until(&mut session, |messages| {
+    let messages = collect_until(&mut rig, |messages| {
         messages.iter().any(|message| {
             matches!(
                 message,
@@ -118,18 +186,26 @@ fn direct_multiplayer_connects_to_shared_lightyear_server_host() {
     )
     .expect("Lightyear server should start");
 
-    let mut session =
-        ClientSession::connect(spawned.addr, &user).expect("direct network session should connect");
-    let initial = session.tick(0.0).expect("session should tick");
-    assert!(matches!(initial[0], ServerMessage::Welcome { .. }));
+    let mut rig = TestRig::direct(spawned.addr);
 
-    session
+    let initial = collect_until(&mut rig, |messages| {
+        messages
+            .iter()
+            .any(|message| matches!(message, ServerMessage::Welcome { .. }))
+    });
+    assert!(
+        initial
+            .iter()
+            .any(|message| matches!(message, ServerMessage::Welcome { .. }))
+    );
+
+    rig.session
         .send(ClientMessage::Chat {
             text: "  remote path  ".to_owned(),
         })
         .expect("chat should send");
 
-    let messages = collect_until(&mut session, |messages| {
+    let messages = collect_until(&mut rig, |messages| {
         messages.iter().any(|message| {
             matches!(
                 message,
@@ -145,7 +221,7 @@ fn direct_multiplayer_connects_to_shared_lightyear_server_host() {
         )
     }));
 
-    session
+    rig.session
         .send(ClientMessage::Disconnect)
         .expect("disconnect should send");
     spawned.handle.shutdown().expect("server should stop");
@@ -159,13 +235,46 @@ fn singleplayer_shutdown_persists_world_from_network_server() {
         .create_world("Persisted", Some(user.steam_id))
         .expect("world should create");
     let world_id = save.id;
-    let mut session =
-        ClientSession::start_singleplayer(save, &user).expect("network session should start");
-    let _ = session.tick(0.0);
+    let mut app = build_test_app();
+    let network = app.world().resource::<ClientNetwork>().clone();
+    let mut session = ClientSession::start_singleplayer(save, &user, network)
+        .expect("network session should start");
 
-    session
-        .shutdown(&store)
-        .expect("session should persist and shut down");
+    // Drive the app until Welcome arrives so the loopback server's world
+    // state is fully initialised before we ask for a save.
+    for _ in 0..200 {
+        app.update();
+        let messages = session.tick(0.0).expect("session should tick");
+        if messages
+            .iter()
+            .any(|message| matches!(message, ServerMessage::Welcome { .. }))
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    // shutdown blocks waiting for the main app to drive the netcode
+    // disconnect to completion; drive it on this thread in parallel.
+    let session_thread = thread::spawn(move || {
+        let store = store;
+        let result = session.shutdown(&store);
+        (store, result)
+    });
+
+    // Pump the app until the shutdown worker thread has completed.
+    for _ in 0..600 {
+        app.update();
+        if session_thread.is_finished() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let (store, result) = session_thread
+        .join()
+        .expect("session shutdown thread should join");
+    result.expect("session should persist and shut down");
 
     let loaded = store.load_world(world_id).expect("world should load");
     assert_eq!(loaded.name, "Persisted");

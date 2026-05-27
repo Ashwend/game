@@ -11,7 +11,7 @@ use bevy::prelude::*;
 
 use crate::{
     app::state::{ClientRuntime, LoadingSplash, LoadingSplashKind, MenuState, Screen, SteamUser},
-    net::ClientSession,
+    net::{ClientNetwork, ClientSession},
     steam::AuthenticatedUser,
 };
 
@@ -42,6 +42,7 @@ pub(crate) fn auto_connect_start_system(
     request: Option<Res<AutoConnectRequest>>,
     attempt: Option<Res<AutoConnectAttempt>>,
     user: Res<SteamUser>,
+    network: Res<ClientNetwork>,
     mut menu: ResMut<MenuState>,
 ) {
     if attempt.is_some() {
@@ -53,11 +54,13 @@ pub(crate) fn auto_connect_start_system(
 
     let (tx, rx) = mpsc::channel::<AutoConnectResult>();
     let user_clone = user.0.clone();
+    let network_clone = network.clone();
     let target = request.addr;
     if let Err(error) = thread::Builder::new()
         .name("auto-connect-attempt".to_owned())
         .spawn(move || {
-            let result = connect(target, user_clone).map_err(|error| format!("{error:#}"));
+            let result =
+                connect(target, user_clone, network_clone).map_err(|error| format!("{error:#}"));
             let _ = tx.send(result);
         })
     {
@@ -78,8 +81,9 @@ pub(crate) fn auto_connect_start_system(
 fn connect(
     addr: SocketAddr,
     user: AuthenticatedUser,
+    network: ClientNetwork,
 ) -> anyhow::Result<(SocketAddr, ClientSession)> {
-    let session = ClientSession::connect(addr, &user)?;
+    let session = ClientSession::connect(addr, &user, network)?;
     Ok((addr, session))
 }
 

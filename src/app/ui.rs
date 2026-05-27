@@ -53,6 +53,7 @@ use super::state::{
 use super::systems::PendingSessionEndReason;
 use super::voice::VoiceState;
 use crate::analytics::Analytics;
+use crate::net::ClientNetwork;
 
 #[derive(SystemParam)]
 pub(crate) struct UiResources<'w, 's> {
@@ -81,6 +82,7 @@ pub(crate) struct UiResources<'w, 's> {
     deployable_overlay: DeployableOverlayParams<'w, 's>,
     analytics: Res<'w, Analytics>,
     pending_session_end: ResMut<'w, PendingSessionEndReason>,
+    client_network: Res<'w, ClientNetwork>,
 }
 
 pub(crate) fn ui_system(
@@ -109,6 +111,7 @@ pub(crate) fn ui_system(
             &mut resources.runtime,
             &resources.store,
             &resources.user,
+            &resources.client_network,
             &resources.analytics,
         ),
         Screen::Options => {
@@ -128,6 +131,7 @@ pub(crate) fn ui_system(
             &mut resources.menu,
             &mut resources.runtime,
             &resources.user,
+            &resources.client_network,
             &resources.analytics,
         ),
         Screen::InGame => {

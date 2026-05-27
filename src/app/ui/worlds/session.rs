@@ -14,7 +14,7 @@ use crate::{
         ClientRuntime, LoadingSplash, LoadingSplashKind, MenuState, SaveStore, SteamUser,
         WorldStartAttempt, WorldStartResult,
     },
-    net::ClientSession,
+    net::{ClientNetwork, ClientSession},
     save::WorldStore,
     steam::AuthenticatedUser,
 };
@@ -40,13 +40,14 @@ pub(super) fn start_singleplayer(
     runtime: &mut ClientRuntime,
     store: &SaveStore,
     user: &SteamUser,
+    network: &ClientNetwork,
     world_id: Uuid,
 ) {
     let result = store
         .0
         .load_world(world_id)
         .context("could not load selected world")
-        .and_then(|save| ClientSession::start_singleplayer(save, &user.0));
+        .and_then(|save| ClientSession::start_singleplayer(save, &user.0, network.clone()));
 
     match result {
         Ok(session) => {
@@ -70,6 +71,7 @@ pub(super) fn start_singleplayer_in_background(
     menu: &mut MenuState,
     store: &SaveStore,
     user: &SteamUser,
+    network: &ClientNetwork,
     world_id: Uuid,
 ) {
     if menu.world_start.is_some() {
@@ -79,10 +81,11 @@ pub(super) fn start_singleplayer_in_background(
     let (tx, receiver) = mpsc::channel::<WorldStartResult>();
     let store = store.0.clone();
     let user = user.0.clone();
+    let network = network.clone();
     match thread::Builder::new()
         .name("singleplayer-start".to_owned())
         .spawn(move || {
-            let result = start_singleplayer_session(store, user, world_id)
+            let result = start_singleplayer_session(store, user, network, world_id)
                 .map_err(|error| format!("{error:#}"));
             let _ = tx.send(result);
         }) {
@@ -112,12 +115,13 @@ pub(super) fn start_singleplayer_in_background(
 fn start_singleplayer_session(
     store: WorldStore,
     user: AuthenticatedUser,
+    network: ClientNetwork,
     world_id: Uuid,
 ) -> anyhow::Result<ClientSession> {
     store
         .load_world(world_id)
         .context("could not load selected world")
-        .and_then(|save| ClientSession::start_singleplayer(save, &user))
+        .and_then(|save| ClientSession::start_singleplayer(save, &user, network))
 }
 
 fn take_finished_singleplayer_start(menu: &mut MenuState) -> Option<(Uuid, WorldStartResult)> {

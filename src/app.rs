@@ -24,6 +24,7 @@ use bevy_framepace::{FramepacePlugin, FramepaceSettings};
 
 use crate::{
     analytics::AnalyticsPlugin,
+    net::{ClientNetworkPlugin, LightyearProtocolPlugin, client_plugins},
     save::WorldStore,
     steam::{OfflineSteamBackend, SteamBackend},
 };
@@ -277,7 +278,15 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         // The perf HUD pulls p99/max from this window so the player sees
         // hitches that the smoothed FPS number hides — 120 samples (default)
         // at 500 FPS is only 0.24 s, too short to catch periodic stalls.
-        .add_plugins(FrameTimeDiagnosticsPlugin::new(480));
+        .add_plugins(FrameTimeDiagnosticsPlugin::new(480))
+        // Lightyear client lives in the main Bevy app from Phase 3 of the
+        // replication migration onward. The two plugins together register
+        // the protocol channels and message types, and wire up the
+        // connection lifecycle systems against the shared `ClientNetwork`
+        // resource that gameplay code (and `ClientSession`) read/write.
+        .add_plugins(client_plugins())
+        .add_plugins(LightyearProtocolPlugin)
+        .add_plugins(ClientNetworkPlugin);
     // `./cli profile` (Cargo feature `profile`): pair the Chrome trace
     // emitted by `bevy/trace_chrome` with text diagnostics so the log shows
     // FPS, frame time, entity count, and CPU/RAM alongside the spans. Gated

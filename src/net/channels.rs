@@ -11,11 +11,11 @@ use lightyear::prelude::{
 
 use crate::protocol::{ClientMessage, PROTOCOL_VERSION, PacketDelivery, ServerMessage};
 
-pub(super) const LIGHTYEAR_PROTOCOL_ID: u64 = PROTOCOL_VERSION as u64;
+pub(crate) const LIGHTYEAR_PROTOCOL_ID: u64 = PROTOCOL_VERSION as u64;
 const LIGHTYEAR_PRIVATE_KEY: [u8; 32] = [0; 32];
 
 #[derive(Clone)]
-pub(super) struct LightyearProtocolPlugin;
+pub(crate) struct LightyearProtocolPlugin;
 
 impl Plugin for LightyearProtocolPlugin {
     fn build(&self, app: &mut App) {
@@ -55,11 +55,11 @@ impl Plugin for LightyearProtocolPlugin {
     }
 }
 
-pub(super) struct ReliableChannel;
-pub(super) struct UnreliableChannel;
-pub(super) struct VoiceChannel;
+pub(crate) struct ReliableChannel;
+pub(crate) struct UnreliableChannel;
+pub(crate) struct VoiceChannel;
 
-pub(super) fn send_client_message(
+pub(crate) fn send_client_message(
     sender: &mut MessageSender<ClientMessage>,
     message: ClientMessage,
 ) {
@@ -70,7 +70,7 @@ pub(super) fn send_client_message(
     }
 }
 
-pub(super) fn send_server_message(
+pub(crate) fn send_server_message(
     sender: &mut MessageSender<ServerMessage>,
     message: ServerMessage,
 ) {
@@ -86,7 +86,7 @@ pub(super) fn send_server_message(
 /// reached over the network, so they don't need the warning. Dedicated
 /// servers and remote clients do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PrivateKeyContext {
+pub(crate) enum PrivateKeyContext {
     /// Singleplayer loopback — listener bound to localhost.
     Loopback,
     /// Anything reachable from another host (dedicated server, remote
@@ -94,7 +94,7 @@ pub(super) enum PrivateKeyContext {
     NetworkExposed,
 }
 
-pub(super) fn private_key(context: PrivateKeyContext) -> [u8; 32] {
+pub(crate) fn private_key(context: PrivateKeyContext) -> [u8; 32] {
     resolve_private_key(
         std::env::var("LIGHTYEAR_PRIVATE_KEY").ok().as_deref(),
         context,

@@ -3,6 +3,7 @@ use bevy_egui::egui;
 use crate::{
     analytics::Analytics,
     app::state::{ClientRuntime, DirectConnectDialog, MenuState, Screen, SteamUser},
+    net::ClientNetwork,
     steam::{OfflineSteamBackend, SteamBackend},
 };
 
@@ -16,6 +17,7 @@ pub(super) fn multiplayer_ui(
     menu: &mut MenuState,
     runtime: &mut ClientRuntime,
     user: &SteamUser,
+    network: &ClientNetwork,
     analytics: &Analytics,
 ) {
     theme::screen_scrim(ctx, "multiplayer_scrim", 145);
@@ -67,7 +69,7 @@ pub(super) fn multiplayer_ui(
                 });
         },
     );
-    direct_connect_dialog_ui(ctx, menu, runtime, user, analytics);
+    direct_connect_dialog_ui(ctx, menu, runtime, user, network, analytics);
 }
 
 fn draw_multiplayer_header(ui: &mut egui::Ui, menu: &mut MenuState) {

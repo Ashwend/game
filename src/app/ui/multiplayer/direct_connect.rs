@@ -13,7 +13,7 @@ use crate::{
         ClientRuntime, DirectConnectAttempt, DirectConnectDialog, DirectConnectResult,
         LoadingSplash, LoadingSplashKind, MenuState, SteamUser,
     },
-    net::ClientSession,
+    net::{ClientNetwork, ClientSession},
 };
 
 use self::target::{DirectConnectTarget, direct_connect_target, resolve_direct_connect_target};
@@ -45,6 +45,7 @@ pub(super) fn direct_connect_dialog_ui(
     menu: &mut MenuState,
     runtime: &mut ClientRuntime,
     user: &SteamUser,
+    network: &ClientNetwork,
     analytics: &Analytics,
 ) {
     let connect_result = {
@@ -79,7 +80,8 @@ pub(super) fn direct_connect_dialog_ui(
                         analytics.track(Event::ConnectAttempted {
                             target_host_masked: mask_host(&display_target),
                         });
-                        if let Err(error) = start_direct_connect_attempt(ctx, dialog, target, user)
+                        if let Err(error) =
+                            start_direct_connect_attempt(ctx, dialog, target, user, network)
                         {
                             analytics.track(Event::ConnectFailed {
                                 reason: ConnectFailReason::Other,
@@ -206,13 +208,16 @@ fn start_direct_connect_attempt(
     dialog: &mut DirectConnectDialog,
     target: DirectConnectTarget,
     user: &SteamUser,
+    network: &ClientNetwork,
 ) -> std::result::Result<(), String> {
     let (tx, receiver) = mpsc::channel::<DirectConnectResult>();
     let user = user.0.clone();
+    let network = network.clone();
     thread::Builder::new()
         .name("direct-connect-attempt".to_owned())
         .spawn(move || {
-            let result = connect_to_target(target, user).map_err(|error| format!("{error:#}"));
+            let result =
+                connect_to_target(target, user, network).map_err(|error| format!("{error:#}"));
             let _ = tx.send(result);
         })
         .map_err(|error| format!("Could not start connection attempt: {error}"))?;
@@ -228,9 +233,10 @@ fn start_direct_connect_attempt(
 fn connect_to_target(
     target: DirectConnectTarget,
     user: crate::steam::AuthenticatedUser,
+    network: ClientNetwork,
 ) -> Result<(SocketAddr, ClientSession)> {
     let addr = resolve_direct_connect_target(&target)?;
-    let session = ClientSession::connect(addr, &user)?;
+    let session = ClientSession::connect(addr, &user, network)?;
     Ok((addr, session))
 }
 

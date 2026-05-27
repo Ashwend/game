@@ -2,14 +2,14 @@ use std::{
     collections::VecDeque,
     net::SocketAddr,
     sync::{
-        Mutex,
-        mpsc::{self, Receiver, Sender},
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
-    thread::{self, JoinHandle},
+    thread,
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use bevy::prelude::*;
 use lightyear::prelude::{
     Authentication, Connected, LocalAddr, MessageReceiver, MessageSender, UdpIo, client,
@@ -17,94 +17,149 @@ use lightyear::prelude::{
 
 use crate::{
     net::{
-        channels::{
-            LIGHTYEAR_PROTOCOL_ID, LightyearProtocolPlugin, PrivateKeyContext, private_key,
-            send_client_message,
-        },
+        channels::{LIGHTYEAR_PROTOCOL_ID, PrivateKeyContext, private_key, send_client_message},
         host::{GameServerHandle, spawn_loopback_server},
     },
-    protocol::{ClientMessage, GAME_VERSION, PROTOCOL_VERSION, ServerMessage},
+    protocol::{ClientMessage, GAME_VERSION, PROTOCOL_VERSION, SERVER_TICK_RATE_HZ, ServerMessage},
     save::{WorldSave, WorldStore},
     server::ServerSettings,
     steam::{AuthMode, AuthenticatedUser},
 };
 
-// 1ms polling was 1000Hz against a 20Hz server — 50× more wake-ups than
-// strictly necessary. 5ms still gives sub-snapshot latency for receive and
-// keeps CPU/battery cost down on the network thread.
-const CLIENT_SLEEP: Duration = Duration::from_millis(5);
-const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 const CLIENT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 
-pub enum ClientSession {
-    Network(Box<LightyearGameSession>),
+/// Maximum wall-clock time the background shutdown thread will wait for the
+/// main app's graceful disconnect to complete. The actual disconnect is
+/// bounded by `USER_DISCONNECT_FLUSH_TICKS + NETCODE_DISCONNECT_FLUSH_TICKS`
+/// frames at whatever the main app's frame rate is; 5 seconds is comfortably
+/// above any realistic frame-time even if the main app is briefly stalled.
+const SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Update ticks to wait between queuing the app-level `Disconnect` message
+/// and triggering the netcode `Disconnect`. The reliable channel needs one
+/// PostUpdate to write the message into the UDP socket; the netcode layer
+/// stops accepting user packets the moment we call its `disconnect()`, so
+/// we must drain the user message first.
+const USER_DISCONNECT_FLUSH_TICKS: u32 = 2;
+
+/// Update ticks to wait after triggering the netcode `Disconnect` so the
+/// 10 redundant DISCONNECT packets can be drained from netcode's internal
+/// send queue into the UDP transport.
+const NETCODE_DISCONNECT_FLUSH_TICKS: u32 = 4;
+
+/// Lightyear client lifecycle as observed by the main app. The UI polls
+/// this to decide when a singleplayer or direct-connect attempt has
+/// actually finished its handshake and is safe to drive gameplay against.
+/// Some variants are read only by the systems that write them today;
+/// they're part of the public state surface so allow the dead-code lint.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) enum ClientConnectionStatus {
+    #[default]
+    Idle,
+    Connecting,
+    Connected,
+    Disconnected(String),
+}
+
+/// Shared state between [`ClientSession`] (held by the runtime / worker
+/// threads) and the Bevy systems that drive Lightyear inside the main app.
+/// Everything is wrapped in `Arc` so a `ClientSession` can be moved into a
+/// background shutdown thread while the main app keeps reading and writing
+/// the same queues.
+#[derive(Resource, Clone, Default)]
+pub(crate) struct ClientNetwork(Arc<ClientNetworkInner>);
+
+#[derive(Default)]
+struct ClientNetworkInner {
+    /// Messages produced by gameplay code waiting to be forwarded to
+    /// Lightyear. The first entry after each `pending_connect` is the
+    /// `ClientMessage::Auth` handshake — it is only drained once the
+    /// server-side handshake completes (`Connected` is observed).
+    outbox: Mutex<VecDeque<ClientMessage>>,
+    /// Server-originated messages received by Lightyear, awaiting drain
+    /// from `network_tick_system` via `ClientSession::tick`.
+    inbox: Mutex<VecDeque<ServerMessage>>,
+    /// Public connection state used by the UI to decide when to flip from
+    /// the loading splash into `Screen::InGame`.
+    status: Mutex<ClientConnectionStatus>,
+    /// Connection request set by `ClientSession::connect_inner`; consumed
+    /// by `process_pending_connect_system` on its next tick.
+    pending_connect: Mutex<Option<PendingConnect>>,
+    /// Set by `ClientSession::shutdown` to start the graceful disconnect.
+    shutdown_request: AtomicBool,
+    /// Flipped by `drive_shutdown_system` once the netcode disconnect has
+    /// had a chance to flush. The shutdown worker thread polls this.
+    shutdown_complete: AtomicBool,
+}
+
+#[derive(Debug)]
+struct PendingConnect {
+    server_addr: SocketAddr,
+    steam_id: u64,
+    auth_message: ClientMessage,
+    key_context: PrivateKeyContext,
+}
+
+/// Bevy plugin that wires the Lightyear client into the main app: registers
+/// the shared `ClientNetwork` resource and the systems that drive the
+/// connection lifecycle. Pairs with [`LightyearProtocolPlugin`] which
+/// installs Lightyear's own channels and message types.
+pub(crate) struct ClientNetworkPlugin;
+
+impl Plugin for ClientNetworkPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<ClientNetwork>()
+            .init_resource::<ClientHeartbeat>()
+            .init_resource::<ClientShutdownState>()
+            .add_systems(
+                Update,
+                (
+                    process_pending_connect_system,
+                    send_client_messages_system,
+                    receive_server_messages_system,
+                    report_client_disconnect_system,
+                    drive_shutdown_system,
+                )
+                    .chain(),
+            );
+    }
+}
+
+/// Returns the `client::ClientPlugins` configured for our protocol tick
+/// rate. Kept as a free function so `app.rs` doesn't need to know the tick
+/// rate constant directly.
+pub(crate) fn client_plugins() -> client::ClientPlugins {
+    client::ClientPlugins {
+        tick_duration: Duration::from_secs_f32(1.0 / SERVER_TICK_RATE_HZ),
+    }
+}
+
+/// Thin handle stored in `ClientRuntime::session`. Sending and ticking the
+/// network now both route through the main app's `ClientNetwork`; this
+/// struct just keeps the loopback server alive (for singleplayer) and
+/// signals shutdown.
+pub struct ClientSession {
+    network: ClientNetwork,
+    local_server: Mutex<Option<GameServerHandle>>,
 }
 
 impl std::fmt::Debug for ClientSession {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Network(_) => formatter.write_str("ClientSession::Network"),
-        }
-    }
-}
-
-impl ClientSession {
-    pub fn start_singleplayer(save: WorldSave, user: &AuthenticatedUser) -> Result<Self> {
-        LightyearGameSession::start_singleplayer(save, user)
-            .map(Box::new)
-            .map(Self::Network)
-    }
-
-    pub fn connect(addr: SocketAddr, user: &AuthenticatedUser) -> Result<Self> {
-        LightyearGameSession::connect(addr, user)
-            .map(Box::new)
-            .map(Self::Network)
-    }
-
-    pub fn send(&mut self, message: ClientMessage) -> Result<()> {
-        match self {
-            Self::Network(session) => session.send(message),
-        }
-    }
-
-    pub fn tick(&mut self, delta_seconds: f32) -> Result<Vec<ServerMessage>> {
-        match self {
-            Self::Network(session) => session.tick(delta_seconds),
-        }
-    }
-
-    pub fn shutdown(&mut self, store: &WorldStore) -> Result<()> {
-        match self {
-            Self::Network(session) => session.shutdown(store)?,
-        }
-        Ok(())
-    }
-}
-
-pub struct LightyearGameSession {
-    command_tx: Sender<ClientCommand>,
-    incoming: Mutex<Receiver<ServerMessage>>,
-    inbox: VecDeque<ServerMessage>,
-    thread: Mutex<Option<JoinHandle<()>>>,
-    local_server: Mutex<Option<GameServerHandle>>,
-}
-
-impl std::fmt::Debug for LightyearGameSession {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let local_server_running = self
-            .local_server
-            .lock()
-            .is_ok_and(|local_server| local_server.is_some());
+        let local_server_running = self.local_server.lock().is_ok_and(|guard| guard.is_some());
         formatter
-            .debug_struct("LightyearGameSession")
+            .debug_struct("ClientSession")
             .field("local_server", &local_server_running)
-            .field("inbox_len", &self.inbox.len())
             .finish_non_exhaustive()
     }
 }
 
-impl LightyearGameSession {
-    pub fn start_singleplayer(save: WorldSave, user: &AuthenticatedUser) -> Result<Self> {
+impl ClientSession {
+    pub(crate) fn start_singleplayer(
+        save: WorldSave,
+        user: &AuthenticatedUser,
+        network: ClientNetwork,
+    ) -> Result<Self> {
         let spawned = spawn_loopback_server(
             save,
             ServerSettings {
@@ -112,26 +167,27 @@ impl LightyearGameSession {
                 singleplayer_host: Some(user.steam_id),
             },
         )?;
-        Self::connect_inner(spawned.addr, user, Some(spawned.handle))
+        Self::connect_inner(spawned.addr, user, Some(spawned.handle), network)
     }
 
-    pub fn connect(addr: SocketAddr, user: &AuthenticatedUser) -> Result<Self> {
-        Self::connect_inner(addr, user, None)
+    pub(crate) fn connect(
+        addr: SocketAddr,
+        user: &AuthenticatedUser,
+        network: ClientNetwork,
+    ) -> Result<Self> {
+        Self::connect_inner(addr, user, None, network)
     }
 
     fn connect_inner(
         addr: SocketAddr,
         user: &AuthenticatedUser,
-        mut local_server: Option<GameServerHandle>,
+        local_server: Option<GameServerHandle>,
+        network: ClientNetwork,
     ) -> Result<Self> {
-        let (command_tx, command_rx) = mpsc::channel();
-        let (incoming_tx, incoming) = mpsc::channel();
-        let (startup_tx, startup_rx) = mpsc::channel();
-        let steam_id = user.steam_id;
         let auth_message = ClientMessage::Auth {
             protocol_version: PROTOCOL_VERSION,
             client_version: Some(GAME_VERSION.to_owned()),
-            steam_id,
+            steam_id: user.steam_id,
             display_name: user.display_name.clone(),
             token: user.token.clone(),
         };
@@ -144,76 +200,65 @@ impl LightyearGameSession {
         } else {
             PrivateKeyContext::NetworkExposed
         };
-        let thread = thread::Builder::new()
-            .name("lightyear-game-client".to_owned())
-            .spawn(move || {
-                match build_client_app(
-                    addr,
-                    steam_id,
-                    auth_message,
-                    command_rx,
-                    incoming_tx,
-                    key_context,
-                ) {
-                    Ok(mut app) => {
-                        let _ = startup_tx.send(Ok(()));
-                        run_client_app(&mut app);
-                    }
-                    Err(error) => {
-                        let _ = startup_tx.send(Err(format!("{error:#}")));
-                    }
-                }
-            })
-            .context("could not spawn Lightyear game client")?;
-
-        match startup_rx
-            .recv_timeout(AUTH_TIMEOUT)
-            .context("Lightyear game client did not start")?
+        network.0.shutdown_request.store(false, Ordering::Release);
+        network.0.shutdown_complete.store(false, Ordering::Release);
         {
-            Ok(()) => {}
-            Err(error) => {
-                let _ = thread.join();
-                if let Some(mut local_server) = local_server.take() {
-                    let _ = local_server.shutdown();
-                }
-                bail!("{error}");
-            }
+            let mut outbox = network
+                .0
+                .outbox
+                .lock()
+                .map_err(|_| anyhow::anyhow!("client outbox lock is poisoned"))?;
+            outbox.clear();
         }
-
-        let inbox = match wait_for_welcome(&incoming) {
-            Ok(inbox) => inbox,
-            Err(error) => {
-                let _ = command_tx.send(ClientCommand::Shutdown);
-                let _ = thread.join();
-                if let Some(mut local_server) = local_server.take() {
-                    let _ = local_server.shutdown();
-                }
-                return Err(error);
-            }
-        };
-
+        {
+            let mut inbox = network
+                .0
+                .inbox
+                .lock()
+                .map_err(|_| anyhow::anyhow!("client inbox lock is poisoned"))?;
+            inbox.clear();
+        }
+        if let Ok(mut status) = network.0.status.lock() {
+            *status = ClientConnectionStatus::Connecting;
+        }
+        {
+            let mut pending = network
+                .0
+                .pending_connect
+                .lock()
+                .map_err(|_| anyhow::anyhow!("client pending-connect lock is poisoned"))?;
+            *pending = Some(PendingConnect {
+                server_addr: addr,
+                steam_id: user.steam_id,
+                auth_message,
+                key_context,
+            });
+        }
         Ok(Self {
-            command_tx,
-            incoming: Mutex::new(incoming),
-            inbox,
-            thread: Mutex::new(Some(thread)),
+            network,
             local_server: Mutex::new(local_server),
         })
     }
 
     pub fn send(&mut self, message: ClientMessage) -> Result<()> {
-        self.command_tx
-            .send(ClientCommand::Send(message))
-            .context("Lightyear game client is not running")
+        let mut outbox = self
+            .network
+            .0
+            .outbox
+            .lock()
+            .map_err(|_| anyhow::anyhow!("client outbox lock is poisoned"))?;
+        outbox.push_back(message);
+        Ok(())
     }
 
     pub fn tick(&mut self, _delta_seconds: f32) -> Result<Vec<ServerMessage>> {
-        let incoming = self
-            .incoming
+        let mut inbox = self
+            .network
+            .0
+            .inbox
             .lock()
-            .map_err(|_| anyhow::anyhow!("Lightyear receiver lock is poisoned"))?;
-        self.inbox.extend(incoming.try_iter());
-        Ok(self.inbox.drain(..).collect())
+            .map_err(|_| anyhow::anyhow!("client inbox lock is poisoned"))?;
+        Ok(inbox.drain(..).collect())
     }
 
     pub fn shutdown(&mut self, store: &WorldStore) -> Result<()> {
@@ -230,265 +275,47 @@ impl LightyearGameSession {
         if let Some(world_save) = world_save {
             store.save_world(&world_save)?;
         }
+
         self.shutdown_transport()
     }
 
     fn shutdown_transport(&mut self) -> Result<()> {
-        let _ = self.command_tx.send(ClientCommand::Shutdown);
+        self.network
+            .0
+            .shutdown_request
+            .store(true, Ordering::Release);
+
+        // Poll for the main app's graceful disconnect. Sleeping is fine —
+        // this runs on the dedicated `game-session-shutdown` worker, not
+        // the main thread.
+        let deadline = Instant::now() + SHUTDOWN_WAIT_TIMEOUT;
+        while !self.network.0.shutdown_complete.load(Ordering::Acquire) && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(5));
+        }
 
         let mut local_server = self
             .local_server
             .lock()
             .map_err(|_| anyhow::anyhow!("game server handle lock is poisoned"))?;
-        if let Some(mut local_server) = local_server.take() {
-            local_server.shutdown()?;
-        }
-        drop(local_server);
-
-        let mut thread = self
-            .thread
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Lightyear game client thread lock is poisoned"))?;
-        if let Some(thread) = thread.take() {
-            thread
-                .join()
-                .map_err(|_| anyhow::anyhow!("Lightyear game client thread panicked"))?;
+        if let Some(mut handle) = local_server.take() {
+            handle.shutdown()?;
         }
         Ok(())
     }
 }
 
-fn wait_for_welcome(incoming: &Receiver<ServerMessage>) -> Result<VecDeque<ServerMessage>> {
-    let deadline = Instant::now() + AUTH_TIMEOUT;
-    let mut buffered = VecDeque::new();
-
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            bail!("Lightyear game server did not answer auth");
-        }
-
-        let message = incoming
-            .recv_timeout(remaining)
-            .context("Lightyear game server did not answer auth")?;
-        match message {
-            ServerMessage::Welcome { .. } => {
-                let mut inbox = VecDeque::from([message]);
-                inbox.extend(buffered);
-                return Ok(inbox);
-            }
-            ServerMessage::AuthRejected { reason } => bail!("auth rejected: {reason}"),
-            ServerMessage::Kicked { reason } => bail!("disconnected: {reason}"),
-            message => buffered.push_back(message),
-        }
-    }
-}
-
-impl Drop for LightyearGameSession {
+impl Drop for ClientSession {
     fn drop(&mut self) {
         let _ = self.shutdown_transport();
     }
 }
 
-#[derive(Debug)]
-enum ClientCommand {
-    Send(ClientMessage),
-    Shutdown,
-}
-
-#[derive(Resource)]
-struct ClientCommandInbox(Mutex<Receiver<ClientCommand>>);
-
-#[derive(Resource)]
-struct ClientIncoming(Sender<ServerMessage>);
-
-#[derive(Resource)]
-struct ClientAuth {
-    message: ClientMessage,
-    sent: bool,
-}
-
-#[derive(Resource, Default)]
-struct PendingClientMessages(VecDeque<ClientMessage>);
-
+/// Per-app heartbeat ticker. Lives outside `ClientNetwork` so the bg
+/// shutdown worker doesn't have to touch it.
 #[derive(Resource, Default)]
 struct ClientHeartbeat {
     elapsed: Duration,
-}
-
-#[derive(Resource, Default)]
-struct ClientShutdown {
-    requested: bool,
-    /// Update ticks that have elapsed since `requested` flipped to true.
-    /// `drive_shutdown` uses this to time the multi-phase graceful
-    /// disconnect (flush user message → netcode disconnect → flush UDP).
-    ticks_in_phase: u32,
-    /// True once `drive_shutdown` has triggered Lightyear's netcode
-    /// `Disconnect` event. After that point we are counting down ticks
-    /// to let the 10 netcode DISCONNECT packets reach the wire.
-    netcode_disconnect_issued: bool,
-}
-
-/// Update ticks to wait between queuing the app-level `Disconnect` message
-/// and triggering the netcode `Disconnect`. The reliable channel needs one
-/// PostUpdate to write the message into the UDP socket; the netcode layer
-/// stops accepting user packets the moment we call its `disconnect()`, so
-/// we must drain the user message first.
-const USER_DISCONNECT_FLUSH_TICKS: u32 = 2;
-
-/// Update ticks to wait after triggering the netcode `Disconnect` so the
-/// 10 redundant DISCONNECT packets can be drained from netcode's internal
-/// send queue into the UDP transport.
-const NETCODE_DISCONNECT_FLUSH_TICKS: u32 = 4;
-
-fn build_client_app(
-    server_addr: SocketAddr,
-    steam_id: u64,
-    auth_message: ClientMessage,
-    command_rx: Receiver<ClientCommand>,
-    incoming_tx: Sender<ServerMessage>,
-    key_context: PrivateKeyContext,
-) -> Result<App> {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(client::ClientPlugins {
-        tick_duration: Duration::from_secs_f32(1.0 / crate::protocol::SERVER_TICK_RATE_HZ),
-    });
-    app.add_plugins(LightyearProtocolPlugin);
-
-    let client_entity = app
-        .world_mut()
-        .spawn((
-            Name::new("Lightyear Game Client"),
-            LocalAddr(SocketAddr::from(([0, 0, 0, 0], 0))),
-            UdpIo::default(),
-            client::NetcodeClient::new(
-                Authentication::Manual {
-                    server_addr,
-                    client_id: steam_id,
-                    private_key: private_key(key_context),
-                    protocol_id: LIGHTYEAR_PROTOCOL_ID,
-                },
-                client::NetcodeConfig::default(),
-            )
-            .context("could not create Lightyear netcode client")?,
-        ))
-        .id();
-
-    app.insert_resource(ClientCommandInbox(Mutex::new(command_rx)));
-    app.insert_resource(ClientIncoming(incoming_tx));
-    app.insert_resource(ClientAuth {
-        message: auth_message,
-        sent: false,
-    });
-    app.insert_resource(PendingClientMessages::default());
-    app.insert_resource(ClientHeartbeat::default());
-    app.insert_resource(ClientShutdown::default());
-
-    app.add_systems(Startup, move |mut commands: Commands| {
-        commands.trigger(client::Connect {
-            entity: client_entity,
-        });
-    });
-    app.add_systems(
-        Update,
-        (
-            send_client_messages,
-            receive_server_messages,
-            report_client_disconnect,
-            drive_shutdown,
-        )
-            .chain(),
-    );
-    app.finish();
-    app.cleanup();
-
-    Ok(app)
-}
-
-fn run_client_app(app: &mut App) {
-    loop {
-        app.update();
-        {
-            let shutdown = app.world().resource::<ClientShutdown>();
-            // Only exit once the graceful disconnect has run to completion:
-            // netcode `Disconnect` must have been triggered AND enough ticks
-            // must have elapsed for the DISCONNECT packets to reach UDP.
-            // Otherwise the server will only learn about us leaving via the
-            // multi-second netcode connection timeout, which causes a fast
-            // reconnect to be rejected as "already connected".
-            if shutdown.netcode_disconnect_issued
-                && shutdown.ticks_in_phase >= NETCODE_DISCONNECT_FLUSH_TICKS
-            {
-                return;
-            }
-        }
-        thread::sleep(CLIENT_SLEEP);
-    }
-}
-
-fn send_client_messages(
-    time: Res<Time>,
-    inbox: Res<ClientCommandInbox>,
-    mut auth: ResMut<ClientAuth>,
-    mut pending: ResMut<PendingClientMessages>,
-    mut heartbeat: ResMut<ClientHeartbeat>,
-    mut shutdown: ResMut<ClientShutdown>,
-    mut clients: Query<(&mut MessageSender<ClientMessage>, Has<Connected>), With<client::Client>>,
-) {
-    let commands = {
-        let Ok(receiver) = inbox.0.lock() else {
-            shutdown.requested = true;
-            return;
-        };
-        receiver.try_iter().collect::<Vec<_>>()
-    };
-
-    for command in commands {
-        match command {
-            ClientCommand::Send(message) => pending.0.push_back(message),
-            ClientCommand::Shutdown => {
-                if !shutdown.requested {
-                    // Queue the app-level Disconnect so the server can clean
-                    // us up immediately on its message-handling path, in
-                    // addition to the netcode Disconnect that `drive_shutdown`
-                    // will issue a couple of ticks from now.
-                    pending.0.push_back(ClientMessage::Disconnect);
-                    shutdown.requested = true;
-                }
-            }
-        }
-    }
-
-    // Any non-heartbeat message implicitly proves the link is alive. Track
-    // whether we sent one this batch so the heartbeat timer only fires when
-    // we'd otherwise go silent — saves ~20 unreliable packets per minute
-    // during normal gameplay.
-    let sent_real_message = pending
-        .0
-        .iter()
-        .any(|message| !matches!(message, ClientMessage::Heartbeat));
-
-    for (mut sender, connected) in &mut clients {
-        if !connected {
-            continue;
-        }
-        if !auth.sent {
-            send_client_message(&mut sender, auth.message.clone());
-            auth.sent = true;
-        }
-        while let Some(message) = pending.0.pop_front() {
-            send_client_message(&mut sender, message);
-        }
-        if !auth.sent {
-            continue;
-        }
-        if sent_real_message {
-            heartbeat.note_traffic();
-        } else if heartbeat.tick(time.delta()) {
-            send_client_message(&mut sender, ClientMessage::Heartbeat);
-        }
-    }
 }
 
 impl ClientHeartbeat {
@@ -497,7 +324,6 @@ impl ClientHeartbeat {
         if self.elapsed < CLIENT_HEARTBEAT_INTERVAL {
             return false;
         }
-
         self.elapsed = Duration::ZERO;
         true
     }
@@ -510,46 +336,231 @@ impl ClientHeartbeat {
     }
 }
 
-fn receive_server_messages(
-    incoming: Res<ClientIncoming>,
+/// Internal state for the graceful disconnect state machine. Mirrors the
+/// shape of the old `ClientShutdown` resource in the standalone client App,
+/// but tracks the additional "auth has been sent at least once" flag so we
+/// can skip the user-disconnect flush when we never got past handshake.
+#[derive(Resource, Default)]
+struct ClientShutdownState {
+    in_progress: bool,
+    ticks_in_phase: u32,
+    netcode_disconnect_issued: bool,
+}
+
+/// Per-session bookkeeping kept on the Lightyear client entity. Records
+/// whether the auth handshake has been sent yet so the send pump only
+/// forwards it once per session.
+#[derive(Component, Default)]
+struct ClientAuthState {
+    sent: bool,
+}
+
+fn process_pending_connect_system(
+    mut commands: Commands,
+    network: Res<ClientNetwork>,
+    mut shutdown: ResMut<ClientShutdownState>,
+    existing: Query<Entity, With<client::Client>>,
+) {
+    let pending = {
+        let Ok(mut guard) = network.0.pending_connect.lock() else {
+            return;
+        };
+        guard.take()
+    };
+    let Some(pending) = pending else {
+        return;
+    };
+
+    // Tear down any prior session entity so a quick reconnect doesn't
+    // pile up Lightyear clients.
+    for entity in &existing {
+        commands.entity(entity).despawn();
+    }
+
+    *shutdown = ClientShutdownState::default();
+
+    let netcode = client::NetcodeClient::new(
+        Authentication::Manual {
+            server_addr: pending.server_addr,
+            client_id: pending.steam_id,
+            private_key: private_key(pending.key_context),
+            protocol_id: LIGHTYEAR_PROTOCOL_ID,
+        },
+        client::NetcodeConfig::default(),
+    );
+    let netcode = match netcode {
+        Ok(netcode) => netcode,
+        Err(error) => {
+            warn!("could not create Lightyear netcode client: {error}");
+            if let Ok(mut status) = network.0.status.lock() {
+                *status = ClientConnectionStatus::Disconnected(format!(
+                    "could not create Lightyear netcode client: {error}"
+                ));
+            }
+            return;
+        }
+    };
+
+    {
+        let Ok(mut outbox) = network.0.outbox.lock() else {
+            return;
+        };
+        outbox.push_front(pending.auth_message);
+    }
+
+    let entity = commands
+        .spawn((
+            Name::new("Lightyear Game Client"),
+            LocalAddr(SocketAddr::from(([0, 0, 0, 0], 0))),
+            UdpIo::default(),
+            netcode,
+            ClientAuthState::default(),
+        ))
+        .id();
+    commands.trigger(client::Connect { entity });
+}
+
+#[allow(clippy::type_complexity)]
+fn send_client_messages_system(
+    time: Res<Time>,
+    network: Res<ClientNetwork>,
+    mut heartbeat: ResMut<ClientHeartbeat>,
+    mut clients: Query<
+        (
+            &mut MessageSender<ClientMessage>,
+            &mut ClientAuthState,
+            Has<Connected>,
+        ),
+        With<client::Client>,
+    >,
+) {
+    let mut clients_iter = clients.iter_mut();
+    let Some((mut sender, mut auth, connected)) = clients_iter.next() else {
+        return;
+    };
+    if !connected {
+        return;
+    }
+
+    // Pull out everything queued so we can decide heartbeat behaviour
+    // before sending. Auth always rides at the head once we observe a
+    // `Connected` client; this matches the old "ClientAuth resource"
+    // sequence, and keeps reconnect deterministic.
+    let messages: Vec<ClientMessage> = {
+        let Ok(mut outbox) = network.0.outbox.lock() else {
+            return;
+        };
+        outbox.drain(..).collect()
+    };
+
+    let sent_real_message = messages
+        .iter()
+        .any(|message| !matches!(message, ClientMessage::Heartbeat));
+
+    for message in messages {
+        if !auth.sent {
+            // The auth message is pushed to the front of the outbox by
+            // `process_pending_connect_system`. Just track that we have
+            // sent at least one frame to the wire so the heartbeat
+            // accounting kicks in.
+            auth.sent = true;
+        }
+        send_client_message(&mut sender, message);
+    }
+
+    if sent_real_message {
+        heartbeat.note_traffic();
+    } else if auth.sent && heartbeat.tick(time.delta()) {
+        send_client_message(&mut sender, ClientMessage::Heartbeat);
+    }
+}
+
+fn receive_server_messages_system(
+    network: Res<ClientNetwork>,
     mut receivers: Query<&mut MessageReceiver<ServerMessage>, With<client::Client>>,
 ) {
+    let mut inbox_collected: Vec<ServerMessage> = Vec::new();
     for mut receiver in &mut receivers {
-        let messages: Vec<ServerMessage> = receiver.receive().collect();
-        for message in messages {
-            if incoming.0.send(message).is_err() {
-                return;
-            }
+        for message in receiver.receive() {
+            inbox_collected.push(message);
+        }
+    }
+    if inbox_collected.is_empty() {
+        return;
+    }
+
+    // Flip status to `Connected` the moment a Welcome lands so the UI's
+    // loading splash can transition to `Screen::InGame`. AuthRejected
+    // and Kicked propagate via the inbox to `ClientRuntime::apply_message`.
+    let mut connected_flip = false;
+    for message in &inbox_collected {
+        if matches!(message, ServerMessage::Welcome { .. }) {
+            connected_flip = true;
+            break;
+        }
+    }
+    if connected_flip
+        && let Ok(mut status) = network.0.status.lock()
+        && !matches!(*status, ClientConnectionStatus::Connected)
+    {
+        *status = ClientConnectionStatus::Connected;
+    }
+
+    let Ok(mut inbox) = network.0.inbox.lock() else {
+        return;
+    };
+    inbox.extend(inbox_collected);
+}
+
+fn report_client_disconnect_system(
+    network: Res<ClientNetwork>,
+    disconnected: Query<&client::Disconnected, (With<client::Client>, Added<client::Disconnected>)>,
+) {
+    for disconnected in &disconnected {
+        let reason = disconnected
+            .reason
+            .clone()
+            .unwrap_or_else(|| "disconnected".to_owned());
+        if let Ok(mut status) = network.0.status.lock() {
+            *status = ClientConnectionStatus::Disconnected(reason.clone());
+        }
+        // Surface as an AuthRejected event so existing UI handling
+        // (kick notice / toast) picks it up via the inbox path.
+        if let Ok(mut inbox) = network.0.inbox.lock() {
+            inbox.push_back(ServerMessage::AuthRejected { reason });
         }
     }
 }
 
-/// Drives the multi-phase graceful disconnect.
-///
-/// Phase 1 (ticks 0..USER_DISCONNECT_FLUSH_TICKS): after `Shutdown` has been
-/// requested we sit idle to let the reliable `ClientMessage::Disconnect`
-/// already queued in `send_client_messages` get drained through Lightyear's
-/// transport into UDP.
-///
-/// Phase 2 (after USER_DISCONNECT_FLUSH_TICKS): trigger Lightyear's netcode
-/// `Disconnect` on the client entity, which queues 10 redundant DISCONNECT
-/// packets and flips the netcode state to `Disconnected`. We then keep
-/// running update ticks (gated by `NETCODE_DISCONNECT_FLUSH_TICKS` in
-/// `run_client_app`) so PostUpdate's transport stage can flush those
-/// packets to the UDP socket before the thread exits.
-///
-/// Without this the server only sees the netcode connection time out
-/// (seconds later), so a fast reconnect would be rejected as "already
-/// connected".
-fn drive_shutdown(
+/// Drives the multi-phase graceful disconnect once `shutdown_request` is
+/// set. Same shape as the old standalone-app version: queue a reliable
+/// `Disconnect`, wait a couple of ticks for the user message to flush,
+/// trigger Lightyear's netcode disconnect, wait a few more ticks for the
+/// redundant DISCONNECT packets to leave the socket, then flip
+/// `shutdown_complete` so the worker thread can finish.
+fn drive_shutdown_system(
     mut commands: Commands,
-    mut shutdown: ResMut<ClientShutdown>,
+    network: Res<ClientNetwork>,
+    mut shutdown: ResMut<ClientShutdownState>,
     clients: Query<Entity, With<client::Client>>,
 ) {
-    if !shutdown.requested {
+    if !network.0.shutdown_request.load(Ordering::Acquire) {
         return;
     }
+    if !shutdown.in_progress {
+        shutdown.in_progress = true;
+        shutdown.ticks_in_phase = 0;
+        shutdown.netcode_disconnect_issued = false;
+        // Queue the app-level Disconnect so the server can clean us up
+        // immediately on its message-handling path, in addition to the
+        // netcode Disconnect we will issue a couple of ticks from now.
+        if let Ok(mut outbox) = network.0.outbox.lock() {
+            outbox.push_back(ClientMessage::Disconnect);
+        }
+    }
+
     shutdown.ticks_in_phase = shutdown.ticks_in_phase.saturating_add(1);
+
     if !shutdown.netcode_disconnect_issued && shutdown.ticks_in_phase >= USER_DISCONNECT_FLUSH_TICKS
     {
         for entity in &clients {
@@ -558,17 +569,31 @@ fn drive_shutdown(
         shutdown.netcode_disconnect_issued = true;
         shutdown.ticks_in_phase = 0;
     }
+
+    if shutdown.netcode_disconnect_issued
+        && shutdown.ticks_in_phase >= NETCODE_DISCONNECT_FLUSH_TICKS
+    {
+        for entity in &clients {
+            commands.entity(entity).despawn();
+        }
+        network.0.shutdown_complete.store(true, Ordering::Release);
+        // Leave `in_progress = true` so we stop firing on this session;
+        // a fresh `process_pending_connect_system` invocation resets it.
+        if let Ok(mut status) = network.0.status.lock() {
+            *status = ClientConnectionStatus::Idle;
+        }
+    }
 }
 
-fn report_client_disconnect(
-    incoming: Res<ClientIncoming>,
-    disconnected: Query<&client::Disconnected, (With<client::Client>, Added<client::Disconnected>)>,
-) {
-    for disconnected in &disconnected {
-        if let Some(reason) = &disconnected.reason {
-            let _ = incoming.0.send(ServerMessage::AuthRejected {
-                reason: reason.clone(),
-            });
-        }
+impl ClientNetwork {
+    /// Snapshot of the current connection state. Polled by the UI to
+    /// decide when a session has actually become live.
+    #[allow(dead_code)]
+    pub(crate) fn status(&self) -> ClientConnectionStatus {
+        self.0
+            .status
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
     }
 }

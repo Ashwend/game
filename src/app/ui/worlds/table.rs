@@ -4,6 +4,7 @@ use uuid::Uuid;
 use crate::{
     analytics::{Analytics, Event},
     app::state::{ConfirmationDialog, EditWorldDialog, MenuState, SaveStore, SteamUser},
+    net::ClientNetwork,
     save::{CorruptedWorld, WorldSummary},
 };
 
@@ -33,6 +34,7 @@ pub(super) fn draw_world_table(
     menu: &mut MenuState,
     store: &SaveStore,
     user: &SteamUser,
+    network: &ClientNetwork,
     analytics: &Analytics,
     table_height: f32,
 ) {
@@ -62,6 +64,7 @@ pub(super) fn draw_world_table(
                                 menu,
                                 store,
                                 user,
+                                network,
                                 analytics,
                                 world,
                                 table_content_width,
@@ -124,11 +127,13 @@ pub(super) fn draw_world_headers(ui: &mut egui::Ui) {
     ui.add_space(6.0);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_world_row(
     ui: &mut egui::Ui,
     menu: &mut MenuState,
     store: &SaveStore,
     user: &SteamUser,
+    network: &ClientNetwork,
     analytics: &Analytics,
     world: WorldSummary,
     row_outer_width: f32,
@@ -201,7 +206,7 @@ fn draw_world_row(
     );
     if start_response.clicked() && starting_world.is_none() {
         analytics.track(Event::WorldLoaded);
-        start_singleplayer_in_background(menu, store, user, world.id);
+        start_singleplayer_in_background(menu, store, user, network, world.id);
     }
     if theme::compact_button_in_rect(
         ui,
