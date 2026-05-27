@@ -10,6 +10,12 @@ default = []
 steam = ["lightyear/steam"]
 # Dev-only. Speeds up local iteration; do not enable for release builds.
 dev-fast = ["bevy/dynamic_linking"]
+# Dev-only diagnostic. Logs every server-side mutation of replicated
+# resource-node components and every client-side reception of the same.
+# Used to verify whether Lightyear's per-component replication path is
+# actually delivering updates after the initial spawn. Off by default —
+# the logs are noisy enough to obscure real signal under normal play.
+replication-trace = []
 # Phase 4 migration A/B switch. When enabled, the resource-node client
 # consumer reads Lightyear-replicated `ResourceNode` entities instead of
 # `WorldSnapshot::resource_nodes`. Snapshot data still ships either way

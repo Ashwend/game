@@ -407,6 +407,15 @@ fn sync_resource_node_entities(world: &mut World) {
                     world.get_mut::<crate::server::ResourceNodeStorage>(entity)
                     && storage.0 != state.storage
                 {
+                    #[cfg(feature = "replication-trace")]
+                    {
+                        let before: u16 = storage.0.iter().map(|s| s.quantity).sum();
+                        let after: u16 = state.storage.iter().map(|s| s.quantity).sum();
+                        info!(
+                            target: "replication_trace",
+                            "server: ResourceNodeStorage MUTATE id={id} entity={entity:?} {before} -> {after}"
+                        );
+                    }
                     storage.0 = state.storage;
                 }
             }

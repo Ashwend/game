@@ -11,6 +11,8 @@ mod network;
 pub(crate) mod node_death;
 mod players;
 mod quit;
+#[cfg(feature = "replication-trace")]
+pub(crate) mod replication_trace;
 mod settings;
 mod test_mode;
 

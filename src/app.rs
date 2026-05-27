@@ -287,6 +287,14 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .add_plugins(client_plugins())
         .add_plugins(LightyearProtocolPlugin)
         .add_plugins(ClientNetworkPlugin);
+    #[cfg(feature = "replication-trace")]
+    {
+        use self::systems::replication_trace::{
+            ReplicationTraceState, log_replicated_storage_changes_system,
+        };
+        app.init_resource::<ReplicationTraceState>()
+            .add_systems(Update, log_replicated_storage_changes_system);
+    }
     // `./cli profile` (Cargo feature `profile`): pair the Chrome trace
     // emitted by `bevy/trace_chrome` with text diagnostics so the log shows
     // FPS, frame time, entity count, and CPU/RAM alongside the spans. Gated
