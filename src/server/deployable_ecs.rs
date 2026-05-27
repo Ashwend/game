@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     items::{DeployableKind, ItemId},
@@ -24,18 +25,27 @@ use crate::{
 /// Identity + immutable-after-spawn fields. `item_id`, `kind`, and
 /// `max_health` never change after placement, so this component stays
 /// quiet on the change-detection front.
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Deployable {
     pub id: DeployedEntityId,
+    #[serde(deserialize_with = "deserialize_interned_item_id")]
     pub item_id: ItemId,
     pub kind: DeployableKind,
     pub max_health: u32,
 }
 
+fn deserialize_interned_item_id<'de, D>(deserializer: D) -> Result<ItemId, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = <String as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(crate::items::intern_item_id(&raw))
+}
+
 /// Placement pose. Static after placement (deployables don't move), but
 /// kept on its own component so the snapshot/replication path can read
 /// it without pulling the rest of the entity.
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct DeployableTransform {
     pub position: Vec3Net,
     pub yaw: f32,
@@ -44,13 +54,13 @@ pub struct DeployableTransform {
 /// Mutable HP — damage taken by the structure. Replicated to all players
 /// in the same chunk room so they can see the destruction animation
 /// trigger when it hits zero.
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct DeployableHealth(pub u32);
 
 /// Public "is it doing work?" flag — drives furnace glow/smoke on the
 /// client. Always `false` for kinds that have no active state
 /// (workbench).
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct DeployableActive(pub bool);
 
 /// Anchor chunk for room subscription.

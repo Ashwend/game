@@ -133,7 +133,7 @@ Docs:
 | 2   | ECS mirror for dropped items, deployables, players             | ✅ done     |
 | 3   | Merge Lightyear client into main Bevy app                      | ✅ done     |
 | 4   | Wire chunk rooms for resource nodes                            | ✅ done     |
-| 5   | Chunk rooms for dropped items, deployables, players            | ⏳ pending  |
+| 5   | Chunk rooms for dropped items, deployables, players            | ✅ done     |
 | 6   | Delete `WorldSnapshot`, save-version bump, cleanup             | ⏳ pending  |
 | 1b  | Fold `resource_nodes` HashMap into entities (cleanup)          | ⏳ pending  |
 
@@ -578,74 +578,145 @@ Tests, lint, and `./cli check` are clean on both feature configurations
 
 ## Phase 5 — Chunk rooms for dropped items, deployables, players
 
-**Status**: ⏳ pending · blocked by Phase 4
+**Status**: ✅ done
 
-### Goal
+### What landed
 
-Apply the same Phase 4 pattern to the remaining replicated entity types. The
-infrastructure (`RoomPlugin`, `ChunkRoomMap`, sender subscriptions) already
-exists from Phase 4 — only the per-entity-type wiring is new.
+Phase 4's room infrastructure now covers every networked entity type. The
+`replicated-nodes` feature flag still toggles the client consumers; with
+the flag, every visual driver (resource nodes, dropped items, deployables,
+remote players) reads from Lightyear-replicated entities rather than
+`WorldSnapshot`. The snapshot path keeps shipping in parallel until
+Phase 6 deletes it.
 
-### Approach
+Server side ([src/net/host.rs](src/net/host.rs)):
 
-- **Dropped items**: identical to resource nodes. `Replicate::to_clients(NetworkTarget::None)`
-  + `Rooms::single(chunk_room_id)` on entity spawn in
-  [src/server/dropped_item_ecs.rs](src/server/dropped_item_ecs.rs). Chunk
-  membership updates from the existing
-  `chunk_manager.update_dropped_item_chunk`.
-- **Deployables**: same.
-- **Players** — the trickier case. Two layers:
-  - **`PlayerPublic`** replicates to **all clients in the room**:
-    `Replicate::to_clients(NetworkTarget::AllExcept(owner))` —
-    everyone except the owning client (who reads their own state from
-    `PlayerController` prediction, not from the wire).
-  - **`PlayerPrivate`** replicates only to the **owning client**:
-    `Replicate::to_clients(NetworkTarget::Single(client_id))`. Inventory,
-    crafting, open furnace — never visible to peers.
-  - Both components live on the same player entity, so the entity is in
-    the chunk room; Lightyear's per-component target shapes who actually
-    gets it.
+- `attach_node_replication` was generalised and renamed to
+  `attach_room_gated_replication`. It now backs every static / room-only
+  entity type (resource nodes, dropped items, deployables) —
+  `Replicate::to_clients(NetworkTarget::None) + NetworkVisibility +
+  RoomEvent::AddEntity`.
+- `attach_player_replication` is new and handles the player public/private
+  split. The entity uses `Replicate::to_clients(NetworkTarget::All)` (so
+  the universe of senders is "everyone connected") and
+  `NetworkVisibility` (so the room narrows to the chunk). Then a
+  `ComponentReplicationOverrides<PlayerPrivate>` component is attached on
+  the entity, configured `.disable_all().enable_for(owner_sender)`.
+  Result: peers in the chunk room receive `PlayerPublic` but never the
+  inventory/crafting bytes of someone else's `PlayerPrivate`.
+- `move_entity_between_rooms` handles dynamic chunk transitions
+  (`RemoveEntity` from the old chunk's Room, `AddEntity` to the new
+  chunk's Room). `sync_dropped_item_entities` calls it when the
+  authoritative `dropped_item_chunk` for a live id changes (physics
+  body rolled); `sync_player_entities` calls it on player chunk
+  crossings. Each call also updates the local `*Chunk` mirror component
+  on the entity. Resource nodes and deployables are static and skip
+  this path.
+
+Protocol registration ([src/net/channels.rs](src/net/channels.rs)):
+
+- Registered `DroppedItem`, `DroppedItemTransform`, `Deployable`,
+  `DeployableTransform`, `DeployableHealth`, `DeployableActive`, `Player`,
+  `PlayerPublic`, `PlayerPrivate` alongside the Phase 4 resource-node
+  pair. Every component now Serde+PartialEq (added via derive) so they
+  meet Lightyear's `register_component` trait bounds. `Deployable` uses
+  the same `deserialize_interned_item_id` helper as the other
+  `ItemId`-bearing wire types so peers and host agree on the interned
+  string.
+
+Client consumers (all under `#[cfg(feature = "replicated-nodes")]`):
+
+- [src/app/systems/items/dropped.rs](src/app/systems/items/dropped.rs) —
+  `collect_dropped_items` returns `Vec<(DroppedWorldItem, tick)>` from
+  either source. Under the flag the per-id tick is
+  `Ref::<DroppedItemTransform>::last_changed().get() as u64`, so
+  interpolation `retarget` fires only on real transform changes. Without
+  the flag the tick is `snapshot.tick` for every item (legacy behaviour).
+- [src/app/systems/deployables.rs](src/app/systems/deployables.rs) —
+  `collect_deployed_entities` materialises a `Vec<DeployedEntityState>`
+  from the four-component replicated query (`Deployable`,
+  `DeployableTransform`, `DeployableHealth`, `DeployableActive`) under
+  the flag, or copies `snapshot.deployed_entities` without it.
+- [src/app/systems/players.rs](src/app/systems/players.rs) —
+  `collect_remote_players` returns a minimal `RemotePlayerSample` (id,
+  position, yaw, per-id tick) from either source. The retired
+  snapshot-driven unit test
+  (`apply_snapshot_spawns_updates_and_removes_remote_players`) is gated
+  off with `#[cfg(not(feature = "replicated-nodes"))]` — the equivalent
+  test against the replicated path needs a real Lightyear plugin set up
+  and is out of scope for a unit test; Phase 6 deletes that test along
+  with the snapshot path.
+
+Tests / lint / check pass on both feature configurations:
+- default: 466 tests pass; `./cli check` / `./cli lint` clean.
+- `--features replicated-nodes`: 465 tests pass (one snapshot-only test
+  gated); `cargo check` / `cargo clippy --all-targets -- -D warnings`
+  clean.
 
 ### Key design decisions
 
-- **Two-component player replication.** This is exactly why we did the
-  public/private split in Phase 2. The wire shape becomes "any peer in
-  range sees `PlayerPublic`; only you see your `PlayerPrivate`". This is
-  more efficient than the current snapshot path (which still serializes
-  the full `PlayerState` per peer, with `inventory: None` for peers — but
-  the wire is paying for the `None`).
-- **Local player visibility.** The owning client's own `PlayerPublic`
-  doesn't need to come over the wire — local prediction owns position. Use
-  `NetworkTarget::AllExcept(owner)` so the owner skips the public state for
-  themselves.
+- **`ComponentReplicationOverrides<PlayerPrivate>` rather than two
+  entities.** Lightyear 0.26's `Replicate` is per-entity; per-component
+  per-sender control is handled via the overrides component. That kept
+  the player ECS shape we already had from Phase 2 (one entity, two
+  payload components, one chunk component) instead of needing a second
+  "private mirror" entity.
+- **Owner sender is captured at spawn.** The override stores a sender
+  entity, so the overrides are recomputed when a player respawns (which
+  happens any time `sync_player_entities` despawns and re-spawns the
+  entity, e.g. reconnect). For the steady-state case where the sender
+  entity hasn't changed the overrides stay valid.
+- **Move events, not despawn/respawn.** When an entity changes chunks
+  we trigger `RemoveEntity` then `AddEntity` on the room machinery.
+  Lightyear's `RoomEvents::shared_counts` makes simultaneous
+  remove/add a no-op visibility-wise for senders subscribed to both
+  rooms — peers walking across the same boundary see no flicker.
+- **Per-id ticks via `Ref::last_changed()`.** Avoids the
+  always-retarget pitfall (elapsed resets every frame → broken
+  interpolation timing). Bevy's change tick advances only when the
+  component is mutated, so `retarget`'s `tick <= self.snapshot_tick`
+  guard is now correct under replication too.
 
 ### Open / deferred
 
-- **Voice frames** are not in the room/replication path. They stay on the
-  unreliable `VoiceChannel` and are gated by distance check, not chunk
-  membership. No change needed here.
-- **Chat bubbles** are inside `PlayerPublic.chat_bubble` so they ride along
-  with the public component automatically.
+- **Inventory / crafting UI still reads `runtime.snapshot`.** The owner's
+  `PlayerPrivate` is on the replicated entity but the inventory hotbar
+  consumer, crafting queue UI, and open-furnace UI still pull from the
+  snapshot path. Phase 6 retargets these to query the replicated
+  `PlayerPrivate` component of the local player.
+- **Resource node `respawn_progress`** is still snapshot-only, same
+  caveat as Phase 4.
+- **Voice frames** stay on the unreliable `VoiceChannel` — distance-
+  gated, not chunk-gated. No change.
 
-### Files touched (expected)
+### Files touched
 
-- [src/server/dropped_item_ecs.rs](src/server/dropped_item_ecs.rs)
-- [src/server/deployable_ecs.rs](src/server/deployable_ecs.rs)
-- [src/server/player_ecs.rs](src/server/player_ecs.rs)
-- [src/app/systems/players.rs](src/app/systems/players.rs) — consumer for `PlayerPublic`
-- [src/app/systems/items/dropped.rs](src/app/systems/items/dropped.rs) — consumer for `DroppedItem`
-- [src/app/systems/deployables.rs](src/app/systems/deployables.rs) — consumer for `Deployable`
-- Wherever `runtime.snapshot.players` / `dropped_items` / `deployed_entities`
-  is read on the client.
+- [src/net/channels.rs](src/net/channels.rs) — register the 9 new
+  components.
+- [src/net/host.rs](src/net/host.rs) — generalise
+  `attach_room_gated_replication`, add `attach_player_replication`, add
+  `move_entity_between_rooms`, handle chunk transitions in the dropped-
+  item and player mirror systems.
+- [src/server/dropped_item_ecs.rs](src/server/dropped_item_ecs.rs),
+  [src/server/deployable_ecs.rs](src/server/deployable_ecs.rs),
+  [src/server/player_ecs.rs](src/server/player_ecs.rs) — `PartialEq +
+  Serialize + Deserialize` derives, `deserialize_interned_item_id` for
+  `Deployable.item_id`.
+- [src/app/systems/items/dropped.rs](src/app/systems/items/dropped.rs),
+  [src/app/systems/deployables.rs](src/app/systems/deployables.rs),
+  [src/app/systems/players.rs](src/app/systems/players.rs) — feature-
+  gated input collectors and per-id tick wiring.
 
-### Verification
+### Verification (still pending manual)
 
-- Connect 2 clients in MP; one drops an item, the other walks into the
-  chunk → drop appears.
-- One deploys a workbench, peer enters chunk → workbench appears with
-  correct health.
-- Owner sees their own inventory; peer entry for the same player has no
-  inventory data (verify with debug print).
+- 2-client MP: drop an item; second client walks into the chunk → drop
+  appears, walks out → drop despawns.
+- 2-client MP: place a workbench; second client enters chunk → workbench
+  visible with health; first client damages it → second client's health
+  reading updates.
+- 2-client MP: open inventory locally → still works. Peer's player
+  entity on the local world has `PlayerPrivate` absent (`Query::<&PlayerPrivate>`
+  returns one entry — your own).
 
 ---
 

@@ -28,7 +28,8 @@ use crate::{
         systems::input::send_place_deployable_command,
     },
     items::{DeployableKind, DeployableProfile, ItemId, ItemModel, item_definition},
-    protocol::{DeployedEntityId, PlaceDeployableCommand, Vec3Net},
+    protocol::{DeployedEntityId, DeployedEntityState, PlaceDeployableCommand, Vec3Net},
+    server::{Deployable, DeployableActive, DeployableHealth, DeployableTransform},
 };
 
 /// Maximum distance, in metres, between the player's feet and the
@@ -169,16 +170,23 @@ pub(crate) fn apply_deployed_entities_system(
     assets: Option<Res<DeployableVisualAssets>>,
     existing: Query<(Entity, &NetworkDeployedEntity)>,
     existing_lights: Query<(Entity, &ChildOf), With<FurnaceMouthLight>>,
+    replicated: Query<(
+        &Deployable,
+        &DeployableTransform,
+        &DeployableHealth,
+        &DeployableActive,
+    )>,
 ) {
     let Some(assets) = assets else {
         return;
     };
-    let Some(snapshot) = runtime.snapshot.as_ref() else {
+    if runtime.snapshot.is_none() {
         for (entity, _) in &existing {
             commands.entity(entity).despawn();
         }
         return;
-    };
+    }
+    let deployed = collect_deployed_entities(&runtime, &replicated);
 
     let mut existing_by_id: HashMap<DeployedEntityId, Entity> = existing
         .iter()
@@ -195,7 +203,7 @@ pub(crate) fn apply_deployed_entities_system(
         lights_by_parent.insert(child_of.parent(), light_entity);
     }
 
-    for state in &snapshot.deployed_entities {
+    for state in &deployed {
         snapshot_ids.insert(state.id);
         let transform = deployable_transform(state.position.into(), state.yaw);
         let parent_entity = if let Some(entity) = existing_by_id.remove(&state.id) {
@@ -238,6 +246,47 @@ pub(crate) fn apply_deployed_entities_system(
     // sweep here just in case.
     for (_, light_entity) in lights_by_parent {
         commands.entity(light_entity).despawn();
+    }
+}
+
+/// Phase 5 A/B switch: under `replicated-nodes`, materialise the
+/// deployable list from replicated entities; otherwise read the
+/// snapshot. Returns the same `DeployedEntityState` wire shape either
+/// way so the rest of the system doesn't branch on the feature flag.
+fn collect_deployed_entities(
+    runtime: &ClientRuntime,
+    replicated: &Query<(
+        &Deployable,
+        &DeployableTransform,
+        &DeployableHealth,
+        &DeployableActive,
+    )>,
+) -> Vec<DeployedEntityState> {
+    #[cfg(feature = "replicated-nodes")]
+    {
+        let _ = runtime;
+        replicated
+            .iter()
+            .map(|(meta, transform, health, active)| DeployedEntityState {
+                id: meta.id,
+                item_id: meta.item_id.clone(),
+                kind: meta.kind,
+                position: transform.position,
+                yaw: transform.yaw,
+                health: health.0,
+                max_health: meta.max_health,
+                active: active.0,
+            })
+            .collect()
+    }
+    #[cfg(not(feature = "replicated-nodes"))]
+    {
+        let _ = replicated;
+        runtime
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.deployed_entities.clone())
+            .unwrap_or_default()
     }
 }
 

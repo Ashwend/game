@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     protocol::{DroppedItemId, DroppedWorldItem, ItemStack, QuatNet, Vec3Net},
@@ -20,7 +21,10 @@ use crate::{
 /// only change when the server merges nearby drops (rare, low-frequency
 /// event), so keeping them on the same component is fine — Lightyear's
 /// per-component change detection still fires only when a merge happens.
-#[derive(Component, Debug, Clone)]
+///
+/// `Serialize`/`Deserialize`/`PartialEq` are required by Lightyear's
+/// component replication (Phase 5).
+#[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DroppedItem {
     pub id: DroppedItemId,
     pub stack: ItemStack,
@@ -31,7 +35,7 @@ pub struct DroppedItem {
 /// every tick a drop is settling and stops changing once the drop comes
 /// to rest. Split from [`DroppedItem`] so Lightyear's per-component delta
 /// stream only ships transform updates while the body is moving.
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct DroppedItemTransform {
     pub position: Vec3Net,
     pub yaw: f32,

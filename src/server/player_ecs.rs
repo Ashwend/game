@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     protocol::{
@@ -26,16 +27,16 @@ use crate::{
 /// Identity. Immutable after spawn. The wire-stable `client_id` is the
 /// link back to the Lightyear `ClientOf` connection entity, and is what
 /// every gameplay message refers to.
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Player {
     pub client_id: ClientId,
     pub steam_id: SteamId,
 }
 
 /// Player state that every peer in the same chunk room can see. Phase 5
-/// will mark this with `Replicate::to_clients(NetworkTarget::All)` and
-/// let Lightyear handle delta/visibility.
-#[derive(Component, Debug, Clone, PartialEq)]
+/// marks this with `Replicate::to_clients(NetworkTarget::All)` and lets
+/// the room machinery + `NetworkVisibility` gate per-client.
+#[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerPublic {
     pub name: String,
     pub position: Vec3Net,
@@ -52,9 +53,11 @@ pub struct PlayerPublic {
 }
 
 /// Player state that only the owning client should ever see. Phase 5
-/// will mark this with `Replicate::to_clients(NetworkTarget::Single(id))`
-/// so peers don't get the owning player's inventory.
-#[derive(Component, Debug, Clone, PartialEq)]
+/// pairs the entity-level `Replicate` (broadcast to all clients in the
+/// chunk room) with a per-component `ComponentReplicationOverrides<PlayerPrivate>`
+/// that disables this component for every sender except the owning
+/// client's link entity. Peers therefore never receive the wire bytes.
+#[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerPrivate {
     pub inventory: PlayerInventoryState,
     pub crafting: PlayerCraftingState,

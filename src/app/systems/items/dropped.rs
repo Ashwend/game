@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use bevy::{light::NotShadowCaster, prelude::*};
+use bevy::{ecs::change_detection::Ref, light::NotShadowCaster, prelude::*};
 
 use crate::{
     app::{
@@ -8,6 +8,7 @@ use crate::{
         state::ClientRuntime,
     },
     protocol::{DroppedItemId, DroppedWorldItem, QuatNet},
+    server::{DroppedItem, DroppedItemTransform},
 };
 
 const DROPPED_ITEM_INTERPOLATION_SECONDS: f32 = 0.1;
@@ -45,19 +46,24 @@ pub(crate) fn apply_dropped_items_system(
         (&Transform, &mut DroppedItemInterpolation),
         With<NetworkDroppedItem>,
     >,
+    replicated: Query<(&DroppedItem, Ref<DroppedItemTransform>)>,
 ) {
-    let Some(snapshot) = &runtime.snapshot else {
+    // Phase 5 A/B switch: under `replicated-nodes`, source from Lightyear
+    // replicated entities; otherwise read `WorldSnapshot::dropped_items`.
+    // The same `Vec<(DroppedWorldItem, tick)>` shape feeds either path —
+    // pop-in, despawn, and distance-gated interpolation logic below are
+    // identical for both. The session-present guard remains
+    // `runtime.snapshot.is_some()` (an empty snapshot still flags
+    // "in-session"), so the disconnect cleanup still fires correctly.
+    if runtime.snapshot.is_none() {
         for (_, entity) in entities.0.drain() {
             commands.entity(entity).despawn();
         }
         return;
-    };
+    }
+    let items = collect_dropped_items(&runtime, &replicated);
 
-    // Single pass over the snapshot — spawn missing items, update existing
-    // ones. We never rebuild the `HashMap` from a Query iteration; the
-    // resource map already mirrors the live entity set.
-    let snapshot_ids: HashSet<DroppedItemId> =
-        snapshot.dropped_items.iter().map(|item| item.id).collect();
+    let snapshot_ids: HashSet<DroppedItemId> = items.iter().map(|(item, _)| item.id).collect();
     let entities = &mut *entities;
     // Camera anchor for the per-item distance gate. Reuse the same eye
     // position the rest of the client uses (player position + EYE_HEIGHT)
@@ -69,11 +75,11 @@ pub(crate) fn apply_dropped_items_system(
         DROPPED_ITEM_INTERPOLATION_MAX_DISTANCE_M * DROPPED_ITEM_INTERPOLATION_MAX_DISTANCE_M;
 
     let mut spawn_budget = MAX_DROPPED_ITEM_SPAWNS_PER_FRAME;
-    for item in &snapshot.dropped_items {
+    for (item, item_tick) in &items {
         let target = dropped_item_transform(item);
         if let Some(entity) = entities.0.get(&item.id).copied() {
             if let Ok((current, mut interpolation)) = dropped_entities.get_mut(entity) {
-                interpolation.retarget(snapshot.tick, current, target);
+                interpolation.retarget(*item_tick, current, target);
                 // Far items skip the per-frame blend — at horizon edge a
                 // sub-100 ms lerp is invisible and we'd burn a slerp per
                 // item per frame. Near items keep the smoothing so a
@@ -102,7 +108,7 @@ pub(crate) fn apply_dropped_items_system(
                 .spawn((
                     Name::new(format!("Dropped Item {}", item.id)),
                     NetworkDroppedItem { id: item.id },
-                    DroppedItemInterpolation::new(snapshot.tick, target),
+                    DroppedItemInterpolation::new(*item_tick, target),
                     Mesh3d(assets.dropped_mesh.clone()),
                     MeshMaterial3d(assets.dropped_material.clone()),
                     target,
@@ -127,6 +133,52 @@ pub(crate) fn apply_dropped_items_system(
             false
         }
     });
+}
+
+/// Source the per-tick dropped-item list. Under `replicated-nodes` the
+/// list comes from Lightyear-replicated entities (one per visible drop)
+/// with a per-id Bevy change tick — `retarget` only fires when the
+/// transform actually mutated. Without the flag, the snapshot's per-tick
+/// id is shared by every item, matching the old behaviour.
+fn collect_dropped_items(
+    runtime: &ClientRuntime,
+    replicated: &Query<(&DroppedItem, Ref<DroppedItemTransform>)>,
+) -> Vec<(DroppedWorldItem, u64)> {
+    #[cfg(feature = "replicated-nodes")]
+    {
+        let _ = runtime;
+        replicated
+            .iter()
+            .map(|(drop, transform)| {
+                let tick = transform.last_changed().get() as u64;
+                (
+                    DroppedWorldItem {
+                        id: drop.id,
+                        stack: drop.stack.clone(),
+                        position: transform.position,
+                        yaw: transform.yaw,
+                        rotation: transform.rotation,
+                    },
+                    tick,
+                )
+            })
+            .collect()
+    }
+    #[cfg(not(feature = "replicated-nodes"))]
+    {
+        let _ = replicated;
+        runtime
+            .snapshot
+            .as_ref()
+            .map(|snapshot| {
+                snapshot
+                    .dropped_items
+                    .iter()
+                    .map(|item| (item.clone(), snapshot.tick))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Component, Debug, Clone, Copy)]

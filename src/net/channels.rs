@@ -11,7 +11,11 @@ use lightyear::prelude::{
 
 use crate::{
     protocol::{ClientMessage, PROTOCOL_VERSION, PacketDelivery, ServerMessage},
-    server::{ResourceNode, ResourceNodeStorage},
+    server::{
+        Deployable, DeployableActive, DeployableHealth, DeployableTransform, DroppedItem,
+        DroppedItemTransform, Player, PlayerPrivate, PlayerPublic, ResourceNode,
+        ResourceNodeStorage,
+    },
 };
 
 pub(crate) const LIGHTYEAR_PROTOCOL_ID: u64 = PROTOCOL_VERSION as u64;
@@ -56,12 +60,21 @@ impl Plugin for LightyearProtocolPlugin {
         app.register_message::<ServerMessage>()
             .add_direction(NetworkDirection::ServerToClient);
 
-        // Phase 4: register the resource-node components so they replicate
+        // Phase 4/5: register the entity-state components so they replicate
         // through Lightyear instead of riding `WorldSnapshot`. Both the
         // server (which spawns the entities) and the client (which receives
         // them) need the same registry so the wire bytes round-trip.
         app.register_component::<ResourceNode>();
         app.register_component::<ResourceNodeStorage>();
+        app.register_component::<DroppedItem>();
+        app.register_component::<DroppedItemTransform>();
+        app.register_component::<Deployable>();
+        app.register_component::<DeployableTransform>();
+        app.register_component::<DeployableHealth>();
+        app.register_component::<DeployableActive>();
+        app.register_component::<Player>();
+        app.register_component::<PlayerPublic>();
+        app.register_component::<PlayerPrivate>();
     }
 }
 

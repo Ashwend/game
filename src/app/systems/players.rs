@@ -1,8 +1,11 @@
 use std::collections::HashSet;
 
-use bevy::prelude::*;
+use bevy::{ecs::change_detection::Ref, prelude::*};
 
-use crate::protocol::ClientId;
+use crate::{
+    protocol::{ClientId, Vec3Net},
+    server::{Player, PlayerPublic},
+};
 
 use super::super::{
     scene::{NetworkPlayer, PlayerVisualAssets, player_visual_position},
@@ -25,24 +28,25 @@ pub(crate) fn apply_snapshot_system(
     assets: Res<PlayerVisualAssets>,
     mut entities: ResMut<RemotePlayerEntities>,
     mut players: Query<(&Transform, &mut NetworkPlayerInterpolation), With<NetworkPlayer>>,
+    replicated: Query<(&Player, Ref<PlayerPublic>)>,
 ) {
-    let Some(snapshot) = &runtime.snapshot else {
+    if runtime.snapshot.is_none() {
         for (_, entity) in entities.0.drain() {
             commands.entity(entity).despawn();
         }
         return;
-    };
+    }
 
     let local_client_id = runtime.client_id;
-    let snapshot_remote_ids: HashSet<ClientId> = snapshot
-        .players
+    let players_in = collect_remote_players(&runtime, &replicated);
+    let snapshot_remote_ids: HashSet<ClientId> = players_in
         .iter()
-        .filter(|player| Some(player.client_id) != local_client_id)
-        .map(|player| player.client_id)
+        .filter(|p| Some(p.client_id) != local_client_id)
+        .map(|p| p.client_id)
         .collect();
     let entities = &mut *entities;
 
-    for player in &snapshot.players {
+    for player in &players_in {
         if Some(player.client_id) == local_client_id {
             continue;
         }
@@ -51,7 +55,7 @@ pub(crate) fn apply_snapshot_system(
             .with_rotation(Quat::from_rotation_y(player.yaw));
         if let Some(entity) = entities.0.get(&player.client_id).copied() {
             if let Ok((current, mut interpolation)) = players.get_mut(entity) {
-                interpolation.retarget(snapshot.tick, current, target);
+                interpolation.retarget(player.tick, current, target);
                 let transform = interpolation.advance(time.delta_secs());
                 commands.entity(entity).insert(transform);
             }
@@ -62,7 +66,7 @@ pub(crate) fn apply_snapshot_system(
                     NetworkPlayer {
                         client_id: player.client_id,
                     },
-                    NetworkPlayerInterpolation::new(snapshot.tick, target),
+                    NetworkPlayerInterpolation::new(player.tick, target),
                     Mesh3d(assets.mesh.clone()),
                     MeshMaterial3d(assets.remote_material.clone()),
                     target,
@@ -81,6 +85,57 @@ pub(crate) fn apply_snapshot_system(
             false
         }
     });
+}
+
+/// Minimal view of a remote player needed by `apply_snapshot_system`.
+/// Keeps the feature-gated input source decoupled from the full
+/// `PlayerState` wire shape — only the visual-driver fields are
+/// included, plus a per-id `tick` so the interpolator knows when to
+/// retarget.
+struct RemotePlayerSample {
+    client_id: ClientId,
+    position: Vec3Net,
+    yaw: f32,
+    tick: u64,
+}
+
+fn collect_remote_players(
+    runtime: &ClientRuntime,
+    replicated: &Query<(&Player, Ref<PlayerPublic>)>,
+) -> Vec<RemotePlayerSample> {
+    #[cfg(feature = "replicated-nodes")]
+    {
+        let _ = runtime;
+        replicated
+            .iter()
+            .map(|(player, public)| RemotePlayerSample {
+                client_id: player.client_id,
+                position: public.position,
+                yaw: public.yaw,
+                tick: public.last_changed().get() as u64,
+            })
+            .collect()
+    }
+    #[cfg(not(feature = "replicated-nodes"))]
+    {
+        let _ = replicated;
+        runtime
+            .snapshot
+            .as_ref()
+            .map(|snapshot| {
+                snapshot
+                    .players
+                    .iter()
+                    .map(|player| RemotePlayerSample {
+                        client_id: player.client_id,
+                        position: player.position,
+                        yaw: player.yaw,
+                        tick: snapshot.tick,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Component, Debug, Clone, Copy)]
@@ -128,8 +183,10 @@ impl NetworkPlayerInterpolation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{ClientId, MAX_HEALTH, PlayerState, SteamId, Vec3Net, WorldSnapshot};
+    #[cfg(not(feature = "replicated-nodes"))]
+    use crate::protocol::{MAX_HEALTH, PlayerState, SteamId, Vec3Net, WorldSnapshot};
 
+    #[cfg(not(feature = "replicated-nodes"))]
     fn player(client_id: ClientId, steam_id: SteamId, position: Vec3Net, yaw: f32) -> PlayerState {
         PlayerState {
             client_id,
@@ -150,6 +207,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "replicated-nodes"))]
     fn app_with_snapshot(snapshot: Option<WorldSnapshot>, client_id: Option<ClientId>) -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -167,6 +225,12 @@ mod tests {
         app
     }
 
+    // Snapshot-driven path. Under `replicated-nodes` the consumer reads
+    // from Lightyear-replicated `(Player, PlayerPublic)` entities instead;
+    // exercising that path needs the replication plugin spun up, which is
+    // out of scope for this unit test. Phase 6 will retire the snapshot
+    // path entirely and either delete this test or repoint it.
+    #[cfg(not(feature = "replicated-nodes"))]
     #[test]
     fn apply_snapshot_spawns_updates_and_removes_remote_players() {
         let mut app = app_with_snapshot(

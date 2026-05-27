@@ -16,8 +16,8 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, Result, bail};
 use bevy::{app::TerminalCtrlCHandlerPlugin, log::info_span, prelude::*};
 use lightyear::prelude::{
-    LinkOf, LocalAddr, MessageSender, NetworkTarget, NetworkVisibility, Replicate,
-    ReplicationSender, Room, RoomEvent, RoomPlugin, RoomTarget,
+    ComponentReplicationOverrides, LinkOf, LocalAddr, MessageSender, NetworkTarget,
+    NetworkVisibility, Replicate, ReplicationSender, Room, RoomEvent, RoomPlugin, RoomTarget,
     server::{self, ClientOf},
 };
 
@@ -424,25 +424,79 @@ fn sync_resource_node_entities(world: &mut World) {
                         crate::world::ChunkCoord::from_world(state.position.x, state.position.z)
                     });
                 let entity = crate::server::spawn_resource_node_entity(world, state, chunk);
-                attach_node_replication(world, entity, chunk);
+                attach_room_gated_replication(world, entity, chunk);
             }
         }
     }
 }
 
-/// Hooks a freshly-spawned resource node entity into Lightyear's
-/// replication path. Adds the per-component replication marker plus
-/// `NetworkVisibility` (interest gate), then joins the chunk's room so
-/// only senders subscribed to that chunk receive the entity. With
-/// `NetworkTarget::None` the room machinery is the sole driver of
-/// per-client visibility — there is no broadcast fallback.
-fn attach_node_replication(world: &mut World, entity: Entity, chunk: ChunkCoord) {
+/// Attach the room-gated replication marker to a freshly-spawned
+/// world-entity (resource node, dropped item, deployable). Adds
+/// `Replicate::to_clients(NetworkTarget::None) + NetworkVisibility` and
+/// then joins the chunk's room so only senders subscribed to that chunk
+/// receive the entity. With `NetworkTarget::None` the room machinery is
+/// the sole driver of per-client visibility — there is no broadcast
+/// fallback.
+fn attach_room_gated_replication(world: &mut World, entity: Entity, chunk: ChunkCoord) {
     let room_entity = ensure_chunk_room_world(world, chunk);
     if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
         entity_mut.insert((
             Replicate::to_clients(NetworkTarget::None),
             NetworkVisibility,
         ));
+    }
+    world.trigger(RoomEvent {
+        room: room_entity,
+        target: RoomTarget::AddEntity(entity),
+    });
+}
+
+/// Move an already-replicated entity between two chunk rooms. No-op when
+/// the coords are equal. Used by dropped items and players whose anchor
+/// chunk can change after spawn (physics rollover, footsteps).
+fn move_entity_between_rooms(world: &mut World, entity: Entity, from: ChunkCoord, to: ChunkCoord) {
+    if from == to {
+        return;
+    }
+    let from_room = world
+        .resource::<ChunkRoomMap>()
+        .by_coord
+        .get(&from)
+        .copied();
+    let to_room = ensure_chunk_room_world(world, to);
+    if let Some(from_room) = from_room {
+        world.trigger(RoomEvent {
+            room: from_room,
+            target: RoomTarget::RemoveEntity(entity),
+        });
+    }
+    world.trigger(RoomEvent {
+        room: to_room,
+        target: RoomTarget::AddEntity(entity),
+    });
+}
+
+/// Phase 5 player replication: broadcast `PlayerPublic` to every sender
+/// in the same room (peer-visible), and gate `PlayerPrivate` behind a
+/// per-component override so only the owning client receives the
+/// inventory/crafting wire bytes. The owner's prediction supplies their
+/// own `PlayerPublic` locally, so them re-receiving it is a small,
+/// acceptable redundancy.
+fn attach_player_replication(
+    world: &mut World,
+    entity: Entity,
+    chunk: ChunkCoord,
+    owner_sender: Option<Entity>,
+) {
+    let room_entity = ensure_chunk_room_world(world, chunk);
+    if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+        entity_mut.insert((Replicate::to_clients(NetworkTarget::All), NetworkVisibility));
+        let mut overrides =
+            ComponentReplicationOverrides::<crate::server::PlayerPrivate>::default().disable_all();
+        if let Some(sender) = owner_sender {
+            overrides = overrides.enable_for(sender);
+        }
+        entity_mut.insert(overrides);
     }
     world.trigger(RoomEvent {
         room: room_entity,
@@ -601,6 +655,28 @@ fn sync_dropped_item_entities(world: &mut World) {
                 {
                     drop.stack = item.stack;
                 }
+                // Dropped items can roll between chunks while their physics
+                // body settles. Keep the room membership and the
+                // `DroppedItemChunk` mirror in step so observing clients
+                // gain/lose visibility at the boundary instead of seeing
+                // the entity disappear off-screen.
+                let live_chunk = world
+                    .resource::<AuthoritativeServer>()
+                    .0
+                    .dropped_item_chunk(id);
+                let old_chunk = world
+                    .get::<crate::server::DroppedItemChunk>(entity)
+                    .map(|c| c.0);
+                if let (Some(live), Some(prev)) = (live_chunk, old_chunk)
+                    && live != prev
+                {
+                    move_entity_between_rooms(world, entity, prev, live);
+                    if let Some(mut chunk_marker) =
+                        world.get_mut::<crate::server::DroppedItemChunk>(entity)
+                    {
+                        chunk_marker.0 = live;
+                    }
+                }
             }
             None => {
                 let chunk = world
@@ -610,7 +686,8 @@ fn sync_dropped_item_entities(world: &mut World) {
                     .unwrap_or_else(|| {
                         crate::world::ChunkCoord::from_world(item.position.x, item.position.z)
                     });
-                crate::server::spawn_dropped_item_entity(world, item, chunk);
+                let entity = crate::server::spawn_dropped_item_entity(world, item, chunk);
+                attach_room_gated_replication(world, entity, chunk);
             }
         }
     }
@@ -665,7 +742,8 @@ fn sync_deployable_entities(world: &mut World) {
                     .unwrap_or_else(|| {
                         crate::world::ChunkCoord::from_world(view.position.x, view.position.z)
                     });
-                crate::server::spawn_deployable_entity(world, view, chunk);
+                let entity = crate::server::spawn_deployable_entity(world, view, chunk);
+                attach_room_gated_replication(world, entity, chunk);
             }
         }
     }
@@ -715,6 +793,24 @@ fn sync_player_entities(world: &mut World) {
                 {
                     *private = view.private;
                 }
+                // Players walk; keep their room subscription aligned with
+                // chunk_manager so peers gain/lose visibility at the
+                // boundary instead of seeing the avatar pop out of view.
+                let live_chunk = world
+                    .resource::<AuthoritativeServer>()
+                    .0
+                    .player_chunk(view.client_id);
+                let old_chunk = world.get::<crate::server::PlayerChunk>(entity).map(|c| c.0);
+                if let (Some(live), Some(prev)) = (live_chunk, old_chunk)
+                    && live != prev
+                {
+                    move_entity_between_rooms(world, entity, prev, live);
+                    if let Some(mut chunk_marker) =
+                        world.get_mut::<crate::server::PlayerChunk>(entity)
+                    {
+                        chunk_marker.0 = live;
+                    }
+                }
             }
             None => {
                 let chunk = world
@@ -727,7 +823,11 @@ fn sync_player_entities(world: &mut World) {
                             view.public.position.z,
                         )
                     });
-                crate::server::spawn_player_entity(world, view, chunk);
+                let owner_sender = world
+                    .resource::<ServerConnections>()
+                    .entity_for_client(view.client_id);
+                let entity = crate::server::spawn_player_entity(world, view, chunk);
+                attach_player_replication(world, entity, chunk, owner_sender);
             }
         }
     }
