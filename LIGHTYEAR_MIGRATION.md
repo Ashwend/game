@@ -134,7 +134,7 @@ Docs:
 | 3   | Merge Lightyear client into main Bevy app                      | ✅ done     |
 | 4   | Wire chunk rooms for resource nodes                            | ✅ done     |
 | 5   | Chunk rooms for dropped items, deployables, players            | ✅ done     |
-| 6   | Delete `WorldSnapshot`, save-version bump, cleanup             | ⏳ pending  |
+| 6   | Delete `WorldSnapshot`, save-version bump, cleanup             | ✅ done (6a) — 6b deferred |
 | 1b  | Fold `resource_nodes` HashMap into entities (cleanup)          | ⏳ pending  |
 
 Future cleanups (analogous to 1b) will likely emerge for dropped items,
@@ -722,50 +722,164 @@ Tests / lint / check pass on both feature configurations:
 
 ## Phase 6 — Delete `WorldSnapshot`, save-version bump, cleanup
 
-**Status**: ⏳ pending · blocked by Phase 5
+**Status**: ✅ done (Phase 6a) · 6b deferred
 
-### Goal
+The wire-level `WorldSnapshot` broadcast is gone. Phase 6 landed in two
+parts: 6a (this session) achieves the bandwidth win and removes the
+feature flag; 6b (a follow-up phase) deletes the type itself and ends
+the snapshot-shaped indirection.
 
-Remove the custom snapshot path entirely now that Lightyear replication owns
-all networked entity state.
+### What landed in 6a
 
-### Approach
+**Wire snapshot deleted.** Server side
+([src/server.rs](src/server.rs)): the per-tick snapshot broadcast loop
+and the `info_span!("snapshot_broadcast")` are gone. The pre-existing
+`perf_stats_for` 1 Hz broadcast is unaffected. Protocol
+([src/protocol.rs](src/protocol.rs)): `ServerMessage::Snapshot(WorldSnapshot)`
+variant deleted, and the `PacketDelivery::Unreliable` mapping it shared
+collapses to the remaining variants.
 
-1. **Delete `ServerMessage::Snapshot` variant** in
-   [src/protocol.rs](src/protocol.rs). And the corresponding `Welcome` field
-   if any. The `WorldSnapshot` type goes away.
-2. **Delete the per-tick snapshot loop** in
-   [src/server.rs:391](src/server.rs:391) and `snapshot_inner` /
-   `snapshot_for` / `snapshot` methods in
-   [src/server/connection.rs](src/server/connection.rs).
-3. **Delete `ClientRuntime::snapshot`** in
-   [src/app/state/runtime.rs](src/app/state/runtime.rs). Consumers now read
-   from ECS queries against replicated entities.
-4. **Save-version bump**: this phase will likely change the saved-state
-   shape (resource nodes serialized via entity iteration vs the existing
-   HashMap iteration, possibly different order). Bump
-   `SAVE_FORMAT_VERSION` in [src/save/format.rs:44](src/save/format.rs:44).
-5. **Tracing spans**: the Phase 0 spans inside `snapshot_inner` are now
-   dead and should be removed.
-6. **Feature flag removal**: the `replicated-nodes` flag from Phase 4 goes
-   away — replication is the only path.
+**Synthesised local snapshot.** New module
+[src/app/systems/snapshot_synth.rs](src/app/systems/snapshot_synth.rs).
+A single Bevy system, registered in `ClientSystemSet::SnapshotSynth`
+between `Network` and `ToolSwap`, rebuilds `ClientRuntime::snapshot`
+every frame from the Lightyear-replicated entity queries (resource
+nodes, dropped items, deployables, players + their public/private
+split). The synthetic `tick` is a monotonic `Local<u64>`. Consumers
+(`apply_resource_nodes_system`, `apply_dropped_items_system`,
+`apply_deployed_entities_system`, `apply_snapshot_system`, plus the
+inventory / crafting / furnace UIs, pickup raycast, world-grid
+rebuild) keep reading `runtime.snapshot` — the system above is the only
+writer now.
 
-### Open / deferred
+**`PlayerPrivate.open_furnace` carries `OpenFurnaceView`.** Was
+`Option<DeployedEntityId>`; now `Option<OpenFurnaceView>`. The server's
+`players_iter` populates the full view via
+`open_furnace_view_for(client_id)` so the owner-side furnace UI works
+without a separate wire message. Privacy is preserved because
+`PlayerPrivate` only replicates to the owner.
 
-- **`PerfStats` message** stays. It's not entity state, it's a perf HUD
-  payload.
-- **`WorldTime` broadcast** stays. World time is a single global value, not
-  per-entity, and broadcasting it 1 Hz over an unreliable channel is fine.
-- **`Toast`, `ResourceImpact`, `ItemMerged`, etc.** — these are events, not
-  state, and stay on the message channel.
+**Feature flag retired.** `replicated-nodes` is gone from `Cargo.toml`.
+The four feature-gated collectors (`collect_resource_node_states`,
+`collect_dropped_items`, `collect_deployed_entities`,
+`collect_remote_players`) collapsed to a single snapshot-reading branch
+each — and the snapshot is now the locally-synthesised one. The
+`apply_snapshot_spawns_updates_and_removes_remote_players` unit test
+that was gated off in Phase 5 is re-enabled (it manually builds a
+snapshot in the test rig, which is unaffected by the synth system).
+
+**Save version bump.** [src/save/format.rs](src/save/format.rs):
+`SAVE_FORMAT_VERSION` 7 → 8. The on-disk shape is identical; the bump
+invalidates v7 worlds so the replication-bootstrapped grid doesn't
+inherit apply-order subtleties from the old snapshot-bootstrapped one.
+
+**Stale apply paths removed.** `ClientRuntime::apply_message` no longer
+has a `Snapshot` arm (deleted). `is_stale_snapshot` helper deleted. The
+three legacy snapshot-driven unit tests
+(`snapshots_do_not_overwrite_existing_local_prediction`,
+`snapshots_do_not_seed_local_prediction_after_welcome`,
+`stale_snapshots_are_ignored`) are deleted with the apply path. The
+older `singleplayer_session_receives_authoritative_snapshots_from_loopback_host`
+network test (which only verified that the wire variant arrived) is
+also deleted. 462 tests pass on `./cli test`.
+
+### Files touched
+
+- [Cargo.toml](Cargo.toml) — `replicated-nodes` feature removed
+- [src/protocol.rs](src/protocol.rs) — `ServerMessage::Snapshot` variant deleted; delivery match updated
+- [src/server.rs](src/server.rs) — per-tick snapshot broadcast deleted;
+  `players_iter` now populates `PlayerPrivate.open_furnace` via
+  `open_furnace_view_for`
+- [src/server/player_ecs.rs](src/server/player_ecs.rs) —
+  `PlayerPrivate.open_furnace` is now `Option<OpenFurnaceView>`
+- [src/save/format.rs](src/save/format.rs) — `SAVE_FORMAT_VERSION` bumped to 8
+- [src/app/state/runtime.rs](src/app/state/runtime.rs) — `Snapshot`
+  apply-message arm deleted; `is_stale_snapshot` deleted;
+  `rebuild_world_grid` and `resource_node_collider_set_version` exposed
+  to the synth module
+- [src/app/state/mod.rs](src/app/state/mod.rs) — `runtime` module
+  visibility lifted to `pub(crate)` for synth access
+- [src/app/state/tests.rs](src/app/state/tests.rs) — three
+  snapshot-apply unit tests removed
+- [src/app/systems.rs](src/app/systems.rs) — `snapshot_synth` module
+  registered; new `ClientSystemSet::SnapshotSynth` variant added
+- [src/app/systems/snapshot_synth.rs](src/app/systems/snapshot_synth.rs)
+  — new file; the synth system itself
+- [src/app.rs](src/app.rs) — synth set inserted between `Network` and
+  `ToolSwap`; system registered
+- [src/app/systems/items/resource_nodes.rs](src/app/systems/items/resource_nodes.rs),
+  [src/app/systems/items/dropped.rs](src/app/systems/items/dropped.rs),
+  [src/app/systems/deployables.rs](src/app/systems/deployables.rs),
+  [src/app/systems/players.rs](src/app/systems/players.rs) — feature-flag
+  blocks collapsed; the collectors read from synthesized snapshot
+- [src/net/tests.rs](src/net/tests.rs) — wire-snapshot test deleted
+
+### Key design decisions
+
+- **Synthesised snapshot vs. consumer rewrite.** The migration doc's
+  original goal was "consumers read from ECS queries against
+  replicated entities". That would have rewritten the inventory UI,
+  crafting UI, furnace UI, pickup raycast, hud, camera-follow, and
+  the world-grid rebuild path in a single session — too risky. Synth
+  preserves the consumer shape and ships the bandwidth win
+  immediately; the consumer rewrite becomes a follow-up (6b) that
+  doesn't block any further phases.
+- **`PlayerPrivate.open_furnace` carries `OpenFurnaceView`.** This is
+  the one place where a strict "components only carry their own
+  state" reading would have forced a new server-pushed wire message
+  for the smelt timer. Embedding the full view in `PlayerPrivate`
+  keeps the data flow simple at the cost of pushing the furnace
+  view's ~30 bytes every tick the smelt timer changes — only to the
+  owner.
+- **Tests for the deleted apply-message arm are deleted, not ported.**
+  The behaviour they tested (stale-tick suppression, lazy
+  prediction seeding from a fresh snapshot) belongs to the gone wire
+  path; the equivalent under replication is "the replicated
+  components are the source of truth" and is tested by the
+  integration tests in `src/net/tests.rs`.
+
+### Phase 6b — deferred follow-up
+
+The remaining doc-stated work that didn't fit this session, captured
+here so a fresh chat can pick it up:
+
+1. **Delete `WorldSnapshot` type entirely.** The synth uses it as the
+   container shape because all the consumers read from
+   `ClientRuntime::snapshot`. A 6b pass replaces the consumers
+   (one by one) with `Query<...>` based readers, then drops the
+   `WorldSnapshot` type and the `snapshot()` / `snapshot_for` /
+   `snapshot_inner` helpers on the server (these stay alive for now
+   because the server tests still use `server.snapshot()` as a
+   read-only accessor).
+2. **Replace `Welcome.snapshot` with a lean local-player seed.** The
+   Welcome message still carries a full `WorldSnapshot` for
+   prediction seeding (`seed_local_prediction_from_snapshot`).
+   Replace with a `PlayerSpawnSeed { position, yaw, pitch, health,
+   last_processed_input }` once the consumers don't need the
+   bootstrap snapshot.
+3. **Direct ECS readers for inventory / crafting / furnace UI.** The
+   UI currently goes `runtime.local_player().and_then(inventory)`.
+   Phase 6b adds a `LocalPlayerComponents` system param or resource
+   that pulls the data straight from the local
+   `PlayerPublic + PlayerPrivate` entity.
+4. **Pickup raycast direct queries.** `pickup.rs` reads
+   `snapshot.resource_nodes` and `snapshot.deployed_entities` for
+   target selection — repointing to `Query<&ResourceNode>` /
+   `Query<&Deployable>` is a small focused change.
+5. **Server-side test refactor.** `src/server/tests/*` use
+   `server.snapshot()` as a state accessor. Replace with direct
+   `GameServer::*_iter()` calls or thin test-only helpers; then
+   delete `snapshot_for` / `snapshot` / `snapshot_inner` on the
+   server.
 
 ### Verification
 
-- Existing world saves no longer load (expected — version bumped). Manual
-  test: delete `~/.local/share/.../*.save` (or wherever) and create fresh.
-- All 460+ tests pass after fixture updates.
-- Bandwidth check: a sitting-still client should be near-silent on the
-  wire (just heartbeats + occasional WorldTime).
+- `./cli check`, `./cli test`, `./cli lint` clean (462 tests pass).
+- `cargo test --lib` clean.
+- Existing `.save` files older than v8 fail to load (expected).
+- Manual MP soak still pending: 2-client world, both players drop
+  items / mine nodes / open furnaces; the wire is silent on entity
+  state between chunk crossings.
 
 ---
 

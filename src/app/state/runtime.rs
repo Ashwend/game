@@ -30,7 +30,7 @@ const COLLIDER_SET_HASH_MIX: u64 = 0x9E37_79B9_7F4A_7C15;
 /// change. XOR of ids + count is good enough — the only way it collides
 /// in practice is two entities being added and two different entities
 /// being removed in the same tick, which can't happen during play.
-fn resource_node_collider_set_version(snapshot: Option<&WorldSnapshot>) -> u64 {
+pub(in crate::app) fn resource_node_collider_set_version(snapshot: Option<&WorldSnapshot>) -> u64 {
     let Some(snapshot) = snapshot else {
         return 0;
     };
@@ -303,7 +303,7 @@ impl ClientRuntime {
     /// the latest snapshot. Called after Welcome and whenever the live
     /// set of collider-bearing nodes changes (a node spawns, is felled,
     /// or is mined out).
-    fn rebuild_world_grid(&mut self) {
+    pub(in crate::app) fn rebuild_world_grid(&mut self) {
         let Some(world) = self.world.as_ref() else {
             self.world_grid = None;
             return;
@@ -363,21 +363,6 @@ impl ClientRuntime {
             }
             ServerMessage::PlayerEvent(event) => {
                 self.push_system_message(format_player_event(event))
-            }
-            ServerMessage::Snapshot(snapshot) => {
-                if self.is_stale_snapshot(snapshot.tick) {
-                    return;
-                }
-                self.snapshot = Some(snapshot);
-                // Nodes can disappear between snapshots (trees felled,
-                // ores mined out). Rebuild the collision grid only when
-                // the live set actually changes — every snapshot would
-                // be wasted work.
-                let new_version = resource_node_collider_set_version(self.snapshot.as_ref());
-                if new_version != self.resource_node_collider_version {
-                    self.resource_node_collider_version = new_version;
-                    self.rebuild_world_grid();
-                }
             }
             ServerMessage::Correction(player) => {
                 self.apply_non_movement_correction(&player);
@@ -547,12 +532,6 @@ impl ClientRuntime {
         if let Some(predicted) = &mut self.predicted_local {
             predicted.health = player.health;
         }
-    }
-
-    fn is_stale_snapshot(&self, tick: u64) -> bool {
-        self.snapshot
-            .as_ref()
-            .is_some_and(|current| tick <= current.tick)
     }
 }
 

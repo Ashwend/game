@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use bevy::{ecs::change_detection::Ref, light::NotShadowCaster, prelude::*};
+use bevy::{light::NotShadowCaster, prelude::*};
 
 use crate::{
     app::{
@@ -8,7 +8,6 @@ use crate::{
         state::ClientRuntime,
     },
     protocol::{DroppedItemId, DroppedWorldItem, QuatNet},
-    server::{DroppedItem, DroppedItemTransform},
 };
 
 const DROPPED_ITEM_INTERPOLATION_SECONDS: f32 = 0.1;
@@ -46,22 +45,16 @@ pub(crate) fn apply_dropped_items_system(
         (&Transform, &mut DroppedItemInterpolation),
         With<NetworkDroppedItem>,
     >,
-    replicated: Query<(&DroppedItem, Ref<DroppedItemTransform>)>,
 ) {
-    // Phase 5 A/B switch: under `replicated-nodes`, source from Lightyear
-    // replicated entities; otherwise read `WorldSnapshot::dropped_items`.
-    // The same `Vec<(DroppedWorldItem, tick)>` shape feeds either path —
-    // pop-in, despawn, and distance-gated interpolation logic below are
-    // identical for both. The session-present guard remains
-    // `runtime.snapshot.is_some()` (an empty snapshot still flags
-    // "in-session"), so the disconnect cleanup still fires correctly.
+    // Phase 6: `runtime.snapshot` is the locally synthesized view of the
+    // replicated entity state. The wire-side per-tick snapshot is gone.
     if runtime.snapshot.is_none() {
         for (_, entity) in entities.0.drain() {
             commands.entity(entity).despawn();
         }
         return;
     }
-    let items = collect_dropped_items(&runtime, &replicated);
+    let items = collect_dropped_items(&runtime);
 
     let snapshot_ids: HashSet<DroppedItemId> = items.iter().map(|(item, _)| item.id).collect();
     let entities = &mut *entities;
@@ -135,50 +128,23 @@ pub(crate) fn apply_dropped_items_system(
     });
 }
 
-/// Source the per-tick dropped-item list. Under `replicated-nodes` the
-/// list comes from Lightyear-replicated entities (one per visible drop)
-/// with a per-id Bevy change tick — `retarget` only fires when the
-/// transform actually mutated. Without the flag, the snapshot's per-tick
-/// id is shared by every item, matching the old behaviour.
-fn collect_dropped_items(
-    runtime: &ClientRuntime,
-    replicated: &Query<(&DroppedItem, Ref<DroppedItemTransform>)>,
-) -> Vec<(DroppedWorldItem, u64)> {
-    #[cfg(feature = "replicated-nodes")]
-    {
-        let _ = runtime;
-        replicated
-            .iter()
-            .map(|(drop, transform)| {
-                let tick = transform.last_changed().get() as u64;
-                (
-                    DroppedWorldItem {
-                        id: drop.id,
-                        stack: drop.stack.clone(),
-                        position: transform.position,
-                        yaw: transform.yaw,
-                        rotation: transform.rotation,
-                    },
-                    tick,
-                )
-            })
-            .collect()
-    }
-    #[cfg(not(feature = "replicated-nodes"))]
-    {
-        let _ = replicated;
-        runtime
-            .snapshot
-            .as_ref()
-            .map(|snapshot| {
-                snapshot
-                    .dropped_items
-                    .iter()
-                    .map(|item| (item.clone(), snapshot.tick))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
+/// Source the per-tick dropped-item list from `runtime.snapshot`, which
+/// Phase 6's `synthesize_runtime_snapshot_system` rebuilds from
+/// Lightyear-replicated entities every frame. Every item shares the
+/// synthetic per-frame tick — sufficient for the `retarget` freshness
+/// gate since the local synth is monotonically increasing.
+fn collect_dropped_items(runtime: &ClientRuntime) -> Vec<(DroppedWorldItem, u64)> {
+    runtime
+        .snapshot
+        .as_ref()
+        .map(|snapshot| {
+            snapshot
+                .dropped_items
+                .iter()
+                .map(|item| (item.clone(), snapshot.tick))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[derive(Component, Debug, Clone, Copy)]

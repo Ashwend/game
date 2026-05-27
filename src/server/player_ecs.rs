@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     protocol::{
-        ClientId, DeployedEntityId, PlayerCraftingState, PlayerInventoryState, SteamId, Vec3Net,
+        ClientId, OpenFurnaceView, PlayerCraftingState, PlayerInventoryState, SteamId, Vec3Net,
     },
     world::ChunkCoord,
 };
@@ -61,7 +61,13 @@ pub struct PlayerPublic {
 pub struct PlayerPrivate {
     pub inventory: PlayerInventoryState,
     pub crafting: PlayerCraftingState,
-    pub open_furnace: Option<DeployedEntityId>,
+    /// Full open-furnace view for the smelt UI. `None` when the player
+    /// hasn't opened any furnace. This carries the whole `OpenFurnaceView`
+    /// rather than just the deployable id so the client can render the
+    /// inputs/outputs/progress bars without a separate message —
+    /// `PlayerPrivate` only replicates to the owner (Phase 5 override),
+    /// so the contents stay private without any extra wire-side gating.
+    pub open_furnace: Option<OpenFurnaceView>,
     pub last_processed_input: u64,
 }
 

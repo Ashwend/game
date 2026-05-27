@@ -29,7 +29,6 @@ use crate::{
     },
     items::{DeployableKind, DeployableProfile, ItemId, ItemModel, item_definition},
     protocol::{DeployedEntityId, DeployedEntityState, PlaceDeployableCommand, Vec3Net},
-    server::{Deployable, DeployableActive, DeployableHealth, DeployableTransform},
 };
 
 /// Maximum distance, in metres, between the player's feet and the
@@ -170,12 +169,6 @@ pub(crate) fn apply_deployed_entities_system(
     assets: Option<Res<DeployableVisualAssets>>,
     existing: Query<(Entity, &NetworkDeployedEntity)>,
     existing_lights: Query<(Entity, &ChildOf), With<FurnaceMouthLight>>,
-    replicated: Query<(
-        &Deployable,
-        &DeployableTransform,
-        &DeployableHealth,
-        &DeployableActive,
-    )>,
 ) {
     let Some(assets) = assets else {
         return;
@@ -186,7 +179,7 @@ pub(crate) fn apply_deployed_entities_system(
         }
         return;
     }
-    let deployed = collect_deployed_entities(&runtime, &replicated);
+    let deployed = collect_deployed_entities(&runtime);
 
     let mut existing_by_id: HashMap<DeployedEntityId, Entity> = existing
         .iter()
@@ -249,45 +242,15 @@ pub(crate) fn apply_deployed_entities_system(
     }
 }
 
-/// Phase 5 A/B switch: under `replicated-nodes`, materialise the
-/// deployable list from replicated entities; otherwise read the
-/// snapshot. Returns the same `DeployedEntityState` wire shape either
-/// way so the rest of the system doesn't branch on the feature flag.
-fn collect_deployed_entities(
-    runtime: &ClientRuntime,
-    replicated: &Query<(
-        &Deployable,
-        &DeployableTransform,
-        &DeployableHealth,
-        &DeployableActive,
-    )>,
-) -> Vec<DeployedEntityState> {
-    #[cfg(feature = "replicated-nodes")]
-    {
-        let _ = runtime;
-        replicated
-            .iter()
-            .map(|(meta, transform, health, active)| DeployedEntityState {
-                id: meta.id,
-                item_id: meta.item_id.clone(),
-                kind: meta.kind,
-                position: transform.position,
-                yaw: transform.yaw,
-                health: health.0,
-                max_health: meta.max_health,
-                active: active.0,
-            })
-            .collect()
-    }
-    #[cfg(not(feature = "replicated-nodes"))]
-    {
-        let _ = replicated;
-        runtime
-            .snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.deployed_entities.clone())
-            .unwrap_or_default()
-    }
+/// Source the per-tick deployable list from `runtime.snapshot`, which
+/// Phase 6's `synthesize_runtime_snapshot_system` rebuilds from
+/// Lightyear-replicated entities every frame.
+fn collect_deployed_entities(runtime: &ClientRuntime) -> Vec<DeployedEntityState> {
+    runtime
+        .snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.deployed_entities.clone())
+        .unwrap_or_default()
 }
 
 /// Spawn / despawn the warm point light that simulates the fire inside

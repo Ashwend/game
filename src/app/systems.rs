@@ -12,6 +12,7 @@ pub(crate) mod node_death;
 mod players;
 mod quit;
 mod settings;
+mod snapshot_synth;
 mod test_mode;
 
 use bevy::prelude::SystemSet;
@@ -52,6 +53,7 @@ pub(crate) use node_death::tick_felling_trees_system;
 pub(crate) use players::{RemotePlayerEntities, apply_snapshot_system};
 pub(crate) use quit::app_quit_system;
 pub(crate) use settings::{save_client_settings_system, sync_view_radius_system};
+pub(crate) use snapshot_synth::synthesize_runtime_snapshot_system;
 pub(crate) use test_mode::{apply_test_mode_overrides_system, reposition_test_window_system};
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -67,6 +69,12 @@ pub(crate) enum ClientSystemSet {
     ToolSwap,
     InventoryShortcuts,
     Network,
+    /// Synthesises `ClientRuntime::snapshot` from Lightyear-replicated
+    /// components after the network tick has applied any incoming
+    /// replication diffs, and before consumer sets (Players,
+    /// DroppedItems, ResourceNodes, DeployedEntities) read from the
+    /// snapshot.
+    SnapshotSynth,
     SessionShutdown,
     Quit,
     Display,

@@ -62,82 +62,15 @@ fn welcome_seeds_local_prediction_from_snapshot() {
     assert_eq!(runtime.input_sequence, 7);
 }
 
-#[test]
-fn snapshots_do_not_overwrite_existing_local_prediction() {
-    let mut runtime = ClientRuntime {
-        client_id: Some(1),
-        predicted_local: Some(PlayerController::from_player_state(&player_state(
-            1,
-            Vec3Net::new(5.0, 0.0, 0.0),
-        ))),
-        ..default()
-    };
-
-    runtime.apply_message(ServerMessage::Snapshot(WorldSnapshot {
-        tick: 1,
-        players: vec![player_state(1, Vec3Net::ZERO)],
-        dropped_items: Vec::new(),
-        resource_nodes: Vec::new(),
-        deployed_entities: Vec::new(),
-    }));
-
-    let predicted = runtime.predicted_local.expect("prediction should exist");
-    assert_eq!(predicted.position, Vec3Net::new(5.0, 0.0, 0.0));
-    assert_eq!(runtime.snapshot.expect("snapshot should exist").tick, 1);
-}
-
-#[test]
-fn snapshots_do_not_seed_local_prediction_after_welcome() {
-    let mut runtime = ClientRuntime {
-        client_id: Some(1),
-        ..default()
-    };
-
-    runtime.apply_message(ServerMessage::Snapshot(WorldSnapshot {
-        tick: 1,
-        players: vec![player_state(1, Vec3Net::new(5.0, 0.0, 0.0))],
-        dropped_items: Vec::new(),
-        resource_nodes: Vec::new(),
-        deployed_entities: Vec::new(),
-    }));
-
-    assert!(runtime.predicted_local.is_none());
-    assert_eq!(
-        runtime.local_view().expect("snapshot fallback").position,
-        Vec3Net::new(5.0, 0.0, 0.0)
-    );
-}
-
-#[test]
-fn stale_snapshots_are_ignored() {
-    let current_snapshot = WorldSnapshot {
-        tick: 5,
-        players: vec![player_state(1, Vec3Net::new(5.0, 0.0, 0.0))],
-        dropped_items: Vec::new(),
-        resource_nodes: Vec::new(),
-        deployed_entities: Vec::new(),
-    };
-    let mut runtime = ClientRuntime {
-        client_id: Some(1),
-        snapshot: Some(current_snapshot.clone()),
-        predicted_local: Some(PlayerController::from_player_state(
-            &current_snapshot.players[0],
-        )),
-        ..default()
-    };
-
-    runtime.apply_message(ServerMessage::Snapshot(WorldSnapshot {
-        tick: 4,
-        players: vec![player_state(1, Vec3Net::ZERO)],
-        dropped_items: Vec::new(),
-        resource_nodes: Vec::new(),
-        deployed_entities: Vec::new(),
-    }));
-
-    let predicted = runtime.predicted_local.expect("prediction should exist");
-    assert_eq!(predicted.position, Vec3Net::new(5.0, 0.0, 0.0));
-    assert_eq!(runtime.snapshot.expect("snapshot should exist").tick, 5);
-}
+// Phase 6 removed the wire-level `ServerMessage::Snapshot` variant and
+// the `apply_message(Snapshot)` arm it fed. The legacy tests that
+// covered that arm —
+// `snapshots_do_not_overwrite_existing_local_prediction`,
+// `snapshots_do_not_seed_local_prediction_after_welcome`,
+// `stale_snapshots_are_ignored` — were deleted alongside the apply path.
+// The local `runtime.snapshot` is now synthesized client-side from
+// replicated components every frame, so a stale-tick guard is no longer
+// applicable.
 
 #[test]
 fn correction_updates_health_without_realigning_local_prediction() {

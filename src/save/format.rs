@@ -41,7 +41,15 @@ pub(super) const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 /// active flag + burn/smelt timers). Old v6 saves don't carry this
 /// field — rejected and surfaced in the worlds-screen "couldn't load"
 /// banner.
-pub(super) const SAVE_FORMAT_VERSION: u32 = 7;
+///
+/// `8` (Phase 6 of the Lightyear replication migration) marks the cutover
+/// from per-tick `ServerMessage::Snapshot` broadcasts to room-gated
+/// component replication. The on-disk shape itself is unchanged but the
+/// loaded state goes through the new replication-driven mirror system
+/// rather than the old snapshot path; a save bump invalidates v7 worlds
+/// rather than chasing subtle apply-order differences between the
+/// snapshot-bootstrapped grid and the replication-bootstrapped one.
+pub(super) const SAVE_FORMAT_VERSION: u32 = 8;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
 /// at >100MB/s compression and ~1GB/s decompression.
 const ZSTD_LEVEL: i32 = 5;
