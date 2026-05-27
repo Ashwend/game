@@ -135,7 +135,7 @@ Docs:
 | 4   | Wire chunk rooms for resource nodes                            | ✅ done     |
 | 5   | Chunk rooms for dropped items, deployables, players            | ✅ done     |
 | 6   | Delete `WorldSnapshot`, save-version bump, cleanup             | ✅ done (6a) — 6b deferred |
-| 1b  | Fold `resource_nodes` HashMap into entities (cleanup)          | ⏳ pending  |
+| 1b  | Fold `resource_nodes` HashMap into entities (cleanup)          | ⏸ deferred  |
 
 Future cleanups (analogous to 1b) will likely emerge for dropped items,
 deployables, and players once Phase 5 lands. They aren't tracked yet to keep the
@@ -885,69 +885,81 @@ here so a fresh chat can pick it up:
 
 ## Phase 1b — Fold `resource_nodes` HashMap into entities (cleanup)
 
-**Status**: ⏳ pending · best done after Phase 4 is proven
+**Status**: ⏸ deferred — no functional impact, ~multi-session refactor
 
-### Goal
+### Why deferred (intentional)
 
-Remove the `resource_nodes: HashMap<ResourceNodeId, ResourceNodeState>` field
-from `GameServer`. The ECS entities (alive since Phase 1) become authoritative
-on their own.
+Phase 1b is a pure code-cleanliness pass: remove the `resource_nodes:
+HashMap` field on `GameServer` so the ECS mirror entities (alive since
+Phase 1) become authoritative on their own. It ships zero user-facing
+or wire-facing behaviour change — the replication migration that
+mattered (Phases 4–6) is done. Reasons for deferral:
 
-### Why deferred
+1. **No bandwidth, latency, or correctness win.** The HashMap +
+   `sync_resource_node_entities` mirror runs in well under 1 ms per
+   tick on the host App. ECS-as-authoritative would save ~80 bytes
+   per node of duplicate state and one exclusive system, but neither
+   is on any hot path.
+2. **The migration's working set is intact.** Phase 6 ended with
+   replication-only on the wire and a synthesised
+   `runtime.snapshot` driving the consumers. Phase 1b would not
+   change either of those — it's strictly server-internal.
+3. **Surgery is sprawling.** Every `&mut self GameServer` method
+   that touches `self.resource_nodes` needs either a `&mut World`
+   parameter or an explicit `Commands + Query` pair. Affected
+   production sites:
+   - `src/server.rs` — init load + regrow splice
+   - `src/server/resource_nodes.rs` — gather (3 sites)
+   - `src/server/inventory.rs` — pickup payouts (3 sites)
+   - `src/server/persistence.rs` — `world_save` builder
+   - `src/server/commands.rs` — admin spawn
+   - `src/server/connection.rs` — `snapshot_inner` still reads
+     the HashMap to bootstrap Welcome (Phase 6b retires this when
+     the snapshot path is fully removed)
+   - `src/server/chunk_manager.rs` — `tick(now, &resource_nodes)`
+     signature; the regrow loop needs the live position set
+   - `src/server/tests/resource_nodes.rs` — ~30 direct
+     `server.resource_nodes.{clear,insert,iter,len,contains_key}`
+     touches across the gather / pickup / regrow / admin tests
+4. **Phase 2b (analogues for dropped items, deployables, players)
+   has the same shape and the same lack of impact.** Without
+   Phase 1b establishing the pattern (e.g. `TestFixture` rig and
+   the `&mut World` threading convention), Phase 2b can't land
+   either. Better to wait until there's a concrete reason to do
+   the refactor at all.
 
-The mirror approach (Phase 1) ships in one session by keeping the HashMap
-authoritative. Flipping ownership cleanly requires changing every site that
-reads or mutates `self.resource_nodes` — roughly:
+### When to revisit
 
-- [src/server.rs](src/server.rs) — init load + regrow insert
-- [src/server/resource_nodes.rs](src/server/resource_nodes.rs) — gather (3 sites)
-- [src/server/persistence.rs](src/server/persistence.rs) — save build
-- [src/server/commands.rs](src/server/commands.rs) — admin spawn
-- [src/server/inventory.rs](src/server/inventory.rs) — pickup payouts (3 sites)
-- [src/server/connection.rs](src/server/connection.rs) — snapshot read (if Phase 6 hasn't already removed it)
-- [src/server/tests/](src/server/tests/) — ~15 direct field touches across `commands.rs` and `resource_nodes.rs`
+- A future feature actually needs ECS-only queries on resource
+  nodes (e.g. running multiple parallel regrow workers, or
+  attaching new components a non-ECS HashMap can't carry).
+- A refactor of `GameServer` for unrelated reasons opens the door
+  to `&mut World` threading at a lower marginal cost.
+- The duplicate state surfaces a real consistency bug.
 
-These methods are on `&mut self GameServer`. Conversion requires either
-threading `&mut World` through them or using `world.resource_scope` at the
-Bevy system entry point. See the "Required surgery" section of Phase 3 — same
-pattern.
+Until then, the HashMap + mirror is the production-supported path.
 
-### Approach
+### Recipe (from the original plan) when picked up
 
-1. Each method that touches `self.resource_nodes` gains a `world: &mut World`
-   parameter (or a more focused `Commands` + `Query` pair).
-2. Bevy system call sites (in `tick_authoritative_server`,
-   `receive_client_messages`, etc.) wrap in
-   `world.resource_scope::<AuthoritativeServer, _>(|world, mut server| { ... })`
-   so both the resource and the world are accessible.
-3. **TestFixture pattern** to minimize test churn: introduce
-   `struct TestFixture { world: World, server: GameServer }` in
-   [src/server/tests/mod.rs](src/server/tests/mod.rs) that wraps `GameServer`
-   methods, hiding the `&mut World` parameter. Tests change from
-   `server.resource_nodes.clear()` to `fixture.clear_resource_nodes()` —
-   same shape, different impl.
-4. Save format change: serialize from query iteration instead of HashMap
-   iteration. The Vec order may differ → bump `SAVE_FORMAT_VERSION`.
-5. Remove the mirror sync system from
-   [src/net/host.rs](src/net/host.rs) (`sync_resource_node_entities`) — no
-   longer needed, entities are authoritative.
-
-### Open / deferred
-
-- **Should this happen before or after Phase 6?** They're independent. If
-  Phase 6 already removed the snapshot's resource node consumer, only the
-  gather / pickup / admin paths still touch `resource_nodes`. Slightly
-  smaller diff. **Recommendation: do this after Phase 6** so the snapshot
-  path doesn't need touching here.
-- The analogous cleanups for dropped items, deployables, players (let's
-  call them **Phase 2b**) are even bigger and have similar shapes. Track
-  them as separate phases when we get there.
-
-### Verification
-
-- `./cli check && ./cli test && ./cli lint` clean
-- Save a world, reload it — content matches (modulo Vec order if that's
-  what triggered the save-version bump).
+1. Each method that touches `self.resource_nodes` gains a
+   `world: &mut World` parameter (or a more focused `Commands +
+   Query` pair).
+2. Bevy system call sites in `net/host.rs`
+   (`tick_authoritative_server`, `receive_client_messages`) wrap in
+   `world.resource_scope::<AuthoritativeServer, _>(|world, mut
+   server| { ... })`.
+3. Introduce `struct TestFixture { world: World, server: GameServer }`
+   in `src/server/tests/mod.rs` so the ~30 test sites flip from
+   `server.resource_nodes.clear()` to `fixture.clear_resource_nodes()`
+   without touching every test body.
+4. `chunk_manager::tick` becomes
+   `tick(now, existing_positions: impl Iterator<Item = &ResourceNodeState>)`
+   so callers can feed it a query iterator instead of a HashMap.
+5. Bump `SAVE_FORMAT_VERSION` again — query-iteration order vs.
+   HashMap-iteration order may shift the on-disk Vec layout.
+6. Delete the `sync_resource_node_entities` exclusive system from
+   `net/host.rs`; ECS entities are now spawned by the gather /
+   admin / regrow paths directly.
 
 ---
 
