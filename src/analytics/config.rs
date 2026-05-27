@@ -77,9 +77,7 @@ impl Environment {
         match value.trim().to_ascii_lowercase().as_str() {
             "dev" | "development" => Some(Self::Dev),
             "ci" => Some(Self::Ci),
-            "bleeding-edge" | "bleeding_edge" | "bleedingedge" | "edge" => {
-                Some(Self::BleedingEdge)
-            }
+            "bleeding-edge" | "bleeding_edge" | "bleedingedge" | "edge" => Some(Self::BleedingEdge),
             "prod" | "production" => Some(Self::Prod),
             _ => None,
         }
@@ -116,7 +114,10 @@ impl AnalyticsConfig {
 
         // Honor opt-out even when the API key is set.
         let enabled = resolved.enabled.unwrap_or(false)
-            && resolved.api_key.as_deref().is_some_and(|key| !key.is_empty());
+            && resolved
+                .api_key
+                .as_deref()
+                .is_some_and(|key| !key.is_empty());
         if !enabled {
             return Self::disabled();
         }
