@@ -244,7 +244,12 @@ pub(crate) fn initial_distance_fog() -> DistanceFog {
         color: Color::srgb(0.55, 0.65, 0.78),
         directional_light_color: Color::srgba(1.0, 0.92, 0.78, 0.5),
         directional_light_exponent: 30.0,
-        falloff: FogFalloff::from_visibility(220.0),
+        // Initial value — `update_sky_system` recomputes this per frame
+        // from the lighting model; this is just the slot the camera owns
+        // until the first sky tick. Sized to match the daytime peak in
+        // `compute_lighting` so the very first frame isn't a fog
+        // discontinuity.
+        falloff: FogFalloff::from_visibility(140.0),
     }
 }
 
@@ -441,7 +446,11 @@ fn compute_lighting(time: &WorldTime) -> LightingFrame {
     // can't see across the world in pitch-blackness. During sunset the
     // distance shrinks for that hazy, dust-laden look.
     let fog_color = sky_color * 0.9 + Vec3::splat(0.02);
-    let fog_distance = lerp(110.0, 240.0, day_strength) - sunset_strength * 40.0;
+    // Tightened so distant chunks fade into the sky well before the
+    // camera's far plane (160 m) clips them. With these numbers the
+    // perimeter walls of a Large 9×9 chunk world (~288 m from centre)
+    // are buried behind the fog wall from every reachable position.
+    let fog_distance = lerp(85.0, 140.0, day_strength) - sunset_strength * 25.0;
 
     LightingFrame {
         sun_direction,

@@ -115,10 +115,13 @@ pub(crate) fn setup_scene(
         Camera3d::default(),
         Projection::from(PerspectiveProjection {
             fov: 65.0_f32.to_radians(),
-            // Tight near/far for a ~30m playspace — improves depth precision
+            // Tight near/far. The far plane sits just past the daylight
+            // fog horizon (~140 m peak) so the perimeter walls of a Large
+            // 9×9 chunk world (288 m from centre) never poke through the
+            // fog wall. Keeping it tight also improves depth precision
             // and keeps z-fighting away from on-screen geometry.
             near: 0.05,
-            far: 200.0,
+            far: 160.0,
             ..default()
         }),
         Msaa::Off,
