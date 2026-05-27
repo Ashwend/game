@@ -1,12 +1,14 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
 
 use crate::{
+    analytics::SessionEndReason,
     app::{
         audio::surface::SurfaceMaterial,
         state::{
             ClientErrorToast, ClientRuntime, MenuState, NoticeDialog, RemoteImpactEvent, Screen,
             SessionShutdownTasks, ToastState,
         },
+        systems::PendingSessionEndReason,
         ui::ButtonSoundRequests,
         voice::IncomingVoiceMessage,
     },
@@ -31,6 +33,7 @@ pub(crate) fn network_tick_system(
     mut button_sound_requests: ResMut<ButtonSoundRequests>,
     mut toasts: ResMut<ToastState>,
     mut writers: NetworkTickWriters,
+    mut pending_session_end: ResMut<PendingSessionEndReason>,
 ) {
     toasts.tick(time.delta_secs());
 
@@ -66,6 +69,7 @@ pub(crate) fn network_tick_system(
     for message in messages {
         if let ServerMessage::Kicked { reason } = &message {
             let reason = reason.clone();
+            pending_session_end.0 = Some(SessionEndReason::Kick);
             runtime.apply_message(message);
             runtime.stop_session_after_kick();
             show_kick_notice(&mut menu, reason.clone());

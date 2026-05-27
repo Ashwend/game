@@ -1,6 +1,7 @@
 use bevy_egui::egui;
 
 use crate::{
+    analytics::{Analytics, Event},
     app::state::{CreateWorldDialog, MenuState, SaveStore, SteamUser},
     save::validate_world_name,
     world::ProceduralMapSize,
@@ -37,6 +38,7 @@ pub(in crate::app::ui::worlds) fn create_world_dialog_ui(
     menu: &mut MenuState,
     store: &SaveStore,
     user: &SteamUser,
+    analytics: &Analytics,
 ) {
     let finished_closing;
     {
@@ -83,7 +85,7 @@ pub(in crate::app::ui::worlds) fn create_world_dialog_ui(
         return;
     };
     if dialog.confirmed {
-        create_world_from_dialog(dialog, menu, store, user);
+        create_world_from_dialog(dialog, menu, store, user, analytics);
     }
 }
 
@@ -92,6 +94,7 @@ pub(in crate::app::ui::worlds) fn create_world_from_dialog(
     menu: &mut MenuState,
     store: &SaveStore,
     user: &SteamUser,
+    analytics: &Analytics,
 ) {
     let map = match dialog.selected_map() {
         Ok(map) => map,
@@ -101,11 +104,15 @@ pub(in crate::app::ui::worlds) fn create_world_from_dialog(
         }
     };
 
+    let map_type = format!("{:?}", map);
     match store
         .0
         .create_world_with_map(&dialog.name, Some(user.0.steam_id), map)
     {
-        Ok(_) => refresh_worlds(menu, store),
+        Ok(_) => {
+            analytics.track(Event::WorldCreated { map_type });
+            refresh_worlds(menu, store);
+        }
         Err(error) => menu.status = Some(format!("create failed: {error}")),
     }
 }

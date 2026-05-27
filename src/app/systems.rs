@@ -1,3 +1,4 @@
+pub(crate) mod analytics;
 mod auto_connect;
 mod camera;
 mod chunk_overlay;
@@ -15,6 +16,10 @@ mod test_mode;
 
 use bevy::prelude::SystemSet;
 
+pub(crate) use analytics::{
+    LastTrackedScreen, PendingSessionEndReason, SessionTracker, error_relay_system,
+    screen_viewed_system, session_ended_system, session_started_system,
+};
 pub(crate) use auto_connect::{
     AutoConnectRequest, auto_connect_poll_system, auto_connect_start_system,
 };
@@ -90,6 +95,7 @@ pub(crate) enum ClientSystemSet {
     MainMenuMusic,
     MenuBackdropCamera,
     AutoConnect,
+    Analytics,
     VoiceCaptureManage,
     VoiceTransmit,
     VoiceReceive,

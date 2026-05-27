@@ -261,6 +261,18 @@ jobs:
         run: rustup toolchain install --profile minimal --target "${{ matrix.target }}"
 
       - name: Build release binary
+        # PostHog config is embedded at compile time via `option_env!()` in
+        # `src/analytics/config.rs`. The repository variables below are the
+        # production project key + environment — players running the
+        # shipped binary phone home without any runtime env-var setup. The
+        # values are GitHub Variables (not Secrets) because PostHog project
+        # API keys are public-ish ingestion keys, not credentials.
+        env:
+          POSTHOG_API_KEY: ${{ vars.POSTHOG_API_KEY }}
+          POSTHOG_HOST: ${{ vars.POSTHOG_HOST }}
+          POSTHOG_ENVIRONMENT: ${{ vars.POSTHOG_ENVIRONMENT }}
+          POSTHOG_ENABLED: ${{ vars.POSTHOG_ENABLED }}
+          POSTHOG_DISABLE_GEOIP: ${{ vars.POSTHOG_DISABLE_GEOIP }}
         run: cargo build --locked --release --target "${{ matrix.target }}"
 
       - name: Package release binary

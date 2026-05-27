@@ -1,3 +1,4 @@
+pub mod analytics;
 pub mod app;
 pub mod cli;
 pub mod controller;

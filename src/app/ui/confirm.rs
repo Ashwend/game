@@ -1,13 +1,21 @@
 use bevy_egui::egui;
 
-use crate::app::state::{ConfirmationAction, MenuState, SaveStore};
+use crate::{
+    analytics::{Analytics, Event},
+    app::state::{ConfirmationAction, MenuState, SaveStore},
+};
 
 use super::{
     modal::{self, ConfirmationChoice},
     worlds::refresh_worlds,
 };
 
-pub(super) fn confirmation_ui(ctx: &egui::Context, menu: &mut MenuState, store: &SaveStore) {
+pub(super) fn confirmation_ui(
+    ctx: &egui::Context,
+    menu: &mut MenuState,
+    store: &SaveStore,
+    analytics: &Analytics,
+) {
     let Some(dialog) = menu.confirmation.as_mut() else {
         return;
     };
@@ -34,7 +42,7 @@ pub(super) fn confirmation_ui(ctx: &egui::Context, menu: &mut MenuState, store: 
         };
 
         if dialog.confirmed {
-            apply_confirmation_action(dialog.action, menu, store);
+            apply_confirmation_action(dialog.action, menu, store, analytics);
         }
     }
 }
@@ -63,10 +71,18 @@ pub(super) fn notice_ui(ctx: &egui::Context, menu: &mut MenuState) {
     }
 }
 
-fn apply_confirmation_action(action: ConfirmationAction, menu: &mut MenuState, store: &SaveStore) {
+fn apply_confirmation_action(
+    action: ConfirmationAction,
+    menu: &mut MenuState,
+    store: &SaveStore,
+    analytics: &Analytics,
+) {
     match action {
         ConfirmationAction::DeleteWorld { world_id } => match store.0.delete_world(world_id) {
-            Ok(()) => refresh_worlds(menu, store),
+            Ok(()) => {
+                analytics.track(Event::WorldDeleted);
+                refresh_worlds(menu, store);
+            }
             Err(error) => menu.status = Some(format!("delete failed: {error}")),
         },
     }
@@ -102,6 +118,7 @@ mod tests {
             ConfirmationAction::DeleteWorld { world_id: save.id },
             &mut menu,
             &store,
+            &Analytics::disabled(),
         );
 
         assert!(menu.worlds.is_empty());
@@ -123,6 +140,7 @@ mod tests {
             },
             &mut menu,
             &store,
+            &Analytics::disabled(),
         );
 
         assert!(

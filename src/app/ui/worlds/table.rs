@@ -2,6 +2,7 @@ use bevy_egui::egui;
 use uuid::Uuid;
 
 use crate::{
+    analytics::{Analytics, Event},
     app::state::{ConfirmationDialog, EditWorldDialog, MenuState, SaveStore, SteamUser},
     save::{CorruptedWorld, WorldSummary},
 };
@@ -32,6 +33,7 @@ pub(super) fn draw_world_table(
     menu: &mut MenuState,
     store: &SaveStore,
     user: &SteamUser,
+    analytics: &Analytics,
     table_height: f32,
 ) {
     let table_outer_width = ui.available_width();
@@ -55,7 +57,15 @@ pub(super) fn draw_world_table(
                         ui.set_width(table_content_width);
                         let worlds = menu.worlds.clone();
                         for world in worlds {
-                            draw_world_row(ui, menu, store, user, world, table_content_width);
+                            draw_world_row(
+                                ui,
+                                menu,
+                                store,
+                                user,
+                                analytics,
+                                world,
+                                table_content_width,
+                            );
                             ui.add_space(8.0);
                         }
                         let corrupted = menu.corrupted_worlds.clone();
@@ -119,6 +129,7 @@ fn draw_world_row(
     menu: &mut MenuState,
     store: &SaveStore,
     user: &SteamUser,
+    analytics: &Analytics,
     world: WorldSummary,
     row_outer_width: f32,
 ) {
@@ -189,6 +200,7 @@ fn draw_world_row(
         start_state,
     );
     if start_response.clicked() && starting_world.is_none() {
+        analytics.track(Event::WorldLoaded);
         start_singleplayer_in_background(menu, store, user, world.id);
     }
     if theme::compact_button_in_rect(

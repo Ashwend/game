@@ -8,6 +8,7 @@ use anyhow::Result;
 use bevy_egui::egui;
 
 use crate::{
+    analytics::{Analytics, ConnectFailReason, Event, events::mask_host},
     app::state::{
         ClientRuntime, DirectConnectAttempt, DirectConnectDialog, DirectConnectResult,
         LoadingSplash, LoadingSplashKind, MenuState, SteamUser,
@@ -44,6 +45,7 @@ pub(super) fn direct_connect_dialog_ui(
     menu: &mut MenuState,
     runtime: &mut ClientRuntime,
     user: &SteamUser,
+    analytics: &Analytics,
 ) {
     let connect_result = {
         let Some(dialog) = menu.direct_connect.as_mut() else {
@@ -58,7 +60,7 @@ pub(super) fn direct_connect_dialog_ui(
     };
 
     if let Some(result) = connect_result {
-        finish_direct_connect(menu, runtime, result);
+        finish_direct_connect(menu, runtime, result, analytics);
     }
 
     let finished_closing;
@@ -74,8 +76,14 @@ pub(super) fn direct_connect_dialog_ui(
                 DirectConnectChoice::Connect => match direct_connect_target(dialog) {
                     Ok(target) => {
                         let display_target = format!("{}:{}", target.host, target.port);
+                        analytics.track(Event::ConnectAttempted {
+                            target_host_masked: mask_host(&display_target),
+                        });
                         if let Err(error) = start_direct_connect_attempt(ctx, dialog, target, user)
                         {
+                            analytics.track(Event::ConnectFailed {
+                                reason: ConnectFailReason::Other,
+                            });
                             dialog.error = Some(error);
                             ctx.request_repaint();
                         } else {
@@ -83,6 +91,9 @@ pub(super) fn direct_connect_dialog_ui(
                         }
                     }
                     Err(error) => {
+                        analytics.track(Event::ConnectFailed {
+                            reason: ConnectFailReason::BadAddress,
+                        });
                         dialog.error = Some(error.to_string());
                         ctx.request_repaint();
                     }
@@ -258,15 +269,20 @@ fn finish_direct_connect(
     menu: &mut MenuState,
     runtime: &mut ClientRuntime,
     result: DirectConnectResult,
+    analytics: &Analytics,
 ) {
     match result {
         Ok((addr, session)) => {
+            analytics.track(Event::ConnectSucceeded);
             runtime.start_session(session, None);
             menu.multiplayer_addr = addr.to_string();
             menu.direct_connect = None;
             menu.enter_in_game();
         }
         Err(error) => {
+            analytics.track(Event::ConnectFailed {
+                reason: classify_connect_error(&error),
+            });
             if let Some(dialog) = menu.direct_connect.as_mut() {
                 dialog.error = Some(format!("Connection failed: {error}"));
             } else {
@@ -274,6 +290,23 @@ fn finish_direct_connect(
             }
             menu.loading_splash = None;
         }
+    }
+}
+
+fn classify_connect_error(error: &str) -> ConnectFailReason {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("timeout") || lower.contains("timed out") {
+        ConnectFailReason::Timeout
+    } else if lower.contains("refused") {
+        ConnectFailReason::Refused
+    } else if lower.contains("version") || lower.contains("protocol") {
+        ConnectFailReason::VersionMismatch
+    } else if lower.contains("auth") {
+        ConnectFailReason::AuthRejected
+    } else if lower.contains("address") || lower.contains("resolve") || lower.contains("dns") {
+        ConnectFailReason::BadAddress
+    } else {
+        ConnectFailReason::Other
     }
 }
 

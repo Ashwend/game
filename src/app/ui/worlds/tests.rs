@@ -136,7 +136,13 @@ fn create_world_from_dialog_persists_selected_map() {
         confirmed: true,
     };
 
-    create_world_from_dialog(dialog, &mut menu, &store, &user);
+    create_world_from_dialog(
+        dialog,
+        &mut menu,
+        &store,
+        &user,
+        &crate::analytics::Analytics::disabled(),
+    );
 
     assert!(menu.status.is_none());
     assert_eq!(menu.worlds.len(), 1);
@@ -241,7 +247,14 @@ fn enter_confirms_create_world_modal() {
     let _ = ctx.run(
         raw_input_with_events(vec![key_press(egui::Key::Enter)]),
         |ctx| {
-            super::worlds_ui(ctx, &mut menu, &mut runtime, &store, &user);
+            super::worlds_ui(
+                ctx,
+                &mut menu,
+                &mut runtime,
+                &store,
+                &user,
+                &crate::analytics::Analytics::disabled(),
+            );
         },
     );
 
@@ -263,7 +276,14 @@ fn worlds_ui_renders_empty_and_populated_tables() {
     let mut runtime = ClientRuntime::default();
 
     let _ = ctx.run(raw_input(), |ctx| {
-        super::worlds_ui(ctx, &mut menu, &mut runtime, &store, &user);
+        super::worlds_ui(
+            ctx,
+            &mut menu,
+            &mut runtime,
+            &store,
+            &user,
+            &crate::analytics::Analytics::disabled(),
+        );
     });
 
     store
@@ -274,7 +294,14 @@ fn worlds_ui_renders_empty_and_populated_tables() {
     assert_eq!(menu.worlds[0].map, MapType::default());
 
     let _ = ctx.run(raw_input(), |ctx| {
-        super::worlds_ui(ctx, &mut menu, &mut runtime, &store, &user);
+        super::worlds_ui(
+            ctx,
+            &mut menu,
+            &mut runtime,
+            &store,
+            &user,
+            &crate::analytics::Analytics::disabled(),
+        );
     });
 
     let _ = fs::remove_dir_all(store.0.root());

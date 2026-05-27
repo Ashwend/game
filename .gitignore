@@ -3,3 +3,4 @@
 .DS_Store
 /steam_appid.txt
 /.claude/
+/analytics.local.toml

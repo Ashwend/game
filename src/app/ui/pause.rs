@@ -1,6 +1,12 @@
 use bevy_egui::egui;
 
-use crate::app::state::{ClientRuntime, MenuState, SaveStore, Screen, SessionShutdownTasks};
+use crate::{
+    analytics::SessionEndReason,
+    app::{
+        state::{ClientRuntime, MenuState, SaveStore, Screen, SessionShutdownTasks},
+        systems::PendingSessionEndReason,
+    },
+};
 
 use super::{danger_menu_button, menu_button, modal::backdrop_layer, theme};
 
@@ -10,6 +16,7 @@ pub(super) fn pause_ui(
     runtime: &mut ClientRuntime,
     shutdown_tasks: &mut SessionShutdownTasks,
     store: &SaveStore,
+    pending_session_end: &mut PendingSessionEndReason,
 ) {
     let backdrop_response = backdrop_layer(
         ctx,
@@ -41,6 +48,7 @@ pub(super) fn pause_ui(
                         menu.pause_options_open = true;
                     }
                     if danger_menu_button(ui, "Quit").clicked() {
+                        pending_session_end.0 = Some(SessionEndReason::UserQuit);
                         runtime.shutdown_in_background(store.0.clone(), shutdown_tasks);
                         menu.screen = Screen::MainMenu;
                         menu.pause_open = false;
@@ -85,9 +93,17 @@ mod tests {
         let store = SaveStore(WorldStore::new(
             std::env::temp_dir().join(format!("game-pause-test-{}", uuid::Uuid::new_v4())),
         ));
+        let mut pending_session_end = PendingSessionEndReason::default();
 
         let output = ctx.run(raw_input(), |ctx| {
-            pause_ui(ctx, &mut menu, &mut runtime, &mut shutdown_tasks, &store);
+            pause_ui(
+                ctx,
+                &mut menu,
+                &mut runtime,
+                &mut shutdown_tasks,
+                &store,
+                &mut pending_session_end,
+            );
         });
 
         assert!(output.shapes.len() > 1);

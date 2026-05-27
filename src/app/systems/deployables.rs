@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 use bevy::{light::NotShadowCaster, prelude::*, window::PrimaryWindow};
 
 use crate::{
+    analytics::{Analytics, Event},
     app::{
         scene::{
             DeployablePlacementGhost, DeployableVisualAssets, FurnaceMouthLight, MainCamera,
@@ -104,6 +105,7 @@ pub(crate) fn placement_input_system(
     mut error_toasts: MessageWriter<ClientErrorToast>,
     menu: Res<MenuState>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
+    analytics: Res<Analytics>,
 ) {
     if !gameplay_accepts_input(&menu, &primary_window) {
         return;
@@ -131,6 +133,7 @@ pub(crate) fn placement_input_system(
         if !placement.valid {
             return;
         }
+        let kind_label = deployable_kind_label(&item_id);
         send_place_deployable_command(
             &mut runtime,
             &mut error_toasts,
@@ -140,7 +143,19 @@ pub(crate) fn placement_input_system(
                 yaw: placement.yaw,
             },
         );
+        if let Some(kind) = kind_label {
+            analytics.track(Event::DeployablePlaced { kind });
+        }
     }
+}
+
+fn deployable_kind_label(item_id: &ItemId) -> Option<String> {
+    let definition = item_definition(item_id)?;
+    let profile = definition.deployable?;
+    Some(match profile.kind {
+        DeployableKind::Workbench { .. } => "workbench".to_owned(),
+        DeployableKind::Furnace { .. } => "furnace".to_owned(),
+    })
 }
 
 /// Diff the snapshot's placed-structure list against the live entities.

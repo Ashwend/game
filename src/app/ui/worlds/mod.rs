@@ -6,7 +6,10 @@ mod tests;
 
 use bevy_egui::egui;
 
-use crate::app::state::{ClientRuntime, MenuState, SaveStore, Screen, SteamUser};
+use crate::{
+    analytics::Analytics,
+    app::state::{ClientRuntime, MenuState, SaveStore, Screen, SteamUser},
+};
 
 use super::theme::{self, BOUNDED_PANEL_VERTICAL_PADDING, BoundedPanelFill, ButtonKind};
 use dialogs::{create_world_dialog_ui, edit_world_dialog_ui, open_create_world_dialog};
@@ -20,6 +23,7 @@ pub(super) fn worlds_ui(
     runtime: &mut ClientRuntime,
     store: &SaveStore,
     user: &SteamUser,
+    analytics: &Analytics,
 ) {
     theme::screen_scrim(ctx, "worlds_scrim", 145);
     handle_worlds_escape(ctx, menu);
@@ -62,7 +66,7 @@ pub(super) fn worlds_ui(
             // bounded panel after the header + status reservation.
             let status_reserve = if menu.status.is_some() { 26.0 } else { 0.0 };
             let table_height = available_table_height(ui, status_reserve);
-            draw_world_table(ui, menu, store, user, table_height);
+            draw_world_table(ui, menu, store, user, analytics, table_height);
 
             if let Some(status) = &menu.status {
                 ui.add_space(10.0);
@@ -70,7 +74,7 @@ pub(super) fn worlds_ui(
             }
         },
     );
-    create_world_dialog_ui(ctx, menu, store, user);
+    create_world_dialog_ui(ctx, menu, store, user, analytics);
     edit_world_dialog_ui(ctx, menu, store);
 }
 

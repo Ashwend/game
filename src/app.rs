@@ -23,6 +23,7 @@ use bevy_egui::{EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass};
 use bevy_framepace::{FramepacePlugin, FramepaceSettings};
 
 use crate::{
+    analytics::AnalyticsPlugin,
     save::WorldStore,
     steam::{OfflineSteamBackend, SteamBackend},
 };
@@ -47,15 +48,17 @@ use self::{
     },
     systems::{
         AutoConnectRequest, CameraImpactKick, CameraMotionEffects, ClientSystemSet,
-        DroppedItemEntities, RemotePlayerEntities, ResourceNodeEntities, app_quit_system,
-        apply_deployed_entities_system, apply_display_settings_system, apply_dropped_items_system,
-        apply_held_item_visual_system, apply_resource_nodes_system, apply_snapshot_system,
-        apply_test_mode_overrides_system, auto_connect_poll_system, auto_connect_start_system,
-        camera_follow_system, center_cursor_on_focus_system, chat_shortcut_system,
-        chunk_overlay_system, client_input_system, close_furnace_on_escape_system,
+        DroppedItemEntities, LastTrackedScreen, PendingSessionEndReason, RemotePlayerEntities,
+        ResourceNodeEntities, SessionTracker, app_quit_system, apply_deployed_entities_system,
+        apply_display_settings_system, apply_dropped_items_system, apply_held_item_visual_system,
+        apply_resource_nodes_system, apply_snapshot_system, apply_test_mode_overrides_system,
+        auto_connect_poll_system, auto_connect_start_system, camera_follow_system,
+        center_cursor_on_focus_system, chat_shortcut_system, chunk_overlay_system,
+        client_input_system, close_furnace_on_escape_system, error_relay_system,
         gameplay_inventory_shortcuts_system, menu_backdrop_camera_system, mouse_look_system,
         network_tick_system, placement_input_system, reposition_test_window_system,
-        save_client_settings_system, session_shutdown_poll_system, spawn_impact_effects_system,
+        save_client_settings_system, screen_viewed_system, session_ended_system,
+        session_shutdown_poll_system, session_started_system, spawn_impact_effects_system,
         surface_client_error_toasts_system, sync_furnace_open_flag_system, sync_view_radius_system,
         tick_felling_trees_system, tick_impact_chips_system, tick_resource_node_pop_in_system,
         toggle_crafting_system, toggle_inventory_system, toggle_pause_system,
@@ -147,6 +150,10 @@ const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::VoiceSettings,
     ClientSystemSet::TestModeApply,
     ClientSystemSet::TestWindowReposition,
+    // Analytics observer systems run last so the screen/session/error
+    // edges they detect reflect every other system's writes from this
+    // frame.
+    ClientSystemSet::Analytics,
 ];
 
 /// Menu-only systems form their own short chain — independent of the main
@@ -214,6 +221,9 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .insert_resource(RemotePlayerEntities::default())
         .insert_resource(LookState::default())
         .insert_resource(ToastState::default())
+        .insert_resource(LastTrackedScreen::default())
+        .insert_resource(SessionTracker::default())
+        .insert_resource(PendingSessionEndReason::default())
         // `continuous()` rather than `desktop_app()`: the menu backdrop
         // camera pans continuously (see `menu_backdrop_camera_system`) and
         // needs steady frames to look smooth. Switching to reactive update
@@ -301,6 +311,10 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         // `apply_display_settings_system` keeps it in sync when the user
         // toggles vsync at runtime.
         .add_plugins(FramepacePlugin)
+        // Analytics. Disabled by default; reads `analytics.local.toml` /
+        // `POSTHOG_*` env vars at startup. Client-only — dedicated server
+        // and admin CLI never load this plugin.
+        .add_plugins(AnalyticsPlugin)
         .insert_resource(FramepaceSettings {
             limiter: window_settings.frame_limiter(),
         })
@@ -518,6 +532,17 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .add_systems(
             Update,
             reposition_test_window_system.in_set(ClientSystemSet::TestWindowReposition),
+        )
+        .add_systems(
+            Update,
+            (
+                screen_viewed_system,
+                session_started_system,
+                session_ended_system,
+                error_relay_system,
+            )
+                .chain()
+                .in_set(ClientSystemSet::Analytics),
         )
         .run();
 

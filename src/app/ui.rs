@@ -50,7 +50,9 @@ use super::state::{
     InventorySoundEvent, MenuBackdropVisibility, MenuState, OptionsUiState, SaveStore, Screen,
     SessionShutdownTasks, SteamUser, ToastState,
 };
+use super::systems::PendingSessionEndReason;
 use super::voice::VoiceState;
+use crate::analytics::Analytics;
 
 #[derive(SystemParam)]
 pub(crate) struct UiResources<'w, 's> {
@@ -77,6 +79,8 @@ pub(crate) struct UiResources<'w, 's> {
     primary_monitor: Query<'w, 's, &'static Monitor, With<PrimaryMonitor>>,
     peer_overlay: PeerOverlayParams<'w, 's>,
     deployable_overlay: DeployableOverlayParams<'w, 's>,
+    analytics: Res<'w, Analytics>,
+    pending_session_end: ResMut<'w, PendingSessionEndReason>,
 }
 
 pub(crate) fn ui_system(
@@ -105,6 +109,7 @@ pub(crate) fn ui_system(
             &mut resources.runtime,
             &resources.store,
             &resources.user,
+            &resources.analytics,
         ),
         Screen::Options => {
             let primary_monitor = resources.primary_monitor.single().ok();
@@ -123,6 +128,7 @@ pub(crate) fn ui_system(
             &mut resources.menu,
             &mut resources.runtime,
             &resources.user,
+            &resources.analytics,
         ),
         Screen::InGame => {
             if resources.menu.pause_options_open {
@@ -246,12 +252,18 @@ pub(crate) fn ui_system(
                     &mut resources.runtime,
                     &mut resources.shutdown_tasks,
                     &resources.store,
+                    &mut resources.pending_session_end,
                 );
             }
         }
     }
 
-    confirmation_ui(ctx, &mut resources.menu, &resources.store);
+    confirmation_ui(
+        ctx,
+        &mut resources.menu,
+        &resources.store,
+        &resources.analytics,
+    );
     notice_ui(ctx, &mut resources.menu);
     // Splash overlay sits on top of every screen and modal. It covers the
     // app-launch warmup ("Authenticating") and every menu→game transition
