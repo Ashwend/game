@@ -560,6 +560,17 @@ impl ChunkManager {
         self.node_chunks.get(&id).map(|(coord, _)| *coord)
     }
 
+    /// Reverse lookup for dropped items. Returns `None` if the item id is
+    /// not currently tracked (e.g. just picked up, just despawned).
+    pub fn dropped_item_chunk(&self, id: DroppedItemId) -> Option<ChunkCoord> {
+        self.dropped_item_chunks.get(&id).copied()
+    }
+
+    /// Reverse lookup for placed structures.
+    pub fn deployed_entity_chunk(&self, id: DeployedEntityId) -> Option<ChunkCoord> {
+        self.deployed_entity_chunks.get(&id).copied()
+    }
+
     /// Live resource node ids anchored to `coord`. Empty iterator for
     /// unloaded chunks. Cheap — backed by the per-chunk live set.
     pub fn nodes_in(&self, coord: ChunkCoord) -> impl Iterator<Item = ResourceNodeId> + '_ {

@@ -38,12 +38,15 @@ pub mod chunk_manager;
 mod commands;
 mod connection;
 mod crafting;
+pub mod deployable_ecs;
 mod deployables;
+pub mod dropped_item_ecs;
 mod dropped_items;
 mod furnace;
 mod inventory;
 pub(crate) mod movement;
 mod persistence;
+pub mod player_ecs;
 pub mod resource_node_ecs;
 mod resource_nodes;
 mod toasts;
@@ -51,6 +54,18 @@ mod voice;
 mod world_time;
 
 pub use chunk_manager::{ChunkManager, ChunkManagerSave, view_tier_radius};
+pub use deployable_ecs::{
+    Deployable, DeployableActive, DeployableChunk, DeployableHealth, DeployableIndex,
+    DeployableTransform, DeployableView, despawn_deployable_entity, spawn_deployable_entity,
+};
+pub use dropped_item_ecs::{
+    DroppedItem, DroppedItemChunk, DroppedItemIndex, DroppedItemTransform,
+    despawn_dropped_item_entity, read_dropped_item, spawn_dropped_item_entity,
+};
+pub use player_ecs::{
+    Player, PlayerChunk, PlayerIndex, PlayerPrivate, PlayerPublic, PlayerView,
+    despawn_player_entity, spawn_player_entity,
+};
 pub use resource_node_ecs::{
     ResourceNode, ResourceNodeChunk, ResourceNodeIndex, ResourceNodeStorage,
     collect_resource_node_states, despawn_resource_node_entity, read_resource_node_state,
@@ -350,6 +365,77 @@ impl GameServer {
     /// state immediately after depletion).
     pub fn resource_node_chunk(&self, id: ResourceNodeId) -> Option<crate::world::ChunkCoord> {
         self.chunk_manager.node_chunk(id)
+    }
+
+    /// Iterate live dropped items (id + wire-shape view) for the
+    /// `sync_dropped_item_entities` mirror.
+    pub fn dropped_items_iter(
+        &self,
+    ) -> impl Iterator<Item = (DroppedItemId, crate::protocol::DroppedWorldItem)> + '_ {
+        self.dropped_items
+            .iter()
+            .map(|(id, body)| (*id, body.item.clone()))
+    }
+
+    /// Chunk a dropped item is anchored to (per chunk_manager bookkeeping).
+    pub fn dropped_item_chunk(&self, id: DroppedItemId) -> Option<crate::world::ChunkCoord> {
+        self.chunk_manager.dropped_item_chunk(id)
+    }
+
+    /// Iterate live deployables as the wire-shape view the mirror needs.
+    pub fn deployables_iter(&self) -> impl Iterator<Item = deployable_ecs::DeployableView> + '_ {
+        self.deployed_entities.values().map(|entity| {
+            let active = entity.furnace.as_ref().map(|f| f.active).unwrap_or(false);
+            deployable_ecs::DeployableView {
+                id: entity.id,
+                item_id: entity.item_id.clone(),
+                kind: entity.kind,
+                position: entity.position,
+                yaw: entity.yaw,
+                health: entity.health,
+                max_health: entity.max_health,
+                active,
+            }
+        })
+    }
+
+    /// Chunk a deployable is anchored to.
+    pub fn deployable_chunk(&self, id: DeployedEntityId) -> Option<crate::world::ChunkCoord> {
+        self.chunk_manager.deployed_entity_chunk(id)
+    }
+
+    /// Iterate connected players as wire-shape views (public + private
+    /// split) for the player mirror.
+    pub fn players_iter(&self) -> impl Iterator<Item = player_ecs::PlayerView> + '_ {
+        self.clients.values().map(|client| player_ecs::PlayerView {
+            client_id: client.client_id,
+            steam_id: client.steam_id,
+            public: player_ecs::PlayerPublic {
+                name: client.name.clone(),
+                position: client.controller.position,
+                velocity: client.controller.velocity,
+                yaw: client.controller.yaw,
+                pitch: client.controller.pitch,
+                health: client.controller.health,
+                grounded: client.controller.grounded,
+                is_admin: client.is_admin,
+                chat_bubble: client
+                    .chat_bubble
+                    .as_ref()
+                    .map(|bubble| bubble.text.clone()),
+            },
+            private: player_ecs::PlayerPrivate {
+                inventory: client.inventory.clone(),
+                crafting: client.crafting.clone(),
+                open_furnace: client.open_furnace,
+                last_processed_input: client.controller.last_processed_input,
+            },
+        })
+    }
+
+    /// Chunk a connected player is anchored to.
+    pub fn player_chunk(&self, id: ClientId) -> Option<crate::world::ChunkCoord> {
+        self.chunk_manager.player_chunk(id)
     }
 
     pub fn announce(&self, text: impl AsRef<str>) -> Vec<ServerEnvelope> {

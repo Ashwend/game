@@ -227,6 +227,9 @@ fn run_host(
     // the index lets the gather/admin paths find an entity in O(1) once
     // ownership is fully flipped in a later phase.
     app.insert_resource(crate::server::ResourceNodeIndex::default());
+    app.insert_resource(crate::server::DroppedItemIndex::default());
+    app.insert_resource(crate::server::DeployableIndex::default());
+    app.insert_resource(crate::server::PlayerIndex::default());
     install_admin_socket(&mut app, admin_socket)?;
 
     app.add_systems(Startup, move |mut commands: Commands| {
@@ -244,6 +247,9 @@ fn run_host(
             handle_disconnected_clients,
             tick_authoritative_server,
             sync_resource_node_entities,
+            sync_dropped_item_entities,
+            sync_deployable_entities,
+            sync_player_entities,
         )
             .chain(),
     );
@@ -256,6 +262,9 @@ fn run_host(
             handle_disconnected_clients,
             tick_authoritative_server,
             sync_resource_node_entities,
+            sync_dropped_item_entities,
+            sync_deployable_entities,
+            sync_player_entities,
         )
             .chain(),
     );
@@ -381,6 +390,191 @@ fn sync_resource_node_entities(world: &mut World) {
                         crate::world::ChunkCoord::from_world(state.position.x, state.position.z)
                     });
                 crate::server::spawn_resource_node_entity(world, state, chunk);
+            }
+        }
+    }
+}
+
+/// Reconciles `GameServer::dropped_items` into ECS entities. Same shape
+/// as `sync_resource_node_entities`: despawn ids that left the live map,
+/// spawn fresh entities for new ids, refresh transform + stack in place
+/// for surviving ids. Stack writes are change-detected so the
+/// `Changed<DroppedItem>` signal only fires on real merges.
+fn sync_dropped_item_entities(world: &mut World) {
+    let _span = info_span!("sync_dropped_item_entities").entered();
+    let authoritative: Vec<(
+        crate::protocol::DroppedItemId,
+        crate::protocol::DroppedWorldItem,
+    )> = {
+        let server = world.resource::<AuthoritativeServer>();
+        server.0.dropped_items_iter().collect()
+    };
+    let live_ids: std::collections::HashSet<crate::protocol::DroppedItemId> =
+        authoritative.iter().map(|(id, _)| *id).collect();
+
+    let stale: Vec<crate::protocol::DroppedItemId> = {
+        let index = world.resource::<crate::server::DroppedItemIndex>();
+        index
+            .iter()
+            .filter_map(|(id, _)| (!live_ids.contains(&id)).then_some(id))
+            .collect()
+    };
+    for id in stale {
+        crate::server::despawn_dropped_item_entity(world, id);
+    }
+
+    for (id, item) in authoritative {
+        let existing = world.resource::<crate::server::DroppedItemIndex>().get(id);
+        match existing {
+            Some(entity) => {
+                // Transform changes every physics tick while the body is
+                // settling; refresh unconditionally but rely on Bevy's
+                // change tick model to suppress no-op writes.
+                let new_transform = crate::server::DroppedItemTransform {
+                    position: item.position,
+                    yaw: item.yaw,
+                    rotation: item.rotation,
+                };
+                if let Some(mut transform) =
+                    world.get_mut::<crate::server::DroppedItemTransform>(entity)
+                    && (transform.position != new_transform.position
+                        || transform.yaw != new_transform.yaw
+                        || transform.rotation != new_transform.rotation)
+                {
+                    *transform = new_transform;
+                }
+                if let Some(mut drop) = world.get_mut::<crate::server::DroppedItem>(entity)
+                    && drop.stack != item.stack
+                {
+                    drop.stack = item.stack;
+                }
+            }
+            None => {
+                let chunk = world
+                    .resource::<AuthoritativeServer>()
+                    .0
+                    .dropped_item_chunk(id)
+                    .unwrap_or_else(|| {
+                        crate::world::ChunkCoord::from_world(item.position.x, item.position.z)
+                    });
+                crate::server::spawn_dropped_item_entity(world, item, chunk);
+            }
+        }
+    }
+}
+
+/// Reconciles `GameServer::deployed_entities` into ECS entities. Each
+/// surviving id has its `DeployableHealth` and `DeployableActive`
+/// refreshed in place so a furnace switching on/off or a wall taking a
+/// hit ships exactly one component delta in the future replication path.
+fn sync_deployable_entities(world: &mut World) {
+    let _span = info_span!("sync_deployable_entities").entered();
+    let authoritative: Vec<crate::server::DeployableView> = {
+        let server = world.resource::<AuthoritativeServer>();
+        server.0.deployables_iter().collect()
+    };
+    let live_ids: std::collections::HashSet<crate::protocol::DeployedEntityId> =
+        authoritative.iter().map(|view| view.id).collect();
+
+    let stale: Vec<crate::protocol::DeployedEntityId> = {
+        let index = world.resource::<crate::server::DeployableIndex>();
+        index
+            .iter()
+            .filter_map(|(id, _)| (!live_ids.contains(&id)).then_some(id))
+            .collect()
+    };
+    for id in stale {
+        crate::server::despawn_deployable_entity(world, id);
+    }
+
+    for view in authoritative {
+        let existing = world
+            .resource::<crate::server::DeployableIndex>()
+            .get(view.id);
+        match existing {
+            Some(entity) => {
+                if let Some(mut health) = world.get_mut::<crate::server::DeployableHealth>(entity)
+                    && health.0 != view.health
+                {
+                    health.0 = view.health;
+                }
+                if let Some(mut active) = world.get_mut::<crate::server::DeployableActive>(entity)
+                    && active.0 != view.active
+                {
+                    active.0 = view.active;
+                }
+            }
+            None => {
+                let chunk = world
+                    .resource::<AuthoritativeServer>()
+                    .0
+                    .deployable_chunk(view.id)
+                    .unwrap_or_else(|| {
+                        crate::world::ChunkCoord::from_world(view.position.x, view.position.z)
+                    });
+                crate::server::spawn_deployable_entity(world, view, chunk);
+            }
+        }
+    }
+}
+
+/// Reconciles `GameServer::clients` into ECS entities. Spawns one entity
+/// per connected client and keeps its public + private components in
+/// sync with the authoritative `ServerClient`. The public/private split
+/// is what Phase 5 uses to ship per-component `Replicate::to_clients`
+/// targets — `NetworkTarget::All` for public, `Single(client_id)` for
+/// private.
+fn sync_player_entities(world: &mut World) {
+    let _span = info_span!("sync_player_entities").entered();
+    let authoritative: Vec<crate::server::PlayerView> = {
+        let server = world.resource::<AuthoritativeServer>();
+        server.0.players_iter().collect()
+    };
+    let live_ids: std::collections::HashSet<crate::protocol::ClientId> =
+        authoritative.iter().map(|view| view.client_id).collect();
+
+    let stale: Vec<crate::protocol::ClientId> = {
+        let index = world.resource::<crate::server::PlayerIndex>();
+        index
+            .iter()
+            .filter_map(|(id, _)| (!live_ids.contains(&id)).then_some(id))
+            .collect()
+    };
+    for id in stale {
+        crate::server::despawn_player_entity(world, id);
+    }
+
+    for view in authoritative {
+        let existing = world
+            .resource::<crate::server::PlayerIndex>()
+            .get(view.client_id);
+        match existing {
+            Some(entity) => {
+                // Refresh public — position/velocity tick every frame.
+                if let Some(mut public) = world.get_mut::<crate::server::PlayerPublic>(entity)
+                    && *public != view.public
+                {
+                    *public = view.public.clone();
+                }
+                // Refresh private — inventory/crafting change on user action.
+                if let Some(mut private) = world.get_mut::<crate::server::PlayerPrivate>(entity)
+                    && *private != view.private
+                {
+                    *private = view.private;
+                }
+            }
+            None => {
+                let chunk = world
+                    .resource::<AuthoritativeServer>()
+                    .0
+                    .player_chunk(view.client_id)
+                    .unwrap_or_else(|| {
+                        crate::world::ChunkCoord::from_world(
+                            view.public.position.x,
+                            view.public.position.z,
+                        )
+                    });
+                crate::server::spawn_player_entity(world, view, chunk);
             }
         }
     }
