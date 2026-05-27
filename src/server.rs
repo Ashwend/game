@@ -456,7 +456,7 @@ impl GameServer {
             private: player_ecs::PlayerPrivate {
                 inventory: client.inventory.clone(),
                 crafting: client.crafting.clone(),
-                open_furnace: self.open_furnace_view_for(client.client_id),
+                open_furnace: client.open_furnace,
                 last_processed_input: client.controller.last_processed_input,
             },
         })
@@ -540,17 +540,24 @@ impl GameServer {
             self.last_world_time_broadcast_tick = self.tick;
         }
 
-        // Phase 6 (replication migration): per-tick `WorldSnapshot` broadcasts
-        // are gone. Per-entity component state ships through Lightyear's
-        // room-gated replication path (Phases 4–5). The client synthesises
-        // its `runtime.snapshot` view locally from replicated components
-        // each frame, so the wire is silent on entity state outside of
-        // chunk-crossing bursts.
+        // Per-client snapshots: each client gets a copy where only their own
+        // player carries the inventory payload. Saves bandwidth and keeps
+        // hotbar contents private without needing a separate inventory
+        // message channel.
+        let client_ids = self.clients.keys().copied().collect::<Vec<_>>();
+        {
+            let _span = info_span!("snapshot_broadcast", clients = client_ids.len()).entered();
+            for client_id in &client_ids {
+                envelopes.push(ServerEnvelope {
+                    target: DeliveryTarget::Client(*client_id),
+                    message: ServerMessage::Snapshot(self.snapshot_for(*client_id)),
+                });
+            }
+        }
         if self
             .tick
             .is_multiple_of(PERF_STATS_BROADCAST_INTERVAL_TICKS)
         {
-            let client_ids = self.clients.keys().copied().collect::<Vec<_>>();
             for client_id in client_ids {
                 envelopes.push(ServerEnvelope {
                     target: DeliveryTarget::Client(client_id),

@@ -111,14 +111,35 @@ fn singleplayer_session_connects_through_loopback_server() {
             .iter()
             .any(|message| matches!(message, ServerMessage::Welcome { .. }))
     );
+
+    let snapshots = collect_until(&mut rig, |messages| {
+        messages
+            .iter()
+            .any(|message| matches!(message, ServerMessage::Snapshot(_)))
+    });
+    assert!(
+        snapshots
+            .iter()
+            .any(|message| matches!(message, ServerMessage::Snapshot(_)))
+    );
 }
 
-// Phase 6 removed the per-tick `ServerMessage::Snapshot` wire broadcast.
-// Per-entity component state arrives through Lightyear's room-gated
-// replication path instead; the client synthesises its `runtime.snapshot`
-// from the replicated components each frame. The previous
-// `singleplayer_session_receives_authoritative_snapshots_from_loopback_host`
-// test only exercised the wire variant and was deleted with it.
+#[test]
+fn singleplayer_session_receives_authoritative_snapshots_from_loopback_host() {
+    let mut rig = TestRig::singleplayer();
+
+    let messages = collect_until(&mut rig, |messages| {
+        messages
+            .iter()
+            .any(|message| matches!(message, ServerMessage::Snapshot(_)))
+    });
+
+    assert!(
+        messages
+            .iter()
+            .any(|message| matches!(message, ServerMessage::Snapshot(_)))
+    );
+}
 
 #[test]
 fn singleplayer_chat_round_trips_through_network_server() {

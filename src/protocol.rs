@@ -635,6 +635,7 @@ pub enum ServerMessage {
         reason: String,
     },
     PlayerEvent(PlayerEvent),
+    Snapshot(WorldSnapshot),
     Correction(PlayerState),
     Chat(ChatMessage),
     ItemMerged {
@@ -790,7 +791,8 @@ impl ServerMessage {
             // voice rides an unordered unreliable channel so every
             // delivered frame is played even if it arrives out of order.
             Self::Voice { .. } => PacketDelivery::UnreliableUnordered,
-            Self::Correction(_)
+            Self::Snapshot(_)
+            | Self::Correction(_)
             | Self::ResourceImpact { .. }
             | Self::WorldTime(_)
             | Self::PerfStats(_)

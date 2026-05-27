@@ -8,7 +8,7 @@ mod inventory;
 mod look;
 mod menu;
 mod options_ui;
-pub(crate) mod runtime;
+mod runtime;
 mod settings;
 mod test_mode;
 #[cfg(test)]

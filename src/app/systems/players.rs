@@ -1,8 +1,11 @@
 use std::collections::HashSet;
 
-use bevy::prelude::*;
+use bevy::{ecs::change_detection::Ref, prelude::*};
 
-use crate::protocol::{ClientId, Vec3Net};
+use crate::{
+    protocol::{ClientId, Vec3Net},
+    server::{Player, PlayerPublic},
+};
 
 use super::super::{
     scene::{NetworkPlayer, PlayerVisualAssets, player_visual_position},
@@ -25,6 +28,7 @@ pub(crate) fn apply_snapshot_system(
     assets: Res<PlayerVisualAssets>,
     mut entities: ResMut<RemotePlayerEntities>,
     mut players: Query<(&Transform, &mut NetworkPlayerInterpolation), With<NetworkPlayer>>,
+    replicated: Query<(&Player, Ref<PlayerPublic>)>,
 ) {
     if runtime.snapshot.is_none() {
         for (_, entity) in entities.0.drain() {
@@ -34,7 +38,7 @@ pub(crate) fn apply_snapshot_system(
     }
 
     let local_client_id = runtime.client_id;
-    let players_in = collect_remote_players(&runtime);
+    let players_in = collect_remote_players(&runtime, &replicated);
     let snapshot_remote_ids: HashSet<ClientId> = players_in
         .iter()
         .filter(|p| Some(p.client_id) != local_client_id)
@@ -95,23 +99,43 @@ struct RemotePlayerSample {
     tick: u64,
 }
 
-fn collect_remote_players(runtime: &ClientRuntime) -> Vec<RemotePlayerSample> {
-    runtime
-        .snapshot
-        .as_ref()
-        .map(|snapshot| {
-            snapshot
-                .players
-                .iter()
-                .map(|player| RemotePlayerSample {
-                    client_id: player.client_id,
-                    position: player.position,
-                    yaw: player.yaw,
-                    tick: snapshot.tick,
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+fn collect_remote_players(
+    runtime: &ClientRuntime,
+    replicated: &Query<(&Player, Ref<PlayerPublic>)>,
+) -> Vec<RemotePlayerSample> {
+    #[cfg(feature = "replicated-nodes")]
+    {
+        let _ = runtime;
+        replicated
+            .iter()
+            .map(|(player, public)| RemotePlayerSample {
+                client_id: player.client_id,
+                position: public.position,
+                yaw: public.yaw,
+                tick: public.last_changed().get() as u64,
+            })
+            .collect()
+    }
+    #[cfg(not(feature = "replicated-nodes"))]
+    {
+        let _ = replicated;
+        runtime
+            .snapshot
+            .as_ref()
+            .map(|snapshot| {
+                snapshot
+                    .players
+                    .iter()
+                    .map(|player| RemotePlayerSample {
+                        client_id: player.client_id,
+                        position: player.position,
+                        yaw: player.yaw,
+                        tick: snapshot.tick,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Component, Debug, Clone, Copy)]
@@ -159,8 +183,10 @@ impl NetworkPlayerInterpolation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(feature = "replicated-nodes"))]
     use crate::protocol::{MAX_HEALTH, PlayerState, SteamId, Vec3Net, WorldSnapshot};
 
+    #[cfg(not(feature = "replicated-nodes"))]
     fn player(client_id: ClientId, steam_id: SteamId, position: Vec3Net, yaw: f32) -> PlayerState {
         PlayerState {
             client_id,
@@ -181,6 +207,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "replicated-nodes"))]
     fn app_with_snapshot(snapshot: Option<WorldSnapshot>, client_id: Option<ClientId>) -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -198,10 +225,12 @@ mod tests {
         app
     }
 
-    // `runtime.snapshot` is the locally-synthesized mirror of replicated
-    // state under Phase 6, but unit tests can still hand-build a snapshot
-    // and drive the consumer directly — the synth system only runs in
-    // the full app's Update schedule and is not included in this test rig.
+    // Snapshot-driven path. Under `replicated-nodes` the consumer reads
+    // from Lightyear-replicated `(Player, PlayerPublic)` entities instead;
+    // exercising that path needs the replication plugin spun up, which is
+    // out of scope for this unit test. Phase 6 will retire the snapshot
+    // path entirely and either delete this test or repoint it.
+    #[cfg(not(feature = "replicated-nodes"))]
     #[test]
     fn apply_snapshot_spawns_updates_and_removes_remote_players() {
         let mut app = app_with_snapshot(
