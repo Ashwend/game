@@ -222,6 +222,11 @@ fn run_host(
     app.insert_resource(ServerConnections::default());
     app.insert_resource(TickAccumulator::default());
     app.insert_resource(HostShutdown::default());
+    // Mirror of `GameServer::resource_nodes` into ECS entities. Phase 4
+    // (Lightyear room replication) attaches `Replicate` to these entities;
+    // the index lets the gather/admin paths find an entity in O(1) once
+    // ownership is fully flipped in a later phase.
+    app.insert_resource(crate::server::ResourceNodeIndex::default());
     install_admin_socket(&mut app, admin_socket)?;
 
     app.add_systems(Startup, move |mut commands: Commands| {
@@ -238,6 +243,7 @@ fn run_host(
             receive_client_messages,
             handle_disconnected_clients,
             tick_authoritative_server,
+            sync_resource_node_entities,
         )
             .chain(),
     );
@@ -249,6 +255,7 @@ fn run_host(
             receive_client_messages,
             handle_disconnected_clients,
             tick_authoritative_server,
+            sync_resource_node_entities,
         )
             .chain(),
     );
@@ -295,6 +302,85 @@ fn drain_host_commands(
             HostCommand::Shutdown(reply_tx) => {
                 shutdown.requested = true;
                 let _ = reply_tx.send(());
+            }
+        }
+    }
+}
+
+/// Reconciles the live `GameServer::resource_nodes` map into ECS entities
+/// once per Update. New ids spawn fresh entities; missing ids despawn the
+/// tracked entity; surviving ids get their `ResourceNodeStorage` refreshed
+/// in place so the per-component value tracks the authoritative HashMap.
+///
+/// Runs as an exclusive system because spawning / despawning needs
+/// `&mut World`. Cheap in steady state (no allocations when the id set
+/// is unchanged); the storage refresh writes are change-detected by Bevy
+/// so they only emit `Changed` ticks when the inner Vec actually differs.
+fn sync_resource_node_entities(world: &mut World) {
+    let _span = info_span!("sync_resource_node_entities").entered();
+    // Pull the authoritative state out as an owned snapshot so we can
+    // release the borrow before mutating the world (spawn/despawn need
+    // `&mut World` and would conflict with a live `Res<>` borrow).
+    let authoritative: Vec<(
+        crate::protocol::ResourceNodeId,
+        crate::protocol::ResourceNodeState,
+    )> = {
+        let server = world.resource::<AuthoritativeServer>();
+        server
+            .0
+            .resource_nodes_iter()
+            .map(|(id, state)| (*id, state.clone()))
+            .collect()
+    };
+    let authoritative_ids: std::collections::HashSet<crate::protocol::ResourceNodeId> =
+        authoritative.iter().map(|(id, _)| *id).collect();
+
+    // 1. Despawn entities whose node id is no longer in the live map.
+    let stale: Vec<crate::protocol::ResourceNodeId> = {
+        let index = world.resource::<crate::server::ResourceNodeIndex>();
+        index
+            .iter()
+            .filter_map(|(id, _)| {
+                if authoritative_ids.contains(&id) {
+                    None
+                } else {
+                    Some(id)
+                }
+            })
+            .collect()
+    };
+    for id in stale {
+        crate::server::despawn_resource_node_entity(world, id);
+    }
+
+    // 2. Walk the live map; spawn fresh entities, update existing ones.
+    for (id, state) in authoritative {
+        let existing = world.resource::<crate::server::ResourceNodeIndex>().get(id);
+        match existing {
+            Some(entity) => {
+                // Refresh storage in place. Change detection will only
+                // mark it changed when the Vec actually differs.
+                if let Some(mut storage) =
+                    world.get_mut::<crate::server::ResourceNodeStorage>(entity)
+                    && storage.0 != state.storage
+                {
+                    storage.0 = state.storage;
+                }
+            }
+            None => {
+                // Find the chunk this node anchors to. If chunk_manager
+                // hasn't tracked it yet (admin spawn arrived after the
+                // resource_nodes insert but before track_resource_node),
+                // fall back to the position's chunk so the entity still
+                // has a coord; the next tick will resync the membership.
+                let chunk = world
+                    .resource::<AuthoritativeServer>()
+                    .0
+                    .resource_node_chunk(id)
+                    .unwrap_or_else(|| {
+                        crate::world::ChunkCoord::from_world(state.position.x, state.position.z)
+                    });
+                crate::server::spawn_resource_node_entity(world, state, chunk);
             }
         }
     }

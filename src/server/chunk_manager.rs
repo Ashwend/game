@@ -552,6 +552,14 @@ impl ChunkManager {
         visible
     }
 
+    /// Reverse lookup: which chunk does this node id live in? Returns
+    /// `None` if the node id is unknown (already depleted, or never
+    /// existed). Used by the ECS mirror system to attach the right
+    /// chunk component when a fresh entity is spawned.
+    pub fn node_chunk(&self, id: ResourceNodeId) -> Option<ChunkCoord> {
+        self.node_chunks.get(&id).map(|(coord, _)| *coord)
+    }
+
     /// Live resource node ids anchored to `coord`. Empty iterator for
     /// unloaded chunks. Cheap — backed by the per-chunk live set.
     pub fn nodes_in(&self, coord: ChunkCoord) -> impl Iterator<Item = ResourceNodeId> + '_ {

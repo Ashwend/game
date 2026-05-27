@@ -44,12 +44,18 @@ mod furnace;
 mod inventory;
 pub(crate) mod movement;
 mod persistence;
+pub mod resource_node_ecs;
 mod resource_nodes;
 mod toasts;
 mod voice;
 mod world_time;
 
 pub use chunk_manager::{ChunkManager, ChunkManagerSave, view_tier_radius};
+pub use resource_node_ecs::{
+    ResourceNode, ResourceNodeChunk, ResourceNodeIndex, ResourceNodeStorage,
+    collect_resource_node_states, despawn_resource_node_entity, read_resource_node_state,
+    spawn_resource_node_entity,
+};
 pub use voice::VOICE_AUDIBLE_RANGE;
 
 use self::{
@@ -109,6 +115,12 @@ pub struct GameServer {
     persisted_players: HashMap<SteamId, PersistedPlayer>,
     dropped_items: HashMap<DroppedItemId, DroppedItemBody>,
     dropped_item_physics: DroppedItemPhysics,
+    /// Authoritative live resource node state, keyed by id. A sync system
+    /// (`sync_resource_node_entities`) mirrors this map into ECS entities
+    /// in the Lightyear server `World` so per-entity replication (Phase 4)
+    /// can attach `Replicate` to them without flipping ownership in one
+    /// big change. Future cleanup will fold this map into the entities
+    /// themselves once Lightyear replication is proven.
     resource_nodes: HashMap<ResourceNodeId, ResourceNodeState>,
     /// Server-authoritative chunk system. Owns per-chunk capacity, AoI
     /// visibility, and the fresh-position regrow scheduler.
@@ -315,6 +327,29 @@ impl GameServer {
             ClientMessage::Heartbeat => Vec::new(),
             ClientMessage::Disconnect => self.disconnect(client_id),
         }
+    }
+
+    /// Read-only access to the live resource node map. Used by the ECS
+    /// mirror system in `net/host` to keep entity state in sync with this
+    /// authoritative map. Avoid mutating callers; use the existing gather/
+    /// regrow paths which already update chunk_manager bookkeeping.
+    pub fn resource_nodes_iter(
+        &self,
+    ) -> impl Iterator<Item = (&ResourceNodeId, &ResourceNodeState)> {
+        self.resource_nodes.iter()
+    }
+
+    /// Quick membership check, used by the mirror sync to decide which
+    /// tracked entities to despawn this tick.
+    pub fn has_resource_node(&self, id: ResourceNodeId) -> bool {
+        self.resource_nodes.contains_key(&id)
+    }
+
+    /// Look up the chunk an active node is anchored to. Returns `None` for
+    /// a node id the chunk_manager doesn't know about (which is the normal
+    /// state immediately after depletion).
+    pub fn resource_node_chunk(&self, id: ResourceNodeId) -> Option<crate::world::ChunkCoord> {
+        self.chunk_manager.node_chunk(id)
     }
 
     pub fn announce(&self, text: impl AsRef<str>) -> Vec<ServerEnvelope> {
