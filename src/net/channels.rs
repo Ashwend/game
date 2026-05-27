@@ -5,11 +5,14 @@ use std::{
 
 use bevy::prelude::*;
 use lightyear::prelude::{
-    AppChannelExt, AppMessageExt, ChannelMode, ChannelSettings, MessageSender, NetworkDirection,
-    ReliableSettings,
+    AppChannelExt, AppComponentExt, AppMessageExt, ChannelMode, ChannelSettings, MessageSender,
+    NetworkDirection, ReliableSettings,
 };
 
-use crate::protocol::{ClientMessage, PROTOCOL_VERSION, PacketDelivery, ServerMessage};
+use crate::{
+    protocol::{ClientMessage, PROTOCOL_VERSION, PacketDelivery, ServerMessage},
+    server::{ResourceNode, ResourceNodeStorage},
+};
 
 pub(crate) const LIGHTYEAR_PROTOCOL_ID: u64 = PROTOCOL_VERSION as u64;
 const LIGHTYEAR_PRIVATE_KEY: [u8; 32] = [0; 32];
@@ -52,6 +55,13 @@ impl Plugin for LightyearProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<ServerMessage>()
             .add_direction(NetworkDirection::ServerToClient);
+
+        // Phase 4: register the resource-node components so they replicate
+        // through Lightyear instead of riding `WorldSnapshot`. Both the
+        // server (which spawns the entities) and the client (which receives
+        // them) need the same registry so the wire bytes round-trip.
+        app.register_component::<ResourceNode>();
+        app.register_component::<ResourceNodeStorage>();
     }
 }
 

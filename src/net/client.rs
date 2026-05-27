@@ -12,7 +12,8 @@ use std::{
 use anyhow::Result;
 use bevy::prelude::*;
 use lightyear::prelude::{
-    Authentication, Connected, LocalAddr, MessageReceiver, MessageSender, UdpIo, client,
+    Authentication, Connected, LocalAddr, MessageReceiver, MessageSender, ReplicationReceiver,
+    UdpIo, client,
 };
 
 use crate::{
@@ -414,6 +415,11 @@ fn process_pending_connect_system(
             LocalAddr(SocketAddr::from(([0, 0, 0, 0], 0))),
             UdpIo::default(),
             netcode,
+            // Phase 4: needed for Lightyear's replication machinery to
+            // buffer and apply incoming entity/component diffs. The
+            // sibling `ReplicationSender` is installed on the server's
+            // `ClientOf` entity inside the host app.
+            ReplicationReceiver::default(),
             ClientAuthState::default(),
         ))
         .id();

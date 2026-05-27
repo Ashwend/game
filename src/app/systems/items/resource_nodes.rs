@@ -11,6 +11,7 @@ use crate::{
     },
     protocol::{ResourceNodeId, ResourceNodeState},
     resources::{ResourceNodeModel, resource_node_definition},
+    server::{ResourceNode, ResourceNodeStorage},
 };
 
 /// Per-frame cap on resource-node *spawns*. Crossing a chunk boundary
@@ -88,17 +89,24 @@ pub(crate) fn apply_resource_nodes_system(
     mut entities: ResMut<ResourceNodeEntities>,
     resource_entities: ResourceEntityQuery,
     popping_in: Query<(), With<ResourceNodePopIn>>,
+    replicated_nodes: Query<(&ResourceNode, &ResourceNodeStorage)>,
 ) {
     if runtime.snapshot.is_none() {
         clear_all_tracked_nodes(&mut commands, &mut entities);
         return;
     }
 
-    let snapshot_ids: HashSet<ResourceNodeId> = runtime
-        .snapshot
-        .as_ref()
-        .map(|snapshot| snapshot.resource_nodes.iter().map(|node| node.id).collect())
-        .unwrap_or_default();
+    // Phase 4 A/B switch: source the per-tick node list from Lightyear
+    // replicated entities when `replicated-nodes` is enabled, otherwise
+    // fall back to the legacy `WorldSnapshot::resource_nodes` payload.
+    // The pop-in / death-effect / depletion logic below is identical
+    // either way — only the input vector differs. `respawn_progress`
+    // is unavailable under replication today (the mirror does not yet
+    // carry it) so all replicated nodes appear in the "ready" state.
+    let snapshot_resource_nodes: Vec<ResourceNodeState> =
+        collect_resource_node_states(&runtime, &replicated_nodes);
+    let snapshot_ids: HashSet<ResourceNodeId> =
+        snapshot_resource_nodes.iter().map(|node| node.id).collect();
     let entities = &mut *entities;
     let pop_in_enabled = entities.applied_first_snapshot;
 
@@ -111,12 +119,6 @@ pub(crate) fn apply_resource_nodes_system(
     // from the snapshot but isn't in this set just left the player's AoI
     // and should despawn silently — no death animation, no camera kick.
     let depleted_this_frame: HashSet<ResourceNodeId> = runtime.depleted_node_ids.clone();
-
-    let snapshot_resource_nodes = runtime
-        .snapshot
-        .as_ref()
-        .map(|snapshot| snapshot.resource_nodes.clone())
-        .unwrap_or_default();
     let mut spawn_budget = MAX_RESOURCE_NODE_SPAWNS_PER_FRAME;
     // IDs whose state we want `commit_progress` to record this frame.
     // Budget-deferred fresh spawns are deliberately excluded so they
@@ -205,6 +207,41 @@ pub(crate) fn apply_resource_nodes_system(
     // set tight makes the invariant local rather than global).
     for id in consumed {
         runtime.depleted_node_ids.remove(&id);
+    }
+}
+
+/// Source the per-tick resource node list. Under the `replicated-nodes`
+/// feature, walk Lightyear-replicated entities (one per live node in the
+/// player's AoI); otherwise, copy from `WorldSnapshot::resource_nodes`.
+/// Returning identical wire shapes both ways means the rest of the
+/// system is path-agnostic.
+fn collect_resource_node_states(
+    runtime: &ClientRuntime,
+    replicated_nodes: &Query<(&ResourceNode, &ResourceNodeStorage)>,
+) -> Vec<ResourceNodeState> {
+    #[cfg(feature = "replicated-nodes")]
+    {
+        let _ = runtime;
+        replicated_nodes
+            .iter()
+            .map(|(node, storage)| ResourceNodeState {
+                id: node.id,
+                definition_id: node.definition_id.clone(),
+                position: node.position,
+                yaw: node.yaw,
+                storage: storage.0.clone(),
+                respawn_progress: None,
+            })
+            .collect()
+    }
+    #[cfg(not(feature = "replicated-nodes"))]
+    {
+        let _ = replicated_nodes;
+        runtime
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.resource_nodes.clone())
+            .unwrap_or_default()
     }
 }
 

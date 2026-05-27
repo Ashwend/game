@@ -11,18 +11,22 @@ use std::{
     time::Duration,
 };
 
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{Context, Result, bail};
 use bevy::{app::TerminalCtrlCHandlerPlugin, log::info_span, prelude::*};
 use lightyear::prelude::{
-    LocalAddr, MessageSender,
+    LinkOf, LocalAddr, MessageSender, NetworkTarget, NetworkVisibility, Replicate,
+    ReplicationSender, Room, RoomEvent, RoomPlugin, RoomTarget,
     server::{self, ClientOf},
 };
 
 use crate::{
-    protocol::{SERVER_TICK_RATE_HZ, ServerMessage},
+    protocol::{ClientId, SERVER_TICK_RATE_HZ, ServerMessage},
     save::WorldSave,
     server::{GameServer, ServerSettings},
     steam::AuthMode,
+    world::ChunkCoord,
 };
 
 #[cfg(unix)]
@@ -70,6 +74,25 @@ struct TickAccumulator(Duration);
 #[derive(Resource, Default)]
 struct HostShutdown {
     requested: bool,
+}
+
+/// Lazy `ChunkCoord -> RoomEntity` allocator. A `Room` is a regular Bevy
+/// entity in Lightyear 0.26; we spawn one the first time we need to attach
+/// a node or subscribe a client to that chunk, then cache it here. Server
+/// shutdown drops the world entirely so no explicit cleanup is required.
+#[derive(Resource, Default)]
+struct ChunkRoomMap {
+    by_coord: HashMap<ChunkCoord, Entity>,
+}
+
+/// Per-client snapshot of which chunk rooms the client is currently
+/// subscribed to. We diff this against `visible_chunks` on every tick to
+/// emit the minimal Add/RemoveSender RoomEvents. RoomPlugin's
+/// `handle_disconnect` observer removes the sender from every room on
+/// `Disconnected`, so we only need to drop our local bookkeeping there.
+#[derive(Resource, Default)]
+struct ClientChunkSubs {
+    by_client: HashMap<ClientId, HashSet<ChunkCoord>>,
 }
 
 pub(super) fn spawn_loopback_server(
@@ -202,6 +225,15 @@ fn run_host(
         tick_duration: Duration::from_secs_f32(1.0 / SERVER_TICK_RATE_HZ),
     });
     app.add_plugins(LightyearProtocolPlugin);
+    // Phase 4: room-based interest management. Each `ChunkCoord` lazily
+    // owns one Room entity; resource-node entities join their chunk's
+    // room and client senders join the rooms covering their AoI ring.
+    // Lightyear delta-ships components to senders in shared rooms and
+    // auto-despawns on the client when rooms diverge.
+    app.add_plugins(RoomPlugin);
+    app.insert_resource(ChunkRoomMap::default());
+    app.insert_resource(ClientChunkSubs::default());
+    app.add_observer(install_replication_sender_on_link);
 
     let server_entity = app
         .world_mut()
@@ -250,6 +282,7 @@ fn run_host(
             sync_dropped_item_entities,
             sync_deployable_entities,
             sync_player_entities,
+            update_client_room_subscriptions,
         )
             .chain(),
     );
@@ -265,6 +298,7 @@ fn run_host(
             sync_dropped_item_entities,
             sync_deployable_entities,
             sync_player_entities,
+            update_client_room_subscriptions,
         )
             .chain(),
     );
@@ -389,9 +423,128 @@ fn sync_resource_node_entities(world: &mut World) {
                     .unwrap_or_else(|| {
                         crate::world::ChunkCoord::from_world(state.position.x, state.position.z)
                     });
-                crate::server::spawn_resource_node_entity(world, state, chunk);
+                let entity = crate::server::spawn_resource_node_entity(world, state, chunk);
+                attach_node_replication(world, entity, chunk);
             }
         }
+    }
+}
+
+/// Hooks a freshly-spawned resource node entity into Lightyear's
+/// replication path. Adds the per-component replication marker plus
+/// `NetworkVisibility` (interest gate), then joins the chunk's room so
+/// only senders subscribed to that chunk receive the entity. With
+/// `NetworkTarget::None` the room machinery is the sole driver of
+/// per-client visibility — there is no broadcast fallback.
+fn attach_node_replication(world: &mut World, entity: Entity, chunk: ChunkCoord) {
+    let room_entity = ensure_chunk_room_world(world, chunk);
+    if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+        entity_mut.insert((
+            Replicate::to_clients(NetworkTarget::None),
+            NetworkVisibility,
+        ));
+    }
+    world.trigger(RoomEvent {
+        room: room_entity,
+        target: RoomTarget::AddEntity(entity),
+    });
+}
+
+/// World-side lazy lookup: returns the Room entity for `chunk`, spawning
+/// one if it does not yet exist. The mirror sync system uses this; the
+/// per-tick subscription update uses the Commands-side
+/// `ensure_chunk_room_commands` instead so it can defer the spawn.
+fn ensure_chunk_room_world(world: &mut World, chunk: ChunkCoord) -> Entity {
+    if let Some(entity) = world
+        .resource::<ChunkRoomMap>()
+        .by_coord
+        .get(&chunk)
+        .copied()
+    {
+        return entity;
+    }
+    let entity = world
+        .spawn((
+            Name::new(format!("Chunk Room {}/{}", chunk.x, chunk.z)),
+            Room::default(),
+        ))
+        .id();
+    world
+        .resource_mut::<ChunkRoomMap>()
+        .by_coord
+        .insert(chunk, entity);
+    entity
+}
+
+fn ensure_chunk_room_commands(
+    commands: &mut Commands,
+    rooms: &mut ChunkRoomMap,
+    chunk: ChunkCoord,
+) -> Entity {
+    if let Some(entity) = rooms.by_coord.get(&chunk).copied() {
+        return entity;
+    }
+    let entity = commands
+        .spawn((
+            Name::new(format!("Chunk Room {}/{}", chunk.x, chunk.z)),
+            Room::default(),
+        ))
+        .id();
+    rooms.by_coord.insert(chunk, entity);
+    entity
+}
+
+/// Observer that fires when Lightyear's link layer spawns a `LinkOf`
+/// entity (a new pending or connected client). Adds the
+/// `ReplicationSender` Lightyear needs to actually ship per-component
+/// updates to that client. Connection plugins handle the
+/// `Disconnected` tear-down for us — `RoomPlugin::handle_disconnect`
+/// removes the sender from all rooms automatically.
+fn install_replication_sender_on_link(trigger: On<Add, LinkOf>, mut commands: Commands) {
+    commands
+        .entity(trigger.entity)
+        .insert(ReplicationSender::default());
+}
+
+/// Reconciles each connected client's chunk-room subscriptions with the
+/// chunks currently inside their AoI ring. Diffs against the last set we
+/// stored so each tick emits at most O(boundary-crossings) RoomEvents —
+/// idle clients pay nothing. On disconnect, RoomPlugin scrubs the
+/// sender from every room; we just drop our cached set.
+fn update_client_room_subscriptions(
+    server: Res<AuthoritativeServer>,
+    connections: Res<ServerConnections>,
+    mut subs: ResMut<ClientChunkSubs>,
+    mut chunk_rooms: ResMut<ChunkRoomMap>,
+    mut commands: Commands,
+) {
+    let _span = info_span!("update_client_room_subscriptions").entered();
+    let live_clients: HashSet<ClientId> = server.0.connected_client_ids().collect();
+    subs.by_client.retain(|id, _| live_clients.contains(id));
+
+    for client_id in live_clients {
+        let Some(sender_entity) = connections.entity_for_client(client_id) else {
+            continue;
+        };
+        let next: HashSet<ChunkCoord> = server.0.visible_chunks_for_client(client_id);
+        let prev = subs.by_client.entry(client_id).or_default();
+
+        for coord in next.difference(prev) {
+            let room = ensure_chunk_room_commands(&mut commands, &mut chunk_rooms, *coord);
+            commands.trigger(RoomEvent {
+                room,
+                target: RoomTarget::AddSender(sender_entity),
+            });
+        }
+        for coord in prev.difference(&next) {
+            if let Some(room) = chunk_rooms.by_coord.get(coord).copied() {
+                commands.trigger(RoomEvent {
+                    room,
+                    target: RoomTarget::RemoveSender(sender_entity),
+                });
+            }
+        }
+        *prev = next;
     }
 }
 

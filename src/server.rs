@@ -344,6 +344,35 @@ impl GameServer {
         }
     }
 
+    /// Read-only view of a connected player's anchor position and AoI tier.
+    /// Used by the chunk-room subscription system in `net/host` to recompute
+    /// which rooms a client should be in each tick.
+    pub fn client_view(
+        &self,
+        client_id: ClientId,
+    ) -> Option<(Vec3Net, crate::protocol::ViewRadiusTier)> {
+        self.clients
+            .get(&client_id)
+            .map(|client| (client.controller.position, client.view_tier))
+    }
+
+    /// Currently-connected client ids. Cheap; backed by the connection map.
+    pub fn connected_client_ids(&self) -> impl Iterator<Item = ClientId> + '_ {
+        self.clients.keys().copied()
+    }
+
+    /// Chunks the given client's AoI ring currently covers. Returns an
+    /// empty set if the client isn't connected.
+    pub fn visible_chunks_for_client(
+        &self,
+        client_id: ClientId,
+    ) -> std::collections::HashSet<crate::world::ChunkCoord> {
+        let Some((position, tier)) = self.client_view(client_id) else {
+            return std::collections::HashSet::new();
+        };
+        self.chunk_manager.visible_chunks(position, tier)
+    }
+
     /// Read-only access to the live resource node map. Used by the ECS
     /// mirror system in `net/host` to keep entity state in sync with this
     /// authoritative map. Avoid mutating callers; use the existing gather/

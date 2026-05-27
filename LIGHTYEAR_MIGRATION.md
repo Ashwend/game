@@ -132,7 +132,7 @@ Docs:
 | 1   | ECS mirror for resource nodes                                  | ✅ done     |
 | 2   | ECS mirror for dropped items, deployables, players             | ✅ done     |
 | 3   | Merge Lightyear client into main Bevy app                      | ✅ done     |
-| 4   | Wire chunk rooms for resource nodes                            | ⏳ pending  |
+| 4   | Wire chunk rooms for resource nodes                            | ✅ done     |
 | 5   | Chunk rooms for dropped items, deployables, players            | ⏳ pending  |
 | 6   | Delete `WorldSnapshot`, save-version bump, cleanup             | ⏳ pending  |
 | 1b  | Fold `resource_nodes` HashMap into entities (cleanup)          | ⏳ pending  |
@@ -441,91 +441,138 @@ Files touched:
 
 ## Phase 4 — Wire chunk rooms for resource nodes
 
-**Status**: ⏳ pending · unblocked by Phase 3
+**Status**: ✅ done
 
-### Goal
+### What landed
 
-First real bandwidth win. Add Lightyear's `RoomPlugin`, lazy-allocate one
-`RoomId` per `ChunkCoord`, put resource node entities in their chunk's room,
-subscribe each client's sender entity to its visible-chunk rooms. Lightyear
-delta-encodes component changes and auto-spawn/despawns entities on the client
-when room membership changes.
+Lightyear room-based replication is now live for resource nodes, gated on a
+`replicated-nodes` Cargo feature (default off) so the existing snapshot path
+keeps shipping in parallel for A/B testing.
 
-Phase 3 left the Lightyear client entity in the main app's `World`, so
-the consumer side of this phase (rewriting `apply_resource_nodes_system`)
-can query replicated entities directly via `Query<&ResourceNode,
-&ResourceNodeStorage>` instead of reading `ClientRuntime::snapshot`.
+`lightyear` features now include `replication`; `Cargo.toml` defines the
+new `replicated-nodes` opt-in.
 
-A/B against the existing `WorldSnapshot.resource_nodes` path under a feature
-flag during the soak; Phase 6 removes the snapshot path once Phase 5 is in.
+Server side ([src/net/host.rs](src/net/host.rs)):
 
-### Approach
+- `RoomPlugin` is installed alongside `LightyearProtocolPlugin`.
+- `ChunkRoomMap` (a `HashMap<ChunkCoord, Entity>`) lazily owns one
+  `Room`-marked entity per chunk. The two lazy helpers
+  `ensure_chunk_room_world` and `ensure_chunk_room_commands` cover the
+  exclusive-system and the per-tick-system call sites without sharing
+  borrows. Rooms are spawned on first need (entity placement or sender
+  subscription) and live for the lifetime of the host app.
+- `sync_resource_node_entities`, on the new-entity branch, calls
+  `attach_node_replication(world, entity, chunk)` which attaches
+  `Replicate::to_clients(NetworkTarget::None) + NetworkVisibility` and
+  triggers `RoomEvent { room, target: AddEntity(entity) }`. `None` plus
+  `NetworkVisibility` makes the room the sole driver of per-client
+  visibility — no broadcast fallback.
+- `install_replication_sender_on_link` is a `On<Add, LinkOf>` observer
+  that inserts `ReplicationSender::default()` on every fresh client link
+  so Lightyear can actually ship component diffs. `RoomPlugin`'s built-in
+  `handle_disconnect` observer scrubs the sender from every room when
+  `Disconnected` is added, so we don't bookkeep that manually.
+- `update_client_room_subscriptions` runs every Update (after the mirror
+  syncs). It calls `GameServer::visible_chunks_for_client` for every
+  connected client, diffs against the cached `ClientChunkSubs` set, and
+  triggers `RoomEvent { target: AddSender/RemoveSender }` only for the
+  delta. Idle players emit zero events; chunk-crossing players emit a
+  single boundary's worth of swaps.
 
-1. **Plugin install** — add `RoomPlugin` to the server app in
-   [src/net/host.rs](src/net/host.rs). Insert a `ChunkRoomMap` resource:
-   `HashMap<ChunkCoord, RoomId>`, lazy-allocated via `RoomAllocator`.
-2. **Mark entities `Replicate`** — when `sync_resource_node_entities` spawns
-   a fresh entity, attach
-   `Replicate::to_clients(NetworkTarget::None)` (no broadcast — visibility
-   is by room) and `Rooms::single(chunk_room_id)`. Despawn removes it
-   automatically.
-3. **Client sender subscriptions** — when a client connects (the
-   `handle_connected` observer in [src/net/host/routing.rs](src/net/host/routing.rs)
-   or equivalent), set its initial `Rooms` based on
-   `chunk_manager.visible_chunks(...)`. When the client's chunk changes
-   (Movement message in [src/server.rs:262](src/server.rs:262)), recompute
-   visible chunks and update the sender's `Rooms` component (add new, drop
-   stale).
-4. **Client-side wiring** — once Phase 3 has merged the client into the main
-   app, replicated entities appear directly with `ResourceNode` +
-   `ResourceNodeStorage` components. Rewrite
-   [src/app/systems/items/resource_nodes.rs](src/app/systems/items/resource_nodes.rs)
-   to query those components instead of reading
-   `ClientRuntime::snapshot.resource_nodes`. Initially, run **both** paths
-   under a feature flag (`replicated-nodes` or similar) so we can A/B.
-5. **Snapshot path stays** — `WorldSnapshot` still ships resource nodes for
-   the rollback case. Phase 6 removes them.
+GameServer accessors added: `client_view`, `connected_client_ids`,
+`visible_chunks_for_client`. `ServerConnections::entity_for_client`
+exposes the `ClientOf` (sender) entity for an id.
+
+Client side ([src/net/client.rs](src/net/client.rs)):
+
+- The Lightyear client entity is spawned with `ReplicationReceiver::default()`
+  so incoming entity/component diffs are buffered and applied.
+
+Protocol registration ([src/net/channels.rs](src/net/channels.rs)):
+
+- `ResourceNode` and `ResourceNodeStorage` are registered via
+  `AppComponentExt::register_component`. Both gained `PartialEq +
+  Serialize + Deserialize` so they meet the replication trait bounds.
+
+Consumer wiring ([src/app/systems/items/resource_nodes.rs](src/app/systems/items/resource_nodes.rs)):
+
+- `apply_resource_nodes_system` now takes a
+  `Query<(&ResourceNode, &ResourceNodeStorage)>` parameter and routes the
+  per-tick input through `collect_resource_node_states`. Without the
+  feature, that helper returns the existing `runtime.snapshot.resource_nodes`
+  clone. With `--features replicated-nodes`, it materialises the same
+  `Vec<ResourceNodeState>` shape from the replicated entities. Pop-in,
+  death-effect, depleted-id, and AoI-leave handling are unchanged either
+  way. `respawn_progress` is forced to `None` under replication for now —
+  regen visuals stay snapshot-only until Phase 6.
+
+Tests, lint, and `./cli check` are clean on both feature configurations
+(466 passed, default; 466 passed, `--features replicated-nodes`).
 
 ### Key design decisions
 
-- **Lazy room allocation.** A 5×5 chunk world has 25 chunks. Allocating all
-  rooms at startup is fine but wasteful for larger worlds. Lazy-allocate on
-  first entity placement; the cost is negligible.
-- **Per-tick room recompute or change-driven?** Lightyear's `Rooms`
-  component is observed; adding/removing room ids triggers replication
-  changes. Most efficient: **change-driven** — only update sender `Rooms`
-  when the player's anchor chunk changes (already tracked by
-  `chunk_manager.update_player_chunk`). Per-tick recompute would be wasteful.
-- **A/B feature flag**: `replicated-nodes` Cargo feature, default off until
-  soaked. Both paths run server-side (snapshot still ships nodes), only one
-  is consumed client-side.
+- **`NetworkTarget::None` + `NetworkVisibility` + Room.** Reviewed the
+  `network_visibility` example and `lightyear_replication::visibility::room`
+  source; the room machinery calls `gain_visibility(sender)` on the
+  entity's `ReplicationState` for every sender in a shared room, so
+  `NetworkTarget::None` (entity defaults to nobody) plus rooms (room
+  drives gain/lose) gives the wanted "room is the sole visibility gate"
+  shape. Late-joining clients pick up existing entities automatically
+  through the same path.
+- **`Room` is an Entity, not a `RoomId`.** Lightyear 0.26 switched the
+  Room model: `Room` is now a regular Bevy component on a spawned entity,
+  and `RoomEvent` is triggered against it. `ChunkRoomMap` therefore maps
+  `ChunkCoord -> Entity`.
+- **Change-driven sender subscriptions.** `update_client_room_subscriptions`
+  diffs against `ClientChunkSubs`, so it only fires `RoomEvent`s on the
+  boundary delta — the system itself runs every Update but emits work
+  proportional to player movement, not player count.
+- **A/B via feature flag, both paths server-side.** Snapshot still ships
+  the node list; only the client consumer switches based on the flag.
+  Phase 6 deletes the snapshot path.
 
 ### Open / deferred
 
-- **Reliability mode for replication.** Lightyear default is unreliable
-  with retransmit-on-ack. Resource nodes are sparse and rarely change, so
-  this is appropriate. No tuning needed initially; revisit if dropouts
-  appear during soak.
-- **Initial state delivery.** When a client first subscribes to a room,
-  Lightyear sends the full snapshot for that room's entities — the bandwidth
-  pattern is "burst on chunk crossing, near-zero between". That's better
-  than the current 20 Hz full snapshot.
+- **`respawn_progress` is not replicated yet.** The mirror does not
+  expose the field on the ECS entity, so under `replicated-nodes` the
+  regenerating-state visual (the "node is mid-respawn" hint) does not
+  appear. Snapshot path still has it. Plan to either add a
+  `ResourceNodeRegrow` component carrying `progress: f32` and replicate
+  that, or accept the loss when Phase 6 removes snapshot. Decision in
+  Phase 6.
+- **Reliability tuning.** Default mode (sequenced unreliable with
+  retransmit-on-ack on the replication side) is fine for sparse,
+  rarely-changing nodes. Revisit if dropouts appear during soak.
+- **Initial state delivery cost.** When a client first subscribes to a
+  chunk room, Lightyear ships the full spawn for every entity in it.
+  That's a burst on chunk crossings (5–20 entities) vs the previous 20
+  Hz full snapshot — net win on idle, similar peak.
 
-### Files touched (expected)
+### Files touched
 
-- [src/net/host.rs](src/net/host.rs)
-- [src/server.rs](src/server.rs) — player movement → chunk update
-- [src/server/resource_node_ecs.rs](src/server/resource_node_ecs.rs) — `Replicate` marker on spawn
-- [src/app/systems/items/resource_nodes.rs](src/app/systems/items/resource_nodes.rs) — consumer rewrite (gated)
-- [Cargo.toml](Cargo.toml) — new feature flag
+- [Cargo.toml](Cargo.toml) — `replication` feature on lightyear; new
+  `replicated-nodes` feature flag
+- [src/net/host.rs](src/net/host.rs) — RoomPlugin install, ChunkRoomMap,
+  ClientChunkSubs, attach_node_replication, install_replication_sender_on_link,
+  update_client_room_subscriptions
+- [src/net/host/routing.rs](src/net/host/routing.rs) — `entity_for_client`
+- [src/net/channels.rs](src/net/channels.rs) — component registration
+- [src/net/client.rs](src/net/client.rs) — `ReplicationReceiver` on client
+- [src/server.rs](src/server.rs) — `client_view`, `connected_client_ids`,
+  `visible_chunks_for_client`
+- [src/server/resource_node_ecs.rs](src/server/resource_node_ecs.rs) —
+  `PartialEq + Serialize + Deserialize` on the two replicated components
+- [src/app/systems/items/resource_nodes.rs](src/app/systems/items/resource_nodes.rs) —
+  feature-gated input source via `collect_resource_node_states`
 
 ### Verification
 
-- Run a 2-client multiplayer test: walking out of chunk → resource nodes
-  despawn on client; walking back → they reappear.
-- Wireshark / pcap: total bytes/sec on the wire should drop sharply once
-  Phase 6 removes the snapshot duplicate.
-- 460+ tests pass throughout.
+- `./cli check`, `./cli test` (466 ok), `./cli lint` clean on default.
+- `cargo check --features replicated-nodes`,
+  `cargo test --features replicated-nodes` (466 ok),
+  `cargo clippy --features replicated-nodes --all-targets -- -D warnings` clean.
+- Manual 2-client MP soak (still pending): walk out of chunk → nodes
+  despawn; walk back → reappear.
 
 ---
 

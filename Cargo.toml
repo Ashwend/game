@@ -10,6 +10,12 @@ default = []
 steam = ["lightyear/steam"]
 # Dev-only. Speeds up local iteration; do not enable for release builds.
 dev-fast = ["bevy/dynamic_linking"]
+# Phase 4 migration A/B switch. When enabled, the resource-node client
+# consumer reads Lightyear-replicated `ResourceNode` entities instead of
+# `WorldSnapshot::resource_nodes`. Snapshot data still ships either way
+# (the duplicate goes away in Phase 6); only the consumer flips. Off by
+# default while the new path soaks.
+replicated-nodes = []
 # Dev-only. Emits a Chrome tracing JSON (`trace-<unix-ms>.json` in cwd) with
 # per-system, per-schedule, and render-pass spans, plus enables extra runtime
 # diagnostics (FPS/frame time/entity count/CPU/RAM) logged to stdout. Use via
@@ -41,7 +47,7 @@ directories = "6.0.0"
 # source — adding a new clip is now "drop the file in `assets/`", no per-file
 # `include_bytes!` row to maintain.
 include_dir = "0.7"
-lightyear = { version = "0.26.4", default-features = false, features = ["client", "server", "netcode", "udp"] }
+lightyear = { version = "0.26.4", default-features = false, features = ["client", "server", "netcode", "udp", "replication"] }
 # Opus codec bindings. The system libopus (`brew install opus` /
 # `apt install libopus-dev`) is required at build time. Picked over a pure-Rust
 # encoder because libopus is the only mature option that hits the

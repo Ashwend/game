@@ -19,6 +19,15 @@ pub(super) struct ServerConnections {
     client_to_entity: HashMap<ClientId, Entity>,
 }
 
+impl ServerConnections {
+    /// Look up the Lightyear `ClientOf` (= sender) entity for a given
+    /// game client id. Returns `None` if the client is not currently
+    /// connected. Used by the chunk-room subscription updater.
+    pub(super) fn entity_for_client(&self, client_id: ClientId) -> Option<Entity> {
+        self.client_to_entity.get(&client_id).copied()
+    }
+}
+
 pub(super) fn receive_client_messages(
     mut commands: Commands,
     mut server: ResMut<AuthoritativeServer>,

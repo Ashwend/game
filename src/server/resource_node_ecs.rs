@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     protocol::{ItemStack, ResourceNodeId, ResourceNodeState, Vec3Net},
@@ -24,7 +25,10 @@ use crate::{
 /// Identity + immutable-after-spawn fields. `position`/`yaw` change only
 /// on regrow (which deletes the old entity and spawns a new one), so this
 /// component is effectively read-only post-spawn.
-#[derive(Component, Debug, Clone)]
+///
+/// `Serialize`/`Deserialize` are required by Lightyear's component
+/// replication (Phase 4) — the component travels the wire as-is.
+#[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResourceNode {
     pub id: ResourceNodeId,
     pub definition_id: String,
@@ -34,7 +38,7 @@ pub struct ResourceNode {
 
 /// Per-node mutable inventory. The active storage list — gather decrements
 /// entries, depletion is observed when this list is empty.
-#[derive(Component, Debug, Clone, Default)]
+#[derive(Component, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ResourceNodeStorage(pub Vec<ItemStack>);
 
 /// Anchor chunk for a node entity. Mirrors `ChunkManager::node_chunks` and
