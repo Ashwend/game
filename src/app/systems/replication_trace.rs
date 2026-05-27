@@ -26,17 +26,27 @@
 
 use bevy::{ecs::change_detection::Ref, prelude::*};
 
-use crate::server::{ResourceNode, ResourceNodeStorage};
+use crate::server::{
+    Deployable, DeployableActive, DeployableHealth, ResourceNode, ResourceNodeStorage,
+};
 
-/// Tracks the last-seen quantity per node id so we can log a clean
+/// Tracks the last-seen value per id so we can log a clean
 /// `before -> after` diff rather than just "changed".
 #[derive(Resource, Default)]
 pub(crate) struct ReplicationTraceState {
-    last_quantity: std::collections::HashMap<u64, u16>,
+    node_qty: std::collections::HashMap<u64, u16>,
+    deployable_health: std::collections::HashMap<u64, u32>,
+    deployable_active: std::collections::HashMap<u64, bool>,
 }
 
 pub(crate) fn log_replicated_storage_changes_system(
     nodes: Query<(Entity, &ResourceNode, Ref<ResourceNodeStorage>)>,
+    deployables: Query<(
+        Entity,
+        &Deployable,
+        Ref<DeployableHealth>,
+        Ref<DeployableActive>,
+    )>,
     mut state: ResMut<ReplicationTraceState>,
 ) {
     for (entity, node, storage) in &nodes {
@@ -47,15 +57,55 @@ pub(crate) fn log_replicated_storage_changes_system(
                 "client: ResourceNodeStorage SPAWN  id={} entity={entity:?} qty={}",
                 node.id, total
             );
-            state.last_quantity.insert(node.id, total);
+            state.node_qty.insert(node.id, total);
         } else if storage.is_changed() {
-            let before = state.last_quantity.get(&node.id).copied().unwrap_or(0);
+            let before = state.node_qty.get(&node.id).copied().unwrap_or(0);
             info!(
                 target: "replication_trace",
-                "client: ResourceNodeStorage RECV   id={} entity={entity:?} {} -> {}",
-                node.id, before, total
+                "client: ResourceNodeStorage RECV   id={} entity={entity:?} {before} -> {total}",
+                node.id
             );
-            state.last_quantity.insert(node.id, total);
+            state.node_qty.insert(node.id, total);
+        }
+    }
+
+    for (entity, meta, health, active) in &deployables {
+        if health.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: DeployableHealth   SPAWN  id={} entity={entity:?} hp={}",
+                meta.id, health.0
+            );
+            state.deployable_health.insert(meta.id, health.0);
+        } else if health.is_changed() {
+            let before = state.deployable_health.get(&meta.id).copied().unwrap_or(0);
+            info!(
+                target: "replication_trace",
+                "client: DeployableHealth   RECV   id={} entity={entity:?} {before} -> {}",
+                meta.id, health.0
+            );
+            state.deployable_health.insert(meta.id, health.0);
+        }
+
+        if active.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: DeployableActive   SPAWN  id={} entity={entity:?} active={}",
+                meta.id, active.0
+            );
+            state.deployable_active.insert(meta.id, active.0);
+        } else if active.is_changed() {
+            let before = state
+                .deployable_active
+                .get(&meta.id)
+                .copied()
+                .unwrap_or(false);
+            info!(
+                target: "replication_trace",
+                "client: DeployableActive   RECV   id={} entity={entity:?} {before} -> {}",
+                meta.id, active.0
+            );
+            state.deployable_active.insert(meta.id, active.0);
         }
     }
 }

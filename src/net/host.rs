@@ -441,18 +441,26 @@ fn sync_resource_node_entities(world: &mut World) {
 
 /// Attach the room-gated replication marker to a freshly-spawned
 /// world-entity (resource node, dropped item, deployable). Adds
-/// `Replicate::to_clients(NetworkTarget::None) + NetworkVisibility` and
-/// then joins the chunk's room so only senders subscribed to that chunk
-/// receive the entity. With `NetworkTarget::None` the room machinery is
-/// the sole driver of per-client visibility — there is no broadcast
-/// fallback.
+/// `Replicate::to_clients(NetworkTarget::All) + NetworkVisibility` and
+/// then joins the chunk's room. `NetworkVisibility` narrows the
+/// `All` target down to the senders currently in a shared room with
+/// the entity — without it, every client would see every node.
+///
+/// `NetworkTarget::All` (not `None`) is load-bearing: the Phase 6a
+/// diagnostic showed Lightyear shipping the initial spawn but not
+/// subsequent component updates with `None + room`. The room machinery
+/// uses `gain_visibility` which inserts a fresh `PerSenderReplicationState`
+/// when the sender isn't already in the entity's targets — that path
+/// admits the sender for the spawn message but apparently does not
+/// register the sender for the subsequent change-detection update
+/// pipeline. Listing the sender in the `Replicate` target up front
+/// avoids that ambiguity; `NetworkVisibility` still gates the actual
+/// visibility per the room state, so peers in unrelated chunks
+/// receive nothing.
 fn attach_room_gated_replication(world: &mut World, entity: Entity, chunk: ChunkCoord) {
     let room_entity = ensure_chunk_room_world(world, chunk);
     if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
-        entity_mut.insert((
-            Replicate::to_clients(NetworkTarget::None),
-            NetworkVisibility,
-        ));
+        entity_mut.insert((Replicate::to_clients(NetworkTarget::All), NetworkVisibility));
     }
     world.trigger(RoomEvent {
         room: room_entity,
