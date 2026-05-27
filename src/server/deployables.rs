@@ -15,7 +15,10 @@ use std::collections::HashMap;
 
 use crate::{
     crafting::RecipeStation,
-    items::{DeployableKind, DeployableProfile, HANDS_TOOL, ItemId, ToolKind, item_definition},
+    items::{
+        DeployableKind, DeployableProfile, HANDS_TOOL, ItemId, ToolKind, item_definition,
+        tool_damage_multiplier_pct,
+    },
     protocol::{
         ClientId, DamageDeployableCommand, DeployedEntityId, DeployedEntityState,
         PlaceDeployableCommand, ServerMessage, ToastKind, ToastMessage, Vec3Net,
@@ -239,8 +242,12 @@ impl GameServer {
         if (dx * dx + dz * dz).sqrt() > DAMAGE_RANGE_M {
             return Vec::new();
         }
-
-        let damage = (tool.gather_amount as u32).saturating_mul(DAMAGE_PER_GATHER_POINT);
+        // Tool-vs-material multiplier — hatchet eats wood, pickaxe
+        // eats stone, mismatched proper tools still chip away but at
+        // ~1/3 the rate of the matched pairing.
+        let multiplier_pct = tool_damage_multiplier_pct(tool.kind, entity.kind.material());
+        let base = (tool.gather_amount as u32).saturating_mul(DAMAGE_PER_GATHER_POINT);
+        let damage = base.saturating_mul(multiplier_pct) / 100;
 
         // Mutable borrow for the actual decrement. We re-fetch instead
         // of holding the earlier `entity` reference across the cooldown
@@ -557,6 +564,33 @@ mod tests {
         assert!(leftover.is_none());
     }
 
+    fn equip_hatchet(server: &mut GameServer, client_id: ClientId) {
+        use crate::{
+            items::BASIC_HATCHET_ID, protocol::ItemStack, server::inventory::add_stack_to_inventory,
+        };
+        let client = server.clients.get_mut(&client_id).unwrap();
+        client.inventory.actionbar_slots[0] = Some(ItemStack::new(BASIC_HATCHET_ID, 1));
+        let leftover =
+            add_stack_to_inventory(&mut client.inventory, ItemStack::new(BASIC_HATCHET_ID, 0));
+        assert!(leftover.is_none());
+    }
+
+    fn place_furnace(server: &mut GameServer, client_id: ClientId) -> DeployedEntityId {
+        server.apply_place_deployable_command(
+            client_id,
+            PlaceDeployableCommand {
+                item_id: intern_item_id(CRUDE_FURNACE_ID),
+                position: Vec3Net::new(1.5, 0.0, 0.0),
+                yaw: 0.0,
+            },
+        );
+        *server
+            .deployed_entities
+            .keys()
+            .next()
+            .expect("furnace placed")
+    }
+
     #[test]
     fn damage_reduces_health_and_respects_tool_cooldown() {
         use crate::protocol::DamageDeployableCommand;
@@ -598,6 +632,78 @@ mod tests {
         assert!(
             !server.deployed_entities.contains_key(&id),
             "deployable should be removed when HP reaches 0"
+        );
+    }
+
+    #[test]
+    fn matched_tool_outdamages_mismatched_tool() {
+        use crate::protocol::DamageDeployableCommand;
+        // Workbench (wood) vs hatchet should deal 3× the per-hit damage
+        // of pickaxe vs the same workbench (150% vs 50%).
+        let mut axe_server = make_server();
+        let axe_client = connect_test_client(&mut axe_server);
+        give_one(&mut axe_server, axe_client, WORKBENCH_T1_ID);
+        let axe_target = place_workbench(&mut axe_server, axe_client);
+        equip_hatchet(&mut axe_server, axe_client);
+
+        let start_hp = axe_server.deployed_entities[&axe_target].health;
+        axe_server.apply_damage_deployable_command(
+            axe_client,
+            DamageDeployableCommand { id: axe_target },
+        );
+        let axe_damage = start_hp - axe_server.deployed_entities[&axe_target].health;
+
+        let mut pick_server = make_server();
+        let pick_client = connect_test_client(&mut pick_server);
+        give_one(&mut pick_server, pick_client, WORKBENCH_T1_ID);
+        let pick_target = place_workbench(&mut pick_server, pick_client);
+        equip_pickaxe(&mut pick_server, pick_client);
+
+        pick_server.apply_damage_deployable_command(
+            pick_client,
+            DamageDeployableCommand { id: pick_target },
+        );
+        let pick_damage = start_hp - pick_server.deployed_entities[&pick_target].health;
+
+        assert_eq!(
+            axe_damage,
+            pick_damage * 3,
+            "hatchet (150% on wood) should out-damage pickaxe (50% on wood) by 3×"
+        );
+    }
+
+    #[test]
+    fn pickaxe_outdamages_hatchet_on_furnace() {
+        use crate::protocol::DamageDeployableCommand;
+        let mut pick_server = make_server();
+        let pick_client = connect_test_client(&mut pick_server);
+        give_one(&mut pick_server, pick_client, CRUDE_FURNACE_ID);
+        let pick_target = place_furnace(&mut pick_server, pick_client);
+        equip_pickaxe(&mut pick_server, pick_client);
+
+        let start_hp = pick_server.deployed_entities[&pick_target].health;
+        pick_server.apply_damage_deployable_command(
+            pick_client,
+            DamageDeployableCommand { id: pick_target },
+        );
+        let pick_damage = start_hp - pick_server.deployed_entities[&pick_target].health;
+
+        let mut axe_server = make_server();
+        let axe_client = connect_test_client(&mut axe_server);
+        give_one(&mut axe_server, axe_client, CRUDE_FURNACE_ID);
+        let axe_target = place_furnace(&mut axe_server, axe_client);
+        equip_hatchet(&mut axe_server, axe_client);
+
+        axe_server.apply_damage_deployable_command(
+            axe_client,
+            DamageDeployableCommand { id: axe_target },
+        );
+        let axe_damage = start_hp - axe_server.deployed_entities[&axe_target].health;
+
+        assert_eq!(
+            pick_damage,
+            axe_damage * 3,
+            "pickaxe (150% on stone) should out-damage hatchet (50% on stone) by 3×"
         );
     }
 

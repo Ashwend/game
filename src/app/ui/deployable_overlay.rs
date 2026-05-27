@@ -15,7 +15,9 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 
 use crate::{
-    app::scene::NetworkDeployedEntity, items::DeployableKind, protocol::DeployedEntityState,
+    app::scene::NetworkDeployedEntity,
+    items::{DeployableKind, item_definition},
+    protocol::DeployedEntityState,
 };
 
 /// Hard cutoff distance for the nameplate. Past this the label hides
@@ -32,10 +34,12 @@ const DEPLOYABLE_FADE_START_M: f32 = 5.0;
 const DEPLOYABLE_LOOK_CONE_COS: f32 = 0.91;
 /// Inset (logical pixels) before the viewport edge.
 const DEPLOYABLE_VIEWPORT_INSET_PX: f32 = 12.0;
-/// Height (world space) above the structure's anchor where the
-/// nameplate floats. Picked to clear the workbench tabletop (~1 m) and
-/// the furnace chimney (~1.6 m) by a comfortable margin.
-const NAMEPLATE_TOP_CLEARANCE_M: f32 = 1.9;
+/// Vertical gap (world space) between the top of the structure's
+/// collider and the nameplate baseline. Small constant — actual
+/// nameplate height comes from the structure's own collider so a
+/// short workbench gets a low label and a taller furnace gets a
+/// higher one.
+const NAMEPLATE_TOP_CLEARANCE_M: f32 = 0.2;
 
 const NAMETAG_WIDTH: f32 = 144.0;
 const NAMETAG_HEIGHT: f32 = 32.0;
@@ -47,7 +51,14 @@ pub(crate) struct DeployableOverlay<'world> {
 }
 
 pub(crate) struct DeployableOverlayEntry<'world> {
+    /// Where the nameplate sits in world space — just above the
+    /// structure's top.
     pub(crate) anchor_world: Vec3,
+    /// Point used for the look-cone + range checks. The structure's
+    /// vertical centre rather than the floating nameplate anchor, so
+    /// looking at the *body* of the workbench (not above it) still
+    /// counts as "aiming at it."
+    pub(crate) look_target_world: Vec3,
     pub(crate) state: &'world DeployedEntityState,
 }
 
@@ -60,12 +71,13 @@ pub(super) fn deployable_overlay_ui(ctx: &egui::Context, overlay: DeployableOver
     let visible_rect = ctx.content_rect().shrink(DEPLOYABLE_VIEWPORT_INSET_PX);
 
     for entry in overlay.entries {
-        // Hide at full health — undamaged props don't need a label.
-        if entry.state.health >= entry.state.max_health {
-            continue;
-        }
-        let to_anchor = entry.anchor_world - camera_origin;
-        let distance = to_anchor.length();
+        // Range + cone test use the structure's centre (`look_target_world`),
+        // not the floating label anchor — otherwise looking at the
+        // workbench body misses the cone and the label stays hidden
+        // until the player tilts the camera up at the empty space
+        // above the structure.
+        let to_target = entry.look_target_world - camera_origin;
+        let distance = to_target.length();
         if distance > DEPLOYABLE_DRAW_DISTANCE_M {
             continue;
         }
@@ -73,7 +85,7 @@ pub(super) fn deployable_overlay_ui(ctx: &egui::Context, overlay: DeployableOver
         // camera forward. Below the cone cosine → not centred enough
         // to be considered "the player is looking at it."
         let cosine = if distance > 1e-3 {
-            to_anchor.dot(camera_forward) / distance
+            to_target.dot(camera_forward) / distance
         } else {
             1.0
         };
@@ -87,7 +99,16 @@ pub(super) fn deployable_overlay_ui(ctx: &egui::Context, overlay: DeployableOver
         if !visible_rect.contains(egui::pos2(screen.x, screen.y)) {
             continue;
         }
-        draw_deployable_label(ctx, screen, distance, entry.state);
+        // Always allocate the Area while the player is aiming at the
+        // structure, even at full health. egui's first-show sizing
+        // pass renders invisibly for one frame and fades in over the
+        // next few — if the Area only appeared the instant the
+        // structure took its first hit, the nameplate would stay
+        // hidden until the player swung the camera off and back. By
+        // pre-warming here, the sizing pass + fade-in happen once
+        // when the structure first comes into focus.
+        let damaged = entry.state.health < entry.state.max_health;
+        draw_deployable_label(ctx, screen, distance, entry.state, damaged);
     }
 }
 
@@ -96,9 +117,18 @@ fn draw_deployable_label(
     screen: Vec2,
     distance: f32,
     state: &DeployedEntityState,
+    damaged: bool,
 ) {
     let id = egui::Id::new(("deployable_overlay", state.id));
-    let fade = distance_fade(distance);
+    // Multiply the distance fade by 0 when the structure is at full
+    // health: the Area still renders (keeping its size + visibility
+    // memo warm in egui) but is fully transparent, so undamaged props
+    // stay silent.
+    let fade = if damaged {
+        distance_fade(distance)
+    } else {
+        0.0
+    };
 
     egui::Area::new(id)
         .order(egui::Order::Foreground)
@@ -212,10 +242,10 @@ fn health_fill_color(fraction: f32) -> egui::Color32 {
 }
 
 /// Pair each placed-entity transform with its current `DeployedEntityState`
-/// from the snapshot. The anchor world point is the structure centre +
-/// `NAMEPLATE_TOP_CLEARANCE_M`, which sits above the tallest current
-/// deployable (the furnace chimney) without depending on per-kind mesh
-/// heights.
+/// from the snapshot. Heights come from the structure's own collider
+/// profile so the nameplate sits just above the visible top (workbench
+/// vs furnace differ in height) and the look-cone target sits at the
+/// vertical centre of the body.
 pub(crate) fn collect_deployable_overlay_entries<'a>(
     placed_entities: impl IntoIterator<Item = (&'a NetworkDeployedEntity, &'a GlobalTransform)>,
     snapshot_entities: impl IntoIterator<Item = &'a DeployedEntityState>,
@@ -229,10 +259,14 @@ pub(crate) fn collect_deployable_overlay_entries<'a>(
         .into_iter()
         .filter_map(|(entity, transform)| {
             let state = state_by_id.remove(&entity.id)?;
+            let profile = item_definition(&state.item_id).and_then(|def| def.deployable)?;
             let translation = transform.translation();
-            let anchor_world = translation + Vec3::Y * NAMEPLATE_TOP_CLEARANCE_M;
+            let full_height = profile.collider_half_height * 2.0;
+            let look_target_world = translation + Vec3::Y * profile.collider_half_height;
+            let anchor_world = translation + Vec3::Y * (full_height + NAMEPLATE_TOP_CLEARANCE_M);
             Some(DeployableOverlayEntry {
                 anchor_world,
+                look_target_world,
                 state,
             })
         })

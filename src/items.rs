@@ -150,6 +150,44 @@ impl DeployableKind {
             Self::Furnace { .. } => "Furnace",
         }
     }
+
+    /// Source of truth for what the structure is built from. The damage
+    /// path uses this for the tool-vs-material multiplier and the
+    /// client uses it to pick the swing surface (audio/visual chip).
+    /// Tier doesn't change material today — a future "reinforced" tier
+    /// can introduce a new kind variant if that ever needs to differ.
+    pub const fn material(self) -> DeployableMaterial {
+        match self {
+            Self::Workbench { .. } => DeployableMaterial::Wood,
+            Self::Furnace { .. } => DeployableMaterial::Stone,
+        }
+    }
+}
+
+/// What the structure is made of, for the damage / tool-matchup system.
+/// Kept deliberately coarse — wood vs stone is enough to express
+/// "hatchet eats workbenches, pickaxe eats furnaces" without forcing
+/// every future deployable to invent a new material.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeployableMaterial {
+    Wood,
+    Stone,
+}
+
+/// Tool-vs-material damage multiplier, expressed as a percentage so
+/// the server stays on integer math. Matched tool ≈ 1.5× damage,
+/// mismatched proper tool ≈ 0.5× damage; bare hands never reach this
+/// code path (they're rejected upstream).
+pub fn tool_damage_multiplier_pct(tool: ToolKind, material: DeployableMaterial) -> u32 {
+    match (tool, material) {
+        (ToolKind::Axe, DeployableMaterial::Wood) => 150,
+        (ToolKind::Pickaxe, DeployableMaterial::Stone) => 150,
+        (ToolKind::Axe, DeployableMaterial::Stone) => 50,
+        (ToolKind::Pickaxe, DeployableMaterial::Wood) => 50,
+        // Hands shouldn't reach here, but if they do treat them as
+        // worst-case mismatched so they make minimal dents.
+        (ToolKind::Hands, _) => 50,
+    }
 }
 
 /// Footprint + health profile for items that drop into the world as
@@ -452,6 +490,41 @@ mod tests {
         assert_eq!(
             normalize_stack(&ItemStack::new(BASIC_HATCHET_ID, 40)),
             Some(ItemStack::new(BASIC_HATCHET_ID, 1))
+        );
+    }
+
+    #[test]
+    fn tool_material_multiplier_favours_matched_pairings() {
+        // Matched: hatchet→wood and pickaxe→stone hit hardest.
+        assert_eq!(
+            tool_damage_multiplier_pct(ToolKind::Axe, DeployableMaterial::Wood),
+            150
+        );
+        assert_eq!(
+            tool_damage_multiplier_pct(ToolKind::Pickaxe, DeployableMaterial::Stone),
+            150
+        );
+        // Mismatched proper tools still chip but at a third of the
+        // matched rate (50 / 150 = 1/3).
+        assert_eq!(
+            tool_damage_multiplier_pct(ToolKind::Axe, DeployableMaterial::Stone),
+            50
+        );
+        assert_eq!(
+            tool_damage_multiplier_pct(ToolKind::Pickaxe, DeployableMaterial::Wood),
+            50
+        );
+    }
+
+    #[test]
+    fn deployable_kind_material_matches_visual_intent() {
+        assert_eq!(
+            DeployableKind::Workbench { tier: 1 }.material(),
+            DeployableMaterial::Wood
+        );
+        assert_eq!(
+            DeployableKind::Furnace { tier: 1 }.material(),
+            DeployableMaterial::Stone
         );
     }
 

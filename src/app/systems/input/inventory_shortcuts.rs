@@ -295,13 +295,16 @@ fn dispatch_deployable_swing(
         return;
     };
 
-    // Surface picks the impact sound + chip palette. Wood for the
-    // workbench, stone for the furnace. Future deployables can map
-    // through `DeployableKind` here.
-    let surface = match params.pickup_target.deployable_kind {
-        Some(crate::items::DeployableKind::Workbench { .. }) => SurfaceMaterial::Wood,
-        Some(crate::items::DeployableKind::Furnace { .. }) => SurfaceMaterial::Stone,
-        None => SurfaceMaterial::Stone,
+    // Surface picks the impact sound + chip palette. The structure's
+    // material lives on `DeployableKind` so it stays aligned with the
+    // server's damage multiplier path (`kind.material()`).
+    let surface = match params
+        .pickup_target
+        .deployable_kind
+        .map(|kind| kind.material())
+    {
+        Some(crate::items::DeployableMaterial::Wood) => SurfaceMaterial::Wood,
+        Some(crate::items::DeployableMaterial::Stone) | None => SurfaceMaterial::Stone,
     };
     let visual_kind = ImpactEffectKind::for_surface(surface);
 
