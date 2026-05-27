@@ -325,11 +325,11 @@ fn spawn_resource_node_entity(
         Visibility::Visible,
     ));
     // Crude clutter (branch piles, surface stones, hay grass) spawns
-    // densely — up to ~30 per chunk in Forest/Rocky — and each casts a
-    // negligible-size shadow under its own footprint. Skipping the
-    // shadow pass for these gets us a meaningful per-frame win in
-    // populated areas without losing readable silhouettes (trees and
-    // veins still cast).
+    // densely — Plains chunks alone carry ~28 grass tufts plus stones
+    // and sticks — and each casts a negligible-size shadow under its
+    // own footprint. Skipping the shadow pass for these gets us a
+    // meaningful per-frame win in populated areas without losing
+    // readable silhouettes (trees and veins still cast).
     if model.is_crude() {
         spawn_command.insert(NotShadowCaster);
     }

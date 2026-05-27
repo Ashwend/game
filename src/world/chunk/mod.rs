@@ -192,7 +192,7 @@ impl NodeKind {
             Self::SurfaceStone => 2.4,
             Self::CoalOre | Self::IronOre | Self::SulfurOre | Self::StoneVein => 3.0,
             Self::BranchPile => 1.6,
-            Self::HayGrass => 1.2,
+            Self::HayGrass => 0.8,
         }
     }
 }

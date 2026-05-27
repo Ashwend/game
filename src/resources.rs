@@ -436,11 +436,12 @@ pub fn resource_node_collider(node: &ResourceNodeState) -> Option<WorldBlock> {
         | ResourceNodeModel::IronOre
         | ResourceNodeModel::SulfurOre
         | ResourceNodeModel::StoneVein => Some(ore_collider_block(node)),
-        ResourceNodeModel::SurfaceStone => Some(surface_stone_collider_block(node)),
-        // Branch piles and grass tufts are walk-through — small enough that
-        // a collider would feel buggy, and the player needs to be able to
-        // stand right on top of them to interact.
-        ResourceNodeModel::BranchPile | ResourceNodeModel::HayGrass => None,
+        // Crude clutter (surface stones, branch piles, hay tufts) is
+        // walk-through — small enough that a collider feels buggy and the
+        // player needs to be able to stand on top to interact.
+        ResourceNodeModel::SurfaceStone
+        | ResourceNodeModel::BranchPile
+        | ResourceNodeModel::HayGrass => None,
     }
 }
 
@@ -463,16 +464,6 @@ fn tree_collider_block(node: &ResourceNodeState, model: ResourceNodeModel) -> Wo
 fn ore_collider_block(node: &ResourceNodeState) -> WorldBlock {
     let half_width = 0.55;
     let half_height = 0.32;
-    let center = Vec3Net::new(node.position.x, half_height, node.position.z);
-    let half_extents = Vec3Net::new(half_width, half_height, half_width);
-    WorldBlock::new(center, half_extents)
-}
-
-fn surface_stone_collider_block(node: &ResourceNodeState) -> WorldBlock {
-    // Smaller than an ore node — a single low rock the player has to step
-    // over rather than walk through.
-    let half_width = 0.30;
-    let half_height = 0.18;
     let center = Vec3Net::new(node.position.x, half_height, node.position.z);
     let half_extents = Vec3Net::new(half_width, half_height, half_width);
     WorldBlock::new(center, half_extents)

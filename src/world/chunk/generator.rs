@@ -39,10 +39,11 @@ const MAX_CANDIDATES_PER_NODE: u32 = 18;
 /// Margin from the chunk edge so neighbouring grids don't double-spawn
 /// against each other when a node lands right on the boundary.
 const EDGE_MARGIN_M: f32 = 0.5;
-/// Minimum distance between any two nodes regardless of kind. Keeps
-/// large-and-small kinds from co-locating (e.g. a tree right on top of
-/// a hay tuft).
-const CROSS_KIND_MIN_SPACING_M: f32 = 1.1;
+/// Minimum distance between any two nodes regardless of kind. Loose
+/// enough that grass can grow right next to a stick or stone — the
+/// crude clutter is small and walk-through, so visual overlap reads as
+/// "ground variety" rather than as broken placement.
+const CROSS_KIND_MIN_SPACING_M: f32 = 0.7;
 
 /// One node placement decided by the generator. Carries the kind so the
 /// caller can keep grid-level bookkeeping (capacity counts, regrow

@@ -178,7 +178,7 @@ pub fn base_capacity(classification: ChunkClassification, kind: NodeKind) -> u16
         (Forest, TreeLarge) => 3,
         (Forest, BranchPile) => 10,
         (Forest, SurfaceStone) => 2,
-        (Forest, HayGrass) => 6,
+        (Forest, HayGrass) => 12,
         (Forest, CoalOre | IronOre | SulfurOre) => 0,
         (Forest, StoneVein) => 0,
 
@@ -213,7 +213,7 @@ pub fn base_capacity(classification: ChunkClassification, kind: NodeKind) -> u16
         (Plains, TreeLarge) => 0,
         (Plains, BranchPile) => 6,
         (Plains, SurfaceStone) => 3,
-        (Plains, HayGrass) => 16,
+        (Plains, HayGrass) => 28,
         (Plains, CoalOre | IronOre | SulfurOre) => 0,
         (Plains, StoneVein) => 1,
 
@@ -222,7 +222,7 @@ pub fn base_capacity(classification: ChunkClassification, kind: NodeKind) -> u16
         (Mixed, TreeLarge) => 1,
         (Mixed, BranchPile) => 5,
         (Mixed, SurfaceStone) => 4,
-        (Mixed, HayGrass) => 5,
+        (Mixed, HayGrass) => 8,
         (Mixed, CoalOre) => 1,
         (Mixed, IronOre) => 1,
         (Mixed, SulfurOre) => 0,
