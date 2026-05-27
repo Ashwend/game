@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use bevy::log::info_span;
 
 use crate::{
     controller::PlayerController,
@@ -170,6 +171,11 @@ impl GameServer {
     }
 
     fn snapshot_inner(&self, for_client: Option<ClientId>) -> WorldSnapshot {
+        let _span = info_span!(
+            "snapshot_inner",
+            client = for_client.map(|cid| cid as i64).unwrap_or(-1)
+        )
+        .entered();
         // Single AoI gate: ask the chunk manager which chunks this
         // client should see, then build every networked-entity vector
         // from chunk membership. `for_client = None` (tests, the brief
@@ -183,119 +189,129 @@ impl GameServer {
                     .visible_chunks(client.controller.position, client.view_tier)
             });
 
-        let mut players = self
-            .clients
-            .values()
-            .filter(|client| match (&chunk_filter, for_client) {
-                // No filter (tests / handshake snapshot): include everyone.
-                (None, _) => true,
-                // Always include the local player, regardless of which
-                // chunk their controller currently anchors to.
-                (Some(_), Some(local)) if client.client_id == local => true,
-                // Peers visible only if their anchor chunk falls inside
-                // the local player's AoI ring. Falls back to the raw
-                // controller position if the manager hasn't recorded
-                // the player yet (transient state on connect).
-                (Some(visible), _) => self
-                    .chunk_manager
-                    .player_chunk(client.client_id)
-                    .map(|coord| visible.contains(&coord))
-                    .unwrap_or_else(|| {
-                        let coord = crate::world::ChunkCoord::from_world(
-                            client.controller.position.x,
-                            client.controller.position.z,
-                        );
-                        visible.contains(&coord)
-                    }),
-            })
-            .map(|client| {
-                let is_local = Some(client.client_id) == for_client;
-                let inventory = if is_local {
-                    Some(client.inventory.clone())
-                } else {
-                    None
-                };
-                // Same reasoning as inventory: only the owning client
-                // needs to render their own crafting queue, and peers
-                // shouldn't see what someone else is building.
-                let crafting = if is_local {
-                    Some(client.crafting.clone())
-                } else {
-                    None
-                };
-                // Furnace view is owner-only too — peers can see the
-                // structure's public `active` flag via the deployable
-                // snapshot, but the inventory itself stays private.
-                let open_furnace = if is_local {
-                    self.open_furnace_view_for(client.client_id)
-                } else {
-                    None
-                };
-                PlayerState {
-                    client_id: client.client_id,
-                    steam_id: client.steam_id,
-                    name: client.name.clone(),
-                    position: client.controller.position,
-                    velocity: client.controller.velocity,
-                    yaw: client.controller.yaw,
-                    pitch: client.controller.pitch,
-                    health: client.controller.health,
-                    grounded: client.controller.grounded,
-                    last_processed_input: client.controller.last_processed_input,
-                    is_admin: client.is_admin,
-                    chat_bubble: client
-                        .chat_bubble
-                        .as_ref()
-                        .map(|bubble| bubble.text.clone()),
-                    inventory,
-                    crafting,
-                    open_furnace,
-                }
-            })
-            .collect::<Vec<_>>();
+        let players_span = info_span!("snapshot_players");
+        let mut players = players_span.in_scope(|| {
+            self.clients
+                .values()
+                .filter(|client| match (&chunk_filter, for_client) {
+                    // No filter (tests / handshake snapshot): include everyone.
+                    (None, _) => true,
+                    // Always include the local player, regardless of which
+                    // chunk their controller currently anchors to.
+                    (Some(_), Some(local)) if client.client_id == local => true,
+                    // Peers visible only if their anchor chunk falls inside
+                    // the local player's AoI ring. Falls back to the raw
+                    // controller position if the manager hasn't recorded
+                    // the player yet (transient state on connect).
+                    (Some(visible), _) => self
+                        .chunk_manager
+                        .player_chunk(client.client_id)
+                        .map(|coord| visible.contains(&coord))
+                        .unwrap_or_else(|| {
+                            let coord = crate::world::ChunkCoord::from_world(
+                                client.controller.position.x,
+                                client.controller.position.z,
+                            );
+                            visible.contains(&coord)
+                        }),
+                })
+                .map(|client| {
+                    let is_local = Some(client.client_id) == for_client;
+                    let inventory = if is_local {
+                        Some(client.inventory.clone())
+                    } else {
+                        None
+                    };
+                    // Same reasoning as inventory: only the owning client
+                    // needs to render their own crafting queue, and peers
+                    // shouldn't see what someone else is building.
+                    let crafting = if is_local {
+                        Some(client.crafting.clone())
+                    } else {
+                        None
+                    };
+                    // Furnace view is owner-only too — peers can see the
+                    // structure's public `active` flag via the deployable
+                    // snapshot, but the inventory itself stays private.
+                    let open_furnace = if is_local {
+                        self.open_furnace_view_for(client.client_id)
+                    } else {
+                        None
+                    };
+                    PlayerState {
+                        client_id: client.client_id,
+                        steam_id: client.steam_id,
+                        name: client.name.clone(),
+                        position: client.controller.position,
+                        velocity: client.controller.velocity,
+                        yaw: client.controller.yaw,
+                        pitch: client.controller.pitch,
+                        health: client.controller.health,
+                        grounded: client.controller.grounded,
+                        last_processed_input: client.controller.last_processed_input,
+                        is_admin: client.is_admin,
+                        chat_bubble: client
+                            .chat_bubble
+                            .as_ref()
+                            .map(|bubble| bubble.text.clone()),
+                        inventory,
+                        crafting,
+                        open_furnace,
+                    }
+                })
+                .collect::<Vec<_>>()
+        });
         players.sort_by_key(|player| player.client_id);
 
-        let visible_drops = chunk_filter.as_ref().map(|chunks| {
-            chunks
-                .iter()
-                .flat_map(|coord| self.chunk_manager.dropped_items_in(*coord))
-                .collect::<std::collections::HashSet<_>>()
+        let dropped_items = info_span!("snapshot_dropped_items").in_scope(|| {
+            let visible_drops = chunk_filter.as_ref().map(|chunks| {
+                chunks
+                    .iter()
+                    .flat_map(|coord| self.chunk_manager.dropped_items_in(*coord))
+                    .collect::<std::collections::HashSet<_>>()
+            });
+            let mut dropped_items = self
+                .dropped_items
+                .values()
+                .filter(|body| match &visible_drops {
+                    None => true,
+                    Some(visible) => visible.contains(&body.item.id),
+                })
+                .map(|body| body.item.clone())
+                .collect::<Vec<_>>();
+            dropped_items.sort_by_key(|item| item.id);
+            dropped_items
         });
-        let mut dropped_items = self
-            .dropped_items
-            .values()
-            .filter(|body| match &visible_drops {
-                None => true,
-                Some(visible) => visible.contains(&body.item.id),
-            })
-            .map(|body| body.item.clone())
-            .collect::<Vec<_>>();
-        dropped_items.sort_by_key(|item| item.id);
 
-        let visible_nodes = chunk_filter.as_ref().map(|chunks| {
-            chunks
-                .iter()
-                .flat_map(|coord| self.chunk_manager.nodes_in(*coord))
-                .collect::<std::collections::HashSet<_>>()
+        let resource_nodes = info_span!("snapshot_resource_nodes").in_scope(|| {
+            let visible_nodes = chunk_filter.as_ref().map(|chunks| {
+                chunks
+                    .iter()
+                    .flat_map(|coord| self.chunk_manager.nodes_in(*coord))
+                    .collect::<std::collections::HashSet<_>>()
+            });
+            let mut resource_nodes = self
+                .resource_nodes
+                .values()
+                .filter(|node| match &visible_nodes {
+                    None => true,
+                    Some(visible) => visible.contains(&node.id),
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            resource_nodes.sort_by_key(|node| node.id);
+            resource_nodes
         });
-        let mut resource_nodes = self
-            .resource_nodes
-            .values()
-            .filter(|node| match &visible_nodes {
-                None => true,
-                Some(visible) => visible.contains(&node.id),
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        resource_nodes.sort_by_key(|node| node.id);
 
-        let visible_deployables = chunk_filter.as_ref().map(|chunks| {
-            chunks
-                .iter()
-                .flat_map(|coord| self.chunk_manager.deployed_entities_in(*coord))
-                .collect::<std::collections::HashSet<_>>()
+        let deployed_entities = info_span!("snapshot_deployables").in_scope(|| {
+            let visible_deployables = chunk_filter.as_ref().map(|chunks| {
+                chunks
+                    .iter()
+                    .flat_map(|coord| self.chunk_manager.deployed_entities_in(*coord))
+                    .collect::<std::collections::HashSet<_>>()
+            });
+            self.deployed_entities_for_snapshot(visible_deployables.as_ref())
         });
-        let deployed_entities = self.deployed_entities_for_snapshot(visible_deployables.as_ref());
 
         WorldSnapshot {
             tick: self.tick,

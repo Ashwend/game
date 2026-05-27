@@ -12,7 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use bevy::{app::TerminalCtrlCHandlerPlugin, prelude::*};
+use bevy::{app::TerminalCtrlCHandlerPlugin, log::info_span, prelude::*};
 use lightyear::prelude::{
     LocalAddr, MessageSender,
     server::{self, ClientOf},
@@ -313,8 +313,12 @@ fn tick_authoritative_server(
     accumulator.0 = (accumulator.0 + time.delta()).min(max_accumulator);
 
     while accumulator.0 >= fixed_delta {
+        let _span = info_span!("host_fixed_tick").entered();
         let envelopes = server.0.tick(fixed_delta.as_secs_f32());
-        route_envelopes(&mut commands, &mut connections, &mut senders, envelopes);
+        let route_span = info_span!("route_envelopes", count = envelopes.len());
+        route_span.in_scope(|| {
+            route_envelopes(&mut commands, &mut connections, &mut senders, envelopes);
+        });
         accumulator.0 -= fixed_delta;
     }
 }

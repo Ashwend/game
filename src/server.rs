@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use bevy::log::info_span;
+
 use crate::{
     controller::{BlockGrid, PlayerController},
     protocol::{
@@ -329,6 +331,7 @@ impl GameServer {
     }
 
     pub fn tick(&mut self, delta_seconds: f32) -> Vec<ServerEnvelope> {
+        let _tick_span = info_span!("server_tick", tick = self.tick + 1).entered();
         self.tick += 1;
         self.save.state.last_authoritative_tick = self.tick;
         self.world_time.advance(delta_seconds);
@@ -345,7 +348,10 @@ impl GameServer {
         // Chunk manager owns regrows now — fresh-position spawns 5-15 min
         // after a node is depleted. The result is spliced into the live
         // node map so the snapshot path picks them up automatically.
-        let regrow = self.chunk_manager.tick(self.tick, &self.resource_nodes);
+        let regrow = {
+            let _span = info_span!("chunk_manager_tick").entered();
+            self.chunk_manager.tick(self.tick, &self.resource_nodes)
+        };
         for node in regrow.spawned {
             self.resource_nodes.insert(node.id, node);
         }
@@ -389,11 +395,14 @@ impl GameServer {
         // hotbar contents private without needing a separate inventory
         // message channel.
         let client_ids = self.clients.keys().copied().collect::<Vec<_>>();
-        for client_id in &client_ids {
-            envelopes.push(ServerEnvelope {
-                target: DeliveryTarget::Client(*client_id),
-                message: ServerMessage::Snapshot(self.snapshot_for(*client_id)),
-            });
+        {
+            let _span = info_span!("snapshot_broadcast", clients = client_ids.len()).entered();
+            for client_id in &client_ids {
+                envelopes.push(ServerEnvelope {
+                    target: DeliveryTarget::Client(*client_id),
+                    message: ServerMessage::Snapshot(self.snapshot_for(*client_id)),
+                });
+            }
         }
         if self
             .tick
