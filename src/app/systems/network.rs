@@ -331,4 +331,77 @@ mod tests {
             Some("Server restart")
         ));
     }
+
+    #[test]
+    fn remote_impact_tool_and_surface_maps_each_kind() {
+        use crate::app::audio::surface::SurfaceMaterial;
+        // Trees -> axe/wood, ores -> pickaxe with their own surface, crude
+        // kinds -> hands.
+        assert_eq!(
+            remote_impact_tool_and_surface(ResourceImpactKind::Tree),
+            (ToolKind::Axe, SurfaceMaterial::Wood)
+        );
+        assert_eq!(
+            remote_impact_tool_and_surface(ResourceImpactKind::CoalOre),
+            (ToolKind::Pickaxe, SurfaceMaterial::Coal)
+        );
+        assert_eq!(
+            remote_impact_tool_and_surface(ResourceImpactKind::IronOre),
+            (ToolKind::Pickaxe, SurfaceMaterial::Iron)
+        );
+        assert_eq!(
+            remote_impact_tool_and_surface(ResourceImpactKind::SulfurOre),
+            (ToolKind::Pickaxe, SurfaceMaterial::Sulfur)
+        );
+        assert_eq!(
+            remote_impact_tool_and_surface(ResourceImpactKind::StoneVein),
+            (ToolKind::Pickaxe, SurfaceMaterial::Stone)
+        );
+        assert_eq!(
+            remote_impact_tool_and_surface(ResourceImpactKind::Branches),
+            (ToolKind::Hands, SurfaceMaterial::Wood)
+        );
+        assert_eq!(
+            remote_impact_tool_and_surface(ResourceImpactKind::SurfaceStone),
+            (ToolKind::Hands, SurfaceMaterial::Stone)
+        );
+        assert_eq!(
+            remote_impact_tool_and_surface(ResourceImpactKind::HayGrass),
+            (ToolKind::Hands, SurfaceMaterial::Dirt)
+        );
+    }
+
+    #[test]
+    fn remote_impact_event_carries_position_and_resolved_pair() {
+        let position = Vec3Net::new(1.0, 2.0, 3.0);
+        let event = remote_impact_event(position, ResourceImpactKind::Tree);
+        assert_eq!(event.anchor, Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(event.tool, ToolKind::Axe);
+        assert!(!event.is_player_hit);
+        // The seed is derived from position and is stable.
+        assert_eq!(event.seed, position_seed(position));
+    }
+
+    #[test]
+    fn position_seed_is_stable_and_varies_with_position() {
+        let a = Vec3Net::new(1.0, 2.0, 3.0);
+        let b = Vec3Net::new(1.0, 2.0, 3.0);
+        let c = Vec3Net::new(1.0, 2.0, 4.0);
+        // Same position -> same seed.
+        assert_eq!(position_seed(a), position_seed(b));
+        // Different position -> (almost certainly) different seed.
+        assert_ne!(position_seed(a), position_seed(c));
+    }
+
+    #[test]
+    fn network_tick_allowed_only_in_game() {
+        assert!(network_tick_allowed(&MenuState {
+            screen: Screen::InGame,
+            ..Default::default()
+        }));
+        assert!(!network_tick_allowed(&MenuState {
+            screen: Screen::MainMenu,
+            ..Default::default()
+        }));
+    }
 }

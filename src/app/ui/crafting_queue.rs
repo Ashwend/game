@@ -362,6 +362,47 @@ fn draw_queue_card(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        app::state::{ClientRuntime, LocalPlayerState},
+        crafting::PLANT_TWINE_RECIPE_ID,
+        protocol::PlayerCraftingState,
+        server::PlayerPrivate,
+    };
+
+    fn job(job_id: u64, progress: u32, total: u32) -> CraftingJob {
+        let mut j = CraftingJob::new(job_id, PLANT_TWINE_RECIPE_ID, total, 1);
+        j.progress_ticks = progress;
+        j
+    }
+
+    fn local_player_with_jobs(jobs: Vec<CraftingJob>) -> LocalPlayerState {
+        LocalPlayerState {
+            entity: None,
+            public: None,
+            private: Some(PlayerPrivate {
+                inventory: crate::protocol::PlayerInventoryState::empty(),
+                crafting: PlayerCraftingState { jobs },
+                open_furnace: None,
+                open_loot_bag: None,
+                last_processed_input: 0,
+            }),
+            lifecycle: None,
+        }
+    }
+
+    fn run_ui(f: impl FnMut(&egui::Context)) -> egui::FullOutput {
+        let ctx = egui::Context::default();
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 768.0),
+                )),
+                ..Default::default()
+            },
+            f,
+        )
+    }
 
     #[test]
     fn queue_card_alpha_shows_first_three_only() {
@@ -372,5 +413,118 @@ mod tests {
         assert!((queue_card_alpha(2) - 1.0).abs() < f32::EPSILON);
         assert!(queue_card_alpha(3) <= 0.0);
         assert!(queue_card_alpha(15) <= 0.0);
+    }
+
+    #[test]
+    fn baseline_from_captures_job_progress_and_clock() {
+        let j = job(1, 7, 40);
+        let baseline = baseline_from(&j, 12.5);
+        assert_eq!(baseline.observed_ticks, 7);
+        assert_eq!(baseline.total_ticks, 40);
+        assert_eq!(baseline.observed_at_secs, 12.5);
+    }
+
+    #[test]
+    fn smoothed_fraction_queued_jobs_render_at_zero() {
+        let mut hud = CraftingHudState::default();
+        let j = job(2, 20, 40);
+        // Non-head jobs always show 0 — the server doesn't advance them.
+        let fraction = smoothed_fraction(&mut hud, &j, 100.0, false);
+        assert_eq!(fraction, 0.0);
+        // A baseline is still recorded so it can become the head later.
+        assert!(hud.progress.contains_key(&j.job_id));
+    }
+
+    #[test]
+    fn smoothed_fraction_head_anchors_and_advances_with_clock() {
+        let mut hud = CraftingHudState::default();
+        // Head job halfway through 40 ticks observed at t=0.
+        let j = job(3, 20, 40);
+        let at_anchor = smoothed_fraction(&mut hud, &j, 0.0, true);
+        assert!((at_anchor - 0.5).abs() < 1e-3);
+
+        // Same snapshot a second later: the bar advances off the wall
+        // clock at the server tick rate, so the fraction grows.
+        let later = smoothed_fraction(&mut hud, &j, 1.0, true);
+        assert!(later > at_anchor);
+        assert!(later <= 1.0);
+    }
+
+    #[test]
+    fn smoothed_fraction_zero_total_is_full() {
+        let mut hud = CraftingHudState::default();
+        let j = job(4, 0, 0);
+        assert_eq!(smoothed_fraction(&mut hud, &j, 5.0, true), 1.0);
+    }
+
+    #[test]
+    fn smoothed_fraction_clamps_at_one() {
+        let mut hud = CraftingHudState::default();
+        // Already complete, observed long ago → clamped to 1.0.
+        let j = job(5, 40, 40);
+        let fraction = smoothed_fraction(&mut hud, &j, 1000.0, true);
+        assert_eq!(fraction, 1.0);
+    }
+
+    #[test]
+    fn smoothed_fraction_rebases_when_server_advances() {
+        let mut hud = CraftingHudState::default();
+        let first = job(6, 10, 40);
+        smoothed_fraction(&mut hud, &first, 0.0, true);
+        // A new snapshot with more progress rebases the anchor's ticks.
+        let second = job(6, 30, 40);
+        smoothed_fraction(&mut hud, &second, 0.0, true);
+        let baseline = hud.progress.get(&second.job_id).expect("baseline");
+        assert_eq!(baseline.observed_ticks, 30);
+    }
+
+    #[test]
+    fn hud_clears_progress_when_no_jobs() {
+        let mut hud = CraftingHudState::default();
+        hud.progress.insert(99, baseline_from(&job(99, 1, 2), 0.0));
+        let mut runtime = ClientRuntime::default();
+        let local = local_player_with_jobs(Vec::new());
+        let mut toasts: Vec<String> = Vec::new();
+
+        run_ui(|ctx| {
+            crafting_queue_hud(ctx, &mut runtime, &local, &mut hud, &mut toasts);
+        });
+        // Empty queue forgets every baseline.
+        assert!(hud.progress.is_empty());
+    }
+
+    #[test]
+    fn hud_renders_cards_and_overflow_bar() {
+        let mut hud = CraftingHudState::default();
+        let jobs = (0..5).map(|i| job(i, 0, 40)).collect();
+        let mut runtime = ClientRuntime::default();
+        let local = local_player_with_jobs(jobs);
+        let mut toasts: Vec<String> = Vec::new();
+
+        let output = run_ui(|ctx| {
+            crafting_queue_hud(ctx, &mut runtime, &local, &mut hud, &mut toasts);
+        });
+        // Five jobs → three cards + a "+2 more" overflow bar all paint.
+        assert!(!output.shapes.is_empty());
+        // Baselines are only recorded for the visible cards (cards past the
+        // window have zero alpha and never call `smoothed_fraction`).
+        assert_eq!(hud.progress.len(), QUEUE_VISIBLE_CARDS);
+    }
+
+    #[test]
+    fn hud_drops_baselines_for_jobs_that_left_queue() {
+        let mut hud = CraftingHudState::default();
+        // Seed a stale baseline for a job that's no longer present.
+        hud.progress
+            .insert(404, baseline_from(&job(404, 1, 2), 0.0));
+        let mut runtime = ClientRuntime::default();
+        let local = local_player_with_jobs(vec![job(0, 0, 40)]);
+        let mut toasts: Vec<String> = Vec::new();
+
+        run_ui(|ctx| {
+            crafting_queue_hud(ctx, &mut runtime, &local, &mut hud, &mut toasts);
+        });
+        assert!(!hud.progress.contains_key(&404));
+        assert!(hud.progress.contains_key(&0));
     }
 }

@@ -640,4 +640,45 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn ease_out_cubic_spans_zero_to_one_monotonically() {
+        assert_eq!(ease_out_cubic(0.0), 0.0);
+        assert!((ease_out_cubic(1.0) - 1.0).abs() < 1e-6);
+        // Eased value leads a linear ramp in the middle (ease-out).
+        assert!(ease_out_cubic(0.5) > 0.5);
+        // Clamped below 0 and above 1.
+        assert_eq!(ease_out_cubic(-1.0), 0.0);
+        assert!((ease_out_cubic(2.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pop_in_overshoots_above_unit_scale_mid_curve() {
+        let base = Transform::from_xyz(0.0, 0.0, 0.0).with_scale(Vec3::ONE);
+        // Just past the overshoot peak (raw ~0.7) the node briefly scales
+        // beyond its base size before settling.
+        let mid = pop_in_transform(base, POP_IN_DURATION_SECS * 0.65);
+        assert!(mid.scale.length() > base.scale.length());
+    }
+
+    #[test]
+    fn tree_transform_keeps_unit_scale_on_the_ground() {
+        let position = Vec3Net::new(1.0, 0.0, 2.0);
+        let transform = resource_node_transform_at(position, 0.5, ResourceNodeModel::PineTreeLarge);
+        assert_eq!(transform.scale, Vec3::ONE);
+        assert_eq!(transform.translation.y, position.y);
+        // Yaw is applied as a rotation about Y.
+        let expected = Quat::from_rotation_y(0.5);
+        assert!(transform.rotation.dot(expected).abs() > 1.0 - 1e-5);
+    }
+
+    #[test]
+    fn ore_models_carry_per_model_scale_jitter() {
+        let position = Vec3Net::new(0.0, 0.0, 0.0);
+        let iron = resource_node_transform_at(position, 0.0, ResourceNodeModel::IronOre);
+        let coal = resource_node_transform_at(position, 0.0, ResourceNodeModel::CoalOre);
+        // Iron has a distinct non-uniform scale; coal stays at unit scale.
+        assert_ne!(iron.scale, coal.scale);
+        assert_eq!(coal.scale, Vec3::ONE);
+    }
 }

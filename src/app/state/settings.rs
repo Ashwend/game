@@ -11,7 +11,10 @@ mod display;
 mod keybindings;
 mod store;
 
-pub(crate) use data::{ClientSettings, DisplayMode, DisplayResolution};
+pub(crate) use data::{
+    ClientSettings, DisplayMode, DisplayResolution, MAX_FOV_DEG, MAX_UI_SCALE, MIN_FOV_DEG,
+    MIN_UI_SCALE,
+};
 pub(crate) use display::display_resolutions;
 pub(crate) use keybindings::{KeyAction, KeyBindingCategory, KeyBindingSlot, KeyBindings};
 pub(crate) use store::ClientSettingsStore;
@@ -82,9 +85,12 @@ mod tests {
         let settings = ClientSettings {
             display: DisplaySettings {
                 resolution: DisplayResolution::new(1, 1),
+                fov_degrees: 5_000.0,
+                ui_scale: 0.0,
                 ..Default::default()
             },
             audio: AudioSettings {
+                master_volume: 3.0,
                 music_volume: 2.0,
                 ui_volume: -1.0,
                 sfx_volume: 5.0,
@@ -103,10 +109,29 @@ mod tests {
             settings.display.resolution,
             DisplayResolution::new(1280, 720)
         );
+        assert_eq!(settings.display.fov_degrees, super::data::MAX_FOV_DEG);
+        assert_eq!(settings.display.ui_scale, super::data::MIN_UI_SCALE);
+        assert_eq!(settings.audio.master_volume, 1.0);
         assert_eq!(settings.audio.music_volume, 1.0);
         assert_eq!(settings.audio.ui_volume, 0.0);
         assert_eq!(settings.audio.sfx_volume, 1.0);
         assert_eq!(settings.input.mouse_sensitivity, 3.0);
+    }
+
+    #[test]
+    fn non_finite_display_fields_fall_back_to_defaults() {
+        let settings = ClientSettings {
+            display: DisplaySettings {
+                fov_degrees: f32::NAN,
+                ui_scale: f32::INFINITY,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .sanitized();
+
+        assert_eq!(settings.display.fov_degrees, 65.0);
+        assert_eq!(settings.display.ui_scale, 1.0);
     }
 
     #[test]
@@ -200,6 +225,7 @@ mod tests {
             mode: DisplayMode::Fullscreen,
             resolution: DisplayResolution::new(1920, 1080),
             vsync: true,
+            ..Default::default()
         };
 
         assert_eq!(

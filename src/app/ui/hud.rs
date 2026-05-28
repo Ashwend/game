@@ -432,4 +432,97 @@ mod tests {
             });
         });
     }
+
+    #[test]
+    fn health_bar_renders_full_mid_and_empty() {
+        // Every fill fraction runs the painter without panicking and emits
+        // the frame + icon + fill + text shapes.
+        for health in [0.0, MAX_HEALTH * 0.5, MAX_HEALTH] {
+            let ctx = egui::Context::default();
+            let output = ctx.run(raw_input(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    health_bar(ui, health);
+                });
+            });
+            assert!(!output.shapes.is_empty());
+        }
+    }
+
+    #[test]
+    fn perf_overlay_is_gated_by_the_settings_toggle() {
+        let runtime = ClientRuntime::default();
+        let diagnostics = DiagnosticsStore::default();
+        let voice = VoiceState::default();
+
+        // Disabled: HUD with no local player and no perf toggle draws
+        // nothing.
+        let mut settings = ClientSettings::default();
+        settings.hud.show_perf_stats = false;
+        let ctx_off = egui::Context::default();
+        let off = ctx_off.run(raw_input(), |ctx| {
+            hud_ui(ctx, &runtime, &diagnostics, &settings, &voice);
+        });
+        assert!(off.shapes.is_empty());
+
+        // Enabled: the perf box renders even before the first server
+        // PerfStats arrives ("waiting for server…").
+        settings.hud.show_perf_stats = true;
+        let ctx_on = egui::Context::default();
+        let on = ctx_on.run(raw_input(), |ctx| {
+            hud_ui(ctx, &runtime, &diagnostics, &settings, &voice);
+        });
+        assert!(!on.shapes.is_empty());
+    }
+
+    #[test]
+    fn perf_overlay_renders_with_server_stats() {
+        use crate::protocol::{PerfClassificationId, PerfStatsSnapshot};
+
+        let runtime = ClientRuntime {
+            perf_stats: Some(PerfStatsSnapshot {
+                loaded_chunks: 9,
+                live_nodes: 42,
+                pending_regrows: 3,
+                aoi_visible_nodes: 7,
+                player_chunk_x: -2,
+                player_chunk_z: 5,
+                player_classification: PerfClassificationId::Forest,
+            }),
+            ..Default::default()
+        };
+        let diagnostics = DiagnosticsStore::default();
+
+        let ctx = egui::Context::default();
+        let output = ctx.run(raw_input(), |ctx| {
+            perf_stats_ui(ctx, &runtime, &diagnostics);
+        });
+        assert!(!output.shapes.is_empty());
+    }
+
+    #[test]
+    fn frame_time_stats_defaults_to_zero_without_diagnostics() {
+        let diagnostics = DiagnosticsStore::default();
+        let stats = frame_time_stats(&diagnostics);
+        assert_eq!(stats.fps, 0.0);
+        assert_eq!(stats.last_ms, 0.0);
+        assert_eq!(stats.p99_ms, 0.0);
+        assert_eq!(stats.max_ms, 0.0);
+    }
+
+    #[test]
+    fn connection_lag_indicator_draws_a_chip() {
+        let ctx = egui::Context::default();
+        let output = ctx.run(raw_input(), connection_lag_indicator);
+        assert!(!output.shapes.is_empty());
+    }
+
+    #[test]
+    fn voice_indicator_envelope_just_above_floor_hides() {
+        // Envelope at/below the 0.005 floor is treated as idle.
+        let ctx = egui::Context::default();
+        let mut voice = VoiceState::default();
+        voice.indicator_envelope = 0.004;
+        let output = ctx.run(raw_input(), |ctx| voice_indicator(ctx, &voice));
+        assert!(output.shapes.is_empty());
+    }
 }

@@ -275,3 +275,168 @@ fn draw_progress_bar(ui: &mut egui::Ui, fraction: f32, fill_color: Color32) {
         painter.rect_filled(fill_rect, CornerRadius::same(3), fill_color);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        app::state::ClientRuntime,
+        items::{COAL_ID, IRON_ORE_ID},
+        protocol::ItemStack,
+        server::PlayerPrivate,
+    };
+
+    fn furnace_view(active: bool) -> OpenFurnaceView {
+        OpenFurnaceView {
+            id: 1,
+            fuel: Some(ItemStack::new(COAL_ID, 5)),
+            items: vec![Some(ItemStack::new(IRON_ORE_ID, 3)), None, None],
+            active,
+            smelt_fraction: 0.5,
+            fuel_fraction: 0.25,
+        }
+    }
+
+    fn local_player(open_furnace: Option<OpenFurnaceView>) -> LocalPlayerState {
+        LocalPlayerState {
+            entity: None,
+            public: None,
+            private: Some(PlayerPrivate {
+                inventory: PlayerInventoryState::empty(),
+                crafting: Default::default(),
+                open_furnace,
+                open_loot_bag: None,
+                last_processed_input: 0,
+            }),
+            lifecycle: None,
+        }
+    }
+
+    fn run_ui(f: impl FnMut(&egui::Context)) -> egui::FullOutput {
+        let ctx = egui::Context::default();
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 768.0),
+                )),
+                ..Default::default()
+            },
+            f,
+        )
+    }
+
+    #[test]
+    fn furnace_ui_noop_without_open_furnace() {
+        let mut menu = MenuState::default();
+        let mut runtime = ClientRuntime::default();
+        let local = local_player(None);
+        let mut inv_ui = InventoryUiState::default();
+        let mut toasts: Vec<String> = Vec::new();
+
+        let output = run_ui(|ctx| {
+            furnace_ui(
+                ctx,
+                &mut menu,
+                &mut runtime,
+                &local,
+                &mut inv_ui,
+                &mut toasts,
+            );
+        });
+        // No furnace open → nothing renders and no panel rect is recorded.
+        assert!(output.shapes.is_empty());
+        assert!(inv_ui.furnace_rect.is_none());
+    }
+
+    #[test]
+    fn furnace_ui_suppressed_while_paused() {
+        let mut menu = MenuState {
+            pause_open: true,
+            ..Default::default()
+        };
+        let mut runtime = ClientRuntime::default();
+        let local = local_player(Some(furnace_view(true)));
+        let mut inv_ui = InventoryUiState::default();
+        let mut toasts: Vec<String> = Vec::new();
+
+        let output = run_ui(|ctx| {
+            furnace_ui(
+                ctx,
+                &mut menu,
+                &mut runtime,
+                &local,
+                &mut inv_ui,
+                &mut toasts,
+            );
+        });
+        assert!(output.shapes.is_empty());
+    }
+
+    #[test]
+    fn furnace_ui_renders_panel_and_records_rect() {
+        let mut menu = MenuState::default();
+        let mut runtime = ClientRuntime::default();
+        let local = local_player(Some(furnace_view(true)));
+        let mut inv_ui = InventoryUiState::default();
+        let mut toasts: Vec<String> = Vec::new();
+
+        let output = run_ui(|ctx| {
+            furnace_ui(
+                ctx,
+                &mut menu,
+                &mut runtime,
+                &local,
+                &mut inv_ui,
+                &mut toasts,
+            );
+        });
+        // Open furnace paints the panel and records the rect so a drag
+        // released over it doesn't fall through to drop-on-ground.
+        assert!(!output.shapes.is_empty());
+        assert!(inv_ui.furnace_rect.is_some());
+    }
+
+    #[test]
+    fn furnace_ui_renders_with_inactive_furnace() {
+        // Inactive furnace shows the "Turn on" primary button instead of
+        // the danger "Turn off" — both branches must paint cleanly.
+        let mut menu = MenuState::default();
+        let mut runtime = ClientRuntime::default();
+        let local = local_player(Some(furnace_view(false)));
+        let mut inv_ui = InventoryUiState::default();
+        let mut toasts: Vec<String> = Vec::new();
+
+        let output = run_ui(|ctx| {
+            furnace_ui(
+                ctx,
+                &mut menu,
+                &mut runtime,
+                &local,
+                &mut inv_ui,
+                &mut toasts,
+            );
+        });
+        assert!(!output.shapes.is_empty());
+    }
+
+    #[test]
+    fn draw_progress_bar_fills_and_empties() {
+        // A full bar paints more shapes than an empty one (the fill rect
+        // is only drawn when the fraction is > 0).
+        let full_out = run_ui(|ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                draw_progress_bar(ui, 1.0, Color32::WHITE);
+            });
+        });
+        let empty_out = run_ui(|ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                draw_progress_bar(ui, 0.0, Color32::WHITE);
+            });
+        });
+        assert!(
+            full_out.shapes.len() > empty_out.shapes.len(),
+            "filled bar should paint more than empty"
+        );
+    }
+}

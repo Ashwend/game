@@ -173,3 +173,53 @@ fn held_item_local_transform(
     Transform::from_translation(base_translation + enter_offset)
         .with_rotation(enter_tilt * base_quat)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fully_swapped_in_tool_sits_at_its_rest_pose() {
+        // swap_fraction == 1.0 means the tool has finished lifting into
+        // view, so no enter-offset is applied — the transform is the
+        // canonical rest pose for the model.
+        let rest = held_item_local_transform(ItemModel::Hatchet, 0.0, 1.0);
+
+        // The base rest translation sits forward (-Z), right (+X) and down.
+        assert!(rest.translation.z < 0.0, "held item is in front of camera");
+        assert!(rest.translation.x > 0.0, "held item offset to the right");
+        assert!(rest.translation.y < 0.0, "held item offset downward");
+    }
+
+    #[test]
+    fn entry_animation_drops_and_tilts_the_item_below_its_rest_pose() {
+        // At swap_fraction == 0.0 the tool is freshly "picked off the
+        // back" — it starts lower than the rest pose.
+        let entering = held_item_local_transform(ItemModel::Pickaxe, 0.0, 0.0);
+        let rest = held_item_local_transform(ItemModel::Pickaxe, 0.0, 1.0);
+        assert!(
+            entering.translation.y < rest.translation.y,
+            "entering item starts below rest"
+        );
+        // And it's tilted relative to rest.
+        assert!(entering.rotation.angle_between(rest.rotation) > 0.05);
+    }
+
+    #[test]
+    fn heavier_pickaxe_drops_further_on_entry_than_the_bag() {
+        let pickaxe = held_item_local_transform(ItemModel::Pickaxe, 0.0, 0.0);
+        let bag = held_item_local_transform(ItemModel::Bag, 0.0, 0.0);
+        // The pickaxe's entry drop is the largest of the three models, so at
+        // the start of the swap it sits lower than the bag.
+        assert!(pickaxe.translation.y < bag.translation.y);
+    }
+
+    #[test]
+    fn swing_phase_moves_the_held_item_relative_to_idle() {
+        // A mid-swing phase displaces the hatchet from its idle (phase 0)
+        // pose — the swing animation actually drives the transform.
+        let idle = held_item_local_transform(ItemModel::Hatchet, 0.0, 1.0);
+        let mid = held_item_local_transform(ItemModel::Hatchet, 0.5, 1.0);
+        assert!(idle.translation.distance(mid.translation) > 0.01);
+    }
+}

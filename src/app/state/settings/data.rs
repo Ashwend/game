@@ -25,7 +25,8 @@ pub(crate) struct ClientSettings {
 
 impl ClientSettings {
     pub(crate) fn sanitized(mut self) -> Self {
-        self.display.resolution = self.display.resolution.sanitized();
+        self.display = self.display.sanitized();
+        self.audio.master_volume = self.audio.master_volume.clamp(0.0, 1.0);
         self.audio.music_volume = self.audio.music_volume.clamp(0.0, 1.0);
         self.audio.ui_volume = self.audio.ui_volume.clamp(0.0, 1.0);
         self.audio.sfx_volume = self.audio.sfx_volume.clamp(0.0, 1.0);
@@ -36,7 +37,22 @@ impl ClientSettings {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Minimum/maximum vertical field of view the player can dial in, in degrees.
+/// The lower bound keeps the view from collapsing into a telescope; the upper
+/// bound stops the fish-eye distortion that makes the world hard to read. The
+/// run-speed FOV boost stacks on top of whatever the player picks. The default
+/// matches the camera's historical baked-in baseline so existing saves look
+/// identical until the player changes it.
+pub(crate) const MIN_FOV_DEG: f32 = 50.0;
+pub(crate) const MAX_FOV_DEG: f32 = 100.0;
+
+/// Minimum/maximum egui UI scale (pixels-per-point multiplier). 1.0 is the
+/// platform default; below 0.75 text becomes unreadable on most displays and
+/// above 1.5 the chrome starts clipping the bounded panels.
+pub(crate) const MIN_UI_SCALE: f32 = 0.75;
+pub(crate) const MAX_UI_SCALE: f32 = 1.5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DisplaySettings {
     #[serde(default)]
     pub(crate) mode: DisplayMode,
@@ -44,6 +60,12 @@ pub(crate) struct DisplaySettings {
     pub(crate) resolution: DisplayResolution,
     #[serde(default = "default_vsync")]
     pub(crate) vsync: bool,
+    /// Base horizontal field of view in degrees. See [`MIN_FOV_DEG`].
+    #[serde(default = "default_fov")]
+    pub(crate) fov_degrees: f32,
+    /// egui pixels-per-point multiplier. See [`MIN_UI_SCALE`].
+    #[serde(default = "default_ui_scale")]
+    pub(crate) ui_scale: f32,
 }
 
 impl Default for DisplaySettings {
@@ -52,6 +74,8 @@ impl Default for DisplaySettings {
             mode: DisplayMode::Windowed,
             resolution: DisplayResolution::new(1280, 720),
             vsync: true,
+            fov_degrees: default_fov(),
+            ui_scale: default_ui_scale(),
         }
     }
 }
@@ -80,6 +104,21 @@ impl DisplaySettings {
         } else {
             Limiter::Off
         }
+    }
+
+    pub(super) fn sanitized(mut self) -> Self {
+        self.resolution = self.resolution.sanitized();
+        self.fov_degrees = if self.fov_degrees.is_finite() {
+            self.fov_degrees.clamp(MIN_FOV_DEG, MAX_FOV_DEG)
+        } else {
+            default_fov()
+        };
+        self.ui_scale = if self.ui_scale.is_finite() {
+            self.ui_scale.clamp(MIN_UI_SCALE, MAX_UI_SCALE)
+        } else {
+            default_ui_scale()
+        };
+        self
     }
 
     pub(crate) fn window_mode(self, monitor: Option<&Monitor>) -> WindowMode {
@@ -145,6 +184,11 @@ impl DisplayResolution {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub(crate) struct AudioSettings {
+    /// Overall mix gain applied on top of every per-category slider. Lets the
+    /// player drop the whole game volume without losing their relative
+    /// music/effects/interface balance.
+    #[serde(default = "default_volume")]
+    pub(crate) master_volume: f32,
     #[serde(default = "default_volume")]
     pub(crate) music_volume: f32,
     #[serde(default = "default_volume")]
@@ -156,6 +200,7 @@ pub(crate) struct AudioSettings {
 impl Default for AudioSettings {
     fn default() -> Self {
         Self {
+            master_volume: 1.0,
             music_volume: 1.0,
             ui_volume: 1.0,
             sfx_volume: 1.0,
@@ -244,6 +289,14 @@ pub(super) fn default_resolution() -> DisplayResolution {
 
 fn default_vsync() -> bool {
     true
+}
+
+fn default_fov() -> f32 {
+    65.0
+}
+
+fn default_ui_scale() -> f32 {
+    1.0
 }
 
 fn default_volume() -> f32 {

@@ -121,4 +121,90 @@ mod tests {
             SocketAddr::from(([127, 0, 0, 1], 7777))
         );
     }
+
+    #[test]
+    fn direct_connect_target_uses_separate_port_field_for_bare_hostname() {
+        // A hostname with no inline port pulls the port from the field.
+        let target = direct_connect_target(&dialog("example.com", "9999")).expect("parses");
+        assert_eq!(
+            target,
+            DirectConnectTarget {
+                host: "example.com".to_owned(),
+                port: 9999,
+            }
+        );
+    }
+
+    #[test]
+    fn direct_connect_target_trims_surrounding_whitespace() {
+        let target = direct_connect_target(&dialog("  example.com  ", "  7000  ")).expect("parses");
+        assert_eq!(target.host, "example.com");
+        assert_eq!(target.port, 7000);
+    }
+
+    #[test]
+    fn direct_connect_target_parses_full_ipv6_socket_addr() {
+        // A complete bracketed IPv6 socket address parses directly via the
+        // SocketAddr fast-path, normalising the host to its canonical form.
+        let target = direct_connect_target(&dialog("[::1]:5555", "1234")).expect("parses");
+        assert_eq!(
+            target,
+            DirectConnectTarget {
+                host: "::1".to_owned(),
+                port: 5555,
+            }
+        );
+    }
+
+    #[test]
+    fn direct_connect_target_parses_bracketed_ipv6_host_with_field_port() {
+        // Bracketed host without an inline port falls through to the
+        // split helper, which strips the brackets and uses the port field.
+        let target = direct_connect_target(&dialog("[2001:db8::1]:8443", "1234")).expect("parses");
+        assert_eq!(target.host, "2001:db8::1");
+        assert_eq!(target.port, 8443);
+    }
+
+    #[test]
+    fn direct_connect_target_rejects_zero_and_overflow_ports() {
+        assert!(direct_connect_target(&dialog("host", "0")).is_err());
+        assert!(direct_connect_target(&dialog("host", "70000")).is_err());
+        assert!(direct_connect_target(&dialog("host", "")).is_err());
+        assert!(direct_connect_target(&dialog("host", "notanumber")).is_err());
+    }
+
+    #[test]
+    fn direct_connect_target_rejects_empty_inline_host() {
+        // "host:" form has an empty host segment.
+        assert!(direct_connect_target(&dialog(":7777", "1234")).is_err());
+    }
+
+    #[test]
+    fn direct_connect_target_inline_port_overrides_field() {
+        // When the host carries an inline `:port`, it wins over the field.
+        let target = direct_connect_target(&dialog("myhost:2020", "7777")).expect("parses");
+        assert_eq!(target.host, "myhost");
+        assert_eq!(target.port, 2020);
+    }
+
+    #[test]
+    fn split_inline_host_port_only_splits_single_colon() {
+        assert_eq!(split_inline_host_port("a:1"), Some(("a", "1")));
+        // Bare IPv6 (multiple colons, no brackets) is ambiguous and is not
+        // split inline — it falls back to the port field.
+        assert_eq!(split_inline_host_port("2001:db8::1"), None);
+        assert_eq!(split_inline_host_port("plainhost"), None);
+        assert_eq!(split_inline_host_port("[::1]:9"), Some(("::1", "9")));
+    }
+
+    #[test]
+    fn resolve_direct_connect_target_resolves_ipv6_literal() {
+        let target = DirectConnectTarget {
+            host: "::1".to_owned(),
+            port: 4321,
+        };
+        let resolved = resolve_direct_connect_target(&target).expect("resolves");
+        assert_eq!(resolved.port(), 4321);
+        assert!(resolved.is_ipv6());
+    }
 }

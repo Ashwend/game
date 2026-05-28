@@ -394,6 +394,31 @@ pub(crate) struct PeerOverlayParams<'w, 's> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::Vec3Net;
+
+    fn raw_input() -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 768.0),
+            )),
+            ..Default::default()
+        }
+    }
+
+    fn public(name: &str, health: f32, is_admin: bool, bubble: Option<&str>) -> PlayerPublic {
+        PlayerPublic {
+            name: name.to_owned(),
+            position: Vec3Net::ZERO,
+            velocity: Vec3Net::ZERO,
+            yaw: 0.0,
+            pitch: 0.0,
+            health,
+            grounded: true,
+            is_admin,
+            chat_bubble: bubble.map(str::to_owned),
+        }
+    }
 
     #[test]
     fn distance_fade_starts_full_then_drops_to_zero() {
@@ -407,6 +432,12 @@ mod tests {
     fn truncated_name_keeps_short_names_intact() {
         assert_eq!(truncated_name("Tom", 22), "Tom");
         assert!(truncated_name("a".repeat(40).as_str(), 10).ends_with('…'));
+        // Exact-cap names are kept whole, one over the cap is ellipsised
+        // and shorter than the original char count.
+        assert_eq!(truncated_name(&"x".repeat(22), 22), "x".repeat(22));
+        let over = truncated_name(&"y".repeat(30), 22);
+        assert_eq!(over.chars().count(), 22);
+        assert!(over.ends_with('…'));
     }
 
     #[test]
@@ -420,5 +451,174 @@ mod tests {
             egui::Color32::from_rgb(232, 188, 64)
         );
         assert_eq!(health_fill_color(0.1), egui::Color32::from_rgb(228, 96, 78));
+    }
+
+    #[test]
+    fn health_fill_color_boundaries_pick_lower_tier() {
+        // Boundaries are strict `>` so the exact threshold falls to the
+        // lower colour band.
+        assert_eq!(
+            health_fill_color(0.6),
+            egui::Color32::from_rgb(232, 188, 64)
+        );
+        assert_eq!(health_fill_color(0.3), egui::Color32::from_rgb(228, 96, 78));
+    }
+
+    #[test]
+    fn scaled_and_with_alpha_apply_fade() {
+        assert_eq!(scaled(200, 1.0), 200);
+        assert_eq!(scaled(200, 0.0), 0);
+        assert_eq!(scaled(200, 0.5), 100);
+        // Fade is clamped so out-of-range values don't overflow.
+        assert_eq!(scaled(200, 2.0), 200);
+        assert_eq!(scaled(200, -1.0), 0);
+
+        // `with_alpha` keeps the rgb channels and swaps in the new alpha,
+        // matching a fresh unmultiplied construction.
+        let faded = with_alpha(egui::Color32::from_rgb(10, 20, 30), 77);
+        assert_eq!(faded, egui::Color32::from_rgba_unmultiplied(10, 20, 30, 77));
+        // Fully opaque alpha is a no-op on the rgb channels.
+        let opaque = with_alpha(egui::Color32::from_rgb(10, 20, 30), 255);
+        assert_eq!(opaque, egui::Color32::from_rgb(10, 20, 30));
+    }
+
+    #[test]
+    fn peer_overlay_without_camera_draws_nothing() {
+        let ctx = egui::Context::default();
+        let output = ctx.run(raw_input(), |ctx| {
+            peer_overlay_ui(
+                ctx,
+                PeerOverlay {
+                    camera: None,
+                    peers: Vec::new(),
+                },
+            );
+        });
+        assert!(output.shapes.is_empty());
+    }
+
+    #[test]
+    fn nametag_admin_uses_distinct_name_color_and_renders() {
+        // Admins get a gold name. The draw path runs both branches without
+        // panicking and emits shapes for the frame + bars + text.
+        let ctx = egui::Context::default();
+        let regular = public("Mortal", MAX_HEALTH, false, None);
+        let admin = public("Overlord", MAX_HEALTH, true, None);
+
+        let regular_out = ctx.run(raw_input(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                nametag(ui, &regular, 1.0, false);
+            });
+        });
+        let admin_out = ctx.run(raw_input(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                nametag(ui, &admin, 1.0, false);
+            });
+        });
+        assert!(!regular_out.shapes.is_empty());
+        assert!(!admin_out.shapes.is_empty());
+    }
+
+    #[test]
+    fn nametag_speaking_adds_voice_indicator_shapes() {
+        // The speaking dot + halo are two extra circle shapes versus the
+        // silent nameplate, so the speaking variant draws strictly more.
+        let person = public("Speaker", MAX_HEALTH, false, None);
+
+        let ctx_quiet = egui::Context::default();
+        let quiet = ctx_quiet.run(raw_input(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                nametag(ui, &person, 1.0, false);
+            });
+        });
+
+        let ctx_loud = egui::Context::default();
+        let loud = ctx_loud.run(raw_input(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                nametag(ui, &person, 1.0, true);
+            });
+        });
+
+        assert!(loud.shapes.len() > quiet.shapes.len());
+    }
+
+    #[test]
+    fn chat_bubble_renders_text_but_skips_blank() {
+        let ctx = egui::Context::default();
+        let drawn = ctx.run(raw_input(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                chat_bubble(ui, "hello there", 1.0);
+            });
+        });
+        assert!(!drawn.shapes.is_empty());
+
+        let ctx_blank = egui::Context::default();
+        let blank = ctx_blank.run(raw_input(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                chat_bubble(ui, "   ", 1.0);
+            });
+        });
+        // Whitespace-only bubbles bail before allocating any bubble shape.
+        // The CentralPanel itself still paints its background, so compare
+        // against an empty panel rather than asserting zero shapes.
+        let ctx_empty = egui::Context::default();
+        let empty = ctx_empty.run(raw_input(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |_ui| {});
+        });
+        assert_eq!(blank.shapes.len(), empty.shapes.len());
+    }
+
+    #[test]
+    fn collect_entries_skips_local_and_dead_peers() {
+        let voice = VoiceState::default();
+        let local_id: ClientId = 1;
+
+        let remote = Player {
+            client_id: 2,
+            steam_id: 200,
+        };
+        let local = Player {
+            client_id: 1,
+            steam_id: 100,
+        };
+        let dead = Player {
+            client_id: 3,
+            steam_id: 300,
+        };
+        let remote_public = public("Remote", MAX_HEALTH, false, None);
+        let local_public = public("Me", MAX_HEALTH, false, None);
+        let dead_public = public("Corpse", MAX_HEALTH, false, None);
+
+        let replicated = vec![
+            (&remote, &remote_public, None),
+            (&local, &local_public, None),
+            (
+                &dead,
+                &dead_public,
+                Some(&PlayerLifecycle::Dead {
+                    since_tick: 0,
+                    killer: None,
+                }),
+            ),
+        ];
+
+        let transform = GlobalTransform::from_translation(Vec3::new(0.0, 0.0, 0.0));
+        let np_remote = NetworkPlayer { client_id: 2 };
+        let np_local = NetworkPlayer { client_id: 1 };
+        let np_dead = NetworkPlayer { client_id: 3 };
+        let network = vec![
+            (&np_remote, &transform),
+            (&np_local, &transform),
+            (&np_dead, &transform),
+        ];
+
+        let entries = collect_peer_overlay_entries(network, replicated, Some(local_id), &voice);
+
+        // Only the live remote peer survives the local + dead filters.
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].client_id, 2);
+        assert!(!entries[0].speaking);
+        // Head anchor floats above the transform translation.
+        assert!(entries[0].head_world.y > 0.0);
     }
 }

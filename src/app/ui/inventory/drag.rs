@@ -163,3 +163,250 @@ pub(crate) fn draw_drag_preview(ctx: &egui::Context, inventory_ui: &InventoryUiS
             paint_slot(ui, rect, Some(&stack), None, false, false, false, 0.0);
         });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        app::state::{InventoryDrag, MenuState},
+        items::COAL_ID,
+        protocol::{ItemContainerSlot, ItemStack},
+    };
+
+    fn drag_state(source: UnifiedSlotRef) -> InventoryUiState {
+        let mut state = InventoryUiState::default();
+        state.drag = Some(InventoryDrag {
+            source,
+            stack: ItemStack::new(COAL_ID, 6),
+            quantity: 6,
+            button: InventoryDragButton::Primary,
+        });
+        state
+    }
+
+    fn run_input(events: Vec<egui::Event>, mut f: impl FnMut(&egui::Context)) {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 768.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| f(ctx),
+        );
+    }
+
+    #[test]
+    fn release_with_no_surface_open_cancels_drag() {
+        let menu = MenuState {
+            inventory_open: false,
+            furnace_open: false,
+            loot_bag_open: false,
+            ..Default::default()
+        };
+        let mut runtime = ClientRuntime::default();
+        let mut inv_ui = drag_state(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0)));
+        let mut toasts: Vec<String> = Vec::new();
+
+        run_input(Vec::new(), |ctx| {
+            handle_drag_release(ctx, &menu, &mut runtime, &mut inv_ui, &mut toasts);
+        });
+        // No container surface is up, so the drag is dropped on the floor
+        // (state-wise) and never becomes a network command.
+        assert!(inv_ui.drag.is_none());
+        assert!(toasts.is_empty());
+    }
+
+    #[test]
+    fn no_release_event_keeps_drag_alive() {
+        let menu = MenuState {
+            inventory_open: true,
+            ..Default::default()
+        };
+        let mut runtime = ClientRuntime::default();
+        let mut inv_ui = drag_state(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0)));
+        let mut toasts: Vec<String> = Vec::new();
+
+        // No pointer-release event this frame.
+        run_input(Vec::new(), |ctx| {
+            handle_drag_release(ctx, &menu, &mut runtime, &mut inv_ui, &mut toasts);
+        });
+        assert!(
+            inv_ui.drag.is_some(),
+            "drag persists until the button is released"
+        );
+    }
+
+    #[test]
+    fn release_over_target_sends_move_and_clears_drag() {
+        let menu = MenuState {
+            inventory_open: true,
+            ..Default::default()
+        };
+        let mut runtime = ClientRuntime::default();
+        let mut inv_ui = drag_state(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0)));
+        // Hovering a different slot makes the release a Move.
+        inv_ui.hovered_slot = Some(UnifiedSlotRef::Player(ItemContainerSlot::inventory(5)));
+        let mut toasts: Vec<String> = Vec::new();
+
+        // Simulate pressing then releasing the primary button so egui's
+        // pointer state reports `button_released(Primary)`.
+        let events = vec![
+            egui::Event::PointerButton {
+                pos: egui::pos2(10.0, 10.0),
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+            egui::Event::PointerButton {
+                pos: egui::pos2(10.0, 10.0),
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            },
+        ];
+        run_input(events, |ctx| {
+            handle_drag_release(ctx, &menu, &mut runtime, &mut inv_ui, &mut toasts);
+        });
+        // Player→player move with no session fails-soft into a toast and
+        // the drag is cleared either way.
+        assert!(inv_ui.drag.is_none());
+        assert!(toasts.iter().any(|t| t.contains("not connected")));
+    }
+
+    #[test]
+    fn release_on_same_slot_is_a_noop_move() {
+        let menu = MenuState {
+            inventory_open: true,
+            ..Default::default()
+        };
+        let mut runtime = ClientRuntime::default();
+        let source = UnifiedSlotRef::Player(ItemContainerSlot::inventory(2));
+        let mut inv_ui = drag_state(source);
+        // Released back over the originating slot → no command.
+        inv_ui.hovered_slot = Some(source);
+        let mut toasts: Vec<String> = Vec::new();
+
+        let events = vec![
+            egui::Event::PointerButton {
+                pos: egui::pos2(10.0, 10.0),
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+            egui::Event::PointerButton {
+                pos: egui::pos2(10.0, 10.0),
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            },
+        ];
+        run_input(events, |ctx| {
+            handle_drag_release(ctx, &menu, &mut runtime, &mut inv_ui, &mut toasts);
+        });
+        assert!(inv_ui.drag.is_none());
+        assert!(
+            toasts.is_empty(),
+            "dropping onto the source slot sends nothing"
+        );
+    }
+
+    #[test]
+    fn release_outside_surfaces_drops_player_item() {
+        let menu = MenuState {
+            inventory_open: true,
+            ..Default::default()
+        };
+        let mut runtime = ClientRuntime::default();
+        let mut inv_ui = drag_state(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0)));
+        // No hovered slot and no recorded surface rects → the pointer is
+        // "outside" everything, so a player item drops on the ground.
+        inv_ui.hovered_slot = None;
+        let mut toasts: Vec<String> = Vec::new();
+
+        let events = vec![
+            egui::Event::PointerButton {
+                pos: egui::pos2(640.0, 384.0),
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+            egui::Event::PointerButton {
+                pos: egui::pos2(640.0, 384.0),
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            },
+        ];
+        run_input(events, |ctx| {
+            handle_drag_release(ctx, &menu, &mut runtime, &mut inv_ui, &mut toasts);
+        });
+        // Drop command attempted (fails-soft, no session) and drag cleared.
+        assert!(inv_ui.drag.is_none());
+        assert!(toasts.iter().any(|t| t.contains("not connected")));
+    }
+
+    #[test]
+    fn bag_source_release_over_player_routes_loot_bag_command() {
+        let menu = MenuState {
+            loot_bag_open: true,
+            ..Default::default()
+        };
+        let mut runtime = ClientRuntime::default();
+        let mut inv_ui = drag_state(UnifiedSlotRef::Bag(0));
+        inv_ui.hovered_slot = Some(UnifiedSlotRef::Player(ItemContainerSlot::inventory(1)));
+        let mut toasts: Vec<String> = Vec::new();
+
+        let events = vec![
+            egui::Event::PointerButton {
+                pos: egui::pos2(10.0, 10.0),
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+            egui::Event::PointerButton {
+                pos: egui::pos2(10.0, 10.0),
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            },
+        ];
+        run_input(events, |ctx| {
+            handle_drag_release(ctx, &menu, &mut runtime, &mut inv_ui, &mut toasts);
+        });
+        // The bag→player move attempts a LootBag command (fails-soft).
+        assert!(inv_ui.drag.is_none());
+        assert!(toasts.iter().any(|t| t.contains("not connected")));
+    }
+
+    fn run_preview(inv_ui: &InventoryUiState) -> egui::FullOutput {
+        let ctx = egui::Context::default();
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 768.0),
+                )),
+                events: vec![egui::Event::PointerMoved(egui::pos2(100.0, 100.0))],
+                ..Default::default()
+            },
+            |ctx| draw_drag_preview(ctx, inv_ui),
+        )
+    }
+
+    #[test]
+    fn draw_drag_preview_paints_only_while_dragging() {
+        // No drag → the early return means no preview shapes.
+        let idle = InventoryUiState::default();
+        let idle_out = run_preview(&idle);
+
+        // Active drag with a pointer position → the floating preview paints.
+        let dragging = drag_state(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0)));
+        let drag_out = run_preview(&dragging);
+
+        assert!(drag_out.shapes.len() > idle_out.shapes.len());
+    }
+}

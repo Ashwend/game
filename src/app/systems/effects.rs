@@ -448,4 +448,47 @@ mod tests {
         assert!(heavy_transform.translation.y < light_transform.translation.y - 0.10);
         assert!(heavy.velocity.y < light.velocity.y - 0.5);
     }
+
+    #[test]
+    fn chip_expires_the_instant_its_age_reaches_lifetime() {
+        let mut transform = Transform::from_xyz(0.0, 5.0, 0.0);
+        let mut chip = ImpactChip {
+            velocity: Vec3::ZERO,
+            spin_axis: Vec3::Y,
+            spin_speed: 0.0,
+            lifetime: 0.20,
+            age: 0.19,
+            initial_scale: 1.0,
+            gravity_scale: 1.0,
+        };
+        // One step that crosses the lifetime expires the chip immediately.
+        assert_eq!(
+            advance_chip(&mut transform, &mut chip, 0.02),
+            ChipStep::Expired
+        );
+    }
+
+    #[test]
+    fn chip_bounces_off_the_floor_rather_than_sinking_through() {
+        // Start below the floor with downward velocity — the chip should be
+        // clamped to ground level and its vertical velocity reflected up.
+        let mut transform = Transform::from_xyz(0.0, -0.5, 0.0);
+        let mut chip = ImpactChip {
+            velocity: Vec3::new(0.0, -3.0, 0.0),
+            spin_axis: Vec3::Y,
+            spin_speed: 0.0,
+            lifetime: 1.0,
+            age: 0.0,
+            initial_scale: 1.0,
+            gravity_scale: 1.0,
+        };
+        assert_eq!(
+            advance_chip(&mut transform, &mut chip, 1.0 / 60.0),
+            ChipStep::Alive
+        );
+        assert!((transform.translation.y - CHIP_GROUND_Y).abs() < 1e-5);
+        // Velocity reflected upward (with restitution), so now positive.
+        assert!(chip.velocity.y > 0.0);
+        assert!(chip.velocity.y < 3.0, "bounce should lose energy");
+    }
 }

@@ -44,7 +44,8 @@ pub(crate) use runtime::{
 };
 pub(crate) use settings::{
     ClientSettings, ClientSettingsStore, DisplayMode, DisplayResolution, KeyAction,
-    KeyBindingCategory, KeyBindingSlot, KeyBindings, display_resolutions,
+    KeyBindingCategory, KeyBindingSlot, KeyBindings, MAX_FOV_DEG, MAX_UI_SCALE, MIN_FOV_DEG,
+    MIN_UI_SCALE, display_resolutions,
 };
 pub(crate) use test_mode::TestModeConfig;
 pub(crate) use toasts::{TOAST_FADE_SECONDS, TOAST_VISIBLE_SECONDS, Toast, ToastState};

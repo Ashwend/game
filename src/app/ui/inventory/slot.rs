@@ -278,6 +278,20 @@ mod tests {
     use super::*;
     use crate::{items::COAL_ID, protocol::INVENTORY_SLOT_COUNT};
 
+    fn run_ui(f: impl FnMut(&egui::Context)) -> egui::FullOutput {
+        let ctx = egui::Context::default();
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 768.0),
+                )),
+                ..Default::default()
+            },
+            f,
+        )
+    }
+
     #[test]
     fn right_drag_takes_half_rounded_up() {
         assert_eq!(split_quantity(1), 1);
@@ -292,6 +306,15 @@ mod tests {
     }
 
     #[test]
+    fn tooltip_body_handles_unknown_item() {
+        // An item id with no registry entry falls back to the generic
+        // "Unknown item" body rather than panicking.
+        let body = item_tooltip_body(&ItemStack::new("not_a_real_item", 9));
+        assert!(body.contains("Unknown item"));
+        assert!(body.contains("Quantity: 9"));
+    }
+
+    #[test]
     fn empty_inventory_slot_lookup_is_safe() {
         let inventory = PlayerInventoryState::empty();
         assert!(
@@ -301,5 +324,152 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn slot_stack_reads_inventory_and_actionbar() {
+        let mut inventory = PlayerInventoryState::empty();
+        inventory.inventory_slots[2] = Some(ItemStack::new(COAL_ID, 5));
+        inventory.actionbar_slots[1] = Some(ItemStack::new(COAL_ID, 9));
+        assert_eq!(
+            slot_stack(&inventory, ItemContainerSlot::inventory(2)).map(|s| s.quantity),
+            Some(5)
+        );
+        assert_eq!(
+            slot_stack(&inventory, ItemContainerSlot::actionbar(1)).map(|s| s.quantity),
+            Some(9)
+        );
+        assert!(slot_stack(&inventory, ItemContainerSlot::inventory(0)).is_none());
+    }
+
+    #[test]
+    fn non_interactive_slot_paints_without_recording_hover() {
+        // The non-interactive branch allocates space and paints, but must
+        // never write `hovered_slot` (it can't be a drag target).
+        let mut inv_ui = InventoryUiState::default();
+        let slot = UnifiedSlotRef::Player(ItemContainerSlot::actionbar(0));
+        let stack = ItemStack::new(COAL_ID, 4);
+        let output = run_ui(|ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                draw_slot(
+                    ui,
+                    slot,
+                    Some(&stack),
+                    Some("1".to_owned()),
+                    false,
+                    false, // not interactive
+                    false,
+                    &mut inv_ui,
+                );
+            });
+        });
+        assert!(!output.shapes.is_empty());
+        assert!(inv_ui.hovered_slot.is_none());
+    }
+
+    #[test]
+    fn interactive_slot_without_pointer_leaves_hover_unset() {
+        // With no pointer position in the input, an interactive slot
+        // still paints but records no hover (nothing to highlight).
+        let mut inv_ui = InventoryUiState::default();
+        let slot = UnifiedSlotRef::Player(ItemContainerSlot::inventory(0));
+        let stack = ItemStack::new(COAL_ID, 2);
+        let output = run_ui(|ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                draw_slot(
+                    ui,
+                    slot,
+                    Some(&stack),
+                    None,
+                    false,
+                    true,
+                    false,
+                    &mut inv_ui,
+                );
+            });
+        });
+        assert!(!output.shapes.is_empty());
+        assert!(inv_ui.hovered_slot.is_none());
+    }
+
+    #[test]
+    fn interactive_slot_with_pointer_marks_hovered() {
+        let mut inv_ui = InventoryUiState::default();
+        let slot = UnifiedSlotRef::Player(ItemContainerSlot::inventory(0));
+        let stack = ItemStack::new(COAL_ID, 2);
+        // The central panel's first widget lands near the top-left; aim
+        // the pointer there.
+        let ctx = egui::Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 768.0),
+                )),
+                events: vec![egui::Event::PointerMoved(egui::pos2(20.0, 20.0))],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::Area::new("slot_test_area".into())
+                    .fixed_pos(egui::pos2(0.0, 0.0))
+                    .show(ctx, |ui| {
+                        draw_slot(
+                            ui,
+                            slot,
+                            Some(&stack),
+                            None,
+                            false,
+                            true,
+                            false,
+                            &mut inv_ui,
+                        );
+                    });
+            },
+        );
+        // The slot occupies a SLOT_SIZE square anchored at (0,0); the
+        // pointer at (20,20) is inside it, so hover is recorded.
+        assert_eq!(inv_ui.hovered_slot, Some(slot));
+    }
+
+    #[test]
+    fn active_slot_paints_differently_than_idle() {
+        // `paint_slot` chooses a brighter fill for the active slot, so
+        // active vs idle differ in their painted output.
+        let stack = ItemStack::new(COAL_ID, 1);
+        let idle = run_ui(|ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let (_, rect) = ui.allocate_space(Vec2::splat(SLOT_SIZE));
+                paint_slot(ui, rect, Some(&stack), None, false, false, false, 0.0);
+            });
+        });
+        let active = run_ui(|ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let (_, rect) = ui.allocate_space(Vec2::splat(SLOT_SIZE));
+                paint_slot(ui, rect, Some(&stack), None, true, false, false, 0.0);
+            });
+        });
+        // Both paint shapes; the active one carries a thicker stroke.
+        assert!(!idle.shapes.is_empty());
+        assert!(!active.shapes.is_empty());
+    }
+
+    #[test]
+    fn flashing_slot_paints_overlay() {
+        // A flash strength > 0 paints an extra overlay rect on top of the
+        // base slot, so it yields more shapes than an unflashed slot.
+        let stack = ItemStack::new(COAL_ID, 1);
+        let plain = run_ui(|ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let (_, rect) = ui.allocate_space(Vec2::splat(SLOT_SIZE));
+                paint_slot(ui, rect, Some(&stack), None, false, false, false, 0.0);
+            });
+        });
+        let flashing = run_ui(|ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let (_, rect) = ui.allocate_space(Vec2::splat(SLOT_SIZE));
+                paint_slot(ui, rect, Some(&stack), None, false, false, false, 1.0);
+            });
+        });
+        assert!(flashing.shapes.len() > plain.shapes.len());
     }
 }

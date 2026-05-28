@@ -303,4 +303,40 @@ mod tests {
     fn ambient_fade_is_long_enough_to_breathe() {
         assert!(ambient_fade_secs() >= 1.0);
     }
+
+    #[test]
+    fn every_zone_has_no_authored_bed_today() {
+        // The manifest ships no ambient assets yet, so every zone's bed
+        // resolves to `None` — the bed-management system treats this the
+        // same as `CurrentAmbientZone(None)`. This guards the contract
+        // documented on `bed_sound`.
+        assert!(AmbientZone::ForestDay.bed_sound().is_none());
+        assert!(AmbientZone::Cave.bed_sound().is_none());
+    }
+
+    #[test]
+    fn ambient_emitter_new_preserves_id_anchor_and_range() {
+        let anchor = Vec3::new(3.0, 4.0, 5.0);
+        let emitter = AmbientEmitter::new(SoundId::TreeFall, anchor, 25.0);
+        assert_eq!(emitter.id, SoundId::TreeFall);
+        assert_eq!(emitter.anchor, anchor);
+        assert_eq!(emitter.audible_range, 25.0);
+        assert_eq!(
+            emitter.gain_offset_db, 0.0,
+            "default emitter has no gain offset"
+        );
+        assert!(emitter.active_sink.is_none());
+    }
+
+    #[test]
+    fn current_ambient_zone_value_equality() {
+        let forest = CurrentAmbientZone(Some(AmbientZone::ForestDay));
+        let forest2 = CurrentAmbientZone(Some(AmbientZone::ForestDay));
+        let cave = CurrentAmbientZone(Some(AmbientZone::Cave));
+        // Copy + PartialEq are derived; same-zone wrappers compare equal,
+        // distinct zones do not.
+        assert_eq!(forest, forest2);
+        assert_ne!(forest, cave);
+        assert_ne!(forest, CurrentAmbientZone::default());
+    }
 }

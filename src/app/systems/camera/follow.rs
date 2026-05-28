@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::app::{
     EYE_HEIGHT,
     scene::{MainCamera, NetworkPlayer},
-    state::{ClientRuntime, MenuState, Screen},
+    state::{ClientRuntime, ClientSettings, MenuState, Screen},
 };
 
 use super::effects::{CameraImpactKick, CameraMotionEffects};
@@ -14,6 +14,7 @@ type FollowCameraFilter = (With<MainCamera>, Without<NetworkPlayer>);
 pub(crate) fn camera_follow_system(
     runtime: Res<ClientRuntime>,
     menu: Res<MenuState>,
+    settings: Res<ClientSettings>,
     time: Res<Time>,
     mut kick: ResMut<CameraImpactKick>,
     mut motion: ResMut<CameraMotionEffects>,
@@ -31,6 +32,8 @@ pub(crate) fn camera_follow_system(
         motion.reset();
         return;
     };
+
+    motion.set_base_fov_deg(settings.display.fov_degrees);
 
     let (pitch_kick, down_kick) = kick.advance(time.delta_secs());
 
@@ -100,6 +103,7 @@ mod tests {
             screen: Screen::InGame,
             ..Default::default()
         });
+        app.insert_resource(ClientSettings::default());
         app.insert_resource(ClientRuntime {
             predicted_local: Some(PlayerController::from_player_state(&player_state(
                 Vec3Net::new(2.0, 1.0, -3.0),

@@ -323,4 +323,183 @@ mod tests {
         let ts = 1_704_164_645_678;
         assert_eq!(iso8601_ms(ts), "2024-01-02T03:04:05.678Z");
     }
+
+    #[test]
+    fn iso8601_zero_pads_single_digit_fields() {
+        // 2001-02-03T04:05:06.007Z — every field needs zero-padding.
+        // 2001-02-03T04:05:06 = 981173106 seconds since epoch.
+        let ts = 981_173_106_007;
+        assert_eq!(iso8601_ms(ts), "2001-02-03T04:05:06.007Z");
+    }
+
+    #[test]
+    fn epoch_to_civil_handles_leap_year_feb_29() {
+        // 2020-02-29T00:00:00Z = 1582934400 seconds.
+        let (y, m, d, h, mi, s) = epoch_to_civil(1_582_934_400);
+        assert_eq!((y, m, d, h, mi, s), (2020, 2, 29, 0, 0, 0));
+    }
+
+    fn shared_props_with(entries: &[(&str, Value)]) -> SharedProps {
+        let mut map = Map::new();
+        for (k, v) in entries {
+            map.insert((*k).to_owned(), v.clone());
+        }
+        Arc::new(Mutex::new(map))
+    }
+
+    fn config_with(super_props: SharedProps, disable_geoip: bool) -> WorkerConfig {
+        WorkerConfig {
+            api_key: "test_key".to_owned(),
+            host: "https://example.test".to_owned(),
+            distinct_id: Uuid::nil(),
+            disable_geoip,
+            super_props,
+        }
+    }
+
+    fn record(name: &'static str, props: &[(&str, Value)]) -> EventRecord {
+        let mut map = Map::new();
+        for (k, v) in props {
+            map.insert((*k).to_owned(), v.clone());
+        }
+        EventRecord {
+            name,
+            properties: map,
+            timestamp_ms: 0,
+        }
+    }
+
+    #[test]
+    fn build_envelope_merges_super_props_and_event_props() {
+        // A super-prop that is NOT a person key should still appear in
+        // the event properties; the event's own props should override a
+        // colliding super-prop key.
+        let config = config_with(
+            shared_props_with(&[
+                ("session_seed", json!("abc")),
+                ("shared_key", json!("from_super")),
+            ]),
+            false,
+        );
+        let value = build_envelope_value(
+            &config,
+            record("world_loaded", &[("shared_key", json!("from_event"))]),
+        );
+
+        assert_eq!(value["event"], json!("world_loaded"));
+        assert_eq!(
+            value["distinct_id"],
+            json!(Uuid::nil().as_hyphenated().to_string())
+        );
+        let props = value["properties"].as_object().expect("props object");
+        assert_eq!(props["session_seed"], json!("abc"));
+        // Event prop wins over the super-prop with the same key.
+        assert_eq!(props["shared_key"], json!("from_event"));
+        // geoip not disabled → no $ip / $geoip_disable injected.
+        assert!(!props.contains_key("$ip"));
+        assert!(!props.contains_key("$geoip_disable"));
+    }
+
+    #[test]
+    fn build_envelope_injects_geoip_disable_when_configured() {
+        let config = config_with(shared_props_with(&[]), true);
+        let value = build_envelope_value(&config, record("app_started", &[]));
+        let props = value["properties"].as_object().expect("props object");
+        assert_eq!(props["$ip"], Value::Null);
+        assert_eq!(props["$geoip_disable"], json!(true));
+    }
+
+    #[test]
+    fn build_envelope_promotes_person_keys_to_set() {
+        // `$os` and `cpu_brand` are PERSON_PROPERTY_KEYS promoted into
+        // `$set`; `shared_key` is not and should stay out of `$set`.
+        let config = config_with(
+            shared_props_with(&[
+                ("$os", json!("macos")),
+                ("cpu_brand", json!("M1")),
+                ("shared_key", json!("nope")),
+            ]),
+            false,
+        );
+        let value = build_envelope_value(&config, record("app_started", &[]));
+        let props = value["properties"].as_object().expect("props object");
+        let set = props["$set"].as_object().expect("$set present");
+        assert_eq!(set["$os"], json!("macos"));
+        assert_eq!(set["cpu_brand"], json!("M1"));
+        assert!(!set.contains_key("shared_key"));
+    }
+
+    #[test]
+    fn build_envelope_omits_set_when_no_person_keys() {
+        // A super-prop that isn't a person key → no `$set` block at all.
+        let config = config_with(shared_props_with(&[("not_a_person_key", json!(1))]), false);
+        let value = build_envelope_value(&config, record("app_started", &[]));
+        let props = value["properties"].as_object().expect("props object");
+        assert!(
+            !props.contains_key("$set"),
+            "no promotable person keys → no $set block"
+        );
+    }
+
+    #[test]
+    fn inject_dropped_event_is_noop_at_zero_and_appends_otherwise() {
+        let mut buffer: Vec<EventRecord> = Vec::new();
+        let dropped = Arc::new(AtomicU64::new(0));
+
+        // Nothing dropped → no event appended.
+        inject_dropped_event(&mut buffer, &dropped);
+        assert!(buffer.is_empty());
+
+        // After recording drops, the next inject appends one event and
+        // resets the counter to zero.
+        dropped.store(3, Ordering::Relaxed);
+        inject_dropped_event(&mut buffer, &dropped);
+        assert_eq!(buffer.len(), 1);
+        assert_eq!(buffer[0].name, "analytics_dropped");
+        assert_eq!(buffer[0].properties["count"], json!(3u64));
+        assert_eq!(
+            dropped.load(Ordering::Relaxed),
+            0,
+            "counter must reset after being drained into an event"
+        );
+
+        // Drained → subsequent inject is a no-op again.
+        inject_dropped_event(&mut buffer, &dropped);
+        assert_eq!(buffer.len(), 1);
+    }
+
+    #[test]
+    fn worker_sender_counts_drops_when_channel_is_full() {
+        // Capacity-1 bounded channel; never drained. The first send fits,
+        // every subsequent send overflows and bumps the dropped counter.
+        let (tx, _rx) = sync_channel::<Envelope>(1);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let sender = WorkerSender {
+            inner: tx,
+            dropped: Arc::clone(&dropped),
+        };
+
+        sender.try_send(record("app_started", &[]));
+        assert_eq!(dropped.load(Ordering::Relaxed), 0, "first send should fit");
+
+        sender.try_send(record("app_started", &[]));
+        sender.try_send(record("app_started", &[]));
+        assert_eq!(
+            dropped.load(Ordering::Relaxed),
+            2,
+            "overflowing sends must increment the dropped counter"
+        );
+    }
+
+    #[test]
+    fn signal_shutdown_never_panics_on_full_channel() {
+        // Best-effort: a full channel must swallow the shutdown sentinel
+        // rather than panic/block.
+        let (tx, _rx) = sync_channel::<Envelope>(1);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let sender = WorkerSender { inner: tx, dropped };
+        sender.try_send(record("app_started", &[]));
+        // Channel is now full; signalling shutdown must not panic.
+        sender.signal_shutdown();
+    }
 }

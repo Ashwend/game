@@ -422,4 +422,82 @@ mod tests {
         assert!(elapsed > 0.5, "the tree should not fall instantly");
         assert!(elapsed < 2.0, "the tree should land in under two seconds");
     }
+
+    fn test_tree(lever_length: f32) -> FellingTree {
+        FellingTree {
+            age: 0.0,
+            angle: TREE_INITIAL_ANGLE,
+            angular_velocity: TREE_INITIAL_PUSH,
+            fall_axis: Vec3::X,
+            lever_length,
+            pivot: Vec3::new(1.0, 0.0, -2.0),
+            initial_rotation: Quat::IDENTITY,
+            initial_scale: Vec3::ONE,
+            material: Handle::default(),
+            landed_age: None,
+            landing_kick_fired: false,
+            landing_chips_fired: false,
+        }
+    }
+
+    #[test]
+    fn step_pendulum_latches_landed_age_at_ninety_degrees() {
+        let mut tree = test_tree(2.5);
+        // Drive it well past the contact point with a big timestep.
+        tree.angle = FRAC_PI_2 - 0.01;
+        tree.angular_velocity = 5.0;
+        step_pendulum(&mut tree, 0.1);
+        assert_eq!(tree.angle, FRAC_PI_2);
+        assert_eq!(tree.angular_velocity, 0.0);
+        assert!(tree.landed_age.is_some());
+    }
+
+    #[test]
+    fn apply_base_transform_rotates_and_lifts_off_the_pivot() {
+        let mut tree = test_tree(2.5);
+        tree.angle = FRAC_PI_2;
+        let mut transform = Transform::IDENTITY;
+        apply_base_transform(&tree, &mut transform);
+
+        // At 90 degrees the ground lift is (1 - cos 90) * TREE_GROUND_LIFT.
+        let expected_lift = TREE_GROUND_LIFT;
+        assert!((transform.translation.y - (tree.pivot.y + expected_lift)).abs() < 1e-4);
+        assert!((transform.translation.x - tree.pivot.x).abs() < 1e-4);
+        // The trunk has rotated away from upright: its local up vector no
+        // longer points along +Y.
+        let up = transform.rotation * Vec3::Y;
+        assert!(up.dot(Vec3::Y) < 0.5);
+    }
+
+    #[test]
+    fn landing_overshoot_decays_to_nothing_after_its_window() {
+        let mut tree = test_tree(2.5);
+        tree.angle = FRAC_PI_2;
+        let mut transform = Transform::IDENTITY;
+        apply_base_transform(&tree, &mut transform);
+        let settled = transform.rotation;
+
+        // During the overshoot window the rotation differs from the settled
+        // 90-degree pose (the bounce). Compare via the quaternion dot
+        // product (|dot| == 1 means identical orientation).
+        let mut bouncing = transform;
+        apply_landing_overshoot(&tree, &mut bouncing, TREE_OVERSHOOT_DURATION * 0.25);
+        assert!(bouncing.rotation.dot(settled).abs() < 1.0 - 1e-5);
+
+        // Past the overshoot duration it's a no-op — leaves the pose alone.
+        let mut after = transform;
+        apply_landing_overshoot(&tree, &mut after, TREE_OVERSHOOT_DURATION + 0.1);
+        assert!(after.rotation.dot(settled).abs() > 1.0 - 1e-5);
+    }
+
+    #[test]
+    fn crude_models_route_to_a_pickup_burst_not_a_fall() {
+        // is_crude / is_tree partition the death-effect dispatch. Confirm the
+        // model classification we branch on.
+        assert!(ResourceNodeModel::BranchPile.is_crude());
+        assert!(ResourceNodeModel::HayGrass.is_crude());
+        assert!(ResourceNodeModel::PineTreeLarge.is_tree());
+        assert!(!ResourceNodeModel::CoalOre.is_tree());
+        assert!(!ResourceNodeModel::CoalOre.is_crude());
+    }
 }

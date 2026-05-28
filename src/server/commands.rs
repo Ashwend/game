@@ -571,6 +571,248 @@ impl SmallRng {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        protocol::{GAME_VERSION, PROTOCOL_VERSION},
+        save::WorldSave,
+        server::ServerSettings,
+        steam::{AuthMode, offline_auth_token},
+    };
+
+    /// Spin up a server. `host` controls whether the connecting client
+    /// becomes the implicit singleplayer admin.
+    fn server_with_host(host: Option<u64>) -> (GameServer, ClientId) {
+        let mut server = GameServer::new(
+            WorldSave::new("Test", host),
+            ServerSettings {
+                auth_mode: AuthMode::Offline,
+                singleplayer_host: host,
+            },
+        );
+        let steam_id = host.unwrap_or(7);
+        let (client_id, _) = server
+            .connect(
+                PROTOCOL_VERSION,
+                Some(GAME_VERSION.to_owned()),
+                steam_id,
+                "Tester".to_owned(),
+                offline_auth_token(steam_id),
+            )
+            .expect("connect ok");
+        (server, client_id)
+    }
+
+    fn has_toast(envelopes: &[ServerEnvelope], kind: ToastKind) -> bool {
+        envelopes.iter().any(|e| {
+            matches!(&e.message, ServerMessage::Toast(t) if std::mem::discriminant(&t.kind) == std::mem::discriminant(&kind))
+        })
+    }
+
+    #[test]
+    fn empty_command_warns() {
+        let (mut server, client) = server_with_host(Some(1));
+        let out = server.apply_command(client, "/   ".to_owned());
+        assert!(has_toast(&out, ToastKind::Warning));
+    }
+
+    #[test]
+    fn unknown_command_warns() {
+        let (mut server, client) = server_with_host(Some(1));
+        let out = server.apply_command(client, "/frobnicate".to_owned());
+        assert!(has_toast(&out, ToastKind::Warning));
+    }
+
+    #[test]
+    fn help_lists_commands_as_chat_for_admin_and_non_admin() {
+        // Admin sees the unlocked descriptions; non-admin sees "admin
+        // only" tags. Both get the list as Chat (not toast).
+        let (mut server, admin) = server_with_host(Some(1));
+        let admin_lines = server.apply_command(admin, "/help".to_owned());
+        assert!(
+            admin_lines
+                .iter()
+                .all(|e| matches!(&e.message, ServerMessage::Chat(_)))
+        );
+        let admin_text: String = admin_lines
+            .iter()
+            .filter_map(|e| match &e.message {
+                ServerMessage::Chat(c) => Some(c.text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(admin_text.contains("/test-kit: grant"));
+
+        let (mut server2, non_admin) = server_with_host(None);
+        let lines = server2.apply_command(non_admin, "/help".to_owned());
+        let text: String = lines
+            .iter()
+            .filter_map(|e| match &e.message {
+                ServerMessage::Chat(c) => Some(c.text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("admin only"),
+            "non-admin help should flag gated commands"
+        );
+    }
+
+    #[test]
+    fn set_time_admin_success_and_parse_error() {
+        let (mut server, client) = server_with_host(Some(1));
+        let ok = server.apply_command(client, "/time 06:30".to_owned());
+        assert!(has_toast(&ok, ToastKind::Success));
+        // The broadcast WorldTime envelope rides along with the toast.
+        assert!(
+            ok.iter()
+                .any(|e| matches!(&e.message, ServerMessage::WorldTime(_)))
+        );
+
+        let bad = server.apply_command(client, "/time half-past".to_owned());
+        assert!(has_toast(&bad, ToastKind::Warning));
+        assert!(
+            !bad.iter()
+                .any(|e| matches!(&e.message, ServerMessage::WorldTime(_)))
+        );
+    }
+
+    #[test]
+    fn set_time_missing_arg_warns() {
+        let (mut server, client) = server_with_host(Some(1));
+        let out = server.apply_command(client, "/time".to_owned());
+        assert!(has_toast(&out, ToastKind::Warning));
+    }
+
+    #[test]
+    fn set_time_rejected_for_non_admin() {
+        let (mut server, client) = server_with_host(None);
+        let out = server.apply_command(client, "/time 06:30".to_owned());
+        assert!(has_toast(&out, ToastKind::Warning));
+        assert!(
+            !out.iter()
+                .any(|e| matches!(&e.message, ServerMessage::WorldTime(_)))
+        );
+    }
+
+    #[test]
+    fn set_speed_applies_clamped_multiplier_and_rejects_garbage() {
+        let (mut server, client) = server_with_host(Some(1));
+        let ok = server.apply_command(client, "/speed 4".to_owned());
+        assert!(has_toast(&ok, ToastKind::Success));
+        assert_eq!(server.world_time.multiplier, 4.0);
+
+        // Non-finite/non-number rejected without mutating.
+        let bad = server.apply_command(client, "/speed fast".to_owned());
+        assert!(has_toast(&bad, ToastKind::Warning));
+        assert_eq!(server.world_time.multiplier, 4.0);
+
+        // Negative below MIN_MULTIPLIER rejected.
+        let neg = server.apply_command(client, "/speed -1".to_owned());
+        assert!(has_toast(&neg, ToastKind::Warning));
+        assert_eq!(server.world_time.multiplier, 4.0);
+    }
+
+    #[test]
+    fn spawn_ore_admin_inserts_a_node_within_radius() {
+        let (mut server, client) = server_with_host(Some(1));
+        let before = server.resource_nodes.len();
+        let out = server.apply_command(client, "/spawn-ore iron 10".to_owned());
+        assert!(has_toast(&out, ToastKind::Success));
+        assert_eq!(
+            server.resource_nodes.len(),
+            before + 1,
+            "spawn-ore should insert exactly one node"
+        );
+    }
+
+    #[test]
+    fn spawn_ore_rejects_bad_argument_and_nonpositive_radius() {
+        let (mut server, client) = server_with_host(Some(1));
+        let before = server.resource_nodes.len();
+        let bad_arg = server.apply_command(client, "/spawn-ore granite".to_owned());
+        assert!(has_toast(&bad_arg, ToastKind::Warning));
+
+        let bad_radius = server.apply_command(client, "/spawn-ore iron -2".to_owned());
+        assert!(has_toast(&bad_radius, ToastKind::Warning));
+        assert_eq!(
+            server.resource_nodes.len(),
+            before,
+            "no node should be inserted on rejection"
+        );
+    }
+
+    #[test]
+    fn spawn_ore_rejected_for_non_admin() {
+        let (mut server, client) = server_with_host(None);
+        let before = server.resource_nodes.len();
+        let out = server.apply_command(client, "/spawn-ore iron".to_owned());
+        assert!(has_toast(&out, ToastKind::Warning));
+        assert_eq!(
+            server.resource_nodes.len(),
+            before,
+            "non-admin must not spawn a node"
+        );
+    }
+
+    #[test]
+    fn teleport_all_with_no_other_players_reports_none() {
+        let (mut server, client) = server_with_host(Some(1));
+        let out = server.apply_command(client, "/tp".to_owned());
+        // Only a toast, no Correction envelopes when alone.
+        assert!(has_toast(&out, ToastKind::Success));
+        assert!(
+            !out.iter()
+                .any(|e| matches!(&e.message, ServerMessage::Correction(_)))
+        );
+    }
+
+    #[test]
+    fn teleport_all_moves_other_players_and_sends_corrections() {
+        let (mut server, admin) = server_with_host(Some(1));
+        // Position the admin somewhere distinctive.
+        {
+            let c = server.clients.get_mut(&admin).unwrap();
+            c.controller.position = Vec3Net::new(12.0, 0.0, -7.0);
+        }
+        // Connect a second, non-host player far away.
+        let (other, _) = server
+            .connect(
+                PROTOCOL_VERSION,
+                Some(GAME_VERSION.to_owned()),
+                2,
+                "Other".to_owned(),
+                offline_auth_token(2),
+            )
+            .expect("second connect ok");
+        {
+            let c = server.clients.get_mut(&other).unwrap();
+            c.controller.position = Vec3Net::new(-50.0, 0.0, 50.0);
+            c.controller.velocity = Vec3Net::new(3.0, 0.0, 3.0);
+        }
+
+        let out = server.apply_command(admin, "/tp".to_owned());
+        assert!(has_toast(&out, ToastKind::Success));
+        let correction_for_other = out.iter().any(|e| {
+            matches!(
+                (&e.target, &e.message),
+                (DeliveryTarget::Client(id), ServerMessage::Correction(_)) if *id == other
+            )
+        });
+        assert!(
+            correction_for_other,
+            "a Correction must be sent to the teleported player"
+        );
+
+        let moved = &server.clients[&other].controller;
+        assert_eq!(moved.position.x, 12.0);
+        assert_eq!(moved.position.z, -7.0);
+        assert_eq!(
+            moved.velocity,
+            Vec3Net::ZERO,
+            "teleport zeroes inbound momentum"
+        );
+    }
 
     #[test]
     fn parse_ore_token_accepts_canonical_and_alternate_spellings() {

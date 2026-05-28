@@ -423,4 +423,49 @@ mod tests {
 
         assert_eq!(corrected.translation, target.translation);
     }
+
+    #[test]
+    fn remote_player_interpolation_ignores_stale_ticks() {
+        let current = Transform::from_xyz(0.0, 0.0, 0.0);
+        let mut interpolation = NetworkPlayerInterpolation::new(5, current);
+        let target = Transform::from_xyz(3.0, 0.0, 0.0);
+
+        // A tick <= the stored tick is a stale duplicate and must not move
+        // the blend off the current pose.
+        interpolation.retarget(5, &current, target);
+        let after = interpolation.advance(REMOTE_PLAYER_INTERPOLATION_SECONDS);
+        assert_eq!(after.translation, current.translation);
+    }
+
+    #[test]
+    fn compute_fall_axes_yields_horizontal_unit_axes() {
+        let (fall_axis, roll_axis, roll) = compute_fall_axes(42, Transform::IDENTITY);
+
+        // Both axes are horizontal (no vertical tip) and unit length.
+        assert!(fall_axis.y.abs() < 1e-5);
+        assert!((fall_axis.length() - 1.0).abs() < 1e-4);
+        assert!(roll_axis.y.abs() < 1e-5);
+        assert!((roll_axis.length() - 1.0).abs() < 1e-4);
+
+        // Fall axis is perpendicular to roll axis (fall_axis = roll x Y).
+        assert!(fall_axis.dot(roll_axis).abs() < 1e-4);
+
+        // The roll magnitude stays within the documented +/-0.45 band.
+        assert!(roll.abs() <= 0.45 + 1e-4);
+    }
+
+    #[test]
+    fn compute_fall_axes_is_deterministic_per_client_id() {
+        // The same id always produces the same collapse so every observer
+        // sees the corpse fall identically.
+        let a = compute_fall_axes(7, Transform::IDENTITY);
+        let b = compute_fall_axes(7, Transform::IDENTITY);
+        assert_eq!(a.0, b.0);
+        assert_eq!(a.1, b.1);
+        assert_eq!(a.2, b.2);
+
+        // Different ids (very likely) produce a different roll magnitude.
+        let other = compute_fall_axes(8, Transform::IDENTITY);
+        assert!((a.2 - other.2).abs() > f32::EPSILON || a.0 != other.0);
+    }
 }

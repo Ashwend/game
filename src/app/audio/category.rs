@@ -42,7 +42,8 @@ impl SoundCategory {
             }
             Self::Ui => settings.audio.ui_volume,
         };
-        raw.clamp(0.0, 1.0)
+        let master = settings.audio.master_volume.clamp(0.0, 1.0);
+        raw.clamp(0.0, 1.0) * master
     }
 
     /// Maximum number of concurrent one-shot voices in this category.
@@ -103,6 +104,33 @@ mod tests {
         settings.audio.sfx_volume = 0.5;
         let half = category_volume(SoundCategory::Sfx3d, &settings, -10.0, 0.0).to_linear();
         assert!((half - full * 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn master_volume_scales_every_category() {
+        let mut settings = ClientSettings::default();
+        settings.audio.master_volume = 0.5;
+        // A category at full slider should now read half-gain from master.
+        assert!((SoundCategory::Music.slider_gain(&settings) - 0.5).abs() < 1e-6);
+        assert!((SoundCategory::Sfx2d.slider_gain(&settings) - 0.5).abs() < 1e-6);
+        assert!((SoundCategory::Ui.slider_gain(&settings) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn master_volume_compounds_with_category_slider() {
+        let mut settings = ClientSettings::default();
+        settings.audio.master_volume = 0.5;
+        settings.audio.sfx_volume = 0.5;
+        assert!((SoundCategory::Sfx3d.slider_gain(&settings) - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn master_volume_clamps_out_of_range() {
+        let mut settings = ClientSettings::default();
+        settings.audio.master_volume = 4.0;
+        assert_eq!(SoundCategory::Music.slider_gain(&settings), 1.0);
+        settings.audio.master_volume = -1.0;
+        assert_eq!(SoundCategory::Music.slider_gain(&settings), 0.0);
     }
 
     #[test]

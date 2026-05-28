@@ -290,12 +290,37 @@ pub(crate) struct DeployableOverlayParams<'w, 's> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::items::{CRUDE_FURNACE_ID, WORKBENCH_T1_ID, intern_item_id};
+
+    fn raw_input() -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 768.0),
+            )),
+            ..Default::default()
+        }
+    }
+
+    fn entry(health: u32, max_health: u32) -> DeployableOverlayEntry {
+        DeployableOverlayEntry {
+            anchor_world: Vec3::Y * 2.0,
+            look_target_world: Vec3::Y,
+            id: 7,
+            kind: DeployableKind::Workbench { tier: 1 },
+            health,
+            max_health,
+        }
+    }
 
     #[test]
     fn distance_fade_starts_full_then_drops_to_zero() {
         assert!((distance_fade(0.0) - 1.0).abs() < f32::EPSILON);
         assert!((distance_fade(DEPLOYABLE_FADE_START_M) - 1.0).abs() < f32::EPSILON);
         assert!(distance_fade(DEPLOYABLE_DRAW_DISTANCE_M + 1.0) <= 0.0001);
+        // Midway through the fade band the alpha is partial.
+        let mid = distance_fade((DEPLOYABLE_FADE_START_M + DEPLOYABLE_DRAW_DISTANCE_M) / 2.0);
+        assert!(mid > 0.0 && mid < 1.0);
     }
 
     #[test]
@@ -308,5 +333,135 @@ mod tests {
             kind_label(DeployableKind::Furnace { tier: 2 }),
             "Furnace T2"
         );
+    }
+
+    #[test]
+    fn health_fill_color_maps_three_tiers() {
+        assert_eq!(
+            health_fill_color(1.0),
+            egui::Color32::from_rgb(125, 196, 55)
+        );
+        assert_eq!(
+            health_fill_color(0.5),
+            egui::Color32::from_rgb(232, 188, 64)
+        );
+        assert_eq!(health_fill_color(0.1), egui::Color32::from_rgb(228, 96, 78));
+        // Strict `>` boundaries fall to the lower band.
+        assert_eq!(
+            health_fill_color(0.6),
+            egui::Color32::from_rgb(232, 188, 64)
+        );
+        assert_eq!(health_fill_color(0.3), egui::Color32::from_rgb(228, 96, 78));
+    }
+
+    #[test]
+    fn scaled_and_with_alpha_apply_and_clamp_fade() {
+        assert_eq!(scaled(100, 1.0), 100);
+        assert_eq!(scaled(100, 0.0), 0);
+        assert_eq!(scaled(100, 0.5), 50);
+        assert_eq!(scaled(100, 5.0), 100);
+        assert_eq!(scaled(100, -2.0), 0);
+        assert_eq!(
+            with_alpha(egui::Color32::from_rgb(9, 8, 7), 200),
+            egui::Color32::from_rgba_unmultiplied(9, 8, 7, 200)
+        );
+        assert_eq!(
+            with_alpha(egui::Color32::from_rgb(9, 8, 7), 255),
+            egui::Color32::from_rgb(9, 8, 7)
+        );
+    }
+
+    #[test]
+    fn overlay_without_camera_draws_nothing() {
+        let ctx = egui::Context::default();
+        let output = ctx.run(raw_input(), |ctx| {
+            deployable_overlay_ui(
+                ctx,
+                DeployableOverlay {
+                    camera: None,
+                    entries: Vec::new(),
+                },
+            );
+        });
+        assert!(output.shapes.is_empty());
+    }
+
+    #[test]
+    fn nameplate_renders_at_full_and_damaged_fade() {
+        // Full-health props draw with fade 0 (transparent) but still emit
+        // shapes; damaged ones draw fully opaque. Both run the painter.
+        let full = entry(500, 500);
+        let damaged = entry(120, 500);
+
+        let ctx_full = egui::Context::default();
+        let out_full = ctx_full.run(raw_input(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                nameplate(ui, &full, 0.0);
+            });
+        });
+        let ctx_dmg = egui::Context::default();
+        let out_dmg = ctx_dmg.run(raw_input(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                nameplate(ui, &damaged, 1.0);
+            });
+        });
+        assert!(!out_full.shapes.is_empty());
+        assert!(!out_dmg.shapes.is_empty());
+    }
+
+    #[test]
+    fn collect_entries_pairs_placed_with_replicated_state() {
+        let placed_wb = NetworkDeployedEntity {
+            id: 10,
+            kind: DeployableKind::Workbench { tier: 1 },
+        };
+        let placed_furnace = NetworkDeployedEntity {
+            id: 11,
+            kind: DeployableKind::Furnace { tier: 1 },
+        };
+        // No replicated state for this id: it should be filtered out.
+        let placed_orphan = NetworkDeployedEntity {
+            id: 99,
+            kind: DeployableKind::Workbench { tier: 1 },
+        };
+
+        let tf = GlobalTransform::from_translation(Vec3::new(2.0, 0.0, -3.0));
+
+        let dep_wb = Deployable {
+            id: 10,
+            item_id: intern_item_id(WORKBENCH_T1_ID),
+            kind: DeployableKind::Workbench { tier: 1 },
+            max_health: 500,
+        };
+        let dep_furnace = Deployable {
+            id: 11,
+            item_id: intern_item_id(CRUDE_FURNACE_ID),
+            kind: DeployableKind::Furnace { tier: 1 },
+            max_health: 800,
+        };
+        let hp_wb = DeployableHealth(250);
+        let hp_furnace = DeployableHealth(800);
+
+        let placed = vec![
+            (&placed_wb, &tf),
+            (&placed_furnace, &tf),
+            (&placed_orphan, &tf),
+        ];
+        let replicated = vec![(&dep_wb, &hp_wb), (&dep_furnace, &hp_furnace)];
+
+        let mut entries = collect_deployable_overlay_entries(placed, replicated);
+        entries.sort_by_key(|e| e.id);
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].id, 10);
+        assert_eq!(entries[0].health, 250);
+        assert_eq!(entries[0].max_health, 500);
+        assert_eq!(entries[1].id, 11);
+        assert_eq!(entries[1].health, 800);
+        // Furnace is taller, so its nameplate anchor sits higher than the
+        // workbench's for the same ground transform.
+        assert!(entries[1].anchor_world.y > entries[0].anchor_world.y);
+        // Look target is below the anchor (body centre, not floating label).
+        assert!(entries[0].look_target_world.y < entries[0].anchor_world.y);
     }
 }

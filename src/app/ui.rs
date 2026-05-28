@@ -57,8 +57,8 @@ pub(crate) use death_splash::tick_death_splash_system;
 
 use super::state::{
     ClientErrorToast, ClientRuntime, ClientSettings, CraftingHudState, CraftingUiState,
-    InventorySoundEvent, LocalPlayerState, MenuBackdropVisibility, MenuState, OptionsUiState,
-    SaveStore, Screen, SessionShutdownTasks, SteamUser, ToastState,
+    InventorySoundEvent, LocalPlayerState, MAX_UI_SCALE, MIN_UI_SCALE, MenuBackdropVisibility,
+    MenuState, OptionsUiState, SaveStore, Screen, SessionShutdownTasks, SteamUser, ToastState,
 };
 use super::systems::PendingSessionEndReason;
 use super::voice::VoiceState;
@@ -97,12 +97,25 @@ pub(crate) struct UiResources<'w, 's> {
     local_player: Res<'w, LocalPlayerState>,
 }
 
+/// egui zoom factor (pixels-per-point multiplier) for the player's chosen UI
+/// scale, clamped to the supported range so a malformed settings file can't
+/// shrink the chrome to nothing or blow it off-screen.
+fn ui_zoom_factor(settings: &ClientSettings) -> f32 {
+    let scale = settings.display.ui_scale;
+    if scale.is_finite() {
+        scale.clamp(MIN_UI_SCALE, MAX_UI_SCALE)
+    } else {
+        1.0
+    }
+}
+
 pub(crate) fn ui_system(
     mut contexts: EguiContexts,
     mut resources: UiResources,
 ) -> bevy::prelude::Result {
     let ctx = contexts.ctx_mut()?;
     theme::apply_game_style(ctx);
+    ctx.set_zoom_factor(ui_zoom_factor(&resources.settings));
     let delta_seconds = resources
         .time
         .as_ref()
@@ -408,5 +421,64 @@ mod tests {
             button_sound_id(theme::ButtonSound::Hover),
             SoundId::UiButtonHover
         );
+    }
+
+    #[test]
+    fn ui_zoom_factor_passes_through_in_range_scale() {
+        let mut settings = ClientSettings::default();
+        settings.display.ui_scale = 1.25;
+        assert!((ui_zoom_factor(&settings) - 1.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ui_zoom_factor_clamps_extremes() {
+        let mut settings = ClientSettings::default();
+        settings.display.ui_scale = 10.0;
+        assert_eq!(ui_zoom_factor(&settings), MAX_UI_SCALE);
+        settings.display.ui_scale = 0.0;
+        assert_eq!(ui_zoom_factor(&settings), MIN_UI_SCALE);
+    }
+
+    #[test]
+    fn ui_zoom_factor_falls_back_on_non_finite() {
+        let mut settings = ClientSettings::default();
+        settings.display.ui_scale = f32::NAN;
+        assert_eq!(ui_zoom_factor(&settings), 1.0);
+        // Negative infinity is also non-finite and should fall back.
+        settings.display.ui_scale = f32::NEG_INFINITY;
+        assert_eq!(ui_zoom_factor(&settings), 1.0);
+    }
+
+    #[test]
+    fn ui_zoom_factor_clamps_to_exact_bounds_at_the_edges() {
+        let mut settings = ClientSettings::default();
+        settings.display.ui_scale = MIN_UI_SCALE;
+        assert_eq!(ui_zoom_factor(&settings), MIN_UI_SCALE);
+        settings.display.ui_scale = MAX_UI_SCALE;
+        assert_eq!(ui_zoom_factor(&settings), MAX_UI_SCALE);
+    }
+
+    #[test]
+    fn inventory_sounds_map_to_distinct_pool_ids() {
+        assert_eq!(
+            inventory_sound_id(InventorySoundEvent::Pickup),
+            SoundId::InventoryPickup
+        );
+        assert_eq!(
+            inventory_sound_id(InventorySoundEvent::Drop),
+            SoundId::InventoryDrop
+        );
+        assert_eq!(
+            inventory_sound_id(InventorySoundEvent::Move),
+            SoundId::InventoryMove
+        );
+    }
+
+    #[test]
+    fn button_sound_requests_queue_hover_events() {
+        let mut requests = ButtonSoundRequests::default();
+        requests.push_hover();
+        requests.push_hover();
+        assert_eq!(requests.0.len(), 2);
     }
 }

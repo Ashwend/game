@@ -241,4 +241,82 @@ mod tests {
 
         assert_eq!(corrected.translation, target.translation);
     }
+
+    #[test]
+    fn retarget_ignores_stale_or_equal_snapshot_ticks() {
+        let current = Transform::from_xyz(0.0, 0.0, 0.0);
+        let mut interpolation = DroppedItemInterpolation::new(5, current);
+        let target = Transform::from_xyz(2.0, 0.0, 0.0);
+
+        // A tick at or below the stored tick is a stale duplicate — it must
+        // not retarget the blend.
+        interpolation.retarget(5, &current, target);
+        let after_equal = interpolation.advance(DROPPED_ITEM_INTERPOLATION_SECONDS);
+        assert_eq!(after_equal.translation, current.translation);
+
+        interpolation.retarget(3, &current, target);
+        let after_stale = interpolation.advance(DROPPED_ITEM_INTERPOLATION_SECONDS);
+        assert_eq!(after_stale.translation, current.translation);
+    }
+
+    #[test]
+    fn snap_to_target_finishes_immediately_and_stops_replaying() {
+        let current = Transform::from_xyz(0.0, 0.0, 0.0);
+        let target = Transform::from_xyz(3.0, 0.0, 0.0);
+        let mut interpolation = DroppedItemInterpolation::new(1, current);
+        interpolation.retarget(2, &current, target);
+
+        let snapped = interpolation.snap_to_target();
+        assert_eq!(snapped.translation, target.translation);
+
+        // After a snap, a subsequent advance must not slide back through the
+        // curve — the interpolation is marked complete.
+        let next = interpolation.advance(DROPPED_ITEM_INTERPOLATION_SECONDS * 0.5);
+        assert_eq!(next.translation, target.translation);
+    }
+
+    #[test]
+    fn rotation_uses_quaternion_when_finite_and_nonzero() {
+        // A valid normalised quaternion is used directly (renormalised).
+        let q = QuatNet {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            w: 1.0,
+        };
+        let rot = dropped_item_rotation(q, 1.23);
+        assert!(rot.dot(Quat::IDENTITY).abs() > 1.0 - 1e-5);
+    }
+
+    #[test]
+    fn rotation_falls_back_to_yaw_for_degenerate_quaternion() {
+        // An all-zero quaternion has zero length, so we fall back to the
+        // yaw-only rotation rather than producing a NaN quaternion.
+        let zero = QuatNet {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            w: 0.0,
+        };
+        let yaw = std::f32::consts::FRAC_PI_2;
+        let rot = dropped_item_rotation(zero, yaw);
+        let expected = Quat::from_rotation_y(yaw);
+        assert!(rot.dot(expected).abs() > 1.0 - 1e-5);
+    }
+
+    #[test]
+    fn transform_from_dropped_carries_position() {
+        let dt = DroppedItemTransform {
+            position: crate::protocol::Vec3Net::new(1.0, 2.0, 3.0),
+            rotation: QuatNet {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            },
+            yaw: 0.0,
+        };
+        let transform = dropped_item_transform_from(&dt);
+        assert_eq!(transform.translation, Vec3::new(1.0, 2.0, 3.0));
+    }
 }

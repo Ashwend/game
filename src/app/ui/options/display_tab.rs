@@ -4,7 +4,10 @@ use bevy::window::Monitor;
 use bevy_egui::egui;
 
 use crate::app::{
-    state::{ClientSettings, DisplayMode, display_resolutions},
+    state::{
+        ClientSettings, DisplayMode, MAX_FOV_DEG, MAX_UI_SCALE, MIN_FOV_DEG, MIN_UI_SCALE,
+        display_resolutions,
+    },
     ui::theme,
 };
 
@@ -23,6 +26,54 @@ pub(super) fn render(
         setting_row(ui, "VSync", |ui| {
             checkbox_with_click_sound(ui, &mut settings.display.vsync, "Enabled");
         });
+    });
+
+    ui.add_space(10.0);
+
+    theme::inset_frame().show(ui, |ui| {
+        ui.label(section_label("View"));
+        ui.add_space(6.0);
+        fov_row(ui, settings);
+        ui_scale_row(ui, settings);
+    });
+}
+
+fn fov_row(ui: &mut egui::Ui, settings: &mut ClientSettings) {
+    let mut degrees = settings.display.fov_degrees.clamp(MIN_FOV_DEG, MAX_FOV_DEG);
+    setting_row(ui, "Field of View", |ui| {
+        let control_width = ui.available_width();
+        if ui
+            .add_sized(
+                [control_width, SETTING_ROW_HEIGHT],
+                egui::Slider::new(&mut degrees, MIN_FOV_DEG..=MAX_FOV_DEG)
+                    .suffix("\u{00b0}")
+                    .show_value(true),
+            )
+            .changed()
+        {
+            settings.display.fov_degrees = degrees.clamp(MIN_FOV_DEG, MAX_FOV_DEG);
+        }
+    });
+}
+
+fn ui_scale_row(ui: &mut egui::Ui, settings: &mut ClientSettings) {
+    let mut percent = settings.display.ui_scale.clamp(MIN_UI_SCALE, MAX_UI_SCALE) * 100.0;
+    setting_row(ui, "UI Scale", |ui| {
+        let control_width = ui.available_width();
+        if ui
+            .add_sized(
+                [control_width, SETTING_ROW_HEIGHT],
+                egui::Slider::new(
+                    &mut percent,
+                    (MIN_UI_SCALE * 100.0)..=(MAX_UI_SCALE * 100.0),
+                )
+                .suffix("%")
+                .show_value(true),
+            )
+            .changed()
+        {
+            settings.display.ui_scale = (percent / 100.0).clamp(MIN_UI_SCALE, MAX_UI_SCALE);
+        }
     });
 }
 
@@ -125,5 +176,31 @@ mod tests {
 
         assert!(!output.shapes.is_empty());
         assert_eq!(settings.display.mode, DisplayMode::BorderlessFullscreen);
+    }
+
+    #[test]
+    fn view_section_renders_fov_and_ui_scale_rows() {
+        let ctx = egui::Context::default();
+        let mut settings = ClientSettings::default();
+
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(960.0, 720.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    render(ui, &mut settings, None);
+                });
+            },
+        );
+
+        assert!(!output.shapes.is_empty());
+        // Defaults survive a render with no interaction.
+        assert_eq!(settings.display.fov_degrees, 65.0);
+        assert_eq!(settings.display.ui_scale, 1.0);
     }
 }

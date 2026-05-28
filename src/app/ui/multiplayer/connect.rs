@@ -139,3 +139,67 @@ fn classify_connect_error(error: &str) -> ConnectFailReason {
         ConnectFailReason::Other
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::state::DirectConnectDialog;
+
+    #[test]
+    fn classify_connect_error_buckets_known_phrases_case_insensitively() {
+        assert_eq!(
+            classify_connect_error("Connection TIMED OUT"),
+            ConnectFailReason::Timeout
+        );
+        assert_eq!(
+            classify_connect_error("socket timeout"),
+            ConnectFailReason::Timeout
+        );
+        assert_eq!(
+            classify_connect_error("Connection refused"),
+            ConnectFailReason::Refused
+        );
+        assert_eq!(
+            classify_connect_error("protocol version mismatch"),
+            ConnectFailReason::VersionMismatch
+        );
+        assert_eq!(
+            classify_connect_error("auth token rejected"),
+            ConnectFailReason::AuthRejected
+        );
+        assert_eq!(
+            classify_connect_error("could not resolve address via dns"),
+            ConnectFailReason::BadAddress
+        );
+    }
+
+    #[test]
+    fn classify_connect_error_falls_back_to_other() {
+        assert_eq!(
+            classify_connect_error("something unexpected happened"),
+            ConnectFailReason::Other
+        );
+        assert_eq!(classify_connect_error(""), ConnectFailReason::Other);
+    }
+
+    #[test]
+    fn classify_connect_error_prioritises_timeout_over_later_buckets() {
+        // A message that matches multiple substrings resolves to the first
+        // branch in declaration order (timeout wins over refused here).
+        assert_eq!(
+            classify_connect_error("timeout: connection refused"),
+            ConnectFailReason::Timeout
+        );
+    }
+
+    #[test]
+    fn take_finished_returns_none_without_an_attempt() {
+        let mut dialog = DirectConnectDialog {
+            host: "host".to_owned(),
+            port: "7777".to_owned(),
+            error: None,
+            attempt: None,
+        };
+        assert!(take_finished(&mut dialog).is_none());
+    }
+}

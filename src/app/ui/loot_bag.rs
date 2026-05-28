@@ -217,3 +217,167 @@ fn draw_panel(
         ui.label(RichText::new("Inventory unavailable").color(theme::muted_text()));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{items::COAL_ID, protocol::ItemStack, server::PlayerPrivate};
+
+    fn bag_view(filled: bool) -> OpenLootBagView {
+        let mut slots: Vec<Option<ItemStack>> = vec![None; 14];
+        if filled {
+            slots[0] = Some(ItemStack::new(COAL_ID, 8));
+            slots[3] = Some(ItemStack::new(COAL_ID, 2));
+        }
+        OpenLootBagView { id: 7, slots }
+    }
+
+    fn local_player(open_loot_bag: Option<OpenLootBagView>) -> LocalPlayerState {
+        LocalPlayerState {
+            entity: None,
+            public: None,
+            private: Some(PlayerPrivate {
+                inventory: PlayerInventoryState::empty(),
+                crafting: Default::default(),
+                open_furnace: None,
+                open_loot_bag,
+                last_processed_input: 0,
+            }),
+            lifecycle: None,
+        }
+    }
+
+    fn run_ui(f: impl FnMut(&egui::Context)) -> egui::FullOutput {
+        let ctx = egui::Context::default();
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 768.0),
+                )),
+                ..Default::default()
+            },
+            f,
+        )
+    }
+
+    #[test]
+    fn loot_bag_ui_noop_without_open_bag() {
+        let mut menu = MenuState::default();
+        let mut runtime = ClientRuntime::default();
+        let local = local_player(None);
+        let mut inv_ui = InventoryUiState::default();
+        let mut toasts: Vec<String> = Vec::new();
+
+        let output = run_ui(|ctx| {
+            loot_bag_ui(
+                ctx,
+                &mut menu,
+                &mut runtime,
+                &local,
+                &mut inv_ui,
+                &mut toasts,
+            );
+        });
+        assert!(output.shapes.is_empty());
+        assert!(inv_ui.loot_bag_rect.is_none());
+    }
+
+    #[test]
+    fn loot_bag_ui_suppressed_while_paused() {
+        let mut menu = MenuState {
+            pause_open: true,
+            ..Default::default()
+        };
+        let mut runtime = ClientRuntime::default();
+        let local = local_player(Some(bag_view(true)));
+        let mut inv_ui = InventoryUiState::default();
+        let mut toasts: Vec<String> = Vec::new();
+
+        let output = run_ui(|ctx| {
+            loot_bag_ui(
+                ctx,
+                &mut menu,
+                &mut runtime,
+                &local,
+                &mut inv_ui,
+                &mut toasts,
+            );
+        });
+        assert!(output.shapes.is_empty());
+    }
+
+    #[test]
+    fn loot_bag_ui_renders_filled_bag_and_records_rect() {
+        let mut menu = MenuState::default();
+        let mut runtime = ClientRuntime::default();
+        let local = local_player(Some(bag_view(true)));
+        let mut inv_ui = InventoryUiState::default();
+        let mut toasts: Vec<String> = Vec::new();
+
+        let output = run_ui(|ctx| {
+            loot_bag_ui(
+                ctx,
+                &mut menu,
+                &mut runtime,
+                &local,
+                &mut inv_ui,
+                &mut toasts,
+            );
+        });
+        assert!(!output.shapes.is_empty());
+        assert!(inv_ui.loot_bag_rect.is_some());
+    }
+
+    #[test]
+    fn loot_bag_ui_renders_empty_bag() {
+        let mut menu = MenuState::default();
+        let mut runtime = ClientRuntime::default();
+        let local = local_player(Some(bag_view(false)));
+        let mut inv_ui = InventoryUiState::default();
+        let mut toasts: Vec<String> = Vec::new();
+
+        let output = run_ui(|ctx| {
+            loot_bag_ui(
+                ctx,
+                &mut menu,
+                &mut runtime,
+                &local,
+                &mut inv_ui,
+                &mut toasts,
+            );
+        });
+        // Even an empty bag draws the two grids and instructional copy.
+        assert!(!output.shapes.is_empty());
+    }
+
+    #[test]
+    fn loot_bag_ui_resolves_pending_quick_transfer() {
+        // A pending shift+click intent is consumed by the bag UI and
+        // turned into a LootBag command (which fails-soft with no
+        // session, recording a toast).
+        let mut menu = MenuState::default();
+        let mut runtime = ClientRuntime::default();
+        let local = local_player(Some(bag_view(true)));
+        let mut inv_ui = InventoryUiState::default();
+        inv_ui.pending_quick_transfer = Some(UnifiedSlotRef::Bag(0));
+        let mut toasts: Vec<String> = Vec::new();
+
+        run_ui(|ctx| {
+            loot_bag_ui(
+                ctx,
+                &mut menu,
+                &mut runtime,
+                &local,
+                &mut inv_ui,
+                &mut toasts,
+            );
+        });
+        // The intent was taken (cleared) and a command attempt happened.
+        assert!(inv_ui.pending_quick_transfer.is_none());
+        assert!(
+            toasts.iter().any(|t| t.contains("not connected")),
+            "quick-transfer should attempt a send (fails without session)"
+        );
+    }
+}

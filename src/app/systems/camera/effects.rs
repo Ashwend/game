@@ -60,6 +60,10 @@ const LANDING_DIP_DURATION: f32 = 0.22;
 pub(crate) struct CameraMotionEffects {
     bob_phase: f32,
     bob_amp_smooth: f32,
+    /// Player-chosen base vertical FOV in degrees. Refreshed from settings
+    /// every frame by [`super::follow::camera_follow_system`]; the run boost
+    /// (`fov_offset_deg`) stacks on top of this.
+    base_fov_deg: f32,
     fov_offset_deg: f32,
     was_grounded: bool,
     prev_fall_speed: f32,
@@ -72,6 +76,7 @@ impl Default for CameraMotionEffects {
         Self {
             bob_phase: 0.0,
             bob_amp_smooth: 0.0,
+            base_fov_deg: BASE_FOV_DEG,
             fov_offset_deg: 0.0,
             // Default to "grounded" so the first frame after a session
             // start doesn't trigger a phantom landing dip.
@@ -157,8 +162,19 @@ impl CameraMotionEffects {
         self.dip_amplitude * pulse
     }
 
+    /// Set the player's chosen base FOV (degrees), clamped to the supported
+    /// range. The run boost is added on top in [`Self::fov_radians`].
+    pub(super) fn set_base_fov_deg(&mut self, degrees: f32) {
+        use crate::app::state::{MAX_FOV_DEG, MIN_FOV_DEG};
+        self.base_fov_deg = if degrees.is_finite() {
+            degrees.clamp(MIN_FOV_DEG, MAX_FOV_DEG)
+        } else {
+            BASE_FOV_DEG
+        };
+    }
+
     pub(super) fn fov_radians(&self) -> f32 {
-        (BASE_FOV_DEG + self.fov_offset_deg).to_radians()
+        (self.base_fov_deg + self.fov_offset_deg).to_radians()
     }
 }
 
@@ -256,6 +272,7 @@ mod tests {
         let mut motion = CameraMotionEffects {
             bob_phase: 1.0,
             bob_amp_smooth: 0.05,
+            base_fov_deg: BASE_FOV_DEG,
             fov_offset_deg: 3.0,
             was_grounded: false,
             prev_fall_speed: 10.0,
@@ -306,6 +323,32 @@ mod tests {
             motion.advance(1.0 / 60.0, WALK_SPEED, false, 0.0);
         }
         assert!(motion.bob_amp_smooth < grounded_amp * 0.1);
+    }
+
+    #[test]
+    fn base_fov_drives_resting_fov_and_run_boost_stacks() {
+        let mut motion = CameraMotionEffects::default();
+        motion.set_base_fov_deg(80.0);
+        // At rest the FOV is exactly the player's chosen base.
+        assert!((motion.fov_radians() - 80.0_f32.to_radians()).abs() < 1e-5);
+
+        // The run boost adds on top of the chosen base, not the hardcoded one.
+        for _ in 0..120 {
+            motion.advance(1.0 / 60.0, RUN_SPEED, true, 0.0);
+        }
+        assert!(motion.fov_radians() > 80.0_f32.to_radians());
+        assert!(motion.fov_radians() <= (80.0 + RUN_FOV_BOOST_DEG).to_radians() + 1e-4);
+    }
+
+    #[test]
+    fn base_fov_is_clamped_to_supported_range() {
+        let mut motion = CameraMotionEffects::default();
+        motion.set_base_fov_deg(10_000.0);
+        assert!((motion.fov_radians() - 100.0_f32.to_radians()).abs() < 1e-5);
+        motion.set_base_fov_deg(0.0);
+        assert!((motion.fov_radians() - 50.0_f32.to_radians()).abs() < 1e-5);
+        motion.set_base_fov_deg(f32::NAN);
+        assert!((motion.fov_radians() - BASE_FOV_DEG.to_radians()).abs() < 1e-5);
     }
 
     #[test]

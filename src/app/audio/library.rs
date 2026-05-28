@@ -342,4 +342,65 @@ mod tests {
             assert!(s <= 1.0 + jitter + 1e-5, "seed {seed}: speed {s} too high");
         }
     }
+
+    #[test]
+    fn jittered_speed_is_deterministic_for_a_seed() {
+        // Same seed must yield the same speed so scripted/deterministic
+        // events reproduce between sessions.
+        assert_eq!(jittered_speed(0.1, 12345), jittered_speed(0.1, 12345));
+        // Different seeds generally differ.
+        assert_ne!(jittered_speed(0.1, 1), jittered_speed(0.1, 2));
+    }
+
+    #[test]
+    fn empty_pool_picks_nothing() {
+        let mut pool = SoundPool::new(Vec::new());
+        assert!(pool.pick().is_none(), "empty pool has no variant to pick");
+    }
+
+    #[test]
+    fn single_variant_pool_always_returns_the_same_handle() {
+        let handle = Handle::<AudioSource>::default();
+        let mut pool = SoundPool::new(vec![handle.clone()]);
+        // A one-element pool can't alternate; it always returns slot 0.
+        let first = pool.pick().cloned().expect("pick from non-empty pool");
+        let second = pool.pick().cloned().expect("pick again");
+        assert_eq!(first, second);
+        assert_eq!(first, handle);
+        // Each fire advances the pool's fire counter.
+        assert_eq!(pool.fire_count, 2);
+    }
+
+    #[test]
+    fn multi_variant_pool_never_repeats_consecutively() {
+        // Five pool slots — identity doesn't matter here; we assert the
+        // picker's `last_index` never repeats consecutively.
+        let handles: Vec<Handle<AudioSource>> =
+            (0..5).map(|_| Handle::<AudioSource>::default()).collect();
+        let mut pool = SoundPool::new(handles);
+        let mut prev = pool.last_index;
+        for _ in 0..50 {
+            assert!(pool.pick().is_some());
+            let picked = pool.last_index;
+            if let (Some(p), Some(prev_idx)) = (picked, prev) {
+                assert_ne!(p, prev_idx, "consecutive variant repeat in pool pick");
+            }
+            prev = picked;
+        }
+    }
+
+    #[test]
+    fn defaults_for_returns_manifest_defaults() {
+        // `defaults_for` should mirror `sound_defaults` regardless of the
+        // pool map contents. Build a library with no pools and confirm it
+        // still resolves the manifest row for a known id.
+        let library = SoundLibrary {
+            pools: HashMap::new(),
+            polyphony: HashMap::new(),
+        };
+        let id = SoundId::SwingMiss;
+        let defaults = library.defaults_for(id);
+        assert_eq!(defaults.category, sound_defaults(id).category);
+        assert_eq!(defaults.base_gain_db, sound_defaults(id).base_gain_db);
+    }
 }

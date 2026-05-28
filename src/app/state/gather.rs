@@ -610,4 +610,194 @@ mod tests {
         );
         assert_eq!(state.swing_fraction(), 0.0);
     }
+
+    #[test]
+    fn release_before_swing_completes_stops_after_one_impact() {
+        let mut state = GatherInputState::default();
+        let tool = ToolKind::Axe;
+        let duration = swing_duration_seconds(tool);
+
+        // Start a swing with a single click (just_pressed, not held).
+        let _ = state.update(0.0, true, false, Some(tool), None);
+        assert!(state.swing_fraction() >= 0.0);
+
+        // Drive the whole swing with no further press. After it completes,
+        // it must NOT roll into a new swing (pressed = false).
+        let _ = state.update(duration, false, false, Some(tool), None);
+        assert_eq!(
+            state.swing_fraction(),
+            0.0,
+            "a released swing should end rather than repeat"
+        );
+    }
+
+    #[test]
+    fn cancel_clears_active_swing_and_pending_feedback() {
+        let mut state = GatherInputState::default();
+        let tool = ToolKind::Pickaxe;
+        let _ = state.update(0.01, true, true, Some(tool), None);
+        state.set_pending_impact(PendingImpactEffect {
+            anchor: Vec3::ZERO,
+            spray_direction: Vec3::Y,
+            kind: ImpactEffectKind::StoneShards,
+            seed: 1,
+        });
+        state.set_pending_audio_cue(PendingAudioCue {
+            anchor: Vec3::ZERO,
+            tool,
+            surface: SurfaceMaterial::Stone,
+            is_player_hit: false,
+        });
+        state.set_pending_miss_audio();
+
+        state.cancel();
+
+        assert_eq!(state.swing_fraction(), 0.0);
+        assert!(state.take_pending_impact().is_none());
+        assert!(state.take_pending_audio_cue().is_none());
+        assert!(!state.take_pending_miss_audio());
+    }
+
+    #[test]
+    fn pending_feedback_is_take_once() {
+        let mut state = GatherInputState::default();
+        state.set_pending_miss_audio();
+        assert!(
+            state.take_pending_miss_audio(),
+            "first take returns the flag"
+        );
+        assert!(
+            !state.take_pending_miss_audio(),
+            "the flag is consumed on take"
+        );
+
+        let cue = PendingAudioCue {
+            anchor: Vec3::new(1.0, 0.0, 0.0),
+            tool: ToolKind::Hands,
+            surface: SurfaceMaterial::Dirt,
+            is_player_hit: true,
+        };
+        state.set_pending_audio_cue(cue);
+        let taken = state.take_pending_audio_cue().expect("cue present");
+        assert!(taken.is_player_hit);
+        assert!(state.take_pending_audio_cue().is_none());
+    }
+
+    #[test]
+    fn each_started_swing_advances_the_seed() {
+        let mut state = GatherInputState::default();
+        let tool = ToolKind::Hands;
+        let duration = swing_duration_seconds(tool);
+
+        let _ = state.update(0.0, true, true, Some(tool), None);
+        let first = state.current_swing_seed();
+        // Roll into a second swing by completing the first while held.
+        let _ = state.update(duration, false, true, Some(tool), None);
+        let second = state.current_swing_seed();
+        assert_ne!(first, second, "each swing should bump the seed");
+    }
+
+    #[test]
+    fn impact_effect_kind_maps_models_and_surfaces() {
+        use crate::resources::ResourceNodeModel;
+        assert_eq!(
+            ImpactEffectKind::for_resource_model(ResourceNodeModel::PineTreeLarge),
+            ImpactEffectKind::WoodChips
+        );
+        assert_eq!(
+            ImpactEffectKind::for_resource_model(ResourceNodeModel::BranchPile),
+            ImpactEffectKind::Sticks
+        );
+        assert_eq!(
+            ImpactEffectKind::for_resource_model(ResourceNodeModel::SurfaceStone),
+            ImpactEffectKind::Pebbles
+        );
+        assert_eq!(
+            ImpactEffectKind::for_resource_model(ResourceNodeModel::HayGrass),
+            ImpactEffectKind::GrassBlades
+        );
+        assert_eq!(
+            ImpactEffectKind::for_resource_model(ResourceNodeModel::IronOre),
+            ImpactEffectKind::StoneShards
+        );
+
+        assert_eq!(
+            ImpactEffectKind::for_surface(SurfaceMaterial::Wood),
+            ImpactEffectKind::WoodChips
+        );
+        assert_eq!(
+            ImpactEffectKind::for_surface(SurfaceMaterial::Coal),
+            ImpactEffectKind::StoneShards
+        );
+    }
+
+    #[test]
+    fn impact_effect_kind_maps_wire_kinds() {
+        use crate::protocol::ResourceImpactKind;
+        assert_eq!(
+            ImpactEffectKind::for_resource_impact(ResourceImpactKind::Tree),
+            ImpactEffectKind::WoodChips
+        );
+        assert_eq!(
+            ImpactEffectKind::for_resource_impact(ResourceImpactKind::SurfaceStone),
+            ImpactEffectKind::Pebbles
+        );
+        assert_eq!(
+            ImpactEffectKind::for_resource_impact(ResourceImpactKind::HayGrass),
+            ImpactEffectKind::GrassBlades
+        );
+    }
+
+    #[test]
+    fn swap_durations_scale_with_item_weight() {
+        // Bag/deployable share the lightest lift; the pickaxe is heaviest.
+        assert!(
+            swap_duration_for_model(ItemModel::Pickaxe)
+                > swap_duration_for_model(ItemModel::Hatchet)
+        );
+        assert!(
+            swap_duration_for_model(ItemModel::Hatchet) > swap_duration_for_model(ItemModel::Bag)
+        );
+        assert_eq!(
+            swap_duration_for_model(ItemModel::Bag),
+            swap_duration_for_model(ItemModel::Deployable)
+        );
+    }
+
+    #[test]
+    fn tool_swap_state_resets_on_new_item_and_progresses_while_held() {
+        let mut swap = ToolSwapState::default();
+        // No item → fully settled, not swapping.
+        swap.observe(0.1, None);
+        assert_eq!(swap.fraction(), 1.0);
+        assert!(!swap.is_swapping());
+
+        // New item begins a swap at fraction 0.
+        swap.observe(0.0, Some(("hatchet", ItemModel::Hatchet)));
+        assert_eq!(swap.fraction(), 0.0);
+        assert!(swap.is_swapping());
+
+        // Advancing the same item progresses the animation.
+        let dur = swap_duration_for_model(ItemModel::Hatchet);
+        swap.observe(dur * 0.5, Some(("hatchet", ItemModel::Hatchet)));
+        let mid = swap.fraction();
+        assert!(
+            mid > 0.0 && mid < 1.0,
+            "expected partial progress, got {mid}"
+        );
+
+        // Finishing the duration settles it.
+        swap.observe(dur, Some(("hatchet", ItemModel::Hatchet)));
+        assert_eq!(swap.fraction(), 1.0);
+        assert!(!swap.is_swapping());
+
+        // Switching to a different item restarts the swap.
+        swap.observe(0.0, Some(("pickaxe", ItemModel::Pickaxe)));
+        assert_eq!(swap.fraction(), 0.0);
+        assert!(swap.is_swapping());
+
+        // Dropping to no item resets entirely.
+        swap.observe(0.0, None);
+        assert_eq!(swap.fraction(), 1.0);
+    }
 }

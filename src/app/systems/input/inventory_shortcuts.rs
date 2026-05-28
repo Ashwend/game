@@ -643,3 +643,240 @@ fn report_send_failure(
     runtime.push_error_message(text.clone());
     error_toasts.push_error(text);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::state::LocalPlayerState;
+    use crate::items::{BASIC_HATCHET_ID, BASIC_PICKAXE_ID, WOOD_ID};
+    use crate::protocol::{ItemStack, PlayerInventoryState, Vec3Net};
+    use crate::resources::{
+        BRANCH_PILE_NODE_ID, COAL_NODE_ID, PINE_TREE_NODE_ID, SURFACE_STONE_NODE_ID,
+    };
+    use crate::server::{PlayerLifecycle, PlayerPrivate};
+
+    fn local_player_holding(item_id: Option<&str>) -> LocalPlayerState {
+        let mut inventory = PlayerInventoryState::empty();
+        if let Some(id) = item_id {
+            inventory.actionbar_slots[0] = Some(ItemStack::new(id, 1));
+        }
+        LocalPlayerState {
+            entity: None,
+            public: None,
+            private: Some(PlayerPrivate {
+                inventory,
+                crafting: Default::default(),
+                open_furnace: None,
+                open_loot_bag: None,
+                last_processed_input: 0,
+            }),
+            lifecycle: None,
+        }
+    }
+
+    fn target_for_node(node_id: u64, definition_id: &str) -> PickupTargetState {
+        PickupTargetState {
+            resource_node_id: Some(node_id),
+            resource_definition_id: Some(definition_id.to_owned()),
+            world_position: Some(Vec3Net::new(1.0, 2.0, 3.0)),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn equipped_tool_kind_only_resolves_real_tools() {
+        // A hatchet resolves to its tool kind.
+        let with_axe = local_player_holding(Some(BASIC_HATCHET_ID));
+        assert_eq!(equipped_tool_kind(&with_axe), Some(ToolKind::Axe));
+
+        let with_pick = local_player_holding(Some(BASIC_PICKAXE_ID));
+        assert_eq!(equipped_tool_kind(&with_pick), Some(ToolKind::Pickaxe));
+
+        // Bare hands -> no tool.
+        let empty = local_player_holding(None);
+        assert_eq!(equipped_tool_kind(&empty), None);
+
+        // A non-tool item (wood) -> no tool.
+        let with_wood = local_player_holding(Some(WOOD_ID));
+        assert_eq!(equipped_tool_kind(&with_wood), None);
+    }
+
+    #[test]
+    fn equipped_tool_profile_falls_back_to_hands() {
+        // Empty hand falls back to the synthesized HANDS_TOOL.
+        let empty = local_player_holding(None);
+        assert_eq!(equipped_tool_profile(&empty).kind, ToolKind::Hands);
+
+        // A real tool returns its own profile.
+        let with_pick = local_player_holding(Some(BASIC_PICKAXE_ID));
+        assert_eq!(equipped_tool_profile(&with_pick).kind, ToolKind::Pickaxe);
+    }
+
+    #[test]
+    fn resource_target_is_crude_only_for_hand_harvestable_nodes() {
+        // Branch piles + surface stones are crude (Hands).
+        let branch = target_for_node(1, BRANCH_PILE_NODE_ID);
+        assert!(resource_target_is_crude(&branch));
+        let stone = target_for_node(2, SURFACE_STONE_NODE_ID);
+        assert!(resource_target_is_crude(&stone));
+
+        // Ore + trees are not crude.
+        let ore = target_for_node(3, COAL_NODE_ID);
+        assert!(!resource_target_is_crude(&ore));
+        let tree = target_for_node(4, PINE_TREE_NODE_ID);
+        assert!(!resource_target_is_crude(&tree));
+
+        // Missing / unknown definition -> false.
+        assert!(!resource_target_is_crude(&PickupTargetState::default()));
+        let bogus = target_for_node(5, "not_a_real_node");
+        assert!(!resource_target_is_crude(&bogus));
+    }
+
+    #[test]
+    fn harvest_check_matches_tool_to_node_requirement() {
+        // Pickaxe vs ore vein -> allowed.
+        let pick = local_player_holding(Some(BASIC_PICKAXE_ID));
+        let ore = target_for_node(1, COAL_NODE_ID);
+        assert!(equipped_tool_can_harvest_target(&pick, &ore));
+
+        // Hatchet vs ore vein -> rejected (wrong tool).
+        let axe = local_player_holding(Some(BASIC_HATCHET_ID));
+        assert!(!equipped_tool_can_harvest_target(&axe, &ore));
+
+        // Hatchet vs tree -> allowed.
+        let tree = target_for_node(2, PINE_TREE_NODE_ID);
+        assert!(equipped_tool_can_harvest_target(&axe, &tree));
+
+        // Crude nodes are E-pickup-only: a swing (even bare hands) is
+        // rejected so the player learns the quick-pickup key.
+        let empty = local_player_holding(None);
+        let branch = target_for_node(3, BRANCH_PILE_NODE_ID);
+        assert!(!equipped_tool_can_harvest_target(&empty, &branch));
+        // A real tool can't swing-harvest a crude node either.
+        assert!(!equipped_tool_can_harvest_target(&pick, &branch));
+
+        // Bare hands vs ore -> rejected.
+        assert!(!equipped_tool_can_harvest_target(&empty, &ore));
+
+        // No definition id on the target -> rejected.
+        assert!(!equipped_tool_can_harvest_target(
+            &pick,
+            &PickupTargetState::default()
+        ));
+    }
+
+    #[test]
+    fn resource_target_anchor_requires_matching_node_id() {
+        let target = target_for_node(42, COAL_NODE_ID);
+        let anchor = resource_target_anchor(&target, 42).expect("matching id resolves an anchor");
+        assert_eq!(anchor, Vec3::new(1.0, 2.0, 3.0));
+
+        // Mismatched id -> None even though a world position exists.
+        assert!(resource_target_anchor(&target, 7).is_none());
+
+        // No world position -> None.
+        let mut no_pos = target_for_node(42, COAL_NODE_ID);
+        no_pos.world_position = None;
+        assert!(resource_target_anchor(&no_pos, 42).is_none());
+    }
+
+    #[test]
+    fn resource_target_model_resolves_definition_model() {
+        let tree = target_for_node(1, PINE_TREE_NODE_ID);
+        assert!(resource_target_model(&tree).is_some());
+        // Unknown / missing definition -> None.
+        assert!(resource_target_model(&PickupTargetState::default()).is_none());
+    }
+
+    #[test]
+    fn resource_target_surface_resolves_only_for_known_definition() {
+        let ore = target_for_node(1, COAL_NODE_ID);
+        assert!(resource_target_surface(&ore).is_some());
+        assert!(resource_target_surface(&PickupTargetState::default()).is_none());
+    }
+
+    #[test]
+    fn swing_spray_direction_defaults_up_without_local_view() {
+        // A default runtime has no predicted local player, so the spray
+        // falls back to straight up.
+        let runtime = ClientRuntime::default();
+        let dir = swing_spray_direction(&runtime, Vec3::new(5.0, 0.0, 5.0));
+        assert_eq!(dir, Vec3::Y);
+    }
+
+    #[test]
+    fn actionbar_key_pressed_out_of_range_slot_is_false() {
+        let keys = ButtonInput::<KeyCode>::default();
+        let settings = ClientSettings::default();
+        // Slot index past the actionbar count never maps to an action.
+        assert!(!actionbar_key_pressed(
+            &keys,
+            &settings,
+            ACTIONBAR_SLOT_COUNT + 5
+        ));
+    }
+
+    #[test]
+    fn send_inventory_command_reports_not_connected() {
+        let mut runtime = ClientRuntime::default();
+        let mut sink: Vec<String> = Vec::new();
+        send_inventory_command(
+            &mut runtime,
+            &mut sink,
+            InventoryCommand::SelectActionbarSlot { slot: 0 },
+        );
+        assert_eq!(sink.len(), 1);
+        assert!(sink[0].contains("not connected"));
+        assert!(sink[0].starts_with("inventory command failed"));
+    }
+
+    #[test]
+    fn send_furnace_command_reports_not_connected() {
+        let mut runtime = ClientRuntime::default();
+        let mut sink: Vec<String> = Vec::new();
+        send_furnace_command(
+            &mut runtime,
+            &mut sink,
+            crate::protocol::FurnaceCommand::Open { id: 1 },
+        );
+        assert_eq!(sink.len(), 1);
+        assert!(sink[0].contains("not connected"));
+    }
+
+    #[test]
+    fn send_gameplay_message_pushes_to_both_runtime_and_sink() {
+        let mut runtime = ClientRuntime::default();
+        let mut sink: Vec<String> = Vec::new();
+        send_gameplay_message(
+            &mut runtime,
+            &mut sink,
+            ClientMessage::Inventory(InventoryCommand::SelectActionbarSlot { slot: 1 }),
+            "test label",
+        );
+        assert_eq!(sink.len(), 1);
+        assert!(sink[0].starts_with("test label failed: not connected"));
+        // The runtime also records the error message.
+        assert!(!runtime.messages.is_empty());
+    }
+
+    #[test]
+    fn dead_lifecycle_matches_dying_check_used_by_the_swing_gate() {
+        // The swing gate treats a Dead lifecycle as "can't swing"; verify
+        // the lifecycle shape we rely on.
+        let mut player = local_player_holding(Some(BASIC_HATCHET_ID));
+        player.lifecycle = Some(PlayerLifecycle::Dead {
+            since_tick: 0,
+            killer: None,
+        });
+        assert!(matches!(
+            player.lifecycle,
+            Some(PlayerLifecycle::Dead { .. })
+        ));
+        // Alive (or none) does not.
+        let alive = local_player_holding(Some(BASIC_HATCHET_ID));
+        assert!(!matches!(
+            alive.lifecycle,
+            Some(PlayerLifecycle::Dead { .. })
+        ));
+    }
+}
