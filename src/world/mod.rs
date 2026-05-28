@@ -76,6 +76,12 @@ pub enum ProceduralMapSize {
 impl ProceduralMapSize {
     pub const ALL: [Self; 3] = [Self::Small, Self::Medium, Self::Large];
 
+    /// Chunk cells per side of the largest map. 63 chunks at the 64 m grid
+    /// size is 4032 m — an approximate 4 km square playable area. Medium and
+    /// small are derived from this maximum so all three sizes scale together
+    /// if it ever changes.
+    const LARGE_DIMS: u32 = 63;
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Small => "Small",
@@ -84,13 +90,16 @@ impl ProceduralMapSize {
         }
     }
 
-    /// Number of chunk cells per side. Small/Medium/Large land at 3/5/9
-    /// cells = 192/320/576 m playable area at the 64 m grid size.
+    /// Number of chunk cells per side. Large approximates a 4 km square
+    /// (`LARGE_DIMS` = 63 cells = 4032 m); medium and small are 1/2 and 1/4 of
+    /// that extent. Each is forced to an odd count (`| 1`) so the grid keeps a
+    /// single center chunk over the origin where the player spawns. This lands
+    /// small/medium/large at 15/31/63 cells = 960/1984/4032 m.
     pub fn dims(self) -> u32 {
         match self {
-            Self::Small => 3,
-            Self::Medium => 5,
-            Self::Large => 9,
+            Self::Small => (Self::LARGE_DIMS / 4) | 1,
+            Self::Medium => (Self::LARGE_DIMS / 2) | 1,
+            Self::Large => Self::LARGE_DIMS,
         }
     }
 

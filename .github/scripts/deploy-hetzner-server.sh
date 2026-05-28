@@ -8,6 +8,16 @@ service_name="${4:-game-server}"
 bind_addr="${5:-0.0.0.0:7777}"
 auth_mode="${6:-offline}"
 restart_notice_seconds="${7:-15}"
+map_size="${8:-large}"
+world_name="${9:-world}"
+
+# The world name becomes a file stem under the data dir, so it must not smuggle
+# in path separators or traversal. Bump it (e.g. world -> world-2) to wipe: a
+# new name points the server at a fresh file and the old save stays as a backup.
+if [[ ! "${world_name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "world name '${world_name}' is invalid; use only letters, digits, '.', '_' or '-'." >&2
+  exit 1
+fi
 
 sudo_cmd=()
 if [[ "${EUID}" -ne 0 ]]; then
@@ -32,7 +42,7 @@ release_dir="${install_dir}/releases/${version}"
 current_link="${install_dir}/current"
 data_dir="${install_dir}/data"
 admin_socket="/run/${service_name}/admin.sock"
-world_path="${data_dir}/world.save"
+world_path="${data_dir}/${world_name}.save"
 unit_path="/etc/systemd/system/${service_name}.service"
 shutdown_reason="Server is updating to ${version}. Please download the latest client before reconnecting."
 
@@ -116,7 +126,7 @@ WorkingDirectory=${install_dir}
 RuntimeDirectory=${service_name}
 RuntimeDirectoryMode=0750
 UMask=007
-ExecStart=${current_link}/game server --bind ${bind_addr} --auth ${auth_mode} --world ${world_path} --admin-socket ${admin_socket}
+ExecStart=${current_link}/game server --bind ${bind_addr} --auth ${auth_mode} --world ${world_path} --admin-socket ${admin_socket} --map-size ${map_size}
 ExecStop=/bin/sh -c '[ -S "${admin_socket}" ] && ${current_link}/game admin --socket ${admin_socket} announce "${shutdown_reason}" || true'
 ExecStop=/bin/sleep 3
 ExecStop=/bin/sh -c '[ -S "${admin_socket}" ] && ${current_link}/game admin --socket ${admin_socket} shutdown --reason "${shutdown_reason}" || true'

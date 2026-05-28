@@ -44,6 +44,10 @@ enum Command {
         auth: AuthModeArg,
         #[arg(long)]
         admin_socket: Option<PathBuf>,
+        /// Map size used only when generating a *fresh* world. Existing
+        /// saves keep whatever size they were authored with.
+        #[arg(long, value_enum, default_value_t = MapSizeArg::Medium)]
+        map_size: MapSizeArg,
     },
     Admin {
         #[arg(long, default_value = DEFAULT_ADMIN_SOCKET)]
@@ -90,6 +94,23 @@ enum AuthModeArg {
     Steam,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum MapSizeArg {
+    Small,
+    Medium,
+    Large,
+}
+
+impl From<MapSizeArg> for crate::world::ProceduralMapSize {
+    fn from(value: MapSizeArg) -> Self {
+        match value {
+            MapSizeArg::Small => Self::Small,
+            MapSizeArg::Medium => Self::Medium,
+            MapSizeArg::Large => Self::Large,
+        }
+    }
+}
+
 struct ServerWorld {
     save: WorldSave,
     persistence: net::DedicatedWorldPersistence,
@@ -113,8 +134,9 @@ pub fn run() -> Result<()> {
             world,
             auth,
             admin_socket,
+            map_size,
         } => {
-            let world = load_server_world(world)?;
+            let world = load_server_world(world, map_size.into())?;
             net::run_dedicated_server(
                 bind,
                 world.save,
@@ -128,11 +150,23 @@ pub fn run() -> Result<()> {
     }
 }
 
-fn load_server_world(path: Option<PathBuf>) -> Result<ServerWorld> {
+fn load_server_world(
+    path: Option<PathBuf>,
+    map_size: crate::world::ProceduralMapSize,
+) -> Result<ServerWorld> {
+    let fresh_map = match crate::world::MapType::default() {
+        crate::world::MapType::Procedural { seed, .. } => crate::world::MapType::Procedural {
+            seed,
+            size: map_size,
+        },
+    };
     if let Some(path) = path {
         let save = if path.exists() {
             match load_world_file(&path) {
-                Ok(save) => save,
+                Ok(save) => {
+                    ensure_map_size_matches(&save, map_size, &path)?;
+                    save
+                }
                 Err(error) => {
                     // Dedicated servers run unattended — when a save format
                     // version bump (or any other unreadable state) makes the
@@ -154,13 +188,13 @@ fn load_server_world(path: Option<PathBuf>) -> Result<ServerWorld> {
                             backup_path.display(),
                         )
                     })?;
-                    let save = WorldSave::new("Dedicated File", None);
+                    let save = WorldSave::new_with_map("Dedicated File", None, fresh_map.clone());
                     save_world_file(&path, &save)?;
                     save
                 }
             }
         } else {
-            let save = WorldSave::new("Dedicated File", None);
+            let save = WorldSave::new_with_map("Dedicated File", None, fresh_map.clone());
             save_world_file(&path, &save)?;
             save
         };
@@ -178,6 +212,34 @@ fn load_server_world(path: Option<PathBuf>) -> Result<ServerWorld> {
         save,
         persistence: net::DedicatedWorldPersistence::Store(store),
     })
+}
+
+/// Refuse to boot a dedicated server against an existing save whose map size
+/// doesn't match the requested `--map-size`. Map size is baked into the world
+/// geometry at generation time and can't be changed in place, so silently
+/// honoring the save's size (and ignoring the flag) would mask an operator
+/// mistake. Pointing `--world` at a fresh file is the intended way to switch
+/// sizes — that regenerates the world rather than corrupting one.
+fn ensure_map_size_matches(
+    save: &WorldSave,
+    requested: crate::world::ProceduralMapSize,
+    path: &std::path::Path,
+) -> Result<()> {
+    let crate::world::MapType::Procedural { size: existing, .. } = &save.map;
+    let existing = *existing;
+    if existing != requested {
+        anyhow::bail!(
+            "world save {} was generated as a {} map but --map-size {} was requested; \
+             refusing to start. Map size is fixed at generation. Either pass --map-size {}, \
+             or point --world at a fresh file to generate a new {} world.",
+            path.display(),
+            existing.label(),
+            requested.label(),
+            existing.label(),
+            requested.label(),
+        );
+    }
+    Ok(())
 }
 
 /// Build a sibling path for an unloadable save: `<original>.bak.<unix-ts>`.
@@ -226,6 +288,7 @@ mod tests {
 
     use super::*;
     use crate::net::DedicatedWorldPersistence;
+    use crate::world::{MapType, ProceduralMapSize};
 
     fn temp_world_path() -> PathBuf {
         std::env::temp_dir().join(format!("game-cli-world-test-{}.save", Uuid::new_v4()))
@@ -234,13 +297,44 @@ mod tests {
     #[test]
     fn load_server_world_creates_fresh_save_when_path_missing() {
         let path = temp_world_path();
-        let world = load_server_world(Some(path.clone())).expect("fresh world should load");
+        let world = load_server_world(Some(path.clone()), ProceduralMapSize::Large)
+            .expect("fresh world should load");
 
         assert!(matches!(
             world.persistence,
             DedicatedWorldPersistence::File(_)
         ));
         assert!(path.exists(), "save file should have been created");
+        assert_eq!(
+            world.save.map,
+            MapType::Procedural {
+                seed: crate::world::TEST_WORLD_SEED,
+                size: ProceduralMapSize::Large,
+            },
+            "fresh dedicated world should honor the requested map size"
+        );
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_server_world_rejects_size_mismatch_against_existing_save() {
+        let path = temp_world_path();
+        // Generate a Large world up front.
+        load_server_world(Some(path.clone()), ProceduralMapSize::Large)
+            .expect("fresh large world should load");
+
+        // Re-loading with a different size must refuse rather than silently
+        // honoring the on-disk size.
+        let mismatch = load_server_world(Some(path.clone()), ProceduralMapSize::Medium);
+        assert!(
+            mismatch.is_err(),
+            "loading a Large save with --map-size medium should be rejected"
+        );
+
+        // Loading with the matching size still works.
+        load_server_world(Some(path.clone()), ProceduralMapSize::Large)
+            .expect("matching size should reload");
 
         let _ = fs::remove_file(&path);
     }
@@ -250,12 +344,13 @@ mod tests {
         let path = temp_world_path();
         fs::write(&path, b"not a real save file").expect("garbage save should be written");
 
-        let world =
-            load_server_world(Some(path.clone())).expect("unloadable save should be replaced");
+        let world = load_server_world(Some(path.clone()), ProceduralMapSize::Medium)
+            .expect("unloadable save should be replaced");
 
         // The fresh save should be loadable on a second call, proving the
         // unreadable file was renamed and a valid one written in its place.
-        let reloaded = load_server_world(Some(path.clone())).expect("fresh save should reload");
+        let reloaded = load_server_world(Some(path.clone()), ProceduralMapSize::Medium)
+            .expect("fresh save should reload");
         assert_eq!(world.save.id, reloaded.save.id);
 
         // A `<path>.bak.<ts>` sibling should have been created from the

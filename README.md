@@ -95,7 +95,10 @@ where the host runs.
 - `./cli dev` — close any stale client and launch the Bevy client.
 - `./cli server --bind 127.0.0.1:7777 --auth offline` — run a dedicated
   authoritative server. Add `--world <path>` to host from a specific save,
-  or `--admin-socket <path>` to enable the admin Unix socket.
+  or `--admin-socket <path>` to enable the admin Unix socket. Use
+  `--map-size <small|medium|large>` to pick the size of a *freshly generated*
+  world; the server refuses to start if it points at an existing save whose
+  size differs (point `--world` at a fresh file to switch sizes).
 - `./cli admin --socket <path> announce <message...>` — push a chat
   announcement to a running dedicated server.
 - `./cli admin --socket <path> shutdown [--reason ...]` — kick all

@@ -21,6 +21,12 @@ env:
   GAME_BIND_ADDR: 0.0.0.0:7777
   GAME_AUTH_MODE: offline
   GAME_RESTART_NOTICE_SECONDS: "15"
+  GAME_MAP_SIZE: large
+  # Bump this (e.g. world -> world-2) to wipe BleedingEdge: a new name makes the
+  # server generate a fresh world file and leaves the previous save as a backup.
+  # Required when changing GAME_MAP_SIZE — the server refuses to start if the
+  # requested size doesn't match the existing save under this name.
+  GAME_WORLD_NAME: world-1
 
 jobs:
   deploy:
@@ -111,4 +117,4 @@ jobs:
           scp "${scp_opts[@]}" release-artifacts/game-aarch64-unknown-linux-gnu.tar.gz "${target}:${remote_archive}"
           scp "${scp_opts[@]}" .github/scripts/deploy-hetzner-server.sh "${target}:${remote_script}"
           ssh "${ssh_opts[@]}" "${target}" \
-            "chmod +x '${remote_script}' && '${remote_script}' '${remote_archive}' '${DEPLOY_VERSION}' '${GAME_SERVICE_USER}' '${GAME_SERVICE_NAME}' '${GAME_BIND_ADDR}' '${GAME_AUTH_MODE}' '${GAME_RESTART_NOTICE_SECONDS}'"
+            "chmod +x '${remote_script}' && '${remote_script}' '${remote_archive}' '${DEPLOY_VERSION}' '${GAME_SERVICE_USER}' '${GAME_SERVICE_NAME}' '${GAME_BIND_ADDR}' '${GAME_AUTH_MODE}' '${GAME_RESTART_NOTICE_SECONDS}' '${GAME_MAP_SIZE}' '${GAME_WORLD_NAME}'"
