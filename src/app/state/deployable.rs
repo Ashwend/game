@@ -17,12 +17,20 @@ pub(crate) struct DeployablePlacementState {
     pub(crate) item_id: Option<ItemId>,
     /// World-space ground position the ghost is anchored to. `None`
     /// when the player isn't looking at a valid surface (e.g. straight
-    /// up at the sky).
+    /// up at the sky). While the player holds right-mouse to rotate, this
+    /// is frozen so fine-tuning the angle can't nudge the spot.
     pub(crate) world_position: Option<Vec3>,
-    /// Yaw the ghost is rotated to, in radians. Held right-mouse rotates
-    /// this value without moving `world_position` — the structure spins
-    /// in place under the player's aim until they let go.
+    /// Yaw the ghost is rotated to, in radians. Until the player takes
+    /// manual control the ghost auto-faces the player (front toward them);
+    /// holding right-mouse freezes position + camera and turns mouse
+    /// motion into rotation. See [`manual_yaw`](Self::manual_yaw).
     pub(crate) yaw: f32,
+    /// True once the player has rotated the ghost themselves (held
+    /// right-mouse, or tapped `R`). While false the ghost keeps re-facing
+    /// the player every frame; once true that auto-facing stops so the
+    /// dialled-in angle survives repositioning. Reset when the active
+    /// deployable changes or after a placement commits.
+    pub(crate) manual_yaw: bool,
     /// Whether the current pose is a legal placement. Drives the ghost
     /// material and gates the place command.
     pub(crate) valid: bool,

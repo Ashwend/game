@@ -5,7 +5,7 @@ use bevy::{
 };
 
 use crate::{
-    app::state::{ClientSettings, LookState, MenuState},
+    app::state::{ClientSettings, DeployablePlacementState, LookState, MenuState},
     controller::MAX_LOOK_PITCH,
 };
 
@@ -23,9 +23,19 @@ pub(crate) fn mouse_look_system(
     mut look: ResMut<LookState>,
     menu: Res<MenuState>,
     settings: Res<ClientSettings>,
+    placement: Res<DeployablePlacementState>,
+    mouse: Res<ButtonInput<MouseButton>>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
 ) {
     if !gameplay_accepts_controls(&menu, primary_window_focused(&primary_window)) {
+        return;
+    }
+
+    // Holding right-mouse while a deployable is selected hands the mouse
+    // over to ghost rotation (see `placement_input_system`). Freeze the
+    // camera so the player can dial in an angle without the view sliding
+    // out from under the spot they picked.
+    if placement.item_id.is_some() && mouse.pressed(MouseButton::Right) {
         return;
     }
 

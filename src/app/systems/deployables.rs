@@ -3,8 +3,10 @@
 //! - `update_placement_ghost_system` — raycasts the camera look ray
 //!   against the ground, updates `DeployablePlacementState`, and
 //!   spawns / despawns the ghost preview entity.
-//! - `placement_input_system` — left-click sends the place command,
-//!   held right-click rotates the ghost yaw, key `R` snaps to 90°.
+//! - `placement_input_system` — left-click sends the place command;
+//!   holding right-click freezes the spot + camera and turns horizontal
+//!   mouse motion into ghost rotation, key `R` snaps to 90°. Until the
+//!   player rotates, the ghost auto-faces them (front toward the player).
 //! - `apply_deployed_entities_system` — diffs the snapshot's
 //!   `deployed_entities` list against the world: spawns new ones,
 //!   despawns missing ones, updates kind/health if needed.
@@ -15,7 +17,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use bevy::{light::NotShadowCaster, prelude::*, window::PrimaryWindow};
+use bevy::{
+    input::mouse::AccumulatedMouseMotion, light::NotShadowCaster, prelude::*, window::PrimaryWindow,
+};
 
 use crate::{
     analytics::{Analytics, Event},
@@ -41,10 +45,10 @@ use crate::{
 /// ghost. Matches `PLACEMENT_REACH_M` on the server so client preview
 /// and server validation agree on what the player can reach.
 const PLACEMENT_REACH_M: f32 = 5.0;
-/// Yaw rotation rate while right mouse is held, in radians per second.
-/// One full revolution takes ~2 seconds — fast enough to feel
-/// responsive, slow enough to land on the angle the player wants.
-const PLACEMENT_ROTATE_RATE_RAD_PER_SEC: f32 = std::f32::consts::PI;
+/// Radians of ghost yaw per pixel of horizontal mouse motion while
+/// right-mouse is held. ~157 px sweeps a quarter turn — slow enough to
+/// land precisely on the angle the player wants while fine-tuning.
+const PLACEMENT_ROTATE_RAD_PER_PIXEL: f32 = 0.01;
 
 /// Update the placement state from the active actionbar item + camera
 /// look ray. Also spawns / despawns the single ghost preview entity.
@@ -52,6 +56,7 @@ const PLACEMENT_ROTATE_RATE_RAD_PER_SEC: f32 = std::f32::consts::PI;
 pub(crate) fn update_placement_ghost_system(
     mut commands: Commands,
     mut placement: ResMut<DeployablePlacementState>,
+    mouse: Res<ButtonInput<MouseButton>>,
     runtime: Res<ClientRuntime>,
     local_player: Res<LocalPlayerState>,
     menu: Res<MenuState>,
@@ -68,10 +73,10 @@ pub(crate) fn update_placement_ghost_system(
     let kind_changed = placement.item_id.as_ref().map(|id| id.as_ref())
         != active.as_ref().map(|(id, _, _)| id.as_ref());
     if kind_changed {
-        // Reset yaw when the deployable type changes — otherwise the
-        // first frame after a swap would inherit a yaw the player
-        // dialled in for a different structure.
-        placement.yaw = 0.0;
+        // Hand control back to auto-facing when the deployable type
+        // changes — otherwise the first frame after a swap would inherit
+        // a yaw the player dialled in for a different structure.
+        placement.manual_yaw = false;
     }
     placement.item_id = active.as_ref().map(|(id, _, _)| id.clone());
 
@@ -87,24 +92,42 @@ pub(crate) fn update_placement_ghost_system(
         return;
     };
 
-    let world_position = ground_under_aim(camera_transform);
+    // While right-mouse rotates the ghost, freeze the spot: the camera is
+    // also locked this frame, so re-aiming would otherwise let a tiny
+    // residual look-ray shift drift the position the player just settled
+    // on. Otherwise the ghost tracks the look ray as usual.
+    let rotating = mouse.pressed(MouseButton::Right) && placement.world_position.is_some();
+    let world_position = if rotating {
+        placement.world_position
+    } else {
+        ground_under_aim(camera_transform)
+    };
+    let player_feet = runtime.local_player_position();
     let valid = match world_position {
-        Some(target) => {
-            is_placement_valid(target, profile, runtime.local_player_position(), &deployed)
-        }
+        Some(target) => is_placement_valid(target, profile, player_feet, &deployed),
         None => false,
     };
     placement.world_position = world_position;
     placement.valid = valid;
 
+    // Until the player takes manual control, keep the front of the ghost
+    // turned toward them so a freshly selected deployable reads the right
+    // way round without any input.
+    if !placement.manual_yaw
+        && let (Some(target), Some(feet)) = (world_position, player_feet)
+        && let Some(yaw) = yaw_facing_player(target, feet)
+    {
+        placement.yaw = yaw;
+    }
+
     refresh_ghost_entity(&mut commands, &ghosts, &assets, &placement, profile);
 }
 
 /// React to placement input: left-click commits, held right-mouse
-/// rotates, R nudges by 90°.
+/// freezes the spot and turns mouse motion into rotation, R nudges by 90°.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn placement_input_system(
-    time: Res<Time>,
+    mouse_motion: Res<AccumulatedMouseMotion>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut placement: ResMut<DeployablePlacementState>,
@@ -121,16 +144,21 @@ pub(crate) fn placement_input_system(
         return;
     };
 
-    // Hold right mouse to rotate in place. We don't lock the world
-    // position while doing this — the player still aims the cursor
-    // wherever they want; only the yaw spins. This matches Rust's feel:
-    // the ghost sits at the aim point and yaw is driven by hold-rotate.
+    // Hold right mouse to take manual control: the camera is frozen (see
+    // `mouse_look_system`) and the spot is frozen (see
+    // `update_placement_ghost_system`), so horizontal mouse motion only
+    // turns the ghost. This lets the player settle on a spot, grab it,
+    // and slowly rotate it into place without nudging the location.
     if mouse.pressed(MouseButton::Right) {
-        placement.yaw =
-            wrap_angle(placement.yaw + time.delta_secs() * PLACEMENT_ROTATE_RATE_RAD_PER_SEC);
+        let dx = mouse_motion.delta.x;
+        if dx != 0.0 {
+            placement.yaw = wrap_angle(placement.yaw + dx * PLACEMENT_ROTATE_RAD_PER_PIXEL);
+            placement.manual_yaw = true;
+        }
     }
     if keys.just_pressed(KeyCode::KeyR) {
         placement.yaw = wrap_angle(placement.yaw + std::f32::consts::FRAC_PI_2);
+        placement.manual_yaw = true;
     }
 
     if mouse.just_pressed(MouseButton::Left) {
@@ -150,9 +178,17 @@ pub(crate) fn placement_input_system(
                 yaw: placement.yaw,
             },
         );
+        // Drop manual control so the next ghost (same deployable type,
+        // another in the stack) starts by auto-facing the player again.
+        placement.manual_yaw = false;
         if let Some(kind) = kind_label {
             analytics.track(Event::DeployablePlaced { kind });
         }
+        // Keep `manual_yaw` set: the ghost stays visible until the
+        // actionbar count replicates down, so resetting here would snap
+        // it back to auto-facing for a frame or two before it vanishes.
+        // It resets when the deployable type changes (see the ghost
+        // system), which also leaves repeat placements at the same angle.
     }
 }
 
@@ -498,6 +534,20 @@ fn deployable_transform(position: Vec3, yaw: f32) -> Transform {
     Transform::from_translation(position).with_rotation(Quat::from_rotation_y(yaw))
 }
 
+/// Yaw that turns the deployable's local +Z front toward the player.
+/// `Quat::from_rotation_y(yaw) * Vec3::Z == (sin yaw, 0, cos yaw)`, so the
+/// yaw whose forward points along `player - object` is `atan2(dx, dz)`.
+/// Returns `None` when the player stands on the spot (direction undefined),
+/// leaving the previous yaw untouched.
+fn yaw_facing_player(object: Vec3, player: Vec3) -> Option<f32> {
+    let dx = player.x - object.x;
+    let dz = player.z - object.z;
+    if dx * dx + dz * dz < 1e-4 {
+        return None;
+    }
+    Some(dx.atan2(dz))
+}
+
 fn refresh_ghost_entity(
     commands: &mut Commands,
     ghosts: &Query<(Entity, &DeployablePlacementGhost)>,
@@ -607,6 +657,23 @@ mod tests {
         let hit = ground_under_aim(&transform).expect("downward look should hit");
         assert!((hit.x - 2.0).abs() < 0.1);
         assert!(hit.y.abs() < 1e-3);
+    }
+
+    #[test]
+    fn yaw_facing_player_points_local_front_at_player() {
+        // Object at origin, player off to +X: the local +Z front should
+        // rotate to point along +X, i.e. forward == (sin yaw, 0, cos yaw)
+        // ~= (1, 0, 0), so yaw ~= +pi/2.
+        let yaw =
+            yaw_facing_player(Vec3::ZERO, Vec3::new(3.0, 0.0, 0.0)).expect("distinct positions");
+        let forward = Quat::from_rotation_y(yaw) * Vec3::Z;
+        assert!((forward.x - 1.0).abs() < 1e-4);
+        assert!(forward.z.abs() < 1e-4);
+    }
+
+    #[test]
+    fn yaw_facing_player_is_none_when_coincident() {
+        assert!(yaw_facing_player(Vec3::new(5.0, 0.0, 5.0), Vec3::new(5.0, 1.7, 5.0)).is_none());
     }
 
     #[test]
