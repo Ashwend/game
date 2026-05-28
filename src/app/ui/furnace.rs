@@ -19,12 +19,15 @@ use bevy_egui::egui::{
 
 use crate::{
     app::{
-        state::{ClientRuntime, ErrorToastSink, InventoryUiState, MenuState, UnifiedSlotRef},
+        state::{
+            ClientRuntime, ErrorToastSink, InventoryUiState, LocalPlayerState, MenuState,
+            UnifiedSlotRef,
+        },
         systems::send_furnace_command,
     },
     protocol::{
         FURNACE_ITEM_SLOT_COUNT, FurnaceCommand, FurnaceSlotRef, INVENTORY_SLOT_COUNT,
-        ItemContainerSlot, OpenFurnaceView, PlayerInventoryState, PlayerState,
+        ItemContainerSlot, OpenFurnaceView, PlayerInventoryState,
     },
 };
 
@@ -47,28 +50,27 @@ pub(super) fn furnace_ui(
     ctx: &egui::Context,
     menu: &mut MenuState,
     runtime: &mut ClientRuntime,
+    local_player: &LocalPlayerState,
     inventory_ui: &mut InventoryUiState,
     error_toasts: &mut dyn ErrorToastSink,
 ) {
     if menu.pause_open {
         return;
     }
-    // Source of truth is the server: a snapshot with `open_furnace`
-    // means the modal is open. Closing the modal is "send Close" from
-    // the client which clears the field on the next snapshot.
-    let view: OpenFurnaceView = match runtime
-        .local_player()
-        .and_then(PlayerState::open_furnace)
-        .cloned()
+    // Source of truth is the replicated `PlayerPrivate.open_furnace`:
+    // the server populates it whenever the player opens a furnace and
+    // clears it on Close. The modal mirrors that — present when set,
+    // absent otherwise.
+    let view: OpenFurnaceView = match local_player
+        .private
+        .as_ref()
+        .and_then(|private| private.open_furnace.clone())
     {
         Some(view) => view,
         None => return,
     };
 
-    let inventory = runtime
-        .local_player()
-        .and_then(PlayerState::inventory)
-        .cloned();
+    let inventory = local_player.private.as_ref().map(|p| p.inventory.clone());
 
     // Scrim. Click outside the panel sends Close to the server.
     let backdrop = backdrop_layer(

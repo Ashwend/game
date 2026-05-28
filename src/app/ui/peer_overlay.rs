@@ -8,7 +8,8 @@ use crate::{
         scene::{MainCamera, NetworkPlayer, PLAYER_HEAD_TOP_LOCAL_Y},
         voice::VoiceState,
     },
-    protocol::{ClientId, MAX_HEALTH, PlayerState},
+    protocol::{ClientId, MAX_HEALTH},
+    server::{Player, PlayerPublic},
 };
 
 /// Hard cutoff: anything farther than this is skipped entirely. Tuned to a
@@ -40,7 +41,8 @@ pub(crate) struct PeerOverlay<'world> {
 
 pub(crate) struct PeerOverlayEntry<'world> {
     pub(crate) head_world: Vec3,
-    pub(crate) state: &'world PlayerState,
+    pub(crate) client_id: ClientId,
+    pub(crate) public: &'world PlayerPublic,
     /// `true` when the peer has spoken within roughly the last 200 ms.
     /// Drives the small microphone glyph that appears beside the
     /// nameplate so listeners can tell who's talking.
@@ -84,7 +86,14 @@ pub(super) fn peer_overlay_ui(ctx: &egui::Context, overlay: PeerOverlay<'_>) {
         if !visible_rect.contains(egui::pos2(screen.x, screen.y)) {
             continue;
         }
-        draw_peer_label(ctx, screen, distance, peer.state, peer.speaking);
+        draw_peer_label(
+            ctx,
+            screen,
+            distance,
+            peer.client_id,
+            peer.public,
+            peer.speaking,
+        );
     }
 }
 
@@ -92,10 +101,11 @@ fn draw_peer_label(
     ctx: &egui::Context,
     screen: Vec2,
     distance: f32,
-    state: &PlayerState,
+    client_id: ClientId,
+    public: &PlayerPublic,
     speaking: bool,
 ) {
-    let id = egui::Id::new(("peer_overlay", state.client_id));
+    let id = egui::Id::new(("peer_overlay", client_id));
     let fade = distance_fade(distance);
 
     // `anchor()` and `fixed_pos()` conflict — `anchor()` pins the area to a
@@ -112,18 +122,18 @@ fn draw_peer_label(
         .fixed_pos(egui::pos2(screen.x, screen.y))
         .show(ctx, |ui| {
             ui.vertical_centered(|ui| {
-                if let Some(text) = state.chat_bubble.as_deref()
+                if let Some(text) = public.chat_bubble.as_deref()
                     && !text.is_empty()
                 {
                     chat_bubble(ui, text, fade);
                     ui.add_space(CHAT_BUBBLE_GAP_PX);
                 }
-                nametag(ui, state, fade, speaking);
+                nametag(ui, public, fade, speaking);
             });
         });
 }
 
-fn nametag(ui: &mut egui::Ui, state: &PlayerState, fade: f32, speaking: bool) {
+fn nametag(ui: &mut egui::Ui, public: &PlayerPublic, fade: f32, speaking: bool) {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(NAMETAG_WIDTH, NAMETAG_HEIGHT),
         egui::Sense::hover(),
@@ -142,7 +152,7 @@ fn nametag(ui: &mut egui::Ui, state: &PlayerState, fade: f32, speaking: bool) {
         egui::StrokeKind::Inside,
     );
 
-    let name_text_color = if state.is_admin {
+    let name_text_color = if public.is_admin {
         egui::Color32::from_rgb(255, 214, 130)
     } else {
         egui::Color32::from_rgb(232, 238, 246)
@@ -154,7 +164,7 @@ fn nametag(ui: &mut egui::Ui, state: &PlayerState, fade: f32, speaking: bool) {
     let text_rect = ui.painter().text(
         name_rect.center(),
         egui::Align2::CENTER_CENTER,
-        truncated_name(&state.name, 22),
+        truncated_name(&public.name, 22),
         egui::FontId::new(12.5, egui::FontFamily::Proportional),
         with_alpha(name_text_color, scaled(u8::MAX, fade)),
     );
@@ -171,7 +181,7 @@ fn nametag(ui: &mut egui::Ui, state: &PlayerState, fade: f32, speaking: bool) {
         egui::pos2(rect.left() + 8.0, rect.bottom() - 10.0),
         egui::pos2(rect.right() - 8.0, rect.bottom() - 10.0 + HEALTH_BAR_HEIGHT),
     );
-    let fraction = (state.health / MAX_HEALTH).clamp(0.0, 1.0);
+    let fraction = (public.health / MAX_HEALTH).clamp(0.0, 1.0);
     let fill_rect = egui::Rect::from_min_max(
         bar_rect.min,
         egui::pos2(
@@ -326,31 +336,32 @@ fn health_fill_color(fraction: f32) -> egui::Color32 {
 
 /// Collects the head world positions of each remote player into entries the
 /// overlay UI can project. The lookup is keyed by `client_id` so we can pair
-/// each entity transform with the matching `PlayerState` from the snapshot —
-/// without that pairing, the overlay would have no name/health/bubble to
-/// display.
+/// each `NetworkPlayer` visual entity with the matching replicated
+/// `PlayerPublic` — without that pairing, the overlay would have no
+/// name/health/bubble to display.
 pub(crate) fn collect_peer_overlay_entries<'a>(
     network_players: impl IntoIterator<Item = (&'a NetworkPlayer, &'a GlobalTransform)>,
-    snapshot_players: impl IntoIterator<Item = &'a PlayerState>,
+    replicated_players: impl IntoIterator<Item = (&'a Player, &'a PlayerPublic)>,
     local_client_id: Option<ClientId>,
     voice: &VoiceState,
 ) -> Vec<PeerOverlayEntry<'a>> {
-    let mut state_by_id: HashMap<ClientId, &PlayerState> = snapshot_players
+    let mut public_by_id: HashMap<ClientId, &PlayerPublic> = replicated_players
         .into_iter()
-        .filter(|player| Some(player.client_id) != local_client_id)
-        .map(|player| (player.client_id, player))
+        .filter(|(player, _)| Some(player.client_id) != local_client_id)
+        .map(|(player, public)| (player.client_id, public))
         .collect();
 
     network_players
         .into_iter()
         .filter_map(|(player, transform)| {
-            let state = state_by_id.remove(&player.client_id)?;
+            let public = public_by_id.remove(&player.client_id)?;
             let translation = transform.translation();
             let head_world =
                 translation + Vec3::Y * (PLAYER_HEAD_TOP_LOCAL_Y + NAMETAG_HEAD_CLEARANCE_M);
             Some(PeerOverlayEntry {
                 head_world,
-                state,
+                client_id: player.client_id,
+                public,
                 speaking: voice.is_peer_talking(player.client_id),
             })
         })
@@ -363,6 +374,7 @@ pub(crate) fn collect_peer_overlay_entries<'a>(
 pub(crate) struct PeerOverlayParams<'w, 's> {
     pub(crate) camera: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<MainCamera>>,
     pub(crate) network_players: Query<'w, 's, (&'static NetworkPlayer, &'static GlobalTransform)>,
+    pub(crate) replicated_players: Query<'w, 's, (&'static Player, &'static PlayerPublic)>,
 }
 
 #[cfg(test)]

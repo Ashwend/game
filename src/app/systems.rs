@@ -30,7 +30,8 @@ pub(crate) use camera::{
 };
 pub(crate) use chunk_overlay::chunk_overlay_system;
 pub(crate) use deployables::{
-    apply_deployed_entities_system, placement_input_system, update_placement_ghost_system,
+    apply_deployed_entities_system, maintain_world_grid_system, placement_input_system,
+    update_placement_ghost_system,
 };
 pub(crate) use display::apply_display_settings_system;
 pub(crate) use effects::{spawn_impact_effects_system, tick_impact_chips_system};
@@ -43,7 +44,7 @@ pub(crate) use input::{
 };
 pub(crate) use items::{
     DroppedItemEntities, ResourceNodeEntities, apply_dropped_items_system,
-    apply_held_item_visual_system, apply_resource_nodes_system, resource_node_transform,
+    apply_held_item_visual_system, apply_resource_nodes_system, resource_node_transform_at,
     resource_node_visual, tick_resource_node_pop_in_system, update_pickup_target_system,
     update_tool_swap_state_system,
 };
@@ -58,6 +59,11 @@ pub(crate) use test_mode::{apply_test_mode_overrides_system, reposition_test_win
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ClientSystemSet {
+    /// Refresh `LocalPlayerState` from the replicated `Player` /
+    /// `PlayerPublic` / `PlayerPrivate` components. Runs at the very
+    /// start of `Update` so every later set sees the current values
+    /// without dipping into the snapshot.
+    LocalPlayerSync,
     Focus,
     ChatShortcut,
     PauseToggle,
@@ -69,6 +75,11 @@ pub(crate) enum ClientSystemSet {
     ToolSwap,
     InventoryShortcuts,
     Network,
+    /// Rebuild `ClientRuntime::world_grid` whenever the world version,
+    /// the snapshot's resource-node collider set, or the replicated
+    /// `Deployable` set changes. Runs after `Network` so freshly
+    /// processed snapshots are reflected this frame.
+    WorldGridRebuild,
     SessionShutdown,
     Quit,
     Display,

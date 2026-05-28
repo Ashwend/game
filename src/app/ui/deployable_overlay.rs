@@ -17,7 +17,7 @@ use bevy_egui::egui;
 use crate::{
     app::scene::NetworkDeployedEntity,
     items::{DeployableKind, item_definition},
-    protocol::DeployedEntityState,
+    server::{Deployable, DeployableHealth},
 };
 
 /// Hard cutoff distance for the nameplate. Past this the label hides
@@ -47,10 +47,10 @@ const HEALTH_BAR_HEIGHT: f32 = 4.0;
 
 pub(crate) struct DeployableOverlay<'world> {
     pub(crate) camera: Option<(&'world Camera, GlobalTransform)>,
-    pub(crate) entries: Vec<DeployableOverlayEntry<'world>>,
+    pub(crate) entries: Vec<DeployableOverlayEntry>,
 }
 
-pub(crate) struct DeployableOverlayEntry<'world> {
+pub(crate) struct DeployableOverlayEntry {
     /// Where the nameplate sits in world space — just above the
     /// structure's top.
     pub(crate) anchor_world: Vec3,
@@ -59,7 +59,10 @@ pub(crate) struct DeployableOverlayEntry<'world> {
     /// looking at the *body* of the workbench (not above it) still
     /// counts as "aiming at it."
     pub(crate) look_target_world: Vec3,
-    pub(crate) state: &'world DeployedEntityState,
+    pub(crate) id: u64,
+    pub(crate) kind: DeployableKind,
+    pub(crate) health: u32,
+    pub(crate) max_health: u32,
 }
 
 pub(super) fn deployable_overlay_ui(ctx: &egui::Context, overlay: DeployableOverlay<'_>) {
@@ -107,8 +110,8 @@ pub(super) fn deployable_overlay_ui(ctx: &egui::Context, overlay: DeployableOver
         // hidden until the player swung the camera off and back. By
         // pre-warming here, the sizing pass + fade-in happen once
         // when the structure first comes into focus.
-        let damaged = entry.state.health < entry.state.max_health;
-        draw_deployable_label(ctx, screen, distance, entry.state, damaged);
+        let damaged = entry.health < entry.max_health;
+        draw_deployable_label(ctx, screen, distance, &entry, damaged);
     }
 }
 
@@ -116,10 +119,10 @@ fn draw_deployable_label(
     ctx: &egui::Context,
     screen: Vec2,
     distance: f32,
-    state: &DeployedEntityState,
+    entry: &DeployableOverlayEntry,
     damaged: bool,
 ) {
-    let id = egui::Id::new(("deployable_overlay", state.id));
+    let id = egui::Id::new(("deployable_overlay", entry.id));
     // Multiply the distance fade by 0 when the structure is at full
     // health: the Area still renders (keeping its size + visibility
     // memo warm in egui) but is fully transparent, so undamaged props
@@ -138,12 +141,12 @@ fn draw_deployable_label(
         .fixed_pos(egui::pos2(screen.x, screen.y))
         .show(ctx, |ui| {
             ui.vertical_centered(|ui| {
-                nameplate(ui, state, fade);
+                nameplate(ui, entry, fade);
             });
         });
 }
 
-fn nameplate(ui: &mut egui::Ui, state: &DeployedEntityState, fade: f32) {
+fn nameplate(ui: &mut egui::Ui, entry: &DeployableOverlayEntry, fade: f32) {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(NAMETAG_WIDTH, NAMETAG_HEIGHT),
         egui::Sense::hover(),
@@ -162,7 +165,7 @@ fn nameplate(ui: &mut egui::Ui, state: &DeployedEntityState, fade: f32) {
         egui::StrokeKind::Inside,
     );
 
-    let label = kind_label(state.kind);
+    let label = kind_label(entry.kind);
     let name_rect = egui::Rect::from_min_max(
         rect.min + egui::vec2(8.0, 3.0),
         egui::pos2(rect.right() - 8.0, rect.top() + 18.0),
@@ -181,8 +184,8 @@ fn nameplate(ui: &mut egui::Ui, state: &DeployedEntityState, fade: f32) {
     // Health bar — same fill colour ladder as `peer_overlay::health_fill_color`
     // so the visual language for "low HP" matches across player and
     // structure labels.
-    let max = state.max_health.max(1) as f32;
-    let fraction = ((state.health as f32) / max).clamp(0.0, 1.0);
+    let max = entry.max_health.max(1) as f32;
+    let fraction = ((entry.health as f32) / max).clamp(0.0, 1.0);
     let bar_rect = egui::Rect::from_min_max(
         egui::pos2(rect.left() + 8.0, rect.bottom() - 9.0),
         egui::pos2(rect.right() - 8.0, rect.bottom() - 9.0 + HEALTH_BAR_HEIGHT),
@@ -241,25 +244,27 @@ fn health_fill_color(fraction: f32) -> egui::Color32 {
     }
 }
 
-/// Pair each placed-entity transform with its current `DeployedEntityState`
-/// from the snapshot. Heights come from the structure's own collider
-/// profile so the nameplate sits just above the visible top (workbench
-/// vs furnace differ in height) and the look-cone target sits at the
-/// vertical centre of the body.
+/// Pair each placed-entity visual transform with the matching
+/// replicated `(Deployable, DeployableHealth)` for the nameplate.
+/// Heights come from the structure's own collider profile so the
+/// nameplate sits just above the visible top (workbench vs furnace
+/// differ in height) and the look-cone target sits at the vertical
+/// centre of the body.
 pub(crate) fn collect_deployable_overlay_entries<'a>(
     placed_entities: impl IntoIterator<Item = (&'a NetworkDeployedEntity, &'a GlobalTransform)>,
-    snapshot_entities: impl IntoIterator<Item = &'a DeployedEntityState>,
-) -> Vec<DeployableOverlayEntry<'a>> {
-    let mut state_by_id: std::collections::HashMap<u64, &DeployedEntityState> = snapshot_entities
-        .into_iter()
-        .map(|state| (state.id, state))
-        .collect();
+    replicated: impl IntoIterator<Item = (&'a Deployable, &'a DeployableHealth)>,
+) -> Vec<DeployableOverlayEntry> {
+    let mut state_by_id: std::collections::HashMap<u64, (&Deployable, &DeployableHealth)> =
+        replicated
+            .into_iter()
+            .map(|(meta, health)| (meta.id, (meta, health)))
+            .collect();
 
     placed_entities
         .into_iter()
         .filter_map(|(entity, transform)| {
-            let state = state_by_id.remove(&entity.id)?;
-            let profile = item_definition(&state.item_id).and_then(|def| def.deployable)?;
+            let (meta, health) = state_by_id.remove(&entity.id)?;
+            let profile = item_definition(&meta.item_id).and_then(|def| def.deployable)?;
             let translation = transform.translation();
             let full_height = profile.collider_half_height * 2.0;
             let look_target_world = translation + Vec3::Y * profile.collider_half_height;
@@ -267,7 +272,10 @@ pub(crate) fn collect_deployable_overlay_entries<'a>(
             Some(DeployableOverlayEntry {
                 anchor_world,
                 look_target_world,
-                state,
+                id: meta.id,
+                kind: meta.kind,
+                health: health.0,
+                max_health: meta.max_health,
             })
         })
         .collect()
@@ -276,6 +284,7 @@ pub(crate) fn collect_deployable_overlay_entries<'a>(
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct DeployableOverlayParams<'w, 's> {
     pub(crate) placed: Query<'w, 's, (&'static NetworkDeployedEntity, &'static GlobalTransform)>,
+    pub(crate) replicated: Query<'w, 's, (&'static Deployable, &'static DeployableHealth)>,
 }
 
 #[cfg(test)]

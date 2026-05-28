@@ -5,7 +5,7 @@ use bevy::{light::NotShadowCaster, prelude::*};
 use crate::{
     app::{
         scene::{HeldItemVisual, ItemVisualAssets, MainCamera},
-        state::{ClientRuntime, GatherInputState, MenuState, Screen, ToolSwapState},
+        state::{GatherInputState, LocalPlayerState, MenuState, Screen, ToolSwapState},
     },
     items::{ItemModel, item_definition},
 };
@@ -21,7 +21,7 @@ const HELD_ITEM_DOWN_OFFSET: f32 = 0.24;
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_held_item_visual_system(
     mut commands: Commands,
-    runtime: Res<ClientRuntime>,
+    local_player: Res<LocalPlayerState>,
     menu: Res<MenuState>,
     assets: Res<ItemVisualAssets>,
     gather_input: Res<GatherInputState>,
@@ -31,10 +31,10 @@ pub(crate) fn apply_held_item_visual_system(
 ) {
     let active_item = (menu.screen == Screen::InGame && !menu.pause_open)
         .then(|| {
-            runtime
-                .local_player()
-                .and_then(|player| player.inventory.as_ref())
-                .and_then(|inventory| inventory.active_actionbar_stack())
+            local_player
+                .private
+                .as_ref()
+                .and_then(|private| private.inventory.active_actionbar_stack())
                 .and_then(|stack| {
                     item_definition(&stack.item_id)
                         .map(|definition| (stack.item_id.clone(), definition))

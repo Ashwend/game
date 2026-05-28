@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::{
-    app::state::{ClientRuntime, MenuState, Screen, ToolSwapState},
+    app::state::{LocalPlayerState, MenuState, Screen, ToolSwapState},
     items::item_definition,
 };
 
@@ -12,7 +12,7 @@ use crate::{
 /// offset is fresh).
 pub(crate) fn update_tool_swap_state_system(
     time: Res<Time>,
-    runtime: Res<ClientRuntime>,
+    local_player: Res<LocalPlayerState>,
     menu: Res<MenuState>,
     mut swap_state: ResMut<ToolSwapState>,
 ) {
@@ -21,10 +21,10 @@ pub(crate) fn update_tool_swap_state_system(
         return;
     }
 
-    let active = runtime
-        .local_player()
-        .and_then(|player| player.inventory.as_ref())
-        .and_then(|inventory| inventory.active_actionbar_stack())
+    let active = local_player
+        .private
+        .as_ref()
+        .and_then(|private| private.inventory.active_actionbar_stack())
         .and_then(|stack| {
             item_definition(&stack.item_id)
                 .filter(|definition| definition.equipable)

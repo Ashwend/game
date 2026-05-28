@@ -47,8 +47,8 @@ use self::{
 
 use super::state::{
     ClientErrorToast, ClientRuntime, ClientSettings, CraftingHudState, CraftingUiState,
-    InventorySoundEvent, MenuBackdropVisibility, MenuState, OptionsUiState, SaveStore, Screen,
-    SessionShutdownTasks, SteamUser, ToastState,
+    InventorySoundEvent, LocalPlayerState, MenuBackdropVisibility, MenuState, OptionsUiState,
+    SaveStore, Screen, SessionShutdownTasks, SteamUser, ToastState,
 };
 use super::systems::PendingSessionEndReason;
 use super::voice::VoiceState;
@@ -83,6 +83,7 @@ pub(crate) struct UiResources<'w, 's> {
     analytics: Res<'w, Analytics>,
     pending_session_end: ResMut<'w, PendingSessionEndReason>,
     client_network: Res<'w, ClientNetwork>,
+    local_player: Res<'w, LocalPlayerState>,
 }
 
 pub(crate) fn ui_system(
@@ -154,15 +155,9 @@ pub(crate) fn ui_system(
                     &resources.settings,
                     &resources.voice,
                 );
-                let snapshot_players = resources
-                    .runtime
-                    .snapshot
-                    .as_ref()
-                    .map(|snapshot| snapshot.players.as_slice())
-                    .unwrap_or(&[]);
                 let peers = collect_peer_overlay_entries(
                     resources.peer_overlay.network_players.iter(),
-                    snapshot_players,
+                    resources.peer_overlay.replicated_players.iter(),
                     resources.runtime.client_id,
                     &resources.voice,
                 );
@@ -178,22 +173,16 @@ pub(crate) fn ui_system(
                 // transform)` projection as the peer overlay so the
                 // labels sit in the same projected space — they
                 // share the in-world feel.
-                let snapshot_deployables = resources
-                    .runtime
-                    .snapshot
-                    .as_ref()
-                    .map(|snapshot| snapshot.deployed_entities.as_slice())
-                    .unwrap_or(&[]);
                 let entries = collect_deployable_overlay_entries(
                     resources.deployable_overlay.placed.iter(),
-                    snapshot_deployables,
+                    resources.deployable_overlay.replicated.iter(),
                 );
                 deployable_overlay_ui(ctx, DeployableOverlay { camera, entries });
 
                 inventory_ui(
                     ctx,
                     &mut resources.menu,
-                    &mut resources.runtime,
+                    &resources.local_player,
                     &mut resources.inventory_ui,
                     &resources.pickup_target,
                     &mut resources.inventory_sound_requests,
@@ -203,6 +192,7 @@ pub(crate) fn ui_system(
                     ctx,
                     &mut resources.menu,
                     &mut resources.runtime,
+                    &resources.local_player,
                     &mut resources.crafting_ui,
                     &mut resources.error_toasts,
                 );
@@ -210,6 +200,7 @@ pub(crate) fn ui_system(
                     ctx,
                     &mut resources.menu,
                     &mut resources.runtime,
+                    &resources.local_player,
                     &mut resources.inventory_ui,
                     &mut resources.error_toasts,
                 );
@@ -234,6 +225,7 @@ pub(crate) fn ui_system(
                 crafting_queue_hud(
                     ctx,
                     &mut resources.runtime,
+                    &resources.local_player,
                     &mut resources.crafting_hud,
                     &mut resources.error_toasts,
                 );

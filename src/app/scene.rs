@@ -38,7 +38,7 @@ mod tests {
             EYE_HEIGHT, PLAYER_VISUAL_CENTER_Y, state::ClientRuntime,
             systems::menu_backdrop_camera_system,
         },
-        protocol::{PlayerState, Vec3Net, WorldSnapshot},
+        protocol::{PlayerState, Vec3Net},
         world::WorldData,
     };
     use bevy::{
@@ -186,31 +186,18 @@ mod tests {
     #[test]
     fn network_marker_components_store_client_ids() {
         let player = NetworkPlayer { client_id: 7 };
-        let snapshot = WorldSnapshot {
-            tick: 1,
-            players: vec![PlayerState {
-                client_id: player.client_id,
-                steam_id: 7,
-                name: "Remote".to_owned(),
-                position: Vec3Net::new(1.0, 2.0, 3.0),
-                velocity: Vec3Net::ZERO,
-                yaw: 1.0,
-                pitch: 0.0,
-                health: 100.0,
-                grounded: true,
-                last_processed_input: 0,
-                is_admin: false,
-                chat_bubble: None,
-                inventory: None,
-                crafting: None,
-                open_furnace: None,
-            }],
-            dropped_items: Vec::new(),
-            resource_nodes: Vec::new(),
-            deployed_entities: Vec::new(),
+        let seed = PlayerState {
+            client_id: player.client_id,
+            position: Vec3Net::new(1.0, 2.0, 3.0),
+            velocity: Vec3Net::ZERO,
+            yaw: 1.0,
+            pitch: 0.0,
+            health: 100.0,
+            grounded: true,
+            last_processed_input: 0,
         };
 
-        assert_eq!(snapshot.players[0].client_id, player.client_id);
-        assert_eq!(snapshot.players[0].position, Vec3Net::new(1.0, 2.0, 3.0));
+        assert_eq!(seed.client_id, player.client_id);
+        assert_eq!(seed.position, Vec3Net::new(1.0, 2.0, 3.0));
     }
 }

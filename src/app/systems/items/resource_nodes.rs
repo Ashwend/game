@@ -9,7 +9,7 @@ use crate::{
         state::{ClientRuntime, ImpactEffectKind},
         systems::effects::spawn_impact_burst,
     },
-    protocol::{ResourceNodeId, ResourceNodeState},
+    protocol::{ResourceNodeId, Vec3Net},
     resources::{ResourceNodeModel, resource_node_definition},
     server::{ResourceNode, ResourceNodeStorage},
 };
@@ -48,21 +48,41 @@ pub(crate) struct ResourceNodePopIn {
     base_transform: Transform,
 }
 
-/// Persistent `id → Entity` lookup plus the previous tick's respawn
-/// progress for each tracked node. The progress map lets the snapshot
-/// system detect transitions (depleted → regenerating, regenerating →
-/// ready) without persisting any extra state on the entity itself.
+/// How many frames a disappeared node sits in
+/// `pending_depletion_check` before we conclude the
+/// `ResourceNodeDepleted` message isn't coming and silent-despawn.
+/// 3 frames at 60 FPS ≈ 50 ms, which is one full Lightyear server tick —
+/// plenty of slack for the depleted message (reliable channel) to land
+/// after the entity-despawn diff (replication channel).
+const DEPLETION_GRACE_FRAMES: u8 = 3;
+
+/// Visual entity whose replicated counterpart vanished but for which
+/// we haven't yet seen a matching `ResourceNodeDepleted` server
+/// message. The depleted message and the Lightyear entity-despawn ship
+/// on different channels and can arrive in either order — keeping the
+/// visual alive for a few frames lets the death animation fire even
+/// when the despawn lands first.
+#[derive(Debug, Clone, Copy)]
+struct PendingDepletion {
+    entity: Entity,
+    frames_waited: u8,
+}
+
+/// Persistent `id → Entity` lookup. Mirrors the live replicated set so
+/// the per-frame reconciliation doesn't have to rebuild it from a
+/// `Query`.
 #[derive(Resource, Default)]
 pub(crate) struct ResourceNodeEntities {
     pub(crate) entities: HashMap<ResourceNodeId, Entity>,
-    /// `id → respawn_progress as of the last applied snapshot`.
-    /// `None` means the node was ready to gather; `Some` means it was
-    /// regenerating.
-    previous_progress: HashMap<ResourceNodeId, Option<f32>>,
-    /// `true` once at least one snapshot has been applied. Suppresses
-    /// the fresh-node pop-in animation for the initial wave of world
-    /// geometry — we don't want 30 trees and ores to all pop up the
-    /// moment the player connects.
+    /// Disappeared visuals waiting for a possible
+    /// `ResourceNodeDepleted` message before deciding silent-despawn
+    /// vs. death-effect. See [`PendingDepletion`] / the
+    /// [`DEPLETION_GRACE_FRAMES`] grace window.
+    pending_depletion_check: HashMap<ResourceNodeId, PendingDepletion>,
+    /// `true` once at least one reconciliation pass has fired.
+    /// Suppresses the fresh-node pop-in animation for the initial wave
+    /// of world geometry — we don't want 30 trees and ores to all pop
+    /// up the moment the player connects.
     applied_first_snapshot: bool,
 }
 
@@ -77,6 +97,13 @@ type ResourceEntityQuery<'w, 's> = Query<
     ),
 >;
 
+/// Reconcile the local `NetworkResourceNode` visuals against the
+/// Lightyear-replicated `(ResourceNode, ResourceNodeStorage)` entities.
+/// Spawn missing ones (rate-limited to
+/// [`MAX_RESOURCE_NODE_SPAWNS_PER_FRAME`]), refresh transforms,
+/// despawn any that left the AoI ring. Despawns gated by the runtime's
+/// `depleted_node_ids` set fire the death-effect; everything else is
+/// a silent AoI-leave despawn.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_resource_nodes_system(
     mut commands: Commands,
@@ -91,22 +118,11 @@ pub(crate) fn apply_resource_nodes_system(
     popping_in: Query<(), With<ResourceNodePopIn>>,
     replicated_nodes: Query<(&ResourceNode, &ResourceNodeStorage)>,
 ) {
-    if runtime.snapshot.is_none() {
+    if runtime.client_id.is_none() {
         clear_all_tracked_nodes(&mut commands, &mut entities);
         return;
     }
 
-    // Phase 4 A/B switch: source the per-tick node list from Lightyear
-    // replicated entities when `replicated-nodes` is enabled, otherwise
-    // fall back to the legacy `WorldSnapshot::resource_nodes` payload.
-    // The pop-in / death-effect / depletion logic below is identical
-    // either way — only the input vector differs. `respawn_progress`
-    // is unavailable under replication today (the mirror does not yet
-    // carry it) so all replicated nodes appear in the "ready" state.
-    let snapshot_resource_nodes: Vec<ResourceNodeState> =
-        collect_resource_node_states(&runtime, &replicated_nodes);
-    let snapshot_ids: HashSet<ResourceNodeId> =
-        snapshot_resource_nodes.iter().map(|node| node.id).collect();
     let entities = &mut *entities;
     let pop_in_enabled = entities.applied_first_snapshot;
 
@@ -116,60 +132,43 @@ pub(crate) fn apply_resource_nodes_system(
 
     // Snapshot the depleted-id set for this frame: nodes the server told us
     // are *actually* gone (gathered out, picked up). Anything that drops
-    // from the snapshot but isn't in this set just left the player's AoI
+    // from the replicated set but isn't here just left the player's AoI
     // and should despawn silently — no death animation, no camera kick.
     let depleted_this_frame: HashSet<ResourceNodeId> = runtime.depleted_node_ids.clone();
     let mut spawn_budget = MAX_RESOURCE_NODE_SPAWNS_PER_FRAME;
-    // IDs whose state we want `commit_progress` to record this frame.
-    // Budget-deferred fresh spawns are deliberately excluded so they
-    // stay "unknown" and replay the pop-in once they finally spawn.
-    let mut processed_ids: HashSet<ResourceNodeId> = HashSet::new();
-    for node in &snapshot_resource_nodes {
+    let mut visible_ids: HashSet<ResourceNodeId> = HashSet::new();
+    for (node, _storage) in &replicated_nodes {
+        visible_ids.insert(node.id);
+        // Replicated entity is back — if it was pending depletion,
+        // clear that pending entry (e.g. AoI bounce, or regrow reusing
+        // the id).
+        entities.pending_depletion_check.remove(&node.id);
         let Some(definition) = resource_node_definition(&node.definition_id) else {
             continue;
         };
 
-        let transition = entities.classify(node, pop_in_enabled);
+        let arrived_fresh = !entities.entities.contains_key(&node.id) && pop_in_enabled;
 
-        if transition.just_entered_regen {
-            despawn_with_death_effect(
-                &mut commands,
-                &impact_assets,
-                &mut play,
-                &mut materials,
-                &mut camera_kick,
-                &resource_entities,
-                player_position,
-                entities.entities.remove(&node.id),
-            );
-        }
-
-        // Regenerating nodes have no on-screen presence — skip any
-        // entity creation or transform updates this frame.
-        if node.respawn_progress.is_some() {
-            processed_ids.insert(node.id);
-            continue;
-        }
-
-        let target_transform = resource_node_transform(node, definition.model);
+        let target_transform =
+            resource_node_transform_at(node.position, node.yaw, definition.model);
 
         if let Some(entity) = entities.entities.get(&node.id).copied() {
             // An entity that's mid-pop-in owns its own transform — the
             // pop-in tick system is the only writer until the animation
-            // completes. Snapshot reads can still nudge other components,
-            // but this prevents a one-frame jump on the first frame.
+            // completes. Replicated updates can still nudge other
+            // components, but this prevents a one-frame jump on the
+            // first frame.
             if !popping_in.contains(entity) {
                 commands.entity(entity).insert(target_transform);
             }
-            processed_ids.insert(node.id);
             continue;
         }
 
         if spawn_budget == 0 {
-            // Defer to a later frame. Skip `processed_ids` insert so
-            // `commit_progress` leaves `previous_progress` untouched
-            // for this id — next frame `classify` will still mark it
-            // as fresh and the pop-in animation runs as intended.
+            // Defer to a later frame. The replicated entity stays put,
+            // so a subsequent invocation picks it up; the cleanup
+            // pass below only despawns ids that left the replicated
+            // set.
             continue;
         }
         spawn_budget -= 1;
@@ -179,15 +178,15 @@ pub(crate) fn apply_resource_nodes_system(
             &assets,
             &impact_assets,
             entities,
-            node,
+            node.id,
+            node.position,
             definition.model,
             target_transform,
-            transition.should_pop_in,
+            arrived_fresh,
         );
-        processed_ids.insert(node.id);
     }
 
-    let consumed = despawn_nodes_missing_from_snapshot(
+    let mut consumed = resolve_pending_depletions(
         &mut commands,
         &impact_assets,
         &mut play,
@@ -195,12 +194,23 @@ pub(crate) fn apply_resource_nodes_system(
         &mut camera_kick,
         &resource_entities,
         entities,
-        &snapshot_ids,
         &depleted_this_frame,
         player_position,
     );
+    consumed.extend(queue_missing_nodes(
+        &mut commands,
+        &impact_assets,
+        &mut play,
+        &mut materials,
+        &mut camera_kick,
+        &resource_entities,
+        entities,
+        &visible_ids,
+        &depleted_this_frame,
+        player_position,
+    ));
 
-    entities.commit_progress(&snapshot_resource_nodes, &snapshot_ids, &processed_ids);
+    entities.applied_first_snapshot = true;
 
     // Clear the consumed depletion ids so they don't fire twice if the
     // same id is somehow re-emitted later (it won't, but keeping the
@@ -210,103 +220,18 @@ pub(crate) fn apply_resource_nodes_system(
     }
 }
 
-/// Source the per-tick resource node list. Under the `replicated-nodes`
-/// feature, walk Lightyear-replicated entities (one per live node in the
-/// player's AoI); otherwise, copy from `WorldSnapshot::resource_nodes`.
-/// Returning identical wire shapes both ways means the rest of the
-/// system is path-agnostic.
-fn collect_resource_node_states(
-    runtime: &ClientRuntime,
-    replicated_nodes: &Query<(&ResourceNode, &ResourceNodeStorage)>,
-) -> Vec<ResourceNodeState> {
-    #[cfg(feature = "replicated-nodes")]
-    {
-        let _ = runtime;
-        replicated_nodes
-            .iter()
-            .map(|(node, storage)| ResourceNodeState {
-                id: node.id,
-                definition_id: node.definition_id.clone(),
-                position: node.position,
-                yaw: node.yaw,
-                storage: storage.0.clone(),
-                respawn_progress: None,
-            })
-            .collect()
-    }
-    #[cfg(not(feature = "replicated-nodes"))]
-    {
-        let _ = replicated_nodes;
-        runtime
-            .snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.resource_nodes.clone())
-            .unwrap_or_default()
-    }
-}
-
-/// First-pass cleanup when the snapshot disappears (disconnect, world swap).
-/// Resets the "have we ever applied a snapshot?" flag so the next batch of
-/// nodes doesn't all pop in at once like a re-entry animation.
+/// First-pass cleanup when the session ends (disconnect, world swap).
+/// Resets the "have we ever applied a reconciliation pass?" flag so the
+/// next batch of nodes doesn't all pop in at once like a re-entry
+/// animation.
 fn clear_all_tracked_nodes(commands: &mut Commands, entities: &mut ResourceNodeEntities) {
     for (_, entity) in entities.entities.drain() {
         commands.entity(entity).despawn();
     }
-    entities.previous_progress.clear();
+    for (_, entry) in entities.pending_depletion_check.drain() {
+        commands.entity(entry.entity).despawn();
+    }
     entities.applied_first_snapshot = false;
-}
-
-#[derive(Debug, Clone, Copy)]
-struct NodeTransition {
-    just_entered_regen: bool,
-    should_pop_in: bool,
-}
-
-impl ResourceNodeEntities {
-    /// Classifies what this tick's snapshot means for `node` compared to the
-    /// previously-applied snapshot. Returned flags drive the death-effect
-    /// despawn and the fresh-spawn pop-in animation in the system loop.
-    fn classify(&self, node: &ResourceNodeState, pop_in_enabled: bool) -> NodeTransition {
-        let was_tracked = self.previous_progress.contains_key(&node.id);
-        let previous_progress = self
-            .previous_progress
-            .get(&node.id)
-            .copied()
-            .unwrap_or(None);
-        let just_entered_regen = previous_progress.is_none() && node.respawn_progress.is_some();
-        let just_finished_regen = previous_progress.is_some() && node.respawn_progress.is_none();
-        let arrived_fresh = !was_tracked && pop_in_enabled;
-        NodeTransition {
-            just_entered_regen,
-            should_pop_in: just_finished_regen || arrived_fresh,
-        }
-    }
-
-    /// Refresh the progress map after a tick, dropping ids that left the
-    /// snapshot so it can't grow without bound across long sessions.
-    ///
-    /// `processed_ids` is the set the system actually handled this frame
-    /// (spawned, updated, or saw mid-regen). Anything in `nodes` but not
-    /// in `processed_ids` was deferred by the per-frame spawn budget and
-    /// is intentionally left unrecorded so the next frame still treats
-    /// it as a fresh arrival (full pop-in animation, just one tick later).
-    fn commit_progress(
-        &mut self,
-        nodes: &[ResourceNodeState],
-        snapshot_ids: &HashSet<ResourceNodeId>,
-        processed_ids: &HashSet<ResourceNodeId>,
-    ) {
-        self.previous_progress
-            .retain(|id, _| snapshot_ids.contains(id));
-        for node in nodes {
-            if !processed_ids.contains(&node.id) {
-                continue;
-            }
-            self.previous_progress
-                .insert(node.id, node.respawn_progress);
-        }
-        self.applied_first_snapshot = true;
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -347,15 +272,16 @@ fn spawn_resource_node_entity(
     assets: &ResourceVisualAssets,
     impact_assets: &ImpactEffectAssets,
     entities: &mut ResourceNodeEntities,
-    node: &ResourceNodeState,
+    id: ResourceNodeId,
+    position: Vec3Net,
     model: ResourceNodeModel,
     target_transform: Transform,
     should_pop_in: bool,
 ) {
-    let (mesh, material) = resource_node_visual(assets, node, model);
+    let (mesh, material) = resource_node_visual(assets, model);
     let mut spawn_command = commands.spawn((
-        Name::new(format!("Resource Node {}", node.id)),
-        NetworkResourceNode { id: node.id, model },
+        Name::new(format!("Resource Node {id}")),
+        NetworkResourceNode { id, model },
         Mesh3d(mesh),
         MeshMaterial3d(material),
         target_transform,
@@ -377,10 +303,10 @@ fn spawn_resource_node_entity(
         });
     }
     let entity = spawn_command.id();
-    entities.entities.insert(node.id, entity);
+    entities.entities.insert(id, entity);
 
     if should_pop_in {
-        spawn_pop_in_chip_burst(commands, impact_assets, node, model);
+        spawn_pop_in_chip_burst(commands, impact_assets, id, position, model);
     }
 }
 
@@ -391,12 +317,13 @@ fn spawn_resource_node_entity(
 fn spawn_pop_in_chip_burst(
     commands: &mut Commands,
     impact_assets: &ImpactEffectAssets,
-    node: &ResourceNodeState,
+    id: ResourceNodeId,
+    position: Vec3Net,
     model: ResourceNodeModel,
 ) {
-    let burst_anchor = Vec3::from(node.position) + Vec3::Y * 0.18;
+    let burst_anchor = Vec3::from(position) + Vec3::Y * 0.18;
     let kind = ImpactEffectKind::for_resource_model(model);
-    let seed = (node.id as u32).wrapping_mul(0x9E37_79B1);
+    let seed = (id as u32).wrapping_mul(0x9E37_79B1);
     spawn_impact_burst(
         commands,
         impact_assets,
@@ -408,22 +335,12 @@ fn spawn_pop_in_chip_burst(
     );
 }
 
-/// Sweeps the tracked-entities map for ids that no longer appear in the
-/// snapshot. Two paths:
-///
-/// - The id is in `depleted_this_frame` → the server told us the node
-///   was actually gathered/picked-up, so play the full death effect
-///   (tree fell, ore shatter, crude pickup burst).
-/// - The id is *only* missing from the snapshot → it just left the
-///   player's AoI ring. Silent despawn: no particles, no camera kick,
-///   no sound. Otherwise every chunk-boundary crossing would animate
-///   the death of every node dropping out of view (the boundary-
-///   crossing "spasm" that this branch fixes).
-///
-/// Returns the ids whose depletion was consumed so the caller can clear
-/// them from the runtime's pending set.
+/// Walk the `pending_depletion_check` map: any id that has since shown
+/// up in `depleted_this_frame` fires the death-effect immediately; any
+/// id past the grace window silent-despawns. Returns consumed
+/// depletion ids.
 #[allow(clippy::too_many_arguments)]
-fn despawn_nodes_missing_from_snapshot(
+fn resolve_pending_depletions(
     commands: &mut Commands,
     impact_assets: &ImpactEffectAssets,
     play: &mut MessageWriter<PlaySound>,
@@ -431,20 +348,20 @@ fn despawn_nodes_missing_from_snapshot(
     camera_kick: &mut crate::app::systems::CameraImpactKick,
     resource_entities: &ResourceEntityQuery,
     entities: &mut ResourceNodeEntities,
-    snapshot_ids: &HashSet<ResourceNodeId>,
     depleted_this_frame: &HashSet<ResourceNodeId>,
     player_position: Option<Vec3>,
 ) -> Vec<ResourceNodeId> {
-    let to_remove: Vec<ResourceNodeId> = entities
-        .entities
-        .iter()
-        .filter(|(id, _)| !snapshot_ids.contains(id))
-        .map(|(id, _)| *id)
-        .collect();
+    let pending_ids: Vec<ResourceNodeId> =
+        entities.pending_depletion_check.keys().copied().collect();
     let mut consumed = Vec::new();
-    for id in to_remove {
-        let entity = entities.entities.remove(&id);
-        if depleted_this_frame.contains(&id) {
+    for id in pending_ids {
+        let depleted = depleted_this_frame.contains(&id);
+        if depleted {
+            let entry = entities
+                .pending_depletion_check
+                .remove(&id)
+                .expect("just iterated this key");
+            entities.entities.remove(&id);
             consumed.push(id);
             despawn_with_death_effect(
                 commands,
@@ -454,11 +371,86 @@ fn despawn_nodes_missing_from_snapshot(
                 camera_kick,
                 resource_entities,
                 player_position,
-                entity,
+                Some(entry.entity),
             );
-        } else if let Some(entity) = entity {
-            // AoI-leave: silent despawn. Just drop the entity.
-            commands.entity(entity).despawn();
+            continue;
+        }
+        let entry = entities
+            .pending_depletion_check
+            .get_mut(&id)
+            .expect("just iterated this key");
+        entry.frames_waited += 1;
+        if entry.frames_waited >= DEPLETION_GRACE_FRAMES {
+            let entry = entities
+                .pending_depletion_check
+                .remove(&id)
+                .expect("just iterated this key");
+            entities.entities.remove(&id);
+            // AoI-leave: silent despawn. The depleted message never
+            // arrived, so this was a chunk-boundary leave rather than
+            // a real depletion.
+            commands.entity(entry.entity).despawn();
+        }
+    }
+    consumed
+}
+
+/// Sweeps the tracked-entities map for ids that just disappeared from
+/// the replicated set. Two paths:
+///
+/// - The id is already in `depleted_this_frame` → the server's
+///   `ResourceNodeDepleted` message beat the Lightyear despawn diff
+///   to the client. Fire the death effect immediately.
+/// - Otherwise → queue the id in `pending_depletion_check` so the
+///   death effect can still fire if the depleted message arrives
+///   within [`DEPLETION_GRACE_FRAMES`] frames. After that we treat it
+///   as an AoI-leave.
+#[allow(clippy::too_many_arguments)]
+fn queue_missing_nodes(
+    commands: &mut Commands,
+    impact_assets: &ImpactEffectAssets,
+    play: &mut MessageWriter<PlaySound>,
+    materials: &mut Assets<StandardMaterial>,
+    camera_kick: &mut crate::app::systems::CameraImpactKick,
+    resource_entities: &ResourceEntityQuery,
+    entities: &mut ResourceNodeEntities,
+    visible_ids: &HashSet<ResourceNodeId>,
+    depleted_this_frame: &HashSet<ResourceNodeId>,
+    player_position: Option<Vec3>,
+) -> Vec<ResourceNodeId> {
+    let to_handle: Vec<(ResourceNodeId, Entity)> = entities
+        .entities
+        .iter()
+        .filter(|(id, _)| {
+            !visible_ids.contains(id) && !entities.pending_depletion_check.contains_key(id)
+        })
+        .map(|(id, entity)| (*id, *entity))
+        .collect();
+    let mut consumed = Vec::new();
+    for (id, entity) in to_handle {
+        if depleted_this_frame.contains(&id) {
+            entities.entities.remove(&id);
+            consumed.push(id);
+            despawn_with_death_effect(
+                commands,
+                impact_assets,
+                play,
+                materials,
+                camera_kick,
+                resource_entities,
+                player_position,
+                Some(entity),
+            );
+        } else {
+            // Hold the visual entity for a few frames in case the
+            // depleted message is still in flight.
+            entities.pending_depletion_check.insert(
+                id,
+                PendingDepletion {
+                    entity,
+                    frames_waited: 0,
+                },
+            );
         }
     }
     consumed
@@ -515,8 +507,9 @@ fn ease_out_cubic(t: f32) -> f32 {
     1.0 - inv * inv * inv
 }
 
-pub(crate) fn resource_node_transform(
-    node: &ResourceNodeState,
+pub(crate) fn resource_node_transform_at(
+    position: Vec3Net,
+    yaw: f32,
     model: ResourceNodeModel,
 ) -> Transform {
     // Trees bake their full size into the mesh and sit on the ground at
@@ -542,18 +535,13 @@ pub(crate) fn resource_node_transform(
         ResourceNodeModel::BranchPile => (0.0, Vec3::ONE),
         ResourceNodeModel::HayGrass => (0.0, Vec3::ONE),
     };
-    Transform::from_xyz(
-        node.position.x,
-        node.position.y + height_offset,
-        node.position.z,
-    )
-    .with_rotation(Quat::from_rotation_y(node.yaw))
-    .with_scale(scale)
+    Transform::from_xyz(position.x, position.y + height_offset, position.z)
+        .with_rotation(Quat::from_rotation_y(yaw))
+        .with_scale(scale)
 }
 
 pub(crate) fn resource_node_visual(
     assets: &ResourceVisualAssets,
-    _node: &ResourceNodeState,
     model: ResourceNodeModel,
 ) -> (Handle<Mesh>, Handle<StandardMaterial>) {
     match model {
@@ -612,17 +600,6 @@ mod tests {
     use crate::protocol::Vec3Net;
     use crate::resources::{COAL_NODE_ID, IRON_NODE_ID, SULFUR_NODE_ID};
 
-    fn node_at(id: &str, position: Vec3Net) -> ResourceNodeState {
-        ResourceNodeState {
-            id: 1,
-            definition_id: id.to_owned(),
-            position,
-            yaw: 0.0,
-            storage: Vec::new(),
-            respawn_progress: None,
-        }
-    }
-
     #[test]
     fn pop_in_starts_below_floor_and_settles_to_base_transform() {
         let base = Transform::from_xyz(3.0, 0.0, -2.0).with_scale(Vec3::ONE);
@@ -654,11 +631,11 @@ mod tests {
         // The ore meshes have their lowest vertex at local y=0, so the
         // transform must not raise them above the floor.
         for ore_id in [COAL_NODE_ID, IRON_NODE_ID, SULFUR_NODE_ID] {
-            let node = node_at(ore_id, Vec3Net::new(2.0, 0.0, -3.0));
+            let position = Vec3Net::new(2.0, 0.0, -3.0);
             let definition = crate::resources::resource_node_definition(ore_id).unwrap();
-            let transform = resource_node_transform(&node, definition.model);
+            let transform = resource_node_transform_at(position, 0.0, definition.model);
             assert_eq!(
-                transform.translation.y, node.position.y,
+                transform.translation.y, position.y,
                 "{ore_id} mesh must sit at the spawn y (no floating offset)"
             );
         }

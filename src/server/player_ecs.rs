@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     protocol::{
-        ClientId, DeployedEntityId, PlayerCraftingState, PlayerInventoryState, SteamId, Vec3Net,
+        ClientId, OpenFurnaceView, PlayerCraftingState, PlayerInventoryState, SteamId, Vec3Net,
     },
     world::ChunkCoord,
 };
@@ -61,7 +61,12 @@ pub struct PlayerPublic {
 pub struct PlayerPrivate {
     pub inventory: PlayerInventoryState,
     pub crafting: PlayerCraftingState,
-    pub open_furnace: Option<DeployedEntityId>,
+    /// Full per-client view of the currently-opened furnace, if any.
+    /// Carrying the full [`OpenFurnaceView`] (slots + progress) rather
+    /// than just the id keeps the furnace UI reachable from the
+    /// replicated component alone — Phase 6.1 retargets the consumer
+    /// here and the snapshot's `open_furnace` field goes away.
+    pub open_furnace: Option<OpenFurnaceView>,
     pub last_processed_input: u64,
 }
 

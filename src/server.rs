@@ -34,18 +34,6 @@ const WORLD_TIME_BROADCAST_INTERVAL_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 
 /// payload is tiny, so 1 Hz keeps bandwidth negligible.
 const PERF_STATS_BROADCAST_INTERVAL_TICKS: u64 = SERVER_TICK_RATE_HZ as u64;
 
-/// Snapshot broadcast cadence in ticks. The server ticks at
-/// [`SERVER_TICK_RATE_HZ`] (20 Hz, 50 ms) but ships snapshots at half
-/// that rate — every other tick, i.e. 10 Hz / 100 ms. This is below
-/// the perceptible threshold for peer interpolation because
-/// `REMOTE_PLAYER_INTERPOLATION_SECONDS` (100 ms client-side) covers
-/// exactly one snapshot interval, so peer avatars still glide without
-/// hitching. Cuts the per-tick snapshot bandwidth in half — gather
-/// progress, dropped item physics, and damage indicators retain
-/// effectively instant feedback because both deltas land within a
-/// single client frame after the action.
-const SNAPSHOT_BROADCAST_INTERVAL_TICKS: u64 = 2;
-
 pub mod chunk_manager;
 mod commands;
 mod connection;
@@ -468,7 +456,7 @@ impl GameServer {
             private: player_ecs::PlayerPrivate {
                 inventory: client.inventory.clone(),
                 crafting: client.crafting.clone(),
-                open_furnace: client.open_furnace,
+                open_furnace: self.open_furnace_view_for(client.client_id),
                 last_processed_input: client.controller.last_processed_input,
             },
         })
@@ -552,27 +540,15 @@ impl GameServer {
             self.last_world_time_broadcast_tick = self.tick;
         }
 
-        // Per-client snapshots: each client gets a copy where only their own
-        // player carries the inventory payload. Saves bandwidth and keeps
-        // hotbar contents private without needing a separate inventory
-        // message channel. Throttled to every
-        // [`SNAPSHOT_BROADCAST_INTERVAL_TICKS`] (10 Hz / 100 ms) — half the
-        // server tick rate. The client interpolates between snapshots at
-        // the same cadence so peer movement still reads as smooth.
-        let client_ids = self.clients.keys().copied().collect::<Vec<_>>();
-        if self.tick.is_multiple_of(SNAPSHOT_BROADCAST_INTERVAL_TICKS) {
-            let _span = info_span!("snapshot_broadcast", clients = client_ids.len()).entered();
-            for client_id in &client_ids {
-                envelopes.push(ServerEnvelope {
-                    target: DeliveryTarget::Client(*client_id),
-                    message: ServerMessage::Snapshot(self.snapshot_for(*client_id)),
-                });
-            }
-        }
+        // Phase 6.6 deleted the per-tick `ServerMessage::Snapshot`
+        // broadcast — every state consumer now reads from
+        // Lightyear-replicated components. Perf stats stay on their
+        // own slow broadcast tick.
         if self
             .tick
             .is_multiple_of(PERF_STATS_BROADCAST_INTERVAL_TICKS)
         {
+            let client_ids = self.clients.keys().copied().collect::<Vec<_>>();
             for client_id in client_ids {
                 envelopes.push(ServerEnvelope {
                     target: DeliveryTarget::Client(client_id),

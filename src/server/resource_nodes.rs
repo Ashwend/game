@@ -84,17 +84,23 @@ impl GameServer {
 
         let payout_id = payout.item_id.clone();
         let mut depleted = false;
+        let mut updated_storage: Option<Vec<ItemStack>> = None;
         if let Some(node) = self.resource_nodes.get_mut(&command.resource_node_id) {
             remove_resource_from_storage(node, &payout_id, accepted_quantity);
             depleted = resource_storage_is_empty(node);
+            // Snapshot the post-gather storage for the storage-update
+            // broadcast below — Lightyear drops the matching
+            // `ResourceNodeStorage` diff so we ship the new value
+            // ourselves on the reliable channel.
+            updated_storage = Some(node.storage.clone());
         }
         let mut envelopes = item_acquired_toast_envelopes(client_id, &payout_id, accepted_quantity);
         if depleted {
             // Remove the node entirely — the chunk manager schedules a
             // fresh-position respawn 5-15 min later in the same grid.
             // Broadcast a `ResourceNodeDepleted` so clients can run the
-            // death animation; without that, the snapshot diff can't
-            // tell "node depleted" apart from "node left this client's
+            // death animation; without that, the diff can't tell
+            // "node depleted" apart from "node left this client's
             // AoI" and would falsely animate the death of every node
             // dropping out of view at every chunk-boundary crossing.
             self.resource_nodes.remove(&command.resource_node_id);
@@ -104,6 +110,22 @@ impl GameServer {
                 target: DeliveryTarget::Broadcast,
                 message: ServerMessage::ResourceNodeDepleted {
                     id: command.resource_node_id,
+                },
+            });
+        } else if let Some(storage) = updated_storage {
+            // Broadcast the new storage on the reliable channel.
+            // Lightyear's per-component delta replication empirically
+            // drops the matching `ResourceNodeStorage` diffs for
+            // entities a client received via a room AddSender event,
+            // so this side-channel keeps the client's local
+            // `ResourceNodeStorage` in sync after each gather. All
+            // clients with the entity in AoI apply it; clients that
+            // don't have the entity ignore the message.
+            envelopes.push(ServerEnvelope {
+                target: DeliveryTarget::Broadcast,
+                message: ServerMessage::ResourceNodeStorageChanged {
+                    id: command.resource_node_id,
+                    storage,
                 },
             });
         }

@@ -6,11 +6,13 @@ use crate::{
         scene::{MainCamera, NetworkDroppedItem},
         state::{ClientRuntime, LookState, MenuState, PickupTargetState, Screen},
     },
-    items::{
-        item_definition, look_forward, pickup_anchor, pickup_anchor_from_position, pickup_score,
+    items::{item_definition, look_forward, pickup_anchor_from_position, pickup_score_at_position},
+    protocol::Vec3Net,
+    resources::{resource_node_anchor_for, resource_node_score_at},
+    server::{
+        Deployable, DeployableTransform, DroppedItem, DroppedItemTransform, ResourceNode,
+        ResourceNodeStorage,
     },
-    protocol::{DeployedEntityState, DroppedWorldItem, ResourceNodeState, Vec3Net},
-    resources::{best_resource_node_target, resource_node_anchor},
 };
 
 /// Max range at which `E` lands on a placed structure. Matches the
@@ -21,6 +23,7 @@ const DEPLOYABLE_INTERACT_RANGE_M: f32 = 5.5;
 /// player is mostly looking past the structure.
 const DEPLOYABLE_INTERACT_CONE_COS: f32 = 0.92;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn update_pickup_target_system(
     time: Res<Time>,
     runtime: Res<ClientRuntime>,
@@ -28,6 +31,9 @@ pub(crate) fn update_pickup_target_system(
     menu: Res<MenuState>,
     camera: Query<(&Camera, &Transform), With<MainCamera>>,
     dropped_entities: Query<(&NetworkDroppedItem, &Transform)>,
+    dropped_replicated: Query<(&DroppedItem, &DroppedItemTransform)>,
+    resource_nodes: Query<(&ResourceNode, &ResourceNodeStorage)>,
+    deployables: Query<(&Deployable, &DeployableTransform)>,
     mut pickup_target: ResMut<PickupTargetState>,
 ) {
     if menu.screen != Screen::InGame || menu.pause_open || menu.inventory_open || menu.chat_open {
@@ -46,18 +52,15 @@ pub(crate) fn update_pickup_target_system(
 
     // Throttle the O(N×M) sweep over dropped items and resource nodes to a
     // fixed cadence — tooltip targeting doesn't need to update every render
-    // frame and the early-exit work in `pickup_score`/`resource_node_score`
-    // still scales with the snapshot size.
+    // frame and the early-exit work in the score helpers still scales
+    // with the replicated set size.
     pickup_target.elapsed_since_scan += time.delta_secs().max(0.0);
     if pickup_target.elapsed_since_scan < crate::app::state::PICKUP_TARGET_SCAN_INTERVAL_SECS {
         return;
     }
     pickup_target.elapsed_since_scan = 0.0;
 
-    let Some(snapshot) = &runtime.snapshot else {
-        pickup_target.clear();
-        return;
-    };
+    let _ = runtime;
     let Some(player) = runtime.local_view() else {
         pickup_target.clear();
         return;
@@ -66,22 +69,34 @@ pub(crate) fn update_pickup_target_system(
     let eye = player
         .position
         .plus(crate::protocol::Vec3Net::new(0.0, EYE_HEIGHT, 0.0));
-    let dropped_target = snapshot
-        .dropped_items
+    let dropped_target = dropped_replicated
         .iter()
-        .filter_map(|item| pickup_score(eye, look.yaw, look.pitch, item).map(|score| (item, score)))
-        .min_by(|(_, a), (_, b)| a.total_cmp(b));
-    let resource_target =
-        best_resource_node_target(eye, look.yaw, look.pitch, snapshot.resource_nodes.iter());
-    let deployable_target =
-        best_deployable_target(eye, look.yaw, look.pitch, snapshot.deployed_entities.iter());
+        .filter_map(|(drop, transform)| {
+            pickup_score_at_position(eye, look.yaw, look.pitch, transform.position)
+                .map(|score| (drop, transform, score))
+        })
+        .min_by(|(_, _, a), (_, _, b)| a.total_cmp(b));
+    let resource_target = resource_nodes
+        .iter()
+        .filter_map(|(node, storage)| {
+            resource_node_score_at(
+                eye,
+                look.yaw,
+                look.pitch,
+                &node.definition_id,
+                node.position,
+            )
+            .map(|score| (node, storage, score))
+        })
+        .min_by(|(_, _, a), (_, _, b)| a.total_cmp(b));
+    let deployable_target = best_deployable_target(eye, look.yaw, look.pitch, deployables.iter());
 
     // Pick whichever option is closest along the look ray. Dropped
     // items + resource nodes both return projection-along-ray scores;
     // we treat the deployable's centre-distance the same way.
-    let item_score = dropped_target.map(|(_, score)| score);
-    let node_score = resource_target.map(|(_, score)| score);
-    let deployable_score = deployable_target.map(|(_, score)| score);
+    let item_score = dropped_target.as_ref().map(|(_, _, score)| *score);
+    let node_score = resource_target.as_ref().map(|(_, _, score)| *score);
+    let deployable_score = deployable_target.as_ref().map(|(_, _, score)| *score);
     let best = [item_score, node_score, deployable_score]
         .into_iter()
         .flatten()
@@ -93,15 +108,21 @@ pub(crate) fn update_pickup_target_system(
     }
 
     if item_score == Some(best) {
-        if let Some((item, _)) = dropped_target {
-            set_dropped_pickup_target(&mut pickup_target, item, &camera, &dropped_entities);
+        if let Some((drop, transform, _)) = dropped_target {
+            set_dropped_pickup_target(
+                &mut pickup_target,
+                drop,
+                transform,
+                &camera,
+                &dropped_entities,
+            );
         }
     } else if node_score == Some(best) {
-        if let Some((node, _)) = resource_target {
-            set_resource_pickup_target(&mut pickup_target, node, &camera);
+        if let Some((node, storage, _)) = resource_target {
+            set_resource_pickup_target(&mut pickup_target, node, storage, &camera);
         }
-    } else if let Some((entity, _)) = deployable_target {
-        set_deployable_pickup_target(&mut pickup_target, entity, &camera);
+    } else if let Some((meta, transform, _)) = deployable_target {
+        set_deployable_pickup_target(&mut pickup_target, meta, transform, &camera);
     }
 }
 
@@ -113,18 +134,18 @@ fn best_deployable_target<'a>(
     eye: Vec3Net,
     yaw: f32,
     pitch: f32,
-    deployables: impl Iterator<Item = &'a DeployedEntityState>,
-) -> Option<(&'a DeployedEntityState, f32)> {
+    deployables: impl Iterator<Item = (&'a Deployable, &'a DeployableTransform)>,
+) -> Option<(&'a Deployable, &'a DeployableTransform, f32)> {
     let forward = look_forward(yaw, pitch);
     if forward.length_squared() <= f32::EPSILON {
         return None;
     }
     let max_sq = DEPLOYABLE_INTERACT_RANGE_M * DEPLOYABLE_INTERACT_RANGE_M;
-    let mut best: Option<(&DeployedEntityState, f32)> = None;
-    for entity in deployables {
+    let mut best: Option<(&Deployable, &DeployableTransform, f32)> = None;
+    for (meta, transform) in deployables {
         // Aim point sits at half the entity's collider height so the
         // cone test isn't biased toward the floor.
-        let aim = deployable_aim_point(entity);
+        let aim = deployable_aim_point(meta, transform);
         let to = aim.minus(eye);
         let dist_sq = to.length_squared();
         if dist_sq > max_sq {
@@ -132,41 +153,42 @@ fn best_deployable_target<'a>(
         }
         let dist = dist_sq.sqrt();
         if dist <= 1e-3 {
-            return Some((entity, 0.0));
+            return Some((meta, transform, 0.0));
         }
         let cosine = to.dot(forward) / dist;
         if cosine < DEPLOYABLE_INTERACT_CONE_COS {
             continue;
         }
         let score = dist;
-        if best.map(|(_, s)| score < s).unwrap_or(true) {
-            best = Some((entity, score));
+        if best.as_ref().map(|(_, _, s)| score < *s).unwrap_or(true) {
+            best = Some((meta, transform, score));
         }
     }
     best
 }
 
-fn deployable_aim_point(entity: &DeployedEntityState) -> Vec3Net {
-    // Approximate the structure's optical centre. We don't have the
-    // profile here without a registry lookup; 0.6 m up reads well for
-    // both the workbench tabletop and the furnace mouth.
-    let mut aim = entity.position;
+fn deployable_aim_point(meta: &Deployable, transform: &DeployableTransform) -> Vec3Net {
+    // Approximate the structure's optical centre. 0.6 m up reads well
+    // for both the workbench tabletop and the furnace mouth; the
+    // profile-based half-height is preferred when we can resolve it.
+    let mut aim = transform.position;
     aim.y += 0.6;
-    if let Some(profile) = item_definition(&entity.item_id).and_then(|def| def.deployable) {
-        aim.y = entity.position.y + profile.collider_half_height;
+    if let Some(profile) = item_definition(&meta.item_id).and_then(|def| def.deployable) {
+        aim.y = transform.position.y + profile.collider_half_height;
     }
     aim
 }
 
 fn set_deployable_pickup_target(
     pickup_target: &mut PickupTargetState,
-    entity: &DeployedEntityState,
+    meta: &Deployable,
+    transform: &DeployableTransform,
     camera: &Query<(&Camera, &Transform), With<MainCamera>>,
 ) {
     pickup_target.clear();
-    pickup_target.deployable_id = Some(entity.id);
-    pickup_target.deployable_kind = Some(entity.kind);
-    let anchor = deployable_aim_point(entity);
+    pickup_target.deployable_id = Some(meta.id);
+    pickup_target.deployable_kind = Some(meta.kind);
+    let anchor = deployable_aim_point(meta, transform);
     pickup_target.world_position = Some(anchor);
     pickup_target.screen_position = viewport_position(camera, anchor);
 }
@@ -208,38 +230,44 @@ fn refresh_dropped_target_anchor(
 
 fn set_dropped_pickup_target(
     pickup_target: &mut PickupTargetState,
-    item: &DroppedWorldItem,
+    drop: &DroppedItem,
+    transform: &DroppedItemTransform,
     camera: &Query<(&Camera, &Transform), With<MainCamera>>,
     dropped_entities: &Query<(&NetworkDroppedItem, &Transform)>,
 ) {
     pickup_target.clear();
-    pickup_target.dropped_item_id = Some(item.id);
-    pickup_target.stack = Some(item.stack.clone());
+    pickup_target.dropped_item_id = Some(drop.id);
+    pickup_target.stack = Some(drop.stack.clone());
+    // Prefer the visual entity's interpolated transform when present so
+    // the tooltip glues to a still-settling drop. Falls back to the
+    // authoritative replicated position if the visual hasn't been
+    // spawned yet this frame (rate-limited spawn budget).
     let anchor = dropped_entities
         .iter()
-        .find(|(dropped, _)| dropped.id == item.id)
-        .map(|(_, transform)| {
+        .find(|(dropped, _)| dropped.id == drop.id)
+        .map(|(_, visual)| {
             pickup_anchor_from_position(crate::protocol::Vec3Net::new(
-                transform.translation.x,
-                transform.translation.y,
-                transform.translation.z,
+                visual.translation.x,
+                visual.translation.y,
+                visual.translation.z,
             ))
         })
-        .unwrap_or_else(|| pickup_anchor(item));
+        .unwrap_or_else(|| pickup_anchor_from_position(transform.position));
     pickup_target.world_position = Some(anchor);
     pickup_target.screen_position = viewport_position(camera, anchor);
 }
 
 fn set_resource_pickup_target(
     pickup_target: &mut PickupTargetState,
-    node: &ResourceNodeState,
+    node: &ResourceNode,
+    storage: &ResourceNodeStorage,
     camera: &Query<(&Camera, &Transform), With<MainCamera>>,
 ) {
     pickup_target.clear();
     pickup_target.resource_node_id = Some(node.id);
     pickup_target.resource_definition_id = Some(node.definition_id.clone());
-    pickup_target.resource_storage = node.storage.clone();
-    let anchor = resource_node_anchor(node);
+    pickup_target.resource_storage = storage.0.clone();
+    let anchor = resource_node_anchor_for(&node.definition_id, node.position);
     pickup_target.world_position = Some(anchor);
     pickup_target.screen_position = viewport_position(camera, anchor);
 }

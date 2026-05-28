@@ -402,7 +402,8 @@ fn sync_resource_node_entities(world: &mut World) {
         match existing {
             Some(entity) => {
                 // Refresh storage in place. Change detection will only
-                // mark it changed when the Vec actually differs.
+                // mark it changed when the Vec actually differs — that's
+                // what triggers Lightyear's per-component diff ship.
                 if let Some(mut storage) =
                     world.get_mut::<crate::server::ResourceNodeStorage>(entity)
                     && storage.0 != state.storage
@@ -743,11 +744,36 @@ fn sync_deployable_entities(world: &mut World) {
                 if let Some(mut health) = world.get_mut::<crate::server::DeployableHealth>(entity)
                     && health.0 != view.health
                 {
+                    #[cfg(feature = "replication-trace")]
+                    {
+                        let before = health.0;
+                        info!(
+                            target: "replication_trace",
+                            "server: DeployableHealth   MUTATE id={} entity={entity:?} {before} -> {}",
+                            view.id, view.health
+                        );
+                    }
                     health.0 = view.health;
                 }
-                if let Some(mut active) = world.get_mut::<crate::server::DeployableActive>(entity)
-                    && active.0 != view.active
-                {
+                if let Some(mut active) = world.get_mut::<crate::server::DeployableActive>(entity) {
+                    // Write unconditionally so Bevy's `Changed<T>` fires
+                    // every mirror pass and Lightyear keeps re-shipping
+                    // the current value until acked. Empirically the
+                    // value-gated write loses diffs under rapid
+                    // furnace on/off toggling — a single boolean is
+                    // cheap enough that paying ~1 byte/tick/deployable
+                    // is worth the guaranteed convergence. The trace
+                    // line still only fires on a *real* value flip so
+                    // diagnostics stay readable.
+                    #[cfg(feature = "replication-trace")]
+                    if active.0 != view.active {
+                        let before = active.0;
+                        info!(
+                            target: "replication_trace",
+                            "server: DeployableActive   MUTATE id={} entity={entity:?} {before} -> {}",
+                            view.id, view.active
+                        );
+                    }
                     active.0 = view.active;
                 }
             }

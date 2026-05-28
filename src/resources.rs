@@ -308,10 +308,17 @@ pub fn definition_storage_stacks(definition: &ResourceNodeDefinition) -> Vec<Ite
 }
 
 pub fn resource_node_anchor(node: &ResourceNodeState) -> Vec3Net {
-    let height = resource_node_definition(&node.definition_id)
+    resource_node_anchor_for(&node.definition_id, node.position)
+}
+
+/// Position-keyed variant of [`resource_node_anchor`] for callers
+/// holding the replicated `ResourceNode` directly (no need to
+/// materialise a `ResourceNodeState`).
+pub fn resource_node_anchor_for(definition_id: &str, position: Vec3Net) -> Vec3Net {
+    let height = resource_node_definition(definition_id)
         .map(|definition| definition.anchor_height)
         .unwrap_or(0.6);
-    node.position.plus(Vec3Net::new(0.0, height, 0.0))
+    position.plus(Vec3Net::new(0.0, height, 0.0))
 }
 
 pub fn resource_node_score(
@@ -325,7 +332,21 @@ pub fn resource_node_score(
     if node.respawn_progress.is_some() {
         return None;
     }
-    let anchor = resource_node_anchor(node);
+    resource_node_score_at(eye, yaw, pitch, &node.definition_id, node.position)
+}
+
+/// Position-keyed variant of [`resource_node_score`]. Same math, but
+/// takes the definition id + position directly so callers iterating
+/// replicated `ResourceNode` components don't have to build a
+/// `ResourceNodeState`.
+pub fn resource_node_score_at(
+    eye: Vec3Net,
+    yaw: f32,
+    pitch: f32,
+    definition_id: &str,
+    position: Vec3Net,
+) -> Option<f32> {
+    let anchor = resource_node_anchor_for(definition_id, position);
     let to_node = anchor.minus(eye);
     // Cheap distance cull before the trig in `look_forward` and the definition
     // lookup. Uses a conservative upper bound on ray_radius so it never rejects
@@ -344,7 +365,7 @@ pub fn resource_node_score(
         return None;
     }
 
-    let ray_radius = resource_node_definition(&node.definition_id)
+    let ray_radius = resource_node_definition(definition_id)
         .map(|definition| definition.ray_radius)
         .unwrap_or(DEFAULT_RESOURCE_RAY_RADIUS);
     let closest = eye.plus(forward.scale(projection));
@@ -424,18 +445,28 @@ pub fn resource_node_collider(node: &ResourceNodeState) -> Option<WorldBlock> {
     if node.respawn_progress.is_some() {
         return None;
     }
-    let definition = resource_node_definition(&node.definition_id)?;
+    resource_node_collider_at(&node.definition_id, node.position)
+}
+
+/// Position-keyed variant of [`resource_node_collider`]. Same lookup,
+/// but takes the definition id + position directly so the client's
+/// world-grid maintainer can build colliders straight from the
+/// replicated `ResourceNode` query.
+pub fn resource_node_collider_at(definition_id: &str, position: Vec3Net) -> Option<WorldBlock> {
+    let definition = resource_node_definition(definition_id)?;
     match definition.model {
         ResourceNodeModel::PineTreeSmall
         | ResourceNodeModel::PineTreeMedium
         | ResourceNodeModel::PineTreeLarge
         | ResourceNodeModel::BirchTreeSmall
         | ResourceNodeModel::BirchTreeMedium
-        | ResourceNodeModel::BirchTreeLarge => Some(tree_collider_block(node, definition.model)),
+        | ResourceNodeModel::BirchTreeLarge => {
+            Some(tree_collider_block(position, definition.model))
+        }
         ResourceNodeModel::CoalOre
         | ResourceNodeModel::IronOre
         | ResourceNodeModel::SulfurOre
-        | ResourceNodeModel::StoneVein => Some(ore_collider_block(node)),
+        | ResourceNodeModel::StoneVein => Some(ore_collider_block(position)),
         // Crude clutter (surface stones, branch piles, hay tufts) is
         // walk-through — small enough that a collider feels buggy and the
         // player needs to be able to stand on top to interact.
@@ -445,7 +476,7 @@ pub fn resource_node_collider(node: &ResourceNodeState) -> Option<WorldBlock> {
     }
 }
 
-fn tree_collider_block(node: &ResourceNodeState, model: ResourceNodeModel) -> WorldBlock {
+fn tree_collider_block(position: Vec3Net, model: ResourceNodeModel) -> WorldBlock {
     let half_width = match model {
         ResourceNodeModel::PineTreeSmall => 0.30,
         ResourceNodeModel::PineTreeMedium => 0.36,
@@ -456,15 +487,15 @@ fn tree_collider_block(node: &ResourceNodeState, model: ResourceNodeModel) -> Wo
         _ => unreachable!("tree_collider_block called with non-tree model"),
     };
     let half_height = 1.5;
-    let center = Vec3Net::new(node.position.x, half_height, node.position.z);
+    let center = Vec3Net::new(position.x, half_height, position.z);
     let half_extents = Vec3Net::new(half_width, half_height, half_width);
     WorldBlock::new(center, half_extents)
 }
 
-fn ore_collider_block(node: &ResourceNodeState) -> WorldBlock {
+fn ore_collider_block(position: Vec3Net) -> WorldBlock {
     let half_width = 0.55;
     let half_height = 0.32;
-    let center = Vec3Net::new(node.position.x, half_height, node.position.z);
+    let center = Vec3Net::new(position.x, half_height, position.z);
     let half_extents = Vec3Net::new(half_width, half_height, half_width);
     WorldBlock::new(center, half_extents)
 }

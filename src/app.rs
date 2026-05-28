@@ -43,9 +43,10 @@ use self::{
     scene::{apply_world_scene_system, setup_scene, update_sky_system},
     state::{
         ClientErrorToast, ClientRuntime, ClientSettingsStore, CraftingHudState, CraftingUiState,
-        DeployablePlacementState, GatherInputState, InventoryUiState, LookState,
+        DeployablePlacementState, GatherInputState, InventoryUiState, LocalPlayerState, LookState,
         MenuBackdropVisibility, MenuState, OptionsUiState, PickupTargetState, RemoteImpactEvent,
         SaveStore, SessionShutdownTasks, SteamUser, TestModeConfig, ToastState, ToolSwapState,
+        update_local_player_state_system,
     },
     systems::{
         AutoConnectRequest, CameraImpactKick, CameraMotionEffects, ClientSystemSet,
@@ -56,15 +57,16 @@ use self::{
         auto_connect_poll_system, auto_connect_start_system, camera_follow_system,
         center_cursor_on_focus_system, chat_shortcut_system, chunk_overlay_system,
         client_input_system, close_furnace_on_escape_system, error_relay_system,
-        gameplay_inventory_shortcuts_system, menu_backdrop_camera_system, mouse_look_system,
-        network_tick_system, placement_input_system, reposition_test_window_system,
-        save_client_settings_system, screen_viewed_system, session_ended_system,
-        session_shutdown_poll_system, session_started_system, spawn_impact_effects_system,
-        surface_client_error_toasts_system, sync_furnace_open_flag_system, sync_view_radius_system,
-        tick_felling_trees_system, tick_impact_chips_system, tick_resource_node_pop_in_system,
-        toggle_crafting_system, toggle_inventory_system, toggle_pause_system,
-        toggle_perf_stats_system, update_cursor_system, update_pickup_target_system,
-        update_placement_ghost_system, update_tool_swap_state_system,
+        gameplay_inventory_shortcuts_system, maintain_world_grid_system,
+        menu_backdrop_camera_system, mouse_look_system, network_tick_system,
+        placement_input_system, reposition_test_window_system, save_client_settings_system,
+        screen_viewed_system, session_ended_system, session_shutdown_poll_system,
+        session_started_system, spawn_impact_effects_system, surface_client_error_toasts_system,
+        sync_furnace_open_flag_system, sync_view_radius_system, tick_felling_trees_system,
+        tick_impact_chips_system, tick_resource_node_pop_in_system, toggle_crafting_system,
+        toggle_inventory_system, toggle_pause_system, toggle_perf_stats_system,
+        update_cursor_system, update_pickup_target_system, update_placement_ghost_system,
+        update_tool_swap_state_system,
     },
     ui::{
         ButtonSoundRequests, InventorySoundRequests, button_sound_system, inventory_sound_system,
@@ -96,6 +98,7 @@ pub(crate) const PLAYER_VISUAL_CENTER_Y: f32 = 0.9;
 ///   (and clears) it, so the cue plays even when the visual system runs in
 ///   the same frame.
 const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
+    ClientSystemSet::LocalPlayerSync,
     ClientSystemSet::Focus,
     ClientSystemSet::ChatShortcut,
     ClientSystemSet::PauseToggle,
@@ -107,6 +110,7 @@ const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::InventoryShortcuts,
     ClientSystemSet::Network,
     ClientSystemSet::ToolSwap,
+    ClientSystemSet::WorldGridRebuild,
     ClientSystemSet::SessionShutdown,
     ClientSystemSet::Quit,
     ClientSystemSet::Display,
@@ -207,6 +211,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .insert_resource(test_mode.clone())
         .insert_resource(MenuBackdropVisibility::default())
         .insert_resource(ClientRuntime::default())
+        .insert_resource(LocalPlayerState::default())
         .insert_resource(SessionShutdownTasks::default())
         .insert_resource(InventoryUiState::default())
         .insert_resource(CraftingUiState::default())
@@ -350,6 +355,10 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         )
         .add_systems(
             Update,
+            update_local_player_state_system.in_set(ClientSystemSet::LocalPlayerSync),
+        )
+        .add_systems(
+            Update,
             chat_shortcut_system.in_set(ClientSystemSet::ChatShortcut),
         )
         .add_systems(
@@ -435,6 +444,10 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .add_systems(
             Update,
             apply_deployed_entities_system.in_set(ClientSystemSet::DeployedEntities),
+        )
+        .add_systems(
+            Update,
+            maintain_world_grid_system.in_set(ClientSystemSet::WorldGridRebuild),
         )
         .add_systems(
             Update,

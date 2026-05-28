@@ -81,8 +81,6 @@ mod tests {
     fn player_state(position: Vec3Net, yaw: f32, pitch: f32) -> PlayerState {
         PlayerState {
             client_id: 1,
-            steam_id: 1,
-            name: "Player 1".to_owned(),
             position,
             velocity: Vec3Net::ZERO,
             yaw,
@@ -90,11 +88,6 @@ mod tests {
             health: MAX_HEALTH,
             grounded: true,
             last_processed_input: 0,
-            is_admin: false,
-            chat_bubble: None,
-            inventory: None,
-            crafting: None,
-            open_furnace: None,
         }
     }
 

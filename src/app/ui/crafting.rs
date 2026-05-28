@@ -24,8 +24,8 @@ use bevy_egui::egui::{
 use crate::{
     app::{
         state::{
-            ClientRuntime, CraftingHudState, CraftingUiState, ErrorToastSink, MenuState,
-            ProgressBaseline,
+            ClientRuntime, CraftingHudState, CraftingUiState, ErrorToastSink, LocalPlayerState,
+            MenuState, ProgressBaseline,
         },
         systems::send_crafting_command,
     },
@@ -35,7 +35,7 @@ use crate::{
     items::{ItemTint, item_definition},
     protocol::{
         CraftingCommand, CraftingJob, MAX_CRAFT_BATCH_SIZE, PlayerCraftingState,
-        PlayerInventoryState, PlayerState, SERVER_TICK_RATE_HZ,
+        PlayerInventoryState, SERVER_TICK_RATE_HZ,
     },
 };
 
@@ -56,6 +56,7 @@ pub(super) fn crafting_ui(
     ctx: &egui::Context,
     menu: &mut MenuState,
     runtime: &mut ClientRuntime,
+    local_player: &LocalPlayerState,
     crafting_ui: &mut CraftingUiState,
     error_toasts: &mut dyn ErrorToastSink,
 ) {
@@ -76,14 +77,11 @@ pub(super) fn crafting_ui(
         return;
     }
 
-    let inventory = runtime
-        .local_player()
-        .and_then(PlayerState::inventory)
-        .cloned();
-    let crafting_state = runtime
-        .local_player()
-        .and_then(PlayerState::crafting)
-        .cloned()
+    let inventory = local_player.private.as_ref().map(|p| p.inventory.clone());
+    let crafting_state = local_player
+        .private
+        .as_ref()
+        .map(|p| p.crafting.clone())
         .unwrap_or_default();
 
     egui::Area::new(Id::new("crafting_panel"))
@@ -811,13 +809,14 @@ const QUEUE_OVERFLOW_BAR_HEIGHT: f32 = 22.0;
 pub(super) fn crafting_queue_hud(
     ctx: &egui::Context,
     runtime: &mut ClientRuntime,
+    local_player: &LocalPlayerState,
     hud_state: &mut CraftingHudState,
     error_toasts: &mut dyn ErrorToastSink,
 ) {
-    let Some(jobs) = runtime
-        .local_player()
-        .and_then(PlayerState::crafting)
-        .map(|crafting| crafting.jobs.clone())
+    let Some(jobs) = local_player
+        .private
+        .as_ref()
+        .map(|p| p.crafting.jobs.clone())
     else {
         // Clear any stale baselines so a future job_id collision (the
         // server's id allocator wraps eventually) can't inherit a wrong

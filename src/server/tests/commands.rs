@@ -18,13 +18,11 @@ fn spawn_ore_command_requires_admin_and_warns_otherwise() {
         )
         .expect("guest should connect");
     let guest_id = server
-        .snapshot()
-        .players
-        .iter()
+        .players_iter()
         .find(|player| player.steam_id == 2)
         .map(|player| player.client_id)
         .expect("guest client id");
-    let before = server.snapshot().resource_nodes.len();
+    let before = server.resource_nodes_iter().count();
 
     let envelopes = server.receive(
         guest_id,
@@ -43,7 +41,7 @@ fn spawn_ore_command_requires_admin_and_warns_otherwise() {
     assert_eq!(warning.kind, ToastKind::Warning);
     assert!(warning.text.to_ascii_lowercase().contains("admin"));
     assert_eq!(
-        server.snapshot().resource_nodes.len(),
+        server.resource_nodes_iter().count(),
         before,
         "non-admin command must not mutate the world"
     );
@@ -53,13 +51,9 @@ fn spawn_ore_command_requires_admin_and_warns_otherwise() {
 fn spawn_ore_command_inserts_a_new_node_for_an_admin() {
     let mut server = server();
     let host_id = connect_host(&mut server);
-    let before = server.snapshot().resource_nodes.len();
-    let known_ids: std::collections::HashSet<u64> = server
-        .snapshot()
-        .resource_nodes
-        .iter()
-        .map(|node| node.id)
-        .collect();
+    let before = server.resource_nodes_iter().count();
+    let known_ids: std::collections::HashSet<u64> =
+        server.resource_nodes_iter().map(|(id, _)| *id).collect();
 
     let envelopes = server.receive(
         host_id,
@@ -79,25 +73,21 @@ fn spawn_ore_command_inserts_a_new_node_for_an_admin() {
         .expect("admin spawn should get a success toast");
     assert!(success.text.to_ascii_lowercase().contains("iron"));
 
-    let after_nodes = server.snapshot().resource_nodes;
+    let after_nodes: Vec<_> = server.resource_nodes_iter().collect();
     assert_eq!(after_nodes.len(), before + 1);
     let new_node = after_nodes
         .iter()
-        .find(|node| !known_ids.contains(&node.id))
+        .find(|(id, _)| !known_ids.contains(id))
         .expect("a new node id should have been allocated");
-    assert_eq!(new_node.definition_id, IRON_NODE_ID);
+    assert_eq!(new_node.1.definition_id, IRON_NODE_ID);
 }
 
 #[test]
 fn spawn_ore_command_defaults_to_a_random_ore_when_type_is_omitted() {
     let mut server = server();
     let host_id = connect_host(&mut server);
-    let before: std::collections::HashSet<u64> = server
-        .snapshot()
-        .resource_nodes
-        .iter()
-        .map(|node| node.id)
-        .collect();
+    let before: std::collections::HashSet<u64> =
+        server.resource_nodes_iter().map(|(id, _)| *id).collect();
 
     let envelopes = server.receive(
         host_id,
@@ -117,14 +107,13 @@ fn spawn_ore_command_defaults_to_a_random_ore_when_type_is_omitted() {
         .expect("admin spawn should get a success toast even without args");
     let _ = success;
 
-    let new_node = server
-        .snapshot()
-        .resource_nodes
+    let nodes_after: Vec<_> = server.resource_nodes_iter().collect();
+    let new_node = nodes_after
         .into_iter()
-        .find(|node| !before.contains(&node.id))
+        .find(|(id, _)| !before.contains(id))
         .expect("a new node should have been spawned");
     assert!(matches!(
-        new_node.definition_id.as_str(),
+        new_node.1.definition_id.as_str(),
         COAL_NODE_ID | IRON_NODE_ID | SULFUR_NODE_ID
     ));
 }
@@ -180,9 +169,7 @@ fn help_marks_spawn_ore_as_admin_only_for_non_admins() {
         )
         .expect("guest should connect");
     let guest_id = server
-        .snapshot()
-        .players
-        .iter()
+        .players_iter()
         .find(|player| player.steam_id == 2)
         .map(|player| player.client_id)
         .expect("guest client id");
@@ -213,7 +200,7 @@ fn help_marks_spawn_ore_as_admin_only_for_non_admins() {
 fn unknown_command_returns_a_warning_without_world_mutation() {
     let mut server = server();
     let host_id = connect_host(&mut server);
-    let before = server.snapshot().resource_nodes.len();
+    let before = server.resource_nodes_iter().count();
 
     let envelopes = server.receive(
         host_id,
@@ -231,5 +218,5 @@ fn unknown_command_returns_a_warning_without_world_mutation() {
         .expect("unknown command should still produce a toast");
     assert_eq!(toast.kind, ToastKind::Warning);
     assert!(toast.text.contains("unknown"));
-    assert_eq!(server.snapshot().resource_nodes.len(), before);
+    assert_eq!(server.resource_nodes_iter().count(), before);
 }

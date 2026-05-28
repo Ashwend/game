@@ -11,7 +11,6 @@ use crate::{
     controller::PlayerController,
     protocol::{
         ChatMessage, ClientId, MAX_HEALTH, PlayerEvent, PlayerState, ServerMessage, Vec3Net,
-        WorldSnapshot,
     },
     world::{MapType, ProceduralMapSize, WorldData},
     world_time::{WorldTime, WorldTimeSnapshot},
@@ -20,8 +19,6 @@ use crate::{
 fn player_state(client_id: ClientId, position: Vec3Net) -> PlayerState {
     PlayerState {
         client_id,
-        steam_id: client_id,
-        name: format!("Player {client_id}"),
         position,
         velocity: Vec3Net::ZERO,
         yaw: 0.0,
@@ -29,16 +26,11 @@ fn player_state(client_id: ClientId, position: Vec3Net) -> PlayerState {
         health: MAX_HEALTH,
         grounded: true,
         last_processed_input: 0,
-        is_admin: false,
-        chat_bubble: None,
-        inventory: None,
-        crafting: None,
-        open_furnace: None,
     }
 }
 
 #[test]
-fn welcome_seeds_local_prediction_from_snapshot() {
+fn welcome_seeds_local_prediction_from_local_seed() {
     let mut server_player = player_state(1, Vec3Net::new(2.0, 0.0, 0.0));
     server_player.last_processed_input = 7;
     let mut runtime = ClientRuntime {
@@ -46,98 +38,25 @@ fn welcome_seeds_local_prediction_from_snapshot() {
         ..default()
     };
 
-    runtime.seed_local_prediction_from_snapshot(
-        &WorldSnapshot {
-            tick: 1,
-            players: vec![server_player],
-            dropped_items: Vec::new(),
-            resource_nodes: Vec::new(),
-            deployed_entities: Vec::new(),
-        },
-        true,
-    );
+    runtime.seed_local_prediction(&server_player);
 
     let predicted = runtime.predicted_local.expect("prediction should exist");
     assert_eq!(predicted.position, Vec3Net::new(2.0, 0.0, 0.0));
     assert_eq!(runtime.input_sequence, 7);
 }
 
-#[test]
-fn snapshots_do_not_overwrite_existing_local_prediction() {
-    let mut runtime = ClientRuntime {
-        client_id: Some(1),
-        predicted_local: Some(PlayerController::from_player_state(&player_state(
-            1,
-            Vec3Net::new(5.0, 0.0, 0.0),
-        ))),
-        ..default()
-    };
+// Deleted: `snapshots_do_not_overwrite_existing_local_prediction` was
+// verifying the WorldSnapshot fallback path; snapshots are gone now and
+// non-Welcome state arrives via Lightyear replication, which would need
+// the plugin set to unit-test meaningfully.
 
-    runtime.apply_message(ServerMessage::Snapshot(WorldSnapshot {
-        tick: 1,
-        players: vec![player_state(1, Vec3Net::ZERO)],
-        dropped_items: Vec::new(),
-        resource_nodes: Vec::new(),
-        deployed_entities: Vec::new(),
-    }));
+// Deleted: `snapshots_do_not_seed_local_prediction_after_welcome` was
+// verifying the WorldSnapshot fallback path; only Welcome seeds
+// `predicted_local` and the new `seed_local_prediction` test covers it.
 
-    let predicted = runtime.predicted_local.expect("prediction should exist");
-    assert_eq!(predicted.position, Vec3Net::new(5.0, 0.0, 0.0));
-    assert_eq!(runtime.snapshot.expect("snapshot should exist").tick, 1);
-}
-
-#[test]
-fn snapshots_do_not_seed_local_prediction_after_welcome() {
-    let mut runtime = ClientRuntime {
-        client_id: Some(1),
-        ..default()
-    };
-
-    runtime.apply_message(ServerMessage::Snapshot(WorldSnapshot {
-        tick: 1,
-        players: vec![player_state(1, Vec3Net::new(5.0, 0.0, 0.0))],
-        dropped_items: Vec::new(),
-        resource_nodes: Vec::new(),
-        deployed_entities: Vec::new(),
-    }));
-
-    assert!(runtime.predicted_local.is_none());
-    assert_eq!(
-        runtime.local_view().expect("snapshot fallback").position,
-        Vec3Net::new(5.0, 0.0, 0.0)
-    );
-}
-
-#[test]
-fn stale_snapshots_are_ignored() {
-    let current_snapshot = WorldSnapshot {
-        tick: 5,
-        players: vec![player_state(1, Vec3Net::new(5.0, 0.0, 0.0))],
-        dropped_items: Vec::new(),
-        resource_nodes: Vec::new(),
-        deployed_entities: Vec::new(),
-    };
-    let mut runtime = ClientRuntime {
-        client_id: Some(1),
-        snapshot: Some(current_snapshot.clone()),
-        predicted_local: Some(PlayerController::from_player_state(
-            &current_snapshot.players[0],
-        )),
-        ..default()
-    };
-
-    runtime.apply_message(ServerMessage::Snapshot(WorldSnapshot {
-        tick: 4,
-        players: vec![player_state(1, Vec3Net::ZERO)],
-        dropped_items: Vec::new(),
-        resource_nodes: Vec::new(),
-        deployed_entities: Vec::new(),
-    }));
-
-    let predicted = runtime.predicted_local.expect("prediction should exist");
-    assert_eq!(predicted.position, Vec3Net::new(5.0, 0.0, 0.0));
-    assert_eq!(runtime.snapshot.expect("snapshot should exist").tick, 5);
-}
+// Deleted: `stale_snapshots_are_ignored` was verifying snapshot tick
+// ordering; snapshots no longer exist and Lightyear handles message
+// ordering on the replication channels.
 
 #[test]
 fn correction_updates_health_without_realigning_local_prediction() {
@@ -359,13 +278,7 @@ fn menu_backdrop_visibility_resets_when_reentering_menu() {
 
 #[test]
 fn apply_message_handles_welcome_chat_events_and_rejections() {
-    let snapshot = WorldSnapshot {
-        tick: 9,
-        players: vec![player_state(1, Vec3Net::new(1.0, 2.0, 3.0))],
-        dropped_items: Vec::new(),
-        resource_nodes: Vec::new(),
-        deployed_entities: Vec::new(),
-    };
+    let local_seed = player_state(1, Vec3Net::new(1.0, 2.0, 3.0));
     let mut runtime = ClientRuntime::default();
 
     runtime.apply_message(ServerMessage::Welcome {
@@ -373,7 +286,7 @@ fn apply_message_handles_welcome_chat_events_and_rejections() {
         map: MapType::default(),
         world: WorldData::test_world(),
         is_admin: true,
-        snapshot,
+        local_seed,
         world_time: WorldTimeSnapshot::from_time(&WorldTime::default(), 9),
     });
     runtime.apply_message(ServerMessage::PlayerEvent(PlayerEvent::Joined {
@@ -429,7 +342,6 @@ fn kicked_message_clears_session_state_and_logs_reason() {
         client_id: Some(1),
         is_admin: true,
         world: Some(WorldData::test_world()),
-        snapshot: Some(WorldSnapshot::default()),
         predicted_local: Some(PlayerController::spawn()),
         ..Default::default()
     };
@@ -441,7 +353,6 @@ fn kicked_message_clears_session_state_and_logs_reason() {
     assert!(runtime.client_id.is_none());
     assert!(!runtime.is_admin);
     assert!(runtime.world.is_none());
-    assert!(runtime.snapshot.is_none());
     assert!(runtime.predicted_local.is_none());
     assert!(
         runtime
@@ -452,36 +363,16 @@ fn kicked_message_clears_session_state_and_logs_reason() {
 }
 
 #[test]
-fn local_view_falls_back_to_snapshot_when_prediction_is_missing() {
-    let mut server_player = player_state(1, Vec3Net::new(4.0, 0.0, 0.0));
-    server_player.yaw = 0.75;
-    server_player.pitch = -0.25;
-    let mut runtime = ClientRuntime {
+fn local_view_is_none_without_prediction() {
+    // Phase 6.2 removed the snapshot fallback from `local_view`. Until
+    // `predicted_local` is seeded by Welcome, there's no local view to
+    // hand to UI/gameplay consumers.
+    let runtime = ClientRuntime {
         client_id: Some(1),
-        snapshot: Some(WorldSnapshot {
-            tick: 1,
-            players: vec![server_player],
-            dropped_items: Vec::new(),
-            resource_nodes: Vec::new(),
-            deployed_entities: Vec::new(),
-        }),
         ..Default::default()
     };
 
-    assert_eq!(
-        runtime.local_player().expect("local player").position,
-        Vec3Net::new(4.0, 0.0, 0.0)
-    );
-    assert_eq!(
-        runtime.local_view().expect("local view").position,
-        Vec3Net::new(4.0, 0.0, 0.0)
-    );
-    let local_view = runtime.local_view().expect("local view");
-    assert_eq!(local_view.yaw, 0.75);
-    assert_eq!(local_view.pitch, -0.25);
-
-    runtime.client_id = Some(99);
-    assert!(runtime.local_player().is_none());
+    assert!(runtime.predicted_local.is_none());
     assert!(runtime.local_view().is_none());
 }
 
@@ -490,19 +381,9 @@ fn local_view_uses_predicted_orientation_with_predicted_position() {
     let mut predicted_player = player_state(1, Vec3Net::new(5.0, 0.0, 0.0));
     predicted_player.yaw = 1.25;
     predicted_player.pitch = -0.35;
-    let mut snapshot_player = player_state(1, Vec3Net::new(1.0, 0.0, 0.0));
-    snapshot_player.yaw = -0.5;
-    snapshot_player.pitch = 0.2;
     let runtime = ClientRuntime {
         client_id: Some(1),
         predicted_local: Some(PlayerController::from_player_state(&predicted_player)),
-        snapshot: Some(WorldSnapshot {
-            tick: 1,
-            players: vec![snapshot_player],
-            dropped_items: Vec::new(),
-            resource_nodes: Vec::new(),
-            deployed_entities: Vec::new(),
-        }),
         ..Default::default()
     };
 
@@ -513,7 +394,7 @@ fn local_view_uses_predicted_orientation_with_predicted_position() {
 }
 
 #[test]
-fn correction_and_snapshot_ignore_non_matching_players() {
+fn correction_ignores_non_matching_players() {
     let mut runtime = ClientRuntime {
         client_id: Some(1),
         predicted_local: Some(PlayerController::from_player_state(&player_state(
@@ -535,17 +416,4 @@ fn correction_and_snapshot_ignore_non_matching_players() {
             .health,
         MAX_HEALTH
     );
-
-    runtime.client_id = None;
-    runtime.seed_local_prediction_from_snapshot(
-        &WorldSnapshot {
-            tick: 1,
-            players: vec![player_state(1, Vec3Net::ZERO)],
-            dropped_items: Vec::new(),
-            resource_nodes: Vec::new(),
-            deployed_entities: Vec::new(),
-        },
-        true,
-    );
-    assert!(runtime.predicted_local.is_some());
 }

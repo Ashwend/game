@@ -20,8 +20,8 @@ use crate::{
         tool_damage_multiplier_pct,
     },
     protocol::{
-        ClientId, DamageDeployableCommand, DeployedEntityId, DeployedEntityState,
-        PlaceDeployableCommand, ServerMessage, ToastKind, ToastMessage, Vec3Net,
+        ClientId, DamageDeployableCommand, DeployedEntityId, PlaceDeployableCommand, ServerMessage,
+        ToastKind, ToastMessage, Vec3Net,
     },
     world::WorldBlock,
 };
@@ -62,19 +62,6 @@ pub(crate) struct DeployedEntity {
 }
 
 impl DeployedEntity {
-    pub(super) fn to_state(&self) -> DeployedEntityState {
-        DeployedEntityState {
-            id: self.id,
-            item_id: self.item_id.clone(),
-            kind: self.kind,
-            position: self.position,
-            yaw: self.yaw,
-            health: self.health,
-            max_health: self.max_health,
-            active: self.furnace.as_ref().map(|f| f.active).unwrap_or(false),
-        }
-    }
-
     /// AABB for placement-overlap and (future) collision use. Same
     /// half-extents as the client builds, so the two stay aligned.
     pub(super) fn collider(&self, profile: DeployableProfile) -> WorldBlock {
@@ -256,7 +243,8 @@ impl GameServer {
             return Vec::new();
         };
         entity.health = entity.health.saturating_sub(damage);
-        let dead = entity.health == 0;
+        let new_health = entity.health;
+        let dead = new_health == 0;
 
         // Apply the swing cooldown after a successful hit so spamming
         // damage swings doesn't bypass the gather throttle.
@@ -264,10 +252,26 @@ impl GameServer {
             client.next_gather_tick = self.tick + tool.cooldown_ticks.max(1);
         }
 
+        let mut envelopes = Vec::new();
         if dead {
             self.destroy_deployed_entity(command.id);
+        } else {
+            // Broadcast the new health on the reliable channel.
+            // Lightyear's per-component delta replication empirically
+            // drops `DeployableHealth` diffs for entities a client
+            // received via a room AddSender event, so this
+            // side-channel keeps the client's local component in sync
+            // after each hit (without it, the HP nameplate lagged
+            // 2-3 swings behind on the swinger's own screen).
+            envelopes.push(ServerEnvelope {
+                target: DeliveryTarget::Broadcast,
+                message: ServerMessage::DeployableHealthChanged {
+                    id: command.id,
+                    health: new_health,
+                },
+            });
         }
-        Vec::new()
+        envelopes
     }
 
     /// Remove a placed structure entirely (gameplay death + tracker
@@ -314,25 +318,6 @@ impl GameServer {
             }
         }
         false
-    }
-
-    /// Collect the deployable states visible to `for_client` — used by the
-    /// snapshot builder. `None` means "no AoI filter" (tests / handshake).
-    pub(super) fn deployed_entities_for_snapshot(
-        &self,
-        visible: Option<&std::collections::HashSet<DeployedEntityId>>,
-    ) -> Vec<DeployedEntityState> {
-        let mut out: Vec<DeployedEntityState> = self
-            .deployed_entities
-            .values()
-            .filter(|entity| match visible {
-                None => true,
-                Some(ids) => ids.contains(&entity.id),
-            })
-            .map(DeployedEntity::to_state)
-            .collect();
-        out.sort_by_key(|state| state.id);
-        out
     }
 
     /// Build the load-time map from a list of persisted deployable

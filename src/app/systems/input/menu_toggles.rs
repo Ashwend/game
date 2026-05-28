@@ -97,16 +97,18 @@ fn handle_pause_escape(menu: &mut MenuState) {
     }
 }
 
-/// Mirror the server's `local_player.open_furnace.is_some()` onto
-/// `MenuState.furnace_open` so the input-gating helpers can suppress
-/// movement/look/swing without having to peek into the snapshot.
+/// Mirror the local player's replicated `PlayerPrivate.open_furnace`
+/// onto `MenuState.furnace_open` so the input-gating helpers can
+/// suppress movement/look/swing without having to peek into the
+/// replicated component themselves.
 pub(crate) fn sync_furnace_open_flag_system(
-    runtime: Res<crate::app::state::ClientRuntime>,
+    local_player: Res<crate::app::state::LocalPlayerState>,
     mut menu: ResMut<MenuState>,
 ) {
-    let open = runtime
-        .local_player()
-        .and_then(crate::protocol::PlayerState::open_furnace)
+    let open = local_player
+        .private
+        .as_ref()
+        .and_then(|private| private.open_furnace.as_ref())
         .is_some();
     if menu.furnace_open != open {
         menu.furnace_open = open;

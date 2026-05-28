@@ -31,6 +31,7 @@ pub(crate) struct GameplayInventoryShortcutsParams<'w, 's> {
     mouse_buttons: Res<'w, ButtonInput<MouseButton>>,
     mouse_wheel: MessageReader<'w, 's, MouseWheel>,
     runtime: ResMut<'w, ClientRuntime>,
+    local_player: Res<'w, crate::app::state::LocalPlayerState>,
     gather_input: ResMut<'w, GatherInputState>,
     inventory_ui: ResMut<'w, InventoryUiState>,
     menu: ResMut<'w, MenuState>,
@@ -81,10 +82,10 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
         .just_pressed(KeyAction::DropItem, &params.keys)
     {
         let Some(active_actionbar_slot) = params
-            .runtime
-            .local_player()
-            .and_then(|player| player.inventory.as_ref())
-            .map(|inventory| inventory.active_actionbar_slot)
+            .local_player
+            .private
+            .as_ref()
+            .map(|private| private.inventory.active_actionbar_slot)
         else {
             return;
         };
@@ -157,7 +158,7 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
         params.gather_input.cancel();
         None
     } else {
-        equipped_tool_kind(&params.runtime)
+        equipped_tool_kind(&params.local_player)
     };
     // Pick the swing target. Priority:
     //  1. A resource node the held tool can actually harvest. Wrong-
@@ -168,21 +169,20 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
     //     bare hands on stone feel wrong, and the no-tool case would
     //     swing on every left-click which is jarring near placed
     //     buildings the player is just standing next to).
-    let target = if let Some(node_id) = params
-        .pickup_target
-        .resource_node_id
-        .filter(|_| equipped_tool_can_harvest_target(&params.runtime, &params.pickup_target))
-    {
-        Some(SwingTarget::ResourceNode(node_id))
-    } else if let Some(deployable_id) = params.pickup_target.deployable_id
-        && equipped_tool
-            .map(|kind| kind != ToolKind::Hands)
-            .unwrap_or(false)
-    {
-        Some(SwingTarget::Deployable(deployable_id))
-    } else {
-        None
-    };
+    let target =
+        if let Some(node_id) = params.pickup_target.resource_node_id.filter(|_| {
+            equipped_tool_can_harvest_target(&params.local_player, &params.pickup_target)
+        }) {
+            Some(SwingTarget::ResourceNode(node_id))
+        } else if let Some(deployable_id) = params.pickup_target.deployable_id
+            && equipped_tool
+                .map(|kind| kind != ToolKind::Hands)
+                .unwrap_or(false)
+        {
+            Some(SwingTarget::Deployable(deployable_id))
+        } else {
+            None
+        };
     let impact = params.gather_input.update(
         params.time.delta_secs(),
         params.mouse_buttons.just_pressed(MouseButton::Left),
@@ -195,8 +195,8 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
     }
 }
 
-fn equipped_tool_kind(runtime: &ClientRuntime) -> Option<ToolKind> {
-    Some(equipped_tool_profile(runtime).kind)
+fn equipped_tool_kind(local_player: &crate::app::state::LocalPlayerState) -> Option<ToolKind> {
+    Some(equipped_tool_profile(local_player).kind)
 }
 
 /// Resolve the active actionbar item to a tool profile, falling back to
@@ -204,11 +204,11 @@ fn equipped_tool_kind(runtime: &ClientRuntime) -> Option<ToolKind> {
 /// the same fallback in `apply_gather_command`, so the client's hit
 /// check and the server's payout decision stay aligned for crude
 /// (hand-harvestable) nodes.
-fn equipped_tool_profile(runtime: &ClientRuntime) -> ToolProfile {
-    runtime
-        .local_player()
-        .and_then(|player| player.inventory.as_ref())
-        .and_then(|inventory| inventory.active_actionbar_stack())
+fn equipped_tool_profile(local_player: &crate::app::state::LocalPlayerState) -> ToolProfile {
+    local_player
+        .private
+        .as_ref()
+        .and_then(|private| private.inventory.active_actionbar_stack())
         .and_then(|stack| item_definition(&stack.item_id))
         .and_then(|definition| definition.tool)
         .unwrap_or(HANDS_TOOL)
@@ -332,8 +332,11 @@ fn dispatch_deployable_swing(
     );
 }
 
-fn equipped_tool_can_harvest_target(runtime: &ClientRuntime, target: &PickupTargetState) -> bool {
-    let profile = equipped_tool_profile(runtime);
+fn equipped_tool_can_harvest_target(
+    local_player: &crate::app::state::LocalPlayerState,
+    target: &PickupTargetState,
+) -> bool {
+    let profile = equipped_tool_profile(local_player);
     let Some(definition_id) = target.resource_definition_id.as_deref() else {
         return false;
     };

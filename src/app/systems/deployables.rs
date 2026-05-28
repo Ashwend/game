@@ -24,12 +24,17 @@ use crate::{
             DeployablePlacementGhost, DeployableVisualAssets, FurnaceMouthLight, MainCamera,
             NetworkDeployedEntity,
         },
-        state::{ClientErrorToast, ClientRuntime, DeployablePlacementState, MenuState, Screen},
+        state::{
+            ClientErrorToast, ClientRuntime, DeployablePlacementState, LocalPlayerState, MenuState,
+            Screen,
+        },
         systems::input::send_place_deployable_command,
     },
     items::{DeployableKind, DeployableProfile, ItemId, ItemModel, item_definition},
-    protocol::{DeployedEntityId, DeployedEntityState, PlaceDeployableCommand, Vec3Net},
-    server::{Deployable, DeployableActive, DeployableHealth, DeployableTransform},
+    protocol::{DeployedEntityId, PlaceDeployableCommand, Vec3Net},
+    resources::resource_node_collider_at,
+    server::{Deployable, DeployableActive, DeployableHealth, DeployableTransform, ResourceNode},
+    world::WorldBlock,
 };
 
 /// Maximum distance, in metres, between the player's feet and the
@@ -48,6 +53,7 @@ pub(crate) fn update_placement_ghost_system(
     mut commands: Commands,
     mut placement: ResMut<DeployablePlacementState>,
     runtime: Res<ClientRuntime>,
+    local_player: Res<LocalPlayerState>,
     menu: Res<MenuState>,
     assets: Option<Res<DeployableVisualAssets>>,
     camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
@@ -58,7 +64,7 @@ pub(crate) fn update_placement_ghost_system(
         return;
     };
 
-    let active = current_deployable(&runtime, &menu);
+    let active = current_deployable(&local_player, &menu);
     let kind_changed = placement.item_id.as_ref().map(|id| id.as_ref())
         != active.as_ref().map(|(id, _, _)| id.as_ref());
     if kind_changed {
@@ -159,10 +165,11 @@ fn deployable_kind_label(item_id: &ItemId) -> Option<String> {
     })
 }
 
-/// Diff the snapshot's placed-structure list against the live entities.
-/// Spawn missing ones, update kind/transform if the snapshot moved
-/// them (admin nudge, future destroy/recreate), despawn any that left
-/// the AoI ring. Toggles the furnace mouth light to match `active`.
+/// Reconcile the local `NetworkDeployedEntity` visuals against the
+/// Lightyear-replicated `(Deployable, DeployableTransform,
+/// DeployableActive)` entities. Spawn missing ones, refresh transforms,
+/// despawn any that left the AoI ring. Toggles the furnace mouth light
+/// to match `active`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_deployed_entities_system(
     mut commands: Commands,
@@ -180,19 +187,19 @@ pub(crate) fn apply_deployed_entities_system(
     let Some(assets) = assets else {
         return;
     };
-    if runtime.snapshot.is_none() {
+    if runtime.client_id.is_none() {
+        // Not connected — tear down any visuals from a prior session.
         for (entity, _) in &existing {
             commands.entity(entity).despawn();
         }
         return;
     }
-    let deployed = collect_deployed_entities(&runtime, &replicated);
 
     let mut existing_by_id: HashMap<DeployedEntityId, Entity> = existing
         .iter()
         .map(|(entity, marker)| (marker.id, entity))
         .collect();
-    let mut snapshot_ids: HashSet<DeployedEntityId> = HashSet::new();
+    let mut visible_ids: HashSet<DeployedEntityId> = HashSet::new();
 
     // Map parent-entity → child-light-entity for the lights currently
     // in the world. We compare per-furnace-entity below and either
@@ -203,24 +210,24 @@ pub(crate) fn apply_deployed_entities_system(
         lights_by_parent.insert(child_of.parent(), light_entity);
     }
 
-    for state in &deployed {
-        snapshot_ids.insert(state.id);
-        let transform = deployable_transform(state.position.into(), state.yaw);
-        let parent_entity = if let Some(entity) = existing_by_id.remove(&state.id) {
-            commands.entity(entity).insert(transform);
+    for (meta, transform, _health, active) in &replicated {
+        visible_ids.insert(meta.id);
+        let visual_transform = deployable_transform(transform.position.into(), transform.yaw);
+        let parent_entity = if let Some(entity) = existing_by_id.remove(&meta.id) {
+            commands.entity(entity).insert(visual_transform);
             entity
         } else {
-            let (mesh, material) = deployable_visual(&assets, state.kind);
+            let (mesh, material) = deployable_visual(&assets, meta.kind);
             commands
                 .spawn((
-                    Name::new(format!("Deployable {}", state.id)),
+                    Name::new(format!("Deployable {}", meta.id)),
                     NetworkDeployedEntity {
-                        id: state.id,
-                        kind: state.kind,
+                        id: meta.id,
+                        kind: meta.kind,
                     },
                     Mesh3d(mesh),
                     MeshMaterial3d(material),
-                    transform,
+                    visual_transform,
                     Visibility::Visible,
                 ))
                 .id()
@@ -229,14 +236,14 @@ pub(crate) fn apply_deployed_entities_system(
         sync_furnace_light(
             &mut commands,
             parent_entity,
-            state.kind,
-            state.active,
+            meta.kind,
+            active.0,
             lights_by_parent.remove(&parent_entity),
         );
     }
 
     for (id, entity) in existing_by_id {
-        if !snapshot_ids.contains(&id) {
+        if !visible_ids.contains(&id) {
             commands.entity(entity).despawn();
         }
     }
@@ -249,45 +256,96 @@ pub(crate) fn apply_deployed_entities_system(
     }
 }
 
-/// Phase 5 A/B switch: under `replicated-nodes`, materialise the
-/// deployable list from replicated entities; otherwise read the
-/// snapshot. Returns the same `DeployedEntityState` wire shape either
-/// way so the rest of the system doesn't branch on the feature flag.
-fn collect_deployed_entities(
-    runtime: &ClientRuntime,
-    replicated: &Query<(
-        &Deployable,
-        &DeployableTransform,
-        &DeployableHealth,
-        &DeployableActive,
-    )>,
-) -> Vec<DeployedEntityState> {
-    #[cfg(feature = "replicated-nodes")]
-    {
-        let _ = runtime;
-        replicated
-            .iter()
-            .map(|(meta, transform, health, active)| DeployedEntityState {
-                id: meta.id,
-                item_id: meta.item_id.clone(),
-                kind: meta.kind,
-                position: transform.position,
-                yaw: transform.yaw,
-                health: health.0,
-                max_health: meta.max_health,
-                active: active.0,
-            })
-            .collect()
+/// Knuth golden-ratio mix constant for the fingerprint helpers — the
+/// XOR-of-ids accumulator gets multiplied by this to spread sequential
+/// id values across the `u64`.
+const FINGERPRINT_MIX: u64 = 0x9E37_79B9_7F4A_7C15;
+
+/// Per-frame maintainer for `ClientRuntime::world_grid`. Watches the
+/// world version (Welcome bumps it), the replicated resource-node set,
+/// and the replicated deployable set; rebuilds the grid when any of
+/// them changes. The local `Option` cache means idle frames cost a
+/// fingerprint compare and nothing else.
+pub(crate) fn maintain_world_grid_system(
+    mut runtime: ResMut<ClientRuntime>,
+    resource_nodes: Query<&ResourceNode>,
+    deployables: Query<(&Deployable, &DeployableTransform)>,
+    mut last_fingerprint: Local<Option<(u64, u64, u64)>>,
+) {
+    let world_version = runtime.world_version;
+    let resource_node_version = resource_node_set_fingerprint(resource_nodes.iter());
+    let deployable_version = deployable_set_fingerprint(deployables.iter());
+    let current = (world_version, resource_node_version, deployable_version);
+
+    if *last_fingerprint == Some(current) {
+        return;
     }
-    #[cfg(not(feature = "replicated-nodes"))]
-    {
-        let _ = replicated;
-        runtime
-            .snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.deployed_entities.clone())
-            .unwrap_or_default()
+
+    let resource_colliders: Vec<WorldBlock> = resource_nodes
+        .iter()
+        .filter_map(|node| resource_node_collider_at(&node.definition_id, node.position))
+        .collect();
+    let deployable_colliders: Vec<WorldBlock> = deployables
+        .iter()
+        .filter_map(|(meta, transform)| deployable_collider(meta, transform))
+        .collect();
+    runtime.rebuild_world_grid(resource_colliders, deployable_colliders);
+    *last_fingerprint = Some(current);
+}
+
+fn resource_node_set_fingerprint<'a>(iter: impl IntoIterator<Item = &'a ResourceNode>) -> u64 {
+    let mut hash: u64 = 0;
+    let mut count: u64 = 0;
+    for node in iter {
+        // Skip ids that contribute no collider so the fingerprint stays
+        // tight to the actual collision set — crude clutter (surface
+        // stones, branch piles, hay grass) doesn't move the grid.
+        if resource_node_collider_at(&node.definition_id, node.position).is_none() {
+            continue;
+        }
+        hash ^= node.id;
+        count += 1;
     }
+    hash.wrapping_mul(FINGERPRINT_MIX).wrapping_add(count)
+}
+
+fn deployable_set_fingerprint<'a>(
+    iter: impl IntoIterator<Item = (&'a Deployable, &'a DeployableTransform)>,
+) -> u64 {
+    let mut hash: u64 = 0;
+    let mut count: u64 = 0;
+    for (meta, _) in iter {
+        // XOR ^ 0xD9E3_F1A7_5B6C_8024 ensures the deployable id space
+        // (separate counter from resource nodes server-side) doesn't
+        // accidentally cancel against a resource node id with the same
+        // numeric value when the two fingerprints are tupled together.
+        hash ^= meta.id ^ 0xD9E3_F1A7_5B6C_8024;
+        count += 1;
+    }
+    hash.wrapping_mul(FINGERPRINT_MIX).wrapping_add(count)
+}
+
+/// Build the AABB collider for a placed structure from its replicated
+/// components. Returns `None` if the item id no longer resolves (e.g.
+/// a server using a newer item table than this client knows about — in
+/// which case skip the collider rather than crash, the renderer will
+/// still draw the structure).
+pub(crate) fn deployable_collider(
+    meta: &Deployable,
+    transform: &DeployableTransform,
+) -> Option<WorldBlock> {
+    let profile = item_definition(&meta.item_id)?.deployable?;
+    let center = Vec3Net::new(
+        transform.position.x,
+        transform.position.y + profile.collider_half_height,
+        transform.position.z,
+    );
+    let half = Vec3Net::new(
+        profile.collider_half_width,
+        profile.collider_half_height,
+        profile.collider_half_width,
+    );
+    Some(WorldBlock::new(center, half))
 }
 
 /// Spawn / despawn the warm point light that simulates the fire inside
@@ -335,7 +393,7 @@ fn sync_furnace_light(
 }
 
 fn current_deployable(
-    runtime: &ClientRuntime,
+    local_player: &LocalPlayerState,
     menu: &MenuState,
 ) -> Option<(ItemId, DeployableProfile, ItemModel)> {
     if menu.screen != Screen::InGame || menu.pause_open {
@@ -347,10 +405,10 @@ fn current_deployable(
     if menu.inventory_open || menu.crafting_open || menu.chat_open {
         return None;
     }
-    let stack = runtime
-        .local_player()?
-        .inventory
+    let stack = local_player
+        .private
         .as_ref()?
+        .inventory
         .active_actionbar_stack()?;
     let definition = item_definition(&stack.item_id)?;
     let profile = definition.deployable?;

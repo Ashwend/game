@@ -625,7 +625,12 @@ pub enum ServerMessage {
         map: MapType,
         world: WorldData,
         is_admin: bool,
-        snapshot: WorldSnapshot,
+        /// Prediction-seed for the connecting client's local
+        /// controller — position, velocity, yaw, pitch, health,
+        /// grounded, last_processed_input. Phase 6.6 retired the
+        /// full-snapshot Welcome payload; everything else now flows
+        /// through Lightyear replication.
+        local_seed: PlayerState,
         world_time: WorldTimeSnapshot,
     },
     AuthRejected {
@@ -635,7 +640,6 @@ pub enum ServerMessage {
         reason: String,
     },
     PlayerEvent(PlayerEvent),
-    Snapshot(WorldSnapshot),
     Correction(PlayerState),
     Chat(ChatMessage),
     ItemMerged {
@@ -662,6 +666,30 @@ pub enum ServerMessage {
     /// the player's view ring.
     ResourceNodeDepleted {
         id: ResourceNodeId,
+    },
+    /// Authoritative storage update for a live resource node. Sent on
+    /// the reliable channel whenever a gather command decrements the
+    /// storage server-side, because Lightyear's per-component delta
+    /// replication empirically drops the `ResourceNodeStorage` updates
+    /// to clients that received the entity via a room AddSender event
+    /// (initial spawn ships but subsequent diffs don't reach the
+    /// client). Routing the change through a reliable `ServerMessage`
+    /// sidesteps the bug — the client applies it to the replicated
+    /// component locally so the existing readers (gather tooltip,
+    /// future consumers) stay on the ECS source of truth.
+    ResourceNodeStorageChanged {
+        id: ResourceNodeId,
+        storage: Vec<ItemStack>,
+    },
+    /// Authoritative health update for a placed deployable. Same
+    /// workaround pattern as `ResourceNodeStorageChanged` — the
+    /// replicated `DeployableHealth` diff is dropped by Lightyear
+    /// after the entity's initial spawn, so we ship the new value on
+    /// the reliable channel instead. Without this, an axe-on-furnace
+    /// hit took 2-3 swings to reflect on the client's HP nameplate.
+    DeployableHealthChanged {
+        id: DeployedEntityId,
+        health: u32,
     },
     /// Authoritative day/night clock. Sent every ~60 s as a routine drift
     /// realignment, and immediately after an admin command changes the
@@ -783,6 +811,8 @@ impl ServerMessage {
             | Self::Chat(_)
             | Self::ItemMerged { .. }
             | Self::ResourceNodeDepleted { .. }
+            | Self::ResourceNodeStorageChanged { .. }
+            | Self::DeployableHealthChanged { .. }
             | Self::Toast(_) => PacketDelivery::Reliable,
             // Impact effects are pure cosmetic feedback. Dropping one is
             // far less bad than the extra latency of a reliable resend,
@@ -791,8 +821,7 @@ impl ServerMessage {
             // voice rides an unordered unreliable channel so every
             // delivered frame is played even if it arrives out of order.
             Self::Voice { .. } => PacketDelivery::UnreliableUnordered,
-            Self::Snapshot(_)
-            | Self::Correction(_)
+            Self::Correction(_)
             | Self::ResourceImpact { .. }
             | Self::WorldTime(_)
             | Self::PerfStats(_)
@@ -827,22 +856,21 @@ pub struct ChatMessage {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct WorldSnapshot {
-    pub tick: u64,
-    pub players: Vec<PlayerState>,
-    pub dropped_items: Vec<DroppedWorldItem>,
-    #[serde(default)]
-    pub resource_nodes: Vec<ResourceNodeState>,
-    #[serde(default)]
-    pub deployed_entities: Vec<DeployedEntityState>,
-}
-
+/// Per-client wire payload used by:
+///
+/// - `ServerMessage::Welcome.local_seed` — the initial prediction
+///   bootstrap (server tells the connecting client where its
+///   controller starts).
+/// - `ServerMessage::Correction` — server-authoritative correction of
+///   a divergent prediction (health rollback today, more fields if
+///   prediction grows).
+///
+/// All other per-player state moved off the wire to Lightyear
+/// replication (`PlayerPublic` / `PlayerPrivate`) during the Phase 6
+/// migration; this struct is now strictly a prediction-seed shape.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlayerState {
     pub client_id: ClientId,
-    pub steam_id: SteamId,
-    pub name: String,
     pub position: Vec3Net,
     pub velocity: Vec3Net,
     pub yaw: f32,
@@ -850,42 +878,6 @@ pub struct PlayerState {
     pub health: f32,
     pub grounded: bool,
     pub last_processed_input: u64,
-    pub is_admin: bool,
-    /// Most recent in-world chat line, while it's still floating above the
-    /// player. Cleared server-side after [`CHAT_BUBBLE_DURATION_SECONDS`].
-    /// Populated on every snapshot entry — even peers — so remote players
-    /// can render speech bubbles above each other's heads.
-    #[serde(default)]
-    pub chat_bubble: Option<String>,
-    /// Only populated for the receiving client. Peer entries omit the
-    /// inventory to keep snapshots small (49 slots × N players × 20 Hz
-    /// adds up fast) and to avoid leaking other players' contents.
-    #[serde(default)]
-    pub inventory: Option<PlayerInventoryState>,
-    /// In-flight crafting queue for the receiving client. Like
-    /// `inventory`, peer entries omit this — peers neither need to render
-    /// each other's queues nor see their contents.
-    #[serde(default)]
-    pub crafting: Option<PlayerCraftingState>,
-    /// Currently-opened furnace's full state, if any. Populated only
-    /// for the owning client (mirrors `inventory` / `crafting` privacy).
-    /// `None` when the player has no furnace open.
-    #[serde(default)]
-    pub open_furnace: Option<OpenFurnaceView>,
-}
-
-impl PlayerState {
-    pub fn inventory(&self) -> Option<&PlayerInventoryState> {
-        self.inventory.as_ref()
-    }
-
-    pub fn crafting(&self) -> Option<&PlayerCraftingState> {
-        self.crafting.as_ref()
-    }
-
-    pub fn open_furnace(&self) -> Option<&OpenFurnaceView> {
-        self.open_furnace.as_ref()
-    }
 }
 
 pub fn sanitize_chat(text: &str) -> Option<String> {

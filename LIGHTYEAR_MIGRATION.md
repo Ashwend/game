@@ -36,10 +36,29 @@ phase and execute it.
 ### Reading order for a fresh session
 
 1. Read **Project context** below for the architecture snapshot.
-2. Read the **Phase index** for status.
-3. Jump to the phase you're going to execute. Each phase section is
+2. **Read the ⚠️ Lightyear known issue section** — it documents a
+   subtle bug class that bit us hard during Phase 6 and influences
+   every future change to replicated state. Future sessions will hit
+   it again if they don't know about it.
+3. Read the **Phase index** for status.
+4. Jump to the phase you're going to execute. Each phase section is
    self-contained (key files, design decisions, open items).
-4. Glance at **Cross-phase reference** for the entity-type table and glossary.
+5. Glance at **Cross-phase reference** for the entity-type table and glossary.
+
+### Migration status (May 2026)
+
+**Phases 0 through 6.6 are all complete and verified in-game.** The
+custom `WorldSnapshot` broadcast is gone; every replicated entity
+type (resource nodes, dropped items, deployables, players) flows
+through Lightyear's per-component replication with chunk-room
+visibility. State changes that Lightyear's post-spawn diff path
+drops (a known Lightyear 0.26.4 bug — see the warning section) are
+routed through reliable `ServerMessage` side-channels: see
+`ResourceNodeStorageChanged` and `DeployableHealthChanged`.
+
+**Only Phase 7 (post-migration audit) is pending.** It's a
+cleanup pass — no behaviour change — focused on removing the
+dead types, comments, and helpers the migration left behind.
 
 ---
 
@@ -135,6 +154,155 @@ Docs:
 
 ---
 
+## ⚠️ Lightyear 0.26.4 known issue: post-spawn component diffs can be silently dropped
+
+**READ THIS BEFORE ADDING ANY NEW REPLICATED STATE.**
+
+### Symptom
+
+A server-side `Changed<T>` on a replicated component never reaches the
+client. The initial entity spawn delivers the component value just
+fine; later mutations to that same component on that same entity are
+invisible to the client. Confirmed empirically with the
+`replication-trace` feature: `server: <Component> MUTATE` log lines
+fire, matching `client: <Component> RECV` lines never do.
+
+### Root cause (Lightyear, not us)
+
+Lightyear's `SendUpdatesMode::SinceLastAck` (the default) gates each
+component update on `is_changed(send_tick, this_run)` where `send_tick`
+is **per `(sender, ReplicationGroupId)`** — not per `(sender, entity)`
+or `(sender, component)`. See
+`lightyear_replication-0.26.4/src/send/sender.rs:155-166` and
+`src/send/buffer.rs:678`.
+
+Lightyear 0.26.0's PR
+[#1330](https://github.com/cBournhonesque/lightyear/pull/1330)
+introduced a `DEFAULT_GROUP = ReplicationGroupId(0)`, so every
+replicated entity in this codebase shares the same ack tick. A
+frequently-updated entity in the group can advance the shared ack
+past a slowly-changing entity's local `Changed` mark, and Lightyear
+concludes "nothing new to send" for the slow entity even though it
+just changed.
+
+The underlying design issue
+([#740](https://github.com/cBournhonesque/lightyear/issues/740)) was
+filed by the maintainer himself in Dec 2024 and is still open. The
+fix lives on `main` as
+[PR #1361](https://github.com/cBournhonesque/lightyear/pull/1361),
+which **replaces the entire replication subsystem with
+`bevy_replicon`**. No crates.io release yet.
+
+### Why we can't downgrade
+
+| Version | Bevy compat | Has the bug? |
+| ------- | ----------- | ------------ |
+| 0.26.x  | 0.18        | Yes — and only line that supports Bevy 0.18 |
+| 0.25.x  | 0.17        | Yes (root-cause #740 predates 0.26 by ~year) |
+| ≤ 0.24  | 0.16 or older | Yes |
+
+There's no version of Lightyear that's both Bevy-0.18-compatible and
+without the bug.
+
+### Why we can't patch locally
+
+The entire replication subsystem is being deleted on `main`. Any
+local fix would be throwaway work, and the replicon-based replacement
+will land sooner or later.
+
+### The workaround pattern
+
+For components whose post-spawn updates fail to ship, route the
+update through a **reliable `ServerMessage`** instead. Pattern, as
+applied for `ResourceNodeStorage` in Phase 6.5:
+
+1. Define a server message variant carrying the entity id + the new
+   value (e.g.
+   `ServerMessage::ResourceNodeStorageChanged { id, storage }`).
+   Add it to `ServerMessage::delivery()`'s `Reliable` arm.
+2. After the server-side mutation in `GameServer`, push a
+   `ServerEnvelope` with `DeliveryTarget::Broadcast` (or AoI-filtered
+   if bandwidth matters). See `src/server/resource_nodes.rs`'s
+   `apply_gather_command` for an example.
+3. In the client's `network_tick_system`, take a
+   `Query<(&MarkerComponent, &mut ReplicatedComponent)>`, find the
+   entity by id, and write the new value directly. See
+   `src/app/systems/network.rs` for the live example.
+4. Make `ClientRuntime::apply_message` a no-op for the new variant
+   (the work happens in the network tick system, not the runtime
+   state).
+
+The replicated component itself stays registered for replication —
+the initial spawn delivery still works fine, and downstream readers
+(tooltips, queries) keep using the ECS source of truth. The reliable
+message is purely a patch on the post-spawn diff path.
+
+### When to use the workaround
+
+Use the reliable side-channel when **all** of these are true:
+
+- The component is server-authoritative.
+- The component is shipped through Lightyear replication.
+- The component mutates after spawn.
+- The mutations are infrequent or event-driven (gather impulses,
+  inventory transactions, structure damage). One missed diff stays
+  visible indefinitely because there's no follow-up update to
+  re-converge.
+
+You probably **don't** need the workaround for components that
+mutate every tick (movement, smelt fractions, animations): the
+flood of `Changed<T>` ticks masks individual dropouts and the client
+converges within ~50 ms.
+
+### Currently active workarounds in tree
+
+- `ResourceNodeStorage` — reliable
+  `ServerMessage::ResourceNodeStorageChanged` (Phase 6.5).
+- `DeployableHealth` — reliable
+  `ServerMessage::DeployableHealthChanged` (Phase 6.6). Surfaced
+  immediately after Phase 6.6 deleted the snapshot wire that had
+  been masking the drop. Symptom was "axe on furnace takes 2-3
+  swings to update HP nameplate". Same pattern as the resource
+  node storage workaround.
+- `DeployableActive` — always-write at the server mirror so
+  `Changed<T>` fires every tick (Phase 6.3 escape hatch). Less
+  principled than the reliable-message pattern but works for a
+  hot-toggling bool; consider migrating to the reliable-message
+  pattern if it ever drops a transition.
+
+### Suspected-but-untested at risk
+
+These mutate post-spawn through replication and could exhibit the
+same drop pattern; nobody has hit them yet but the next person who
+adds gameplay touching them should plan for it:
+
+- `PlayerPrivate.crafting` — only updates on craft enqueue/finish.
+  Currently masked by the same `last_processed_input` field
+  changing every tick alongside it, but verify after any future
+  refactor.
+
+### Long-term direction
+
+Lightyear's `main` branch is migrating to `bevy_replicon`
+([PR #1361](https://github.com/cBournhonesque/lightyear/pull/1361),
+[PR #1486](https://github.com/cBournhonesque/lightyear/pulls)). When
+that ships as a release, this whole class of bug should vanish and
+we can revisit dropping the side-channel messages. Until then, treat
+**reliable side-channel for slow-changing replicated state** as the
+default pattern for this codebase.
+
+### Diagnosing future occurrences
+
+Add a `client: <Component> RECV` trace under the
+`replication-trace` feature (see
+`src/app/systems/replication_trace.rs`) and a matching
+`server: <Component> MUTATE` trace in the mirror sync system in
+`src/net/host.rs`. Reproduce the gameplay action that mutates the
+component. If MUTATE fires but RECV doesn't, you're in this bug
+class — apply the reliable-message workaround.
+
+---
+
 ## Phase index
 
 | #   | Title                                                          | Status      |
@@ -145,7 +313,12 @@ Docs:
 | 3   | Merge Lightyear client into main Bevy app                      | ✅ done     |
 | 4   | Wire chunk rooms for resource nodes                            | ✅ done     |
 | 5   | Chunk rooms for dropped items, deployables, players            | ✅ done     |
-| 6   | Migrate consumers off `WorldSnapshot`, delete it               | ⏳ pending  |
+| 6.1 | Migrate `PlayerPrivate` consumers (inv/craft/furnace UI)       | ✅ done     |
+| 6.2 | Migrate `PlayerPublic` consumers (peer avatars)                | ✅ done     |
+| 6.3 | Migrate `Deployable` consumers                                 | ✅ done     |
+| 6.4 | Migrate `DroppedItem` consumers                                | ✅ done     |
+| 6.5 | Migrate `ResourceNode` consumers                               | ✅ done     |
+| 6.6 | Delete the snapshot path                                       | ✅ done     |
 | 7   | Post-migration audit & cleanup                                 | ⏳ pending  |
 | 1b  | Fold `resource_nodes` HashMap into entities (cleanup)          | ⏸ deferred  |
 
@@ -803,122 +976,377 @@ in-game behaviour listed under **Verification** before moving on.
 
 #### Phase 6.1 — `PlayerPrivate` (local inventory / crafting / furnace UI)
 
-Smallest first: this only affects what the local player sees in their
-own UI. No peer state involved.
+**Status**: ✅ done
 
-**Consumers to retarget:**
-- [src/app/ui/inventory.rs](src/app/ui/inventory.rs) — reads
-  `runtime.local_player().and_then(PlayerState::inventory)`.
-- [src/app/ui/crafting.rs](src/app/ui/crafting.rs) — reads
-  `runtime.local_player()` and its `.crafting`.
-- [src/app/ui/furnace.rs](src/app/ui/furnace.rs) — reads
-  `local_player.open_furnace`.
-- [src/app/systems/input/menu_toggles.rs](src/app/systems/input/menu_toggles.rs)
-  — reads `local_player.open_furnace.is_some()`.
-- [src/app/systems/items/tool_swap.rs](src/app/systems/items/tool_swap.rs)
-  — reads `local_player.inventory`.
+**What landed:**
 
-**Approach:**
-1. Add `LocalPlayerComponents` system param (or a `LocalPlayerSnapshot`
-   resource refreshed from a query) that exposes the local player's
-   replicated `(PlayerPublic, PlayerPrivate)` via the
-   `PlayerIndex.get(runtime.client_id?)` lookup we already have on
-   the server side… wait, that's server-side. On the client side
-   the local player entity is whichever replicated `Player` entity
-   matches `runtime.client_id`. Add a small client-side
-   `LocalPlayerIndex` resource keyed on `client_id`, populated by a
-   system that runs on `Added<Player>`.
-2. Retarget each consumer one at a time. After each, in-game-test
-   that the corresponding UI still works.
-3. Remove `inventory: Option<PlayerInventoryState>`,
-   `crafting: Option<PlayerCraftingState>`, and
-   `open_furnace: Option<OpenFurnaceView>` from `PlayerState` (the
-   wire type). The snapshot's player entries shrink to the
-   peer-visible public fields.
+- [src/server/player_ecs.rs](src/server/player_ecs.rs) — widened
+  `PlayerPrivate.open_furnace` from `Option<DeployedEntityId>` to
+  `Option<OpenFurnaceView>` so the furnace UI gets the whole view
+  (slots + smelt/fuel progress) from one replicated component.
+- [src/server.rs](src/server.rs) — `players_iter` now calls
+  `self.open_furnace_view_for(client_id)` so the mirror writes the
+  full view into the replicated component each tick.
+- [src/app/state/local_player.rs](src/app/state/local_player.rs) —
+  new `LocalPlayerState` resource (cached `(Entity, PlayerPublic,
+  PlayerPrivate)`). Refreshed once per frame by
+  `update_local_player_state_system` scanning `Query<(Entity,
+  &Player, &PlayerPublic, Option<&PlayerPrivate>)>` for whichever
+  entity matches `ClientRuntime::client_id`.
+- New `ClientSystemSet::LocalPlayerSync` runs the cache refresh at
+  the very start of `Update`, ahead of every consumer.
+- Consumers retargeted:
+  - [src/app/ui/inventory.rs](src/app/ui/inventory.rs),
+    [src/app/ui/crafting.rs](src/app/ui/crafting.rs),
+    [src/app/ui/furnace.rs](src/app/ui/furnace.rs) now read from
+    `LocalPlayerState`. `inventory_ui` no longer takes `&mut
+    ClientRuntime`.
+  - [src/app/systems/input/menu_toggles.rs](src/app/systems/input/menu_toggles.rs)
+    `sync_furnace_open_flag_system` reads
+    `local_player.private.open_furnace.is_some()`.
+  - [src/app/systems/items/tool_swap.rs](src/app/systems/items/tool_swap.rs)
+    reads `local_player.private.inventory.active_actionbar_stack()`.
 
-**Verification:**
-- Inventory UI shows and updates correctly when picking up / crafting
-  items.
-- Crafting queue shows in-flight jobs and ticks down progress bars.
-- Furnace UI opens with the right contents when interacting with a
-  furnace; smelt + fuel progress bars animate.
+**Not yet removed** (intentionally — defer to Phase 6.6 so the diff
+is small and the snapshot wire keeps the other consumers feeding
+until they migrate): the wire `PlayerState.inventory`,
+`PlayerState.crafting`, `PlayerState.open_furnace` fields. Server
+still populates them; nothing reads them.
+
+**Verified in-game:** inventory + actionbar render and update,
+crafting queue HUD ticks, furnace fuel/smelt bars animate, tool-swap
+animation fires, ESC closes the furnace modal.
+
+**Bandwidth note:** `OpenFurnaceView.smelt_fraction` /
+`fuel_fraction` change every tick while the furnace is running, so
+`PlayerPrivate` ships a diff every tick under that condition.
+Same as the legacy snapshot. Phase 7 can think about rounding /
+fewer significant bits if it matters.
 
 #### Phase 6.2 — `PlayerPublic` (peer avatars)
 
-**Consumers to retarget:**
+**Status**: ✅ done
+
+**What landed:**
+
 - [src/app/systems/players.rs](src/app/systems/players.rs)
-  `apply_snapshot_system` — peer avatar spawn / despawn / interpolation.
-- Wherever `local_view()` reads from snapshot — replace the
-  fallback path to read from the local player's replicated
-  `PlayerPublic` via the `LocalPlayerIndex` from Phase 6.1.
+  `apply_snapshot_system` now iterates the replicated `Query<(&Player,
+  Ref<PlayerPublic>)>` directly — no more `WorldSnapshot` fallback or
+  `replicated-nodes` cfg branches. Disconnect tear-down is keyed on
+  `runtime.client_id.is_none()`. The snapshot-driven unit test was
+  deleted; integration coverage lives in `src/net/tests.rs`.
+- [src/app/state/runtime.rs](src/app/state/runtime.rs) — `local_view`
+  and `local_player_position` drop the snapshot fallback. Until
+  Welcome seeds `predicted_local`, both return `None`. Two test
+  fixtures (`local_view_falls_back_to_snapshot_when_prediction_is_missing`
+  → renamed `local_view_is_none_without_prediction`, plus the HUD
+  render test) updated accordingly.
+- [src/app/ui/peer_overlay.rs](src/app/ui/peer_overlay.rs) — overlay
+  entries now borrow `&PlayerPublic` instead of `&PlayerState`.
+  `collect_peer_overlay_entries` takes a replicated query iterator,
+  and `PeerOverlayParams` gained a `Query<(&Player, &PlayerPublic)>`.
 
-**Approach:** mirror the existing system shape but iterate
-`Query<(&Player, Ref<PlayerPublic>)>` instead of
-`snapshot.players.iter()`. Use `Ref::last_changed().get() as u64` as
-the per-id interpolation tick (we already proved this works in the
-Phase 5 collectors).
-
-**Verification:** in MP, a second client's avatar appears, moves
-smoothly, despawns when they walk out of the AoI ring. Chat bubbles
-show on peers. Health-bar nameplate updates when peers take damage.
+**Verified in-game:** in 2-client MP, peer capsule + nameplate + chat
+bubble render; AoI ring controls visibility; local HUD continues to
+read off `predicted_local`. PvP isn't implemented (no melee/fall
+damage), so the health-bar tick on a peer wasn't directly tested —
+the field replicates fine and renders at full HP.
 
 #### Phase 6.3 — `Deployable` + family
 
-**Consumers to retarget:**
-- [src/app/systems/deployables.rs](src/app/systems/deployables.rs)
-  `apply_deployed_entities_system` — workbench/furnace spawn/despawn
-  and furnace-light toggle.
-- [src/app/state/runtime.rs](src/app/state/runtime.rs)
-  `rebuild_world_grid` — reads `snapshot.deployed_entities` for
-  collision colliders. Switch to reading replicated `Deployable +
-  DeployableTransform` directly; trigger a rebuild on
-  `Added<Deployable>` / `RemovedComponents<Deployable>`.
-- [src/app/systems/items/pickup.rs](src/app/systems/items/pickup.rs)
-  `update_pickup_target_system` — `snapshot.deployed_entities.iter()`
-  for raycast targeting.
+**Status**: ✅ done
 
-**Verification:** place a workbench → it appears with correct
-visuals. Damage it → HP nameplate counts down. Place a furnace,
-toggle it on → glow + smoke animations fire and stay on.
+**What landed:**
+
+- [src/app/systems/deployables.rs](src/app/systems/deployables.rs)
+  `apply_deployed_entities_system` iterates `Query<(&Deployable,
+  &DeployableTransform, &DeployableHealth, &DeployableActive)>`
+  directly — no more `replicated-nodes` cfg gate or
+  `collect_deployed_entities` indirection. Tear-down keys on
+  `runtime.client_id.is_none()`. `current_deployable` now reads
+  the active actionbar stack from `LocalPlayerState.private`.
+- New `maintain_world_grid_system` (in the same file) runs in a
+  new `ClientSystemSet::WorldGridRebuild` set right after
+  `Network`. It fingerprints `(world_version,
+  resource_node_collider_set_version,
+  deployable_set_fingerprint)` via `Local<Option<(u64, u64,
+  u64)>>` and rebuilds `ClientRuntime::world_grid` only when one
+  of them changes. Removes the in-`apply_message` rebuild calls
+  and the `resource_node_collider_version` field from
+  `ClientRuntime`.
+- [src/app/state/runtime.rs](src/app/state/runtime.rs)
+  `rebuild_world_grid` now takes
+  `deployable_colliders: impl IntoIterator<Item = WorldBlock>`
+  and combines them with the snapshot's resource-node colliders.
+  The deployable-side `deployable_collider` helper moved to
+  `deployables.rs` and takes `&Deployable + &DeployableTransform`.
+- [src/app/systems/items/pickup.rs](src/app/systems/items/pickup.rs)
+  `update_pickup_target_system`'s deployable branch took on a
+  `Query<(&Deployable, &DeployableTransform)>` and dropped the
+  `DeployedEntityState` references.
+  `best_deployable_target` / `deployable_aim_point` /
+  `set_deployable_pickup_target` now take replicated components.
+
+**Mid-phase bug found & worked around:**
+
+`DeployableActive` diffs were getting dropped under rapid
+furnace on/off toggling. The `replication-trace` server log
+showed `MUTATE true→false` followed by `MUTATE false→true` but
+the client only received one of every ~5 transitions, leaving
+the furnace mouth light visually stuck. Workaround in
+`sync_deployable_entities` ([src/net/host.rs](src/net/host.rs)):
+write `DeployableActive` *unconditionally* every mirror pass,
+so Bevy's `Changed<T>` fires every tick and Lightyear keeps
+re-shipping the current value until the client acks. The
+trace log still only fires on a real value flip so the
+diagnostic stays readable. Bandwidth cost: ~1 byte/tick per
+deployable (~20 bytes/sec at 20 Hz) — trivial.
+
+The underlying Lightyear delta-replication race is something to
+revisit in Phase 7 or report upstream — for now, this
+workaround keeps the convergence guarantee where it matters.
+
+**Verified in-game:** workbench/furnace placement visuals,
+collision against placed structures (via the new maintain
+system), furnace light toggling under repeated rapid clicks,
+deployable pickup tooltip + interact, AoI ring despawn/respawn
+all behave correctly.
+
+**Pre-existing issue surfaced (not a 6.3 regression):**
+Hatchet swings on a furnace play the "miss whoosh" because
+`impact_sound_for(Axe, Stone)` returns `None` in
+[src/app/audio/manifest.rs](src/app/audio/manifest.rs) — no
+dedicated audio clip for that (tool, surface) combination.
+The swing damage lands correctly. Same gap exists for
+`(Pickaxe, Wood)` on a workbench. Worth filling in but
+unrelated to the replication migration.
 
 #### Phase 6.4 — `DroppedItem`
 
-**Consumers to retarget:**
-- [src/app/systems/items/dropped.rs](src/app/systems/items/dropped.rs)
-  `apply_dropped_items_system` — visual interpolation.
-- The dropped-item branch of `update_pickup_target_system`.
+**Status**: ✅ done
 
-**Verification:** drop an item → it appears. Pick it up → particle
-burst fires (the existing `depleted_node_ids`-style signal is
-ResourceNode-only, but item-picked is similar — confirm pickup feels
-right). Drop a stack of items, watch them settle from the air
-smoothly.
+**What landed:**
+
+- [src/app/systems/items/dropped.rs](src/app/systems/items/dropped.rs)
+  `apply_dropped_items_system` iterates
+  `Query<(&DroppedItem, Ref<DroppedItemTransform>)>` directly. The
+  `collect_dropped_items` indirection (and its `replicated-nodes`
+  cfg gate) is gone. Tear-down keys on `runtime.client_id.is_none()`.
+  Per-id retarget tick comes from `Ref::last_changed().get() as u64`
+  so interpolation only restarts on real transform changes. The
+  visual transform is built from `DroppedItemTransform` directly via
+  a new `dropped_item_transform_from` helper (replaces the
+  `DroppedWorldItem`-shaped one).
+- [src/items.rs](src/items.rs) gained a position-keyed
+  `pickup_score_at_position(eye, yaw, pitch, position)` so callers
+  iterating replicated `DroppedItemTransform` don't have to
+  materialise a `DroppedWorldItem`. `pickup_score` is now a thin
+  shim that calls it.
+- [src/app/systems/items/pickup.rs](src/app/systems/items/pickup.rs)
+  `update_pickup_target_system` took on a
+  `Query<(&DroppedItem, &DroppedItemTransform)>` and the dropped-
+  item branch scores against the replicated position via the new
+  helper. `set_dropped_pickup_target` now takes `&DroppedItem +
+  &DroppedItemTransform`; it still prefers the visual entity's
+  interpolated transform for the tooltip anchor and falls back to
+  the authoritative replicated position only when the visual
+  hasn't been spawned yet (rate-limited spawn budget).
+
+**Verified in-game:** drops appear and settle, large-burst spawns
+drain over a few frames as expected, pickup tooltip + E pick work,
+AoI ring despawn/respawn behaves, and the multi-target priority
+(dropped item vs. resource node vs. deployable) still picks the
+closest one along the ray.
 
 #### Phase 6.5 — `ResourceNode`
 
-**Consumers to retarget:**
+**Status**: ✅ done
+
+**What landed:**
+
 - [src/app/systems/items/resource_nodes.rs](src/app/systems/items/resource_nodes.rs)
-  `apply_resource_nodes_system` — node spawn, pop-in animation,
-  depletion death-effect.
-- The resource-node branch of `update_pickup_target_system`.
-- The resource-node-collider portion of `rebuild_world_grid`.
+  `apply_resource_nodes_system` iterates
+  `Query<(&ResourceNode, &ResourceNodeStorage)>` directly. The
+  `collect_resource_node_states` indirection + `replicated-nodes`
+  cfg gate are gone. Tear-down keys on `runtime.client_id.is_none()`.
+  The `respawn_progress` machinery turned out to be dead code (the
+  server set it to `None` everywhere) so the `classify` /
+  `commit_progress` helpers and the `previous_progress` map were
+  deleted; pop-in is now just "this id wasn't tracked last frame
+  and we've already applied at least one reconciliation pass".
+- [src/resources.rs](src/resources.rs) gained position-keyed
+  variants `resource_node_anchor_for`, `resource_node_score_at`,
+  and `resource_node_collider_at` so callers iterating replicated
+  components don't have to materialise a `ResourceNodeState`.
+- [src/app/systems/items/pickup.rs](src/app/systems/items/pickup.rs)
+  `update_pickup_target_system` took on a
+  `Query<(&ResourceNode, &ResourceNodeStorage)>`. The resource-node
+  branch scores against the replicated position via the new helper
+  and the tooltip reads storage directly off the replicated
+  component.
+- [src/app/systems/deployables.rs](src/app/systems/deployables.rs)
+  `maintain_world_grid_system` now takes
+  `Query<&ResourceNode>` too; its fingerprint covers
+  `(world_version, resource_node_set_fingerprint,
+  deployable_set_fingerprint)` and the rebuild combines both
+  collider sources. The
+  `runtime.rs::resource_node_collider_set_version` helper +
+  `ClientRuntime::resource_node_collider_version` field were
+  deleted; the system carries its own `Local<Option<…>>` cache.
+- `rebuild_world_grid` now takes both
+  `resource_node_colliders` and `deployable_colliders` parameters
+  — no more snapshot reads.
 
-**Tricky bit:** `ResourceNodeState.respawn_progress` is currently a
-server-driven field on the wire. The mirror does not put it on the
-ECS entity. Decide between (a) adding a `ResourceNodeRegrow {
-progress: f32 }` component the server replicates while the node is
-regenerating, or (b) shipping respawn as a discrete
-`ServerMessage::ResourceNodeRegrowProgress` event. (a) is cleaner if
-we're keeping replication as the only path; (b) is a smaller diff.
+**Mid-phase bugs found:**
 
-**Verification:** gather a tree → count-down updates in real time.
-Fell it → death animation plays. Watch a node regenerate (5–15 min
-wait, or admin-spawn one with low storage and gather it to test the
-short cycle).
+1. **Tooltip never updated** — `ResourceNodeStorage` post-spawn
+   diffs were getting silently dropped by Lightyear (initial
+   spawn ships fine but subsequent gather decrements never reach
+   the client). Verified with `replication-trace`: ~6 server
+   MUTATE log lines per gather session, zero client RECV lines.
+   See the "⚠️ Lightyear 0.26.4 known issue" section at the top
+   of this file for the root-cause writeup.
+
+   **Workaround:** new reliable
+   `ServerMessage::ResourceNodeStorageChanged { id, storage }`.
+   Server emits it after every gather; client's
+   `network_tick_system` applies it directly to the replicated
+   `ResourceNodeStorage` component. Replication still owns the
+   initial-spawn delivery; the reliable channel just patches the
+   post-spawn diff path.
+
+2. **Death animation race** — `ServerMessage::ResourceNodeDepleted`
+   (reliable channel) and the Lightyear entity-despawn diff
+   (separate channel) race; depending on order the client either
+   plays the death animation or silently despawns the visual.
+
+   **Fix:** new `pending_depletion_check` grace map on
+   `ResourceNodeEntities`. When a replicated entity vanishes
+   without the depleted id already in
+   `runtime.depleted_node_ids`, the visual is held for
+   [`DEPLETION_GRACE_FRAMES`] (3 frames ≈ 50 ms). If the
+   message lands in that window, death effect fires; otherwise
+   it's treated as an AoI-leave and silently despawned.
+
+**Tricky bit (resolved):** `ResourceNodeState.respawn_progress`
+turned out to be dead — the server never sets it to `Some`. The
+client's old "just_entered_regen" / "just_finished_regen"
+classification logic was entirely unreachable code. Deleted with
+the rest of the snapshot reads. Regrow flow is now: server
+depletes → broadcast `ResourceNodeDepleted` → entity despawns →
+chunk manager schedules regrow → fresh entity spawns later
+(possibly different id) → arrives as a brand-new replicated
+entity on the client → standard pop-in animation. No regen-state
+component needed.
+
+**Verified in-game:** gather tooltip updates with each swing,
+trees fall and shatter on depletion, ores shatter, crude pickups
+fire pickup burst, AoI ring controls visibility with proper
+silent despawn on leave / pop-in on return.
 
 #### Phase 6.6 — Cleanup: delete the snapshot path
 
-Everything below should now be dead code. Delete it in one commit:
+**Status**: ✅ done
+
+**What landed:**
+
+- **Wire**: `WorldSnapshot` type deleted from
+  [src/protocol.rs](src/protocol.rs). `ServerMessage::Snapshot`
+  variant deleted. `PlayerState` trimmed to the prediction-seed
+  shape (`client_id`, `position`, `velocity`, `yaw`, `pitch`,
+  `health`, `grounded`, `last_processed_input`) — used by
+  `Welcome.local_seed` and `ServerMessage::Correction` only.
+- **Welcome**: `snapshot: WorldSnapshot` field replaced by
+  `local_seed: PlayerState`. Server constructs it from the
+  connecting client's controller; client's
+  `apply_message::Welcome` calls the new `seed_local_prediction`
+  helper. No more per-player iteration through a snapshot players
+  list.
+- **Server**: `GameServer::snapshot()`, `snapshot_for()`,
+  `snapshot_inner()`, `deployed_entities_for_snapshot()`, and
+  `DeployedEntity::to_state()` removed from
+  [src/server.rs](src/server.rs) /
+  [src/server/connection.rs](src/server/connection.rs) /
+  [src/server/deployables.rs](src/server/deployables.rs). The
+  per-tick snapshot broadcast loop in `GameServer::tick` is
+  gone — `tick()` returns ~0 envelopes per server tick when
+  nothing is happening.
+- **Tracing**: `snapshot_broadcast`, `snapshot_inner`,
+  `snapshot_players`, `snapshot_dropped_items`,
+  `snapshot_resource_nodes`, `snapshot_deployables` spans
+  removed alongside their methods. The Phase 0 spans that
+  measured CPU on the snapshot hot path are now also dead — the
+  remaining `server_tick` / `host_fixed_tick` / `route_envelopes`
+  / mirror-sync spans stay (those still see traffic).
+- **Constants**: `SNAPSHOT_BROADCAST_INTERVAL_TICKS` deleted from
+  [src/server.rs](src/server.rs).
+  `PERF_STATS_BROADCAST_INTERVAL_TICKS` kept — perf stats aren't
+  entity state, they're an HUD-only broadcast on its own slow
+  tick.
+- **`ClientRuntime`**: `snapshot: Option<WorldSnapshot>` field
+  deleted. `local_player()`, `is_stale_snapshot()`, and
+  `seed_local_prediction_from_snapshot()` removed. New
+  `seed_local_prediction(&PlayerState)` takes a Welcome seed
+  directly.
+- **Last live consumer migrated**: the deployable nameplate
+  overlay
+  ([src/app/ui/deployable_overlay.rs](src/app/ui/deployable_overlay.rs))
+  was reading `runtime.snapshot.deployed_entities`. It now takes
+  a `Query<(&Deployable, &DeployableHealth)>` via
+  `DeployableOverlayParams.replicated` and pairs IDs against the
+  visual `NetworkDeployedEntity` set the same way. The held-item
+  visual system and the gameplay-inventory shortcut handlers
+  also moved off `runtime.local_player()` onto
+  `LocalPlayerState`.
+- **`PlayerController::from_player_state`** stayed — same name,
+  reads the trimmed `PlayerState`. No call-site churn beyond the
+  field-set update.
+- **Feature flag**: `replicated-nodes` deleted from
+  [Cargo.toml](Cargo.toml). Every consumer is now unconditionally
+  on the replicated path.
+- **Tests**: 460 tests pass after the port (was 465 before; the
+  delta is 5 snapshot-only tests deleted with one-line reason
+  comments).
+
+**Wire types kept** (still used as the server's internal
+authoritative HashMap value type — they're no longer wire shapes
+but rewriting their callers is Phase 7 work):
+- `ResourceNodeState`
+- `DroppedWorldItem`
+- `DeployedEntityState`
+- `OpenFurnaceView`
+
+**Skipped intentionally:**
+- **Save-format bump** — the save format never carried
+  `WorldSnapshot` to begin with, so deleting the wire type left
+  the on-disk shape unchanged.
+- **`replication-trace` feature** — kept as the documented
+  diagnostic for the Lightyear-bug pattern (see the ⚠️ section
+  at the top of this file).
+
+**Late-breaking discovery, fixed in-phase:** `DeployableHealth`
+hit the Lightyear post-spawn-diff bug as soon as the snapshot
+wire was gone (the snapshot had been masking it). Symptom:
+hatchet on a furnace took 2-3 swings to update the HP nameplate
+on the swinger's own screen. Fix: applied the same reliable
+`ServerMessage::DeployableHealthChanged` workaround as
+`ResourceNodeStorage`; server's
+`apply_damage_deployable_command` broadcasts the new health
+after each hit, client's `network_tick_system` writes it to the
+replicated `DeployableHealth` component. Recorded in the
+"Currently active workarounds" list of the known-issues section
+above.
+
+**Verification:** `./cli check` / `./cli test` (460 ok) /
+`./cli lint` clean. `--features replication-trace` builds clean
+too.
+
+---
+
+Below is the original Phase 6.6 punch list, preserved for
+reference. Everything in it landed except the wire-type group
+(2), which was scoped down to keeping server-internal types in
+place; Phase 7 can move them out of `protocol.rs` if it wants:
 
 1. **Server**:
    - The per-tick snapshot broadcast loop in
@@ -978,140 +1406,226 @@ Everything below should now be dead code. Delete it in one commit:
 
 ## Phase 7 — Post-migration audit & cleanup
 
-**Status**: ⏳ pending · blocked by Phase 6
+**Status**: ⏳ pending — fits a single focused session
 
 ### Goal
 
-After Phase 6 lands, the migration is functionally complete but the
-tree probably carries leftovers: dead code paths, comments that still
-reference the snapshot, helper types that exist only to feed
-serialization that no longer exists, and so on. Phase 7 is a single
-focused audit pass: read the diff, find the cruft, remove it.
+The migration is functionally complete and verified in-game. Phase 7
+is a single audit pass to remove the cruft Phase 6 left behind: dead
+fields, stale comments, helper types whose only job was feeding the
+deleted snapshot wire, and docs that still describe the old
+architecture. **No behaviour change** — this is purely a hygiene pass.
 
-### What to look for
+### Before you start — context
 
-This is a **judgment / exploration phase**, not a step-by-step recipe.
-The agent picking this up should explicitly review each of the items
-below and write up findings before changing anything. Some items will
-be "no action needed", and that's a valid outcome.
+- **Read the ⚠️ Lightyear known issue section at the top of this
+  file first.** It explains the active workarounds, why they exist,
+  and the rule for new replicated state. Phase 7 should not touch
+  those workarounds — they're load-bearing.
+- **The migration is verified.** All 460 tests pass, lint is clean,
+  singleplayer + multiplayer were play-tested end-to-end. Do not
+  rip out machinery that "looks suspicious" without confirming it's
+  dead — the live grep below already filtered the obviously-dead
+  parts.
+- **Per-entity `ReplicationGroup` was considered but not applied.**
+  The research from "Known issue" section's referenced PRs notes
+  switching from the default `ReplicationGroupId(0)` to
+  `ReplicationGroup::new_from_entity()` *might* fix the post-spawn-
+  diff bug. If you want to experiment, do it in isolation as a
+  follow-up — don't bundle it into the Phase 7 cleanup commit.
 
-1. **Dead types and re-exports.**
-   - `PlayerState`, `DroppedWorldItem`, `ResourceNodeState`,
-     `DeployedEntityState`, `OpenFurnaceView` — these were wire
-     shapes for the snapshot. After Phase 6.6, are any still
-     reachable? If only the `Correction` path uses something like
-     `PlayerState`, the type can be trimmed. If a type has no
-     remaining caller, delete it.
-   - `DeployableView`, `PlayerView` — Phase 1/2 introduced these as
-     server-internal "wire shape" structs to feed the mirror sync.
-     If the ECS entities are now the source of truth, the mirror
-     can read directly from `GameServer` fields. Verify whether
-     these views still earn their keep.
-   - `read_dropped_item`, `read_resource_node_state`,
-     `collect_resource_node_states` — helpers introduced to
-     translate the ECS components back into the wire shape. If
-     nothing reads the wire shape, these go.
+### Punch list (concrete, executable)
 
-2. **The ECS mirror systems themselves.**
-   - `sync_resource_node_entities`, `sync_dropped_item_entities`,
-     `sync_deployable_entities`, `sync_player_entities` — these
-     copy `GameServer` HashMap state into ECS components every
-     tick. They exist because the HashMap is still authoritative
-     server-side.
-   - Phase 1b (`Fold resource_nodes HashMap into entities`) and
-     the analogous never-started Phase 2b are the path to making
-     ECS authoritative and deleting the mirror systems entirely.
-     Phase 7 is the right place to decide: do we want to schedule
-     Phase 1b + 2b now (multi-session refactor each, no behaviour
-     change), defer them indefinitely, or pick just the resource-
-     nodes one because that's where regrow + gather hit-rate
-     concentrates the most mutations per tick?
+Each item below has file paths + line numbers. Surveyed at the end
+of Phase 6 — re-grep if you find drift.
 
-3. **The legacy snapshot tests.**
-   - `src/server/tests/*` use `server.snapshot()` extensively as a
-     state accessor. Phase 6.6 will have replaced those. Look for
-     any helper introduced during the migration that's now
-     redundant.
-   - `src/net/tests.rs` — the singleplayer/MP integration tests
-     used to assert on `ServerMessage::Snapshot` arrivals. The
-     `ServerMessage::Welcome` assertion is the right replacement;
-     verify the wire-coverage stayed equivalent.
+#### 1. Delete `ResourceNodeState.respawn_progress` (vestigial field)
 
-4. **Comments that reference the snapshot path.**
-   - `grep -rn 'snapshot' src/` after Phase 6 will return ~hundreds
-     of comments referencing the (now-gone) wire snapshot. Walk
-     them and either update or delete.
-   - `WorldSnapshot` in code comments — should be replaced with
-     references to the specific replicated components.
+[src/protocol.rs:594](src/protocol.rs) defines
+`pub respawn_progress: Option<f32>` on `ResourceNodeState`. Survey
+confirmed it's **set to `None` everywhere** (8 sites) and **only
+read via `.is_some()` checks** (3 sites, all in dead branches):
 
-5. **The chunk-room subscription cost.**
-   - `update_client_room_subscriptions` runs every tick and
-     diffs per-client `visible_chunks`. Most ticks it's a no-op
-     (the player didn't cross a boundary). Worth measuring with
-     `./cli profile` and checking the trace — if the
-     `update_client_room_subscriptions` span is hot, gate it on
-     a "player crossed chunk this tick" event from
-     `ChunkManager::update_player_chunk` instead of running
-     unconditionally.
+Writes (all `None`):
+- `src/resources.rs:295,515,544,573,590`
+- `src/server/resource_node_ecs.rs:140`
+- `src/server/tests/resource_nodes.rs:10`
 
-6. **The `replication-trace` feature.**
-   - It's a dev-only diagnostic. Keep it in tree for future
-     replication debugging, but make sure it doesn't get baked
-     into release builds (already gated by `#[cfg(feature = ...)]`).
-   - Consider extending it to also log `DroppedItem` /
-     `DroppedItemTransform` / `Player` / `PlayerPublic` /
-     `PlayerPrivate` mutations once those are all migrated, so
-     the diagnostic stays useful for the full surface.
+Reads (all `is_some()` → always false):
+- `src/resources.rs:332` — `resource_node_anchor()` guard
+- `src/resources.rs:445` — `resource_storage_is_empty()` guard
+- `src/server/resource_nodes.rs:32` — `apply_gather_command()` guard
 
-7. **CLAUDE.md and docs/networking.md.**
-   - `CLAUDE.md` references the snapshot path in the
-     server-side description ("State delivery: per-client
-     `ServerMessage::Snapshot(WorldSnapshot)` every tick"). Update
-     to describe room-based replication.
-   - `docs/networking.md` — same.
-   - `docs/architecture.md` — same.
+Delete the field, drop the three guard branches, remove the "this
+is vestigial" comment at `src/server/resource_node_ecs.rs:136-139`.
 
-8. **`SNAPSHOT_BROADCAST_INTERVAL_TICKS` stopgap.**
-   - Sanity-check this constant was deleted in 6.6 along with the
-     broadcast loop.
+#### 2. Move `OpenFurnaceView` out of `src/protocol.rs`
 
-9. **`PERF_STATS_BROADCAST_INTERVAL_TICKS`.**
-   - This stays — perf stats aren't entity state — but its
-     comment may still reference the snapshot path.
+It's no longer a wire type — only the client side uses it (the
+furnace UI reconstructs it from `PlayerPrivate.open_furnace`
+locally). [src/protocol.rs:416](src/protocol.rs).
 
-10. **Save format bookkeeping.**
-    - Verify `SAVE_FORMAT_VERSION` reflects the cumulative breaking
-      changes from the migration. If 6.6 didn't bump it but
-      something on-disk did change, fix it now.
+The server still constructs it via
+`server.open_furnace_view_for(client_id)` in
+[src/server/furnace.rs](src/server/furnace.rs) to populate
+`PlayerPrivate.open_furnace`. So it's still bidirectional state.
+Decide: keep where it is (it IS still on the wire, embedded inside
+PlayerPrivate), or move to a `src/app/state/` module if you split
+the wire/local concerns more strictly. Probably the right call is
+to leave it in `protocol.rs` and just add a comment that it's a
+replicated-component field, not a top-level wire type.
 
-11. **The `Welcome.local_seed` field (from 6.6).**
-    - Verify the prediction seed contains the minimum fields
-      needed (position, yaw, pitch, health, last_processed_input).
-      Anything more is dead weight.
+#### 3. Keep `DroppedWorldItem`, `ResourceNodeState`,
+       `DeployedEntityState` in `src/protocol.rs`
 
-12. **Phase 1b / 2b reconsideration.**
-    - With the migration complete, is the `GameServer.resource_nodes`
-      / `dropped_items` / `deployed_entities` / `clients` HashMap
-      doing any work the ECS entities couldn't do? Decide whether
-      to schedule 1b/2b or close them as won't-fix.
+All three are still used as the server's authoritative HashMap value
+types (`GameServer.dropped_items`, `.resource_nodes`,
+`.deployed_entities`). They're no longer wire types but they live
+in `protocol.rs` because the persisted save layer also uses them.
+Phase 1b/2b would move these out by folding the HashMaps into ECS
+entities; until then, **leave them in place** but add a docstring
+to each clarifying that they are server-internal post-Phase-6.
+
+#### 4. Keep `DeployableView` and `PlayerView`
+
+[src/server/deployable_ecs.rs:105-114](src/server/deployable_ecs.rs)
+and [src/server/player_ecs.rs:114-119](src/server/player_ecs.rs).
+Both still actively feed the mirror sync in
+[src/net/host.rs](src/net/host.rs) via
+`GameServer::deployables_iter()` and `GameServer::players_iter()`.
+Cheap adapters with no logic — defer removal to Phase 1b/2b.
+
+#### 5. Add docstring to `PlayerController::from_player_state`
+
+[src/controller/mod.rs:86](src/controller/mod.rs). Missing one.
+Suggested:
+
+```rust
+/// Seed a `PlayerController` from a `PlayerState`. Used at
+/// `ServerMessage::Welcome` time (prediction bootstrap from
+/// `local_seed`) and when applying a `ServerMessage::Correction`.
+```
+
+`PlayerState` itself doesn't need renaming — its trimmed shape
+post-Phase-6 is "the prediction-seed view of the player's kinematic
+state", which the existing name describes adequately.
+
+#### 6. Update stale comments referencing the snapshot path
+
+These survived Phase 6 and need updating to reference the
+Lightyear replication path instead. Don't blow time on every
+comment in tree — focus on these specific stragglers:
+
+- `src/net/channels.rs:64` — comment says "riding `WorldSnapshot`".
+  Update to describe per-component replication via rooms.
+- `src/app/state/runtime.rs:427` — references "full
+  `WorldSnapshot.players` list". Now reads `PlayerState` seed
+  directly from Welcome.
+- `src/app/state/local_player.rs:5` — refers to
+  `runtime.snapshot.players[i]` path. Obsolete.
+- `src/app/systems/players.rs:27` — "no `WorldSnapshot` dependency"
+  is accurate but reads like a Phase-6-era brag; rephrase to just
+  describe the Lightyear replication query.
+
+Tests at `src/app/state/tests.rs:49,54` already have "Deleted: was
+verifying ..." comments — those are fine as-is (they document why
+the test is gone).
+
+#### 7. Update `docs/*.md` to reflect the new architecture
+
+Pre-Phase-6 paragraphs that still describe the snapshot wire:
+
+- [docs/networking.md:8](docs/networking.md) — lists `Snapshot` as
+  a `ServerMessage` variant. Remove it.
+- [docs/networking.md:15](docs/networking.md) — mentions "snapshots"
+  on `UnreliableChannel`. Remove; state now flows via Lightyear's
+  internal replication channel, not user channels.
+- [docs/architecture.md:18](docs/architecture.md) — lists snapshots
+  as a `ReliableChannel` payload. Remove.
+- [docs/architecture.md:19](docs/architecture.md) — "the snapshot
+  builder asks which chunks does this player see". Rephrase as the
+  Lightyear room-visibility filter.
+- [docs/worlds-and-saves.md:27](docs/worlds-and-saves.md) — "the
+  snapshot builder then collects all entities". Same rephrasing.
+- [docs/ui-and-client.md:10](docs/ui-and-client.md) — lists
+  `snapshots` as a `runtime.rs` field. The field is gone.
+
+[CLAUDE.md](CLAUDE.md) is already clean — no snapshot references in
+the architecture description.
+
+#### 8. Add a "Lightyear known issue" pointer to CLAUDE.md or docs
+
+The ⚠️ section at the top of this file documents the workaround
+pattern future contributors need. Right now it only lives in this
+migration doc, which a fresh session reads. Consider linking it
+from `CLAUDE.md` (or moving it into a new
+`docs/lightyear-known-issues.md`) so it survives this file
+eventually being archived. The user explicitly asked for this at
+session wrap-up.
+
+#### 9. Optionally extend `replication-trace` coverage
+
+[src/app/systems/replication_trace.rs](src/app/systems/replication_trace.rs)
+currently logs `ResourceNodeStorage`, `DeployableHealth`,
+`DeployableActive`. The same diagnostic would help if we ever hit
+the post-spawn-diff bug for `DroppedItemTransform`, `PlayerPublic`,
+or `PlayerPrivate`. Trivial to extend — add a similar query +
+`Ref::is_changed()` log for each component. Server side mirrors
+in `src/net/host.rs` already have matching MUTATE logs for these
+where useful.
+
+Not blocking Phase 7; only do this if you want to make the
+diagnostic complete.
+
+#### 10. Phase 1b / 2b reconsideration
+
+Phase 6 didn't change the cost/benefit of folding the
+`GameServer.resource_nodes` / `dropped_items` / `deployed_entities`
+/ `clients` HashMaps into ECS entities. Still no runtime impact;
+still ~8 production sites + ~30 test sites per HashMap. **Keep
+deferred** unless a feature actually needs ECS-only queries on one
+of these.
+
+### Pre-flight checks (don't do, just verify)
+
+Already verified as part of Phase 6 wrap-up — sanity-check before
+starting:
+
+- `SNAPSHOT_BROADCAST_INTERVAL_TICKS` — gone.
+- `replicated-nodes` Cargo feature — gone.
+- `WorldSnapshot` type — gone.
+- `ServerMessage::Snapshot` variant — gone.
+- `GameServer::snapshot()`, `snapshot_for()`, `snapshot_inner()` —
+  gone.
+- `ClientRuntime::snapshot`, `local_player()`,
+  `is_stale_snapshot()`, `seed_local_prediction_from_snapshot()` —
+  gone.
+- `SAVE_FORMAT_VERSION` — not bumped (the save layer never carried
+  `WorldSnapshot`).
+- `Welcome.local_seed: PlayerState` carries exactly the prediction-
+  seed fields (no dead weight).
 
 ### Output
 
 Phase 7 ends with:
 
-- One commit removing dead code identified in the audit.
-- One commit updating CLAUDE.md and `docs/*.md` to reflect the new
-  architecture.
+- One commit removing the dead `respawn_progress` field, its
+  guards, and the vestigial-marker comment.
+- One commit updating the comments listed in item 6 and the docs
+  listed in item 7.
 - A short "Phase 7 findings" section appended below this one
-  documenting what was deleted, what was kept and why, and any
-  follow-ups that didn't fit this session.
+  documenting what was deleted, what was kept and why (especially
+  the wire-type group in items 3 and 4), and any follow-ups that
+  didn't fit this session.
 
 ### Verification
 
 - `./cli check && ./cli test && ./cli lint` clean.
-- `grep -rn 'WorldSnapshot\|ServerMessage::Snapshot\|runtime\.snapshot' src/`
-  returns zero hits.
-- Singleplayer + 2-client MP soak still feels right.
+- `cargo check --features replication-trace` clean.
+- Spot-check `grep -rn 'WorldSnapshot\|ServerMessage::Snapshot' src/`
+  returns zero hits (already verified at end of Phase 6, but worth
+  re-running).
+- Singleplayer launches and renders a familiar gameplay scene.
 
 ---
 
@@ -1253,9 +1767,30 @@ Until then, the HashMap + mirror is the production-supported path.
 # Every site that touches the resource_nodes HashMap
 grep -rn '\.resource_nodes\b' src/
 
-# Every site that reads from the snapshot on the client (Phase 6 removes these)
-grep -rn 'runtime\.snapshot' src/
+# Sanity check: no remaining snapshot references (should be empty after Phase 6)
+grep -rn 'WorldSnapshot\|ServerMessage::Snapshot\|runtime\.snapshot' src/
 
-# Every ClientSession call site (Phase 3 audits these)
+# Every ClientSession call site
 grep -rn 'ClientSession\|session\.send\|session\.tick' src/
+
+# Find any post-spawn-diff workaround broadcasts (the reliable
+# side-channels we use to work around the Lightyear bug). When adding
+# new replicated state that mutates after spawn, follow this pattern.
+grep -rn 'ServerMessage::.*Changed' src/protocol.rs
+
+# Replication-trace coverage: extend if adding new replicated components
+grep -rn 'replication_trace' src/
 ```
+
+### How to run with the replication-trace diagnostic
+
+```bash
+RUST_LOG=replication_trace=info cargo run --features replication-trace -- client
+```
+
+Then reproduce the suspect gameplay action. Look for:
+- `server: <Component> MUTATE` line — confirms the server's mirror
+  wrote a new value.
+- `client: <Component> RECV` line — confirms Lightyear delivered the
+  diff. **No matching RECV after a MUTATE = the Lightyear bug;
+  workaround needed.**

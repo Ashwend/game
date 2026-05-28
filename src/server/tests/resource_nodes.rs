@@ -22,14 +22,13 @@ fn test_world_spawns_authoritative_resource_nodes() {
     let mut server = server();
     connect_host(&mut server);
 
-    let snapshot = server.snapshot();
+    let nodes: Vec<_> = server.resource_nodes_iter().collect();
 
-    assert!(snapshot.resource_nodes.len() >= 6);
+    assert!(nodes.len() >= 6);
     assert!(
-        snapshot
-            .resource_nodes
+        nodes
             .iter()
-            .any(|node| node.definition_id == COAL_NODE_ID)
+            .any(|(_, node)| node.definition_id == COAL_NODE_ID)
     );
 }
 
@@ -53,17 +52,14 @@ fn pickaxe_depletes_node_and_removes_it_from_the_world() {
         }),
     );
 
-    let snapshot = server.snapshot_for(client_id);
-    let inventory = snapshot.players[0]
-        .inventory
-        .as_ref()
-        .expect("host inventory should be present");
+    let client = server.clients.get(&client_id).expect("client exists");
+    let inventory = &client.inventory;
     // Depleted nodes are removed from the world entirely — the chunk
     // manager schedules a fresh-position respawn 5-15 minutes later. The
-    // snapshot should no longer contain this node id.
+    // server should no longer hold this node id.
     assert!(
-        snapshot.resource_nodes.iter().all(|node| node.id != 99),
-        "depleted node should be removed from the live snapshot"
+        server.resource_nodes_iter().all(|(id, _)| *id != 99),
+        "depleted node should be removed from the live server state"
     );
     assert!(inventory.inventory_slots.iter().any(|slot| {
         slot.as_ref()

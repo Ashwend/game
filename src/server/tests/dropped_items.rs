@@ -1,5 +1,17 @@
 use super::*;
 
+fn first_dropped_item(server: &GameServer) -> crate::protocol::DroppedWorldItem {
+    server
+        .dropped_items_iter()
+        .next()
+        .expect("at least one dropped item")
+        .1
+}
+
+fn dropped_count(server: &GameServer) -> usize {
+    server.dropped_items_iter().count()
+}
+
 #[test]
 fn dropped_items_spawn_near_head_and_inherit_player_velocity() {
     let mut server = server();
@@ -22,14 +34,14 @@ fn dropped_items_spawn_near_head_and_inherit_player_velocity() {
             quantity: None,
         }),
     );
-    let initial_item = server.snapshot().dropped_items[0].clone();
+    let initial_item = first_dropped_item(&server);
 
     assert!(initial_item.position.y > SERVER_EYE_HEIGHT);
     assert!(initial_item.position.z > -0.7);
     assert!(initial_item.position.z < -0.25);
 
     server.tick(1.0 / SERVER_TICK_RATE_HZ);
-    let moving_item = server.snapshot().dropped_items[0].clone();
+    let moving_item = first_dropped_item(&server);
     assert!(moving_item.position.z < initial_item.position.z - 0.3);
 }
 
@@ -54,9 +66,9 @@ fn nearby_dropped_items_merge_on_server_interval() {
         envelopes.extend(server.tick(1.0 / SERVER_TICK_RATE_HZ));
     }
 
-    let snapshot = server.snapshot();
-    assert_eq!(snapshot.dropped_items.len(), 1);
-    assert_eq!(snapshot.dropped_items[0].stack.quantity, 20);
+    let dropped: Vec<_> = server.dropped_items_iter().collect();
+    assert_eq!(dropped.len(), 1);
+    assert_eq!(dropped[0].1.stack.quantity, 20);
     assert!(envelopes.iter().any(|envelope| {
         matches!(
             &envelope.message,
@@ -91,12 +103,11 @@ fn full_stack_does_not_oscillate_with_partial_neighbour() {
         envelopes.extend(server.tick(1.0 / SERVER_TICK_RATE_HZ));
     }
 
-    let snapshot = server.snapshot();
-    assert_eq!(snapshot.dropped_items.len(), 2);
-    let mut quantities = snapshot
-        .dropped_items
+    let dropped: Vec<_> = server.dropped_items_iter().collect();
+    assert_eq!(dropped.len(), 2);
+    let mut quantities = dropped
         .iter()
-        .map(|item| item.stack.quantity)
+        .map(|(_, item)| item.stack.quantity)
         .collect::<Vec<_>>();
     quantities.sort_unstable();
     assert_eq!(quantities, vec![8, 200]);
@@ -128,7 +139,7 @@ fn dropped_items_outside_merge_radius_stay_separate() {
         server.tick(1.0 / SERVER_TICK_RATE_HZ);
     }
 
-    assert_eq!(server.snapshot().dropped_items.len(), 2);
+    assert_eq!(dropped_count(&server), 2);
 }
 
 #[test]
@@ -154,13 +165,13 @@ fn dropped_items_use_rapier_gravity_and_floor_collision() {
             quantity: None,
         }),
     );
-    let initial_item = server.snapshot().dropped_items[0].clone();
+    let initial_item = first_dropped_item(&server);
 
     for _ in 0..80 {
         server.tick(1.0 / SERVER_TICK_RATE_HZ);
     }
 
-    let settled_item = server.snapshot().dropped_items[0].clone();
+    let settled_item = first_dropped_item(&server);
     assert!(settled_item.position.y < initial_item.position.y - 2.0);
     assert!(settled_item.position.y >= DROPPED_ITEM_RADIUS - 0.03);
     assert!(settled_item.position.y <= DROPPED_ITEM_RADIUS + 0.12);
@@ -176,7 +187,7 @@ fn dropped_items_despawn_after_their_lifetime() {
         Vec3Net::ZERO,
         0.0,
     );
-    assert_eq!(server.snapshot().dropped_items.len(), 1);
+    assert_eq!(dropped_count(&server), 1);
 
     // Tick just up to one cleanup boundary short of the lifetime — the item
     // should still be present.
@@ -185,7 +196,7 @@ fn dropped_items_despawn_after_their_lifetime() {
         server.tick(1.0 / SERVER_TICK_RATE_HZ);
     }
     assert_eq!(
-        server.snapshot().dropped_items.len(),
+        dropped_count(&server),
         1,
         "item should still be in the world just before the lifetime expires"
     );
@@ -194,76 +205,17 @@ fn dropped_items_despawn_after_their_lifetime() {
     for _ in 0..DROPPED_ITEM_CLEANUP_INTERVAL_TICKS * 2 {
         server.tick(1.0 / SERVER_TICK_RATE_HZ);
     }
-    assert!(
-        server.snapshot().dropped_items.is_empty(),
+    assert_eq!(
+        dropped_count(&server),
+        0,
         "item past its lifetime should be despawned by the cleanup sweep"
     );
 }
 
-#[test]
-fn dropped_items_are_filtered_by_chunk_aoi_in_per_client_snapshots() {
-    // 9×9 chunk world (chunks -4..=4) so we can actually move a player
-    // past the medium-tier AoI ring (radius 2 + 1 buffer = 3 chunks).
-    // In the default 5×5 test world every chunk falls inside the ring,
-    // so AoI filtering is a no-op there.
-    use crate::{
-        save::WorldSave,
-        world::{MapType, ProceduralMapSize},
-    };
-    let mut server = GameServer::new(
-        WorldSave::new_with_map(
-            "AoI",
-            Some(1),
-            MapType::Procedural {
-                seed: 0xC0DE_C0DE,
-                size: ProceduralMapSize::Large,
-            },
-        ),
-        ServerSettings {
-            auth_mode: AuthMode::Offline,
-            singleplayer_host: Some(1),
-        },
-    );
-    let client_id = connect_host(&mut server);
-
-    // Drop an item at the player's spawn (chunk 0,0). Snapshot for the
-    // player — still at chunk 0,0 — should see it.
-    server.spawn_dropped_item(
-        ItemStack::new(COAL_ID, 1),
-        Vec3Net::new(0.0, DROPPED_ITEM_RADIUS, 0.0),
-        Vec3Net::ZERO,
-        0.0,
-    );
-    let close = server.snapshot_for(client_id);
-    assert_eq!(
-        close.dropped_items.len(),
-        1,
-        "item at the player's chunk must appear in their snapshot"
-    );
-
-    // Move the player to chunk (-4, 0) — Chebyshev distance 4 from the
-    // origin, outside the radius-3 visible ring. The drop should be
-    // filtered out of this player's snapshot.
-    let far_position = Vec3Net::new(-260.0, 0.0, 0.0);
-    server.receive(
-        client_id,
-        ClientMessage::Movement(movement(1, far_position)),
-    );
-    let far = server.snapshot_for(client_id);
-    assert!(
-        far.dropped_items.is_empty(),
-        "drop at the origin chunk should be filtered out when the player is 4 chunks away"
-    );
-
-    // The unfiltered snapshot (the test/handshake path) still sees the
-    // item — proves we filter per-client, not globally.
-    let unfiltered = server.snapshot();
-    assert_eq!(
-        unfiltered.dropped_items.len(),
-        1,
-        "global snapshot should still carry the drop"
-    );
-}
+// Deleted: `dropped_items_are_filtered_by_chunk_aoi_in_per_client_snapshots`
+// was verifying the snapshot_for AoI-filter behaviour; with Phase 6.6 the
+// snapshot path is gone and AoI filtering happens through Lightyear's
+// room/visibility machinery, which requires the plugin set to exercise.
 
 #[test]
 fn dropped_item_physics_settles_on_the_floor() {
@@ -281,7 +233,7 @@ fn dropped_item_physics_settles_on_the_floor() {
 
     // Grid-generated worlds have no internal blocks — items settle on
     // the floor at y = DROPPED_ITEM_RADIUS plus a small jitter.
-    let item = &server.snapshot().dropped_items[0];
+    let item = first_dropped_item(&server);
     assert!(item.position.y >= DROPPED_ITEM_RADIUS - 0.03);
     assert!(item.position.y <= DROPPED_ITEM_RADIUS + 0.12);
 }

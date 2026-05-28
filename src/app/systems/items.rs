@@ -22,7 +22,7 @@ pub(crate) use dropped::{DroppedItemEntities, apply_dropped_items_system};
 pub(crate) use held::apply_held_item_visual_system;
 pub(crate) use pickup::update_pickup_target_system;
 pub(crate) use resource_nodes::{
-    ResourceNodeEntities, apply_resource_nodes_system, resource_node_transform,
+    ResourceNodeEntities, apply_resource_nodes_system, resource_node_transform_at,
     resource_node_visual, tick_resource_node_pop_in_system,
 };
 pub(crate) use tool_swap::update_tool_swap_state_system;

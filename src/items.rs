@@ -434,7 +434,21 @@ pub fn pickup_anchor_from_position(position: Vec3Net) -> Vec3Net {
 }
 
 pub fn pickup_score(eye: Vec3Net, yaw: f32, pitch: f32, item: &DroppedWorldItem) -> Option<f32> {
-    let anchor = pickup_anchor(item);
+    pickup_score_at_position(eye, yaw, pitch, item.position)
+}
+
+/// Projection-along-ray distance from the eye to the pickup anchor at
+/// `position`. `None` when the point is outside the swept pickup
+/// cylinder. Same math as [`pickup_score`] but reads the position
+/// directly so callers iterating replicated `DroppedItemTransform`
+/// don't need to materialise a `DroppedWorldItem`.
+pub fn pickup_score_at_position(
+    eye: Vec3Net,
+    yaw: f32,
+    pitch: f32,
+    position: Vec3Net,
+) -> Option<f32> {
+    let anchor = pickup_anchor_from_position(position);
     let to_item = anchor.minus(eye);
     // Cheap distance cull before the trig in `look_forward`. Anything outside
     // the swept cylinder is unreachable; the bound stays conservative so it

@@ -338,7 +338,7 @@ fn health_bar(ui: &mut egui::Ui, health: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{PlayerState, Vec3Net, WorldSnapshot};
+    use crate::protocol::{PlayerState, Vec3Net};
 
     fn raw_input() -> egui::RawInput {
         egui::RawInput {
@@ -353,8 +353,6 @@ mod tests {
     fn player(health: f32) -> PlayerState {
         PlayerState {
             client_id: 1,
-            steam_id: 1,
-            name: "Player".to_owned(),
             position: Vec3Net::new(1.0, 2.0, 3.0),
             velocity: Vec3Net::ZERO,
             yaw: 0.0,
@@ -362,11 +360,6 @@ mod tests {
             health,
             grounded: true,
             last_processed_input: 0,
-            is_admin: false,
-            chat_bubble: None,
-            inventory: None,
-            crafting: None,
-            open_furnace: None,
         }
     }
 
@@ -387,14 +380,13 @@ mod tests {
             );
         });
 
+        // After Welcome seeds `predicted_local` the HUD has a view to
+        // render. Snapshot used to drive this too, but Phase 6.2
+        // removed the fallback.
         runtime.client_id = Some(1);
-        runtime.snapshot = Some(WorldSnapshot {
-            tick: 1,
-            players: vec![player(75.0)],
-            dropped_items: Vec::new(),
-            resource_nodes: Vec::new(),
-            deployed_entities: Vec::new(),
-        });
+        runtime.predicted_local = Some(crate::controller::PlayerController::from_player_state(
+            &player(75.0),
+        ));
 
         let _ = ctx.run(raw_input(), |ctx| {
             hud_ui(

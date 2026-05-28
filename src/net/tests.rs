@@ -111,35 +111,13 @@ fn singleplayer_session_connects_through_loopback_server() {
             .iter()
             .any(|message| matches!(message, ServerMessage::Welcome { .. }))
     );
-
-    let snapshots = collect_until(&mut rig, |messages| {
-        messages
-            .iter()
-            .any(|message| matches!(message, ServerMessage::Snapshot(_)))
-    });
-    assert!(
-        snapshots
-            .iter()
-            .any(|message| matches!(message, ServerMessage::Snapshot(_)))
-    );
 }
 
-#[test]
-fn singleplayer_session_receives_authoritative_snapshots_from_loopback_host() {
-    let mut rig = TestRig::singleplayer();
-
-    let messages = collect_until(&mut rig, |messages| {
-        messages
-            .iter()
-            .any(|message| matches!(message, ServerMessage::Snapshot(_)))
-    });
-
-    assert!(
-        messages
-            .iter()
-            .any(|message| matches!(message, ServerMessage::Snapshot(_)))
-    );
-}
+// Deleted: `singleplayer_session_receives_authoritative_snapshots_from_loopback_host`
+// was verifying that the `ServerMessage::Snapshot` payload arrived. Phase
+// 6.6 retired the snapshot wire path; world state now flows through
+// Lightyear's per-component replication and asserting on it requires the
+// full plugin set in the test harness.
 
 #[test]
 fn singleplayer_chat_round_trips_through_network_server() {

@@ -1,15 +1,20 @@
 use super::*;
 
+fn first_dropped_item_id(server: &GameServer) -> crate::protocol::DroppedItemId {
+    server
+        .dropped_items_iter()
+        .next()
+        .expect("at least one dropped item")
+        .0
+}
+
 #[test]
 fn connect_seeds_empty_authoritative_inventory() {
     let mut server = server();
     let client_id = connect_host(&mut server);
 
-    let snapshot = server.snapshot_for(client_id);
-    let inventory = snapshot.players[0]
-        .inventory
-        .as_ref()
-        .expect("host inventory should be present in its own snapshot");
+    let client = server.clients.get(&client_id).expect("client exists");
+    let inventory = &client.inventory;
 
     assert_eq!(inventory.inventory_slots.len(), 40);
     assert_eq!(inventory.actionbar_slots.len(), 9);
@@ -50,23 +55,22 @@ fn inventory_move_splits_merges_and_populates_actionbar() {
         }),
     );
 
-    let snapshot = server.snapshot_for(client_id);
-    let inventory = snapshot.players[0]
-        .inventory
-        .as_ref()
-        .expect("host inventory should be present");
-    assert_eq!(
-        inventory.inventory_slots[0]
-            .as_ref()
-            .map(|stack| stack.quantity),
-        Some(7)
-    );
-    assert_eq!(
-        inventory.actionbar_slots[2]
-            .as_ref()
-            .map(|stack| stack.quantity),
-        Some(5)
-    );
+    {
+        let client = server.clients.get(&client_id).expect("client exists");
+        let inventory = &client.inventory;
+        assert_eq!(
+            inventory.inventory_slots[0]
+                .as_ref()
+                .map(|stack| stack.quantity),
+            Some(7)
+        );
+        assert_eq!(
+            inventory.actionbar_slots[2]
+                .as_ref()
+                .map(|stack| stack.quantity),
+            Some(5)
+        );
+    }
 
     server.receive(
         client_id,
@@ -77,11 +81,8 @@ fn inventory_move_splits_merges_and_populates_actionbar() {
         }),
     );
 
-    let snapshot = server.snapshot_for(client_id);
-    let inventory = snapshot.players[0]
-        .inventory
-        .as_ref()
-        .expect("host inventory should be present");
+    let client = server.clients.get(&client_id).expect("client exists");
+    let inventory = &client.inventory;
     assert_eq!(
         inventory.inventory_slots[0]
             .as_ref()
@@ -123,18 +124,13 @@ fn actionbar_selection_and_drop_are_server_authoritative() {
         }),
     );
 
-    let snapshot = server.snapshot_for(client_id);
-    let inventory = snapshot.players[0]
-        .inventory
-        .as_ref()
-        .expect("host inventory should be present");
+    let client = server.clients.get(&client_id).expect("client exists");
+    let inventory = &client.inventory;
     assert_eq!(inventory.active_actionbar_slot, 3);
     assert!(inventory.actionbar_slots[3].is_none());
-    assert_eq!(snapshot.dropped_items.len(), 1);
-    assert_eq!(
-        snapshot.dropped_items[0].stack.item_id.as_ref(),
-        BASIC_HATCHET_ID
-    );
+    let dropped: Vec<_> = server.dropped_items_iter().collect();
+    assert_eq!(dropped.len(), 1);
+    assert_eq!(dropped[0].1.stack.item_id.as_ref(), BASIC_HATCHET_ID);
 }
 
 #[test]
@@ -165,18 +161,16 @@ fn actionbar_q_style_drop_removes_one_item_from_stack() {
         }),
     );
 
-    let snapshot = server.snapshot_for(client_id);
-    let inventory = snapshot.players[0]
-        .inventory
-        .as_ref()
-        .expect("host inventory should be present");
+    let client = server.clients.get(&client_id).expect("client exists");
+    let inventory = &client.inventory;
     assert_eq!(
         inventory.actionbar_slots[2]
             .as_ref()
             .map(|stack| stack.quantity),
         Some(4)
     );
-    assert_eq!(snapshot.dropped_items[0].stack.quantity, 1);
+    let dropped: Vec<_> = server.dropped_items_iter().collect();
+    assert_eq!(dropped[0].1.stack.quantity, 1);
 }
 
 #[test]
@@ -195,19 +189,16 @@ fn pickup_merges_actionbar_stacks_before_inventory() {
         Vec3Net::ZERO,
         0.0,
     );
-    let dropped_item_id = server.snapshot().dropped_items[0].id;
+    let dropped_item_id = first_dropped_item_id(&server);
 
     server.receive(
         client_id,
         ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
     );
 
-    let snapshot = server.snapshot_for(client_id);
-    let inventory = snapshot.players[0]
-        .inventory
-        .as_ref()
-        .expect("host inventory should be present");
-    assert!(snapshot.dropped_items.is_empty());
+    let client = server.clients.get(&client_id).expect("client exists");
+    let inventory = &client.inventory;
+    assert!(server.dropped_items_iter().next().is_none());
     assert_eq!(
         inventory.actionbar_slots[0]
             .as_ref()
@@ -241,7 +232,7 @@ fn pickup_requires_looking_at_dropped_item_and_restores_inventory() {
             quantity: None,
         }),
     );
-    let dropped_item_id = server.snapshot().dropped_items[0].id;
+    let dropped_item_id = first_dropped_item_id(&server);
 
     let mut look_away = movement(1, Vec3Net::ZERO);
     look_away.yaw = std::f32::consts::PI;
@@ -250,7 +241,7 @@ fn pickup_requires_looking_at_dropped_item_and_restores_inventory() {
         client_id,
         ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
     );
-    assert_eq!(server.snapshot().dropped_items.len(), 1);
+    assert_eq!(server.dropped_items_iter().count(), 1);
 
     let look_at_drop = movement(2, Vec3Net::ZERO);
     server.receive(client_id, ClientMessage::Movement(look_at_drop));
@@ -259,12 +250,9 @@ fn pickup_requires_looking_at_dropped_item_and_restores_inventory() {
         ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
     );
 
-    let snapshot = server.snapshot_for(client_id);
-    let inventory = snapshot.players[0]
-        .inventory
-        .as_ref()
-        .expect("host inventory should be present");
-    assert!(snapshot.dropped_items.is_empty());
+    let client = server.clients.get(&client_id).expect("client exists");
+    let inventory = &client.inventory;
+    assert!(server.dropped_items_iter().next().is_none());
     assert!(
         inventory.inventory_slots.iter().any(|slot| slot
             .as_ref()
@@ -289,7 +277,7 @@ fn pickup_emits_success_toast_to_requesting_client() {
         Vec3Net::ZERO,
         0.0,
     );
-    let dropped_item_id = server.snapshot().dropped_items[0].id;
+    let dropped_item_id = first_dropped_item_id(&server);
 
     let envelopes = server.receive(
         client_id,
@@ -338,29 +326,29 @@ fn partial_pickup_decrements_dropped_stack_and_keeps_it_in_world() {
         Vec3Net::ZERO,
         0.0,
     );
-    let dropped_item_id = server.snapshot().dropped_items[0].id;
+    let dropped_item_id = first_dropped_item_id(&server);
 
     server.receive(
         client_id,
         ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
     );
 
-    let snapshot = server.snapshot_for(client_id);
-    let inventory = snapshot.players[0]
-        .inventory
-        .as_ref()
-        .expect("host inventory should be present");
-    assert_eq!(
-        inventory.inventory_slots[0]
-            .as_ref()
-            .map(|stack| stack.quantity),
-        Some(200)
-    );
-    assert_eq!(snapshot.dropped_items.len(), 1);
-    assert_eq!(
-        snapshot.dropped_items[0].stack.quantity, 3,
-        "remaining dropped quantity should equal original minus accepted (8 - 5 = 3)"
-    );
+    {
+        let client = server.clients.get(&client_id).expect("client exists");
+        let inventory = &client.inventory;
+        assert_eq!(
+            inventory.inventory_slots[0]
+                .as_ref()
+                .map(|stack| stack.quantity),
+            Some(200)
+        );
+        let dropped: Vec<_> = server.dropped_items_iter().collect();
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(
+            dropped[0].1.stack.quantity, 3,
+            "remaining dropped quantity should equal original minus accepted (8 - 5 = 3)"
+        );
+    }
 
     // A second pickup with no further headroom must not refund the previously
     // accepted quantity into the dropped item.
@@ -368,9 +356,9 @@ fn partial_pickup_decrements_dropped_stack_and_keeps_it_in_world() {
         client_id,
         ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
     );
-    let snapshot = server.snapshot_for(client_id);
-    assert_eq!(snapshot.dropped_items.len(), 1);
-    assert_eq!(snapshot.dropped_items[0].stack.quantity, 3);
+    let dropped: Vec<_> = server.dropped_items_iter().collect();
+    assert_eq!(dropped.len(), 1);
+    assert_eq!(dropped[0].1.stack.quantity, 3);
 }
 
 #[test]
@@ -398,7 +386,7 @@ fn pickup_into_full_inventory_emits_warning_toast() {
         Vec3Net::ZERO,
         0.0,
     );
-    let dropped_item_id = server.snapshot().dropped_items[0].id;
+    let dropped_item_id = first_dropped_item_id(&server);
 
     let envelopes = server.receive(
         client_id,
@@ -434,7 +422,7 @@ fn failed_pickup_emits_no_toast() {
         Vec3Net::ZERO,
         0.0,
     );
-    let dropped_item_id = server.snapshot().dropped_items[0].id;
+    let dropped_item_id = first_dropped_item_id(&server);
 
     // Turn the player around so the dropped item is behind them; the pickup
     // line-of-sight check rejects the request and no toast should fire.

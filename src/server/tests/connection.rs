@@ -74,7 +74,7 @@ fn chat_is_sanitized_and_broadcast_by_server() {
 }
 
 #[test]
-fn chat_populates_speaker_bubble_for_snapshot_window() {
+fn chat_populates_speaker_bubble_for_broadcast_window() {
     use crate::protocol::CHAT_BUBBLE_DURATION_SECONDS;
 
     let mut server = server();
@@ -87,13 +87,11 @@ fn chat_populates_speaker_bubble_for_snapshot_window() {
         },
     );
 
-    let snapshot = server.snapshot_for(client_id);
-    let speaker = snapshot
-        .players
-        .iter()
+    let speaker = server
+        .players_iter()
         .find(|player| player.client_id == client_id)
-        .expect("speaker should be in snapshot");
-    assert_eq!(speaker.chat_bubble.as_deref(), Some("hi there"));
+        .expect("speaker should be in players_iter");
+    assert_eq!(speaker.public.chat_bubble.as_deref(), Some("hi there"));
 
     let dt = 1.0 / SERVER_TICK_RATE_HZ;
     let ticks_to_expire = (CHAT_BUBBLE_DURATION_SECONDS * SERVER_TICK_RATE_HZ) as u64 + 1;
@@ -101,14 +99,12 @@ fn chat_populates_speaker_bubble_for_snapshot_window() {
         server.tick(dt);
     }
 
-    let snapshot = server.snapshot_for(client_id);
-    let speaker = snapshot
-        .players
-        .iter()
+    let speaker = server
+        .players_iter()
         .find(|player| player.client_id == client_id)
-        .expect("speaker should still be in snapshot");
+        .expect("speaker should still be present");
     assert!(
-        speaker.chat_bubble.is_none(),
+        speaker.public.chat_bubble.is_none(),
         "bubble should auto-clear after the broadcast window"
     );
 }
@@ -168,7 +164,7 @@ fn silent_clients_are_disconnected_after_timeout() {
         )),
         "stale-client eviction must emit a transport-level Disconnect so Lightyear tears the session down"
     );
-    assert!(server.snapshot().players.is_empty());
+    assert!(server.players_iter().next().is_none());
     assert!(
         server
             .connect(
@@ -195,9 +191,9 @@ fn heartbeat_keeps_client_connected_until_it_stops() {
         server.tick(1.0 / SERVER_TICK_RATE_HZ);
     }
 
-    assert_eq!(server.snapshot().players.len(), 1);
+    assert_eq!(server.players_iter().count(), 1);
     server.tick(1.0 / SERVER_TICK_RATE_HZ);
-    assert!(server.snapshot().players.is_empty());
+    assert!(server.players_iter().next().is_none());
 }
 
 #[test]
@@ -239,7 +235,7 @@ fn kick_all_sends_reason_before_disconnects() {
                 if *left_id == client_id
         )
     }));
-    assert!(server.snapshot().players.is_empty());
+    assert!(server.players_iter().next().is_none());
 }
 
 #[test]
@@ -296,21 +292,20 @@ fn world_save_round_trips_player_inventory_and_position() {
         )
         .expect("returning host should reconnect");
 
-    let snapshot = restored.snapshot_for(restored_client_id);
-    let player = snapshot
-        .players
-        .iter()
+    let player = restored
+        .players_iter()
         .find(|player| player.client_id == restored_client_id)
-        .expect("restored client should appear in snapshot");
-    assert!((player.position.x - 12.0).abs() < f32::EPSILON);
-    assert!((player.position.y - 4.5).abs() < f32::EPSILON);
-    assert!((player.position.z + 7.0).abs() < f32::EPSILON);
-    assert!((player.yaw - 0.75).abs() < f32::EPSILON);
+        .expect("restored client should appear in the live state");
+    assert!((player.public.position.x - 12.0).abs() < f32::EPSILON);
+    assert!((player.public.position.y - 4.5).abs() < f32::EPSILON);
+    assert!((player.public.position.z + 7.0).abs() < f32::EPSILON);
+    assert!((player.public.yaw - 0.75).abs() < f32::EPSILON);
 
-    let inventory = player
-        .inventory
-        .as_ref()
-        .expect("snapshot should carry inventory for the receiving client");
+    let client = restored
+        .clients
+        .get(&restored_client_id)
+        .expect("restored client exists");
+    let inventory = &client.inventory;
     assert!(inventory.actionbar_slots[0].is_none());
     assert!(inventory.actionbar_slots[4].is_some());
 

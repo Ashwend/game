@@ -5,6 +5,7 @@ mod deployable;
 mod dialogs;
 mod gather;
 mod inventory;
+mod local_player;
 mod look;
 mod menu;
 mod options_ui;
@@ -33,6 +34,7 @@ pub(crate) use gather::{
 pub(crate) use inventory::{
     InventoryDrag, InventoryDragButton, InventorySoundEvent, InventoryUiState, UnifiedSlotRef,
 };
+pub(crate) use local_player::{LocalPlayerState, update_local_player_state_system};
 pub(crate) use look::LookState;
 pub(crate) use menu::{MenuState, SaveStore, Screen, SteamUser};
 pub(crate) use options_ui::{OptionsTab, OptionsUiState, PendingRebind};

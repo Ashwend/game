@@ -9,69 +9,13 @@ use uuid::Uuid;
 use crate::{
     controller::{BlockGrid, PlayerController},
     net::ClientSession,
-    protocol::{
-        ChatMessage, ClientId, PlayerEvent, PlayerState, ServerMessage, Vec3Net, WorldSnapshot,
-    },
-    resources::resource_node_collider,
+    protocol::{ChatMessage, ClientId, PlayerEvent, PlayerState, ServerMessage, Vec3Net},
     save::WorldStore,
     world::{WorldBlock, WorldData},
     world_time::{WorldTime, WorldTimeSnapshot},
 };
 
 use super::connection::ConnectionWatch;
-
-/// Knuth golden-ratio multiplier (`2^64 / phi`, odd). Mixes a XOR-of-ids
-/// accumulator into a well-distributed `u64` fingerprint.
-const COLLIDER_SET_HASH_MIX: u64 = 0x9E37_79B9_7F4A_7C15;
-
-/// Cheap order-independent fingerprint of the live collider-bearing
-/// entity set (trees + ores + placed deployables). Used by the snapshot
-/// handler to skip rebuilding the collision grid when the set didn't
-/// change. XOR of ids + count is good enough — the only way it collides
-/// in practice is two entities being added and two different entities
-/// being removed in the same tick, which can't happen during play.
-fn resource_node_collider_set_version(snapshot: Option<&WorldSnapshot>) -> u64 {
-    let Some(snapshot) = snapshot else {
-        return 0;
-    };
-    let mut hash: u64 = 0;
-    let mut count: u64 = 0;
-    for node in &snapshot.resource_nodes {
-        if resource_node_collider(node).is_none() {
-            continue;
-        }
-        hash ^= node.id;
-        count += 1;
-    }
-    for entity in &snapshot.deployed_entities {
-        // Same-id-space collision is impossible because deployables
-        // and resource nodes draw from different counters server-side,
-        // but flipping a bit keeps the two halves of the fingerprint
-        // from accidentally cancelling out if they ever did share ids.
-        hash ^= entity.id ^ 0xD9E3_F1A7_5B6C_8024;
-        count += 1;
-    }
-    hash.wrapping_mul(COLLIDER_SET_HASH_MIX).wrapping_add(count)
-}
-
-/// AABB collider for a placed structure. Returns `None` if the item id
-/// no longer resolves (e.g. a server using a newer item table than this
-/// client knows about — in which case skip the collider rather than
-/// crash, the renderer will still draw the structure).
-fn deployable_collider(state: &crate::protocol::DeployedEntityState) -> Option<WorldBlock> {
-    let profile = crate::items::item_definition(&state.item_id)?.deployable?;
-    let center = Vec3Net::new(
-        state.position.x,
-        state.position.y + profile.collider_half_height,
-        state.position.z,
-    );
-    let half = Vec3Net::new(
-        profile.collider_half_width,
-        profile.collider_half_height,
-        profile.collider_half_width,
-    );
-    Some(WorldBlock::new(center, half))
-}
 
 pub(super) const MAX_CLIENT_LOG_MESSAGES: usize = 80;
 
@@ -126,15 +70,9 @@ pub(crate) struct ClientRuntime {
     /// system uses this to detect "do I need to respawn world geometry?" in
     /// O(1) instead of deep-comparing the previous `WorldData`.
     pub(crate) world_version: u64,
-    pub(crate) snapshot: Option<WorldSnapshot>,
     pub(crate) predicted_local: Option<PlayerController>,
     pub(crate) messages: VecDeque<ClientLogEntry>,
     pub(crate) input_sequence: u64,
-    /// Hash of the live collider-bearing resource node set (trees + ores)
-    /// used to detect when the `world_grid` needs to be rebuilt. Only
-    /// changes when a node spawns or is exhausted — most snapshots keep
-    /// the same set and skip the rebuild.
-    pub(crate) resource_node_collider_version: u64,
     /// Tracks how long it's been since the server last sent anything. Used
     /// by the HUD's connection indicator. Lives in its own type so the
     /// thresholds and ticking logic stay focused on that concern.
@@ -262,11 +200,9 @@ impl ClientRuntime {
         self.world = None;
         self.world_grid = None;
         self.world_version = self.world_version.wrapping_add(1);
-        self.snapshot = None;
         self.predicted_local = None;
         self.messages.clear();
         self.input_sequence = 0;
-        self.resource_node_collider_version = 0;
         self.depleted_node_ids.clear();
         self.connection.reset();
         self.world_time = WorldTime::default();
@@ -287,45 +223,36 @@ impl ClientRuntime {
         self.session = None;
         self.active_world_id = None;
         self.client_id = None;
-        self.snapshot = None;
         self.world = None;
         self.world_grid = None;
         self.world_version = self.world_version.wrapping_add(1);
         self.predicted_local = None;
         self.is_admin = false;
-        self.resource_node_collider_version = 0;
         self.depleted_node_ids.clear();
         self.connection.reset();
     }
 
-    /// Rebuilds the world collision grid from the current world plus any
-    /// live resource node colliders (tree trunks, ore rocks) present in
-    /// the latest snapshot. Called after Welcome and whenever the live
-    /// set of collider-bearing nodes changes (a node spawns, is felled,
-    /// or is mined out).
-    fn rebuild_world_grid(&mut self) {
+    /// Rebuilds the world collision grid from the current world plus
+    /// live resource-node and deployable colliders supplied by the
+    /// caller (a per-frame system that watches replicated entities).
+    pub(crate) fn rebuild_world_grid<R, D>(
+        &mut self,
+        resource_node_colliders: R,
+        deployable_colliders: D,
+    ) where
+        R: IntoIterator<Item = WorldBlock>,
+        D: IntoIterator<Item = WorldBlock>,
+    {
         let Some(world) = self.world.as_ref() else {
             self.world_grid = None;
             return;
         };
-        let extras: Vec<WorldBlock> = self
-            .snapshot
-            .as_ref()
-            .map(|snapshot| {
-                let nodes = snapshot
-                    .resource_nodes
-                    .iter()
-                    .filter_map(resource_node_collider);
-                // Placed structures also block player movement. We
-                // build the AABB from each structure's item profile so
-                // the half-extents match the server-side overlap test.
-                let deployables = snapshot
-                    .deployed_entities
-                    .iter()
-                    .filter_map(deployable_collider);
-                nodes.chain(deployables).collect()
-            })
-            .unwrap_or_default();
+        // Trees + ores from the replicated resource-node set, plus
+        // placed structures from the replicated deployable set. The
+        // collider half-extents come from each entity's definition /
+        // item profile to match the server-side overlap test.
+        let mut extras: Vec<WorldBlock> = resource_node_colliders.into_iter().collect();
+        extras.extend(deployable_colliders);
         self.world_grid = Some(BlockGrid::build_with_extras(world, &extras));
     }
 
@@ -338,7 +265,7 @@ impl ClientRuntime {
                 client_id,
                 world,
                 is_admin,
-                snapshot,
+                local_seed,
                 world_time,
                 ..
             } => {
@@ -346,11 +273,12 @@ impl ClientRuntime {
                 self.is_admin = is_admin;
                 self.world = Some(world);
                 self.world_version = self.world_version.wrapping_add(1);
-                self.seed_local_prediction_from_snapshot(&snapshot, true);
-                self.snapshot = Some(snapshot);
-                self.rebuild_world_grid();
-                self.resource_node_collider_version =
-                    resource_node_collider_set_version(self.snapshot.as_ref());
+                self.seed_local_prediction(&local_seed);
+                // The world collision grid is rebuilt by
+                // `maintain_world_grid_system` once per frame —
+                // bumping `world_version` (and the implicit
+                // change to the resource-node set) is the signal
+                // that triggers it.
                 self.apply_world_time_snapshot(world_time);
                 self.push_system_message(format!("connected as player {client_id}"));
             }
@@ -363,21 +291,6 @@ impl ClientRuntime {
             }
             ServerMessage::PlayerEvent(event) => {
                 self.push_system_message(format_player_event(event))
-            }
-            ServerMessage::Snapshot(snapshot) => {
-                if self.is_stale_snapshot(snapshot.tick) {
-                    return;
-                }
-                self.snapshot = Some(snapshot);
-                // Nodes can disappear between snapshots (trees felled,
-                // ores mined out). Rebuild the collision grid only when
-                // the live set actually changes — every snapshot would
-                // be wasted work.
-                let new_version = resource_node_collider_set_version(self.snapshot.as_ref());
-                if new_version != self.resource_node_collider_version {
-                    self.resource_node_collider_version = new_version;
-                    self.rebuild_world_grid();
-                }
             }
             ServerMessage::Correction(player) => {
                 self.apply_non_movement_correction(&player);
@@ -409,6 +322,17 @@ impl ClientRuntime {
                 // node already left AoI when this arrived) lingers
                 // harmlessly until the player reconnects.
                 self.depleted_node_ids.insert(id);
+            }
+            ServerMessage::ResourceNodeStorageChanged { .. } => {
+                // Applied directly to the replicated
+                // `ResourceNodeStorage` component by the network tick
+                // system before it reaches runtime — no log / history
+                // side-effect.
+            }
+            ServerMessage::DeployableHealthChanged { .. } => {
+                // Same as `ResourceNodeStorageChanged` — applied to
+                // the replicated `DeployableHealth` component by the
+                // network tick system before this point.
             }
             ServerMessage::Voice { .. } => {
                 // Voice frames are dispatched as `IncomingVoiceMessage`
@@ -478,65 +402,33 @@ impl ClientRuntime {
         }
     }
 
-    pub(crate) fn local_player(&self) -> Option<&PlayerState> {
-        let client_id = self.client_id?;
-        self.snapshot
-            .as_ref()?
-            .players
-            .iter()
-            .find(|player| player.client_id == client_id)
-    }
-
     /// Best-known world-space position of the local player's feet.
-    /// Prefers the predicted controller (zero-latency placement preview)
-    /// and falls back to the last server snapshot.
+    /// The predicted controller is the source of truth from Welcome
+    /// onward; before Welcome there's no view at all.
     pub(crate) fn local_player_position(&self) -> Option<Vec3> {
-        if let Some(predicted) = &self.predicted_local {
-            return Some(predicted.position.into());
-        }
-        let player = self.local_player()?;
-        Some(player.position.into())
+        self.predicted_local
+            .as_ref()
+            .map(|predicted| predicted.position.into())
     }
 
     pub(crate) fn local_view(&self) -> Option<LocalPlayerView> {
-        if let Some(predicted) = &self.predicted_local {
-            return Some(LocalPlayerView {
-                position: predicted.view_position(),
-                yaw: predicted.yaw,
-                pitch: predicted.pitch,
-                health: predicted.health,
-            });
-        }
-
-        let player = self.local_player()?;
+        let predicted = self.predicted_local.as_ref()?;
         Some(LocalPlayerView {
-            position: player.position,
-            yaw: player.yaw,
-            pitch: player.pitch,
-            health: player.health,
+            position: predicted.view_position(),
+            yaw: predicted.yaw,
+            pitch: predicted.pitch,
+            health: predicted.health,
         })
     }
 
-    pub(super) fn seed_local_prediction_from_snapshot(
-        &mut self,
-        snapshot: &WorldSnapshot,
-        force: bool,
-    ) {
-        let Some(client_id) = self.client_id else {
-            return;
-        };
-        let Some(server_player) = snapshot
-            .players
-            .iter()
-            .find(|player| player.client_id == client_id)
-        else {
-            return;
-        };
-
-        if force || self.predicted_local.is_none() {
-            self.predicted_local = Some(PlayerController::from_player_state(server_player));
-            self.input_sequence = self.input_sequence.max(server_player.last_processed_input);
-        }
+    /// Initialise `predicted_local` from the Welcome message's
+    /// `local_seed` field. Phase 6.6 replaced the old
+    /// `seed_local_prediction_from_snapshot` (which searched a
+    /// full `WorldSnapshot.players` list) with this direct seed —
+    /// Welcome now carries only what prediction actually needs.
+    pub(super) fn seed_local_prediction(&mut self, seed: &PlayerState) {
+        self.predicted_local = Some(PlayerController::from_player_state(seed));
+        self.input_sequence = self.input_sequence.max(seed.last_processed_input);
     }
 
     fn apply_non_movement_correction(&mut self, player: &PlayerState) {
@@ -547,12 +439,6 @@ impl ClientRuntime {
         if let Some(predicted) = &mut self.predicted_local {
             predicted.health = player.health;
         }
-    }
-
-    fn is_stale_snapshot(&self, tick: u64) -> bool {
-        self.snapshot
-            .as_ref()
-            .is_some_and(|current| tick <= current.tick)
     }
 }
 

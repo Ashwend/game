@@ -4,7 +4,7 @@ use crate::{
     app::{
         scene::ResourceVisualAssets,
         state::{ClientRuntime, MenuState, Screen},
-        systems::{resource_node_transform, resource_node_visual},
+        systems::{resource_node_transform_at, resource_node_visual},
     },
     resources::{resource_node_definition, spawn_resource_node},
     world::{BlockKind, WorldData},
@@ -92,8 +92,8 @@ fn spawn_menu_resource_nodes(
         let Some(definition) = resource_node_definition(&node.definition_id) else {
             continue;
         };
-        let (mesh, material) = resource_node_visual(assets, &node, definition.model);
-        let transform = resource_node_transform(&node, definition.model);
+        let (mesh, material) = resource_node_visual(assets, definition.model);
+        let transform = resource_node_transform_at(node.position, node.yaw, definition.model);
         commands.spawn((
             Name::new(format!("Menu Resource Node {}", node.id)),
             WorldGeometry,

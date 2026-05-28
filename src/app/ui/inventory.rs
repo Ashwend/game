@@ -6,10 +6,10 @@ use bevy_egui::egui::{self, Align2, Color32, Stroke};
 
 use crate::{
     app::{
-        state::{ClientRuntime, InventoryUiState, MenuState, PickupTargetState, UnifiedSlotRef},
+        state::{InventoryUiState, LocalPlayerState, MenuState, PickupTargetState, UnifiedSlotRef},
         ui::InventorySoundRequests,
     },
-    protocol::{ACTIONBAR_SLOT_COUNT, ItemContainerSlot, PlayerState},
+    protocol::{ACTIONBAR_SLOT_COUNT, ItemContainerSlot},
 };
 
 use self::{
@@ -30,7 +30,7 @@ const INVENTORY_PANEL_WIDTH: f32 =
 pub(super) fn inventory_ui(
     ctx: &egui::Context,
     menu: &mut MenuState,
-    runtime: &mut ClientRuntime,
+    local_player: &LocalPlayerState,
     inventory_ui: &mut InventoryUiState,
     pickup_target: &PickupTargetState,
     inventory_sound_requests: &mut InventorySoundRequests,
@@ -38,7 +38,7 @@ pub(super) fn inventory_ui(
 ) {
     inventory_ui.begin_frame();
     inventory_ui.tick_slot_flashes(delta_seconds);
-    match runtime.local_player().and_then(PlayerState::inventory) {
+    match local_player.private.as_ref().map(|p| &p.inventory) {
         Some(inventory) => {
             if let Some(event) = inventory_ui.observe_inventory(inventory) {
                 inventory_sound_requests.push(event);
@@ -53,7 +53,7 @@ pub(super) fn inventory_ui(
 
     if menu.inventory_open && !menu.pause_open {
         inventory_backdrop(ctx);
-        draw_inventory_panel(ctx, runtime, inventory_ui);
+        draw_inventory_panel(ctx, local_player, inventory_ui);
     }
 
     if !menu.pause_open {
@@ -64,7 +64,7 @@ pub(super) fn inventory_ui(
         // the furnace immediately disables the gesture again.
         draw_actionbar(
             ctx,
-            runtime,
+            local_player,
             inventory_ui,
             menu.inventory_open,
             menu.furnace_open,
@@ -92,7 +92,7 @@ fn inventory_backdrop(ctx: &egui::Context) {
 
 fn draw_inventory_panel(
     ctx: &egui::Context,
-    runtime: &ClientRuntime,
+    local_player: &LocalPlayerState,
     inventory_ui: &mut InventoryUiState,
 ) {
     let response = egui::Area::new("inventory_panel".into())
@@ -104,7 +104,7 @@ fn draw_inventory_panel(
                 ui.set_width(INVENTORY_PANEL_WIDTH - 48.0);
                 ui.label(theme::section("Inventory"));
                 ui.add_space(14.0);
-                draw_inventory_grid(ui, runtime, inventory_ui);
+                draw_inventory_grid(ui, local_player, inventory_ui);
             });
         });
     inventory_ui.inventory_rect = Some(response.response.rect);
@@ -112,10 +112,10 @@ fn draw_inventory_panel(
 
 fn draw_inventory_grid(
     ui: &mut egui::Ui,
-    runtime: &ClientRuntime,
+    local_player: &LocalPlayerState,
     inventory_ui: &mut InventoryUiState,
 ) {
-    let inventory = runtime.local_player().and_then(PlayerState::inventory);
+    let inventory = local_player.private.as_ref().map(|p| &p.inventory);
     for row in 0..INVENTORY_ROWS {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = SLOT_GAP;
@@ -146,12 +146,12 @@ fn draw_inventory_grid(
 
 fn draw_actionbar(
     ctx: &egui::Context,
-    runtime: &ClientRuntime,
+    local_player: &LocalPlayerState,
     inventory_ui: &mut InventoryUiState,
     inventory_open: bool,
     furnace_open: bool,
 ) {
-    let Some(inventory) = runtime.local_player().and_then(PlayerState::inventory) else {
+    let Some(inventory) = local_player.private.as_ref().map(|p| &p.inventory) else {
         return;
     };
 
