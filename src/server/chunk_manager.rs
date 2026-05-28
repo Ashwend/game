@@ -82,6 +82,16 @@ const VIEW_RADIUS_HIGH: u32 = 3;
 /// jitter-free traversal.
 const LOAD_BUFFER_RINGS: u32 = 1;
 
+/// Spatial-hysteresis margin for room subscriptions. A chunk is *added* to a
+/// client's subscription when it enters the load radius (`view + buffer`), but
+/// is only *removed* once the player moves this many extra rings beyond that
+/// radius. The asymmetric add/keep thresholds stop chunks thrashing
+/// (load → unload → reload) when a player walks along a chunk boundary: a
+/// 1-chunk wobble can never cross both thresholds, so nothing unloads. This is
+/// deterministic (no timer) and costs only the extra fringe rings' replication
+/// while the player lingers near an edge. See `visible_chunks` / `retained_chunks`.
+const KEEP_MARGIN_RINGS: u32 = 2;
+
 /// Outer-ring spawn-budget multipliers. When the chunk manager is first
 /// populating the world, grids further from the centre keep a smaller
 /// fraction of their generated capacity, so distant areas still read as
@@ -540,25 +550,44 @@ impl ChunkManager {
     }
 
     /// The chunk coords a player at `player_pos` should receive
-    /// snapshot data for under the given view tier. Centralizes the AoI
-    /// ring math so every networked entity flows through the same
-    /// chunk-visibility decision.
+    /// snapshot data for under the given view tier — the **add** radius for
+    /// room subscriptions. Centralizes the AoI ring math so every networked
+    /// entity flows through the same chunk-visibility decision. Includes the
+    /// load-buffer ring so the client's collider grid is already populated
+    /// when the player crosses a boundary — see `LOAD_BUFFER_RINGS`.
     pub fn visible_chunks(&self, player_pos: Vec3Net, tier: ViewRadiusTier) -> HashSet<ChunkCoord> {
-        // Include the load-buffer ring so the client's collider grid is
-        // already populated when the player crosses a boundary — see
-        // `LOAD_BUFFER_RINGS` for the why.
-        let radius = (view_tier_radius(tier) + LOAD_BUFFER_RINGS) as i32;
+        self.chunks_within(player_pos, view_tier_radius(tier) + LOAD_BUFFER_RINGS)
+    }
+
+    /// The **keep** radius for room subscriptions: the load radius plus
+    /// `KEEP_MARGIN_RINGS`. A subscribed chunk is retained until it falls
+    /// outside this larger ring, which is the spatial hysteresis that stops
+    /// boundary thrash. Always a superset of `visible_chunks`.
+    pub fn retained_chunks(
+        &self,
+        player_pos: Vec3Net,
+        tier: ViewRadiusTier,
+    ) -> HashSet<ChunkCoord> {
+        self.chunks_within(
+            player_pos,
+            view_tier_radius(tier) + LOAD_BUFFER_RINGS + KEEP_MARGIN_RINGS,
+        )
+    }
+
+    /// Loaded chunks within a Chebyshev `radius` (in chunks) of the player.
+    fn chunks_within(&self, player_pos: Vec3Net, radius: u32) -> HashSet<ChunkCoord> {
+        let radius = radius as i32;
         let player_grid = ChunkCoord::from_world(player_pos.x, player_pos.z);
-        let mut visible = HashSet::new();
+        let mut out = HashSet::new();
         for dx in -radius..=radius {
             for dz in -radius..=radius {
                 let coord = ChunkCoord::new(player_grid.x + dx, player_grid.z + dz);
                 if self.grids.contains_key(&coord) {
-                    visible.insert(coord);
+                    out.insert(coord);
                 }
             }
         }
-        visible
+        out
     }
 
     /// Reverse lookup: which chunk does this node id live in? Returns
@@ -1114,5 +1143,23 @@ mod tests {
                 "visible chunk {coord:?} is outside the loaded grid"
             );
         }
+    }
+
+    #[test]
+    fn retained_chunks_is_wider_superset_of_visible_chunks() {
+        // World large enough that neither radius clamps against the edge.
+        let (manager, _nodes) = ChunkManager::new_for_world(0xCAFE, ChunkDims::new(15));
+        let visible = manager.visible_chunks(Vec3Net::ZERO, ViewRadiusTier::Low);
+        let retained = manager.retained_chunks(Vec3Net::ZERO, ViewRadiusTier::Low);
+
+        // Low tier(1) + load buffer(1) = radius 2 → 5x5; keep adds
+        // KEEP_MARGIN_RINGS(2) → radius 4 → 9x9. The keep set must strictly
+        // contain the add set — that gap is what gives the hysteresis.
+        assert_eq!(visible.len(), 25);
+        assert_eq!(retained.len(), 81);
+        assert!(
+            visible.is_subset(&retained),
+            "every subscribed (visible) chunk must stay within the keep radius"
+        );
     }
 }

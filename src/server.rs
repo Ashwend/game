@@ -402,6 +402,20 @@ impl GameServer {
         self.chunk_manager.visible_chunks(position, tier)
     }
 
+    /// Chunks the given client's subscription should be *retained* for —
+    /// the AoI ring widened by the spatial-hysteresis keep margin. Always a
+    /// superset of `visible_chunks_for_client`. Empty if the client isn't
+    /// connected.
+    pub fn retained_chunks_for_client(
+        &self,
+        client_id: ClientId,
+    ) -> std::collections::HashSet<crate::world::ChunkCoord> {
+        let Some((position, tier)) = self.client_view(client_id) else {
+            return std::collections::HashSet::new();
+        };
+        self.chunk_manager.retained_chunks(position, tier)
+    }
+
     /// Read-only access to the live resource node map. Used by the ECS
     /// mirror system in `net/host` to keep entity state in sync with this
     /// authoritative map. Avoid mutating callers; use the existing gather/

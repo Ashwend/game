@@ -86,11 +86,11 @@ struct ChunkRoomMap {
     by_coord: HashMap<ChunkCoord, Entity>,
 }
 
-/// Per-client snapshot of which chunk rooms the client is currently
-/// subscribed to. We diff this against `visible_chunks` on every tick to
-/// emit the minimal Add/RemoveSender RoomEvents. RoomPlugin's
-/// `handle_disconnect` observer removes the sender from every room on
-/// `Disconnected`, so we only need to drop our local bookkeeping there.
+/// Per-client snapshot of which chunk rooms the client currently has a sender
+/// in. We diff the AoI add/keep radii against this every tick to emit the
+/// minimal Add/RemoveSender RoomEvents. RoomPlugin's `handle_disconnect`
+/// observer removes the sender from every room on `Disconnected`, so we only
+/// need to drop our local bookkeeping there.
 #[derive(Resource, Default)]
 struct ClientChunkSubs {
     by_client: HashMap<ClientId, HashSet<ChunkCoord>>,
@@ -605,11 +605,14 @@ fn install_replication_sender_on_link(trigger: On<Add, LinkOf>, mut commands: Co
         .insert(ReplicationSender::default());
 }
 
-/// Reconciles each connected client's chunk-room subscriptions with the
-/// chunks currently inside their AoI ring. Diffs against the last set we
-/// stored so each tick emits at most O(boundary-crossings) RoomEvents —
-/// idle clients pay nothing. On disconnect, RoomPlugin scrubs the
-/// sender from every room; we just drop our cached set.
+/// Reconciles each connected client's chunk-room subscriptions with their AoI
+/// ring, using **spatial hysteresis** to stop boundary thrash. A chunk is
+/// subscribed as soon as it enters the *add* radius (`visible_chunks_for_client`)
+/// but only unsubscribed once it falls outside the wider *keep* radius
+/// (`retained_chunks_for_client`). The gap between the two thresholds means a
+/// player wobbling across a chunk boundary never crosses both, so nothing
+/// loads/unloads/reloads. On disconnect, RoomPlugin scrubs the sender from
+/// every room; we just drop our cached set.
 fn update_client_room_subscriptions(
     server: Res<AuthoritativeServer>,
     connections: Res<ServerConnections>,
@@ -625,25 +628,32 @@ fn update_client_room_subscriptions(
         let Some(sender_entity) = connections.entity_for_client(client_id) else {
             continue;
         };
-        let next: HashSet<ChunkCoord> = server.0.visible_chunks_for_client(client_id);
-        let prev = subs.by_client.entry(client_id).or_default();
+        let add_set: HashSet<ChunkCoord> = server.0.visible_chunks_for_client(client_id);
+        let keep_set: HashSet<ChunkCoord> = server.0.retained_chunks_for_client(client_id);
+        let subscribed = subs.by_client.entry(client_id).or_default();
 
-        for coord in next.difference(prev) {
-            let room = ensure_chunk_room_commands(&mut commands, &mut chunk_rooms, *coord);
-            commands.trigger(RoomEvent {
-                room,
-                target: RoomTarget::AddSender(sender_entity),
-            });
+        // Subscribe chunks that entered the add radius.
+        for coord in &add_set {
+            if subscribed.insert(*coord) {
+                let room = ensure_chunk_room_commands(&mut commands, &mut chunk_rooms, *coord);
+                commands.trigger(RoomEvent {
+                    room,
+                    target: RoomTarget::AddSender(sender_entity),
+                });
+            }
         }
-        for coord in prev.difference(&next) {
-            if let Some(room) = chunk_rooms.by_coord.get(coord).copied() {
+
+        // Unsubscribe chunks that fell outside the wider keep radius.
+        let to_remove: Vec<ChunkCoord> = subscribed.difference(&keep_set).copied().collect();
+        for coord in to_remove {
+            subscribed.remove(&coord);
+            if let Some(room) = chunk_rooms.by_coord.get(&coord).copied() {
                 commands.trigger(RoomEvent {
                     room,
                     target: RoomTarget::RemoveSender(sender_entity),
                 });
             }
         }
-        *prev = next;
     }
 }
 

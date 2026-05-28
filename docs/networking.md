@@ -33,6 +33,8 @@ Each replicated entity gets its own `ReplicationGroup::new_from_entity()` at spa
 
 Visibility is controlled by **rooms**. One Lightyear `Room` entity per `ChunkCoord` (lazily allocated, lives in `ChunkRoomMap`). When a mirror entity is spawned it triggers `RoomEvent::AddEntity` for its anchor chunk. When a client's AoI ring changes (player crossed a chunk boundary, view tier changed), `update_client_room_subscriptions` triggers `AddSender` / `RemoveSender` for just the boundary delta. Lightyear handles the rest: clients in a shared room receive spawns/despawns/diffs automatically.
 
+Subscriptions use **spatial hysteresis** to stop boundary thrash. There are two radii: a chunk is *added* when it enters the load radius (`visible_chunks` = view tier + `LOAD_BUFFER_RINGS`) but only *removed* once it falls outside the wider keep radius (`retained_chunks` = load radius + `KEEP_MARGIN_RINGS`). Because the keep set is a strict superset of the add set, a player wobbling across a chunk boundary never crosses both thresholds, so no chunk loads → unloads → reloads (the churn that causes visible hitches). This is deterministic — no timer — and costs only the extra fringe rings' replication while the player lingers near an edge. `update_client_room_subscriptions` diffs the cached subscribed set against both radii each tick: subscribe `add − subscribed`, unsubscribe `subscribed − keep`.
+
 The `replication-trace` Cargo feature (default off) adds `server: <Component> MUTATE` / `client: <Component> RECV` log lines for the load-bearing replicated components. Build with `--features replication-trace` and `RUST_LOG=replication_trace=info` to verify a mutation actually reaches the client.
 
 ### Player public / private split

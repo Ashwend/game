@@ -751,21 +751,19 @@ mod tests {
         let mut tasks = SessionShutdownTasks::default();
         tasks.push_finished_for_test(Ok(()));
         tasks.push_finished_for_test(Err("nope".to_owned()));
-        // Allow the threads to finish.
-        let mut drained = Vec::new();
-        for _ in 0..100 {
-            drained = tasks.drain_finished();
-            if !drained.is_empty() {
+        // Poll until both spawned threads finish and have been drained.
+        // `drain_finished` only returns *finished* tasks, so we accumulate
+        // across iterations rather than breaking on the first non-empty
+        // batch — otherwise a slower second thread races the assertions.
+        let mut all = Vec::new();
+        for _ in 0..200 {
+            all.extend(tasks.drain_finished());
+            if tasks.pending_len() == 0 {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        // Once finished, both results surface and the queue empties.
-        let all: Vec<_> = {
-            let mut acc = drained;
-            acc.extend(tasks.drain_finished());
-            acc
-        };
+        // Both results surface and the queue empties.
         assert!(all.iter().any(|r| r.is_ok()));
         assert!(all.iter().any(|r| r.is_err()));
         assert_eq!(tasks.pending_len(), 0);
