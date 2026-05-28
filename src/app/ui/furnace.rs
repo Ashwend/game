@@ -77,7 +77,7 @@ pub(super) fn furnace_ui(
         ctx,
         "furnace_backdrop",
         Order::Middle,
-        Color32::from_rgba_unmultiplied(1, 3, 7, 190),
+        theme::backdrop_color(),
     );
     if backdrop.clicked() {
         send_furnace_command(runtime, error_toasts, FurnaceCommand::Close);

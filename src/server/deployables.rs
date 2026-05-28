@@ -28,22 +28,10 @@ use crate::{
 
 use super::{DeliveryTarget, GameServer, ServerEnvelope, inventory::take_items_from_inventory};
 
-/// Maximum range, in metres, at which a player can damage a placed
-/// structure. Matches the furnace open-range so the swing-tooltip-damage
-/// flow stays consistent — if E reaches it, your tool reaches it too.
-const DAMAGE_RANGE_M: f32 = 5.5;
-/// Per-tool damage scalar. The tool's `gather_amount` already scales
-/// with tier (stone tools = 6, future iron tools = higher), so
-/// re-using it as the base means deployable damage tracks tool tier
-/// without a separate balance table. The multiplier puts stone-tool
-/// time-to-destroy in the survival-game-sweet-spot (~15 swings for a
-/// workbench).
-const DAMAGE_PER_GATHER_POINT: u32 = 5;
-
-/// Maximum distance, in metres, from the placing player's feet to the
-/// requested placement position. Keeps placements within arm's reach +
-/// a forgiving margin for foot-of-camera vs centre-of-feet projection.
-const PLACEMENT_REACH_M: f32 = 5.0;
+use crate::game_balance::{
+    DEPLOYABLE_DAMAGE_PER_GATHER_POINT as DAMAGE_PER_GATHER_POINT,
+    DEPLOYABLE_DAMAGE_RANGE_M as DAMAGE_RANGE_M, DEPLOYABLE_PLACEMENT_REACH_M as PLACEMENT_REACH_M,
+};
 
 /// Authoritative record of a placed structure. The id is server-assigned
 /// and stable for the entity's lifetime.
@@ -56,6 +44,10 @@ pub(crate) struct DeployedEntity {
     pub(super) yaw: f32,
     pub(super) health: u32,
     pub(super) max_health: u32,
+    /// Steam id of the player who placed this entity, or `None` for
+    /// world-spawned structures. Used to gate damage: only the owner
+    /// (or any player, when this is `None`) can damage the entity.
+    pub(super) owner: Option<crate::protocol::SteamId>,
     /// Furnace-only state. `None` for non-furnaces; the place handler
     /// initialises a default `FurnaceState` for placed furnaces.
     pub(super) furnace: Option<super::furnace::FurnaceState>,
@@ -129,6 +121,7 @@ impl GameServer {
         // is left to gather (drops sit lower than typical deployables);
         // resource nodes already enforce their own collision so the
         // player can't hammer a workbench inside a tree.
+        let owner_steam_id = client.steam_id;
         let candidate = DeployedEntity {
             id: 0,
             item_id: command.item_id.clone(),
@@ -137,6 +130,7 @@ impl GameServer {
             yaw: command.yaw,
             health: profile.max_health,
             max_health: profile.max_health,
+            owner: Some(owner_steam_id),
             furnace: None,
         };
         let candidate_block = candidate.collider(profile);
@@ -221,9 +215,22 @@ impl GameServer {
             return Vec::new();
         }
 
+        let attacker_steam_id = client.steam_id;
+        let attacker_is_admin = client.is_admin;
         let Some(entity) = self.deployed_entities.get(&command.id) else {
             return Vec::new();
         };
+        // Ownership gate: world-spawned entities (`owner = None`) are
+        // damageable by anyone. Player-placed entities can only be
+        // damaged by their placer — except admins, who can demolish
+        // anyone's structures for moderation (clearing grief bases,
+        // tidying derelict workbenches, etc.).
+        if !attacker_is_admin
+            && let Some(owner) = entity.owner
+            && owner != attacker_steam_id
+        {
+            return Vec::new();
+        }
         let dx = entity.position.x - player_pos.x;
         let dz = entity.position.z - player_pos.z;
         if (dx * dx + dz * dz).sqrt() > DAMAGE_RANGE_M {
@@ -328,6 +335,7 @@ impl GameServer {
                         yaw: p.yaw,
                         health: p.health,
                         max_health: p.max_health,
+                        owner: p.owner,
                         furnace,
                     },
                 ))
@@ -349,6 +357,7 @@ impl GameServer {
                 yaw: entity.yaw,
                 health: entity.health,
                 max_health: entity.max_health,
+                owner: entity.owner,
                 furnace: entity.furnace.as_ref().map(|f| f.to_persisted()),
             })
             .collect();
@@ -710,5 +719,115 @@ mod tests {
         assert!(server.station_in_range(client_id, RecipeStation::Workbench { min_tier: 1 }));
         // A higher-tier workbench requirement is not satisfied by a T1.
         assert!(!server.station_in_range(client_id, RecipeStation::Workbench { min_tier: 2 }));
+    }
+
+    #[test]
+    fn placement_records_owner_steam_id() {
+        let mut server = make_server();
+        let client_id = connect_test_client(&mut server);
+        give_one(&mut server, client_id, WORKBENCH_T1_ID);
+        let id = place_workbench(&mut server, client_id);
+
+        let entity = server.deployed_entities.get(&id).expect("placed");
+        assert_eq!(
+            entity.owner,
+            Some(1),
+            "owner steam id should match the placing client"
+        );
+    }
+
+    #[test]
+    fn another_player_cannot_damage_an_owned_deployable() {
+        use crate::protocol::DamageDeployableCommand;
+
+        let mut server = make_server();
+        let owner_id = connect_test_client(&mut server);
+        give_one(&mut server, owner_id, WORKBENCH_T1_ID);
+        let id = place_workbench(&mut server, owner_id);
+        let start_hp = server.deployed_entities[&id].health;
+
+        // Connect a second player with a different steam id and try to
+        // damage the placed workbench.
+        let attacker_id = server
+            .connect(
+                PROTOCOL_VERSION,
+                Some(GAME_VERSION.to_owned()),
+                2,
+                "Griefer".to_owned(),
+                offline_auth_token(2),
+            )
+            .expect("connect ok")
+            .0;
+        equip_pickaxe(&mut server, attacker_id);
+        // Move the attacker into range of the placed entity.
+        if let Some(client) = server.clients.get_mut(&attacker_id) {
+            client.controller.position = Vec3Net::new(1.5, 0.0, 0.0);
+        }
+
+        server.apply_damage_deployable_command(attacker_id, DamageDeployableCommand { id });
+        assert_eq!(
+            server.deployed_entities[&id].health, start_hp,
+            "non-owner damage must be rejected"
+        );
+    }
+
+    #[test]
+    fn owner_can_damage_their_own_deployable() {
+        use crate::protocol::DamageDeployableCommand;
+
+        let mut server = make_server();
+        let client_id = connect_test_client(&mut server);
+        give_one(&mut server, client_id, WORKBENCH_T1_ID);
+        let id = place_workbench(&mut server, client_id);
+        let start_hp = server.deployed_entities[&id].health;
+        equip_pickaxe(&mut server, client_id);
+
+        server.apply_damage_deployable_command(client_id, DamageDeployableCommand { id });
+        assert!(
+            server.deployed_entities[&id].health < start_hp,
+            "owner damage should land"
+        );
+    }
+
+    #[test]
+    fn admin_bypasses_ownership_gate_on_damage() {
+        use crate::protocol::DamageDeployableCommand;
+
+        // Owner places a structure. An admin (different steam id) walks
+        // up and damages it. The ownership gate must defer to the admin
+        // bit so moderation works without exposing a side door for
+        // regular players.
+        let mut server = make_server();
+        let owner_id = connect_test_client(&mut server);
+        give_one(&mut server, owner_id, WORKBENCH_T1_ID);
+        let id = place_workbench(&mut server, owner_id);
+        let start_hp = server.deployed_entities[&id].health;
+
+        let admin_id = server
+            .connect(
+                PROTOCOL_VERSION,
+                Some(GAME_VERSION.to_owned()),
+                2,
+                "Moderator".to_owned(),
+                offline_auth_token(2),
+            )
+            .expect("connect ok")
+            .0;
+        // The make_server fixture marks singleplayer host=1 as admin;
+        // for a multiplayer-shaped test we promote the second client
+        // explicitly.
+        if let Some(client) = server.clients.get_mut(&admin_id) {
+            client.is_admin = true;
+        }
+        equip_pickaxe(&mut server, admin_id);
+        if let Some(client) = server.clients.get_mut(&admin_id) {
+            client.controller.position = Vec3Net::new(1.5, 0.0, 0.0);
+        }
+
+        server.apply_damage_deployable_command(admin_id, DamageDeployableCommand { id });
+        assert!(
+            server.deployed_entities[&id].health < start_hp,
+            "admin damage must land even against another player's structure"
+        );
     }
 }

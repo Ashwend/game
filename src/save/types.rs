@@ -122,6 +122,9 @@ pub struct PersistedDeployedEntity {
     pub yaw: f32,
     pub health: u32,
     pub max_health: u32,
+    /// Steam id of the player who placed this entity, or `None` for
+    /// world-spawned structures. Persisted so ownership survives reloads.
+    pub owner: Option<crate::protocol::SteamId>,
     /// Furnace-only sub-state. `None` for kinds that aren't furnaces
     /// (workbench). Keeps the per-kind shape out of the top-level
     /// struct so adding more deployable types later doesn't grow it.

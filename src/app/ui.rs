@@ -1,6 +1,7 @@
 mod chat;
 mod confirm;
 mod crafting;
+mod crafting_queue;
 mod death_splash;
 mod deployable_overlay;
 pub(crate) mod floating_text;
@@ -29,7 +30,8 @@ use super::audio::{PlaySound, SoundId};
 use self::{
     chat::chat_ui,
     confirm::{confirmation_ui, notice_ui},
-    crafting::{crafting_queue_hud, crafting_ui},
+    crafting::crafting_ui,
+    crafting_queue::crafting_queue_hud,
     death_splash::{death_splash_ui, send_respawn},
     deployable_overlay::{
         DeployableOverlay, DeployableOverlayParams, collect_deployable_overlay_entries,

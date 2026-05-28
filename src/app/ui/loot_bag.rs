@@ -16,7 +16,7 @@
 //! every looker (see `loot_bag::close_loot_bag`), so leaving the UI
 //! is the signal that says "I'm done with this pile".
 
-use bevy_egui::egui::{self, Align, Align2, Color32, Layout, Order, RichText};
+use bevy_egui::egui::{self, Align, Align2, Layout, Order, RichText};
 
 use crate::{
     app::{
@@ -69,7 +69,7 @@ pub(super) fn loot_bag_ui(
         ctx,
         "loot_bag_backdrop",
         Order::Middle,
-        Color32::from_rgba_unmultiplied(1, 3, 7, 190),
+        theme::backdrop_color(),
     );
     if backdrop.clicked() {
         send_loot_bag_command(runtime, error_toasts, LootBagCommand::Close);

@@ -122,10 +122,11 @@ pub struct GameServer {
     save: WorldSave,
     world: WorldData,
     /// Spatial index over `world.blocks`. Built once at construction. Movement
-    /// is currently client-authoritative so the server doesn't simulate, but
-    /// the chunk is here for the next time a server-side collision check (e.g.
-    /// drop validation, future server-authoritative movement) is wired in.
-    #[allow(dead_code)]
+    /// Coarse block AABB index used by server-side line-of-sight checks
+    /// (currently the combat LOS gate in `combat::line_of_sight_clear`).
+    /// Movement is client-authoritative so the server doesn't simulate
+    /// against it, but the data is here for any future server-side
+    /// collision or validation check.
     world_grid: BlockGrid,
     settings: ServerSettings,
     clients: HashMap<ClientId, ServerClient>,

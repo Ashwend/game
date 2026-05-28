@@ -40,6 +40,14 @@ pub(in crate::app::ui) fn button_stroke() -> Color32 {
     Color32::from_rgba_unmultiplied(115, 132, 151, 112)
 }
 
+/// Backdrop tint drawn behind every full-screen modal (crafting,
+/// furnace, inventory, loot bag, pause). Near-black with high alpha
+/// so the modal pops while leaving a hint of the world visible
+/// underneath.
+pub(in crate::app::ui) fn backdrop_color() -> Color32 {
+    Color32::from_rgba_unmultiplied(1, 3, 7, 190)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

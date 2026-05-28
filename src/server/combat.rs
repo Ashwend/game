@@ -33,35 +33,12 @@ use crate::{
     server::{DeliveryTarget, GameServer, PlayerLifecycle, ServerEnvelope},
 };
 
-/// Max feet-to-feet distance at which a melee swing connects. Same
-/// number the client uses in `app::systems::items::pickup` —
-/// keeping the constants in step means "I aimed at them and they
-/// were highlighted" ≈ "the server accepted the hit". A small
-/// tolerance over the client's value (0.5 m) accounts for the
-/// movement-prediction delta between the client's view at swing
-/// time and the server's at receive time.
-const ATTACK_RANGE_M: f32 = 3.5;
-
-/// Cosine of the attacker's view-cone half-angle. Matches the
-/// deployable interact cone so a tighter "looking at the avatar"
-/// gate isn't required for one entity type vs another.
-const ATTACK_CONE_COS: f32 = 0.92;
-
-/// Vertical offset from the attacker's feet to the eye. Drawn from
-/// the controller's `EYE_HEIGHT`; duplicated as a const here so the
-/// combat path doesn't have to pull a client-side constant.
-const ATTACKER_EYE_HEIGHT: f32 = 1.62;
-
-/// Chest-height aim point relative to the target's feet. Half the
-/// player's collision capsule height so the LOS ray passes through
-/// the body rather than the head (which would clip against the
-/// world ceiling on a low-ceiling map).
-const TARGET_CHEST_HEIGHT: f32 = 0.95;
-
-/// Fraction of the horizontal knockback magnitude applied as a
-/// vertical pop. Small upward component so the target slides away
-/// instead of grinding into the floor on the first contact substep.
-const KNOCKBACK_VERTICAL_FRACTION: f32 = 0.25;
+use crate::game_balance::{
+    COMBAT_ATTACK_CONE_COS as ATTACK_CONE_COS, COMBAT_ATTACK_RANGE_M as ATTACK_RANGE_M,
+    COMBAT_ATTACKER_EYE_HEIGHT as ATTACKER_EYE_HEIGHT,
+    COMBAT_KNOCKBACK_VERTICAL_FRACTION as KNOCKBACK_VERTICAL_FRACTION,
+    COMBAT_TARGET_CHEST_HEIGHT as TARGET_CHEST_HEIGHT,
+};
 
 impl GameServer {
     /// Process a client's `AttackPlayer` request. All validation is
@@ -407,10 +384,7 @@ fn next_f32(state: &mut u64) -> f32 {
     ((z >> 40) as f32) / ((1u64 << 24) as f32)
 }
 
-/// Minimum distance, in metres, between a fresh respawn point and any
-/// alive player. Tuned to prevent spawn-camping without making the
-/// safe-spawn picker fail on a sparsely-populated map.
-const RESPAWN_MIN_DISTANCE_M: f32 = 12.0;
+use crate::game_balance::RESPAWN_MIN_DISTANCE_M;
 
 fn knockback_impulse(attacker_pos: Vec3Net, target_pos: Vec3Net, speed: f32) -> Vec3Net {
     let dx = target_pos.x - attacker_pos.x;

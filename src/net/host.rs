@@ -693,6 +693,15 @@ fn sync_dropped_item_entities(world: &mut World) {
                         || transform.yaw != new_transform.yaw
                         || transform.rotation != new_transform.rotation)
                 {
+                    #[cfg(feature = "replication-trace")]
+                    {
+                        let before = transform.position;
+                        info!(
+                            target: "replication_trace",
+                            "server: DroppedItemTransform MUTATE id={id} entity={entity:?} pos {before:?} -> {:?}",
+                            new_transform.position
+                        );
+                    }
                     *transform = new_transform;
                 }
                 if let Some(mut drop) = world.get_mut::<crate::server::DroppedItem>(entity)
@@ -848,12 +857,29 @@ fn sync_player_entities(world: &mut World) {
                 if let Some(mut public) = world.get_mut::<crate::server::PlayerPublic>(entity)
                     && *public != view.public
                 {
+                    #[cfg(feature = "replication-trace")]
+                    {
+                        let before = public.position;
+                        info!(
+                            target: "replication_trace",
+                            "server: PlayerPublic       MUTATE client={} entity={entity:?} pos {before:?} -> {:?}",
+                            view.client_id, view.public.position
+                        );
+                    }
                     *public = view.public;
                 }
                 // Refresh private — inventory/crafting change on user action.
                 if let Some(mut private) = world.get_mut::<crate::server::PlayerPrivate>(entity)
                     && *private != view.private
                 {
+                    #[cfg(feature = "replication-trace")]
+                    {
+                        info!(
+                            target: "replication_trace",
+                            "server: PlayerPrivate      MUTATE client={} entity={entity:?} last_input={}",
+                            view.client_id, view.private.last_processed_input
+                        );
+                    }
                     *private = view.private;
                 }
                 // Refresh armor. Today only mutated by future systems —

@@ -10,6 +10,18 @@ singleplayer, or a remote dedicated host for multiplayer. Both are reached
 through the same Lightyear/UDP client — the only thing that changes is
 where the host runs.
 
+## Prerequisites
+
+- **Rust** 1.94+ (pinned via [`rust-toolchain.toml`](rust-toolchain.toml)).
+- **libopus** for the voice pipeline.
+  - macOS: `brew install opus`
+  - Debian/Ubuntu: `apt install libopus-dev`
+  - Other Linux: install your distro's libopus development headers.
+- The `./cli` script wraps the common workflows: `./cli dev` (run client),
+  `./cli server` (run dedicated host), `./cli test`, `./cli lint`,
+  `./cli multiplayer-test` (two clients + a host). Run `./cli` with no
+  args for the full list.
+
 ## What you can do today
 
 - Drop into a world from the main menu, or host one and join from another
@@ -53,7 +65,7 @@ where the host runs.
 - **Bevy 0.18** for the client app, scene rendering, ECS scheduling, and
   windowing.
 - **bevy_egui** for menus, HUD, chat, inventory, world list, and modals.
-- **Lightyear 0.26** (netcode + UDP) for the wire transport. Singleplayer
+- **Lightyear 0.26.4** (netcode + UDP) for the wire transport. Singleplayer
   spawns a loopback host on an ephemeral port and connects the same client
   to it; dedicated multiplayer reuses the exact same host wrapper.
 - **Rapier3D** for dropped-item physics bodies.

@@ -64,6 +64,7 @@ mod combat;
 mod commands;
 mod connection;
 mod dropped_items;
+mod furnace;
 mod inventory;
 mod loot_bag;
 mod movement;

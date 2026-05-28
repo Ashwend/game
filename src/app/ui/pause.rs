@@ -22,7 +22,7 @@ pub(super) fn pause_ui(
         ctx,
         "pause_backdrop",
         egui::Order::Middle,
-        egui::Color32::from_rgba_unmultiplied(1, 3, 7, 190),
+        theme::backdrop_color(),
     );
 
     if backdrop_response.clicked() {

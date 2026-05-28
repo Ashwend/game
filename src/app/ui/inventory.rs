@@ -86,7 +86,7 @@ fn inventory_backdrop(ctx: &egui::Context) {
         ctx,
         "inventory_backdrop",
         egui::Order::Middle,
-        Color32::from_rgba_unmultiplied(1, 3, 7, 190),
+        theme::backdrop_color(),
     );
 }
 

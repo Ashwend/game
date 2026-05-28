@@ -1,34 +1,39 @@
 //! Diagnostic systems for the Phase 6 re-attempt. Off unless the
 //! `replication-trace` Cargo feature is enabled.
 //!
-//! When a Lightyear-replicated `ResourceNodeStorage` component arrives
-//! on the client (or mutates on an already-known entity), this logs
-//! it to `target: "replication_trace"`. Pair with the matching
-//! `server: ResourceNodeStorage MUTATE …` line in `src/net/host.rs` to
-//! verify whether per-component updates flow end-to-end.
+//! Logs per-component arrivals and post-spawn diffs on the client and
+//! pairs with matching `server: <Component> MUTATE …` lines emitted by
+//! `src/net/host.rs` so we can verify every replicated component is
+//! actually delivering after the initial spawn.
 //!
 //! Use:
 //! ```sh
 //! RUST_LOG=replication_trace=info ./cli dev --features replication-trace
 //! ```
 //!
-//! Expected output when gathering a tree (this is what we're trying to
-//! prove out):
+//! Expected output when gathering a tree:
 //!
 //! ```text
 //! server: ResourceNodeStorage MUTATE id=12 entity=… 100 -> 95
 //! client: ResourceNodeStorage RECV   id=12 entity=… 100 -> 95
 //! ```
 //!
-//! If the server line fires but the client line doesn't, Lightyear is
-//! not delivering the update after the initial spawn — that's the
-//! Phase 6a bug.
+//! Coverage:
+//!   - `ResourceNodeStorage`
+//!   - `DeployableHealth`, `DeployableActive`
+//!   - `PlayerPublic`, `PlayerPrivate`, `PlayerArmor`, `PlayerLifecycle`
+//!   - `LootBagContents`
+//!   - `DroppedItemTransform`
+//!
+//! If a server `MUTATE` line fires but the client `RECV` line doesn't,
+//! Lightyear is not delivering the update after the initial spawn.
 
 use bevy::{ecs::change_detection::Ref, prelude::*};
 
 use crate::server::{
-    Deployable, DeployableActive, DeployableHealth, Player, PlayerArmor, ResourceNode,
-    ResourceNodeStorage,
+    Deployable, DeployableActive, DeployableHealth, DroppedItem, DroppedItemTransform,
+    LootBagContents, LootBagEntity, Player, PlayerArmor, PlayerLifecycle, PlayerPrivate,
+    PlayerPublic, ResourceNode, ResourceNodeStorage,
 };
 
 /// Tracks the last-seen value per id so we can log a clean
@@ -39,8 +44,11 @@ pub(crate) struct ReplicationTraceState {
     deployable_health: std::collections::HashMap<u64, u32>,
     deployable_active: std::collections::HashMap<u64, bool>,
     player_armor: std::collections::HashMap<u64, u8>,
+    player_lifecycle: std::collections::HashMap<u64, PlayerLifecycle>,
+    loot_bag_occupied: std::collections::HashMap<u64, usize>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn log_replicated_storage_changes_system(
     nodes: Query<(Entity, &ResourceNode, Ref<ResourceNodeStorage>)>,
     deployables: Query<(
@@ -49,7 +57,12 @@ pub(crate) fn log_replicated_storage_changes_system(
         Ref<DeployableHealth>,
         Ref<DeployableActive>,
     )>,
-    players: Query<(Entity, &Player, Ref<PlayerArmor>)>,
+    players_public: Query<(Entity, &Player, Ref<PlayerPublic>)>,
+    players_private: Query<(Entity, &Player, Ref<PlayerPrivate>)>,
+    players_armor: Query<(Entity, &Player, Ref<PlayerArmor>)>,
+    players_lifecycle: Query<(Entity, &Player, Ref<PlayerLifecycle>)>,
+    loot_bags: Query<(Entity, &LootBagEntity, Ref<LootBagContents>)>,
+    dropped_items: Query<(Entity, &DroppedItem, Ref<DroppedItemTransform>)>,
     mut state: ResMut<ReplicationTraceState>,
 ) {
     for (entity, node, storage) in &nodes {
@@ -112,7 +125,39 @@ pub(crate) fn log_replicated_storage_changes_system(
         }
     }
 
-    for (entity, player, armor) in &players {
+    for (entity, player, public) in &players_public {
+        if public.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: PlayerPublic       SPAWN  client={} entity={entity:?} pos={:?}",
+                player.client_id, public.position
+            );
+        } else if public.is_changed() {
+            info!(
+                target: "replication_trace",
+                "client: PlayerPublic       RECV   client={} entity={entity:?} pos={:?}",
+                player.client_id, public.position
+            );
+        }
+    }
+
+    for (entity, player, private) in &players_private {
+        if private.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: PlayerPrivate      SPAWN  client={} entity={entity:?} last_input={}",
+                player.client_id, private.last_processed_input
+            );
+        } else if private.is_changed() {
+            info!(
+                target: "replication_trace",
+                "client: PlayerPrivate      RECV   client={} entity={entity:?} last_input={}",
+                player.client_id, private.last_processed_input
+            );
+        }
+    }
+
+    for (entity, player, armor) in &players_armor {
         if armor.is_added() {
             info!(
                 target: "replication_trace",
@@ -132,6 +177,65 @@ pub(crate) fn log_replicated_storage_changes_system(
                 player.client_id, armor.0
             );
             state.player_armor.insert(player.client_id, armor.0);
+        }
+    }
+
+    for (entity, player, lifecycle) in &players_lifecycle {
+        if lifecycle.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: PlayerLifecycle    SPAWN  client={} entity={entity:?} state={:?}",
+                player.client_id, *lifecycle
+            );
+            state.player_lifecycle.insert(player.client_id, *lifecycle);
+        } else if lifecycle.is_changed() {
+            let before = state
+                .player_lifecycle
+                .get(&player.client_id)
+                .copied()
+                .unwrap_or(PlayerLifecycle::Alive);
+            info!(
+                target: "replication_trace",
+                "client: PlayerLifecycle    RECV   client={} entity={entity:?} {before:?} -> {:?}",
+                player.client_id, *lifecycle
+            );
+            state.player_lifecycle.insert(player.client_id, *lifecycle);
+        }
+    }
+
+    for (entity, bag, contents) in &loot_bags {
+        let occupied = contents.0.iter().filter(|s| s.is_some()).count();
+        if contents.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: LootBagContents    SPAWN  id={} entity={entity:?} occupied={occupied}",
+                bag.id
+            );
+            state.loot_bag_occupied.insert(bag.id, occupied);
+        } else if contents.is_changed() {
+            let before = state.loot_bag_occupied.get(&bag.id).copied().unwrap_or(0);
+            info!(
+                target: "replication_trace",
+                "client: LootBagContents    RECV   id={} entity={entity:?} {before} -> {occupied}",
+                bag.id
+            );
+            state.loot_bag_occupied.insert(bag.id, occupied);
+        }
+    }
+
+    for (entity, drop, transform) in &dropped_items {
+        if transform.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: DroppedItemTransform SPAWN id={} entity={entity:?} pos={:?}",
+                drop.id, transform.position
+            );
+        } else if transform.is_changed() {
+            info!(
+                target: "replication_trace",
+                "client: DroppedItemTransform RECV  id={} entity={entity:?} pos={:?}",
+                drop.id, transform.position
+            );
         }
     }
 }

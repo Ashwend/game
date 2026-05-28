@@ -15,3 +15,23 @@ Movement lives in `src/controller/`:
 - `collision.rs`: world-block AABB collision and support checks.
 - `grid.rs`: `BlockGrid`, a coarse spatial index over `WorldData::blocks` used by collision and held by `GameServer` for future server-side checks.
 - `tests.rs`: substep, step-up, coyote-time, and reconciliation regression tests.
+
+## Trust boundary
+
+Movement is intentionally **client-authoritative for responsiveness**. The client runs its full `PlayerController` simulation locally, then ships the resulting `PlayerMovement` state to the server. The server does not re-simulate the input — it accepts the client's reported pose if it passes a small set of cheap guards.
+
+What the server validates:
+- **Input sequence monotonicity.** Accepts a movement only if its `sequence` is strictly greater than the last one applied for that client (`src/server/movement.rs`). Replays and stale frames are dropped.
+- **Finiteness.** Position, velocity, yaw, and pitch must all be finite floats. NaN/Inf is rejected outright.
+- **Death pinning.** Dead players are pinned at their death position; movement messages from a dead client are ignored until respawn.
+
+What the server deliberately does **not** validate:
+- **Collision validity.** No world-block AABB check on the reported position. A modified client can clip through walls.
+- **Teleport / speed plausibility.** No max-step distance between consecutive accepted movements. A modified client can teleport or move arbitrarily fast.
+- **Look-direction physics.** Yaw/pitch are clamped to a finite range but otherwise trusted.
+
+This is a conscious trade-off. Server-authoritative movement would require either (a) running the full controller simulation server-side and reconciling client-side, which adds end-to-end latency to every step, or (b) running plausibility checks (max delta per tick, anti-teleport) that bite legitimately fast network conditions and add false-positive friction.
+
+**When to revisit:** if the game adds competitive PvP modes where speed/wallhack cheats meaningfully affect outcomes, or if a sustained cheating incident is reported. Re-introducing server-side simulation is a non-trivial architecture change — discuss before starting.
+
+**What you can rely on right now:** combat ranges, gather ranges, placement ranges, furnace/loot-bag interact ranges, and inventory operations all re-validate the client's reported position server-side at the moment they fire. So a wallhack can move you to the wrong place, but you can't gather a tree you're not actually next to, or punch a player from across the map. The exploit surface from client-authoritative movement is "I appear to be standing somewhere implausible" — not "I can damage/loot/gather from there."

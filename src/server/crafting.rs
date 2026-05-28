@@ -197,7 +197,14 @@ impl GameServer {
     /// toast. Run once per `GameServer::tick`.
     pub(super) fn tick_crafting(&mut self) -> Vec<ServerEnvelope> {
         let mut envelopes = Vec::new();
-        let client_ids: Vec<ClientId> = self.clients.keys().copied().collect();
+        // Sort client iteration so the order of side effects (granted
+        // outputs, completion toasts, overflow drops) is deterministic
+        // across runs. `HashMap::keys` is randomized; without this, two
+        // players completing on the same tick would emit envelopes in a
+        // run-dependent order — fine for correctness today but blocks
+        // any future replay / streaming work.
+        let mut client_ids: Vec<ClientId> = self.clients.keys().copied().collect();
+        client_ids.sort_unstable();
         for client_id in client_ids {
             self.tick_client_crafting(client_id, &mut envelopes);
         }

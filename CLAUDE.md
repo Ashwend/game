@@ -15,7 +15,9 @@ Start here:
 - `src/server.rs` and `src/server/`: shared authoritative game state for both singleplayer loopback and dedicated multiplayer; keep connection/auth, inventory, movement, dropped-item, resource-node, and deployable concerns split. The `HashMap`s on `GameServer` are authoritative; the `*_ecs.rs` modules define the matching ECS mirror components that Lightyear replicates to clients (see [Networking § Replication](docs/networking.md#replication)).
 - `src/protocol.rs`: `ClientMessage` / `ServerMessage` wire variants, channel delivery preferences, and a handful of server-internal shape types (`ResourceNodeState`, `DroppedWorldItem`, `DeployedEntityState`, `OpenFurnaceView`) kept here because the save layer serialises them.
 - `src/controller/`: movement simulation, movement tuning/math, collision, and the server-side block spatial grid.
-- `src/items.rs` and `src/resources.rs`: item registry, tool profiles, and resource-node definitions/gather rules.
+- `src/items.rs` and `src/resources.rs`: item registry, tool profiles, and resource-node definitions/gather rules. See [Items and Resources](docs/items-and-resources.md) for the walkthrough.
+- `src/game_balance.rs`: every gameplay tuning constant (combat ranges, deployable damage/placement, furnace timings, loot-bag interact range, respawn radius). New balance values live here, not inline in subsystem modules.
+- `src/server/furnace/` (split): `state.rs` (types + pure helpers), `tick.rs` (smelt loop), `commands.rs` (open/move/quick-transfer). Tests in `src/server/tests/furnace.rs`. See [Crafting and Deployables](docs/crafting.md).
 - `src/net/client.rs`: Lightyear client session wrapper used by singleplayer and direct multiplayer.
 - `src/net/host.rs` and `src/net/host/`: Lightyear host wrapper, handle/shutdown helpers, routing around `GameServer`, the room/AoI subscription system that drives per-component replication, and the optional Unix admin socket used by `./cli admin`. See [Networking § Replication](docs/networking.md#replication).
 - `src/net/channels.rs`: Lightyear channel registration plus the `app.register_component::<T>()` calls for every replicated component. Both server and client install the same `LightyearProtocolPlugin` so registries match.
@@ -47,8 +49,10 @@ Clean-code rules:
 
 Open docs only when the task touches that area:
 - [Architecture](docs/architecture.md)
-- [Movement](docs/movement.md)
+- [Movement](docs/movement.md) — includes the client-authoritative trust boundary.
 - [Networking](docs/networking.md) — includes the **Replication** section that documents per-component replication, chunk-room AoI, the Lightyear 0.26.4 known-issue pattern, and the procedure for adding new replicated state.
+- [Items and resources](docs/items-and-resources.md) — registries, tool profiles, resource-node spawn rules, and "how to add a new tool / ore / recipe".
+- [Crafting and deployables](docs/crafting.md) — recipe queue, furnace state machine, loot bags, deployable damage + ownership.
 - [Voice](docs/voice.md)
 - [Worlds and saves](docs/worlds-and-saves.md)
 - [UI and client flow](docs/ui-and-client.md)

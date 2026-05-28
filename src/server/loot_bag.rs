@@ -25,7 +25,7 @@ use crate::{
 /// Max range, in metres, at which a player can open / interact with
 /// a loot bag. Loosened from the swing range so a kill that knocks
 /// the corpse a step or two doesn't put the loot out of reach.
-pub(crate) const LOOT_BAG_INTERACT_RANGE_M: f32 = 4.5;
+pub(crate) use crate::game_balance::LOOT_BAG_INTERACT_RANGE_M;
 
 /// Vertical offset above the dead player's feet where the bag
 /// spawns. Roughly waist-height so the bag falls naturally instead of
@@ -153,10 +153,39 @@ impl GameServer {
                 Vec::new()
             }
             LootBagCommand::Move { from, to, quantity } => {
+                if !self.open_loot_bag_in_range(client_id) {
+                    self.close_loot_bag(client_id);
+                    return Vec::new();
+                }
                 self.move_loot_bag_stack(client_id, from, to, quantity)
             }
-            LootBagCommand::QuickTransfer { from } => self.quick_transfer_loot_bag(client_id, from),
+            LootBagCommand::QuickTransfer { from } => {
+                if !self.open_loot_bag_in_range(client_id) {
+                    self.close_loot_bag(client_id);
+                    return Vec::new();
+                }
+                self.quick_transfer_loot_bag(client_id, from)
+            }
         }
+    }
+
+    /// Re-validate that the client's currently-open loot bag is still
+    /// within interact range. The bag UI can persist client-side while
+    /// the player walks away; without this check, stacks could be moved
+    /// out of line-of-sight.
+    fn open_loot_bag_in_range(&self, client_id: ClientId) -> bool {
+        let Some(client) = self.clients.get(&client_id) else {
+            return false;
+        };
+        let Some(bag_id) = client.open_loot_bag else {
+            return true;
+        };
+        let Some(bag) = self.loot_bags.get(&bag_id) else {
+            return false;
+        };
+        let dx = bag.position.x - client.controller.position.x;
+        let dz = bag.position.z - client.controller.position.z;
+        (dx * dx + dz * dz).sqrt() <= LOOT_BAG_INTERACT_RANGE_M
     }
 
     /// Quick membership / view helper for the player-private replication

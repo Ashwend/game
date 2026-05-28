@@ -48,7 +48,10 @@ pub(super) const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 /// and regrow as fresh entities — so the field was always `None`. Old
 /// v7 saves carry the trailing `Option<f32>` and would deserialise
 /// wrong; rejected at load.
-pub(super) const SAVE_FORMAT_VERSION: u32 = 8;
+///
+/// `9` added `PersistedDeployedEntity::owner: Option<SteamId>` so
+/// damage gating can survive reloads. Old v8 saves are rejected.
+pub(super) const SAVE_FORMAT_VERSION: u32 = 9;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
 /// at >100MB/s compression and ~1GB/s decompression.
 const ZSTD_LEVEL: i32 = 5;
@@ -220,5 +223,106 @@ mod tests {
         assert_eq!(loaded.name, "Dedicated File");
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn round_trip_preserves_empty_world() {
+        let save = WorldSave::new("Round Trip Empty", Some(42));
+        let bytes = encode_world_save(&save).expect("encode");
+        let decoded = decode_world_save(&bytes).expect("decode");
+        assert_eq!(save, decoded, "empty round trip should be byte-identical");
+    }
+
+    #[test]
+    fn round_trip_preserves_populated_world() {
+        use crate::{
+            items::{CRUDE_FURNACE_ID, DeployableKind, IRON_ORE_ID, WOOD_ID},
+            protocol::{DroppedWorldItem, ItemStack, PlayerInventoryState, QuatNet, Vec3Net},
+            save::{PersistedDeployedEntity, PersistedFurnaceState, PersistedPlayer},
+        };
+
+        let mut save = WorldSave::new("Round Trip Populated", Some(1));
+        save.state.last_authoritative_tick = 1234;
+        save.state.next_dropped_item_id = 17;
+        save.state.next_client_id = 9;
+        save.state.next_resource_node_id = 99;
+        save.state.next_deployed_entity_id = 42;
+        save.state.world_time_seconds_of_day = 4321.5;
+        save.state.world_time_multiplier = 2.0;
+
+        save.state.players.push(PersistedPlayer {
+            steam_id: 1,
+            name: "Alice".to_owned(),
+            position: Vec3Net::new(1.0, 0.0, 2.0),
+            velocity: Vec3Net::ZERO,
+            yaw: 0.5,
+            pitch: 0.1,
+            health: 80.0,
+            grounded: true,
+            last_processed_input: 7,
+            is_admin: false,
+            inventory: PlayerInventoryState::empty(),
+        });
+
+        save.state.dropped_items.push(DroppedWorldItem {
+            id: 7,
+            stack: ItemStack::new(IRON_ORE_ID, 4),
+            position: Vec3Net::new(3.0, 0.0, 5.0),
+            yaw: 0.0,
+            rotation: QuatNet::IDENTITY,
+        });
+
+        save.state.resource_nodes = Some(Vec::new());
+
+        save.state.deployed_entities.push(PersistedDeployedEntity {
+            id: 11,
+            item_id: CRUDE_FURNACE_ID.to_owned(),
+            kind: DeployableKind::Furnace { tier: 1 },
+            position: Vec3Net::new(0.0, 0.0, 0.0),
+            yaw: 0.0,
+            health: 800,
+            max_health: 800,
+            owner: Some(1),
+            furnace: Some(PersistedFurnaceState {
+                fuel: Some(ItemStack::new(WOOD_ID, 3)),
+                items: vec![Some(ItemStack::new(IRON_ORE_ID, 2)), None, None],
+                active: true,
+                fuel_burn_ticks_left: 50,
+                smelt_progress_ticks: 25,
+            }),
+        });
+
+        let bytes = encode_world_save(&save).expect("encode");
+        let decoded = decode_world_save(&bytes).expect("decode");
+        assert_eq!(
+            save, decoded,
+            "populated round trip should be byte-identical"
+        );
+    }
+
+    #[test]
+    fn rejects_truncated_compressed_payload() {
+        let save = WorldSave::new("Truncate", Some(1));
+        let bytes = encode_world_save(&save).expect("encode");
+        // Snip 8 bytes off the end of the compressed payload — zstd
+        // should refuse it on decode.
+        let truncated = &bytes[..bytes.len() - 8];
+        assert!(
+            decode_world_save(truncated).is_err(),
+            "truncated payload must not decode silently"
+        );
+    }
+
+    #[test]
+    fn rejects_corrupted_compressed_payload() {
+        let save = WorldSave::new("Corrupt", Some(1));
+        let mut bytes = encode_world_save(&save).expect("encode");
+        // Flip a byte in the middle of the compressed payload.
+        let mid = bytes.len() / 2;
+        bytes[mid] ^= 0xFF;
+        assert!(
+            decode_world_save(&bytes).is_err(),
+            "corrupt payload must not decode silently"
+        );
     }
 }
