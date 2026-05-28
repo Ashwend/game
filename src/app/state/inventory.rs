@@ -519,6 +519,58 @@ mod tests {
     }
 
     #[test]
+    fn unified_slot_ref_classifies_bag_and_player_variants() {
+        let bag = UnifiedSlotRef::Bag(3);
+        let player = UnifiedSlotRef::Player(ItemContainerSlot::inventory(0));
+        let furnace = UnifiedSlotRef::Furnace(crate::protocol::FurnaceSlotRef::Fuel);
+
+        assert!(bag.is_bag());
+        assert!(!bag.is_player());
+        assert!(!player.is_bag());
+        assert!(player.is_player());
+        assert!(!furnace.is_bag());
+        assert!(!furnace.is_player());
+    }
+
+    #[test]
+    fn unified_slot_ref_maps_to_loot_bag_ref() {
+        // A bag slot stays a bag slot end-to-end.
+        let bag = UnifiedSlotRef::Bag(5);
+        assert_eq!(
+            bag.as_loot_bag_ref(),
+            LootBagSlotRef::Bag(5),
+            "Bag → Bag should round-trip the index untouched"
+        );
+
+        // Player inventory routes through `PlayerInventory(slot)` so a
+        // player→bag drag is one `LootBagCommand::Move`.
+        let inv = UnifiedSlotRef::Player(ItemContainerSlot::inventory(2));
+        assert_eq!(inv.as_loot_bag_ref(), LootBagSlotRef::PlayerInventory(2));
+
+        // Same idea for the actionbar.
+        let bar = UnifiedSlotRef::Player(ItemContainerSlot::actionbar(4));
+        assert_eq!(bar.as_loot_bag_ref(), LootBagSlotRef::PlayerActionbar(4));
+    }
+
+    #[test]
+    fn unified_slot_ref_maps_to_furnace_ref() {
+        // A furnace slot stays a furnace slot.
+        let fuel = UnifiedSlotRef::Furnace(crate::protocol::FurnaceSlotRef::Fuel);
+        assert_eq!(fuel.as_furnace_ref(), crate::protocol::FurnaceSlotRef::Fuel);
+
+        let inv = UnifiedSlotRef::Player(ItemContainerSlot::inventory(7));
+        assert_eq!(
+            inv.as_furnace_ref(),
+            crate::protocol::FurnaceSlotRef::PlayerInventory(7)
+        );
+        let bar = UnifiedSlotRef::Player(ItemContainerSlot::actionbar(1));
+        assert_eq!(
+            bar.as_furnace_ref(),
+            crate::protocol::FurnaceSlotRef::PlayerActionbar(1)
+        );
+    }
+
+    #[test]
     fn slot_flash_strength_eases_out_over_duration() {
         let mut state = InventoryUiState::default();
         state

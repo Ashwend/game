@@ -180,3 +180,48 @@ impl MenuState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn death_splash_new_has_no_killer_and_no_closing_timer() {
+        let splash = DeathSplash::new(None);
+        assert!(splash.killer_name.is_none());
+        assert_eq!(splash.elapsed, 0.0);
+        assert!(
+            splash.closing_elapsed.is_none(),
+            "the closing fade only starts after the respawn lands"
+        );
+    }
+
+    #[test]
+    fn death_splash_remembers_killer_name() {
+        let splash = DeathSplash::new(Some("Murderer".into()));
+        assert_eq!(splash.killer_name.as_deref(), Some("Murderer"));
+    }
+
+    #[test]
+    fn begin_closing_starts_the_fade() {
+        let mut splash = DeathSplash::new(None);
+        splash.begin_closing();
+        assert_eq!(
+            splash.closing_elapsed,
+            Some(0.0),
+            "first call should start the closing timer at 0"
+        );
+    }
+
+    #[test]
+    fn begin_closing_is_idempotent() {
+        // A second `Correction` that lands while the fade is already
+        // running must not reset the curve — that would freeze the
+        // player on a black screen for an extra fade window.
+        let mut splash = DeathSplash::new(None);
+        splash.begin_closing();
+        splash.closing_elapsed = Some(0.25);
+        splash.begin_closing();
+        assert_eq!(splash.closing_elapsed, Some(0.25));
+    }
+}

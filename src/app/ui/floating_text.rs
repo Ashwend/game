@@ -304,6 +304,66 @@ mod tests {
     }
 
     #[test]
+    fn alpha_holds_through_pop_then_fades_to_zero() {
+        let mut text = FloatingDamageText::new(Vec3::ZERO, 12, FloatingDamageRole::Taken);
+
+        // Inside the pop window: hold near full opacity.
+        text.elapsed = FLOATING_TEXT_LIFETIME_S * (FLOATING_TEXT_POP_FRACTION * 0.5);
+        assert_eq!(text.alpha(), 1.0, "alpha should hold at 1.0 during the pop");
+
+        // Past the pop, alpha eases toward zero.
+        text.elapsed = FLOATING_TEXT_LIFETIME_S * 0.9;
+        let late = text.alpha();
+        assert!(
+            late > 0.0 && late < 1.0,
+            "alpha should be fading mid-life, got {late}"
+        );
+
+        // End of life: fully transparent.
+        text.elapsed = FLOATING_TEXT_LIFETIME_S;
+        assert_eq!(text.alpha(), 0.0);
+    }
+
+    #[test]
+    fn current_world_drifts_along_launch_direction() {
+        let mut text =
+            FloatingDamageText::new(Vec3::new(1.0, 2.0, 3.0), 5, FloatingDamageRole::Dealt);
+        let anchor = text.anchor;
+        let start = text.current_world();
+        // At t = 0 the eased fraction is 0; the world position should
+        // match the anchor exactly.
+        assert!(
+            (start - anchor).length() < 1e-3,
+            "start position should match the anchor"
+        );
+
+        text.elapsed = FLOATING_TEXT_LIFETIME_S;
+        let end = text.current_world();
+        let total_drift = (end - anchor).length();
+        assert!(
+            (total_drift - FLOATING_TEXT_DRIFT_M).abs() < 1e-2,
+            "end position should sit FLOATING_TEXT_DRIFT_M from anchor, got {total_drift}"
+        );
+        // Drift direction must point upward (cone is biased to +Y).
+        assert!(end.y > anchor.y, "text should rise above the anchor");
+    }
+
+    #[test]
+    fn role_colors_are_distinct_for_dealt_and_taken() {
+        let dealt = FloatingDamageRole::Dealt.color();
+        let taken = FloatingDamageRole::Taken.color();
+        assert_ne!(
+            (dealt.r(), dealt.g(), dealt.b()),
+            (taken.r(), taken.g(), taken.b()),
+            "dealt and taken should be visually distinct"
+        );
+        // Dealt is orange-ish: red and green are high, blue is low.
+        assert!(dealt.r() > 200 && dealt.g() > 100 && dealt.b() < 100);
+        // Taken is red: red is high, green and blue are low.
+        assert!(taken.r() > 200 && taken.g() < 100 && taken.b() < 100);
+    }
+
+    #[test]
     fn pop_scale_peaks_then_settles_to_one() {
         let mut text = FloatingDamageText::new(Vec3::ZERO, 8, FloatingDamageRole::Dealt);
         // Halfway through the pop window the scale should be above the

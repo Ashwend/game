@@ -65,5 +65,6 @@ mod commands;
 mod connection;
 mod dropped_items;
 mod inventory;
+mod loot_bag;
 mod movement;
 mod resource_nodes;
