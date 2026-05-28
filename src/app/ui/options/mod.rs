@@ -18,9 +18,7 @@ use bevy_egui::egui;
 
 use crate::app::state::{ClientSettings, MenuState, OptionsTab, OptionsUiState, Screen};
 
-use super::theme::{
-    self, BOUNDED_PANEL_VERTICAL_PADDING, BoundedPanelFill, ButtonKind, COMPACT_ROW_HEIGHT,
-};
+use super::theme::{self, BOUNDED_PANEL_VERTICAL_PADDING, ButtonKind, COMPACT_ROW_HEIGHT};
 
 const OPTIONS_PANEL_WIDTH: f32 = 760.0;
 const OPTIONS_HEADER_HEIGHT: f32 = COMPACT_ROW_HEIGHT;
@@ -51,7 +49,6 @@ pub(in crate::app::ui) fn options_ui(
         OPTIONS_PANEL_WIDTH,
         BOUNDED_PANEL_VERTICAL_PADDING,
         BOUNDED_PANEL_VERTICAL_PADDING,
-        BoundedPanelFill::Fill,
         |ui| {
             ui.horizontal(|ui| {
                 ui.set_min_height(OPTIONS_HEADER_HEIGHT);

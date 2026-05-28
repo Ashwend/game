@@ -100,37 +100,18 @@ pub(in crate::app::ui) fn inset_frame() -> Frame {
         .inner_margin(Margin::symmetric(14, 12))
 }
 
-/// Controls how a [`bounded_panel`] uses the vertical space between its
-/// top and bottom window padding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::app::ui) enum BoundedPanelFill {
-    /// Force the panel to fill the bounded inner height. Use this for
-    /// screens whose contents should grow into the available space — a
-    /// worlds table that scrolls inside, an options page whose section
-    /// list scrolls inside, a server browser, and so on.
-    Fill,
-    /// Let the panel size itself to its contents while still respecting
-    /// the bounded inner height as an upper bound. Use this for short
-    /// screens (a few buttons + status text) where filling the viewport
-    /// would leave a large empty area underneath.
-    ToContent,
-}
-
 /// Anchored panel that reserves explicit top and bottom window padding
 /// instead of centering. The contents receive a `Ui` already sized to the
 /// bounded inner height, so calls like `ui.available_height()` produce
-/// the right budget for child widgets (table heights, scroll areas).
-///
-/// `fill` chooses between filling the bounded inner height (good for
-/// scrollable content that should grow) and sizing to content (good for
-/// short screens) — see [`BoundedPanelFill`].
+/// the right budget for child widgets (table heights, scroll areas). The
+/// panel always fills the bounded inner height so scrollable content can
+/// grow into the available space.
 pub(in crate::app::ui) fn bounded_panel(
     ctx: &egui::Context,
     id: &'static str,
     desired_width: f32,
     top_padding: f32,
     bottom_padding: f32,
-    fill: BoundedPanelFill,
     add_contents: impl FnOnce(&mut egui::Ui),
 ) {
     let screen_rect = ctx.content_rect();
@@ -148,9 +129,7 @@ pub(in crate::app::ui) fn bounded_panel(
             panel_frame().show(ui, |ui| {
                 ui.set_width(width - 48.0);
                 ui.set_max_height(inner_height);
-                if fill == BoundedPanelFill::Fill {
-                    ui.set_min_height(inner_height);
-                }
+                ui.set_min_height(inner_height);
                 add_contents(ui);
             });
         });
@@ -193,38 +172,9 @@ mod tests {
         let output = ctx.run(input(), |ctx| {
             screen_scrim(ctx, "test_scrim", 120);
             backdrop_cover(ctx, 180);
-            bounded_panel(
-                ctx,
-                "test_panel",
-                500.0,
-                40.0,
-                40.0,
-                BoundedPanelFill::Fill,
-                |ui| {
-                    ui.label("content");
-                },
-            );
-        });
-
-        assert!(!output.shapes.is_empty());
-    }
-
-    #[test]
-    fn bounded_panel_respects_to_content_fill_mode() {
-        let ctx = egui::Context::default();
-
-        let output = ctx.run(input(), |ctx| {
-            bounded_panel(
-                ctx,
-                "to_content_panel",
-                500.0,
-                40.0,
-                40.0,
-                BoundedPanelFill::ToContent,
-                |ui| {
-                    ui.label("short content");
-                },
-            );
+            bounded_panel(ctx, "test_panel", 500.0, 40.0, 40.0, |ui| {
+                ui.label("content");
+            });
         });
 
         assert!(!output.shapes.is_empty());

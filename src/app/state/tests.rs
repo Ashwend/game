@@ -236,7 +236,6 @@ fn direct_connect_dialog_separates_address_and_port() {
     assert_eq!(dialog.host, "46.224.101.205");
     assert_eq!(dialog.port, "7777");
     assert!(dialog.error.is_none());
-    assert!(!dialog.closing);
     assert!(!dialog.is_connecting());
 
     let fallback = DirectConnectDialog::new("example.invalid");

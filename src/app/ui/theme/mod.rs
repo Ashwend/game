@@ -15,8 +15,7 @@ pub(super) use colors::{
     muted_text, panel_fill, panel_stroke, text,
 };
 pub(super) use frames::{
-    BoundedPanelFill, apply_game_style, backdrop_cover, bounded_panel, inset_frame, panel_frame,
-    screen_scrim,
+    apply_game_style, backdrop_cover, bounded_panel, inset_frame, panel_frame, screen_scrim,
 };
 pub(super) use spacing::{BOUNDED_PANEL_VERTICAL_PADDING, COMPACT_ROW_HEIGHT};
 pub(super) use text::{field_label, muted, section, status_text, text_input, title};

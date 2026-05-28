@@ -73,7 +73,6 @@ mod tests {
             host: host.to_owned(),
             port: port.to_owned(),
             error: None,
-            closing: false,
             attempt: None,
         }
     }

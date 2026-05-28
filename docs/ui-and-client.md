@@ -30,10 +30,10 @@ Inventory UI is split by responsibility:
 - `src/app/ui/inventory/drag.rs`: drag release, move/drop command dispatch, and drag preview.
 - `src/app/ui/inventory/pickup.rs`: world-item pickup tooltip.
 
-Multiplayer direct connect is split from the screen shell:
-- `src/app/ui/multiplayer.rs`: multiplayer panel, header actions, and Escape behavior.
-- `src/app/ui/multiplayer/direct_connect.rs`: direct-connect modal orchestration and background connection attempts.
-- `src/app/ui/multiplayer/direct_connect/target.rs`: address/port parsing and DNS/IP resolution.
+Multiplayer is a single confirm-to-join prompt for the one official server (a real server browser is not built yet), split from its connection engine:
+- `src/app/ui/multiplayer.rs`: the join-prompt modal, join/cancel handling, and Escape behavior.
+- `src/app/ui/multiplayer/connect.rs`: background connection attempt orchestration (start, poll, finish).
+- `src/app/ui/multiplayer/connect/target.rs`: address/port parsing and DNS/IP resolution.
 
 HUD, chat, and toasts:
 - `src/app/ui/hud.rs`: in-game heads-up display, including the actionbar strip, health bar, and the "Voice On" PTT chip (top-center pulsing dot + label drawn from painter primitives so it's font-fallback safe).

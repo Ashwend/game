@@ -174,7 +174,6 @@ pub(crate) struct DirectConnectDialog {
     pub(crate) host: String,
     pub(crate) port: String,
     pub(crate) error: Option<String>,
-    pub(crate) closing: bool,
     pub(crate) attempt: Option<DirectConnectAttempt>,
 }
 
@@ -185,7 +184,6 @@ impl DirectConnectDialog {
             host,
             port,
             error: None,
-            closing: false,
             attempt: None,
         }
     }
