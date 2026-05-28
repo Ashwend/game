@@ -36,7 +36,7 @@ pub(crate) use inventory::{
 };
 pub(crate) use local_player::{LocalPlayerState, update_local_player_state_system};
 pub(crate) use look::LookState;
-pub(crate) use menu::{MenuState, SaveStore, Screen, SteamUser};
+pub(crate) use menu::{DeathSplash, MenuState, SaveStore, Screen, SteamUser};
 pub(crate) use options_ui::{OptionsTab, OptionsUiState, PendingRebind};
 pub(crate) use runtime::{
     ClientErrorToast, ClientLogEntry, ClientLogKind, ClientRuntime, ErrorToastSink,

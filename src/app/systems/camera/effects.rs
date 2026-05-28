@@ -18,6 +18,18 @@ const HANDS_KICK_PITCH: f32 = 0.005;
 const HANDS_KICK_DOWN: f32 = 0.002;
 const HANDS_KICK_DURATION: f32 = 0.06;
 
+// "I just got hit by a player" reaction. Larger and more downward-biased
+// than any swing-side kick — the camera jolts down rather than up, so the
+// recipient can tell at a glance whether the wobble was their own swing or
+// an incoming hit. Hatchet and pickaxe variants scale with the swinger's
+// tool so a pickaxe blow rocks the camera harder than a hatchet jab.
+const HIT_RECEIVED_AXE_PITCH: f32 = 0.015;
+const HIT_RECEIVED_AXE_DOWN: f32 = 0.045;
+const HIT_RECEIVED_AXE_DURATION: f32 = 0.16;
+const HIT_RECEIVED_PICKAXE_PITCH: f32 = 0.025;
+const HIT_RECEIVED_PICKAXE_DOWN: f32 = 0.075;
+const HIT_RECEIVED_PICKAXE_DURATION: f32 = 0.22;
+
 // Head bob: walk-speed cadence is ~2 footsteps/sec, which is one full sine
 // cycle per second (a step is half a cycle). BOB_FREQ_CYCLES_PER_METER *
 // walk_speed ≈ 1.0 cycle/sec keeps the bob in step with the player's gait.
@@ -167,6 +179,35 @@ impl CameraImpactKick {
         };
         // If a previous kick is still decaying, take the stronger of the two so
         // rapid hits accumulate rather than stomp on each other.
+        self.pitch_magnitude = self.pitch_magnitude.max(pitch);
+        self.down_magnitude = self.down_magnitude.max(down);
+        self.duration = duration;
+        self.elapsed = 0.0;
+    }
+
+    /// Trigger the "I just got hit by a player" kick. Distinct profile
+    /// from the swing-side kick — sharper, more downward-biased — so the
+    /// recipient can tell at a glance whether the wobble was their own
+    /// swing or an incoming hit. `attacker_tool` scales the response:
+    /// pickaxe blows rock the camera harder than hatchet jabs.
+    pub(crate) fn trigger_from_hit(&mut self, attacker_tool: ToolKind) {
+        let (pitch, down, duration) = match attacker_tool {
+            ToolKind::Pickaxe => (
+                HIT_RECEIVED_PICKAXE_PITCH,
+                HIT_RECEIVED_PICKAXE_DOWN,
+                HIT_RECEIVED_PICKAXE_DURATION,
+            ),
+            // Axe and any future light-melee tool share the lighter
+            // profile. Bare hands shouldn't be reaching here — the
+            // server rejects bare-handed PvP — but using the lighter
+            // profile keeps the kick proportionate if the path ever
+            // surfaces.
+            ToolKind::Axe | ToolKind::Hands => (
+                HIT_RECEIVED_AXE_PITCH,
+                HIT_RECEIVED_AXE_DOWN,
+                HIT_RECEIVED_AXE_DURATION,
+            ),
+        };
         self.pitch_magnitude = self.pitch_magnitude.max(pitch);
         self.down_magnitude = self.down_magnitude.max(down);
         self.duration = duration;

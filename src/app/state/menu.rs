@@ -69,12 +69,64 @@ pub(crate) struct MenuState {
     /// into the snapshot themselves. Synced by
     /// [`crate::app::systems::sync_furnace_open_flag_system`].
     pub(crate) furnace_open: bool,
+    /// Mirrors `local_player.open_loot_bag.is_some()` from
+    /// replication. Same purpose as `furnace_open` — input gating
+    /// without reaching into the replicated state from every
+    /// helper.
+    pub(crate) loot_bag_open: bool,
     pub(crate) chat_open: bool,
     pub(crate) chat_focus_pending: bool,
     pub(crate) chat_input: String,
     pub(crate) confirmation: Option<ConfirmationDialog>,
     pub(crate) notice: Option<NoticeDialog>,
+    /// Set when the server tells the local client they died. Drives
+    /// the "You died — Killed by … — Respawn" splash. Cleared when the
+    /// respawn lands (server pushes a `Correction` and the runtime
+    /// flips back to alive) so the splash auto-dismisses.
+    pub(crate) death_splash: Option<DeathSplash>,
     pub(crate) quit_requested: bool,
+}
+
+/// Snapshot of "I just died" UI state. Stored on `MenuState` because
+/// the splash sits in the same UI layer as the pause/inventory
+/// overlays and shares their input gating.
+#[derive(Debug, Clone)]
+pub(crate) struct DeathSplash {
+    /// Display name of the killer, resolved server-side. `None` for
+    /// environmental death (future) where there's no attacker to
+    /// credit.
+    pub(crate) killer_name: Option<String>,
+    /// Seconds since the splash opened. Drives the slow fade from
+    /// "the player still sees the world dying" into the fully-black
+    /// "YOU DIED" screen.
+    pub(crate) elapsed: f32,
+    /// Seconds spent in the closing-fade animation. `None` until the
+    /// respawn `Correction` lands — at that point the splash keeps
+    /// rendering but its backdrop alpha eases from "fully black" back
+    /// to "fully transparent" over [`CLOSE_FADE_SECS`]. The splash
+    /// clears itself when the fade completes, so the new HUD doesn't
+    /// pop in for a frame underneath a still-black screen.
+    pub(crate) closing_elapsed: Option<f32>,
+}
+
+impl DeathSplash {
+    pub(crate) fn new(killer_name: Option<String>) -> Self {
+        Self {
+            killer_name,
+            elapsed: 0.0,
+            closing_elapsed: None,
+        }
+    }
+
+    /// Start the close-fade. Idempotent — once started, the same
+    /// timer keeps ticking; a second call is a no-op so racing
+    /// `Correction` messages can't reset the curve and leave the
+    /// player staring at black.
+    pub(crate) fn begin_closing(&mut self) {
+        if self.closing_elapsed.is_none() {
+            self.closing_elapsed = Some(0.0);
+        }
+    }
 }
 
 impl Default for MenuState {
@@ -95,11 +147,13 @@ impl Default for MenuState {
             inventory_open: false,
             crafting_open: false,
             furnace_open: false,
+            loot_bag_open: false,
             chat_open: false,
             chat_focus_pending: false,
             chat_input: String::new(),
             confirmation: None,
             notice: None,
+            death_splash: None,
             quit_requested: false,
         }
     }
@@ -117,6 +171,7 @@ impl MenuState {
         self.pause_options_open = false;
         self.crafting_open = false;
         self.furnace_open = false;
+        self.loot_bag_open = false;
         self.chat_open = false;
         self.chat_focus_pending = false;
         self.status = None;

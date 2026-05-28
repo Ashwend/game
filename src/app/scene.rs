@@ -22,7 +22,7 @@ pub(crate) use assets::{
 };
 pub(crate) use components::{
     DeployablePlacementGhost, FurnaceMouthLight, HeldItemVisual, MainCamera, NetworkDeployedEntity,
-    NetworkDroppedItem, NetworkPlayer, NetworkResourceNode, tree_mesh_height,
+    NetworkDroppedItem, NetworkLootBag, NetworkPlayer, NetworkResourceNode, tree_mesh_height,
 };
 pub(crate) use mesh::PLAYER_HEAD_TOP_LOCAL_Y;
 pub(crate) use sky::update_sky_system;

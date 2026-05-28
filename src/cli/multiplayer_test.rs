@@ -68,7 +68,7 @@ pub(super) fn run_multiplayer_test(port: u16, names_override: Option<Vec<String>
     // Pre-create the temp save with the smallest procedural map so the
     // helper boots into a tiny world — quick to generate, cheap to stream,
     // and uses the same map path as a real player-created world.
-    let seeded = WorldSave::new_with_map(
+    let mut seeded = WorldSave::new_with_map(
         "Multiplayer Test",
         None,
         MapType::Procedural {
@@ -76,6 +76,15 @@ pub(super) fn run_multiplayer_test(port: u16, names_override: Option<Vec<String>
             size: ProceduralMapSize::Small,
         },
     );
+    // Flag both test clients as admins so they can drive `/test-kit` and
+    // `/tp` straight out of the gate — those commands are admin-gated
+    // and the multiplayer-test loop is the place where they're most
+    // useful for verifying PvP / death / respawn.
+    for steam_id in TEST_STEAM_IDS {
+        if !seeded.admins.contains(&steam_id) {
+            seeded.admins.push(steam_id);
+        }
+    }
     save_world_file(&world_save, &seeded).context("could not seed multiplayer-test world save")?;
 
     let mut server = spawn_server(&exe, &world_save, bind)?;
@@ -318,6 +327,11 @@ fn spawn_client(
         )
         .env("GAME_TEST_SPAWN_YAW", layout.spawn_yaw.to_string())
         .env("GAME_TEST_INVENTORY_OPEN", "1")
+        // Auto-issue `/test-kit` on join so both windows boot with the
+        // full early-game kit. Pairs with the admin steam IDs that
+        // multiplayer-test seeds into the save before spawning the
+        // server.
+        .env("GAME_TEST_AUTO_KIT", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());

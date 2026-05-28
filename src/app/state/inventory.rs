@@ -3,15 +3,18 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-use crate::protocol::{FurnaceSlotRef, ItemContainerSlot, ItemStack, PlayerInventoryState};
+use crate::protocol::{
+    FurnaceSlotRef, ItemContainerSlot, ItemStack, LootBagSlotRef, PlayerInventoryState,
+};
 
 /// Either-or addressable slot used by the unified drag pipeline. The
-/// main inventory and the furnace UI both speak this type so a drag
-/// originating in either container can be dropped on a slot in either
-/// container; the dispatch in `handle_drag_release` translates it back
-/// into the matching wire command (`InventoryCommand::Move` for
-/// player↔player, `FurnaceCommand::Move` for anything touching a
-/// furnace slot).
+/// main inventory, furnace, and loot-bag UIs all speak this type so a
+/// drag originating in any container can be dropped on a slot in any
+/// container; the dispatch in `handle_drag_release` translates it
+/// back into the matching wire command:
+///   - `InventoryCommand::Move` for player↔player,
+///   - `FurnaceCommand::Move` for anything touching a furnace slot,
+///   - `LootBagCommand::Move` for anything touching a bag slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum UnifiedSlotRef {
     /// A slot in the player's own inventory or actionbar.
@@ -19,11 +22,19 @@ pub(crate) enum UnifiedSlotRef {
     /// A slot inside the currently-open furnace (fuel slot or one of
     /// the smelt-grid slots).
     Furnace(FurnaceSlotRef),
+    /// A slot inside the currently-open loot bag.
+    Bag(usize),
 }
 
 impl UnifiedSlotRef {
     pub(crate) fn is_player(self) -> bool {
         matches!(self, Self::Player(_))
+    }
+
+    /// True when this ref points at a bag slot. Used by the drag
+    /// release dispatcher to pick the right wire command.
+    pub(crate) fn is_bag(self) -> bool {
+        matches!(self, Self::Bag(_))
     }
 
     /// Map this unified ref to its `FurnaceSlotRef` form. Player slots
@@ -41,6 +52,31 @@ impl UnifiedSlotRef {
                     FurnaceSlotRef::PlayerActionbar(slot.slot)
                 }
             },
+            // Bag → furnace is not a valid move; the caller should
+            // never reach here. Return a sentinel so a misroute fails
+            // closed (the server rejects unknown slots) rather than
+            // open.
+            Self::Bag(_) => FurnaceSlotRef::Fuel,
+        }
+    }
+
+    /// Same idea for [`LootBagSlotRef`]. Player slots map through the
+    /// matching variants so a player→bag drag is one
+    /// `LootBagCommand::Move`. Furnace slots can't reach a bag
+    /// command — the bag UI is mutually exclusive with the furnace
+    /// modal, so the unreachable branch is OK as a fallback.
+    pub(crate) fn as_loot_bag_ref(self) -> LootBagSlotRef {
+        match self {
+            Self::Bag(index) => LootBagSlotRef::Bag(index),
+            Self::Player(slot) => match slot.container {
+                crate::protocol::ItemContainer::Inventory => {
+                    LootBagSlotRef::PlayerInventory(slot.slot)
+                }
+                crate::protocol::ItemContainer::Actionbar => {
+                    LootBagSlotRef::PlayerActionbar(slot.slot)
+                }
+            },
+            Self::Furnace(_) => LootBagSlotRef::Bag(0),
         }
     }
 }
@@ -86,6 +122,11 @@ pub(crate) struct InventoryUiState {
     /// "drop on the ground" path. `None` when the furnace UI isn't
     /// up.
     pub(crate) furnace_rect: Option<egui::Rect>,
+    /// Same purpose as `furnace_rect` but for the loot bag UI. A
+    /// drag released inside the bag panel routes through the bag
+    /// command path; released outside, it falls back to the
+    /// standard inventory drop-on-ground.
+    pub(crate) loot_bag_rect: Option<egui::Rect>,
     /// Single-frame inbox for shift+click "quick transfer" intents.
     /// The slot widget sets this when the player Shift+LMBs a slot
     /// while a container surface (furnace today) is up; the container's
@@ -118,6 +159,7 @@ impl InventoryUiState {
         self.inventory_rect = None;
         self.actionbar_rect = None;
         self.furnace_rect = None;
+        self.loot_bag_rect = None;
         // Last frame's shift+click should have been consumed by now.
         // Clearing here makes the field strictly single-frame so a
         // surface that opens after the click was recorded can't pick up
@@ -322,6 +364,7 @@ mod tests {
                 egui::vec2(5.0, 5.0),
             )),
             furnace_rect: None,
+            loot_bag_rect: None,
             pending_quick_transfer: Some(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0))),
             was_open: true,
             slot_flashes: HashMap::new(),

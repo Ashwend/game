@@ -235,6 +235,12 @@ pub struct ChunkManager {
     /// Reverse index from placed-structure id to its anchor chunk. Lets
     /// despawn/destroy paths swap the membership in O(1).
     deployed_entity_chunks: HashMap<DeployedEntityId, ChunkCoord>,
+    /// Reverse index from loot-bag id to its anchor chunk. Bags don't
+    /// move after spawn so the membership only changes at
+    /// spawn / despawn time, but the lookup helper is still wired
+    /// through here so the AoI / replication pipeline treats bags
+    /// identically to other chunk-anchored entities.
+    loot_bag_chunks: HashMap<crate::protocol::LootBagId, ChunkCoord>,
     regrow_queue: BinaryHeap<RegrowEvent>,
     next_node_id: u64,
     /// Stir-in counter for regrow RNG so identical re-scheduling on the
@@ -280,6 +286,7 @@ impl ChunkManager {
                 dropped_item_chunks: HashMap::new(),
                 player_chunks: HashMap::new(),
                 deployed_entity_chunks: HashMap::new(),
+                loot_bag_chunks: HashMap::new(),
                 regrow_queue: BinaryHeap::new(),
                 next_node_id,
                 placement_counter: splitmix64(world_seed ^ 0x00C0_FFEE_BABE),
@@ -322,6 +329,7 @@ impl ChunkManager {
             dropped_item_chunks: HashMap::new(),
             player_chunks: HashMap::new(),
             deployed_entity_chunks: HashMap::new(),
+            loot_bag_chunks: HashMap::new(),
             regrow_queue,
             next_node_id: save.next_node_id.max(1),
             placement_counter: splitmix64(
@@ -634,6 +642,24 @@ impl ChunkManager {
         {
             grid.deployed_entities.remove(&id);
         }
+    }
+
+    /// Register a freshly-spawned loot bag at its anchor chunk. Bags
+    /// don't move, so this is called once at spawn time. Lightyear
+    /// room replication handles visibility from there.
+    pub fn track_loot_bag(&mut self, id: crate::protocol::LootBagId, position: Vec3Net) {
+        let coord = self.anchor_chunk_for(position);
+        self.loot_bag_chunks.insert(id, coord);
+    }
+
+    /// Stop tracking a loot bag (despawn).
+    pub fn untrack_loot_bag(&mut self, id: crate::protocol::LootBagId) {
+        self.loot_bag_chunks.remove(&id);
+    }
+
+    /// Look up the chunk a loot bag is anchored to.
+    pub fn loot_bag_chunk(&self, id: crate::protocol::LootBagId) -> Option<ChunkCoord> {
+        self.loot_bag_chunks.get(&id).copied()
     }
 
     /// Register an externally-spawned resource node (admin command, etc.)

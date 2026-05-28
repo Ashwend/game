@@ -35,6 +35,7 @@ const WORLD_TIME_BROADCAST_INTERVAL_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 
 const PERF_STATS_BROADCAST_INTERVAL_TICKS: u64 = SERVER_TICK_RATE_HZ as u64;
 
 pub mod chunk_manager;
+mod combat;
 mod commands;
 mod connection;
 mod crafting;
@@ -44,6 +45,8 @@ pub mod dropped_item_ecs;
 mod dropped_items;
 mod furnace;
 mod inventory;
+pub mod loot_bag;
+pub mod loot_bag_ecs;
 pub(crate) mod movement;
 mod persistence;
 pub mod player_ecs;
@@ -62,9 +65,13 @@ pub use dropped_item_ecs::{
     DroppedItem, DroppedItemChunk, DroppedItemIndex, DroppedItemTransform,
     despawn_dropped_item_entity, spawn_dropped_item_entity,
 };
+pub use loot_bag_ecs::{
+    LootBag as LootBagEntity, LootBagChunk, LootBagContents, LootBagIndex, LootBagTransform,
+    LootBagView, despawn_loot_bag_entity, spawn_loot_bag_entity,
+};
 pub use player_ecs::{
-    Player, PlayerChunk, PlayerIndex, PlayerPrivate, PlayerPublic, PlayerView,
-    despawn_player_entity, spawn_player_entity,
+    Player, PlayerArmor, PlayerChunk, PlayerIndex, PlayerLifecycle, PlayerPrivate, PlayerPublic,
+    PlayerView, despawn_player_entity, spawn_player_entity,
 };
 pub use resource_node_ecs::{
     ResourceNode, ResourceNodeChunk, ResourceNodeIndex, ResourceNodeStorage,
@@ -143,10 +150,16 @@ pub struct GameServer {
     /// chunks are owned by `chunk_manager` so AoI filtering matches the
     /// same pipeline as resource nodes and dropped items.
     pub(super) deployed_entities: HashMap<DeployedEntityId, deployables::DeployedEntity>,
+    /// Death-loot containers, keyed by id. Spawned by the PvP kill
+    /// chain in `combat.rs`; despawned when emptied + closed by every
+    /// looker. Anchor chunks tracked via `chunk_manager` so the
+    /// existing AoI/replication pipeline picks them up.
+    pub(super) loot_bags: HashMap<crate::protocol::LootBagId, loot_bag::LootBag>,
     next_dropped_item_id: DroppedItemId,
     next_client_id: ClientId,
     next_resource_node_id: ResourceNodeId,
     next_deployed_entity_id: DeployedEntityId,
+    next_loot_bag_id: crate::protocol::LootBagId,
     tick: u64,
     /// Authoritative day/night clock. Mirrored to clients via
     /// [`ServerMessage::WorldTime`]. Persisted to the save in `world_save`.
@@ -269,10 +282,12 @@ impl GameServer {
             resource_nodes,
             chunk_manager,
             deployed_entities,
+            loot_bags: HashMap::new(),
             next_dropped_item_id,
             next_client_id,
             next_resource_node_id,
             next_deployed_entity_id,
+            next_loot_bag_id: 1,
             world_time,
             last_world_time_broadcast_tick: tick,
         }
@@ -290,8 +305,16 @@ impl GameServer {
             }],
             ClientMessage::Movement(movement) => {
                 let new_position = if let Some(client) = self.clients.get_mut(&client_id) {
-                    accept_client_movement(&mut client.controller, movement);
-                    Some(client.controller.position)
+                    // Dead players can't drive their controller — we
+                    // keep the corpse pinned at the death position so
+                    // the tilt-and-fade animation has a stable
+                    // anchor and the loot pile stays under it.
+                    if client.lifecycle.is_alive() {
+                        accept_client_movement(&mut client.controller, movement);
+                        Some(client.controller.position)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -332,6 +355,11 @@ impl GameServer {
             ClientMessage::DamageDeployable(command) => {
                 self.apply_damage_deployable_command(client_id, command)
             }
+            ClientMessage::AttackPlayer(command) => {
+                self.apply_attack_player_command(client_id, command)
+            }
+            ClientMessage::Respawn => self.apply_respawn_command(client_id),
+            ClientMessage::LootBag(command) => self.apply_loot_bag_command(client_id, command),
             ClientMessage::SetViewRadius { tier } => {
                 if let Some(client) = self.clients.get_mut(&client_id) {
                     client.view_tier = tier;
@@ -457,8 +485,11 @@ impl GameServer {
                 inventory: client.inventory.clone(),
                 crafting: client.crafting.clone(),
                 open_furnace: self.open_furnace_view_for(client.client_id),
+                open_loot_bag: self.open_loot_bag_view_for(client.client_id),
                 last_processed_input: client.controller.last_processed_input,
             },
+            armor: PlayerArmor(client.armor),
+            lifecycle: client.lifecycle,
         })
     }
 
@@ -507,6 +538,7 @@ impl GameServer {
             self.resource_nodes.insert(node.id, node);
         }
         self.tick_furnaces();
+        self.tick_loot_bags(delta_seconds);
         self.expire_chat_bubbles();
 
         let mut envelopes = self.tick_crafting();
@@ -619,9 +651,25 @@ pub(super) struct ServerClient {
     pub(super) name: String,
     pub(super) controller: PlayerController,
     pub(super) inventory: PlayerInventoryState,
+    /// Authoritative damage reduction (0–100, percent). Today always
+    /// `0` — armor items don't exist yet — but kept on the client so
+    /// the damage path doesn't have to special-case the missing field.
+    /// Replicated to every peer via the [`PlayerArmor`] component
+    /// attached to the mirror entity.
+    pub(super) armor: u8,
     pub(super) is_admin: bool,
     pub(super) last_seen_tick: u64,
     pub(super) next_gather_tick: u64,
+    /// Separate cooldown for PvP swings so a melee combo can't piggyback
+    /// onto a fresh gather tick (and vice versa). Same cadence as the
+    /// tool's per-swing cooldown; the cooldown is set on every accepted
+    /// `AttackPlayer` after damage lands.
+    pub(super) next_attack_tick: u64,
+    /// Authoritative life state. `Alive` while the player is up and
+    /// running, `Dead { … }` between HP-hits-zero and the respawn
+    /// request. Dropped inputs and attack rejections gate on this so
+    /// a corpse can't move, swing, or eat damage twice.
+    pub(super) lifecycle: PlayerLifecycle,
     /// Most recent chat line + the tick it stops being broadcast. Empty
     /// outside the bubble window. Snapshots copy `text` so peer clients can
     /// render speech bubbles above the speaker's head.
@@ -641,6 +689,10 @@ pub(super) struct ServerClient {
     /// open at a time — opening a new furnace closes the previous.
     /// Cleared on disconnect.
     pub(super) open_furnace: Option<DeployedEntityId>,
+    /// The loot bag the player currently has open, if any. Same
+    /// "one open container at a time" rule as furnaces — opening a
+    /// bag closes any previously-open bag. Cleared on disconnect.
+    pub(super) open_loot_bag: Option<crate::protocol::LootBagId>,
 }
 
 #[derive(Debug, Clone)]

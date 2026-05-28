@@ -60,6 +60,7 @@ fn equip_basic_tools(server: &mut GameServer, client_id: ClientId) {
     client.inventory.actionbar_slots[1] = Some(ItemStack::new(BASIC_PICKAXE_ID, 1));
 }
 
+mod combat;
 mod commands;
 mod connection;
 mod dropped_items;

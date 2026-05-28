@@ -59,14 +59,17 @@ fn welcome_seeds_local_prediction_from_local_seed() {
 // ordering on the replication channels.
 
 #[test]
-fn correction_updates_health_without_realigning_local_prediction() {
-    let mut correction = player_state(1, Vec3Net::ZERO);
+fn correction_updates_health_without_realigning_small_position_drift() {
+    // Within-threshold position drift (< 1 m) keeps client prediction
+    // — movement is client-authoritative for responsiveness. Only
+    // health is mirrored from the server.
+    let mut correction = player_state(1, Vec3Net::new(0.4, 0.0, 0.0));
     correction.health = 42.0;
     let mut runtime = ClientRuntime {
         client_id: Some(1),
         predicted_local: Some(PlayerController::from_player_state(&player_state(
             1,
-            Vec3Net::new(5.0, 0.0, 0.0),
+            Vec3Net::ZERO,
         ))),
         ..default()
     };
@@ -74,8 +77,33 @@ fn correction_updates_health_without_realigning_local_prediction() {
     runtime.apply_message(ServerMessage::Correction(correction));
 
     let predicted = runtime.predicted_local.expect("prediction should exist");
-    assert_eq!(predicted.position, Vec3Net::new(5.0, 0.0, 0.0));
+    assert_eq!(predicted.position, Vec3Net::ZERO);
     assert_eq!(predicted.health, 42.0);
+}
+
+#[test]
+fn correction_snaps_local_prediction_on_large_position_delta() {
+    // Past-threshold position delta (> 1 m) snaps the predictor —
+    // covers admin teleport, respawn, and any future anti-cheat
+    // snap-back. Without this, /tp + Phase 5 respawn would only
+    // change the server-side controller and the local view would
+    // keep drifting.
+    let mut correction = player_state(1, Vec3Net::new(40.0, 0.0, -10.0));
+    correction.health = 80.0;
+    let mut runtime = ClientRuntime {
+        client_id: Some(1),
+        predicted_local: Some(PlayerController::from_player_state(&player_state(
+            1,
+            Vec3Net::ZERO,
+        ))),
+        ..default()
+    };
+
+    runtime.apply_message(ServerMessage::Correction(correction));
+
+    let predicted = runtime.predicted_local.expect("prediction should exist");
+    assert_eq!(predicted.position, Vec3Net::new(40.0, 0.0, -10.0));
+    assert_eq!(predicted.health, 80.0);
 }
 
 #[test]

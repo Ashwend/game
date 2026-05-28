@@ -50,23 +50,24 @@ use self::{
     },
     systems::{
         AutoConnectRequest, CameraImpactKick, CameraMotionEffects, ClientSystemSet,
-        DroppedItemEntities, LastTrackedScreen, PendingSessionEndReason, RemotePlayerEntities,
-        ResourceNodeEntities, SessionTracker, app_quit_system, apply_deployed_entities_system,
-        apply_display_settings_system, apply_dropped_items_system, apply_held_item_visual_system,
-        apply_resource_nodes_system, apply_snapshot_system, apply_test_mode_overrides_system,
-        auto_connect_poll_system, auto_connect_start_system, camera_follow_system,
-        center_cursor_on_focus_system, chat_shortcut_system, chunk_overlay_system,
-        client_input_system, close_furnace_on_escape_system, error_relay_system,
+        DroppedItemEntities, LastTrackedScreen, LootBagEntities, PendingSessionEndReason,
+        RemotePlayerEntities, ResourceNodeEntities, SessionTracker, app_quit_system,
+        apply_deployed_entities_system, apply_display_settings_system, apply_dropped_items_system,
+        apply_held_item_visual_system, apply_loot_bags_system, apply_resource_nodes_system,
+        apply_snapshot_system, apply_test_mode_overrides_system, auto_connect_poll_system,
+        auto_connect_start_system, camera_follow_system, center_cursor_on_focus_system,
+        chat_shortcut_system, chunk_overlay_system, client_input_system,
+        close_furnace_on_escape_system, close_loot_bag_on_escape_system, error_relay_system,
         gameplay_inventory_shortcuts_system, maintain_world_grid_system,
         menu_backdrop_camera_system, mouse_look_system, network_tick_system,
         placement_input_system, reposition_test_window_system, save_client_settings_system,
         screen_viewed_system, session_ended_system, session_shutdown_poll_system,
         session_started_system, spawn_impact_effects_system, surface_client_error_toasts_system,
-        sync_furnace_open_flag_system, sync_view_radius_system, tick_felling_trees_system,
-        tick_impact_chips_system, tick_resource_node_pop_in_system, toggle_crafting_system,
-        toggle_inventory_system, toggle_pause_system, toggle_perf_stats_system,
-        update_cursor_system, update_pickup_target_system, update_placement_ghost_system,
-        update_tool_swap_state_system,
+        sync_furnace_open_flag_system, sync_loot_bag_open_flag_system, sync_view_radius_system,
+        tick_felling_trees_system, tick_impact_chips_system, tick_resource_node_pop_in_system,
+        toggle_crafting_system, toggle_inventory_system, toggle_pause_system,
+        toggle_perf_stats_system, update_cursor_system, update_pickup_target_system,
+        update_placement_ghost_system, update_tool_swap_state_system,
     },
     ui::{
         ButtonSoundRequests, InventorySoundRequests, button_sound_system, inventory_sound_system,
@@ -223,6 +224,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .insert_resource(CameraImpactKick::default())
         .insert_resource(CameraMotionEffects::default())
         .insert_resource(DroppedItemEntities::default())
+        .insert_resource(LootBagEntities::default())
         .insert_resource(ResourceNodeEntities::default())
         .insert_resource(RemotePlayerEntities::default())
         .insert_resource(LookState::default())
@@ -372,6 +374,8 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
             (
                 sync_furnace_open_flag_system,
                 close_furnace_on_escape_system,
+                sync_loot_bag_open_flag_system,
+                close_loot_bag_on_escape_system,
             )
                 .in_set(ClientSystemSet::PauseToggle),
         )
@@ -427,6 +431,24 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .add_systems(Update, chunk_overlay_system)
         .add_systems(
             Update,
+            crate::app::ui::floating_text::tick_floating_damage_system,
+        )
+        .add_systems(Update, crate::app::ui::tick_death_splash_system)
+        // Runs after the replicated-player reconcile so the
+        // DyingPlayer component a kill stamps onto the visual
+        // entity is in place before the tick advances its
+        // animation. The reconciler lives in `ClientSystemSet::Players`;
+        // ordering against the set (not the function) avoids the
+        // transitive-cycle panic you'd otherwise get from naming the
+        // function directly. No `before` constraint — the death
+        // animation only mutates the visual entity's transform +
+        // material alpha, neither of which the later sets read.
+        .add_systems(
+            Update,
+            crate::app::systems::tick_dying_players_system.after(ClientSystemSet::Players),
+        )
+        .add_systems(
+            Update,
             apply_world_scene_system.in_set(ClientSystemSet::WorldScene),
         )
         .add_systems(
@@ -436,6 +458,10 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .add_systems(
             Update,
             apply_dropped_items_system.in_set(ClientSystemSet::DroppedItems),
+        )
+        .add_systems(
+            Update,
+            apply_loot_bags_system.in_set(ClientSystemSet::DroppedItems),
         )
         .add_systems(
             Update,

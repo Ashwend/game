@@ -55,6 +55,13 @@ pub(crate) enum SoundId {
     // --- Swing whoosh (tool swung but no target) ---
     SwingMiss,
 
+    /// PvP melee impact ("thump" of a blunt tool landing on a player).
+    /// Routed off the existing axe-wood pool until dedicated assets
+    /// land — see `impact_sound_for_player`. One pool covers every
+    /// tool today; per-tool variants can be added later by branching
+    /// on `ToolKind` in the lookup.
+    ImpactPlayerBlunt,
+
     // --- Footsteps per surface ---
     FootstepDirt,
     FootstepWood,
@@ -83,6 +90,7 @@ pub(crate) fn all_sound_ids() -> &'static [SoundId] {
         SoundId::ImpactPickaxeOnIron,
         SoundId::ImpactPickaxeOnSulfur,
         SoundId::ImpactPickaxeOnWood,
+        SoundId::ImpactPlayerBlunt,
         SoundId::SwingMiss,
         SoundId::FootstepDirt,
         SoundId::FootstepWood,
@@ -214,6 +222,22 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
             looped: false,
         },
 
+        // PvP melee blunt impact — a meatier thump than chipping at a
+        // tree, so it sits a bit louder than the resource impact pool.
+        // Wider pitch jitter (±9 %) because rapid hits would otherwise
+        // sound metronomic; the body of a player gives a different
+        // resonance each time.
+        SoundId::ImpactPlayerBlunt => SoundDefaults {
+            category: SoundCategory::Sfx3d,
+            base_gain_db: -8.0,
+            spatial: Some(SpatialDefaults {
+                scale: 0.06,
+                height_offset: 1.0,
+            }),
+            pitch_jitter: 0.09,
+            looped: false,
+        },
+
         // Miss whoosh belongs to the local swinger — non-spatial so
         // distance falloff can't quiet the player's own swing.
         SoundId::SwingMiss => SoundDefaults {
@@ -334,6 +358,17 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         "impacts/miss-3.wav",
     ];
 
+    // PvP player-impact pool. Today shares the axe-wood sample set —
+    // the "meaty thump" character is roughly right and re-using the
+    // existing assets means the PvP loop ships without blocking on a
+    // dedicated audio capture. Drop in `impacts/player-blunt-*.wav`
+    // and rewrite this static to switch over.
+    static PLAYER_BLUNT: [&str; 3] = [
+        "impacts/axe-wood-1.wav",
+        "impacts/axe-wood-2.wav",
+        "impacts/axe-wood-3.wav",
+    ];
+
     static INVENTORY_PICKUP: [&str; 1] = ["inventory/pickup-item.wav"];
     static INVENTORY_DROP: [&str; 1] = ["inventory/drop-item.wav"];
     static INVENTORY_MOVE: [&str; 1] = ["inventory/inventory-move.wav"];
@@ -355,6 +390,7 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         | SoundId::ImpactPickaxeOnIron
         | SoundId::ImpactPickaxeOnSulfur => &PICKAXE_ORE,
         SoundId::ImpactPickaxeOnWood => &PICKAXE_WOOD,
+        SoundId::ImpactPlayerBlunt => &PLAYER_BLUNT,
         SoundId::SwingMiss => &MISS,
         SoundId::FootstepDirt => footstep_paths("dirt"),
         SoundId::FootstepWood => footstep_paths("wood"),
@@ -392,6 +428,19 @@ pub(crate) fn impact_sound_for(tool: ToolKind, surface: SurfaceMaterial) -> Opti
         | (ToolKind::Pickaxe, SurfaceMaterial::Dirt)
         | (ToolKind::Pickaxe, SurfaceMaterial::Concrete)
         | (ToolKind::Pickaxe, SurfaceMaterial::Sand) => None,
+    }
+}
+
+/// PvP-impact sound lookup. Every melee tool routes to the single
+/// `ImpactPlayerBlunt` pool today; per-tool variants can be added
+/// later by branching on `tool` here without touching call sites.
+pub(crate) fn impact_sound_for_player(tool: ToolKind) -> Option<SoundId> {
+    match tool {
+        ToolKind::Axe | ToolKind::Pickaxe => Some(SoundId::ImpactPlayerBlunt),
+        // Hands shouldn't reach this path — the server gates bare-hand
+        // PvP — but if it does, fall through to "no sound" rather
+        // than playing a misleading "tool" thump.
+        ToolKind::Hands => None,
     }
 }
 

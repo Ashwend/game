@@ -6,9 +6,9 @@ use crate::{
             ClientRuntime, ErrorToastSink, InventoryDragButton, InventoryUiState, MenuState,
             UnifiedSlotRef,
         },
-        systems::{send_furnace_command, send_inventory_command},
+        systems::{send_furnace_command, send_inventory_command, send_loot_bag_command},
     },
-    protocol::{FurnaceCommand, InventoryCommand},
+    protocol::{FurnaceCommand, InventoryCommand, LootBagCommand},
 };
 
 use super::slot::{SLOT_SIZE, paint_slot};
@@ -32,9 +32,10 @@ pub(crate) fn handle_drag_release(
     inventory_ui: &mut InventoryUiState,
     error_toasts: &mut dyn ErrorToastSink,
 ) {
-    // Drag is allowed while either the inventory or the furnace is up
-    // — both surfaces draw slots and route through the same drag state.
-    if !menu.inventory_open && !menu.furnace_open {
+    // Drag is allowed whenever a slot surface is up: the player's own
+    // inventory, the furnace modal, or the loot-bag modal. All three
+    // surfaces route through this unified pipeline.
+    if !menu.inventory_open && !menu.furnace_open && !menu.loot_bag_open {
         inventory_ui.cancel_drag();
         return;
     }
@@ -84,6 +85,22 @@ fn send_move_command(
     target: UnifiedSlotRef,
     quantity: Option<u16>,
 ) {
+    // Bag moves take priority — `as_loot_bag_ref` covers every
+    // combination the bag command shape accepts (player↔bag,
+    // bag↔bag). Furnace moves come next; only player↔player falls
+    // through to the inventory-only command.
+    if source.is_bag() || target.is_bag() {
+        send_loot_bag_command(
+            runtime,
+            error_toasts,
+            LootBagCommand::Move {
+                from: source.as_loot_bag_ref(),
+                to: target.as_loot_bag_ref(),
+                quantity,
+            },
+        );
+        return;
+    }
     match (source, target) {
         (UnifiedSlotRef::Player(from), UnifiedSlotRef::Player(to)) => {
             send_inventory_command(
@@ -121,6 +138,9 @@ fn pointer_is_outside_inventory_surfaces(
             .is_some_and(|rect| rect.contains(pointer))
         && !inventory_ui
             .furnace_rect
+            .is_some_and(|rect| rect.contains(pointer))
+        && !inventory_ui
+            .loot_bag_rect
             .is_some_and(|rect| rect.contains(pointer))
 }
 

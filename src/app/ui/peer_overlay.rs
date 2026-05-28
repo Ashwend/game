@@ -9,7 +9,7 @@ use crate::{
         voice::VoiceState,
     },
     protocol::{ClientId, MAX_HEALTH},
-    server::{Player, PlayerPublic},
+    server::{Player, PlayerLifecycle, PlayerPublic},
 };
 
 /// Hard cutoff: anything farther than this is skipped entirely. Tuned to a
@@ -341,14 +341,20 @@ fn health_fill_color(fraction: f32) -> egui::Color32 {
 /// name/health/bubble to display.
 pub(crate) fn collect_peer_overlay_entries<'a>(
     network_players: impl IntoIterator<Item = (&'a NetworkPlayer, &'a GlobalTransform)>,
-    replicated_players: impl IntoIterator<Item = (&'a Player, &'a PlayerPublic)>,
+    replicated_players: impl IntoIterator<
+        Item = (&'a Player, &'a PlayerPublic, Option<&'a PlayerLifecycle>),
+    >,
     local_client_id: Option<ClientId>,
     voice: &VoiceState,
 ) -> Vec<PeerOverlayEntry<'a>> {
+    // Dead peers get their nameplate suppressed entirely — a tag
+    // floating over a tilted-and-fading corpse reads as a UI bug,
+    // and a name on a hidden invisible-corpse entity even more so.
     let mut public_by_id: HashMap<ClientId, &PlayerPublic> = replicated_players
         .into_iter()
-        .filter(|(player, _)| Some(player.client_id) != local_client_id)
-        .map(|(player, public)| (player.client_id, public))
+        .filter(|(player, _, _)| Some(player.client_id) != local_client_id)
+        .filter(|(_, _, lifecycle)| !matches!(lifecycle, Some(PlayerLifecycle::Dead { .. })))
+        .map(|(player, public, _)| (player.client_id, public))
         .collect();
 
     network_players
@@ -374,7 +380,15 @@ pub(crate) fn collect_peer_overlay_entries<'a>(
 pub(crate) struct PeerOverlayParams<'w, 's> {
     pub(crate) camera: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<MainCamera>>,
     pub(crate) network_players: Query<'w, 's, (&'static NetworkPlayer, &'static GlobalTransform)>,
-    pub(crate) replicated_players: Query<'w, 's, (&'static Player, &'static PlayerPublic)>,
+    pub(crate) replicated_players: Query<
+        'w,
+        's,
+        (
+            &'static Player,
+            &'static PlayerPublic,
+            Option<&'static PlayerLifecycle>,
+        ),
+    >,
 }
 
 #[cfg(test)]

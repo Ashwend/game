@@ -309,6 +309,34 @@ impl ClientRuntime {
                 // system before reaching runtime state — no log/history
                 // side-effect here.
             }
+            ServerMessage::PlayerImpact { .. } => {
+                // Fanned out to feedback events by the network tick
+                // system. Runtime keeps no log of hits — they show
+                // as floating damage, chip burst, and HP
+                // replication.
+            }
+            ServerMessage::Knockback { impulse } => {
+                // Apply the server-authored impulse directly to the
+                // local prediction's velocity. A cheater ignoring
+                // this message only forfeits their own pushback.
+                if let Some(predicted) = &mut self.predicted_local {
+                    predicted.velocity = predicted.velocity.plus(impulse);
+                    // Knockback should always lift the target off the
+                    // ground for one frame so the upward fraction in
+                    // the impulse actually carries; without this, the
+                    // controller's "grounded → cap y at 0" branch
+                    // would eat the vertical component on the next
+                    // substep.
+                    predicted.grounded = false;
+                }
+            }
+            ServerMessage::PlayerKilled { .. } => {
+                // The death splash itself lives on `MenuState`; the
+                // dedicated `route_player_killed_system` opens it.
+                // Runtime only logs the event so the chat history
+                // shows what happened.
+                self.push_system_message("you died".to_owned());
+            }
             ServerMessage::WorldTime(snapshot) => {
                 self.apply_world_time_snapshot(snapshot);
             }
@@ -419,13 +447,36 @@ impl ClientRuntime {
         self.input_sequence = self.input_sequence.max(seed.last_processed_input);
     }
 
+    /// Server-authoritative correction of the local prediction. Health
+    /// is always overwritten (the server is the source of truth for
+    /// damage). Position/velocity/yaw/pitch only snap when they differ
+    /// meaningfully from the current prediction — a small per-tick drift
+    /// shouldn't yank the player off-screen. The teleport, respawn, and
+    /// future anti-cheat snap-back paths use this to force a full state
+    /// reset by sending a `PlayerState` that diverges from the predicted
+    /// values.
     fn apply_non_movement_correction(&mut self, player: &PlayerState) {
         if Some(player.client_id) != self.client_id {
             return;
         }
 
-        if let Some(predicted) = &mut self.predicted_local {
-            predicted.health = player.health;
+        let Some(predicted) = &mut self.predicted_local else {
+            return;
+        };
+        predicted.health = player.health;
+
+        // Position snap threshold — anything past this looks like an
+        // intentional server-side relocation (teleport, respawn) rather
+        // than a small floating-point drift. 1 m is bigger than any
+        // single-tick movement the controller can produce at run speed,
+        // and small enough that a real desync still corrects.
+        const SNAP_THRESHOLD_M: f32 = 1.0;
+        let dx = predicted.position.x - player.position.x;
+        let dy = predicted.position.y - player.position.y;
+        let dz = predicted.position.z - player.position.z;
+        if (dx * dx + dy * dy + dz * dz).sqrt() > SNAP_THRESHOLD_M {
+            *predicted = PlayerController::from_player_state(player);
+            self.input_sequence = self.input_sequence.max(player.last_processed_input);
         }
     }
 }

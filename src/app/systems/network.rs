@@ -9,7 +9,10 @@ use crate::{
             SessionShutdownTasks, ToastState,
         },
         systems::PendingSessionEndReason,
-        ui::ButtonSoundRequests,
+        ui::{
+            ButtonSoundRequests,
+            floating_text::{FloatingDamageRole, FloatingDamageText},
+        },
         voice::IncomingVoiceMessage,
     },
     items::ToolKind,
@@ -24,11 +27,15 @@ pub(crate) struct NetworkTickWriters<'w> {
     pub(crate) remote_impacts: MessageWriter<'w, RemoteImpactEvent>,
     pub(crate) error_toasts: MessageWriter<'w, ClientErrorToast>,
     pub(crate) voice_messages: MessageWriter<'w, IncomingVoiceMessage>,
+    /// PvP "I got hit" camera reaction. Fired when a `PlayerImpact`
+    /// arrives whose `target` matches the local client.
+    pub(crate) camera_kick: ResMut<'w, crate::app::systems::CameraImpactKick>,
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn network_tick_system(
     time: Res<Time>,
+    mut commands: Commands,
     mut runtime: ResMut<ClientRuntime>,
     mut menu: ResMut<MenuState>,
     mut button_sound_requests: ResMut<ButtonSoundRequests>,
@@ -98,6 +105,93 @@ pub(crate) fn network_tick_system(
                 .remote_impacts
                 .write(remote_impact_event(*position, *kind));
         }
+        if let ServerMessage::PlayerKilled { killer_name, .. } = &message {
+            menu.death_splash = Some(crate::app::state::DeathSplash::new(killer_name.clone()));
+            // Pop any pause/inventory overlays so the splash is the
+            // only modal — the player can't pause-out of the death
+            // screen.
+            menu.pause_open = false;
+            menu.inventory_open = false;
+            menu.crafting_open = false;
+            menu.furnace_open = false;
+            menu.chat_open = false;
+        }
+        // The server replies to Respawn with a `Correction` carrying
+        // full health, so the message itself is the reliable "the
+        // player just respawned" signal — more robust than watching
+        // the replicated `PlayerLifecycle` flip, which can be missed
+        // if the player's mirror entity crosses a chunk-room boundary
+        // at the same tick. Instead of clearing the splash outright
+        // we kick off its close-fade so the new HUD doesn't pop in
+        // under a still-black screen for a frame.
+        if let ServerMessage::Correction(state) = &message
+            && runtime.client_id == Some(state.client_id)
+            && state.health > 0.0
+            && let Some(splash) = menu.death_splash.as_mut()
+        {
+            splash.begin_closing();
+        }
+        if let ServerMessage::PlayerImpact {
+            attacker,
+            target,
+            position,
+            tool,
+            damage_dealt,
+        } = &message
+        {
+            // Reuse the `RemoteImpactEvent` channel as resource hits
+            // so peers see a chip burst at the target's chest.
+            // `is_player_hit = true` routes the audio dispatcher to
+            // the dedicated PvP impact pool; the `surface` field is
+            // still set for the visual fallback only.
+            writers
+                .remote_impacts
+                .write(crate::app::state::RemoteImpactEvent {
+                    anchor: Vec3::new(position.x, position.y, position.z),
+                    tool: *tool,
+                    surface: SurfaceMaterial::Wood,
+                    effect_kind: crate::app::state::ImpactEffectKind::FleshHit,
+                    seed: position_seed(*position),
+                    is_player_hit: true,
+                });
+            // Per-role camera + floating-text feedback. `PlayerImpact`
+            // is broadcast to every peer except the attacker, so:
+            //   - If the local client is the target, they get the
+            //     "I just got hit" camera kick + a red number.
+            //   - If the local client is a third-party observer, they
+            //     see the chip burst + audio but no camera kick (it'd
+            //     read as someone hitting *them*).
+            //   - The attacker never receives this message; their
+            //     local prediction already spawned an orange number
+            //     in `dispatch_player_swing`.
+            let local = runtime.client_id;
+            if local == Some(*target) {
+                writers.camera_kick.trigger_from_hit(*tool);
+                commands.spawn(FloatingDamageText::new(
+                    Vec3::new(position.x, position.y, position.z),
+                    *damage_dealt,
+                    FloatingDamageRole::Taken,
+                ));
+            } else if local == Some(*attacker) {
+                // Reconciliation: the attacker already spawned an
+                // orange number from prediction. If the server's
+                // damage disagrees, we don't bother chasing the
+                // delta — the chip burst from PlayerImpact never
+                // arrives on the attacker side anyway, so any
+                // mismatch is silent. Future hook: spawn a
+                // corrective number here if the predicted value
+                // doesn't match `damage_dealt`.
+            } else {
+                // Third-party observer: only floating text, no
+                // camera kick. Use the dealt (orange) variant so a
+                // bystander reads the hit as "someone scored".
+                commands.spawn(FloatingDamageText::new(
+                    Vec3::new(position.x, position.y, position.z),
+                    *damage_dealt,
+                    FloatingDamageRole::Dealt,
+                ));
+            }
+        }
         if let ServerMessage::Voice {
             speaker,
             sequence,
@@ -141,6 +235,7 @@ fn remote_impact_event(position: Vec3Net, kind: ResourceImpactKind) -> RemoteImp
         // stable per-event so the chip burst is deterministic but varies
         // between consecutive hits.
         seed: position_seed(position),
+        is_player_hit: false,
     }
 }
 

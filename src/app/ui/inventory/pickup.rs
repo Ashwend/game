@@ -22,7 +22,9 @@ pub(super) fn pickup_tooltip(
         || menu.inventory_open
         || menu.crafting_open
         || menu.furnace_open
+        || menu.loot_bag_open
         || menu.chat_open
+        || menu.death_splash.is_some()
     {
         return;
     }
@@ -66,6 +68,18 @@ fn pickup_tooltip_text(pickup_target: &PickupTargetState) -> Option<(String, Str
     // an interaction that doesn't exist.
     if let Some(kind) = pickup_target.deployable_kind {
         return Some(deployable_tooltip_text(kind));
+    }
+
+    // Loot bags use the same "Press E to open" wording as a furnace;
+    // the bag itself is a container so the interaction shape lines
+    // up. Item count would be ideal here but the pickup target
+    // doesn't carry the bag's contents — the bag is opened
+    // server-side and contents arrive via `PlayerPrivate.open_loot_bag`.
+    if pickup_target.loot_bag_id.is_some() {
+        return Some((
+            "Loot bag".to_owned(),
+            "Press E to open\nDrag items between the bag and your inventory.".to_owned(),
+        ));
     }
 
     let definition_id = pickup_target.resource_definition_id.as_ref()?;

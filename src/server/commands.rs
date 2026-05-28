@@ -60,6 +60,7 @@ impl GameServer {
             "time" => self.command_set_time(client_id, &args),
             "speed" | "timescale" => self.command_set_time_multiplier(client_id, &args),
             "test-kit" | "testkit" => self.command_test_kit(client_id),
+            "tp" | "teleport" => self.command_teleport_all(client_id),
             "help" => self.command_help(client_id),
             other => reply_warning(client_id, format!("unknown command: /{other}")),
         }
@@ -104,6 +105,12 @@ impl GameServer {
             "  /test-kit: admin only"
         };
         lines.push(test_kit_line.to_owned());
+        let tp_line = if is_admin {
+            "  /tp: teleport every other connected player to your position (for PvP/death testing)"
+        } else {
+            "  /tp: admin only"
+        };
+        lines.push(tp_line.to_owned());
 
         lines
             .into_iter()
@@ -357,6 +364,103 @@ impl GameServer {
             )
         };
         reply_success(client_id, message)
+    }
+
+    /// `/tp` — teleport every other connected player to the issuer's
+    /// position. Bread-and-butter PvP-test command: drop both clients
+    /// into the same arms-length so death/respawn/melee can be
+    /// exercised without manually walking them together.
+    ///
+    /// Implementation: validate admin, snapshot the issuer's position,
+    /// and for each other connected client move the server-side
+    /// controller onto the issuer's spot, re-anchor the chunk
+    /// membership, then push a `ServerMessage::Correction` so the
+    /// client predictor snaps cleanly. The runtime applies the snap on
+    /// a position delta above its 1 m threshold (see
+    /// `apply_non_movement_correction`).
+    fn command_teleport_all(&mut self, client_id: ClientId) -> Vec<ServerEnvelope> {
+        let Some(issuer) = self.clients.get(&client_id) else {
+            return Vec::new();
+        };
+        if !issuer.is_admin {
+            return reply_warning(client_id, "admin only");
+        }
+        let target_position = issuer.controller.position;
+        let target_yaw = issuer.controller.yaw;
+
+        let other_ids: Vec<ClientId> = self
+            .clients
+            .keys()
+            .copied()
+            .filter(|id| *id != client_id)
+            .collect();
+
+        let mut envelopes = Vec::new();
+        let mut moved = 0u32;
+        for other_id in &other_ids {
+            let Some(other) = self.clients.get_mut(other_id) else {
+                continue;
+            };
+            // Stamp the controller. Velocity is zeroed so the target
+            // doesn't keep their inbound momentum and immediately slide
+            // off the issuer's tile.
+            other.controller.position = target_position;
+            other.controller.velocity = Vec3Net::ZERO;
+            // Keep the target's look direction so the camera doesn't
+            // snap mid-frame; only the world position should change.
+            // Re-anchor chunk membership so AoI replication sees the
+            // new home immediately.
+            self.chunk_manager
+                .update_player_chunk(*other_id, target_position);
+
+            // Synthesize a Correction so the client prediction follows.
+            let state = crate::protocol::PlayerState {
+                client_id: *other_id,
+                position: target_position,
+                velocity: Vec3Net::ZERO,
+                yaw: self
+                    .clients
+                    .get(other_id)
+                    .map(|c| c.controller.yaw)
+                    .unwrap_or(target_yaw),
+                pitch: self
+                    .clients
+                    .get(other_id)
+                    .map(|c| c.controller.pitch)
+                    .unwrap_or(0.0),
+                health: self
+                    .clients
+                    .get(other_id)
+                    .map(|c| c.controller.health)
+                    .unwrap_or(crate::protocol::MAX_HEALTH),
+                grounded: true,
+                last_processed_input: self
+                    .clients
+                    .get(other_id)
+                    .map(|c| c.controller.last_processed_input)
+                    .unwrap_or(0),
+            };
+            envelopes.push(ServerEnvelope {
+                target: DeliveryTarget::Client(*other_id),
+                message: ServerMessage::Correction(state),
+            });
+            moved += 1;
+        }
+
+        envelopes.push(ServerEnvelope {
+            target: DeliveryTarget::Client(client_id),
+            message: ServerMessage::Toast(ToastMessage::new(
+                ToastKind::Success,
+                if moved == 0 {
+                    "no other players to teleport".to_owned()
+                } else if moved == 1 {
+                    "teleported 1 player to your position".to_owned()
+                } else {
+                    format!("teleported {moved} players to your position")
+                },
+            )),
+        });
+        envelopes
     }
 
     fn allocate_resource_node_id(&mut self) -> ResourceNodeId {

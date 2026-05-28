@@ -264,6 +264,7 @@ fn run_host(
     app.insert_resource(crate::server::DroppedItemIndex::default());
     app.insert_resource(crate::server::DeployableIndex::default());
     app.insert_resource(crate::server::PlayerIndex::default());
+    app.insert_resource(crate::server::LootBagIndex::default());
     install_admin_socket(&mut app, admin_socket)?;
 
     app.add_systems(Startup, move |mut commands: Commands| {
@@ -284,6 +285,7 @@ fn run_host(
             sync_dropped_item_entities,
             sync_deployable_entities,
             sync_player_entities,
+            sync_loot_bag_entities,
             update_client_room_subscriptions,
         )
             .chain(),
@@ -300,6 +302,7 @@ fn run_host(
             sync_dropped_item_entities,
             sync_deployable_entities,
             sync_player_entities,
+            sync_loot_bag_entities,
             update_client_room_subscriptions,
         )
             .chain(),
@@ -853,6 +856,40 @@ fn sync_player_entities(world: &mut World) {
                 {
                     *private = view.private;
                 }
+                // Refresh armor. Today only mutated by future systems —
+                // change detection still tracks it so the wire diff is
+                // ready the moment armor items start landing.
+                if let Some(mut armor) = world.get_mut::<crate::server::PlayerArmor>(entity)
+                    && *armor != view.armor
+                {
+                    #[cfg(feature = "replication-trace")]
+                    {
+                        let before = armor.0;
+                        info!(
+                            target: "replication_trace",
+                            "server: PlayerArmor        MUTATE client={} entity={entity:?} {before} -> {}",
+                            view.client_id, view.armor.0
+                        );
+                    }
+                    *armor = view.armor;
+                }
+                // Refresh lifecycle. Flips on every death / respawn.
+                // Triggers the corpse animation on peers and the death
+                // splash on the owner.
+                if let Some(mut lifecycle) = world.get_mut::<crate::server::PlayerLifecycle>(entity)
+                    && *lifecycle != view.lifecycle
+                {
+                    #[cfg(feature = "replication-trace")]
+                    {
+                        let before = *lifecycle;
+                        info!(
+                            target: "replication_trace",
+                            "server: PlayerLifecycle    MUTATE client={} entity={entity:?} {before:?} -> {:?}",
+                            view.client_id, view.lifecycle
+                        );
+                    }
+                    *lifecycle = view.lifecycle;
+                }
                 // Players walk; keep their room subscription aligned with
                 // chunk_manager so peers gain/lose visibility at the
                 // boundary instead of seeing the avatar pop out of view.
@@ -888,6 +925,92 @@ fn sync_player_entities(world: &mut World) {
                     .entity_for_client(view.client_id);
                 let entity = crate::server::spawn_player_entity(world, view, chunk);
                 attach_player_replication(world, entity, chunk, owner_sender);
+            }
+        }
+    }
+}
+
+/// Reconciles `GameServer::loot_bags` into ECS entities. Sync per
+/// tick covers two diffable fields:
+///   - `LootBagContents`: changes when a player drags items in/out.
+///   - `LootBagTransform`: changes while the spawn-time gravity
+///     settle is still in flight (the bag falls from chest height
+///     to the ground over ~0.4 s). Without refreshing the
+///     replicated transform the client would see the bag frozen at
+///     its spawn position.
+fn sync_loot_bag_entities(world: &mut World) {
+    let _span = info_span!("sync_loot_bag_entities").entered();
+    let authoritative: Vec<crate::server::LootBagView> = {
+        let server = world.resource::<AuthoritativeServer>();
+        server
+            .0
+            .loot_bags_iter()
+            .map(|(id, bag)| crate::server::LootBagView {
+                id,
+                position: bag.position,
+                yaw: bag.yaw,
+                slots: bag.slots.clone(),
+            })
+            .collect()
+    };
+    let live_ids: std::collections::HashSet<crate::protocol::LootBagId> =
+        authoritative.iter().map(|view| view.id).collect();
+
+    let stale: Vec<crate::protocol::LootBagId> = {
+        let index = world.resource::<crate::server::LootBagIndex>();
+        index
+            .iter()
+            .filter_map(|(id, _)| (!live_ids.contains(&id)).then_some(id))
+            .collect()
+    };
+    for id in stale {
+        crate::server::despawn_loot_bag_entity(world, id);
+    }
+
+    for view in authoritative {
+        let existing = world.resource::<crate::server::LootBagIndex>().get(view.id);
+        match existing {
+            Some(entity) => {
+                if let Some(mut contents) = world.get_mut::<crate::server::LootBagContents>(entity)
+                    && contents.0 != view.slots
+                {
+                    #[cfg(feature = "replication-trace")]
+                    {
+                        let before: usize = contents.0.iter().filter(|s| s.is_some()).count();
+                        let after: usize = view.slots.iter().filter(|s| s.is_some()).count();
+                        info!(
+                            target: "replication_trace",
+                            "server: LootBagContents    MUTATE id={} entity={entity:?} occupied {before} -> {after}",
+                            view.id
+                        );
+                    }
+                    contents.0 = view.slots;
+                }
+                // Refresh transform while the bag is still settling.
+                // Change detection suppresses no-op writes, so once
+                // the bag is at rest this short-circuits.
+                let new_transform = crate::server::LootBagTransform {
+                    position: view.position,
+                    yaw: view.yaw,
+                };
+                if let Some(mut transform) =
+                    world.get_mut::<crate::server::LootBagTransform>(entity)
+                    && (transform.position != new_transform.position
+                        || transform.yaw != new_transform.yaw)
+                {
+                    *transform = new_transform;
+                }
+            }
+            None => {
+                let chunk = world
+                    .resource::<AuthoritativeServer>()
+                    .0
+                    .loot_bag_chunk(view.id)
+                    .unwrap_or_else(|| {
+                        crate::world::ChunkCoord::from_world(view.position.x, view.position.z)
+                    });
+                let entity = crate::server::spawn_loot_bag_entity(world, view, chunk);
+                attach_room_gated_replication(world, entity, chunk);
             }
         }
     }

@@ -1,10 +1,13 @@
 mod chat;
 mod confirm;
 mod crafting;
+mod death_splash;
 mod deployable_overlay;
+pub(crate) mod floating_text;
 mod furnace;
 mod hud;
 mod inventory;
+mod loot_bag;
 mod menu;
 mod modal;
 mod multiplayer;
@@ -27,13 +30,16 @@ use self::{
     chat::chat_ui,
     confirm::{confirmation_ui, notice_ui},
     crafting::{crafting_queue_hud, crafting_ui},
+    death_splash::{death_splash_ui, send_respawn},
     deployable_overlay::{
         DeployableOverlay, DeployableOverlayParams, collect_deployable_overlay_entries,
         deployable_overlay_ui,
     },
+    floating_text::{FloatingDamageText, floating_damage_ui},
     furnace::furnace_ui,
     hud::hud_ui,
     inventory::{draw_drag_preview, handle_drag_release, inventory_ui},
+    loot_bag::loot_bag_ui,
     menu::main_menu_ui,
     multiplayer::multiplayer_ui,
     options::{OptionsBackTarget, options_ui},
@@ -44,6 +50,8 @@ use self::{
     toast::toast_ui,
     worlds::worlds_ui,
 };
+
+pub(crate) use death_splash::tick_death_splash_system;
 
 use super::state::{
     ClientErrorToast, ClientRuntime, ClientSettings, CraftingHudState, CraftingUiState,
@@ -80,6 +88,7 @@ pub(crate) struct UiResources<'w, 's> {
     primary_monitor: Query<'w, 's, &'static Monitor, With<PrimaryMonitor>>,
     peer_overlay: PeerOverlayParams<'w, 's>,
     deployable_overlay: DeployableOverlayParams<'w, 's>,
+    floating_damage: Query<'w, 's, &'static FloatingDamageText>,
     analytics: Res<'w, Analytics>,
     pending_session_end: ResMut<'w, PendingSessionEndReason>,
     client_network: Res<'w, ClientNetwork>,
@@ -155,29 +164,44 @@ pub(crate) fn ui_system(
                     &resources.settings,
                     &resources.voice,
                 );
-                let peers = collect_peer_overlay_entries(
-                    resources.peer_overlay.network_players.iter(),
-                    resources.peer_overlay.replicated_players.iter(),
-                    resources.runtime.client_id,
-                    &resources.voice,
-                );
+                // Suppress the peer overlay (nameplates, chat bubbles)
+                // whenever a full-screen modal is up. Nameplates
+                // render at Order::Foreground; without this gate
+                // they'd poke through the bag / furnace / inventory /
+                // crafting panels.
+                let world_overlays_visible = !resources.menu.inventory_open
+                    && !resources.menu.crafting_open
+                    && !resources.menu.furnace_open
+                    && !resources.menu.loot_bag_open;
                 let camera = resources
                     .peer_overlay
                     .camera
                     .single()
                     .ok()
                     .map(|(camera, transform)| (camera, *transform));
-                peer_overlay_ui(ctx, PeerOverlay { camera, peers });
+                if world_overlays_visible {
+                    let peers = collect_peer_overlay_entries(
+                        resources.peer_overlay.network_players.iter(),
+                        resources.peer_overlay.replicated_players.iter(),
+                        resources.runtime.client_id,
+                        &resources.voice,
+                    );
+                    peer_overlay_ui(ctx, PeerOverlay { camera, peers });
+                }
 
-                // Deployable overlay rides on the same `(camera,
-                // transform)` projection as the peer overlay so the
-                // labels sit in the same projected space — they
-                // share the in-world feel.
-                let entries = collect_deployable_overlay_entries(
-                    resources.deployable_overlay.placed.iter(),
-                    resources.deployable_overlay.replicated.iter(),
-                );
-                deployable_overlay_ui(ctx, DeployableOverlay { camera, entries });
+                // Floating damage + deployable nametags are also
+                // world-overlay layers; suppress them under the same
+                // gate so a full-screen modal isn't pocked with
+                // floating numbers and structure labels.
+                if world_overlays_visible {
+                    floating_damage_ui(ctx, camera, resources.floating_damage.iter());
+
+                    let entries = collect_deployable_overlay_entries(
+                        resources.deployable_overlay.placed.iter(),
+                        resources.deployable_overlay.replicated.iter(),
+                    );
+                    deployable_overlay_ui(ctx, DeployableOverlay { camera, entries });
+                }
 
                 inventory_ui(
                     ctx,
@@ -197,6 +221,14 @@ pub(crate) fn ui_system(
                     &mut resources.error_toasts,
                 );
                 furnace_ui(
+                    ctx,
+                    &mut resources.menu,
+                    &mut resources.runtime,
+                    &resources.local_player,
+                    &mut resources.inventory_ui,
+                    &mut resources.error_toasts,
+                );
+                loot_bag_ui(
                     ctx,
                     &mut resources.menu,
                     &mut resources.runtime,
@@ -240,6 +272,17 @@ pub(crate) fn ui_system(
                     actionbar_rect,
                 );
                 toast_ui(ctx, &resources.toasts, actionbar_rect);
+                // Death splash sits above every other in-game UI but
+                // below modal dialogs / loading splash. Renders only
+                // while `menu.death_splash` is set (server flipped the
+                // local player to Dead and the runtime stored the
+                // killer name).
+                if let Some(splash) = resources.menu.death_splash.clone() {
+                    let respawn_clicked = death_splash_ui(ctx, &splash);
+                    if respawn_clicked {
+                        send_respawn(&mut resources.runtime);
+                    }
+                }
             }
             if resources.menu.pause_open && !resources.menu.pause_options_open {
                 pause_ui(

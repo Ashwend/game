@@ -73,14 +73,22 @@ impl GameServer {
             name: name.clone(),
             controller,
             inventory,
+            // Phase 1 ships armor on the wire (per-component replicated),
+            // but every player starts with 0 — there are no armor items
+            // defined yet. A future armor pass mutates this field
+            // server-side and the replication path picks up the diff.
+            armor: 0,
+            lifecycle: crate::server::PlayerLifecycle::Alive,
             is_admin,
             last_seen_tick: self.tick,
             next_gather_tick: self.tick,
+            next_attack_tick: self.tick,
             chat_bubble: None,
             view_tier: crate::protocol::ViewRadiusTier::default(),
             crafting: starting_crafting_state(),
             next_craft_job_id: 1,
             open_furnace: None,
+            open_loot_bag: None,
         };
 
         let initial_position = client.controller.position;
@@ -133,6 +141,10 @@ impl GameServer {
         // Drop any open-furnace reference so the next snapshot for any
         // peer doesn't reach into a stale client entry.
         self.close_furnace(client_id);
+        // Same for loot bags — drops the player's open-bag pointer
+        // and, if no one else has the bag open and it's empty,
+        // despawns the bag entity.
+        self.close_loot_bag(client_id);
 
         let Some(client) = self.clients.remove(&client_id) else {
             return Vec::new();

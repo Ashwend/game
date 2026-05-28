@@ -20,6 +20,11 @@ pub(crate) mod env {
     pub(crate) const SPAWN_OFFSET_Z: &str = "GAME_TEST_SPAWN_OFFSET_Z";
     pub(crate) const SPAWN_YAW: &str = "GAME_TEST_SPAWN_YAW";
     pub(crate) const INVENTORY_OPEN: &str = "GAME_TEST_INVENTORY_OPEN";
+    /// `1` → send `/test-kit` once after the first in-game frame. Used by
+    /// the multiplayer-test harness so both clients spawn with the full
+    /// tool/resource set (admin gating is also pre-seeded into the save
+    /// for the same reason).
+    pub(crate) const AUTO_KIT: &str = "GAME_TEST_AUTO_KIT";
 }
 
 /// Window-tiling instructions. Stored as "I am window N of M, size W×H,
@@ -59,6 +64,12 @@ pub(crate) struct TestModeConfig {
     /// because the panel is the most common visual surface to debug
     /// against.
     pub(crate) inventory_open_on_join: bool,
+    /// If true, fire one `/test-kit` slash command once the client is
+    /// in-game. Lets the multiplayer-test helper start both windows
+    /// with the full early-game kit (tools, resources, workbench, and
+    /// furnace) so PvP / death / crafting paths are immediately
+    /// exercisable.
+    pub(crate) auto_test_kit_on_join: bool,
 }
 
 impl TestModeConfig {
@@ -88,6 +99,7 @@ impl TestModeConfig {
             spawn_offset_z: read_env(env::SPAWN_OFFSET_Z).unwrap_or(0.0),
             spawn_yaw: read_env(env::SPAWN_YAW),
             inventory_open_on_join: read_env::<u8>(env::INVENTORY_OPEN).unwrap_or(0) != 0,
+            auto_test_kit_on_join: read_env::<u8>(env::AUTO_KIT).unwrap_or(0) != 0,
         }
     }
 
@@ -98,6 +110,7 @@ impl TestModeConfig {
             || self.spawn_offset_z != 0.0
             || self.spawn_yaw.is_some()
             || self.inventory_open_on_join
+            || self.auto_test_kit_on_join
     }
 }
 

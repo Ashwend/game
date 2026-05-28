@@ -10,7 +10,10 @@ use bevy::{
     window::{Monitor, PrimaryMonitor, PrimaryWindow, Window, WindowPosition},
 };
 
-use crate::app::state::{ClientRuntime, LookState, MenuState, Screen, TestModeConfig};
+use crate::{
+    app::state::{ClientRuntime, LookState, MenuState, Screen, TestModeConfig},
+    protocol::ClientMessage,
+};
 
 pub(crate) fn apply_test_mode_overrides_system(
     config: Res<TestModeConfig>,
@@ -45,6 +48,17 @@ pub(crate) fn apply_test_mode_overrides_system(
 
     if config.inventory_open_on_join {
         menu.inventory_open = true;
+    }
+
+    if config.auto_test_kit_on_join
+        && let Some(session) = runtime.session.as_mut()
+    {
+        // Fire-and-forget: any send error here is debug ergonomics
+        // only — the player can re-issue `/test-kit` from chat if it
+        // ever fails to land.
+        let _ = session.send(ClientMessage::Command {
+            text: "test-kit".to_owned(),
+        });
     }
 
     *already_applied = true;

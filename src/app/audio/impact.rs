@@ -12,7 +12,7 @@ use crate::app::state::{GatherInputState, RemoteImpactEvent};
 
 use super::{
     library::PlaySound,
-    manifest::{SoundId, impact_sound_for},
+    manifest::{SoundId, impact_sound_for, impact_sound_for_player},
 };
 
 /// Drain queued impact + miss cues each frame and emit `PlaySound`
@@ -24,7 +24,12 @@ pub(crate) fn play_impact_sounds_system(
     mut play: MessageWriter<PlaySound>,
 ) {
     if let Some(cue) = gather_input.take_pending_audio_cue() {
-        if let Some(id) = impact_sound_for(cue.tool, cue.surface) {
+        let id = if cue.is_player_hit {
+            impact_sound_for_player(cue.tool)
+        } else {
+            impact_sound_for(cue.tool, cue.surface)
+        };
+        if let Some(id) = id {
             play.write(PlaySound::at(id, cue.anchor));
         } else {
             // No dedicated impact clip for this (tool, surface). Fall
@@ -38,7 +43,12 @@ pub(crate) fn play_impact_sounds_system(
         play.write(PlaySound::non_spatial(SoundId::SwingMiss));
     }
     for event in remote_impacts.read() {
-        if let Some(id) = impact_sound_for(event.tool, event.surface) {
+        let id = if event.is_player_hit {
+            impact_sound_for_player(event.tool)
+        } else {
+            impact_sound_for(event.tool, event.surface)
+        };
+        if let Some(id) = id {
             play.write(PlaySound::at(id, event.anchor));
         }
     }

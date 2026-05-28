@@ -38,6 +38,9 @@ pub(crate) fn chat_shortcut_system(
         || menu.chat_open
         || menu.crafting_open
         || menu.inventory_open
+        // Dead players can't chat, loot, or do anything but click
+        // Respawn. The splash is the only modal on screen.
+        || menu.death_splash.is_some()
     {
         return;
     }
@@ -59,6 +62,11 @@ pub(crate) fn toggle_pause_system(keys: Res<ButtonInput<KeyCode>>, mut menu: Res
     if menu.chat_open {
         return;
     }
+    // ESC during the death splash is a no-op — the player has one
+    // exit (the Respawn button), not a pause menu hop.
+    if menu.death_splash.is_some() {
+        return;
+    }
 
     if keys.just_pressed(KeyCode::Escape) {
         handle_pause_escape(&mut menu);
@@ -66,9 +74,12 @@ pub(crate) fn toggle_pause_system(keys: Res<ButtonInput<KeyCode>>, mut menu: Res
 }
 
 fn handle_pause_escape(menu: &mut MenuState) {
-    // Furnace handled separately — its close path needs a network
-    // round-trip to the server. See `close_furnace_on_escape_system`.
-    if menu.furnace_open {
+    // Furnace + loot bag are both handled by their own
+    // close-on-escape systems because the close path is a network
+    // round-trip (server clears the open-state field, replication
+    // mirrors it back). Bailing here means ESC stops at "close the
+    // bag" instead of falling through to open the pause menu.
+    if menu.furnace_open || menu.loot_bag_open {
         return;
     }
 
@@ -115,6 +126,43 @@ pub(crate) fn sync_furnace_open_flag_system(
     }
 }
 
+/// Same as `sync_furnace_open_flag_system` but for the loot bag.
+/// Drives `MenuState.loot_bag_open` off the replicated
+/// `PlayerPrivate.open_loot_bag`.
+pub(crate) fn sync_loot_bag_open_flag_system(
+    local_player: Res<crate::app::state::LocalPlayerState>,
+    mut menu: ResMut<MenuState>,
+) {
+    let open = local_player
+        .private
+        .as_ref()
+        .and_then(|private| private.open_loot_bag.as_ref())
+        .is_some();
+    if menu.loot_bag_open != open {
+        menu.loot_bag_open = open;
+    }
+}
+
+/// Send a loot bag `Close` command when ESC is pressed while the
+/// bag is open. Mirror of `close_furnace_on_escape_system`.
+pub(crate) fn close_loot_bag_on_escape_system(
+    keys: Res<ButtonInput<KeyCode>>,
+    menu: Res<MenuState>,
+    mut runtime: ResMut<crate::app::state::ClientRuntime>,
+    mut error_toasts: MessageWriter<crate::app::state::ClientErrorToast>,
+) {
+    if menu.screen != Screen::InGame || !menu.loot_bag_open {
+        return;
+    }
+    if keys.just_pressed(KeyCode::Escape) {
+        crate::app::systems::input::send_loot_bag_command(
+            &mut runtime,
+            &mut error_toasts,
+            crate::protocol::LootBagCommand::Close,
+        );
+    }
+}
+
 /// Send a furnace `Close` command when ESC is pressed while the furnace
 /// modal is open. Kept separate from `toggle_pause_system` so the
 /// authority round-trip (client → server → snapshot clears
@@ -151,7 +199,11 @@ pub(crate) fn toggle_inventory_system(
     // crafting search input swallows the tab character itself (egui
     // never types a literal `\t`), so the only visible effect is the
     // screen swap below.
-    if menu.screen != Screen::InGame || menu.pause_open || menu.pause_options_open || menu.chat_open
+    if menu.screen != Screen::InGame
+        || menu.pause_open
+        || menu.pause_options_open
+        || menu.chat_open
+        || menu.death_splash.is_some()
     {
         return;
     }
@@ -163,13 +215,17 @@ pub(crate) fn toggle_inventory_system(
         menu.inventory_open = !menu.inventory_open;
         if menu.inventory_open {
             // Inventory takes over the cursor; close every other modal
-            // we don't want layered behind it. The furnace closes via
-            // a network round-trip because its `open_furnace` state
-            // lives server-side - sending Close now means the next
-            // snapshot will clear `furnace_open` on its own.
+            // we don't want layered behind it. The furnace + loot bag
+            // close via a network round-trip because their open state
+            // lives server-side — sending Close now means the next
+            // replication tick clears the matching `*_open` flag on
+            // its own.
             menu.crafting_open = false;
             if menu.furnace_open {
                 close_open_furnace(&mut runtime, &mut error_toasts);
+            }
+            if menu.loot_bag_open {
+                close_open_loot_bag(&mut runtime, &mut error_toasts);
             }
         } else {
             inventory_ui.cancel_drag();
@@ -191,6 +247,19 @@ fn close_open_furnace(
     );
 }
 
+/// Same idea for the loot bag — opening inventory / crafting / a new
+/// modal shouldn't leave a bag UI ghosted behind the new view.
+fn close_open_loot_bag(
+    runtime: &mut crate::app::state::ClientRuntime,
+    error_toasts: &mut MessageWriter<crate::app::state::ClientErrorToast>,
+) {
+    crate::app::systems::input::send_loot_bag_command(
+        runtime,
+        error_toasts,
+        crate::protocol::LootBagCommand::Close,
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn toggle_crafting_system(
     keys: Res<ButtonInput<KeyCode>>,
@@ -207,7 +276,11 @@ pub(crate) fn toggle_crafting_system(
     // `wants_keyboard_input` so typing `c` into the search box leaves
     // the modal open (the input absorbs the keystroke), while pressing
     // `C` with the search box unfocused toggles the modal off.
-    if menu.screen != Screen::InGame || menu.pause_open || menu.pause_options_open || menu.chat_open
+    if menu.screen != Screen::InGame
+        || menu.pause_open
+        || menu.pause_options_open
+        || menu.chat_open
+        || menu.death_splash.is_some()
     {
         return;
     }
@@ -271,6 +344,11 @@ pub(crate) fn open_crafting_modal(
         // The furnace lives server-side so we ship a Close and the
         // next snapshot will clear our mirrored `furnace_open` flag.
         close_open_furnace(runtime, error_toasts);
+    }
+    if menu.loot_bag_open {
+        // Same lifecycle as the furnace: server-side state, close
+        // round-trip clears the local mirror on the next tick.
+        close_open_loot_bag(runtime, error_toasts);
     }
     // Reset transient browser state so a fresh open behaves like a
     // fresh open: empty search, scrolled to the top. We intentionally

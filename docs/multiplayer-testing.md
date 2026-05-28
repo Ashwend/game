@@ -45,8 +45,16 @@ launching three processes and arranging windows.
 - **Inventory panel open on join.** `GAME_TEST_INVENTORY_OPEN=1` flips
   `MenuState::inventory_open` the first frame the client reaches the
   in-game screen.
+- **Both clients are admins with a full kit.** `multiplayer-test`
+  pre-seeds the temp world save with both test Steam IDs in
+  `WorldSave.admins`, and `GAME_TEST_AUTO_KIT=1` makes each client send
+  `/test-kit` once on the first in-game frame. Boots both windows with
+  the full early-game tool + resource + workbench + furnace set so PvP
+  / death / crafting paths are immediately exercisable. The admin flag
+  also unlocks `/tp` (teleport every other connected player to you) and
+  the rest of the admin-only slash commands.
 
-All three overrides run exactly once, gated by a `Local<bool>` in the
+All overrides run exactly once, gated by a `Local<bool>` in the
 test-mode systems. Production builds (no `GAME_TEST_*` vars set) see
 `TestModeConfig::default()` and the systems short-circuit immediately.
 
@@ -69,6 +77,7 @@ The producer side (`src/cli/multiplayer_test.rs`) and the consumer side
 | `GAME_TEST_SPAWN_OFFSET_Z` | f32 | Meters added to spawn position along Z. |
 | `GAME_TEST_SPAWN_YAW` | f32 | Initial yaw in radians (set after Welcome). |
 | `GAME_TEST_INVENTORY_OPEN` | u8 | `1` → open the inventory on first in-game frame. |
+| `GAME_TEST_AUTO_KIT` | u8 | `1` → fire `/test-kit` once after Welcome lands. Paired with admin steam IDs pre-seeded into the save. |
 
 ## Tuning knobs
 

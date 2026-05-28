@@ -16,8 +16,8 @@ use crate::{
     },
     items::{HANDS_TOOL, ToolKind, ToolProfile, item_definition},
     protocol::{
-        ACTIONBAR_SLOT_COUNT, ClientMessage, DamageDeployableCommand, InventoryCommand,
-        ItemContainerSlot, ResourceGatherCommand,
+        ACTIONBAR_SLOT_COUNT, AttackPlayerCommand, ClientMessage, DamageDeployableCommand,
+        InventoryCommand, ItemContainerSlot, LootBagCommand, ResourceGatherCommand,
     },
     resources::resource_node_definition,
 };
@@ -26,6 +26,7 @@ use super::gating::{gameplay_accepts_controls, primary_window_focused};
 
 #[derive(SystemParam)]
 pub(crate) struct GameplayInventoryShortcutsParams<'w, 's> {
+    commands: Commands<'w, 's>,
     time: Res<'w, Time>,
     keys: Res<'w, ButtonInput<KeyCode>>,
     mouse_buttons: Res<'w, ButtonInput<MouseButton>>,
@@ -149,27 +150,53 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
                 }
                 None => {}
             }
+        } else if let Some(id) = params.pickup_target.loot_bag_id {
+            // Open the death loot bag. Server validates range +
+            // membership and replies by populating
+            // `PlayerPrivate.open_loot_bag` so the transfer UI
+            // becomes visible on the next replication tick.
+            send_gameplay_message(
+                &mut params.runtime,
+                &mut params.error_toasts,
+                ClientMessage::LootBag(LootBagCommand::Open { id }),
+                "loot bag open",
+            );
         }
     }
 
     // Tool-swap entry locks out swings — the new tool is still being
-    // lifted into view, so it can't be used yet.
-    let equipped_tool = if params.swap_state.is_swapping() {
+    // lifted into view, so it can't be used yet. Death does the same:
+    // a corpse can't swing.
+    let local_dead = matches!(
+        params.local_player.lifecycle,
+        Some(crate::server::PlayerLifecycle::Dead { .. })
+    );
+    let equipped_tool = if params.swap_state.is_swapping() || local_dead {
         params.gather_input.cancel();
         None
     } else {
         equipped_tool_kind(&params.local_player)
     };
     // Pick the swing target. Priority:
-    //  1. A resource node the held tool can actually harvest. Wrong-
+    //  1. Another player inside attack range. Players win over
+    //     resource nodes / deployables because at melee range the
+    //     intent is unambiguous — if you're aiming at the avatar of
+    //     someone running past a tree, that's the target you mean.
+    //     Gated on a real tool being equipped (bare hands deal no PvP
+    //     damage; the server rejects too).
+    //  2. A resource node the held tool can actually harvest. Wrong-
     //     tool nodes turn into "no target" so the impact frame resolves
     //     to a clean miss instead of a hit the server would reject.
-    //  2. A placed structure the player is aimed at. Reaching this
+    //  3. A placed structure the player is aimed at. Reaching this
     //     branch already implies a real tool is equipped — bare hands
     //     and non-tool items return `None` from `equipped_tool_kind`,
     //     which short-circuits the swing before this check runs.
     let target =
-        if let Some(node_id) = params.pickup_target.resource_node_id.filter(|_| {
+        if let Some(player_id) = params.pickup_target.player_id
+            && equipped_tool.is_some()
+        {
+            Some(SwingTarget::Player(player_id))
+        } else if let Some(node_id) = params.pickup_target.resource_node_id.filter(|_| {
             equipped_tool_can_harvest_target(&params.local_player, &params.pickup_target)
         }) {
             Some(SwingTarget::ResourceNode(node_id))
@@ -232,6 +259,7 @@ fn dispatch_swing_impact(params: &mut GameplayInventoryShortcutsParams, impact: 
     match impact.target {
         Some(SwingTarget::ResourceNode(id)) => dispatch_resource_swing(params, impact, id),
         Some(SwingTarget::Deployable(id)) => dispatch_deployable_swing(params, impact, id),
+        Some(SwingTarget::Player(id)) => dispatch_player_swing(params, impact, id),
         None => params.gather_input.set_pending_miss_audio(),
     }
 }
@@ -273,6 +301,7 @@ fn dispatch_resource_swing(
         anchor,
         tool: impact.tool,
         surface,
+        is_player_hit: false,
     });
 
     params.camera_kick.trigger(impact.tool);
@@ -330,6 +359,7 @@ fn dispatch_deployable_swing(
         anchor,
         tool: impact.tool,
         surface,
+        is_player_hit: false,
     });
 
     params.camera_kick.trigger(impact.tool);
@@ -339,6 +369,76 @@ fn dispatch_deployable_swing(
         &mut params.error_toasts,
         ClientMessage::DamageDeployable(DamageDeployableCommand { id: deployable_id }),
         "damage command",
+    );
+}
+
+/// PvP swing dispatch — mirrors `dispatch_deployable_swing` but the
+/// network payload is `AttackPlayer` (no inventory payout) and the
+/// impact visual uses the dedicated `FleshHit` palette (Phase 4 will
+/// flip the placeholder kind to `FleshHit`; today it uses the generic
+/// stone-shard fallback so the swing still produces feedback).
+fn dispatch_player_swing(
+    params: &mut GameplayInventoryShortcutsParams,
+    impact: SwingImpact,
+    target_player_id: crate::protocol::ClientId,
+) {
+    let Some(anchor) = params
+        .pickup_target
+        .world_position
+        .filter(|_| params.pickup_target.player_id == Some(target_player_id))
+        .map(|pos| bevy::prelude::Vec3::new(pos.x, pos.y, pos.z))
+    else {
+        // Target moved out of view between scan and impact — treat as
+        // a miss so the swing still produces a whoosh.
+        params.gather_input.set_pending_miss_audio();
+        return;
+    };
+
+    // Local prediction: chip burst + camera kick + impact audio so the
+    // attacker sees instant feedback. The server confirms with
+    // `ServerMessage::PlayerImpact` to peers; a desync resolves on the
+    // next replication tick. The `is_player_hit` flag steers the audio
+    // dispatcher onto the dedicated `ImpactPlayerBlunt` pool.
+    let surface = SurfaceMaterial::Wood; // audio fallback when pool routing is bypassed.
+    let visual_kind = ImpactEffectKind::FleshHit;
+    let spray_direction = swing_spray_direction(&params.runtime, anchor);
+    let seed = params.gather_input.current_swing_seed();
+    params.gather_input.set_pending_impact(PendingImpactEffect {
+        anchor,
+        spray_direction,
+        kind: visual_kind,
+        seed,
+    });
+    params.gather_input.set_pending_audio_cue(PendingAudioCue {
+        anchor,
+        tool: impact.tool,
+        surface,
+        is_player_hit: true,
+    });
+
+    // Predicted floating damage number — orange, since the local
+    // client is the attacker. The server replies with
+    // `PlayerImpact { damage_dealt }` so a desync would cost only
+    // the brief mismatch between this predicted value and the
+    // armor-reduced server value. Today every player has armor 0
+    // so the prediction is always exact.
+    if let Some(damage) = crate::combat::tool_player_damage(impact.tool, 0) {
+        params
+            .commands
+            .spawn(crate::app::ui::floating_text::FloatingDamageText::new(
+                anchor,
+                damage.raw,
+                crate::app::ui::floating_text::FloatingDamageRole::Dealt,
+            ));
+    }
+
+    params.camera_kick.trigger(impact.tool);
+
+    send_gameplay_message(
+        &mut params.runtime,
+        &mut params.error_toasts,
+        ClientMessage::AttackPlayer(AttackPlayerCommand { target_player_id }),
+        "attack player command",
     );
 }
 
@@ -483,6 +583,19 @@ pub(crate) fn send_furnace_command(
         error_toasts,
         ClientMessage::Furnace(command),
         "furnace command",
+    );
+}
+
+pub(crate) fn send_loot_bag_command(
+    runtime: &mut ClientRuntime,
+    error_toasts: &mut dyn ErrorToastSink,
+    command: crate::protocol::LootBagCommand,
+) {
+    send_gameplay_message(
+        runtime,
+        error_toasts,
+        ClientMessage::LootBag(command),
+        "loot bag command",
     );
 }
 

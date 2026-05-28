@@ -35,10 +35,10 @@ pub(crate) fn draw_slot(
 ) {
     // Slot flashes are only tracked for player slots — they highlight
     // "you just gained items here", which is a property of the player's
-    // inventory. The furnace's own slots don't flash.
+    // inventory. Furnace and bag slots don't flash.
     let flash_strength = match slot {
         UnifiedSlotRef::Player(container_slot) => inventory_ui.slot_flash_strength(container_slot),
-        UnifiedSlotRef::Furnace(_) => 0.0,
+        UnifiedSlotRef::Furnace(_) | UnifiedSlotRef::Bag(_) => 0.0,
     };
 
     if !interactive {

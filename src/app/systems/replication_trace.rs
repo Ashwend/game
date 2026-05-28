@@ -27,7 +27,8 @@
 use bevy::{ecs::change_detection::Ref, prelude::*};
 
 use crate::server::{
-    Deployable, DeployableActive, DeployableHealth, ResourceNode, ResourceNodeStorage,
+    Deployable, DeployableActive, DeployableHealth, Player, PlayerArmor, ResourceNode,
+    ResourceNodeStorage,
 };
 
 /// Tracks the last-seen value per id so we can log a clean
@@ -37,6 +38,7 @@ pub(crate) struct ReplicationTraceState {
     node_qty: std::collections::HashMap<u64, u16>,
     deployable_health: std::collections::HashMap<u64, u32>,
     deployable_active: std::collections::HashMap<u64, bool>,
+    player_armor: std::collections::HashMap<u64, u8>,
 }
 
 pub(crate) fn log_replicated_storage_changes_system(
@@ -47,6 +49,7 @@ pub(crate) fn log_replicated_storage_changes_system(
         Ref<DeployableHealth>,
         Ref<DeployableActive>,
     )>,
+    players: Query<(Entity, &Player, Ref<PlayerArmor>)>,
     mut state: ResMut<ReplicationTraceState>,
 ) {
     for (entity, node, storage) in &nodes {
@@ -106,6 +109,29 @@ pub(crate) fn log_replicated_storage_changes_system(
                 meta.id, active.0
             );
             state.deployable_active.insert(meta.id, active.0);
+        }
+    }
+
+    for (entity, player, armor) in &players {
+        if armor.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: PlayerArmor        SPAWN  client={} entity={entity:?} armor={}",
+                player.client_id, armor.0
+            );
+            state.player_armor.insert(player.client_id, armor.0);
+        } else if armor.is_changed() {
+            let before = state
+                .player_armor
+                .get(&player.client_id)
+                .copied()
+                .unwrap_or(0);
+            info!(
+                target: "replication_trace",
+                "client: PlayerArmor        RECV   client={} entity={entity:?} {before} -> {}",
+                player.client_id, armor.0
+            );
+            state.player_armor.insert(player.client_id, armor.0);
         }
     }
 }

@@ -203,6 +203,21 @@ pub(crate) fn spawn_impact_burst(
                 0.45,
                 1.4,
             ),
+            // Player-hit chip palette. Smaller particle count and a
+            // faster lifetime than `StoneShards` so the burst reads
+            // as a quick spray rather than a wall of chips. Re-uses
+            // the stone-shard mesh + material so a dedicated reddish
+            // dust ramp isn't required to ship Phase 2/3 feedback;
+            // Phase 4 can swap in a bespoke material here.
+            ImpactEffectKind::FleshHit => (
+                assets.stone_shard_mesh.clone(),
+                assets.stone_shard_material.clone(),
+                4.0,
+                2.2,
+                0.35,
+                0.45,
+                1.8,
+            ),
         };
 
     let intensity = intensity.max(0.0);

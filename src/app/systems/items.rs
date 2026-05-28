@@ -13,6 +13,7 @@
 
 mod dropped;
 mod held;
+mod loot_bag;
 mod pickup;
 mod resource_nodes;
 mod swing_poses;
@@ -20,6 +21,7 @@ mod tool_swap;
 
 pub(crate) use dropped::{DroppedItemEntities, apply_dropped_items_system};
 pub(crate) use held::apply_held_item_visual_system;
+pub(crate) use loot_bag::{LootBagEntities, apply_loot_bags_system};
 pub(crate) use pickup::update_pickup_target_system;
 pub(crate) use resource_nodes::{
     ResourceNodeEntities, apply_resource_nodes_system, resource_node_transform_at,

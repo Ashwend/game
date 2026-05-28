@@ -29,7 +29,15 @@ pub(crate) fn apply_held_item_visual_system(
     camera: Query<Entity, With<MainCamera>>,
     held: Query<(Entity, &HeldItemVisual)>,
 ) {
-    let active_item = (menu.screen == Screen::InGame && !menu.pause_open)
+    // Dead players don't render a held item. The corpse drops its
+    // loot into a bag at the death position; the camera fades to
+    // black while the death splash is up, and a visible weapon on
+    // screen during that fade reads as a UI bug.
+    let local_dead = matches!(
+        local_player.lifecycle,
+        Some(crate::server::PlayerLifecycle::Dead { .. })
+    );
+    let active_item = (menu.screen == Screen::InGame && !menu.pause_open && !local_dead)
         .then(|| {
             local_player
                 .private

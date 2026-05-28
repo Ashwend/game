@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::{
     app::audio::surface::SurfaceMaterial,
     items::{DeployableKind, ItemModel, ToolKind},
-    protocol::{DeployedEntityId, DroppedItemId, ItemStack, ResourceNodeId, Vec3Net},
+    protocol::{ClientId, DeployedEntityId, DroppedItemId, ItemStack, ResourceNodeId, Vec3Net},
 };
 
 // Each tool has its own swing length and impact moment. Pickaxe swings are
@@ -39,6 +39,13 @@ pub(crate) enum ImpactEffectKind {
     /// Tiny green burst for hay/grass tufts — uses a dedicated
     /// grass-coloured material and a very small footprint.
     GrassBlades,
+    /// Small reddish-grey dust burst for PvP melee hits. Lower particle
+    /// count + shorter lifetime than `StoneShards`, with a warmer
+    /// (reddish) tint so a player-hit reads differently from a stone
+    /// chip. Phase 4 wires the dedicated colour ramp into the particle
+    /// system; until then the palette mapping below falls back to the
+    /// stone-shard material so the swing still produces visible chips.
+    FleshHit,
 }
 
 impl ImpactEffectKind {
@@ -121,6 +128,12 @@ pub(crate) struct RemoteImpactEvent {
     pub(crate) surface: SurfaceMaterial,
     pub(crate) effect_kind: ImpactEffectKind,
     pub(crate) seed: u32,
+    /// When `true` the audio dispatcher routes through
+    /// `impact_sound_for_player` instead of the `(tool, surface)`
+    /// lookup, picking the dedicated PvP-impact pool. The `surface`
+    /// field is still set (used by visuals fallback) but ignored by
+    /// the audio path in this case.
+    pub(crate) is_player_hit: bool,
 }
 
 pub(crate) fn swing_duration_seconds(tool: ToolKind) -> f32 {
@@ -228,6 +241,15 @@ pub(crate) struct PickupTargetState {
     /// the right entity-specific action (e.g. open furnace UI).
     pub(crate) deployable_id: Option<DeployedEntityId>,
     pub(crate) deployable_kind: Option<DeployableKind>,
+    /// Remote player the swing would land on. Set when the look ray
+    /// intersects a remote player's body AABB within attack range. The
+    /// swing dispatch routes through `dispatch_player_swing` when this
+    /// is `Some`, sending `ClientMessage::AttackPlayer` to the server.
+    pub(crate) player_id: Option<ClientId>,
+    /// Loot bag the player is currently looking at. Drives the E-to-
+    /// open path — pressing E sends `LootBagCommand::Open` and the
+    /// transfer UI panel becomes visible via `PlayerPrivate.open_loot_bag`.
+    pub(crate) loot_bag_id: Option<crate::protocol::LootBagId>,
     /// Seconds since the last full pickup-target scan. The scan is throttled
     /// to ~33 ms (≈ 30 Hz) — that's well above the cadence a player can
     /// react to a tooltip highlight and saves an O(N×M) sweep over every
@@ -250,6 +272,8 @@ impl PickupTargetState {
         self.screen_position = None;
         self.deployable_id = None;
         self.deployable_kind = None;
+        self.player_id = None;
+        self.loot_bag_id = None;
     }
 }
 
@@ -275,11 +299,14 @@ struct ActiveSwing {
 /// What the swing connected with at its impact frame. Resource nodes
 /// run through the existing gather command (item payout + node
 /// shrink); placed structures run through a damage command (no
-/// payout, just HP decrement + auto-destroy on 0).
+/// payout, just HP decrement + auto-destroy on 0); players run
+/// through `ClientMessage::AttackPlayer` (HP decrement + knockback,
+/// no payout).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SwingTarget {
     ResourceNode(ResourceNodeId),
     Deployable(DeployedEntityId),
+    Player(ClientId),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -297,6 +324,9 @@ pub(crate) struct PendingAudioCue {
     pub(crate) anchor: Vec3,
     pub(crate) tool: ToolKind,
     pub(crate) surface: SurfaceMaterial,
+    /// Same flag as [`RemoteImpactEvent::is_player_hit`] — when `true`
+    /// the audio system picks the PvP-impact pool.
+    pub(crate) is_player_hit: bool,
 }
 
 impl GatherInputState {
@@ -432,6 +462,8 @@ mod tests {
             screen_position: Some(Vec2::new(10.0, 20.0)),
             deployable_id: Some(42),
             deployable_kind: Some(crate::items::DeployableKind::Furnace { tier: 1 }),
+            player_id: Some(99),
+            loot_bag_id: Some(123),
             elapsed_since_scan: 0.0,
         };
 
@@ -444,6 +476,8 @@ mod tests {
         assert!(state.resource_storage.is_empty());
         assert!(state.world_position.is_none());
         assert!(state.screen_position.is_none());
+        assert!(state.player_id.is_none());
+        assert!(state.loot_bag_id.is_none());
     }
 
     #[test]

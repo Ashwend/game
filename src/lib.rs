@@ -1,6 +1,7 @@
 pub mod analytics;
 pub mod app;
 pub mod cli;
+pub mod combat;
 pub mod controller;
 pub mod crafting;
 pub mod items;

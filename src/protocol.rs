@@ -9,7 +9,7 @@ use crate::{
 pub type ClientId = u64;
 pub type SteamId = u64;
 
-pub const PROTOCOL_VERSION: u32 = 26;
+pub const PROTOCOL_VERSION: u32 = 28;
 pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_CHAT_LEN: usize = 240;
@@ -43,6 +43,16 @@ pub const MAX_VOICE_FRAME_BYTES: usize = 512;
 
 pub type DroppedItemId = u64;
 pub type ResourceNodeId = u64;
+/// Identifier for a loot bag (the container spawned at a dead
+/// player's feet — see `docs/pvp.md`). Stable for the bag's
+/// lifetime; the server picks it from a monotonic counter and uses
+/// it to route `LootBagCommand` traffic.
+pub type LootBagId = u64;
+/// Slot count inside a loot bag — sized to hold the full inventory
+/// plus actionbar of one player, the worst case any death can produce.
+/// Bags spawned by death start with their slots filled from index 0;
+/// trailing slots stay empty.
+pub const LOOT_BAG_SLOT_COUNT: usize = INVENTORY_SLOT_COUNT + ACTIONBAR_SLOT_COUNT;
 /// Identifier assigned by the server when a crafting job enters the queue.
 /// Stable for the job's lifetime so the client can target it with
 /// [`CraftingCommand::Cancel`] without worrying about queue reordering.
@@ -170,6 +180,19 @@ pub enum ClientMessage {
     /// validates the active tool, the target's range/cone, and applies
     /// per-tool damage; the structure despawns when health reaches 0.
     DamageDeployable(DamageDeployableCommand),
+    /// Swing the equipped tool at another player. Server re-validates
+    /// tool, range, view cone, and line-of-sight against the world
+    /// blocks; on success it applies armor-reduced damage and sends
+    /// `PlayerImpact` + `Knockback`. See `docs/pvp.md`.
+    AttackPlayer(AttackPlayerCommand),
+    /// Respawn the calling client after death. Rejected unless the
+    /// client is currently dead — the server is the authority on the
+    /// lifecycle state.
+    Respawn,
+    /// Open / close / move-items in a loot bag (the container spawned
+    /// at a dead player's feet). Server keeps the authoritative slots
+    /// and gates the move on the player having the bag open.
+    LootBag(LootBagCommand),
     /// Client's view-radius preference (Low/Medium/High). The server uses
     /// this to decide how many concentric chunk rings to include in this
     /// client's per-tick snapshot. Sent on connect and whenever the
@@ -221,6 +244,9 @@ impl ClientMessage {
             | Self::PlaceDeployable(_)
             | Self::Furnace(_)
             | Self::DamageDeployable(_)
+            | Self::AttackPlayer(_)
+            | Self::Respawn
+            | Self::LootBag(_)
             | Self::SetViewRadius { .. }
             | Self::Disconnect => PacketDelivery::Reliable,
             // Voice frames are each independent (Opus packets carry their own
@@ -351,6 +377,63 @@ pub struct PlaceDeployableCommand {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DamageDeployableCommand {
     pub id: DeployedEntityId,
+}
+
+/// Client → server PvP melee attack intent. Same shape as
+/// `DamageDeployableCommand` — only an id is shipped, the server reads
+/// the attacker's active tool itself so the client can't lie about
+/// what it's swinging.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AttackPlayerCommand {
+    pub target_player_id: ClientId,
+}
+
+/// Loot bag commands. Same Open/Close/Move shape as
+/// `FurnaceCommand` — the bag is essentially "a furnace with no
+/// smelt loop" from the wire layer's perspective. The server gates
+/// every move on the player having the bag open.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum LootBagCommand {
+    /// Open the bag's UI server-side. Replied to by replicating the
+    /// `OpenLootBagView` on `PlayerPrivate`.
+    Open { id: LootBagId },
+    /// Close the active bag, if any. Idempotent — no-op when there's
+    /// nothing open. If the bag is empty when this lands the server
+    /// also despawns the entity.
+    Close,
+    /// Move an `ItemStack` between any pair of {player inventory,
+    /// player actionbar, bag slot}. The server validates the bag is
+    /// the one currently open before applying.
+    Move {
+        from: LootBagSlotRef,
+        to: LootBagSlotRef,
+        quantity: Option<u16>,
+    },
+    /// Shift-click "send this somewhere useful" — same idea as
+    /// `FurnaceCommand::QuickTransfer`. From a bag slot, the stack
+    /// flows back into the player's inventory; from a player slot,
+    /// it lands in the first empty bag slot. Lets the player loot
+    /// a full bag without dragging every stack manually.
+    QuickTransfer { from: LootBagSlotRef },
+}
+
+/// Addressable slot used by [`LootBagCommand::Move`]. Refers either
+/// to a slot in the player's own inventory/actionbar or to one of
+/// the bag's [`LOOT_BAG_SLOT_COUNT`] slots.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum LootBagSlotRef {
+    PlayerInventory(usize),
+    PlayerActionbar(usize),
+    Bag(usize),
+}
+
+/// Per-client view of the bag currently open on the server.
+/// Replicated as a field of `PlayerPrivate.open_loot_bag` so the
+/// owning client renders the transfer UI off its replicated data.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OpenLootBagView {
+    pub id: LootBagId,
+    pub slots: Vec<Option<ItemStack>>,
 }
 
 /// Client → server messages for furnace interaction. The server gates
@@ -665,6 +748,34 @@ pub enum ServerMessage {
         position: Vec3Net,
         kind: ResourceImpactKind,
     },
+    /// A PvP attack landed on a player. Broadcast to every client
+    /// except the attacker (the attacker already produced their own
+    /// feedback via prediction). Drives the chip burst, hit audio,
+    /// floating damage number, and — on the target client only — the
+    /// camera-kick hit reaction.
+    PlayerImpact {
+        attacker: ClientId,
+        target: ClientId,
+        /// Chest-height world position of the target at impact time —
+        /// the visual + audio anchor.
+        position: Vec3Net,
+        tool: crate::items::ToolKind,
+        /// Post-armor damage in HP. Used for the floating damage text.
+        damage_dealt: u32,
+    },
+    /// Knockback impulse sent only to the target of a PvP hit. The
+    /// target applies it to its local velocity predictor; a cheater
+    /// ignoring this message only forfeits their own pushback.
+    Knockback {
+        impulse: Vec3Net,
+    },
+    /// Sent to the dying player when their HP reaches zero. Triggers the
+    /// death splash and the respawn UI. `killer_name` is resolved
+    /// server-side so the client doesn't have to look it up.
+    PlayerKilled {
+        killer: Option<ClientId>,
+        killer_name: Option<String>,
+    },
     /// A resource node was actually depleted (storage drained, node
     /// removed) — distinct from "the node just left this player's
     /// AoI". The client uses this to decide whether a node disappearing
@@ -795,6 +906,9 @@ impl ServerMessage {
             | Self::Chat(_)
             | Self::ItemMerged { .. }
             | Self::ResourceNodeDepleted { .. }
+            | Self::PlayerImpact { .. }
+            | Self::Knockback { .. }
+            | Self::PlayerKilled { .. }
             | Self::Toast(_) => PacketDelivery::Reliable,
             // Impact effects are pure cosmetic feedback. Dropping one is
             // far less bad than the extra latency of a reliable resend,

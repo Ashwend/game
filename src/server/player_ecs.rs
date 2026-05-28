@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     protocol::{
-        ClientId, OpenFurnaceView, PlayerCraftingState, PlayerInventoryState, SteamId, Vec3Net,
+        ClientId, OpenFurnaceView, OpenLootBagView, PlayerCraftingState, PlayerInventoryState,
+        SteamId, Vec3Net,
     },
     world::ChunkCoord,
 };
@@ -67,7 +68,50 @@ pub struct PlayerPrivate {
     /// replicated component alone — Phase 6.1 retargets the consumer
     /// here and the snapshot's `open_furnace` field goes away.
     pub open_furnace: Option<OpenFurnaceView>,
+    /// Full per-client view of the currently-opened loot bag, if any.
+    /// Mirrors `open_furnace` for the bag UI — the slot grid is
+    /// shipped here so the bag panel doesn't need a separate
+    /// network round-trip to render.
+    pub open_loot_bag: Option<OpenLootBagView>,
     pub last_processed_input: u64,
+}
+
+/// Authoritative damage reduction (0–100, percent). Replicated to every
+/// peer in the same chunk room because the future HUD wants to read its
+/// own armor straight off the replicated component instead of hand-rolling
+/// a separate `ServerMessage`. Today every player ships with `0` — there
+/// are no armor items defined — but the wire path is live so adding one
+/// is purely a server-side change.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlayerArmor(pub u8);
+
+/// Authoritative life state. Replicated to every peer in the room so
+/// remote clients can render the dead avatar with the tilt-and-fade
+/// "corpse" animation and the local owner can show the death splash.
+///
+/// `Alive` is the spawn default. `Dead` carries:
+///   - `since_tick`: when death happened, for the corpse animation
+///     timer.
+///   - `killer`: the attacker's client id, so the death splash on the
+///     victim's screen can name them.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub enum PlayerLifecycle {
+    #[default]
+    Alive,
+    Dead {
+        since_tick: u64,
+        killer: Option<ClientId>,
+    },
+}
+
+impl PlayerLifecycle {
+    pub fn is_alive(self) -> bool {
+        matches!(self, Self::Alive)
+    }
+
+    pub fn is_dead(self) -> bool {
+        !self.is_alive()
+    }
 }
 
 /// Anchor chunk for room subscription. Updated when the player crosses
@@ -116,6 +160,8 @@ pub struct PlayerView {
     pub steam_id: SteamId,
     pub public: PlayerPublic,
     pub private: PlayerPrivate,
+    pub armor: PlayerArmor,
+    pub lifecycle: PlayerLifecycle,
 }
 
 pub fn spawn_player_entity(world: &mut World, view: PlayerView, chunk: ChunkCoord) -> Entity {
@@ -128,6 +174,8 @@ pub fn spawn_player_entity(world: &mut World, view: PlayerView, chunk: ChunkCoor
             },
             view.public,
             view.private,
+            view.armor,
+            view.lifecycle,
             PlayerChunk(chunk),
         ))
         .id();
@@ -172,8 +220,11 @@ mod tests {
                 inventory: PlayerInventoryState::empty(),
                 crafting: PlayerCraftingState::default(),
                 open_furnace: None,
+                open_loot_bag: None,
                 last_processed_input: 0,
             },
+            armor: PlayerArmor::default(),
+            lifecycle: PlayerLifecycle::default(),
         }
     }
 
@@ -187,6 +238,8 @@ mod tests {
         assert_eq!(public.name, "Alice");
         let private = world.get::<PlayerPrivate>(entity).expect("private");
         assert_eq!(private.last_processed_input, 0);
+        let armor = world.get::<PlayerArmor>(entity).expect("armor");
+        assert_eq!(armor.0, 0);
 
         let despawned = despawn_player_entity(&mut world, 1);
         assert_eq!(despawned, Some(entity));

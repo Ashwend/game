@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::{
     items::DeployableKind,
-    protocol::{ClientId, DeployedEntityId, DroppedItemId, ResourceNodeId},
+    protocol::{ClientId, DeployedEntityId, DroppedItemId, LootBagId, ResourceNodeId},
     resources::ResourceNodeModel,
 };
 
@@ -45,6 +45,15 @@ pub(crate) struct NetworkDeployedEntity {
 /// despawns and respawns when the kind changes.
 #[derive(Component)]
 pub(crate) struct DeployablePlacementGhost;
+
+/// Visual marker for a death loot bag in the world. One per
+/// replicated `LootBag` entity; lets the pickup-target ray test
+/// distinguish bags from regular dropped items.
+#[derive(Component)]
+pub(crate) struct NetworkLootBag {
+    #[allow(dead_code)]
+    pub(crate) id: LootBagId,
+}
 
 /// Child entity attached to an active furnace, carrying the warm
 /// orange `PointLight` that pours out of the mouth. Despawned when the
