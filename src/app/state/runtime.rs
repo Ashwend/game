@@ -323,17 +323,6 @@ impl ClientRuntime {
                 // harmlessly until the player reconnects.
                 self.depleted_node_ids.insert(id);
             }
-            ServerMessage::ResourceNodeStorageChanged { .. } => {
-                // Applied directly to the replicated
-                // `ResourceNodeStorage` component by the network tick
-                // system before it reaches runtime — no log / history
-                // side-effect.
-            }
-            ServerMessage::DeployableHealthChanged { .. } => {
-                // Same as `ResourceNodeStorageChanged` — applied to
-                // the replicated `DeployableHealth` component by the
-                // network tick system before this point.
-            }
             ServerMessage::Voice { .. } => {
                 // Voice frames are dispatched as `IncomingVoiceMessage`
                 // events by the network tick system before this point —
@@ -422,10 +411,9 @@ impl ClientRuntime {
     }
 
     /// Initialise `predicted_local` from the Welcome message's
-    /// `local_seed` field. Phase 6.6 replaced the old
-    /// `seed_local_prediction_from_snapshot` (which searched a
-    /// full `WorldSnapshot.players` list) with this direct seed —
-    /// Welcome now carries only what prediction actually needs.
+    /// `local_seed` field. Welcome carries exactly the fields
+    /// prediction needs (`PlayerState`); remote players arrive via
+    /// Lightyear replication, not Welcome.
     pub(super) fn seed_local_prediction(&mut self, seed: &PlayerState) {
         self.predicted_local = Some(PlayerController::from_player_state(seed));
         self.input_sequence = self.input_sequence.max(seed.last_processed_input);

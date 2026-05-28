@@ -46,8 +46,9 @@ impl Plugin for LightyearProtocolPlugin {
         // that races slightly past its neighbours still gets played rather
         // than being silently dropped (which is what `Sequenced` would do
         // and what produced the periodic-flicker symptom in earlier tests).
-        // Higher priority than non-voice unreliable traffic so a noisy
-        // snapshot stream doesn't shoulder voice off the wire under load.
+        // Higher priority than non-voice unreliable traffic so a busy
+        // replication or movement stream doesn't shoulder voice off the
+        // wire under load.
         app.add_channel::<VoiceChannel>(ChannelSettings {
             mode: ChannelMode::UnorderedUnreliable,
             send_frequency: Duration::default(),
@@ -60,10 +61,12 @@ impl Plugin for LightyearProtocolPlugin {
         app.register_message::<ServerMessage>()
             .add_direction(NetworkDirection::ServerToClient);
 
-        // Phase 4/5: register the entity-state components so they replicate
-        // through Lightyear instead of riding `WorldSnapshot`. Both the
-        // server (which spawns the entities) and the client (which receives
-        // them) need the same registry so the wire bytes round-trip.
+        // Per-component replication: every networked entity ships through
+        // Lightyear's room-gated replication. The server spawns the mirror
+        // entity carrying these components (see `src/net/host.rs`); the
+        // client receives them automatically once it subscribes to the
+        // chunk room. Both sides need an identical registry here so the
+        // wire bytes round-trip.
         app.register_component::<ResourceNode>();
         app.register_component::<ResourceNodeStorage>();
         app.register_component::<DroppedItem>();

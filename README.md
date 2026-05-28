@@ -5,7 +5,10 @@
 [![Dependency Audit](https://github.com/danniehansen/game/actions/workflows/audit.yml/badge.svg)](https://github.com/danniehansen/game/actions/workflows/audit.yml)
 
 A Rust + Bevy first-person prototype. One authoritative server, one shared
-gameplay path, two ways in: loopback singleplayer and direct UDP multiplayer.
+gameplay path, two ways in: a loopback host launched in-process for
+singleplayer, or a remote dedicated host for multiplayer. Both are reached
+through the same Lightyear/UDP client — the only thing that changes is
+where the host runs.
 
 ## What you can do today
 
@@ -39,9 +42,9 @@ gameplay path, two ways in: loopback singleplayer and direct UDP multiplayer.
 - See feedback. Toasts surface pickup totals, gather events, and other
   server-driven notifications; the HUD shows health and the actionbar.
 - Save and resume. Each world is a compressed binary save that captures
-  player positions, inventories, dropped items, resource node state, and
-  admin lists. Disconnecting writes a snapshot; a returning player picks
-  up where they left off.
+  player positions, inventories, dropped items, resource node state,
+  deployables, and admin lists. Disconnecting persists the live state;
+  a returning player picks up where they left off.
 - Run a dedicated server with optional auth mode, custom world file, and
   a Unix admin socket for announcements and graceful shutdown from the CLI.
 
@@ -62,9 +65,13 @@ gameplay path, two ways in: loopback singleplayer and direct UDP multiplayer.
 - **postcard + zstd** for compact, versioned world saves on disk.
 - **Custom first-person controller** with substep collision, jump
   buffering, coyote time, and reconciliation hooks.
-- **Tick-based authoritative server** at 20 Hz with per-client snapshots,
-  reliable/unreliable channel selection per message type, and stale-client
-  timeout.
+- **Tick-based authoritative server** at 20 Hz. Per-entity state ships
+  through Lightyear's per-component replication, room-gated to the
+  AoI chunk ring around each player. Reliable/unreliable channel
+  selection per message type. Stale-client timeout. See
+  [docs/networking.md](docs/networking.md) for the replication
+  architecture and the load-bearing reliable side-channel pattern
+  for Lightyear 0.26.4's known post-spawn-diff bug.
 - **Platform-aware persistence** via `directories` for client settings and
   world saves under the OS app-data directory.
 - **Cargo workspace conventions**: `cargo check`, `cargo test`, rustfmt,
@@ -101,8 +108,11 @@ gameplay path, two ways in: loopback singleplayer and direct UDP multiplayer.
   local prediction.
 - **Shared server** (`src/server/`): authoritative state for both
   singleplayer loopback and dedicated multiplayer. Auth, sessions,
-  movement acceptance, inventory, dropped items, resource nodes, chat,
-  admin actions, snapshots — all split by concern.
+  movement acceptance, inventory, dropped items, resource nodes,
+  deployables, chat, admin actions — all split by concern. The
+  authoritative state lives in `HashMap`s on `GameServer`; exclusive
+  sync systems mirror those into ECS entities carrying the components
+  Lightyear replicates.
 - **Networking** (`src/net/`): one client wrapper, one host wrapper,
   one shared protocol module, plus a thin dedicated-server entrypoint.
 - **Controller** (`src/controller/`): the movement simulation that both
@@ -124,7 +134,9 @@ gameplay path, two ways in: loopback singleplayer and direct UDP multiplayer.
 ## Status notes
 
 - Movement is intentionally client-authoritative for responsiveness;
-  the server validates sequence/finite values and republishes snapshots.
+  the server validates sequence/finite values and writes the accepted
+  pose onto the player's mirror entity so Lightyear replicates it to
+  peers in the same chunk room.
 - Steam auth and the Steam server browser are placeholders — `AuthMode::Steam`
   currently rejects until a real `SteamGameServer` verifier is wired in.
 - Worlds are chunk-generated against a seed: each 64 m grid gets a biome

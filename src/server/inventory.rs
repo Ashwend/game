@@ -429,9 +429,10 @@ impl GameServer {
         if !any_leftover {
             // Node fully picked up — remove and schedule the fresh-position
             // respawn the gather path uses on depletion. Broadcast a
-            // `ResourceNodeDepleted` so clients can run the death effect
-            // (the snapshot diff can't otherwise distinguish a real
-            // depletion from an AoI-leave).
+            // `ResourceNodeDepleted` so clients can run the death effect:
+            // a Lightyear despawn alone can't distinguish a real depletion
+            // from an AoI-leave, so this reliable message is the
+            // disambiguator the client's pending-depletion grace map uses.
             self.resource_nodes.remove(&resource_node_id);
             self.chunk_manager
                 .handle_node_depleted(resource_node_id, self.tick);
@@ -443,7 +444,9 @@ impl GameServer {
             });
         } else if let Some(node_mut) = self.resource_nodes.get_mut(&resource_node_id) {
             // Partial pickup — leave the rest in the node's storage so
-            // the player can come back with a bigger bag.
+            // the player can come back with a bigger bag. The ECS
+            // mirror picks up the new storage on the next sync and
+            // Lightyear replicates the `ResourceNodeStorage` diff.
             node_mut.storage = new_storage;
         }
 

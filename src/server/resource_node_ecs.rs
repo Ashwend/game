@@ -7,10 +7,9 @@
 //! without a query.
 //!
 //! Splitting position/yaw/definition (rarely changes) from storage
-//! (mutated on every successful gather) keeps the per-component change
-//! detection useful when Lightyear replication is wired in a later
-//! phase — only the changed component ships per tick instead of the
-//! whole node.
+//! (mutated on every successful gather) keeps per-component change
+//! detection cheap: only the changed component ships through Lightyear
+//! per tick instead of the whole node.
 
 use std::collections::HashMap;
 
@@ -27,7 +26,7 @@ use crate::{
 /// component is effectively read-only post-spawn.
 ///
 /// `Serialize`/`Deserialize` are required by Lightyear's component
-/// replication (Phase 4) — the component travels the wire as-is.
+/// replication — the component travels the wire as-is.
 #[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResourceNode {
     pub id: ResourceNodeId,
@@ -121,73 +120,6 @@ pub fn despawn_resource_node_entity(world: &mut World, id: ResourceNodeId) -> Op
     Some(entity)
 }
 
-/// Materialise the wire-form snapshot state for a single node by entity.
-/// Used by the snapshot path and persistence to translate the ECS storage
-/// back to the protocol shape the client expects.
-pub fn read_resource_node_state(world: &World, entity: Entity) -> Option<ResourceNodeState> {
-    let node = world.get::<ResourceNode>(entity)?;
-    let storage = world.get::<ResourceNodeStorage>(entity)?;
-    Some(ResourceNodeState {
-        id: node.id,
-        definition_id: node.definition_id.clone(),
-        position: node.position,
-        yaw: node.yaw,
-        storage: storage.0.clone(),
-        // respawn_progress is a vestigial client-side hint that the
-        // server never sets — depleted nodes are removed entirely and
-        // re-emerge from chunk_manager.tick as a fresh entity at a
-        // new position.
-        respawn_progress: None,
-    })
-}
-
-/// Update the storage of an indexed node entity in place. No-op if the
-/// id isn't tracked or the stored value already matches. Returns `true`
-/// if a write actually happened (used by tests / future change-detection
-/// instrumentation).
-pub fn refresh_resource_node_storage(
-    world: &mut World,
-    id: ResourceNodeId,
-    storage: &[ItemStack],
-) -> bool {
-    let Some(entity) = world.resource::<ResourceNodeIndex>().get(id) else {
-        return false;
-    };
-    let Some(mut component) = world.get_mut::<ResourceNodeStorage>(entity) else {
-        return false;
-    };
-    if component.0 == storage {
-        return false;
-    }
-    component.0 = storage.to_vec();
-    true
-}
-
-/// Snapshot every live node into a HashMap keyed by id. Used by:
-/// - `chunk_manager.tick` (collision check against existing positions)
-/// - `world_save` (persistence — entire live set)
-/// - snapshot when no AoI filter is active (tests / handshake fallback)
-pub fn collect_resource_node_states(
-    world: &mut World,
-) -> HashMap<ResourceNodeId, ResourceNodeState> {
-    let mut out = HashMap::new();
-    let mut query = world.query::<(&ResourceNode, &ResourceNodeStorage)>();
-    for (node, storage) in query.iter(world) {
-        out.insert(
-            node.id,
-            ResourceNodeState {
-                id: node.id,
-                definition_id: node.definition_id.clone(),
-                position: node.position,
-                yaw: node.yaw,
-                storage: storage.0.clone(),
-                respawn_progress: None,
-            },
-        );
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,7 +132,6 @@ mod tests {
             position: Vec3Net::new(1.0, 0.0, 2.0),
             yaw: 0.5,
             storage: vec![ItemStack::new(crate::items::COAL_ID, quantity)],
-            respawn_progress: None,
         }
     }
 
@@ -217,53 +148,15 @@ mod tests {
             spawn_resource_node_entity(&mut world, coal_state(7, 3), ChunkCoord::new(0, 0));
 
         assert_eq!(world.resource::<ResourceNodeIndex>().get(7), Some(entity));
-        let state = read_resource_node_state(&world, entity).expect("state");
-        assert_eq!(state.id, 7);
-        assert_eq!(state.storage[0].quantity, 3);
+        let node = world.get::<ResourceNode>(entity).expect("node component");
+        let storage = world
+            .get::<ResourceNodeStorage>(entity)
+            .expect("storage component");
+        assert_eq!(node.id, 7);
+        assert_eq!(storage.0[0].quantity, 3);
 
         let despawned = despawn_resource_node_entity(&mut world, 7);
         assert_eq!(despawned, Some(entity));
         assert!(world.resource::<ResourceNodeIndex>().get(7).is_none());
-    }
-
-    #[test]
-    fn collect_returns_all_live_nodes_keyed_by_id() {
-        let mut world = fresh_world();
-        spawn_resource_node_entity(&mut world, coal_state(1, 5), ChunkCoord::new(0, 0));
-        spawn_resource_node_entity(&mut world, coal_state(2, 9), ChunkCoord::new(0, 0));
-
-        let collected = collect_resource_node_states(&mut world);
-        assert_eq!(collected.len(), 2);
-        assert_eq!(collected.get(&1).unwrap().storage[0].quantity, 5);
-        assert_eq!(collected.get(&2).unwrap().storage[0].quantity, 9);
-    }
-
-    #[test]
-    fn refresh_storage_writes_only_on_real_change() {
-        let mut world = fresh_world();
-        spawn_resource_node_entity(&mut world, coal_state(1, 5), ChunkCoord::new(0, 0));
-
-        // Same value → no write.
-        let unchanged = refresh_resource_node_storage(
-            &mut world,
-            1,
-            &[ItemStack::new(crate::items::COAL_ID, 5)],
-        );
-        assert!(!unchanged);
-
-        // Different value → write.
-        let changed = refresh_resource_node_storage(
-            &mut world,
-            1,
-            &[ItemStack::new(crate::items::COAL_ID, 4)],
-        );
-        assert!(changed);
-        let entity = world.resource::<ResourceNodeIndex>().get(1).unwrap();
-        let storage = world.get::<ResourceNodeStorage>(entity).unwrap();
-        assert_eq!(storage.0[0].quantity, 4);
-
-        // Unknown id → no-op.
-        let missing = refresh_resource_node_storage(&mut world, 999, &[]);
-        assert!(!missing);
     }
 }

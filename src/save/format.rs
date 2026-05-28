@@ -41,7 +41,14 @@ pub(super) const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 /// active flag + burn/smelt timers). Old v6 saves don't carry this
 /// field — rejected and surfaced in the worlds-screen "couldn't load"
 /// banner.
-pub(super) const SAVE_FORMAT_VERSION: u32 = 7;
+///
+/// `8` (Phase 7 of the Lightyear migration) dropped the vestigial
+/// `ResourceNodeState::respawn_progress` field. The server never wrote
+/// `Some(_)` to it post-Phase-1 — depleted nodes are removed entirely
+/// and regrow as fresh entities — so the field was always `None`. Old
+/// v7 saves carry the trailing `Option<f32>` and would deserialise
+/// wrong; rejected at load.
+pub(super) const SAVE_FORMAT_VERSION: u32 = 8;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
 /// at >100MB/s compression and ~1GB/s decompression.
 const ZSTD_LEVEL: i32 = 5;

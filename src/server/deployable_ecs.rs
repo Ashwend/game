@@ -43,8 +43,8 @@ where
 }
 
 /// Placement pose. Static after placement (deployables don't move), but
-/// kept on its own component so the snapshot/replication path can read
-/// it without pulling the rest of the entity.
+/// kept on its own component so Lightyear's per-component replication
+/// can ship it once on spawn without pulling the rest of the entity.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct DeployableTransform {
     pub position: Vec3Net,

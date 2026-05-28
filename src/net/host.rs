@@ -17,7 +17,8 @@ use anyhow::{Context, Result, bail};
 use bevy::{app::TerminalCtrlCHandlerPlugin, log::info_span, prelude::*};
 use lightyear::prelude::{
     ComponentReplicationOverrides, LinkOf, LocalAddr, MessageSender, NetworkTarget,
-    NetworkVisibility, Replicate, ReplicationSender, Room, RoomEvent, RoomPlugin, RoomTarget,
+    NetworkVisibility, Replicate, ReplicationGroup, ReplicationSender, Room, RoomEvent, RoomPlugin,
+    RoomTarget,
     server::{self, ClientOf},
 };
 
@@ -254,10 +255,11 @@ fn run_host(
     app.insert_resource(ServerConnections::default());
     app.insert_resource(TickAccumulator::default());
     app.insert_resource(HostShutdown::default());
-    // Mirror of `GameServer::resource_nodes` into ECS entities. Phase 4
-    // (Lightyear room replication) attaches `Replicate` to these entities;
-    // the index lets the gather/admin paths find an entity in O(1) once
-    // ownership is fully flipped in a later phase.
+    // Per-id → ECS-entity lookup for each networked entity type. The
+    // `HashMap`s on `GameServer` are still the authoritative store; the
+    // mirror sync systems below reconcile them into ECS entities that
+    // carry the Lightyear-replicated components, and these indexes let
+    // gather/admin paths resolve `id → entity` in O(1).
     app.insert_resource(crate::server::ResourceNodeIndex::default());
     app.insert_resource(crate::server::DroppedItemIndex::default());
     app.insert_resource(crate::server::DeployableIndex::default());
@@ -442,10 +444,22 @@ fn sync_resource_node_entities(world: &mut World) {
 
 /// Attach the room-gated replication marker to a freshly-spawned
 /// world-entity (resource node, dropped item, deployable). Adds
-/// `Replicate::to_clients(NetworkTarget::All) + NetworkVisibility` and
-/// then joins the chunk's room. `NetworkVisibility` narrows the
-/// `All` target down to the senders currently in a shared room with
-/// the entity — without it, every client would see every node.
+/// `Replicate::to_clients(NetworkTarget::All) + NetworkVisibility +
+/// ReplicationGroup::new_from_entity()` and then joins the chunk's room.
+/// `NetworkVisibility` narrows the `All` target down to the senders
+/// currently in a shared room with the entity — without it, every
+/// client would see every node.
+///
+/// `ReplicationGroup::new_from_entity()` is the fix for the upstream
+/// Lightyear 0.26.4 post-spawn-diff dropout bug. By default Lightyear
+/// puts every replicated entity in `DEFAULT_GROUP = ReplicationGroupId(0)`
+/// and gates change-detection sends on a per-group ack tick, so a
+/// frequently-updated entity in the group can advance the shared ack
+/// past a slowly-changing entity's local `Changed` mark and Lightyear
+/// concludes "nothing new to send" for the slow entity even though it
+/// just changed. Giving each entity its own group (derived from
+/// `Entity::to_bits()`) means each entity has its own ack tick and the
+/// share-the-tick race goes away. See [Networking § Replication](../../docs/networking.md#replication).
 ///
 /// `NetworkTarget::All` (not `None`) is load-bearing: the Phase 6a
 /// diagnostic showed Lightyear shipping the initial spawn but not
@@ -461,7 +475,11 @@ fn sync_resource_node_entities(world: &mut World) {
 fn attach_room_gated_replication(world: &mut World, entity: Entity, chunk: ChunkCoord) {
     let room_entity = ensure_chunk_room_world(world, chunk);
     if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
-        entity_mut.insert((Replicate::to_clients(NetworkTarget::All), NetworkVisibility));
+        entity_mut.insert((
+            Replicate::to_clients(NetworkTarget::All),
+            ReplicationGroup::new_from_entity(),
+            NetworkVisibility,
+        ));
     }
     world.trigger(RoomEvent {
         room: room_entity,
@@ -508,7 +526,13 @@ fn attach_player_replication(
 ) {
     let room_entity = ensure_chunk_room_world(world, chunk);
     if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
-        entity_mut.insert((Replicate::to_clients(NetworkTarget::All), NetworkVisibility));
+        // See `attach_room_gated_replication` for why
+        // `ReplicationGroup::new_from_entity()` is load-bearing.
+        entity_mut.insert((
+            Replicate::to_clients(NetworkTarget::All),
+            ReplicationGroup::new_from_entity(),
+            NetworkVisibility,
+        ));
         let mut overrides =
             ComponentReplicationOverrides::<crate::server::PlayerPrivate>::default().disable_all();
         if let Some(sender) = owner_sender {
@@ -755,18 +779,11 @@ fn sync_deployable_entities(world: &mut World) {
                     }
                     health.0 = view.health;
                 }
-                if let Some(mut active) = world.get_mut::<crate::server::DeployableActive>(entity) {
-                    // Write unconditionally so Bevy's `Changed<T>` fires
-                    // every mirror pass and Lightyear keeps re-shipping
-                    // the current value until acked. Empirically the
-                    // value-gated write loses diffs under rapid
-                    // furnace on/off toggling — a single boolean is
-                    // cheap enough that paying ~1 byte/tick/deployable
-                    // is worth the guaranteed convergence. The trace
-                    // line still only fires on a *real* value flip so
-                    // diagnostics stay readable.
+                if let Some(mut active) = world.get_mut::<crate::server::DeployableActive>(entity)
+                    && active.0 != view.active
+                {
                     #[cfg(feature = "replication-trace")]
-                    if active.0 != view.active {
+                    {
                         let before = active.0;
                         info!(
                             target: "replication_trace",
@@ -828,7 +845,7 @@ fn sync_player_entities(world: &mut World) {
                 if let Some(mut public) = world.get_mut::<crate::server::PlayerPublic>(entity)
                     && *public != view.public
                 {
-                    *public = view.public.clone();
+                    *public = view.public;
                 }
                 // Refresh private — inventory/crafting change on user action.
                 if let Some(mut private) = world.get_mut::<crate::server::PlayerPrivate>(entity)

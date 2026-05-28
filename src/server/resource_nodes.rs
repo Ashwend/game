@@ -26,12 +26,6 @@ impl GameServer {
         let Some(node_definition) = resource_node_definition(&node.definition_id) else {
             return Vec::new();
         };
-        // Regenerating nodes carry no payout — they're a ghost waiting to
-        // come back. Silently reject the gather so a swing hitting a
-        // regrowing node doesn't dispense items or fire impact effects.
-        if node.respawn_progress.is_some() {
-            return Vec::new();
-        }
         let Some(client) = self.clients.get(&client_id) else {
             return Vec::new();
         };
@@ -84,25 +78,19 @@ impl GameServer {
 
         let payout_id = payout.item_id.clone();
         let mut depleted = false;
-        let mut updated_storage: Option<Vec<ItemStack>> = None;
         if let Some(node) = self.resource_nodes.get_mut(&command.resource_node_id) {
             remove_resource_from_storage(node, &payout_id, accepted_quantity);
             depleted = resource_storage_is_empty(node);
-            // Snapshot the post-gather storage for the storage-update
-            // broadcast below — Lightyear drops the matching
-            // `ResourceNodeStorage` diff so we ship the new value
-            // ourselves on the reliable channel.
-            updated_storage = Some(node.storage.clone());
         }
         let mut envelopes = item_acquired_toast_envelopes(client_id, &payout_id, accepted_quantity);
         if depleted {
             // Remove the node entirely — the chunk manager schedules a
             // fresh-position respawn 5-15 min later in the same grid.
             // Broadcast a `ResourceNodeDepleted` so clients can run the
-            // death animation; without that, the diff can't tell
-            // "node depleted" apart from "node left this client's
-            // AoI" and would falsely animate the death of every node
-            // dropping out of view at every chunk-boundary crossing.
+            // death animation; without that, a Lightyear despawn alone
+            // can't tell "node depleted" apart from "node left this
+            // client's AoI" and would falsely animate the death of
+            // every node leaving view at every chunk-boundary crossing.
             self.resource_nodes.remove(&command.resource_node_id);
             self.chunk_manager
                 .handle_node_depleted(command.resource_node_id, self.tick);
@@ -112,23 +100,11 @@ impl GameServer {
                     id: command.resource_node_id,
                 },
             });
-        } else if let Some(storage) = updated_storage {
-            // Broadcast the new storage on the reliable channel.
-            // Lightyear's per-component delta replication empirically
-            // drops the matching `ResourceNodeStorage` diffs for
-            // entities a client received via a room AddSender event,
-            // so this side-channel keeps the client's local
-            // `ResourceNodeStorage` in sync after each gather. All
-            // clients with the entity in AoI apply it; clients that
-            // don't have the entity ignore the message.
-            envelopes.push(ServerEnvelope {
-                target: DeliveryTarget::Broadcast,
-                message: ServerMessage::ResourceNodeStorageChanged {
-                    id: command.resource_node_id,
-                    storage,
-                },
-            });
         }
+        // Storage post-gather: the ECS mirror picks up `node.storage`
+        // on the next sync and Lightyear replicates the
+        // `ResourceNodeStorage` diff. No reliable side-channel needed
+        // — see [Networking § Replication](../../docs/networking.md#replication).
 
         envelopes.push(ServerEnvelope {
             // Skip the swinger — their client already played the impact via

@@ -24,7 +24,7 @@ pub(crate) struct RemotePlayerEntities(pub(crate) std::collections::HashMap<Clie
 /// Reconciles the set of visual `NetworkPlayer` entities against the
 /// Lightyear-replicated `(Player, PlayerPublic)` entities. Spawn,
 /// despawn, and interpolation re-target all flow off the replicated
-/// components — no `WorldSnapshot` dependency.
+/// query — one visual entity per replicated entity.
 pub(crate) fn apply_snapshot_system(
     mut commands: Commands,
     time: Res<Time>,

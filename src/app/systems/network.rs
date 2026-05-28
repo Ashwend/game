@@ -14,7 +14,6 @@ use crate::{
     },
     items::ToolKind,
     protocol::{ResourceImpactKind, ServerMessage, ToastKind, Vec3Net},
-    server::{Deployable, DeployableHealth, ResourceNode, ResourceNodeStorage},
 };
 
 /// Fan-out writers for messages the network tick produces — voice frames,
@@ -36,8 +35,6 @@ pub(crate) fn network_tick_system(
     mut toasts: ResMut<ToastState>,
     mut writers: NetworkTickWriters,
     mut pending_session_end: ResMut<PendingSessionEndReason>,
-    mut resource_storage: Query<(&ResourceNode, &mut ResourceNodeStorage)>,
-    mut deployable_health: Query<(&Deployable, &mut DeployableHealth)>,
 ) {
     toasts.tick(time.delta_secs());
 
@@ -100,38 +97,6 @@ pub(crate) fn network_tick_system(
             writers
                 .remote_impacts
                 .write(remote_impact_event(*position, *kind));
-        }
-        if let ServerMessage::ResourceNodeStorageChanged { id, storage } = &message {
-            // Apply the storage side-channel directly to the
-            // replicated component so downstream consumers (gather
-            // tooltip, etc.) keep reading from the same ECS source of
-            // truth. See the matching server-side comment in
-            // `apply_gather_command`: Lightyear silently drops the
-            // post-spawn `ResourceNodeStorage` diff for entities a
-            // client received via room AddSender, so we patch the
-            // value here instead. Idempotent — replays just rewrite
-            // the same value.
-            for (node, mut local_storage) in &mut resource_storage {
-                if node.id == *id {
-                    local_storage.0 = storage.clone();
-                    break;
-                }
-            }
-        }
-        if let ServerMessage::DeployableHealthChanged { id, health } = &message {
-            // Same workaround as `ResourceNodeStorageChanged` — the
-            // server-side comment in `apply_damage_deployable_command`
-            // explains why Lightyear can't be trusted to ship this
-            // diff on its own. Apply locally to the replicated
-            // `DeployableHealth` component so the HP nameplate, the
-            // mid-frame visual reads, and any future consumers all
-            // see the new value immediately.
-            for (meta, mut local_health) in &mut deployable_health {
-                if meta.id == *id {
-                    local_health.0 = *health;
-                    break;
-                }
-            }
         }
         if let ServerMessage::Voice {
             speaker,

@@ -7,7 +7,7 @@ Screens live in `MenuState`: `MainMenu`, `Worlds`, `Multiplayer`, `Options`, `In
 Client resources live in `src/app/state/`:
 - `menu.rs`: screen selection and menu flags.
 - `dialogs.rs`: confirmation, create-world, edit-world, direct-connect, world-start, and notice dialog data.
-- `runtime.rs`: active `ClientSession`, snapshots, local prediction, client log messages, and shutdown task tracking.
+- `runtime.rs`: active `ClientSession`, local prediction state, client log messages, and shutdown task tracking. Per-entity authoritative state lives on Lightyear-replicated ECS entities (resource nodes, dropped items, deployables, peer players); the local player's replicated components are mirrored into `state/local_player.rs::LocalPlayerState` once per frame for UI helpers.
 - `look.rs`: camera yaw/pitch and sensitivity.
 - `backdrop.rs`: menu backdrop fade state.
 - `inventory.rs`: inventory UI state, drag state, pickup target, swing impacts, tool-swap animation state.

@@ -243,8 +243,7 @@ impl GameServer {
             return Vec::new();
         };
         entity.health = entity.health.saturating_sub(damage);
-        let new_health = entity.health;
-        let dead = new_health == 0;
+        let dead = entity.health == 0;
 
         // Apply the swing cooldown after a successful hit so spamming
         // damage swings doesn't bypass the gather throttle.
@@ -252,26 +251,13 @@ impl GameServer {
             client.next_gather_tick = self.tick + tool.cooldown_ticks.max(1);
         }
 
-        let mut envelopes = Vec::new();
         if dead {
             self.destroy_deployed_entity(command.id);
-        } else {
-            // Broadcast the new health on the reliable channel.
-            // Lightyear's per-component delta replication empirically
-            // drops `DeployableHealth` diffs for entities a client
-            // received via a room AddSender event, so this
-            // side-channel keeps the client's local component in sync
-            // after each hit (without it, the HP nameplate lagged
-            // 2-3 swings behind on the swinger's own screen).
-            envelopes.push(ServerEnvelope {
-                target: DeliveryTarget::Broadcast,
-                message: ServerMessage::DeployableHealthChanged {
-                    id: command.id,
-                    health: new_health,
-                },
-            });
         }
-        envelopes
+        // Survivor health change replicates via the ECS mirror →
+        // Lightyear's `DeployableHealth` diff. See
+        // [Networking § Replication](../../docs/networking.md#replication).
+        Vec::new()
     }
 
     /// Remove a placed structure entirely (gameplay death + tracker

@@ -121,10 +121,11 @@ See [Voice](voice.md) for the rest of the audio pipeline.
 
 ## When *not* to use this
 
-For end-to-end tests of a single concern (auth, snapshot, etc.), prefer
-the in-process tests under `src/net/tests.rs` and `src/server/tests/`
-that drive `ClientSession` against a `LightyearGameSession` without
-spawning child processes. `./cli multiplayer-test` is for the cases
-where you actually need to *see* two clients render the same world —
-voice chat, interpolation, animation, nameplate behaviour, UI
-synchronisation.
+For end-to-end tests of a single concern (auth, chat round-trip,
+gather, etc.), prefer the in-process tests under `src/net/tests.rs`
+and `src/server/tests/` that drive `ClientSession` against a
+`LightyearGameSession` without spawning child processes.
+`./cli multiplayer-test` is for the cases where you actually need to
+*see* two clients render the same world — voice chat, interpolation,
+animation, nameplate behaviour, UI synchronisation, or visual
+verification of replicated state on chunk crossings.

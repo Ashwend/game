@@ -7,7 +7,6 @@ fn coal_node(id: u64, quantity: u16) -> ResourceNodeState {
         position: Vec3Net::new(0.0, 0.0, -2.2),
         yaw: 0.0,
         storage: vec![ItemStack::new(COAL_ID, quantity)],
-        respawn_progress: None,
     }
 }
 

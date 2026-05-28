@@ -6,7 +6,7 @@ Flow:
 - Client builds `PlayerInput` from WASD, shift, space, and mouse look.
 - The client predicts locally with `PlayerController`, then sends `PlayerMovement` through the shared `ClientSession::Network` path.
 - Loopback singleplayer and direct multiplayer use the same Lightyear client/host message flow.
-- `GameServer` accepts newer finite movement states, normalizes/clamps view angles, and broadcasts authoritative snapshots.
+- `GameServer` accepts newer finite movement states, normalizes/clamps view angles, and writes the accepted pose onto the player's ECS mirror entity. Lightyear replicates the resulting `PlayerPublic` to peers in the same chunk room — see [Networking § Replication](networking.md#replication).
 - Future movement authority changes should happen in `PlayerController`, `ClientMessage`/`ServerMessage`, and `GameServer` so singleplayer and multiplayer keep exercising the same code.
 
 Movement lives in `src/controller/`:

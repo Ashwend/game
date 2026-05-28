@@ -113,20 +113,6 @@ pub fn despawn_dropped_item_entity(world: &mut World, id: DroppedItemId) -> Opti
     Some(entity)
 }
 
-/// Read back the wire-shape of a mirrored drop. Used by the snapshot
-/// fallback path and by tests.
-pub fn read_dropped_item(world: &World, entity: Entity) -> Option<DroppedWorldItem> {
-    let drop = world.get::<DroppedItem>(entity)?;
-    let transform = world.get::<DroppedItemTransform>(entity)?;
-    Some(DroppedWorldItem {
-        id: drop.id,
-        stack: drop.stack.clone(),
-        position: transform.position,
-        yaw: transform.yaw,
-        rotation: transform.rotation,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,9 +140,9 @@ mod tests {
         let entity = spawn_dropped_item_entity(&mut world, drop_state(3, 5), ChunkCoord::new(0, 0));
         assert_eq!(world.resource::<DroppedItemIndex>().get(3), Some(entity));
 
-        let readback = read_dropped_item(&world, entity).expect("readback");
-        assert_eq!(readback.id, 3);
-        assert_eq!(readback.stack.quantity, 5);
+        let drop = world.get::<DroppedItem>(entity).expect("drop component");
+        assert_eq!(drop.id, 3);
+        assert_eq!(drop.stack.quantity, 5);
 
         let despawned = despawn_dropped_item_entity(&mut world, 3);
         assert_eq!(despawned, Some(entity));

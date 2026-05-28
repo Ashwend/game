@@ -83,6 +83,11 @@ impl PlayerController {
         }
     }
 
+    /// Seed a `PlayerController` from a `PlayerState`. Used at
+    /// `ServerMessage::Welcome` time (prediction bootstrap from
+    /// `Welcome.local_seed`) and when applying a
+    /// `ServerMessage::Correction`. Post-Phase-6 `PlayerState` is
+    /// trimmed to exactly the fields prediction needs.
     pub fn from_player_state(state: &PlayerState) -> Self {
         Self::from_fields(
             state.position,

@@ -407,11 +407,16 @@ pub enum FurnaceSlotRef {
     Item(usize),
 }
 
-/// Per-client snapshot of the furnace currently open on the server.
+/// Per-client view of the furnace currently open on the server.
 /// `progress_fraction` is the smelt timer of the head input slot for
 /// quick UI rendering — the per-slot inputs themselves are not split
 /// into separate "input vs output" lists since items in a furnace slot
 /// can be either, depending on whether they're smeltable.
+///
+/// Replicated as a field of `PlayerPrivate.open_furnace`, not as a
+/// top-level wire message. Lives in `protocol.rs` because it's
+/// serialised across the wire (inside the parent component) and also
+/// shared between server build-up and client UI read-out.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OpenFurnaceView {
     pub id: DeployedEntityId,
@@ -546,6 +551,10 @@ impl PlayerInventoryState {
     }
 }
 
+/// Server-internal authoritative shape of a dropped item. Post-Phase-6
+/// this is no longer a wire type — the client receives `DroppedItem` +
+/// `DroppedItemTransform` via Lightyear replication. Still used as the
+/// `GameServer::dropped_items` map value and persisted on save.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DroppedWorldItem {
     pub id: DroppedItemId,
@@ -556,9 +565,11 @@ pub struct DroppedWorldItem {
     pub rotation: QuatNet,
 }
 
-/// Wire-shape of a placed structure (workbench, furnace, …). Carries the
-/// kind + tier so the client can pick the right mesh and the right
-/// crafting-station match without a separate registry lookup.
+/// Server-internal authoritative shape of a placed structure (workbench,
+/// furnace, …). Post-Phase-6 this is no longer a wire type — the client
+/// receives `Deployable` + `DeployableTransform` + `DeployableHealth` +
+/// `DeployableActive` via Lightyear replication. Still used as the
+/// `GameServer::deployed_entities` map value and persisted on save.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DeployedEntityState {
     pub id: DeployedEntityId,
@@ -576,6 +587,12 @@ pub struct DeployedEntityState {
     pub active: bool,
 }
 
+/// Server-internal authoritative shape of a live resource node. Post-Phase-6
+/// this is no longer a wire type — the client receives `ResourceNode` +
+/// `ResourceNodeStorage` via Lightyear replication instead. The struct
+/// stays here because the server still keys its in-memory map and the
+/// persisted save layer by this shape; Phase 1b would eventually fold it
+/// into the ECS entities.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResourceNodeState {
     pub id: ResourceNodeId,
@@ -583,15 +600,6 @@ pub struct ResourceNodeState {
     pub position: Vec3Net,
     pub yaw: f32,
     pub storage: Vec<ItemStack>,
-    /// `None` when the node is ready to be gathered. `Some(p)` while it's
-    /// regenerating after being depleted, with `p` in `0.0..1.0` — the
-    /// server ticks this up to 1.0 over the configured respawn window and
-    /// then resets storage and clears the flag.
-    ///
-    /// The client renders nodes with `Some(_)` as translucent ghosts that
-    /// fade up to full opacity. Gather attempts are rejected server-side
-    /// during this window.
-    pub respawn_progress: Option<f32>,
 }
 
 /// Per-frame intent emitted by the client controller. Never serialized — the
@@ -666,30 +674,6 @@ pub enum ServerMessage {
     /// the player's view ring.
     ResourceNodeDepleted {
         id: ResourceNodeId,
-    },
-    /// Authoritative storage update for a live resource node. Sent on
-    /// the reliable channel whenever a gather command decrements the
-    /// storage server-side, because Lightyear's per-component delta
-    /// replication empirically drops the `ResourceNodeStorage` updates
-    /// to clients that received the entity via a room AddSender event
-    /// (initial spawn ships but subsequent diffs don't reach the
-    /// client). Routing the change through a reliable `ServerMessage`
-    /// sidesteps the bug — the client applies it to the replicated
-    /// component locally so the existing readers (gather tooltip,
-    /// future consumers) stay on the ECS source of truth.
-    ResourceNodeStorageChanged {
-        id: ResourceNodeId,
-        storage: Vec<ItemStack>,
-    },
-    /// Authoritative health update for a placed deployable. Same
-    /// workaround pattern as `ResourceNodeStorageChanged` — the
-    /// replicated `DeployableHealth` diff is dropped by Lightyear
-    /// after the entity's initial spawn, so we ship the new value on
-    /// the reliable channel instead. Without this, an axe-on-furnace
-    /// hit took 2-3 swings to reflect on the client's HP nameplate.
-    DeployableHealthChanged {
-        id: DeployedEntityId,
-        health: u32,
     },
     /// Authoritative day/night clock. Sent every ~60 s as a routine drift
     /// realignment, and immediately after an admin command changes the
@@ -811,8 +795,6 @@ impl ServerMessage {
             | Self::Chat(_)
             | Self::ItemMerged { .. }
             | Self::ResourceNodeDepleted { .. }
-            | Self::ResourceNodeStorageChanged { .. }
-            | Self::DeployableHealthChanged { .. }
             | Self::Toast(_) => PacketDelivery::Reliable,
             // Impact effects are pure cosmetic feedback. Dropping one is
             // far less bad than the extra latency of a reliable resend,

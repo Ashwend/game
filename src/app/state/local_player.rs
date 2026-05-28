@@ -1,18 +1,15 @@
 //! Client-side mirror of the local player's replicated components.
 //!
-//! UI and input systems used to read the local player's inventory,
-//! crafting queue, and open-furnace state from the legacy
-//! `runtime.snapshot.players[i]` path. Phase 6.1 retargets them at the
+//! UI and input systems need to read the local player's inventory,
+//! crafting queue, and open-furnace state. Those live on the
 //! Lightyear-replicated `PlayerPublic` / `PlayerPrivate` components on
 //! the local player's entity. A single per-frame system scans the
 //! `Player` query to find whichever entity matches
-//! `ClientRuntime::client_id` and caches a clone of the components so UI
-//! helpers (which don't own a query themselves) can read the data via a
-//! plain `Res<LocalPlayerState>`.
+//! `ClientRuntime::client_id` and caches a clone of the components so
+//! UI helpers (which don't own a query themselves) can read the data
+//! via a plain `Res<LocalPlayerState>`.
 //!
-//! Clones are cheap for one entity per frame and match the
-//! `.cloned()` pattern the UI consumers already used against the
-//! snapshot.
+//! Clones are cheap for one entity per frame.
 
 use bevy::prelude::*;
 

@@ -17,16 +17,16 @@ use crate::{
 
 const CLIENT_STALE_TIMEOUT_TICKS: u64 = 20 * 10;
 
-/// How many ticks a chat bubble floats above the speaker before the server
-/// clears it from snapshots. Derived from
-/// [`CHAT_BUBBLE_DURATION_SECONDS`] so the visible lifetime is the same
-/// regardless of tick rate.
+/// How many ticks a chat bubble floats above the speaker before the
+/// server clears it from the replicated `PlayerPublic.chat_bubble`
+/// field. Derived from [`CHAT_BUBBLE_DURATION_SECONDS`] so the visible
+/// lifetime is the same regardless of tick rate.
 const CHAT_BUBBLE_DURATION_TICKS: u64 = (CHAT_BUBBLE_DURATION_SECONDS * SERVER_TICK_RATE_HZ) as u64;
 
 /// Cadence of the routine [`ServerMessage::WorldTime`] broadcast. One per
 /// real minute keeps clients aligned against drift without flooding the
-/// wire — the client integrates between snapshots using the same
-/// multiplier, so the visible cycle stays smooth in between.
+/// wire — the client integrates locally between broadcasts using the
+/// same multiplier, so the visible cycle stays smooth in between.
 const WORLD_TIME_BROADCAST_INTERVAL_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 60;
 
 /// Cadence of the routine [`ServerMessage::PerfStats`] broadcast — one
@@ -60,7 +60,7 @@ pub use deployable_ecs::{
 };
 pub use dropped_item_ecs::{
     DroppedItem, DroppedItemChunk, DroppedItemIndex, DroppedItemTransform,
-    despawn_dropped_item_entity, read_dropped_item, spawn_dropped_item_entity,
+    despawn_dropped_item_entity, spawn_dropped_item_entity,
 };
 pub use player_ecs::{
     Player, PlayerChunk, PlayerIndex, PlayerPrivate, PlayerPublic, PlayerView,
@@ -68,8 +68,7 @@ pub use player_ecs::{
 };
 pub use resource_node_ecs::{
     ResourceNode, ResourceNodeChunk, ResourceNodeIndex, ResourceNodeStorage,
-    collect_resource_node_states, despawn_resource_node_entity, read_resource_node_state,
-    spawn_resource_node_entity,
+    despawn_resource_node_entity, spawn_resource_node_entity,
 };
 pub use voice::VOICE_AUDIBLE_RANGE;
 
@@ -204,7 +203,7 @@ impl GameServer {
             let physics_body =
                 dropped_item_physics.spawn_body(item.position, Vec3Net::ZERO, item.yaw);
             // Anchor the reloaded drop to its chunk so a returning
-            // player immediately sees it in their snapshot — without
+            // player immediately sees it via room replication — without
             // this the item exists server-side but is filtered out of
             // every AoI ring until something nudges its position.
             chunk_manager.track_dropped_item(item.id, item.position);
@@ -236,9 +235,10 @@ impl GameServer {
                 .max(resource_nodes.keys().copied().max().unwrap_or(0) + 1),
         );
         // Deployables: restore from save and re-anchor to their chunks
-        // so the next snapshot picks them up immediately. The id counter
-        // floors above the highest known id so a future place can't
-        // collide with a persisted one.
+        // so the next mirror sync spawns the replicated entity and any
+        // in-AoI client picks them up. The id counter floors above the
+        // highest known id so a future place can't collide with a
+        // persisted one.
         let persisted_deployables = std::mem::take(&mut save.state.deployed_entities);
         let deployed_entities = Self::restore_deployed_entities(persisted_deployables);
         for entity in deployed_entities.values() {
@@ -497,7 +497,8 @@ impl GameServer {
         }
         // Chunk manager owns regrows now — fresh-position spawns 5-15 min
         // after a node is depleted. The result is spliced into the live
-        // node map so the snapshot path picks them up automatically.
+        // node map; the mirror sync turns it into a replicated entity
+        // on the next Update.
         let regrow = {
             let _span = info_span!("chunk_manager_tick").entered();
             self.chunk_manager.tick(self.tick, &self.resource_nodes)
@@ -522,9 +523,9 @@ impl GameServer {
             .tick
             .is_multiple_of(DROPPED_ITEM_CLEANUP_INTERVAL_TICKS)
         {
-            // Removal is silent — the next per-client snapshot omits the
-            // expired ids and the client's snapshot-diff system despawns the
-            // visuals, the same lifecycle path used for pickups and merges.
+            // Removal is silent — the next mirror sync drops the ECS
+            // entity, Lightyear ships the despawn to in-AoI clients, and
+            // the visual goes away. Same lifecycle as pickups and merges.
             self.despawn_aging_dropped_items();
         }
 
