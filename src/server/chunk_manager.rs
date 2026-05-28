@@ -46,7 +46,8 @@ use crate::{
     resources::spawn_resource_node,
     world::{
         ChunkClassification, ChunkCoord, ChunkDims, ChunkSpawn, ClassificationChannels, NodeKind,
-        PlayableBounds, base_capacity, generate_chunk_spawns, generate_world_spawns, splitmix64,
+        PlayableBounds, base_capacity, generate_chunk_spawns, generate_world_spawns, kind_target,
+        splitmix64,
     },
 };
 
@@ -845,10 +846,11 @@ impl ChunkManager {
 
 /// Build the per-chunk capacity tables for every coord in `dims`, leaving
 /// the live entity sets empty. Both `new_for_world` and `from_save` start
-/// here so the cap-derivation formula
-/// `round(base × (0.55 + ch × 0.7))` lives in exactly one place — a save
-/// loaded by code that scaled differently would silently drift on the
-/// next regrow.
+/// here, and the cap derivation defers to [`kind_target`] — the same
+/// formula the generator uses at world-gen time. Keeping them on one
+/// function means generation and regrow ceilings can't drift; a save
+/// loaded by code that scaled differently would silently over- or
+/// under-fill on the next regrow.
 fn build_empty_grids(world_seed: u64, dims: ChunkDims) -> HashMap<ChunkCoord, ActiveChunkState> {
     let mut grids: HashMap<ChunkCoord, ActiveChunkState> = HashMap::new();
     for coord in dims.coords() {
@@ -856,9 +858,8 @@ fn build_empty_grids(world_seed: u64, dims: ChunkDims) -> HashMap<ChunkCoord, Ac
         let classification = channels.classify();
         let mut capacity = HashMap::new();
         for kind in NodeKind::ALL {
-            let base = base_capacity(classification, kind) as f32;
             let channel = channels.channel_for(kind);
-            let target = (base * (0.55 + channel * 0.7)).round() as u16;
+            let target = kind_target(base_capacity(classification, kind), channel);
             if target > 0 {
                 capacity.insert(kind, target);
             }

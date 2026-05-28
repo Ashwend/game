@@ -3,7 +3,7 @@ pub mod chunk;
 pub use chunk::{
     CHUNK_SIZE_M, ChunkClassification, ChunkCoord, ChunkDims, ChunkRng, ChunkSpawn,
     ClassificationChannels, NodeKind, PlayableBounds, base_capacity, build_world_blocks, fbm,
-    generate_chunk_spawns, generate_world_spawns, splitmix64, value_noise_2d,
+    generate_chunk_spawns, generate_world_spawns, kind_target, splitmix64, value_noise_2d,
 };
 
 use serde::{Deserialize, Serialize};

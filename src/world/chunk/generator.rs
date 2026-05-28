@@ -24,6 +24,11 @@ use super::{
     noise::{ChunkRng, fbm, splitmix64},
 };
 
+/// Global multiplier on every kind's per-chunk target count. Bumped to
+/// 2.0 because the world read as barren at 1.0 — sparse chunks especially
+/// felt empty. Spacing rules still cap how dense a single kind can get, so
+/// dense chunks fill in less than 2× while sparse ones gain the most.
+const DENSITY_MULTIPLIER: f32 = 2.0;
 /// Octaves for the per-kind density mask used during rejection sampling.
 const KIND_MASK_OCTAVES: u32 = 3;
 /// Feature scale of the per-kind density mask. Smaller than the
@@ -44,6 +49,15 @@ const EDGE_MARGIN_M: f32 = 0.5;
 /// crude clutter is small and walk-through, so visual overlap reads as
 /// "ground variety" rather than as broken placement.
 const CROSS_KIND_MIN_SPACING_M: f32 = 0.7;
+
+/// Per-chunk target count for one kind: scale its classification base
+/// capacity by the channel intensity, then by the global density knob.
+/// Lives here so the generator and the regrow capacity table in
+/// `chunk_manager` share one formula — if they drift, generation and
+/// regrow ceilings disagree and the world either over- or under-fills.
+pub fn kind_target(base_capacity: u16, channel: f32) -> u16 {
+    (base_capacity as f32 * (0.55 + channel * 0.7) * DENSITY_MULTIPLIER).round() as u16
+}
 
 /// One node placement decided by the generator. Carries the kind so the
 /// caller can keep grid-level bookkeeping (capacity counts, regrow
@@ -141,8 +155,7 @@ pub fn generate_chunk_spawns(
         // A channel just above the classification threshold (~0.42) still
         // delivers ~0.7× capacity; a fully-saturated channel hits ~1.05×.
         let channel = channels.channel_for(kind);
-        let base = base_capacity(classification, kind) as f32;
-        let target = (base * (0.55 + channel * 0.7)).round() as u16;
+        let target = kind_target(base_capacity(classification, kind), channel);
         if target == 0 {
             continue;
         }
