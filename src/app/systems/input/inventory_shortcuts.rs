@@ -164,20 +164,17 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
     //  1. A resource node the held tool can actually harvest. Wrong-
     //     tool nodes turn into "no target" so the impact frame resolves
     //     to a clean miss instead of a hit the server would reject.
-    //  2. A placed structure the player is aimed at, *iff* they're
-    //     swinging a real tool (Hands don't damage furnaces/workbenches —
-    //     bare hands on stone feel wrong, and the no-tool case would
-    //     swing on every left-click which is jarring near placed
-    //     buildings the player is just standing next to).
+    //  2. A placed structure the player is aimed at. Reaching this
+    //     branch already implies a real tool is equipped — bare hands
+    //     and non-tool items return `None` from `equipped_tool_kind`,
+    //     which short-circuits the swing before this check runs.
     let target =
         if let Some(node_id) = params.pickup_target.resource_node_id.filter(|_| {
             equipped_tool_can_harvest_target(&params.local_player, &params.pickup_target)
         }) {
             Some(SwingTarget::ResourceNode(node_id))
         } else if let Some(deployable_id) = params.pickup_target.deployable_id
-            && equipped_tool
-                .map(|kind| kind != ToolKind::Hands)
-                .unwrap_or(false)
+            && equipped_tool.is_some()
         {
             Some(SwingTarget::Deployable(deployable_id))
         } else {
@@ -195,15 +192,28 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
     }
 }
 
+/// Tool kind backing a left-click swing. Only items with a real
+/// [`ToolProfile`] count — bare hands and non-tool items (ores, wood,
+/// deployables-in-hand) return `None` so the swing never starts and no
+/// impact-detection fires. Fists can't damage anything in this game
+/// today, and an in-hand ore swinging at a tree shouldn't pretend to.
 fn equipped_tool_kind(local_player: &crate::app::state::LocalPlayerState) -> Option<ToolKind> {
-    Some(equipped_tool_profile(local_player).kind)
+    local_player
+        .private
+        .as_ref()
+        .and_then(|private| private.inventory.active_actionbar_stack())
+        .and_then(|stack| item_definition(&stack.item_id))
+        .and_then(|definition| definition.tool)
+        .map(|profile| profile.kind)
 }
 
 /// Resolve the active actionbar item to a tool profile, falling back to
 /// the synthesized [`HANDS_TOOL`] when no tool is held. The server runs
 /// the same fallback in `apply_gather_command`, so the client's hit
 /// check and the server's payout decision stay aligned for crude
-/// (hand-harvestable) nodes.
+/// (hand-harvestable) nodes. Used only by the harvest-check path; the
+/// swing-start path goes through [`equipped_tool_kind`] which treats
+/// the empty-hand case as "no tool".
 fn equipped_tool_profile(local_player: &crate::app::state::LocalPlayerState) -> ToolProfile {
     local_player
         .private

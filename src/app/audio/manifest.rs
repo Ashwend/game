@@ -37,10 +37,20 @@ pub(crate) enum SoundId {
 
     // --- Tool impacts: (tool, surface successfully struck) ---
     ImpactAxeOnWood,
+    /// Axe striking anything that isn't wood (stone vein, ore, stone
+    /// structures). Mixed down from the pickaxe-ore pool — same hard-
+    /// surface transient, pitched up so it reads as the lighter hatchet
+    /// rather than the heavier pickaxe.
+    ImpactAxeGeneric,
     ImpactPickaxeOnStone,
     ImpactPickaxeOnCoal,
     ImpactPickaxeOnIron,
     ImpactPickaxeOnSulfur,
+    /// Pickaxe striking a wood entity (tree, wood structure). Mixed
+    /// down from the axe-wood pool — same wood-fracture transient,
+    /// pitched down so it reads as the heavier pickaxe rather than the
+    /// lighter hatchet.
+    ImpactPickaxeOnWood,
 
     // --- Swing whoosh (tool swung but no target) ---
     SwingMiss,
@@ -67,10 +77,12 @@ pub(crate) fn all_sound_ids() -> &'static [SoundId] {
         SoundId::WorldJoin,
         SoundId::TreeFall,
         SoundId::ImpactAxeOnWood,
+        SoundId::ImpactAxeGeneric,
         SoundId::ImpactPickaxeOnStone,
         SoundId::ImpactPickaxeOnCoal,
         SoundId::ImpactPickaxeOnIron,
         SoundId::ImpactPickaxeOnSulfur,
+        SoundId::ImpactPickaxeOnWood,
         SoundId::SwingMiss,
         SoundId::FootstepDirt,
         SoundId::FootstepWood,
@@ -186,10 +198,12 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
         // gives every swing audible variety without a third pre-rendered
         // variant per pool.
         SoundId::ImpactAxeOnWood
+        | SoundId::ImpactAxeGeneric
         | SoundId::ImpactPickaxeOnStone
         | SoundId::ImpactPickaxeOnCoal
         | SoundId::ImpactPickaxeOnIron
-        | SoundId::ImpactPickaxeOnSulfur => SoundDefaults {
+        | SoundId::ImpactPickaxeOnSulfur
+        | SoundId::ImpactPickaxeOnWood => SoundDefaults {
             category: SoundCategory::Sfx3d,
             base_gain_db: -10.0,
             spatial: Some(SpatialDefaults {
@@ -293,10 +307,26 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         "impacts/axe-wood-2.wav",
         "impacts/axe-wood-3.wav",
     ];
+    // Hatchet hitting anything but wood. Derived offline from
+    // pickaxe-ore-*.wav (pitched up +2 semitones, gain -1 dB) so the
+    // strike reads as the lighter hatchet against a hard surface.
+    static AXE_GENERIC: [&str; 3] = [
+        "impacts/axe-generic-1.wav",
+        "impacts/axe-generic-2.wav",
+        "impacts/axe-generic-3.wav",
+    ];
     static PICKAXE_ORE: [&str; 3] = [
         "impacts/pickaxe-ore-1.wav",
         "impacts/pickaxe-ore-2.wav",
         "impacts/pickaxe-ore-3.wav",
+    ];
+    // Pickaxe biting into a wood entity. Derived offline from
+    // axe-wood-*.wav (pitched down ~3 semitones, gain +1.2 dB) so the
+    // strike reads as the heavier pickaxe rather than the hatchet.
+    static PICKAXE_WOOD: [&str; 3] = [
+        "impacts/pickaxe-wood-1.wav",
+        "impacts/pickaxe-wood-2.wav",
+        "impacts/pickaxe-wood-3.wav",
     ];
     static MISS: [&str; 3] = [
         "impacts/miss-1.wav",
@@ -315,6 +345,7 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         SoundId::WorldJoin => &WORLD_JOIN,
         SoundId::TreeFall => &TREE_FALL,
         SoundId::ImpactAxeOnWood => &AXE_WOOD,
+        SoundId::ImpactAxeGeneric => &AXE_GENERIC,
         // Until each ore has its own captured impact pool, every pickaxe
         // ore-hit shares the existing ore-node recording. New pools land
         // by adding files under `assets/items/` and pointing this match
@@ -323,6 +354,7 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         | SoundId::ImpactPickaxeOnCoal
         | SoundId::ImpactPickaxeOnIron
         | SoundId::ImpactPickaxeOnSulfur => &PICKAXE_ORE,
+        SoundId::ImpactPickaxeOnWood => &PICKAXE_WOOD,
         SoundId::SwingMiss => &MISS,
         SoundId::FootstepDirt => footstep_paths("dirt"),
         SoundId::FootstepWood => footstep_paths("wood"),
@@ -344,11 +376,22 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
 pub(crate) fn impact_sound_for(tool: ToolKind, surface: SurfaceMaterial) -> Option<SoundId> {
     match (tool, surface) {
         (ToolKind::Axe, SurfaceMaterial::Wood) => Some(SoundId::ImpactAxeOnWood),
+        // Hatchet biting anything else (ore, stone vein, stone structure,
+        // hay, dirt). Generic mixed-down pickaxe-ore sample.
+        (ToolKind::Axe, _) => Some(SoundId::ImpactAxeGeneric),
+        (ToolKind::Pickaxe, SurfaceMaterial::Wood) => Some(SoundId::ImpactPickaxeOnWood),
         (ToolKind::Pickaxe, SurfaceMaterial::Stone) => Some(SoundId::ImpactPickaxeOnStone),
         (ToolKind::Pickaxe, SurfaceMaterial::Coal) => Some(SoundId::ImpactPickaxeOnCoal),
         (ToolKind::Pickaxe, SurfaceMaterial::Iron) => Some(SoundId::ImpactPickaxeOnIron),
         (ToolKind::Pickaxe, SurfaceMaterial::Sulfur) => Some(SoundId::ImpactPickaxeOnSulfur),
-        _ => None,
+        // Bare hands never reach here — the input layer suppresses the
+        // swing entirely when no real tool is equipped. The arm exists
+        // so the match stays exhaustive against future ToolKind /
+        // SurfaceMaterial additions.
+        (ToolKind::Hands, _)
+        | (ToolKind::Pickaxe, SurfaceMaterial::Dirt)
+        | (ToolKind::Pickaxe, SurfaceMaterial::Concrete)
+        | (ToolKind::Pickaxe, SurfaceMaterial::Sand) => None,
     }
 }
 
@@ -448,7 +491,29 @@ mod tests {
             impact_sound_for(ToolKind::Pickaxe, SurfaceMaterial::Iron),
             Some(SoundId::ImpactPickaxeOnIron)
         );
-        // No table entry → None (caller falls back to miss whoosh).
-        assert_eq!(impact_sound_for(ToolKind::Axe, SurfaceMaterial::Iron), None);
+        // Hatchet on a non-wood surface (e.g. striking a furnace) used
+        // to fall through to the miss whoosh — now it ships the
+        // mixed-down generic axe impact.
+        assert_eq!(
+            impact_sound_for(ToolKind::Axe, SurfaceMaterial::Iron),
+            Some(SoundId::ImpactAxeGeneric)
+        );
+        assert_eq!(
+            impact_sound_for(ToolKind::Axe, SurfaceMaterial::Stone),
+            Some(SoundId::ImpactAxeGeneric)
+        );
+        // Pickaxe on wood (e.g. striking a workbench) used to fall
+        // through to the miss whoosh — now it ships the mixed-down
+        // pickaxe-on-wood impact.
+        assert_eq!(
+            impact_sound_for(ToolKind::Pickaxe, SurfaceMaterial::Wood),
+            Some(SoundId::ImpactPickaxeOnWood)
+        );
+        // Bare hands never reach the dispatcher today, but the table
+        // still reports `None` so the fallback stays explicit.
+        assert_eq!(
+            impact_sound_for(ToolKind::Hands, SurfaceMaterial::Wood),
+            None
+        );
     }
 }

@@ -73,8 +73,15 @@ mod tests {
             impact_sound_for(ToolKind::Pickaxe, SurfaceMaterial::Coal),
             Some(SoundId::ImpactPickaxeOnCoal)
         );
-        // Axe on iron isn't a real combo today, so no entry exists; the
-        // play system will fall back to the miss whoosh.
-        assert_eq!(impact_sound_for(ToolKind::Axe, SurfaceMaterial::Iron), None);
+        // Wrong-tool-on-deployable used to fall through to a miss
+        // whoosh; the mixed-down pools cover those gaps now.
+        assert_eq!(
+            impact_sound_for(ToolKind::Axe, SurfaceMaterial::Stone),
+            Some(SoundId::ImpactAxeGeneric)
+        );
+        assert_eq!(
+            impact_sound_for(ToolKind::Pickaxe, SurfaceMaterial::Wood),
+            Some(SoundId::ImpactPickaxeOnWood)
+        );
     }
 }
