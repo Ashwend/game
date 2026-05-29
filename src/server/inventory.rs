@@ -1,9 +1,8 @@
 use crate::{
-    items::{ToolKind, can_pick_up, normalize_stack, stack_limit},
+    items::{ToolKind, can_pick_up, normalize_stack},
     protocol::{
-        ACTIONBAR_SLOT_COUNT, ClientId, DroppedItemId, DroppedWorldItem, INVENTORY_SLOT_COUNT,
-        InventoryCommand, ItemContainer, ItemContainerSlot, ItemStack, PlayerInventoryState,
-        ResourceNodeId, Vec3Net,
+        ACTIONBAR_SLOT_COUNT, ClientId, DroppedItemId, DroppedWorldItem, InventoryCommand,
+        ItemStack, PlayerInventoryState, ResourceNodeId, Vec3Net,
     },
     resources::{can_gather_resource_node, resource_node_definition},
 };
@@ -15,215 +14,17 @@ use super::{
     toasts::{inventory_full_toast_envelopes, item_acquired_toast_envelopes},
 };
 
+// The pure inventory math moved to `crate::inventory` so the client-side
+// prediction overlay can replay the exact same operations the server runs.
+// Re-exported here so existing `super::inventory::*` / `crate::server::inventory::*`
+// call sites across the server keep resolving unchanged.
+pub use crate::inventory::{
+    accepted_inventory_quantity, add_stack_to_inventory, insert_stack_at, move_stack,
+    offset_actionbar_slot, remove_stack, take_items_from_inventory,
+};
+
 pub(super) fn starting_inventory() -> PlayerInventoryState {
     PlayerInventoryState::empty()
-}
-
-pub(super) fn move_stack(
-    inventory: &mut PlayerInventoryState,
-    from: ItemContainerSlot,
-    to: ItemContainerSlot,
-    quantity: Option<u16>,
-) {
-    if from == to || !slot_exists(inventory, from) || !slot_exists(inventory, to) {
-        return;
-    }
-
-    let Some((moving, removed_all)) = remove_stack_for_move(inventory, from, quantity) else {
-        return;
-    };
-    let remainder = insert_stack_at(inventory, to, moving, removed_all);
-    if let Some(remainder) = remainder {
-        restore_stack(inventory, from, remainder);
-    }
-}
-
-fn remove_stack_for_move(
-    inventory: &mut PlayerInventoryState,
-    slot: ItemContainerSlot,
-    quantity: Option<u16>,
-) -> Option<(ItemStack, bool)> {
-    let source = slot_mut(inventory, slot)?;
-    let current = source.as_mut()?;
-    let amount = quantity
-        .unwrap_or(current.quantity)
-        .clamp(1, current.quantity);
-    let removed_all = amount == current.quantity;
-    let item_id = current.item_id.clone();
-    current.quantity -= amount;
-    if current.quantity == 0 {
-        *source = None;
-    }
-    Some((ItemStack::new(item_id, amount), removed_all))
-}
-
-pub(super) fn remove_stack(
-    inventory: &mut PlayerInventoryState,
-    slot: ItemContainerSlot,
-    quantity: Option<u16>,
-) -> Option<ItemStack> {
-    let source = slot_mut(inventory, slot)?;
-    let current = source.as_mut()?;
-    let amount = quantity
-        .unwrap_or(current.quantity)
-        .clamp(1, current.quantity);
-    let item_id = current.item_id.clone();
-    current.quantity -= amount;
-    if current.quantity == 0 {
-        *source = None;
-    }
-    Some(ItemStack::new(item_id, amount))
-}
-
-pub(super) fn insert_stack_at(
-    inventory: &mut PlayerInventoryState,
-    slot: ItemContainerSlot,
-    mut moving: ItemStack,
-    allow_swap: bool,
-) -> Option<ItemStack> {
-    moving = normalize_stack(&moving)?;
-    let target = slot_mut(inventory, slot)?;
-    match target {
-        None => {
-            *target = Some(moving);
-            None
-        }
-        Some(existing) if existing.item_id == moving.item_id => {
-            let limit = stack_limit(&existing.item_id).unwrap_or(1);
-            let room = limit.saturating_sub(existing.quantity);
-            let moved = room.min(moving.quantity);
-            existing.quantity += moved;
-            moving.quantity -= moved;
-            (moving.quantity > 0).then_some(moving)
-        }
-        Some(existing) if allow_swap => {
-            let displaced = std::mem::replace(existing, moving);
-            Some(displaced)
-        }
-        Some(_) => Some(moving),
-    }
-}
-
-fn restore_stack(inventory: &mut PlayerInventoryState, slot: ItemContainerSlot, stack: ItemStack) {
-    let Some(target) = slot_mut(inventory, slot) else {
-        return;
-    };
-    match target {
-        Some(existing) if existing.item_id == stack.item_id => {
-            let limit = stack_limit(&existing.item_id).unwrap_or(1);
-            existing.quantity = existing.quantity.saturating_add(stack.quantity).min(limit);
-        }
-        None => {
-            *target = Some(stack);
-        }
-        Some(_) => {}
-    }
-}
-
-/// Pull up to `quantity` units of `item_id` out of the inventory + actionbar.
-/// Walks slots in `actionbar → inventory` order (so the toolbar drains last,
-/// leaving the player's quick-access items intact when the bag has the same
-/// material). Returns the actual amount removed; less than `quantity` means
-/// there wasn't enough to satisfy the request.
-///
-/// Designed for the crafting consume path. The caller is expected to verify
-/// totals up-front so the partial case shouldn't fire in practice — but the
-/// function still drains what it can, since refusing to remove anything
-/// would leave the inventory in a worse state if a recipe definition ever
-/// goes out of sync with the take.
-pub(super) fn take_items_from_inventory(
-    inventory: &mut PlayerInventoryState,
-    item_id: &str,
-    quantity: u16,
-) -> u16 {
-    let mut remaining = quantity;
-    if remaining == 0 {
-        return 0;
-    }
-
-    for slot in inventory
-        .actionbar_slots
-        .iter_mut()
-        .chain(inventory.inventory_slots.iter_mut())
-    {
-        if remaining == 0 {
-            break;
-        }
-        let Some(stack) = slot.as_mut() else {
-            continue;
-        };
-        if stack.item_id.as_ref() != item_id {
-            continue;
-        }
-        let take = remaining.min(stack.quantity);
-        stack.quantity -= take;
-        remaining -= take;
-        if stack.quantity == 0 {
-            *slot = None;
-        }
-    }
-
-    quantity - remaining
-}
-
-pub(super) fn add_stack_to_inventory(
-    inventory: &mut PlayerInventoryState,
-    stack: ItemStack,
-) -> Option<ItemStack> {
-    let mut remaining = normalize_stack(&stack)?;
-
-    for index in 0..inventory.actionbar_slots.len() {
-        let slot = ItemContainerSlot::actionbar(index);
-        if inventory.actionbar_slots[index]
-            .as_ref()
-            .is_some_and(|existing| existing.item_id == remaining.item_id)
-        {
-            remaining = insert_stack_at(inventory, slot, remaining, false)?;
-        }
-    }
-
-    for index in 0..inventory.inventory_slots.len() {
-        let slot = ItemContainerSlot::inventory(index);
-        if inventory.inventory_slots[index]
-            .as_ref()
-            .is_some_and(|existing| existing.item_id == remaining.item_id)
-        {
-            remaining = insert_stack_at(inventory, slot, remaining, false)?;
-        }
-    }
-
-    for index in 0..inventory.inventory_slots.len() {
-        if inventory.inventory_slots[index].is_none() {
-            inventory.inventory_slots[index] = Some(remaining);
-            return None;
-        }
-    }
-
-    Some(remaining)
-}
-
-fn slot_mut(
-    inventory: &mut PlayerInventoryState,
-    slot: ItemContainerSlot,
-) -> Option<&mut Option<ItemStack>> {
-    match slot.container {
-        ItemContainer::Inventory => inventory.inventory_slots.get_mut(slot.slot),
-        ItemContainer::Actionbar => inventory.actionbar_slots.get_mut(slot.slot),
-    }
-}
-
-fn slot_exists(inventory: &PlayerInventoryState, slot: ItemContainerSlot) -> bool {
-    (match slot.container {
-        ItemContainer::Inventory => slot.slot < INVENTORY_SLOT_COUNT,
-        ItemContainer::Actionbar => slot.slot < ACTIONBAR_SLOT_COUNT,
-    }) && (match slot.container {
-        ItemContainer::Inventory => slot.slot < inventory.inventory_slots.len(),
-        ItemContainer::Actionbar => slot.slot < inventory.actionbar_slots.len(),
-    })
-}
-
-pub(super) fn offset_actionbar_slot(current: usize, offset: i8) -> usize {
-    (current as isize + offset as isize).rem_euclid(ACTIONBAR_SLOT_COUNT as isize) as usize
 }
 
 impl GameServer {
@@ -233,13 +34,15 @@ impl GameServer {
         command: InventoryCommand,
     ) -> Vec<ServerEnvelope> {
         match command {
-            InventoryCommand::Move { from, to, quantity } => {
+            InventoryCommand::Move {
+                from, to, quantity, ..
+            } => {
                 if let Some(client) = self.clients.get_mut(&client_id) {
                     move_stack(&mut client.inventory, from, to, quantity);
                 }
                 Vec::new()
             }
-            InventoryCommand::Drop { from, quantity } => {
+            InventoryCommand::Drop { from, quantity, .. } => {
                 let Some((stack, position, velocity, yaw)) =
                     self.clients.get_mut(&client_id).and_then(|client| {
                         remove_stack(&mut client.inventory, from, quantity).map(|stack| {
@@ -257,9 +60,9 @@ impl GameServer {
                 self.spawn_dropped_item(stack, position, velocity, yaw);
                 Vec::new()
             }
-            InventoryCommand::PickUp { dropped_item_id } => {
-                self.pick_up_dropped_item(client_id, dropped_item_id)
-            }
+            InventoryCommand::PickUp {
+                dropped_item_id, ..
+            } => self.pick_up_dropped_item(client_id, dropped_item_id),
             InventoryCommand::PickUpResourceNode { resource_node_id } => {
                 self.pick_up_resource_node(client_id, resource_node_id)
             }

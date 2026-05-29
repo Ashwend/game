@@ -11,15 +11,18 @@ use crate::{
         state::{
             ClientErrorToast, ClientRuntime, ClientSettings, ErrorToastSink, GatherInputState,
             ImpactEffectKind, InventoryUiState, KeyAction, MenuState, PendingAudioCue,
-            PendingImpactEffect, PickupTargetState, SwingImpact, SwingTarget, ToolSwapState,
+            PendingImpactEffect, PickupTargetState, PredictionState, SwingImpact, SwingTarget,
+            ToolSwapState,
         },
     },
+    inventory::accepted_inventory_quantity,
     items::{HANDS_TOOL, ToolKind, ToolProfile, item_definition},
     protocol::{
         ACTIONBAR_SLOT_COUNT, AttackPlayerCommand, ClientMessage, DamageDeployableCommand,
-        InventoryCommand, ItemContainerSlot, LootBagCommand, ResourceGatherCommand,
+        DroppedItemId, InventoryCommand, ItemContainerSlot, ItemStack, LootBagCommand,
+        ResourceGatherCommand, ResourceNodeId,
     },
-    resources::resource_node_definition,
+    resources::{next_payout_from_storage, resource_node_definition},
 };
 
 use super::gating::{gameplay_accepts_controls, primary_window_focused};
@@ -33,6 +36,7 @@ pub(crate) struct GameplayInventoryShortcutsParams<'w, 's> {
     mouse_wheel: MessageReader<'w, 's, MouseWheel>,
     runtime: ResMut<'w, ClientRuntime>,
     local_player: Res<'w, crate::app::state::LocalPlayerState>,
+    prediction: ResMut<'w, PredictionState>,
     gather_input: ResMut<'w, GatherInputState>,
     inventory_ui: ResMut<'w, InventoryUiState>,
     menu: ResMut<'w, MenuState>,
@@ -90,12 +94,18 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
         else {
             return;
         };
+        let from = ItemContainerSlot::actionbar(active_actionbar_slot);
+        // Predict the bag removal instantly; the dropped entity itself still
+        // appears via server replication (no local ground ghost in Tier 1).
+        let seq = params.prediction.alloc_seq();
+        params.prediction.push_drop(seq, from, Some(1));
         send_inventory_command(
             &mut params.runtime,
             &mut params.error_toasts,
             InventoryCommand::Drop {
-                from: ItemContainerSlot::actionbar(active_actionbar_slot),
+                from,
                 quantity: Some(1),
+                seq,
             },
         );
     }
@@ -106,10 +116,24 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
         .just_pressed(KeyAction::PickUp, &params.keys)
     {
         if let Some(dropped_item_id) = params.pickup_target.dropped_item_id {
+            // Predict the gain instantly and (when the whole stack fits) hide
+            // the world item. A rejected/partial pickup reconciles when the
+            // server advances `applied_action_seq`: the add evaporates / the
+            // item un-hides. `seq == 0` means "not predicted" (unknown stack
+            // or full bag) — the server still processes the command.
+            let seq = predict_pickup(
+                &mut params.prediction,
+                &params.local_player,
+                dropped_item_id,
+                &params.pickup_target,
+            );
             send_inventory_command(
                 &mut params.runtime,
                 &mut params.error_toasts,
-                InventoryCommand::PickUp { dropped_item_id },
+                InventoryCommand::PickUp {
+                    dropped_item_id,
+                    seq,
+                },
             );
             params.inventory_ui.note_pickup_intent();
         } else if let Some(resource_node_id) = params.pickup_target.resource_node_id
@@ -306,14 +330,98 @@ fn dispatch_resource_swing(
 
     params.camera_kick.trigger(impact.tool);
 
+    // Predict the payout landing in the bag instantly. The node's visual
+    // shrink / death stays server-driven (we never predict depletion). A
+    // rejected gather (range, cooldown, full bag) reverts when the server
+    // advances `applied_action_seq`. `seq == 0` means "not predicted".
+    let seq = predict_gather(
+        &mut params.prediction,
+        &params.local_player,
+        node_id,
+        &params.pickup_target,
+    );
     send_gameplay_message(
         &mut params.runtime,
         &mut params.error_toasts,
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: node_id,
+            seq,
         }),
         "gather command",
     );
+}
+
+/// Predict the inventory gain from a gather swing, returning the action
+/// sequence the command should carry (`0` = not predicted, so the server's
+/// `applied_action_seq` is left unchanged by this command).
+///
+/// Mirrors the server's `apply_gather_command` payout math exactly: the same
+/// [`next_payout_from_storage`] against the node's storage (folded with any
+/// unconfirmed predicted takes via [`PredictionState::effective_node_storage`])
+/// and the same [`accepted_inventory_quantity`] truncation against the bag. A
+/// full bag (`accepted == 0`) predicts nothing — matching the server, which
+/// only emits a "full" toast and applies the cooldown.
+fn predict_gather(
+    prediction: &mut PredictionState,
+    local_player: &crate::app::state::LocalPlayerState,
+    node_id: ResourceNodeId,
+    target: &PickupTargetState,
+) -> u32 {
+    let Some(inventory) = local_player
+        .private
+        .as_ref()
+        .map(|private| &private.inventory)
+    else {
+        return 0;
+    };
+    let tool = equipped_tool_profile(local_player);
+    let storage = prediction.effective_node_storage(node_id, &target.resource_storage);
+    let Some(payout) = next_payout_from_storage(&storage, tool) else {
+        return 0;
+    };
+    let mut effective = inventory.clone();
+    let accepted = accepted_inventory_quantity(&mut effective, payout.clone());
+    if accepted == 0 {
+        return 0;
+    }
+    let seq = prediction.alloc_seq();
+    prediction.push_gather(seq, node_id, ItemStack::new(payout.item_id, accepted));
+    seq
+}
+
+/// Predict a dropped-item pickup, returning the action sequence the command
+/// should carry (`0` = not predicted). Predicts only the portion that fits
+/// the bag (mirroring the server's partial pickup), and hides the world item
+/// only when the *whole* stack fits — the server removes the world entity
+/// from existence only on a full pickup.
+fn predict_pickup(
+    prediction: &mut PredictionState,
+    local_player: &crate::app::state::LocalPlayerState,
+    dropped_item_id: DroppedItemId,
+    target: &PickupTargetState,
+) -> u32 {
+    let Some(inventory) = local_player
+        .private
+        .as_ref()
+        .map(|private| &private.inventory)
+    else {
+        return 0;
+    };
+    let Some(stack) = target.stack.clone() else {
+        return 0;
+    };
+    let mut effective = inventory.clone();
+    let accepted = accepted_inventory_quantity(&mut effective, stack.clone());
+    if accepted == 0 {
+        return 0;
+    }
+    let seq = prediction.alloc_seq();
+    if accepted == stack.quantity {
+        prediction.push_pickup(seq, dropped_item_id, stack);
+    } else {
+        prediction.push_add(seq, ItemStack::new(stack.item_id, accepted));
+    }
+    seq
 }
 
 /// Damage swing on a placed structure: same camera kick + per-tool
@@ -669,6 +777,7 @@ mod tests {
                 open_furnace: None,
                 open_loot_bag: None,
                 last_processed_input: 0,
+                applied_action_seq: 0,
             }),
             lifecycle: None,
         }

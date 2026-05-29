@@ -294,6 +294,17 @@ impl GameServer {
         }
     }
 
+    /// Advance a client's optimistic-prediction high-water mark. Called for
+    /// every predicted command (gather, inventory move/drop/pickup) *before*
+    /// the handler runs, so the value advances whether the command is accepted
+    /// or rejected — the client relies on this to prune and revert pending
+    /// overlay ops. `max` guards against any out-of-order or duplicate seq.
+    fn note_action_seq(&mut self, client_id: ClientId, seq: u32) {
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.applied_action_seq = client.applied_action_seq.max(seq);
+        }
+    }
+
     pub fn receive(&mut self, client_id: ClientId, message: ClientMessage) -> Vec<ServerEnvelope> {
         self.mark_client_seen(client_id);
 
@@ -346,9 +357,20 @@ impl GameServer {
                 }]
             }
             ClientMessage::Command { text } => self.apply_command(client_id, text),
-            ClientMessage::Inventory(command) => self.apply_inventory_command(client_id, command),
+            ClientMessage::Inventory(command) => {
+                // Advance the prediction high-water mark before dispatch so a
+                // rejected command (out of range, full bag, …) still lets the
+                // client prune and revert its optimistic overlay op.
+                if let Some(seq) = command.action_seq() {
+                    self.note_action_seq(client_id, seq);
+                }
+                self.apply_inventory_command(client_id, command)
+            }
             ClientMessage::Crafting(command) => self.apply_crafting_command(client_id, command),
-            ClientMessage::Gather(command) => self.apply_gather_command(client_id, command),
+            ClientMessage::Gather(command) => {
+                self.note_action_seq(client_id, command.seq);
+                self.apply_gather_command(client_id, command)
+            }
             ClientMessage::PlaceDeployable(command) => {
                 self.apply_place_deployable_command(client_id, command)
             }
@@ -502,6 +524,7 @@ impl GameServer {
                 open_furnace: self.open_furnace_view_for(client.client_id),
                 open_loot_bag: self.open_loot_bag_view_for(client.client_id),
                 last_processed_input: client.controller.last_processed_input,
+                applied_action_seq: client.applied_action_seq,
             },
             armor: PlayerArmor(client.armor),
             lifecycle: client.lifecycle,
@@ -708,6 +731,10 @@ pub(super) struct ServerClient {
     /// "one open container at a time" rule as furnaces — opening a
     /// bag closes any previously-open bag. Cleared on disconnect.
     pub(super) open_loot_bag: Option<crate::protocol::LootBagId>,
+    /// Highest optimistic-prediction action sequence processed for this client
+    /// (advanced for accepted *and* rejected predicted commands). Mirrored into
+    /// `PlayerPrivate::applied_action_seq` for the client's reconcile pass.
+    pub(super) applied_action_seq: u32,
 }
 
 #[derive(Debug, Clone)]

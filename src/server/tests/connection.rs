@@ -268,6 +268,7 @@ fn world_save_round_trips_player_inventory_and_position() {
                 slot: 4,
             },
             quantity: None,
+            seq: 0,
         }),
     );
     drop(envelopes);

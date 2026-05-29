@@ -392,8 +392,19 @@ pub fn best_resource_node_target<'a>(
 }
 
 pub fn next_resource_payout(node: &ResourceNodeState, tool: ToolProfile) -> Option<ItemStack> {
+    next_payout_from_storage(&node.storage, tool)
+}
+
+/// Core payout rule shared by the server's `next_resource_payout` and the
+/// client-side gather prediction. Takes raw `storage` instead of a full
+/// [`ResourceNodeState`] so the client can compute the same payout straight
+/// from the replicated `ResourceNodeStorage` component (folded with any
+/// unconfirmed predicted takes) without fabricating a node. Keeping a single
+/// implementation is what guarantees the client's optimistic gain matches the
+/// server's authoritative payout.
+pub fn next_payout_from_storage(storage: &[ItemStack], tool: ToolProfile) -> Option<ItemStack> {
     let quantity = tool.gather_amount.max(1);
-    node.storage
+    storage
         .iter()
         .find(|stack| stack.quantity > 0)
         .map(|stack| ItemStack::new(stack.item_id.clone(), stack.quantity.min(quantity)))
@@ -518,6 +529,53 @@ mod tests {
             next_resource_payout(&node, tool),
             Some(ItemStack::new(COAL_ID, 2))
         );
+    }
+
+    /// The client-side gather prediction computes its payout straight from a
+    /// replicated `ResourceNodeStorage` via [`next_payout_from_storage`],
+    /// while the server runs [`next_resource_payout`] over the full node. They
+    /// must agree for every storage + tool combination, or a prediction would
+    /// land a different gain than the server confirms.
+    #[test]
+    fn client_storage_payout_matches_server_node_payout() {
+        let tools = [
+            crate::items::HANDS_TOOL,
+            ToolProfile {
+                kind: ToolKind::Pickaxe,
+                tier: 1,
+                gather_amount: 3,
+                cooldown_ticks: 1,
+            },
+            ToolProfile {
+                kind: ToolKind::Axe,
+                tier: 2,
+                gather_amount: 6,
+                cooldown_ticks: 6,
+            },
+        ];
+        let storages = [
+            Vec::new(),
+            vec![ItemStack::new(COAL_ID, 1)],
+            vec![ItemStack::new(COAL_ID, 5)],
+            vec![ItemStack::new(COAL_ID, 100)],
+        ];
+
+        for storage in &storages {
+            let node = ResourceNodeState {
+                id: 1,
+                definition_id: COAL_NODE_ID.to_owned(),
+                position: Vec3Net::ZERO,
+                yaw: 0.0,
+                storage: storage.clone(),
+            };
+            for tool in tools {
+                assert_eq!(
+                    next_resource_payout(&node, tool),
+                    next_payout_from_storage(storage, tool),
+                    "client/server payout diverged for {storage:?} + {tool:?}"
+                );
+            }
+        }
     }
 
     #[test]

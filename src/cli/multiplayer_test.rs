@@ -25,6 +25,12 @@ const DEFAULT_NAMES: [&str; 2] = ["Alpha", "Bravo"];
 /// as a separate player. Different from the default offline ID
 /// (`76561197960287930`) to avoid colliding with a real local-dev session.
 const TEST_STEAM_IDS: [u64; 2] = [76_561_197_960_287_001, 76_561_197_960_287_002];
+/// Map size for the ephemeral test world — the smallest procedural map so
+/// the helper boots fast and streams cheaply. Single source of truth: the
+/// seed save is generated at this size *and* the spawned `server --map-size`
+/// flag is derived from it, so the two can't drift apart and trip the
+/// "save was generated as X but Y was requested" guard in `cli.rs`.
+const TEST_MAP_SIZE: ProceduralMapSize = ProceduralMapSize::Small;
 /// How long we wait for the server to advertise its listening port before
 /// giving up. The server prints `Lightyear game server listening on …` once
 /// it's ready, so on a warm rebuild this typically takes a few hundred ms.
@@ -73,7 +79,7 @@ pub(super) fn run_multiplayer_test(port: u16, names_override: Option<Vec<String>
         None,
         MapType::Procedural {
             seed: 0,
-            size: ProceduralMapSize::Small,
+            size: TEST_MAP_SIZE,
         },
     );
     // Flag both test clients as admins so they can drive `/test-kit` and
@@ -162,6 +168,17 @@ enum ServerReady {
     Exited,
 }
 
+/// The `server --map-size <token>` value matching a [`ProceduralMapSize`].
+/// Mirrors the clap `MapSizeArg` value-enum tokens in `cli.rs`; the
+/// exhaustive match means a new map size forces this to be updated.
+fn map_size_cli_token(size: ProceduralMapSize) -> &'static str {
+    match size {
+        ProceduralMapSize::Small => "small",
+        ProceduralMapSize::Medium => "medium",
+        ProceduralMapSize::Large => "large",
+    }
+}
+
 fn spawn_server(
     exe: &std::path::Path,
     save: &std::path::Path,
@@ -174,6 +191,11 @@ fn spawn_server(
         .arg(addr.to_string())
         .arg("--world")
         .arg(save)
+        // Match the size the seed save was generated at. Without this the
+        // server falls back to its `--map-size` default and the size guard
+        // rejects the (smaller) seed save.
+        .arg("--map-size")
+        .arg(map_size_cli_token(TEST_MAP_SIZE))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());

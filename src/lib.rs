@@ -5,6 +5,7 @@ pub mod combat;
 pub mod controller;
 pub mod crafting;
 pub mod game_balance;
+pub mod inventory;
 pub mod items;
 pub mod net;
 pub mod protocol;

@@ -44,9 +44,9 @@ use self::{
     state::{
         ClientErrorToast, ClientRuntime, ClientSettingsStore, CraftingHudState, CraftingUiState,
         DeployablePlacementState, GatherInputState, InventoryUiState, LocalPlayerState, LookState,
-        MenuBackdropVisibility, MenuState, OptionsUiState, PickupTargetState, RemoteImpactEvent,
-        SaveStore, SessionShutdownTasks, SteamUser, TestModeConfig, ToastState, ToolSwapState,
-        update_local_player_state_system,
+        MenuBackdropVisibility, MenuState, OptionsUiState, PickupTargetState, PredictionState,
+        RemoteImpactEvent, SaveStore, SessionShutdownTasks, SteamUser, TestModeConfig, ToastState,
+        ToolSwapState, apply_prediction_overlay_system, update_local_player_state_system,
     },
     systems::{
         AutoConnectRequest, CameraImpactKick, CameraMotionEffects, ClientSystemSet,
@@ -213,6 +213,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .insert_resource(MenuBackdropVisibility::default())
         .insert_resource(ClientRuntime::default())
         .insert_resource(LocalPlayerState::default())
+        .init_resource::<PredictionState>()
         .insert_resource(SessionShutdownTasks::default())
         .insert_resource(InventoryUiState::default())
         .insert_resource(CraftingUiState::default())
@@ -357,7 +358,15 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         )
         .add_systems(
             Update,
-            update_local_player_state_system.in_set(ClientSystemSet::LocalPlayerSync),
+            // Sync the local player's replicated components, then fold the
+            // optimistic prediction overlay onto the fresh inventory. Chained
+            // so the overlay always reads the just-synced replicated base.
+            (
+                update_local_player_state_system,
+                apply_prediction_overlay_system,
+            )
+                .chain()
+                .in_set(ClientSystemSet::LocalPlayerSync),
         )
         .add_systems(
             Update,

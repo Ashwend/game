@@ -1,6 +1,6 @@
 use crate::{
     items::{HANDS_TOOL, ToolProfile, item_definition},
-    protocol::{ClientId, ItemStack, ResourceGatherCommand, ResourceImpactKind, ServerMessage},
+    protocol::{ClientId, ResourceGatherCommand, ResourceImpactKind, ServerMessage},
     resources::{
         ResourceNodeModel, can_gather_resource_node, next_resource_payout,
         remove_resource_from_storage, resource_node_definition, resource_storage_is_empty,
@@ -9,7 +9,7 @@ use crate::{
 
 use super::{
     DeliveryTarget, GameServer, ServerEnvelope,
-    inventory::add_stack_to_inventory,
+    inventory::accepted_inventory_quantity,
     movement::player_eye_position,
     toasts::{inventory_full_toast_envelopes, item_acquired_toast_envelopes},
 };
@@ -135,45 +135,5 @@ pub(super) fn resource_impact_kind(model: ResourceNodeModel) -> ResourceImpactKi
         ResourceNodeModel::BranchPile => ResourceImpactKind::Branches,
         ResourceNodeModel::SurfaceStone => ResourceImpactKind::SurfaceStone,
         ResourceNodeModel::HayGrass => ResourceImpactKind::HayGrass,
-    }
-}
-
-fn accepted_inventory_quantity(
-    inventory: &mut crate::protocol::PlayerInventoryState,
-    stack: ItemStack,
-) -> u16 {
-    let requested = stack.quantity;
-    match add_stack_to_inventory(inventory, stack) {
-        Some(remainder) => requested.saturating_sub(remainder.quantity),
-        None => requested,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        items::{BASIC_PICKAXE_ID, COAL_ID},
-        protocol::ItemStack,
-    };
-
-    #[test]
-    fn accepted_quantity_reports_partial_inventory_insert() {
-        let mut inventory = crate::protocol::PlayerInventoryState::empty();
-        inventory.inventory_slots[0] = Some(ItemStack::new(COAL_ID, 199));
-        for slot in inventory.inventory_slots.iter_mut().skip(1) {
-            *slot = Some(ItemStack::new(BASIC_PICKAXE_ID, 1));
-        }
-
-        assert_eq!(
-            accepted_inventory_quantity(&mut inventory, ItemStack::new(COAL_ID, 3)),
-            1
-        );
-        assert_eq!(
-            inventory.inventory_slots[0]
-                .as_ref()
-                .map(|stack| stack.quantity),
-            Some(200)
-        );
     }
 }

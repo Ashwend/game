@@ -15,7 +15,7 @@ use bevy::prelude::*;
 
 use crate::server::{Player, PlayerLifecycle, PlayerPrivate, PlayerPublic};
 
-use super::{ClientRuntime, MenuState};
+use super::{ClientRuntime, MenuState, PredictionState};
 
 /// Refreshed every frame from the replicated Player entity whose
 /// `Player.client_id == runtime.client_id`. `None` until the local
@@ -77,4 +77,46 @@ pub(crate) fn update_local_player_state_system(
     state.public = None;
     state.private = None;
     state.lifecycle = None;
+}
+
+/// Fold the client-side optimistic prediction overlay onto the just-synced
+/// local player inventory. Runs immediately after
+/// [`update_local_player_state_system`] (same `LocalPlayerSync` set), so it
+/// reads the freshly-replicated inventory and overwrites
+/// `LocalPlayerState.private.inventory` *in place* with the predicted result.
+/// Every downstream consumer (inventory UI, actionbar, gather eligibility,
+/// `observe_inventory` sound/flash) reads through that field, so none of them
+/// need to know prediction exists — they just see the optimistic state, which
+/// reconciles to the authoritative one as the server confirms or rejects each
+/// action.
+///
+/// See [`PredictionState`] for the reconciliation invariant. The raw
+/// replicated inventory still lives on the `PlayerPrivate` ECS component; this
+/// only overwrites the per-frame cache clone.
+pub(crate) fn apply_prediction_overlay_system(
+    runtime: Res<ClientRuntime>,
+    mut prediction: ResMut<PredictionState>,
+    mut state: ResMut<LocalPlayerState>,
+) {
+    // No local session, or the player is down: a corpse has no pending
+    // inventory actions, and respawn hands back a fresh authoritative
+    // inventory that stale ops must not be replayed onto. Clear and bail.
+    let disconnected = runtime.client_id.is_none();
+    let dead = matches!(state.lifecycle, Some(PlayerLifecycle::Dead { .. }));
+    if disconnected || dead {
+        prediction.clear();
+        return;
+    }
+
+    let Some(private) = state.private.as_mut() else {
+        return;
+    };
+
+    // Drop ops the server has already processed (confirmed or rejected),
+    // then replay the survivors onto the replicated base for display.
+    prediction.prune(private.applied_action_seq);
+    if prediction.is_idle() {
+        return;
+    }
+    private.inventory = prediction.rebuild_effective(&private.inventory);
 }

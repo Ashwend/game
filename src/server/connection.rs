@@ -89,6 +89,7 @@ impl GameServer {
             next_craft_job_id: 1,
             open_furnace: None,
             open_loot_bag: None,
+            applied_action_seq: 0,
         };
 
         let initial_position = client.controller.position;

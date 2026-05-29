@@ -58,7 +58,8 @@ pub(crate) use death_splash::tick_death_splash_system;
 use super::state::{
     ClientErrorToast, ClientRuntime, ClientSettings, CraftingHudState, CraftingUiState,
     InventorySoundEvent, LocalPlayerState, MAX_UI_SCALE, MIN_UI_SCALE, MenuBackdropVisibility,
-    MenuState, OptionsUiState, SaveStore, Screen, SessionShutdownTasks, SteamUser, ToastState,
+    MenuState, OptionsUiState, PredictionState, SaveStore, Screen, SessionShutdownTasks, SteamUser,
+    ToastState,
 };
 use super::systems::PendingSessionEndReason;
 use super::voice::VoiceState;
@@ -95,6 +96,7 @@ pub(crate) struct UiResources<'w, 's> {
     pending_session_end: ResMut<'w, PendingSessionEndReason>,
     client_network: Res<'w, ClientNetwork>,
     local_player: Res<'w, LocalPlayerState>,
+    prediction: ResMut<'w, PredictionState>,
 }
 
 /// egui zoom factor (pixels-per-point multiplier) for the player's chosen UI
@@ -262,6 +264,8 @@ pub(crate) fn ui_system(
                     ctx,
                     &resources.menu,
                     &mut resources.runtime,
+                    &mut resources.prediction,
+                    &resources.local_player,
                     &mut resources.inventory_ui,
                     &mut resources.error_toasts,
                 );

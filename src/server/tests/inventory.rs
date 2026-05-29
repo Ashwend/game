@@ -35,6 +35,53 @@ fn connect_seeds_empty_authoritative_inventory() {
 }
 
 #[test]
+fn applied_action_seq_tracks_predicted_inventory_commands_only() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+
+    // A pickup of a non-existent dropped item is rejected (no inventory
+    // change), but the predicted command's seq must still advance.
+    server.receive(
+        client_id,
+        ClientMessage::Inventory(InventoryCommand::PickUp {
+            dropped_item_id: 999_999,
+            seq: 7,
+        }),
+    );
+    assert_eq!(
+        server.clients.get(&client_id).unwrap().applied_action_seq,
+        7,
+        "rejected pickup still advances the high-water mark (fix #1)"
+    );
+
+    // A move (even a no-op over empty slots) advances the mark too.
+    server.receive(
+        client_id,
+        ClientMessage::Inventory(InventoryCommand::Move {
+            from: ItemContainerSlot::inventory(0),
+            to: ItemContainerSlot::inventory(1),
+            quantity: None,
+            seq: 12,
+        }),
+    );
+    assert_eq!(
+        server.clients.get(&client_id).unwrap().applied_action_seq,
+        12
+    );
+
+    // Non-predicted variants carry no seq and must leave the mark untouched.
+    server.receive(
+        client_id,
+        ClientMessage::Inventory(InventoryCommand::SelectActionbarSlot { slot: 2 }),
+    );
+    assert_eq!(
+        server.clients.get(&client_id).unwrap().applied_action_seq,
+        12,
+        "non-predicted inventory commands must not advance the mark"
+    );
+}
+
+#[test]
 fn inventory_move_splits_merges_and_populates_actionbar() {
     let mut server = server();
     let client_id = connect_host(&mut server);
@@ -52,6 +99,7 @@ fn inventory_move_splits_merges_and_populates_actionbar() {
             from: ItemContainerSlot::inventory(0),
             to: ItemContainerSlot::actionbar(2),
             quantity: Some(5),
+            seq: 0,
         }),
     );
 
@@ -78,6 +126,7 @@ fn inventory_move_splits_merges_and_populates_actionbar() {
             from: ItemContainerSlot::actionbar(2),
             to: ItemContainerSlot::inventory(0),
             quantity: None,
+            seq: 0,
         }),
     );
 
@@ -110,6 +159,7 @@ fn actionbar_selection_and_drop_are_server_authoritative() {
             from: ItemContainerSlot::inventory(2),
             to: ItemContainerSlot::actionbar(3),
             quantity: None,
+            seq: 0,
         }),
     );
     server.receive(
@@ -121,6 +171,7 @@ fn actionbar_selection_and_drop_are_server_authoritative() {
         ClientMessage::Inventory(InventoryCommand::Drop {
             from: ItemContainerSlot::actionbar(3),
             quantity: None,
+            seq: 0,
         }),
     );
 
@@ -151,6 +202,7 @@ fn actionbar_q_style_drop_removes_one_item_from_stack() {
             from: ItemContainerSlot::inventory(0),
             to: ItemContainerSlot::actionbar(2),
             quantity: Some(5),
+            seq: 0,
         }),
     );
     server.receive(
@@ -158,6 +210,7 @@ fn actionbar_q_style_drop_removes_one_item_from_stack() {
         ClientMessage::Inventory(InventoryCommand::Drop {
             from: ItemContainerSlot::actionbar(2),
             quantity: Some(1),
+            seq: 0,
         }),
     );
 
@@ -193,7 +246,10 @@ fn pickup_merges_actionbar_stacks_before_inventory() {
 
     server.receive(
         client_id,
-        ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
+        ClientMessage::Inventory(InventoryCommand::PickUp {
+            dropped_item_id,
+            seq: 0,
+        }),
     );
 
     let client = server.clients.get(&client_id).expect("client exists");
@@ -230,6 +286,7 @@ fn pickup_requires_looking_at_dropped_item_and_restores_inventory() {
         ClientMessage::Inventory(InventoryCommand::Drop {
             from: ItemContainerSlot::inventory(2),
             quantity: None,
+            seq: 0,
         }),
     );
     let dropped_item_id = first_dropped_item_id(&server);
@@ -239,7 +296,10 @@ fn pickup_requires_looking_at_dropped_item_and_restores_inventory() {
     server.receive(client_id, ClientMessage::Movement(look_away));
     server.receive(
         client_id,
-        ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
+        ClientMessage::Inventory(InventoryCommand::PickUp {
+            dropped_item_id,
+            seq: 0,
+        }),
     );
     assert_eq!(server.dropped_items_iter().count(), 1);
 
@@ -247,7 +307,10 @@ fn pickup_requires_looking_at_dropped_item_and_restores_inventory() {
     server.receive(client_id, ClientMessage::Movement(look_at_drop));
     server.receive(
         client_id,
-        ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
+        ClientMessage::Inventory(InventoryCommand::PickUp {
+            dropped_item_id,
+            seq: 0,
+        }),
     );
 
     let client = server.clients.get(&client_id).expect("client exists");
@@ -281,7 +344,10 @@ fn pickup_emits_success_toast_to_requesting_client() {
 
     let envelopes = server.receive(
         client_id,
-        ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
+        ClientMessage::Inventory(InventoryCommand::PickUp {
+            dropped_item_id,
+            seq: 0,
+        }),
     );
 
     let toast = envelopes
@@ -330,7 +396,10 @@ fn partial_pickup_decrements_dropped_stack_and_keeps_it_in_world() {
 
     server.receive(
         client_id,
-        ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
+        ClientMessage::Inventory(InventoryCommand::PickUp {
+            dropped_item_id,
+            seq: 0,
+        }),
     );
 
     {
@@ -354,7 +423,10 @@ fn partial_pickup_decrements_dropped_stack_and_keeps_it_in_world() {
     // accepted quantity into the dropped item.
     server.receive(
         client_id,
-        ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
+        ClientMessage::Inventory(InventoryCommand::PickUp {
+            dropped_item_id,
+            seq: 0,
+        }),
     );
     let dropped: Vec<_> = server.dropped_items_iter().collect();
     assert_eq!(dropped.len(), 1);
@@ -390,7 +462,10 @@ fn pickup_into_full_inventory_emits_warning_toast() {
 
     let envelopes = server.receive(
         client_id,
-        ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
+        ClientMessage::Inventory(InventoryCommand::PickUp {
+            dropped_item_id,
+            seq: 0,
+        }),
     );
 
     let toast = envelopes
@@ -432,7 +507,10 @@ fn failed_pickup_emits_no_toast() {
 
     let envelopes = server.receive(
         client_id,
-        ClientMessage::Inventory(InventoryCommand::PickUp { dropped_item_id }),
+        ClientMessage::Inventory(InventoryCommand::PickUp {
+            dropped_item_id,
+            seq: 0,
+        }),
     );
 
     assert!(

@@ -9,7 +9,7 @@ use crate::{
 pub type ClientId = u64;
 pub type SteamId = u64;
 
-pub const PROTOCOL_VERSION: u32 = 28;
+pub const PROTOCOL_VERSION: u32 = 29;
 pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_CHAT_LEN: usize = 240;
@@ -328,13 +328,19 @@ pub enum InventoryCommand {
         from: ItemContainerSlot,
         to: ItemContainerSlot,
         quantity: Option<u16>,
+        /// Optimistic-prediction sequence number (see [`InventoryCommand::action_seq`]).
+        seq: u32,
     },
     Drop {
         from: ItemContainerSlot,
         quantity: Option<u16>,
+        /// Optimistic-prediction sequence number (see [`InventoryCommand::action_seq`]).
+        seq: u32,
     },
     PickUp {
         dropped_item_id: DroppedItemId,
+        /// Optimistic-prediction sequence number (see [`InventoryCommand::action_seq`]).
+        seq: u32,
     },
     /// Quick-pick a crude (hand-harvestable) resource node — surface
     /// stones, branch piles, grass tufts. Server treats this as an
@@ -353,9 +359,31 @@ pub enum InventoryCommand {
     },
 }
 
+impl InventoryCommand {
+    /// The optimistic-prediction sequence number for the client-predicted
+    /// variants (`Move`/`Drop`/`PickUp`); `None` for variants the client does
+    /// not predict. The server advances the per-client `applied_action_seq` to
+    /// this value — whether it accepts or rejects the command — so the client
+    /// can prune the matching pending overlay op and either confirm or revert.
+    pub fn action_seq(&self) -> Option<u32> {
+        match self {
+            Self::Move { seq, .. } | Self::Drop { seq, .. } | Self::PickUp { seq, .. } => {
+                Some(*seq)
+            }
+            Self::PickUpResourceNode { .. }
+            | Self::SelectActionbarSlot { .. }
+            | Self::SelectActionbarOffset { .. } => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResourceGatherCommand {
     pub resource_node_id: ResourceNodeId,
+    /// Optimistic-prediction sequence number. The client tags each predicted
+    /// gather so the server can echo it back via `PlayerPrivate.applied_action_seq`,
+    /// letting the client prune the matching pending inventory overlay op.
+    pub seq: u32,
 }
 
 /// Client → server placement intent for a deployable structure. The
@@ -631,6 +659,17 @@ impl PlayerInventoryState {
         self.actionbar_slots
             .get(self.active_actionbar_slot)
             .and_then(Option::as_ref)
+    }
+
+    /// Read-only access to the stack in a specific slot. Returns `None` for
+    /// an empty *or* out-of-range slot. Used by the client-side move
+    /// prediction to gate on an empty destination.
+    pub fn slot(&self, slot: ItemContainerSlot) -> Option<&ItemStack> {
+        match slot.container {
+            ItemContainer::Inventory => self.inventory_slots.get(slot.slot),
+            ItemContainer::Actionbar => self.actionbar_slots.get(slot.slot),
+        }
+        .and_then(Option::as_ref)
     }
 }
 

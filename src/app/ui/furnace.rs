@@ -307,6 +307,7 @@ mod tests {
                 open_furnace,
                 open_loot_bag: None,
                 last_processed_input: 0,
+                applied_action_seq: 0,
             }),
             lifecycle: None,
         }

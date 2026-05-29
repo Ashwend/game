@@ -5,7 +5,7 @@ use bevy::{ecs::change_detection::Ref, light::NotShadowCaster, prelude::*};
 use crate::{
     app::{
         scene::{ItemVisualAssets, NetworkDroppedItem},
-        state::ClientRuntime,
+        state::{ClientRuntime, PredictionState},
     },
     protocol::{DroppedItemId, QuatNet},
     server::{DroppedItem, DroppedItemTransform},
@@ -42,10 +42,12 @@ pub(crate) struct DroppedItemEntities(pub(crate) HashMap<DroppedItemId, Entity>)
 /// [`MAX_DROPPED_ITEM_SPAWNS_PER_FRAME`]), retarget interpolation on
 /// real transform updates (`Ref::last_changed()` as the per-id tick),
 /// despawn any that left the AoI ring.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_dropped_items_system(
     mut commands: Commands,
     time: Res<Time>,
     runtime: Res<ClientRuntime>,
+    prediction: Res<PredictionState>,
     assets: Res<ItemVisualAssets>,
     mut entities: ResMut<DroppedItemEntities>,
     mut dropped_entities: Query<
@@ -75,6 +77,14 @@ pub(crate) fn apply_dropped_items_system(
     let mut visible_ids: HashSet<DroppedItemId> = HashSet::new();
     let mut spawn_budget = MAX_DROPPED_ITEM_SPAWNS_PER_FRAME;
     for (drop, transform) in &replicated {
+        // Suppressed by an unconfirmed predicted pickup: leave it out of
+        // `visible_ids` so the cleanup pass below despawns any existing
+        // visual, making the item vanish instantly. If the server rejects
+        // the pickup, `applied_action_seq` advances, the id un-hides, and
+        // the item respawns from the still-replicated entity next frame.
+        if prediction.is_dropped_hidden(drop.id) {
+            continue;
+        }
         visible_ids.insert(drop.id);
         let tick = transform.last_changed().get() as u64;
         let target = dropped_item_transform_from(&transform);

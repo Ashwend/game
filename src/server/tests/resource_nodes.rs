@@ -48,6 +48,7 @@ fn pickaxe_depletes_node_and_removes_it_from_the_world() {
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
+            seq: 0,
         }),
     );
 
@@ -64,6 +65,73 @@ fn pickaxe_depletes_node_and_removes_it_from_the_world() {
         slot.as_ref()
             .is_some_and(|stack| stack.item_id.as_ref() == COAL_ID && stack.quantity == 3)
     }));
+}
+
+#[test]
+fn applied_action_seq_advances_on_accepted_and_rejected_gather() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    equip_basic_tools(&mut server, client_id);
+    server.resource_nodes.clear();
+    // High storage so the node never depletes during the test.
+    server.resource_nodes.insert(99, coal_node(99, 100));
+    look_at_test_node(&mut server, client_id);
+    server.receive(
+        client_id,
+        ClientMessage::Inventory(InventoryCommand::SelectActionbarSlot { slot: 1 }),
+    );
+
+    // Accepted gather (looking at the node, correct tool) advances the mark.
+    server.receive(
+        client_id,
+        ClientMessage::Gather(ResourceGatherCommand {
+            resource_node_id: 99,
+            seq: 5,
+        }),
+    );
+    assert_eq!(
+        server.clients.get(&client_id).unwrap().applied_action_seq,
+        5,
+        "accepted gather advances the prediction high-water mark"
+    );
+
+    // Look away → out of range (and still inside cooldown): the gather is
+    // rejected, leaving the inventory untouched — but the mark MUST still
+    // advance so the client can prune and revert its optimistic overlay op.
+    let inventory_before = server.clients.get(&client_id).unwrap().inventory.clone();
+    let mut look_away = movement(2, Vec3Net::ZERO);
+    look_away.pitch = 1.4;
+    server.receive(client_id, ClientMessage::Movement(look_away));
+    server.receive(
+        client_id,
+        ClientMessage::Gather(ResourceGatherCommand {
+            resource_node_id: 99,
+            seq: 9,
+        }),
+    );
+    let client = server.clients.get(&client_id).unwrap();
+    assert_eq!(
+        client.applied_action_seq, 9,
+        "rejected gather still advances the high-water mark (fix #1)"
+    );
+    assert_eq!(
+        client.inventory, inventory_before,
+        "rejected gather must not change the inventory"
+    );
+
+    // A stale / duplicate (lower) seq never walks the mark backward.
+    server.receive(
+        client_id,
+        ClientMessage::Gather(ResourceGatherCommand {
+            resource_node_id: 99,
+            seq: 4,
+        }),
+    );
+    assert_eq!(
+        server.clients.get(&client_id).unwrap().applied_action_seq,
+        9,
+        "a stale seq must not move the high-water mark backward"
+    );
 }
 
 #[test]
@@ -84,6 +152,7 @@ fn second_gather_on_removed_node_is_silently_dropped() {
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
+            seq: 0,
         }),
     );
     assert!(!server.resource_nodes.contains_key(&99));
@@ -98,6 +167,7 @@ fn second_gather_on_removed_node_is_silently_dropped() {
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
+            seq: 0,
         }),
     );
     assert!(
@@ -129,6 +199,7 @@ fn successful_gather_emits_success_toast_to_requesting_client() {
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
+            seq: 0,
         }),
     );
 
@@ -185,6 +256,7 @@ fn gather_into_full_inventory_emits_warning_toast_and_locks_cooldown() {
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
+            seq: 0,
         }),
     );
 
@@ -225,6 +297,7 @@ fn failed_gather_emits_no_toast() {
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
+            seq: 0,
         }),
     );
 
@@ -255,6 +328,7 @@ fn successful_gather_broadcasts_impact_to_peers_only() {
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
+            seq: 0,
         }),
     );
 
@@ -294,6 +368,7 @@ fn failed_gather_emits_no_impact_broadcast() {
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
+            seq: 0,
         }),
     );
 
@@ -318,6 +393,7 @@ fn resource_gathering_requires_matching_tool_and_server_cooldown() {
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
+            seq: 0,
         }),
     );
     assert_eq!(
@@ -337,6 +413,7 @@ fn resource_gathering_requires_matching_tool_and_server_cooldown() {
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
+            seq: 0,
         }),
     );
     assert_eq!(
@@ -352,6 +429,7 @@ fn resource_gathering_requires_matching_tool_and_server_cooldown() {
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
+            seq: 0,
         }),
     );
     assert_eq!(

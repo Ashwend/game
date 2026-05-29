@@ -9,6 +9,7 @@ mod local_player;
 mod look;
 mod menu;
 mod options_ui;
+mod prediction;
 mod runtime;
 mod settings;
 mod test_mode;
@@ -34,10 +35,13 @@ pub(crate) use gather::{
 pub(crate) use inventory::{
     InventoryDrag, InventoryDragButton, InventorySoundEvent, InventoryUiState, UnifiedSlotRef,
 };
-pub(crate) use local_player::{LocalPlayerState, update_local_player_state_system};
+pub(crate) use local_player::{
+    LocalPlayerState, apply_prediction_overlay_system, update_local_player_state_system,
+};
 pub(crate) use look::LookState;
 pub(crate) use menu::{DeathSplash, MenuState, SaveStore, Screen, SteamUser};
 pub(crate) use options_ui::{OptionsTab, OptionsUiState, PendingRebind};
+pub(crate) use prediction::PredictionState;
 pub(crate) use runtime::{
     ClientErrorToast, ClientLogEntry, ClientLogKind, ClientRuntime, ErrorToastSink,
     SessionShutdownTasks,

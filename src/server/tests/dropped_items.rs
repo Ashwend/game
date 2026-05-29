@@ -32,6 +32,7 @@ fn dropped_items_spawn_near_head_and_inherit_player_velocity() {
         ClientMessage::Inventory(InventoryCommand::Drop {
             from: ItemContainerSlot::inventory(2),
             quantity: None,
+            seq: 0,
         }),
     );
     let initial_item = first_dropped_item(&server);
@@ -163,6 +164,7 @@ fn dropped_items_use_rapier_gravity_and_floor_collision() {
         ClientMessage::Inventory(InventoryCommand::Drop {
             from: ItemContainerSlot::inventory(2),
             quantity: None,
+            seq: 0,
         }),
     );
     let initial_item = first_dropped_item(&server);

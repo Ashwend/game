@@ -242,6 +242,7 @@ mod tests {
                 open_furnace: None,
                 open_loot_bag,
                 last_processed_input: 0,
+                applied_action_seq: 0,
             }),
             lifecycle: None,
         }

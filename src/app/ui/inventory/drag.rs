@@ -3,12 +3,12 @@ use bevy_egui::egui::{self, PointerButton, Sense, Vec2, vec2};
 use crate::{
     app::{
         state::{
-            ClientRuntime, ErrorToastSink, InventoryDragButton, InventoryUiState, MenuState,
-            UnifiedSlotRef,
+            ClientRuntime, ErrorToastSink, InventoryDragButton, InventoryUiState, LocalPlayerState,
+            MenuState, PredictionState, UnifiedSlotRef,
         },
         systems::{send_furnace_command, send_inventory_command, send_loot_bag_command},
     },
-    protocol::{FurnaceCommand, InventoryCommand, LootBagCommand},
+    protocol::{FurnaceCommand, InventoryCommand, ItemContainerSlot, LootBagCommand},
 };
 
 use super::slot::{SLOT_SIZE, paint_slot};
@@ -25,10 +25,13 @@ use super::slot::{SLOT_SIZE, paint_slot};
 /// for player-sourced drags. Furnace-sourced items that get released
 /// in the void snap back to where they came from — better that than
 /// silently dropping a stack of iron bars into the void.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_drag_release(
     ctx: &egui::Context,
     menu: &MenuState,
     runtime: &mut ClientRuntime,
+    prediction: &mut PredictionState,
+    local_player: &LocalPlayerState,
     inventory_ui: &mut InventoryUiState,
     error_toasts: &mut dyn ErrorToastSink,
 ) {
@@ -55,6 +58,8 @@ pub(crate) fn handle_drag_release(
         if target != drag.source {
             send_move_command(
                 runtime,
+                prediction,
+                local_player,
                 error_toasts,
                 drag.source,
                 target,
@@ -65,12 +70,16 @@ pub(crate) fn handle_drag_release(
         && pointer_is_outside_inventory_surfaces(ctx, inventory_ui)
         && let UnifiedSlotRef::Player(from) = drag.source
     {
+        // Predict the bag removal instantly; the dropped entity still
+        // appears via server replication (no local ground ghost in Tier 1).
+        let seq = predict_drop(prediction, local_player, from, Some(drag.quantity));
         send_inventory_command(
             runtime,
             error_toasts,
             InventoryCommand::Drop {
                 from,
                 quantity: Some(drag.quantity),
+                seq,
             },
         );
     }
@@ -78,8 +87,11 @@ pub(crate) fn handle_drag_release(
     inventory_ui.cancel_drag();
 }
 
+#[allow(clippy::too_many_arguments)]
 fn send_move_command(
     runtime: &mut ClientRuntime,
+    prediction: &mut PredictionState,
+    local_player: &LocalPlayerState,
     error_toasts: &mut dyn ErrorToastSink,
     source: UnifiedSlotRef,
     target: UnifiedSlotRef,
@@ -103,10 +115,16 @@ fn send_move_command(
     }
     match (source, target) {
         (UnifiedSlotRef::Player(from), UnifiedSlotRef::Player(to)) => {
+            let seq = predict_move(prediction, local_player, from, to, quantity);
             send_inventory_command(
                 runtime,
                 error_toasts,
-                InventoryCommand::Move { from, to, quantity },
+                InventoryCommand::Move {
+                    from,
+                    to,
+                    quantity,
+                    seq,
+                },
             );
         }
         _ => {
@@ -121,6 +139,60 @@ fn send_move_command(
             );
         }
     }
+}
+
+/// Predict a player-inventory drop, returning the action sequence the
+/// command should carry (`0` = not predicted). Predicts unconditionally when
+/// the local inventory is known — `remove_stack` no-ops harmlessly on replay
+/// if the source slot turns out empty.
+fn predict_drop(
+    prediction: &mut PredictionState,
+    local_player: &LocalPlayerState,
+    from: ItemContainerSlot,
+    quantity: Option<u16>,
+) -> u32 {
+    let Some(inventory) = local_player
+        .private
+        .as_ref()
+        .map(|private| &private.inventory)
+    else {
+        return 0;
+    };
+    if inventory.slot(from).is_none() {
+        return 0;
+    }
+    let seq = prediction.alloc_seq();
+    prediction.push_drop(seq, from, quantity);
+    seq
+}
+
+/// Predict a player→player inventory move, returning the action sequence the
+/// command should carry (`0` = not predicted). Tier 1 predicts only the
+/// empty-destination case — swap/merge onto an occupied slot stays
+/// server-driven, since a mispredicted displacement is more jarring than a
+/// brief replication delay. The shared `move_stack` replay handles the actual
+/// relocation deterministically.
+fn predict_move(
+    prediction: &mut PredictionState,
+    local_player: &LocalPlayerState,
+    from: ItemContainerSlot,
+    to: ItemContainerSlot,
+    quantity: Option<u16>,
+) -> u32 {
+    let Some(inventory) = local_player
+        .private
+        .as_ref()
+        .map(|private| &private.inventory)
+    else {
+        return 0;
+    };
+    // Empty destination + non-empty source, or the move no-ops / displaces.
+    if inventory.slot(to).is_some() || inventory.slot(from).is_none() {
+        return 0;
+    }
+    let seq = prediction.alloc_seq();
+    prediction.push_move(seq, from, to, quantity);
+    seq
 }
 
 fn pointer_is_outside_inventory_surfaces(
@@ -208,11 +280,21 @@ mod tests {
             ..Default::default()
         };
         let mut runtime = ClientRuntime::default();
+        let mut prediction = PredictionState::default();
+        let local_player = LocalPlayerState::default();
         let mut inv_ui = drag_state(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0)));
         let mut toasts: Vec<String> = Vec::new();
 
         run_input(Vec::new(), |ctx| {
-            handle_drag_release(ctx, &menu, &mut runtime, &mut inv_ui, &mut toasts);
+            handle_drag_release(
+                ctx,
+                &menu,
+                &mut runtime,
+                &mut prediction,
+                &local_player,
+                &mut inv_ui,
+                &mut toasts,
+            );
         });
         // No container surface is up, so the drag is dropped on the floor
         // (state-wise) and never becomes a network command.
@@ -227,12 +309,22 @@ mod tests {
             ..Default::default()
         };
         let mut runtime = ClientRuntime::default();
+        let mut prediction = PredictionState::default();
+        let local_player = LocalPlayerState::default();
         let mut inv_ui = drag_state(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0)));
         let mut toasts: Vec<String> = Vec::new();
 
         // No pointer-release event this frame.
         run_input(Vec::new(), |ctx| {
-            handle_drag_release(ctx, &menu, &mut runtime, &mut inv_ui, &mut toasts);
+            handle_drag_release(
+                ctx,
+                &menu,
+                &mut runtime,
+                &mut prediction,
+                &local_player,
+                &mut inv_ui,
+                &mut toasts,
+            );
         });
         assert!(
             inv_ui.drag.is_some(),
@@ -247,6 +339,8 @@ mod tests {
             ..Default::default()
         };
         let mut runtime = ClientRuntime::default();
+        let mut prediction = PredictionState::default();
+        let local_player = LocalPlayerState::default();
         let mut inv_ui = drag_state(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0)));
         // Hovering a different slot makes the release a Move.
         inv_ui.hovered_slot = Some(UnifiedSlotRef::Player(ItemContainerSlot::inventory(5)));
@@ -269,7 +363,15 @@ mod tests {
             },
         ];
         run_input(events, |ctx| {
-            handle_drag_release(ctx, &menu, &mut runtime, &mut inv_ui, &mut toasts);
+            handle_drag_release(
+                ctx,
+                &menu,
+                &mut runtime,
+                &mut prediction,
+                &local_player,
+                &mut inv_ui,
+                &mut toasts,
+            );
         });
         // Player→player move with no session fails-soft into a toast and
         // the drag is cleared either way.
@@ -284,6 +386,8 @@ mod tests {
             ..Default::default()
         };
         let mut runtime = ClientRuntime::default();
+        let mut prediction = PredictionState::default();
+        let local_player = LocalPlayerState::default();
         let source = UnifiedSlotRef::Player(ItemContainerSlot::inventory(2));
         let mut inv_ui = drag_state(source);
         // Released back over the originating slot → no command.
@@ -305,7 +409,15 @@ mod tests {
             },
         ];
         run_input(events, |ctx| {
-            handle_drag_release(ctx, &menu, &mut runtime, &mut inv_ui, &mut toasts);
+            handle_drag_release(
+                ctx,
+                &menu,
+                &mut runtime,
+                &mut prediction,
+                &local_player,
+                &mut inv_ui,
+                &mut toasts,
+            );
         });
         assert!(inv_ui.drag.is_none());
         assert!(
@@ -321,6 +433,8 @@ mod tests {
             ..Default::default()
         };
         let mut runtime = ClientRuntime::default();
+        let mut prediction = PredictionState::default();
+        let local_player = LocalPlayerState::default();
         let mut inv_ui = drag_state(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0)));
         // No hovered slot and no recorded surface rects → the pointer is
         // "outside" everything, so a player item drops on the ground.
@@ -342,7 +456,15 @@ mod tests {
             },
         ];
         run_input(events, |ctx| {
-            handle_drag_release(ctx, &menu, &mut runtime, &mut inv_ui, &mut toasts);
+            handle_drag_release(
+                ctx,
+                &menu,
+                &mut runtime,
+                &mut prediction,
+                &local_player,
+                &mut inv_ui,
+                &mut toasts,
+            );
         });
         // Drop command attempted (fails-soft, no session) and drag cleared.
         assert!(inv_ui.drag.is_none());
@@ -356,6 +478,8 @@ mod tests {
             ..Default::default()
         };
         let mut runtime = ClientRuntime::default();
+        let mut prediction = PredictionState::default();
+        let local_player = LocalPlayerState::default();
         let mut inv_ui = drag_state(UnifiedSlotRef::Bag(0));
         inv_ui.hovered_slot = Some(UnifiedSlotRef::Player(ItemContainerSlot::inventory(1)));
         let mut toasts: Vec<String> = Vec::new();
@@ -375,7 +499,15 @@ mod tests {
             },
         ];
         run_input(events, |ctx| {
-            handle_drag_release(ctx, &menu, &mut runtime, &mut inv_ui, &mut toasts);
+            handle_drag_release(
+                ctx,
+                &menu,
+                &mut runtime,
+                &mut prediction,
+                &local_player,
+                &mut inv_ui,
+                &mut toasts,
+            );
         });
         // The bag→player move attempts a LootBag command (fails-soft).
         assert!(inv_ui.drag.is_none());

@@ -74,6 +74,11 @@ pub struct PlayerPrivate {
     /// network round-trip to render.
     pub open_loot_bag: Option<OpenLootBagView>,
     pub last_processed_input: u64,
+    /// Highest optimistic-prediction action sequence the server has processed
+    /// for this client (accepted *or* rejected). The client prunes pending
+    /// overlay ops with `seq <= applied_action_seq`; see
+    /// `src/app/state/prediction.rs`.
+    pub applied_action_seq: u32,
 }
 
 /// Authoritative damage reduction (0–100, percent). Replicated to every
@@ -222,6 +227,7 @@ mod tests {
                 open_furnace: None,
                 open_loot_bag: None,
                 last_processed_input: 0,
+                applied_action_seq: 0,
             },
             armor: PlayerArmor::default(),
             lifecycle: PlayerLifecycle::default(),
