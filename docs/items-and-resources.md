@@ -51,6 +51,14 @@ A resource node is a static placeable thing the world spawns at generation time.
 
 Authoritative state lives in `GameServer::resource_nodes` as a `HashMap<ResourceNodeId, ResourceNodeState>`. The ECS mirror in `src/server/resource_node_ecs.rs` carries the replicated component split — see [Networking § Replication](networking.md#replication).
 
+**Client reconciliation.** The client mirrors replicated nodes into local `NetworkResourceNode` visual entities via [`apply_resource_nodes_system`](../src/app/systems/items/resource_nodes.rs). It is **event-driven** — reacts to `Added<ResourceNode>` and `RemovedComponents<ResourceNode>` rather than iterating the full replicated set every frame. The `ResourceNodeEntities` resource carries three state pieces that make this work:
+
+1. `entities: HashMap<ResourceNodeId, Entity>` — forward map id → local mirror entity.
+2. `replicated_to_id: HashMap<Entity, ResourceNodeId>` — reverse map so `RemovedComponents` events can find the id of a despawned replicated entity.
+3. `pending_spawns: VecDeque<PendingSpawn>` — per-frame spawn budget (`MAX_RESOURCE_NODE_SPAWNS_PER_FRAME = 8`) drains across frames. Persisting the queue across frames is load-bearing: `Added<T>` only fires *once* per entity, so the budget-deferred remainder of an initial AoI fill would be lost without it.
+
+A one-time catch-up scan runs on the first real run after connect (`!applied_first_snapshot`). This handles entities that arrived during early-return frames while `client_id == None` (Bevy's `Added` filter's `last_run` tick advanced past them). After the catch-up, steady-state cost is ~50 µs per frame instead of 1.4-4 ms. The same pattern applies to `maintain_world_grid_system` in [src/app/systems/deployables.rs](../src/app/systems/deployables.rs) and should be applied to any new `apply_*` system that iterates replicated state. See [docs/profiling.md](profiling.md) for the trace-analysis workflow that surfaces this kind of bug.
+
 ## How to add a new resource node type
 
 1. **Add a `pub const X_NODE_ID: &str = "x_node";`** at the top of [`src/resources.rs`](../src/resources.rs).

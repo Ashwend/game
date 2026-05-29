@@ -13,12 +13,23 @@ pub(crate) fn update_cursor_system(
     primary_window: Query<&Window, With<PrimaryWindow>>,
 ) {
     let should_capture = gameplay_accepts_controls(&menu, primary_window_focused(&primary_window));
-    cursor_options.visible = !should_capture;
-    cursor_options.grab_mode = if should_capture {
+    let visible = !should_capture;
+    let grab_mode = if should_capture {
         CursorGrabMode::Locked
     } else {
         CursorGrabMode::None
     };
+    // Compare-before-assign so Bevy's change detection only trips when
+    // the value actually flips. Without this, `bevy_winit`'s
+    // `changed_cursor_options` re-applies through the winit window API
+    // every frame — costs ~684 µs mean on the main thread plus a
+    // 16 ms occasional spike when winit takes the slow path.
+    if cursor_options.visible != visible {
+        cursor_options.visible = visible;
+    }
+    if cursor_options.grab_mode != grab_mode {
+        cursor_options.grab_mode = grab_mode;
+    }
 }
 
 pub(crate) fn center_cursor_on_focus_system(

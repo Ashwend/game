@@ -31,11 +31,17 @@ pub const BRANCH_PILE_NODE_ID: &str = "branch_pile";
 pub const HAY_GRASS_NODE_ID: &str = "hay_grass";
 
 pub const RESOURCE_GATHER_RANGE: f32 = 3.75;
-const DEFAULT_RESOURCE_RAY_RADIUS: f32 = 0.7;
 // Loose upper bound used only for the cheap distance cull in
 // `resource_node_score`. Must be >= any definition's `ray_radius`; correctness
 // of the actual ray test does not depend on it.
 const MAX_RESOURCE_RAY_RADIUS: f32 = 1.0;
+// Loose upper bound on `anchor_height` across all definitions. Used
+// for a *position-only* distance cull that runs before any HashMap
+// lookup, so the hot path in `resource_node_score_at` can reject
+// far-away nodes without paying for `resource_node_definition`. Must
+// be >= any definition's `anchor_height`; correctness of the precise
+// test does not depend on it.
+const MAX_RESOURCE_ANCHOR_HEIGHT: f32 = 1.6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceNodeModel {
@@ -340,11 +346,23 @@ pub fn resource_node_score_at(
     definition_id: &str,
     position: Vec3Net,
 ) -> Option<f32> {
-    let anchor = resource_node_anchor_for(definition_id, position);
+    // Position-only distance cull — runs BEFORE the HashMap lookup
+    // in `resource_node_definition`. The 1811-node AoI ring would
+    // otherwise pay 1811 string hashes per pickup-target scan.
+    // Expanded radius covers the max possible `anchor_height` so we
+    // never reject a candidate the precise test would accept.
+    let to_position = position.minus(eye);
+    let cheap_max_reach =
+        RESOURCE_GATHER_RANGE + MAX_RESOURCE_RAY_RADIUS + MAX_RESOURCE_ANCHOR_HEIGHT;
+    if to_position.length_squared() > cheap_max_reach * cheap_max_reach {
+        return None;
+    }
+
+    // In the close-range path: one HashMap lookup reused for both
+    // `anchor_height` and `ray_radius` (was two separate lookups).
+    let definition = resource_node_definition(definition_id)?;
+    let anchor = position.plus(Vec3Net::new(0.0, definition.anchor_height, 0.0));
     let to_node = anchor.minus(eye);
-    // Cheap distance cull before the trig in `look_forward` and the definition
-    // lookup. Uses a conservative upper bound on ray_radius so it never rejects
-    // a candidate the actual ray test would accept.
     let max_reach_sq = (RESOURCE_GATHER_RANGE + MAX_RESOURCE_RAY_RADIUS).powi(2);
     if to_node.length_squared() > max_reach_sq {
         return None;
@@ -359,9 +377,7 @@ pub fn resource_node_score_at(
         return None;
     }
 
-    let ray_radius = resource_node_definition(definition_id)
-        .map(|definition| definition.ray_radius)
-        .unwrap_or(DEFAULT_RESOURCE_RAY_RADIUS);
+    let ray_radius = definition.ray_radius;
     let closest = eye.plus(forward.scale(projection));
     let lateral = anchor.minus(closest);
     if lateral.length_squared() > ray_radius * ray_radius {

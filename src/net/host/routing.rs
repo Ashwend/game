@@ -110,7 +110,16 @@ pub(super) fn route_envelopes(
                     // but `forget_connection` here makes that call a no-op
                     // (its early-return path) so the server doesn't try to
                     // double-disconnect a client we already cleaned up.
-                    commands.entity(entity).insert(Disconnecting);
+                    //
+                    // `try_insert` is load-bearing: between the time the
+                    // envelope was queued (e.g. `kick_all` during shutdown,
+                    // or a quit-message path) and the time the command
+                    // buffer drains, Lightyear's own connection-management
+                    // systems may have already despawned the client entity
+                    // (timeout, transport disconnect). A plain `insert`
+                    // panics on a despawned entity; `try_insert` silently
+                    // no-ops, which is what we want for a teardown signal.
+                    commands.entity(entity).try_insert(Disconnecting);
                     forget_connection(entity, connections);
                 }
             }

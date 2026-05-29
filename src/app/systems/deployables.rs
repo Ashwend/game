@@ -300,18 +300,46 @@ const FINGERPRINT_MIX: u64 = 0x9E37_79B9_7F4A_7C15;
 /// Per-frame maintainer for `ClientRuntime::world_grid`. Watches the
 /// world version (Welcome bumps it), the replicated resource-node set,
 /// and the replicated deployable set; rebuilds the grid when any of
-/// them changes. The local `Option` cache means idle frames cost a
-/// fingerprint compare and nothing else.
+/// them changes.
+///
+/// **Event-gated** — the previous fingerprint-based "idle frames cost a
+/// fingerprint compare and nothing else" was a lie at scale: with 1811
+/// resource nodes, the fingerprint scan was a 1-2 ms iteration *every
+/// frame*, calling `resource_node_collider_at` (string-keyed HashMap
+/// lookup) for each node just to detect "nothing changed". The probe
+/// below short-circuits before that scan when `Added`/`Removed` events
+/// confirm the entity set is unchanged.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn maintain_world_grid_system(
     mut runtime: ResMut<ClientRuntime>,
     resource_nodes: Query<&ResourceNode>,
     deployables: Query<(&Deployable, &DeployableTransform)>,
+    added_nodes: Query<(), Added<ResourceNode>>,
+    added_deps: Query<(), Added<Deployable>>,
+    mut removed_nodes: RemovedComponents<ResourceNode>,
+    mut removed_deps: RemovedComponents<Deployable>,
     mut last_fingerprint: Local<Option<(u64, u64, u64)>>,
+    mut last_world_version: Local<u64>,
 ) {
     let world_version = runtime.world_version;
+    // Cheap probe: skip the O(N) fingerprint scan when the entity sets
+    // and world version are unchanged. `.count()` drains all events
+    // so the cursor doesn't carry stale counts across frames.
+    let world_changed = world_version != *last_world_version || last_fingerprint.is_none();
+    let removed_count = removed_nodes.read().count() + removed_deps.read().count();
+    let added_any = !added_nodes.is_empty() || !added_deps.is_empty();
+    if !world_changed && !added_any && removed_count == 0 {
+        return;
+    }
+
+    // At least one change is plausible. Compute the actual fingerprint
+    // and bail if it matches (e.g. Added fired for an entity whose id
+    // already contributed to the prior fingerprint — shouldn't happen
+    // but cheap to verify).
     let resource_node_version = resource_node_set_fingerprint(resource_nodes.iter());
     let deployable_version = deployable_set_fingerprint(deployables.iter());
     let current = (world_version, resource_node_version, deployable_version);
+    *last_world_version = world_version;
 
     if *last_fingerprint == Some(current) {
         return;

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use bevy::{light::NotShadowCaster, prelude::*};
 
@@ -11,7 +11,7 @@ use crate::{
     },
     protocol::{ResourceNodeId, Vec3Net},
     resources::{ResourceNodeModel, resource_node_definition},
-    server::{ResourceNode, ResourceNodeStorage},
+    server::ResourceNode,
 };
 
 /// Per-frame cap on resource-node *spawns*. Crossing a chunk boundary
@@ -68,12 +68,34 @@ struct PendingDepletion {
     frames_waited: u8,
 }
 
+/// Spawn data captured from an `Added<ResourceNode>` event and held in
+/// [`ResourceNodeEntities::pending_spawns`] until the per-frame spawn
+/// budget admits it. Carrying the data here (rather than re-querying
+/// the replicated entity each frame) lets the system iterate the queue
+/// instead of the whole `replicated_nodes` query.
+struct PendingSpawn {
+    id: ResourceNodeId,
+    definition_id: String,
+    position: Vec3Net,
+    yaw: f32,
+}
+
 /// Persistent `id → Entity` lookup. Mirrors the live replicated set so
 /// the per-frame reconciliation doesn't have to rebuild it from a
 /// `Query`.
 #[derive(Resource, Default)]
 pub(crate) struct ResourceNodeEntities {
     pub(crate) entities: HashMap<ResourceNodeId, Entity>,
+    /// Reverse lookup `Lightyear-replicated entity → ResourceNodeId`.
+    /// Populated from `Added<ResourceNode>`, consumed from
+    /// `RemovedComponents<ResourceNode>` so the system can find which
+    /// node id was on a despawned entity without scanning.
+    replicated_to_id: HashMap<Entity, ResourceNodeId>,
+    /// FIFO queue of `Added<ResourceNode>` arrivals waiting on the
+    /// per-frame spawn budget ([`MAX_RESOURCE_NODE_SPAWNS_PER_FRAME`]).
+    /// Persisting across frames keeps the spawn rate-limit working
+    /// without re-iterating the replicated query each frame.
+    pending_spawns: VecDeque<PendingSpawn>,
     /// Disappeared visuals waiting for a possible
     /// `ResourceNodeDepleted` message before deciding silent-despawn
     /// vs. death-effect. See [`PendingDepletion`] / the
@@ -100,10 +122,17 @@ type ResourceEntityQuery<'w, 's> = Query<
 /// Reconcile the local `NetworkResourceNode` visuals against the
 /// Lightyear-replicated `(ResourceNode, ResourceNodeStorage)` entities.
 /// Spawn missing ones (rate-limited to
-/// [`MAX_RESOURCE_NODE_SPAWNS_PER_FRAME`]), refresh transforms,
-/// despawn any that left the AoI ring. Despawns gated by the runtime's
-/// `depleted_node_ids` set fire the death-effect; everything else is
-/// a silent AoI-leave despawn.
+/// [`MAX_RESOURCE_NODE_SPAWNS_PER_FRAME`]) and despawn any that left
+/// the AoI ring. Despawns gated by the runtime's `depleted_node_ids`
+/// set fire the death-effect; everything else is a silent AoI-leave.
+///
+/// **Event-driven** since [the pickup-target investigation]: the
+/// previous design iterated all ~1811 replicated nodes every frame
+/// just to detect "nothing changed" — a 1.4 ms median / 4 ms slow-
+/// frame cost that showed up as the second bimodal peak in the frame
+/// histogram. This version reads `Added<ResourceNode>` and
+/// `RemovedComponents<ResourceNode>` so steady-state frames (no
+/// arrivals, no departures, no pending work) do essentially no work.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_resource_nodes_system(
     mut commands: Commands,
@@ -115,8 +144,9 @@ pub(crate) fn apply_resource_nodes_system(
     mut camera_kick: ResMut<crate::app::systems::CameraImpactKick>,
     mut entities: ResMut<ResourceNodeEntities>,
     resource_entities: ResourceEntityQuery,
-    popping_in: Query<(), With<ResourceNodePopIn>>,
-    replicated_nodes: Query<(&ResourceNode, &ResourceNodeStorage)>,
+    all_nodes: Query<(Entity, &ResourceNode)>,
+    added_nodes: Query<(Entity, &ResourceNode), Added<ResourceNode>>,
+    mut removed_nodes: RemovedComponents<ResourceNode>,
 ) {
     if runtime.client_id.is_none() {
         clear_all_tracked_nodes(&mut commands, &mut entities);
@@ -124,69 +154,155 @@ pub(crate) fn apply_resource_nodes_system(
     }
 
     let entities = &mut *entities;
-    let pop_in_enabled = entities.applied_first_snapshot;
+
+    // First-run catch-up. The `Added<T>` filter compares against the
+    // system's `last_run` tick, which keeps advancing every frame the
+    // system early-returns (i.e. while `client_id` is None during the
+    // main menu). By the time we connect and Lightyear's replicated
+    // entities arrive, `Added` won't fire for them on the first real
+    // run because their add tick is older than `last_run`. So on the
+    // first real run (`!applied_first_snapshot`), iterate the full
+    // query once to seed the spawn queue and the reverse map. After
+    // that, event-driven Added/Removed handles everything.
+    if !entities.applied_first_snapshot {
+        for (replicated_entity, node) in &all_nodes {
+            entities.replicated_to_id.insert(replicated_entity, node.id);
+            if entities.entities.contains_key(&node.id) {
+                continue;
+            }
+            entities.pending_spawns.push_back(PendingSpawn {
+                id: node.id,
+                definition_id: node.definition_id.clone(),
+                position: node.position,
+                yaw: node.yaw,
+            });
+        }
+    }
 
     let player_position = runtime
         .local_view()
         .map(|view| Vec3::from(view.position) + Vec3::Y * crate::app::EYE_HEIGHT);
 
-    // Snapshot the depleted-id set for this frame: nodes the server told us
-    // are *actually* gone (gathered out, picked up). Anything that drops
-    // from the replicated set but isn't here just left the player's AoI
-    // and should despawn silently — no death animation, no camera kick.
-    let depleted_this_frame: HashSet<ResourceNodeId> = runtime.depleted_node_ids.clone();
-    let mut spawn_budget = MAX_RESOURCE_NODE_SPAWNS_PER_FRAME;
-    let mut visible_ids: HashSet<ResourceNodeId> = HashSet::new();
-    for (node, _storage) in &replicated_nodes {
-        visible_ids.insert(node.id);
-        // Replicated entity is back — if it was pending depletion,
-        // clear that pending entry (e.g. AoI bounce, or regrow reusing
-        // the id).
-        entities.pending_depletion_check.remove(&node.id);
-        let Some(definition) = resource_node_definition(&node.definition_id) else {
+    // 1. Departures. A Lightyear-replicated entity disappeared (AoI
+    //    leave, depletion, server-side despawn). Look the id up via
+    //    the reverse map and either fire the death effect (if the
+    //    server already told us it was depleted) or queue grace.
+    for replicated_entity in removed_nodes.read() {
+        let Some(id) = entities.replicated_to_id.remove(&replicated_entity) else {
+            // Either we never tracked this entity (unlikely — we
+            // populate `replicated_to_id` on every `Added`) or it
+            // was cleaned up by `clear_all_tracked_nodes`. Either
+            // way nothing to do.
             continue;
         };
 
-        let arrived_fresh = !entities.entities.contains_key(&node.id) && pop_in_enabled;
-
-        let target_transform =
-            resource_node_transform_at(node.position, node.yaw, definition.model);
-
-        if let Some(entity) = entities.entities.get(&node.id).copied() {
-            // An entity that's mid-pop-in owns its own transform — the
-            // pop-in tick system is the only writer until the animation
-            // completes. Replicated updates can still nudge other
-            // components, but this prevents a one-frame jump on the
-            // first frame.
-            if !popping_in.contains(entity) {
-                commands.entity(entity).insert(target_transform);
-            }
+        // If still queued for spawn, the mirror was never created —
+        // just drop the queue entry. The grace-period machinery
+        // doesn't apply: there's no death animation to attach to
+        // something that never appeared.
+        let was_queued = entities.pending_spawns.iter().any(|s| s.id == id);
+        if was_queued {
+            entities.pending_spawns.retain(|s| s.id != id);
             continue;
         }
 
-        if spawn_budget == 0 {
-            // Defer to a later frame. The replicated entity stays put,
-            // so a subsequent invocation picks it up; the cleanup
-            // pass below only despawns ids that left the replicated
-            // set.
+        let Some(mirror) = entities.entities.get(&id).copied() else {
+            continue;
+        };
+
+        if runtime.depleted_node_ids.remove(&id) {
+            // Server told us this was a depletion — death effect
+            // fires immediately. No grace window needed.
+            despawn_with_death_effect(
+                &mut commands,
+                &impact_assets,
+                &mut play,
+                &mut materials,
+                &mut camera_kick,
+                &resource_entities,
+                player_position,
+                Some(mirror),
+            );
+            entities.entities.remove(&id);
+        } else {
+            // No depletion message yet. Queue for grace — if the
+            // message arrives within [`DEPLETION_GRACE_FRAMES`],
+            // `resolve_pending_depletions` will fire the death
+            // effect; otherwise the entity silent-despawns.
+            entities.pending_depletion_check.insert(
+                id,
+                PendingDepletion {
+                    entity: mirror,
+                    frames_waited: 0,
+                },
+            );
+        }
+    }
+
+    // 2. Arrivals. `Added<ResourceNode>` fires once per replicated
+    //    entity, the frame after Lightyear spawns it. Record the
+    //    reverse map and either cancel a pending depletion (AoI
+    //    bounce / regrow reusing the id) or queue a spawn.
+    for (replicated_entity, node) in &added_nodes {
+        // Skip entities we already know about — either the catch-up
+        // above seeded them on the first run, or a previous Added
+        // already enqueued them.
+        if entities.replicated_to_id.contains_key(&replicated_entity) {
             continue;
         }
+        entities.replicated_to_id.insert(replicated_entity, node.id);
+
+        if entities.pending_depletion_check.remove(&node.id).is_some() {
+            // AoI bounce — the mirror is still alive from before, so
+            // no spawn needed and no pop-in (the visual stayed put).
+            continue;
+        }
+        if entities.entities.contains_key(&node.id) {
+            // Defensive: id is already tracked. Shouldn't happen but
+            // skip rather than double-spawn.
+            continue;
+        }
+
+        entities.pending_spawns.push_back(PendingSpawn {
+            id: node.id,
+            definition_id: node.definition_id.clone(),
+            position: node.position,
+            yaw: node.yaw,
+        });
+    }
+
+    // 3. Drain the spawn queue up to the per-frame budget. The
+    //    initial 1811-node fill takes ~226 frames at budget 8/frame
+    //    to fully populate; thereafter the queue is usually empty
+    //    and this loop is zero iterations.
+    let pop_in_enabled = entities.applied_first_snapshot;
+    let mut spawn_budget = MAX_RESOURCE_NODE_SPAWNS_PER_FRAME;
+    while spawn_budget > 0 {
+        let Some(spawn) = entities.pending_spawns.pop_front() else {
+            break;
+        };
+        let Some(definition) = resource_node_definition(&spawn.definition_id) else {
+            continue;
+        };
         spawn_budget -= 1;
-
+        let target_transform =
+            resource_node_transform_at(spawn.position, spawn.yaw, definition.model);
         spawn_resource_node_entity(
             &mut commands,
             &assets,
             &impact_assets,
             entities,
-            node.id,
-            node.position,
+            spawn.id,
+            spawn.position,
             definition.model,
             target_transform,
-            arrived_fresh,
+            pop_in_enabled,
         );
     }
 
-    let mut consumed = resolve_pending_depletions(
+    // 4. Grace-period bookkeeping. Empty in steady state — when it
+    //    is empty the function returns immediately without iterating.
+    let consumed = resolve_pending_depletions(
         &mut commands,
         &impact_assets,
         &mut play,
@@ -194,27 +310,12 @@ pub(crate) fn apply_resource_nodes_system(
         &mut camera_kick,
         &resource_entities,
         entities,
-        &depleted_this_frame,
+        &runtime.depleted_node_ids,
         player_position,
     );
-    consumed.extend(queue_missing_nodes(
-        &mut commands,
-        &impact_assets,
-        &mut play,
-        &mut materials,
-        &mut camera_kick,
-        &resource_entities,
-        entities,
-        &visible_ids,
-        &depleted_this_frame,
-        player_position,
-    ));
 
     entities.applied_first_snapshot = true;
 
-    // Clear the consumed depletion ids so they don't fire twice if the
-    // same id is somehow re-emitted later (it won't, but keeping the
-    // set tight makes the invariant local rather than global).
     for id in consumed {
         runtime.depleted_node_ids.remove(&id);
     }
@@ -231,6 +332,8 @@ fn clear_all_tracked_nodes(commands: &mut Commands, entities: &mut ResourceNodeE
     for (_, entry) in entities.pending_depletion_check.drain() {
         commands.entity(entry.entity).despawn();
     }
+    entities.replicated_to_id.clear();
+    entities.pending_spawns.clear();
     entities.applied_first_snapshot = false;
 }
 
@@ -390,67 +493,6 @@ fn resolve_pending_depletions(
             // arrived, so this was a chunk-boundary leave rather than
             // a real depletion.
             commands.entity(entry.entity).despawn();
-        }
-    }
-    consumed
-}
-
-/// Sweeps the tracked-entities map for ids that just disappeared from
-/// the replicated set. Two paths:
-///
-/// - The id is already in `depleted_this_frame` → the server's
-///   `ResourceNodeDepleted` message beat the Lightyear despawn diff
-///   to the client. Fire the death effect immediately.
-/// - Otherwise → queue the id in `pending_depletion_check` so the
-///   death effect can still fire if the depleted message arrives
-///   within [`DEPLETION_GRACE_FRAMES`] frames. After that we treat it
-///   as an AoI-leave.
-#[allow(clippy::too_many_arguments)]
-fn queue_missing_nodes(
-    commands: &mut Commands,
-    impact_assets: &ImpactEffectAssets,
-    play: &mut MessageWriter<PlaySound>,
-    materials: &mut Assets<StandardMaterial>,
-    camera_kick: &mut crate::app::systems::CameraImpactKick,
-    resource_entities: &ResourceEntityQuery,
-    entities: &mut ResourceNodeEntities,
-    visible_ids: &HashSet<ResourceNodeId>,
-    depleted_this_frame: &HashSet<ResourceNodeId>,
-    player_position: Option<Vec3>,
-) -> Vec<ResourceNodeId> {
-    let to_handle: Vec<(ResourceNodeId, Entity)> = entities
-        .entities
-        .iter()
-        .filter(|(id, _)| {
-            !visible_ids.contains(id) && !entities.pending_depletion_check.contains_key(id)
-        })
-        .map(|(id, entity)| (*id, *entity))
-        .collect();
-    let mut consumed = Vec::new();
-    for (id, entity) in to_handle {
-        if depleted_this_frame.contains(&id) {
-            entities.entities.remove(&id);
-            consumed.push(id);
-            despawn_with_death_effect(
-                commands,
-                impact_assets,
-                play,
-                materials,
-                camera_kick,
-                resource_entities,
-                player_position,
-                Some(entity),
-            );
-        } else {
-            // Hold the visual entity for a few frames in case the
-            // depleted message is still in flight.
-            entities.pending_depletion_check.insert(
-                id,
-                PendingDepletion {
-                    entity,
-                    frames_waited: 0,
-                },
-            );
         }
     }
     consumed
