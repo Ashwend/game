@@ -6,7 +6,7 @@ use crate::{
     app::{
         audio::PlaySound,
         scene::{ImpactEffectAssets, NetworkResourceNode, ResourceVisualAssets},
-        state::{ClientRuntime, ImpactEffectKind},
+        state::{ClientRuntime, ImpactEffectKind, PredictionState},
         systems::effects::spawn_impact_burst,
     },
     protocol::{ResourceNodeId, Vec3Net},
@@ -106,6 +106,12 @@ pub(crate) struct ResourceNodeEntities {
     /// of world geometry — we don't want 30 trees and ores to all pop
     /// up the moment the player connects.
     applied_first_snapshot: bool,
+    /// Node ids whose visual we've hidden for an unconfirmed predicted
+    /// crude pickup (see [`PredictionState::is_node_hidden`]). Mirrors the
+    /// prediction overlay's `hidden_nodes`; the local copy lets the reconcile
+    /// detect the hide→un-hide / hide→despawn transitions without a per-frame
+    /// scan of the full replicated set. Tiny in practice (in-flight pickups).
+    suppressed: HashSet<ResourceNodeId>,
 }
 
 type ResourceEntityQuery<'w, 's> = Query<
@@ -143,6 +149,7 @@ pub(crate) fn apply_resource_nodes_system(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut camera_kick: ResMut<crate::app::systems::CameraImpactKick>,
     mut entities: ResMut<ResourceNodeEntities>,
+    prediction: Res<PredictionState>,
     resource_entities: ResourceEntityQuery,
     all_nodes: Query<(Entity, &ResourceNode)>,
     added_nodes: Query<(Entity, &ResourceNode), Added<ResourceNode>>,
@@ -209,6 +216,19 @@ pub(crate) fn apply_resource_nodes_system(
         let Some(mirror) = entities.entities.get(&id).copied() else {
             continue;
         };
+
+        // Predicted crude pickup already played the depletion effect and
+        // hid this node's visual. The server's confirming despawn (or an
+        // AoI-leave before the command resolved) just finalises it: drop
+        // the hidden mirror silently — no second death effect, no grace
+        // window. Clearing `suppressed` here also keeps the reject-path
+        // un-hide below from firing on an already-despawned node.
+        if entities.suppressed.remove(&id) {
+            commands.entity(mirror).despawn();
+            entities.entities.remove(&id);
+            runtime.depleted_node_ids.remove(&id);
+            continue;
+        }
 
         if runtime.depleted_node_ids.remove(&id) {
             // Server told us this was a depletion — death effect
@@ -314,6 +334,23 @@ pub(crate) fn apply_resource_nodes_system(
         player_position,
     );
 
+    // 5. Predicted crude-pickup suppression. Runs after departures so a
+    //    confirmed despawn has already cleared its `suppressed` entry,
+    //    leaving only genuine new-hides and reject un-hides here. Both
+    //    sets are tiny (in-flight pickups), so this never iterates the
+    //    full replicated node set.
+    reconcile_predicted_pickups(
+        &mut commands,
+        &impact_assets,
+        &mut play,
+        &mut materials,
+        &mut camera_kick,
+        &resource_entities,
+        entities,
+        &prediction,
+        player_position,
+    );
+
     entities.applied_first_snapshot = true;
 
     for id in consumed {
@@ -334,6 +371,7 @@ fn clear_all_tracked_nodes(commands: &mut Commands, entities: &mut ResourceNodeE
     }
     entities.replicated_to_id.clear();
     entities.pending_spawns.clear();
+    entities.suppressed.clear();
     entities.applied_first_snapshot = false;
 }
 
@@ -351,6 +389,35 @@ fn despawn_with_death_effect(
     let Some(entity) = entity else {
         return;
     };
+    fire_node_death_effect(
+        commands,
+        impact_assets,
+        play,
+        materials,
+        camera_kick,
+        resource_entities,
+        player_position,
+        entity,
+    );
+    commands.entity(entity).despawn();
+}
+
+/// Spawn the node depletion effect (chip burst / tree-fall + sound + camera
+/// kick) for `entity` *without* despawning it. Pulled out of
+/// [`despawn_with_death_effect`] so the predicted-pickup path can play the
+/// effect while merely *hiding* the mirror — the visual still has to survive
+/// in case the server rejects the pickup and we un-hide it.
+#[allow(clippy::too_many_arguments)]
+fn fire_node_death_effect(
+    commands: &mut Commands,
+    impact_assets: &ImpactEffectAssets,
+    play: &mut MessageWriter<PlaySound>,
+    materials: &mut Assets<StandardMaterial>,
+    camera_kick: &mut crate::app::systems::CameraImpactKick,
+    resource_entities: &ResourceEntityQuery,
+    player_position: Option<Vec3>,
+    entity: Entity,
+) {
     if let Ok((resource, mesh, material, transform)) = resource_entities.get(entity) {
         crate::app::systems::node_death::spawn_node_death(
             commands,
@@ -366,7 +433,6 @@ fn despawn_with_death_effect(
             player_position,
         );
     }
-    commands.entity(entity).despawn();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -496,6 +562,69 @@ fn resolve_pending_depletions(
         }
     }
     consumed
+}
+
+/// Reconcile predicted crude-pickup suppression against the prediction
+/// overlay's `hidden_nodes`. Two transitions, both over the tiny in-flight
+/// set (never the full node list, so this stays within the event-driven
+/// budget the rest of the system was tuned to):
+///
+/// * **New hide** — id is predicted-hidden but not yet suppressed: play the
+///   depletion effect once and hide the mirror, so the node vanishes the
+///   instant the player presses E (the dropped-item pickup feel, extended to
+///   the much-more-numerous resource nodes).
+/// * **Un-hide** — id is suppressed but no longer predicted-hidden while its
+///   mirror still exists: the server *rejected* the pickup. (A confirmed
+///   despawn instead clears `suppressed` and removes the entity in the
+///   departures pass, which runs first — so reaching here with a live mirror
+///   means a revert.) Make the node visible again.
+#[allow(clippy::too_many_arguments)]
+fn reconcile_predicted_pickups(
+    commands: &mut Commands,
+    impact_assets: &ImpactEffectAssets,
+    play: &mut MessageWriter<PlaySound>,
+    materials: &mut Assets<StandardMaterial>,
+    camera_kick: &mut crate::app::systems::CameraImpactKick,
+    resource_entities: &ResourceEntityQuery,
+    entities: &mut ResourceNodeEntities,
+    prediction: &PredictionState,
+    player_position: Option<Vec3>,
+) {
+    for id in prediction.hidden_node_ids() {
+        if entities.suppressed.contains(&id) {
+            continue;
+        }
+        let Some(mirror) = entities.entities.get(&id).copied() else {
+            // Not spawned locally yet (still queued / outside AoI). If it
+            // appears while still predicted-hidden, a later pass hides it.
+            continue;
+        };
+        fire_node_death_effect(
+            commands,
+            impact_assets,
+            play,
+            materials,
+            camera_kick,
+            resource_entities,
+            player_position,
+            mirror,
+        );
+        commands.entity(mirror).insert(Visibility::Hidden);
+        entities.suppressed.insert(id);
+    }
+
+    let stale: Vec<ResourceNodeId> = entities
+        .suppressed
+        .iter()
+        .copied()
+        .filter(|id| !prediction.is_node_hidden(*id))
+        .collect();
+    for id in stale {
+        entities.suppressed.remove(&id);
+        if let Some(mirror) = entities.entities.get(&id).copied() {
+            commands.entity(mirror).insert(Visibility::Visible);
+        }
+    }
 }
 
 /// Drives the "emerge from the ground" animation attached to freshly

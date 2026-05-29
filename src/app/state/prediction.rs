@@ -82,6 +82,13 @@ pub(crate) struct PredictionState {
     /// hid them. While present, the dropped-item render system suppresses the
     /// world visual; pruning (server rejected the pickup) un-hides it.
     hidden_dropped: HashMap<DroppedItemId, u32>,
+    /// Resource node ids hidden by a predicted crude (E-key) pickup that
+    /// fully drained the node, keyed to the seq that hid them. While
+    /// present, the resource-node render system suppresses the world visual
+    /// (and plays the depletion effect once); pruning un-hides it on reject
+    /// or lets the confirmed despawn finalise it. The dropped-item analogue
+    /// for the much-more-numerous resource nodes — see [`Self::is_node_hidden`].
+    hidden_nodes: HashMap<ResourceNodeId, u32>,
     /// Per-node predicted storage decrements awaiting confirmation.
     node_takes: HashMap<ResourceNodeId, Vec<NodeTake>>,
 }
@@ -119,6 +126,35 @@ impl PredictionState {
             seq,
             kind: PendingKind::Add(stack),
         });
+    }
+
+    /// Predict a crude (E-key) resource-node pickup: the server drains the
+    /// whole node into the bag in one shot, so record one node take + one
+    /// inventory add per accepted stack (all under the same `seq`), and —
+    /// when the node is fully emptied — hide the world visual. A partial
+    /// pickup (near-full bag leaves storage behind) mirrors the server by
+    /// adding only what fit and leaving the node visible to reconcile via
+    /// replication.
+    pub(crate) fn push_node_pickup(
+        &mut self,
+        seq: u32,
+        node: ResourceNodeId,
+        accepted: Vec<ItemStack>,
+        fully_drained: bool,
+    ) {
+        for stack in accepted {
+            self.node_takes.entry(node).or_default().push(NodeTake {
+                seq,
+                stack: stack.clone(),
+            });
+            self.pending.push(PendingOp {
+                seq,
+                kind: PendingKind::Add(stack),
+            });
+        }
+        if fully_drained {
+            self.hidden_nodes.insert(node, seq);
+        }
     }
 
     /// Predict an inventory gain not tied to a node or a hidden world item
@@ -159,6 +195,20 @@ impl PredictionState {
         self.hidden_dropped.contains_key(&id)
     }
 
+    /// Is this resource node currently hidden by an unconfirmed predicted
+    /// crude pickup? The resource-node render system consults this to drive
+    /// the suppress / un-hide reconcile.
+    pub(crate) fn is_node_hidden(&self, id: ResourceNodeId) -> bool {
+        self.hidden_nodes.contains_key(&id)
+    }
+
+    /// Node ids currently hidden by an unconfirmed predicted pickup. The set
+    /// is tiny (in-flight crude pickups, usually empty), so the resource-node
+    /// reconcile can diff it without iterating the full replicated set.
+    pub(crate) fn hidden_node_ids(&self) -> Vec<ResourceNodeId> {
+        self.hidden_nodes.keys().copied().collect()
+    }
+
     /// Drop every pending op / hidden id / node take whose seq the server has
     /// already processed (`seq <= applied_action_seq`). On the reliable,
     /// ordered command channel `applied = K` implies every `seq < K` was
@@ -167,6 +217,7 @@ impl PredictionState {
         self.pending.retain(|op| op.seq > applied_action_seq);
         self.hidden_dropped
             .retain(|_, seq| *seq > applied_action_seq);
+        self.hidden_nodes.retain(|_, seq| *seq > applied_action_seq);
         for takes in self.node_takes.values_mut() {
             takes.retain(|take| take.seq > applied_action_seq);
         }
@@ -223,13 +274,17 @@ impl PredictionState {
     pub(crate) fn clear(&mut self) {
         self.pending.clear();
         self.hidden_dropped.clear();
+        self.hidden_nodes.clear();
         self.node_takes.clear();
     }
 
     /// True when there is nothing to fold — lets the fold system skip the
     /// clone+replay entirely on the common idle frame.
     pub(crate) fn is_idle(&self) -> bool {
-        self.pending.is_empty() && self.hidden_dropped.is_empty() && self.node_takes.is_empty()
+        self.pending.is_empty()
+            && self.hidden_dropped.is_empty()
+            && self.hidden_nodes.is_empty()
+            && self.node_takes.is_empty()
     }
 }
 
@@ -408,14 +463,86 @@ mod tests {
     }
 
     #[test]
+    fn node_pickup_full_drain_hides_and_adds_then_confirms() {
+        let mut state = PredictionState::default();
+        let seq = state.alloc_seq();
+        state.push_node_pickup(
+            seq,
+            NODE,
+            vec![ItemStack::new(COAL_ID, 3)],
+            true, // fully drained
+        );
+        assert!(state.is_node_hidden(NODE));
+        assert_eq!(state.hidden_node_ids(), vec![NODE]);
+
+        // Gain shows immediately on top of an empty bag.
+        let effective = state.rebuild_effective(&PlayerInventoryState::empty());
+        assert_eq!(
+            effective.inventory_slots[0].as_ref().map(|s| s.quantity),
+            Some(3)
+        );
+
+        // Server confirms: inventory now holds the 3, applied_action_seq == seq.
+        let confirmed = inv_with(Some(ItemStack::new(COAL_ID, 3)));
+        state.prune(seq);
+        assert!(state.is_idle());
+        assert!(!state.is_node_hidden(NODE));
+        let effective = state.rebuild_effective(&confirmed);
+        assert_eq!(
+            effective.inventory_slots[0].as_ref().map(|s| s.quantity),
+            Some(3),
+            "no double-count after confirm"
+        );
+    }
+
+    #[test]
+    fn node_pickup_unhides_and_reverts_on_reject() {
+        let mut state = PredictionState::default();
+        let seq = state.alloc_seq();
+        state.push_node_pickup(seq, NODE, vec![ItemStack::new(COAL_ID, 2)], true);
+        assert!(state.is_node_hidden(NODE));
+
+        // Server rejected (out of range / already gone): applied_action_seq
+        // advances with the replicated inventory unchanged.
+        state.prune(seq);
+        assert!(!state.is_node_hidden(NODE), "rejected pickup un-hides node");
+        let effective = state.rebuild_effective(&PlayerInventoryState::empty());
+        assert!(
+            effective.inventory_slots[0].is_none(),
+            "rejected gain must evaporate"
+        );
+    }
+
+    #[test]
+    fn node_pickup_partial_adds_without_hiding() {
+        // Near-full bag: only part of the node fit, so the node stays in the
+        // world (server leaves the remainder) and must not be hidden.
+        let mut state = PredictionState::default();
+        let seq = state.alloc_seq();
+        state.push_node_pickup(seq, NODE, vec![ItemStack::new(COAL_ID, 1)], false);
+        assert!(
+            !state.is_node_hidden(NODE),
+            "partial pickup leaves the node visible"
+        );
+        let effective = state.rebuild_effective(&PlayerInventoryState::empty());
+        assert_eq!(
+            effective.inventory_slots[0].as_ref().map(|s| s.quantity),
+            Some(1)
+        );
+    }
+
+    #[test]
     fn clear_drops_everything() {
         let mut state = PredictionState::default();
         let seq = state.alloc_seq();
         state.push_pickup(seq, 1, ItemStack::new(COAL_ID, 1));
         let seq2 = state.alloc_seq();
         state.push_gather(seq2, NODE, ItemStack::new(COAL_ID, 1));
+        let seq3 = state.alloc_seq();
+        state.push_node_pickup(seq3, NODE, vec![ItemStack::new(COAL_ID, 1)], true);
         state.clear();
         assert!(state.is_idle());
         assert!(!state.is_dropped_hidden(1));
+        assert!(!state.is_node_hidden(NODE));
     }
 }

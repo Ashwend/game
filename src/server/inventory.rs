@@ -63,9 +63,9 @@ impl GameServer {
             InventoryCommand::PickUp {
                 dropped_item_id, ..
             } => self.pick_up_dropped_item(client_id, dropped_item_id),
-            InventoryCommand::PickUpResourceNode { resource_node_id } => {
-                self.pick_up_resource_node(client_id, resource_node_id)
-            }
+            InventoryCommand::PickUpResourceNode {
+                resource_node_id, ..
+            } => self.pick_up_resource_node(client_id, resource_node_id),
             InventoryCommand::SelectActionbarSlot { slot } => {
                 if slot < ACTIONBAR_SLOT_COUNT
                     && let Some(client) = self.clients.get_mut(&client_id)

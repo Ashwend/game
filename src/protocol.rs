@@ -350,6 +350,8 @@ pub enum InventoryCommand {
     /// ore veins) — those still require a tool swing.
     PickUpResourceNode {
         resource_node_id: ResourceNodeId,
+        /// Optimistic-prediction sequence number (see [`InventoryCommand::action_seq`]).
+        seq: u32,
     },
     SelectActionbarSlot {
         slot: usize,
@@ -361,18 +363,18 @@ pub enum InventoryCommand {
 
 impl InventoryCommand {
     /// The optimistic-prediction sequence number for the client-predicted
-    /// variants (`Move`/`Drop`/`PickUp`); `None` for variants the client does
-    /// not predict. The server advances the per-client `applied_action_seq` to
-    /// this value — whether it accepts or rejects the command — so the client
-    /// can prune the matching pending overlay op and either confirm or revert.
+    /// variants (`Move`/`Drop`/`PickUp`/`PickUpResourceNode`); `None` for
+    /// variants the client does not predict. The server advances the
+    /// per-client `applied_action_seq` to this value — whether it accepts or
+    /// rejects the command — so the client can prune the matching pending
+    /// overlay op and either confirm or revert.
     pub fn action_seq(&self) -> Option<u32> {
         match self {
-            Self::Move { seq, .. } | Self::Drop { seq, .. } | Self::PickUp { seq, .. } => {
-                Some(*seq)
-            }
-            Self::PickUpResourceNode { .. }
-            | Self::SelectActionbarSlot { .. }
-            | Self::SelectActionbarOffset { .. } => None,
+            Self::Move { seq, .. }
+            | Self::Drop { seq, .. }
+            | Self::PickUp { seq, .. }
+            | Self::PickUpResourceNode { seq, .. } => Some(*seq),
+            Self::SelectActionbarSlot { .. } | Self::SelectActionbarOffset { .. } => None,
         }
     }
 }

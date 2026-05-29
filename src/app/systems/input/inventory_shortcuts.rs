@@ -140,12 +140,26 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
             && resource_target_is_crude(&params.pickup_target)
         {
             // Crude nodes (branches, surface stones, grass tufts) can be
-            // picked up with E. The server gates on the same crude check
-            // and a view-ray ping, so a wrong target is silently dropped.
+            // picked up with E. Predict the full drain into the bag and —
+            // when the whole node fits — hide the world visual instantly,
+            // exactly like a dropped-item pickup. The server gates on the
+            // same crude check and a view-ray ping, so a rejected pickup
+            // reverts (and the node un-hides) when `applied_action_seq`
+            // advances. `seq == 0` means "not predicted" (full bag); the
+            // server still processes the command.
+            let seq = predict_resource_node_pickup(
+                &mut params.prediction,
+                &params.local_player,
+                resource_node_id,
+                &params.pickup_target,
+            );
             send_inventory_command(
                 &mut params.runtime,
                 &mut params.error_toasts,
-                InventoryCommand::PickUpResourceNode { resource_node_id },
+                InventoryCommand::PickUpResourceNode {
+                    resource_node_id,
+                    seq,
+                },
             );
             params.inventory_ui.note_pickup_intent();
         } else if let Some(id) = params.pickup_target.deployable_id {
@@ -421,6 +435,54 @@ fn predict_pickup(
     } else {
         prediction.push_add(seq, ItemStack::new(stack.item_id, accepted));
     }
+    seq
+}
+
+/// Predict a crude (E-key) resource-node pickup, returning the action
+/// sequence the command should carry (`0` = not predicted).
+///
+/// Mirrors the server's `pick_up_resource_node` drain exactly: walk the
+/// node's storage (folded with any unconfirmed predicted takes via
+/// [`PredictionState::effective_node_storage`]) adding each stack to a
+/// cloned bag with the shared [`accepted_inventory_quantity`], collect what
+/// fit, and treat the node as *fully drained* only when nothing is left
+/// behind — matching the server, which despawns the node only on a clean
+/// full drain and leaves a partial node standing. A full bag (nothing fit)
+/// predicts nothing, mirroring the server's "full" toast + no-op.
+fn predict_resource_node_pickup(
+    prediction: &mut PredictionState,
+    local_player: &crate::app::state::LocalPlayerState,
+    node_id: ResourceNodeId,
+    target: &PickupTargetState,
+) -> u32 {
+    let Some(inventory) = local_player
+        .private
+        .as_ref()
+        .map(|private| &private.inventory)
+    else {
+        return 0;
+    };
+    let storage = prediction.effective_node_storage(node_id, &target.resource_storage);
+    let mut effective = inventory.clone();
+    let mut accepted: Vec<ItemStack> = Vec::new();
+    let mut fully_drained = true;
+    for stack in &storage {
+        if stack.quantity == 0 {
+            continue;
+        }
+        let took = accepted_inventory_quantity(&mut effective, stack.clone());
+        if took > 0 {
+            accepted.push(ItemStack::new(stack.item_id.clone(), took));
+        }
+        if took < stack.quantity {
+            fully_drained = false;
+        }
+    }
+    if accepted.is_empty() {
+        return 0;
+    }
+    let seq = prediction.alloc_seq();
+    prediction.push_node_pickup(seq, node_id, accepted, fully_drained);
     seq
 }
 
@@ -819,6 +881,48 @@ mod tests {
         // A real tool returns its own profile.
         let with_pick = local_player_holding(Some(BASIC_PICKAXE_ID));
         assert_eq!(equipped_tool_profile(&with_pick).kind, ToolKind::Pickaxe);
+    }
+
+    #[test]
+    fn predict_resource_node_pickup_full_drain_into_empty_bag_predicts_and_hides() {
+        let local = local_player_holding(None);
+        let mut prediction = PredictionState::default();
+        let mut target = target_for_node(7, BRANCH_PILE_NODE_ID);
+        target.resource_storage = vec![ItemStack::new(WOOD_ID, 3)];
+
+        let seq = predict_resource_node_pickup(&mut prediction, &local, 7, &target);
+        assert_ne!(
+            seq, 0,
+            "a node draining fully into an empty bag is predicted"
+        );
+        assert!(
+            prediction.is_node_hidden(7),
+            "a full drain hides the node visual"
+        );
+
+        // The whole node lands in the bag immediately.
+        let effective = prediction.rebuild_effective(&PlayerInventoryState::empty());
+        let total: u16 = effective
+            .inventory_slots
+            .iter()
+            .chain(effective.actionbar_slots.iter())
+            .filter_map(|slot| slot.as_ref().map(|s| s.quantity))
+            .sum();
+        assert_eq!(total, 3);
+    }
+
+    #[test]
+    fn predict_resource_node_pickup_empty_storage_is_not_predicted() {
+        // A node with nothing left to give predicts nothing and stays
+        // visible (the server would no-op too).
+        let local = local_player_holding(None);
+        let mut prediction = PredictionState::default();
+        let target = target_for_node(9, BRANCH_PILE_NODE_ID);
+
+        let seq = predict_resource_node_pickup(&mut prediction, &local, 9, &target);
+        assert_eq!(seq, 0);
+        assert!(!prediction.is_node_hidden(9));
+        assert!(prediction.is_idle());
     }
 
     #[test]
