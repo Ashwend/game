@@ -45,21 +45,27 @@ pub trait SteamBackend: Send + Sync + 'static {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct OfflineSteamBackend;
 
+/// Fallback offline identity, used only when no per-install id is available
+/// (the `cli` entry points that don't load client settings) and
+/// `GAME_STEAM_ID` is unset. The normal client path persists a per-install id
+/// instead — see [`generate_install_id`] and [`OfflineSteamBackend::user_for_install`].
+const DEFAULT_OFFLINE_STEAM_ID: SteamId = 76_561_197_960_287_930;
+
+impl OfflineSteamBackend {
+    /// Build the offline identity for `persisted_id` — the stable per-install
+    /// id loaded from client settings. `GAME_STEAM_ID` still overrides it so
+    /// `multiplayer-test` can hand each spawned window a distinct identity on
+    /// a single machine.
+    pub fn user_for_install(&self, persisted_id: SteamId) -> AuthenticatedUser {
+        offline_user(env_steam_id().unwrap_or(persisted_id))
+    }
+}
+
 impl SteamBackend for OfflineSteamBackend {
     fn current_user(&self) -> Result<AuthenticatedUser, SteamError> {
-        let steam_id = std::env::var("GAME_STEAM_ID")
-            .ok()
-            .and_then(|value| value.parse::<SteamId>().ok())
-            .unwrap_or(76_561_197_960_287_930);
-        let display_name = std::env::var("GAME_PLAYER_NAME")
-            .or_else(|_| std::env::var("USER"))
-            .unwrap_or_else(|_| "Player".to_owned());
-
-        Ok(AuthenticatedUser {
-            steam_id,
-            display_name,
-            token: offline_auth_token(steam_id),
-        })
+        Ok(offline_user(
+            env_steam_id().unwrap_or(DEFAULT_OFFLINE_STEAM_ID),
+        ))
     }
 
     fn open_server_browser(&self) -> Result<(), SteamError> {
@@ -83,6 +89,38 @@ impl SteamBackend for OfflineSteamBackend {
 
 pub fn offline_auth_token(steam_id: SteamId) -> String {
     format!("offline:{steam_id}")
+}
+
+fn env_steam_id() -> Option<SteamId> {
+    std::env::var("GAME_STEAM_ID")
+        .ok()
+        .and_then(|value| value.parse::<SteamId>().ok())
+}
+
+fn offline_display_name() -> String {
+    std::env::var("GAME_PLAYER_NAME")
+        .or_else(|_| std::env::var("USER"))
+        .unwrap_or_else(|_| "Player".to_owned())
+}
+
+fn offline_user(steam_id: SteamId) -> AuthenticatedUser {
+    AuthenticatedUser {
+        steam_id,
+        display_name: offline_display_name(),
+        token: offline_auth_token(steam_id),
+    }
+}
+
+/// Generate a fresh stable per-installation id. Persisted in client settings
+/// on first launch and reused thereafter so the same machine keeps the same
+/// player identity (and saved inventory) across sessions. Derived from a v4
+/// UUID truncated to the 64-bit [`SteamId`] width; guaranteed non-zero so `0`
+/// stays usable as the "not generated yet" sentinel in settings.
+pub fn generate_install_id() -> SteamId {
+    match uuid::Uuid::new_v4().as_u64_pair().0 {
+        0 => 1,
+        id => id,
+    }
 }
 
 pub fn verify_auth_ticket(

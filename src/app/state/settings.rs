@@ -102,6 +102,7 @@ mod tests {
             hud: HudSettings::default(),
             voice: Default::default(),
             keybindings: Default::default(),
+            identity: Default::default(),
         }
         .sanitized();
 

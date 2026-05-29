@@ -26,7 +26,7 @@ use crate::{
     analytics::AnalyticsPlugin,
     net::{ClientNetworkPlugin, LightyearProtocolPlugin, client_plugins},
     save::WorldStore,
-    steam::{OfflineSteamBackend, SteamBackend},
+    steam::OfflineSteamBackend,
 };
 
 use self::voice::{
@@ -189,12 +189,22 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
     store.ensure_exists()?;
 
     let steam = OfflineSteamBackend;
-    let user = steam.current_user()?;
     let settings_store = ClientSettingsStore::platform_default()?;
-    let settings = settings_store.load().unwrap_or_else(|error| {
+    let mut settings = settings_store.load().unwrap_or_else(|error| {
         eprintln!("could not load client settings: {error:#}");
         Default::default()
     });
+    // Resolve a stable per-install identity. Generate one on first launch and
+    // write it back so this machine keeps the same player (and saved
+    // inventory) across sessions; `GAME_STEAM_ID` still overrides inside
+    // `user_for_install`.
+    if settings.identity.install_id == 0 {
+        settings.identity.install_id = crate::steam::generate_install_id();
+        if let Err(error) = settings_store.save(&settings) {
+            eprintln!("could not persist generated install id: {error:#}");
+        }
+    }
+    let user = steam.user_for_install(settings.identity.install_id);
     let window_settings = settings.display;
     let test_mode = TestModeConfig::from_env();
 

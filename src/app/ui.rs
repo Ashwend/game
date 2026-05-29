@@ -55,6 +55,7 @@ use self::{
 
 pub(crate) use death_splash::tick_death_splash_system;
 
+use super::scene::WorldSceneState;
 use super::state::{
     ClientErrorToast, ClientRuntime, ClientSettings, CraftingHudState, CraftingUiState,
     InventorySoundEvent, LocalPlayerState, MAX_UI_SCALE, MIN_UI_SCALE, MenuBackdropVisibility,
@@ -97,6 +98,20 @@ pub(crate) struct UiResources<'w, 's> {
     client_network: Res<'w, ClientNetwork>,
     local_player: Res<'w, LocalPlayerState>,
     prediction: ResMut<'w, PredictionState>,
+    scene_state: Res<'w, WorldSceneState>,
+}
+
+/// Whether the just-joined world is ready for the player to interact with:
+/// the `Welcome` has been applied (client id + world data present), the live
+/// scene geometry for that world has been spawned, and the local player's
+/// replicated entity has arrived. The loading splash holds until this is true
+/// so the crossfade reveals a populated, rendered scene rather than a
+/// half-streamed one.
+fn world_ready_for_play(resources: &UiResources) -> bool {
+    resources.runtime.client_id.is_some()
+        && resources.runtime.world.is_some()
+        && resources.local_player.entity.is_some()
+        && resources.scene_state.applied_live_version() == Some(resources.runtime.world_version)
 }
 
 /// egui zoom factor (pixels-per-point multiplier) for the player's chosen UI
@@ -325,11 +340,14 @@ pub(crate) fn ui_system(
     notice_ui(ctx, &mut resources.menu);
     // Splash overlay sits on top of every screen and modal. It covers the
     // app-launch warmup ("Authenticating") and every menu→game transition
-    // (world entry, server join).
+    // (world entry, server join). World-entry splashes hold until the joined
+    // world is actually ready to play (see `world_ready_for_play`).
+    let world_ready = world_ready_for_play(&resources);
     loading_splash_ui(
         ctx,
         &mut resources.menu,
         &resources.backdrop_visibility,
+        world_ready,
         delta_seconds,
     );
     resources

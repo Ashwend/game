@@ -161,10 +161,17 @@ impl Default for MenuState {
 
 impl MenuState {
     /// Hand off to the in-game screen after a successful singleplayer or
-    /// multiplayer session start. Resets the modal/chat overlay state and
-    /// flags the loading splash as ready to fade out. Both session-start
-    /// paths (loopback singleplayer and direct multiplayer) funnel through
-    /// here so the two flows can't drift in what they clear or set.
+    /// multiplayer session start. Resets the modal/chat overlay state. Both
+    /// session-start paths (loopback singleplayer and direct multiplayer)
+    /// funnel through here so the two flows can't drift in what they clear.
+    ///
+    /// This flips the *screen* (so the scene starts building underneath the
+    /// splash) but deliberately does NOT mark the loading splash ready to
+    /// fade — that's gated on the world actually being ready to interact with
+    /// (Welcome applied, scene spawned, local player replicated) via
+    /// `LoadingSplash::note_world_ready`, driven from the UI each frame. The
+    /// session object existing only means the handshake started, not that the
+    /// world has arrived or rendered.
     pub(crate) fn enter_in_game(&mut self) {
         self.screen = Screen::InGame;
         self.pause_open = false;
@@ -175,9 +182,6 @@ impl MenuState {
         self.chat_open = false;
         self.chat_focus_pending = false;
         self.status = None;
-        if let Some(splash) = self.loading_splash.as_mut() {
-            splash.ready = true;
-        }
     }
 }
 

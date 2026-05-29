@@ -21,6 +21,21 @@ pub(crate) struct ClientSettings {
     pub(crate) hud: HudSettings,
     #[serde(default)]
     pub(crate) keybindings: KeyBindings,
+    #[serde(default)]
+    pub(crate) identity: IdentitySettings,
+}
+
+/// Stable per-installation identity. Persisted alongside the other settings so
+/// the same machine keeps the same player (and saved inventory) across
+/// launches, and so two installs no longer collide on the single hardcoded
+/// offline id. A real Steam login would supersede this in the future.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct IdentitySettings {
+    /// Offline-auth Steam id for this installation. `0` means "not generated
+    /// yet"; the client resolves and persists a real value on first launch
+    /// (see `crate::steam::generate_install_id`).
+    #[serde(default)]
+    pub(crate) install_id: u64,
 }
 
 impl ClientSettings {

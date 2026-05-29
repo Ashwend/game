@@ -97,7 +97,14 @@ struct ClientNetworkInner {
 #[derive(Debug)]
 struct PendingConnect {
     server_addr: SocketAddr,
-    steam_id: u64,
+    /// Transport-level netcode connection id. Deliberately a fresh random
+    /// nonce per attempt, NOT the player's `steam_id`: netcode refuses a
+    /// connection whose client id is already in its table (`ClientIdInUse`)
+    /// and only releases the slot after its ~10s client timeout, so reusing a
+    /// stable id made quick reconnects fail until the old link timed out. The
+    /// real identity rides in `auth_message` and the server keys players off
+    /// that, so a per-connection nonce here is purely a transport detail.
+    netcode_client_id: u64,
     auth_message: ClientMessage,
     key_context: PrivateKeyContext,
 }
@@ -230,7 +237,7 @@ impl ClientSession {
                 .map_err(|_| anyhow::anyhow!("client pending-connect lock is poisoned"))?;
             *pending = Some(PendingConnect {
                 server_addr: addr,
-                steam_id: user.steam_id,
+                netcode_client_id: uuid::Uuid::new_v4().as_u64_pair().0,
                 auth_message,
                 key_context,
             });
@@ -383,7 +390,7 @@ fn process_pending_connect_system(
     let netcode = client::NetcodeClient::new(
         Authentication::Manual {
             server_addr: pending.server_addr,
-            client_id: pending.steam_id,
+            client_id: pending.netcode_client_id,
             private_key: private_key(pending.key_context),
             protocol_id: LIGHTYEAR_PROTOCOL_ID,
         },

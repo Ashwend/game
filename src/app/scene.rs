@@ -20,15 +20,15 @@ pub(crate) use assets::{
     DeployableVisualAssets, ImpactEffectAssets, ItemVisualAssets, PlayerVisualAssets,
     ResourceVisualAssets, menu_backdrop_depth_of_field, player_visual_position, setup_scene,
 };
+#[cfg(test)]
+pub(crate) use components::WorldGeometry;
 pub(crate) use components::{
     DeployablePlacementGhost, FurnaceMouthLight, HeldItemVisual, MainCamera, NetworkDeployedEntity,
     NetworkDroppedItem, NetworkLootBag, NetworkPlayer, NetworkResourceNode, tree_mesh_height,
 };
 pub(crate) use mesh::PLAYER_HEAD_TOP_LOCAL_Y;
 pub(crate) use sky::update_sky_system;
-pub(crate) use world::apply_world_scene_system;
-#[cfg(test)]
-pub(crate) use {components::WorldGeometry, world::WorldSceneState};
+pub(crate) use world::{WorldSceneState, apply_world_scene_system};
 
 #[cfg(test)]
 mod tests {

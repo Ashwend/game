@@ -39,9 +39,19 @@ impl GameServer {
 
         verify_auth_ticket(self.settings.auth_mode, steam_id, &token)?;
 
-        if self.steam_to_client.contains_key(&steam_id) {
-            bail!("this Steam user is already connected");
-        }
+        // Takeover: if this identity is still attached to a prior session, tear
+        // the old one down before admitting the new one instead of rejecting
+        // the reconnect. This fires on a quick reconnect (the previous link
+        // hasn't timed out yet) or a second login from the same install.
+        // `disconnect` snapshots the old client's inventory/position into the
+        // persisted-player store, which `take_persisted_player` below then
+        // restores onto the new session — so a reconnect resumes exactly where
+        // it left off rather than getting bounced for the ~10s it takes the
+        // stale-client / netcode timeout to release the old slot.
+        let mut envelopes = match self.steam_to_client.get(&steam_id).copied() {
+            Some(old_client_id) => self.disconnect(old_client_id),
+            None => Vec::new(),
+        };
 
         let client_id = self.next_client_id;
         self.next_client_id += 1;
@@ -112,26 +122,25 @@ impl GameServer {
         self.chunk_manager.track_player(client_id, initial_position);
 
         let world_time = self.world_time_snapshot();
-        Ok((
-            client_id,
-            vec![
-                ServerEnvelope {
-                    target: DeliveryTarget::Client(client_id),
-                    message: ServerMessage::Welcome {
-                        client_id,
-                        map: self.save.map.clone(),
-                        world: self.world.clone(),
-                        is_admin,
-                        local_seed,
-                        world_time,
-                    },
-                },
-                ServerEnvelope {
-                    target: DeliveryTarget::Broadcast,
-                    message: ServerMessage::PlayerEvent(PlayerEvent::Joined { client_id, name }),
-                },
-            ],
-        ))
+        // Any takeover teardown envelopes (Left + transport Disconnect for the
+        // old session) lead, so peers see the old session leave before the new
+        // one joins and the host layer tears the stale transport down first.
+        envelopes.push(ServerEnvelope {
+            target: DeliveryTarget::Client(client_id),
+            message: ServerMessage::Welcome {
+                client_id,
+                map: self.save.map.clone(),
+                world: self.world.clone(),
+                is_admin,
+                local_seed,
+                world_time,
+            },
+        });
+        envelopes.push(ServerEnvelope {
+            target: DeliveryTarget::Broadcast,
+            message: ServerMessage::PlayerEvent(PlayerEvent::Joined { client_id, name }),
+        });
+        Ok((client_id, envelopes))
     }
 
     pub fn disconnect(&mut self, client_id: ClientId) -> Vec<ServerEnvelope> {

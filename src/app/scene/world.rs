@@ -35,6 +35,18 @@ pub(crate) struct WorldSceneState {
     applied: WorldSceneSelection,
 }
 
+impl WorldSceneState {
+    /// The live-world version currently spawned into the scene, if any. The
+    /// loading-splash readiness gate uses this to confirm the geometry for the
+    /// freshly joined world has actually been built before revealing it.
+    pub(crate) fn applied_live_version(&self) -> Option<u64> {
+        match self.applied {
+            WorldSceneSelection::Live { version } => Some(version),
+            _ => None,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_world_scene_system(
     mut commands: Commands,

@@ -119,9 +119,9 @@ pub(crate) fn auto_connect_poll_system(
             menu.chat_open = false;
             menu.chat_focus_pending = false;
             menu.status = None;
-            if let Some(splash) = menu.loading_splash.as_mut() {
-                splash.ready = true;
-            }
+            // The splash is left holding; the world-entry readiness gate in
+            // the UI fades it once the joined world is actually ready (see
+            // `LoadingSplash::note_world_ready`).
             commands.remove_resource::<AutoConnectAttempt>();
             commands.remove_resource::<AutoConnectRequest>();
         }

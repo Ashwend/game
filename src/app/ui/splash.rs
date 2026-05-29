@@ -6,13 +6,19 @@ use super::theme;
 
 /// Renders the loading splash overlay on top of every other screen.
 /// Ticks the splash timer using the supplied frame `delta_seconds`, drops
-/// the splash when it has fully faded out, and — for the `Startup`
-/// variant — flips `ready` once the menu backdrop has finished warming up
-/// so the splash and the backdrop crossfade as one motion.
+/// the splash when it has fully faded out, and flips `ready` once the splash
+/// is allowed to fade:
+/// - `Startup` waits for the menu backdrop to finish warming up so the splash
+///   and the backdrop crossfade as one motion.
+/// - World-entry splashes (`EnteringWorld` / `JoiningServer`) wait for
+///   `world_ready` — the joined world being applied, spawned, and replicated —
+///   so the reveal lands on a populated, rendered scene rather than an empty
+///   frame. See [`MenuState`]'s `enter_in_game` and `LoadingSplash::note_world_ready`.
 pub(super) fn loading_splash_ui(
     ctx: &egui::Context,
     menu: &mut MenuState,
     backdrop_visibility: &MenuBackdropVisibility,
+    world_ready: bool,
     delta_seconds: f32,
 ) {
     let alpha = {
@@ -25,6 +31,9 @@ pub(super) fn loading_splash_ui(
         {
             splash.ready = true;
         }
+        // World-entry splashes gate their fade on the world being ready
+        // (no-op for `Startup` and once already ready).
+        splash.note_world_ready(world_ready);
         let Some(alpha) = splash.tick(delta_seconds) else {
             menu.loading_splash = None;
             ctx.request_repaint();
@@ -212,7 +221,7 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| loading_splash_ui(ctx, &mut menu, &backdrop, 0.05),
+            |ctx| loading_splash_ui(ctx, &mut menu, &backdrop, false, 0.05),
         );
         assert!(menu.loading_splash.as_ref().expect("startup splash").ready);
     }
@@ -237,7 +246,7 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| loading_splash_ui(ctx, &mut menu, &backdrop, 0.016),
+            |ctx| loading_splash_ui(ctx, &mut menu, &backdrop, false, 0.016),
         );
 
         assert!(!output.shapes.is_empty());

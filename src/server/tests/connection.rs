@@ -239,6 +239,76 @@ fn kick_all_sends_reason_before_disconnects() {
 }
 
 #[test]
+fn reconnect_with_same_identity_takes_over_and_preserves_state() {
+    let mut server = server();
+    let first = connect_host(&mut server);
+    equip_basic_tools(&mut server, first);
+
+    // Move an item so we can prove the live inventory carries across the
+    // takeover instead of resetting to starting state.
+    server.receive(
+        first,
+        ClientMessage::Inventory(InventoryCommand::Move {
+            from: ItemContainerSlot {
+                container: crate::protocol::ItemContainer::Actionbar,
+                slot: 0,
+            },
+            to: ItemContainerSlot {
+                container: crate::protocol::ItemContainer::Actionbar,
+                slot: 4,
+            },
+            quantity: None,
+            seq: 0,
+        }),
+    );
+
+    // Reconnect with the same identity before the old session has timed out.
+    // This is the quick-reconnect path that used to be rejected for ~10s.
+    let (second, envelopes) = server
+        .connect(
+            PROTOCOL_VERSION,
+            Some(GAME_VERSION.to_owned()),
+            1,
+            "Host".to_owned(),
+            offline_auth_token(1),
+        )
+        .expect("reconnect with the same identity should take over, not be rejected");
+
+    assert_ne!(first, second, "takeover should issue a fresh client id");
+
+    // The old session is torn down — a Left for the old id and a transport
+    // Disconnect targeting it — and that teardown precedes the new Welcome so
+    // peers and the host layer see the old session leave first.
+    assert!(envelopes.iter().any(|envelope| matches!(
+        &envelope.message,
+        ServerMessage::PlayerEvent(PlayerEvent::Left { client_id, .. }) if *client_id == first
+    )));
+    let disconnect_index = envelopes
+        .iter()
+        .position(|envelope| {
+            matches!(
+                envelope.target,
+                DeliveryTarget::Disconnect(id) if id == first
+            )
+        })
+        .expect("old session must emit a transport-level Disconnect");
+    let welcome_index = envelopes
+        .iter()
+        .position(|envelope| matches!(&envelope.message, ServerMessage::Welcome { .. }))
+        .expect("new session must receive a Welcome");
+    assert!(
+        disconnect_index < welcome_index,
+        "old session teardown must precede the new Welcome"
+    );
+
+    // Exactly one live player, and it inherited the moved inventory.
+    assert_eq!(server.players_iter().count(), 1);
+    let client = server.clients.get(&second).expect("new session exists");
+    assert!(client.inventory.actionbar_slots[0].is_none());
+    assert!(client.inventory.actionbar_slots[4].is_some());
+}
+
+#[test]
 fn world_save_round_trips_player_inventory_and_position() {
     let mut server = server();
     let client_id = connect_host(&mut server);
