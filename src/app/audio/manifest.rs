@@ -282,13 +282,17 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
             looped: false,
         },
 
-        // Inventory pickup — sharp, bright, but kept well below impact
-        // cues so it reads as confirmation, not an achievement chime.
-        // ±4 % pitch jitter keeps a rapid-fire pickup burst from sounding
-        // like a metronome.
+        // Inventory pickup — a trimmed real grass-rustle recording, so it
+        // reads as brushing the item out of the grass rather than a chime
+        // or a clicky metal clink. The source clip is ~21 dB quieter than
+        // the old cue, so base_gain_db is raised far above the drop/move
+        // cues just to reach a comparable, deliberately subtle in-game
+        // level (it sits a few dB under where the old pickup landed). ±4 %
+        // pitch jitter keeps a rapid-fire pickup burst from sounding like
+        // a metronome.
         SoundId::InventoryPickup => SoundDefaults {
             category: SoundCategory::Sfx2d,
-            base_gain_db: -16.0,
+            base_gain_db: 0.0,
             spatial: None,
             pitch_jitter: 0.04,
             looped: false,
