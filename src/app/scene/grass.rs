@@ -35,15 +35,14 @@
 use std::collections::HashMap;
 
 use bevy::{
-    asset::RenderAssetUsages,
     light::NotShadowCaster,
-    mesh::{Indices, PrimitiveTopology},
     pbr::{ExtendedMaterial, MaterialExtension},
     prelude::*,
     render::render_resource::AsBindGroup,
     shader::ShaderRef,
 };
 
+use super::mesh::builder::{GrassBlade, GrassBladeMesh, grass_blade_colors};
 use crate::{
     app::state::{ClientRuntime, ClientSettings, GrassDensity},
     world::{WorldBlock, WorldData, fbm, splitmix64},
@@ -77,6 +76,14 @@ const GRASS_LAYOUT_SEED: u64 = 0xBB67_AE85_84CA_A73B;
 
 /// The grass material: StandardMaterial PBR + the wind/dither shader extension.
 pub(crate) type GrassMaterial = ExtendedMaterial<StandardMaterial, GrassWindExtension>;
+
+/// Shared handle to the single [`GrassMaterial`] instance. Created eagerly at
+/// scene setup and used by **both** the streamed detail grass and the
+/// harvestable hay-grass node, so they sway in unison — and so hay grass sways
+/// even when the detail-grass density is Off (it's a gameplay plant, not the
+/// cosmetic layer). The material is binding-free, so one instance suffices.
+#[derive(Resource, Clone)]
+pub(crate) struct GrassMaterialHandle(pub(crate) Handle<GrassMaterial>);
 
 /// Shader extension that adds the wind + distance-fade behaviour. **Deliberately
 /// binding-free**: it carries no uniform/texture, only the shader override.
@@ -128,8 +135,6 @@ pub(crate) struct GrassState {
     /// Shared, pre-baked layout meshes (one per layout). Built once per density
     /// and **never freed during play**.
     variants: Vec<Handle<Mesh>>,
-    /// Shared grass material, created on first use.
-    material: Option<Handle<GrassMaterial>>,
     bound_world_version: u64,
     bound_density: Option<GrassDensity>,
 }
@@ -141,7 +146,7 @@ pub(crate) fn stream_grass_system(
     settings: Res<ClientSettings>,
     runtime: Res<ClientRuntime>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<GrassMaterial>>,
+    grass_material: Res<GrassMaterialHandle>,
     mut state: ResMut<GrassState>,
 ) {
     let density = settings.graphics.grass_density;
@@ -181,12 +186,8 @@ pub(crate) fn stream_grass_system(
     };
     let (px, pz) = (view.position.x, view.position.z);
 
-    // The material is binding-free and the fade is a shader constant, so it never
-    // changes — create it once.
-    let material = state
-        .material
-        .get_or_insert_with(|| materials.add(grass_material()))
-        .clone();
+    // One shared material instance, created eagerly at scene setup.
+    let material = grass_material.0.clone();
 
     let GrassState {
         tiles, variants, ..
@@ -264,7 +265,7 @@ fn clear_tiles(commands: &mut Commands, state: &mut GrassState) {
     }
 }
 
-fn grass_material() -> GrassMaterial {
+pub(crate) fn grass_material() -> GrassMaterial {
     ExtendedMaterial {
         base: StandardMaterial {
             // Vertex colours carry the green gradient; the base colour passes
@@ -327,29 +328,11 @@ fn next_unit(state: &mut u64) -> f32 {
     ((*state >> 40) as f32) / ((1u64 << 24) as f32)
 }
 
-/// Base (dark) and tip (light) green for a blade, before the per-blade shade /
-/// warmth tweaks. Tuned to sit at/just below the ground tone (`WORLD_COLOR`).
-const BLADE_BASE: [f32; 3] = [0.08, 0.18, 0.07];
-const BLADE_TIP: [f32; 3] = [0.19, 0.34, 0.13];
-
-/// One generated blade.
-struct Blade {
-    base: Vec2,
-    yaw: f32,
-    height: f32,
-    half_width: f32,
-    bend: Vec2,
-    base_color: [f32; 4],
-    tip_color: [f32; 4],
-    /// Per-blade random in `[0, 1)`, stored in every vertex's `uv.x` as the
-    /// shader's distance-dither key (whole-blade keep/drop).
-    dither: f32,
-}
-
 /// Deterministically scatter one layout's blades, centred on the origin spanning
 /// `[-GRASS_TILE_M/2, GRASS_TILE_M/2]` so a cardinal rotation about the tile
-/// centre maps the square onto itself (no seams).
-fn generate_layout_blades(layout: usize, blades_per_m2: f32) -> Vec<Blade> {
+/// centre maps the square onto itself (no seams). The blade geometry itself
+/// lives in [`GrassBladeMesh`] (shared with the hay-grass node).
+fn generate_layout_blades(layout: usize, blades_per_m2: f32) -> Vec<GrassBlade> {
     let half = GRASS_TILE_M * 0.5;
     let candidates = (blades_per_m2 * GRASS_TILE_M * GRASS_TILE_M).round() as u32;
     let mut rng = splitmix64(GRASS_LAYOUT_SEED ^ (layout as u64).wrapping_mul(0x100_0001));
@@ -381,10 +364,10 @@ fn generate_layout_blades(layout: usize, blades_per_m2: f32) -> Vec<Blade> {
         // Darken-only shade + small warm/cool hue jitter so the field isn't flat.
         let shade = 0.7 + next_unit(&mut rng) * 0.3;
         let warm = next_unit(&mut rng) * 2.0 - 1.0;
-        let (base_color, tip_color) = blade_colors(shade, warm);
+        let (base_color, tip_color) = grass_blade_colors(shade, warm);
         let dither = next_unit(&mut rng);
 
-        blades.push(Blade {
+        blades.push(GrassBlade {
             base: Vec2::new(lx, lz),
             yaw,
             height,
@@ -397,8 +380,8 @@ fn generate_layout_blades(layout: usize, blades_per_m2: f32) -> Vec<Blade> {
     }
 
     if blades.is_empty() {
-        let (base_color, tip_color) = blade_colors(0.9, 0.0);
-        blades.push(Blade {
+        let (base_color, tip_color) = grass_blade_colors(0.9, 0.0);
+        blades.push(GrassBlade {
             base: Vec2::ZERO,
             yaw: 0.0,
             height: 0.2,
@@ -412,95 +395,12 @@ fn generate_layout_blades(layout: usize, blades_per_m2: f32) -> Vec<Blade> {
     blades
 }
 
-fn mesh_from_blades(blades: &[Blade]) -> Mesh {
-    let mut builder = BladeMeshBuilder::default();
+fn mesh_from_blades(blades: &[GrassBlade]) -> Mesh {
+    let mut builder = GrassBladeMesh::default();
     for blade in blades {
         builder.push_blade(blade);
     }
     builder.build()
-}
-
-/// Base/tip blade colours for a `shade` (darken multiplier, ≤ 1.0) and `warm`
-/// hue jitter in `[-1, 1]` (positive = warmer/yellower). Alpha carries the sway
-/// weight (base 0, tip 1) for the wind shader.
-fn blade_colors(shade: f32, warm: f32) -> ([f32; 4], [f32; 4]) {
-    let tint = |rgb: [f32; 3], sway: f32| {
-        [
-            (rgb[0] * shade + warm * 0.05).clamp(0.0, 1.0),
-            (rgb[1] * shade + warm * 0.01).clamp(0.0, 1.0),
-            (rgb[2] * shade - warm * 0.03).clamp(0.0, 1.0),
-            sway,
-        ]
-    };
-    (tint(BLADE_BASE, 0.0), tint(BLADE_TIP, 1.0))
-}
-
-#[derive(Default)]
-struct BladeMeshBuilder {
-    positions: Vec<[f32; 3]>,
-    normals: Vec<[f32; 3]>,
-    colors: Vec<[f32; 4]>,
-    uvs: Vec<[f32; 2]>,
-    indices: Vec<u32>,
-}
-
-impl BladeMeshBuilder {
-    /// Append one tapered blade quad (base → near-point tip).
-    fn push_blade(&mut self, blade: &Blade) {
-        let (s, c) = blade.yaw.sin_cos();
-        let ax = Vec2::new(c, s);
-        let top_width = blade.half_width * 0.18;
-        let base = blade.base;
-
-        let bl = [
-            base.x - ax.x * blade.half_width,
-            0.0,
-            base.y - ax.y * blade.half_width,
-        ];
-        let br = [
-            base.x + ax.x * blade.half_width,
-            0.0,
-            base.y + ax.y * blade.half_width,
-        ];
-        let tcx = base.x + blade.bend.x;
-        let tcz = base.y + blade.bend.y;
-        let tl = [tcx - ax.x * top_width, blade.height, tcz - ax.y * top_width];
-        let tr = [tcx + ax.x * top_width, blade.height, tcz + ax.y * top_width];
-
-        let base_index = self.positions.len() as u32;
-        self.positions.extend_from_slice(&[bl, br, tr, tl]);
-        // Upward normals: grass reads as lit-from-above, blending with the ground.
-        self.normals.extend_from_slice(&[[0.0, 1.0, 0.0]; 4]);
-        self.colors.extend_from_slice(&[
-            blade.base_color,
-            blade.base_color,
-            blade.tip_color,
-            blade.tip_color,
-        ]);
-        // Same per-blade dither key on every vertex → whole-blade keep/drop in
-        // the shader.
-        self.uvs.extend_from_slice(&[[blade.dither, 0.0]; 4]);
-        self.indices.extend_from_slice(&[
-            base_index,
-            base_index + 1,
-            base_index + 2,
-            base_index,
-            base_index + 2,
-            base_index + 3,
-        ]);
-    }
-
-    fn build(self) -> Mesh {
-        Mesh::new(
-            PrimitiveTopology::TriangleList,
-            RenderAssetUsages::default(),
-        )
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.colors)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs)
-        .with_inserted_indices(Indices::U32(self.indices))
-    }
 }
 
 #[cfg(test)]
@@ -593,27 +493,5 @@ mod tests {
         let floor_half = 1000.0 * 0.5 - GRASS_EDGE_MARGIN_M;
         assert!(!tile_is_plantable(0, 0, floor_half, &world));
         assert!(tile_is_plantable(5, 5, floor_half, &world));
-    }
-
-    #[test]
-    fn blade_bakes_sway_and_dither() {
-        let (base_color, tip_color) = blade_colors(0.9, 0.0);
-        let mut b = BladeMeshBuilder::default();
-        b.push_blade(&Blade {
-            base: Vec2::new(1.0, 1.0),
-            yaw: 0.3,
-            height: 0.3,
-            half_width: 0.03,
-            bend: Vec2::ZERO,
-            base_color,
-            tip_color,
-            dither: 0.42,
-        });
-        // Sway weight in colour alpha: base 0, tip 1.
-        assert_eq!(b.colors[0][3], 0.0);
-        assert_eq!(b.colors[2][3], 1.0);
-        // Dither key in uv.x, identical on all four verts (whole-blade decision).
-        assert!(b.uvs.iter().all(|uv| uv[0] == 0.42));
-        assert!(b.positions[2][1] > b.positions[0][1], "tip above base");
     }
 }

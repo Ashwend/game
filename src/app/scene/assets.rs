@@ -10,6 +10,7 @@ use bevy::{
 
 use super::{
     components::MainCamera,
+    grass::{GrassMaterial, GrassMaterialHandle, grass_material},
     mesh::{
         COAL_ORE, IRON_ORE, STONE_VEIN, SULFUR_ORE, impact_stone_shard_mesh, impact_wood_chip_mesh,
         low_poly_bag_mesh, low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_large_mesh,
@@ -130,7 +131,12 @@ pub(crate) fn setup_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut scattering_media: ResMut<Assets<ScatteringMedium>>,
+    mut grass_materials: ResMut<Assets<GrassMaterial>>,
 ) {
+    // The one shared grass material (wind + distance-fade shader), created
+    // eagerly so both the streamed detail grass and the harvestable hay-grass
+    // node reference the same instance and sway in unison.
+    commands.insert_resource(GrassMaterialHandle(grass_materials.add(grass_material())));
     // Ambient and clear color are now driven by the day/night cycle in
     // `sky::update_sky_system`. We still insert defaults here so the
     // very first frame (before the system runs) has sensible values

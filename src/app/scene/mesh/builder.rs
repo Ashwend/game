@@ -1,4 +1,8 @@
-use bevy::{asset::RenderAssetUsages, mesh::PrimitiveTopology, prelude::*};
+use bevy::{
+    asset::RenderAssetUsages,
+    mesh::{Indices, PrimitiveTopology},
+    prelude::*,
+};
 
 pub(crate) type MeshColor = [f32; 4];
 
@@ -285,5 +289,160 @@ impl LowPolyMeshBuilder {
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs)
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.colors)
         .with_computed_flat_normals()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Grass blades
+//
+// A tapered "blade" quad shared by the streamed detail grass (`scene::grass`,
+// where it's instanced + wind-shaded) and the harvestable hay-grass node mesh
+// (`mesh::crude`, a static clump). Unlike `LowPolyMeshBuilder`, blades use
+// **upward (+Y) vertex normals** so they read as lit-from-above (catching sky
+// light) rather than dark vertical walls, a per-vertex base→tip colour gradient,
+// and `uv.x` carries an optional per-blade dither key (used by the detail-grass
+// shader's distance fade; harmless for nodes that don't read it).
+// ---------------------------------------------------------------------------
+
+/// Base (dark) and tip (light) green for a blade, before the per-blade shade /
+/// warmth tweaks. Tuned to sit at/just below the ground tone.
+pub(crate) const GRASS_BLADE_BASE: [f32; 3] = [0.08, 0.18, 0.07];
+pub(crate) const GRASS_BLADE_TIP: [f32; 3] = [0.19, 0.34, 0.13];
+
+/// One grass blade. `base_color`/`tip_color` already include the shade/warmth
+/// (their alpha is the sway weight — 0 base, 1 tip). `dither` is written to every
+/// vertex's `uv.x` as a stable per-blade key.
+pub(crate) struct GrassBlade {
+    pub(crate) base: Vec2,
+    pub(crate) yaw: f32,
+    pub(crate) height: f32,
+    pub(crate) half_width: f32,
+    pub(crate) bend: Vec2,
+    pub(crate) base_color: [f32; 4],
+    pub(crate) tip_color: [f32; 4],
+    pub(crate) dither: f32,
+}
+
+/// Base/tip blade colours for a darken-only `shade` (≤ 1.0, never glows brighter
+/// than the ground) and a `warm` hue jitter in `[-1, 1]` (positive = warmer /
+/// yellower). Alpha carries the sway weight (base 0, tip 1).
+pub(crate) fn grass_blade_colors(shade: f32, warm: f32) -> ([f32; 4], [f32; 4]) {
+    let tint = |rgb: [f32; 3], sway: f32| {
+        [
+            (rgb[0] * shade + warm * 0.05).clamp(0.0, 1.0),
+            (rgb[1] * shade + warm * 0.01).clamp(0.0, 1.0),
+            (rgb[2] * shade - warm * 0.03).clamp(0.0, 1.0),
+            sway,
+        ]
+    };
+    (tint(GRASS_BLADE_BASE, 0.0), tint(GRASS_BLADE_TIP, 1.0))
+}
+
+/// Indexed mesh builder for grass-blade clumps. Keeps the upward-normal /
+/// gradient / dither convention out of `LowPolyMeshBuilder` (which is flat-normal
+/// and per-face colour).
+#[derive(Default)]
+pub(crate) struct GrassBladeMesh {
+    positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    colors: Vec<[f32; 4]>,
+    uvs: Vec<[f32; 2]>,
+    indices: Vec<u32>,
+}
+
+impl GrassBladeMesh {
+    /// Append one tapered blade quad (base → near-point tip).
+    pub(crate) fn push_blade(&mut self, blade: &GrassBlade) {
+        let (s, c) = blade.yaw.sin_cos();
+        // Width runs along the yaw-rotated local X axis (in the XZ plane).
+        let ax = Vec2::new(c, s);
+        let top_width = blade.half_width * 0.18;
+        let base = blade.base;
+
+        let bl = [
+            base.x - ax.x * blade.half_width,
+            0.0,
+            base.y - ax.y * blade.half_width,
+        ];
+        let br = [
+            base.x + ax.x * blade.half_width,
+            0.0,
+            base.y + ax.y * blade.half_width,
+        ];
+        let tcx = base.x + blade.bend.x;
+        let tcz = base.y + blade.bend.y;
+        let tl = [tcx - ax.x * top_width, blade.height, tcz - ax.y * top_width];
+        let tr = [tcx + ax.x * top_width, blade.height, tcz + ax.y * top_width];
+
+        let base_index = self.positions.len() as u32;
+        self.positions.extend_from_slice(&[bl, br, tr, tl]);
+        self.normals.extend_from_slice(&[[0.0, 1.0, 0.0]; 4]);
+        self.colors.extend_from_slice(&[
+            blade.base_color,
+            blade.base_color,
+            blade.tip_color,
+            blade.tip_color,
+        ]);
+        self.uvs.extend_from_slice(&[[blade.dither, 0.0]; 4]);
+        self.indices.extend_from_slice(&[
+            base_index,
+            base_index + 1,
+            base_index + 2,
+            base_index,
+            base_index + 2,
+            base_index + 3,
+        ]);
+    }
+
+    pub(crate) fn build(self) -> Mesh {
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.colors)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs)
+        .with_inserted_indices(Indices::U32(self.indices))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grass_blade_bakes_sway_gradient_and_dither() {
+        let (base_color, tip_color) = grass_blade_colors(0.9, 0.0);
+        let mut b = GrassBladeMesh::default();
+        b.push_blade(&GrassBlade {
+            base: Vec2::new(1.0, 1.0),
+            yaw: 0.3,
+            height: 0.3,
+            half_width: 0.03,
+            bend: Vec2::ZERO,
+            base_color,
+            tip_color,
+            dither: 0.42,
+        });
+        // Sway weight in colour alpha: base verts 0, tip verts 1.
+        assert_eq!(b.colors[0][3], 0.0);
+        assert_eq!(b.colors[2][3], 1.0);
+        // Dither key in uv.x, identical on all four verts (whole-blade decision).
+        assert!(b.uvs.iter().all(|uv| uv[0] == 0.42));
+        // Tip sits above the base; normals point up.
+        assert!(b.positions[2][1] > b.positions[0][1], "tip above base");
+        assert!(b.normals.iter().all(|n| n[1] == 1.0), "upward normals");
+    }
+
+    #[test]
+    fn grass_blade_colors_darken_only_and_warm_shifts_hue() {
+        // Shade ≤ 1 never brightens past the base tip green.
+        let (_, tip) = grass_blade_colors(1.0, 0.0);
+        assert!(tip[1] <= GRASS_BLADE_TIP[1] + 1e-6);
+        // Positive warmth pushes red up and blue down.
+        let (_, warm_tip) = grass_blade_colors(1.0, 1.0);
+        assert!(warm_tip[0] > tip[0]);
+        assert!(warm_tip[2] < tip[2]);
     }
 }

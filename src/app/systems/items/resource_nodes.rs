@@ -5,7 +5,9 @@ use bevy::{camera::visibility::VisibilityRange, light::NotShadowCaster, prelude:
 use crate::{
     app::{
         audio::PlaySound,
-        scene::{ImpactEffectAssets, NetworkResourceNode, ResourceVisualAssets},
+        scene::{
+            GrassMaterialHandle, ImpactEffectAssets, NetworkResourceNode, ResourceVisualAssets,
+        },
         state::{ClientRuntime, ImpactEffectKind, PredictionState},
         systems::effects::spawn_impact_burst,
     },
@@ -120,7 +122,11 @@ type ResourceEntityQuery<'w, 's> = Query<
     (
         &'static NetworkResourceNode,
         &'static Mesh3d,
-        &'static MeshMaterial3d<StandardMaterial>,
+        // Optional: the hay-grass node uses `GrassMaterial` (the wind shader),
+        // not `StandardMaterial`, so it has no entry here. Only the tree-felling
+        // death effect actually reads the material; crude pickups (incl. hay
+        // grass) ignore it, so `None` is fine for them.
+        Option<&'static MeshMaterial3d<StandardMaterial>>,
         &'static Transform,
     ),
 >;
@@ -144,6 +150,7 @@ pub(crate) fn apply_resource_nodes_system(
     mut commands: Commands,
     mut runtime: ResMut<ClientRuntime>,
     assets: Res<ResourceVisualAssets>,
+    grass_material: Res<GrassMaterialHandle>,
     impact_assets: Res<ImpactEffectAssets>,
     mut play: MessageWriter<PlaySound>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -310,6 +317,7 @@ pub(crate) fn apply_resource_nodes_system(
         spawn_resource_node_entity(
             &mut commands,
             &assets,
+            &grass_material,
             &impact_assets,
             entities,
             spawn.id,
@@ -419,6 +427,10 @@ fn fire_node_death_effect(
     entity: Entity,
 ) {
     if let Ok((resource, mesh, material, transform)) = resource_entities.get(entity) {
+        // Only the tree-felling path uses the material (trees always carry a
+        // `StandardMaterial`); crude/ore deaths ignore it, so a default handle
+        // is fine for the materialless hay-grass node.
+        let material = material.map(|m| m.0.clone()).unwrap_or_default();
         crate::app::systems::node_death::spawn_node_death(
             commands,
             impact_assets,
@@ -429,7 +441,7 @@ fn fire_node_death_effect(
             resource.model,
             *transform,
             mesh.0.clone(),
-            material.0.clone(),
+            material,
             player_position,
         );
     }
@@ -439,6 +451,7 @@ fn fire_node_death_effect(
 fn spawn_resource_node_entity(
     commands: &mut Commands,
     assets: &ResourceVisualAssets,
+    grass_material: &GrassMaterialHandle,
     impact_assets: &ImpactEffectAssets,
     entities: &mut ResourceNodeEntities,
     id: ResourceNodeId,
@@ -453,10 +466,17 @@ fn spawn_resource_node_entity(
         Name::new(format!("Resource Node {id}")),
         NetworkResourceNode { id, model },
         Mesh3d(mesh),
-        MeshMaterial3d(material.clone()),
         target_transform,
         Visibility::Visible,
     ));
+    // Hay grass renders with the swaying grass shader (the *same* material as
+    // the cosmetic detail grass, so they move in unison); every other node uses
+    // its matte `StandardMaterial`.
+    if model == ResourceNodeModel::HayGrass {
+        spawn_command.insert(MeshMaterial3d(grass_material.0.clone()));
+    } else {
+        spawn_command.insert(MeshMaterial3d(material.clone()));
+    }
     // Crude clutter (branch piles, surface stones, hay grass) spawns
     // densely — Plains chunks alone carry ~28 grass tufts plus stones
     // and sticks — and each casts a negligible-size shadow under its
