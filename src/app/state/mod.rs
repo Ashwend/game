@@ -47,9 +47,9 @@ pub(crate) use runtime::{
     SessionShutdownTasks,
 };
 pub(crate) use settings::{
-    AntiAliasing, ClientSettings, ClientSettingsStore, DisplayMode, DisplayResolution, KeyAction,
-    KeyBindingCategory, KeyBindingSlot, KeyBindings, MAX_FOV_DEG, MAX_UI_SCALE, MIN_FOV_DEG,
-    MIN_UI_SCALE, ShadowQuality, display_resolutions,
+    AntiAliasing, ClientSettings, ClientSettingsStore, DisplayMode, DisplayResolution,
+    GrassDensity, KeyAction, KeyBindingCategory, KeyBindingSlot, KeyBindings, MAX_FOV_DEG,
+    MAX_UI_SCALE, MIN_FOV_DEG, MIN_UI_SCALE, ShadowQuality, display_resolutions,
 };
 pub(crate) use test_mode::TestModeConfig;
 pub(crate) use toasts::{TOAST_FADE_SECONDS, TOAST_VISIBLE_SECONDS, Toast, ToastState};

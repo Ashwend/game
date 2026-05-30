@@ -124,17 +124,26 @@ impl WorldTimeSnapshot {
     }
 }
 
-/// Parse a player-supplied time token. Accepts `HH:MM`, `HH`, or a raw
-/// seconds count (`12345.6`). Returns the normalised seconds-of-day.
+/// Parse a player-supplied time token. Accepts, in order:
+/// - `HH:MM` (`06:30`),
+/// - `HHMM` military time with no colon (`0700`, `1430`) — any 3-4 digit
+///   integer, so a leading zero isn't required,
+/// - a bare hour (`14`, `7.5`), wrapped into the day.
+///
+/// Returns the normalised seconds-of-day.
 pub fn parse_time_token(token: &str) -> Option<f32> {
     let token = token.trim();
     if let Some((h, m)) = token.split_once(':') {
-        let hours: u32 = h.parse().ok()?;
-        let minutes: u32 = m.parse().ok()?;
-        if hours >= 24 || minutes >= 60 {
-            return None;
-        }
-        return Some((hours * 3600 + minutes * 60) as f32);
+        return hhmm_seconds(h.parse().ok()?, m.parse().ok()?);
+    }
+
+    // `HHMM` with no colon. A 3-4 digit integer almost certainly means a clock
+    // time (`0700` = 07:00), not "700 hours" — which the bare-hour branch below
+    // would silently wrap to a nonsensical time of day. Split off the trailing
+    // two digits as minutes.
+    if (3..=4).contains(&token.len()) && token.bytes().all(|b| b.is_ascii_digit()) {
+        let value: u32 = token.parse().ok()?;
+        return hhmm_seconds(value / 100, value % 100);
     }
 
     if let Ok(hours) = token.parse::<f32>()
@@ -144,6 +153,14 @@ pub fn parse_time_token(token: &str) -> Option<f32> {
         return Some(seconds.rem_euclid(SECONDS_PER_DAY));
     }
     None
+}
+
+/// Seconds-of-day for an `HH`/`MM` pair, or `None` if either is out of range.
+fn hhmm_seconds(hours: u32, minutes: u32) -> Option<f32> {
+    if hours >= 24 || minutes >= 60 {
+        return None;
+    }
+    Some((hours * 3600 + minutes * 60) as f32)
 }
 
 #[cfg(test)]
@@ -187,6 +204,22 @@ mod tests {
         assert!(parse_time_token("nope").is_none());
         assert!(parse_time_token("25:00").is_none());
         assert!(parse_time_token("12:60").is_none());
+    }
+
+    #[test]
+    fn parse_time_token_handles_hhmm_without_colon() {
+        // `0700` is 07:00, not "700 hours" wrapped to 04:00 (the old bug).
+        assert!((parse_time_token("0700").unwrap() - 25_200.0).abs() < 0.01);
+        assert!((parse_time_token("0800").unwrap() - 28_800.0).abs() < 0.01);
+        assert!((parse_time_token("1430").unwrap() - 52_200.0).abs() < 0.01);
+        // 3-digit form: leading zero optional.
+        assert!((parse_time_token("800").unwrap() - 28_800.0).abs() < 0.01);
+        assert!((parse_time_token("100").unwrap() - 3_600.0).abs() < 0.01);
+        // Out-of-range clock components are rejected, not wrapped.
+        assert!(parse_time_token("2400").is_none());
+        assert!(parse_time_token("1260").is_none());
+        // 1-2 digit tokens stay "bare hour" (07:00, not split as H:M).
+        assert!((parse_time_token("7").unwrap() - 25_200.0).abs() < 0.01);
     }
 
     #[test]

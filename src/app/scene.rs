@@ -12,6 +12,7 @@
 
 mod assets;
 mod components;
+mod grass;
 mod mesh;
 mod sky;
 mod world;
@@ -26,6 +27,7 @@ pub(crate) use components::{
     DeployablePlacementGhost, FurnaceMouthLight, HeldItemVisual, MainCamera, NetworkDeployedEntity,
     NetworkDroppedItem, NetworkLootBag, NetworkPlayer, NetworkResourceNode, tree_mesh_height,
 };
+pub(crate) use grass::{GrassMaterial, GrassState, stream_grass_system};
 pub(crate) use mesh::PLAYER_HEAD_TOP_LOCAL_Y;
 pub(crate) use sky::{SunLight, update_sky_system};
 pub(crate) use world::{WorldSceneState, apply_world_scene_system};

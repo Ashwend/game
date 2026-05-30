@@ -91,6 +91,10 @@ pub(crate) enum ClientSystemSet {
     Players,
     DroppedItems,
     ResourceNodes,
+    /// Stream procedural detail-grass tiles around the camera. After
+    /// `ResourceNodes` so it shares the post-snapshot world view; purely
+    /// cosmetic and client-only.
+    Grass,
     DeployedEntities,
     PlacementGhost,
     PlacementInput,

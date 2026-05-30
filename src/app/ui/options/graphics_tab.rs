@@ -5,7 +5,7 @@
 use bevy_egui::egui;
 
 use crate::app::{
-    state::{AntiAliasing, ClientSettings, ShadowQuality},
+    state::{AntiAliasing, ClientSettings, GrassDensity, ShadowQuality},
     ui::theme,
 };
 
@@ -27,6 +27,27 @@ pub(super) fn render(ui: &mut egui::Ui, settings: &mut ClientSettings) {
         ui.add_space(6.0);
         anti_aliasing_row(ui, settings);
         shadows_row(ui, settings);
+        grass_row(ui, settings);
+    });
+}
+
+fn grass_row(ui: &mut egui::Ui, settings: &mut ClientSettings) {
+    setting_row(ui, "Grass", |ui| {
+        let response = egui::ComboBox::from_id_salt("options_grass_density")
+            .selected_text(settings.graphics.grass_density.label())
+            .width(230.0)
+            .show_ui(ui, |ui| {
+                for density in GrassDensity::ALL {
+                    let response = ui.selectable_value(
+                        &mut settings.graphics.grass_density,
+                        density,
+                        density.label(),
+                    );
+                    theme::record_click_sound(ui, &response);
+                }
+            })
+            .response;
+        theme::record_click_sound(ui, &response);
     });
 }
 

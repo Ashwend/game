@@ -40,7 +40,10 @@ use self::{
         manage_ambient_emitters_system, play_footsteps_system, play_impact_sounds_system,
         play_sounds_system, play_transition_stingers_system, tick_audio_faders_system,
     },
-    scene::{apply_world_scene_system, setup_scene, update_sky_system},
+    scene::{
+        GrassMaterial, GrassState, apply_world_scene_system, setup_scene, stream_grass_system,
+        update_sky_system,
+    },
     state::{
         ClientErrorToast, ClientRuntime, ClientSettingsStore, CraftingHudState, CraftingUiState,
         DeployablePlacementState, GatherInputState, InventoryUiState, LocalPlayerState, LookState,
@@ -120,6 +123,7 @@ const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::Players,
     ClientSystemSet::DroppedItems,
     ClientSystemSet::ResourceNodes,
+    ClientSystemSet::Grass,
     ClientSystemSet::DeployedEntities,
     // Placement preview / input rides after the snapshot has been
     // applied (so the local-player position used for reach checks is
@@ -237,6 +241,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .insert_resource(DroppedItemEntities::default())
         .insert_resource(LootBagEntities::default())
         .insert_resource(ResourceNodeEntities::default())
+        .insert_resource(GrassState::default())
         .insert_resource(RemotePlayerEntities::default())
         .insert_resource(LookState::default())
         .insert_resource(ToastState::default())
@@ -332,6 +337,11 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         // sibling `assets/` folder. Must come after DefaultPlugins so
         // AssetPlugin (and therefore `EmbeddedAssetRegistry`) exists.
         .add_plugins(embedded_assets::EmbeddedAssetsPlugin)
+        // Detail-grass material: the custom wind + distance-fade shader, an
+        // `ExtendedMaterial<StandardMaterial, GrassWindExtension>`. Client-only
+        // (the dedicated server has no render app); after EmbeddedAssetsPlugin so
+        // the embedded `shaders/grass.wgsl` resolves when grass first spawns.
+        .add_plugins(MaterialPlugin::<GrassMaterial>::default())
         // Audio: registers PlaySound event, SoundLibrary, FootstepState,
         // and the global ambient-zone resource. Must come after
         // EmbeddedAssetsPlugin so the asset paths it loads at startup
@@ -490,6 +500,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
             Update,
             apply_resource_nodes_system.in_set(ClientSystemSet::ResourceNodes),
         )
+        .add_systems(Update, stream_grass_system.in_set(ClientSystemSet::Grass))
         .add_systems(
             Update,
             apply_deployed_entities_system.in_set(ClientSystemSet::DeployedEntities),

@@ -5,7 +5,7 @@ use bevy::{
     pbr::{Atmosphere, AtmosphereSettings, ScatteringMedium},
     post_process::dof::{DepthOfField, DepthOfFieldMode},
     prelude::*,
-    render::view::Hdr,
+    render::view::{Hdr, NoIndirectDrawing},
 };
 
 use super::{
@@ -153,6 +153,14 @@ pub(crate) fn setup_scene(
         // a clipped white blob. Bloom itself is owned by
         // `apply_graphics_settings_system` so it tracks the Graphics tab.
         Hdr,
+        // Opt this camera out of GPU-driven indirect batching. With it on, the
+        // binned opaque phase intermittently dropped whole batches (regions of
+        // trees/ore vanishing until you moved) once a second pipeline — the
+        // custom grass material, and earlier `VisibilityRange` entities — shared
+        // the phase. Direct (non-indirect) drawing is stable here; with ~1k
+        // visible meshes the CPU draw-submission cost is negligible, and macOS
+        // Metal has limited multi-draw-indirect support anyway.
+        NoIndirectDrawing,
         Tonemapping::TonyMcMapface,
         // Procedural physically-based sky. `earthlike` uses the default
         // earthlike scattering medium; `AtmosphereSettings` is auto-required

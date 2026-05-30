@@ -88,9 +88,9 @@ impl GameServer {
         };
         lines.push(spawn_ore_line.to_owned());
         let time_line = if is_admin {
-            "  /time <HH:MM|hour>: set the time of day"
+            "  /time <HH:MM|HHMM|hour>: set the time of day"
         } else {
-            "  /time <HH:MM|hour>: admin only"
+            "  /time <HH:MM|HHMM|hour>: admin only"
         };
         lines.push(time_line.to_owned());
         let speed_line = if is_admin {
@@ -133,12 +133,17 @@ impl GameServer {
         }
 
         let Some(token) = args.first() else {
-            return reply_warning(client_id, "usage: /time <HH:MM> or /time <hour>");
+            return reply_warning(
+                client_id,
+                "usage: /time <HH:MM>, /time <HHMM>, or /time <hour>",
+            );
         };
         let Some(seconds) = parse_time_token(token) else {
             return reply_warning(
                 client_id,
-                format!("could not parse '{token}'; try '/time 06:30' or '/time 14'"),
+                format!(
+                    "could not parse '{token}'; try '/time 06:30', '/time 0700', or '/time 14'"
+                ),
             );
         };
 

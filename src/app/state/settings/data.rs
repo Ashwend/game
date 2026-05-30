@@ -222,6 +222,11 @@ pub(crate) struct GraphicsSettings {
     /// a major GPU cost in dense forest, so this is a real perf lever.
     #[serde(default)]
     pub(crate) shadows: ShadowQuality,
+    /// Density of the procedural detail grass — a client-only cosmetic ground
+    /// layer streamed in tiles around the camera. Higher tiers raise the blade
+    /// count and the draw radius (more GPU cost), `Off` removes it entirely.
+    #[serde(default)]
+    pub(crate) grass_density: GrassDensity,
 }
 
 impl Default for GraphicsSettings {
@@ -230,6 +235,34 @@ impl Default for GraphicsSettings {
             bloom_enabled: default_bloom_enabled(),
             anti_aliasing: AntiAliasing::default(),
             shadows: ShadowQuality::default(),
+            grass_density: GrassDensity::default(),
+        }
+    }
+}
+
+/// Procedural detail-grass density. Cosmetic, client-side, seed-free — none of
+/// it touches gameplay, collision, or the server, so it's free to differ
+/// between players. `Off` despawns all grass; the other tiers map to a
+/// blades-per-tile + draw-radius pair in the grass renderer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum GrassDensity {
+    Off,
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+
+impl GrassDensity {
+    pub(crate) const ALL: [Self; 4] = [Self::Off, Self::Low, Self::Medium, Self::High];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Low => "Low",
+            Self::Medium => "Medium",
+            Self::High => "High",
         }
     }
 }
