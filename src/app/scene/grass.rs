@@ -42,6 +42,7 @@ use bevy::{
     shader::ShaderRef,
 };
 
+use super::components::WorldGeometry;
 use super::mesh::builder::{GrassBlade, GrassBladeMesh, grass_blade_colors};
 use crate::{
     app::state::{ClientRuntime, ClientSettings, GrassDensity},
@@ -251,6 +252,52 @@ pub(crate) fn stream_grass_system(
                 ))
                 .id();
             tiles.insert((tx, tz), Some(entity));
+        }
+    }
+}
+
+/// Blade density for the static menu-backdrop grass carpet (Medium-ish).
+const MENU_GRASS_BLADES_PER_M2: f32 = 11.0;
+
+/// Spawn a fixed patch of detail grass for the main-menu backdrop, tagged
+/// [`WorldGeometry`] so it's torn down with the rest of the backdrop on scene
+/// change. Uses the shared wind [`GrassMaterial`] + the same blade meshes as the
+/// in-game grass, but as a static patch — the menu camera barely drifts, so
+/// streaming isn't needed and the shader's radial fade thins the far edge.
+///
+/// The tile range covers the camera's visible foreground/midground (camera near
+/// `(-5.8, 7.2)` looking toward `(0.4, -3.6)`); tiles past the fade radius are
+/// still spawned but dithered away by the shader.
+pub(crate) fn spawn_menu_grass(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    material: &Handle<GrassMaterial>,
+) {
+    let variants: Vec<Handle<Mesh>> = (0..GRASS_LAYOUT_COUNT)
+        .map(|layout| {
+            meshes.add(mesh_from_blades(&generate_layout_blades(
+                layout,
+                MENU_GRASS_BLADES_PER_M2,
+            )))
+        })
+        .collect();
+
+    // Visible ground band in front of the menu camera, in 8 m tiles.
+    for tx in -2..=4 {
+        for tz in -3..=0 {
+            let (cx, cz) = tile_center(tx, tz);
+            let seed = tile_seed(tx, tz);
+            let layout = (seed % GRASS_LAYOUT_COUNT as u64) as usize;
+            let yaw = ((seed >> 8) % 4) as f32 * std::f32::consts::FRAC_PI_2;
+            commands.spawn((
+                Name::new(format!("Menu Grass {tx},{tz}")),
+                WorldGeometry,
+                Mesh3d(variants[layout].clone()),
+                MeshMaterial3d(material.clone()),
+                Transform::from_xyz(cx, 0.0, cz).with_rotation(Quat::from_rotation_y(yaw)),
+                Visibility::Visible,
+                NotShadowCaster,
+            ));
         }
     }
 }

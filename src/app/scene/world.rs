@@ -10,7 +10,11 @@ use crate::{
     world::{BlockKind, WorldData},
 };
 
-use super::{assets::WORLD_COLOR, components::WorldGeometry};
+use super::{
+    assets::WORLD_COLOR,
+    components::WorldGeometry,
+    grass::{GrassMaterialHandle, spawn_menu_grass},
+};
 
 pub(super) const STONE_WALL_COLOR: Color = Color::srgb(0.52, 0.53, 0.55);
 
@@ -56,6 +60,7 @@ pub(crate) fn apply_world_scene_system(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     resource_assets: Option<Res<ResourceVisualAssets>>,
+    grass_material: Option<Res<GrassMaterialHandle>>,
     geometry: Query<Entity, With<WorldGeometry>>,
 ) {
     let desired = scene_selection(&runtime, menu.screen);
@@ -77,6 +82,11 @@ pub(crate) fn apply_world_scene_system(
             // camera has something interesting to look at.
             if let Some(assets) = resource_assets.as_deref() {
                 spawn_menu_resource_nodes(&mut commands, assets, &backdrop);
+            }
+            // A swaying detail-grass carpet over the bare ground between props,
+            // so the backdrop reads as a living woodland floor.
+            if let Some(grass_material) = grass_material.as_deref() {
+                spawn_menu_grass(&mut commands, &mut meshes, &grass_material.0);
             }
         }
         WorldSceneSelection::Live { .. } => {
