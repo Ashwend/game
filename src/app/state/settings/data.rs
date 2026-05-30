@@ -211,10 +211,13 @@ pub(crate) struct GraphicsSettings {
     /// preset; players just get a simple on/off like most games offer.
     #[serde(default = "default_bloom_enabled")]
     pub(crate) bloom_enabled: bool,
-    /// Multisample anti-aliasing level used while in-game. The menu backdrop
-    /// always forces MSAA off (it relies on depth-of-field instead).
+    /// In-game anti-aliasing mode. Defaults to FXAA: MSAA composites badly with
+    /// the procedural atmosphere sky (dark, shimmering fringes where geometry
+    /// meets the fullscreen sky pass), so FXAA is the clean default with MSAA
+    /// left as an explicit choice. The menu backdrop ignores this (it leans on
+    /// depth-of-field instead).
     #[serde(default)]
-    pub(crate) msaa: MsaaSetting,
+    pub(crate) anti_aliasing: AntiAliasing,
     /// Sun shadow quality. Re-rendering every tree into the shadow cascades is
     /// a major GPU cost in dense forest, so this is a real perf lever.
     #[serde(default)]
@@ -225,7 +228,7 @@ impl Default for GraphicsSettings {
     fn default() -> Self {
         Self {
             bloom_enabled: default_bloom_enabled(),
-            msaa: MsaaSetting::default(),
+            anti_aliasing: AntiAliasing::default(),
             shadows: ShadowQuality::default(),
         }
     }
@@ -285,36 +288,45 @@ impl ShadowQuality {
     }
 }
 
-/// In-game multisample anti-aliasing level. Mirrors the subset of Bevy's
-/// [`Msaa`] variants we expose; `Sample8` is intentionally omitted — it costs
-/// far more than `Sample4` for a barely perceptible gain at this art style.
+/// In-game anti-aliasing mode. FXAA is the default because MSAA leaves dark,
+/// shimmering fringes where geometry meets the procedural atmosphere sky (the
+/// fullscreen sky pass doesn't resolve cleanly under multisampling — Bevy's own
+/// atmosphere example uses FXAA for the same reason). MSAA is still offered for
+/// players who prefer its sharper interior edges and don't mind the fringing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum MsaaSetting {
+pub(crate) enum AntiAliasing {
     Off,
-    Sample2,
     #[default]
-    Sample4,
+    Fxaa,
+    Msaa2,
+    Msaa4,
 }
 
-impl MsaaSetting {
-    pub(crate) const ALL: [Self; 3] = [Self::Off, Self::Sample2, Self::Sample4];
+impl AntiAliasing {
+    pub(crate) const ALL: [Self; 4] = [Self::Off, Self::Fxaa, Self::Msaa2, Self::Msaa4];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Off => "Off",
-            Self::Sample2 => "2x",
-            Self::Sample4 => "4x",
+            Self::Fxaa => "FXAA",
+            Self::Msaa2 => "MSAA 2x",
+            Self::Msaa4 => "MSAA 4x",
         }
     }
 
-    /// The Bevy MSAA value to apply to the in-game camera.
-    pub(crate) fn to_msaa(self) -> Msaa {
+    /// The Bevy MSAA sample count for this mode (`Off` for the FXAA/Off modes).
+    pub(crate) fn msaa(self) -> Msaa {
         match self {
-            Self::Off => Msaa::Off,
-            Self::Sample2 => Msaa::Sample2,
-            Self::Sample4 => Msaa::Sample4,
+            Self::Msaa2 => Msaa::Sample2,
+            Self::Msaa4 => Msaa::Sample4,
+            Self::Off | Self::Fxaa => Msaa::Off,
         }
+    }
+
+    /// Whether the FXAA post-process pass should run on the camera.
+    pub(crate) fn fxaa_enabled(self) -> bool {
+        matches!(self, Self::Fxaa)
     }
 }
 

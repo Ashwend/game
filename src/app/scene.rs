@@ -42,8 +42,10 @@ mod tests {
         world::WorldData,
     };
     use bevy::{
-        anti_alias::taa::TemporalAntiAliasing, pbr::ScatteringMedium,
-        post_process::dof::DepthOfField, prelude::*,
+        anti_alias::{fxaa::Fxaa, taa::TemporalAntiAliasing},
+        pbr::ScatteringMedium,
+        post_process::dof::DepthOfField,
+        prelude::*,
     };
 
     use crate::app::state::{MenuState, Screen};
@@ -110,11 +112,19 @@ mod tests {
         app.update();
 
         let world = app.world_mut();
+        // Default in-game AA is FXAA (post-process), not MSAA and not TAA — so
+        // MSAA is off, FXAA is present, and there's no temporal double-image.
         let msaa = world
             .query_filtered::<&Msaa, With<MainCamera>>()
             .single(world)
             .expect("main camera should exist");
-        assert_eq!(*msaa, Msaa::Sample4);
+        assert_eq!(*msaa, Msaa::Off);
+
+        let fxaa_count = world
+            .query_filtered::<&Fxaa, With<MainCamera>>()
+            .iter(world)
+            .count();
+        assert_eq!(fxaa_count, 1);
 
         let depth_of_field_count = world
             .query_filtered::<&DepthOfField, With<MainCamera>>()

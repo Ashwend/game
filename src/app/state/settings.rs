@@ -12,8 +12,8 @@ mod keybindings;
 mod store;
 
 pub(crate) use data::{
-    ClientSettings, DisplayMode, DisplayResolution, MAX_FOV_DEG, MAX_UI_SCALE, MIN_FOV_DEG,
-    MIN_UI_SCALE, MsaaSetting, ShadowQuality,
+    AntiAliasing, ClientSettings, DisplayMode, DisplayResolution, MAX_FOV_DEG, MAX_UI_SCALE,
+    MIN_FOV_DEG, MIN_UI_SCALE, ShadowQuality,
 };
 pub(crate) use display::display_resolutions;
 pub(crate) use keybindings::{KeyAction, KeyBindingCategory, KeyBindingSlot, KeyBindings};

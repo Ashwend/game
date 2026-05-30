@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use bevy::{light::NotShadowCaster, prelude::*};
+use bevy::{camera::visibility::VisibilityRange, light::NotShadowCaster, prelude::*};
 
 use crate::{
     app::{
@@ -448,11 +448,12 @@ fn spawn_resource_node_entity(
     should_pop_in: bool,
 ) {
     let (mesh, material) = resource_node_visual(assets, model);
+    let lod_mesh = tree_lod_mesh(assets, model);
     let mut spawn_command = commands.spawn((
         Name::new(format!("Resource Node {id}")),
         NetworkResourceNode { id, model },
         Mesh3d(mesh),
-        MeshMaterial3d(material),
+        MeshMaterial3d(material.clone()),
         target_transform,
         Visibility::Visible,
     ));
@@ -471,11 +472,71 @@ fn spawn_resource_node_entity(
             base_transform: target_transform,
         });
     }
+    // Trees get a distance LOD: this (full-detail) mesh fades out past
+    // `TREE_LOD_DISTANCE`; a child carrying the low-poly mesh fades in. Bevy's
+    // `VisibilityRange` does the crossfade GPU-side off the existing visibility
+    // pass — no per-frame CPU cost. Cuts main-pass vertex throughput across a
+    // forest of distant trees (shadow distance is bounded separately by the
+    // Shadows graphics setting).
+    if lod_mesh.is_some() {
+        spawn_command.insert(tree_lod_high_range());
+    }
     let entity = spawn_command.id();
     entities.entities.insert(id, entity);
 
+    if let Some(lod_mesh) = lod_mesh {
+        commands.entity(entity).with_children(|parent| {
+            parent.spawn((
+                Name::new(format!("Resource Node {id} LOD")),
+                Mesh3d(lod_mesh),
+                MeshMaterial3d(material),
+                tree_lod_low_range(),
+                Transform::default(),
+                Visibility::Visible,
+            ));
+        });
+    }
+
     if should_pop_in {
         spawn_pop_in_chip_burst(commands, impact_assets, id, position, model);
+    }
+}
+
+/// Distance (m from camera) at which a tree crossfades from its full-detail
+/// mesh to the low-poly LOD, and the width of the crossfade band.
+const TREE_LOD_DISTANCE: f32 = 40.0;
+const TREE_LOD_FADE: f32 = 12.0;
+
+/// The low-poly LOD mesh for a tree model, or `None` for non-tree nodes.
+fn tree_lod_mesh(assets: &ResourceVisualAssets, model: ResourceNodeModel) -> Option<Handle<Mesh>> {
+    Some(match model {
+        ResourceNodeModel::PineTreeSmall => assets.pine_tree_small_lod_mesh.clone(),
+        ResourceNodeModel::PineTreeMedium => assets.pine_tree_medium_lod_mesh.clone(),
+        ResourceNodeModel::PineTreeLarge => assets.pine_tree_large_lod_mesh.clone(),
+        ResourceNodeModel::BirchTreeSmall => assets.birch_tree_small_lod_mesh.clone(),
+        ResourceNodeModel::BirchTreeMedium => assets.birch_tree_medium_lod_mesh.clone(),
+        ResourceNodeModel::BirchTreeLarge => assets.birch_tree_large_lod_mesh.clone(),
+        _ => return None,
+    })
+}
+
+/// `VisibilityRange` for the full-detail mesh: fully visible up close, dither-
+/// crossfading out across the LOD band.
+fn tree_lod_high_range() -> VisibilityRange {
+    VisibilityRange {
+        start_margin: 0.0..0.0,
+        end_margin: TREE_LOD_DISTANCE..(TREE_LOD_DISTANCE + TREE_LOD_FADE),
+        use_aabb: false,
+    }
+}
+
+/// `VisibilityRange` for the low-poly mesh: fades in across the LOD band, then
+/// stays visible out to the (well-beyond-far-plane) cutoff.
+fn tree_lod_low_range() -> VisibilityRange {
+    VisibilityRange {
+        start_margin: TREE_LOD_DISTANCE..(TREE_LOD_DISTANCE + TREE_LOD_FADE),
+        end_margin: 10_000.0..10_000.0,
+        use_aabb: false,
     }
 }
 

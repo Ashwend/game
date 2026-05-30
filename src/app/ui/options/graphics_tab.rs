@@ -5,7 +5,7 @@
 use bevy_egui::egui;
 
 use crate::app::{
-    state::{ClientSettings, MsaaSetting, ShadowQuality},
+    state::{AntiAliasing, ClientSettings, ShadowQuality},
     ui::theme,
 };
 
@@ -25,7 +25,7 @@ pub(super) fn render(ui: &mut egui::Ui, settings: &mut ClientSettings) {
     theme::inset_frame().show(ui, |ui| {
         ui.label(section_label("Quality"));
         ui.add_space(6.0);
-        msaa_row(ui, settings);
+        anti_aliasing_row(ui, settings);
         shadows_row(ui, settings);
     });
 }
@@ -50,15 +50,18 @@ fn shadows_row(ui: &mut egui::Ui, settings: &mut ClientSettings) {
     });
 }
 
-fn msaa_row(ui: &mut egui::Ui, settings: &mut ClientSettings) {
-    setting_row(ui, "Anti-aliasing (MSAA)", |ui| {
-        let response = egui::ComboBox::from_id_salt("options_msaa")
-            .selected_text(settings.graphics.msaa.label())
+fn anti_aliasing_row(ui: &mut egui::Ui, settings: &mut ClientSettings) {
+    setting_row(ui, "Anti-aliasing", |ui| {
+        let response = egui::ComboBox::from_id_salt("options_anti_aliasing")
+            .selected_text(settings.graphics.anti_aliasing.label())
             .width(230.0)
             .show_ui(ui, |ui| {
-                for level in MsaaSetting::ALL {
-                    let response =
-                        ui.selectable_value(&mut settings.graphics.msaa, level, level.label());
+                for mode in AntiAliasing::ALL {
+                    let response = ui.selectable_value(
+                        &mut settings.graphics.anti_aliasing,
+                        mode,
+                        mode.label(),
+                    );
                     theme::record_click_sound(ui, &response);
                 }
             })
@@ -95,6 +98,6 @@ mod tests {
         assert!(!output.shapes.is_empty());
         // Defaults survive a render with no interaction.
         assert!(settings.graphics.bloom_enabled);
-        assert_eq!(settings.graphics.msaa, MsaaSetting::Sample4);
+        assert_eq!(settings.graphics.anti_aliasing, AntiAliasing::Fxaa);
     }
 }
