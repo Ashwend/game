@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bevy::log::info_span;
 
@@ -144,6 +144,18 @@ pub struct GameServer {
     /// big change. Future cleanup will fold this map into the entities
     /// themselves once Lightyear replication is proven.
     resource_nodes: HashMap<ResourceNodeId, ResourceNodeState>,
+    /// Incremental mirror-sync bookkeeping. `sync_resource_node_entities`
+    /// (in `net::host`) used to walk *every* live node each tick to reconcile
+    /// the replicated ECS mirror — O(live nodes), which at tens of thousands
+    /// of nodes cost ~100ms/tick. Instead, mutations to `resource_nodes` record
+    /// the affected id here and the sync processes only the delta. `dirty` =
+    /// added or storage-changed (re-spawn or update the mirror entity);
+    /// `removed` = gone (despawn the mirror entity). Both are drained by the
+    /// sync each tick. All `resource_nodes` mutations MUST go through the
+    /// `insert_resource_node` / `remove_resource_node` / `resource_node_state_mut`
+    /// helpers so nothing is missed (stale replication otherwise).
+    node_sync_dirty: HashSet<ResourceNodeId>,
+    node_sync_removed: HashSet<ResourceNodeId>,
     /// Server-authoritative chunk system. Owns per-chunk capacity, AoI
     /// visibility, and the fresh-position regrow scheduler.
     pub(crate) chunk_manager: ChunkManager,
@@ -269,6 +281,11 @@ impl GameServer {
         let world_time = save.state.world_time();
         let tick = save.state.last_authoritative_tick;
 
+        // Seed the mirror-sync dirty set with every initial node so the first
+        // `sync_resource_node_entities` pass spawns all mirror entities once;
+        // after that only mutated nodes are reprocessed.
+        let node_sync_dirty: HashSet<ResourceNodeId> = resource_nodes.keys().copied().collect();
+
         Self {
             tick,
             save,
@@ -281,6 +298,8 @@ impl GameServer {
             dropped_items,
             dropped_item_physics,
             resource_nodes,
+            node_sync_dirty,
+            node_sync_removed: HashSet::new(),
             chunk_manager,
             deployed_entities,
             loot_bags: HashMap::new(),
@@ -461,6 +480,57 @@ impl GameServer {
         self.chunk_manager.node_chunk(id)
     }
 
+    /// Read a single node's authoritative state. Used by the mirror sync to
+    /// fetch only the nodes it needs to (re)spawn or update this tick.
+    pub fn resource_node_state(&self, id: ResourceNodeId) -> Option<&ResourceNodeState> {
+        self.resource_nodes.get(&id)
+    }
+
+    /// Insert (or replace) a node and record it for the next mirror sync. The
+    /// single entry point for adding nodes — keeps `node_sync_dirty` accurate.
+    pub(crate) fn insert_resource_node(&mut self, id: ResourceNodeId, node: ResourceNodeState) {
+        self.resource_nodes.insert(id, node);
+        self.node_sync_dirty.insert(id);
+        self.node_sync_removed.remove(&id);
+    }
+
+    /// Remove a node and record it for the next mirror sync (which despawns the
+    /// replicated entity). Returns the removed state, mirroring `HashMap`.
+    pub(crate) fn remove_resource_node(&mut self, id: ResourceNodeId) -> Option<ResourceNodeState> {
+        let removed = self.resource_nodes.remove(&id);
+        if removed.is_some() {
+            self.node_sync_removed.insert(id);
+            self.node_sync_dirty.remove(&id);
+        }
+        removed
+    }
+
+    /// Mutable access to a node, conservatively flagging it dirty for the next
+    /// mirror sync (any hand-out of `&mut` may change the node). The single
+    /// entry point for in-place node edits.
+    pub(crate) fn resource_node_state_mut(
+        &mut self,
+        id: ResourceNodeId,
+    ) -> Option<&mut ResourceNodeState> {
+        // Mark before borrowing the map mutably; the change-detection compare
+        // still happens on the actual value in the sync, so a spurious mark
+        // just costs one no-op delta entry.
+        if self.resource_nodes.contains_key(&id) {
+            self.node_sync_dirty.insert(id);
+            self.node_sync_removed.remove(&id);
+        }
+        self.resource_nodes.get_mut(&id)
+    }
+
+    /// Drain the accumulated mirror-sync deltas: `(dirty ids, removed ids)`.
+    /// Called once per tick by `sync_resource_node_entities`.
+    pub fn drain_resource_node_sync(&mut self) -> (Vec<ResourceNodeId>, Vec<ResourceNodeId>) {
+        (
+            self.node_sync_dirty.drain().collect(),
+            self.node_sync_removed.drain().collect(),
+        )
+    }
+
     /// Iterate live dropped items (id + wire-shape view) for the
     /// `sync_dropped_item_entities` mirror.
     pub fn dropped_items_iter(
@@ -573,7 +643,7 @@ impl GameServer {
             self.chunk_manager.tick(self.tick, &self.resource_nodes)
         };
         for node in regrow.spawned {
-            self.resource_nodes.insert(node.id, node);
+            self.insert_resource_node(node.id, node);
         }
         self.tick_furnaces();
         self.tick_loot_bags(delta_seconds);

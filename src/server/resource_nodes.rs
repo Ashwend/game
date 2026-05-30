@@ -78,7 +78,7 @@ impl GameServer {
 
         let payout_id = payout.item_id.clone();
         let mut depleted = false;
-        if let Some(node) = self.resource_nodes.get_mut(&command.resource_node_id) {
+        if let Some(node) = self.resource_node_state_mut(command.resource_node_id) {
             remove_resource_from_storage(node, &payout_id, accepted_quantity);
             depleted = resource_storage_is_empty(node);
         }
@@ -91,7 +91,7 @@ impl GameServer {
             // can't tell "node depleted" apart from "node left this
             // client's AoI" and would falsely animate the death of
             // every node leaving view at every chunk-boundary crossing.
-            self.resource_nodes.remove(&command.resource_node_id);
+            self.remove_resource_node(command.resource_node_id);
             self.chunk_manager
                 .handle_node_depleted(command.resource_node_id, self.tick);
             envelopes.push(ServerEnvelope {

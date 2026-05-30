@@ -17,6 +17,55 @@ fn look_at_test_node(server: &mut GameServer, client_id: ClientId) {
 }
 
 #[test]
+fn mirror_sync_deltas_track_insert_mutate_and_remove() {
+    let mut server = server();
+    // The constructor seeds every generated node as dirty (so the first sync
+    // spawns all mirror entities). Drain it to start from a clean slate.
+    let _ = server.drain_resource_node_sync();
+    let (dirty, removed) = server.drain_resource_node_sync();
+    assert!(
+        dirty.is_empty() && removed.is_empty(),
+        "drain should clear the delta sets"
+    );
+
+    let id = 999_001;
+
+    // Insert is recorded as dirty (→ sync spawns a mirror entity).
+    server.insert_resource_node(id, coal_node(id, 5));
+    let (dirty, removed) = server.drain_resource_node_sync();
+    assert_eq!(dirty, vec![id]);
+    assert!(removed.is_empty());
+
+    // Mutating via the guarded accessor re-flags it dirty (→ storage diff).
+    server
+        .resource_node_state_mut(id)
+        .expect("node present")
+        .storage = vec![ItemStack::new(COAL_ID, 2)];
+    let (dirty, removed) = server.drain_resource_node_sync();
+    assert_eq!(dirty, vec![id]);
+    assert!(removed.is_empty());
+
+    // Removal is recorded as removed, not dirty (→ sync despawns it).
+    assert!(server.remove_resource_node(id).is_some());
+    let (dirty, removed) = server.drain_resource_node_sync();
+    assert!(dirty.is_empty());
+    assert_eq!(removed, vec![id]);
+
+    // Insert + remove within one sync window collapses to a single removal
+    // (the entity was never spawned, so the sync's despawn no-ops).
+    server.insert_resource_node(id, coal_node(id, 5));
+    assert!(server.remove_resource_node(id).is_some());
+    let (dirty, removed) = server.drain_resource_node_sync();
+    assert!(dirty.is_empty(), "removed-after-insert must not stay dirty");
+    assert_eq!(removed, vec![id]);
+
+    // A mutate-attempt on an absent node records nothing.
+    assert!(server.resource_node_state_mut(id).is_none());
+    let (dirty, removed) = server.drain_resource_node_sync();
+    assert!(dirty.is_empty() && removed.is_empty());
+}
+
+#[test]
 fn test_world_spawns_authoritative_resource_nodes() {
     let mut server = server();
     connect_host(&mut server);

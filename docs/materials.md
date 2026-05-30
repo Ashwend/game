@@ -45,6 +45,16 @@ The ground plane in `src/app/scene/world.rs` solves this with `build_ground_mesh
 
 Apply the same recipe to any future large flat ground/water/floor surface. For curved or faceted low-poly meshes (trees, ore chunks, bags), the geometry already breaks up the highlight and no normal jitter is needed.
 
-## Bigger lever for later
+## Environment lighting (IBL)
 
-There is currently no `EnvironmentMapLight` in the scene — every material's ambient specular is fed purely by the directional sun and the ambient term. Generating a tiny cubemap from the procedural sky and feeding it as an IBL source would give all materials proper environment reflections, which is the single biggest "this scene looks lit" jump still on the table. Out of scope for now; flagged here so it isn't forgotten.
+The camera carries a procedural `Atmosphere` plus `AtmosphereEnvironmentMapLight` (set up in [`assets.rs`](../src/app/scene/assets.rs)). The atmosphere renders the sky **and** generates an environment map from it each frame, which feeds every material's ambient diffuse and specular reflections — the "free IBL" that makes the scene read as genuinely lit. This replaced the old hand-authored `ClearColor` sky and the all-ambient-term lighting model.
+
+Consequences for material authoring:
+
+- Ambient now has *direction and colour* (sky above is brighter/bluer than the ground bounce), so reflectance values read more naturally than they did under a flat ambient term — but it also means a too-high `reflectance` will now pick up visible sky reflections. Keep the matte values in the table above.
+- Daytime ambient comes from the atmosphere; the `GlobalAmbientLight` resource is now only a **night floor** (see [`sky.rs`](../src/app/scene/sky.rs)) and fades to zero by day. Don't reintroduce a large day-time `GlobalAmbientLight` — it double-lights against the environment map and washes the scene out.
+- The sun `DirectionalLight` is kept neutral white; the atmosphere tints it toward warm at the horizon. Don't re-add a per-time-of-day warm tint to the light colour or it double-counts.
+
+Brightness is intentionally **not** physical raw-sunlight + manual exposure. Raw sunlight (~130k lux) has too much dynamic range across the day for a single fixed exposure to look good, and the usual fix — auto-exposure — fights the fixed, gameplay-fair night this game wants (it would brighten the dark so the player always sees). Instead the sun sits at a daylight-calibrated `SUN_PEAK_ILLUMINANCE` (≈ `AMBIENT_DAYLIGHT`) under the renderer's default exposure, which the atmosphere still renders/tints correctly and which holds a consistent, hand-tuned look from dawn to dusk. So existing lights/emissives stay in the established scale — don't switch a new one to physical raw values.
+
+Brightness knobs: `ATMOSPHERE_AMBIENT_INTENSITY` (in `assets.rs`) for daytime ambient/reflection strength, and `SUN_PEAK_ILLUMINANCE` / `NIGHT_AMBIENT_FLOOR` / `MOON_PEAK_ILLUMINANCE` in `sky.rs` for sun/night balance.

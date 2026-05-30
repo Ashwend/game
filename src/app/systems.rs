@@ -5,6 +5,7 @@ mod chunk_overlay;
 mod deployables;
 mod display;
 pub(crate) mod effects;
+mod graphics;
 pub(crate) mod input;
 mod items;
 mod network;
@@ -35,6 +36,7 @@ pub(crate) use deployables::{
 };
 pub(crate) use display::apply_display_settings_system;
 pub(crate) use effects::{spawn_impact_effects_system, tick_impact_chips_system};
+pub(crate) use graphics::apply_graphics_settings_system;
 pub(crate) use input::{
     center_cursor_on_focus_system, chat_shortcut_system, client_input_system,
     close_furnace_on_escape_system, close_loot_bag_on_escape_system,

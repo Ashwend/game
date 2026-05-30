@@ -7,6 +7,7 @@ mod audio_tab;
 mod controls_tab;
 mod display_tab;
 mod general_tab;
+mod graphics_tab;
 mod keybindings_tab;
 mod voice_tab;
 mod widgets;
@@ -97,6 +98,7 @@ fn options_body_contents(
     match options_ui_state.tab {
         OptionsTab::General => general_tab::render(ui, settings),
         OptionsTab::Display => display_tab::render(ui, settings, primary_monitor),
+        OptionsTab::Graphics => graphics_tab::render(ui, settings),
         OptionsTab::Audio => audio_tab::render(ui, settings),
         OptionsTab::Voice => voice_tab::render(ui, settings),
         OptionsTab::Controls => controls_tab::render(ui, settings),

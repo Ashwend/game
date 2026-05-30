@@ -13,7 +13,7 @@ mod store;
 
 pub(crate) use data::{
     ClientSettings, DisplayMode, DisplayResolution, MAX_FOV_DEG, MAX_UI_SCALE, MIN_FOV_DEG,
-    MIN_UI_SCALE,
+    MIN_UI_SCALE, MsaaSetting, ShadowQuality,
 };
 pub(crate) use display::display_resolutions;
 pub(crate) use keybindings::{KeyAction, KeyBindingCategory, KeyBindingSlot, KeyBindings};
@@ -100,6 +100,7 @@ mod tests {
                 invert_mouse_y: false,
             },
             hud: HudSettings::default(),
+            graphics: Default::default(),
             voice: Default::default(),
             keybindings: Default::default(),
             identity: Default::default(),

@@ -12,6 +12,7 @@ pub(crate) enum OptionsTab {
     #[default]
     General,
     Display,
+    Graphics,
     Audio,
     Voice,
     Controls,
@@ -19,9 +20,10 @@ pub(crate) enum OptionsTab {
 }
 
 impl OptionsTab {
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 7] = [
         Self::General,
         Self::Display,
+        Self::Graphics,
         Self::Audio,
         Self::Voice,
         Self::Controls,
@@ -32,6 +34,7 @@ impl OptionsTab {
         match self {
             Self::General => "General",
             Self::Display => "Display",
+            Self::Graphics => "Graphics",
             Self::Audio => "Audio",
             Self::Voice => "Voice",
             Self::Controls => "Controls",

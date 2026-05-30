@@ -266,7 +266,7 @@ impl GameServer {
         let kind = ore_node_kind(ore_id);
         self.chunk_manager
             .track_resource_node(node_id, kind, position);
-        self.resource_nodes.insert(node_id, node);
+        self.insert_resource_node(node_id, node);
 
         reply_success(
             client_id,

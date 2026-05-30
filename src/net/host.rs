@@ -366,43 +366,42 @@ fn drain_host_commands(
 /// so they only emit `Changed` ticks when the inner Vec actually differs.
 fn sync_resource_node_entities(world: &mut World) {
     let _span = info_span!("sync_resource_node_entities").entered();
-    // Pull the authoritative state out as an owned snapshot so we can
-    // release the borrow before mutating the world (spawn/despawn need
-    // `&mut World` and would conflict with a live `Res<>` borrow).
-    let authoritative: Vec<(
-        crate::protocol::ResourceNodeId,
-        crate::protocol::ResourceNodeState,
-    )> = {
-        let server = world.resource::<AuthoritativeServer>();
-        server
-            .0
-            .resource_nodes_iter()
-            .map(|(id, state)| (*id, state.clone()))
-            .collect()
-    };
-    let authoritative_ids: std::collections::HashSet<crate::protocol::ResourceNodeId> =
-        authoritative.iter().map(|(id, _)| *id).collect();
-
-    // 1. Despawn entities whose node id is no longer in the live map.
-    let stale: Vec<crate::protocol::ResourceNodeId> = {
-        let index = world.resource::<crate::server::ResourceNodeIndex>();
-        index
-            .iter()
-            .filter_map(|(id, _)| {
-                if authoritative_ids.contains(&id) {
-                    None
-                } else {
-                    Some(id)
-                }
+    // Incremental sync: the authoritative map records which node ids changed
+    // (`dirty`) or were removed since the last pass, so we only touch the delta
+    // instead of walking all live nodes every tick. We snapshot the (small) set
+    // of changed states + anchor chunks up front so the `Res` borrow is
+    // released before the spawn/despawn calls need `&mut World`.
+    #[allow(clippy::type_complexity)]
+    let (dirty_states, removed): (
+        Vec<(
+            crate::protocol::ResourceNodeId,
+            crate::protocol::ResourceNodeState,
+            Option<ChunkCoord>,
+        )>,
+        Vec<crate::protocol::ResourceNodeId>,
+    ) = {
+        let mut server = world.resource_mut::<AuthoritativeServer>();
+        let (dirty_ids, removed_ids) = server.0.drain_resource_node_sync();
+        let dirty_states = dirty_ids
+            .into_iter()
+            .filter_map(|id| {
+                server
+                    .0
+                    .resource_node_state(id)
+                    .map(|state| (id, state.clone(), server.0.resource_node_chunk(id)))
             })
-            .collect()
+            .collect();
+        (dirty_states, removed_ids)
     };
-    for id in stale {
+
+    // 1. Despawn the mirror entities for removed ids (no-op if one was added
+    //    and removed within the same sync window — it never got an entity).
+    for id in removed {
         crate::server::despawn_resource_node_entity(world, id);
     }
 
-    // 2. Walk the live map; spawn fresh entities, update existing ones.
-    for (id, state) in authoritative {
+    // 2. Spawn fresh entities for new ids; refresh storage for changed ones.
+    for (id, state, chunk) in dirty_states {
         let existing = world.resource::<crate::server::ResourceNodeIndex>().get(id);
         match existing {
             Some(entity) => {
@@ -431,13 +430,9 @@ fn sync_resource_node_entities(world: &mut World) {
                 // resource_nodes insert but before track_resource_node),
                 // fall back to the position's chunk so the entity still
                 // has a coord; the next tick will resync the membership.
-                let chunk = world
-                    .resource::<AuthoritativeServer>()
-                    .0
-                    .resource_node_chunk(id)
-                    .unwrap_or_else(|| {
-                        crate::world::ChunkCoord::from_world(state.position.x, state.position.z)
-                    });
+                let chunk = chunk.unwrap_or_else(|| {
+                    crate::world::ChunkCoord::from_world(state.position.x, state.position.z)
+                });
                 let entity = crate::server::spawn_resource_node_entity(world, state, chunk);
                 attach_room_gated_replication(world, entity, chunk);
             }

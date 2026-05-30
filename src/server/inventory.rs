@@ -236,7 +236,7 @@ impl GameServer {
             // a Lightyear despawn alone can't distinguish a real depletion
             // from an AoI-leave, so this reliable message is the
             // disambiguator the client's pending-depletion grace map uses.
-            self.resource_nodes.remove(&resource_node_id);
+            self.remove_resource_node(resource_node_id);
             self.chunk_manager
                 .handle_node_depleted(resource_node_id, self.tick);
             envelopes.push(ServerEnvelope {
@@ -245,7 +245,7 @@ impl GameServer {
                     id: resource_node_id,
                 },
             });
-        } else if let Some(node_mut) = self.resource_nodes.get_mut(&resource_node_id) {
+        } else if let Some(node_mut) = self.resource_node_state_mut(resource_node_id) {
             // Partial pickup — leave the rest in the node's storage so
             // the player can come back with a bigger bag. The ECS
             // mirror picks up the new storage on the next sync and

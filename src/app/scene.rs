@@ -27,7 +27,7 @@ pub(crate) use components::{
     NetworkDroppedItem, NetworkLootBag, NetworkPlayer, NetworkResourceNode, tree_mesh_height,
 };
 pub(crate) use mesh::PLAYER_HEAD_TOP_LOCAL_Y;
-pub(crate) use sky::update_sky_system;
+pub(crate) use sky::{SunLight, update_sky_system};
 pub(crate) use world::{WorldSceneState, apply_world_scene_system};
 
 #[cfg(test)]
@@ -42,7 +42,8 @@ mod tests {
         world::WorldData,
     };
     use bevy::{
-        anti_alias::taa::TemporalAntiAliasing, post_process::dof::DepthOfField, prelude::*,
+        anti_alias::taa::TemporalAntiAliasing, pbr::ScatteringMedium,
+        post_process::dof::DepthOfField, prelude::*,
     };
 
     use crate::app::state::{MenuState, Screen};
@@ -51,6 +52,9 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Assets<Mesh>>();
         app.init_resource::<Assets<StandardMaterial>>();
+        // `setup_scene` adds an earthlike `Atmosphere` to the camera, which
+        // pulls a `ScatteringMedium` handle out of this asset collection.
+        app.init_resource::<Assets<ScatteringMedium>>();
         app
     }
 

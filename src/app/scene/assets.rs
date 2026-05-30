@@ -1,7 +1,11 @@
 use bevy::{
     audio::SpatialListener,
+    core_pipeline::tonemapping::Tonemapping,
+    light::AtmosphereEnvironmentMapLight,
+    pbr::{Atmosphere, AtmosphereSettings, ScatteringMedium},
     post_process::dof::{DepthOfField, DepthOfFieldMode},
     prelude::*,
+    render::view::Hdr,
 };
 
 use super::{
@@ -19,6 +23,22 @@ use super::{
 };
 
 use crate::app::{EYE_HEIGHT, PLAYER_VISUAL_CENTER_Y};
+
+/// Strength of the image-based ambient/reflection light generated from the
+/// procedural sky. The sun is kept at a daylight-calibrated illuminance (see
+/// `SUN_PEAK_ILLUMINANCE` in `sky.rs`) with the renderer's default exposure, so
+/// the physical default of `1.0` reads well here and gives the scene consistent
+/// ambient across the whole day. Lower it for moodier, deeper shadows.
+pub(crate) const ATMOSPHERE_AMBIENT_INTENSITY: f32 = 1.0;
+
+/// Cubemap resolution (per face) of the atmosphere environment map used for
+/// IBL. Bevy's default is `512`, but that cubemap is **refiltered every frame**
+/// (no skip-if-unchanged gating in Bevy 0.18) and dominated our GPU cost
+/// (500→70 fps). Our materials are almost all matte and the shiniest (iron ore)
+/// is still roughness 0.78 — no mirrors — while diffuse irradiance needs almost
+/// no resolution. So `64` is visually indistinguishable here yet ~64× cheaper
+/// to filter than the default. Raise it if a glossier material is ever added.
+pub(crate) const ATMOSPHERE_ENV_MAP_SIZE: u32 = 64;
 
 pub(crate) const WORLD_COLOR: Color = Color::srgb(0.18, 0.34, 0.22);
 pub(crate) const DROPPED_BAG_COLOR: Color = Color::srgb(0.42, 0.31, 0.18);
@@ -98,6 +118,7 @@ pub(crate) fn setup_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut scattering_media: ResMut<Assets<ScatteringMedium>>,
 ) {
     // Ambient and clear color are now driven by the day/night cycle in
     // `sky::update_sky_system`. We still insert defaults here so the
@@ -113,6 +134,47 @@ pub(crate) fn setup_scene(
         Name::new("Camera"),
         MainCamera,
         Camera3d::default(),
+        // HDR is a permanent baseline: bloom needs it, and the procedural
+        // atmosphere sky (Phase 2) requires it. It only changes the
+        // intermediate render texture, not the swapchain. Tonemapping is set
+        // explicitly to the filmic TonyMcMapface curve, which desaturates the
+        // brightest values so bloom + a hot sun disc read as glow rather than
+        // a clipped white blob. Bloom itself is owned by
+        // `apply_graphics_settings_system` so it tracks the Graphics tab.
+        Hdr,
+        Tonemapping::TonyMcMapface,
+        // Procedural physically-based sky. `earthlike` uses the default
+        // earthlike scattering medium; `AtmosphereSettings` is auto-required
+        // with sensible defaults (scene units are already metres). The
+        // atmosphere reads the sun `DirectionalLight` to place the sun disc and
+        // tint sunlight through the air, and renders the sky behind all
+        // geometry — so the old hand-authored `ClearColor` sky is retired.
+        Atmosphere::earthlike(scattering_media.add(ScatteringMedium::default())),
+        // The atmosphere recomputes its LUTs every frame (no skip-if-unchanged
+        // gating in Bevy 0.18), so these are a per-frame GPU cost. We trim them
+        // for performance, favouring sample-count cuts (slightly noisier
+        // integration, ~imperceptible) over resolution cuts (which band). The
+        // transmittance/multiscattering *resolutions* stay at default to keep
+        // sky-colour fidelity. Defaults shown in comments for reference.
+        AtmosphereSettings {
+            transmittance_lut_samples: 24,           // default 40
+            multiscattering_lut_samples: 12,         // default 20
+            sky_view_lut_size: UVec2::new(256, 128), // default 400×200
+            sky_view_lut_samples: 12,                // default 16
+            aerial_view_lut_samples: 6,              // default 10
+            ..default()
+        },
+        // Image-based ambient + reflections generated from the atmosphere.
+        // This is the "free IBL" that lifts every PBR surface; it supplies the
+        // daytime ambient term (the sky's `GlobalAmbientLight` floor fades to
+        // zero by day — see `sky.rs`). Strength via `ATMOSPHERE_AMBIENT_INTENSITY`.
+        AtmosphereEnvironmentMapLight {
+            intensity: ATMOSPHERE_AMBIENT_INTENSITY,
+            // Small cubemap — refiltered every frame, so this is the main GPU
+            // cost lever. See `ATMOSPHERE_ENV_MAP_SIZE`.
+            size: UVec2::splat(ATMOSPHERE_ENV_MAP_SIZE),
+            ..default()
+        },
         Projection::from(PerspectiveProjection {
             fov: 65.0_f32.to_radians(),
             // Tight near/far. The far plane sits just past the daylight

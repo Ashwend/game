@@ -1,18 +1,33 @@
-//! Day/night visuals: sun + moon directional lights, animated ambient
-//! light, animated clear color, animated distance fog, and visible sun
-//! and moon discs that ride the sky dome around the player camera.
+//! Day/night visuals.
 //!
-//! The math driver is [`ClientRuntime::world_time`]. The server owns it
-//! and the client integrates between snapshots — by the time these
-//! systems run the value is the live mirror.
+//! The procedural [`Atmosphere`](bevy::pbr::Atmosphere) on the camera (set up
+//! in `assets.rs`) now renders the sky itself — physically-based scattering,
+//! the visible sun disc, and image-based ambient/reflection light via
+//! [`AtmosphereEnvironmentMapLight`]. This module's job shrank to:
 //!
-//! Module boundary: lighting setup and per-frame updates live here so
-//! `assets.rs` stays focused on neutral mesh/material handles. The sun
-//! direction math also lives here because it's only consumed by the
-//! systems below.
+//! - driving the sun + moon [`DirectionalLight`] direction/intensity from world
+//!   time (the atmosphere reads the sun light to know where the sun is and
+//!   tints it as it passes through the air),
+//! - supplementing the night with a **fixed** ambient floor + a dim moon light
+//!   so the player can still navigate after dark (intentionally not a user
+//!   setting — night visibility is a gameplay-fair constant),
+//! - and keeping a [`DistanceFog`] curtain that hides the far perimeter walls
+//!   before the camera's far plane clips them (the atmosphere's own aerial
+//!   perspective is negligible over our ~160 m view distance).
+//!
+//! The math driver is [`ClientRuntime::world_time`]. The server owns it and the
+//! client integrates between snapshots — by the time these systems run the
+//! value is the live mirror.
+//!
+//! ## Tuning knobs
+//!
+//! Night brightness and the day/night balance live in the `const`s at the top
+//! of this file (grouped so the look can be dialed in without touching logic).
+//! Daytime ambient strength is the `AtmosphereEnvironmentMapLight` intensity on
+//! the camera (`ATMOSPHERE_AMBIENT_INTENSITY` in `assets.rs`).
 
 use bevy::{
-    light::{CascadeShadowConfigBuilder, NotShadowCaster},
+    light::{CascadeShadowConfigBuilder, NotShadowCaster, SunDisk},
     pbr::{DistanceFog, FogFalloff},
     prelude::*,
 };
@@ -24,64 +39,54 @@ use crate::{
 
 use super::components::MainCamera;
 
-/// Apparent radius of the sky dome the sun/moon ride on. The camera's
-/// far plane is 200 m, so we stay comfortably inside it. Chosen big
-/// enough that parallax against nearby trees feels infinite, small
-/// enough that the disc resolves cleanly.
+/// Apparent radius of the sky dome the moon visual rides on. The camera's far
+/// plane is 160 m, so we stay comfortably inside it.
 const SKY_DISTANCE: f32 = 140.0;
 
-/// Visible radius of the sun disc. ~3.5 m at 140 m → about 2.9° of arc,
-/// roughly twice the real sun's apparent diameter. The exaggeration is
-/// deliberate; a true 0.5° disc reads as a pinhole in stylised art.
-const SUN_DISC_RADIUS: f32 = 3.6;
-
-/// Visible radius of the moon disc. Slightly larger than the sun so a
-/// full moon reads as a feature, not a freckle.
+/// Visible radius of the moon disc. The sun is drawn by the atmosphere's
+/// built-in [`SunDisk`]; the moon has no atmospheric equivalent, so it stays a
+/// hand-placed emissive sphere.
 const MOON_DISC_RADIUS: f32 = 4.2;
 
-/// Tilt of the solar/lunar plane off the world's east-west axis. Bevy's
-/// world Z grows "forward" in the default camera setup; tilting the
-/// celestial plane a bit gives the sun an oblique track across the sky
-/// instead of marching straight overhead, which reads as more cinematic.
+/// Tilt of the solar/lunar plane off the world's east-west axis, giving the
+/// sun an oblique, more cinematic track across the sky.
 const CELESTIAL_TILT_DEGREES: f32 = 18.0;
 
-/// Peak daylight illuminance (lux). Matched to Bevy's
-/// `light_consts::lux::AMBIENT_DAYLIGHT` (10 000 lux). Higher values
-/// blow PBR surfaces past the tonemapper's response curve and the
-/// scene reads as overexposed "atomic flash" rather than midday.
+/// Peak daylight illuminance (lux) for the sun directional light. Kept at a
+/// daylight-calibrated value (≈ `AMBIENT_DAYLIGHT`) rather than physical
+/// `RAW_SUNLIGHT` + a manual camera `Exposure`: the atmosphere still renders the
+/// sky and filters/tints the light toward the horizon, but this value keeps the
+/// scene at a consistent brightness across the whole day under the renderer's
+/// default exposure — which suits a stylised game with a fixed, gameplay-fair
+/// night far better than raw sunlight (which really wants auto-exposure).
 const SUN_PEAK_ILLUMINANCE: f32 = 11_000.0;
 
-/// Peak moonlight illuminance. Real moonlight is ~0.3 lux; we cheat
-/// up by ~3 000× so the player can actually see what's around them.
-/// ~7% of the sun's peak gives a moonlit-grass survival look without
-/// reading as overcast daytime.
-const MOON_PEAK_ILLUMINANCE: f32 = 800.0;
+/// Peak moonlight illuminance. Real moonlight is ~0.05 lux; we cheat up hugely
+/// so the player can navigate at night. Tuning knob for night brightness.
+const MOON_PEAK_ILLUMINANCE: f32 = 1_300.0;
 
-/// Sun direction shifts from "below horizon" through dawn into "up".
-/// This is the cosine of the angle below the horizon at which the sun
-/// transitions from off to its full illuminance ramp.
+/// `GlobalAmbientLight` brightness at deep night. During the day this fades to
+/// zero and the atmosphere environment map supplies ambient instead; at night
+/// the atmosphere sky is dark, so this fixed floor is what lets the player
+/// navigate. Raise it for brighter nights, lower it for moodier ones.
+const NIGHT_AMBIENT_FLOOR: f32 = 90.0;
+
+/// Cool blue-grey tint of the night ambient floor. Sells "moonlit" without
+/// reading as overcast daytime.
+const NIGHT_AMBIENT_COLOR: Vec3 = Vec3::new(0.40, 0.50, 0.72);
+
+/// Sun direction shifts from "below horizon" through dawn into "up". This is
+/// the half-width of the band (in sun-height units) over which day fades to
+/// night, anchored at the horizon so dawn/dusk linger a beat.
 const HORIZON_FADE_BAND: f32 = 0.18;
 
-/// Real-time cadence at which the directional light's transform is
-/// allowed to change at the default `1×` multiplier. Targets 15 Hz —
-/// fast enough that the eye fuses successive updates into smooth
-/// motion (well above the ~24 fps perception threshold for fluid
-/// motion is a movie myth; ~12–15 Hz is plenty for tiny shadow-edge
-/// changes) but only a quarter of the per-frame cost the original
-/// every-frame approach was paying.
-///
-/// At higher time multipliers the interval is scaled down so that
-/// each tick still represents roughly the same angle change —
-/// otherwise fast-forward would produce visible stepping. See
-/// [`shadow_update_interval`].
-///
-/// Light *colour* and *illuminance* still update every frame — only
-/// the transform (which drives the shadow projection) is throttled.
+/// Real-time cadence at which the directional light's transform is allowed to
+/// change at the default `1×` multiplier (~15 Hz). Light colour/illuminance
+/// still update every frame; only the transform (which drives the shadow
+/// projection) is throttled to avoid per-frame shadow shimmer.
 const SHADOW_UPDATE_BASE_INTERVAL_SECS: f32 = 1.0 / 15.0;
 
-/// Lower bound on the shadow update interval. ~60 Hz: faster than this
-/// puts us back into per-frame shimmer territory and gains nothing,
-/// since the eye fuses motion above ~24 Hz regardless.
+/// Lower bound on the shadow update interval (~60 Hz).
 const SHADOW_UPDATE_MIN_INTERVAL_SECS: f32 = 1.0 / 60.0;
 
 #[derive(Component)]
@@ -89,9 +94,6 @@ pub(crate) struct SunLight;
 
 #[derive(Component)]
 pub(crate) struct MoonLight;
-
-#[derive(Component)]
-pub(crate) struct SunVisual;
 
 #[derive(Component)]
 pub(crate) struct MoonVisual;
@@ -113,26 +115,12 @@ type MoonLightQuery<'w, 's> = Query<
     (With<MoonLight>, Without<SunLight>, Without<MainCamera>),
 >;
 
-type SunVisualQuery<'w, 's> = Query<
-    'w,
-    's,
-    &'static mut Transform,
-    (
-        With<SunVisual>,
-        Without<MoonVisual>,
-        Without<SunLight>,
-        Without<MoonLight>,
-        Without<MainCamera>,
-    ),
->;
-
 type MoonVisualQuery<'w, 's> = Query<
     'w,
     's,
     &'static mut Transform,
     (
         With<MoonVisual>,
-        Without<SunVisual>,
         Without<SunLight>,
         Without<MoonLight>,
         Without<MainCamera>,
@@ -141,35 +129,32 @@ type MoonVisualQuery<'w, 's> = Query<
 
 type FogQuery<'w, 's> = Query<'w, 's, &'static mut DistanceFog, With<MainCamera>>;
 
-/// Spawn the directional lights and sun/moon disc visuals. Called from
+/// Spawn the directional lights and the moon disc visual. Called from
 /// `setup_scene` after the camera exists.
 pub(crate) fn setup_sky(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
-    // Sun: shadow-casting directional light. Slightly warm white at
-    // peak; the per-frame color update will tint warmer at sunrise and
-    // sunset, cooler at midday. We start with `illuminance` near zero
-    // because the lighting system will overwrite it on the next tick
-    // anyway, but a sensible non-zero starting value avoids a black
-    // first frame.
+    // Sun: shadow-casting directional light. Colour stays neutral white — the
+    // atmosphere filters it through the air, warming it toward the horizon, so
+    // tinting it here too would double-count. `SunDisk` makes the atmosphere
+    // draw the visible solar disc (which bloom then makes glow).
     commands.spawn((
         Name::new("Sun"),
         SunLight,
         DirectionalLight {
             illuminance: SUN_PEAK_ILLUMINANCE * 0.5,
-            color: Color::srgb(1.00, 0.96, 0.88),
+            color: Color::WHITE,
             shadows_enabled: true,
             shadow_depth_bias: 0.10,
             shadow_normal_bias: 1.8,
             ..default()
         },
-        // Default cascade config goes out to 150 m, sized for AAA open
-        // worlds. Our floor is at most ~80 m across so trimming the far
-        // bound to 100 m gives every shadow texel ~33% more on-screen
-        // resolution and skips one cascade's worth of shadow-caster
-        // draws past the visible playspace, with no visible difference.
+        SunDisk::EARTH,
+        // Default cascade config goes out to 150 m, sized for AAA open worlds.
+        // Our playspace is ~80 m across so trimming to 100 m gives every shadow
+        // texel ~33% more on-screen resolution with no visible difference.
         CascadeShadowConfigBuilder {
             num_cascades: 3,
             maximum_distance: 100.0,
@@ -180,10 +165,10 @@ pub(crate) fn setup_sky(
         Transform::from_xyz(0.0, 1.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
-    // Moon: dim cool directional light. Shadows are off — a second
-    // shadow map is expensive and moonlit shadows in stylised low-poly
-    // art read as visual noise. The moon contributes color and a sense
-    // of direction without slamming the shadow budget.
+    // Moon: dim cool directional light. Shadows off — a second shadow map is
+    // expensive and moonlit shadows in stylised low-poly art read as noise.
+    // This is the documented way to do nighttime with the atmosphere: a dim
+    // directional light for the moon while the sun sits below the horizon.
     commands.spawn((
         Name::new("Moon"),
         MoonLight,
@@ -196,36 +181,19 @@ pub(crate) fn setup_sky(
         Transform::from_xyz(0.0, 1.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
-    let sun_visual_mesh = meshes.add(Sphere::new(SUN_DISC_RADIUS));
     let moon_visual_mesh = meshes.add(Sphere::new(MOON_DISC_RADIUS));
-
-    let sun_visual_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(1.0, 0.95, 0.85),
-        emissive: Color::srgb(40.0, 30.0, 15.0).to_linear(),
-        unlit: true,
-        fog_enabled: false,
-        ..default()
-    });
     let moon_visual_material = materials.add(StandardMaterial {
-        // A faint warm tint on the surface lit color reads as moon
-        // regolith without needing a texture.
+        // A faint warm tint on the surface lit colour reads as moon regolith
+        // without needing a texture. The emissive is bright enough that the disc
+        // reads as a silver moon against the atmosphere's dark night sky, with a
+        // little headroom to bloom.
         base_color: Color::srgb(0.95, 0.95, 0.92),
-        emissive: Color::srgb(2.6, 2.8, 3.4).to_linear(),
+        emissive: Color::srgb(3.4, 3.7, 4.6).to_linear(),
         unlit: true,
         fog_enabled: false,
         ..default()
     });
 
-    commands.spawn((
-        Name::new("Sun Visual"),
-        SunVisual,
-        Mesh3d(sun_visual_mesh),
-        MeshMaterial3d(sun_visual_material),
-        Transform::IDENTITY,
-        // The sun mesh IS the sun — it shouldn't drop a shadow on the
-        // world from its own light. Same logic for the moon.
-        NotShadowCaster,
-    ));
     commands.spawn((
         Name::new("Moon Visual"),
         MoonVisual,
@@ -236,76 +204,56 @@ pub(crate) fn setup_sky(
     ));
 }
 
-/// Distance fog the gameplay camera should carry. Color and falloff are
-/// updated per-frame; this is just the initial component so the camera
-/// owns the slot before the lighting system runs.
+/// Distance fog the gameplay camera should carry. Colour and falloff are
+/// updated per-frame; this is just the initial component so the camera owns the
+/// slot before the lighting system runs.
 pub(crate) fn initial_distance_fog() -> DistanceFog {
     DistanceFog {
         color: Color::srgb(0.55, 0.65, 0.78),
         directional_light_color: Color::srgba(1.0, 0.92, 0.78, 0.5),
         directional_light_exponent: 30.0,
-        // Initial value — `update_sky_system` recomputes this per frame
-        // from the lighting model; this is just the slot the camera owns
-        // until the first sky tick. Sized to match the daytime peak in
-        // `compute_lighting` so the very first frame isn't a fog
-        // discontinuity.
         falloff: FogFalloff::from_visibility(140.0),
     }
 }
 
-/// Drives every per-frame day/night change: light direction and color,
-/// ambient brightness, clear color, fog, and the sun/moon disc
-/// positions. Runs in `ClientSystemSet::Sky`, which sits after the
-/// network tick (so `runtime.world_time` is fresh) and after the
-/// camera follow (so we anchor the discs to the latest camera pose).
+/// Drives every per-frame day/night change: sun/moon light direction, colour,
+/// and intensity; the night ambient floor; the fog curtain; and the moon disc
+/// position. Runs in `ClientSystemSet::Sky`, after the network tick (so
+/// `runtime.world_time` is fresh) and after the camera follow (so the moon
+/// anchors to the latest camera pose).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update_sky_system(
     time: Res<Time>,
     runtime: Res<ClientRuntime>,
     mut shadow_throttle: Local<f32>,
     mut ambient: ResMut<GlobalAmbientLight>,
-    mut clear_color: ResMut<ClearColor>,
     camera: CameraTransformQuery,
     mut sun_light: SunLightQuery,
     mut moon_light: MoonLightQuery,
-    mut sun_visual: SunVisualQuery,
     mut moon_visual: MoonVisualQuery,
     mut fog: FogQuery,
 ) {
     let lighting = compute_lighting(&runtime.world_time);
 
-    // Real-time throttle for the directional lights' *transform*. The
-    // shadow projection is the part the eye reads as "shimmery" when
-    // updated every frame; throttling its writes gives windows of
-    // fully stable shadows between events. The interval scales with
-    // the world-time multiplier (see `shadow_update_interval`) so
-    // each tick represents a roughly constant *angle* — fast-forward
-    // gets more frequent updates, normal play gets the calm ~4.5 Hz.
-    // We accumulate `delta_secs` and only fire on overflow so the
-    // actual cadence doesn't drift with frame rate.
+    // Real-time throttle for the directional lights' *transform*. The shadow
+    // projection is the part the eye reads as "shimmery" when updated every
+    // frame; throttling its writes gives windows of fully stable shadows. The
+    // interval scales with the world-time multiplier (see
+    // `shadow_update_interval`) so each tick represents a roughly constant
+    // angle. Colour and illuminance still update every frame.
     let interval = shadow_update_interval(runtime.world_time.multiplier);
     *shadow_throttle += time.delta_secs();
     let advance_shadows = *shadow_throttle >= interval;
     if advance_shadows {
-        // Subtract the interval rather than zeroing so accumulated
-        // overshoot is preserved — keeps the long-run cadence honest
-        // even under uneven frame timing.
         *shadow_throttle -= interval;
-        // If the game was paused or framerate stalled hard the
-        // accumulator could pile up enough to fire several events in
-        // a row; clamp to a single fire per frame so we never
-        // hammer the shadow cascade rebuild after a hitch.
         if *shadow_throttle > interval {
             *shadow_throttle = 0.0;
         }
     }
 
-    // Colour and illuminance update every frame — those are scalar
-    // changes that don't move the shadow grid, so they can ride the
-    // continuous time-of-day curve without contributing to shimmer.
-    // Only the Transform write is gated by the throttle.
     if let Ok((mut light, mut transform)) = sun_light.single_mut() {
-        light.color = lighting.sun_color;
+        // Neutral white; the atmosphere applies the warm horizon tint.
+        light.color = Color::WHITE;
         light.illuminance = lighting.sun_illuminance;
         if advance_shadows {
             *transform = directional_light_transform(lighting.sun_direction);
@@ -322,49 +270,34 @@ pub(crate) fn update_sky_system(
 
     ambient.color = vec3_to_color(lighting.ambient_color);
     ambient.brightness = lighting.ambient_brightness;
-    clear_color.0 = vec3_to_color(lighting.sky_color);
 
     if let Ok(mut fog) = fog.single_mut() {
         fog.color = vec3_to_color(lighting.fog_color);
-        fog.directional_light_color = Color::srgba(
-            lighting.sun_glow.x,
-            lighting.sun_glow.y,
-            lighting.sun_glow.z,
-            lighting.sun_glow_strength,
-        );
         fog.falloff = FogFalloff::from_visibility(lighting.fog_distance);
     }
 
-    // Sun/moon visuals follow the camera at a fixed dome radius so they
-    // feel infinitely distant regardless of where the player walks.
-    if let Ok(camera_transform) = camera.single() {
-        let anchor = camera_transform.translation;
-        if let Ok(mut transform) = sun_visual.single_mut() {
-            transform.translation = anchor + lighting.sun_direction * SKY_DISTANCE;
-        }
-        if let Ok(mut transform) = moon_visual.single_mut() {
-            transform.translation = anchor + lighting.moon_direction * SKY_DISTANCE;
-        }
+    // Moon visual follows the camera at a fixed dome radius so it feels
+    // infinitely distant regardless of where the player walks.
+    if let Ok(camera_transform) = camera.single()
+        && let Ok(mut transform) = moon_visual.single_mut()
+    {
+        transform.translation =
+            camera_transform.translation + lighting.moon_direction * SKY_DISTANCE;
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 struct LightingFrame {
-    /// Continuous sun direction. Drives the visible sun disc, all the
-    /// colour/intensity ramps, and the directional-light transform
-    /// when the shadow-update throttle fires.
+    /// Continuous sun direction. Drives the directional-light transform (when
+    /// the shadow throttle fires) and, via that light, the atmosphere.
     sun_direction: Vec3,
     /// Continuous moon direction (always the antipode of the sun).
     moon_direction: Vec3,
     sun_illuminance: f32,
     moon_illuminance: f32,
-    sun_color: Color,
     moon_color: Color,
     ambient_color: Vec3,
     ambient_brightness: f32,
-    sky_color: Vec3,
-    sun_glow: Vec3,
-    sun_glow_strength: f32,
     fog_color: Vec3,
     fog_distance: f32,
 }
@@ -377,104 +310,52 @@ fn compute_lighting(time: &WorldTime) -> LightingFrame {
     let sun_height = sun_direction.y;
     let moon_height = moon_direction.y;
 
-    // Smooth, signed elevation factor in [0, 1] used to blend day/night
-    // palettes. Anchored to ~10° below the horizon so the dawn/dusk
-    // colour ramp lingers a beat instead of flicking to night.
+    // Smooth day/night factor in [0, 1], anchored just below the horizon so the
+    // dawn/dusk transition lingers instead of flicking.
     let day_strength = smoothstep(-HORIZON_FADE_BAND, HORIZON_FADE_BAND, sun_height);
 
-    // Warm-cast band around the horizon. Peaks when the sun is right at
-    // the edge of the world; zero when it's well above or well below.
-    let sunset_strength = (1.0 - (sun_height / HORIZON_FADE_BAND).abs())
-        .clamp(0.0, 1.0)
-        .powf(1.7);
-
-    // Civil-twilight palette. Day sky is desaturated from a pure cyan
-    // toward a slightly warmer azure so it doesn't read as a flat
-    // bleach when the sun is directly overhead. Night sky is lifted
-    // off black so the distance fog (which mirrors the sky tone)
-    // doesn't crush everything behind 30 m into a black void.
-    let day_sky = Vec3::new(0.46, 0.66, 0.86);
-    let sunset_sky = Vec3::new(0.92, 0.48, 0.26);
-    let night_sky = Vec3::new(0.045, 0.065, 0.130);
-
-    let sky_color =
-        lerp_vec3(night_sky, day_sky, day_strength).lerp(sunset_sky, sunset_strength * 0.85);
-
-    // Ambient *color* sits close to neutral white during the day with a
-    // very mild sky-bounce tint. Heavier blue here saturates against
-    // the cyan sky and pushes the scene into the "atomic flash" look.
-    let day_ambient = Vec3::new(0.92, 0.94, 1.00);
-    let night_ambient = Vec3::new(0.32, 0.42, 0.66);
-    let sunset_ambient = Vec3::new(0.96, 0.70, 0.50);
-    let ambient_color = lerp_vec3(night_ambient, day_ambient, day_strength)
-        .lerp(sunset_ambient, sunset_strength * 0.4);
-
-    // Ambient *brightness* curve. Bevy's default GlobalAmbientLight is
-    // 80; we stay close to that for noon so PBR surfaces aren't lit
-    // twice (once by the sun, once by an oversized ambient bounce).
-    // Night sits at ~60 so the player can actually navigate by moon
-    // and ambient sky bounce. Combined with the cool-blue night
-    // `ambient_color` it still reads unambiguously as night, just a
-    // moonlit one rather than a cave.
-    let ambient_brightness = lerp(60.0, 75.0, day_strength) + sunset_strength * 25.0;
-
-    // Sun direct illuminance: 0 below the horizon, ramping up to a soft
-    // peak well above. The pow shapes the curve so the sun stays warm
-    // and shadows stay long during the first hour of "morning".
+    // Sun direct illuminance: 0 below the horizon, ramping to peak well above.
+    // The pow keeps the sun gentle and shadows long in the first hour.
     let sun_elevation = sun_height.max(0.0).clamp(0.0, 1.0);
     let sun_illuminance = SUN_PEAK_ILLUMINANCE * sun_elevation.powf(0.55);
 
-    let sun_warm = Vec3::new(1.00, 0.55, 0.30);
-    let sun_neutral = Vec3::new(1.00, 0.96, 0.88);
-    let sun_tint = sun_warm.lerp(sun_neutral, day_strength);
-    let sun_color = vec3_to_color(sun_tint);
-
-    // Moonlight only takes over once the sun has fully set. The
-    // moonlight color is a cool blue-white; intensity follows the moon
-    // height with a softer curve.
+    // Moonlight only takes over once the sun has set.
     let moon_elevation = moon_height.max(0.0).clamp(0.0, 1.0);
     let moon_illuminance = MOON_PEAK_ILLUMINANCE * moon_elevation.powf(0.6) * (1.0 - day_strength);
     let moon_color = Color::srgb(0.70, 0.78, 1.00);
 
-    let sun_glow = sun_warm.lerp(Vec3::new(1.0, 0.92, 0.80), 1.0 - sunset_strength);
-    // The directional-light bleed through fog should be a hint of warm
-    // glow around the sun, not a second sun layer. Keep it modest at
-    // noon, peaking at sunset where it sells the atmosphere most.
-    let sun_glow_strength = (0.08 + sunset_strength * 0.35) * sun_elevation.powf(0.4);
+    // Ambient floor: zero during the day (the atmosphere environment map does
+    // the daytime ambient), ramping up to the fixed night floor after dark.
+    let ambient_brightness = NIGHT_AMBIENT_FLOOR * (1.0 - day_strength);
+    let ambient_color = NIGHT_AMBIENT_COLOR;
 
-    // Fog matches the sky horizon and tightens at night so the player
-    // can't see across the world in pitch-blackness. During sunset the
-    // distance shrinks for that hazy, dust-laden look.
-    let fog_color = sky_color * 0.9 + Vec3::splat(0.02);
-    // Tightened so distant chunks fade into the sky well before the
-    // camera's far plane (160 m) clips them. With these numbers the
-    // perimeter walls of a Large 9×9 chunk world (~288 m from centre)
-    // are buried behind the fog wall from every reachable position.
-    let fog_distance = lerp(85.0, 140.0, day_strength) - sunset_strength * 25.0;
+    // Fog curtain: matches a desaturated horizon tone, tightening at night so
+    // the player can't see across the world in the dark. Sized so distant
+    // chunks fade into the sky well before the 160 m far plane clips them.
+    let day_fog = Vec3::new(0.55, 0.65, 0.78);
+    let night_fog = Vec3::new(0.05, 0.07, 0.13);
+    let fog_color = lerp_vec3(night_fog, day_fog, day_strength);
+    let fog_distance = lerp(85.0, 140.0, day_strength);
 
     LightingFrame {
         sun_direction,
         moon_direction,
         sun_illuminance,
         moon_illuminance,
-        sun_color,
         moon_color,
         ambient_color,
         ambient_brightness,
-        sky_color,
-        sun_glow,
-        sun_glow_strength,
         fog_color,
         fog_distance,
     }
 }
 
-/// Build the unit-length sun direction (origin → sun) for the given
-/// day fraction in `[0, 1)`. The plane is tilted off east-west so the
-/// sun doesn't march along a straight axis-aligned path.
+/// Build the unit-length sun direction (origin → sun) for the given day
+/// fraction in `[0, 1)`. The plane is tilted off east-west so the sun doesn't
+/// march along a straight axis-aligned path.
 fn celestial_direction(day_fraction: f32) -> Vec3 {
-    // Theta = 0 at sunrise (east horizon), π/2 at noon (overhead),
-    // π at sunset, 3π/2 below the horizon.
+    // Theta = 0 at sunrise (east horizon), π/2 at noon (overhead), π at sunset,
+    // 3π/2 below the horizon.
     let theta = (day_fraction - 0.25) * std::f32::consts::TAU;
     let east_west = theta.cos();
     let up = theta.sin();
@@ -483,18 +364,16 @@ fn celestial_direction(day_fraction: f32) -> Vec3 {
     let tilt_cos = tilt.cos();
     let tilt_sin = tilt.sin();
 
-    // Rotate the east-up plane around the world's east axis by the
-    // tilt: introduces a Z component so the sun arcs slightly toward
-    // the player's "forward" direction as it climbs.
+    // Rotate the east-up plane around the world's east axis by the tilt.
     Vec3::new(east_west, up * tilt_cos, up * tilt_sin).normalize_or_zero()
 }
 
 fn directional_light_transform(direction_to_source: Vec3) -> Transform {
-    // The directional light's local -Z is the direction light *travels*.
-    // We want light to travel from the celestial body toward the ground,
-    // so we place the entity at `+direction` and orient it back at the
-    // origin. The translation itself is meaningless for an infinite
-    // directional light; we only need the rotation.
+    // The directional light's local -Z is the direction light *travels*. We
+    // want light to travel from the celestial body toward the ground, so we
+    // place the entity at `+direction` and orient it back at the origin. The
+    // translation is meaningless for an infinite directional light; only the
+    // rotation matters.
     let position = direction_to_source.normalize_or_zero() * 100.0;
     if position.length_squared() < 1.0 {
         return Transform::from_xyz(0.0, 1.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y);
@@ -502,14 +381,10 @@ fn directional_light_transform(direction_to_source: Vec3) -> Transform {
     Transform::from_translation(position).looking_at(Vec3::ZERO, Vec3::Y)
 }
 
-/// How long to wait between writes to the directional light's
-/// transform, given the current world-time multiplier. Scales
-/// inversely so each tick represents roughly the same angular change
-/// at any speed: at 1× the sun ticks every ~67 ms (15 Hz), at 4× and
-/// above we're already at the per-frame floor so the cadence
-/// saturates at 60 Hz. Multipliers below 1× inherit the base
-/// interval — slow-motion is already smooth at 15 Hz, no need to
-/// slow updates down further.
+/// How long to wait between writes to the directional light's transform, given
+/// the current world-time multiplier. Scales inversely so each tick represents
+/// roughly the same angular change at any speed; saturates at the ~60 Hz floor
+/// for fast-forward and inherits the base interval for slow-motion.
 fn shadow_update_interval(multiplier: f32) -> f32 {
     let scale = multiplier.max(1.0);
     (SHADOW_UPDATE_BASE_INTERVAL_SECS / scale).max(SHADOW_UPDATE_MIN_INTERVAL_SECS)
@@ -587,23 +462,27 @@ mod tests {
     }
 
     #[test]
-    fn night_lighting_is_dimmer_than_day() {
+    fn sun_illuminance_is_dim_at_night_and_bright_at_noon() {
         let day = compute_lighting(&time_at(12.0));
         let night = compute_lighting(&time_at(0.0));
         assert!(night.sun_illuminance < 1.0);
         assert!(day.sun_illuminance > 100.0);
-        assert!(night.ambient_brightness < day.ambient_brightness);
-        // Night ambient is intentionally non-zero so the player can read
-        // their surroundings.
+    }
+
+    #[test]
+    fn night_has_an_ambient_floor_and_day_relies_on_the_atmosphere() {
+        let day = compute_lighting(&time_at(12.0));
+        let night = compute_lighting(&time_at(0.0));
+        // Daytime ambient comes from the atmosphere environment map, so the
+        // GlobalAmbientLight floor fades to ~zero.
+        assert!(day.ambient_brightness < 1.0);
+        // Night keeps a non-zero floor so the player can navigate.
         assert!(night.ambient_brightness > 5.0);
     }
 
     #[test]
     fn moon_provides_some_illumination_at_night() {
         let night = compute_lighting(&time_at(0.0));
-        // The moon's job is "see your surroundings", not "stadium
-        // floodlight". A double-digit lux value is plenty against a
-        // ~15-lux ambient.
         assert!(night.moon_illuminance > 10.0);
         let noon = compute_lighting(&time_at(12.0));
         assert!(noon.moon_illuminance < 1.0);
@@ -611,8 +490,6 @@ mod tests {
 
     #[test]
     fn day_fraction_wraps_around_seconds() {
-        // Make sure rem_euclid is in the conversion, not just the
-        // server-side advance.
         let time = WorldTime {
             seconds_of_day: SECONDS_PER_DAY + 1.0,
             multiplier: 1.0,
@@ -623,9 +500,15 @@ mod tests {
     }
 
     #[test]
+    fn fog_tightens_at_night() {
+        let day = compute_lighting(&time_at(12.0));
+        let night = compute_lighting(&time_at(0.0));
+        assert!(night.fog_distance < day.fog_distance);
+    }
+
+    #[test]
     fn directional_light_transform_does_not_panic_for_origin() {
         let t = directional_light_transform(Vec3::ZERO);
-        // Identity-ish fallback that still has a valid orientation.
         assert!(t.translation.is_finite());
     }
 
@@ -634,21 +517,15 @@ mod tests {
         let base = shadow_update_interval(1.0);
         assert!((base - SHADOW_UPDATE_BASE_INTERVAL_SECS).abs() < 1e-6);
 
-        // Modest multipliers scale linearly (between base 15 Hz and
-        // the per-frame floor at 60 Hz — crossover happens at 4×).
         let two_x = shadow_update_interval(2.0);
         assert!((two_x - SHADOW_UPDATE_BASE_INTERVAL_SECS / 2.0).abs() < 1e-4);
         assert!(two_x > SHADOW_UPDATE_MIN_INTERVAL_SECS);
 
-        // Fast-forward saturates at the ~60 Hz floor — once we're
-        // updating every frame there's nothing left to gain.
         let fast = shadow_update_interval(60.0);
         assert!((fast - SHADOW_UPDATE_MIN_INTERVAL_SECS).abs() < 1e-6);
         let extreme = shadow_update_interval(10_000.0);
         assert!((extreme - SHADOW_UPDATE_MIN_INTERVAL_SECS).abs() < 1e-6);
 
-        // Slow-motion stays at the base cadence — no need to throttle
-        // updates further when shadows are already smooth at 15 Hz.
         let slow = shadow_update_interval(0.5);
         assert_eq!(slow, SHADOW_UPDATE_BASE_INTERVAL_SECS);
         let paused = shadow_update_interval(0.0);

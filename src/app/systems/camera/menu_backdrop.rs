@@ -8,7 +8,7 @@ use bevy::{
 use crate::app::{
     EYE_HEIGHT,
     scene::{MainCamera, NetworkPlayer, menu_backdrop_depth_of_field},
-    state::{MenuState, Screen},
+    state::{ClientSettings, MenuState, Screen},
 };
 
 const MENU_BACKDROP_EYE: Vec3 = Vec3::new(-5.8, EYE_HEIGHT, 7.2);
@@ -31,6 +31,7 @@ type MenuBackdropCameraFilter = (With<MainCamera>, Without<NetworkPlayer>);
 pub(crate) fn menu_backdrop_camera_system(
     mut commands: Commands,
     menu: Res<MenuState>,
+    settings: Option<Res<ClientSettings>>,
     time: Option<Res<Time>>,
     mut camera: Query<MenuBackdropCameraData, MenuBackdropCameraFilter>,
 ) {
@@ -48,8 +49,15 @@ pub(crate) fn menu_backdrop_camera_system(
     };
 
     if menu.screen == Screen::InGame {
-        if *msaa != Msaa::Sample4 {
-            *msaa = Msaa::Sample4;
+        // In-game MSAA level is player-configurable (Graphics tab). Fall back
+        // to the historical default when settings aren't present (e.g. unit
+        // tests that spin up a bare camera).
+        let target_msaa = settings
+            .as_ref()
+            .map(|settings| settings.graphics.msaa.to_msaa())
+            .unwrap_or(Msaa::Sample4);
+        if *msaa != target_msaa {
+            *msaa = target_msaa;
         }
         if depth_of_field.is_some()
             || temporal_aa.is_some()
@@ -201,6 +209,26 @@ mod tests {
         let mut query = app.world_mut().query_filtered::<&Msaa, With<MainCamera>>();
         let msaa = query.single(app.world()).expect("camera should use msaa");
         assert_eq!(*msaa, Msaa::Sample4);
+    }
+
+    #[test]
+    fn gameplay_camera_honors_msaa_setting() {
+        use crate::app::state::{ClientSettings, MsaaSetting};
+
+        let menu = MenuState {
+            screen: Screen::InGame,
+            ..Default::default()
+        };
+        let mut app = app_with_camera(menu);
+        let mut settings = ClientSettings::default();
+        settings.graphics.msaa = MsaaSetting::Off;
+        app.insert_resource(settings);
+
+        app.update();
+
+        let mut query = app.world_mut().query_filtered::<&Msaa, With<MainCamera>>();
+        let msaa = query.single(app.world()).expect("camera should use msaa");
+        assert_eq!(*msaa, Msaa::Off);
     }
 
     #[test]

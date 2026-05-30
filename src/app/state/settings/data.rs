@@ -12,6 +12,8 @@ pub(crate) struct ClientSettings {
     #[serde(default)]
     pub(crate) display: DisplaySettings,
     #[serde(default)]
+    pub(crate) graphics: GraphicsSettings,
+    #[serde(default)]
     pub(crate) audio: AudioSettings,
     #[serde(default)]
     pub(crate) voice: VoiceSettings,
@@ -197,6 +199,125 @@ impl DisplayResolution {
     }
 }
 
+/// Rendering options the player can dial in from the Graphics tab. These are
+/// all **client-side visual** knobs — none of them affect gameplay or what the
+/// server simulates, so they're free to differ between players. HDR is *not*
+/// exposed here: it's a required baseline for the procedural atmosphere sky and
+/// is always on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct GraphicsSettings {
+    /// Whether the camera runs the bloom (light-glow) post-process pass. The
+    /// strength is intentionally not exposed — it's fixed at Bevy's natural
+    /// preset; players just get a simple on/off like most games offer.
+    #[serde(default = "default_bloom_enabled")]
+    pub(crate) bloom_enabled: bool,
+    /// Multisample anti-aliasing level used while in-game. The menu backdrop
+    /// always forces MSAA off (it relies on depth-of-field instead).
+    #[serde(default)]
+    pub(crate) msaa: MsaaSetting,
+    /// Sun shadow quality. Re-rendering every tree into the shadow cascades is
+    /// a major GPU cost in dense forest, so this is a real perf lever.
+    #[serde(default)]
+    pub(crate) shadows: ShadowQuality,
+}
+
+impl Default for GraphicsSettings {
+    fn default() -> Self {
+        Self {
+            bloom_enabled: default_bloom_enabled(),
+            msaa: MsaaSetting::default(),
+            shadows: ShadowQuality::default(),
+        }
+    }
+}
+
+/// Resolved sun-shadow parameters for a [`ShadowQuality`] level.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ShadowConfig {
+    /// Far bound of the shadow cascades, in metres. Smaller = fewer trees
+    /// re-rendered into the cascades.
+    pub(crate) maximum_distance: f32,
+    pub(crate) num_cascades: usize,
+    /// Per-cascade shadow map resolution (power of two).
+    pub(crate) map_size: usize,
+}
+
+/// Sun shadow quality. Shadows over a dense forest re-render every tree into
+/// each cascade, which is one of the heaviest GPU costs, so this trades shadow
+/// distance / cascade count / map resolution against framerate. `Off` disables
+/// sun shadows entirely. `High` matches the engine defaults the scene shipped
+/// with.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ShadowQuality {
+    Off,
+    Low,
+    #[default]
+    High,
+}
+
+impl ShadowQuality {
+    pub(crate) const ALL: [Self; 3] = [Self::Off, Self::Low, Self::High];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Low => "Low",
+            Self::High => "High",
+        }
+    }
+
+    /// Resolved cascade/map config, or `None` when sun shadows are disabled.
+    pub(crate) fn config(self) -> Option<ShadowConfig> {
+        match self {
+            Self::Off => None,
+            Self::Low => Some(ShadowConfig {
+                maximum_distance: 45.0,
+                num_cascades: 2,
+                map_size: 1024,
+            }),
+            Self::High => Some(ShadowConfig {
+                maximum_distance: 100.0,
+                num_cascades: 3,
+                map_size: 2048,
+            }),
+        }
+    }
+}
+
+/// In-game multisample anti-aliasing level. Mirrors the subset of Bevy's
+/// [`Msaa`] variants we expose; `Sample8` is intentionally omitted — it costs
+/// far more than `Sample4` for a barely perceptible gain at this art style.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MsaaSetting {
+    Off,
+    Sample2,
+    #[default]
+    Sample4,
+}
+
+impl MsaaSetting {
+    pub(crate) const ALL: [Self; 3] = [Self::Off, Self::Sample2, Self::Sample4];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Sample2 => "2x",
+            Self::Sample4 => "4x",
+        }
+    }
+
+    /// The Bevy MSAA value to apply to the in-game camera.
+    pub(crate) fn to_msaa(self) -> Msaa {
+        match self {
+            Self::Off => Msaa::Off,
+            Self::Sample2 => Msaa::Sample2,
+            Self::Sample4 => Msaa::Sample4,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub(crate) struct AudioSettings {
     /// Overall mix gain applied on top of every per-category slider. Lets the
@@ -303,6 +424,10 @@ pub(super) fn default_resolution() -> DisplayResolution {
 }
 
 fn default_vsync() -> bool {
+    true
+}
+
+fn default_bloom_enabled() -> bool {
     true
 }
 
