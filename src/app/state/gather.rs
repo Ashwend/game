@@ -11,8 +11,16 @@ use crate::{
 // (both hit and miss whoosh) and visual feedback all fire from the same
 // impact crossing, so there's exactly one decision per swing and the two
 // sounds can never play together.
-const AXE_SWING_SECONDS: f32 = 0.50;
-const AXE_IMPACT_FRACTION: f32 = 0.50;
+//
+// The impact fraction must match the phase at which the tool's pose bottoms
+// out in `swing_poses.rs`, otherwise the chop/impact sound drifts off the
+// visual contact. The hatchet is a deliberate heavy chop: a long wind-up that
+// hangs over the shoulder, then a fast strike that lands at pose phase 0.58
+// (see `hatchet_swing_pose`). The swing is slow enough (0.78s) that it — not
+// the 0.30s server gather cooldown — gates the attack cadence, so the heavy
+// tempo is what the player feels. Keep these two constants in step.
+const AXE_SWING_SECONDS: f32 = 0.78;
+const AXE_IMPACT_FRACTION: f32 = 0.58;
 const PICKAXE_SWING_SECONDS: f32 = 1.60;
 const PICKAXE_IMPACT_FRACTION: f32 = 0.68;
 // Bare-hand "punch" — short, snappy. Sits between the axe and the

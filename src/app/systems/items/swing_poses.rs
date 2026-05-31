@@ -27,63 +27,77 @@ pub(crate) fn bag_idle_pose(phase: f32) -> ToolSwingPose {
     }
 }
 
-// Hatchet: a quick, pitch-driven chop. The head lifts up and back over the
-// shoulder (no handle twist), then snaps forward and down with a slight
-// rightward kick for a natural diagonal finish. The pitch arc is intentionally
-// modest — a wrist-flick chop rather than a full-body swing — and roll is
-// held nearly constant so the handle stays aligned with the motion. Impact
-// lands at phase 0.50.
+// Hatchet: a heavy, committed chop. The head winds up high over the shoulder
+// and *hangs* at the apex (ease-out anticipation) — the wind-up takes the
+// larger share of the swing, so the load reads as deliberate weight rather
+// than a quick jab. It then accelerates down and forward *through* the target
+// (the strike eases in, so the head is moving hardest at the moment of
+// contact). That long-load → fast-strike contrast is what sells the mass; an
+// even, eased-out arc reads as a limp wrist-flick. After contact the head
+// bites and dwells at the bottom (the blade buried in the cut), then the
+// weight is hauled back up to rest more slowly than it came down. Roll is held
+// near rest so the handle stays aligned with the motion. Impact lands at phase
+// 0.58 — keep `AXE_IMPACT_FRACTION` in `gather.rs` matched to this so the chop
+// sound and camera kick fire exactly as the head bottoms out.
 pub(crate) fn hatchet_swing_pose(phase: f32) -> ToolSwingPose {
-    if phase <= 0.32 {
-        // Wind-up: lift the head up and tilt it back. Yaw eases toward
-        // centre — no sideways throw, no handle roll.
-        let t = smoothstep(phase / 0.32);
+    if phase <= 0.40 {
+        // Wind-up: cock the head high and back over the shoulder, decelerating
+        // into a hang at the apex (ease-out). The hang at the top is the
+        // anticipation beat that loads the swing with weight, and it owns the
+        // first 40% of the swing so the chop feels deliberate. Yaw winds
+        // inward and the head pulls back toward the shoulder.
+        let t = ease_out(phase / 0.40);
         return ToolSwingPose {
-            pitch: lerp(-0.32, 0.42, t),
-            yaw: lerp(0.22, -0.04, t),
+            pitch: lerp(-0.32, 0.82, t),
+            yaw: lerp(0.22, -0.14, t),
             roll: lerp(0.08, 0.06, t),
-            forward: lerp(0.0, -0.08, t),
-            right: lerp(0.0, 0.02, t),
-            up: lerp(0.0, 0.14, t),
+            forward: lerp(0.0, -0.18, t),
+            right: lerp(0.0, 0.07, t),
+            up: lerp(0.0, 0.28, t),
         };
     }
 
-    if phase <= 0.50 {
-        // Strike: snap forward and down. Small yaw sweep gives the chop a
-        // slight diagonal finish without twisting the handle.
-        let t = smoothstep((phase - 0.32) / 0.18);
+    if phase <= 0.58 {
+        // Strike: accelerate down and forward through the target (ease-in) so
+        // the head is travelling fastest exactly at impact. Forward drives
+        // past rest — full bodyweight committed into the cut — and a diagonal
+        // yaw sweep finishes the chop across the body.
+        let t = ease_in((phase - 0.40) / 0.18);
         return ToolSwingPose {
-            pitch: lerp(0.42, -0.78, t),
-            yaw: lerp(-0.04, 0.18, t),
+            pitch: lerp(0.82, -1.22, t),
+            yaw: lerp(-0.14, 0.24, t),
             roll: lerp(0.06, 0.08, t),
-            forward: lerp(-0.08, 0.16, t),
-            right: lerp(0.02, -0.05, t),
-            up: lerp(0.14, -0.12, t),
+            forward: lerp(-0.18, 0.30, t),
+            right: lerp(0.07, -0.08, t),
+            up: lerp(0.28, -0.24, t),
         };
     }
 
-    if phase <= 0.62 {
-        // Brief follow-through — head holds at the bottom of the arc.
-        let t = smoothstep((phase - 0.50) / 0.12);
+    if phase <= 0.72 {
+        // Bite + dwell: the head holds buried at the bottom of the arc with a
+        // small settle back off the contact. The brief hold sells the mass of
+        // the strike before the recovery lifts it out.
+        let t = smoothstep((phase - 0.58) / 0.14);
         return ToolSwingPose {
-            pitch: lerp(-0.78, -0.66, t),
-            yaw: lerp(0.18, 0.20, t),
+            pitch: lerp(-1.22, -1.02, t),
+            yaw: lerp(0.24, 0.24, t),
             roll: lerp(0.08, 0.08, t),
-            forward: lerp(0.16, 0.12, t),
-            right: lerp(-0.05, -0.03, t),
-            up: lerp(-0.12, -0.08, t),
+            forward: lerp(0.30, 0.18, t),
+            right: lerp(-0.08, -0.03, t),
+            up: lerp(-0.24, -0.16, t),
         };
     }
 
-    // Smooth drag back to rest.
-    let t = smoothstep((phase - 0.62) / 0.38);
+    // Recovery: haul the heavy head back up to rest. Slower than the strike —
+    // you don't snap a buried axe straight back out.
+    let t = smoothstep((phase - 0.72) / 0.28);
     ToolSwingPose {
-        pitch: lerp(-0.66, -0.32, t),
-        yaw: lerp(0.20, 0.22, t),
+        pitch: lerp(-1.02, -0.32, t),
+        yaw: lerp(0.24, 0.22, t),
         roll: lerp(0.08, 0.08, t),
-        forward: lerp(0.12, 0.0, t),
+        forward: lerp(0.18, 0.0, t),
         right: lerp(-0.03, 0.0, t),
-        up: lerp(-0.08, 0.0, t),
+        up: lerp(-0.16, 0.0, t),
     }
 }
 
@@ -153,6 +167,22 @@ pub(crate) fn smoothstep(value: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Accelerating ease — slowest at the start, fastest at the end. Used for the
+/// strike of a heavy swing so the tool is travelling hardest at the moment of
+/// impact, which reads as force rather than a soft, evenly-paced arc.
+pub(crate) fn ease_in(value: f32) -> f32 {
+    let t = value.clamp(0.0, 1.0);
+    t * t
+}
+
+/// Decelerating ease — fastest at the start, settling at the end. Used for the
+/// wind-up so the head snaps back and then hangs at the apex; that hang is the
+/// anticipation beat that gives a swing its weight.
+pub(crate) fn ease_out(value: f32) -> f32 {
+    let t = value.clamp(0.0, 1.0);
+    1.0 - (1.0 - t) * (1.0 - t)
+}
+
 pub(crate) fn lerp(from: f32, to: f32, t: f32) -> f32 {
     from + (to - from) * t
 }
@@ -162,25 +192,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hatchet_swing_pose_chops_with_a_stable_handle() {
+    fn hatchet_swing_pose_drives_a_committed_chop() {
         let ready = hatchet_swing_pose(0.0);
-        let windup = hatchet_swing_pose(0.32);
-        let impact = hatchet_swing_pose(0.50);
+        let apex = hatchet_swing_pose(0.40);
+        let impact = hatchet_swing_pose(0.58);
+        let dwell = hatchet_swing_pose(0.66);
 
-        // Wind-up loads the head up and back, not sideways. The arc stays
-        // modest — a wrist-flick chop rather than a full overhead swing.
-        assert!(windup.pitch > ready.pitch + 0.6);
-        assert!(windup.up > ready.up + 0.10);
+        // Wind-up loads the head high and back over the shoulder — a real
+        // cock-back, not a wrist flick: it lifts well clear of rest and pulls
+        // back toward the shoulder rather than reaching forward.
+        assert!(apex.pitch > ready.pitch + 0.8);
+        assert!(apex.up > ready.up + 0.15);
+        assert!(apex.forward < ready.forward - 0.10);
 
-        // Strike drops the head forward and down with a small diagonal yaw.
-        assert!(impact.pitch < windup.pitch - 1.0);
-        assert!(impact.forward > windup.forward + 0.20);
-        assert!(impact.up < windup.up - 0.20);
-        assert!(impact.yaw > windup.yaw + 0.10);
+        // Strike drives the head deep, forward through the target, and down
+        // with a diagonal yaw finish — bodyweight committed, not flicked.
+        assert!(impact.pitch < apex.pitch - 1.4);
+        assert!(impact.forward > apex.forward + 0.30);
+        assert!(impact.up < ready.up - 0.15);
+        assert!(impact.yaw > apex.yaw + 0.20);
+
+        // The head bites and holds at the bottom rather than snapping straight
+        // back — just after contact it still sits below rest and forward.
+        assert!(dwell.up < ready.up - 0.10);
+        assert!(dwell.forward > 0.10);
 
         // Handle stays aligned with the swing — roll never drifts far from
         // rest, so the haft isn't spinning around its own axis.
-        assert!((windup.roll - ready.roll).abs() < 0.05);
+        assert!((apex.roll - ready.roll).abs() < 0.05);
         assert!((impact.roll - ready.roll).abs() < 0.05);
     }
 

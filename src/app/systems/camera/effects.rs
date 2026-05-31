@@ -5,9 +5,12 @@ use crate::{
     items::ToolKind,
 };
 
-const AXE_KICK_PITCH: f32 = 0.010;
-const AXE_KICK_DOWN: f32 = 0.005;
-const AXE_KICK_DURATION: f32 = 0.08;
+// Axe kick: the chop is a slow, heavy wind-up into a deep committed strike
+// (see `hatchet_swing_pose`), so the camera punch is firm and lingers to sell
+// the weight of the contact — still short of the pickaxe's heavy slam.
+const AXE_KICK_PITCH: f32 = 0.026;
+const AXE_KICK_DOWN: f32 = 0.016;
+const AXE_KICK_DURATION: f32 = 0.14;
 const PICKAXE_KICK_PITCH: f32 = 0.038;
 const PICKAXE_KICK_DOWN: f32 = 0.024;
 const PICKAXE_KICK_DURATION: f32 = 0.18;
