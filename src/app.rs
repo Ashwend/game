@@ -273,7 +273,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
                 // startup would need a screen-size guess and that's exactly
                 // what we'd get wrong on the dev's actual monitor.
                 primary_window: Some(Window {
-                    title: "Game".to_owned(),
+                    title: "Ashwend".to_owned(),
                     resolution: test_mode
                         .window
                         .map(|w| (w.width, w.height).into())

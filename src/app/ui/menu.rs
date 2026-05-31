@@ -24,7 +24,7 @@ pub(super) fn main_menu_ui(
         .show(ctx, |ui| {
             ui.set_width(MENU_WIDTH);
             ui.vertical_centered(|ui| {
-                ui.label(theme::title("Game", 78.0));
+                ui.label(theme::title("Ashwend", 78.0));
                 ui.add_space(20.0);
                 let panel = theme::panel_frame().inner_margin(egui::Margin::same(24));
                 panel.show(ui, |ui| {

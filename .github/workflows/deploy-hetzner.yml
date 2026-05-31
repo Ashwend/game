@@ -47,9 +47,9 @@ jobs:
         run: |
           mkdir -p release-artifacts
           gh run download "${RELEASE_RUN_ID}" --name release-metadata --dir release-artifacts
-          gh run download "${RELEASE_RUN_ID}" --name game-aarch64-unknown-linux-gnu.tar.gz --dir release-artifacts
+          gh run download "${RELEASE_RUN_ID}" --name ashwend-aarch64-unknown-linux-gnu.tar.gz --dir release-artifacts
           test -f release-artifacts/release-metadata.env
-          test -f release-artifacts/game-aarch64-unknown-linux-gnu.tar.gz
+          test -f release-artifacts/ashwend-aarch64-unknown-linux-gnu.tar.gz
 
       - name: Read release metadata
         id: release
@@ -114,7 +114,7 @@ jobs:
           ssh_opts=(-i ~/.ssh/hetzner -p "${port}" -o IdentitiesOnly=yes)
           scp_opts=(-i ~/.ssh/hetzner -P "${port}" -o IdentitiesOnly=yes)
 
-          scp "${scp_opts[@]}" release-artifacts/game-aarch64-unknown-linux-gnu.tar.gz "${target}:${remote_archive}"
+          scp "${scp_opts[@]}" release-artifacts/ashwend-aarch64-unknown-linux-gnu.tar.gz "${target}:${remote_archive}"
           scp "${scp_opts[@]}" .github/scripts/deploy-hetzner-server.sh "${target}:${remote_script}"
           ssh "${ssh_opts[@]}" "${target}" \
             "chmod +x '${remote_script}' && '${remote_script}' '${remote_archive}' '${DEPLOY_VERSION}' '${GAME_SERVICE_USER}' '${GAME_SERVICE_NAME}' '${GAME_BIND_ADDR}' '${GAME_AUTH_MODE}' '${GAME_RESTART_NOTICE_SECONDS}' '${GAME_MAP_SIZE}' '${GAME_WORLD_NAME}'"

@@ -107,14 +107,14 @@ fi
 as_root install -d -m 0750 -o "${service_user}" -g "${service_user}" "${release_dir}"
 as_root tar -xzf "${archive_path}" -C "${release_dir}"
 as_root chown -R "${service_user}:${service_user}" "${release_dir}"
-as_root chmod 0750 "${release_dir}/game"
+as_root chmod 0750 "${release_dir}/ashwend"
 as_root ln -sfn "${release_dir}" "${current_link}"
 as_root chown -h "${service_user}:${service_user}" "${current_link}"
 
 unit_tmp="$(mktemp)"
 cat > "${unit_tmp}" <<EOF
 [Unit]
-Description=Game Dedicated Server
+Description=Ashwend Dedicated Server
 After=network-online.target
 Wants=network-online.target
 
@@ -126,10 +126,10 @@ WorkingDirectory=${install_dir}
 RuntimeDirectory=${service_name}
 RuntimeDirectoryMode=0750
 UMask=007
-ExecStart=${current_link}/game server --bind ${bind_addr} --auth ${auth_mode} --world ${world_path} --admin-socket ${admin_socket} --map-size ${map_size}
-ExecStop=/bin/sh -c '[ -S "${admin_socket}" ] && ${current_link}/game admin --socket ${admin_socket} announce "${shutdown_reason}" || true'
+ExecStart=${current_link}/ashwend server --bind ${bind_addr} --auth ${auth_mode} --world ${world_path} --admin-socket ${admin_socket} --map-size ${map_size}
+ExecStop=/bin/sh -c '[ -S "${admin_socket}" ] && ${current_link}/ashwend admin --socket ${admin_socket} announce "${shutdown_reason}" || true'
 ExecStop=/bin/sleep 3
-ExecStop=/bin/sh -c '[ -S "${admin_socket}" ] && ${current_link}/game admin --socket ${admin_socket} shutdown --reason "${shutdown_reason}" || true'
+ExecStop=/bin/sh -c '[ -S "${admin_socket}" ] && ${current_link}/ashwend admin --socket ${admin_socket} shutdown --reason "${shutdown_reason}" || true'
 ExecStop=/bin/sleep 5
 KillSignal=SIGINT
 TimeoutStopSec=45
@@ -155,8 +155,8 @@ announce() {
     echo "skipping announce — ${admin_socket} is not available (server not running?)"
     return 0
   fi
-  if [[ -x "${current_link}/game" ]]; then
-    as_service_user "${current_link}/game" admin --socket "${admin_socket}" announce "${message}" || true
+  if [[ -x "${current_link}/ashwend" ]]; then
+    as_service_user "${current_link}/ashwend" admin --socket "${admin_socket}" announce "${message}" || true
   fi
 }
 

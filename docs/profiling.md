@@ -33,7 +33,7 @@ Build with the `profile` Cargo feature. This adds:
 ./cli server --bind 127.0.0.1:7777
 
 # Terminal 2 — client with tracing
-cargo run --features profile --bin game -- client --connect 127.0.0.1:7777
+cargo run --features profile --bin ashwend -- client --connect 127.0.0.1:7777
 ```
 
 Stand still in-game for ~30 seconds, then **quit through the menu** (not Ctrl+C). The trace only flushes on clean exit. Output lands in the project root.

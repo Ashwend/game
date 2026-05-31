@@ -31,7 +31,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", required=True)
     parser.add_argument("--asset", required=True)
-    parser.add_argument("--binary", default="game")
+    parser.add_argument("--binary", default="ashwend")
     args = parser.parse_args()
 
     binary = binary_name(args.target, args.binary)

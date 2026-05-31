@@ -18,8 +18,8 @@ use directories::ProjectDirs;
 use uuid::Uuid;
 
 const QUALIFIER: &str = "com";
-const ORGANIZATION: &str = "Game";
-const APPLICATION: &str = "Game";
+const ORGANIZATION: &str = "Ashwend";
+const APPLICATION: &str = "Ashwend";
 const FILE_NAME: &str = "analytics_id";
 
 /// Resolve the platform-default location for the anonymous id file.

@@ -7,8 +7,8 @@ use directories::ProjectDirs;
 use super::data::ClientSettings;
 
 const QUALIFIER: &str = "com";
-const ORGANIZATION: &str = "Game";
-const APPLICATION: &str = "Game";
+const ORGANIZATION: &str = "Ashwend";
+const APPLICATION: &str = "Ashwend";
 const SETTINGS_FILE: &str = "settings.json";
 
 #[derive(Resource, Debug, Clone)]

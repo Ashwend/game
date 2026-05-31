@@ -392,6 +392,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "ashwend"
+version = "0.14.1"
+dependencies = [
+ "anyhow",
+ "bevy",
+ "bevy_egui",
+ "bevy_framepace",
+ "clap",
+ "cpal 0.16.0",
+ "crossbeam-channel",
+ "directories",
+ "include_dir",
+ "lightyear",
+ "opus",
+ "os_info",
+ "postcard",
+ "rapier3d",
+ "serde",
+ "serde_json",
+ "sys-locale",
+ "sysinfo 0.32.1",
+ "thiserror 2.0.18",
+ "toml",
+ "ureq",
+ "uuid",
+ "zstd",
+]
+
+[[package]]
 name = "asn1-rs"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3547,35 +3576,6 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
-]
-
-[[package]]
-name = "game"
-version = "0.14.1"
-dependencies = [
- "anyhow",
- "bevy",
- "bevy_egui",
- "bevy_framepace",
- "clap",
- "cpal 0.16.0",
- "crossbeam-channel",
- "directories",
- "include_dir",
- "lightyear",
- "opus",
- "os_info",
- "postcard",
- "rapier3d",
- "serde",
- "serde_json",
- "sys-locale",
- "sysinfo 0.32.1",
- "thiserror 2.0.18",
- "toml",
- "ureq",
- "uuid",
- "zstd",
 ]
 
 [[package]]

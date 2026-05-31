@@ -19,9 +19,9 @@ if [[ $# -gt 0 ]]; then
 fi
 
 close_existing_game() {
-  pkill -x "Game" >/dev/null 2>&1 || true
-  pkill -x "game" >/dev/null 2>&1 || true
-  pkill -f "target/debug/game" >/dev/null 2>&1 || true
+  pkill -x "Ashwend" >/dev/null 2>&1 || true
+  pkill -x "ashwend" >/dev/null 2>&1 || true
+  pkill -f "target/debug/ashwend" >/dev/null 2>&1 || true
 }
 
 copy_release_binary() {
@@ -31,9 +31,9 @@ copy_release_binary() {
     ext=".exe"
   fi
 
-  local src="target/${target}/release/game${ext}"
+  local src="target/${target}/release/ashwend${ext}"
   local out_dir="builds/${target}"
-  local out="${out_dir}/Game${ext}"
+  local out="${out_dir}/Ashwend${ext}"
 
   mkdir -p "$out_dir"
   cp "$src" "$out"
@@ -59,11 +59,11 @@ publish_target() {
 case "$cmd" in
   dev)
     close_existing_game
-    cargo run --bin game -- client "$@"
+    cargo run --bin ashwend -- client "$@"
     ;;
   dev-fast)
     close_existing_game
-    cargo run --features dev-fast --bin game -- client "$@"
+    cargo run --features dev-fast --bin ashwend -- client "$@"
     ;;
   profile)
     close_existing_game
@@ -73,18 +73,18 @@ case "$cmd" in
     # ui.perfetto.dev. Run release-ish opt levels so the trace reflects
     # something close to shipped perf — `[profile.dev.package."*"]` already
     # builds deps at opt-level 3, so a plain dev build is acceptable here.
-    cargo run --features profile --bin game -- client "$@"
+    cargo run --features profile --bin ashwend -- client "$@"
     ;;
   server)
-    cargo run --bin game -- server "$@"
+    cargo run --bin ashwend -- server "$@"
     ;;
   admin)
-    cargo run --bin game -- admin "$@"
+    cargo run --bin ashwend -- admin "$@"
     ;;
   multiplayer-test)
     close_existing_game
-    cargo build --bin game
-    ./target/debug/game multiplayer-test "$@"
+    cargo build --bin ashwend
+    ./target/debug/ashwend multiplayer-test "$@"
     ;;
   check)
     cargo check --locked --all-targets
@@ -133,7 +133,7 @@ case "$cmd" in
 Usage: ./cli <command> [args]
 
 Commands:
-  dev          Close existing Game windows and run the Bevy client.
+  dev          Close existing Ashwend windows and run the Bevy client.
   dev-fast     Like dev, but with bevy/dynamic_linking for faster rebuilds.
   profile      Like dev, with Chrome tracing + extra diagnostics. Writes trace-*.json on exit.
   server       Run a dedicated authoritative server. Pass --help after server for flags.

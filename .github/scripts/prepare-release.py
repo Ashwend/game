@@ -11,10 +11,10 @@ from pathlib import Path
 
 
 ASSETS = [
-    ("Linux Intel", "game-x86_64-unknown-linux-gnu.tar.gz"),
-    ("Linux ARM", "game-aarch64-unknown-linux-gnu.tar.gz"),
-    ("macOS ARM", "game-aarch64-apple-darwin.tar.gz"),
-    ("Windows Intel", "game-x86_64-pc-windows-msvc.zip"),
+    ("Linux Intel", "ashwend-x86_64-unknown-linux-gnu.tar.gz"),
+    ("Linux ARM", "ashwend-aarch64-unknown-linux-gnu.tar.gz"),
+    ("macOS ARM", "ashwend-aarch64-apple-darwin.tar.gz"),
+    ("Windows Intel", "ashwend-x86_64-pc-windows-msvc.zip"),
 ]
 
 CATEGORY_ORDER = [
@@ -225,7 +225,7 @@ def build_release_notes(version: str, tag: str, since_tag: str | None, end_ref: 
         grouped[category].append(f"- {description} (`{commit['short_hash']}`)")
 
     lines = [
-        f"## game {tag}",
+        f"## Ashwend {tag}",
         "",
         f"Changes since {since_label}.",
         "",

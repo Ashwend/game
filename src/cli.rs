@@ -19,7 +19,11 @@ const DEFAULT_SHUTDOWN_REASON: &str =
     "Server is stopping for maintenance. Please reconnect after it restarts.";
 
 #[derive(Debug, Parser)]
-#[command(name = "Game", version, about = "Game client and authoritative server")]
+#[command(
+    name = "Ashwend",
+    version,
+    about = "Ashwend client and authoritative server"
+)]
 struct Args {
     #[command(subcommand)]
     command: Option<Command>,

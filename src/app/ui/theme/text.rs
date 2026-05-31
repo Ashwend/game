@@ -47,7 +47,7 @@ mod tests {
     fn text_builders_accept_expected_labels() {
         let mut value = "value".to_owned();
         let _ = text_input(&mut value);
-        let _ = title("Game", 78.0);
+        let _ = title("Ashwend", 78.0);
         let _ = section("Worlds");
         let _ = muted("Muted");
         let _ = field_label("Name");

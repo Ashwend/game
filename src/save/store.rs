@@ -18,8 +18,8 @@ use super::types::WorldSave;
 use super::validate::normalize_world_name;
 
 const QUALIFIER: &str = "com";
-const ORGANIZATION: &str = "Game";
-const APPLICATION: &str = "Game";
+const ORGANIZATION: &str = "Ashwend";
+const APPLICATION: &str = "Ashwend";
 
 #[derive(Debug, Clone)]
 pub struct WorldStore {

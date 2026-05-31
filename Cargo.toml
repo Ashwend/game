@@ -1,9 +1,11 @@
 [package]
-name = "game"
+name = "ashwend"
 version = "0.14.1"
 edition = "2024"
 rust-version = "1.94"
-default-run = "game"
+default-run = "ashwend"
+license-file = "LICENSE"
+publish = false
 
 [features]
 default = []

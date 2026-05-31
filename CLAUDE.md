@@ -2,7 +2,7 @@
 
 AI context for this repo.
 
-Game is a Rust/Bevy first-person prototype. Singleplayer and multiplayer both use the Lightyear-backed `ClientSession::Network` path; singleplayer only adds loopback host startup, host admin assignment, and local save persistence. Worlds are compressed binary `.save` files (postcard + zstd, versioned `GAMESAVE` header).
+Ashwend is a Rust/Bevy first-person prototype. Singleplayer and multiplayer both use the Lightyear-backed `ClientSession::Network` path; singleplayer only adds loopback host startup, host admin assignment, and local save persistence. Worlds are compressed binary `.save` files (postcard + zstd, versioned `GAMESAVE` header).
 
 Start here:
 - `src/cli.rs`: `client`, `server`, and `admin` subcommands.
