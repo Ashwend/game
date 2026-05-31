@@ -10,7 +10,7 @@
 use bevy::prelude::*;
 
 use crate::{
-    app::state::ClientRuntime,
+    app::state::{ClientRuntime, LocalPlayerState},
     controller::{PlayerController, RUN_SPEED, WALK_SPEED, block_under_feet},
 };
 
@@ -41,25 +41,79 @@ const MIN_HORIZONTAL_SPEED: f32 = 0.5;
 // composes cleanly with the manifest's `base_gain_db`.
 const MIN_VOLUME_SCALE: f32 = 0.55;
 
+// Landing footstep: when the player touches down from a jump or fall we play
+// one footstep immediately so the landing has weight. The trigger matches the
+// camera landing dip (`LANDING_DIP_TRIGGER_SPEED` in camera/effects.rs) so the
+// felt dip and the heard step fire together; below it, stepping off a low
+// ledge stays silent. The gain ramps from `MIN`→`MAX` dB between the trigger
+// speed and `MAX_FALL_SPEED` so a gentle hop lands as a soft step and a long
+// drop lands as a firm thud (heavier than a mid-stride footfall).
+const LANDING_MIN_FALL_SPEED: f32 = 2.0;
+const LANDING_MAX_FALL_SPEED: f32 = 22.0;
+const LANDING_MIN_GAIN_DB: f32 = 0.0;
+const LANDING_MAX_GAIN_DB: f32 = 5.0;
+
 /// Per-frame state for the distance-triggered footstep system. Tracks
 /// the last ground position so we measure *actual* travel rather than
 /// integrating velocity (which drifts when the controller resolves
-/// collisions or the snapshot snaps the predicted position back).
-#[derive(Resource, Default)]
+/// collisions or the snapshot snaps the predicted position back). Also
+/// tracks the airborne/grounded edge so we can fire a step on touchdown.
+#[derive(Resource)]
 pub(crate) struct FootstepState {
     last_xz: Option<(f32, f32)>,
     accumulated_distance: f32,
+    /// Grounded state last frame — the airborne→grounded edge is the landing.
+    was_grounded: bool,
+    /// Downward speed last frame. Grounding zeroes vertical velocity in the
+    /// simulator, so the landing footstep keys off the previous frame's value
+    /// (same reasoning as the camera landing dip).
+    prev_fall_speed: f32,
+}
+
+impl Default for FootstepState {
+    fn default() -> Self {
+        Self {
+            last_xz: None,
+            accumulated_distance: 0.0,
+            // Start pinned to the grounded baseline so the first in-game frame
+            // never reads a spurious airborne→grounded edge.
+            was_grounded: true,
+            prev_fall_speed: 0.0,
+        }
+    }
 }
 
 impl FootstepState {
     fn reset(&mut self) {
-        self.last_xz = None;
-        self.accumulated_distance = 0.0;
+        // Pin to the grounded baseline (not just zeroed) so a fresh spawn or
+        // a between-worlds reconnect never fires a phantom landing thud.
+        *self = Self::default();
+    }
+
+    /// Update the airborne/grounded tracking and report the fall speed of a
+    /// landing footfall if this frame is the moment the player touched down
+    /// hard enough to be heard. While dead the state is pinned to the grounded
+    /// baseline: the predicted controller keeps falling under gravity during
+    /// the death splash, then respawn snaps it to the ground — without this
+    /// guard that snap would fire a phantom thud from the pre-death fall.
+    fn detect_landing(&mut self, grounded: bool, fall_speed: f32, alive: bool) -> Option<f32> {
+        if !alive {
+            self.was_grounded = true;
+            self.prev_fall_speed = 0.0;
+            return None;
+        }
+        let landed =
+            !self.was_grounded && grounded && self.prev_fall_speed >= LANDING_MIN_FALL_SPEED;
+        let landing_fall_speed = landed.then_some(self.prev_fall_speed);
+        self.was_grounded = grounded;
+        self.prev_fall_speed = if grounded { 0.0 } else { fall_speed };
+        landing_fall_speed
     }
 }
 
 pub(crate) fn play_footsteps_system(
     runtime: Res<ClientRuntime>,
+    local_player: Res<LocalPlayerState>,
     mut state: ResMut<FootstepState>,
     mut play: MessageWriter<PlaySound>,
 ) {
@@ -69,6 +123,32 @@ pub(crate) fn play_footsteps_system(
         state.reset();
         return;
     };
+
+    let velocity = predicted.velocity;
+    let horizontal_speed = (velocity.x * velocity.x + velocity.z * velocity.z).sqrt();
+    // Positive = falling; clamped to 0 on the way up.
+    let fall_speed = (-velocity.y).max(0.0);
+    let alive = !matches!(
+        local_player.lifecycle,
+        Some(crate::server::PlayerLifecycle::Dead { .. })
+    );
+
+    // Landing footstep — fired the instant the player touches down, *before*
+    // the standing-still / airborne guard below so a straight-up jump still
+    // lands audibly even though the player isn't moving horizontally.
+    if let Some(landing_fall_speed) = state.detect_landing(predicted.grounded, fall_speed, alive) {
+        let surface = surface_material_under(predicted, runtime.world_grid.as_ref());
+        let id = footstep_sound_for(surface);
+        play.write(PlaySound {
+            id,
+            at: None,
+            gain_offset_db: landing_gain_offset_db(landing_fall_speed),
+            jitter_seed: None,
+        });
+        // Start the next stride clean so the landing thud and the first
+        // running step after it don't double up.
+        state.accumulated_distance = 0.0;
+    }
 
     let position = predicted.position;
     let current_xz = (position.x, position.z);
@@ -84,9 +164,6 @@ pub(crate) fn play_footsteps_system(
     // spent airborne would make the following ground frame see a huge
     // teleport-sized displacement and fire a burst of steps.
     state.last_xz = Some(current_xz);
-
-    let velocity = predicted.velocity;
-    let horizontal_speed = (velocity.x * velocity.x + velocity.z * velocity.z).sqrt();
 
     if !predicted.grounded || horizontal_speed < MIN_HORIZONTAL_SPEED {
         // In the air or effectively standing still: hold the accumulator
@@ -121,6 +198,17 @@ fn speed_gain_offset_db(horizontal_speed: f32) -> f32 {
     let scale = MIN_VOLUME_SCALE + (1.0 - MIN_VOLUME_SCALE) * t;
     // 20 * log10(scale) in dB. Range: 20*log10(0.55) ≈ -5.2 dB to 0 dB.
     20.0 * scale.log10()
+}
+
+/// Gain offset for a landing footstep, ramped by how hard the player hit the
+/// ground. A landing at the trigger speed plays at the run-footfall level
+/// (`LANDING_MIN_GAIN_DB`); a terminal-speed drop adds `LANDING_MAX_GAIN_DB`
+/// on top so it reads as a heavy thud rather than a casual step.
+fn landing_gain_offset_db(fall_speed: f32) -> f32 {
+    let t = ((fall_speed - LANDING_MIN_FALL_SPEED)
+        / (LANDING_MAX_FALL_SPEED - LANDING_MIN_FALL_SPEED))
+        .clamp(0.0, 1.0);
+    LANDING_MIN_GAIN_DB + (LANDING_MAX_GAIN_DB - LANDING_MIN_GAIN_DB) * t
 }
 
 /// Resolve the surface under the player. Looks up the topmost block
@@ -184,14 +272,75 @@ mod tests {
     }
 
     #[test]
-    fn footstep_state_reset_clears_accumulator() {
+    fn footstep_state_reset_clears_accumulator_and_pins_grounded() {
         let mut state = FootstepState {
             last_xz: Some((1.0, 2.0)),
             accumulated_distance: 1.2,
+            was_grounded: false,
+            prev_fall_speed: 9.0,
         };
         state.reset();
         assert!(state.last_xz.is_none());
         assert_eq!(state.accumulated_distance, 0.0);
+        // Reset pins to the grounded baseline so a fresh (re)spawn never reads
+        // a spurious airborne→grounded edge.
+        assert!(state.was_grounded);
+        assert_eq!(state.prev_fall_speed, 0.0);
+    }
+
+    #[test]
+    fn landing_fires_once_on_touchdown_with_previous_fall_speed() {
+        let mut state = FootstepState::default();
+        // Standing on the ground: no landing.
+        assert!(state.detect_landing(true, 0.0, true).is_none());
+        // Jump: airborne, rising then falling — no landing yet.
+        assert!(state.detect_landing(false, 0.0, true).is_none());
+        assert!(state.detect_landing(false, 8.0, true).is_none());
+        // Touch down: fires with the *previous* frame's fall speed (8.0),
+        // because grounding has already zeroed vertical velocity this frame.
+        let speed = state
+            .detect_landing(true, 0.0, true)
+            .expect("landing fires on touchdown");
+        assert!((speed - 8.0).abs() < 1e-6);
+        // Still grounded next frame: no repeat.
+        assert!(state.detect_landing(true, 0.0, true).is_none());
+    }
+
+    #[test]
+    fn gentle_step_off_a_ledge_does_not_thud() {
+        let mut state = FootstepState::default();
+        state.detect_landing(true, 0.0, true); // grounded
+        state.detect_landing(false, 0.0, true); // airborne
+        state.detect_landing(false, 1.0, true); // drifting down below trigger
+        // Lands under the trigger speed → no footstep.
+        assert!(state.detect_landing(true, 0.0, true).is_none());
+    }
+
+    #[test]
+    fn dead_player_respawn_does_not_fire_a_phantom_landing() {
+        let mut state = FootstepState::default();
+        state.detect_landing(true, 0.0, true); // grounded, alive
+        state.detect_landing(false, 20.0, true); // airborne, falling hard
+        // Dies mid-fall: state pins to the grounded baseline, no thud.
+        assert!(state.detect_landing(false, 25.0, false).is_none());
+        // Respawn snaps to the ground on the first alive frame — must NOT
+        // fire a landing from the pre-death fall.
+        assert!(state.detect_landing(true, 0.0, true).is_none());
+    }
+
+    #[test]
+    fn landing_gain_ramps_with_fall_speed_and_clamps() {
+        let soft = landing_gain_offset_db(LANDING_MIN_FALL_SPEED);
+        let mid = landing_gain_offset_db((LANDING_MIN_FALL_SPEED + LANDING_MAX_FALL_SPEED) * 0.5);
+        let hard = landing_gain_offset_db(LANDING_MAX_FALL_SPEED);
+        let terminal = landing_gain_offset_db(LANDING_MAX_FALL_SPEED * 2.0);
+
+        assert!(soft < mid);
+        assert!(mid < hard);
+        // Above the max fall speed the gain clamps rather than running away.
+        assert_eq!(hard, terminal);
+        assert!((soft - LANDING_MIN_GAIN_DB).abs() < 1e-6);
+        assert!((hard - LANDING_MAX_GAIN_DB).abs() < 1e-6);
     }
 
     #[test]
