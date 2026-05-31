@@ -321,10 +321,10 @@ fn early_air_press_still_fires_jump_on_landing() {
     // Step the rest of the arc — well past `JUMP_BUFFER_SECONDS` of airtime.
     // The buffer must NOT decay while airborne; the OLD behaviour would have
     // chewed it down to zero long before landing.
-    let mut sequence: u64 = 3;
     let mut saw_rejump = false;
-    for _ in 0..250 {
-        sequence += 1;
+    // Sequence numbers continue from 3 (set during the jump arc above), one per
+    // simulated input over the 250-substep airborne stretch.
+    for sequence in 4..=253u64 {
         controller.apply_input(PlayerInput {
             sequence,
             direction: Vec3Net::ZERO,

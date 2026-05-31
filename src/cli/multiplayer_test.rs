@@ -129,7 +129,7 @@ pub(super) fn run_multiplayer_test(port: u16, names_override: Option<Vec<String>
 fn resolved_names(override_names: Option<Vec<String>>) -> [String; 2] {
     let mut names = [DEFAULT_NAMES[0].to_owned(), DEFAULT_NAMES[1].to_owned()];
     if let Some(custom) = override_names {
-        for (slot, name) in names.iter_mut().zip(custom.into_iter()) {
+        for (slot, name) in names.iter_mut().zip(custom) {
             let trimmed = name.trim();
             if !trimmed.is_empty() {
                 *slot = trimmed.to_owned();
