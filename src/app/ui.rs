@@ -23,7 +23,7 @@ mod worlds;
 use bevy::input::ButtonInput;
 use bevy::window::{Monitor, PrimaryMonitor};
 use bevy::{diagnostic::DiagnosticsStore, ecs::system::SystemParam, prelude::*};
-use bevy_egui::{EguiContexts, egui};
+use bevy_egui::{EguiContextSettings, EguiContexts, PrimaryEguiContext, egui};
 
 use super::audio::{PlaySound, SoundId};
 
@@ -126,13 +126,40 @@ fn ui_zoom_factor(settings: &ClientSettings) -> f32 {
     }
 }
 
+/// Applies the player's UI-scale preference to the primary egui context.
+///
+/// bevy_egui 0.39 bakes the display scale factor into egui's zoom every frame,
+/// so driving zoom directly fights it and breaks layout (see the note in
+/// [`ui_system`]). The supported knob is [`EguiContextSettings::scale_factor`],
+/// which bevy_egui multiplies into the context's pixels-per-point on top of the
+/// display scale. Written only when it changes so a stable value never
+/// re-triggers egui's per-frame zoom path.
+pub(crate) fn apply_ui_scale_system(
+    settings: Res<ClientSettings>,
+    mut contexts: Query<&mut EguiContextSettings, With<PrimaryEguiContext>>,
+) {
+    let target = ui_zoom_factor(&settings);
+    for mut ctx_settings in &mut contexts {
+        if ctx_settings.scale_factor != target {
+            ctx_settings.scale_factor = target;
+        }
+    }
+}
+
 pub(crate) fn ui_system(
     mut contexts: EguiContexts,
     mut resources: UiResources,
 ) -> bevy::prelude::Result {
     let ctx = contexts.ctx_mut()?;
     theme::apply_game_style(ctx);
-    ctx.set_zoom_factor(ui_zoom_factor(&resources.settings));
+    // NOTE: do NOT call `ctx.set_zoom_factor()` here. bevy_egui 0.39 bakes the
+    // display scale factor into egui's zoom every frame via
+    // `set_pixels_per_point`; setting a different zoom here makes the two
+    // ping-pong, and egui's `begin_pass` jitter-avoidance hack discards the
+    // real `screen_rect` on every zoom change — so the whole UI is laid out in
+    // egui's ~5000x5000 default and centred menus render off-screen on HiDPI.
+    // User UI scale is applied via `EguiContextSettings::scale_factor` in
+    // `apply_ui_scale_system` instead.
     let delta_seconds = resources
         .time
         .as_ref()

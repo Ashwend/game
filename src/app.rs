@@ -73,8 +73,8 @@ use self::{
         update_placement_ghost_system, update_tool_swap_state_system,
     },
     ui::{
-        ButtonSoundRequests, InventorySoundRequests, button_sound_system, inventory_sound_system,
-        ui_system,
+        ButtonSoundRequests, InventorySoundRequests, apply_ui_scale_system, button_sound_system,
+        inventory_sound_system, ui_system,
     },
 };
 
@@ -450,7 +450,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .add_systems(Update, app_quit_system.in_set(ClientSystemSet::Quit))
         .add_systems(
             Update,
-            apply_display_settings_system.in_set(ClientSystemSet::Display),
+            (apply_display_settings_system, apply_ui_scale_system).in_set(ClientSystemSet::Display),
         )
         .add_systems(
             Update,
