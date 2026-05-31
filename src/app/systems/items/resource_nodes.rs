@@ -492,12 +492,13 @@ fn spawn_resource_node_entity(
             base_transform: target_transform,
         });
     }
-    // Trees get a distance LOD: this (full-detail) mesh fades out past
-    // `TREE_LOD_DISTANCE`; a child carrying the low-poly mesh fades in. Bevy's
-    // `VisibilityRange` does the crossfade GPU-side off the existing visibility
-    // pass — no per-frame CPU cost. Cuts main-pass vertex throughput across a
-    // forest of distant trees (shadow distance is bounded separately by the
-    // Shadows graphics setting).
+    // Trees get a distance LOD: this (full-detail) mesh switches off past
+    // `TREE_LOD_DISTANCE`; a child carrying the low-poly mesh switches on at the
+    // same distance. Bevy's `VisibilityRange` does this GPU-side off the
+    // existing visibility pass — no per-frame CPU cost. It's a hard step, not a
+    // dither crossfade (see `TREE_LOD_DISTANCE` for why). Cuts main-pass vertex
+    // throughput across a forest of distant trees (shadow distance is bounded
+    // separately by the Shadows graphics setting).
     if lod_mesh.is_some() {
         spawn_command.insert(tree_lod_high_range());
     }
@@ -522,10 +523,20 @@ fn spawn_resource_node_entity(
     }
 }
 
-/// Distance (m from camera) at which a tree crossfades from its full-detail
-/// mesh to the low-poly LOD, and the width of the crossfade band.
-const TREE_LOD_DISTANCE: f32 = 40.0;
-const TREE_LOD_FADE: f32 = 12.0;
+/// Distance (m from camera) at which a tree switches from its full-detail mesh
+/// to the low-poly LOD.
+///
+/// We deliberately use a **hard switch, not a dither crossfade**. Bevy's
+/// `VisibilityRange` crossfade is a screen-space stochastic dither in the
+/// fragment shader, and it misbehaves against this camera's post-process stack
+/// (HDR + bloom + the fullscreen atmosphere pass + FXAA): inside the fade band
+/// the dithered fragments get discarded, so a tree at ~LOD distance randomly
+/// renders as nothing but its shadow. See the upstream reports
+/// (<https://github.com/bevyengine/bevy/issues/17643>,
+/// <https://github.com/bevyengine/bevy/pull/16286>). Zero-width margins below
+/// disable the dither entirely; the trade-off is a small LOD pop at this
+/// distance instead of a fade.
+const TREE_LOD_DISTANCE: f32 = 80.0;
 
 /// The low-poly LOD mesh for a tree model, or `None` for non-tree nodes.
 fn tree_lod_mesh(assets: &ResourceVisualAssets, model: ResourceNodeModel) -> Option<Handle<Mesh>> {
@@ -540,21 +551,24 @@ fn tree_lod_mesh(assets: &ResourceVisualAssets, model: ResourceNodeModel) -> Opt
     })
 }
 
-/// `VisibilityRange` for the full-detail mesh: fully visible up close, dither-
-/// crossfading out across the LOD band.
+/// `VisibilityRange` for the full-detail mesh: visible up close, hard cutoff at
+/// `TREE_LOD_DISTANCE`. Zero-width margins = a step switch, no dither crossfade
+/// (see [`TREE_LOD_DISTANCE`] for why we avoid the crossfade).
 fn tree_lod_high_range() -> VisibilityRange {
     VisibilityRange {
         start_margin: 0.0..0.0,
-        end_margin: TREE_LOD_DISTANCE..(TREE_LOD_DISTANCE + TREE_LOD_FADE),
+        end_margin: TREE_LOD_DISTANCE..TREE_LOD_DISTANCE,
         use_aabb: false,
     }
 }
 
-/// `VisibilityRange` for the low-poly mesh: fades in across the LOD band, then
-/// stays visible out to the (well-beyond-far-plane) cutoff.
+/// `VisibilityRange` for the low-poly mesh: hard switch-in at
+/// `TREE_LOD_DISTANCE`, then visible out to the (well-beyond-far-plane) cutoff.
+/// The switch-in distance is identical to the high mesh's cutoff so exactly one
+/// LOD is visible at any distance — no gap, no overlap.
 fn tree_lod_low_range() -> VisibilityRange {
     VisibilityRange {
-        start_margin: TREE_LOD_DISTANCE..(TREE_LOD_DISTANCE + TREE_LOD_FADE),
+        start_margin: TREE_LOD_DISTANCE..TREE_LOD_DISTANCE,
         end_margin: 10_000.0..10_000.0,
         use_aabb: false,
     }

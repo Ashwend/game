@@ -9,6 +9,7 @@ use crate::{
     items::ToolKind,
     protocol::ResourceNodeId,
     resources::ResourceNodeModel,
+    util::hash::hashed_unit,
 };
 
 use super::{
@@ -25,6 +26,11 @@ const TREE_OVERSHOOT_DURATION: f32 = 0.28;
 const TREE_LANDED_HOLD: f32 = 0.55;
 const TREE_FADE_DURATION: f32 = 1.05;
 const TREE_GROUND_LIFT: f32 = 0.16;
+/// Half-width of the per-tree random spread applied to the fall direction.
+/// Trees lead away from the player, but each one is rotated by a hashed offset
+/// in `[-MAX, MAX]` so a cleared grove doesn't have every trunk lying in
+/// lockstep. ~0.6 rad ≈ 34° keeps the trunk clearly pointing away.
+const MAX_FALL_JITTER_RADIANS: f32 = 0.6;
 
 // Ore shatter tuning.
 const ORE_BURST_HEIGHT: f32 = 0.35;
@@ -141,12 +147,7 @@ fn spawn_tree_felling(
 
     let fall_direction =
         compute_horizontal_fall_direction(player_position, transform.translation, node_id);
-    let fall_axis = fall_direction.cross(Vec3::Y).normalize_or_zero();
-    let fall_axis = if fall_axis.length_squared() < f32::EPSILON {
-        Vec3::X
-    } else {
-        fall_axis
-    };
+    let fall_axis = fall_axis_from_direction(fall_direction);
 
     // Clone the source material so we can drive this falling tree's alpha
     // without touching the shared material that other resource nodes use.
@@ -357,7 +358,11 @@ fn compute_horizontal_fall_direction(
     if let Some(player) = player_position {
         let away = Vec3::new(tree_position.x - player.x, 0.0, tree_position.z - player.z);
         if away.length_squared() > 0.01 {
-            return away.normalize();
+            // Lead away from the player, then rotate by a per-node hashed
+            // offset so neighbouring trunks don't all topple in lockstep and a
+            // trunk rarely lands straight back over where the player stands.
+            let jitter = (hashed_unit(node_id as u32) - 0.5) * 2.0 * MAX_FALL_JITTER_RADIANS;
+            return (Quat::from_rotation_y(jitter) * away.normalize()).normalize_or_zero();
         }
     }
 
@@ -366,6 +371,21 @@ fn compute_horizontal_fall_direction(
     // as the seed.
     let angle = (node_id as f32) * 0.137 + 0.31;
     Vec3::new(angle.cos(), 0.0, angle.sin()).normalize_or_zero()
+}
+
+/// The rotation axis that tips a trunk *along* `fall_direction`. Rotating the
+/// trunk's local +Y (its length) by a positive angle around `Y × fall_direction`
+/// swings the top toward `fall_direction`; the reverse order (`fall_direction ×
+/// Y`) tips it the opposite way, which is what made felled trees appear to fall
+/// back toward the player. Falls back to `Vec3::X` for a degenerate (vertical)
+/// direction, which never happens for the horizontal directions we feed it.
+fn fall_axis_from_direction(fall_direction: Vec3) -> Vec3 {
+    let axis = Vec3::Y.cross(fall_direction).normalize_or_zero();
+    if axis.length_squared() < f32::EPSILON {
+        Vec3::X
+    } else {
+        axis
+    }
 }
 
 #[cfg(test)]
@@ -379,10 +399,47 @@ mod tests {
             Vec3::new(4.0, 0.0, 0.0),
             1,
         );
-        assert!(direction.x > 0.9);
+        // The away direction is +X; the per-node jitter rotates it within a
+        // ±MAX cone, so the X component stays at least cos(MAX).
+        assert!(direction.x >= MAX_FALL_JITTER_RADIANS.cos() - 1e-3);
         assert!(direction.length() > 0.99);
         assert!(direction.length() < 1.01);
         assert!(direction.y.abs() < 1e-6);
+    }
+
+    #[test]
+    fn fall_direction_jitter_varies_per_node_but_stays_in_cone() {
+        let player = Vec3::ZERO;
+        let tree = Vec3::new(4.0, 0.0, 0.0);
+        let a = compute_horizontal_fall_direction(Some(player), tree, 1);
+        let b = compute_horizontal_fall_direction(Some(player), tree, 2);
+        // Different nodes get different spread...
+        assert!(a.distance(b) > 1e-3);
+        // ...but every one still leads away from the player (+X half-plane).
+        for dir in [a, b] {
+            assert!(dir.x > 0.0);
+        }
+    }
+
+    #[test]
+    fn felled_trunk_tips_away_from_the_player() {
+        // Regression for the cross-product sign: the trunk must topple along
+        // `fall_direction` (away from the player at the origin), not back over
+        // it. Reproduce the production transform math and check the trunk's
+        // length axis (+Y) leans in the same horizontal direction we chose.
+        let player = Vec3::ZERO;
+        let tree = Vec3::new(4.0, 0.0, 0.0);
+        let dir = compute_horizontal_fall_direction(Some(player), tree, 1);
+        let axis = fall_axis_from_direction(dir);
+
+        // Part-way through the fall the trunk's length (+Y) tips over.
+        let leaning = Quat::from_axis_angle(axis, 0.6) * Vec3::Y;
+        let horizontal = Vec3::new(leaning.x, 0.0, leaning.z);
+
+        // It leans away from the player (the tree sits at +X relative to them)
+        // and specifically along the chosen fall direction.
+        assert!(horizontal.x > 0.0, "trunk leaned back toward the player");
+        assert!(horizontal.normalize().dot(dir) > 0.99);
     }
 
     #[test]

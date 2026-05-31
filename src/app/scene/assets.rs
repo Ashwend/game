@@ -79,7 +79,7 @@ pub(crate) struct ResourceVisualAssets {
     pub(crate) birch_tree_medium_mesh: Handle<Mesh>,
     pub(crate) birch_tree_large_mesh: Handle<Mesh>,
     /// Low-poly distance LOD variants of the trees, swapped in past the LOD
-    /// distance via `VisibilityRange` crossfade (see the resource-node spawn).
+    /// distance via `VisibilityRange` hard switch (see the resource-node spawn).
     pub(crate) pine_tree_small_lod_mesh: Handle<Mesh>,
     pub(crate) pine_tree_medium_lod_mesh: Handle<Mesh>,
     pub(crate) pine_tree_large_lod_mesh: Handle<Mesh>,

@@ -181,11 +181,11 @@ pub(crate) fn low_poly_birch_tree_large_mesh() -> Mesh {
 // ---------------------------------------------------------------------------
 // Distance LOD meshes
 //
-// Low-poly stand-ins swapped in past ~40 m via `VisibilityRange` crossfade (see
+// Low-poly stand-ins swapped in past ~80 m via `VisibilityRange` hard switch (see
 // the resource-node spawn path). Each preserves its full-detail counterpart's
-// height, canopy extent, and colour palette so the crossfade reads as the same
+// height, canopy extent, and colour palette so the hard switch reads as the same
 // tree — but with ~1/3 the triangles (single trunk box, few low-segment cones /
-// canopy blobs). At 40 m+ on screen the facet count is imperceptible; the win
+// canopy blobs). At 80 m+ on screen the facet count is imperceptible; the win
 // is the per-frame vertex throughput across a forest of distant trees.
 // ---------------------------------------------------------------------------
 
