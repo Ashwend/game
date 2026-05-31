@@ -138,6 +138,14 @@ impl PlaySound {
             jitter_seed: None,
         }
     }
+
+    /// Override the per-instance gain offset (dB on top of the manifest's
+    /// `base_gain_db`). Lets one trigger play a shared sound quieter or louder
+    /// than its default without touching the manifest.
+    pub(crate) const fn with_gain_offset_db(mut self, gain_offset_db: f32) -> Self {
+        self.gain_offset_db = gain_offset_db;
+        self
+    }
 }
 
 pub(crate) fn play_sounds_system(

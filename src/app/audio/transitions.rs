@@ -1,7 +1,8 @@
 //! Transition stingers — one-shot cues that fire on a state change
 //! rather than a gameplay event. Today: the "you entered a world"
 //! sound that plays when the player crosses from the menu/loading
-//! flow into [`Screen::InGame`].
+//! flow into [`Screen::InGame`], reused to score the main-menu reveal
+//! when the initial "Authenticating" splash clears at launch.
 //!
 //! The cue is detected here, not inside [`MenuState::enter_in_game`],
 //! because the state method runs from UI handlers that don't carry a
@@ -12,17 +13,26 @@
 
 use bevy::prelude::*;
 
-use crate::app::state::{MenuState, Screen};
+use crate::app::state::{LoadingSplashKind, MenuState, Screen};
 
 use super::{library::PlaySound, manifest::SoundId};
 
-/// Last-frame snapshot of `MenuState::screen`. Compared against the
-/// current frame's screen to detect the moment the player enters a
-/// world. `None` on the very first tick — no prior frame to compare
-/// against, so the system seeds the watch state and emits nothing.
+/// Gain trim for the main-menu reveal cue relative to the in-game world-join.
+/// −9 dB ≈ 35% of the linear amplitude — the boot sting is kept gentle so it
+/// doesn't greet the player with a blast on launch, while the world-join stays
+/// at full weight.
+const STARTUP_CUE_GAIN_OFFSET_DB: f32 = -9.0;
+
+/// Last-frame snapshot of the bits of `MenuState` we edge-detect against.
+/// Compared each frame to spot the moment the player enters a world and the
+/// moment the startup splash clears. Defaults seed the watch on the first
+/// tick — no prior frame to compare against, so the system emits nothing.
 #[derive(Resource, Debug, Default)]
 pub(crate) struct ScreenTransitionWatch {
     last_screen: Option<Screen>,
+    /// Whether the startup "Authenticating" splash had begun revealing the menu
+    /// (its `ready` flag) last frame.
+    startup_splash_ready: bool,
 }
 
 pub(crate) fn play_transition_stingers_system(
@@ -39,6 +49,30 @@ pub(crate) fn play_transition_stingers_system(
     if matches!(current, Screen::InGame) && previous != Some(Screen::InGame) {
         play.write(PlaySound::non_spatial(SoundId::WorldJoin));
     }
+
+    // Reuse the same arrival cue to score the main-menu reveal. Fire it the
+    // instant the "Authenticating" splash begins to fade (its `ready` edge),
+    // not when it finishes clearing — so the sting rises *with* the menu as it
+    // crossfades in, rather than trailing a half-second behind once it's
+    // already settled. The startup splash only readies once per launch, so this
+    // lands exactly once.
+    let startup_splash_ready = menu
+        .loading_splash
+        .as_ref()
+        .is_some_and(|splash| splash.kind == LoadingSplashKind::Startup && splash.ready);
+    if reveal_started(watch.startup_splash_ready, startup_splash_ready) {
+        play.write(
+            PlaySound::non_spatial(SoundId::WorldJoin)
+                .with_gain_offset_db(STARTUP_CUE_GAIN_OFFSET_DB),
+        );
+    }
+    watch.startup_splash_ready = startup_splash_ready;
+}
+
+/// Rising-edge test for the startup splash beginning its reveal: true exactly
+/// on the frame `ready` first flips true.
+fn reveal_started(was_ready: bool, is_ready: bool) -> bool {
+    is_ready && !was_ready
 }
 
 #[cfg(test)]
@@ -84,6 +118,19 @@ mod tests {
         let mut watch = ScreenTransitionWatch::default();
         assert!(step(&mut watch, Screen::InGame));
         assert!(step(&mut watch, Screen::InGame).not());
+    }
+
+    #[test]
+    fn startup_splash_cue_fires_once_when_reveal_begins() {
+        // Boot: splash held at full opacity, not yet ready — no cue.
+        assert!(reveal_started(false, false).not(), "still authenticating");
+        // The frame `ready` flips is the single firing edge — the menu has
+        // begun to crossfade in.
+        assert!(reveal_started(false, true), "reveal begins");
+        // It holds ready through the fade without re-firing…
+        assert!(reveal_started(true, true).not(), "mid fade");
+        // …and going un-ready (splash dropped) doesn't fire either.
+        assert!(reveal_started(true, false).not(), "splash gone");
     }
 
     // Convenience: `.not()` on bool — pre-Rust 1.85 doesn't have it on
