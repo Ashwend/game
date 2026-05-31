@@ -12,7 +12,7 @@
 //! `src/server/inventory.rs`.
 
 use crate::{
-    items::{normalize_stack, stack_limit},
+    items::{item_definition, normalize_stack, stack_limit},
     protocol::{
         ACTIONBAR_SLOT_COUNT, INVENTORY_SLOT_COUNT, ItemContainer, ItemContainerSlot, ItemStack,
         PlayerInventoryState,
@@ -192,6 +192,19 @@ pub fn add_stack_to_inventory(
         }
     }
 
+    // Tools and deployables are quick-access items the player reaches for
+    // constantly, so a freshly crafted or picked-up one should land on the
+    // actionbar when there's an open slot — before it spills into the bag.
+    // Everything else keeps the original bag-first behaviour.
+    if prefers_actionbar(&remaining.item_id) {
+        for index in 0..inventory.actionbar_slots.len() {
+            if inventory.actionbar_slots[index].is_none() {
+                inventory.actionbar_slots[index] = Some(remaining);
+                return None;
+            }
+        }
+    }
+
     for index in 0..inventory.inventory_slots.len() {
         if inventory.inventory_slots[index].is_none() {
             inventory.inventory_slots[index] = Some(remaining);
@@ -200,6 +213,14 @@ pub fn add_stack_to_inventory(
     }
 
     Some(remaining)
+}
+
+/// Whether a freshly added stack of `item_id` should prefer an empty
+/// actionbar slot over the bag. True for tools and deployables — the items
+/// the player equips and uses directly — and false for everything else, so
+/// gathered resources still flow into the main inventory as before.
+fn prefers_actionbar(item_id: &str) -> bool {
+    item_definition(item_id).is_some_and(|def| def.tool.is_some() || def.deployable.is_some())
 }
 
 /// How many units of `stack` would actually fit if added to `inventory`,
@@ -275,6 +296,57 @@ mod tests {
         assert_eq!(
             inventory.inventory_slots[0].as_ref().map(|s| s.quantity),
             Some(15)
+        );
+    }
+
+    #[test]
+    fn tools_land_on_the_actionbar_before_the_bag() {
+        let mut inventory = PlayerInventoryState::empty();
+
+        assert!(
+            add_stack_to_inventory(&mut inventory, ItemStack::new(BASIC_PICKAXE_ID, 1)).is_none()
+        );
+
+        // The pickaxe went to the first actionbar slot, leaving the bag empty.
+        assert_eq!(
+            inventory.actionbar_slots[0]
+                .as_ref()
+                .map(|stack| stack.item_id.as_ref()),
+            Some(BASIC_PICKAXE_ID)
+        );
+        assert!(inventory.inventory_slots.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn tools_fall_back_to_the_bag_when_the_actionbar_is_full() {
+        let mut inventory = PlayerInventoryState::empty();
+        for slot in inventory.actionbar_slots.iter_mut() {
+            *slot = Some(ItemStack::new(COAL_ID, 1));
+        }
+
+        assert!(
+            add_stack_to_inventory(&mut inventory, ItemStack::new(BASIC_PICKAXE_ID, 1)).is_none()
+        );
+
+        assert_eq!(
+            inventory.inventory_slots[0]
+                .as_ref()
+                .map(|stack| stack.item_id.as_ref()),
+            Some(BASIC_PICKAXE_ID)
+        );
+    }
+
+    #[test]
+    fn non_tools_ignore_empty_actionbar_slots() {
+        let mut inventory = PlayerInventoryState::empty();
+
+        assert!(add_stack_to_inventory(&mut inventory, ItemStack::new(COAL_ID, 5)).is_none());
+
+        // Resources still flow into the bag even with the actionbar wide open.
+        assert!(inventory.actionbar_slots.iter().all(Option::is_none));
+        assert_eq!(
+            inventory.inventory_slots[0].as_ref().map(|s| s.quantity),
+            Some(5)
         );
     }
 

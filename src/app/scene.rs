@@ -18,13 +18,14 @@ mod sky;
 mod world;
 
 pub(crate) use assets::{
-    DeployableVisualAssets, ImpactEffectAssets, ItemVisualAssets, PlayerVisualAssets,
-    ResourceVisualAssets, menu_backdrop_depth_of_field, player_visual_position, setup_scene,
+    DeployableVisualAssets, FurnaceFireAssets, ImpactEffectAssets, ItemVisualAssets,
+    PlayerVisualAssets, ResourceVisualAssets, menu_backdrop_depth_of_field, player_visual_position,
+    setup_scene,
 };
 #[cfg(test)]
 pub(crate) use components::WorldGeometry;
 pub(crate) use components::{
-    DeployablePlacementGhost, FurnaceMouthLight, HeldItemVisual, MainCamera, NetworkDeployedEntity,
+    DeployablePlacementGhost, HeldItemVisual, MainCamera, NetworkDeployedEntity,
     NetworkDroppedItem, NetworkLootBag, NetworkPlayer, NetworkResourceNode, tree_mesh_height,
 };
 pub(crate) use grass::{GrassMaterial, GrassMaterialHandle, GrassState, stream_grass_system};

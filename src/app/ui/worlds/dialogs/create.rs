@@ -1,8 +1,11 @@
 use bevy_egui::egui;
 
+use uuid::Uuid;
+
 use crate::{
     analytics::{Analytics, Event},
     app::state::{CreateWorldDialog, MenuState, SaveStore, SteamUser},
+    net::ClientNetwork,
     save::validate_world_name,
     world::ProceduralMapSize,
 };
@@ -11,7 +14,7 @@ use super::super::super::{
     modal,
     theme::{self, ButtonKind, COMPACT_ROW_HEIGHT},
 };
-use super::super::session::refresh_worlds;
+use super::super::session::{refresh_worlds, start_singleplayer_in_background};
 use super::shared::{field_label, select_all_text};
 
 const CREATE_WORLD_NAME_INPUT_ID: &str = "create_world_name_input";
@@ -38,6 +41,7 @@ pub(in crate::app::ui::worlds) fn create_world_dialog_ui(
     menu: &mut MenuState,
     store: &SaveStore,
     user: &SteamUser,
+    network: &ClientNetwork,
     analytics: &Analytics,
 ) {
     let finished_closing;
@@ -84,23 +88,35 @@ pub(in crate::app::ui::worlds) fn create_world_dialog_ui(
     let Some(dialog) = menu.create_world.take() else {
         return;
     };
-    if dialog.confirmed {
-        create_world_from_dialog(dialog, menu, store, user, analytics);
+    if dialog.confirmed
+        && let Some(world_id) = create_world_from_dialog(dialog, menu, store, user, analytics)
+    {
+        // Creating a world almost always means "play it now", so drop straight
+        // into the fresh save instead of bouncing back to the list. The world
+        // is already in `menu.worlds` (create refreshes the list), so the
+        // loading splash can resolve its name. Reuse the exact background
+        // start the table's Start button drives.
+        analytics.track(Event::WorldLoaded);
+        start_singleplayer_in_background(menu, store, user, network, world_id);
     }
 }
 
+/// Create + persist the world described by `dialog`, refresh the list, and
+/// return the new world's id on success. Kept free of the start/host concern
+/// so it stays a pure persistence step (the caller decides whether to enter
+/// the world); `create_world_dialog_ui` drives the immediate join.
 pub(in crate::app::ui::worlds) fn create_world_from_dialog(
     dialog: CreateWorldDialog,
     menu: &mut MenuState,
     store: &SaveStore,
     user: &SteamUser,
     analytics: &Analytics,
-) {
+) -> Option<Uuid> {
     let map = match dialog.selected_map() {
         Ok(map) => map,
         Err(error) => {
             menu.status = Some(error.to_owned());
-            return;
+            return None;
         }
     };
 
@@ -109,11 +125,15 @@ pub(in crate::app::ui::worlds) fn create_world_from_dialog(
         .0
         .create_world_with_map(&dialog.name, Some(user.0.steam_id), map)
     {
-        Ok(_) => {
+        Ok(save) => {
             analytics.track(Event::WorldCreated { map_type });
             refresh_worlds(menu, store);
+            Some(save.id)
         }
-        Err(error) => menu.status = Some(format!("create failed: {error}")),
+        Err(error) => {
+            menu.status = Some(format!("create failed: {error}"));
+            None
+        }
     }
 }
 

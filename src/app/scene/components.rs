@@ -55,12 +55,6 @@ pub(crate) struct NetworkLootBag {
     pub(crate) id: LootBagId,
 }
 
-/// Child entity attached to an active furnace, carrying the warm
-/// orange `PointLight` that pours out of the mouth. Despawned when the
-/// snapshot says the furnace is inactive.
-#[derive(Component)]
-pub(crate) struct FurnaceMouthLight;
-
 #[derive(Component)]
 pub(crate) struct HeldItemVisual {
     pub(crate) item_id: crate::items::ItemId,

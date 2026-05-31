@@ -113,6 +113,17 @@ pub(crate) struct DeployableVisualAssets {
     pub(crate) ghost_invalid_material: Handle<StandardMaterial>,
 }
 
+/// Mesh + material handles for the furnace fire visuals (the flickering flame
+/// tongue and its rising sparks). Built once in `setup_scene`; consumed by the
+/// furnace-fire systems in `app::systems::furnace_fire`.
+#[derive(Resource, Clone)]
+pub(crate) struct FurnaceFireAssets {
+    pub(crate) flame_mesh: Handle<Mesh>,
+    pub(crate) flame_material: Handle<StandardMaterial>,
+    pub(crate) spark_mesh: Handle<Mesh>,
+    pub(crate) spark_material: Handle<StandardMaterial>,
+}
+
 #[derive(Resource, Clone)]
 pub(crate) struct ImpactEffectAssets {
     pub(crate) wood_chip_mesh: Handle<Mesh>,
@@ -363,6 +374,31 @@ pub(crate) fn setup_scene(
             base_color: Color::srgb(0.42, 0.62, 0.22),
             perceptual_roughness: 0.92,
             reflectance: 0.12,
+            ..default()
+        }),
+    });
+    commands.insert_resource(FurnaceFireAssets {
+        // A small round puff. The fire is built from a dense stream of these
+        // rising and fading; additive blending fuses the overlap into a soft
+        // glowing flame body, so no single particle reads as a hard shape.
+        flame_mesh: meshes.add(Sphere::new(0.07)),
+        flame_material: materials.add(StandardMaterial {
+            // Additive + unlit so each puff paints pure glow over whatever's
+            // behind it; the HDR (>1) emissive drives the bloom that gives the
+            // accumulated core its heat under the filmic tonemap. Kept modest
+            // per-puff because dozens overlap at the base.
+            base_color: Color::srgb(0.55, 0.18, 0.03),
+            emissive: LinearRgba::rgb(4.0, 1.4, 0.25),
+            alpha_mode: AlphaMode::Add,
+            unlit: true,
+            ..default()
+        }),
+        spark_mesh: meshes.add(Cuboid::new(0.035, 0.035, 0.035)),
+        spark_material: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.8, 0.45, 0.12),
+            emissive: LinearRgba::rgb(9.0, 4.2, 0.8),
+            alpha_mode: AlphaMode::Add,
+            unlit: true,
             ..default()
         }),
     });

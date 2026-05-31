@@ -25,14 +25,16 @@ use crate::{
     analytics::{Analytics, Event},
     app::{
         scene::{
-            DeployablePlacementGhost, DeployableVisualAssets, FurnaceMouthLight, MainCamera,
-            NetworkDeployedEntity,
+            DeployablePlacementGhost, DeployableVisualAssets, MainCamera, NetworkDeployedEntity,
         },
         state::{
             ClientErrorToast, ClientRuntime, DeployablePlacementState, LocalPlayerState, MenuState,
             Screen,
         },
-        systems::input::send_place_deployable_command,
+        systems::{
+            furnace_fire::{FurnaceFire, sync_furnace_fire},
+            input::send_place_deployable_command,
+        },
     },
     items::{DeployableKind, DeployableProfile, ItemId, ItemModel, item_definition},
     protocol::{DeployedEntityId, PlaceDeployableCommand, Vec3Net},
@@ -212,7 +214,7 @@ pub(crate) fn apply_deployed_entities_system(
     runtime: Res<ClientRuntime>,
     assets: Option<Res<DeployableVisualAssets>>,
     existing: Query<(Entity, &NetworkDeployedEntity)>,
-    existing_lights: Query<(Entity, &ChildOf), With<FurnaceMouthLight>>,
+    existing_fires: Query<(Entity, &ChildOf), With<FurnaceFire>>,
     replicated: Query<(
         &Deployable,
         &DeployableTransform,
@@ -237,13 +239,12 @@ pub(crate) fn apply_deployed_entities_system(
         .collect();
     let mut visible_ids: HashSet<DeployedEntityId> = HashSet::new();
 
-    // Map parent-entity → child-light-entity for the lights currently
-    // in the world. We compare per-furnace-entity below and either
-    // spawn (active && missing) or despawn (inactive && present) the
-    // child light.
-    let mut lights_by_parent: HashMap<Entity, Entity> = HashMap::new();
-    for (light_entity, child_of) in &existing_lights {
-        lights_by_parent.insert(child_of.parent(), light_entity);
+    // Map parent-entity → child-fire-rig-entity for the furnace fires
+    // currently in the world. We compare per-furnace-entity below and either
+    // spawn (active && missing) or despawn (inactive && present) the rig.
+    let mut fires_by_parent: HashMap<Entity, Entity> = HashMap::new();
+    for (fire_entity, child_of) in &existing_fires {
+        fires_by_parent.insert(child_of.parent(), fire_entity);
     }
 
     for (meta, transform, _health, active) in &replicated {
@@ -269,12 +270,12 @@ pub(crate) fn apply_deployed_entities_system(
                 .id()
         };
 
-        sync_furnace_light(
+        sync_furnace_fire(
             &mut commands,
             parent_entity,
             meta.kind,
             active.0,
-            lights_by_parent.remove(&parent_entity),
+            fires_by_parent.remove(&parent_entity),
         );
     }
 
@@ -283,12 +284,12 @@ pub(crate) fn apply_deployed_entities_system(
             commands.entity(entity).despawn();
         }
     }
-    // Any light whose parent disappeared (out of AoI / destroyed)
+    // Any fire rig whose parent disappeared (out of AoI / destroyed)
     // would normally despawn alongside its parent via Bevy's hierarchy
     // cleanup, but a despawn-recursive isn't guaranteed everywhere —
     // sweep here just in case.
-    for (_, light_entity) in lights_by_parent {
-        commands.entity(light_entity).despawn();
+    for (_, fire_entity) in fires_by_parent {
+        commands.entity(fire_entity).despawn();
     }
 }
 
@@ -410,50 +411,6 @@ pub(crate) fn deployable_collider(
         profile.collider_half_width,
     );
     Some(WorldBlock::new(center, half))
-}
-
-/// Spawn / despawn the warm point light that simulates the fire inside
-/// the furnace mouth. The light is a child of the structure entity so
-/// it inherits the parent's transform and yaw automatically.
-fn sync_furnace_light(
-    commands: &mut Commands,
-    parent_entity: Entity,
-    kind: DeployableKind,
-    active: bool,
-    existing_light: Option<Entity>,
-) {
-    let is_furnace = matches!(kind, DeployableKind::Furnace { .. });
-    match (is_furnace && active, existing_light) {
-        (true, None) => {
-            // Local offset matches the furnace mouth: just in front of
-            // the loading lip, halfway up the cavity. The parent's yaw
-            // rotates the offset so the light always shines where the
-            // mouth faces.
-            commands.entity(parent_entity).with_children(|parent| {
-                parent.spawn((
-                    Name::new("Furnace Mouth Light"),
-                    FurnaceMouthLight,
-                    PointLight {
-                        // Saturated ember glow — warm enough to read as
-                        // fire, dim enough not to wash out the scene
-                        // at night when several furnaces might be lit.
-                        color: Color::srgb(1.0, 0.62, 0.28),
-                        intensity: 5_500.0,
-                        range: 4.5,
-                        radius: 0.10,
-                        shadows_enabled: false,
-                        ..default()
-                    },
-                    Transform::from_xyz(0.0, 0.55, 0.42),
-                ));
-            });
-        }
-        (false, Some(light_entity)) => {
-            commands.entity(light_entity).despawn();
-        }
-        // Already in the right state — leave it.
-        _ => {}
-    }
 }
 
 fn current_deployable(

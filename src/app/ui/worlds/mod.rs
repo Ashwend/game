@@ -75,7 +75,7 @@ pub(super) fn worlds_ui(
             }
         },
     );
-    create_world_dialog_ui(ctx, menu, store, user, analytics);
+    create_world_dialog_ui(ctx, menu, store, user, network, analytics);
     edit_world_dialog_ui(ctx, menu, store);
 }
 

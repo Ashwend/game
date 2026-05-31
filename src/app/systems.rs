@@ -5,6 +5,7 @@ mod chunk_overlay;
 mod deployables;
 mod display;
 pub(crate) mod effects;
+mod furnace_fire;
 mod graphics;
 pub(crate) mod input;
 mod items;
@@ -36,6 +37,7 @@ pub(crate) use deployables::{
 };
 pub(crate) use display::apply_display_settings_system;
 pub(crate) use effects::{spawn_impact_effects_system, tick_impact_chips_system};
+pub(crate) use furnace_fire::{animate_furnace_fire_system, tick_furnace_particles_system};
 pub(crate) use graphics::apply_graphics_settings_system;
 pub(crate) use input::{
     center_cursor_on_focus_system, chat_shortcut_system, client_input_system,
@@ -105,6 +107,11 @@ pub(crate) enum ClientSystemSet {
     Footsteps,
     ImpactEffectsSpawn,
     ImpactEffectsTick,
+    /// Flicker lit furnaces and emit their flame + ember particles. Purely
+    /// cosmetic and client-only; rides after the impact-effect tick so all
+    /// particle work shares the same post-snapshot window.
+    FurnaceFireAnimate,
+    FurnaceParticleTick,
     ImpactSounds,
     TransitionStingers,
     PlaySounds,

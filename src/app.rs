@@ -54,20 +54,21 @@ use self::{
     systems::{
         AutoConnectRequest, CameraImpactKick, CameraMotionEffects, ClientSystemSet,
         DroppedItemEntities, LastTrackedScreen, LootBagEntities, PendingSessionEndReason,
-        RemotePlayerEntities, ResourceNodeEntities, SessionTracker, app_quit_system,
-        apply_deployed_entities_system, apply_display_settings_system, apply_dropped_items_system,
-        apply_graphics_settings_system, apply_held_item_visual_system, apply_loot_bags_system,
-        apply_resource_nodes_system, apply_snapshot_system, apply_test_mode_overrides_system,
-        auto_connect_poll_system, auto_connect_start_system, camera_follow_system,
-        center_cursor_on_focus_system, chat_shortcut_system, chunk_overlay_system,
-        client_input_system, close_furnace_on_escape_system, close_loot_bag_on_escape_system,
-        error_relay_system, gameplay_inventory_shortcuts_system, maintain_world_grid_system,
-        menu_backdrop_camera_system, mouse_look_system, network_tick_system,
-        placement_input_system, reposition_test_window_system, save_client_settings_system,
-        screen_viewed_system, session_ended_system, session_shutdown_poll_system,
-        session_started_system, spawn_impact_effects_system, surface_client_error_toasts_system,
-        sync_furnace_open_flag_system, sync_loot_bag_open_flag_system, sync_view_radius_system,
-        tick_felling_trees_system, tick_impact_chips_system, tick_resource_node_pop_in_system,
+        RemotePlayerEntities, ResourceNodeEntities, SessionTracker, animate_furnace_fire_system,
+        app_quit_system, apply_deployed_entities_system, apply_display_settings_system,
+        apply_dropped_items_system, apply_graphics_settings_system, apply_held_item_visual_system,
+        apply_loot_bags_system, apply_resource_nodes_system, apply_snapshot_system,
+        apply_test_mode_overrides_system, auto_connect_poll_system, auto_connect_start_system,
+        camera_follow_system, center_cursor_on_focus_system, chat_shortcut_system,
+        chunk_overlay_system, client_input_system, close_furnace_on_escape_system,
+        close_loot_bag_on_escape_system, error_relay_system, gameplay_inventory_shortcuts_system,
+        maintain_world_grid_system, menu_backdrop_camera_system, mouse_look_system,
+        network_tick_system, placement_input_system, reposition_test_window_system,
+        save_client_settings_system, screen_viewed_system, session_ended_system,
+        session_shutdown_poll_system, session_started_system, spawn_impact_effects_system,
+        surface_client_error_toasts_system, sync_furnace_open_flag_system,
+        sync_loot_bag_open_flag_system, sync_view_radius_system, tick_felling_trees_system,
+        tick_furnace_particles_system, tick_impact_chips_system, tick_resource_node_pop_in_system,
         toggle_crafting_system, toggle_inventory_system, toggle_pause_system,
         toggle_perf_stats_system, update_cursor_system, update_pickup_target_system,
         update_placement_ghost_system, update_tool_swap_state_system,
@@ -139,6 +140,8 @@ const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::Footsteps,
     ClientSystemSet::ImpactEffectsSpawn,
     ClientSystemSet::ImpactEffectsTick,
+    ClientSystemSet::FurnaceFireAnimate,
+    ClientSystemSet::FurnaceParticleTick,
     ClientSystemSet::NodeDeathTick,
     // Transition stingers (e.g. world-join) ride on `MenuState`
     // edge-detection, not on the gameplay event stream — slotted just
@@ -573,6 +576,14 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .add_systems(
             Update,
             tick_impact_chips_system.in_set(ClientSystemSet::ImpactEffectsTick),
+        )
+        .add_systems(
+            Update,
+            animate_furnace_fire_system.in_set(ClientSystemSet::FurnaceFireAnimate),
+        )
+        .add_systems(
+            Update,
+            tick_furnace_particles_system.in_set(ClientSystemSet::FurnaceParticleTick),
         )
         .add_systems(
             Update,
