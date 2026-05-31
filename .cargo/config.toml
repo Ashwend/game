@@ -1,0 +1,11 @@
+# Cargo configuration for this workspace.
+
+[env]
+# The `audiopus_sys` crate (pulled in by voice chat) bundles an old Opus
+# source whose CMakeLists declares `cmake_minimum_required` below 3.5. CMake
+# 4.x removed compatibility with that, so configuring fails with
+# "Compatibility with CMake < 3.5 has been removed from CMake". CMake 3.31+
+# reads this variable from the environment as the policy-version floor, which
+# lets the bundled Opus configure cleanly. Inherited by the `cmake`
+# subprocess the build script spawns.
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
