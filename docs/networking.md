@@ -116,7 +116,7 @@ If the spawn site is correct and the dropout persists, the fallback is the relia
 
 Singleplayer bootstrap:
 - `ClientSession::start_singleplayer` loads a `WorldSave`, starts `spawn_loopback_server`, and connects the normal Lightyear client to the reserved loopback UDP address.
-- The loopback host runs the same `run_host` code as a dedicated server, with `ServerSettings { auth_mode: Offline, singleplayer_host: Some(user.steam_id) }`.
+- The loopback host runs the same `run_host` code as a dedicated server, with `ServerSettings { auth_mode: NoAuth, singleplayer_host: Some(user.account_id) }`.
 - Ephemeral loopback ports are reserved until the host thread performs its first update and reports startup, so the client is not handed an address before the host is ready to bind it.
 - On shutdown, the client asks the local host for `world_save()` and persists it through `WorldStore`.
 
@@ -143,4 +143,11 @@ Networking files:
 
 Do not reintroduce a direct in-process singleplayer transport or a singleplayer-only gameplay server. If a feature needs networking, add it to the shared protocol and `GameServer` flow so loopback singleplayer and remote multiplayer exercise the same code.
 
-Steam mode is not production-ready. `AuthMode::Steam` currently rejects until a live SteamGameServer verifier is wired; the server browser path opens the Steam UI through the offline backend but does not register a visible server.
+## Authentication
+
+Identity is WorkOS-only. The `src/auth/` module owns it: `authenticate()` resolves a client's `ClientMessage::Auth` handshake into a `VerifiedIdentity { account_id, display_name }` according to the server's `AuthMode`:
+
+- `AuthMode::Workos` (the default for any dedicated server): the client presents a WorkOS access-token JWT, which `WorkosVerifier` validates offline against the WorkOS JWKS (RS256, signature + expiry; issuer/audience checks stay off until confirmed against a live token). The `account_id` is a stable truncated-SHA-256 of the token's `sub`, so client and server agree on identity and the save format stays byte-compatible. No API key or secret is needed — only the public client id.
+- `AuthMode::NoAuth` (loopback singleplayer + `./cli multiplayer-test`): the server trusts the client's claimed `account_id` and display name with no token check. **Localhost only** — never expose a `NoAuth` server to the network, or any client could claim any identity.
+
+The desktop client drives a native browser login (RFC 8252: system browser + loopback redirect + PKCE) in `src/auth/workos/`; the short-lived access token rides the `Auth` handshake and the refresh token is kept in the OS keychain. WorkOS config (just the public `client_id`) resolves like analytics — baked-in build default → `workos.local.toml` → `GAME_WORKOS_*` env — via `WorkosConfig::load()`; CI bakes `GAME_WORKOS_CLIENT_ID` into release builds. `./cli multiplayer-test` injects each window's identity through `GAME_ACCOUNT_ID` / `GAME_PLAYER_NAME` and starts its server with `--auth no-auth`.

@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     analytics::{Analytics, Event},
-    app::state::{CreateWorldDialog, MenuState, SaveStore, SteamUser},
+    app::state::{CreateWorldDialog, CurrentUser, MenuState, SaveStore},
     net::ClientNetwork,
     save::validate_world_name,
     world::ProceduralMapSize,
@@ -40,7 +40,7 @@ pub(in crate::app::ui::worlds) fn create_world_dialog_ui(
     ctx: &egui::Context,
     menu: &mut MenuState,
     store: &SaveStore,
-    user: &SteamUser,
+    user: &CurrentUser,
     network: &ClientNetwork,
     analytics: &Analytics,
 ) {
@@ -109,7 +109,7 @@ pub(in crate::app::ui::worlds) fn create_world_from_dialog(
     dialog: CreateWorldDialog,
     menu: &mut MenuState,
     store: &SaveStore,
-    user: &SteamUser,
+    user: &CurrentUser,
     analytics: &Analytics,
 ) -> Option<Uuid> {
     let map = match dialog.selected_map() {
@@ -123,7 +123,7 @@ pub(in crate::app::ui::worlds) fn create_world_from_dialog(
     let map_type = format!("{:?}", map);
     match store
         .0
-        .create_world_with_map(&dialog.name, Some(user.0.steam_id), map)
+        .create_world_with_map(&dialog.name, Some(user.0.account_id), map)
     {
         Ok(save) => {
             analytics.track(Event::WorldCreated { map_type });

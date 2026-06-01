@@ -59,9 +59,9 @@ pub(crate) use death_splash::tick_death_splash_system;
 use super::scene::WorldSceneState;
 use super::state::{
     AuthFlow, ClientErrorToast, ClientRuntime, ClientSettings, CraftingHudState, CraftingUiState,
-    InventorySoundEvent, LocalPlayerState, MAX_UI_SCALE, MIN_UI_SCALE, MenuBackdropVisibility,
-    MenuState, OptionsUiState, PredictionState, SaveStore, Screen, SessionShutdownTasks, SteamUser,
-    ToastState, WorkosAuth,
+    CurrentUser, InventorySoundEvent, LocalPlayerState, MAX_UI_SCALE, MIN_UI_SCALE,
+    MenuBackdropVisibility, MenuState, OptionsUiState, PredictionState, SaveStore, Screen,
+    SessionShutdownTasks, ToastState, WorkosAuth,
 };
 use super::systems::PendingSessionEndReason;
 use super::voice::VoiceState;
@@ -89,7 +89,7 @@ pub(crate) struct UiResources<'w, 's> {
     store: Res<'w, SaveStore>,
     /// Absent until the player is signed in (gated by `auth`). The menu screens
     /// only read it once `auth.is_authenticated()`.
-    user: Option<Res<'w, SteamUser>>,
+    user: Option<Res<'w, CurrentUser>>,
     auth: ResMut<'w, AuthFlow>,
     workos: Res<'w, WorkosAuth>,
     time: Option<Res<'w, Time>>,
@@ -208,7 +208,7 @@ pub(crate) fn ui_system(
     let user = resources
         .user
         .as_deref()
-        .expect("authenticated state implies SteamUser is present");
+        .expect("authenticated state implies CurrentUser is present");
 
     match resources.menu.screen {
         Screen::MainMenu => main_menu_ui(ctx, &mut resources.menu, &resources.store, user),

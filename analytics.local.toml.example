@@ -1,0 +1,32 @@
+# Analytics (PostHog) — local opt-in config.
+#
+# Copy this file to `analytics.local.toml` (gitignored) and fill it in to point
+# a local checkout at a PostHog project. Loaded by `src/analytics/config.rs`.
+#
+# Resolution order (each step overrides the previous):
+#   1. Build-time defaults baked in via `option_env!` (CI release builds).
+#   2. This file (`analytics.local.toml`) at the repo root.
+#   3. Runtime environment variables (`POSTHOG_*`), which override everything.
+#
+# Analytics stays DISABLED unless `enabled = true` AND `api_key` is set.
+# Client-only: the dedicated server and admin CLI never load this.
+
+# PostHog project API key (a public-ish ingestion key, not a secret).
+# Env override: POSTHOG_API_KEY
+api_key = "phc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Master switch. Must be true (and api_key set) for any event to be sent.
+# Env override: POSTHOG_ENABLED
+enabled = true
+
+# Ingestion host. Defaults to the EU endpoint if omitted.
+# Env override: POSTHOG_HOST
+host = "https://eu.i.posthog.com"
+
+# Environment tag attached to every event: dev | ci | bleeding-edge | prod.
+# Defaults to "dev" if omitted. Env override: POSTHOG_ENVIRONMENT
+environment = "dev"
+
+# Drop the client IP server-side (`$ip = null`). Defaults to true if omitted.
+# Env override: POSTHOG_DISABLE_GEOIP
+disable_geoip = true

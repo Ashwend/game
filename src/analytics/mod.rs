@@ -10,7 +10,7 @@
 //!   never touches the network.
 //! - **Privacy.** EU endpoints by default, `$ip = null` when
 //!   `disable_geoip` is set, no chat text / player names / save paths in
-//!   properties. Anonymous UUID — not Steam ID — as `distinct_id`.
+//!   properties. Anonymous UUID — not account ID — as `distinct_id`.
 
 mod client;
 pub(crate) mod config;

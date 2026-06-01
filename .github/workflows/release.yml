@@ -267,12 +267,18 @@ jobs:
         # shipped binary phone home without any runtime env-var setup. The
         # values are GitHub Variables (not Secrets) because PostHog project
         # API keys are public-ish ingestion keys, not credentials.
+        #
+        # The WorkOS client id is likewise embedded via `option_env!()` in
+        # `src/auth/workos/config.rs`, so shipped client + dedicated-server
+        # binaries carry the right id (the JWKS endpoint it points at) with no
+        # runtime setup. It's a public client id, not a secret.
         env:
           POSTHOG_API_KEY: ${{ vars.POSTHOG_API_KEY }}
           POSTHOG_HOST: ${{ vars.POSTHOG_HOST }}
           POSTHOG_ENVIRONMENT: ${{ vars.POSTHOG_ENVIRONMENT }}
           POSTHOG_ENABLED: ${{ vars.POSTHOG_ENABLED }}
           POSTHOG_DISABLE_GEOIP: ${{ vars.POSTHOG_DISABLE_GEOIP }}
+          GAME_WORKOS_CLIENT_ID: ${{ vars.GAME_WORKOS_CLIENT_ID }}
         run: cargo build --locked --release --target "${{ matrix.target }}"
 
       - name: Package release binary

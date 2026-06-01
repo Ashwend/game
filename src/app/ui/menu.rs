@@ -1,7 +1,7 @@
 use bevy_egui::egui;
 
 use crate::{
-    app::state::{MenuState, SaveStore, Screen, SteamUser},
+    app::state::{CurrentUser, MenuState, SaveStore, Screen},
     protocol::GAME_VERSION,
 };
 
@@ -15,7 +15,7 @@ pub(super) fn main_menu_ui(
     ctx: &egui::Context,
     menu: &mut MenuState,
     store: &SaveStore,
-    user: &SteamUser,
+    user: &CurrentUser,
 ) {
     theme::screen_scrim(ctx, "main_menu_scrim", 118);
     egui::Area::new("main_menu".into())
@@ -88,10 +88,7 @@ fn draw_version_indicator(ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        save::WorldStore,
-        steam::{AuthenticatedUser, offline_auth_token},
-    };
+    use crate::{auth::AuthenticatedUser, save::WorldStore};
 
     fn raw_input() -> egui::RawInput {
         egui::RawInput {
@@ -109,11 +106,11 @@ mod tests {
         ))
     }
 
-    fn user() -> SteamUser {
-        SteamUser(AuthenticatedUser {
-            steam_id: 1,
+    fn user() -> CurrentUser {
+        CurrentUser(AuthenticatedUser {
+            account_id: 1,
             display_name: "Tester".to_owned(),
-            token: offline_auth_token(1),
+            token: String::new(),
         })
     }
 

@@ -7,19 +7,19 @@ use crate::{
 #[test]
 fn spawn_ore_command_requires_admin_and_warns_otherwise() {
     let mut server = server();
-    // Connect a second player as a non-admin (host steam_id is 1, this one is 2).
+    // Connect a second player as a non-admin (host account_id is 1, this one is 2).
     let (_, _) = server
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
             2,
             "Guest".to_owned(),
-            crate::steam::offline_auth_token(2),
+            String::new(),
         )
         .expect("guest should connect");
     let guest_id = server
         .players_iter()
-        .find(|player| player.steam_id == 2)
+        .find(|player| player.account_id == 2)
         .map(|player| player.client_id)
         .expect("guest client id");
     let before = server.resource_nodes_iter().count();
@@ -158,19 +158,19 @@ fn help_command_replies_as_server_chat_only_to_issuer() {
 #[test]
 fn help_marks_spawn_ore_as_admin_only_for_non_admins() {
     let mut server = server();
-    // Guest is steam_id 2; the host (steam_id 1) is the singleplayer admin.
+    // Guest is account_id 2; the host (account_id 1) is the singleplayer admin.
     let _ = server
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
             2,
             "Guest".to_owned(),
-            crate::steam::offline_auth_token(2),
+            String::new(),
         )
         .expect("guest should connect");
     let guest_id = server
         .players_iter()
-        .find(|player| player.steam_id == 2)
+        .find(|player| player.account_id == 2)
         .map(|player| player.client_id)
         .expect("guest client id");
 

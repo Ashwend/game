@@ -1,13 +1,13 @@
 use bevy::prelude::*;
 
 use crate::{
-    app::state::{AuthFlow, LoadingSplash, MenuState, SteamUser},
-    steam::AuthenticatedUser,
-    workos_login::LoginOutcome,
+    app::state::{AuthFlow, CurrentUser, LoadingSplash, MenuState},
+    auth::AuthenticatedUser,
+    auth::workos::LoginOutcome,
 };
 
 /// Polls the in-flight WorkOS login/refresh handle each frame and advances the
-/// auth state machine: on success it installs [`SteamUser`] and crossfades into
+/// auth state machine: on success it installs [`CurrentUser`] and crossfades into
 /// the title screen; on failure it drops back to the login splash (surfacing
 /// the error only for an explicit sign-in attempt, not a silent refresh).
 pub(crate) fn drive_auth_flow_system(
@@ -18,12 +18,12 @@ pub(crate) fn drive_auth_flow_system(
     // Title-screen account actions.
     if menu.manage_account_requested {
         menu.manage_account_requested = false;
-        crate::workos_login::open_account_page();
+        crate::auth::workos::open_account_page();
     }
     if menu.sign_out_requested {
         menu.sign_out_requested = false;
-        crate::workos_login::logout();
-        commands.remove_resource::<SteamUser>();
+        crate::auth::workos::logout();
+        commands.remove_resource::<CurrentUser>();
         *auth = AuthFlow::LoggedOut { error: None };
         return;
     }
@@ -38,8 +38,8 @@ pub(crate) fn drive_auth_flow_system(
         LoginOutcome::Pending => {}
         LoginOutcome::Success(session) => {
             let session = *session;
-            commands.insert_resource(SteamUser(AuthenticatedUser {
-                steam_id: session.account_id,
+            commands.insert_resource(CurrentUser(AuthenticatedUser {
+                account_id: session.account_id,
                 display_name: session.display_name,
                 token: session.access_token,
             }));
@@ -61,8 +61,8 @@ mod tests {
     use super::*;
 
     use crate::{
-        app::state::{AuthFlow, LoadingSplashKind, MenuState, SteamUser},
-        workos_login::{LoginHandle, Session},
+        app::state::{AuthFlow, CurrentUser, LoadingSplashKind, MenuState},
+        auth::workos::{LoginHandle, Session},
     };
 
     fn session() -> Session {
@@ -96,9 +96,9 @@ mod tests {
 
         let user = app
             .world()
-            .get_resource::<SteamUser>()
+            .get_resource::<CurrentUser>()
             .expect("a successful login installs the signed-in user");
-        assert_eq!(user.0.steam_id, 77);
+        assert_eq!(user.0.account_id, 77);
         assert_eq!(user.0.display_name, "Ada");
         assert_eq!(user.0.token, "access");
 

@@ -8,7 +8,7 @@ use bevy_egui::egui;
 
 use crate::{
     analytics::Analytics,
-    app::state::{ClientRuntime, MenuState, SaveStore, Screen, SteamUser},
+    app::state::{ClientRuntime, CurrentUser, MenuState, SaveStore, Screen},
     net::ClientNetwork,
 };
 
@@ -23,7 +23,7 @@ pub(super) fn worlds_ui(
     menu: &mut MenuState,
     runtime: &mut ClientRuntime,
     store: &SaveStore,
-    user: &SteamUser,
+    user: &CurrentUser,
     network: &ClientNetwork,
     analytics: &Analytics,
 ) {

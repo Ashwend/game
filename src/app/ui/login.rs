@@ -2,7 +2,7 @@ use bevy_egui::egui;
 
 use crate::{
     app::state::{AuthFlow, MenuState, WorkosAuth},
-    workos_login::{ScreenHint, begin_login},
+    auth::workos::{ScreenHint, begin_login},
 };
 
 use super::{
@@ -99,7 +99,7 @@ pub(super) fn login_overlay_ui(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workos_login::{LoginHandle, WorkosLoginConfig};
+    use crate::auth::workos::{LoginHandle, WorkosConfig};
 
     fn raw_input() -> egui::RawInput {
         egui::RawInput {
@@ -120,9 +120,10 @@ mod tests {
     }
 
     fn workos() -> WorkosAuth {
-        WorkosAuth(WorkosLoginConfig {
+        WorkosAuth(WorkosConfig {
             client_id: "client_test".to_owned(),
             redirect_port: 8765,
+            account_url: "https://ashwend.com".to_owned(),
         })
     }
 

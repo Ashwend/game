@@ -387,19 +387,19 @@ pub(super) fn starting_crafting_state() -> PlayerCraftingState {
 mod tests {
     use super::*;
     use crate::{
+        auth::AuthMode,
         crafting::{PLANT_TWINE_RECIPE_ID, STONE_HATCHET_RECIPE_ID},
         items::{BASIC_HATCHET_ID, FIBER_ID, PLANT_TWINE_ID, STONE_ID, WOOD_ID},
         protocol::{GAME_VERSION, ItemStack, PROTOCOL_VERSION},
         save::WorldSave,
         server::ServerSettings,
-        steam::{AuthMode, offline_auth_token},
     };
 
     fn make_server() -> GameServer {
         GameServer::new(
             WorldSave::new("Test", Some(1)),
             ServerSettings {
-                auth_mode: AuthMode::Offline,
+                auth_mode: AuthMode::NoAuth,
                 singleplayer_host: Some(1),
             },
         )
@@ -412,7 +412,7 @@ mod tests {
                 Some(GAME_VERSION.to_owned()),
                 1,
                 "Tester".to_owned(),
-                offline_auth_token(1),
+                String::new(),
             )
             .expect("connect ok")
             .0

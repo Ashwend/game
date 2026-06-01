@@ -179,7 +179,7 @@ pub(crate) const WORLD_ENTRY_READY_TIMEOUT_SECONDS: f32 = 20.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LoadingSplashKind {
     /// Initial app-launch splash. Stays visible while the menu backdrop
-    /// warms up (and, in the future, while Steam authenticates).
+    /// warms up (and, in the future, while WorkOS authenticates).
     Startup,
     /// Local world load between clicking Start and the scene appearing.
     EnteringWorld,

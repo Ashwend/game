@@ -2,13 +2,14 @@ mod multiplayer_test;
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::{
-    app, net,
+    app,
+    auth::{AuthMode, WorkosVerifier, workos::WorkosConfig},
+    net,
     save::{WorldSave, WorldStore, load_world_file, save_world_file},
-    steam::{AuthMode, OfflineSteamBackend, SteamBackend, WorkosVerifier},
     world_time::parse_time_token,
 };
 
@@ -44,10 +45,12 @@ enum Command {
         bind: SocketAddr,
         #[arg(long)]
         world: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = AuthModeArg::Offline)]
+        #[arg(long, value_enum, default_value_t = AuthModeArg::Workos)]
         auth: AuthModeArg,
-        /// WorkOS client id (public, e.g. `client_01…`). Required when
-        /// `--auth workos`; used to fetch the JWKS and verify access tokens.
+        /// Overrides the WorkOS client id used to fetch the JWKS and verify
+        /// access tokens. Defaults to the value from `workos.local.toml` /
+        /// `GAME_WORKOS_CLIENT_ID` / the baked-in default (see
+        /// [`crate::auth::workos::WorkosConfig`]). Only used with `--auth workos`.
         #[arg(long)]
         workos_client_id: Option<String>,
         #[arg(long)]
@@ -98,13 +101,11 @@ enum AdminCommand {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum AuthModeArg {
-    Offline,
-    Steam,
-    /// Verify WorkOS access tokens against the WorkOS JWKS. Needs
-    /// `--workos-client-id`.
+    /// Verify WorkOS access tokens against the WorkOS JWKS. The default.
     Workos,
-    /// Accept synthetic `test:<id>` tokens. Local testing only.
-    Test,
+    /// Trust the client's claimed identity with no token check. Localhost only
+    /// (singleplayer loopback, `multiplayer-test`) — never expose to the net.
+    NoAuth,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -132,10 +133,8 @@ struct ServerWorld {
 impl From<AuthModeArg> for AuthMode {
     fn from(value: AuthModeArg) -> Self {
         match value {
-            AuthModeArg::Offline => Self::Offline,
-            AuthModeArg::Steam => Self::Steam,
             AuthModeArg::Workos => Self::Workos,
-            AuthModeArg::Test => Self::Test,
+            AuthModeArg::NoAuth => Self::NoAuth,
         }
     }
 }
@@ -155,11 +154,14 @@ pub fn run() -> Result<()> {
             let auth_mode: AuthMode = auth.into();
             let workos = match auth_mode {
                 AuthMode::Workos => {
-                    let client_id = workos_client_id
-                        .ok_or_else(|| anyhow!("--auth workos requires --workos-client-id"))?;
+                    // The client id comes from the resolved WorkOS config
+                    // (workos.local.toml / GAME_WORKOS_CLIENT_ID / baked-in
+                    // default); `--workos-client-id` overrides it.
+                    let client_id =
+                        workos_client_id.unwrap_or_else(|| WorkosConfig::load().client_id);
                     Some(Arc::new(WorkosVerifier::new(&client_id)))
                 }
-                _ => None,
+                AuthMode::NoAuth => None,
             };
             let world = load_server_world(world, map_size.into())?;
             net::run_dedicated_server(
@@ -230,10 +232,11 @@ fn load_server_world(
         });
     }
 
-    let steam = OfflineSteamBackend;
-    let user = steam.current_user()?;
+    // No `--world` path: fall back to the platform default store with an
+    // unowned dedicated world (admins are managed out-of-band for a real
+    // dedicated server, not seeded from a local identity).
     let store = WorldStore::platform_default()?;
-    let save = store.load_or_create_dedicated(Some(user.steam_id))?;
+    let save = store.load_or_create_dedicated(None)?;
     Ok(ServerWorld {
         save,
         persistence: net::DedicatedWorldPersistence::Store(store),

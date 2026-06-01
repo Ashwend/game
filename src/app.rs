@@ -24,10 +24,12 @@ use bevy_framepace::{FramepacePlugin, FramepaceSettings};
 
 use crate::{
     analytics::AnalyticsPlugin,
+    auth::{
+        bypass_identity_from_env,
+        workos::{self, WorkosConfig},
+    },
     net::{ClientNetworkPlugin, LightyearProtocolPlugin, client_plugins},
     save::WorldStore,
-    steam::OfflineSteamBackend,
-    workos_login::{self, WorkosLoginConfig},
 };
 
 use self::voice::{
@@ -47,11 +49,11 @@ use self::{
     },
     state::{
         AuthFlow, ClientErrorToast, ClientRuntime, ClientSettingsStore, CraftingHudState,
-        CraftingUiState, DeployablePlacementState, GatherInputState, InventoryUiState,
+        CraftingUiState, CurrentUser, DeployablePlacementState, GatherInputState, InventoryUiState,
         LocalPlayerState, LookState, MenuBackdropVisibility, MenuState, OptionsUiState,
         PickupTargetState, PredictionState, RemoteImpactEvent, SaveStore, SessionShutdownTasks,
-        SteamUser, TestModeConfig, ToastState, ToolSwapState, WorkosAuth,
-        apply_prediction_overlay_system, update_local_player_state_system,
+        TestModeConfig, ToastState, ToolSwapState, WorkosAuth, apply_prediction_overlay_system,
+        update_local_player_state_system,
     },
     systems::{
         AutoConnectRequest, CameraImpactKick, CameraMotionEffects, ClientSystemSet,
@@ -199,26 +201,15 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
     store.ensure_exists()?;
 
     let settings_store = ClientSettingsStore::platform_default()?;
-    let mut settings = settings_store.load().unwrap_or_else(|error| {
+    let settings = settings_store.load().unwrap_or_else(|error| {
         eprintln!("could not load client settings: {error:#}");
         Default::default()
     });
-    // Resolve a stable per-install identity. Generate one on first launch and
-    // write it back so this machine keeps the same player (and saved
-    // inventory) across sessions; `GAME_STEAM_ID` still overrides inside
-    // `user_for_install`.
-    if settings.identity.install_id == 0 {
-        settings.identity.install_id = crate::steam::generate_install_id();
-        if let Err(error) = settings_store.save(&settings) {
-            eprintln!("could not persist generated install id: {error:#}");
-        }
-    }
-    let install_id = settings.identity.install_id;
     let window_settings = settings.display;
     let test_mode = TestModeConfig::from_env();
     // A plain `client` launch must sign in through WorkOS before the title
     // screen appears; only the test / `--connect` path bypasses the gate with
-    // the local offline identity.
+    // an identity injected from the environment.
     let bypass_auth = auto_connect.is_some();
 
     let mut app = App::new();
@@ -226,15 +217,16 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         app.insert_resource(AutoConnectRequest { addr });
     }
     if bypass_auth {
-        // Test / `--connect`: skip the WorkOS gate with the stable offline
-        // identity so spawned windows land in-world without a browser.
-        app.insert_resource(SteamUser(OfflineSteamBackend.user_for_install(install_id)));
+        // Test / `--connect`: skip the WorkOS gate with the identity injected
+        // via `GAME_ACCOUNT_ID` / `GAME_PLAYER_NAME` so spawned windows land
+        // in-world without a browser.
+        app.insert_resource(CurrentUser(bypass_identity_from_env()));
         app.insert_resource(AuthFlow::Authenticated);
     } else {
-        let workos = WorkosLoginConfig::from_env();
-        app.insert_resource(if workos_login::has_stored_session() {
+        let workos = WorkosConfig::load();
+        app.insert_resource(if workos::has_stored_session() {
             // A stored session: verify (silently refresh) behind the spinner.
-            AuthFlow::Verifying(workos_login::begin_restore(&workos))
+            AuthFlow::Verifying(workos::begin_restore(&workos))
         } else {
             AuthFlow::LoggedOut { error: None }
         });

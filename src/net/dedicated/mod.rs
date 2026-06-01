@@ -5,8 +5,8 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use anyhow::Result;
 
 use crate::{
+    auth::{AuthMode, WorkosVerifier},
     save::{WorldSave, WorldStore, save_world_file},
-    steam::{AuthMode, WorkosVerifier},
 };
 
 use super::host::run_game_server;

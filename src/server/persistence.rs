@@ -1,5 +1,5 @@
 use crate::{
-    protocol::SteamId,
+    protocol::AccountId,
     save::{PersistedPlayer, WorldSave, WorldStateSave},
 };
 
@@ -11,10 +11,10 @@ impl GameServer {
         let mut persisted = self.persisted_players.clone();
         // Capture any currently connected players' live state before writing.
         for client in self.clients.values() {
-            persisted.insert(client.steam_id, persisted_player_from(client));
+            persisted.insert(client.account_id, persisted_player_from(client));
         }
         let mut players = persisted.into_values().collect::<Vec<_>>();
-        players.sort_by_key(|player| player.steam_id);
+        players.sort_by_key(|player| player.account_id);
 
         let mut dropped_items = self
             .dropped_items
@@ -43,11 +43,14 @@ impl GameServer {
         save
     }
 
-    pub(super) fn take_persisted_player(&mut self, steam_id: SteamId) -> Option<PersistedPlayer> {
-        self.persisted_players.remove(&steam_id)
+    pub(super) fn take_persisted_player(
+        &mut self,
+        account_id: AccountId,
+    ) -> Option<PersistedPlayer> {
+        self.persisted_players.remove(&account_id)
     }
 
     pub(super) fn remember_player(&mut self, player: PersistedPlayer) {
-        self.persisted_players.insert(player.steam_id, player);
+        self.persisted_players.insert(player.account_id, player);
     }
 }

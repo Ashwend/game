@@ -1,11 +1,12 @@
 use anyhow::Result;
 
 use crate::{
+    auth::authenticate,
     controller::PlayerController,
     protocol::{
-        ClientId, GAME_VERSION, PROTOCOL_VERSION, PlayerEvent, PlayerState, ServerMessage, SteamId,
+        AccountId, ClientId, GAME_VERSION, PROTOCOL_VERSION, PlayerEvent, PlayerState,
+        ServerMessage,
     },
-    steam::authenticate,
 };
 
 use super::{
@@ -47,7 +48,7 @@ impl GameServer {
         &mut self,
         protocol_version: u32,
         client_version: Option<String>,
-        steam_id: SteamId,
+        account_id: AccountId,
         display_name: String,
         token: String,
     ) -> Result<(ClientId, Vec<ServerEnvelope>)> {
@@ -69,11 +70,11 @@ impl GameServer {
 
         // Validate the handshake and resolve the identity to admit under. For
         // WorkOS/Test this comes from the *verified* token, not the client's
-        // claim; `steam_id` is only consulted by the legacy offline/Steam paths.
+        // claim; `account_id` is only consulted by the `NoAuth` path.
         let verified = authenticate(
             self.settings.auth_mode,
             self.workos.as_deref(),
-            steam_id,
+            account_id,
             &token,
         )?;
         let account_id = verified.account_id;
@@ -90,7 +91,7 @@ impl GameServer {
         // restores onto the new session — so a reconnect resumes exactly where
         // it left off rather than getting bounced for the ~10s it takes the
         // stale-client / netcode timeout to release the old slot.
-        let mut envelopes = match self.steam_to_client.get(&account_id).copied() {
+        let mut envelopes = match self.account_to_client.get(&account_id).copied() {
             Some(old_client_id) => self.disconnect(old_client_id),
             None => Vec::new(),
         };
@@ -121,7 +122,7 @@ impl GameServer {
         };
         let client = ServerClient {
             client_id,
-            steam_id: account_id,
+            account_id,
             name: name.clone(),
             controller,
             inventory,
@@ -156,7 +157,7 @@ impl GameServer {
             last_processed_input: client.controller.last_processed_input,
         };
         self.clients.insert(client_id, client);
-        self.steam_to_client.insert(account_id, client_id);
+        self.account_to_client.insert(account_id, client_id);
         // Register the player with the chunk anchor index so the AoI
         // path can find them. Done before any subsequent peer ticks
         // so peers already in the world see the new arrival on their
@@ -206,7 +207,7 @@ impl GameServer {
         // next shutdown save (or reconnect) sees their final position and
         // inventory, not the prior persisted copy.
         let persisted = persisted_player_from(&client);
-        self.steam_to_client.remove(&client.steam_id);
+        self.account_to_client.remove(&client.account_id);
         self.chunk_manager.untrack_player(client_id);
         let name = client.name;
         self.remember_player(persisted);
@@ -228,8 +229,9 @@ impl GameServer {
         ]
     }
 
-    fn is_admin(&self, steam_id: SteamId) -> bool {
-        self.settings.singleplayer_host == Some(steam_id) || self.save.admins.contains(&steam_id)
+    fn is_admin(&self, account_id: AccountId) -> bool {
+        self.settings.singleplayer_host == Some(account_id)
+            || self.save.admins.contains(&account_id)
     }
 
     pub fn kick_all(&mut self, reason: impl Into<String>) -> Vec<ServerEnvelope> {

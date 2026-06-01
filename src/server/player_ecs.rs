@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     protocol::{
-        ClientId, OpenFurnaceView, OpenLootBagView, PlayerCraftingState, PlayerInventoryState,
-        SteamId, Vec3Net,
+        AccountId, ClientId, OpenFurnaceView, OpenLootBagView, PlayerCraftingState,
+        PlayerInventoryState, Vec3Net,
     },
     world::ChunkCoord,
 };
@@ -31,7 +31,7 @@ use crate::{
 #[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Player {
     pub client_id: ClientId,
-    pub steam_id: SteamId,
+    pub account_id: AccountId,
 }
 
 /// Player state that every peer in the same chunk room can see. Phase 5
@@ -162,7 +162,7 @@ impl PlayerIndex {
 /// shape.
 pub struct PlayerView {
     pub client_id: ClientId,
-    pub steam_id: SteamId,
+    pub account_id: AccountId,
     pub public: PlayerPublic,
     pub private: PlayerPrivate,
     pub armor: PlayerArmor,
@@ -175,7 +175,7 @@ pub fn spawn_player_entity(world: &mut World, view: PlayerView, chunk: ChunkCoor
         .spawn((
             Player {
                 client_id: view.client_id,
-                steam_id: view.steam_id,
+                account_id: view.account_id,
             },
             view.public,
             view.private,
@@ -209,7 +209,7 @@ mod tests {
     fn sample_view(client_id: ClientId) -> PlayerView {
         PlayerView {
             client_id,
-            steam_id: 42,
+            account_id: 42,
             public: PlayerPublic {
                 name: "Alice".to_owned(),
                 position: Vec3Net::ZERO,

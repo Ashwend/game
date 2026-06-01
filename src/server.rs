@@ -1,16 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
-use bevy::log::info_span;
-
 use crate::{
+    auth::AuthMode,
     controller::{BlockGrid, PlayerController},
     protocol::{
-        CHAT_BUBBLE_DURATION_SECONDS, ChatMessage, ClientId, ClientMessage, CraftingJobId,
-        DeployedEntityId, DroppedItemId, PlayerCraftingState, PlayerInventoryState, ResourceNodeId,
-        ResourceNodeState, SERVER_TICK_RATE_HZ, ServerMessage, SteamId, Vec3Net, sanitize_chat,
+        AccountId, CHAT_BUBBLE_DURATION_SECONDS, ClientId, CraftingJobId, DeployedEntityId,
+        DroppedItemId, PlayerCraftingState, PlayerInventoryState, ResourceNodeId,
+        ResourceNodeState, SERVER_TICK_RATE_HZ, ServerMessage,
     },
     save::{PersistedPlayer, WorldSave},
-    steam::AuthMode,
     world::WorldData,
     world_time::WorldTime,
 };
@@ -41,17 +39,21 @@ mod connection;
 mod crafting;
 pub mod deployable_ecs;
 mod deployables;
+mod dispatch;
 pub mod dropped_item_ecs;
 mod dropped_items;
 mod furnace;
 mod inventory;
+mod lifecycle;
 pub mod loot_bag;
 pub mod loot_bag_ecs;
 pub(crate) mod movement;
 mod persistence;
 pub mod player_ecs;
+mod queries;
 pub mod resource_node_ecs;
 mod resource_nodes;
+mod tick;
 mod toasts;
 mod voice;
 mod world_time;
@@ -80,18 +82,17 @@ pub use resource_node_ecs::{
 };
 pub use voice::VOICE_AUDIBLE_RANGE;
 
-use self::{
-    dropped_items::{
-        DROPPED_ITEM_CLEANUP_INTERVAL_TICKS, DROPPED_ITEM_MERGE_INTERVAL_TICKS, DroppedItemBody,
-        DroppedItemPhysics,
-    },
-    movement::accept_client_movement,
-};
+use self::dropped_items::{DroppedItemBody, DroppedItemPhysics};
+// Re-exported into the module namespace only for the in-tree tests, which
+// reach these tick-cadence constants through `tests::*`'s `use super::*`.
+// Production code references them from `self::tick`, not here.
+#[cfg(test)]
+use self::dropped_items::{DROPPED_ITEM_CLEANUP_INTERVAL_TICKS, DROPPED_ITEM_MERGE_INTERVAL_TICKS};
 
 #[derive(Debug, Clone)]
 pub struct ServerSettings {
     pub auth_mode: AuthMode,
-    pub singleplayer_host: Option<SteamId>,
+    pub singleplayer_host: Option<AccountId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,13 +134,13 @@ pub struct GameServer {
     /// WorkOS access-token verifier, present only on a dedicated server run in
     /// [`AuthMode::Workos`]. Loopback (singleplayer) and `Test` runs leave it
     /// `None`; attached via [`GameServer::with_workos`] on the dedicated path.
-    workos: Option<std::sync::Arc<crate::steam::WorkosVerifier>>,
+    workos: Option<std::sync::Arc<crate::auth::WorkosVerifier>>,
     clients: HashMap<ClientId, ServerClient>,
-    steam_to_client: HashMap<SteamId, ClientId>,
-    /// Players who have ever been seen on this server, keyed by Steam ID. A
+    account_to_client: HashMap<AccountId, ClientId>,
+    /// Players who have ever been seen on this server, keyed by account ID. A
     /// disconnect or shutdown writes back into this map so a returning player
     /// picks up their inventory, position, and admin status.
-    persisted_players: HashMap<SteamId, PersistedPlayer>,
+    persisted_players: HashMap<AccountId, PersistedPlayer>,
     dropped_items: HashMap<DroppedItemId, DroppedItemBody>,
     dropped_item_physics: DroppedItemPhysics,
     /// Authoritative live resource node state, keyed by id. A sync system
@@ -188,590 +189,10 @@ pub struct GameServer {
     last_world_time_broadcast_tick: u64,
 }
 
-impl GameServer {
-    pub fn new(mut save: WorldSave, settings: ServerSettings) -> Self {
-        if let Some(host) = settings.singleplayer_host
-            && !save.admins.contains(&host)
-        {
-            save.admins.push(host);
-        }
-        let world = save.map.world_data();
-        let world_grid = BlockGrid::build(&world);
-        let mut dropped_item_physics = DroppedItemPhysics::new(&world);
-
-        let load_tick_for_chunk = save.state.last_authoritative_tick;
-        // Resource nodes: trust the saved state once a world has ever been
-        // hosted (so harvested resources don't respawn). For brand-new worlds
-        // the save has `None` and we seed from the chunk generator.
-        let (mut chunk_manager, resource_nodes) = match (
-            save.state.resource_nodes.take(),
-            save.state.chunk_manager.take(),
-        ) {
-            (Some(saved_nodes), Some(saved_chunk)) => {
-                let nodes: HashMap<ResourceNodeId, ResourceNodeState> = saved_nodes
-                    .into_iter()
-                    .map(|node| (node.id, node))
-                    .collect();
-                let manager = ChunkManager::from_save(saved_chunk, load_tick_for_chunk);
-                (manager, nodes)
-            }
-            _ => {
-                // Brand-new world: generate from seed + dims. Any partial
-                // save without grid state would also fall here, but
-                // that's prevented at the save-format level (version
-                // bumps are not migrated).
-                let (manager, spawns) =
-                    ChunkManager::new_for_world(save.map.world_seed(), save.map.chunk_dims());
-                let nodes: HashMap<ResourceNodeId, ResourceNodeState> =
-                    spawns.into_iter().map(|node| (node.id, node)).collect();
-                (manager, nodes)
-            }
-        };
-
-        let mut dropped_items = HashMap::new();
-        let load_tick = save.state.last_authoritative_tick;
-        for item in std::mem::take(&mut save.state.dropped_items) {
-            let physics_body =
-                dropped_item_physics.spawn_body(item.position, Vec3Net::ZERO, item.yaw);
-            // Anchor the reloaded drop to its chunk so a returning
-            // player immediately sees it via room replication — without
-            // this the item exists server-side but is filtered out of
-            // every AoI ring until something nudges its position.
-            chunk_manager.track_dropped_item(item.id, item.position);
-            dropped_items.insert(
-                item.id,
-                DroppedItemBody {
-                    item,
-                    body_handle: physics_body.body_handle,
-                    // Reset the timer on load so a returning player doesn't
-                    // find every dropped item already past its expiry.
-                    spawn_tick: load_tick,
-                },
-            );
-        }
-
-        let persisted_players = std::mem::take(&mut save.state.players)
-            .into_iter()
-            .map(|player| (player.steam_id, player))
-            .collect();
-
-        let next_dropped_item_id = save.state.next_dropped_item_id.max(1);
-        let next_client_id = save.state.next_client_id.max(1);
-        // Floor at the chunk-generator's high-water mark so admin-spawned
-        // ids can't collide with chunk-issued node ids, regardless of how
-        // many nodes the world generator produced.
-        let next_resource_node_id = save.state.next_resource_node_id.max(
-            chunk_manager
-                .next_node_id()
-                .max(resource_nodes.keys().copied().max().unwrap_or(0) + 1),
-        );
-        // Deployables: restore from save and re-anchor to their chunks
-        // so the next mirror sync spawns the replicated entity and any
-        // in-AoI client picks them up. The id counter floors above the
-        // highest known id so a future place can't collide with a
-        // persisted one.
-        let persisted_deployables = std::mem::take(&mut save.state.deployed_entities);
-        let deployed_entities = Self::restore_deployed_entities(persisted_deployables);
-        for entity in deployed_entities.values() {
-            chunk_manager.track_deployed_entity(entity.id, entity.position);
-        }
-        let next_deployed_entity_id = save.state.next_deployed_entity_id.max(
-            deployed_entities
-                .keys()
-                .copied()
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1),
-        );
-        let world_time = save.state.world_time();
-        let tick = save.state.last_authoritative_tick;
-
-        // Seed the mirror-sync dirty set with every initial node so the first
-        // `sync_resource_node_entities` pass spawns all mirror entities once;
-        // after that only mutated nodes are reprocessed.
-        let node_sync_dirty: HashSet<ResourceNodeId> = resource_nodes.keys().copied().collect();
-
-        Self {
-            tick,
-            save,
-            world,
-            world_grid,
-            settings,
-            workos: None,
-            clients: HashMap::new(),
-            steam_to_client: HashMap::new(),
-            persisted_players,
-            dropped_items,
-            dropped_item_physics,
-            resource_nodes,
-            node_sync_dirty,
-            node_sync_removed: HashSet::new(),
-            chunk_manager,
-            deployed_entities,
-            loot_bags: HashMap::new(),
-            next_dropped_item_id,
-            next_client_id,
-            next_resource_node_id,
-            next_deployed_entity_id,
-            next_loot_bag_id: 1,
-            world_time,
-            last_world_time_broadcast_tick: tick,
-        }
-    }
-
-    /// Attach a WorkOS access-token verifier (dedicated [`AuthMode::Workos`]
-    /// only). A builder so the loopback/test construction paths stay untouched.
-    pub fn with_workos(
-        mut self,
-        verifier: Option<std::sync::Arc<crate::steam::WorkosVerifier>>,
-    ) -> Self {
-        self.workos = verifier;
-        self
-    }
-
-    /// Advance a client's optimistic-prediction high-water mark. Called for
-    /// every predicted command (gather, inventory move/drop/pickup) *before*
-    /// the handler runs, so the value advances whether the command is accepted
-    /// or rejected — the client relies on this to prune and revert pending
-    /// overlay ops. `max` guards against any out-of-order or duplicate seq.
-    fn note_action_seq(&mut self, client_id: ClientId, seq: u32) {
-        if let Some(client) = self.clients.get_mut(&client_id) {
-            client.applied_action_seq = client.applied_action_seq.max(seq);
-        }
-    }
-
-    pub fn receive(&mut self, client_id: ClientId, message: ClientMessage) -> Vec<ServerEnvelope> {
-        self.mark_client_seen(client_id);
-
-        match message {
-            ClientMessage::Auth { .. } => vec![ServerEnvelope {
-                target: DeliveryTarget::Client(client_id),
-                message: ServerMessage::AuthRejected {
-                    reason: "client is already authenticated".to_owned(),
-                },
-            }],
-            ClientMessage::Movement(movement) => {
-                let new_position = if let Some(client) = self.clients.get_mut(&client_id) {
-                    // Dead players can't drive their controller — we
-                    // keep the corpse pinned at the death position so
-                    // the tilt-and-fade animation has a stable
-                    // anchor and the loot pile stays under it.
-                    if client.lifecycle.is_alive() {
-                        accept_client_movement(&mut client.controller, movement);
-                        Some(client.controller.position)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                if let Some(position) = new_position {
-                    // Keep the chunk anchor in sync so the next snapshot
-                    // filters every networked entity through the player's
-                    // new AoI ring.
-                    self.chunk_manager.update_player_chunk(client_id, position);
-                }
-                Vec::new()
-            }
-            ClientMessage::Chat { text } => {
-                let Some(text) = sanitize_chat(&text) else {
-                    return Vec::new();
-                };
-                let expires_tick = self.tick.saturating_add(CHAT_BUBBLE_DURATION_TICKS);
-                let Some(client) = self.clients.get_mut(&client_id) else {
-                    return Vec::new();
-                };
-                client.chat_bubble = Some(ChatBubble {
-                    text: text.clone(),
-                    expires_tick,
-                });
-                let from = client.name.clone();
-                vec![ServerEnvelope {
-                    target: DeliveryTarget::Broadcast,
-                    message: ServerMessage::Chat(ChatMessage { from, text }),
-                }]
-            }
-            ClientMessage::Command { text } => self.apply_command(client_id, text),
-            ClientMessage::Inventory(command) => {
-                // Advance the prediction high-water mark before dispatch so a
-                // rejected command (out of range, full bag, …) still lets the
-                // client prune and revert its optimistic overlay op.
-                if let Some(seq) = command.action_seq() {
-                    self.note_action_seq(client_id, seq);
-                }
-                self.apply_inventory_command(client_id, command)
-            }
-            ClientMessage::Crafting(command) => self.apply_crafting_command(client_id, command),
-            ClientMessage::Gather(command) => {
-                self.note_action_seq(client_id, command.seq);
-                self.apply_gather_command(client_id, command)
-            }
-            ClientMessage::PlaceDeployable(command) => {
-                self.apply_place_deployable_command(client_id, command)
-            }
-            ClientMessage::Furnace(command) => self.apply_furnace_command(client_id, command),
-            ClientMessage::DamageDeployable(command) => {
-                self.apply_damage_deployable_command(client_id, command)
-            }
-            ClientMessage::AttackPlayer(command) => {
-                self.apply_attack_player_command(client_id, command)
-            }
-            ClientMessage::Respawn => self.apply_respawn_command(client_id),
-            ClientMessage::LootBag(command) => self.apply_loot_bag_command(client_id, command),
-            ClientMessage::SetViewRadius { tier } => {
-                if let Some(client) = self.clients.get_mut(&client_id) {
-                    client.view_tier = tier;
-                }
-                Vec::new()
-            }
-            ClientMessage::Voice(voice) => self.apply_voice_frame(client_id, voice),
-            ClientMessage::Heartbeat => Vec::new(),
-            ClientMessage::Disconnect => self.disconnect(client_id),
-        }
-    }
-
-    /// Read-only view of a connected player's anchor position and AoI tier.
-    /// Used by the chunk-room subscription system in `net/host` to recompute
-    /// which rooms a client should be in each tick.
-    pub fn client_view(
-        &self,
-        client_id: ClientId,
-    ) -> Option<(Vec3Net, crate::protocol::ViewRadiusTier)> {
-        self.clients
-            .get(&client_id)
-            .map(|client| (client.controller.position, client.view_tier))
-    }
-
-    /// Currently-connected client ids. Cheap; backed by the connection map.
-    pub fn connected_client_ids(&self) -> impl Iterator<Item = ClientId> + '_ {
-        self.clients.keys().copied()
-    }
-
-    /// Chunks the given client's AoI ring currently covers. Returns an
-    /// empty set if the client isn't connected.
-    pub fn visible_chunks_for_client(
-        &self,
-        client_id: ClientId,
-    ) -> std::collections::HashSet<crate::world::ChunkCoord> {
-        let Some((position, tier)) = self.client_view(client_id) else {
-            return std::collections::HashSet::new();
-        };
-        self.chunk_manager.visible_chunks(position, tier)
-    }
-
-    /// Chunks the given client's subscription should be *retained* for —
-    /// the AoI ring widened by the spatial-hysteresis keep margin. Always a
-    /// superset of `visible_chunks_for_client`. Empty if the client isn't
-    /// connected.
-    pub fn retained_chunks_for_client(
-        &self,
-        client_id: ClientId,
-    ) -> std::collections::HashSet<crate::world::ChunkCoord> {
-        let Some((position, tier)) = self.client_view(client_id) else {
-            return std::collections::HashSet::new();
-        };
-        self.chunk_manager.retained_chunks(position, tier)
-    }
-
-    /// Read-only access to the live resource node map. Used by the ECS
-    /// mirror system in `net/host` to keep entity state in sync with this
-    /// authoritative map. Avoid mutating callers; use the existing gather/
-    /// regrow paths which already update chunk_manager bookkeeping.
-    pub fn resource_nodes_iter(
-        &self,
-    ) -> impl Iterator<Item = (&ResourceNodeId, &ResourceNodeState)> {
-        self.resource_nodes.iter()
-    }
-
-    /// Quick membership check, used by the mirror sync to decide which
-    /// tracked entities to despawn this tick.
-    pub fn has_resource_node(&self, id: ResourceNodeId) -> bool {
-        self.resource_nodes.contains_key(&id)
-    }
-
-    /// Look up the chunk an active node is anchored to. Returns `None` for
-    /// a node id the chunk_manager doesn't know about (which is the normal
-    /// state immediately after depletion).
-    pub fn resource_node_chunk(&self, id: ResourceNodeId) -> Option<crate::world::ChunkCoord> {
-        self.chunk_manager.node_chunk(id)
-    }
-
-    /// Read a single node's authoritative state. Used by the mirror sync to
-    /// fetch only the nodes it needs to (re)spawn or update this tick.
-    pub fn resource_node_state(&self, id: ResourceNodeId) -> Option<&ResourceNodeState> {
-        self.resource_nodes.get(&id)
-    }
-
-    /// Insert (or replace) a node and record it for the next mirror sync. The
-    /// single entry point for adding nodes — keeps `node_sync_dirty` accurate.
-    pub(crate) fn insert_resource_node(&mut self, id: ResourceNodeId, node: ResourceNodeState) {
-        self.resource_nodes.insert(id, node);
-        self.node_sync_dirty.insert(id);
-        self.node_sync_removed.remove(&id);
-    }
-
-    /// Remove a node and record it for the next mirror sync (which despawns the
-    /// replicated entity). Returns the removed state, mirroring `HashMap`.
-    pub(crate) fn remove_resource_node(&mut self, id: ResourceNodeId) -> Option<ResourceNodeState> {
-        let removed = self.resource_nodes.remove(&id);
-        if removed.is_some() {
-            self.node_sync_removed.insert(id);
-            self.node_sync_dirty.remove(&id);
-        }
-        removed
-    }
-
-    /// Mutable access to a node, conservatively flagging it dirty for the next
-    /// mirror sync (any hand-out of `&mut` may change the node). The single
-    /// entry point for in-place node edits.
-    pub(crate) fn resource_node_state_mut(
-        &mut self,
-        id: ResourceNodeId,
-    ) -> Option<&mut ResourceNodeState> {
-        // Mark before borrowing the map mutably; the change-detection compare
-        // still happens on the actual value in the sync, so a spurious mark
-        // just costs one no-op delta entry.
-        if self.resource_nodes.contains_key(&id) {
-            self.node_sync_dirty.insert(id);
-            self.node_sync_removed.remove(&id);
-        }
-        self.resource_nodes.get_mut(&id)
-    }
-
-    /// Drain the accumulated mirror-sync deltas: `(dirty ids, removed ids)`.
-    /// Called once per tick by `sync_resource_node_entities`.
-    pub fn drain_resource_node_sync(&mut self) -> (Vec<ResourceNodeId>, Vec<ResourceNodeId>) {
-        (
-            self.node_sync_dirty.drain().collect(),
-            self.node_sync_removed.drain().collect(),
-        )
-    }
-
-    /// Iterate live dropped items (id + wire-shape view) for the
-    /// `sync_dropped_item_entities` mirror.
-    pub fn dropped_items_iter(
-        &self,
-    ) -> impl Iterator<Item = (DroppedItemId, crate::protocol::DroppedWorldItem)> + '_ {
-        self.dropped_items
-            .iter()
-            .map(|(id, body)| (*id, body.item.clone()))
-    }
-
-    /// Chunk a dropped item is anchored to (per chunk_manager bookkeeping).
-    pub fn dropped_item_chunk(&self, id: DroppedItemId) -> Option<crate::world::ChunkCoord> {
-        self.chunk_manager.dropped_item_chunk(id)
-    }
-
-    /// Iterate live deployables as the wire-shape view the mirror needs.
-    pub fn deployables_iter(&self) -> impl Iterator<Item = deployable_ecs::DeployableView> + '_ {
-        self.deployed_entities.values().map(|entity| {
-            let active = entity.furnace.as_ref().map(|f| f.active).unwrap_or(false);
-            deployable_ecs::DeployableView {
-                id: entity.id,
-                item_id: entity.item_id.clone(),
-                kind: entity.kind,
-                position: entity.position,
-                yaw: entity.yaw,
-                health: entity.health,
-                max_health: entity.max_health,
-                active,
-            }
-        })
-    }
-
-    /// Chunk a deployable is anchored to.
-    pub fn deployable_chunk(&self, id: DeployedEntityId) -> Option<crate::world::ChunkCoord> {
-        self.chunk_manager.deployed_entity_chunk(id)
-    }
-
-    /// Iterate connected players as wire-shape views (public + private
-    /// split) for the player mirror.
-    pub fn players_iter(&self) -> impl Iterator<Item = player_ecs::PlayerView> + '_ {
-        self.clients.values().map(|client| player_ecs::PlayerView {
-            client_id: client.client_id,
-            steam_id: client.steam_id,
-            public: player_ecs::PlayerPublic {
-                name: client.name.clone(),
-                position: client.controller.position,
-                velocity: client.controller.velocity,
-                yaw: client.controller.yaw,
-                pitch: client.controller.pitch,
-                health: client.controller.health,
-                grounded: client.controller.grounded,
-                is_admin: client.is_admin,
-                chat_bubble: client
-                    .chat_bubble
-                    .as_ref()
-                    .map(|bubble| bubble.text.clone()),
-            },
-            private: player_ecs::PlayerPrivate {
-                inventory: client.inventory.clone(),
-                crafting: client.crafting.clone(),
-                open_furnace: self.open_furnace_view_for(client.client_id),
-                open_loot_bag: self.open_loot_bag_view_for(client.client_id),
-                last_processed_input: client.controller.last_processed_input,
-                applied_action_seq: client.applied_action_seq,
-            },
-            armor: PlayerArmor(client.armor),
-            lifecycle: client.lifecycle,
-        })
-    }
-
-    /// Chunk a connected player is anchored to.
-    pub fn player_chunk(&self, id: ClientId) -> Option<crate::world::ChunkCoord> {
-        self.chunk_manager.player_chunk(id)
-    }
-
-    pub fn announce(&self, text: impl AsRef<str>) -> Vec<ServerEnvelope> {
-        sanitize_chat(text.as_ref())
-            .map(|text| ServerEnvelope {
-                target: DeliveryTarget::Broadcast,
-                message: ServerMessage::Chat(ChatMessage {
-                    from: "Server".to_owned(),
-                    text,
-                }),
-            })
-            .into_iter()
-            .collect()
-    }
-
-    pub fn tick(&mut self, delta_seconds: f32) -> Vec<ServerEnvelope> {
-        let _tick_span = info_span!("server_tick", tick = self.tick + 1).entered();
-        self.tick += 1;
-        self.save.state.last_authoritative_tick = self.tick;
-        self.world_time.advance(delta_seconds);
-        self.dropped_item_physics
-            .step(delta_seconds, &mut self.dropped_items);
-        // Re-anchor every dropped item now that gravity/friction have
-        // moved them. Items that didn't cross a chunk boundary take the
-        // cheap "already in this chunk" path; only boundary crossers
-        // pay the membership swap.
-        for (id, body) in &self.dropped_items {
-            self.chunk_manager
-                .update_dropped_item_chunk(*id, body.item.position);
-        }
-        // Chunk manager owns regrows now — fresh-position spawns 5-15 min
-        // after a node is depleted. The result is spliced into the live
-        // node map; the mirror sync turns it into a replicated entity
-        // on the next Update.
-        let regrow = {
-            let _span = info_span!("chunk_manager_tick").entered();
-            self.chunk_manager.tick(self.tick, &self.resource_nodes)
-        };
-        for node in regrow.spawned {
-            self.insert_resource_node(node.id, node);
-        }
-        self.tick_furnaces();
-        self.tick_loot_bags(delta_seconds);
-        self.expire_chat_bubbles();
-
-        let mut envelopes = self.tick_crafting();
-        envelopes.extend(self.disconnect_stale_clients());
-        if self.tick.is_multiple_of(DROPPED_ITEM_MERGE_INTERVAL_TICKS) {
-            envelopes.extend(self.merge_nearby_dropped_items().into_iter().map(
-                |(item_id, quantity)| ServerEnvelope {
-                    target: DeliveryTarget::Broadcast,
-                    message: ServerMessage::ItemMerged { item_id, quantity },
-                },
-            ));
-        }
-        if self
-            .tick
-            .is_multiple_of(DROPPED_ITEM_CLEANUP_INTERVAL_TICKS)
-        {
-            // Removal is silent — the next mirror sync drops the ECS
-            // entity, Lightyear ships the despawn to in-AoI clients, and
-            // the visual goes away. Same lifecycle as pickups and merges.
-            self.despawn_aging_dropped_items();
-        }
-
-        if self
-            .tick
-            .saturating_sub(self.last_world_time_broadcast_tick)
-            >= WORLD_TIME_BROADCAST_INTERVAL_TICKS
-        {
-            envelopes.push(ServerEnvelope {
-                target: DeliveryTarget::Broadcast,
-                message: ServerMessage::WorldTime(self.world_time_snapshot()),
-            });
-            self.last_world_time_broadcast_tick = self.tick;
-        }
-
-        // Phase 6.6 deleted the per-tick `ServerMessage::Snapshot`
-        // broadcast — every state consumer now reads from
-        // Lightyear-replicated components. Perf stats stay on their
-        // own slow broadcast tick.
-        if self
-            .tick
-            .is_multiple_of(PERF_STATS_BROADCAST_INTERVAL_TICKS)
-        {
-            let client_ids = self.clients.keys().copied().collect::<Vec<_>>();
-            for client_id in client_ids {
-                envelopes.push(ServerEnvelope {
-                    target: DeliveryTarget::Client(client_id),
-                    message: ServerMessage::PerfStats(self.perf_stats_for(client_id)),
-                });
-            }
-        }
-        envelopes
-    }
-
-    /// Build the perf-stats payload for one client — covers the player's
-    /// own AoI count plus the world-wide chunk bookkeeping. The classification
-    /// is sampled at the player's feet so the HUD shows the biome under them.
-    fn perf_stats_for(&self, client_id: ClientId) -> crate::protocol::PerfStatsSnapshot {
-        use crate::protocol::{PerfClassificationId, PerfStatsSnapshot};
-        use crate::world::ChunkCoord;
-        let (position, view_tier) = self
-            .clients
-            .get(&client_id)
-            .map(|client| (client.controller.position, client.view_tier))
-            .unwrap_or((Vec3Net::ZERO, crate::protocol::ViewRadiusTier::default()));
-        let coord = ChunkCoord::from_world(position.x, position.z);
-        let classification = self
-            .chunk_manager
-            .classification_at(position)
-            .map(|c| match c {
-                crate::world::ChunkClassification::Forest => PerfClassificationId::Forest,
-                crate::world::ChunkClassification::RockyOutcrop => {
-                    PerfClassificationId::RockyOutcrop
-                }
-                crate::world::ChunkClassification::OreVein => PerfClassificationId::OreVein,
-                crate::world::ChunkClassification::Plains => PerfClassificationId::Plains,
-                crate::world::ChunkClassification::Mixed => PerfClassificationId::Mixed,
-            })
-            .unwrap_or(PerfClassificationId::None);
-        let aoi_visible_nodes = self
-            .chunk_manager
-            .nodes_visible_to(position, view_tier)
-            .len() as u32;
-        PerfStatsSnapshot {
-            loaded_chunks: self.chunk_manager.loaded_chunk_count() as u32,
-            live_nodes: self.chunk_manager.live_node_count() as u32,
-            pending_regrows: self.chunk_manager.pending_regrow_count() as u32,
-            aoi_visible_nodes,
-            player_chunk_x: coord.x,
-            player_chunk_z: coord.z,
-            player_classification: classification,
-        }
-    }
-
-    fn expire_chat_bubbles(&mut self) {
-        let tick = self.tick;
-        for client in self.clients.values_mut() {
-            if let Some(bubble) = &client.chat_bubble
-                && bubble.expires_tick <= tick
-            {
-                client.chat_bubble = None;
-            }
-        }
-    }
-}
-
 #[derive(Debug)]
 pub(super) struct ServerClient {
     pub(super) client_id: ClientId,
-    pub(super) steam_id: SteamId,
+    pub(super) account_id: AccountId,
     pub(super) name: String,
     pub(super) controller: PlayerController,
     pub(super) inventory: PlayerInventoryState,
@@ -831,7 +252,7 @@ pub(super) struct ChatBubble {
 
 pub(super) fn persisted_player_from(client: &ServerClient) -> PersistedPlayer {
     PersistedPlayer {
-        steam_id: client.steam_id,
+        account_id: client.account_id,
         name: client.name.clone(),
         position: client.controller.position,
         velocity: client.controller.velocity,

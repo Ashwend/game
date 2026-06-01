@@ -4,11 +4,12 @@ use bevy_egui::egui;
 
 use crate::{
     app::state::{
-        ClientRuntime, CreateWorldDialog, EditWorldDialog, MenuState, SaveStore, Screen, SteamUser,
+        ClientRuntime, CreateWorldDialog, CurrentUser, EditWorldDialog, MenuState, SaveStore,
+        Screen,
     },
+    auth::AuthenticatedUser,
     net::ClientNetwork,
     save::WorldStore,
-    steam::AuthenticatedUser,
     world::{MapType, ProceduralMapSize},
 };
 
@@ -48,11 +49,11 @@ fn temp_store() -> SaveStore {
     ))
 }
 
-fn steam_user() -> SteamUser {
-    SteamUser(AuthenticatedUser {
-        steam_id: 42,
+fn current_user() -> CurrentUser {
+    CurrentUser(AuthenticatedUser {
+        account_id: 42,
         display_name: "Dannie".to_owned(),
-        token: "offline:42".to_owned(),
+        token: String::new(),
     })
 }
 
@@ -96,10 +97,10 @@ fn refresh_worlds_handles_success_and_list_errors() {
 #[test]
 fn start_singleplayer_updates_runtime_or_reports_load_error() {
     let store = temp_store();
-    let user = steam_user();
+    let user = current_user();
     let save = store
         .0
-        .create_world("Local", Some(user.0.steam_id))
+        .create_world("Local", Some(user.0.account_id))
         .expect("world should create");
     let mut menu = MenuState::default();
     let mut runtime = ClientRuntime::default();
@@ -134,7 +135,7 @@ fn start_singleplayer_updates_runtime_or_reports_load_error() {
 #[test]
 fn create_world_from_dialog_persists_selected_map() {
     let store = temp_store();
-    let user = steam_user();
+    let user = current_user();
     let mut menu = MenuState::default();
     let dialog = CreateWorldDialog {
         name: "Generated".to_owned(),
@@ -245,7 +246,7 @@ fn escape_cancels_modal_or_returns_to_main_menu() {
 fn enter_confirms_create_world_modal() {
     let ctx = egui::Context::default();
     let store = temp_store();
-    let user = steam_user();
+    let user = current_user();
     let network = ClientNetwork::default();
     let mut menu = MenuState {
         screen: Screen::Worlds,
@@ -282,7 +283,7 @@ fn enter_confirms_create_world_modal() {
 fn worlds_ui_renders_empty_and_populated_tables() {
     let ctx = egui::Context::default();
     let store = temp_store();
-    let user = steam_user();
+    let user = current_user();
     let network = ClientNetwork::default();
     let mut menu = MenuState::default();
     let mut runtime = ClientRuntime::default();
@@ -301,7 +302,7 @@ fn worlds_ui_renders_empty_and_populated_tables() {
 
     store
         .0
-        .create_world("Rendered", Some(user.0.steam_id))
+        .create_world("Rendered", Some(user.0.account_id))
         .expect("world should create");
     refresh_worlds(&mut menu, &store);
     assert_eq!(menu.worlds[0].map, MapType::default());

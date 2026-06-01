@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
 use crate::{
+    auth::AuthenticatedUser,
     save::{CorruptedWorld, WorldStore},
-    steam::AuthenticatedUser,
 };
 
 use super::{
@@ -31,7 +31,7 @@ impl Screen {
 pub(crate) struct SaveStore(pub(crate) WorldStore);
 
 #[derive(Resource)]
-pub(crate) struct SteamUser(pub(crate) AuthenticatedUser);
+pub(crate) struct CurrentUser(pub(crate) AuthenticatedUser);
 
 #[derive(Resource)]
 pub(crate) struct MenuState {

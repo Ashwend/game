@@ -17,6 +17,7 @@ use lightyear::prelude::{
 };
 
 use crate::{
+    auth::{AuthMode, AuthenticatedUser},
     net::{
         channels::{LIGHTYEAR_PROTOCOL_ID, PrivateKeyContext, private_key, send_client_message},
         host::{GameServerHandle, spawn_loopback_server},
@@ -24,7 +25,6 @@ use crate::{
     protocol::{ClientMessage, GAME_VERSION, PROTOCOL_VERSION, SERVER_TICK_RATE_HZ, ServerMessage},
     save::{WorldSave, WorldStore},
     server::ServerSettings,
-    steam::{AuthMode, AuthenticatedUser},
 };
 
 const CLIENT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
@@ -98,7 +98,7 @@ struct ClientNetworkInner {
 struct PendingConnect {
     server_addr: SocketAddr,
     /// Transport-level netcode connection id. Deliberately a fresh random
-    /// nonce per attempt, NOT the player's `steam_id`: netcode refuses a
+    /// nonce per attempt, NOT the player's `account_id`: netcode refuses a
     /// connection whose client id is already in its table (`ClientIdInUse`)
     /// and only releases the slot after its ~10s client timeout, so reusing a
     /// stable id made quick reconnects fail until the old link timed out. The
@@ -168,24 +168,18 @@ impl ClientSession {
         user: &AuthenticatedUser,
         network: ClientNetwork,
     ) -> Result<Self> {
-        // The loopback host runs in Offline mode and trusts the local player.
-        // A signed-in player carries a WorkOS access-token JWT, which Offline
-        // mode would reject (and re-validating it over the network would break
-        // offline singleplayer) — so present the matching offline token for
-        // this account id instead. Multiplayer keeps the real access token.
-        let local_user = AuthenticatedUser {
-            steam_id: user.steam_id,
-            display_name: user.display_name.clone(),
-            token: crate::steam::offline_auth_token(user.steam_id),
-        };
+        // The loopback host runs in `NoAuth` mode and trusts the local player,
+        // so the signed-in user's identity (and WorkOS access token) rides
+        // through unchanged — the token is ignored locally, and the real
+        // account id keeps the player's save continuity.
         let spawned = spawn_loopback_server(
             save,
             ServerSettings {
-                auth_mode: AuthMode::Offline,
-                singleplayer_host: Some(user.steam_id),
+                auth_mode: AuthMode::NoAuth,
+                singleplayer_host: Some(user.account_id),
             },
         )?;
-        Self::connect_inner(spawned.addr, &local_user, Some(spawned.handle), network)
+        Self::connect_inner(spawned.addr, user, Some(spawned.handle), network)
     }
 
     pub(crate) fn connect(
@@ -205,7 +199,7 @@ impl ClientSession {
         let auth_message = ClientMessage::Auth {
             protocol_version: PROTOCOL_VERSION,
             client_version: Some(GAME_VERSION.to_owned()),
-            steam_id: user.steam_id,
+            account_id: user.account_id,
             display_name: user.display_name.clone(),
             token: user.token.clone(),
         };

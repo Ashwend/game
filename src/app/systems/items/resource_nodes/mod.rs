@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use bevy::{camera::visibility::VisibilityRange, light::NotShadowCaster, prelude::*};
+use bevy::prelude::*;
 
 use crate::{
     app::{
@@ -8,13 +8,23 @@ use crate::{
         scene::{
             GrassMaterialHandle, ImpactEffectAssets, NetworkResourceNode, ResourceVisualAssets,
         },
-        state::{ClientRuntime, ImpactEffectKind, PredictionState},
-        systems::effects::spawn_impact_burst,
+        state::{ClientRuntime, PredictionState},
     },
     protocol::{ResourceNodeId, Vec3Net},
-    resources::{ResourceNodeModel, resource_node_definition},
+    resources::resource_node_definition,
     server::ResourceNode,
 };
+
+mod pop_in;
+mod spawn;
+
+#[cfg(test)]
+mod tests;
+
+pub(crate) use pop_in::{resource_node_transform_at, tick_resource_node_pop_in_system};
+pub(crate) use spawn::resource_node_visual;
+
+use spawn::spawn_resource_node_entity;
 
 /// Per-frame cap on resource-node *spawns*. Crossing a chunk boundary
 /// can pull tens of trees and ores into view in one snapshot tick. Doing
@@ -28,26 +38,13 @@ use crate::{
 /// despawns are uncapped — only first-time spawns are budgeted.
 const MAX_RESOURCE_NODE_SPAWNS_PER_FRAME: usize = 8;
 
-/// How long the "node emerges from the ground" animation runs. Short
-/// enough to feel like a pop rather than a slow grow, long enough to
-/// register as something happening.
-const POP_IN_DURATION_SECS: f32 = 0.42;
-/// How far below the floor the node starts on emerge. The mesh's bottom
-/// sits at local y=0 so this pulls the rock/sapling fully into the
-/// ground at t=0, then lifts back to flush.
-const POP_IN_GROUND_OFFSET: f32 = 0.55;
-/// Peak overshoot scale during the emergence pulse. The node briefly
-/// pops slightly above its target size then settles, giving a "landed"
-/// feel rather than a linear ramp.
-const POP_IN_OVERSHOOT: f32 = 0.06;
-
 /// Component attached to a freshly-spawned resource node while it
 /// animates into view. The base transform is captured at spawn time so
 /// the tick system can interpolate without re-reading the snapshot.
 #[derive(Component, Debug, Clone)]
 pub(crate) struct ResourceNodePopIn {
-    elapsed: f32,
-    base_transform: Transform,
+    pub(super) elapsed: f32,
+    pub(super) base_transform: Transform,
 }
 
 /// How many frames a disappeared node sits in
@@ -447,158 +444,6 @@ fn fire_node_death_effect(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn spawn_resource_node_entity(
-    commands: &mut Commands,
-    assets: &ResourceVisualAssets,
-    grass_material: &GrassMaterialHandle,
-    impact_assets: &ImpactEffectAssets,
-    entities: &mut ResourceNodeEntities,
-    id: ResourceNodeId,
-    position: Vec3Net,
-    model: ResourceNodeModel,
-    target_transform: Transform,
-    should_pop_in: bool,
-) {
-    let (mesh, material) = resource_node_visual(assets, model);
-    let lod_mesh = tree_lod_mesh(assets, model);
-    let mut spawn_command = commands.spawn((
-        Name::new(format!("Resource Node {id}")),
-        NetworkResourceNode { id, model },
-        Mesh3d(mesh),
-        target_transform,
-        Visibility::Visible,
-    ));
-    // Hay grass renders with the swaying grass shader (the *same* material as
-    // the cosmetic detail grass, so they move in unison); every other node uses
-    // its matte `StandardMaterial`.
-    if model == ResourceNodeModel::HayGrass {
-        spawn_command.insert(MeshMaterial3d(grass_material.0.clone()));
-    } else {
-        spawn_command.insert(MeshMaterial3d(material.clone()));
-    }
-    // Crude clutter (branch piles, surface stones, hay grass) spawns
-    // densely — Plains chunks alone carry ~28 grass tufts plus stones
-    // and sticks — and each casts a negligible-size shadow under its
-    // own footprint. Skipping the shadow pass for these gets us a
-    // meaningful per-frame win in populated areas without losing
-    // readable silhouettes (trees and veins still cast).
-    if model.is_crude() {
-        spawn_command.insert(NotShadowCaster);
-    }
-    if should_pop_in {
-        spawn_command.insert(ResourceNodePopIn {
-            elapsed: 0.0,
-            base_transform: target_transform,
-        });
-    }
-    // Trees get a distance LOD: this (full-detail) mesh switches off past
-    // `TREE_LOD_DISTANCE`; a child carrying the low-poly mesh switches on at the
-    // same distance. Bevy's `VisibilityRange` does this GPU-side off the
-    // existing visibility pass — no per-frame CPU cost. It's a hard step, not a
-    // dither crossfade (see `TREE_LOD_DISTANCE` for why). Cuts main-pass vertex
-    // throughput across a forest of distant trees (shadow distance is bounded
-    // separately by the Shadows graphics setting).
-    if lod_mesh.is_some() {
-        spawn_command.insert(tree_lod_high_range());
-    }
-    let entity = spawn_command.id();
-    entities.entities.insert(id, entity);
-
-    if let Some(lod_mesh) = lod_mesh {
-        commands.entity(entity).with_children(|parent| {
-            parent.spawn((
-                Name::new(format!("Resource Node {id} LOD")),
-                Mesh3d(lod_mesh),
-                MeshMaterial3d(material),
-                tree_lod_low_range(),
-                Transform::default(),
-                Visibility::Visible,
-            ));
-        });
-    }
-
-    if should_pop_in {
-        spawn_pop_in_chip_burst(commands, impact_assets, id, position, model);
-    }
-}
-
-/// Distance (m from camera) at which a tree switches from its full-detail mesh
-/// to the low-poly LOD.
-///
-/// We deliberately use a **hard switch, not a dither crossfade**. Bevy's
-/// `VisibilityRange` crossfade is a screen-space stochastic dither in the
-/// fragment shader, and it misbehaves against this camera's post-process stack
-/// (HDR + bloom + the fullscreen atmosphere pass + FXAA): inside the fade band
-/// the dithered fragments get discarded, so a tree at ~LOD distance randomly
-/// renders as nothing but its shadow. See the upstream reports
-/// (<https://github.com/bevyengine/bevy/issues/17643>,
-/// <https://github.com/bevyengine/bevy/pull/16286>). Zero-width margins below
-/// disable the dither entirely; the trade-off is a small LOD pop at this
-/// distance instead of a fade.
-const TREE_LOD_DISTANCE: f32 = 80.0;
-
-/// The low-poly LOD mesh for a tree model, or `None` for non-tree nodes.
-fn tree_lod_mesh(assets: &ResourceVisualAssets, model: ResourceNodeModel) -> Option<Handle<Mesh>> {
-    Some(match model {
-        ResourceNodeModel::PineTreeSmall => assets.pine_tree_small_lod_mesh.clone(),
-        ResourceNodeModel::PineTreeMedium => assets.pine_tree_medium_lod_mesh.clone(),
-        ResourceNodeModel::PineTreeLarge => assets.pine_tree_large_lod_mesh.clone(),
-        ResourceNodeModel::BirchTreeSmall => assets.birch_tree_small_lod_mesh.clone(),
-        ResourceNodeModel::BirchTreeMedium => assets.birch_tree_medium_lod_mesh.clone(),
-        ResourceNodeModel::BirchTreeLarge => assets.birch_tree_large_lod_mesh.clone(),
-        _ => return None,
-    })
-}
-
-/// `VisibilityRange` for the full-detail mesh: visible up close, hard cutoff at
-/// `TREE_LOD_DISTANCE`. Zero-width margins = a step switch, no dither crossfade
-/// (see [`TREE_LOD_DISTANCE`] for why we avoid the crossfade).
-fn tree_lod_high_range() -> VisibilityRange {
-    VisibilityRange {
-        start_margin: 0.0..0.0,
-        end_margin: TREE_LOD_DISTANCE..TREE_LOD_DISTANCE,
-        use_aabb: false,
-    }
-}
-
-/// `VisibilityRange` for the low-poly mesh: hard switch-in at
-/// `TREE_LOD_DISTANCE`, then visible out to the (well-beyond-far-plane) cutoff.
-/// The switch-in distance is identical to the high mesh's cutoff so exactly one
-/// LOD is visible at any distance — no gap, no overlap.
-fn tree_lod_low_range() -> VisibilityRange {
-    VisibilityRange {
-        start_margin: TREE_LOD_DISTANCE..TREE_LOD_DISTANCE,
-        end_margin: 10_000.0..10_000.0,
-        use_aabb: false,
-    }
-}
-
-/// A short upward chip burst sells the "fresh from the ground" moment.
-/// Trees throw wood chips, ores throw stone shards, crude nodes throw
-/// their own small per-kind burst — same palette as gather impacts so
-/// the visual language stays consistent.
-fn spawn_pop_in_chip_burst(
-    commands: &mut Commands,
-    impact_assets: &ImpactEffectAssets,
-    id: ResourceNodeId,
-    position: Vec3Net,
-    model: ResourceNodeModel,
-) {
-    let burst_anchor = Vec3::from(position) + Vec3::Y * 0.18;
-    let kind = ImpactEffectKind::for_resource_model(model);
-    let seed = (id as u32).wrapping_mul(0x9E37_79B1);
-    spawn_impact_burst(
-        commands,
-        impact_assets,
-        kind,
-        burst_anchor,
-        Vec3::Y,
-        seed,
-        0.65,
-    );
-}
-
 /// Walk the `pending_depletion_check` map: any id that has since shown
 /// up in `depleted_this_frame` fires the death-effect immediately; any
 /// id past the grace window silent-despawns. Returns consumed
@@ -719,232 +564,5 @@ fn reconcile_predicted_pickups(
         if let Some(mirror) = entities.entities.get(&id).copied() {
             commands.entity(mirror).insert(Visibility::Visible);
         }
-    }
-}
-
-/// Drives the "emerge from the ground" animation attached to freshly
-/// (re)spawned resource nodes. Removes the component once the curve
-/// settles, after which the entity returns to snapshot-driven transforms.
-pub(crate) fn tick_resource_node_pop_in_system(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut popping_in: Query<(Entity, &mut Transform, &mut ResourceNodePopIn)>,
-) {
-    let dt = time.delta_secs().clamp(0.0, 0.1);
-    if dt == 0.0 {
-        return;
-    }
-    for (entity, mut transform, mut pop_in) in &mut popping_in {
-        pop_in.elapsed += dt;
-        let finished = pop_in.elapsed >= POP_IN_DURATION_SECS;
-        *transform = pop_in_transform(pop_in.base_transform, pop_in.elapsed);
-        if finished {
-            commands.entity(entity).remove::<ResourceNodePopIn>();
-        }
-    }
-}
-
-/// Pure math behind the pop-in transform. Pulled out of the system so
-/// it can be exercised without spinning up a Bevy world.
-fn pop_in_transform(base: Transform, elapsed: f32) -> Transform {
-    let raw = (elapsed / POP_IN_DURATION_SECS).clamp(0.0, 1.0);
-    if raw >= 1.0 {
-        return base;
-    }
-    let ease = ease_out_cubic(raw);
-    // Lift from below the floor to flush, with a brief overshoot beyond
-    // unit scale that settles back to 1.0 — reads as the node "thudding"
-    // into place rather than easing to a stop.
-    let height = -POP_IN_GROUND_OFFSET * (1.0 - ease);
-    let overshoot = if raw < 0.7 {
-        POP_IN_OVERSHOOT * (raw / 0.7)
-    } else {
-        POP_IN_OVERSHOOT * (1.0 - (raw - 0.7) / 0.3)
-    };
-    let scale_factor = ease + overshoot * (raw * (1.0 - raw) * 4.0);
-    let mut next = base;
-    next.translation.y = base.translation.y + height;
-    next.scale = base.scale * scale_factor.max(0.0);
-    next
-}
-
-fn ease_out_cubic(t: f32) -> f32 {
-    let inv = 1.0 - t.clamp(0.0, 1.0);
-    1.0 - inv * inv * inv
-}
-
-pub(crate) fn resource_node_transform_at(
-    position: Vec3Net,
-    yaw: f32,
-    model: ResourceNodeModel,
-) -> Transform {
-    // Trees bake their full size into the mesh and sit on the ground at
-    // unit scale, which keeps each variant a single canonical mesh that
-    // can be GPU-instanced. Ore nodes keep their per-instance scale
-    // jitter for shape variety. Both the tree trunks and the ore rock
-    // lumps have their lowest vertices at local y=0, so no height offset
-    // is needed — adding one would float the geometry above the floor.
-    let (height_offset, scale) = match model {
-        ResourceNodeModel::CoalOre => (0.0, Vec3::new(1.0, 1.0, 1.0)),
-        ResourceNodeModel::IronOre => (0.0, Vec3::new(1.1, 1.05, 0.95)),
-        ResourceNodeModel::SulfurOre => (0.0, Vec3::new(0.96, 0.92, 1.06)),
-        // Stone veins are wider/flatter than ore mounds — they read as
-        // an outcrop rather than a focused deposit.
-        ResourceNodeModel::StoneVein => (0.0, Vec3::new(1.18, 0.86, 1.08)),
-        ResourceNodeModel::PineTreeSmall
-        | ResourceNodeModel::PineTreeMedium
-        | ResourceNodeModel::PineTreeLarge
-        | ResourceNodeModel::BirchTreeSmall
-        | ResourceNodeModel::BirchTreeMedium
-        | ResourceNodeModel::BirchTreeLarge => (0.0, Vec3::ONE),
-        ResourceNodeModel::SurfaceStone => (0.0, Vec3::new(0.9, 0.9, 0.9)),
-        ResourceNodeModel::BranchPile => (0.0, Vec3::ONE),
-        ResourceNodeModel::HayGrass => (0.0, Vec3::ONE),
-    };
-    Transform::from_xyz(position.x, position.y + height_offset, position.z)
-        .with_rotation(Quat::from_rotation_y(yaw))
-        .with_scale(scale)
-}
-
-pub(crate) fn resource_node_visual(
-    assets: &ResourceVisualAssets,
-    model: ResourceNodeModel,
-) -> (Handle<Mesh>, Handle<StandardMaterial>) {
-    match model {
-        ResourceNodeModel::CoalOre => (assets.coal_node_mesh.clone(), assets.coal_material.clone()),
-        ResourceNodeModel::IronOre => (assets.iron_node_mesh.clone(), assets.iron_material.clone()),
-        ResourceNodeModel::SulfurOre => (
-            assets.sulfur_node_mesh.clone(),
-            assets.sulfur_material.clone(),
-        ),
-        ResourceNodeModel::StoneVein => (
-            assets.stone_vein_mesh.clone(),
-            assets.stone_vein_material.clone(),
-        ),
-        ResourceNodeModel::PineTreeSmall => (
-            assets.pine_tree_small_mesh.clone(),
-            assets.vertex_material.clone(),
-        ),
-        ResourceNodeModel::PineTreeMedium => (
-            assets.pine_tree_medium_mesh.clone(),
-            assets.vertex_material.clone(),
-        ),
-        ResourceNodeModel::PineTreeLarge => (
-            assets.pine_tree_large_mesh.clone(),
-            assets.vertex_material.clone(),
-        ),
-        ResourceNodeModel::BirchTreeSmall => (
-            assets.birch_tree_small_mesh.clone(),
-            assets.vertex_material.clone(),
-        ),
-        ResourceNodeModel::BirchTreeMedium => (
-            assets.birch_tree_medium_mesh.clone(),
-            assets.vertex_material.clone(),
-        ),
-        ResourceNodeModel::BirchTreeLarge => (
-            assets.birch_tree_large_mesh.clone(),
-            assets.vertex_material.clone(),
-        ),
-        ResourceNodeModel::SurfaceStone => (
-            assets.surface_stone_mesh.clone(),
-            assets.vertex_material.clone(),
-        ),
-        ResourceNodeModel::BranchPile => (
-            assets.branch_pile_mesh.clone(),
-            assets.vertex_material.clone(),
-        ),
-        ResourceNodeModel::HayGrass => (
-            assets.hay_grass_mesh.clone(),
-            assets.vertex_material.clone(),
-        ),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::protocol::Vec3Net;
-    use crate::resources::{COAL_NODE_ID, IRON_NODE_ID, SULFUR_NODE_ID};
-
-    #[test]
-    fn pop_in_starts_below_floor_and_settles_to_base_transform() {
-        let base = Transform::from_xyz(3.0, 0.0, -2.0).with_scale(Vec3::ONE);
-
-        // At t=0 the node is fully buried — the very first frame the
-        // animation runs the entity should be at the deepest point.
-        let at_start = pop_in_transform(base, 0.0);
-        assert!(
-            at_start.translation.y < base.translation.y - 0.4,
-            "pop-in should start well below the floor, got {at_start:?}"
-        );
-        assert!(at_start.scale.length() <= base.scale.length() + 1e-3);
-
-        // Mid-curve the node is on its way up and slightly above unit
-        // scale (the overshoot pulse), but still below its final y.
-        let mid = pop_in_transform(base, POP_IN_DURATION_SECS * 0.6);
-        assert!(mid.translation.y > at_start.translation.y);
-        assert!(mid.translation.y < base.translation.y);
-
-        // Past the window the result snaps exactly back to the base
-        // transform so subsequent snapshot updates take over cleanly.
-        let after = pop_in_transform(base, POP_IN_DURATION_SECS + 1.0);
-        assert_eq!(after.translation, base.translation);
-        assert_eq!(after.scale, base.scale);
-    }
-
-    #[test]
-    fn ore_transform_matches_spawn_y_so_rock_sits_on_ground() {
-        // The ore meshes have their lowest vertex at local y=0, so the
-        // transform must not raise them above the floor.
-        for ore_id in [COAL_NODE_ID, IRON_NODE_ID, SULFUR_NODE_ID] {
-            let position = Vec3Net::new(2.0, 0.0, -3.0);
-            let definition = crate::resources::resource_node_definition(ore_id).unwrap();
-            let transform = resource_node_transform_at(position, 0.0, definition.model);
-            assert_eq!(
-                transform.translation.y, position.y,
-                "{ore_id} mesh must sit at the spawn y (no floating offset)"
-            );
-        }
-    }
-
-    #[test]
-    fn ease_out_cubic_spans_zero_to_one_monotonically() {
-        assert_eq!(ease_out_cubic(0.0), 0.0);
-        assert!((ease_out_cubic(1.0) - 1.0).abs() < 1e-6);
-        // Eased value leads a linear ramp in the middle (ease-out).
-        assert!(ease_out_cubic(0.5) > 0.5);
-        // Clamped below 0 and above 1.
-        assert_eq!(ease_out_cubic(-1.0), 0.0);
-        assert!((ease_out_cubic(2.0) - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn pop_in_overshoots_above_unit_scale_mid_curve() {
-        let base = Transform::from_xyz(0.0, 0.0, 0.0).with_scale(Vec3::ONE);
-        // Just past the overshoot peak (raw ~0.7) the node briefly scales
-        // beyond its base size before settling.
-        let mid = pop_in_transform(base, POP_IN_DURATION_SECS * 0.65);
-        assert!(mid.scale.length() > base.scale.length());
-    }
-
-    #[test]
-    fn tree_transform_keeps_unit_scale_on_the_ground() {
-        let position = Vec3Net::new(1.0, 0.0, 2.0);
-        let transform = resource_node_transform_at(position, 0.5, ResourceNodeModel::PineTreeLarge);
-        assert_eq!(transform.scale, Vec3::ONE);
-        assert_eq!(transform.translation.y, position.y);
-        // Yaw is applied as a rotation about Y.
-        let expected = Quat::from_rotation_y(0.5);
-        assert!(transform.rotation.dot(expected).abs() > 1.0 - 1e-5);
-    }
-
-    #[test]
-    fn ore_models_carry_per_model_scale_jitter() {
-        let position = Vec3Net::new(0.0, 0.0, 0.0);
-        let iron = resource_node_transform_at(position, 0.0, ResourceNodeModel::IronOre);
-        let coal = resource_node_transform_at(position, 0.0, ResourceNodeModel::CoalOre);
-        // Iron has a distinct non-uniform scale; coal stays at unit scale.
-        assert_ne!(iron.scale, coal.scale);
-        assert_eq!(coal.scale, Vec3::ONE);
     }
 }

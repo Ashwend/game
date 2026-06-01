@@ -12,14 +12,13 @@ use crate::{
     },
     resources::COAL_NODE_ID,
     save::WorldSave,
-    steam::offline_auth_token,
 };
 
 fn server() -> GameServer {
     GameServer::new(
         WorldSave::new("Test", Some(1)),
         ServerSettings {
-            auth_mode: AuthMode::Offline,
+            auth_mode: AuthMode::NoAuth,
             singleplayer_host: Some(1),
         },
     )
@@ -43,7 +42,7 @@ fn connect_host(server: &mut GameServer) -> ClientId {
             Some(GAME_VERSION.to_owned()),
             1,
             "Host".to_owned(),
-            offline_auth_token(1),
+            String::new(),
         )
         .expect("host should connect")
         .0

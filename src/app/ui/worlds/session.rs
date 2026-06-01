@@ -11,12 +11,12 @@ use uuid::Uuid;
 
 use crate::{
     app::state::{
-        ClientRuntime, LoadingSplash, LoadingSplashKind, MenuState, SaveStore, SteamUser,
+        ClientRuntime, CurrentUser, LoadingSplash, LoadingSplashKind, MenuState, SaveStore,
         WorldStartAttempt, WorldStartResult,
     },
+    auth::AuthenticatedUser,
     net::{ClientNetwork, ClientSession},
     save::WorldStore,
-    steam::AuthenticatedUser,
 };
 
 pub(in crate::app::ui) fn refresh_worlds(menu: &mut MenuState, store: &SaveStore) {
@@ -39,7 +39,7 @@ pub(super) fn start_singleplayer(
     menu: &mut MenuState,
     runtime: &mut ClientRuntime,
     store: &SaveStore,
-    user: &SteamUser,
+    user: &CurrentUser,
     network: &ClientNetwork,
     world_id: Uuid,
 ) {
@@ -70,7 +70,7 @@ pub(super) fn poll_singleplayer_start(menu: &mut MenuState, runtime: &mut Client
 pub(super) fn start_singleplayer_in_background(
     menu: &mut MenuState,
     store: &SaveStore,
-    user: &SteamUser,
+    user: &CurrentUser,
     network: &ClientNetwork,
     world_id: Uuid,
 ) {

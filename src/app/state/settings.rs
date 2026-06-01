@@ -103,7 +103,6 @@ mod tests {
             graphics: Default::default(),
             voice: Default::default(),
             keybindings: Default::default(),
-            identity: Default::default(),
         }
         .sanitized();
 

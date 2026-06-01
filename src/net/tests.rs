@@ -4,17 +4,17 @@ use bevy::prelude::*;
 
 use super::*;
 use crate::{
+    auth::{AuthMode, AuthenticatedUser},
     protocol::{ClientMessage, ServerMessage},
     save::{WorldSave, WorldStore},
     server::ServerSettings,
-    steam::{AuthMode, AuthenticatedUser, offline_auth_token},
 };
 
 fn user() -> AuthenticatedUser {
     AuthenticatedUser {
-        steam_id: 1,
+        account_id: 1,
         display_name: "Host".to_owned(),
-        token: offline_auth_token(1),
+        token: String::new(),
     }
 }
 
@@ -39,7 +39,7 @@ impl TestRig {
         let app = build_test_app();
         let network = app.world().resource::<ClientNetwork>().clone();
         let session = ClientSession::start_singleplayer(
-            WorldSave::new("Local", Some(user.steam_id)),
+            WorldSave::new("Local", Some(user.account_id)),
             &user,
             network,
         )
@@ -156,9 +156,9 @@ fn singleplayer_chat_round_trips_through_network_server() {
 fn direct_multiplayer_connects_to_shared_lightyear_server_host() {
     let user = user();
     let mut spawned = super::host::spawn_loopback_server(
-        WorldSave::new("Remote", Some(user.steam_id)),
+        WorldSave::new("Remote", Some(user.account_id)),
         ServerSettings {
-            auth_mode: AuthMode::Offline,
+            auth_mode: AuthMode::NoAuth,
             singleplayer_host: None,
         },
     )
@@ -210,7 +210,7 @@ fn singleplayer_shutdown_persists_world_from_network_server() {
     let store = temp_store();
     let user = user();
     let save = store
-        .create_world("Persisted", Some(user.steam_id))
+        .create_world("Persisted", Some(user.account_id))
         .expect("world should create");
     let world_id = save.id;
     let mut app = build_test_app();

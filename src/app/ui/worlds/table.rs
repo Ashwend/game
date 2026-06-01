@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::{
     analytics::{Analytics, Event},
-    app::state::{ConfirmationDialog, EditWorldDialog, MenuState, SaveStore, SteamUser},
+    app::state::{ConfirmationDialog, CurrentUser, EditWorldDialog, MenuState, SaveStore},
     net::ClientNetwork,
     save::{CorruptedWorld, WorldSummary},
 };
@@ -33,7 +33,7 @@ pub(super) fn draw_world_table(
     ui: &mut egui::Ui,
     menu: &mut MenuState,
     store: &SaveStore,
-    user: &SteamUser,
+    user: &CurrentUser,
     network: &ClientNetwork,
     analytics: &Analytics,
     table_height: f32,
@@ -132,7 +132,7 @@ fn draw_world_row(
     ui: &mut egui::Ui,
     menu: &mut MenuState,
     store: &SaveStore,
-    user: &SteamUser,
+    user: &CurrentUser,
     network: &ClientNetwork,
     analytics: &Analytics,
     world: WorldSummary,

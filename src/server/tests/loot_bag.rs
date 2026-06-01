@@ -9,21 +9,20 @@ use super::*;
 use crate::{
     items::{COAL_ID, WOOD_ID},
     protocol::{
-        ClientMessage, GAME_VERSION, ItemStack, LOOT_BAG_SLOT_COUNT, LootBagCommand,
-        LootBagSlotRef, PROTOCOL_VERSION, PlayerMovement, SteamId, Vec3Net,
+        AccountId, ClientMessage, GAME_VERSION, ItemStack, LOOT_BAG_SLOT_COUNT, LootBagCommand,
+        LootBagSlotRef, PROTOCOL_VERSION, PlayerMovement, Vec3Net,
     },
     server::loot_bag::LOOT_BAG_INTERACT_RANGE_M,
-    steam::offline_auth_token,
 };
 
-fn connect_named(server: &mut GameServer, steam_id: SteamId, name: &str) -> ClientId {
+fn connect_named(server: &mut GameServer, account_id: AccountId, name: &str) -> ClientId {
     server
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
-            steam_id,
+            account_id,
             name.to_owned(),
-            offline_auth_token(steam_id),
+            String::new(),
         )
         .expect("connect should succeed")
         .0

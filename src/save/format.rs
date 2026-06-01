@@ -49,7 +49,7 @@ pub(super) const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 /// v7 saves carry the trailing `Option<f32>` and would deserialise
 /// wrong; rejected at load.
 ///
-/// `9` added `PersistedDeployedEntity::owner: Option<SteamId>` so
+/// `9` added `PersistedDeployedEntity::owner: Option<AccountId>` so
 /// damage gating can survive reloads. Old v8 saves are rejected.
 pub(super) const SAVE_FORMAT_VERSION: u32 = 9;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
@@ -251,7 +251,7 @@ mod tests {
         save.state.world_time_multiplier = 2.0;
 
         save.state.players.push(PersistedPlayer {
-            steam_id: 1,
+            account_id: 1,
             name: "Alice".to_owned(),
             position: Vec3Net::new(1.0, 0.0, 2.0),
             velocity: Vec3Net::ZERO,

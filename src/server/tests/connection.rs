@@ -9,7 +9,7 @@ fn singleplayer_host_is_admin() {
             Some(GAME_VERSION.to_owned()),
             1,
             "Host".to_owned(),
-            offline_auth_token(1),
+            String::new(),
         )
         .expect("host should connect");
 
@@ -21,8 +21,18 @@ fn singleplayer_host_is_admin() {
 }
 
 #[test]
-fn rejects_invalid_auth() {
-    let mut server = server();
+fn workos_mode_rejects_a_connection_it_cannot_verify() {
+    // `NoAuth` trusts the claim, so there's nothing to reject there — the real
+    // gate is `Workos` mode. A Workos-mode server with no configured verifier
+    // can't validate the token, so the handshake is refused rather than
+    // admitting the claimed identity.
+    let mut server = GameServer::new(
+        WorldSave::new("Test", Some(1)),
+        ServerSettings {
+            auth_mode: AuthMode::Workos,
+            singleplayer_host: Some(1),
+        },
+    );
     assert!(
         server
             .connect(
@@ -30,7 +40,7 @@ fn rejects_invalid_auth() {
                 Some(GAME_VERSION.to_owned()),
                 2,
                 "Bad".to_owned(),
-                "wrong".to_owned()
+                "not.a.jwt".to_owned(),
             )
             .is_err()
     );
@@ -45,7 +55,7 @@ fn rejects_mismatched_client_versions() {
             Some("0.1.0".to_owned()),
             1,
             "Host".to_owned(),
-            offline_auth_token(1),
+            String::new(),
         )
         .expect_err("version mismatch should reject auth");
 
@@ -62,7 +72,7 @@ fn version_mismatch_is_a_typed_rejection_carrying_both_sides() {
             Some("0.0.1".to_owned()),
             1,
             "Host".to_owned(),
-            offline_auth_token(1),
+            String::new(),
         )
         .expect_err("a mismatched protocol must be rejected");
 
@@ -195,7 +205,7 @@ fn silent_clients_are_disconnected_after_timeout() {
                 Some(GAME_VERSION.to_owned()),
                 1,
                 "Host".to_owned(),
-                offline_auth_token(1),
+                String::new(),
             )
             .is_ok()
     );
@@ -293,7 +303,7 @@ fn reconnect_with_same_identity_takes_over_and_preserves_state() {
             Some(GAME_VERSION.to_owned()),
             1,
             "Host".to_owned(),
-            offline_auth_token(1),
+            String::new(),
         )
         .expect("reconnect with the same identity should take over, not be rejected");
 
@@ -372,7 +382,7 @@ fn world_save_round_trips_player_inventory_and_position() {
     let mut restored = GameServer::new(
         save,
         ServerSettings {
-            auth_mode: AuthMode::Offline,
+            auth_mode: AuthMode::NoAuth,
             singleplayer_host: Some(1),
         },
     );
@@ -382,7 +392,7 @@ fn world_save_round_trips_player_inventory_and_position() {
             Some(GAME_VERSION.to_owned()),
             1,
             "Host".to_owned(),
-            offline_auth_token(1),
+            String::new(),
         )
         .expect("returning host should reconnect");
 

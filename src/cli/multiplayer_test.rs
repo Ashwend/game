@@ -22,10 +22,10 @@ use crate::{
 /// the client-side `reposition_test_window_system`); the names mirror that
 /// left-to-right ordering so the window you're looking at is obvious.
 const DEFAULT_NAMES: [&str; 2] = ["player1", "player2"];
-/// Stable but distinct Steam IDs so the server treats each spawned client
-/// as a separate player. Different from the default offline ID
+/// Stable but distinct account IDs so the server treats each spawned client
+/// as a separate player. Different from the default bypass ID
 /// (`76561197960287930`) to avoid colliding with a real local-dev session.
-const TEST_STEAM_IDS: [u64; 2] = [76_561_197_960_287_001, 76_561_197_960_287_002];
+const TEST_ACCOUNT_IDS: [u64; 2] = [76_561_197_960_287_001, 76_561_197_960_287_002];
 /// Map size for the ephemeral test world — the smallest procedural map so
 /// the helper boots fast and streams cheaply. Single source of truth: the
 /// seed save is generated at this size *and* the spawned `server --map-size`
@@ -87,9 +87,9 @@ pub(super) fn run_multiplayer_test(port: u16, names_override: Option<Vec<String>
     // `/tp` straight out of the gate — those commands are admin-gated
     // and the multiplayer-test loop is the place where they're most
     // useful for verifying PvP / death / respawn.
-    for steam_id in TEST_STEAM_IDS {
-        if !seeded.admins.contains(&steam_id) {
-            seeded.admins.push(steam_id);
+    for account_id in TEST_ACCOUNT_IDS {
+        if !seeded.admins.contains(&account_id) {
+            seeded.admins.push(account_id);
         }
     }
     save_world_file(&world_save, &seeded).context("could not seed multiplayer-test world save")?;
@@ -108,9 +108,9 @@ pub(super) fn run_multiplayer_test(port: u16, names_override: Option<Vec<String>
     let layouts = test_client_layouts();
     let mut clients = Vec::new();
     for (index, name) in names.iter().enumerate() {
-        let steam_id = TEST_STEAM_IDS[index];
+        let account_id = TEST_ACCOUNT_IDS[index];
         let layout = layouts[index];
-        let child = spawn_client(&exe, bind, name, steam_id, layout)
+        let child = spawn_client(&exe, bind, name, account_id, layout)
             .with_context(|| format!("could not spawn test client {name}"))?;
         clients.push(child);
     }
@@ -192,6 +192,10 @@ fn spawn_server(
         .arg(addr.to_string())
         .arg("--world")
         .arg(save)
+        // Localhost test server: bypass WorkOS and admit each spawned client by
+        // the account id + name it claims via the environment.
+        .arg("--auth")
+        .arg("no-auth")
         // Match the size the seed save was generated at. Without this the
         // server falls back to its `--map-size` default and the size guard
         // rejects the (smaller) seed save.
@@ -329,7 +333,7 @@ fn spawn_client(
     exe: &std::path::Path,
     server_addr: SocketAddr,
     name: &str,
-    steam_id: u64,
+    account_id: u64,
     layout: TestClientLayout,
 ) -> Result<Child> {
     let mut command = Command::new(exe);
@@ -338,7 +342,7 @@ fn spawn_client(
         .arg("--connect")
         .arg(server_addr.to_string())
         .env("GAME_PLAYER_NAME", name)
-        .env("GAME_STEAM_ID", steam_id.to_string())
+        .env("GAME_ACCOUNT_ID", account_id.to_string())
         // Mirror the `GAME_TEST_*` keys the client reads in
         // `state::test_mode::TestModeConfig::from_env`. Centralising them
         // there means a future field only needs to be wired in once and
@@ -355,7 +359,7 @@ fn spawn_client(
         .env("GAME_TEST_SPAWN_YAW", layout.spawn_yaw.to_string())
         .env("GAME_TEST_INVENTORY_OPEN", "1")
         // Auto-issue `/test-kit` on join so both windows boot with the
-        // full early-game kit. Pairs with the admin steam IDs that
+        // full early-game kit. Pairs with the admin account IDs that
         // multiplayer-test seeds into the save before spawning the
         // server.
         .env("GAME_TEST_AUTO_KIT", "1")

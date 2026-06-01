@@ -6,8 +6,8 @@ use uuid::Uuid;
 use crate::{
     items::DeployableKind,
     protocol::{
-        ClientId, DeployedEntityId, DroppedItemId, DroppedWorldItem, ItemStack,
-        PlayerInventoryState, ResourceNodeId, ResourceNodeState, SteamId, Vec3Net,
+        AccountId, ClientId, DeployedEntityId, DroppedItemId, DroppedWorldItem, ItemStack,
+        PlayerInventoryState, ResourceNodeId, ResourceNodeState, Vec3Net,
     },
     server::ChunkManagerSave,
     world::MapType,
@@ -22,20 +22,20 @@ pub struct WorldSave {
     pub name: String,
     pub map: MapType,
     pub created_at_unix: u64,
-    pub admins: Vec<SteamId>,
+    pub admins: Vec<AccountId>,
     pub state: WorldStateSave,
 }
 
 impl WorldSave {
-    pub fn new(name: &str, owner_steam_id: Option<SteamId>) -> Self {
-        Self::new_with_map(name, owner_steam_id, MapType::default())
+    pub fn new(name: &str, owner_account_id: Option<AccountId>) -> Self {
+        Self::new_with_map(name, owner_account_id, MapType::default())
     }
 
-    pub fn new_with_map(name: &str, owner_steam_id: Option<SteamId>, map: MapType) -> Self {
+    pub fn new_with_map(name: &str, owner_account_id: Option<AccountId>, map: MapType) -> Self {
         let id = Uuid::new_v4();
         let mut admins = Vec::new();
-        if let Some(owner_steam_id) = owner_steam_id {
-            admins.push(owner_steam_id);
+        if let Some(owner_account_id) = owner_account_id {
+            admins.push(owner_account_id);
         }
 
         Self {
@@ -122,9 +122,9 @@ pub struct PersistedDeployedEntity {
     pub yaw: f32,
     pub health: u32,
     pub max_health: u32,
-    /// Steam id of the player who placed this entity, or `None` for
+    /// account id of the player who placed this entity, or `None` for
     /// world-spawned structures. Persisted so ownership survives reloads.
-    pub owner: Option<crate::protocol::SteamId>,
+    pub owner: Option<crate::protocol::AccountId>,
     /// Furnace-only sub-state. `None` for kinds that aren't furnaces
     /// (workbench). Keeps the per-kind shape out of the top-level
     /// struct so adding more deployable types later doesn't grow it.
@@ -182,7 +182,7 @@ fn default_world_time_multiplier() -> f32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PersistedPlayer {
-    pub steam_id: SteamId,
+    pub account_id: AccountId,
     pub name: String,
     pub position: Vec3Net,
     pub velocity: Vec3Net,

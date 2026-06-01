@@ -10,9 +10,9 @@ use std::{
 use bevy::prelude::*;
 
 use crate::{
-    app::state::{ClientRuntime, LoadingSplash, LoadingSplashKind, MenuState, Screen, SteamUser},
+    app::state::{ClientRuntime, CurrentUser, LoadingSplash, LoadingSplashKind, MenuState, Screen},
+    auth::AuthenticatedUser,
     net::{ClientNetwork, ClientSession},
-    steam::AuthenticatedUser,
 };
 
 /// Optional one-shot directive that asks the client to skip the main menu
@@ -41,7 +41,7 @@ pub(crate) fn auto_connect_start_system(
     mut commands: Commands,
     request: Option<Res<AutoConnectRequest>>,
     attempt: Option<Res<AutoConnectAttempt>>,
-    user: Option<Res<SteamUser>>,
+    user: Option<Res<CurrentUser>>,
     network: Res<ClientNetwork>,
     mut menu: ResMut<MenuState>,
 ) {

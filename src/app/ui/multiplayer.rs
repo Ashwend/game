@@ -3,8 +3,8 @@ use bevy_egui::egui::{self, RichText};
 use crate::{
     analytics::{Analytics, ConnectFailReason, Event, events::mask_host},
     app::state::{
-        ClientRuntime, DirectConnectDialog, LoadingSplash, LoadingSplashKind, MenuState, Screen,
-        SteamUser,
+        ClientRuntime, CurrentUser, DirectConnectDialog, LoadingSplash, LoadingSplashKind,
+        MenuState, Screen,
     },
     net::ClientNetwork,
 };
@@ -31,7 +31,7 @@ pub(super) fn multiplayer_ui(
     ctx: &egui::Context,
     menu: &mut MenuState,
     runtime: &mut ClientRuntime,
-    user: &SteamUser,
+    user: &CurrentUser,
     network: &ClientNetwork,
     analytics: &Analytics,
 ) {
@@ -125,7 +125,7 @@ fn draw_join_prompt(ctx: &egui::Context, menu: &MenuState, connecting: bool) -> 
 fn start_join(
     ctx: &egui::Context,
     menu: &mut MenuState,
-    user: &SteamUser,
+    user: &CurrentUser,
     network: &ClientNetwork,
     analytics: &Analytics,
 ) {

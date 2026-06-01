@@ -164,7 +164,7 @@ fn handle_unauthenticated_message(
     let ClientMessage::Auth {
         protocol_version,
         client_version,
-        steam_id,
+        account_id,
         display_name,
         token,
     } = message
@@ -182,7 +182,7 @@ fn handle_unauthenticated_message(
     match server.connect(
         protocol_version,
         client_version,
-        steam_id,
+        account_id,
         display_name,
         token,
     ) {

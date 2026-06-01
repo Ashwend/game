@@ -110,16 +110,16 @@ fn non_fuel_rejected_in_fuel_slot_via_merge_helper() {
 #[test]
 fn removing_fuel_resets_the_burn_timer() {
     use crate::{
+        auth::AuthMode,
         protocol::{GAME_VERSION, PROTOCOL_VERSION},
         save::WorldSave,
         server::ServerSettings,
-        steam::{AuthMode, offline_auth_token},
     };
 
     let mut server = crate::server::GameServer::new(
         WorldSave::new("Test", Some(1)),
         ServerSettings {
-            auth_mode: AuthMode::Offline,
+            auth_mode: AuthMode::NoAuth,
             singleplayer_host: Some(1),
         },
     );
@@ -129,7 +129,7 @@ fn removing_fuel_resets_the_burn_timer() {
             Some(GAME_VERSION.to_owned()),
             1,
             "Tester".to_owned(),
-            offline_auth_token(1),
+            String::new(),
         )
         .expect("connect ok");
 
@@ -184,16 +184,16 @@ fn removing_fuel_resets_the_burn_timer() {
 #[test]
 fn partial_fuel_drag_keeps_burn_timer_running() {
     use crate::{
+        auth::AuthMode,
         protocol::{GAME_VERSION, PROTOCOL_VERSION},
         save::WorldSave,
         server::ServerSettings,
-        steam::{AuthMode, offline_auth_token},
     };
 
     let mut server = crate::server::GameServer::new(
         WorldSave::new("Test", Some(1)),
         ServerSettings {
-            auth_mode: AuthMode::Offline,
+            auth_mode: AuthMode::NoAuth,
             singleplayer_host: Some(1),
         },
     );
@@ -203,7 +203,7 @@ fn partial_fuel_drag_keeps_burn_timer_running() {
             Some(GAME_VERSION.to_owned()),
             1,
             "Tester".to_owned(),
-            offline_auth_token(1),
+            String::new(),
         )
         .expect("connect ok");
 
@@ -263,16 +263,16 @@ fn partial_fuel_drag_keeps_burn_timer_running() {
 #[test]
 fn moving_from_furnace_to_a_specific_player_inventory_slot_respects_the_target() {
     use crate::{
+        auth::AuthMode,
         protocol::{GAME_VERSION, PROTOCOL_VERSION},
         save::WorldSave,
         server::ServerSettings,
-        steam::{AuthMode, offline_auth_token},
     };
 
     let mut server = crate::server::GameServer::new(
         WorldSave::new("Test", Some(1)),
         ServerSettings {
-            auth_mode: AuthMode::Offline,
+            auth_mode: AuthMode::NoAuth,
             singleplayer_host: Some(1),
         },
     );
@@ -282,7 +282,7 @@ fn moving_from_furnace_to_a_specific_player_inventory_slot_respects_the_target()
             Some(GAME_VERSION.to_owned()),
             1,
             "Tester".to_owned(),
-            offline_auth_token(1),
+            String::new(),
         )
         .expect("connect ok");
 
@@ -362,16 +362,16 @@ fn furnace_test_fixture() -> (
     crate::protocol::DeployedEntityId,
 ) {
     use crate::{
+        auth::AuthMode,
         protocol::{GAME_VERSION, PROTOCOL_VERSION},
         save::WorldSave,
         server::ServerSettings,
-        steam::{AuthMode, offline_auth_token},
     };
 
     let mut server = crate::server::GameServer::new(
         WorldSave::new("Test", Some(1)),
         ServerSettings {
-            auth_mode: AuthMode::Offline,
+            auth_mode: AuthMode::NoAuth,
             singleplayer_host: Some(1),
         },
     );
@@ -381,7 +381,7 @@ fn furnace_test_fixture() -> (
             Some(GAME_VERSION.to_owned()),
             1,
             "Tester".to_owned(),
-            offline_auth_token(1),
+            String::new(),
         )
         .expect("connect ok");
 

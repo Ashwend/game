@@ -575,15 +575,15 @@ mod tests {
 
         let remote = Player {
             client_id: 2,
-            steam_id: 200,
+            account_id: 200,
         };
         let local = Player {
             client_id: 1,
-            steam_id: 100,
+            account_id: 100,
         };
         let dead = Player {
             client_id: 3,
-            steam_id: 300,
+            account_id: 300,
         };
         let remote_public = public("Remote", MAX_HEALTH, false, None);
         let local_public = public("Me", MAX_HEALTH, false, None);

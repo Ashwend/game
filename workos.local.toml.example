@@ -1,0 +1,31 @@
+# WorkOS — local client config.
+#
+# Copy this file to `workos.local.toml` (gitignored) to point a local checkout
+# at a specific WorkOS environment. Loaded by `src/auth/workos/config.rs` and
+# used by both the desktop login and the dedicated server's JWKS verifier.
+#
+# Resolution order (each step overrides the previous):
+#   1. Build-time defaults baked in via `option_env!` (CI bakes
+#      GAME_WORKOS_CLIENT_ID into release builds). The repo also ships a public
+#      default client id, so the game works with NO file at all.
+#   2. This file (`workos.local.toml`) at the repo root.
+#   3. Runtime environment variables (`GAME_WORKOS_*`), which override everything.
+#
+# Everything here is public (no secrets): the client id drives both the OAuth
+# authorize request and the server-side JWKS URL; the OAuth + JWKS endpoints are
+# always api.workos.com.
+
+# WorkOS client id (public, e.g. `client_01…`). Omit to use the baked-in default.
+# Env override: GAME_WORKOS_CLIENT_ID
+client_id = "client_01XXXXXXXXXXXXXXXXXXXXXXXX"
+
+# Loopback port the browser is redirected back to after sign-in. Must be
+# registered as a redirect URI in the WorkOS dashboard:
+# `http://127.0.0.1:<port>/callback`. Defaults to 8765 if omitted.
+# Env override: GAME_WORKOS_REDIRECT_PORT
+redirect_port = 8765
+
+# Where the title screen's "Manage account" link sends the player (WorkOS has no
+# hosted end-user profile page). Defaults to https://ashwend.com if omitted.
+# Env override: GAME_WORKOS_ACCOUNT_URL
+account_url = "https://ashwend.com"

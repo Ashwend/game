@@ -9,7 +9,6 @@ publish = false
 
 [features]
 default = []
-steam = ["lightyear/steam"]
 # Dev-only. Speeds up local iteration; do not enable for release builds.
 dev-fast = ["bevy/dynamic_linking"]
 # Dev-only diagnostic. Logs every server-side mutation of replicated

@@ -10,20 +10,19 @@ use crate::{
     combat::{HATCHET_PVP_DAMAGE, PICKAXE_PVP_DAMAGE},
     items::{BASIC_HATCHET_ID, BASIC_PICKAXE_ID},
     protocol::{
-        AttackPlayerCommand, ClientMessage, ItemStack, MAX_HEALTH, PROTOCOL_VERSION,
-        PlayerMovement, SteamId,
+        AccountId, AttackPlayerCommand, ClientMessage, ItemStack, MAX_HEALTH, PROTOCOL_VERSION,
+        PlayerMovement,
     },
-    steam::offline_auth_token,
 };
 
-fn connect_named(server: &mut GameServer, steam_id: SteamId, name: &str) -> ClientId {
+fn connect_named(server: &mut GameServer, account_id: AccountId, name: &str) -> ClientId {
     server
         .connect(
             PROTOCOL_VERSION,
             Some(crate::protocol::GAME_VERSION.to_owned()),
-            steam_id,
+            account_id,
             name.to_owned(),
-            offline_auth_token(steam_id),
+            String::new(),
         )
         .expect("connect should succeed")
         .0

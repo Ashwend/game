@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use uuid::Uuid;
 
-use crate::{protocol::SteamId, world::MapType};
+use crate::{protocol::AccountId, world::MapType};
 
 use super::format::{SAVE_EXTENSION, decode_world_save, save_world_file};
 use super::listing::{
@@ -90,19 +90,23 @@ impl WorldStore {
         Ok(WorldListing { worlds, corrupted })
     }
 
-    pub fn create_world(&self, name: &str, owner_steam_id: Option<SteamId>) -> Result<WorldSave> {
-        self.create_world_with_map(name, owner_steam_id, MapType::default())
+    pub fn create_world(
+        &self,
+        name: &str,
+        owner_account_id: Option<AccountId>,
+    ) -> Result<WorldSave> {
+        self.create_world_with_map(name, owner_account_id, MapType::default())
     }
 
     pub fn create_world_with_map(
         &self,
         name: &str,
-        owner_steam_id: Option<SteamId>,
+        owner_account_id: Option<AccountId>,
         map: MapType,
     ) -> Result<WorldSave> {
         self.ensure_exists()?;
 
-        let save = WorldSave::new_with_map(name, owner_steam_id, map);
+        let save = WorldSave::new_with_map(name, owner_account_id, map);
         self.save_world(&save)?;
         Ok(save)
     }
@@ -134,7 +138,10 @@ impl WorldStore {
         Ok(())
     }
 
-    pub fn load_or_create_dedicated(&self, owner_steam_id: Option<SteamId>) -> Result<WorldSave> {
+    pub fn load_or_create_dedicated(
+        &self,
+        owner_account_id: Option<AccountId>,
+    ) -> Result<WorldSave> {
         let listing = self.list_worlds()?;
         if let Some(world) = listing
             .worlds
@@ -144,7 +151,7 @@ impl WorldStore {
             return self.load_world(world.id);
         }
 
-        self.create_world("Dedicated", owner_steam_id)
+        self.create_world("Dedicated", owner_account_id)
     }
 
     pub(crate) fn world_path(&self, id: Uuid) -> PathBuf {
@@ -343,7 +350,7 @@ mod tests {
 
         save.state.last_authoritative_tick = 12345;
         save.state.players.push(PersistedPlayer {
-            steam_id: 42,
+            account_id: 42,
             name: "Tester".to_owned(),
             position: Vec3Net::new(1.0, 2.5, -3.0),
             velocity: Vec3Net::new(0.1, 0.0, 0.2),

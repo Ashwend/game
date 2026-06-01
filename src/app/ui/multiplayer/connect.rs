@@ -16,8 +16,8 @@ use bevy_egui::egui;
 use crate::{
     analytics::{Analytics, ConnectFailReason, Event},
     app::state::{
-        ClientRuntime, DirectConnectAttempt, DirectConnectDialog, DirectConnectResult, MenuState,
-        SteamUser,
+        ClientRuntime, CurrentUser, DirectConnectAttempt, DirectConnectDialog, DirectConnectResult,
+        MenuState,
     },
     net::{ClientNetwork, ClientSession},
 };
@@ -29,7 +29,7 @@ mod target;
 pub(super) fn start_attempt(
     ctx: &egui::Context,
     dialog: &mut DirectConnectDialog,
-    user: &SteamUser,
+    user: &CurrentUser,
     network: &ClientNetwork,
 ) -> std::result::Result<(), String> {
     let target = direct_connect_target(dialog).map_err(|error| error.to_string())?;
@@ -56,7 +56,7 @@ pub(super) fn start_attempt(
 
 fn connect_to_target(
     target: DirectConnectTarget,
-    user: crate::steam::AuthenticatedUser,
+    user: crate::auth::AuthenticatedUser,
     network: ClientNetwork,
 ) -> Result<(SocketAddr, ClientSession)> {
     let addr = resolve_direct_connect_target(&target)?;
