@@ -1,6 +1,6 @@
 [package]
 name = "ashwend"
-version = "0.16.3"
+version = "0.16.4"
 edition = "2024"
 rust-version = "1.94"
 default-run = "ashwend"
