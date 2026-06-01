@@ -128,6 +128,35 @@ case "$cmd" in
     done
     exit "$failed"
     ;;
+  web-build)
+    web_dir="$ROOT/website"
+    dist_dir="$web_dir/dist/client"
+    out="$ROOT/ashwend-web.zip"
+
+    if [[ ! -d "$web_dir/node_modules" ]]; then
+      echo "installing website dependencies..." >&2
+      (cd "$web_dir" && npm install)
+    fi
+
+    echo "building website..."
+    (cd "$web_dir" && npm run build)
+
+    if [[ ! -f "$dist_dir/index.html" ]]; then
+      echo "website build produced no $dist_dir/index.html" >&2
+      exit 1
+    fi
+
+    # Cloudflare Pages "Direct Upload" expects the site files at the zip root
+    # (index.html on top, not nested under dist/client/), so zip the *contents*
+    # of dist/client. Land it at the repo root (gitignored) so it's a one-step
+    # drag-and-drop into the dashboard.
+    find "$dist_dir" -name '.DS_Store' -delete 2>/dev/null || true
+    rm -f "$out"
+    (cd "$dist_dir" && zip -r -q -X "$out" . -x '*.DS_Store')
+
+    echo "packaged $(du -h "$out" | cut -f1) -> $out"
+    echo "drop it into Cloudflare Pages (Create > Pages > Upload assets / Direct Upload)."
+    ;;
   help|*)
     cat <<'EOF'
 Usage: ./cli <command> [args]
@@ -147,6 +176,7 @@ Commands:
   coverage     Print text coverage when cargo-llvm-cov is installed, otherwise run tests.
   build        Run cargo build with any extra args.
   publish      Build release binaries into builds/ for macOS, Linux, and Windows targets.
+  web-build    Build the website and zip it to ./ashwend-web.zip (gitignored) for Cloudflare Pages drop-in.
 EOF
     ;;
 esac

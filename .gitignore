@@ -1,5 +1,6 @@
 /target/
 /builds/
+/ashwend-web.zip
 .DS_Store
 /.claude/
 /analytics.local.toml

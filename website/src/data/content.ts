@@ -69,8 +69,9 @@ export const META = {
 
 export const HERO_META: ReadonlyArray<string> = [
   'Procedurally generated worlds',
-  'Open-world PvP',
-  'Patched weekly',
+  'Open-world',
+  'PvP',
+  'First-person',
 ]
 
 export const GALLERY: ReadonlyArray<Shot> = [

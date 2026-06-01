@@ -22,7 +22,7 @@ export function Hero() {
 
       <div className="relative mx-auto w-full max-w-6xl px-5 pt-24 pb-28 sm:px-8">
         <p className="mb-5 text-xs font-medium uppercase tracking-[0.22em] text-ember-300">
-          Multiplayer survival · in active development
+          Survival sandbox · in active development
         </p>
 
         <h1 className="wordmark bg-gradient-to-b from-[#f6eedd] to-ember-300 bg-clip-text text-[3.25rem] leading-none text-transparent drop-shadow-sm sm:text-7xl lg:text-[8.5rem]">
@@ -30,11 +30,11 @@ export function Hero() {
         </h1>
 
         <p className="mt-7 max-w-2xl text-lg text-fg/90 sm:text-xl">
-          Drop into a procedurally generated world and carve out a place in it.
+          Drop into a procedurally generated world.
         </p>
         <p className="mt-3 max-w-xl text-base text-muted">
-          A multiplayer survival game, patched roughly every week. Jump in early
-          while it takes shape.
+          Gather, craft, build, and raid your way through an open-world survival
+          sandbox shaped by the players in it.
         </p>
 
         <div className="mt-9 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
