@@ -19,7 +19,7 @@ env:
   GAME_SERVICE_USER: game-server
   GAME_SERVICE_NAME: game-server
   GAME_BIND_ADDR: 0.0.0.0:7777
-  GAME_AUTH_MODE: offline
+  GAME_AUTH_MODE: workos
   GAME_RESTART_NOTICE_SECONDS: "15"
   GAME_MAP_SIZE: large
   # Bump this (e.g. world -> world-2) to wipe BleedingEdge: a new name makes the
