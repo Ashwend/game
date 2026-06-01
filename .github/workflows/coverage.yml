@@ -23,6 +23,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Free up runner disk space
+        # GitHub-hosted runners ship ~14 GB free. A restored ~5 GB Cargo cache
+        # plus an `--all-features` (LLVM-instrumented) Bevy build overruns that.
+        # Delete the large preinstalled toolchains this job never touches
+        # (~25 GB) so the cache can stay on and builds stay fast.
+        run: |
+          sudo rm -rf \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/share/swift
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
