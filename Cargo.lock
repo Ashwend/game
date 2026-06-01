@@ -393,7 +393,7 @@ dependencies = [
 
 [[package]]
 name = "ashwend"
-version = "0.14.2"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "base64",
