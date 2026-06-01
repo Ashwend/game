@@ -14,6 +14,7 @@ pub mod save;
 pub mod server;
 pub mod steam;
 pub mod util;
+pub mod workos_login;
 pub mod world;
 pub mod world_time;
 

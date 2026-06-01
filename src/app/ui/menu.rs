@@ -24,7 +24,12 @@ pub(super) fn main_menu_ui(
         .show(ctx, |ui| {
             ui.set_width(MENU_WIDTH);
             ui.vertical_centered(|ui| {
-                ui.label(theme::title("Ashwend", 78.0));
+                // The title font is wider than the menu column, so let it
+                // extend onto a single centred line instead of wrapping.
+                ui.add(
+                    egui::Label::new(theme::title("ASHWEND", 78.0))
+                        .wrap_mode(egui::TextWrapMode::Extend),
+                );
                 ui.add_space(20.0);
                 let panel = theme::panel_frame().inner_margin(egui::Margin::same(24));
                 panel.show(ui, |ui| {
@@ -51,6 +56,17 @@ pub(super) fn main_menu_ui(
                     egui::RichText::new(format!("Signed in as {}", user.0.display_name))
                         .color(theme::text()),
                 );
+                // `vertical_centered` centres single widgets but left-aligns a
+                // `horizontal` row (it fills the column width), so stack the two
+                // account actions — each centres cleanly, like the line above.
+                ui.add_space(8.0);
+                if ui.link(theme::muted("Manage account")).clicked() {
+                    menu.manage_account_requested = true;
+                }
+                ui.add_space(2.0);
+                if ui.link(theme::muted("Sign out")).clicked() {
+                    menu.sign_out_requested = true;
+                }
                 if let Some(status) = &menu.status {
                     ui.add_space(4.0);
                     ui.label(theme::status_text(status));
@@ -104,6 +120,9 @@ mod tests {
     #[test]
     fn main_menu_renders_status_and_version() {
         let ctx = egui::Context::default();
+        // The title renders with the custom `cinzel` family; bind it (applied
+        // at the next `begin_pass`, which `ctx.run` performs) or layout panics.
+        theme::install_title_font(&ctx);
         let mut menu = MenuState {
             status: Some("Ready".to_owned()),
             ..Default::default()

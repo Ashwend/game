@@ -10,7 +10,7 @@ use lightyear::prelude::{
 };
 
 use crate::{
-    protocol::{ClientMessage, PROTOCOL_VERSION, PacketDelivery, ServerMessage},
+    protocol::{ClientMessage, PacketDelivery, ServerMessage},
     server::{
         Deployable, DeployableActive, DeployableHealth, DeployableTransform, DroppedItem,
         DroppedItemTransform, LootBagContents, LootBagEntity, LootBagTransform, Player,
@@ -19,7 +19,21 @@ use crate::{
     },
 };
 
-pub(crate) const LIGHTYEAR_PROTOCOL_ID: u64 = PROTOCOL_VERSION as u64;
+/// Fixed netcode `protocol_id` for the Ashwend transport, deliberately
+/// **independent of [`crate::protocol::PROTOCOL_VERSION`]**.
+///
+/// The netcode bakes this id into the encrypted connect token and rejects any
+/// token whose id doesn't match — at the transport layer, before a single
+/// application message is exchanged. If it tracked `PROTOCOL_VERSION`, a
+/// version-bumped client would be bounced there and could never learn *which*
+/// version the server runs. Keeping it fixed lets the connection always reach
+/// the application-level `Auth` handshake, where `GameServer::connect` compares
+/// versions and answers with a structured `ServerMessage::VersionMismatch`
+/// carrying the server's version — so the client can show a "you're
+/// newer/older" modal. The `Auth` / `AuthRejected` / `VersionMismatch` wire
+/// shapes must therefore stay stable across versions; bump this id only on a
+/// genuinely incompatible *transport* change.
+pub(crate) const LIGHTYEAR_PROTOCOL_ID: u64 = 0x4153_4857_454E_4401; // b"ASHWEND\x01"
 const LIGHTYEAR_PRIVATE_KEY: [u8; 32] = [0; 32];
 
 #[derive(Clone)]

@@ -53,6 +53,29 @@ fn rejects_mismatched_client_versions() {
 }
 
 #[test]
+fn version_mismatch_is_a_typed_rejection_carrying_both_sides() {
+    let mut server = server();
+    // A bumped protocol is a version mismatch just like a different build.
+    let error = server
+        .connect(
+            PROTOCOL_VERSION + 1,
+            Some("0.0.1".to_owned()),
+            1,
+            "Host".to_owned(),
+            offline_auth_token(1),
+        )
+        .expect_err("a mismatched protocol must be rejected");
+
+    let mismatch = error
+        .downcast_ref::<crate::server::VersionMismatchRejection>()
+        .expect("rejection must be typed so routing answers with ServerMessage::VersionMismatch");
+    assert_eq!(mismatch.server_version, GAME_VERSION);
+    assert_eq!(mismatch.server_protocol, PROTOCOL_VERSION);
+    assert_eq!(mismatch.client_version.as_deref(), Some("0.0.1"));
+    assert_eq!(mismatch.client_protocol, PROTOCOL_VERSION + 1);
+}
+
+#[test]
 fn chat_is_sanitized_and_broadcast_by_server() {
     let mut server = server();
     let client_id = connect_host(&mut server);

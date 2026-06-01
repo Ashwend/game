@@ -7,7 +7,7 @@
 
 use bevy::{
     prelude::*,
-    window::{Monitor, PrimaryMonitor, PrimaryWindow, Window, WindowPosition},
+    window::{Monitor, MonitorSelection, PrimaryWindow, Window, WindowMode, WindowPosition},
 };
 
 use crate::{
@@ -64,15 +64,20 @@ pub(crate) fn apply_test_mode_overrides_system(
     *already_applied = true;
 }
 
-/// Repositions the primary window into its centered tile slot once Bevy
-/// has surfaced the primary monitor. We can't compute the position at
-/// startup because monitor dimensions aren't available before the window
-/// is created — so the window opens at whatever winit's default chose,
-/// and this system snaps it into place on the first frame the monitor is
-/// queryable. Runs once per session (gated by `Local<bool>`).
+/// Places the multiplayer-test window on its target display once Bevy has
+/// surfaced the monitors. With two or more monitors each client gets its own
+/// screen, borderless-fullscreen — `player1` (index 0) on the leftmost
+/// monitor, `player2` (index 1) on the next one to the right. With a single
+/// monitor it falls back to the centered side-by-side tiling so both windows
+/// still fit. Runs once per session (gated by `Local<bool>`).
+///
+/// We can't decide this at startup because monitor geometry isn't known until
+/// after the window opens — so the window comes up plain windowed (see the
+/// `WindowPlugin` setup in `app.rs`) and this snaps it into place on the first
+/// frame the monitors are queryable.
 pub(crate) fn reposition_test_window_system(
     config: Res<TestModeConfig>,
-    monitors: Query<&Monitor, With<PrimaryMonitor>>,
+    monitors: Query<(Entity, &Monitor)>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mut applied: Local<bool>,
 ) {
@@ -85,26 +90,53 @@ pub(crate) fn reposition_test_window_system(
         *applied = true;
         return;
     };
-    let Ok(monitor) = monitors.single() else {
+    if monitors.is_empty() {
+        // Monitors not surfaced yet — winit reports them within a frame or
+        // two of the window opening; retry until they're queryable.
         return;
-    };
+    }
     let Ok(mut window) = windows.single_mut() else {
         return;
     };
 
-    // Bevy reports the monitor in *physical* pixels, but `Window.position`
-    // is in *logical* pixels — divide by the scale factor so the math
-    // matches on Retina/HiDPI displays. `scale_factor` is f64 in Bevy;
-    // cast to f32 for the divide.
-    let scale = (monitor.scale_factor as f32).max(1.0);
-    let logical_width = (monitor.physical_width as f32 / scale) as u32;
-    let logical_height = (monitor.physical_height as f32 / scale) as u32;
-    let mut position = layout.position_in_screen(UVec2::new(logical_width, logical_height));
-    // Account for the monitor's offset on multi-display setups so the
-    // window lands on the *primary* monitor's rect rather than the
-    // virtual-desktop origin.
-    position += monitor.physical_position;
+    // Order monitors left-to-right by their virtual-desktop position so index
+    // 0 is the leftmost screen. When two monitors share an x (or we otherwise
+    // can't tell them apart) the sort just keeps a stable order — i.e. it
+    // falls back to enumeration order, as requested.
+    let mut ordered: Vec<(Entity, &Monitor)> = monitors.iter().collect();
+    ordered.sort_by_key(|(_, monitor)| (monitor.physical_position.x, monitor.physical_position.y));
 
-    window.position = WindowPosition::At(position);
+    if ordered.len() >= 2 {
+        // One client per monitor: fill the assigned screen with no chrome.
+        let (target, _) = ordered[(layout.index as usize).min(ordered.len() - 1)];
+        window.mode = WindowMode::BorderlessFullscreen(MonitorSelection::Entity(target));
+    } else {
+        // Single monitor: keep the centered side-by-side windowed tiling.
+        // Bevy reports the monitor in *physical* pixels but `Window.position`
+        // is *logical* — divide by the scale factor so the math matches on
+        // Retina/HiDPI displays (`scale_factor` is f64; cast to f32).
+        let (_, monitor) = ordered[0];
+        let scale = (monitor.scale_factor as f32).max(1.0);
+        let logical = UVec2::new(
+            (monitor.physical_width as f32 / scale) as u32,
+            (monitor.physical_height as f32 / scale) as u32,
+        );
+        // Add the monitor's offset so the window lands on its rect rather than
+        // the virtual-desktop origin.
+        let position = layout.position_in_screen(logical) + monitor.physical_position;
+        window.mode = WindowMode::Windowed;
+        window.position = WindowPosition::At(position);
+    }
     *applied = true;
+}
+
+/// Run condition: true while this client is a `multiplayer-test` window, where
+/// the test harness — not the player's saved display settings — owns the
+/// window. [`apply_display_settings_system`](super::apply_display_settings_system)
+/// is gated off in that case so it can't fight
+/// [`reposition_test_window_system`], which may put the window
+/// borderless-fullscreen on a non-primary monitor. Tolerates a missing
+/// resource so unit-test apps that never insert it read as "not a test".
+pub(crate) fn multiplayer_test_owns_window(config: Option<Res<TestModeConfig>>) -> bool {
+    config.is_some_and(|config| config.window.is_some())
 }

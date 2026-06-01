@@ -19,7 +19,7 @@ use bevy::{
     diagnostic::FrameTimeDiagnosticsPlugin, prelude::*, transform::TransformSystems,
     window::WindowPosition, winit::WinitSettings,
 };
-use bevy_egui::{EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass};
+use bevy_egui::{EguiPlugin, EguiPostUpdateSet, EguiPreUpdateSet, EguiPrimaryContextPass};
 use bevy_framepace::{FramepacePlugin, FramepaceSettings};
 
 use crate::{
@@ -27,6 +27,7 @@ use crate::{
     net::{ClientNetworkPlugin, LightyearProtocolPlugin, client_plugins},
     save::WorldStore,
     steam::OfflineSteamBackend,
+    workos_login::{self, WorkosLoginConfig},
 };
 
 use self::voice::{
@@ -45,11 +46,12 @@ use self::{
         update_sky_system,
     },
     state::{
-        ClientErrorToast, ClientRuntime, ClientSettingsStore, CraftingHudState, CraftingUiState,
-        DeployablePlacementState, GatherInputState, InventoryUiState, LocalPlayerState, LookState,
-        MenuBackdropVisibility, MenuState, OptionsUiState, PickupTargetState, PredictionState,
-        RemoteImpactEvent, SaveStore, SessionShutdownTasks, SteamUser, TestModeConfig, ToastState,
-        ToolSwapState, apply_prediction_overlay_system, update_local_player_state_system,
+        AuthFlow, ClientErrorToast, ClientRuntime, ClientSettingsStore, CraftingHudState,
+        CraftingUiState, DeployablePlacementState, GatherInputState, InventoryUiState,
+        LocalPlayerState, LookState, MenuBackdropVisibility, MenuState, OptionsUiState,
+        PickupTargetState, PredictionState, RemoteImpactEvent, SaveStore, SessionShutdownTasks,
+        SteamUser, TestModeConfig, ToastState, ToolSwapState, WorkosAuth,
+        apply_prediction_overlay_system, update_local_player_state_system,
     },
     systems::{
         AutoConnectRequest, CameraImpactKick, CameraMotionEffects, ClientSystemSet,
@@ -61,8 +63,9 @@ use self::{
         apply_test_mode_overrides_system, auto_connect_poll_system, auto_connect_start_system,
         camera_follow_system, center_cursor_on_focus_system, chat_shortcut_system,
         chunk_overlay_system, client_input_system, close_furnace_on_escape_system,
-        close_loot_bag_on_escape_system, error_relay_system, gameplay_inventory_shortcuts_system,
-        maintain_world_grid_system, menu_backdrop_camera_system, mouse_look_system,
+        close_loot_bag_on_escape_system, drive_auth_flow_system, error_relay_system,
+        gameplay_inventory_shortcuts_system, maintain_world_grid_system,
+        menu_backdrop_camera_system, mouse_look_system, multiplayer_test_owns_window,
         network_tick_system, placement_input_system, reposition_test_window_system,
         save_client_settings_system, screen_viewed_system, session_ended_system,
         session_shutdown_poll_system, session_started_system, spawn_impact_effects_system,
@@ -75,7 +78,7 @@ use self::{
     },
     ui::{
         ButtonSoundRequests, InventorySoundRequests, apply_ui_scale_system, button_sound_system,
-        inventory_sound_system, ui_system,
+        install_egui_fonts_system, inventory_sound_system, ui_system,
     },
 };
 
@@ -195,7 +198,6 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
     let store = WorldStore::platform_default()?;
     store.ensure_exists()?;
 
-    let steam = OfflineSteamBackend;
     let settings_store = ClientSettingsStore::platform_default()?;
     let mut settings = settings_store.load().unwrap_or_else(|error| {
         eprintln!("could not load client settings: {error:#}");
@@ -211,17 +213,35 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
             eprintln!("could not persist generated install id: {error:#}");
         }
     }
-    let user = steam.user_for_install(settings.identity.install_id);
+    let install_id = settings.identity.install_id;
     let window_settings = settings.display;
     let test_mode = TestModeConfig::from_env();
+    // A plain `client` launch must sign in through WorkOS before the title
+    // screen appears; only the test / `--connect` path bypasses the gate with
+    // the local offline identity.
+    let bypass_auth = auto_connect.is_some();
 
     let mut app = App::new();
     if let Some(addr) = auto_connect {
         app.insert_resource(AutoConnectRequest { addr });
     }
+    if bypass_auth {
+        // Test / `--connect`: skip the WorkOS gate with the stable offline
+        // identity so spawned windows land in-world without a browser.
+        app.insert_resource(SteamUser(OfflineSteamBackend.user_for_install(install_id)));
+        app.insert_resource(AuthFlow::Authenticated);
+    } else {
+        let workos = WorkosLoginConfig::from_env();
+        app.insert_resource(if workos_login::has_stored_session() {
+            // A stored session: verify (silently refresh) behind the spinner.
+            AuthFlow::Verifying(workos_login::begin_restore(&workos))
+        } else {
+            AuthFlow::LoggedOut { error: None }
+        });
+        app.insert_resource(WorkosAuth(workos));
+    }
     app.insert_resource(ClearColor(Color::srgb(0.015, 0.018, 0.023)))
         .insert_resource(SaveStore(store))
-        .insert_resource(SteamUser(user))
         .insert_resource(settings_store)
         .insert_resource(settings)
         .insert_resource(MenuState::default())
@@ -379,6 +399,17 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
             EguiPrimaryContextPass,
             (ui_system, button_sound_system, inventory_sound_system).chain(),
         )
+        // Install the title typeface before bevy_egui's `begin_pass` so the
+        // named font family is bound when `ui_system` lays out the menu title
+        // on the very first frame. `set_fonts` is applied lazily at the next
+        // `begin_pass`, so running this inside the context pass would leave the
+        // family unbound for one frame and panic the layout.
+        .add_systems(
+            PreUpdate,
+            install_egui_fonts_system
+                .after(EguiPreUpdateSet::ProcessInput)
+                .before(EguiPreUpdateSet::BeginPass),
+        )
         .add_systems(
             Update,
             // Sync the local player's replicated components, then fold the
@@ -453,7 +484,15 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .add_systems(Update, app_quit_system.in_set(ClientSystemSet::Quit))
         .add_systems(
             Update,
-            (apply_display_settings_system, apply_ui_scale_system).in_set(ClientSystemSet::Display),
+            (
+                // Gated off for multiplayer-test windows: there the test
+                // harness owns the window (it may sit borderless-fullscreen on
+                // a non-primary monitor), so letting the saved display
+                // settings re-assert themselves would fight the placement.
+                apply_display_settings_system.run_if(not(multiplayer_test_owns_window)),
+                apply_ui_scale_system,
+            )
+                .in_set(ClientSystemSet::Display),
         )
         .add_systems(
             Update,
@@ -610,6 +649,8 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
                 .chain()
                 .in_set(ClientSystemSet::AutoConnect),
         )
+        // Polls the in-flight WorkOS login/refresh and advances the auth gate.
+        .add_systems(Update, drive_auth_flow_system)
         .add_systems(
             Update,
             manage_voice_capture_system.in_set(ClientSystemSet::VoiceCaptureManage),

@@ -52,7 +52,7 @@ mod tests {
     fn default_settings_match_startup_window() {
         let settings = ClientSettings::default();
 
-        assert_eq!(settings.display.mode, DisplayMode::Windowed);
+        assert_eq!(settings.display.mode, DisplayMode::BorderlessFullscreen);
         assert_eq!(
             settings.display.resolution,
             DisplayResolution::new(1280, 720)

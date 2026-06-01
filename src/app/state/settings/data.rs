@@ -88,7 +88,7 @@ pub(crate) struct DisplaySettings {
 impl Default for DisplaySettings {
     fn default() -> Self {
         Self {
-            mode: DisplayMode::Windowed,
+            mode: DisplayMode::BorderlessFullscreen,
             resolution: DisplayResolution::new(1280, 720),
             vsync: true,
             fov_degrees: default_fov(),
@@ -156,8 +156,11 @@ impl DisplaySettings {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum DisplayMode {
-    #[default]
     Windowed,
+    /// Default for a fresh install: fills the primary monitor with no window
+    /// chrome. A persisted settings file overrides this with the player's
+    /// saved choice (the `mode` field is always written on save).
+    #[default]
     BorderlessFullscreen,
     Fullscreen,
 }

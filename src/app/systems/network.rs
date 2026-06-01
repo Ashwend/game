@@ -5,8 +5,8 @@ use crate::{
     app::{
         audio::surface::SurfaceMaterial,
         state::{
-            ClientErrorToast, ClientRuntime, MenuState, NoticeDialog, RemoteImpactEvent, Screen,
-            SessionShutdownTasks, ToastState,
+            ClientErrorToast, ClientRuntime, MenuState, NoticeDialog, RemoteImpactEvent, SaveStore,
+            Screen, SessionShutdownTasks, ToastState,
         },
         systems::PendingSessionEndReason,
         ui::{
@@ -16,7 +16,7 @@ use crate::{
         voice::IncomingVoiceMessage,
     },
     items::ToolKind,
-    protocol::{ResourceImpactKind, ServerMessage, ToastKind, Vec3Net},
+    protocol::{GAME_VERSION, ResourceImpactKind, ServerMessage, ToastKind, Vec3Net},
 };
 
 /// Fan-out writers for messages the network tick produces — voice frames,
@@ -42,6 +42,8 @@ pub(crate) fn network_tick_system(
     mut toasts: ResMut<ToastState>,
     mut writers: NetworkTickWriters,
     mut pending_session_end: ResMut<PendingSessionEndReason>,
+    store: Res<SaveStore>,
+    mut shutdown_tasks: ResMut<SessionShutdownTasks>,
 ) {
     toasts.tick(time.delta_secs());
 
@@ -90,9 +92,34 @@ pub(crate) fn network_tick_system(
             continue;
         }
         if let ServerMessage::AuthRejected { reason } = &message {
-            writers
-                .error_toasts
-                .write(ClientErrorToast::new(format!("auth rejected: {reason}")));
+            let reason = reason.clone();
+            // The server refused us at the handshake (bad/expired auth
+            // ticket, protocol or version mismatch). Bucket it as a
+            // disconnect for analytics, log it, gracefully tear the session
+            // down, and bounce back to the main menu with a friendly notice.
+            pending_session_end.0 = Some(SessionEndReason::Disconnect);
+            runtime.apply_message(message);
+            // Graceful, non-blocking teardown: the DISCONNECT handshake runs
+            // on a worker thread (`shutdown_in_background`) rather than
+            // freezing the main thread on an inline session drop.
+            runtime.shutdown_in_background(store.0.clone(), &mut shutdown_tasks);
+            show_auth_rejected_notice(&mut menu, reason);
+            // In-flight gather toasts aren't relevant back at the menu; the
+            // notice modal carries the message.
+            toasts.clear();
+            continue;
+        }
+        if let ServerMessage::VersionMismatch { server_version, .. } = &message {
+            let server_version = server_version.clone();
+            // Client/server build mismatch. Same graceful teardown as an auth
+            // rejection, but the modal shows both versions so the player can
+            // see whether they're ahead of or behind the server.
+            pending_session_end.0 = Some(SessionEndReason::Disconnect);
+            runtime.apply_message(message);
+            runtime.shutdown_in_background(store.0.clone(), &mut shutdown_tasks);
+            show_version_mismatch_notice(&mut menu, server_version);
+            toasts.clear();
+            continue;
         }
         if matches!(message, ServerMessage::ItemMerged { .. }) {
             button_sound_requests.push_hover();
@@ -274,6 +301,34 @@ fn show_kick_notice(menu: &mut MenuState, reason: String) {
     menu.chat_focus_pending = false;
 }
 
+/// Bounces the client back to the main menu and surfaces `notice`. Used when
+/// the server refuses a join (auth rejection or version mismatch). Unlike a
+/// mid-game kick, this fires while the join is still in progress, so it also
+/// clears the "Joining server" loading splash and any half-open connect dialog
+/// that would otherwise linger over the menu.
+fn return_to_menu_with_notice(menu: &mut MenuState, notice: NoticeDialog) {
+    menu.notice = Some(notice);
+    menu.screen = Screen::MainMenu;
+    menu.loading_splash = None;
+    menu.direct_connect = None;
+    menu.pause_open = false;
+    menu.pause_options_open = false;
+    menu.inventory_open = false;
+    menu.chat_open = false;
+    menu.chat_focus_pending = false;
+}
+
+fn show_auth_rejected_notice(menu: &mut MenuState, reason: String) {
+    return_to_menu_with_notice(menu, NoticeDialog::auth_rejected(reason));
+}
+
+fn show_version_mismatch_notice(menu: &mut MenuState, server_version: String) {
+    return_to_menu_with_notice(
+        menu,
+        NoticeDialog::version_mismatch(GAME_VERSION, &server_version),
+    );
+}
+
 fn network_tick_allowed(menu: &MenuState) -> bool {
     menu.screen == Screen::InGame
 }
@@ -330,6 +385,58 @@ mod tests {
             menu.notice.as_ref().map(|notice| notice.body.as_str()),
             Some("Server restart")
         ));
+    }
+
+    #[test]
+    fn auth_rejected_notice_returns_to_main_menu_and_clears_join_overlay() {
+        // Default seeds a loading splash; the join bounce must clear it so
+        // the "Joining server" overlay doesn't linger over the menu.
+        let mut menu = MenuState {
+            screen: Screen::InGame,
+            inventory_open: true,
+            chat_open: true,
+            chat_focus_pending: true,
+            ..Default::default()
+        };
+        assert!(menu.loading_splash.is_some());
+
+        show_auth_rejected_notice(&mut menu, "bad token".to_owned());
+
+        assert_eq!(menu.screen, Screen::MainMenu);
+        assert!(menu.loading_splash.is_none());
+        assert!(menu.direct_connect.is_none());
+        assert!(!menu.inventory_open);
+        assert!(!menu.chat_open);
+        assert!(!menu.chat_focus_pending);
+        let notice = menu.notice.as_ref().expect("auth-rejected notice set");
+        assert_eq!(notice.title, "Couldn't join server");
+        assert!(
+            notice.body.contains("bad token"),
+            "the server reason should be surfaced: {}",
+            notice.body
+        );
+    }
+
+    #[test]
+    fn version_mismatch_notice_returns_to_main_menu_with_both_versions() {
+        let mut menu = MenuState {
+            screen: Screen::InGame,
+            inventory_open: true,
+            ..Default::default()
+        };
+
+        show_version_mismatch_notice(&mut menu, "9.9.9".to_owned());
+
+        assert_eq!(menu.screen, Screen::MainMenu);
+        assert!(menu.loading_splash.is_none());
+        assert!(!menu.inventory_open);
+        let notice = menu.notice.as_ref().expect("version-mismatch notice set");
+        assert_eq!(notice.title, "Version mismatch");
+        assert!(notice.body.contains("9.9.9"), "shows the server version");
+        assert!(
+            notice.body.contains(GAME_VERSION),
+            "shows the client's own version"
+        );
     }
 
     #[test]

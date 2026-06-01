@@ -57,6 +57,7 @@ mod voice;
 mod world_time;
 
 pub use chunk_manager::{ChunkManager, ChunkManagerSave, view_tier_radius};
+pub use connection::VersionMismatchRejection;
 pub use deployable_ecs::{
     Deployable, DeployableActive, DeployableChunk, DeployableHealth, DeployableIndex,
     DeployableTransform, DeployableView, despawn_deployable_entity, spawn_deployable_entity,
@@ -129,6 +130,10 @@ pub struct GameServer {
     /// collision or validation check.
     world_grid: BlockGrid,
     settings: ServerSettings,
+    /// WorkOS access-token verifier, present only on a dedicated server run in
+    /// [`AuthMode::Workos`]. Loopback (singleplayer) and `Test` runs leave it
+    /// `None`; attached via [`GameServer::with_workos`] on the dedicated path.
+    workos: Option<std::sync::Arc<crate::steam::WorkosVerifier>>,
     clients: HashMap<ClientId, ServerClient>,
     steam_to_client: HashMap<SteamId, ClientId>,
     /// Players who have ever been seen on this server, keyed by Steam ID. A
@@ -292,6 +297,7 @@ impl GameServer {
             world,
             world_grid,
             settings,
+            workos: None,
             clients: HashMap::new(),
             steam_to_client: HashMap::new(),
             persisted_players,
@@ -311,6 +317,16 @@ impl GameServer {
             world_time,
             last_world_time_broadcast_tick: tick,
         }
+    }
+
+    /// Attach a WorkOS access-token verifier (dedicated [`AuthMode::Workos`]
+    /// only). A builder so the loopback/test construction paths stay untouched.
+    pub fn with_workos(
+        mut self,
+        verifier: Option<std::sync::Arc<crate::steam::WorkosVerifier>>,
+    ) -> Self {
+        self.workos = verifier;
+        self
     }
 
     /// Advance a client's optimistic-prediction high-water mark. Called for

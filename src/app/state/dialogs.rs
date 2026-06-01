@@ -58,6 +58,79 @@ impl NoticeDialog {
             closing: false,
         }
     }
+
+    /// Notice for a client/server version mismatch. Shows both versions and
+    /// tells the player whether their build is older or newer than the server,
+    /// so they know which side needs updating. `client_version` is the local
+    /// build (the caller passes `GAME_VERSION`); `server_version` is what the
+    /// server reported over the handshake.
+    pub(crate) fn version_mismatch(client_version: &str, server_version: &str) -> Self {
+        let hint = match compare_versions(client_version, server_version) {
+            Some(std::cmp::Ordering::Less) => {
+                "Your game is older than the server — update to the latest version to play."
+            }
+            Some(std::cmp::Ordering::Greater) => {
+                "Your game is newer than the server, which hasn't been updated yet."
+            }
+            // Equal protocol numbers can still mismatch (different build with
+            // the same parsed version), and unparseable versions fall here too.
+            _ => "Your game doesn't match the server — make sure you're on the latest version.",
+        };
+        Self {
+            title: "Version mismatch".to_owned(),
+            body: format!(
+                "This server is running a different version of Ashwend.\n\n\
+                 Your version:\u{2002}\u{2002}{client_version}\n\
+                 Server version:\u{2002}{server_version}\n\n\
+                 {hint}"
+            ),
+            confirm_label: "OK".to_owned(),
+            closing: false,
+        }
+    }
+
+    /// Friendly notice for a connection the server refused at the handshake
+    /// (bad/expired auth ticket, or a generic auth failure). Version
+    /// mismatches use [`Self::version_mismatch`] instead. The raw `reason`
+    /// from the server is shown when present so the player has something
+    /// actionable, but it's framed so an empty reason still reads cleanly.
+    pub(crate) fn auth_rejected(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        let body = if reason.trim().is_empty() {
+            "The server refused the connection — your login couldn't be verified.".to_owned()
+        } else {
+            format!("The server refused the connection:\n{reason}")
+        };
+        Self {
+            title: "Couldn't join server".to_owned(),
+            body,
+            confirm_label: "OK".to_owned(),
+            closing: false,
+        }
+    }
+}
+
+/// Order `a` against `b` as dotted version strings (`"0.14.1"`). Compares
+/// major, then minor, then patch numerically. Returns `None` if either side
+/// can't be parsed, so the caller can fall back to a neutral message rather
+/// than guessing a direction.
+fn compare_versions(a: &str, b: &str) -> Option<std::cmp::Ordering> {
+    Some(parse_version(a)?.cmp(&parse_version(b)?))
+}
+
+fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = version.trim().split('.');
+    let major = leading_number(parts.next()?)?;
+    let minor = leading_number(parts.next().unwrap_or("0"))?;
+    let patch = leading_number(parts.next().unwrap_or("0"))?;
+    Some((major, minor, patch))
+}
+
+/// Parse the leading run of ASCII digits (so a pre-release suffix like
+/// `"1-beta"` still yields `1`). `None` when there are no leading digits.
+fn leading_number(segment: &str) -> Option<u64> {
+    let digits: String = segment.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
 }
 
 pub(crate) type DirectConnectResult = std::result::Result<(SocketAddr, ClientSession), String>;
@@ -388,5 +461,64 @@ mod tests {
             !splash.ready,
             "Startup readiness is driven by backdrop warmup, not world readiness"
         );
+    }
+
+    #[test]
+    fn auth_rejected_notice_surfaces_reason_when_present() {
+        let notice = NoticeDialog::auth_rejected("protocol mismatch: client 3, server 4");
+        assert_eq!(notice.title, "Couldn't join server");
+        assert!(
+            notice
+                .body
+                .contains("protocol mismatch: client 3, server 4")
+        );
+        assert_eq!(notice.confirm_label, "OK");
+    }
+
+    #[test]
+    fn auth_rejected_notice_falls_back_when_reason_is_blank() {
+        let notice = NoticeDialog::auth_rejected("   ");
+        assert_eq!(notice.title, "Couldn't join server");
+        assert!(
+            notice.body.contains("login couldn't be verified"),
+            "a blank reason should still read cleanly: {}",
+            notice.body
+        );
+    }
+
+    #[test]
+    fn version_mismatch_notice_shows_both_versions_and_direction() {
+        let older = NoticeDialog::version_mismatch("0.14.0", "0.15.0");
+        assert_eq!(older.title, "Version mismatch");
+        assert!(older.body.contains("0.14.0"), "shows the client version");
+        assert!(older.body.contains("0.15.0"), "shows the server version");
+        assert!(older.body.contains("older"), "flags the client as older");
+
+        let newer = NoticeDialog::version_mismatch("0.16.0", "0.15.0");
+        assert!(newer.body.contains("newer"), "flags the client as newer");
+
+        // Unparseable versions fall back to neutral phrasing instead of
+        // guessing a direction, but still show both versions.
+        let weird = NoticeDialog::version_mismatch("dev", "0.15.0");
+        assert!(weird.body.contains("0.15.0"));
+        assert!(!weird.body.contains("older") && !weird.body.contains("newer"));
+    }
+
+    #[test]
+    fn compare_versions_is_numeric_and_tolerates_suffixes() {
+        use std::cmp::Ordering;
+        assert_eq!(compare_versions("0.14.1", "0.14.2"), Some(Ordering::Less));
+        // Numeric, not lexical: 10 > 2 even though "10" < "2" as strings.
+        assert_eq!(
+            compare_versions("0.14.10", "0.14.2"),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(compare_versions("1.0.0", "1.0.0"), Some(Ordering::Equal));
+        // A pre-release suffix on the patch is stripped to its leading digits.
+        assert_eq!(
+            compare_versions("0.14.1-beta", "0.14.1"),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(compare_versions("oops", "0.1.0"), None);
     }
 }

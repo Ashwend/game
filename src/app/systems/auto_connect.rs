@@ -41,7 +41,7 @@ pub(crate) fn auto_connect_start_system(
     mut commands: Commands,
     request: Option<Res<AutoConnectRequest>>,
     attempt: Option<Res<AutoConnectAttempt>>,
-    user: Res<SteamUser>,
+    user: Option<Res<SteamUser>>,
     network: Res<ClientNetwork>,
     mut menu: ResMut<MenuState>,
 ) {
@@ -49,6 +49,11 @@ pub(crate) fn auto_connect_start_system(
         return;
     }
     let Some(request) = request else {
+        return;
+    };
+    // Auto-connect only runs in the test/`--connect` bypass, where a synthetic
+    // identity is always present; if it somehow isn't, there's nothing to do.
+    let Some(user) = user else {
         return;
     };
 

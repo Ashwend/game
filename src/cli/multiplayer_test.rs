@@ -17,10 +17,11 @@ use crate::{
     world::{MapType, ProceduralMapSize},
 };
 
-/// Default display names for the two spawned test clients. Picked from the
-/// NATO alphabet so the labels read cleanly above each character — the
-/// purpose is debugging, so trivially distinguishable beats clever.
-const DEFAULT_NAMES: [&str; 2] = ["Alpha", "Bravo"];
+/// Default display names for the two spawned test clients. `player1` lands on
+/// the left monitor and `player2` on the right (see [`test_client_layouts`] and
+/// the client-side `reposition_test_window_system`); the names mirror that
+/// left-to-right ordering so the window you're looking at is obvious.
+const DEFAULT_NAMES: [&str; 2] = ["player1", "player2"];
 /// Stable but distinct Steam IDs so the server treats each spawned client
 /// as a separate player. Different from the default offline ID
 /// (`76561197960287930`) to avoid colliding with a real local-dev session.
@@ -277,12 +278,16 @@ fn wait_for_tcp_canary(addr: SocketAddr) {
     thread::sleep(Duration::from_millis(150));
 }
 
-/// Per-client side of the test layout: tile index (resolved against the
-/// real monitor on the client side) plus where the player gets pushed
-/// within the world after Welcome.
+/// Per-client side of the test layout: window/monitor index (resolved
+/// against the real displays on the client side) plus where the player gets
+/// pushed within the world after Welcome.
 #[derive(Debug, Clone, Copy)]
 struct TestClientLayout {
-    /// 0-based index of this client inside the row of test windows.
+    /// 0-based index of this client. On a multi-monitor setup it selects the
+    /// monitor (0 = leftmost, 1 = next to the right) the client goes
+    /// borderless-fullscreen on; on a single monitor it's the tile slot for
+    /// the side-by-side windowed fallback. See the client-side
+    /// `reposition_test_window_system`.
     window_index: u32,
     /// World-space x offset applied to the predicted player controller as
     /// soon as the snapshot arrives. Positive pushes east, negative west.
@@ -292,9 +297,9 @@ struct TestClientLayout {
     spawn_yaw: f32,
 }
 
-/// Side-by-side layout for the two test clients. Windows are described
-/// abstractly (index 0/1 inside a 2-window row); the client resolves the
-/// actual pixel position once it can query the monitor.
+/// Layout for the two test clients. Each is described abstractly (index 0/1);
+/// the client resolves the actual display once it can query the monitors —
+/// one client per monitor when two are present, side-by-side on one otherwise.
 ///
 /// Yaw convention matches the live mouse-look code (`look.yaw -= delta.x`
 /// for "mouse moves right"). On this convention:
@@ -302,8 +307,8 @@ struct TestClientLayout {
 /// - yaw = +π/2 → look toward +X.
 /// - yaw = -π/2 → look toward -X.
 ///
-/// So the player on the -X side (Alpha, offset = -1.25) needs yaw = +π/2
-/// to look toward +X (at Bravo), and Bravo mirrors it with yaw = -π/2.
+/// So the player on the -X side (player1, offset = -1.25) needs yaw = +π/2
+/// to look toward +X (at player2), and player2 mirrors it with yaw = -π/2.
 fn test_client_layouts() -> [TestClientLayout; 2] {
     let half_pi = std::f32::consts::FRAC_PI_2;
     [
@@ -461,20 +466,20 @@ mod tests {
     fn resolved_names_falls_back_to_defaults_when_unset() {
         assert_eq!(
             resolved_names(None),
-            ["Alpha".to_owned(), "Bravo".to_owned(),]
+            ["player1".to_owned(), "player2".to_owned(),]
         );
     }
 
     #[test]
     fn resolved_names_applies_partial_overrides() {
         let names = resolved_names(Some(vec!["Tom".to_owned()]));
-        assert_eq!(names, ["Tom".to_owned(), "Bravo".to_owned()]);
+        assert_eq!(names, ["Tom".to_owned(), "player2".to_owned()]);
     }
 
     #[test]
     fn resolved_names_ignores_whitespace_overrides() {
         let names = resolved_names(Some(vec!["   ".to_owned(), "Echo".to_owned()]));
-        assert_eq!(names, ["Alpha".to_owned(), "Echo".to_owned()]);
+        assert_eq!(names, ["player1".to_owned(), "Echo".to_owned()]);
     }
 
     #[test]

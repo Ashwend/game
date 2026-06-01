@@ -9,7 +9,14 @@ use crate::{
 pub type ClientId = u64;
 pub type SteamId = u64;
 
-pub const PROTOCOL_VERSION: u32 = 29;
+/// Application-level wire/version handshake number. Sent in
+/// [`ClientMessage::Auth`] and validated by `GameServer::connect`; a mismatch
+/// is answered with [`ServerMessage::VersionMismatch`]. This is the primary
+/// protocol gate now that the netcode `protocol_id`
+/// ([`crate::net::channels::LIGHTYEAR_PROTOCOL_ID`]) is fixed and no longer
+/// tracks it — bump it on any breaking wire change so mismatched builds are
+/// cleanly rejected at the `Auth` handshake.
+pub const PROTOCOL_VERSION: u32 = 30;
 pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_CHAT_LEN: usize = 240;
@@ -768,6 +775,19 @@ pub enum ServerMessage {
     AuthRejected {
         reason: String,
     },
+    /// The server refused the connection because the client's version didn't
+    /// match. Carries the *server's* human-readable version and protocol so
+    /// the client can pair them with its own compiled-in
+    /// [`GAME_VERSION`]/[`PROTOCOL_VERSION`] and tell the player whether
+    /// they're newer or older. Sent at the `Auth` handshake instead of a
+    /// generic [`Self::AuthRejected`] string. Part of the stable handshake
+    /// surface (see [`crate::net::channels::LIGHTYEAR_PROTOCOL_ID`]): keep this
+    /// variant and its fields wire-stable so a future server can always tell an
+    /// older client why it was turned away.
+    VersionMismatch {
+        server_version: String,
+        server_protocol: u32,
+    },
     Kicked {
         reason: String,
     },
@@ -942,6 +962,7 @@ impl ServerMessage {
         match self {
             Self::Welcome { .. }
             | Self::AuthRejected { .. }
+            | Self::VersionMismatch { .. }
             | Self::Kicked { .. }
             | Self::PlayerEvent(_)
             | Self::Chat(_)

@@ -6,7 +6,7 @@ mod routing;
 use std::{
     net::{Ipv4Addr, SocketAddr, UdpSocket},
     path::PathBuf,
-    sync::{Mutex, mpsc},
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::Duration,
 };
@@ -26,7 +26,7 @@ use crate::{
     protocol::{ClientId, SERVER_TICK_RATE_HZ, ServerMessage},
     save::WorldSave,
     server::{GameServer, ServerSettings},
-    steam::AuthMode,
+    steam::{AuthMode, WorkosVerifier},
     world::ChunkCoord,
 };
 
@@ -112,6 +112,7 @@ pub(super) fn spawn_loopback_server(
                 reserved_addr,
                 save,
                 settings,
+                None,
                 command_rx,
                 None,
                 false,
@@ -153,6 +154,7 @@ pub(super) fn run_game_server(
     bind_addr: SocketAddr,
     save: WorldSave,
     auth_mode: AuthMode,
+    workos: Option<Arc<WorkosVerifier>>,
     admin_socket: Option<PathBuf>,
 ) -> Result<WorldSave> {
     let reserved_addr = reserve_udp_addr(bind_addr)
@@ -167,6 +169,7 @@ pub(super) fn run_game_server(
             auth_mode,
             singleplayer_host: None,
         },
+        workos,
         command_rx,
         admin_socket,
         true,
@@ -210,6 +213,7 @@ fn run_host(
     mut reserved_addr: ReservedUdpAddr,
     save: WorldSave,
     settings: ServerSettings,
+    workos: Option<Arc<WorkosVerifier>>,
     command_rx: mpsc::Receiver<HostCommand>,
     admin_socket: Option<PathBuf>,
     install_terminal_shutdown: bool,
@@ -251,7 +255,9 @@ fn run_host(
         .id();
 
     app.insert_resource(HostCommandInbox(Mutex::new(command_rx)));
-    app.insert_resource(AuthoritativeServer(GameServer::new(save, settings)));
+    app.insert_resource(AuthoritativeServer(
+        GameServer::new(save, settings).with_workos(workos),
+    ));
     app.insert_resource(ServerConnections::default());
     app.insert_resource(TickAccumulator::default());
     app.insert_resource(HostShutdown::default());

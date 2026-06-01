@@ -1,5 +1,10 @@
-use std::process::Command;
+use std::{
+    process::Command,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -7,8 +12,18 @@ use crate::protocol::SteamId;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AuthMode {
+    /// Legacy/dev: the client claims its own id and proves it with the
+    /// matching `offline:<id>` token. Removed once WorkOS login lands.
     Offline,
+    /// Legacy Steamworks ticket validation. Slated for removal.
     Steam,
+    /// Real identity: the client presents a WorkOS access-token JWT, which the
+    /// server verifies offline against the WorkOS JWKS (see [`WorkosVerifier`]).
+    Workos,
+    /// Local testing only (`./cli multiplayer-test`): accepts a synthetic
+    /// `test:<id>` token so spawned windows get deterministic identities with no
+    /// browser round-trip. Never the default for a dedicated server.
+    Test,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -123,23 +138,213 @@ pub fn generate_install_id() -> SteamId {
     }
 }
 
-pub fn verify_auth_ticket(
+/// Identity the server admits a client under once their `Auth` handshake checks
+/// out. `account_id` is what every authoritative map and the save format key on;
+/// `display_name` is set when the provider carries one (WorkOS may), else the
+/// server falls back to the client-supplied name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedIdentity {
+    pub account_id: SteamId,
+    pub display_name: Option<String>,
+}
+
+/// Validate a client's auth handshake and resolve the identity to admit them
+/// under. For [`AuthMode::Workos`]/[`AuthMode::Test`] the identity comes from
+/// the *verified* token, never the client's claim; `claimed_id` is only used by
+/// the legacy offline/Steam paths.
+pub fn authenticate(
     mode: AuthMode,
-    steam_id: SteamId,
+    workos: Option<&WorkosVerifier>,
+    claimed_id: SteamId,
     token: &str,
-) -> Result<(), SteamError> {
+) -> Result<VerifiedIdentity, SteamError> {
     match mode {
         AuthMode::Offline => {
-            let expected = offline_auth_token(steam_id);
-            if token == expected {
-                Ok(())
+            if token == offline_auth_token(claimed_id) {
+                Ok(VerifiedIdentity {
+                    account_id: claimed_id,
+                    display_name: None,
+                })
             } else {
                 Err(SteamError::AuthRejected(
-                    "offline auth token did not match the claimed Steam id".to_owned(),
+                    "offline auth token did not match the claimed id".to_owned(),
                 ))
             }
         }
-        AuthMode::Steam => verify_steam_ticket(steam_id, token),
+        AuthMode::Steam => {
+            verify_steam_ticket(claimed_id, token)?;
+            Ok(VerifiedIdentity {
+                account_id: claimed_id,
+                display_name: None,
+            })
+        }
+        AuthMode::Test => {
+            let account_id = parse_test_token(token).ok_or_else(|| {
+                SteamError::AuthRejected("test auth token was not `test:<id>`".to_owned())
+            })?;
+            Ok(VerifiedIdentity {
+                account_id,
+                display_name: None,
+            })
+        }
+        AuthMode::Workos => {
+            let verifier = workos.ok_or_else(|| {
+                SteamError::Unavailable(
+                    "Workos auth mode needs a configured WorkOS verifier".to_owned(),
+                )
+            })?;
+            let claims = verifier.verify(token)?;
+            Ok(VerifiedIdentity {
+                account_id: account_id_from_sub(&claims.sub),
+                display_name: claims.name,
+            })
+        }
+    }
+}
+
+/// Synthetic token for [`AuthMode::Test`]; pairs with [`parse_test_token`].
+/// Used by `multiplayer-test` once it moves onto `Test` mode; kept available
+/// now so the mode has a matching producer.
+#[allow(dead_code)]
+pub fn test_auth_token(account_id: SteamId) -> String {
+    format!("test:{account_id}")
+}
+
+fn parse_test_token(token: &str) -> Option<SteamId> {
+    token
+        .strip_prefix("test:")
+        .and_then(|id| id.parse::<SteamId>().ok())
+        .filter(|&id| id != 0)
+}
+
+/// Derive a stable 64-bit account id from a WorkOS subject (`sub`, e.g.
+/// `user_01…`). Truncated SHA-256 keeps the `u64`-keyed identity maps and the
+/// on-disk save format byte-compatible; non-zero so `0` stays the "unset"
+/// sentinel. Distinct subjects collide only on a 64-bit hash clash — negligible
+/// at playtest scale.
+pub fn account_id_from_sub(sub: &str) -> SteamId {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(sub.as_bytes());
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&digest[..8]);
+    match u64::from_be_bytes(bytes) {
+        0 => 1,
+        id => id,
+    }
+}
+
+/// Minimum gap between JWKS refetches, so a client spamming tokens with bogus
+/// `kid`s can't make the server hammer WorkOS.
+const JWKS_MIN_REFRESH: Duration = Duration::from_secs(60);
+/// How long a fetched JWKS is trusted before a proactive refresh.
+const JWKS_MAX_AGE: Duration = Duration::from_secs(60 * 60);
+
+/// Offline verifier for WorkOS access-token JWTs. Validates RS256 signatures
+/// against the public JWKS for one client id — no API key, no secrets. Build
+/// once per server and share via `Arc`; the JWKS is fetched lazily and cached.
+#[derive(Debug)]
+pub struct WorkosVerifier {
+    jwks_url: String,
+    validation: Validation,
+    cache: Mutex<JwksCache>,
+}
+
+#[derive(Debug, Default)]
+struct JwksCache {
+    keys: Option<JwkSet>,
+    fetched_at: Option<Instant>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkosClaims {
+    sub: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+impl WorkosVerifier {
+    pub fn new(client_id: &str) -> Self {
+        // Signature + expiry are the hard gates. Binding to this client's JWKS
+        // already ties the token to this WorkOS app; issuer/audience checks stay
+        // off until confirmed against a live token (see docs/networking.md).
+        let mut validation = Validation::new(Algorithm::RS256);
+        validation.validate_exp = true;
+        validation.validate_aud = false;
+        validation.leeway = 30;
+        Self {
+            jwks_url: format!("https://api.workos.com/sso/jwks/{client_id}"),
+            validation,
+            cache: Mutex::new(JwksCache::default()),
+        }
+    }
+
+    fn verify(&self, token: &str) -> Result<WorkosClaims, SteamError> {
+        let header = decode_header(token)
+            .map_err(|err| SteamError::AuthRejected(format!("malformed access token: {err}")))?;
+        let kid = header
+            .kid
+            .ok_or_else(|| SteamError::AuthRejected("access token had no key id".to_owned()))?;
+        let key = self.decoding_key(&kid)?;
+        let data = decode::<WorkosClaims>(token, &key, &self.validation)
+            .map_err(|err| SteamError::AuthRejected(format!("access token rejected: {err}")))?;
+        Ok(data.claims)
+    }
+
+    fn decoding_key(&self, kid: &str) -> Result<DecodingKey, SteamError> {
+        if let Some(key) = self.cached_key(kid)? {
+            return Ok(key);
+        }
+        self.refresh_jwks()?;
+        self.cached_key(kid)?
+            .ok_or_else(|| SteamError::AuthRejected("unknown access-token signing key".to_owned()))
+    }
+
+    fn cached_key(&self, kid: &str) -> Result<Option<DecodingKey>, SteamError> {
+        let cache = self
+            .cache
+            .lock()
+            .map_err(|_| SteamError::Unavailable("JWKS cache lock poisoned".to_owned()))?;
+        if cache
+            .fetched_at
+            .is_none_or(|at| at.elapsed() >= JWKS_MAX_AGE)
+        {
+            return Ok(None);
+        }
+        let Some(jwk) = cache.keys.as_ref().and_then(|set| set.find(kid)) else {
+            return Ok(None);
+        };
+        DecodingKey::from_jwk(jwk)
+            .map(Some)
+            .map_err(|err| SteamError::Unavailable(format!("bad JWKS key: {err}")))
+    }
+
+    fn refresh_jwks(&self) -> Result<(), SteamError> {
+        {
+            let cache = self
+                .cache
+                .lock()
+                .map_err(|_| SteamError::Unavailable("JWKS cache lock poisoned".to_owned()))?;
+            if cache
+                .fetched_at
+                .is_some_and(|at| at.elapsed() < JWKS_MIN_REFRESH)
+            {
+                return Ok(());
+            }
+        }
+        let body = ureq::get(&self.jwks_url)
+            .call()
+            .map_err(|err| SteamError::Unavailable(format!("could not fetch JWKS: {err}")))?
+            .into_string()
+            .map_err(|err| SteamError::Unavailable(format!("could not read JWKS: {err}")))?;
+        let keys: JwkSet = serde_json::from_str(&body)
+            .map_err(|err| SteamError::Unavailable(format!("malformed JWKS: {err}")))?;
+        let mut cache = self
+            .cache
+            .lock()
+            .map_err(|_| SteamError::Unavailable("JWKS cache lock poisoned".to_owned()))?;
+        cache.keys = Some(keys);
+        cache.fetched_at = Some(Instant::now());
+        Ok(())
     }
 }
 
@@ -207,16 +412,39 @@ mod tests {
 
     #[test]
     fn offline_auth_matches_claimed_id() {
-        assert!(verify_auth_ticket(AuthMode::Offline, 42, &offline_auth_token(42)).is_ok());
-        assert!(verify_auth_ticket(AuthMode::Offline, 42, &offline_auth_token(7)).is_err());
+        assert!(authenticate(AuthMode::Offline, None, 42, &offline_auth_token(42)).is_ok());
+        assert!(authenticate(AuthMode::Offline, None, 42, &offline_auth_token(7)).is_err());
     }
 
     #[test]
     fn offline_auth_rejects_wildcard_singleplayer_token() {
         // The literal "singleplayer" string used to be a wildcard that
-        // accepted any claimed Steam id under AuthMode::Offline. If a dedicated
+        // accepted any claimed id under AuthMode::Offline. If a dedicated
         // server were ever launched in Offline mode, a malicious client could
         // claim any identity with it. Verify the shortcut stays rejected.
-        assert!(verify_auth_ticket(AuthMode::Offline, 42, "singleplayer").is_err());
+        assert!(authenticate(AuthMode::Offline, None, 42, "singleplayer").is_err());
+    }
+
+    #[test]
+    fn test_mode_derives_identity_from_token() {
+        let identity = authenticate(AuthMode::Test, None, 0, &test_auth_token(7))
+            .expect("a well-formed test token is accepted");
+        assert_eq!(identity.account_id, 7);
+        // The claimed id is ignored — the token is the source of truth.
+        assert!(authenticate(AuthMode::Test, None, 999, "garbage").is_err());
+        assert!(authenticate(AuthMode::Test, None, 0, "test:0").is_err());
+    }
+
+    #[test]
+    fn workos_mode_without_a_verifier_is_rejected() {
+        assert!(authenticate(AuthMode::Workos, None, 0, "any.jwt.here").is_err());
+    }
+
+    #[test]
+    fn account_id_from_sub_is_stable_distinct_and_nonzero() {
+        let id = account_id_from_sub("user_01ABC");
+        assert_eq!(id, account_id_from_sub("user_01ABC"));
+        assert_ne!(id, account_id_from_sub("user_01XYZ"));
+        assert_ne!(id, 0);
     }
 }

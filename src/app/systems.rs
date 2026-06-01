@@ -1,4 +1,5 @@
 pub(crate) mod analytics;
+mod auth;
 mod auto_connect;
 mod camera;
 mod chunk_overlay;
@@ -24,6 +25,7 @@ pub(crate) use analytics::{
     LastTrackedScreen, PendingSessionEndReason, SessionTracker, error_relay_system,
     screen_viewed_system, session_ended_system, session_started_system,
 };
+pub(crate) use auth::drive_auth_flow_system;
 pub(crate) use auto_connect::{
     AutoConnectRequest, auto_connect_poll_system, auto_connect_start_system,
 };
@@ -60,7 +62,9 @@ pub(crate) use node_death::tick_felling_trees_system;
 pub(crate) use players::{RemotePlayerEntities, apply_snapshot_system, tick_dying_players_system};
 pub(crate) use quit::app_quit_system;
 pub(crate) use settings::{save_client_settings_system, sync_view_radius_system};
-pub(crate) use test_mode::{apply_test_mode_overrides_system, reposition_test_window_system};
+pub(crate) use test_mode::{
+    apply_test_mode_overrides_system, multiplayer_test_owns_window, reposition_test_window_system,
+};
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ClientSystemSet {

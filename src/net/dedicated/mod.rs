@@ -1,12 +1,12 @@
 mod admin;
 
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 
 use crate::{
     save::{WorldSave, WorldStore, save_world_file},
-    steam::AuthMode,
+    steam::{AuthMode, WorkosVerifier},
 };
 
 use super::host::run_game_server;
@@ -32,9 +32,10 @@ pub fn run_dedicated_server(
     bind_addr: SocketAddr,
     save: WorldSave,
     auth_mode: AuthMode,
+    workos: Option<Arc<WorkosVerifier>>,
     persistence: DedicatedWorldPersistence,
     admin_socket: Option<PathBuf>,
 ) -> Result<()> {
-    let final_save = run_game_server(bind_addr, save, auth_mode, admin_socket)?;
+    let final_save = run_game_server(bind_addr, save, auth_mode, workos, admin_socket)?;
     persistence.save(&final_save)
 }

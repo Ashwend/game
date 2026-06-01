@@ -168,6 +168,16 @@ impl ClientSession {
         user: &AuthenticatedUser,
         network: ClientNetwork,
     ) -> Result<Self> {
+        // The loopback host runs in Offline mode and trusts the local player.
+        // A signed-in player carries a WorkOS access-token JWT, which Offline
+        // mode would reject (and re-validating it over the network would break
+        // offline singleplayer) — so present the matching offline token for
+        // this account id instead. Multiplayer keeps the real access token.
+        let local_user = AuthenticatedUser {
+            steam_id: user.steam_id,
+            display_name: user.display_name.clone(),
+            token: crate::steam::offline_auth_token(user.steam_id),
+        };
         let spawned = spawn_loopback_server(
             save,
             ServerSettings {
@@ -175,7 +185,7 @@ impl ClientSession {
                 singleplayer_host: Some(user.steam_id),
             },
         )?;
-        Self::connect_inner(spawned.addr, user, Some(spawned.handle), network)
+        Self::connect_inner(spawned.addr, &local_user, Some(spawned.handle), network)
     }
 
     pub(crate) fn connect(

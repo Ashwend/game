@@ -8,6 +8,7 @@ pub(crate) mod floating_text;
 mod furnace;
 mod hud;
 mod inventory;
+mod login;
 mod loot_bag;
 mod menu;
 mod modal;
@@ -57,10 +58,10 @@ pub(crate) use death_splash::tick_death_splash_system;
 
 use super::scene::WorldSceneState;
 use super::state::{
-    ClientErrorToast, ClientRuntime, ClientSettings, CraftingHudState, CraftingUiState,
+    AuthFlow, ClientErrorToast, ClientRuntime, ClientSettings, CraftingHudState, CraftingUiState,
     InventorySoundEvent, LocalPlayerState, MAX_UI_SCALE, MIN_UI_SCALE, MenuBackdropVisibility,
     MenuState, OptionsUiState, PredictionState, SaveStore, Screen, SessionShutdownTasks, SteamUser,
-    ToastState,
+    ToastState, WorkosAuth,
 };
 use super::systems::PendingSessionEndReason;
 use super::voice::VoiceState;
@@ -86,7 +87,11 @@ pub(crate) struct UiResources<'w, 's> {
     inventory_sound_requests: ResMut<'w, InventorySoundRequests>,
     error_toasts: MessageWriter<'w, ClientErrorToast>,
     store: Res<'w, SaveStore>,
-    user: Res<'w, SteamUser>,
+    /// Absent until the player is signed in (gated by `auth`). The menu screens
+    /// only read it once `auth.is_authenticated()`.
+    user: Option<Res<'w, SteamUser>>,
+    auth: ResMut<'w, AuthFlow>,
+    workos: Res<'w, WorkosAuth>,
     time: Option<Res<'w, Time>>,
     diagnostics: Res<'w, DiagnosticsStore>,
     primary_monitor: Query<'w, 's, &'static Monitor, With<PrimaryMonitor>>,
@@ -146,6 +151,24 @@ pub(crate) fn apply_ui_scale_system(
     }
 }
 
+/// Registers the custom title typeface on the primary egui context once.
+///
+/// `ctx.set_fonts` rebuilds the font atlas, so this must not run per frame —
+/// the `Local` flag latches after the first successful install. Runs ahead of
+/// [`ui_system`] in the context pass so the very first frame already has the
+/// font available.
+pub(crate) fn install_egui_fonts_system(
+    mut contexts: EguiContexts,
+    mut installed: Local<bool>,
+) -> bevy::prelude::Result {
+    if *installed {
+        return Ok(());
+    }
+    theme::install_title_font(contexts.ctx_mut()?);
+    *installed = true;
+    Ok(())
+}
+
 pub(crate) fn ui_system(
     mut contexts: EguiContexts,
     mut resources: UiResources,
@@ -170,16 +193,31 @@ pub(crate) fn ui_system(
         .cover_alpha(resources.menu.screen, delta_seconds);
     theme::backdrop_cover(ctx, cover_alpha);
 
+    // Gate the title screen behind WorkOS sign-in: until authenticated, render
+    // the login splash (or the verifying/authenticating spinner) in place of
+    // the menu. `drive_auth_flow_system` advances the spinner states.
+    if !resources.auth.is_authenticated() {
+        login::login_overlay_ui(
+            ctx,
+            &mut resources.auth,
+            &resources.workos,
+            &mut resources.menu,
+        );
+        return Ok(());
+    }
+    let user = resources
+        .user
+        .as_deref()
+        .expect("authenticated state implies SteamUser is present");
+
     match resources.menu.screen {
-        Screen::MainMenu => {
-            main_menu_ui(ctx, &mut resources.menu, &resources.store, &resources.user)
-        }
+        Screen::MainMenu => main_menu_ui(ctx, &mut resources.menu, &resources.store, user),
         Screen::Worlds => worlds_ui(
             ctx,
             &mut resources.menu,
             &mut resources.runtime,
             &resources.store,
-            &resources.user,
+            user,
             &resources.client_network,
             &resources.analytics,
         ),
@@ -199,7 +237,7 @@ pub(crate) fn ui_system(
             ctx,
             &mut resources.menu,
             &mut resources.runtime,
-            &resources.user,
+            user,
             &resources.client_network,
             &resources.analytics,
         ),

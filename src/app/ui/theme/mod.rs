@@ -1,5 +1,6 @@
 mod buttons;
 mod colors;
+mod fonts;
 mod frames;
 mod spacing;
 mod text;
@@ -14,6 +15,7 @@ pub(super) use colors::{
     accent, accent_dark, backdrop_color, button_fill, button_hover_fill, button_stroke, input_fill,
     muted_text, panel_fill, panel_stroke, text,
 };
+pub(super) use fonts::{TITLE_FONT, install_title_font};
 pub(super) use frames::{
     apply_game_style, backdrop_cover, bounded_panel, inset_frame, panel_frame, screen_scrim,
 };

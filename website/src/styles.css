@@ -1,0 +1,117 @@
+@import 'tailwindcss';
+
+/* ─── Brand design tokens ──────────────────────────────────────────────────
+   Palette is pulled from the in-game UI theme (cool ink panels + the #5ca2ff
+   accent) and warmed with an ember ramp that ties to the name "Ashwend" and
+   the dusk hero. */
+@theme {
+  --font-display: 'Cinzel', ui-serif, Georgia, 'Times New Roman', serif;
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica,
+    Arial, 'Apple Color Emoji', sans-serif;
+
+  --color-fg: #e6ebf2;
+  --color-muted: #97a4b2;
+
+  --color-ink-950: #06080b;
+  --color-ink-900: #0a0e13;
+  --color-ink-850: #0e131a;
+  --color-ink-800: #131a22;
+  --color-ink-700: #1c2530;
+  --color-ink-600: #2a3543;
+
+  --color-ember-200: #f7d9a8;
+  --color-ember-300: #f2bd72;
+  --color-ember-400: #ec9f48;
+  --color-ember-500: #e08433;
+  --color-ember-600: #c56a23;
+
+  --color-haze: #5ca2ff;
+  --color-discord: #5865f2;
+
+  /* Lightbox image swap (prev/next + open). */
+  --animate-lb-img: lb-img 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes lb-img {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Match the in-game wordmark: the same Cinzel Bold the menu renders, served as
+   web-optimized WOFF2 (with the TTF as a fallback). */
+@font-face {
+  font-family: 'Cinzel';
+  src:
+    url('/fonts/Cinzel-Bold.woff2') format('woff2'),
+    url('/fonts/Cinzel-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  html,
+  body {
+    min-height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-ink-900);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: color-mix(
+      in srgb,
+      var(--color-ember-500) 35%,
+      transparent
+    );
+    color: #fff;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-ember-400);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* The display wordmark: small-caps Roman inscription feel. */
+.wordmark {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}

@@ -9,7 +9,10 @@ use uuid::Uuid;
 use crate::{
     controller::{BlockGrid, PlayerController},
     net::ClientSession,
-    protocol::{ChatMessage, ClientId, PlayerEvent, PlayerState, ServerMessage, Vec3Net},
+    protocol::{
+        ChatMessage, ClientId, GAME_VERSION, PROTOCOL_VERSION, PlayerEvent, PlayerState,
+        ServerMessage, Vec3Net,
+    },
     save::WorldStore,
     world::{WorldBlock, WorldData},
     world_time::{WorldTime, WorldTimeSnapshot},
@@ -284,6 +287,15 @@ impl ClientRuntime {
             }
             ServerMessage::AuthRejected { reason } => {
                 self.push_error_message(format!("auth rejected: {reason}"));
+            }
+            ServerMessage::VersionMismatch {
+                server_version,
+                server_protocol,
+            } => {
+                self.push_error_message(format!(
+                    "version mismatch: server {server_version} (protocol {server_protocol}), \
+                     client {GAME_VERSION} (protocol {PROTOCOL_VERSION})"
+                ));
             }
             ServerMessage::Kicked { reason } => {
                 self.push_error_message(format!("disconnected: {reason}"));

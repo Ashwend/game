@@ -14,29 +14,38 @@ launching three processes and arranging windows.
    to finish initialising.
 3. Launches **two client processes** in parallel, each with:
    - Distinct Steam IDs (`76561197960287001`, `76561197960287002`) and
-     names (`Alpha`, `Bravo` by default; override via positional args).
+     names (`player1`, `player2` by default; override via positional args).
    - `--connect <server addr>` so they skip the menu and auto-join.
    - A bundle of `GAME_TEST_*` environment variables that drive
-     window-tiling, spawn placement, and the "start with inventory open"
+     window placement, spawn placement, and the "start with inventory open"
      behaviour. See [Voice](voice.md) and below for the keys.
 4. Polls the two child processes until both exit, then shuts the server
    down cleanly (its `Drop` flushes any save state).
 
 ## Test-mode behaviour the helper produces
 
-- **Side-by-side, centered, never-overlapping windows.** Each client
-  receives `GAME_TEST_WINDOW_WIDTH/HEIGHT/INDEX/COUNT/GAP` and computes
-  its own final pixel position *after* the primary monitor's logical
-  size becomes queryable (see `reposition_test_window_system` in
-  `src/app/systems/test_mode.rs`). Multi-monitor and Retina/HiDPI safe
-  because the math uses `monitor.physical_position` and divides by
-  `monitor.scale_factor`. Trying to compute the position before the
-  window opens — by guessing screen width — is what produced the earlier
-  "windows overlap on my display" regression.
+- **One client per monitor, with a single-monitor fallback.** Each
+  client receives `GAME_TEST_WINDOW_INDEX` (0 or 1) and resolves its
+  display *after* the monitors become queryable (see
+  `reposition_test_window_system` in `src/app/systems/test_mode.rs`).
+  Monitors are sorted left-to-right by `monitor.physical_position`, so:
+  - With **two or more monitors**, `player1` (index 0) goes
+    borderless-fullscreen on the leftmost screen and `player2` (index 1)
+    on the next one to the right. "Don't know which is which" degrades to
+    enumeration order.
+  - With a **single monitor**, it falls back to the old centered,
+    side-by-side, never-overlapping windowed tiling
+    (`GAME_TEST_WINDOW_WIDTH/HEIGHT/GAP`), Retina/HiDPI safe because the
+    math divides by `monitor.scale_factor`.
+
+  Because the test harness owns the window here, `apply_display_settings_system`
+  is gated off in test mode (`multiplayer_test_owns_window`) so the player's
+  saved display mode (now **Borderless Fullscreen** by default) can't reassert
+  itself and stack both clients on the primary monitor.
 - **Players spawn 2.5 m apart facing each other.** `GAME_TEST_SPAWN_OFFSET_X`
   pushes each player ±1.25 m from the world spawn point along the
   X axis; `GAME_TEST_SPAWN_YAW` sets each player's initial yaw so they
-  look at each other (Alpha = +π/2 → faces +X, Bravo = −π/2 → faces −X
+  look at each other (player1 = +π/2 → faces +X, player2 = −π/2 → faces −X
   on the controller's mouse-look convention). The override has to write
   *both* `predicted.yaw` and `LookState.yaw` because `client_input_system`
   echoes `LookState.yaw` back into the controller every input tick.
@@ -68,11 +77,11 @@ The producer side (`src/cli/multiplayer_test.rs`) and the consumer side
 |---|---|---|
 | `GAME_PLAYER_NAME` | string | Display name. |
 | `GAME_STEAM_ID` | u64 | Stable identity per client. |
-| `GAME_TEST_WINDOW_WIDTH` | u32 | Window logical width (px). |
-| `GAME_TEST_WINDOW_HEIGHT` | u32 | Window logical height (px). |
-| `GAME_TEST_WINDOW_INDEX` | u32 | 0-based slot in the tile row. |
-| `GAME_TEST_WINDOW_COUNT` | u32 | Total tile slots (always 2 today). |
-| `GAME_TEST_WINDOW_GAP` | i32 | Pixel gap between sibling windows. |
+| `GAME_TEST_WINDOW_WIDTH` | u32 | Window logical width (px) — single-monitor fallback tiling only. |
+| `GAME_TEST_WINDOW_HEIGHT` | u32 | Window logical height (px) — single-monitor fallback tiling only. |
+| `GAME_TEST_WINDOW_INDEX` | u32 | 0-based client index. Selects the monitor (0 = leftmost) on multi-monitor; the tile slot on single-monitor. |
+| `GAME_TEST_WINDOW_COUNT` | u32 | Total clients/tile slots (always 2 today). |
+| `GAME_TEST_WINDOW_GAP` | i32 | Pixel gap between sibling windows — single-monitor fallback tiling only. |
 | `GAME_TEST_SPAWN_OFFSET_X` | f32 | Meters added to spawn position along X. |
 | `GAME_TEST_SPAWN_OFFSET_Z` | f32 | Meters added to spawn position along Z. |
 | `GAME_TEST_SPAWN_YAW` | f32 | Initial yaw in radians (set after Welcome). |
@@ -83,17 +92,18 @@ The producer side (`src/cli/multiplayer_test.rs`) and the consumer side
 
 Defaults live as constants in `src/cli/multiplayer_test.rs`:
 
-- `TEST_WINDOW_WIDTH` / `TEST_WINDOW_HEIGHT` — sized to fit two windows
-  side-by-side on a 1920-wide display with comfortable margins, and
-  tall enough to show the inventory panel without scrolling.
-- `TEST_WINDOW_GAP` — pixel gap between the two test windows.
+- `TEST_WINDOW_WIDTH` / `TEST_WINDOW_HEIGHT` — single-monitor fallback
+  only: sized to fit two windows side-by-side on a 1920-wide display with
+  comfortable margins, and tall enough to show the inventory panel without
+  scrolling. Ignored on multi-monitor (each client is borderless-fullscreen).
+- `TEST_WINDOW_GAP` — single-monitor fallback gap between the two windows.
 - `TEST_PLAYER_OFFSET_X` — half the spawn separation between the two
   players (so they end up `2 × TEST_PLAYER_OFFSET_X` apart). Tuned so
   voice indicators / nameplates are clearly visible without making
   interpolation jitter hard to spot.
-- The names array (`DEFAULT_NAMES = ["Alpha", "Bravo"]`) is the
-  positional default for `./cli multiplayer-test`; pass `Tom Echo` to
-  override.
+- The names array (`DEFAULT_NAMES = ["player1", "player2"]`) is the
+  positional default for `./cli multiplayer-test`; `player1` lands on the
+  left monitor and `player2` on the right. Pass `Tom Echo` to override.
 
 ## Voice testing caveats
 

@@ -10,7 +10,7 @@ use super::super::channels::send_server_message;
 use super::AuthoritativeServer;
 use crate::{
     protocol::{ClientId, ClientMessage, ServerMessage},
-    server::{DeliveryTarget, GameServer, ServerEnvelope},
+    server::{DeliveryTarget, GameServer, ServerEnvelope, VersionMismatchRejection},
 };
 
 #[derive(Resource, Default)]
@@ -192,13 +192,19 @@ fn handle_unauthenticated_message(
             route_envelopes(commands, connections, senders, envelopes);
         }
         Err(error) => {
-            send_to_entity(
-                senders,
-                entity,
-                ServerMessage::AuthRejected {
+            // A version mismatch gets a structured reply carrying the server's
+            // version so the client can render a clear "you're newer/older"
+            // modal; everything else falls back to a generic rejection string.
+            let message = match error.downcast_ref::<VersionMismatchRejection>() {
+                Some(mismatch) => ServerMessage::VersionMismatch {
+                    server_version: mismatch.server_version.clone(),
+                    server_protocol: mismatch.server_protocol,
+                },
+                None => ServerMessage::AuthRejected {
                     reason: error.to_string(),
                 },
-            );
+            };
+            send_to_entity(senders, entity, message);
         }
     }
 }

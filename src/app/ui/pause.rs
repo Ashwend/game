@@ -38,7 +38,14 @@ pub(super) fn pause_ui(
             theme::panel_frame().show(ui, |ui| {
                 ui.set_width(272.0);
                 ui.vertical_centered(|ui| {
-                    ui.label(theme::section("Paused"));
+                    // Gameplay never actually pauses — the authoritative server
+                    // keeps ticking while this overlay is up — so brand it with
+                    // the game name in the title typeface rather than a
+                    // misleading "Paused". `Extend` keeps it on one line.
+                    ui.add(
+                        egui::Label::new(theme::title("ASHWEND", 44.0))
+                            .wrap_mode(egui::TextWrapMode::Extend),
+                    );
                     ui.add_space(16.0);
                     if menu_button(ui, "Resume").clicked() {
                         menu.pause_open = false;
@@ -80,6 +87,9 @@ mod tests {
     #[test]
     fn pause_menu_renders_without_changing_state_when_idle() {
         let ctx = egui::Context::default();
+        // The header renders with the custom `cinzel` family; bind it (applied
+        // at the next `begin_pass`, which `ctx.run` performs) or layout panics.
+        theme::install_title_font(&ctx);
         let mut menu = MenuState {
             screen: Screen::InGame,
             pause_open: true,

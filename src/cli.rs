@@ -1,14 +1,14 @@
 mod multiplayer_test;
 
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::{
     app, net,
     save::{WorldSave, WorldStore, load_world_file, save_world_file},
-    steam::{AuthMode, OfflineSteamBackend, SteamBackend},
+    steam::{AuthMode, OfflineSteamBackend, SteamBackend, WorkosVerifier},
     world_time::parse_time_token,
 };
 
@@ -46,6 +46,10 @@ enum Command {
         world: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = AuthModeArg::Offline)]
         auth: AuthModeArg,
+        /// WorkOS client id (public, e.g. `client_01…`). Required when
+        /// `--auth workos`; used to fetch the JWKS and verify access tokens.
+        #[arg(long)]
+        workos_client_id: Option<String>,
         #[arg(long)]
         admin_socket: Option<PathBuf>,
         /// Map size used only when generating a *fresh* world. Existing
@@ -96,6 +100,11 @@ enum AdminCommand {
 enum AuthModeArg {
     Offline,
     Steam,
+    /// Verify WorkOS access tokens against the WorkOS JWKS. Needs
+    /// `--workos-client-id`.
+    Workos,
+    /// Accept synthetic `test:<id>` tokens. Local testing only.
+    Test,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -125,6 +134,8 @@ impl From<AuthModeArg> for AuthMode {
         match value {
             AuthModeArg::Offline => Self::Offline,
             AuthModeArg::Steam => Self::Steam,
+            AuthModeArg::Workos => Self::Workos,
+            AuthModeArg::Test => Self::Test,
         }
     }
 }
@@ -137,14 +148,25 @@ pub fn run() -> Result<()> {
             bind,
             world,
             auth,
+            workos_client_id,
             admin_socket,
             map_size,
         } => {
+            let auth_mode: AuthMode = auth.into();
+            let workos = match auth_mode {
+                AuthMode::Workos => {
+                    let client_id = workos_client_id
+                        .ok_or_else(|| anyhow!("--auth workos requires --workos-client-id"))?;
+                    Some(Arc::new(WorkosVerifier::new(&client_id)))
+                }
+                _ => None,
+            };
             let world = load_server_world(world, map_size.into())?;
             net::run_dedicated_server(
                 bind,
                 world.save,
-                auth.into(),
+                auth_mode,
+                workos,
                 world.persistence,
                 admin_socket,
             )

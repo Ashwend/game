@@ -1,6 +1,6 @@
-use bevy_egui::egui::{self, Color32, Margin, RichText, TextEdit};
+use bevy_egui::egui::{self, Color32, FontFamily, FontId, Margin, RichText, TextEdit};
 
-use super::muted_text;
+use super::{TITLE_FONT, muted_text};
 
 pub(in crate::app::ui) fn text_input(value: &mut String) -> TextEdit<'_> {
     TextEdit::singleline(value)
@@ -10,8 +10,7 @@ pub(in crate::app::ui) fn text_input(value: &mut String) -> TextEdit<'_> {
 
 pub(in crate::app::ui) fn title(text_value: &str, size: f32) -> RichText {
     RichText::new(text_value)
-        .size(size)
-        .strong()
+        .font(FontId::new(size, FontFamily::Name(TITLE_FONT.into())))
         .color(Color32::WHITE)
 }
 

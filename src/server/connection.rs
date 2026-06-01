@@ -1,11 +1,11 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 
 use crate::{
     controller::PlayerController,
     protocol::{
         ClientId, GAME_VERSION, PROTOCOL_VERSION, PlayerEvent, PlayerState, ServerMessage, SteamId,
     },
-    steam::verify_auth_ticket,
+    steam::authenticate,
 };
 
 use super::{
@@ -13,6 +13,34 @@ use super::{
     crafting::starting_crafting_state, inventory::starting_inventory, movement::clean_player_name,
     persisted_player_from,
 };
+
+/// Returned by [`GameServer::connect`] when the client's version doesn't match
+/// the server's (either the protocol number or the human-readable build). The
+/// routing layer downcasts to it to answer with a structured
+/// [`ServerMessage::VersionMismatch`] carrying the server's version — so the
+/// client can show the player both versions and whether they're newer or
+/// older — instead of a generic auth-rejection string. The `Display` form is
+/// what lands in server logs.
+#[derive(Debug, Clone)]
+pub struct VersionMismatchRejection {
+    pub server_version: String,
+    pub server_protocol: u32,
+    pub client_version: Option<String>,
+    pub client_protocol: u32,
+}
+
+impl std::fmt::Display for VersionMismatchRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let client = self.client_version.as_deref().unwrap_or("unknown");
+        write!(
+            f,
+            "version mismatch: client {client} (protocol {}), server {} (protocol {})",
+            self.client_protocol, self.server_version, self.server_protocol
+        )
+    }
+}
+
+impl std::error::Error for VersionMismatchRejection {}
 
 impl GameServer {
     pub fn connect(
@@ -23,21 +51,35 @@ impl GameServer {
         display_name: String,
         token: String,
     ) -> Result<(ClientId, Vec<ServerEnvelope>)> {
-        if protocol_version != PROTOCOL_VERSION {
-            bail!("protocol mismatch: client {protocol_version}, server {PROTOCOL_VERSION}");
+        // Both the protocol number and the human-readable build must line up.
+        // Either kind of difference is reported the same way — a structured
+        // rejection the routing layer turns into `ServerMessage::VersionMismatch`
+        // so the client can show the player both versions. The netcode already
+        // let the connection through (its id is fixed, not version-tied), so
+        // this is the real version gate.
+        if protocol_version != PROTOCOL_VERSION || client_version.as_deref() != Some(GAME_VERSION) {
+            return Err(VersionMismatchRejection {
+                server_version: GAME_VERSION.to_owned(),
+                server_protocol: PROTOCOL_VERSION,
+                client_version,
+                client_protocol: protocol_version,
+            }
+            .into());
         }
 
-        match client_version.as_deref() {
-            Some(GAME_VERSION) => {}
-            Some(client_version) => {
-                bail!("version mismatch: client {client_version}, server {GAME_VERSION}");
-            }
-            None => {
-                bail!("version mismatch: client version is unknown, server {GAME_VERSION}");
-            }
-        }
-
-        verify_auth_ticket(self.settings.auth_mode, steam_id, &token)?;
+        // Validate the handshake and resolve the identity to admit under. For
+        // WorkOS/Test this comes from the *verified* token, not the client's
+        // claim; `steam_id` is only consulted by the legacy offline/Steam paths.
+        let verified = authenticate(
+            self.settings.auth_mode,
+            self.workos.as_deref(),
+            steam_id,
+            &token,
+        )?;
+        let account_id = verified.account_id;
+        // WorkOS may carry a display name in the token; otherwise trust the
+        // (cleaned) name the client supplied.
+        let display_name = verified.display_name.unwrap_or(display_name);
 
         // Takeover: if this identity is still attached to a prior session, tear
         // the old one down before admitting the new one instead of rejecting
@@ -48,7 +90,7 @@ impl GameServer {
         // restores onto the new session — so a reconnect resumes exactly where
         // it left off rather than getting bounced for the ~10s it takes the
         // stale-client / netcode timeout to release the old slot.
-        let mut envelopes = match self.steam_to_client.get(&steam_id).copied() {
+        let mut envelopes = match self.steam_to_client.get(&account_id).copied() {
             Some(old_client_id) => self.disconnect(old_client_id),
             None => Vec::new(),
         };
@@ -59,8 +101,8 @@ impl GameServer {
         // Returning players (saved on a prior shutdown or disconnect) keep
         // their inventory, position, and admin status. Their last display
         // name is overwritten with whatever the client provides this session.
-        let persisted = self.take_persisted_player(steam_id);
-        let is_admin = self.is_admin(steam_id) || persisted.as_ref().is_some_and(|p| p.is_admin);
+        let persisted = self.take_persisted_player(account_id);
+        let is_admin = self.is_admin(account_id) || persisted.as_ref().is_some_and(|p| p.is_admin);
         let name = clean_player_name(&display_name, client_id);
         let (controller, inventory) = match persisted {
             Some(player) => (
@@ -79,7 +121,7 @@ impl GameServer {
         };
         let client = ServerClient {
             client_id,
-            steam_id,
+            steam_id: account_id,
             name: name.clone(),
             controller,
             inventory,
@@ -114,7 +156,7 @@ impl GameServer {
             last_processed_input: client.controller.last_processed_input,
         };
         self.clients.insert(client_id, client);
-        self.steam_to_client.insert(steam_id, client_id);
+        self.steam_to_client.insert(account_id, client_id);
         // Register the player with the chunk anchor index so the AoI
         // path can find them. Done before any subsequent peer ticks
         // so peers already in the world see the new arrival on their

@@ -177,7 +177,11 @@ mod tests {
     #[test]
     fn display_settings_apply_to_primary_window() {
         let mut app = App::new();
-        app.insert_resource(ClientSettings::default());
+        // This case exercises the windowed-resolution path, so pin the mode
+        // to Windowed rather than relying on the (now borderless) default.
+        let mut settings = ClientSettings::default();
+        settings.display.mode = DisplayMode::Windowed;
+        app.insert_resource(settings);
         app.insert_resource(FramepaceSettings {
             limiter: Limiter::Off,
         });

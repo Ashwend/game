@@ -49,6 +49,20 @@ pub(crate) fn iter_embedded_assets() -> impl Iterator<Item = (&'static str, &'st
     entries.into_iter()
 }
 
+/// Look up a single embedded asset's bytes by its `assets/`-relative path
+/// (e.g. `"fonts/Cinzel-Bold.ttf"`). Returns the compile-time `&'static`
+/// slice from the `include_dir!` tree.
+///
+/// egui builds its `FontDefinitions` synchronously and wants the raw
+/// `&'static [u8]` up front, which the async `AssetServer` path can't hand
+/// back — so the title font is pulled straight from the embedded tree here
+/// instead of round-tripping through `embedded://`.
+pub(crate) fn embedded_bytes(path: &str) -> Option<&'static [u8]> {
+    iter_embedded_assets()
+        .find(|(p, _)| *p == path)
+        .map(|(_, bytes)| bytes)
+}
+
 pub(crate) struct EmbeddedAssetsPlugin;
 
 impl Plugin for EmbeddedAssetsPlugin {

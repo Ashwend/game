@@ -1,3 +1,4 @@
+mod auth;
 mod backdrop;
 mod connection;
 mod crafting;
@@ -17,6 +18,7 @@ mod test_mode;
 mod tests;
 mod toasts;
 
+pub(crate) use auth::{AuthFlow, WorkosAuth};
 pub(crate) use backdrop::MenuBackdropVisibility;
 #[cfg(test)]
 pub(crate) use connection::CONNECTION_LAG_WARNING_SECONDS;
