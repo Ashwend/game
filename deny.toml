@@ -36,6 +36,13 @@ ignore = [
 
 [licenses]
 version = 2
+# Skip license vetting on our own crate. ashwend is `publish = false` and ships
+# under PolyForm-Noncommercial-1.0.0 (`license-file = "LICENSE"`) — a
+# source-available game license, not a dependency license. cargo-deny matches
+# the LICENSE text at only 0.83 confidence and it isn't (and shouldn't be) on
+# the code-license allow-list below, so without this it reports ashwend itself
+# as "unlicensed".
+private = { ignore = true }
 # Permissive OSS licenses that have been reviewed for compatibility. Anything
 # outside this list must be added explicitly with a one-line justification.
 allow = [
@@ -54,7 +61,17 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.93
-exceptions = []
+# Per-crate allowances for non-code licenses that only appear on bundled
+# font/data assets. Scoped to the owning crate (all versions) so they can't
+# silently apply to anything else. Both are well-known permissive licenses.
+exceptions = [
+    # egui's bundled default fonts (Hack, Ubuntu, Noto Emoji). OFL-1.1 is the
+    # SIL Open Font License; Ubuntu-font-1.0 covers the Ubuntu font family.
+    { allow = ["OFL-1.1", "Ubuntu-font-1.0"], crate = "epaint_default_fonts" },
+    # Mozilla root-certificate data shipped by webpki-roots (pulled in by ureq's
+    # TLS stack). CDLA-Permissive-2.0 is a permissive data-sharing license.
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots" },
+]
 
 [bans]
 # Multiple versions of the same major crate are the usual symptom of a
