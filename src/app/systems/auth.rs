@@ -55,3 +55,107 @@ pub(crate) fn drive_auth_flow_system(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::{
+        app::state::{AuthFlow, LoadingSplashKind, MenuState, SteamUser},
+        workos_login::{LoginHandle, Session},
+    };
+
+    fn session() -> Session {
+        Session {
+            account_id: 77,
+            display_name: "Ada".to_owned(),
+            email: "ada@example.com".to_owned(),
+            access_token: "access".to_owned(),
+            refresh_token: "refresh".to_owned(),
+            expires_at: None,
+        }
+    }
+
+    /// A bare app with the auth system installed and the startup splash cleared,
+    /// so a test can assert the system is what (re)installs it.
+    fn app_with(auth: AuthFlow) -> App {
+        let mut app = App::new();
+        app.insert_resource(auth);
+        app.insert_resource(MenuState {
+            loading_splash: None,
+            ..Default::default()
+        });
+        app.add_systems(Update, drive_auth_flow_system);
+        app
+    }
+
+    #[test]
+    fn successful_login_installs_user_and_crossfades_in() {
+        let mut app = app_with(AuthFlow::Authenticating(LoginHandle::ready(Ok(session()))));
+        app.update();
+
+        let user = app
+            .world()
+            .get_resource::<SteamUser>()
+            .expect("a successful login installs the signed-in user");
+        assert_eq!(user.0.steam_id, 77);
+        assert_eq!(user.0.display_name, "Ada");
+        assert_eq!(user.0.token, "access");
+
+        assert!(matches!(
+            app.world().resource::<AuthFlow>(),
+            AuthFlow::Authenticated
+        ));
+        let splash_kind = app
+            .world()
+            .resource::<MenuState>()
+            .loading_splash
+            .as_ref()
+            .map(|splash| splash.kind);
+        assert_eq!(
+            splash_kind,
+            Some(LoadingSplashKind::Startup),
+            "login should reuse the startup splash for a crossfade reveal"
+        );
+    }
+
+    #[test]
+    fn explicit_sign_in_failure_surfaces_the_error() {
+        let mut app = app_with(AuthFlow::Authenticating(LoginHandle::ready(Err(
+            "bad code".to_owned(),
+        ))));
+        app.update();
+        match app.world().resource::<AuthFlow>() {
+            AuthFlow::LoggedOut { error } => assert_eq!(error.as_deref(), Some("bad code")),
+            _ => panic!("expected LoggedOut after an explicit failure"),
+        }
+    }
+
+    #[test]
+    fn silent_restore_failure_returns_to_login_without_an_error() {
+        let mut app = app_with(AuthFlow::Verifying(LoginHandle::ready(Err(
+            "expired".to_owned()
+        ))));
+        app.update();
+        match app.world().resource::<AuthFlow>() {
+            AuthFlow::LoggedOut { error } => {
+                assert!(error.is_none(), "a silent refresh failure stays quiet")
+            }
+            _ => panic!("expected LoggedOut after a silent restore failure"),
+        }
+    }
+
+    #[test]
+    fn pending_login_stays_in_flight() {
+        let (handle, tx) = LoginHandle::pending();
+        let mut app = app_with(AuthFlow::Authenticating(handle));
+        app.update();
+        assert!(matches!(
+            app.world().resource::<AuthFlow>(),
+            AuthFlow::Authenticating(_)
+        ));
+        // Keep the sender alive until after the poll so the channel doesn't
+        // disconnect and report a spurious failure.
+        drop(tx);
+    }
+}

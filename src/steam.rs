@@ -447,4 +447,104 @@ mod tests {
         assert_ne!(id, account_id_from_sub("user_01XYZ"));
         assert_ne!(id, 0);
     }
+
+    #[test]
+    fn steam_auth_mode_is_rejected_without_a_live_verifier() {
+        // Neither feature flavour of `verify_steam_ticket` can admit a client
+        // (legacy path, slated for removal), so the Steam arm always errors.
+        assert!(authenticate(AuthMode::Steam, None, 1, "ticket").is_err());
+        assert!(authenticate(AuthMode::Steam, None, 1, "").is_err());
+    }
+
+    #[test]
+    fn parse_test_token_accepts_only_well_formed_nonzero_ids() {
+        assert_eq!(parse_test_token(&test_auth_token(42)), Some(42));
+        assert_eq!(parse_test_token("test:0"), None);
+        assert_eq!(parse_test_token("test:notanumber"), None);
+        assert_eq!(parse_test_token("nope:7"), None);
+        assert_eq!(parse_test_token("7"), None);
+    }
+
+    #[test]
+    fn auth_mode_round_trips_through_serde() {
+        for mode in [
+            AuthMode::Offline,
+            AuthMode::Steam,
+            AuthMode::Workos,
+            AuthMode::Test,
+        ] {
+            let json = serde_json::to_string(&mode).expect("serialize");
+            let parsed: AuthMode = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(mode, parsed);
+        }
+    }
+
+    #[test]
+    fn offline_backend_user_token_matches_its_id() {
+        // Whatever id the backend resolves (env override or the persisted id),
+        // the minted offline token must round-trip to that same id.
+        let backend = OfflineSteamBackend;
+        let user = backend.user_for_install(123);
+        assert_eq!(user.token, offline_auth_token(user.steam_id));
+
+        let current = backend
+            .current_user()
+            .expect("offline user is always available");
+        assert_eq!(current.token, offline_auth_token(current.steam_id));
+    }
+
+    #[test]
+    fn offline_backend_register_server_is_non_public_dev_stub() {
+        let backend = OfflineSteamBackend;
+        let registration = backend
+            .register_server(&ServerRegistrationRequest {
+                name: "Test Realm".to_owned(),
+                bind_addr: "127.0.0.1:7777".to_owned(),
+                map: "valley".to_owned(),
+                max_players: 8,
+            })
+            .expect("offline registration never fails");
+        assert_eq!(registration.backend, "offline-dev");
+        assert!(!registration.visible_in_server_browser);
+        assert!(registration.detail.contains("127.0.0.1:7777"));
+        assert!(registration.detail.contains("Test Realm"));
+    }
+
+    #[test]
+    fn generated_install_ids_are_nonzero_and_distinct() {
+        let a = generate_install_id();
+        let b = generate_install_id();
+        assert_ne!(a, 0);
+        assert_ne!(b, 0);
+        // Two fresh v4 UUIDs colliding in 64 bits is astronomically unlikely.
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn workos_verifier_new_targets_the_client_jwks() {
+        let verifier = WorkosVerifier::new("client_abc123");
+        // The JWKS URL is private, but the derived Debug output carries it.
+        assert!(
+            format!("{verifier:?}").contains("https://api.workos.com/sso/jwks/client_abc123"),
+            "verifier should point at the per-client JWKS endpoint"
+        );
+    }
+
+    #[test]
+    fn workos_verifier_rejects_unusable_tokens_before_any_network() {
+        let verifier = WorkosVerifier::new("client_abc123");
+        // Not a JWT at all -> rejected at header decode, no JWKS fetch.
+        assert!(verifier.verify("not-a-jwt").is_err());
+
+        // Well-formed header with no `kid` -> rejected before any key lookup.
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let header = b64.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let payload = b64.encode(br#"{"sub":"user_1"}"#);
+        let token = format!("{header}.{payload}.signature");
+        let err = verifier
+            .verify(&token)
+            .expect_err("a kid-less token is rejected");
+        assert!(matches!(err, SteamError::AuthRejected(_)));
+    }
 }

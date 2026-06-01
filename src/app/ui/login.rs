@@ -95,3 +95,103 @@ pub(super) fn login_overlay_ui(
         menu.quit_requested = true;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workos_login::{LoginHandle, WorkosLoginConfig};
+
+    fn raw_input() -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1024.0, 768.0),
+            )),
+            ..Default::default()
+        }
+    }
+
+    /// A context with the title font bound — `theme::title` lays out with the
+    /// `cinzel` family, which panics if the family isn't registered.
+    fn ctx() -> egui::Context {
+        let ctx = egui::Context::default();
+        theme::install_title_font(&ctx);
+        ctx
+    }
+
+    fn workos() -> WorkosAuth {
+        WorkosAuth(WorkosLoginConfig {
+            client_id: "client_test".to_owned(),
+            redirect_port: 8765,
+        })
+    }
+
+    #[test]
+    fn logged_out_view_renders_without_triggering_actions() {
+        let ctx = ctx();
+        let mut auth = AuthFlow::LoggedOut { error: None };
+        let workos = workos();
+        let mut menu = MenuState::default();
+
+        let output = ctx.run(raw_input(), |ctx| {
+            login_overlay_ui(ctx, &mut auth, &workos, &mut menu);
+        });
+
+        assert!(output.shapes.len() > 1, "the login splash should draw");
+        // No pointer input was fed in, so nothing transitions or quits.
+        assert!(matches!(auth, AuthFlow::LoggedOut { .. }));
+        assert!(!menu.quit_requested);
+    }
+
+    #[test]
+    fn logged_out_view_renders_an_error_message() {
+        let ctx = ctx();
+        let mut auth = AuthFlow::LoggedOut {
+            error: Some("sign-in rejected".to_owned()),
+        };
+        let workos = workos();
+        let mut menu = MenuState::default();
+
+        let output = ctx.run(raw_input(), |ctx| {
+            login_overlay_ui(ctx, &mut auth, &workos, &mut menu);
+        });
+
+        assert!(output.shapes.len() > 1);
+        assert!(matches!(auth, AuthFlow::LoggedOut { error: Some(_) }));
+    }
+
+    #[test]
+    fn busy_views_render_the_spinner_splash() {
+        let constructors: [fn(LoginHandle) -> AuthFlow; 2] =
+            [AuthFlow::Verifying, AuthFlow::Authenticating];
+        for make in constructors {
+            let ctx = ctx();
+            let (handle, _tx) = LoginHandle::pending();
+            let mut auth = make(handle);
+            let workos = workos();
+            let mut menu = MenuState::default();
+
+            let output = ctx.run(raw_input(), |ctx| {
+                login_overlay_ui(ctx, &mut auth, &workos, &mut menu);
+            });
+
+            assert!(output.shapes.len() > 1, "the busy splash should draw");
+        }
+    }
+
+    #[test]
+    fn authenticated_view_returns_early() {
+        let ctx = ctx();
+        let mut auth = AuthFlow::Authenticated;
+        let workos = workos();
+        let mut menu = MenuState::default();
+
+        let _ = ctx.run(raw_input(), |ctx| {
+            login_overlay_ui(ctx, &mut auth, &workos, &mut menu);
+        });
+
+        // Still authenticated and untouched — the overlay drew nothing.
+        assert!(matches!(auth, AuthFlow::Authenticated));
+        assert!(!menu.quit_requested);
+    }
+}

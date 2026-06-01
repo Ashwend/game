@@ -51,11 +51,10 @@ directories = "6.0.0"
 # source — adding a new clip is now "drop the file in `assets/`", no per-file
 # `include_bytes!` row to maintain.
 include_dir = "0.7"
-# OS keychain for the WorkOS refresh token on the client (macOS Keychain,
-# Windows Credential Manager, Linux Secret Service). Per-platform native
-# backends; the refresh token is the only credential we persist, never in plain
-# text. The short-lived access token stays in memory.
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+# OS keychain for the WorkOS refresh token on the client — see the per-OS
+# `[target.…]` sections below for the backend on each platform. The refresh
+# token is the only credential we persist, never in plain text; the short-lived
+# access token stays in memory.
 # Offline JWT verification for WorkOS access tokens on the authoritative server
 # (RS256 against the WorkOS JWKS) plus JWK parsing. No secrets needed — the
 # server only ever holds the public client id and the public signing keys.
@@ -91,6 +90,23 @@ toml = "0.8"
 ureq = { version = "2.10", default-features = false, features = ["tls", "json"] }
 uuid = { version = "1.23.1", features = ["serde", "v4"] }
 zstd = "0.13.3"
+
+# Per-OS keychain backend for the WorkOS refresh token. Kept target-specific on
+# purpose: the catch-all `sync-secret-service` backend drags in `dbus`
+# (`libdbus-sys`), a system C library that the headless Linux server image and
+# the CI runners don't have, breaking every Linux build. The native backends
+# below need no system libraries:
+#   - macOS:   Keychain Services (Security.framework)
+#   - Windows: Credential Manager
+#   - Linux:   kernel keyutils via `linux-keyutils` (raw syscalls, no dbus)
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["linux-native"] }
 
 # Optimize dependencies (bevy, rapier3d, lightyear) even in dev builds so
 # `./cli dev` hits playable frame rates. Our own crate stays at the default

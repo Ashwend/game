@@ -151,6 +151,25 @@ impl LoginHandle {
     }
 }
 
+#[cfg(test)]
+impl LoginHandle {
+    /// Test-only handle that immediately resolves to `outcome`, so the auth
+    /// state machine and UI can be driven without a real browser round-trip.
+    pub(crate) fn ready(outcome: Result<Session, String>) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let _ = tx.send(outcome);
+        Self { rx: Mutex::new(rx) }
+    }
+
+    /// Test-only handle that stays `Pending`. The returned sender keeps the
+    /// channel open; hold it for the duration of the test (drop it to make the
+    /// handle report `Disconnected`).
+    pub(crate) fn pending() -> (Self, mpsc::Sender<Result<Session, String>>) {
+        let (tx, rx) = mpsc::channel();
+        (Self { rx: Mutex::new(rx) }, tx)
+    }
+}
+
 /// Start an interactive browser login. Non-blocking: opens the browser and
 /// listens on the loopback from a worker thread, then reports via the handle.
 pub fn begin_login(config: &WorkosLoginConfig, hint: ScreenHint) -> LoginHandle {
@@ -561,5 +580,156 @@ mod tests {
         assert!(url.contains("screen_hint=sign-up"));
         assert!(url.contains("client_id=client_test"));
         assert!(url.contains(&percent_encode("http://127.0.0.1:8765/callback")));
+    }
+
+    #[test]
+    fn screen_hint_maps_to_authkit_slugs() {
+        assert_eq!(ScreenHint::SignIn.as_str(), "sign-in");
+        assert_eq!(ScreenHint::SignUp.as_str(), "sign-up");
+    }
+
+    #[test]
+    fn config_redirect_uri_is_loopback_callback() {
+        let config = WorkosLoginConfig {
+            client_id: "client_x".to_owned(),
+            redirect_port: 9000,
+        };
+        assert_eq!(config.redirect_uri(), "http://127.0.0.1:9000/callback");
+    }
+
+    #[test]
+    fn percent_decode_handles_plus_and_malformed_escapes() {
+        // `+` decodes to a space (form encoding).
+        assert_eq!(percent_decode("a+b"), "a b");
+        // A valid escape decodes; a malformed one is passed through verbatim.
+        assert_eq!(percent_decode("%41"), "A");
+        assert_eq!(percent_decode("%ZZ"), "%ZZ");
+        // A trailing, truncated escape can't be decoded and is left as-is.
+        assert_eq!(percent_decode("x%4"), "x%4");
+    }
+
+    #[test]
+    fn session_from_prefers_first_name_then_falls_back_to_email() {
+        let with_name = session_from(AuthResponse {
+            access_token: "h.e.s".to_owned(),
+            refresh_token: "refresh".to_owned(),
+            user: WorkosUser {
+                id: "user_01ABC".to_owned(),
+                email: "player@example.com".to_owned(),
+                first_name: Some("  Ada  ".to_owned()),
+            },
+        });
+        // The display name is the trimmed first name when present.
+        assert_eq!(with_name.display_name, "Ada");
+        assert_eq!(with_name.email, "player@example.com");
+        assert_eq!(with_name.refresh_token, "refresh");
+        assert_eq!(with_name.account_id, account_id_from_sub("user_01ABC"));
+
+        // A blank/whitespace first name falls back to the email address.
+        let no_name = session_from(AuthResponse {
+            access_token: "h.e.s".to_owned(),
+            refresh_token: "r".to_owned(),
+            user: WorkosUser {
+                id: "user_01XYZ".to_owned(),
+                email: "fallback@example.com".to_owned(),
+                first_name: Some("   ".to_owned()),
+            },
+        });
+        assert_eq!(no_name.display_name, "fallback@example.com");
+    }
+
+    #[test]
+    fn access_token_expiry_reads_exp_claim_else_none() {
+        // Craft a JWT-shaped token whose payload carries an `exp` claim.
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(br#"{"exp":1700000000,"sub":"user_1"}"#);
+        let token = format!("header.{payload}.signature");
+        assert_eq!(
+            access_token_expiry(&token),
+            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000))
+        );
+
+        // Not a JWT (no second segment) -> None.
+        assert_eq!(access_token_expiry("not-a-jwt"), None);
+        // Second segment isn't valid base64 -> None.
+        assert_eq!(access_token_expiry("h.@@@.s"), None);
+        // Valid base64 but no `exp` field -> None.
+        let no_exp = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"sub":"x"}"#);
+        assert_eq!(access_token_expiry(&format!("h.{no_exp}.s")), None);
+    }
+
+    #[test]
+    fn login_handle_reports_outcomes() {
+        // Success.
+        let ok = LoginHandle::ready(Ok(Session {
+            account_id: 5,
+            display_name: "n".to_owned(),
+            email: "e".to_owned(),
+            access_token: "a".to_owned(),
+            refresh_token: "r".to_owned(),
+            expires_at: None,
+        }));
+        match ok.poll() {
+            LoginOutcome::Success(session) => assert_eq!(session.account_id, 5),
+            other => panic!("expected success, got {other:?}"),
+        }
+
+        // Failure.
+        let failed = LoginHandle::ready(Err("nope".to_owned()));
+        assert!(matches!(failed.poll(), LoginOutcome::Failed(msg) if msg == "nope"));
+
+        // Pending while the sender is alive.
+        let (pending, tx) = LoginHandle::pending();
+        assert!(matches!(pending.poll(), LoginOutcome::Pending));
+        // Dropping the sender disconnects the channel -> reported as failure.
+        drop(tx);
+        assert!(matches!(pending.poll(), LoginOutcome::Failed(_)));
+    }
+
+    #[test]
+    fn handle_callback_extracts_code_and_state() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind loopback");
+        let addr = listener.local_addr().expect("local addr");
+
+        let writer = thread::spawn(move || {
+            let mut client = TcpStream::connect(addr).expect("connect loopback");
+            client
+                .write_all(b"GET /callback?code=abc123&state=xyz789 HTTP/1.1\r\nHost: x\r\n\r\n")
+                .expect("write request");
+            // Read the browser response so the server-side write doesn't race
+            // a premature close.
+            let mut sink = Vec::new();
+            use std::io::Read;
+            let _ = client.read_to_end(&mut sink);
+        });
+
+        let (server, _) = listener.accept().expect("accept callback");
+        let (code, state) = handle_callback(server).expect("callback parsed");
+        assert_eq!(code, "abc123");
+        assert_eq!(state, "xyz789");
+        writer.join().expect("writer thread");
+    }
+
+    #[test]
+    fn handle_callback_surfaces_provider_error() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind loopback");
+        let addr = listener.local_addr().expect("local addr");
+
+        let writer = thread::spawn(move || {
+            let mut client = TcpStream::connect(addr).expect("connect loopback");
+            client
+                .write_all(
+                    b"GET /callback?error=access_denied&error_description=user+said+no HTTP/1.1\r\n\r\n",
+                )
+                .expect("write request");
+            let mut sink = Vec::new();
+            use std::io::Read;
+            let _ = client.read_to_end(&mut sink);
+        });
+
+        let (server, _) = listener.accept().expect("accept callback");
+        let err = handle_callback(server).expect_err("an error callback should fail");
+        assert_eq!(err, "user said no");
+        writer.join().expect("writer thread");
     }
 }
