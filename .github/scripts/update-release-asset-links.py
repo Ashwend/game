@@ -9,7 +9,7 @@ from pathlib import Path
 ASSETS = [
     ("Linux Intel", "ashwend-x86_64-unknown-linux-gnu.tar.gz"),
     ("Linux ARM", "ashwend-aarch64-unknown-linux-gnu.tar.gz"),
-    ("macOS ARM", "ashwend-aarch64-apple-darwin.tar.gz"),
+    ("macOS ARM", "ashwend-aarch64-apple-darwin.zip"),
     ("Windows Intel", "ashwend-x86_64-pc-windows-msvc.zip"),
 ]
 

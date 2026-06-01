@@ -45,6 +45,14 @@ clap = { version = "4.6.1", features = ["derive"] }
 cpal = "0.16"
 crossbeam-channel = "0.5"
 directories = "6.0.0"
+# CommonMark renderer for egui. Used by the in-game update modal to render the
+# GitHub release notes (changelog since the player's version) as styled
+# markdown. Pinned to the 0.22 line because that is the release that targets
+# egui ^0.33, which is what `bevy_egui` 0.39 pulls in. `default-features = off`
+# drops the optional image/syntax-highlighting backends — our changelog is
+# headings, bullet lists, inline code, and links, no images — so we avoid
+# dragging in the `image`/`syntect` crates.
+egui_commonmark = { version = "0.22", default-features = false }
 # Compile-time tree of `assets/` baked into the binary. The audio system walks
 # this at startup to register every shipped sound with Bevy's embedded asset
 # source — adding a new clip is now "drop the file in `assets/`", no per-file
@@ -98,14 +106,26 @@ zstd = "0.13.3"
 #   - macOS:   Keychain Services (Security.framework)
 #   - Windows: Credential Manager
 #   - Linux:   kernel keyutils via `linux-keyutils` (raw syscalls, no dbus)
+# The self-updater downloads the host platform's release archive and extracts
+# the new game binary from it. macOS and Windows ship a `.zip` (the macOS one
+# wraps `Ashwend.app`), so those builds need the `zip` reader; Linux ships a
+# `.tar.gz`, so that build needs `flate2` + `tar`. Each backend is gated to the
+# OS that actually consumes it — same pattern as the per-OS `keyring` below —
+# so no platform compiles an extractor it never calls. `zip` runs with
+# `default-features = off` + just `deflate`, the only codec `ditto`/the release
+# zips use, which reuses the `flate2`/`miniz_oxide` already in the tree.
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["linux-native"] }
+flate2 = "1"
+tar = "0.4"
 
 # Optimize dependencies (bevy, rapier3d, lightyear) even in dev builds so
 # `./cli dev` hits playable frame rates. Our own crate stays at the default

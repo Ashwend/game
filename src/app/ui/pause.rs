@@ -8,7 +8,11 @@ use crate::{
     },
 };
 
-use super::{danger_menu_button, menu_button, modal::backdrop_layer, theme};
+use crate::update::UpdateState;
+
+use super::{
+    danger_menu_button, menu_button, modal::backdrop_layer, theme, update::pause_update_row,
+};
 
 pub(super) fn pause_ui(
     ctx: &egui::Context,
@@ -17,6 +21,7 @@ pub(super) fn pause_ui(
     shutdown_tasks: &mut SessionShutdownTasks,
     store: &SaveStore,
     pending_session_end: &mut PendingSessionEndReason,
+    update: &mut UpdateState,
 ) {
     let backdrop_response = backdrop_layer(
         ctx,
@@ -54,6 +59,10 @@ pub(super) fn pause_ui(
                     if menu_button(ui, "Options").clicked() {
                         menu.pause_options_open = true;
                     }
+                    // Surfaces "Update available / ready" while in-game, since
+                    // the corner pill is suppressed over the HUD. Opens the
+                    // shared changelog modal.
+                    pause_update_row(ui, update);
                     if danger_menu_button(ui, "Quit").clicked() {
                         pending_session_end.0 = Some(SessionEndReason::UserQuit);
                         runtime.shutdown_in_background(store.0.clone(), shutdown_tasks);
@@ -104,6 +113,7 @@ mod tests {
             std::env::temp_dir().join(format!("game-pause-test-{}", uuid::Uuid::new_v4())),
         ));
         let mut pending_session_end = PendingSessionEndReason::default();
+        let mut update = UpdateState::idle_for_test();
 
         let output = ctx.run(raw_input(), |ctx| {
             pause_ui(
@@ -113,6 +123,7 @@ mod tests {
                 &mut shutdown_tasks,
                 &store,
                 &mut pending_session_end,
+                &mut update,
             );
         });
 

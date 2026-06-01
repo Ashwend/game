@@ -18,6 +18,7 @@ mod quit;
 pub(crate) mod replication_trace;
 mod settings;
 mod test_mode;
+mod update;
 
 use bevy::prelude::SystemSet;
 
@@ -65,6 +66,7 @@ pub(crate) use settings::{save_client_settings_system, sync_view_radius_system};
 pub(crate) use test_mode::{
     apply_test_mode_overrides_system, multiplayer_test_owns_window, reposition_test_window_system,
 };
+pub(crate) use update::apply_update_system;
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ClientSystemSet {

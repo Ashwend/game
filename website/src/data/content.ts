@@ -42,7 +42,7 @@ export const DOWNLOADS: ReadonlyArray<Download> = [
     os: 'macOS',
     arch: 'Apple Silicon',
     short: 'macOS',
-    asset: 'ashwend-aarch64-apple-darwin.tar.gz',
+    asset: 'ashwend-aarch64-apple-darwin.zip',
   },
   {
     platform: 'linux',

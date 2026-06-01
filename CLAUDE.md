@@ -55,6 +55,7 @@ Open docs only when the task touches that area:
 - [Crafting and deployables](docs/crafting.md) — recipe queue, furnace state machine, loot bags, deployable damage + ownership.
 - [Voice](docs/voice.md)
 - [Worlds and saves](docs/worlds-and-saves.md)
+- [Updates and self-update](docs/updates.md) — boot-time GitHub version check, the changelog modal, the separate `ashwend-updater` binary, and the macOS `.app` packaging. Consult before changing release-asset names (they're hardcoded in several scripts + the website) or the self-update flow.
 - [UI and client flow](docs/ui-and-client.md)
 - [Multiplayer testing](docs/multiplayer-testing.md)
 - [Materials](docs/materials.md) — PBR conventions for the scene (reflectance, roughness, metallic). Consult before adding a new `StandardMaterial` or tweaking an existing one.

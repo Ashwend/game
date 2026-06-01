@@ -191,7 +191,7 @@ jobs:
           - label: macOS ARM
             runner: macos-15
             target: aarch64-apple-darwin
-            asset: ashwend-aarch64-apple-darwin.tar.gz
+            asset: ashwend-aarch64-apple-darwin.zip
           - label: Windows Intel
             runner: windows-2025-vs2026
             target: x86_64-pc-windows-msvc
@@ -282,7 +282,7 @@ jobs:
         run: cargo build --locked --release --target "${{ matrix.target }}"
 
       - name: Package release binary
-        run: python .github/scripts/package-release.py --target "${{ matrix.target }}" --asset "${{ matrix.asset }}"
+        run: python .github/scripts/package-release.py --target "${{ matrix.target }}" --asset "${{ matrix.asset }}" --version "${{ needs.prepare.outputs.version }}"
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v7

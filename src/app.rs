@@ -30,6 +30,7 @@ use crate::{
     },
     net::{ClientNetworkPlugin, LightyearProtocolPlugin, client_plugins},
     save::WorldStore,
+    update::UpdatePlugin,
 };
 
 use self::voice::{
@@ -62,11 +63,11 @@ use self::{
         app_quit_system, apply_deployed_entities_system, apply_display_settings_system,
         apply_dropped_items_system, apply_graphics_settings_system, apply_held_item_visual_system,
         apply_loot_bags_system, apply_resource_nodes_system, apply_snapshot_system,
-        apply_test_mode_overrides_system, auto_connect_poll_system, auto_connect_start_system,
-        camera_follow_system, center_cursor_on_focus_system, chat_shortcut_system,
-        chunk_overlay_system, client_input_system, close_furnace_on_escape_system,
-        close_loot_bag_on_escape_system, drive_auth_flow_system, error_relay_system,
-        gameplay_inventory_shortcuts_system, maintain_world_grid_system,
+        apply_test_mode_overrides_system, apply_update_system, auto_connect_poll_system,
+        auto_connect_start_system, camera_follow_system, center_cursor_on_focus_system,
+        chat_shortcut_system, chunk_overlay_system, client_input_system,
+        close_furnace_on_escape_system, close_loot_bag_on_escape_system, drive_auth_flow_system,
+        error_relay_system, gameplay_inventory_shortcuts_system, maintain_world_grid_system,
         menu_backdrop_camera_system, mouse_look_system, multiplayer_test_owns_window,
         network_tick_system, placement_input_system, reposition_test_window_system,
         save_client_settings_system, screen_viewed_system, session_ended_system,
@@ -375,6 +376,10 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         // `POSTHOG_*` env vars at startup. Client-only — dedicated server
         // and admin CLI never load this plugin.
         .add_plugins(AnalyticsPlugin)
+        // Update checker + self-updater. Client-only; spawns a background
+        // thread that asks GitHub for the latest release on boot. Disabled
+        // implicitly when offline (the check just reports "up to date").
+        .add_plugins(UpdatePlugin)
         .insert_resource(FramepaceSettings {
             limiter: window_settings.frame_limiter(),
         })
@@ -474,6 +479,9 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
             session_shutdown_poll_system.in_set(ClientSystemSet::SessionShutdown),
         )
         .add_systems(Update, app_quit_system.in_set(ClientSystemSet::Quit))
+        // Applies a staged self-update: saves any open world, then launches the
+        // updater and quits. Reacts to `UpdateState::Applying` set by the modal.
+        .add_systems(Update, apply_update_system)
         .add_systems(
             Update,
             (

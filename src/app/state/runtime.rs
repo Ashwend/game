@@ -172,6 +172,13 @@ impl SessionShutdownTasks {
         results
     }
 
+    /// Whether every spawned save/shutdown has finished writing. Empty (no
+    /// session ever shut down) counts as finished. Used by the update-apply
+    /// path to hold the relaunch until an in-progress world save is durable.
+    pub(crate) fn all_finished(&self) -> bool {
+        self.0.iter().all(|task| task.is_finished())
+    }
+
     #[cfg(test)]
     pub(super) fn push_finished_for_test(&mut self, result: Result<(), String>) {
         self.0.push(thread::spawn(move || result));

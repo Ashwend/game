@@ -19,6 +19,7 @@ mod peer_overlay;
 mod splash;
 mod theme;
 mod toast;
+mod update;
 mod worlds;
 
 use bevy::input::ButtonInput;
@@ -51,8 +52,11 @@ use self::{
     splash::loading_splash_ui,
     theme::{ButtonKind, MENU_BUTTON_WIDTH, game_button},
     toast::toast_ui,
+    update::{update_corner_pill, update_modal},
     worlds::worlds_ui,
 };
+
+use egui_commonmark::CommonMarkCache;
 
 pub(crate) use death_splash::tick_death_splash_system;
 
@@ -67,6 +71,7 @@ use super::systems::PendingSessionEndReason;
 use super::voice::VoiceState;
 use crate::analytics::Analytics;
 use crate::net::ClientNetwork;
+use crate::update::UpdateState;
 
 #[derive(SystemParam)]
 pub(crate) struct UiResources<'w, 's> {
@@ -104,6 +109,7 @@ pub(crate) struct UiResources<'w, 's> {
     local_player: Res<'w, LocalPlayerState>,
     prediction: ResMut<'w, PredictionState>,
     scene_state: Res<'w, WorldSceneState>,
+    update: ResMut<'w, UpdateState>,
 }
 
 /// Whether the just-joined world is ready for the player to interact with:
@@ -172,6 +178,7 @@ pub(crate) fn install_egui_fonts_system(
 pub(crate) fn ui_system(
     mut contexts: EguiContexts,
     mut resources: UiResources,
+    mut commonmark_cache: Local<CommonMarkCache>,
 ) -> bevy::prelude::Result {
     let ctx = contexts.ctx_mut()?;
     theme::apply_game_style(ctx);
@@ -391,10 +398,19 @@ pub(crate) fn ui_system(
                     &mut resources.shutdown_tasks,
                     &resources.store,
                     &mut resources.pending_session_end,
+                    &mut resources.update,
                 );
             }
         }
     }
+
+    // Update affordances. The corner pill rides every menu screen (the in-game
+    // HUD uses a pause-menu row instead); the changelog modal is a global
+    // overlay so it works from any screen.
+    if !matches!(resources.menu.screen, Screen::InGame) {
+        update_corner_pill(ctx, &mut resources.update);
+    }
+    update_modal(ctx, &mut resources.update, &mut commonmark_cache);
 
     confirmation_ui(
         ctx,
