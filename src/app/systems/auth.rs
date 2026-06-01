@@ -16,10 +16,6 @@ pub(crate) fn drive_auth_flow_system(
     mut menu: ResMut<MenuState>,
 ) {
     // Title-screen account actions.
-    if menu.manage_account_requested {
-        menu.manage_account_requested = false;
-        crate::auth::workos::open_account_page();
-    }
     if menu.sign_out_requested {
         menu.sign_out_requested = false;
         crate::auth::workos::logout();

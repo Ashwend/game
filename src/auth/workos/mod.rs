@@ -23,15 +23,8 @@ pub use login::{
 #[cfg(test)]
 pub(crate) use login::Session;
 
-/// Open the account page in the system browser. WorkOS has no hosted end-user
-/// profile page, so this points at our own site (see
-/// [`WorkosConfig::account_url`]), where account management can grow over time.
-pub fn open_account_page() {
-    let _ = open_url(&WorkosConfig::load().account_url);
-}
-
-/// Open `url` in the system browser. Best-effort; errors are surfaced to the
-/// caller (the login flow reports them, `open_account_page` ignores them).
+/// Open `url` in the system browser. Best-effort; the login flow surfaces any
+/// error to the user.
 fn open_url(url: &str) -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     let mut command = {

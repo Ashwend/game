@@ -24,7 +24,7 @@
     "verbatimModuleSyntax": true,
     "noEmit": true,
 
-    /* Strictness — turned up well past the `strict` baseline */
+    /* Strictness: turned up well past the `strict` baseline */
     "skipLibCheck": true,
     "strict": true,
     "noUnusedLocals": true,

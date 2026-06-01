@@ -7,7 +7,7 @@ import { DiscordIcon } from './icons'
 export function Hero() {
   return (
     <section className="relative flex min-h-[100svh] items-center overflow-hidden">
-      {/* Dusk hero, captured in-engine. Decorative — described by the page copy. */}
+      {/* Dusk hero, captured in-engine. Decorative, described by the page copy. */}
       <div className="absolute inset-0" aria-hidden="true">
         <img
           src="/img/hero.jpg"

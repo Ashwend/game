@@ -75,7 +75,7 @@ function RootDocument({ children }: { children: ReactNode }) {
         <HeadContent />
         <script
           type="application/ld+json"
-          // Static structured data for search engines — safe, no user input.
+          // Static structured data for search engines; safe, no user input.
           dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
         />
       </head>

@@ -85,11 +85,9 @@ pub(crate) struct MenuState {
     /// flips back to alive) so the splash auto-dismisses.
     pub(crate) death_splash: Option<DeathSplash>,
     pub(crate) quit_requested: bool,
-    /// Set by the title-screen account links; consumed by
-    /// `drive_auth_flow_system` (sign out → keychain cleared + back to the login
-    /// splash; manage account → open the website).
+    /// Set by the title-screen "Sign out" link; consumed by
+    /// `drive_auth_flow_system` (keychain cleared + back to the login splash).
     pub(crate) sign_out_requested: bool,
-    pub(crate) manage_account_requested: bool,
 }
 
 /// Snapshot of "I just died" UI state. Stored on `MenuState` because
@@ -161,7 +159,6 @@ impl Default for MenuState {
             death_splash: None,
             quit_requested: false,
             sign_out_requested: false,
-            manage_account_requested: false,
         }
     }
 }

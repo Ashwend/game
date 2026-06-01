@@ -50,12 +50,24 @@ impl ScreenHint {
             ScreenHint::SignUp => "sign-up",
         }
     }
+
+    /// OIDC `prompt` value, if any, to send with the authorize request. An
+    /// explicit sign-in always forces a fresh credential entry (`prompt=login`)
+    /// so that signing out and back in — or switching accounts — can't silently
+    /// reuse a lingering WorkOS browser session. Sign-up sends nothing so the
+    /// browser lands on the registration screen untouched.
+    fn prompt(self) -> Option<&'static str> {
+        match self {
+            ScreenHint::SignIn => Some("login"),
+            ScreenHint::SignUp => None,
+        }
+    }
 }
 
 /// The WorkOS authorize URL carrying the PKCE challenge, CSRF state, and screen
 /// hint. The browser is opened to this; WorkOS redirects back to the loopback.
 fn authorize_url(config: &WorkosConfig, challenge: &str, state: &str, hint: ScreenHint) -> String {
-    format!(
+    let mut url = format!(
         "{AUTHORIZE_URL}?response_type=code&provider=authkit&client_id={client_id}\
          &redirect_uri={redirect_uri}&code_challenge={challenge}&code_challenge_method=S256\
          &state={state}&screen_hint={hint}",
@@ -64,7 +76,14 @@ fn authorize_url(config: &WorkosConfig, challenge: &str, state: &str, hint: Scre
         challenge = percent_encode(challenge),
         state = percent_encode(state),
         hint = hint.as_str(),
-    )
+    );
+    // Force reauthentication on an explicit sign-in (see `ScreenHint::prompt`).
+    // The value is a fixed slug, so no percent-encoding is needed.
+    if let Some(prompt) = hint.prompt() {
+        url.push_str("&prompt=");
+        url.push_str(prompt);
+    }
+    url
 }
 
 /// A signed-in WorkOS session. `account_id` is the same stable id the server
@@ -320,19 +339,32 @@ mod tests {
         assert_eq!(ScreenHint::SignUp.as_str(), "sign-up");
     }
 
-    #[test]
-    fn authorize_url_carries_pkce_and_redirect() {
-        let config = WorkosConfig {
+    fn test_config() -> WorkosConfig {
+        WorkosConfig {
             client_id: "client_test".to_owned(),
             redirect_port: 8765,
-            account_url: "https://ashwend.com".to_owned(),
-        };
-        let url = authorize_url(&config, "chal", "st8", ScreenHint::SignUp);
+        }
+    }
+
+    #[test]
+    fn authorize_url_carries_pkce_and_redirect() {
+        let url = authorize_url(&test_config(), "chal", "st8", ScreenHint::SignUp);
         assert!(url.contains("code_challenge=chal"));
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("screen_hint=sign-up"));
         assert!(url.contains("client_id=client_test"));
         assert!(url.contains(&percent_encode("http://127.0.0.1:8765/callback")));
+        // Sign-up should land on the registration screen, not be forced to log in.
+        assert!(!url.contains("prompt="));
+    }
+
+    #[test]
+    fn sign_in_forces_reauthentication() {
+        let url = authorize_url(&test_config(), "chal", "st8", ScreenHint::SignIn);
+        assert!(url.contains("screen_hint=sign-in"));
+        // `prompt=login` makes WorkOS re-ask for credentials even if the browser
+        // still holds a session, so sign-out → sign-in can't silently SSO back in.
+        assert!(url.contains("prompt=login"));
     }
 
     fn sample_session() -> Session {

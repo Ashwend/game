@@ -123,7 +123,6 @@ mod tests {
         WorkosAuth(WorkosConfig {
             client_id: "client_test".to_owned(),
             redirect_port: 8765,
-            account_url: "https://ashwend.com".to_owned(),
         })
     }
 

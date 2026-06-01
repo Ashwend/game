@@ -28,9 +28,6 @@ const DEFAULT_CLIENT_ID: &str = "client_01KSZSFDYP8ZVPE63P94ZWJ3WX";
 /// Loopback port the browser is redirected back to. Must be registered as a
 /// redirect URI in the WorkOS dashboard: `http://127.0.0.1:8765/callback`.
 const DEFAULT_REDIRECT_PORT: u16 = 8765;
-/// Where "Manage account" sends the player — WorkOS has no hosted end-user
-/// profile page, so this points at our own site.
-const DEFAULT_ACCOUNT_URL: &str = "https://ashwend.com";
 
 /// File at the repo root that points a local checkout at a WorkOS environment.
 const FILE_NAME: &str = "workos.local.toml";
@@ -38,7 +35,6 @@ const FILE_NAME: &str = "workos.local.toml";
 mod env {
     pub(super) const CLIENT_ID: &str = "GAME_WORKOS_CLIENT_ID";
     pub(super) const REDIRECT_PORT: &str = "GAME_WORKOS_REDIRECT_PORT";
-    pub(super) const ACCOUNT_URL: &str = "GAME_WORKOS_ACCOUNT_URL";
 }
 
 /// Compile-time fallbacks resolved by [`option_env!`] at `cargo build` time, so
@@ -47,7 +43,6 @@ mod env {
 mod build {
     pub(super) const CLIENT_ID: Option<&str> = option_env!("GAME_WORKOS_CLIENT_ID");
     pub(super) const REDIRECT_PORT: Option<&str> = option_env!("GAME_WORKOS_REDIRECT_PORT");
-    pub(super) const ACCOUNT_URL: Option<&str> = option_env!("GAME_WORKOS_ACCOUNT_URL");
 }
 
 /// Resolved WorkOS client configuration. Everything here is public.
@@ -55,7 +50,6 @@ mod build {
 pub struct WorkosConfig {
     pub client_id: String,
     pub redirect_port: u16,
-    pub account_url: String,
 }
 
 impl Default for WorkosConfig {
@@ -63,7 +57,6 @@ impl Default for WorkosConfig {
         Self {
             client_id: DEFAULT_CLIENT_ID.to_owned(),
             redirect_port: DEFAULT_REDIRECT_PORT,
-            account_url: DEFAULT_ACCOUNT_URL.to_owned(),
         }
     }
 }
@@ -92,14 +85,12 @@ impl WorkosConfig {
 struct RawConfig {
     client_id: Option<String>,
     redirect_port: Option<u16>,
-    account_url: Option<String>,
 }
 
 #[derive(Default, Debug)]
 struct Resolved {
     client_id: Option<String>,
     redirect_port: Option<u16>,
-    account_url: Option<String>,
 }
 
 impl Resolved {
@@ -108,7 +99,6 @@ impl Resolved {
         WorkosConfig {
             client_id: self.client_id.unwrap_or(defaults.client_id),
             redirect_port: self.redirect_port.unwrap_or(defaults.redirect_port),
-            account_url: self.account_url.unwrap_or(defaults.account_url),
         }
     }
 }
@@ -118,7 +108,6 @@ impl From<RawConfig> for Resolved {
         Self {
             client_id: raw.client_id.filter(|id| !id.is_empty()),
             redirect_port: raw.redirect_port,
-            account_url: raw.account_url.filter(|url| !url.is_empty()),
         }
     }
 }
@@ -127,7 +116,6 @@ fn build_defaults() -> Resolved {
     Resolved {
         client_id: trim_static(build::CLIENT_ID).map(str::to_owned),
         redirect_port: trim_static(build::REDIRECT_PORT).and_then(|value| value.parse().ok()),
-        account_url: trim_static(build::ACCOUNT_URL).map(str::to_owned),
     }
 }
 
@@ -150,9 +138,6 @@ fn overlay_file(mut base: Resolved, repo_root: &Path) -> Resolved {
     if from_file.redirect_port.is_some() {
         base.redirect_port = from_file.redirect_port;
     }
-    if from_file.account_url.is_some() {
-        base.account_url = from_file.account_url;
-    }
     base
 }
 
@@ -162,9 +147,6 @@ fn overlay_env(mut base: Resolved) -> Resolved {
     }
     if let Some(value) = env_string(env::REDIRECT_PORT).and_then(|value| value.parse().ok()) {
         base.redirect_port = Some(value);
-    }
-    if let Some(value) = env_string(env::ACCOUNT_URL) {
-        base.account_url = Some(value);
     }
     base
 }
@@ -197,7 +179,6 @@ mod tests {
         let config = WorkosConfig::load_from(&root);
         assert_eq!(config.client_id, DEFAULT_CLIENT_ID);
         assert_eq!(config.redirect_port, DEFAULT_REDIRECT_PORT);
-        assert_eq!(config.account_url, DEFAULT_ACCOUNT_URL);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -212,8 +193,6 @@ mod tests {
         let config = WorkosConfig::load_from(&root);
         assert_eq!(config.client_id, "client_fromfile");
         assert_eq!(config.redirect_port, 9123);
-        // Unset field keeps its default.
-        assert_eq!(config.account_url, DEFAULT_ACCOUNT_URL);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -231,7 +210,6 @@ mod tests {
         let config = WorkosConfig {
             client_id: "client_x".to_owned(),
             redirect_port: 9000,
-            account_url: DEFAULT_ACCOUNT_URL.to_owned(),
         };
         assert_eq!(config.redirect_uri(), "http://127.0.0.1:9000/callback");
     }

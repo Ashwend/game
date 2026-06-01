@@ -1,5 +1,5 @@
 // Shared button styling so anchors (`<a>`) and real buttons (`<button onClick>`)
-// look identical. Tailwind classes only — no runtime cost.
+// look identical. Tailwind classes only, no runtime cost.
 
 export type ButtonVariant = 'primary' | 'discord' | 'ghost' | 'subtle'
 export type ButtonSize = 'sm' | 'md' | 'lg'

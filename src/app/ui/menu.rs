@@ -56,14 +56,7 @@ pub(super) fn main_menu_ui(
                     egui::RichText::new(format!("Signed in as {}", user.0.display_name))
                         .color(theme::text()),
                 );
-                // `vertical_centered` centres single widgets but left-aligns a
-                // `horizontal` row (it fills the column width), so stack the two
-                // account actions — each centres cleanly, like the line above.
                 ui.add_space(8.0);
-                if ui.link(theme::muted("Manage account")).clicked() {
-                    menu.manage_account_requested = true;
-                }
-                ui.add_space(2.0);
                 if ui.link(theme::muted("Sign out")).clicked() {
                     menu.sign_out_requested = true;
                 }
