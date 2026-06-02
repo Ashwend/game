@@ -6,7 +6,7 @@
 //! how to tell chat input apart from command input by the leading `/`.
 //!
 //! Each command yields a `Vec<ServerEnvelope>` like the rest of the receive
-//! path — a Toast (back to the issuer) plus any side-effects (resource node
+//! path, a Toast (back to the issuer) plus any side-effects (resource node
 //! insert, broadcast snapshot pickup on the next tick, etc.).
 
 mod kit;
@@ -51,7 +51,7 @@ impl GameServer {
         }
     }
 
-    /// `/help` — drop the command list into the issuer's chat log as
+    /// `/help`, drop the command list into the issuer's chat log as
     /// messages from "Server" (rather than a toast) so it lingers, scrolls,
     /// and reads alongside normal conversation. Only the issuer sees it.
     fn command_help(&self, client_id: ClientId) -> Vec<ServerEnvelope> {

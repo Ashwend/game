@@ -20,9 +20,9 @@ const REMOTE_PLAYER_INTERPOLATION_SNAP_DISTANCE: f32 = 6.0;
 /// do a true ragdoll, but the per-axis breakdown below gives a much
 /// more "physical" collapse than a flat tilt:
 ///
-///   1. Brief upward kick (`UPWARD_KICK_S`) — the body lurches off
+///   1. Brief upward kick (`UPWARD_KICK_S`), the body lurches off
 ///      its feet at the moment of death.
-///   2. Pivoted fall (`FALL_DURATION_S`) — the rotation happens
+///   2. Pivoted fall (`FALL_DURATION_S`), the rotation happens
 ///      around the feet pivot, with a small overshoot at impact so
 ///      the body bounces once it hits the ground.
 ///   3. Settle hold (`HOLD_DURATION_S`).
@@ -35,10 +35,10 @@ const DEATH_UPWARD_KICK_S: f32 = 0.12;
 const DEATH_FALL_DURATION_S: f32 = 0.65;
 const DEATH_HOLD_DURATION_S: f32 = 0.4;
 const DEATH_FADE_DURATION_S: f32 = 0.9;
-/// Fall arc — past 90° so the body face-plants into the floor
+/// Fall arc, past 90° so the body face-plants into the floor
 /// instead of standing rigid on its head.
 const DEATH_FALL_ANGLE_RAD: f32 = std::f32::consts::FRAC_PI_2 + 0.12;
-/// How far the body lifts during the initial death kick. Tiny — just
+/// How far the body lifts during the initial death kick. Tiny, just
 /// enough to see the corpse shudder off its feet.
 const DEATH_UPWARD_KICK_M: f32 = 0.08;
 /// Bounce magnitude at the moment of impact, in radians. Soft
@@ -54,15 +54,15 @@ pub(crate) struct DyingPlayer {
     elapsed: f32,
     /// World-space rotation axis the body falls around. Picked once
     /// at death time so the corpse picks a direction and sticks with
-    /// it. Horizontal — the rotation tips the body forward, not
+    /// it. Horizontal, the rotation tips the body forward, not
     /// yaws it on the spot.
     fall_axis: Vec3,
     /// Small per-spawn roll (radians) so the body lands at a
-    /// slightly tilted angle instead of square-flat — reads as a
+    /// slightly tilted angle instead of square-flat, reads as a
     /// limp collapse rather than a folded mannequin.
     roll_axis: Vec3,
     roll_magnitude: f32,
-    /// Snapshot of the world transform at death — used as the rest
+    /// Snapshot of the world transform at death, used as the rest
     /// pose the tilt is layered on top of. The interpolator stops
     /// re-targeting once the entity is dying, so the dead avatar
     /// doesn't keep sliding to wherever the server-side controller
@@ -84,7 +84,7 @@ pub(crate) struct RemotePlayerEntities(pub(crate) std::collections::HashMap<Clie
 /// Reconciles the set of visual `NetworkPlayer` entities against the
 /// Lightyear-replicated `(Player, PlayerPublic)` entities. Spawn,
 /// despawn, and interpolation re-target all flow off the replicated
-/// query — one visual entity per replicated entity.
+/// query, one visual entity per replicated entity.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_snapshot_system(
     mut commands: Commands,
@@ -104,7 +104,7 @@ pub(crate) fn apply_snapshot_system(
     replicated: Query<(&Player, Ref<PlayerPublic>, Option<&PlayerLifecycle>)>,
 ) {
     let Some(local_client_id) = runtime.client_id else {
-        // Not connected — tear down any remote visuals from a prior
+        // Not connected, tear down any remote visuals from a prior
         // session.
         for (_, entity) in entities.0.drain() {
             commands.entity(entity).despawn();
@@ -134,7 +134,7 @@ pub(crate) fn apply_snapshot_system(
         if let Some(entity) = entities.0.get(&player.client_id).copied() {
             if let Ok((current, mut interpolation, dying)) = players.get_mut(entity) {
                 if is_dead && dying.is_none() {
-                    // Just-died this frame — stamp the dying state so
+                    // Just-died this frame, stamp the dying state so
                     // the tick system below takes over the transform.
                     let (fall_axis, roll_axis, roll_magnitude) =
                         compute_fall_axes(player.client_id, *current);
@@ -163,7 +163,7 @@ pub(crate) fn apply_snapshot_system(
                         MeshMaterial3d(cloned_material),
                     ));
                 } else if !is_dead && dying.is_some() {
-                    // Respawned — drop the dying state, restore the
+                    // Respawned, drop the dying state, restore the
                     // shared remote material and full visibility.
                     commands.entity(entity).remove::<DyingPlayer>().insert((
                         MeshMaterial3d(assets.remote_material.clone()),
@@ -183,7 +183,7 @@ pub(crate) fn apply_snapshot_system(
             }
         } else if !is_dead {
             // Don't spawn a fresh visual just to immediately mark it
-            // dying — if we somehow see a player whose first sight is
+            // dying, if we somehow see a player whose first sight is
             // already Dead (rare; would only happen on AoI cross-in
             // mid-death-anim), we let them stay invisible until the
             // server sends Alive again.
@@ -221,7 +221,7 @@ pub(crate) fn apply_snapshot_system(
 ///
 /// Returns:
 ///   - `fall_axis`: horizontal axis the body tips forward over.
-///   - `roll_axis`: the same axis crossed with the fall direction —
+///   - `roll_axis`: the same axis crossed with the fall direction,
 ///     the body's "long axis" once it lands. Small magnitude roll
 ///     around this axis gives the corpse a sideways lean.
 ///   - `roll_magnitude`: signed roll in radians.
@@ -259,7 +259,7 @@ fn compute_fall_axes(client_id: ClientId, current: Transform) -> (Vec3, Vec3, f3
 /// the body collapses through a recognisable arc:
 ///
 /// 1. **Kick** (`DEATH_UPWARD_KICK_S`): tiny vertical lurch off the
-///    feet — reads as "they just took a fatal hit".
+///    feet, reads as "they just took a fatal hit".
 /// 2. **Fall** (`DEATH_FALL_DURATION_S`): pivot around the feet from
 ///    upright to flat. Ease-in so the body accelerates as gravity
 ///    takes over.
@@ -270,7 +270,7 @@ fn compute_fall_axes(client_id: ClientId, current: Transform) -> (Vec3, Vec3, f3
 ///    where the body landed before it disappears.
 /// 5. **Fade** (`DEATH_FADE_DURATION_S`): alpha 1 → 0, then hide.
 ///
-/// The entity itself isn't despawned — it might respawn (the
+/// The entity itself isn't despawned, it might respawn (the
 /// lifecycle goes Alive → DyingPlayer removed → MeshMaterial3d
 /// restored upstream), and recreating the mesh + material pair every
 /// kill would churn allocations.
@@ -293,7 +293,7 @@ pub(crate) fn tick_dying_players_system(
 
         let fall_t = (dying.elapsed / DEATH_FALL_DURATION_S).clamp(0.0, 1.0);
         // Ease-in cubic so the body hangs briefly before
-        // accelerating downward — reads like "weight gives out".
+        // accelerating downward, reads like "weight gives out".
         let fall_eased = fall_t * fall_t * fall_t;
 
         // Bounce: a damped sine pulse layered on top of the fall

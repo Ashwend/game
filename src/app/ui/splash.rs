@@ -11,7 +11,7 @@ use super::theme;
 /// - `Startup` waits for the menu backdrop to finish warming up so the splash
 ///   and the backdrop crossfade as one motion.
 /// - World-entry splashes (`EnteringWorld` / `JoiningServer`) wait for
-///   `world_ready` — the joined world being applied, spawned, and replicated —
+///   `world_ready`, the joined world being applied, spawned, and replicated,
 ///   so the reveal lands on a populated, rendered scene rather than an empty
 ///   frame. See [`MenuState`]'s `enter_in_game` and `LoadingSplash::note_world_ready`.
 pub(super) fn loading_splash_ui(
@@ -43,7 +43,7 @@ pub(super) fn loading_splash_ui(
     };
 
     // While the splash is on-screen the underlying work is either still
-    // running or we're holding the minimum-display window — repaint every
+    // running or we're holding the minimum-display window, repaint every
     // frame so the spinner spins and the fade animates smoothly.
     ctx.request_repaint();
 
@@ -169,7 +169,7 @@ mod tests {
         assert_eq!(fast.tick(0.05), Some(u8::MAX));
         assert_eq!(fast.tick(0.1), Some(u8::MAX));
 
-        // Total hold + fade window is bounded — splash must drop within 3s.
+        // Total hold + fade window is bounded, splash must drop within 3s.
         let mut faded = false;
         for _ in 0..200 {
             if fast.tick(0.05).is_none() {

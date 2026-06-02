@@ -8,7 +8,7 @@
 //!
 //! Split into [`PlayerPublic`] (replicated to every client in the same
 //! room) and [`PlayerPrivate`] (replicated only to the owning client).
-//! This is the shape we want for Phase 5 — putting it on the components
+//! This is the shape we want for Phase 5, putting it on the components
 //! now means the replication wiring later just needs `Replicate` markers
 //! with the right `NetworkTarget`, no further refactor.
 
@@ -48,7 +48,7 @@ pub struct PlayerPublic {
     pub grounded: bool,
     pub is_admin: bool,
     /// Most recent chat bubble text, or `None` if the bubble window has
-    /// expired. Only the text is public — the expiry tick is server-only
+    /// expired. Only the text is public, the expiry tick is server-only
     /// bookkeeping.
     pub chat_bubble: Option<String>,
 }
@@ -65,11 +65,11 @@ pub struct PlayerPrivate {
     /// Full per-client view of the currently-opened furnace, if any.
     /// Carrying the full [`OpenFurnaceView`] (slots + progress) rather
     /// than just the id keeps the furnace UI reachable from the
-    /// replicated component alone — Phase 6.1 retargets the consumer
+    /// replicated component alone, Phase 6.1 retargets the consumer
     /// here and the snapshot's `open_furnace` field goes away.
     pub open_furnace: Option<OpenFurnaceView>,
     /// Full per-client view of the currently-opened loot bag, if any.
-    /// Mirrors `open_furnace` for the bag UI — the slot grid is
+    /// Mirrors `open_furnace` for the bag UI, the slot grid is
     /// shipped here so the bag panel doesn't need a separate
     /// network round-trip to render.
     pub open_loot_bag: Option<OpenLootBagView>,
@@ -84,8 +84,8 @@ pub struct PlayerPrivate {
 /// Authoritative damage reduction (0–100, percent). Replicated to every
 /// peer in the same chunk room because the future HUD wants to read its
 /// own armor straight off the replicated component instead of hand-rolling
-/// a separate `ServerMessage`. Today every player ships with `0` — there
-/// are no armor items defined — but the wire path is live so adding one
+/// a separate `ServerMessage`. Today every player ships with `0`, there
+/// are no armor items defined, but the wire path is live so adding one
 /// is purely a server-side change.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlayerArmor(pub u8);

@@ -5,8 +5,8 @@
 //! drives a two-stage UI:
 //!
 //! 1. A slow fade-to-black over `BLACK_FADE_SECS`. The player can
-//!    still see the world for the first second or so — the camera
-//!    stays pointed at wherever they died — and gradually loses
+//!    still see the world for the first second or so, the camera
+//!    stays pointed at wherever they died, and gradually loses
 //!    contrast until the screen is fully black.
 //! 2. After the black-out completes, the "YOU DIED" title, the
 //!    "Killed by {name}" subline, and the Respawn button fade in.
@@ -25,7 +25,7 @@ use crate::{
 };
 
 /// Time, in seconds, from "the player died" to "screen is fully
-/// black". A slow lift so the death moment lingers — the player
+/// black". A slow lift so the death moment lingers, the player
 /// processes what happened before the UI takes over.
 const BLACK_FADE_SECS: f32 = 4.0;
 /// Time, in seconds, after the black-out completes before the
@@ -33,8 +33,8 @@ const BLACK_FADE_SECS: f32 = 4.0;
 /// enough that the player isn't left staring at a black screen.
 const TITLE_FADE_SECS: f32 = 0.6;
 /// Time, in seconds, the splash spends fading back out once the
-/// respawn lands. The window is short — the player wants their
-/// view of the world back — but long enough that the HUD/hotbar
+/// respawn lands. The window is short, the player wants their
+/// view of the world back, but long enough that the HUD/hotbar
 /// don't visibly pop into existence on a black screen.
 const CLOSE_FADE_SECS: f32 = 0.45;
 
@@ -61,7 +61,7 @@ pub(super) fn death_splash_ui(ctx: &egui::Context, splash: &DeathSplash) -> bool
     // floating damage text, deployable labels, hotbar HUD) so the
     // dim actually covers them. Background order put the dim
     // beneath everything else, which made the world fade out around
-    // a still-visible HUD — exactly what the player flagged.
+    // a still-visible HUD, exactly what the player flagged.
     egui::Area::new(egui::Id::new("death_splash_dim"))
         .order(egui::Order::Tooltip)
         .interactable(false)
@@ -83,7 +83,7 @@ pub(super) fn death_splash_ui(ctx: &egui::Context, splash: &DeathSplash) -> bool
     let title_alpha_f = title_rise * close_multiplier;
     let title_alpha = (title_alpha_f * 255.0).round() as u8;
     // While the title is still invisible, skip emitting the area
-    // entirely — saves a layout pass and keeps the egui pointer
+    // entirely, saves a layout pass and keeps the egui pointer
     // tracking from latching onto an invisible button.
     if title_alpha == 0 {
         return respawn_requested;
@@ -143,7 +143,7 @@ pub(super) fn death_splash_ui(ctx: &egui::Context, splash: &DeathSplash) -> bool
     respawn_requested
 }
 
-/// Try to send `ClientMessage::Respawn`. Doesn't touch `MenuState` —
+/// Try to send `ClientMessage::Respawn`. Doesn't touch `MenuState`,
 /// the server's `Correction` reply is what clears the splash, handled
 /// by the network tick.
 pub(super) fn send_respawn(runtime: &mut ClientRuntime) {

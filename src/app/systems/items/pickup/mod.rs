@@ -61,7 +61,7 @@ pub(crate) fn update_pickup_target_system(
     reproject_screen_position(&mut pickup_target, &camera);
 
     // Throttle the O(N×M) sweep over dropped items and resource nodes to a
-    // fixed cadence — tooltip targeting doesn't need to update every render
+    // fixed cadence, tooltip targeting doesn't need to update every render
     // frame and the early-exit work in the score helpers still scales
     // with the replicated set size.
     pickup_target.elapsed_since_scan += time.delta_secs().max(0.0);

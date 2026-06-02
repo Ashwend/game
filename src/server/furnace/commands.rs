@@ -59,7 +59,7 @@ impl GameServer {
     /// within interact range. Returns `true` if there is no open furnace
     /// (no constraint to enforce) or if the player is in range. Returns
     /// `false` if the open furnace exists in the world but the player has
-    /// walked away — caller should `close_furnace` and drop the command.
+    /// walked away, caller should `close_furnace` and drop the command.
     fn open_furnace_in_range(&self, client_id: ClientId) -> bool {
         let Some(client) = self.clients.get(&client_id) else {
             return false;
@@ -91,7 +91,7 @@ impl GameServer {
     ///
     /// All operations are clamped to the receiving slot's stack limit; a
     /// remainder that doesn't fit is put back into the source slot. No
-    /// silent drops on the ground — the player asked for a transfer, not
+    /// silent drops on the ground, the player asked for a transfer, not
     /// a discard.
     fn quick_transfer(&mut self, client_id: ClientId, from: FurnaceSlotRef) -> Vec<ServerEnvelope> {
         let Some(furnace_id) = self.client_open_furnace(client_id) else {

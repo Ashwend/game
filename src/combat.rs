@@ -4,7 +4,7 @@
 //! The flow is the same for every kind of damage:
 //!
 //! 1. The source path builds a [`DamageInstance`] describing what it
-//!    wants to do — raw amount, damage kind, knockback impulse magnitude,
+//!    wants to do, raw amount, damage kind, knockback impulse magnitude,
 //!    who originated it.
 //! 2. The recipient's [`PlayerArmor`] is read.
 //! 3. [`damage_after_armor`] reduces the raw amount.
@@ -29,7 +29,7 @@ pub enum DamageKind {
 
 /// One self-contained damage event. Lives on the stack while the damage
 /// path runs, never serialized to the wire. The client never sees the
-/// raw damage value — it only sees the post-armor `damage_dealt` on
+/// raw damage value, it only sees the post-armor `damage_dealt` on
 /// `ServerMessage::PlayerImpact` and the replicated `PlayerPublic.health`
 /// change.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -60,7 +60,7 @@ pub const PICKAXE_PVP_DAMAGE: u32 = 15;
 pub const PICKAXE_KNOCKBACK_SPEED: f32 = 4.0;
 
 /// Build the PvP damage profile for one swing of `tool`. Returns `None`
-/// for tool kinds that can't damage a player — Hands today, future
+/// for tool kinds that can't damage a player, Hands today, future
 /// non-combat tools (a shovel, say) would also return `None` here so the
 /// server can reject the swing in one branch.
 pub fn tool_player_damage(tool: ToolKind, attacker: ClientId) -> Option<DamageInstance> {

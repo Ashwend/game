@@ -85,7 +85,7 @@ fn handle_chat_shortcuts(ctx: &egui::Context, menu: &mut MenuState) -> bool {
     // Mirror `chat_shortcut_system`'s modal gating. Without
     // `crafting_open` here, typing `T` into the crafting search would
     // open the chat *from the UI side* even after the Bevy keybind
-    // bailed — chat has two open-paths and they must agree.
+    // bailed, chat has two open-paths and they must agree.
     if menu.pause_open || menu.chat_open || menu.crafting_open || menu.inventory_open {
         return false;
     }
@@ -313,7 +313,7 @@ fn submit_chat(
 
     // Leading slash routes through the server's command dispatcher rather
     // than broadcasting as chat. The server is the source of truth for
-    // parsing, admin checks, and any state mutation — keeps clients honest.
+    // parsing, admin checks, and any state mutation, keeps clients honest.
     let message = if let Some(body) = trimmed.strip_prefix('/') {
         ClientMessage::Command {
             text: body.to_owned(),
@@ -614,7 +614,7 @@ mod tests {
         let wide = egui::Rect::from_min_max(egui::pos2(900.0, 600.0), egui::pos2(1500.0, 700.0));
         assert_eq!(effective_chat_width(Some(wide)), CHAT_MAX_WIDTH);
 
-        // Actionbar that crowds the chat — width should be reduced so the
+        // Actionbar that crowds the chat, width should be reduced so the
         // frame's outer-right edge sits `CHAT_ACTIONBAR_GAP` before the bar.
         let crowded = egui::Rect::from_min_max(egui::pos2(360.0, 600.0), egui::pos2(900.0, 700.0));
         let width = effective_chat_width(Some(crowded));

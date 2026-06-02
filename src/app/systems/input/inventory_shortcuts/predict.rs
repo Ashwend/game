@@ -15,7 +15,7 @@ use super::swing::equipped_tool_profile;
 /// [`next_payout_from_storage`] against the node's storage (folded with any
 /// unconfirmed predicted takes via [`PredictionState::effective_node_storage`])
 /// and the same [`accepted_inventory_quantity`] truncation against the bag. A
-/// full bag (`accepted == 0`) predicts nothing — matching the server, which
+/// full bag (`accepted == 0`) predicts nothing, matching the server, which
 /// only emits a "full" toast and applies the cooldown.
 pub(super) fn predict_gather(
     prediction: &mut PredictionState,
@@ -48,7 +48,7 @@ pub(super) fn predict_gather(
 /// Predict a dropped-item pickup, returning the action sequence the command
 /// should carry (`0` = not predicted). Predicts only the portion that fits
 /// the bag (mirroring the server's partial pickup), and hides the world item
-/// only when the *whole* stack fits — the server removes the world entity
+/// only when the *whole* stack fits, the server removes the world entity
 /// from existence only on a full pickup.
 pub(super) fn predict_pickup(
     prediction: &mut PredictionState,
@@ -88,7 +88,7 @@ pub(super) fn predict_pickup(
 /// [`PredictionState::effective_node_storage`]) adding each stack to a
 /// cloned bag with the shared [`accepted_inventory_quantity`], collect what
 /// fit, and treat the node as *fully drained* only when nothing is left
-/// behind — matching the server, which despawns the node only on a clean
+/// behind, matching the server, which despawns the node only on a clean
 /// full drain and leaves a partial node standing. A full bag (nothing fit)
 /// predicts nothing, mirroring the server's "full" toast + no-op.
 pub(super) fn predict_resource_node_pickup(

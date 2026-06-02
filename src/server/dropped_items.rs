@@ -36,7 +36,7 @@ pub(super) const DROPPED_ITEM_MERGE_RADIUS: f32 = 1.0;
 pub(super) const DROPPED_ITEM_LIFETIME_SECONDS: f32 = 180.0;
 pub(super) const DROPPED_ITEM_LIFETIME_TICKS: u64 =
     (DROPPED_ITEM_LIFETIME_SECONDS * SERVER_TICK_RATE_HZ) as u64;
-/// Cadence of the lifetime sweep. One pass per second is plenty — the
+/// Cadence of the lifetime sweep. One pass per second is plenty, the
 /// timeout has second-scale granularity and the sweep is O(N).
 pub(super) const DROPPED_ITEM_CLEANUP_INTERVAL_TICKS: u64 = SERVER_TICK_RATE_HZ as u64;
 
@@ -44,7 +44,7 @@ pub(super) const DROPPED_ITEM_CLEANUP_INTERVAL_TICKS: u64 = SERVER_TICK_RATE_HZ 
 pub(super) struct DroppedItemBody {
     pub(super) item: DroppedWorldItem,
     pub(super) body_handle: RigidBodyHandle,
-    /// Tick at which this body entered the world. In-memory only — items
+    /// Tick at which this body entered the world. In-memory only, items
     /// reloaded from a save are stamped with the load-time tick so a player
     /// returning after a long absence isn't greeted by a wave of instant
     /// despawns.
@@ -328,7 +328,7 @@ impl GameServer {
         }
         // Refuse partial merges. If the source can't be fully absorbed (e.g.
         // 100 + 8 with a 100 stack limit), moving anything just swaps which
-        // body is "full" and which is "small" — both still exist and the
+        // body is "full" and which is "small", both still exist and the
         // pair is back in `nearby_dropped_item_pairs` on the very next merge
         // tick, oscillating forever. Leaving the smaller stack alone until
         // there's room for all of it removes the flip while still letting

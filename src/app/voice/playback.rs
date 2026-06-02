@@ -6,7 +6,7 @@
 //! gains. The audio callback reads everything through a `Mutex` and mixes
 //! into the output buffer.
 //!
-//! Mixing is intentionally simple — per-speaker stereo gains, no HRTF, no
+//! Mixing is intentionally simple, per-speaker stereo gains, no HRTF, no
 //! Doppler. It's the right baseline for prototype quality and bumps the CPU
 //! footprint into the "negligible per frame" range.
 
@@ -36,7 +36,7 @@ const MAX_BUFFERED_SAMPLES_PER_SPEAKER: usize = VOICE_SAMPLE_RATE_HZ as usize / 
 /// cushion has to absorb (a) one full Bevy frame of jitter on the receive
 /// side (~16 ms at 60 Hz, more when the frame skips), (b) network jitter,
 /// and (c) the per-callback granularity. 100 ms is the sweet spot used by
-/// most game voice systems — large enough to ride out routine schedule
+/// most game voice systems, large enough to ride out routine schedule
 /// hiccups, small enough to stay perceptually "immediate".
 const PLAYBACK_WARMUP_SAMPLES: usize = (VOICE_SAMPLE_RATE_HZ as usize * 100) / 1000;
 
@@ -70,7 +70,7 @@ pub(crate) struct SpeakerSlot {
     /// reordered duplicates and to detect single-packet losses for FEC.
     pub(crate) last_sequence: Option<u16>,
     /// Jitter-buffer state. `false` until we've accumulated
-    /// [`PLAYBACK_WARMUP_SAMPLES`] for the first time — the audio callback
+    /// [`PLAYBACK_WARMUP_SAMPLES`] for the first time, the audio callback
     /// plays silence for this slot until then. Sticky once true; only
     /// resets if the buffer has been empty for
     /// [`PLAYBACK_RESET_AFTER_EMPTY_CALLBACKS`] callbacks in a row.
@@ -177,7 +177,7 @@ impl VoicePlayback {
                 && let Some(decoder) = slot.decoder.as_mut()
             {
                 // FEC reconstructs frame (prev + 1) from this packet's
-                // payload — the cheapest one-frame fill we can do.
+                // payload, the cheapest one-frame fill we can do.
                 if let Ok(samples) = decoder.decode(packet, true) {
                     push_samples(&mut slot.samples, &samples);
                 }
@@ -232,7 +232,7 @@ impl Drop for VoicePlayback {
 fn push_samples(buffer: &mut VecDeque<f32>, samples: &[f32]) {
     buffer.extend(samples.iter().copied());
     while buffer.len() > MAX_BUFFERED_SAMPLES_PER_SPEAKER {
-        // Discard the oldest tail — preferring a tiny truncation to ever-
+        // Discard the oldest tail, preferring a tiny truncation to ever-
         // increasing latency. In practice this only fires if the OS audio
         // graph stalls for hundreds of ms.
         buffer.pop_front();
@@ -403,7 +403,7 @@ fn fill_output_f32(out: &mut [f32], channels: usize, mixer: &Mutex<Mixer>) {
             slot.empty_callback_streak = 0;
         } else {
             slot.empty_callback_streak = slot.empty_callback_streak.saturating_add(1);
-            // Only re-arm warmup after a sustained empty window — a single
+            // Only re-arm warmup after a sustained empty window, a single
             // empty callback between packets is normal jitter, not a stop.
             if slot.empty_callback_streak >= PLAYBACK_RESET_AFTER_EMPTY_CALLBACKS {
                 slot.ready = false;

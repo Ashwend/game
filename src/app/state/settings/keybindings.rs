@@ -27,7 +27,7 @@ pub(crate) enum KeyAction {
     Jump,
     /// The `serde(alias = "Sprint")` keeps `settings.json` files written
     /// before the rename (when this action was called `Sprint`) loading
-    /// cleanly — any custom keybinding the player saved survives.
+    /// cleanly, any custom keybinding the player saved survives.
     #[serde(alias = "Sprint")]
     Run,
     OpenChat,
@@ -172,7 +172,7 @@ impl KeyAction {
 }
 
 /// Primary and optional secondary key for an action. `None` in either slot
-/// means "no key bound" — the player can leave a slot empty if they don't
+/// means "no key bound", the player can leave a slot empty if they don't
 /// want a secondary, or even unbind an action entirely.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct KeyBindingSlots {

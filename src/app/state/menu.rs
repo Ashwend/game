@@ -59,7 +59,7 @@ pub(crate) struct MenuState {
     pub(crate) pause_options_open: bool,
     pub(crate) inventory_open: bool,
     /// Whether the dedicated crafting screen is up. Like
-    /// `inventory_open`, this only frees the cursor and gates input — it
+    /// `inventory_open`, this only frees the cursor and gates input, it
     /// does not pause gameplay or the network tick. The server keeps
     /// progressing the queue regardless of this flag.
     pub(crate) crafting_open: bool,
@@ -70,7 +70,7 @@ pub(crate) struct MenuState {
     /// [`crate::app::systems::sync_furnace_open_flag_system`].
     pub(crate) furnace_open: bool,
     /// Mirrors `local_player.open_loot_bag.is_some()` from
-    /// replication. Same purpose as `furnace_open` — input gating
+    /// replication. Same purpose as `furnace_open`, input gating
     /// without reaching into the replicated state from every
     /// helper.
     pub(crate) loot_bag_open: bool,
@@ -80,7 +80,7 @@ pub(crate) struct MenuState {
     pub(crate) confirmation: Option<ConfirmationDialog>,
     pub(crate) notice: Option<NoticeDialog>,
     /// Set when the server tells the local client they died. Drives
-    /// the "You died — Killed by … — Respawn" splash. Cleared when the
+    /// the "You died, Killed by …, Respawn" splash. Cleared when the
     /// respawn lands (server pushes a `Correction` and the runtime
     /// flips back to alive) so the splash auto-dismisses.
     pub(crate) death_splash: Option<DeathSplash>,
@@ -104,7 +104,7 @@ pub(crate) struct DeathSplash {
     /// "YOU DIED" screen.
     pub(crate) elapsed: f32,
     /// Seconds spent in the closing-fade animation. `None` until the
-    /// respawn `Correction` lands — at that point the splash keeps
+    /// respawn `Correction` lands, at that point the splash keeps
     /// rendering but its backdrop alpha eases from "fully black" back
     /// to "fully transparent" over [`CLOSE_FADE_SECS`]. The splash
     /// clears itself when the fade completes, so the new HUD doesn't
@@ -121,7 +121,7 @@ impl DeathSplash {
         }
     }
 
-    /// Start the close-fade. Idempotent — once started, the same
+    /// Start the close-fade. Idempotent, once started, the same
     /// timer keeps ticking; a second call is a no-op so racing
     /// `Correction` messages can't reset the curve and leave the
     /// player staring at black.
@@ -171,7 +171,7 @@ impl MenuState {
     ///
     /// This flips the *screen* (so the scene starts building underneath the
     /// splash) but deliberately does NOT mark the loading splash ready to
-    /// fade — that's gated on the world actually being ready to interact with
+    /// fade, that's gated on the world actually being ready to interact with
     /// (Welcome applied, scene spawned, local player replicated) via
     /// `LoadingSplash::note_world_ready`, driven from the UI each frame. The
     /// session object existing only means the handshake started, not that the
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn begin_closing_is_idempotent() {
         // A second `Correction` that lands while the fade is already
-        // running must not reset the curve — that would freeze the
+        // running must not reset the curve, that would freeze the
         // player on a black screen for an extra fade window.
         let mut splash = DeathSplash::new(None);
         splash.begin_closing();

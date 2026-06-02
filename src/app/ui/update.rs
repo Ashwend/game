@@ -46,7 +46,7 @@ pub(super) fn update_modal(
             ui.label(theme::section("Update available"));
             ui.add_space(4.0);
             ui.label(theme::muted(format!(
-                "Ashwend v{version} is available — you have v{GAME_VERSION}."
+                "You're on v{GAME_VERSION}. Latest is v{version}."
             )));
             ui.add_space(12.0);
 
@@ -165,13 +165,13 @@ pub(super) fn update_corner_pill(ctx: &egui::Context, update: &mut UpdateState) 
         return;
     }
     let label = match &update.status {
-        UpdateStatus::Ready => "Update ready — restart".to_owned(),
+        UpdateStatus::Ready => "Update ready to install".to_owned(),
         UpdateStatus::Downloading { received, total } => {
             let pct = (download_fraction(*received, *total) * 100.0).round() as u32;
             format!("Updating… {pct}%")
         }
         _ => match update.latest_version() {
-            Some(version) => format!("Update available — v{version}"),
+            Some(version) => format!("Update available: v{version}"),
             None => "Update available".to_owned(),
         },
     };
@@ -193,7 +193,7 @@ pub(super) fn pause_update_row(ui: &mut egui::Ui, update: &mut UpdateState) {
         return;
     }
     let label = match &update.status {
-        UpdateStatus::Ready => "Update ready — restart".to_owned(),
+        UpdateStatus::Ready => "Update ready to install".to_owned(),
         _ => "Update available".to_owned(),
     };
     if super::menu_button(ui, &label).clicked() {

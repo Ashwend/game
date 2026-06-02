@@ -99,8 +99,8 @@ pub(crate) struct ClientRuntime {
 
 /// Surfaces a client-side error string as a toast. Emitted by any system
 /// that has access to a `MessageWriter<ClientErrorToast>` (chat send, input
-/// dispatch, network tick) so a single system —
-/// `surface_client_error_toasts_system` — can be the only place that writes
+/// dispatch, network tick) so a single system,
+/// `surface_client_error_toasts_system`, can be the only place that writes
 /// to `ToastState`. The runtime still keeps a copy in its chat log via
 /// `push_error_message` for in-game history; this event is just for the
 /// transient on-screen surface.
@@ -267,7 +267,7 @@ impl ClientRuntime {
     }
 
     pub(crate) fn apply_message(&mut self, message: ServerMessage) {
-        // Any server-originated payload — including the periodic Heartbeat —
+        // Any server-originated payload, including the periodic Heartbeat,
         // counts as proof the link is alive.
         self.connection.note_received();
         match message {
@@ -285,7 +285,7 @@ impl ClientRuntime {
                 self.world_version = self.world_version.wrapping_add(1);
                 self.seed_local_prediction(&local_seed);
                 // The world collision grid is rebuilt by
-                // `maintain_world_grid_system` once per frame —
+                // `maintain_world_grid_system` once per frame,
                 // bumping `world_version` (and the implicit
                 // change to the resource-node set) is the signal
                 // that triggers it.
@@ -325,12 +325,12 @@ impl ClientRuntime {
             }
             ServerMessage::ResourceImpact { .. } => {
                 // Fanned out to `RemoteImpactEvent` by the network tick
-                // system before reaching runtime state — no log/history
+                // system before reaching runtime state, no log/history
                 // side-effect here.
             }
             ServerMessage::PlayerImpact { .. } => {
                 // Fanned out to feedback events by the network tick
-                // system. Runtime keeps no log of hits — they show
+                // system. Runtime keeps no log of hits, they show
                 // as floating damage, chip burst, and HP
                 // replication.
             }
@@ -372,7 +372,7 @@ impl ClientRuntime {
             }
             ServerMessage::Voice { .. } => {
                 // Voice frames are dispatched as `IncomingVoiceMessage`
-                // events by the network tick system before this point —
+                // events by the network tick system before this point,
                 // the runtime keeps no per-frame voice history.
             }
             ServerMessage::Heartbeat => {}
@@ -469,7 +469,7 @@ impl ClientRuntime {
     /// Server-authoritative correction of the local prediction. Health
     /// is always overwritten (the server is the source of truth for
     /// damage). Position/velocity/yaw/pitch only snap when they differ
-    /// meaningfully from the current prediction — a small per-tick drift
+    /// meaningfully from the current prediction, a small per-tick drift
     /// shouldn't yank the player off-screen. The teleport, respawn, and
     /// future anti-cheat snap-back paths use this to force a full state
     /// reset by sending a `PlayerState` that diverges from the predicted
@@ -484,7 +484,7 @@ impl ClientRuntime {
         };
         predicted.health = player.health;
 
-        // Position snap threshold — anything past this looks like an
+        // Position snap threshold, anything past this looks like an
         // intentional server-side relocation (teleport, respawn) rather
         // than a small floating-point drift. 1 m is bigger than any
         // single-tick movement the controller can produce at run speed,

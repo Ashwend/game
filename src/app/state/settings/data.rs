@@ -86,7 +86,7 @@ impl DisplaySettings {
     /// The wgpu present mode for the primary window.
     ///
     /// Always `Immediate` regardless of the user's vsync preference: GPU
-    /// vsync (`Fifo`/`AutoVsync`) misbehaves on macOS Metal — `Fifo`
+    /// vsync (`Fifo`/`AutoVsync`) misbehaves on macOS Metal, `Fifo`
     /// flickers, `AutoVsync` fails to cap the frame rate at all. Frame
     /// limiting is handled CPU-side by `bevy_framepace`, which works
     /// reliably across platforms. See [`Self::frame_limiter`].
@@ -188,14 +188,14 @@ impl DisplayResolution {
 }
 
 /// Rendering options the player can dial in from the Graphics tab. These are
-/// all **client-side visual** knobs — none of them affect gameplay or what the
+/// all **client-side visual** knobs, none of them affect gameplay or what the
 /// server simulates, so they're free to differ between players. HDR is *not*
 /// exposed here: it's a required baseline for the procedural atmosphere sky and
 /// is always on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct GraphicsSettings {
     /// Whether the camera runs the bloom (light-glow) post-process pass. The
-    /// strength is intentionally not exposed — it's fixed at Bevy's natural
+    /// strength is intentionally not exposed, it's fixed at Bevy's natural
     /// preset; players just get a simple on/off like most games offer.
     #[serde(default = "default_bloom_enabled")]
     pub(crate) bloom_enabled: bool,
@@ -210,7 +210,7 @@ pub(crate) struct GraphicsSettings {
     /// a major GPU cost in dense forest, so this is a real perf lever.
     #[serde(default)]
     pub(crate) shadows: ShadowQuality,
-    /// Density of the procedural detail grass — a client-only cosmetic ground
+    /// Density of the procedural detail grass, a client-only cosmetic ground
     /// layer streamed in tiles around the camera. Higher tiers raise the blade
     /// count and the draw radius (more GPU cost), `Off` removes it entirely.
     #[serde(default)]
@@ -228,7 +228,7 @@ impl Default for GraphicsSettings {
     }
 }
 
-/// Procedural detail-grass density. Cosmetic, client-side, seed-free — none of
+/// Procedural detail-grass density. Cosmetic, client-side, seed-free, none of
 /// it touches gameplay, collision, or the server, so it's free to differ
 /// between players. `Off` despawns all grass; the other tiers map to a
 /// blades-per-tile + draw-radius pair in the grass renderer.
@@ -311,7 +311,7 @@ impl ShadowQuality {
 
 /// In-game anti-aliasing mode. FXAA is the default because MSAA leaves dark,
 /// shimmering fringes where geometry meets the procedural atmosphere sky (the
-/// fullscreen sky pass doesn't resolve cleanly under multisampling — Bevy's own
+/// fullscreen sky pass doesn't resolve cleanly under multisampling, Bevy's own
 /// atmosphere example uses FXAA for the same reason). MSAA is still offered for
 /// players who prefer its sharper interior edges and don't mind the fringing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -381,8 +381,8 @@ impl Default for AudioSettings {
 /// disk alongside the other [`ClientSettings`] tabs.
 ///
 /// Note: the *audible distance* is intentionally NOT a setting. It's a core
-/// gameplay rule — how far your voice carries is part of the game design,
-/// not a personal preference — and lives as a constant on the server-side
+/// gameplay rule, how far your voice carries is part of the game design,
+/// not a personal preference, and lives as a constant on the server-side
 /// voice module so both halves of the system agree.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub(crate) struct VoiceSettings {

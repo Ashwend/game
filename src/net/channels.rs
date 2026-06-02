@@ -23,13 +23,13 @@ use crate::{
 /// **independent of [`crate::protocol::PROTOCOL_VERSION`]**.
 ///
 /// The netcode bakes this id into the encrypted connect token and rejects any
-/// token whose id doesn't match — at the transport layer, before a single
+/// token whose id doesn't match, at the transport layer, before a single
 /// application message is exchanged. If it tracked `PROTOCOL_VERSION`, a
 /// version-bumped client would be bounced there and could never learn *which*
 /// version the server runs. Keeping it fixed lets the connection always reach
 /// the application-level `Auth` handshake, where `GameServer::connect` compares
 /// versions and answers with a structured `ServerMessage::VersionMismatch`
-/// carrying the server's version — so the client can show a "you're
+/// carrying the server's version, so the client can show a "you're
 /// newer/older" modal. The `Auth` / `AuthRejected` / `VersionMismatch` wire
 /// shapes must therefore stay stable across versions; bump this id only on a
 /// genuinely incompatible *transport* change.
@@ -133,7 +133,7 @@ pub(crate) fn send_server_message(
 /// servers and remote clients do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrivateKeyContext {
-    /// Singleplayer loopback — listener bound to localhost.
+    /// Singleplayer loopback, listener bound to localhost.
     Loopback,
     /// Anything reachable from another host (dedicated server, remote
     /// client). The all-zero default is dangerous here.
@@ -159,7 +159,7 @@ fn resolve_private_key(env_value: Option<&str>, context: PrivateKeyContext) -> [
         static WARNED: AtomicBool = AtomicBool::new(false);
         if !WARNED.swap(true, Ordering::Relaxed) {
             eprintln!(
-                "warning: LIGHTYEAR_PRIVATE_KEY is unset or unparseable — using the all-zero default. \
+                "warning: LIGHTYEAR_PRIVATE_KEY is unset or unparseable, using the all-zero default. \
                  Anyone on the network can forge connections with this key; set \
                  LIGHTYEAR_PRIVATE_KEY (32 comma-separated bytes) before exposing this server."
             );

@@ -3,10 +3,10 @@
 // It keeps StandardMaterial's PBR lighting (so grass is lit by the same sun +
 // atmosphere IBL as the rest of the scene) and layers on two effects:
 //
-//   * Vertex wind sway — tips displace along a world-space travelling wave,
+//   * Vertex wind sway, tips displace along a world-space travelling wave,
 //     weighted by the per-vertex sway weight baked into vertex-colour alpha
 //     (0 at the blade base, 1 at the tip), so blades bend rather than slide.
-//   * Fragment radial dither — whole blades are discarded with increasing
+//   * Fragment radial dither, whole blades are discarded with increasing
 //     probability as their distance from the camera grows, thinning the field
 //     into smooth rings (no hard cutoff line, no square tile boundaries). The
 //     discard key is a stable per-blade random stored in `uv.x`, so a blade is
@@ -29,18 +29,18 @@
 // `StandardMaterial` on Metal drops a `@binding(100)` extension uniform from the
 // pipeline layout, so referencing one here crashes at pipeline creation
 // ("binding 100 missing from pipeline layout"). Keeping the shader free of any
-// extension binding sidesteps that entirely — the trade-off is the fade window
+// extension binding sidesteps that entirely, the trade-off is the fade window
 // is fixed (so the draw radius is the same across density tiers; density only
 // changes blade count).
 
 // Radial-dither fade window (metres from camera): full density before `start`,
-// fully thinned by `end` — just inside the tile despawn radius so grass is gone
+// fully thinned by `end`, just inside the tile despawn radius so grass is gone
 // before a tile despawns (no pop).
 const FADE_START: f32 = 18.0;
 const FADE_END: f32 = 45.0;
 
 // Wind tuning. Strength = horizontal tip sway in metres; speed scales the
-// temporal wave; scale = spatial frequency (radians/metre — lower = longer,
+// temporal wave; scale = spatial frequency (radians/metre, lower = longer,
 // rolling gusts).
 const WIND_STRENGTH: f32 = 0.04;
 const WIND_SPEED: f32 = 1.15;

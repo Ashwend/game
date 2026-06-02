@@ -14,7 +14,7 @@ use super::gating::{gameplay_accepts_controls, primary_window_focused};
 /// Hard cap on a single frame's mouse delta. Without it, a stalled frame
 /// dumps two frames of accumulated motion into one yaw step, which reads as
 /// a sudden "snap" while strafing around a focused object. The cap is well
-/// above any normal flick (raw pixels — at 4k a fast flick is ~1500 px),
+/// above any normal flick (raw pixels, at 4k a fast flick is ~1500 px),
 /// so it only kicks in when a frame genuinely hiccups.
 const MAX_MOUSE_DELTA_PER_FRAME: f32 = 2000.0;
 

@@ -11,7 +11,7 @@ const IMPACT_GRAVITY: f32 = 5.4;
 // clamping chips here lets them settle on the surface instead of falling
 // through it.
 const CHIP_GROUND_Y: f32 = 0.02;
-// Vertical bounce restitution — chips kiss the ground rather than launching.
+// Vertical bounce restitution, chips kiss the ground rather than launching.
 const CHIP_BOUNCE: f32 = 0.18;
 // Horizontal friction applied per second while a chip is on the ground.
 const CHIP_GROUND_FRICTION: f32 = 6.0;
@@ -65,7 +65,7 @@ pub(crate) fn spawn_impact_effects_system(
     }
 }
 
-/// Spawn a radial shatter burst — the "rock cracked apart" effect we play
+/// Spawn a radial shatter burst, the "rock cracked apart" effect we play
 /// when an ore node is depleted. Chunks fly outward in every horizontal
 /// direction with a strong upward kick, tumble, then fall under gravity.
 pub(crate) fn spawn_ore_shatter_burst(
@@ -78,7 +78,7 @@ pub(crate) fn spawn_ore_shatter_burst(
     let speed = 2.6;
     let lifetime = 0.45;
     let chunk_scale = 1.30;
-    // Heavy gravity — chunks of rock are dense, they don't drift. Combined
+    // Heavy gravity, chunks of rock are dense, they don't drift. Combined
     // with the very low upward kick below, this gives a "crumbling" feel
     // where pieces tumble outward and fall straight to the ground rather
     // than blasting up like an explosion.
@@ -138,7 +138,7 @@ pub(crate) fn spawn_ore_shatter_burst(
 }
 
 /// Spawn a burst of impact chips at `anchor`. `intensity` scales the chip
-/// count, velocity, lifetime, and size — pass `1.0` for the regular per-hit
+/// count, velocity, lifetime, and size, pass `1.0` for the regular per-hit
 /// burst and a larger value (e.g. `3.0`) for "kill" effects when a resource
 /// node is depleted.
 pub(crate) fn spawn_impact_burst(
@@ -171,7 +171,7 @@ pub(crate) fn spawn_impact_burst(
                 2.0,
             ),
             // Crude pickups (branches, surface stones, grass) are
-            // hand-harvested — the burst should feel like flicking up
+            // hand-harvested, the burst should feel like flicking up
             // a handful of debris rather than a tool strike. Fewer
             // chips, smaller, shorter-lived. Grass also gets a green
             // material so the tuft visibly bursts into leaves rather
@@ -243,7 +243,7 @@ pub(crate) fn spawn_impact_burst(
         let r2 = hashed_unit(seed.wrapping_add(0xDEADBEEF));
         let r3 = hashed_unit(seed.wrapping_add(0xC0FFEE));
 
-        // Most of the energy goes into a horizontal spread — only a small
+        // Most of the energy goes into a horizontal spread, only a small
         // upward "puff" so chips clear the surface, then gravity pulls them
         // straight down and friction rolls them out.
         let angle = (index as f32 / count as f32) * std::f32::consts::TAU + r1 * 0.6;
@@ -319,7 +319,7 @@ fn advance_chip(transform: &mut Transform, chip: &mut ImpactChip, dt: f32) -> Ch
     chip.velocity.y -= IMPACT_GRAVITY * chip.gravity_scale * dt;
     transform.translation += chip.velocity * dt;
 
-    // Ground interaction — once a chip reaches the floor it stops sinking,
+    // Ground interaction, once a chip reaches the floor it stops sinking,
     // bounces a little, and slides outward under friction so it reads as
     // "tumbling along the ground until it stops" instead of vanishing in
     // mid-air or punching through the floor.
@@ -366,7 +366,7 @@ mod tests {
             gravity_scale: 1.0,
         };
 
-        // Mid-life — still alive, gravity has pulled velocity down.
+        // Mid-life, still alive, gravity has pulled velocity down.
         assert_eq!(
             advance_chip(&mut transform, &mut chip, 0.10),
             ChipStep::Alive
@@ -375,7 +375,7 @@ mod tests {
         assert!(transform.translation.y > 1.0);
         assert!(transform.scale.x > 0.99); // still in hold range
 
-        // Past the shrink threshold — scale should have shrunk noticeably.
+        // Past the shrink threshold, scale should have shrunk noticeably.
         assert_eq!(
             advance_chip(&mut transform, &mut chip, 0.25),
             ChipStep::Alive
@@ -470,7 +470,7 @@ mod tests {
 
     #[test]
     fn chip_bounces_off_the_floor_rather_than_sinking_through() {
-        // Start below the floor with downward velocity — the chip should be
+        // Start below the floor with downward velocity, the chip should be
         // clamped to ground level and its vertical velocity reflected up.
         let mut transform = Transform::from_xyz(0.0, -0.5, 0.0);
         let mut chip = ImpactChip {

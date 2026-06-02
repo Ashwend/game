@@ -59,7 +59,7 @@ pub(super) fn furnace_ui(
     }
     // Source of truth is the replicated `PlayerPrivate.open_furnace`:
     // the server populates it whenever the player opens a furnace and
-    // clears it on Close. The modal mirrors that — present when set,
+    // clears it on Close. The modal mirrors that, present when set,
     // absent otherwise.
     let view: OpenFurnaceView = match local_player
         .private
@@ -401,7 +401,7 @@ mod tests {
     #[test]
     fn furnace_ui_renders_with_inactive_furnace() {
         // Inactive furnace shows the "Turn on" primary button instead of
-        // the danger "Turn off" — both branches must paint cleanly.
+        // the danger "Turn off", both branches must paint cleanly.
         let mut menu = MenuState::default();
         let mut runtime = ClientRuntime::default();
         let local = local_player(Some(furnace_view(false)));

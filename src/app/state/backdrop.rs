@@ -45,8 +45,8 @@ impl MenuBackdropVisibility {
 
     /// Returns true once the menu backdrop has been on a backdrop-using
     /// screen long enough to finish its blur warmup. The startup splash
-    /// uses this as its readiness signal so the two crossfades — splash
-    /// out, backdrop in — happen as a single motion.
+    /// uses this as its readiness signal so the two crossfades, splash
+    /// out, backdrop in, happen as a single motion.
     pub(crate) fn has_finished_warmup(&self) -> bool {
         self.active && self.elapsed_seconds >= MENU_BACKDROP_BLUR_WARMUP_SECONDS
     }

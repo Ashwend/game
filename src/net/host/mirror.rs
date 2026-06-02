@@ -56,7 +56,7 @@ pub(super) fn sync_resource_node_entities(world: &mut World) {
     };
 
     // 1. Despawn the mirror entities for removed ids (no-op if one was added
-    //    and removed within the same sync window — it never got an entity).
+    //    and removed within the same sync window, it never got an entity).
     for id in removed {
         crate::server::despawn_resource_node_entity(world, id);
     }
@@ -67,7 +67,7 @@ pub(super) fn sync_resource_node_entities(world: &mut World) {
         match existing {
             Some(entity) => {
                 // Refresh storage in place. Change detection will only
-                // mark it changed when the Vec actually differs — that's
+                // mark it changed when the Vec actually differs, that's
                 // what triggers Lightyear's per-component diff ship.
                 if let Some(mut storage) =
                     world.get_mut::<crate::server::ResourceNodeStorage>(entity)
@@ -279,7 +279,7 @@ pub(super) fn sync_deployable_entities(world: &mut World) {
 /// per connected client and keeps its public + private components in
 /// sync with the authoritative `ServerClient`. The public/private split
 /// is what Phase 5 uses to ship per-component `Replicate::to_clients`
-/// targets — `NetworkTarget::All` for public, `Single(client_id)` for
+/// targets, `NetworkTarget::All` for public, `Single(client_id)` for
 /// private.
 pub(super) fn sync_player_entities(world: &mut World) {
     let _span = info_span!("sync_player_entities").entered();
@@ -307,7 +307,7 @@ pub(super) fn sync_player_entities(world: &mut World) {
             .get(view.client_id);
         match existing {
             Some(entity) => {
-                // Refresh public — position/velocity tick every frame.
+                // Refresh public, position/velocity tick every frame.
                 if let Some(mut public) = world.get_mut::<crate::server::PlayerPublic>(entity)
                     && *public != view.public
                 {
@@ -322,7 +322,7 @@ pub(super) fn sync_player_entities(world: &mut World) {
                     }
                     *public = view.public;
                 }
-                // Refresh private — inventory/crafting change on user action.
+                // Refresh private, inventory/crafting change on user action.
                 if let Some(mut private) = world.get_mut::<crate::server::PlayerPrivate>(entity)
                     && *private != view.private
                 {
@@ -336,7 +336,7 @@ pub(super) fn sync_player_entities(world: &mut World) {
                     }
                     *private = view.private;
                 }
-                // Refresh armor. Today only mutated by future systems —
+                // Refresh armor. Today only mutated by future systems,
                 // change detection still tracks it so the wire diff is
                 // ready the moment armor items start landing.
                 if let Some(mut armor) = world.get_mut::<crate::server::PlayerArmor>(entity)

@@ -24,7 +24,7 @@ env:
   GAME_MAP_SIZE: large
   # Bump this (e.g. world -> world-2) to wipe BleedingEdge: a new name makes the
   # server generate a fresh world file and leaves the previous save as a backup.
-  # Required when changing GAME_MAP_SIZE — the server refuses to start if the
+  # Required when changing GAME_MAP_SIZE, the server refuses to start if the
   # requested size doesn't match the existing save under this name.
   GAME_WORLD_NAME: world-1
 

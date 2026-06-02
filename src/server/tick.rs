@@ -24,7 +24,7 @@ impl GameServer {
             self.chunk_manager
                 .update_dropped_item_chunk(*id, body.item.position);
         }
-        // Chunk manager owns regrows now — fresh-position spawns 5-15 min
+        // Chunk manager owns regrows now, fresh-position spawns 5-15 min
         // after a node is depleted. The result is spliced into the live
         // node map; the mirror sync turns it into a replicated entity
         // on the next Update.
@@ -53,7 +53,7 @@ impl GameServer {
             .tick
             .is_multiple_of(DROPPED_ITEM_CLEANUP_INTERVAL_TICKS)
         {
-            // Removal is silent — the next mirror sync drops the ECS
+            // Removal is silent, the next mirror sync drops the ECS
             // entity, Lightyear ships the despawn to in-AoI clients, and
             // the visual goes away. Same lifecycle as pickups and merges.
             self.despawn_aging_dropped_items();
@@ -72,7 +72,7 @@ impl GameServer {
         }
 
         // Phase 6.6 deleted the per-tick `ServerMessage::Snapshot`
-        // broadcast — every state consumer now reads from
+        // broadcast, every state consumer now reads from
         // Lightyear-replicated components. Perf stats stay on their
         // own slow broadcast tick.
         if self
@@ -90,7 +90,7 @@ impl GameServer {
         envelopes
     }
 
-    /// Build the perf-stats payload for one client — covers the player's
+    /// Build the perf-stats payload for one client, covers the player's
     /// own AoI count plus the world-wide chunk bookkeeping. The classification
     /// is sampled at the player's feet so the HUD shows the biome under them.
     fn perf_stats_for(&self, client_id: ClientId) -> crate::protocol::PerfStatsSnapshot {

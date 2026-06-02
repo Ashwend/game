@@ -38,7 +38,7 @@ pub(crate) struct IncomingVoiceMessage {
 
 /// Listener-relative cosine of the forward axis. We use a tiny right-bias so
 /// directly-in-front (cos = 1) maps to "equal in both ears" rather than dead
-/// silence on one side — keeps speech intelligible in the common case.
+/// silence on one side, keeps speech intelligible in the common case.
 const STEREO_FRONT_BLEND: f32 = 0.4;
 
 #[derive(Resource, Default)]
@@ -46,7 +46,7 @@ pub(crate) struct VoiceState {
     capture: Option<VoiceCapture>,
     playback: Option<VoicePlayback>,
     /// Monotonic packet counter for the local mic stream. The 16-bit wrap is
-    /// fine — the receiver's cyclic comparison handles it.
+    /// fine, the receiver's cyclic comparison handles it.
     next_sequence: u16,
     /// `true` while the player is actively transmitting (PTT held). Drives
     /// the HUD indicator's animation target.
@@ -54,7 +54,7 @@ pub(crate) struct VoiceState {
     /// Smoothed 0..1 envelope for the on-screen indicator. Pulled up when
     /// transmitting, eased back down when released.
     pub(crate) indicator_envelope: f32,
-    /// `true` when the worker threads spawned successfully — false if cpal
+    /// `true` when the worker threads spawned successfully, false if cpal
     /// or libopus refused to initialise, so the UI can show a discreet
     /// "voice unavailable" hint without crashing.
     pub(crate) available: bool,
@@ -87,7 +87,7 @@ impl VoiceState {
 }
 
 pub(crate) fn setup_voice_system(mut commands: Commands) {
-    // Playback is cheap to leave open — it's an output-only audio stream
+    // Playback is cheap to leave open, it's an output-only audio stream
     // and (crucially) doesn't trigger Bluetooth profile switching the way
     // an open input stream does. Mic capture is started lazily by
     // `manage_voice_capture_system` only while the player is actually in
@@ -117,7 +117,7 @@ pub(crate) fn setup_voice_system(mut commands: Commands) {
 /// 2. Voice chat is enabled in the user settings.
 /// 3. The cpal/Opus init actually succeeds.
 ///
-/// When any of these flips off, the capture is dropped — its `Drop` impl
+/// When any of these flips off, the capture is dropped, its `Drop` impl
 /// joins the worker thread and closes the cpal stream, which on macOS is
 /// what makes a Bluetooth headset switch back from HSP/HFP (call quality,
 /// mono) to A2DP (stereo, full quality).
@@ -144,7 +144,7 @@ pub(crate) fn manage_voice_capture_system(
             }
         },
         (false, true) => {
-            // Drop the capture handle — `VoiceCapture::Drop` joins the
+            // Drop the capture handle, `VoiceCapture::Drop` joins the
             // worker thread and closes the cpal stream so the OS releases
             // the microphone (and the Bluetooth profile switches back).
             info!("voice capture stopped; releasing microphone");
@@ -197,7 +197,7 @@ pub(crate) fn transmit_voice_system(
         *level > 0.001
     });
 
-    // Always drain the capture channel — otherwise a stalled-but-running mic
+    // Always drain the capture channel, otherwise a stalled-but-running mic
     // thread would backlog frames during long PTT-off periods and burst them
     // the moment PTT is held again.
     let frames = match voice.capture.as_ref() {
@@ -285,7 +285,7 @@ pub(crate) fn apply_voice_settings_system(settings: Res<ClientSettings>, voice: 
 /// the local listener. The distance falloff is intentionally gentle:
 ///
 /// - **0 .. 40% of max_distance** → full volume. This is the "you're in
-///   conversational range" zone — speech stays crisp without the player
+///   conversational range" zone, speech stays crisp without the player
 ///   having to stand right next to the talker.
 /// - **40% .. 90%** → linear falloff. Linear (rather than quadratic) keeps
 ///   the talker audibly present out to nearly the full range, which is
@@ -314,7 +314,7 @@ fn spatial_gain(
 
     // Equal-power stereo panning. `theta = 0` at full-left, `pi/2` at
     // full-right; cos/sin keep the perceived loudness constant as the
-    // source sweeps across the stereo field and — crucially — never let
+    // source sweeps across the stereo field and, crucially, never let
     // either channel exceed 1.0 of `amplitude`, which is what prevents the
     // hard-clip distortion the prior asymmetric formula could produce.
     let to_source_x = dx;
@@ -327,7 +327,7 @@ fn spatial_gain(
     let dir_z = to_source_z / len;
     let dot_right = (dir_x * listener.right_x + dir_z * listener.right_z).clamp(-1.0, 1.0);
     // Soften extreme panning so a source directly to one side still bleeds
-    // a little to the other ear — closer to natural HRTF behaviour and
+    // a little to the other ear, closer to natural HRTF behaviour and
     // keeps speech intelligible without forcing the player to turn.
     let softened_pan = dot_right * (1.0 - STEREO_FRONT_BLEND);
     let theta = (softened_pan + 1.0) * 0.25 * std::f32::consts::PI;

@@ -43,7 +43,7 @@ pub(crate) mod transitions;
 // today (audio bus, music, footsteps, impact) plus the future-facing
 // hooks (ambient beds + emitters, fader component, library handle) that
 // new sounds and gameplay systems can wire up without reaching past
-// this module's boundary. Suppressing the warning is correct here — the
+// this module's boundary. Suppressing the warning is correct here, the
 // items are intentionally exported even when nothing inside the binary
 // references them yet.
 #[allow(unused_imports)]
@@ -66,7 +66,7 @@ pub(crate) use transitions::{ScreenTransitionWatch, play_transition_stingers_sys
 /// Bevy plugin wiring up audio resources, events, and startup loaders.
 ///
 /// Add this to the app after `DefaultPlugins` and `EmbeddedAssetsPlugin`
-/// — the asset server must exist and the embedded registry must be
+///, the asset server must exist and the embedded registry must be
 /// populated before [`setup_sound_library`] runs.
 pub(crate) struct AudioPlugin;
 

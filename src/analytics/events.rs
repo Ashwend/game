@@ -2,7 +2,7 @@
 //!
 //! Every captured event is one variant of [`Event`]. The associated event
 //! name and JSON properties are produced by [`Event::name_and_props`]. New
-//! events MUST be added here rather than passed as raw strings — that keeps
+//! events MUST be added here rather than passed as raw strings, that keeps
 //! event names greppable, prevents typos that would silently fork a
 //! dashboard, and concentrates the per-property enums (reason categories,
 //! screen kinds, etc.) in one file.

@@ -45,8 +45,8 @@ pub(super) fn spawn_resource_node_entity(
         spawn_command.insert(MeshMaterial3d(material.clone()));
     }
     // Crude clutter (branch piles, surface stones, hay grass) spawns
-    // densely — Plains chunks alone carry ~28 grass tufts plus stones
-    // and sticks — and each casts a negligible-size shadow under its
+    // densely, Plains chunks alone carry ~28 grass tufts plus stones
+    // and sticks, and each casts a negligible-size shadow under its
     // own footprint. Skipping the shadow pass for these gets us a
     // meaningful per-frame win in populated areas without losing
     // readable silhouettes (trees and veins still cast).
@@ -62,7 +62,7 @@ pub(super) fn spawn_resource_node_entity(
     // Trees get a distance LOD: this (full-detail) mesh switches off past
     // `TREE_LOD_DISTANCE`; a child carrying the low-poly mesh switches on at the
     // same distance. Bevy's `VisibilityRange` does this GPU-side off the
-    // existing visibility pass — no per-frame CPU cost. It's a hard step, not a
+    // existing visibility pass, no per-frame CPU cost. It's a hard step, not a
     // dither crossfade (see `TREE_LOD_DISTANCE` for why). Cuts main-pass vertex
     // throughput across a forest of distant trees (shadow distance is bounded
     // separately by the Shadows graphics setting).
@@ -132,7 +132,7 @@ fn tree_lod_high_range() -> VisibilityRange {
 /// `VisibilityRange` for the low-poly mesh: hard switch-in at
 /// `TREE_LOD_DISTANCE`, then visible out to the (well-beyond-far-plane) cutoff.
 /// The switch-in distance is identical to the high mesh's cutoff so exactly one
-/// LOD is visible at any distance — no gap, no overlap.
+/// LOD is visible at any distance, no gap, no overlap.
 fn tree_lod_low_range() -> VisibilityRange {
     VisibilityRange {
         start_margin: TREE_LOD_DISTANCE..TREE_LOD_DISTANCE,
@@ -143,7 +143,7 @@ fn tree_lod_low_range() -> VisibilityRange {
 
 /// A short upward chip burst sells the "fresh from the ground" moment.
 /// Trees throw wood chips, ores throw stone shards, crude nodes throw
-/// their own small per-kind burst — same palette as gather impacts so
+/// their own small per-kind burst, same palette as gather impacts so
 /// the visual language stays consistent.
 fn spawn_pop_in_chip_burst(
     commands: &mut Commands,

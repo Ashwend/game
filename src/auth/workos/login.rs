@@ -5,7 +5,7 @@
 //! Flow: generate a PKCE verifier/challenge + state -> bind a one-shot loopback
 //! HTTP listener on `127.0.0.1:<port>` -> open the system browser to the WorkOS
 //! authorize URL -> the browser comes back to the loopback with `?code` -> swap
-//! the code for tokens (public client, no secret — PKCE proves it's the same
+//! the code for tokens (public client, no secret, PKCE proves it's the same
 //! app). The short-lived access token rides the game's `Auth` handshake and is
 //! verified server-side against the JWKS (see [`crate::auth::WorkosVerifier`]);
 //! the refresh token is kept in the OS keychain so we can silently re-auth on
@@ -53,7 +53,7 @@ impl ScreenHint {
 
     /// OIDC `prompt` value, if any, to send with the authorize request. An
     /// explicit sign-in always forces a fresh credential entry (`prompt=login`)
-    /// so that signing out and back in — or switching accounts — can't silently
+    /// so that signing out and back in, or switching accounts, can't silently
     /// reuse a lingering WorkOS browser session. Sign-up sends nothing so the
     /// browser lands on the registration screen untouched.
     fn prompt(self) -> Option<&'static str> {
@@ -189,7 +189,7 @@ pub fn begin_restore(config: &WorkosConfig) -> LoginHandle {
 
 /// Silently restore a session at startup from the stored refresh token. Returns
 /// `None` (and clears the stored token) if there's no token or the refresh
-/// fails — the caller then shows the login splash.
+/// fails, the caller then shows the login splash.
 pub fn restore_session(config: &WorkosConfig) -> Option<Session> {
     let refresh_token = load_refresh_token()?;
     match refresh(config, &refresh_token) {
@@ -298,7 +298,7 @@ fn handle_callback(mut stream: TcpStream) -> Result<(String, String), String> {
     }
 
     let outcome = match (&code, &error) {
-        (Some(_), _) => "You're signed in. Return to Ashwend — you can close this tab.",
+        (Some(_), _) => "You're signed in. Return to Ashwend and close this tab.",
         _ => "Sign-in failed. Return to Ashwend and try again.",
     };
     write_browser_response(&mut stream, outcome);

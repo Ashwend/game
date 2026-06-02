@@ -14,14 +14,14 @@ dev-fast = ["bevy/dynamic_linking"]
 # Dev-only diagnostic. Logs every server-side mutation of replicated
 # resource-node components and every client-side reception of the same.
 # Used to verify whether Lightyear's per-component replication path is
-# actually delivering updates after the initial spawn. Off by default —
+# actually delivering updates after the initial spawn. Off by default, 
 # the logs are noisy enough to obscure real signal under normal play.
 replication-trace = []
 # Dev-only. Emits a Chrome tracing JSON (`trace-<unix-ms>.json` in cwd) with
 # per-system, per-schedule, and render-pass spans, plus enables extra runtime
 # diagnostics (FPS/frame time/entity count/CPU/RAM) logged to stdout. Use via
 # `./cli profile` and feed the resulting trace into chrome://tracing or
-# ui.perfetto.dev. Do not enable for release builds — tracing has a perf
+# ui.perfetto.dev. Do not enable for release builds, tracing has a perf
 # cost and the trace file grows fast.
 profile = ["bevy/trace_chrome"]
 
@@ -35,7 +35,7 @@ bevy_egui = "0.39.1"
 # sleeping on the CPU before each frame is presented. We rely on this
 # rather than the GPU's vsync (`PresentMode::Fifo`/`AutoVsync`) because
 # macOS Metal's Fifo implementation has long-standing pacing/flicker bugs
-# in wgpu — software pacing produces stable frame times where Fifo does
+# in wgpu, software pacing produces stable frame times where Fifo does
 # not. The `framepace_debug` feature would add a debug overlay we don't
 # need, so default features are off.
 bevy_framepace = { version = "0.21", default-features = false }
@@ -49,21 +49,21 @@ directories = "6.0.0"
 # GitHub release notes (changelog since the player's version) as styled
 # markdown. Pinned to the 0.22 line because that is the release that targets
 # egui ^0.33, which is what `bevy_egui` 0.39 pulls in. `default-features = off`
-# drops the optional image/syntax-highlighting backends — our changelog is
-# headings, bullet lists, inline code, and links, no images — so we avoid
+# drops the optional image/syntax-highlighting backends, our changelog is
+# headings, bullet lists, inline code, and links, no images, so we avoid
 # dragging in the `image`/`syntect` crates.
 egui_commonmark = { version = "0.22", default-features = false }
 # Compile-time tree of `assets/` baked into the binary. The audio system walks
 # this at startup to register every shipped sound with Bevy's embedded asset
-# source — adding a new clip is now "drop the file in `assets/`", no per-file
+# source, adding a new clip is now "drop the file in `assets/`", no per-file
 # `include_bytes!` row to maintain.
 include_dir = "0.7"
-# OS keychain for the WorkOS refresh token on the client — see the per-OS
+# OS keychain for the WorkOS refresh token on the client, see the per-OS
 # `[target.…]` sections below for the backend on each platform. The refresh
 # token is the only credential we persist, never in plain text; the short-lived
 # access token stays in memory.
 # Offline JWT verification for WorkOS access tokens on the authoritative server
-# (RS256 against the WorkOS JWKS) plus JWK parsing. No secrets needed — the
+# (RS256 against the WorkOS JWKS) plus JWK parsing. No secrets needed, the
 # server only ever holds the public client id and the public signing keys.
 jsonwebtoken = "9.3"
 lightyear = { version = "0.26.4", default-features = false, features = ["client", "server", "netcode", "udp", "replication"] }
@@ -92,7 +92,7 @@ thiserror = "2.0.18"
 # for the analytics pipeline).
 toml = "0.8"
 # Blocking HTTP client used by the analytics background worker. Picked over
-# `reqwest` because the app has no live tokio runtime — the analytics worker
+# `reqwest` because the app has no live tokio runtime, the analytics worker
 # is a single OS thread that POSTs in a recv-then-flush loop.
 ureq = { version = "2.10", default-features = false, features = ["tls", "json"] }
 uuid = { version = "1.23.1", features = ["serde", "v4"] }
@@ -110,7 +110,7 @@ zstd = "0.13.3"
 # the new game binary from it. macOS and Windows ship a `.zip` (the macOS one
 # wraps `Ashwend.app`), so those builds need the `zip` reader; Linux ships a
 # `.tar.gz`, so that build needs `flate2` + `tar`. Each backend is gated to the
-# OS that actually consumes it — same pattern as the per-OS `keyring` below —
+# OS that actually consumes it, same pattern as the per-OS `keyring` below, 
 # so no platform compiles an extractor it never calls. `zip` runs with
 # `default-features = off` + just `deflate`, the only codec `ditto`/the release
 # zips use, which reuses the `flate2`/`miniz_oxide` already in the tree.

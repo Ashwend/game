@@ -16,7 +16,7 @@ const LIMB_DARK: MeshColor = [0.18, 0.20, 0.26, 1.0];
 const ACCENT: MeshColor = [0.20, 0.18, 0.16, 1.0];
 
 /// Builds a low-poly humanoid mesh for remote players. Single mesh so the
-/// entire body inherits one parent transform — the snapshot apply system
+/// entire body inherits one parent transform, the snapshot apply system
 /// only has to interpolate the root.
 ///
 /// Local frame: y=0 is `PLAYER_VISUAL_CENTER_Y` above feet, -Z is forward
@@ -29,13 +29,13 @@ pub(crate) fn low_poly_player_mesh() -> Mesh {
     // feet level). Center each so the bottom sits flush with the ground.
     for x in [-0.13, 0.13] {
         builder.add_box([x, -0.55, 0.0], [0.10, 0.35, 0.11], LIMB);
-        // Boots — a darker stub at the very bottom for visual contrast.
+        // Boots, a darker stub at the very bottom for visual contrast.
         builder.add_box([x, -0.85, 0.02], [0.11, 0.05, 0.13], LIMB_DARK);
     }
 
     // Torso: chunky chest with a slightly recessed waist for a hint of shape.
     builder.add_box([0.0, 0.10, 0.0], [0.30, 0.34, 0.17], TORSO);
-    // Belt — darker band across the waist seam.
+    // Belt, darker band across the waist seam.
     builder.add_box([0.0, -0.24, 0.0], [0.31, 0.04, 0.18], TORSO_DARK);
 
     // Arms: hanging at the sides, slightly forward so the silhouette reads
@@ -49,7 +49,7 @@ pub(crate) fn low_poly_player_mesh() -> Mesh {
     // the front so the facing direction reads at a glance.
     builder.add_box([0.0, 0.62, 0.0], [0.17, 0.17, 0.16], HEAD_SKIN);
     builder.add_box([0.0, 0.78, 0.0], [0.18, 0.04, 0.17], HAIR);
-    // Visor — front-facing dark strip. -Z is forward in Bevy.
+    // Visor, front-facing dark strip. -Z is forward in Bevy.
     builder.add_box([0.0, 0.64, -0.16], [0.16, 0.04, 0.01], ACCENT);
     // Tiny nose nub for additional facing cue.
     builder.add_box([0.0, 0.58, -0.17], [0.025, 0.03, 0.02], ACCENT);

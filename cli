@@ -6,10 +6,10 @@ cd "$ROOT"
 
 # When the game binary is launched directly (not through `cargo run`),
 # CARGO_MANIFEST_DIR is missing and Bevy's AssetServer falls back to the
-# directory of the executable — which is `target/debug/` during local dev
+# directory of the executable, which is `target/debug/` during local dev
 # and has no `assets/` folder. Setting BEVY_ASSET_ROOT here gives every
-# binary launched from this script — and any child processes it spawns,
-# like the multiplayer-test client windows — a stable, project-relative
+# binary launched from this script, and any child processes it spawns,
+# like the multiplayer-test client windows, a stable, project-relative
 # asset root.
 export BEVY_ASSET_ROOT="$ROOT"
 
@@ -71,7 +71,7 @@ case "$cmd" in
     # diagnostics plugins. Bevy writes `trace-<unix-ms>.json` to the
     # working directory on exit; load it in chrome://tracing or
     # ui.perfetto.dev. Run release-ish opt levels so the trace reflects
-    # something close to shipped perf — `[profile.dev.package."*"]` already
+    # something close to shipped perf, `[profile.dev.package."*"]` already
     # builds deps at opt-level 3, so a plain dev build is acceptable here.
     cargo run --features profile --bin ashwend -- client "$@"
     ;;

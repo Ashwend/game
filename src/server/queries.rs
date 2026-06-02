@@ -34,7 +34,7 @@ impl GameServer {
         self.chunk_manager.visible_chunks(position, tier)
     }
 
-    /// Chunks the given client's subscription should be *retained* for —
+    /// Chunks the given client's subscription should be *retained* for,
     /// the AoI ring widened by the spatial-hysteresis keep margin. Always a
     /// superset of `visible_chunks_for_client`. Empty if the client isn't
     /// connected.
@@ -78,7 +78,7 @@ impl GameServer {
     }
 
     /// Insert (or replace) a node and record it for the next mirror sync. The
-    /// single entry point for adding nodes — keeps `node_sync_dirty` accurate.
+    /// single entry point for adding nodes, keeps `node_sync_dirty` accurate.
     pub(crate) fn insert_resource_node(&mut self, id: ResourceNodeId, node: ResourceNodeState) {
         self.resource_nodes.insert(id, node);
         self.node_sync_dirty.insert(id);

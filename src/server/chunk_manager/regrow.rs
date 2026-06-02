@@ -30,7 +30,7 @@ impl ChunkManager {
         if let Some(grid) = self.grids.get_mut(&coord) {
             grid.remove_live(kind, node_id);
         }
-        // Pick a per-event delay deterministically — same coord+kind+tick
+        // Pick a per-event delay deterministically, same coord+kind+tick
         // round-trips identically on save+load.
         self.placement_counter = splitmix64(self.placement_counter ^ now_tick ^ node_id);
         let span = MAX_REGROW_TICKS.saturating_sub(MIN_REGROW_TICKS).max(1);
@@ -72,7 +72,7 @@ impl ChunkManager {
     /// Find an open position inside `coord` for `kind`, build the
     /// resource state, and bookkeep it in the per-chunk live set. Returns
     /// `None` if the chunk is full for this kind or no candidate fit
-    /// inside the candidate budget — better to drop a respawn than to
+    /// inside the candidate budget, better to drop a respawn than to
     /// jam a node into an occupied square.
     fn place_fresh_node(
         &mut self,
@@ -132,7 +132,7 @@ fn candidate_positions(
     salt: u64,
     bounds: PlayableBounds,
 ) -> Vec<ChunkSpawn> {
-    // We just want a few candidates, not the full target capacity — the
+    // We just want a few candidates, not the full target capacity, the
     // caller filters by collision and picks the first survivor. Re-run
     // the per-chunk generator with a salted seed so we're not handing
     // out the same point set every time. The bounds get forwarded so a

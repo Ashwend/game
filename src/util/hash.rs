@@ -3,7 +3,7 @@
 //! `mix32` is the classic Murmur3 finalizer. It produces a well-distributed
 //! `u32` from any 32-bit seed and is fast enough to call inline. We use it for
 //! impact-chip spread, admin-spawned ore placement, and node-set fingerprints
-//! — anywhere we want "feels different per input" without dragging in the
+//!, anywhere we want "feels different per input" without dragging in the
 //! `rand` crate.
 
 /// Mix a 32-bit seed into a well-distributed `u32`. Identical inputs yield

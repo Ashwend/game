@@ -1,7 +1,7 @@
 //! Server-side WorkOS access-token verification.
 //!
 //! Validates RS256 access-token JWTs against the public JWKS for one client id
-//! — no API key, no secrets. Build once per server and share via `Arc`; the
+//!, no API key, no secrets. Build once per server and share via `Arc`; the
 //! JWKS is fetched lazily over HTTP and cached.
 
 use std::{

@@ -23,14 +23,14 @@ use super::{
 // Distance the player must travel along the ground between footsteps.
 // Tuned against the game's movement speeds (`WALK_SPEED = 5.2 m/s`,
 // `RUN_SPEED = 7.0 m/s`) so walking gives ~2.6 Hz cadence and running
-// ~3.5 Hz — slow enough to read as deliberate footfalls rather than the
+// ~3.5 Hz, slow enough to read as deliberate footfalls rather than the
 // frantic ~4.7 Hz a tighter interval produced at the previous run-speed
 // tuning. Trigger is distance-based so the walk → run transition is
 // smooth: accelerating shortens the interval frame by frame, no discrete
 // state switch.
 const STEP_INTERVAL_DISTANCE: f32 = 2.0;
 
-// Don't fire footsteps while the player is barely moving — keeps a single
+// Don't fire footsteps while the player is barely moving, keeps a single
 // stray sub-pixel of drift from playing a step.
 const MIN_HORIZONTAL_SPEED: f32 = 0.5;
 
@@ -62,7 +62,7 @@ const LANDING_MAX_GAIN_DB: f32 = 5.0;
 pub(crate) struct FootstepState {
     last_xz: Option<(f32, f32)>,
     accumulated_distance: f32,
-    /// Grounded state last frame — the airborne→grounded edge is the landing.
+    /// Grounded state last frame, the airborne→grounded edge is the landing.
     was_grounded: bool,
     /// Downward speed last frame. Grounding zeroes vertical velocity in the
     /// simulator, so the landing footstep keys off the previous frame's value
@@ -94,7 +94,7 @@ impl FootstepState {
     /// landing footfall if this frame is the moment the player touched down
     /// hard enough to be heard. While dead the state is pinned to the grounded
     /// baseline: the predicted controller keeps falling under gravity during
-    /// the death splash, then respawn snaps it to the ground — without this
+    /// the death splash, then respawn snaps it to the ground, without this
     /// guard that snap would fire a phantom thud from the pre-death fall.
     fn detect_landing(&mut self, grounded: bool, fall_speed: f32, alive: bool) -> Option<f32> {
         if !alive {
@@ -133,7 +133,7 @@ pub(crate) fn play_footsteps_system(
         Some(crate::server::PlayerLifecycle::Dead { .. })
     );
 
-    // Landing footstep — fired the instant the player touches down, *before*
+    // Landing footstep, fired the instant the player touches down, *before*
     // the standing-still / airborne guard below so a straight-up jump still
     // lands audibly even though the player isn't moving horizontally.
     if let Some(landing_fall_speed) = state.detect_landing(predicted.grounded, fall_speed, alive) {
@@ -154,13 +154,13 @@ pub(crate) fn play_footsteps_system(
     let current_xz = (position.x, position.z);
 
     let Some((last_x, last_z)) = state.last_xz else {
-        // First tick after (re)spawn — seed last position and skip; we
+        // First tick after (re)spawn, seed last position and skip; we
         // have no previous frame to measure travel against.
         state.last_xz = Some(current_xz);
         return;
     };
 
-    // Always update last_xz before any early return — otherwise a frame
+    // Always update last_xz before any early return, otherwise a frame
     // spent airborne would make the following ground frame see a huge
     // teleport-sized displacement and fire a burst of steps.
     state.last_xz = Some(current_xz);
@@ -212,7 +212,7 @@ fn landing_gain_offset_db(fall_speed: f32) -> f32 {
 }
 
 /// Resolve the surface under the player. Looks up the topmost block
-/// whose top surface is right under the player's feet — if there is
+/// whose top surface is right under the player's feet, if there is
 /// one, its kind picks the surface; otherwise the player is on the
 /// world floor and we fall back to dirt.
 fn surface_material_under(
@@ -293,7 +293,7 @@ mod tests {
         let mut state = FootstepState::default();
         // Standing on the ground: no landing.
         assert!(state.detect_landing(true, 0.0, true).is_none());
-        // Jump: airborne, rising then falling — no landing yet.
+        // Jump: airborne, rising then falling, no landing yet.
         assert!(state.detect_landing(false, 0.0, true).is_none());
         assert!(state.detect_landing(false, 8.0, true).is_none());
         // Touch down: fires with the *previous* frame's fall speed (8.0),
@@ -323,7 +323,7 @@ mod tests {
         state.detect_landing(false, 20.0, true); // airborne, falling hard
         // Dies mid-fall: state pins to the grounded baseline, no thud.
         assert!(state.detect_landing(false, 25.0, false).is_none());
-        // Respawn snaps to the ground on the first alive frame — must NOT
+        // Respawn snaps to the ground on the first alive frame, must NOT
         // fire a landing from the pre-death fall.
         assert!(state.detect_landing(true, 0.0, true).is_none());
     }

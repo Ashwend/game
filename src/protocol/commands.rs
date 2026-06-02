@@ -26,12 +26,12 @@ pub enum InventoryCommand {
         /// Optimistic-prediction sequence number (see [`InventoryCommand::action_seq`]).
         seq: u32,
     },
-    /// Quick-pick a crude (hand-harvestable) resource node — surface
+    /// Quick-pick a crude (hand-harvestable) resource node, surface
     /// stones, branch piles, grass tufts. Server treats this as an
     /// instant full drain: as much of the node's storage as fits flows
     /// straight into the player's inventory, and the node despawns if
     /// fully emptied. Rejected server-side for non-crude nodes (trees,
-    /// ore veins) — those still require a tool swing.
+    /// ore veins), those still require a tool swing.
     PickUpResourceNode {
         resource_node_id: ResourceNodeId,
         /// Optimistic-prediction sequence number (see [`InventoryCommand::action_seq`]).
@@ -49,8 +49,8 @@ impl InventoryCommand {
     /// The optimistic-prediction sequence number for the client-predicted
     /// variants (`Move`/`Drop`/`PickUp`/`PickUpResourceNode`); `None` for
     /// variants the client does not predict. The server advances the
-    /// per-client `applied_action_seq` to this value — whether it accepts or
-    /// rejects the command — so the client can prune the matching pending
+    /// per-client `applied_action_seq` to this value, whether it accepts or
+    /// rejects the command, so the client can prune the matching pending
     /// overlay op and either confirm or revert.
     pub fn action_seq(&self) -> Option<u32> {
         match self {
@@ -85,7 +85,7 @@ pub struct PlaceDeployableCommand {
 }
 
 /// Client → server damage intent for a placed structure. Server picks
-/// the damage amount from the player's currently-equipped tool — no
+/// the damage amount from the player's currently-equipped tool, no
 /// damage payload on the wire so clients can't lie about how hard they
 /// hit.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -94,7 +94,7 @@ pub struct DamageDeployableCommand {
 }
 
 /// Client → server PvP melee attack intent. Same shape as
-/// `DamageDeployableCommand` — only an id is shipped, the server reads
+/// `DamageDeployableCommand`, only an id is shipped, the server reads
 /// the attacker's active tool itself so the client can't lie about
 /// what it's swinging.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -103,7 +103,7 @@ pub struct AttackPlayerCommand {
 }
 
 /// Loot bag commands. Same Open/Close/Move shape as
-/// `FurnaceCommand` — the bag is essentially "a furnace with no
+/// `FurnaceCommand`, the bag is essentially "a furnace with no
 /// smelt loop" from the wire layer's perspective. The server gates
 /// every move on the player having the bag open.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -111,7 +111,7 @@ pub enum LootBagCommand {
     /// Open the bag's UI server-side. Replied to by replicating the
     /// `OpenLootBagView` on `PlayerPrivate`.
     Open { id: LootBagId },
-    /// Close the active bag, if any. Idempotent — no-op when there's
+    /// Close the active bag, if any. Idempotent, no-op when there's
     /// nothing open. If the bag is empty when this lands the server
     /// also despawns the entity.
     Close,
@@ -123,7 +123,7 @@ pub enum LootBagCommand {
         to: LootBagSlotRef,
         quantity: Option<u16>,
     },
-    /// Shift-click "send this somewhere useful" — same idea as
+    /// Shift-click "send this somewhere useful", same idea as
     /// `FurnaceCommand::QuickTransfer`. From a bag slot, the stack
     /// flows back into the player's inventory; from a player slot,
     /// it lands in the first empty bag slot. Lets the player loot
@@ -159,7 +159,7 @@ pub enum FurnaceCommand {
     /// Open the furnace UI on the server side. The server replies by
     /// including `open_furnace` in the next snapshot for this client.
     Open { id: DeployedEntityId },
-    /// Close the active furnace, if any. Idempotent — no-op when the
+    /// Close the active furnace, if any. Idempotent, no-op when the
     /// player has no furnace open.
     Close,
     /// Toggle the furnace's burn state. Auto-shutoff still applies on
@@ -187,13 +187,13 @@ pub enum FurnaceCommand {
     ///
     /// Authoritative item-kind detection lives server-side so the client
     /// doesn't have to duplicate `fuel_burn_ticks_for` or smelt-recipe
-    /// tables — saves one wire format coupling per added fuel/recipe.
+    /// tables, saves one wire format coupling per added fuel/recipe.
     QuickTransfer { from: FurnaceSlotRef },
 }
 
 /// Addressable slot used by [`FurnaceCommand::Move`]. Refers either to
 /// a slot in the player's own inventory/actionbar or to one of the
-/// furnace's slots — both endpoints flow through one move command.
+/// furnace's slots, both endpoints flow through one move command.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum FurnaceSlotRef {
     PlayerInventory(usize),
@@ -206,7 +206,7 @@ pub enum FurnaceSlotRef {
 
 /// Per-client view of the furnace currently open on the server.
 /// `progress_fraction` is the smelt timer of the head input slot for
-/// quick UI rendering — the per-slot inputs themselves are not split
+/// quick UI rendering, the per-slot inputs themselves are not split
 /// into separate "input vs output" lists since items in a furnace slot
 /// can be either, depending on whether they're smeltable.
 ///
@@ -220,9 +220,9 @@ pub struct OpenFurnaceView {
     pub fuel: Option<ItemStack>,
     pub items: Vec<Option<ItemStack>>,
     pub active: bool,
-    /// 0.0..1.0 — fraction of the current smelt operation. 0 when idle.
+    /// 0.0..1.0, fraction of the current smelt operation. 0 when idle.
     pub smelt_fraction: f32,
-    /// 0.0..1.0 — fraction of the currently-burning fuel unit. 0 when
+    /// 0.0..1.0, fraction of the currently-burning fuel unit. 0 when
     /// no fuel is burning. Drives the small "fuel" indicator in the UI.
     pub fuel_fraction: f32,
 }
@@ -231,7 +231,7 @@ pub struct OpenFurnaceView {
 /// the recipe's inputs immediately; cancel refunds whatever's left of them.
 /// The recipe id is shipped as a plain `String` on the wire and resolved
 /// against [`crate::crafting`] server-side. `quantity` is the batch size
-/// for the job — a quantity of 5 takes 5× the inputs, 5× the total tick
+/// for the job, a quantity of 5 takes 5× the inputs, 5× the total tick
 /// time, and produces 5× the output in a single completion event. Server
 /// clamps to `[1, MAX_CRAFT_BATCH_SIZE]`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

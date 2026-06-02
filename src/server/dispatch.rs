@@ -9,7 +9,7 @@ impl GameServer {
     /// Advance a client's optimistic-prediction high-water mark. Called for
     /// every predicted command (gather, inventory move/drop/pickup) *before*
     /// the handler runs, so the value advances whether the command is accepted
-    /// or rejected — the client relies on this to prune and revert pending
+    /// or rejected, the client relies on this to prune and revert pending
     /// overlay ops. `max` guards against any out-of-order or duplicate seq.
     fn note_action_seq(&mut self, client_id: ClientId, seq: u32) {
         if let Some(client) = self.clients.get_mut(&client_id) {
@@ -29,7 +29,7 @@ impl GameServer {
             }],
             ClientMessage::Movement(movement) => {
                 let new_position = if let Some(client) = self.clients.get_mut(&client_id) {
-                    // Dead players can't drive their controller — we
+                    // Dead players can't drive their controller, we
                     // keep the corpse pinned at the death position so
                     // the tilt-and-fade animation has a stable
                     // anchor and the loot pile stays under it.

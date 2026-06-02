@@ -8,7 +8,7 @@ executable, so they must travel together in the archive.
 - macOS: assemble a proper `Ashwend.app` bundle (Info.plist + both binaries
   under `Contents/MacOS/`) and zip it with `ditto` so bundle metadata and the
   executable bits survive. The self-updater replaces `Contents/MacOS/ashwend`
-  in place. The bundle is intentionally *not* code-signed here — see
+  in place. The bundle is intentionally *not* code-signed here, see
   docs/updates.md.
 - Linux: a `.tar.gz` of both bare binaries with the executable bit set.
 - Windows: a `.zip` of both `.exe`s.
@@ -33,7 +33,7 @@ BUNDLE_IDENTIFIER = "com.Ashwend.Ashwend"
 
 # Pre-rendered macOS app icon (committed). Generated from the website favicon
 # with the native QuickLook renderer (ImageMagick can't render the SVG's
-# gradient) — see docs/updates.md. Regenerate only when the logo changes.
+# gradient), see docs/updates.md. Regenerate only when the logo changes.
 ICON_SRC = Path(__file__).resolve().parents[1] / "assets" / "AppIcon.icns"
 ICON_NAME = "AppIcon"  # CFBundleIconFile (macOS appends .icns)
 
@@ -113,7 +113,7 @@ def build_app_bundle(game: Path, updater: Path, version: str) -> Path:
 def adhoc_sign(app: Path) -> None:
     # Ad-hoc sign the assembled bundle. The Rust toolchain only applies a
     # *linker* ad-hoc signature to each bare binary, which is invalid as a
-    # bundle's main executable (no sealed `_CodeSignature/CodeResources`) — a
+    # bundle's main executable (no sealed `_CodeSignature/CodeResources`), a
     # broken signature is what makes Gatekeeper say "damaged, move to Trash"
     # with no recourse. A proper ad-hoc bundle signature downgrades that to the
     # ordinary "Apple can't check it" prompt (which has an "Open Anyway"
@@ -123,7 +123,7 @@ def adhoc_sign(app: Path) -> None:
     # time (the in-app self-updater uses non-`--deep` re-signing precisely
     # because it *is* running from inside the bundle it re-signs).
     #
-    # Not notarized — that needs a paid Developer ID. When that lands, swap the
+    # Not notarized, that needs a paid Developer ID. When that lands, swap the
     # `-` identity for the Developer ID and add an `xcrun notarytool` step here.
     subprocess.run(
         ["codesign", "--force", "--deep", "--sign", "-", str(app)],
@@ -139,7 +139,7 @@ def zip_app_bundle(app: Path, output: Path) -> None:
     # `ditto` is the canonical way to zip a macOS bundle: it preserves the
     # bundle layout and executable bits, and `--keepParent` keeps `Ashwend.app/`
     # as the top-level entry (matches what the in-game extractor looks for).
-    # It also writes AppleDouble `._<name>` metadata entries — those are
+    # It also writes AppleDouble `._<name>` metadata entries, those are
     # expected: macOS Archive Utility folds them back in (preserving perms) when
     # a user double-clicks the zip, and the self-updater matches the real
     # `Contents/MacOS/ashwend` entry exactly, ignoring the sidecars.

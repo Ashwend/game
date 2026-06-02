@@ -193,7 +193,7 @@ impl LowPolyMeshBuilder {
             let next = (index + 1) % segments;
             self.push_triangle_away_from(origin, apex, ring[index], ring[next], color);
         }
-        // Bottom cap — closes the underside so the cone is solid when seen
+        // Bottom cap, closes the underside so the cone is solid when seen
         // from below (e.g. once a tree falls over). The `push_triangle_away`
         // helper picks the winding that points the normal outward from the
         // interior origin.
@@ -310,7 +310,7 @@ pub(crate) const GRASS_BLADE_BASE: [f32; 3] = [0.08, 0.18, 0.07];
 pub(crate) const GRASS_BLADE_TIP: [f32; 3] = [0.19, 0.34, 0.13];
 
 /// One grass blade. `base_color`/`tip_color` already include the shade/warmth
-/// (their alpha is the sway weight — 0 base, 1 tip). `dither` is written to every
+/// (their alpha is the sway weight, 0 base, 1 tip). `dither` is written to every
 /// vertex's `uv.x` as a stable per-blade key.
 pub(crate) struct GrassBlade {
     pub(crate) base: Vec2,

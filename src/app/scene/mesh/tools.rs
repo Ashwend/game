@@ -9,7 +9,7 @@ pub(crate) fn low_poly_hatchet_mesh() -> Mesh {
     // Built in the same orientation convention as the pickaxe: the head
     // extends along mesh +X (which becomes world -Z, i.e. forward in the
     // first-person view, after the model's Y rotation). The mesh-Z axis is
-    // the blade's thickness — kept thin so the blade reads as a blade rather
+    // the blade's thickness, kept thin so the blade reads as a blade rather
     // than a block from the side profile.
     let mut builder = LowPolyMeshBuilder::default();
 
@@ -26,7 +26,7 @@ pub(crate) fn low_poly_hatchet_mesh() -> Mesh {
     // Wooden head saddle that the stone bit wraps around.
     builder.add_box([0.0, 0.22, 0.0], [0.050, 0.044, 0.040], WOOD_DARK);
 
-    // Stone bit body — flared trapezoid in the mesh-XY plane. The half-depth
+    // Stone bit body, flared trapezoid in the mesh-XY plane. The half-depth
     // is small so the blade is a true blade in profile rather than a block.
     builder.add_quad_prism(
         [[0.04, 0.10], [0.22, 0.07], [0.32, 0.32], [0.04, 0.32]],
@@ -40,19 +40,19 @@ pub(crate) fn low_poly_hatchet_mesh() -> Mesh {
         0.013,
         STONE_EDGE,
     );
-    // Beard — small downward hook at the front-bottom of the bit.
+    // Beard, small downward hook at the front-bottom of the bit.
     builder.add_tri_prism(
         [[0.04, 0.10], [0.22, 0.05], [0.20, 0.10]],
         0.013,
         STONE_DARK,
     );
-    // Upper horn — small triangular peak at the front-top, balances the beard.
+    // Upper horn, small triangular peak at the front-top, balances the beard.
     builder.add_tri_prism(
         [[0.04, 0.32], [0.22, 0.36], [0.28, 0.32]],
         0.013,
         STONE_DARK,
     );
-    // Poll — short counterweight behind the eye (mesh -X), i.e. the back of
+    // Poll, short counterweight behind the eye (mesh -X), i.e. the back of
     // the head in the held view.
     builder.add_box([-0.07, 0.22, 0.0], [0.046, 0.036, 0.036], STONE_DARK);
 
@@ -75,14 +75,14 @@ pub(crate) fn low_poly_pickaxe_mesh() -> Mesh {
     // Wooden head saddle that the stone head is set into.
     builder.add_box([0.0, 0.24, 0.0], [0.038, 0.040, 0.058], WOOD_DARK);
 
-    // Stone head — central eye block sitting on the saddle. Wider than
+    // Stone head, central eye block sitting on the saddle. Wider than
     // the saddle so the head reads as a distinct stone piece capping the
     // handle rather than a continuation of the wood.
     builder.add_box([0.0, 0.27, 0.0], [0.054, 0.030, 0.054], STONE_DARK);
-    // Top crown — bright stone that catches light along the upper face.
+    // Top crown, bright stone that catches light along the upper face.
     builder.add_box([0.0, 0.298, 0.0], [0.048, 0.012, 0.044], STONE_LIGHT);
 
-    // Forward pick — long tapered stone prong to a sharp point. The
+    // Forward pick, long tapered stone prong to a sharp point. The
     // profile narrows in both height and depth so the spike reads as a
     // real pick rather than a wedge.
     builder.add_quad_prism(
@@ -96,7 +96,7 @@ pub(crate) fn low_poly_pickaxe_mesh() -> Mesh {
         STONE_EDGE,
     );
 
-    // Back tail — short blunt chisel counterweight opposite the pick.
+    // Back tail, short blunt chisel counterweight opposite the pick.
     // Kept stubby so the silhouette reads as asymmetric (pick + tail)
     // rather than a double-headed rock hammer.
     builder.add_quad_prism(

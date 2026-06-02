@@ -70,7 +70,7 @@ pub(crate) fn send_loot_bag_command(
 
 /// Wrapper used by the E-interact handler so the call site reads as
 /// "open this furnace" instead of a generic enum constructor. Inline-
-/// only convenience — feel free to inline it if the call site is the
+/// only convenience, feel free to inline it if the call site is the
 /// last consumer.
 pub(super) fn send_place_deployable_or_furnace_open(
     runtime: &mut ClientRuntime,

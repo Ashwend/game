@@ -1,4 +1,4 @@
-//! `/time` and `/speed` — world-time admin commands.
+//! `/time` and `/speed`, world-time admin commands.
 
 use crate::{
     protocol::{ClientId, ServerMessage, ToastKind, ToastMessage},

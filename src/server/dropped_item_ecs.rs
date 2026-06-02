@@ -1,6 +1,6 @@
 //! ECS mirror for authoritative dropped items.
 //!
-//! Companion to [`crate::server::resource_node_ecs`] — the dropped item
+//! Companion to [`crate::server::resource_node_ecs`], the dropped item
 //! analogue. `GameServer::dropped_items` (HashMap of physics-body-backed
 //! [`crate::protocol::DroppedWorldItem`]) stays authoritative; the
 //! `sync_dropped_item_entities` system in `net/host.rs` reconciles it
@@ -19,7 +19,7 @@ use crate::{
 
 /// Identity + the stack of items the drop carries. `item_id`/`quantity`
 /// only change when the server merges nearby drops (rare, low-frequency
-/// event), so keeping them on the same component is fine — Lightyear's
+/// event), so keeping them on the same component is fine, Lightyear's
 /// per-component change detection still fires only when a merge happens.
 ///
 /// `Serialize`/`Deserialize`/`PartialEq` are required by Lightyear's

@@ -19,7 +19,7 @@ Press **F2** to toggle the perf overlay ([src/app/ui/hud.rs](../src/app/ui/hud.r
 | `max frame` | Worst single frame in the window. |
 | `Chunk`, `Loaded`, `Live nodes`, `Visible`, `Regrow queue` | Server-side counters from the periodic [`PerfStatsSnapshot`](../src/protocol.rs) broadcast. Visible-node count is what drives most per-frame client work. |
 
-The HUD is enough for a first-pass diagnosis. If `p99` ≈ `Frame`, the game is steady — no spikes. If `p99` >> `Frame`, capture a trace.
+The HUD is enough for a first-pass diagnosis. If `p99` ≈ `Frame`, the game is steady, no spikes. If `p99` >> `Frame`, capture a trace.
 
 ## 2. Capturing a Chrome trace
 
@@ -28,11 +28,11 @@ Build with the `profile` Cargo feature. This adds:
 - `LogDiagnosticsPlugin` + `EntityCountDiagnosticsPlugin` + `SystemInformationDiagnosticsPlugin`: periodic stdout logs of fps, frame time, entity count, CPU, RAM.
 
 ```bash
-# Terminal 1 — local dedicated server (reproduces the multiplayer code path
+# Terminal 1, local dedicated server (reproduces the multiplayer code path
 # without WAN jitter; recommended over a remote test).
 ./cli server --bind 127.0.0.1:7777
 
-# Terminal 2 — client with tracing
+# Terminal 2, client with tracing
 cargo run --features profile --bin ashwend -- client --connect 127.0.0.1:7777
 ```
 
@@ -44,7 +44,7 @@ Stand still in-game for ~30 seconds, then **quit through the menu** (not Ctrl+C)
 
 ## 3. Loading the trace into Perfetto
 
-We use the `trace_processor` CLI — Perfetto's local SQL engine for trace files. It parses the Chrome JSON, exposes spans as a SQLite-shaped `slice` table, and runs SQL queries non-interactively.
+We use the `trace_processor` CLI, Perfetto's local SQL engine for trace files. It parses the Chrome JSON, exposes spans as a SQLite-shaped `slice` table, and runs SQL queries non-interactively.
 
 ```bash
 # One-time install
@@ -75,7 +75,7 @@ The trace loads in 10-20 s for a multi-GB file; then queries run in milliseconds
 | `id` | row id (unused for our queries) |
 | `ts` | start timestamp, **nanoseconds** since trace start |
 | `dur` | duration in **nanoseconds** |
-| `name` | span label — typically `"system: name=\"…\""` for Bevy systems, `"main app: "` for the per-frame wrapper, `"schedule: name=Update "` etc. for schedule wrappers |
+| `name` | span label, typically `"system: name=\"…\""` for Bevy systems, `"main app: "` for the per-frame wrapper, `"schedule: name=Update "` etc. for schedule wrappers |
 | `track_id` | thread / track identifier. `0` = main thread, `3` = render thread, `4-8` = task pool workers |
 
 **Watch out for trailing spaces in span names.** Bevy's `tracing` formatting includes a trailing space: filter for `'main app: '`, `'schedule: name=Main '`, etc., not `'main app:'`.
@@ -88,7 +88,7 @@ These four queries pinpoint nearly every kind of frame-pacing problem we hit dur
 
 ### 4a. Frame-time distribution
 
-Bins every per-frame `main app:` duration. Look for a **bimodal** distribution — a clean fast peak and a separate slow peak — that's the signature of a periodic system adding work to ~1-in-N frames.
+Bins every per-frame `main app:` duration. Look for a **bimodal** distribution, a clean fast peak and a separate slow peak, that's the signature of a periodic system adding work to ~1-in-N frames.
 
 ```sql
 WITH frames AS (
@@ -134,11 +134,11 @@ ORDER BY f.dur DESC
 LIMIT 20;
 ```
 
-Add or remove columns to chase specific suspects. The `LIKE '%term%'` matcher is forgiving — `'%apply_resource_nodes%'` catches both the system span and its `system_commands` deferred-apply counterpart.
+Add or remove columns to chase specific suspects. The `LIKE '%term%'` matcher is forgiving, `'%apply_resource_nodes%'` catches both the system span and its `system_commands` deferred-apply counterpart.
 
 ### 4c. Worst individual spans
 
-Useful when the slow-frame composition is uniform and you need to find an outlier — e.g. a single Lightyear receive burst or a Metal swapchain stall.
+Useful when the slow-frame composition is uniform and you need to find an outlier, e.g. a single Lightyear receive burst or a Metal swapchain stall.
 
 ```sql
 SELECT
@@ -182,7 +182,7 @@ WHERE b.ms - a.ms < 100
 GROUP BY 1 ORDER BY 1;
 ```
 
-A peak at small gap_ms (≈ slow_frame_dur) means **consecutive** slow frames — a sustained burst, very likely a GPU pipeline stall blocking the main thread's next extract phase. A peak at 50 ms means tied to the 20 Hz server tick. A flat distribution means random.
+A peak at small gap_ms (≈ slow_frame_dur) means **consecutive** slow frames, a sustained burst, very likely a GPU pipeline stall blocking the main thread's next extract phase. A peak at 50 ms means tied to the 20 Hz server tick. A flat distribution means random.
 
 ## 5. Diagnostic patterns we learned
 
@@ -192,7 +192,7 @@ These are the systems-level patterns we hit while debugging the 2026-05-29 frame
 The fast peak is the baseline; the slow peak is the baseline plus N systems' worth of work. Query 4b reveals which.
 
 **Slow frames in clustered bursts (small gaps in query 4d) → GPU pipeline stall.**
-Bevy's pipelined renderer makes the main thread wait one render frame at the extract sync. A slow render frame blocks the next main frame, which has nothing to do but wait — looks like a slow main frame in the trace too. This propagates until the GPU catches up. Common cause on macOS: `bevy_render::view::window::prepare_windows` (the `wgpu::Surface::get_current_texture()` Metal swapchain stall, [upstream issue](https://github.com/gfx-rs/wgpu/issues/2269)).
+Bevy's pipelined renderer makes the main thread wait one render frame at the extract sync. A slow render frame blocks the next main frame, which has nothing to do but wait, looks like a slow main frame in the trace too. This propagates until the GPU catches up. Common cause on macOS: `bevy_render::view::window::prepare_windows` (the `wgpu::Surface::get_current_texture()` Metal swapchain stall, [upstream issue](https://github.com/gfx-rs/wgpu/issues/2269)).
 
 **A system iterating N replicated entities every frame to discover "nothing changed" is the most common bug shape we saw.**
 Both [`apply_resource_nodes_system`](../src/app/systems/items/resource_nodes.rs) and [`maintain_world_grid_system`](../src/app/systems/deployables.rs) had this pattern. The fix is a cheap event-driven probe at the top of the system:
@@ -201,17 +201,17 @@ Both [`apply_resource_nodes_system`](../src/app/systems/items/resource_nodes.rs)
 let added_any = !added_probe.is_empty();
 let removed_count = removed_probe.read().count();
 if !added_any && removed_count == 0 && other_queues_empty {
-    return;   // fast path — no iteration
+    return;   // fast path, no iteration
 }
 ```
 
-For systems where `Added<T>` can fire while the system early-returns (e.g. the client-connect window where `client_id == None`), the `Added` filter compares against the system's *last_run* tick and misses entities added during early-return frames. The fix is a **one-time catch-up scan** gated by an `applied_first_snapshot: bool` flag — see [src/app/systems/items/resource_nodes.rs:155](../src/app/systems/items/resource_nodes.rs) for the canonical implementation.
+For systems where `Added<T>` can fire while the system early-returns (e.g. the client-connect window where `client_id == None`), the `Added` filter compares against the system's *last_run* tick and misses entities added during early-return frames. The fix is a **one-time catch-up scan** gated by an `applied_first_snapshot: bool` flag, see [src/app/systems/items/resource_nodes.rs:155](../src/app/systems/items/resource_nodes.rs) for the canonical implementation.
 
 **Spurious change-detection on resources.**
-Bevy's change detection fires on any `&mut` access via `DerefMut`, even when the new value equals the old. Compare-before-assign is the fix. We hit this in [`update_cursor_system`](../src/app/systems/input/cursor.rs) — every-frame writes to `CursorOptions.visible` tripped `bevy_winit::system::changed_cursor_options`'s slow winit path. Cost was ~684 µs mean / 16 ms outlier on the main thread.
+Bevy's change detection fires on any `&mut` access via `DerefMut`, even when the new value equals the old. Compare-before-assign is the fix. We hit this in [`update_cursor_system`](../src/app/systems/input/cursor.rs), every-frame writes to `CursorOptions.visible` tripped `bevy_winit::system::changed_cursor_options`'s slow winit path. Cost was ~684 µs mean / 16 ms outlier on the main thread.
 
 **`commands.entity().insert()` on a maybe-despawned entity → panic in apply_buffers.**
-On the server, between queuing a teardown command (e.g. `Disconnecting`) and the buffer being applied, Lightyear's own connection management can despawn the client entity. Use `try_insert` instead — it silently no-ops on a despawned target, which is the right behavior for teardown signals. Example: [src/net/host/routing.rs:113](../src/net/host/routing.rs).
+On the server, between queuing a teardown command (e.g. `Disconnecting`) and the buffer being applied, Lightyear's own connection management can despawn the client entity. Use `try_insert` instead, it silently no-ops on a despawned target, which is the right behavior for teardown signals. Example: [src/net/host/routing.rs:113](../src/net/host/routing.rs).
 
 **`Ref::is_changed()` is unreliable for Lightyear-replicated components.**
 Lightyear's receive path uses `entity_world_mut.insert_by_ids(...)` which *always* bumps the change tick, even when the new bytes equal the old. So `Changed<T>` and `Ref<T>::is_changed()` fire on every replication tick, not just on real changes. Don't gate work behind these for replicated state; use `Added<T>` (one-shot per spawn) and `RemovedComponents<T>` (one-shot per despawn) instead, plus event-driven bookkeeping.

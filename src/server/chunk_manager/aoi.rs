@@ -15,11 +15,11 @@ use crate::{
 
 impl ChunkManager {
     /// The chunk coords a player at `player_pos` should receive
-    /// snapshot data for under the given view tier — the **add** radius for
+    /// snapshot data for under the given view tier, the **add** radius for
     /// room subscriptions. Centralizes the AoI ring math so every networked
     /// entity flows through the same chunk-visibility decision. Includes the
     /// load-buffer ring so the client's collider grid is already populated
-    /// when the player crosses a boundary — see `LOAD_BUFFER_RINGS`.
+    /// when the player crosses a boundary, see `LOAD_BUFFER_RINGS`.
     pub fn visible_chunks(&self, player_pos: Vec3Net, tier: ViewRadiusTier) -> HashSet<ChunkCoord> {
         self.chunks_within(player_pos, view_tier_radius(tier) + LOAD_BUFFER_RINGS)
     }

@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Real-world seconds it takes the in-game clock to traverse a full
-/// 24 h day at `multiplier = 1.0`. 30 min by design — short enough that
+/// 24 h day at `multiplier = 1.0`. 30 min by design, short enough that
 /// a single play session lands across several cycles.
 pub const REAL_SECONDS_PER_DAY: f32 = 30.0 * 60.0;
 
@@ -30,12 +30,12 @@ pub const REAL_TO_IN_GAME: f32 = SECONDS_PER_DAY / REAL_SECONDS_PER_DAY;
 /// Hardcoded ceiling on the speed multiplier. 240× = a full cycle in ~7.5 s
 /// real time, fast enough for an admin to flick through sunrise/sunset.
 pub const MAX_MULTIPLIER: f32 = 240.0;
-/// Hardcoded floor. Pausing time (`0.0`) is allowed; negative is not — we
+/// Hardcoded floor. Pausing time (`0.0`) is allowed; negative is not, we
 /// don't reverse the cycle because shadow/light interpolation assumes
 /// monotonic advance within a snapshot window.
 pub const MIN_MULTIPLIER: f32 = 0.0;
 
-/// Initial wall-clock time when a brand-new world is created. 07:00 — just
+/// Initial wall-clock time when a brand-new world is created. 07:00, just
 /// after sunrise so the player spawns into daylight without a black screen.
 pub const DEFAULT_START_SECONDS: f32 = 7.0 * 3600.0;
 
@@ -126,7 +126,7 @@ impl WorldTimeSnapshot {
 
 /// Parse a player-supplied time token. Accepts, in order:
 /// - `HH:MM` (`06:30`),
-/// - `HHMM` military time with no colon (`0700`, `1430`) — any 3-4 digit
+/// - `HHMM` military time with no colon (`0700`, `1430`), any 3-4 digit
 ///   integer, so a leading zero isn't required,
 /// - a bare hour (`14`, `7.5`), wrapped into the day.
 ///
@@ -138,7 +138,7 @@ pub fn parse_time_token(token: &str) -> Option<f32> {
     }
 
     // `HHMM` with no colon. A 3-4 digit integer almost certainly means a clock
-    // time (`0700` = 07:00), not "700 hours" — which the bare-hour branch below
+    // time (`0700` = 07:00), not "700 hours", which the bare-hour branch below
     // would silently wrap to a nonsensical time of day. Split off the trailing
     // two digits as minutes.
     if (3..=4).contains(&token.len()) && token.bytes().all(|b| b.is_ascii_digit()) {

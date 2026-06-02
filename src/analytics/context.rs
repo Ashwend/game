@@ -1,4 +1,4 @@
-//! Super properties — the hardware/OS/version snapshot that PostHog joins
+//! Super properties, the hardware/OS/version snapshot that PostHog joins
 //! onto every event. Captured once at startup, then read-only.
 //!
 //! Two-stage fill:
@@ -11,7 +11,7 @@
 //!    [`RenderPropsFilled`] sentinel so subsequent frames early-return.
 //!
 //! The same keys are also surfaced as PostHog Person properties via a
-//! `$set` envelope in [`SuperProps::person_set`] — the worker attaches that
+//! `$set` envelope in [`SuperProps::person_set`], the worker attaches that
 //! to every event so hardware/OS info lives on the user's profile in
 //! PostHog, not just on each event row.
 
@@ -35,7 +35,7 @@ pub(crate) struct SuperProps;
 
 impl SuperProps {
     /// Synchronous probe done before plugin/worker startup. Cheap enough to
-    /// run on the main thread — `os_info` and `sysinfo` together take a few
+    /// run on the main thread, `os_info` and `sysinfo` together take a few
     /// ms and never panic.
     pub(crate) fn initial(environment: Environment) -> Map<String, Value> {
         let mut props = Map::new();
@@ -48,7 +48,7 @@ impl SuperProps {
 
         // `new_all` forces full refresh of CPU + memory in one call. The
         // earlier `new() + refresh_cpu_all() + refresh_memory()` form could
-        // come back empty on some platforms — `new_all` is the documented
+        // come back empty on some platforms, `new_all` is the documented
         // sysinfo way to get a complete snapshot.
         let system = sysinfo::System::new_all();
         let cpus = system.cpus();
@@ -88,7 +88,7 @@ impl SuperProps {
 
 /// Keys that should also be promoted to PostHog Person properties via `$set`
 /// so they're visible on the user's profile, not just per-event. Anything
-/// not in this list stays event-only (e.g. environment, build_profile —
+/// not in this list stays event-only (e.g. environment, build_profile,
 /// those legitimately differ between sessions and shouldn't overwrite the
 /// Person row).
 const PERSON_PROPERTY_KEYS: &[&str] = &[

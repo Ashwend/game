@@ -1,9 +1,9 @@
-//! Client settings — data, persistence store, and monitor/video-mode
+//! Client settings, data, persistence store, and monitor/video-mode
 //! helpers. Split into:
 //!
-//! - `data` — the `ClientSettings` tree and its sanitization rules.
-//! - `store` — `ClientSettingsStore` filesystem I/O.
-//! - `display` — `display_resolutions`/`best_video_mode` helpers that read
+//! - `data`, the `ClientSettings` tree and its sanitization rules.
+//! - `store`, `ClientSettingsStore` filesystem I/O.
+//! - `display`, `display_resolutions`/`best_video_mode` helpers that read
 //!   the active `Monitor`.
 
 mod data;

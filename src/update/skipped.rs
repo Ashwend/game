@@ -3,8 +3,8 @@
 //! When the player dismisses an update with **Skip this version**, we store
 //! that version string so the modal doesn't auto-pop for it again. Kept in its
 //! own file (`<data_dir>/skipped_version`) sibling to the settings + analytics
-//! id — same `ProjectDirs` + atomic-write pattern as
-//! [`crate::analytics::distinct_id`] — so clearing display/audio settings
+//! id, same `ProjectDirs` + atomic-write pattern as
+//! [`crate::analytics::distinct_id`], so clearing display/audio settings
 //! doesn't also un-skip an update, and vice versa. The persistent corner pill
 //! still shows regardless; only the unprompted boot popup is suppressed.
 

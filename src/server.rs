@@ -23,11 +23,11 @@ const CHAT_BUBBLE_DURATION_TICKS: u64 = (CHAT_BUBBLE_DURATION_SECONDS * SERVER_T
 
 /// Cadence of the routine [`ServerMessage::WorldTime`] broadcast. One per
 /// real minute keeps clients aligned against drift without flooding the
-/// wire — the client integrates locally between broadcasts using the
+/// wire, the client integrates locally between broadcasts using the
 /// same multiplier, so the visible cycle stays smooth in between.
 const WORLD_TIME_BROADCAST_INTERVAL_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 60;
 
-/// Cadence of the routine [`ServerMessage::PerfStats`] broadcast — one
+/// Cadence of the routine [`ServerMessage::PerfStats`] broadcast, one
 /// per second. The HUD never needs sub-second resolution and the
 /// payload is tiny, so 1 Hz keeps bandwidth negligible.
 const PERF_STATS_BROADCAST_INTERVAL_TICKS: u64 = SERVER_TICK_RATE_HZ as u64;
@@ -152,7 +152,7 @@ pub struct GameServer {
     resource_nodes: HashMap<ResourceNodeId, ResourceNodeState>,
     /// Incremental mirror-sync bookkeeping. `sync_resource_node_entities`
     /// (in `net::host`) used to walk *every* live node each tick to reconcile
-    /// the replicated ECS mirror — O(live nodes), which at tens of thousands
+    /// the replicated ECS mirror, O(live nodes), which at tens of thousands
     /// of nodes cost ~100ms/tick. Instead, mutations to `resource_nodes` record
     /// the affected id here and the sync processes only the delta. `dirty` =
     /// added or storage-changed (re-spawn or update the mirror entity);
@@ -197,7 +197,7 @@ pub(super) struct ServerClient {
     pub(super) controller: PlayerController,
     pub(super) inventory: PlayerInventoryState,
     /// Authoritative damage reduction (0–100, percent). Today always
-    /// `0` — armor items don't exist yet — but kept on the client so
+    /// `0`, armor items don't exist yet, but kept on the client so
     /// the damage path doesn't have to special-case the missing field.
     /// Replicated to every peer via the [`PlayerArmor`] component
     /// attached to the mirror entity.
@@ -227,15 +227,15 @@ pub(super) struct ServerClient {
     /// Snapshots send a clone of this to the owning client only.
     pub(super) crafting: PlayerCraftingState,
     /// Next id handed out for [`crafting::jobs`]. Wraps after 2^64 jobs,
-    /// which won't happen — it's a u64 so the wrap is harmless even if
+    /// which won't happen, it's a u64 so the wrap is harmless even if
     /// the player runs a crafting macro for years.
     pub(super) next_craft_job_id: CraftingJobId,
     /// The furnace the player currently has open, if any. Only one
-    /// open at a time — opening a new furnace closes the previous.
+    /// open at a time, opening a new furnace closes the previous.
     /// Cleared on disconnect.
     pub(super) open_furnace: Option<DeployedEntityId>,
     /// The loot bag the player currently has open, if any. Same
-    /// "one open container at a time" rule as furnaces — opening a
+    /// "one open container at a time" rule as furnaces, opening a
     /// bag closes any previously-open bag. Cleared on disconnect.
     pub(super) open_loot_bag: Option<crate::protocol::LootBagId>,
     /// Highest optimistic-prediction action sequence processed for this client

@@ -20,7 +20,7 @@ pub struct ChunkManagerSave {
     pub node_chunks: Vec<NodeChunkEntry>,
     /// `(coord, kind, ticks_from_now)` for every scheduled regrow. The
     /// "from now" framing means a save that sits on disk for an hour
-    /// doesn't dump a backlog of respawns at t+0 on load — each event
+    /// doesn't dump a backlog of respawns at t+0 on load, each event
     /// re-clamps to at least [`super::MIN_REGROW_TICKS`].
     pub pending_regrows: Vec<PendingRegrowSave>,
 }

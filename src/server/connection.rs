@@ -18,9 +18,9 @@ use super::{
 /// Returned by [`GameServer::connect`] when the client's version doesn't match
 /// the server's (either the protocol number or the human-readable build). The
 /// routing layer downcasts to it to answer with a structured
-/// [`ServerMessage::VersionMismatch`] carrying the server's version — so the
+/// [`ServerMessage::VersionMismatch`] carrying the server's version, so the
 /// client can show the player both versions and whether they're newer or
-/// older — instead of a generic auth-rejection string. The `Display` form is
+/// older, instead of a generic auth-rejection string. The `Display` form is
 /// what lands in server logs.
 #[derive(Debug, Clone)]
 pub struct VersionMismatchRejection {
@@ -53,7 +53,7 @@ impl GameServer {
         token: String,
     ) -> Result<(ClientId, Vec<ServerEnvelope>)> {
         // Both the protocol number and the human-readable build must line up.
-        // Either kind of difference is reported the same way — a structured
+        // Either kind of difference is reported the same way, a structured
         // rejection the routing layer turns into `ServerMessage::VersionMismatch`
         // so the client can show the player both versions. The netcode already
         // let the connection through (its id is fixed, not version-tied), so
@@ -88,7 +88,7 @@ impl GameServer {
         // hasn't timed out yet) or a second login from the same install.
         // `disconnect` snapshots the old client's inventory/position into the
         // persisted-player store, which `take_persisted_player` below then
-        // restores onto the new session — so a reconnect resumes exactly where
+        // restores onto the new session, so a reconnect resumes exactly where
         // it left off rather than getting bounced for the ~10s it takes the
         // stale-client / netcode timeout to release the old slot.
         let mut envelopes = match self.account_to_client.get(&account_id).copied() {
@@ -127,7 +127,7 @@ impl GameServer {
             controller,
             inventory,
             // Phase 1 ships armor on the wire (per-component replicated),
-            // but every player starts with 0 — there are no armor items
+            // but every player starts with 0, there are no armor items
             // defined yet. A future armor pass mutates this field
             // server-side and the replication path picks up the diff.
             armor: 0,
@@ -188,13 +188,13 @@ impl GameServer {
 
     pub fn disconnect(&mut self, client_id: ClientId) -> Vec<ServerEnvelope> {
         // Refund any queued crafting inputs before we snapshot the
-        // persisted state — the player shouldn't pay for jobs that never
+        // persisted state, the player shouldn't pay for jobs that never
         // finished. Overflow lands as drops at their last position.
         self.cancel_all_jobs_for_disconnect(client_id);
         // Drop any open-furnace reference so the next snapshot for any
         // peer doesn't reach into a stale client entry.
         self.close_furnace(client_id);
-        // Same for loot bags — drops the player's open-bag pointer
+        // Same for loot bags, drops the player's open-bag pointer
         // and, if no one else has the bag open and it's empty,
         // despawns the bag entity.
         self.close_loot_bag(client_id);

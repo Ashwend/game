@@ -48,7 +48,7 @@ pub(super) fn pop_in_transform(base: Transform, elapsed: f32) -> Transform {
     }
     let ease = ease_out_cubic(raw);
     // Lift from below the floor to flush, with a brief overshoot beyond
-    // unit scale that settles back to 1.0 — reads as the node "thudding"
+    // unit scale that settles back to 1.0, reads as the node "thudding"
     // into place rather than easing to a stop.
     let height = -POP_IN_GROUND_OFFSET * (1.0 - ease);
     let overshoot = if raw < 0.7 {
@@ -78,12 +78,12 @@ pub(crate) fn resource_node_transform_at(
     // can be GPU-instanced. Ore nodes keep their per-instance scale
     // jitter for shape variety. Both the tree trunks and the ore rock
     // lumps have their lowest vertices at local y=0, so no height offset
-    // is needed — adding one would float the geometry above the floor.
+    // is needed, adding one would float the geometry above the floor.
     let (height_offset, scale) = match model {
         ResourceNodeModel::CoalOre => (0.0, Vec3::new(1.0, 1.0, 1.0)),
         ResourceNodeModel::IronOre => (0.0, Vec3::new(1.1, 1.05, 0.95)),
         ResourceNodeModel::SulfurOre => (0.0, Vec3::new(0.96, 0.92, 1.06)),
-        // Stone veins are wider/flatter than ore mounds — they read as
+        // Stone veins are wider/flatter than ore mounds, they read as
         // an outcrop rather than a focused deposit.
         ResourceNodeModel::StoneVein => (0.0, Vec3::new(1.18, 0.86, 1.08)),
         ResourceNodeModel::PineTreeSmall

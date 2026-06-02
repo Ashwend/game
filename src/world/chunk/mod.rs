@@ -3,9 +3,9 @@
 //! The world is partitioned into 64 m × 64 m grids. Each grid is
 //! independently:
 //!
-//! 1. **Classified** — `forest`, `rocky outcrop`, `ore vein`, `plains`, or
-//!    `mixed` — by sampling four seeded noise channels at its centre.
-//! 2. **Populated** — Poisson-disk rejection sampling places resource
+//! 1. **Classified**, `forest`, `rocky outcrop`, `ore vein`, `plains`, or
+//!    `mixed`, by sampling four seeded noise channels at its centre.
+//! 2. **Populated**, Poisson-disk rejection sampling places resource
 //!    nodes inside the chunk, with per-kind counts scaled from the
 //!    classification's base capacity table by the local channel intensity.
 //!
@@ -14,7 +14,7 @@
 //! state plus harvested nodes in the world save; the noise pipeline itself
 //! does not need to be persisted.
 //!
-//! The grid pipeline replaces the hand-authored test layout — see
+//! The grid pipeline replaces the hand-authored test layout, see
 //! [`super::WorldData::chunk_world`].
 
 mod classification;
@@ -144,9 +144,9 @@ impl NodeKind {
             SULFUR_NODE_ID, SURFACE_STONE_NODE_ID,
         };
         // Trees alternate between pine and birch deterministically inside
-        // the generator — at this lookup we'd need the per-spawn pick, so
+        // the generator, at this lookup we'd need the per-spawn pick, so
         // the generator picks the species itself and uses these constants.
-        // `definition_id` is just the *default* (pine) — callers that need
+        // `definition_id` is just the *default* (pine), callers that need
         // species variation use `tree_variant_id`.
         match self {
             Self::TreeSmall => PINE_TREE_SMALL_NODE_ID,
@@ -162,7 +162,7 @@ impl NodeKind {
         }
     }
 
-    /// Per-spawn species pick for tree kinds — alternating pine/birch
+    /// Per-spawn species pick for tree kinds, alternating pine/birch
     /// deterministically by an unsigned counter. Non-tree kinds ignore
     /// the counter and return [`Self::definition_id`].
     pub fn variant_definition_id(self, variant_counter: u64) -> &'static str {
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn from_world_handles_negative_correctly() {
-        // -0.5 m sits in cell x = -1, not 0 — make sure we floor, not trunc.
+        // -0.5 m sits in cell x = -1, not 0, make sure we floor, not trunc.
         assert_eq!(ChunkCoord::from_world(-0.5, 0.5), ChunkCoord::new(-1, 0));
     }
 }

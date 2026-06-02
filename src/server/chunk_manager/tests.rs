@@ -67,7 +67,7 @@ fn tick_spawns_pending_regrows() {
     manager.handle_node_depleted(depleted_id, 0);
     // Fast-forward past the maximum regrow window.
     let RegrowResult { spawned } = manager.tick(MAX_REGROW_TICKS + 1, &existing);
-    // We should get back exactly one fresh spawn — same kind, fresh
+    // We should get back exactly one fresh spawn, same kind, fresh
     // position, new id.
     assert_eq!(spawned.len(), 1, "expected exactly one regrow");
     let fresh = &spawned[0];
@@ -166,7 +166,7 @@ fn retained_chunks_is_wider_superset_of_visible_chunks() {
 
     // Low tier(1) + load buffer(1) = radius 2 → 5x5; keep adds
     // KEEP_MARGIN_RINGS(2) → radius 4 → 9x9. The keep set must strictly
-    // contain the add set — that gap is what gives the hysteresis.
+    // contain the add set, that gap is what gives the hysteresis.
     assert_eq!(visible.len(), 25);
     assert_eq!(retained.len(), 81);
     assert!(

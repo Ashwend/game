@@ -31,7 +31,7 @@ pub(crate) const SULFUR_ORE: OreNodeStyle = OreNodeStyle {
     chunk_highlight: [1.00, 0.92, 0.36, 1.0],
 };
 
-/// Plain rock vein — same silhouette as the ore variants, but the
+/// Plain rock vein, same silhouette as the ore variants, but the
 /// "chunks" embedded in the top are just darker rock instead of a
 /// metallic/coal/sulfur colour. Reads as "weathered exposed stone".
 pub(crate) const STONE_VEIN: OreNodeStyle = OreNodeStyle {
@@ -43,7 +43,7 @@ pub(crate) const STONE_VEIN: OreNodeStyle = OreNodeStyle {
 
 pub(crate) fn low_poly_ore_node_mesh(style: OreNodeStyle) -> Mesh {
     let mut builder = LowPolyMeshBuilder::default();
-    // Layered base rock mound — bigger central mass plus smaller flanking stones.
+    // Layered base rock mound, bigger central mass plus smaller flanking stones.
     builder.add_rock_lump([0.00, 0.00, 0.00], [1.00, 1.00, 1.00], style.base_color);
     builder.add_rock_lump([-0.32, 0.00, 0.18], [0.62, 0.74, 0.58], style.accent_color);
     builder.add_rock_lump([0.38, 0.00, -0.12], [0.54, 0.62, 0.52], style.accent_color);
@@ -54,9 +54,9 @@ pub(crate) fn low_poly_ore_node_mesh(style: OreNodeStyle) -> Mesh {
 }
 
 fn add_ore_chunks(builder: &mut LowPolyMeshBuilder, style: OreNodeStyle) {
-    // Each chunk is positioned over one of the mound's high spots — the
+    // Each chunk is positioned over one of the mound's high spots, the
     // central peak (y≈0.58) or one of the three flanking stones (peaks
-    // around y=0.30–0.43) — with the centre tuned to sink under the local
+    // around y=0.30–0.43), with the centre tuned to sink under the local
     // surface so the visible portion pokes out by a similar amount on
     // every chunk. Without that, chunks placed over a slope used to look
     // like they were floating in mid-air.

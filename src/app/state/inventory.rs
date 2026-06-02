@@ -63,7 +63,7 @@ impl UnifiedSlotRef {
     /// Same idea for [`LootBagSlotRef`]. Player slots map through the
     /// matching variants so a player→bag drag is one
     /// `LootBagCommand::Move`. Furnace slots can't reach a bag
-    /// command — the bag UI is mutually exclusive with the furnace
+    /// command, the bag UI is mutually exclusive with the furnace
     /// modal, so the unreachable branch is OK as a fallback.
     pub(crate) fn as_loot_bag_ref(self) -> LootBagSlotRef {
         match self {
@@ -84,16 +84,16 @@ impl UnifiedSlotRef {
 /// One audible inventory change. Returned by [`InventoryUiState::observe_inventory`]
 /// so the UI layer can play the matching cue without re-diffing the
 /// snapshot. The variants are mutually exclusive; ties go to whichever
-/// change is most informative — gains beat losses, losses beat shuffles —
+/// change is most informative, gains beat losses, losses beat shuffles,
 /// since a tick that did all three at once is dominated by the "new item
 /// arrived" cue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InventorySoundEvent {
-    /// Total inventory quantity grew — an item entered the player's bag.
+    /// Total inventory quantity grew, an item entered the player's bag.
     Pickup,
-    /// Total inventory quantity shrank — an item left the bag (drop, use).
+    /// Total inventory quantity shrank, an item left the bag (drop, use).
     Drop,
-    /// Per-slot contents changed but the total stayed the same — a move,
+    /// Per-slot contents changed but the total stayed the same, a move,
     /// swap, or partial-stack split inside the grid.
     Move,
 }
@@ -106,7 +106,7 @@ pub(crate) const SLOT_FLASH_DURATION_SECS: f32 = 0.55;
 /// How long after the client sends a pickup command an inventory gain
 /// still counts as "the player picked something up." Anything beyond this
 /// window is treated as a harvest payout or a server-side grant and stays
-/// silent — pressing E is the only thing that should trigger the pickup
+/// silent, pressing E is the only thing that should trigger the pickup
 /// cue. Covers a typical loopback round-trip plus a snapshot interval
 /// with margin to spare.
 const PICKUP_INTENT_WINDOW_SECS: f32 = 0.6;
@@ -251,7 +251,7 @@ impl InventoryUiState {
     /// Returns the flash strength for `slot`, with 1.0 right after the
     /// trigger and 0.0 at the end of the fade window. Uses an ease-out
     /// curve so the bright instant is short and the fade lingers a little
-    /// — natural attention-grabbing without being garish.
+    ///, natural attention-grabbing without being garish.
     pub(crate) fn slot_flash_strength(&self, slot: ItemContainerSlot) -> f32 {
         let Some(elapsed) = self.slot_flashes.get(&slot) else {
             return 0.0;
@@ -260,7 +260,7 @@ impl InventoryUiState {
         (1.0 - progress).powi(2)
     }
 
-    /// Drop any tracked state — call this when the player disconnects so
+    /// Drop any tracked state, call this when the player disconnects so
     /// stale slots from the previous session don't bleed into the next one.
     pub(crate) fn clear_inventory_tracking(&mut self) {
         self.slot_flashes.clear();
@@ -394,7 +394,7 @@ mod tests {
         let mut first = PlayerInventoryState::empty();
         first.actionbar_slots[0] = Some(ItemStack::new("hatchet", 1));
         state.observe_inventory(&first);
-        // The first observation seeds the baseline — nothing should flash.
+        // The first observation seeds the baseline, nothing should flash.
         assert!(state.slot_flashes.is_empty());
 
         let mut second = first.clone();
@@ -428,7 +428,7 @@ mod tests {
     fn observe_inventory_classifies_total_quantity_changes() {
         let mut state = InventoryUiState::default();
 
-        // Seed baseline — no event on the first observation.
+        // Seed baseline, no event on the first observation.
         let baseline = PlayerInventoryState::empty();
         assert_eq!(state.observe_inventory(&baseline), None);
 
@@ -478,7 +478,7 @@ mod tests {
         let baseline = PlayerInventoryState::empty();
         state.observe_inventory(&baseline);
 
-        // No `note_pickup_intent` — a quantity gain here is a harvest
+        // No `note_pickup_intent`, a quantity gain here is a harvest
         // payout, not a pickup, and must stay silent.
         let mut grew = baseline.clone();
         grew.inventory_slots[0] = Some(ItemStack::new("wood", 1));

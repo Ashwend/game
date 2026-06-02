@@ -17,7 +17,7 @@ const DROPPED_ITEM_INTERPOLATION_SNAP_DISTANCE: f32 = 6.0;
 /// death can produce a burst of dozens of drops in a single snapshot; if
 /// every visual entity is created the same frame the snapshot lands the
 /// command-buffer flush stalls the main thread. Updates to existing
-/// drops and despawns are uncapped — only first-time spawns are
+/// drops and despawns are uncapped, only first-time spawns are
 /// budgeted. The remainder appears the next frame; at 50 ms snapshot
 /// cadence and 16-per-frame, even a 200-item burst drains in under a
 /// snapshot interval.
@@ -26,7 +26,7 @@ const MAX_DROPPED_ITEM_SPAWNS_PER_FRAME: usize = 16;
 /// per-frame lerp/slerp blend and just snap to their target transform.
 /// At that distance the sub-frame interpolation is invisible (the item
 /// is a tiny bag clutched at horizon-edge), but skipping the math saves
-/// a `Quat::slerp` per item per frame — meaningful when a player has
+/// a `Quat::slerp` per item per frame, meaningful when a player has
 /// dropped a large pile in the same chunk.
 const DROPPED_ITEM_INTERPOLATION_MAX_DISTANCE_M: f32 = 40.0;
 
@@ -57,7 +57,7 @@ pub(crate) fn apply_dropped_items_system(
     replicated: Query<(&DroppedItem, Ref<DroppedItemTransform>)>,
 ) {
     if runtime.client_id.is_none() {
-        // Not connected — tear down any visuals from a prior session.
+        // Not connected, tear down any visuals from a prior session.
         for (_, entity) in entities.0.drain() {
             commands.entity(entity).despawn();
         }
@@ -91,7 +91,7 @@ pub(crate) fn apply_dropped_items_system(
         if let Some(entity) = entities.0.get(&drop.id).copied() {
             if let Ok((current, mut interpolation)) = dropped_entities.get_mut(entity) {
                 interpolation.retarget(tick, current, target);
-                // Far items skip the per-frame blend — at horizon edge a
+                // Far items skip the per-frame blend, at horizon edge a
                 // sub-100 ms lerp is invisible and we'd burn a slerp per
                 // item per frame. Near items keep the smoothing so a
                 // bouncing drop reads as a continuous arc.
@@ -123,7 +123,7 @@ pub(crate) fn apply_dropped_items_system(
                     MeshMaterial3d(assets.dropped_material.clone()),
                     target,
                     Visibility::Visible,
-                    // Dropped items are tiny ground clutter — a sun-cast
+                    // Dropped items are tiny ground clutter, a sun-cast
                     // shadow on a 25 cm bag adds almost no visual signal
                     // but every drop in the world pays the shadow-pass
                     // draw call. Skip it entirely; the lighting on the
@@ -258,7 +258,7 @@ mod tests {
         let mut interpolation = DroppedItemInterpolation::new(5, current);
         let target = Transform::from_xyz(2.0, 0.0, 0.0);
 
-        // A tick at or below the stored tick is a stale duplicate — it must
+        // A tick at or below the stored tick is a stale duplicate, it must
         // not retarget the blend.
         interpolation.retarget(5, &current, target);
         let after_equal = interpolation.advance(DROPPED_ITEM_INTERPOLATION_SECONDS);
@@ -280,7 +280,7 @@ mod tests {
         assert_eq!(snapped.translation, target.translation);
 
         // After a snap, a subsequent advance must not slide back through the
-        // curve — the interpolation is marked complete.
+        // curve, the interpolation is marked complete.
         let next = interpolation.advance(DROPPED_ITEM_INTERPOLATION_SECONDS * 0.5);
         assert_eq!(next.translation, target.translation);
     }

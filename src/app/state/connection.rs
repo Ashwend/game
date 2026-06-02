@@ -9,7 +9,7 @@
 /// land at ~1 Hz, so 2.5s is well outside normal variance.
 pub(crate) const CONNECTION_LAG_WARNING_SECONDS: f32 = 2.5;
 
-/// Cap the counter so a long disconnect doesn't accumulate forever — the
+/// Cap the counter so a long disconnect doesn't accumulate forever, the
 /// HUD only cares whether we're past the warning threshold.
 const MAX_TRACKED_SILENCE_SECONDS: f32 = 60.0;
 
@@ -19,7 +19,7 @@ pub(crate) struct ConnectionWatch {
 }
 
 impl ConnectionWatch {
-    /// A server message just arrived — reset the silence counter.
+    /// A server message just arrived, reset the silence counter.
     pub(crate) fn note_received(&mut self) {
         self.seconds_since_last_message = 0.0;
     }
@@ -39,7 +39,7 @@ impl ConnectionWatch {
 
     /// Returns true when the session has gone long enough without a server
     /// message that the connection should be flagged as suspect. The
-    /// session-active gate is the caller's responsibility — the tracker
+    /// session-active gate is the caller's responsibility, the tracker
     /// only knows about its own counter.
     pub(crate) fn is_lagging(&self, session_active: bool) -> bool {
         session_active && self.seconds_since_last_message >= CONNECTION_LAG_WARNING_SECONDS
@@ -70,7 +70,7 @@ mod tests {
 
         watch.tick(CONNECTION_LAG_WARNING_SECONDS + 1.0, true);
         assert!(watch.is_lagging(true));
-        // The flag is still gated on session_active — a session that ends
+        // The flag is still gated on session_active, a session that ends
         // mid-silence should report not-lagging instead of stale-lagging.
         assert!(!watch.is_lagging(false));
     }
@@ -87,7 +87,7 @@ mod tests {
     fn tick_caps_silence_to_keep_long_disconnects_bounded() {
         let mut watch = ConnectionWatch::default();
         watch.tick(MAX_TRACKED_SILENCE_SECONDS * 4.0, true);
-        // The is_lagging API is what callers care about — the cap exists
+        // The is_lagging API is what callers care about, the cap exists
         // purely to keep the internal value finite, not to gate the flag.
         assert!(watch.is_lagging(true));
     }

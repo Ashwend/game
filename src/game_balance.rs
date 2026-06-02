@@ -14,7 +14,7 @@
 //! 3. Reference it in code via the subsystem module path so the
 //!    one-tunable-per-feature-area shape is preserved.
 //!
-//! Don't put balance values directly in subsystem files — even a
+//! Don't put balance values directly in subsystem files, even a
 //! "throwaway" magic number is harder to find six months later. If a
 //! value affects what the game feels like, it belongs in this file.
 
@@ -57,7 +57,7 @@ pub const RESPAWN_MIN_DISTANCE_M: f32 = 12.0;
 // =====================================================================
 
 /// Maximum distance at which a player can damage a placed structure.
-/// Matches the furnace open-range so the swing flow stays consistent —
+/// Matches the furnace open-range so the swing flow stays consistent,
 /// if E reaches it, your tool reaches it too.
 pub const DEPLOYABLE_DAMAGE_RANGE_M: f32 = 5.5;
 
@@ -82,7 +82,7 @@ pub const DEPLOYABLE_PLACEMENT_REACH_M: f32 = 5.0;
 /// server tick rate so it feels like a real wait without being
 /// tedious for solo testing.
 pub const FURNACE_SMELT_TICKS_PER_OUTPUT: u32 = (6.0 * SERVER_TICK_RATE_HZ) as u32;
-/// Burn duration in ticks for one wood unit (4 s) — short burn, lots
+/// Burn duration in ticks for one wood unit (4 s), short burn, lots
 /// of shovelling.
 pub const FURNACE_WOOD_BURN_TICKS: u32 = (4.0 * SERVER_TICK_RATE_HZ) as u32;
 /// Burn duration in ticks for one coal unit (16 s). The upgrade path

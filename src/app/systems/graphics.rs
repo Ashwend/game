@@ -6,7 +6,7 @@
 //! Ownership split: this system owns the camera's [`Bloom`] component and the
 //! sun's shadow config (`DirectionalLight::shadows_enabled` + the cascade
 //! config + the global shadow map resolution). MSAA is intentionally *not*
-//! touched here — the `menu_backdrop_camera_system` already owns the `Msaa`
+//! touched here, the `menu_backdrop_camera_system` already owns the `Msaa`
 //! slot (it swaps it between the menu and in-game), so it reads the MSAA
 //! setting directly to keep a single writer of that component. The sky system
 //! writes the sun's colour/illuminance/transform but never `shadows_enabled`,
@@ -37,7 +37,7 @@ pub(crate) fn apply_graphics_settings_system(
         return;
     };
 
-    // Bloom is a fixed-strength on/off — the `Bloom::NATURAL` preset is the
+    // Bloom is a fixed-strength on/off, the `Bloom::NATURAL` preset is the
     // intensity. No exposed slider.
     if settings.graphics.bloom_enabled {
         if bloom.is_none() {
@@ -45,7 +45,7 @@ pub(crate) fn apply_graphics_settings_system(
         }
     } else if bloom.is_some() {
         // `Bloom` requires `Hdr`, but removing `Bloom` leaves `Hdr` in place
-        // (required components aren't auto-removed) — exactly what we want,
+        // (required components aren't auto-removed), exactly what we want,
         // since the atmosphere sky needs HDR regardless of the bloom toggle.
         commands.entity(entity).remove::<Bloom>();
     }

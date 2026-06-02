@@ -38,7 +38,7 @@ pub(crate) enum SoundId {
     // --- Tool impacts: (tool, surface successfully struck) ---
     ImpactAxeOnWood,
     /// Axe striking anything that isn't wood (stone vein, ore, stone
-    /// structures). Mixed down from the pickaxe-ore pool — same hard-
+    /// structures). Mixed down from the pickaxe-ore pool, same hard-
     /// surface transient, pitched up so it reads as the lighter hatchet
     /// rather than the heavier pickaxe.
     ImpactAxeGeneric,
@@ -47,7 +47,7 @@ pub(crate) enum SoundId {
     ImpactPickaxeOnIron,
     ImpactPickaxeOnSulfur,
     /// Pickaxe striking a wood entity (tree, wood structure). Mixed
-    /// down from the axe-wood pool — same wood-fracture transient,
+    /// down from the axe-wood pool, same wood-fracture transient,
     /// pitched down so it reads as the heavier pickaxe rather than the
     /// lighter hatchet.
     ImpactPickaxeOnWood,
@@ -57,7 +57,7 @@ pub(crate) enum SoundId {
 
     /// PvP melee impact ("thump" of a blunt tool landing on a player).
     /// Routed off the existing axe-wood pool until dedicated assets
-    /// land — see `impact_sound_for_player`. One pool covers every
+    /// land, see `impact_sound_for_player`. One pool covers every
     /// tool today; per-tool variants can be added later by branching
     /// on `ToolKind` in the lookup.
     ImpactPlayerBlunt,
@@ -133,7 +133,7 @@ pub(crate) struct SpatialDefaults {
     pub(crate) height_offset: f32,
 }
 
-/// Match each variant to its mix defaults. Compile-time exhaustive — add
+/// Match each variant to its mix defaults. Compile-time exhaustive, add
 /// a `SoundId` variant and the compiler points at the missing arm here.
 pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
     match id {
@@ -168,7 +168,7 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
         // or multiplayer). Mixed at the same loudness reference as the
         // menu music so it doesn't blow the level when the music is
         // still fading out beneath it. Music-category routing keeps it
-        // off the SFX slider — players adjust this with the same control
+        // off the SFX slider, players adjust this with the same control
         // they use for the soundtrack, since it's a "scoring" cue, not a
         // gameplay event. Non-spatial, no pitch jitter (a signature
         // sound should always play the same way), uncapped polyphony
@@ -202,7 +202,7 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
             looped: false,
         },
 
-        // Per-hit impact cues — short, sharp transients. Pitch jitter ±5%
+        // Per-hit impact cues, short, sharp transients. Pitch jitter ±5%
         // gives every swing audible variety without a third pre-rendered
         // variant per pool.
         SoundId::ImpactAxeOnWood
@@ -222,7 +222,7 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
             looped: false,
         },
 
-        // PvP melee blunt impact — a meatier thump than chipping at a
+        // PvP melee blunt impact, a meatier thump than chipping at a
         // tree, so it sits a bit louder than the resource impact pool.
         // Wider pitch jitter (±9 %) because rapid hits would otherwise
         // sound metronomic; the body of a player gives a different
@@ -238,7 +238,7 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
             looped: false,
         },
 
-        // Miss whoosh belongs to the local swinger — non-spatial so
+        // Miss whoosh belongs to the local swinger, non-spatial so
         // distance falloff can't quiet the player's own swing.
         SoundId::SwingMiss => SoundDefaults {
             category: SoundCategory::Sfx2d,
@@ -282,7 +282,7 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
             looped: false,
         },
 
-        // Inventory pickup — a trimmed real grass-rustle recording, so it
+        // Inventory pickup, a trimmed real grass-rustle recording, so it
         // reads as brushing the item out of the grass rather than a chime
         // or a clicky metal clink. The source clip is ~21 dB quieter than
         // the old cue, so base_gain_db is raised far above the drop/move
@@ -297,7 +297,7 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
             pitch_jitter: 0.04,
             looped: false,
         },
-        // Drop cue — slightly more body, hits a touch quieter than pickup
+        // Drop cue, slightly more body, hits a touch quieter than pickup
         // because dropping is a deliberate negative-feedback action, not
         // an achievement.
         SoundId::InventoryDrop => SoundDefaults {
@@ -307,7 +307,7 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
             pitch_jitter: 0.04,
             looped: false,
         },
-        // Slot-shuffle tick — UI chrome, deliberately quiet so dragging a
+        // Slot-shuffle tick, UI chrome, deliberately quiet so dragging a
         // stack across the grid doesn't drown out gameplay audio.
         SoundId::InventoryMove => SoundDefaults {
             category: SoundCategory::Ui,
@@ -321,7 +321,7 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
 
 /// Returns the asset paths for a sound's variant pool. Each path is
 /// relative to `assets/`. The same path appearing twice means deliberate
-/// duplication — but in practice every entry is a separate recording or a
+/// duplication, but in practice every entry is a separate recording or a
 /// pre-rendered variant.
 pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
     static UI_CLICK: [&str; 1] = ["ui/button-click.wav"];
@@ -362,7 +362,7 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         "impacts/miss-3.wav",
     ];
 
-    // PvP player-impact pool. Today shares the axe-wood sample set —
+    // PvP player-impact pool. Today shares the axe-wood sample set,
     // the "meaty thump" character is roughly right and re-using the
     // existing assets means the PvP loop ships without blocking on a
     // dedicated audio capture. Drop in `impacts/player-blunt-*.wav`
@@ -407,7 +407,7 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
 }
 
 /// Map a (tool, surface) pair to the impact `SoundId` to play. Returns
-/// `None` for pairs that have no dedicated sound — callers should fall
+/// `None` for pairs that have no dedicated sound, callers should fall
 /// back to the swing whoosh in that case.
 ///
 /// New combinations slot in by adding a row here. The audio-selection
@@ -424,7 +424,7 @@ pub(crate) fn impact_sound_for(tool: ToolKind, surface: SurfaceMaterial) -> Opti
         (ToolKind::Pickaxe, SurfaceMaterial::Coal) => Some(SoundId::ImpactPickaxeOnCoal),
         (ToolKind::Pickaxe, SurfaceMaterial::Iron) => Some(SoundId::ImpactPickaxeOnIron),
         (ToolKind::Pickaxe, SurfaceMaterial::Sulfur) => Some(SoundId::ImpactPickaxeOnSulfur),
-        // Bare hands never reach here — the input layer suppresses the
+        // Bare hands never reach here, the input layer suppresses the
         // swing entirely when no real tool is equipped. The arm exists
         // so the match stays exhaustive against future ToolKind /
         // SurfaceMaterial additions.
@@ -441,8 +441,8 @@ pub(crate) fn impact_sound_for(tool: ToolKind, surface: SurfaceMaterial) -> Opti
 pub(crate) fn impact_sound_for_player(tool: ToolKind) -> Option<SoundId> {
     match tool {
         ToolKind::Axe | ToolKind::Pickaxe => Some(SoundId::ImpactPlayerBlunt),
-        // Hands shouldn't reach this path — the server gates bare-hand
-        // PvP — but if it does, fall through to "no sound" rather
+        // Hands shouldn't reach this path, the server gates bare-hand
+        // PvP, but if it does, fall through to "no sound" rather
         // than playing a misleading "tool" thump.
         ToolKind::Hands => None,
     }
@@ -451,7 +451,7 @@ pub(crate) fn impact_sound_for_player(tool: ToolKind) -> Option<SoundId> {
 /// Lazily-built `Vec<String>` of `movement/footstep-<material>-01.wav` …
 /// `-12.wav`. Cached behind a `OnceLock` per material so the pool array
 /// is built exactly once per process. The pool size matches the embedded
-/// asset count — drop more files in and bump `12`.
+/// asset count, drop more files in and bump `12`.
 fn footstep_paths(material: &'static str) -> &'static [&'static str] {
     fn pool_for(material: &'static str) -> &'static [&'static str] {
         // Twelve variants per material; the anti-repeat picker can't
@@ -512,7 +512,7 @@ mod tests {
 
     #[test]
     fn looped_sounds_skip_pitch_jitter() {
-        // Music and ambient loops must never randomly pitch-shift — it
+        // Music and ambient loops must never randomly pitch-shift, it
         // would sound wrong on every cycle. Enforce that the manifest
         // never accidentally configures them with jitter.
         for id in all_sound_ids() {
@@ -520,7 +520,7 @@ mod tests {
             if defaults.looped {
                 assert_eq!(
                     defaults.pitch_jitter, 0.0,
-                    "{id:?} is looped but has pitch_jitter — would warble"
+                    "{id:?} is looped but has pitch_jitter, would warble"
                 );
             }
         }
@@ -545,7 +545,7 @@ mod tests {
             Some(SoundId::ImpactPickaxeOnIron)
         );
         // Hatchet on a non-wood surface (e.g. striking a furnace) used
-        // to fall through to the miss whoosh — now it ships the
+        // to fall through to the miss whoosh, now it ships the
         // mixed-down generic axe impact.
         assert_eq!(
             impact_sound_for(ToolKind::Axe, SurfaceMaterial::Iron),
@@ -556,7 +556,7 @@ mod tests {
             Some(SoundId::ImpactAxeGeneric)
         );
         // Pickaxe on wood (e.g. striking a workbench) used to fall
-        // through to the miss whoosh — now it ships the mixed-down
+        // through to the miss whoosh, now it ships the mixed-down
         // pickaxe-on-wood impact.
         assert_eq!(
             impact_sound_for(ToolKind::Pickaxe, SurfaceMaterial::Wood),

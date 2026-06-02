@@ -24,7 +24,7 @@ pub struct WorldListing {
 
 /// A save file that was present on disk but could not be loaded. The file
 /// name is preserved (rather than the parsed UUID) because the parse is
-/// exactly what failed — there's no save struct to extract an id from.
+/// exactly what failed, there's no save struct to extract an id from.
 ///
 /// `id` is recovered from the file name (`{uuid}.save`) when possible so the
 /// UI can still wire up a Delete action against the same `WorldStore::delete_world`
@@ -43,7 +43,7 @@ pub struct CorruptedWorld {
 impl CorruptedWorld {
     /// Display name for the worlds list. Falls back to the file name if the
     /// best-effort recovery turned up nothing (or the recovered name is
-    /// empty/control-only — postcard layout drift can produce junk bytes
+    /// empty/control-only, postcard layout drift can produce junk bytes
     /// that decode but aren't human-readable).
     pub fn display_name(&self) -> &str {
         self.recovered_name

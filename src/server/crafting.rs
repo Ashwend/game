@@ -1,14 +1,14 @@
 //! Server-authoritative crafting queue.
 //!
 //! Inputs are consumed when a job is enqueued. The queue advances one
-//! "current job" per server tick — parallel crafting is intentionally not
+//! "current job" per server tick, parallel crafting is intentionally not
 //! supported: queueing four arrows runs them serially behind one progress
 //! bar, which keeps the wire model trivial and the UI honest about wait
 //! time.
 //!
 //! Outputs are granted into the player's inventory on completion. If the
 //! result doesn't fit, it spawns as a dropped world item at the player's
-//! feet — the same recovery the resource gather path uses. Cancels follow
+//! feet, the same recovery the resource gather path uses. Cancels follow
 //! the same refund-then-drop rule for inputs.
 
 use crate::{
@@ -28,7 +28,7 @@ use super::{
 
 /// Convert a recipe's wall-clock duration into a tick count for a single
 /// unit. Always at least one tick so a zero-duration recipe still appears
-/// in the queue for a frame — the UI relies on the head job being visible
+/// in the queue for a frame, the UI relies on the head job being visible
 /// long enough for the player to see *something* happen.
 pub(super) fn craft_total_ticks(recipe: &RecipeDefinition) -> u32 {
     let ticks = (recipe.craft_seconds * SERVER_TICK_RATE_HZ).round() as u32;
@@ -37,7 +37,7 @@ pub(super) fn craft_total_ticks(recipe: &RecipeDefinition) -> u32 {
 
 /// Scale a single-unit tick count by the batch quantity, saturating at
 /// `u32::MAX` so an absurd quantity can't underflow the math. The actual
-/// per-message clamp lives on `MAX_CRAFT_BATCH_SIZE` — this is the
+/// per-message clamp lives on `MAX_CRAFT_BATCH_SIZE`, this is the
 /// belt-and-braces guard.
 pub(super) fn batch_total_ticks(recipe: &RecipeDefinition, quantity: u16) -> u32 {
     craft_total_ticks(recipe).saturating_mul(quantity.max(1) as u32)
@@ -88,7 +88,7 @@ impl GameServer {
         // max" rule is enforced authoritatively as well.
         let quantity = requested_quantity.clamp(1, MAX_CRAFT_BATCH_SIZE);
 
-        // Station gate — check before borrowing `clients` mutably so the
+        // Station gate, check before borrowing `clients` mutably so the
         // immutable scan inside `station_in_range` doesn't fight the
         // borrow checker.
         if !self.station_in_range(client_id, recipe.station) {
@@ -164,7 +164,7 @@ impl GameServer {
         };
         let job = client.crafting.jobs.remove(index);
         let Some(recipe) = recipe_definition(&job.recipe_id) else {
-            // Recipe was retired between enqueue and cancel — drop the job
+            // Recipe was retired between enqueue and cancel, drop the job
             // silently rather than refund inputs the registry no longer
             // knows about. This shouldn't happen with the current
             // append-only registry; the guard is here so a future
@@ -201,7 +201,7 @@ impl GameServer {
         // outputs, completion toasts, overflow drops) is deterministic
         // across runs. `HashMap::keys` is randomized; without this, two
         // players completing on the same tick would emit envelopes in a
-        // run-dependent order — fine for correctness today but blocks
+        // run-dependent order, fine for correctness today but blocks
         // any future replay / streaming work.
         let mut client_ids: Vec<ClientId> = self.clients.keys().copied().collect();
         client_ids.sort_unstable();
@@ -555,7 +555,7 @@ mod tests {
         );
 
         let client = server.clients.get(&client_id).expect("client");
-        // No partial debit — nothing was taken because the full batch
+        // No partial debit, nothing was taken because the full batch
         // didn't fit.
         assert_eq!(count_item_in_inventory(client, FIBER_ID), 6);
         assert!(client.crafting.jobs.is_empty());

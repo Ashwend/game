@@ -26,7 +26,7 @@ use crate::{
 /// component is effectively read-only post-spawn.
 ///
 /// `Serialize`/`Deserialize` are required by Lightyear's component
-/// replication — the component travels the wire as-is.
+/// replication, the component travels the wire as-is.
 #[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResourceNode {
     pub id: ResourceNodeId,
@@ -35,7 +35,7 @@ pub struct ResourceNode {
     pub yaw: f32,
 }
 
-/// Per-node mutable inventory. The active storage list — gather decrements
+/// Per-node mutable inventory. The active storage list, gather decrements
 /// entries, depletion is observed when this list is empty.
 #[derive(Component, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ResourceNodeStorage(pub Vec<ItemStack>);

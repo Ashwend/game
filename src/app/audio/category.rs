@@ -26,7 +26,7 @@ pub(crate) enum SoundCategory {
     /// Short, non-spatial one-shots (swing whoosh, the local player's own
     /// footsteps, UI confirmations not in the chrome).
     Sfx2d,
-    /// Chrome cues — button click/hover, slider tick, dialog open.
+    /// Chrome cues, button click/hover, slider tick, dialog open.
     Ui,
 }
 
@@ -47,7 +47,7 @@ impl SoundCategory {
     }
 
     /// Maximum number of concurrent one-shot voices in this category.
-    /// `None` means "no cap" — used for music and ambient layers, where
+    /// `None` means "no cap", used for music and ambient layers, where
     /// every active sound is intentional and we never want one to clip out.
     pub(crate) fn polyphony_cap(self) -> Option<usize> {
         match self {
@@ -62,7 +62,7 @@ impl SoundCategory {
 /// Combine a sound's intrinsic base gain (dB) with the user's slider so the
 /// final per-entity `Volume` is one helper call. Linear scaling on top of a
 /// dB reference is what every individual `_volume()` helper used to do
-/// inline — this is that math, deduplicated.
+/// inline, this is that math, deduplicated.
 pub(crate) fn category_volume(
     category: SoundCategory,
     settings: &ClientSettings,

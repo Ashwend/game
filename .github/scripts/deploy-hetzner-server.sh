@@ -152,7 +152,7 @@ as_root systemctl enable "${service_name}"
 announce() {
   local message="$1"
   if [[ ! -S "${admin_socket}" ]]; then
-    echo "skipping announce — ${admin_socket} is not available (server not running?)"
+    echo "skipping announce, ${admin_socket} is not available (server not running?)"
     return 0
   fi
   if [[ -x "${current_link}/ashwend" ]]; then
@@ -180,7 +180,7 @@ done
 if [[ "${socket_ready}" -eq 1 ]]; then
   announce "Server is back online with ${version}. Please download the latest client before reconnecting."
 else
-  echo "admin socket ${admin_socket} did not appear within the timeout — skipping post-deploy announcement" >&2
+  echo "admin socket ${admin_socket} did not appear within the timeout, skipping post-deploy announcement" >&2
 fi
 
 as_root systemctl --no-pager --full status "${service_name}"

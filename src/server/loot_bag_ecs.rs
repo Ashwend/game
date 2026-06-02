@@ -7,9 +7,9 @@
 //! receives per-component diffs of the bag's slot list.
 //!
 //! Split into:
-//!   - [`LootBag`] — identity (immutable post-spawn).
-//!   - [`LootBagTransform`] — placement pose (static after spawn).
-//!   - [`LootBagContents`] — the mutable slot list. Changes when a
+//!   - [`LootBag`], identity (immutable post-spawn).
+//!   - [`LootBagTransform`], placement pose (static after spawn).
+//!   - [`LootBagContents`], the mutable slot list. Changes when a
 //!     player drags items in or out; per-component replication keeps
 //!     wire traffic to just the contents diff.
 
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn index_round_trips_inserted_id() {
-        // Spawn a throwaway entity rather than fabricating one — the
+        // Spawn a throwaway entity rather than fabricating one, the
         // public Entity constructor surface changes between bevy
         // releases, but `World::spawn_empty()` is stable.
         let mut world = World::new();

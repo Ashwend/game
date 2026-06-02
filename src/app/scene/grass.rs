@@ -1,4 +1,4 @@
-//! Procedural detail grass — a client-only cosmetic ground layer streamed in
+//! Procedural detail grass, a client-only cosmetic ground layer streamed in
 //! tiles around the camera, with a custom wind + distance-fade shader.
 //!
 //! Placement is **seed-free**: which layout + rotation each tile gets is a pure
@@ -8,13 +8,13 @@
 //!
 //! ## Material
 //!
-//! Grass uses [`GrassMaterial`] — an `ExtendedMaterial<StandardMaterial,
+//! Grass uses [`GrassMaterial`], an `ExtendedMaterial<StandardMaterial,
 //! GrassWindExtension>` (the project's first custom shader, `assets/shaders/
 //! grass.wgsl`). It keeps StandardMaterial's PBR/IBL lighting (so grass is lit
 //! like the rest of the scene) and adds:
-//! - **Vertex wind sway** — tips ride a world-space wave, weighted by the sway
+//! - **Vertex wind sway**, tips ride a world-space wave, weighted by the sway
 //!   weight baked into vertex-colour alpha (0 base → 1 tip), so blades bend.
-//! - **Fragment radial dither** — whole blades drop out with distance from the
+//! - **Fragment radial dither**, whole blades drop out with distance from the
 //!   camera (key = a stable per-blade random in `uv.x`), thinning the field into
 //!   smooth *rings*. This replaces a hard despawn edge and the old square
 //!   per-tile density bands: the fade is now per-blade and radial, GPU-side.
@@ -49,7 +49,7 @@ use crate::{
     world::{WorldBlock, WorldData, fbm, splitmix64},
 };
 
-/// Embedded path of the grass shader (see [`crate::app::embedded_asset_path`] —
+/// Embedded path of the grass shader (see [`crate::app::embedded_asset_path`],
 /// the same `embedded://` scheme, but a `&'static str` because [`ShaderRef`]
 /// needs one).
 const GRASS_SHADER_PATH: &str = "embedded://shaders/grass.wgsl";
@@ -62,12 +62,12 @@ const GRASS_TILE_M: f32 = 8.0;
 const GRASS_EDGE_MARGIN_M: f32 = 3.0;
 
 /// Tile entities spawned per frame. One entity per tile (the mesh is shared and
-/// pre-built), so this is cheap — but capped so the first fill on entering a
+/// pre-built), so this is cheap, but capped so the first fill on entering a
 /// world drains over a few frames instead of one command-buffer spike.
 const MAX_GRASS_TILE_SPAWNS_PER_FRAME: usize = 12;
 
 /// Distinct blade layouts to bake. Each tile picks one by hash and rotates it to
-/// one of four cardinal angles, giving `4 × COUNT` permutations — plenty to hide
+/// one of four cardinal angles, giving `4 × COUNT` permutations, plenty to hide
 /// tiling across an open field.
 const GRASS_LAYOUT_COUNT: usize = 16;
 
@@ -80,7 +80,7 @@ pub(crate) type GrassMaterial = ExtendedMaterial<StandardMaterial, GrassWindExte
 
 /// Shared handle to the single [`GrassMaterial`] instance. Created eagerly at
 /// scene setup and used by **both** the streamed detail grass and the
-/// harvestable hay-grass node, so they sway in unison — and so hay grass sways
+/// harvestable hay-grass node, so they sway in unison, and so hay grass sways
 /// even when the detail-grass density is Off (it's a gameplay plant, not the
 /// cosmetic layer). The material is binding-free, so one instance suffices.
 #[derive(Resource, Clone)]
@@ -91,7 +91,7 @@ pub(crate) struct GrassMaterialHandle(pub(crate) Handle<GrassMaterial>);
 /// `ExtendedMaterial`'s bind-group merge with the bindless `StandardMaterial`
 /// drops a `@binding(100)` extension uniform from the pipeline layout on Metal
 /// (crash: "binding 100 missing from pipeline layout"), so all shader tuning is
-/// compile-time constants in `grass.wgsl` instead — the trade-off being a fixed
+/// compile-time constants in `grass.wgsl` instead, the trade-off being a fixed
 /// fade window / draw radius across density tiers (see [`GRASS_RADIUS_M`]).
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
 pub(crate) struct GrassWindExtension {}
@@ -107,7 +107,7 @@ impl MaterialExtension for GrassWindExtension {
 
 /// Camera-relative radius (m) within which grass tiles are kept loaded. Fixed
 /// across density tiers because the shader's fade window (`FADE_START`/`FADE_END`
-/// in `grass.wgsl`) is a compile-time constant — see [`GrassWindExtension`]. A
+/// in `grass.wgsl`) is a compile-time constant, see [`GrassWindExtension`]. A
 /// hair above the shader's `FADE_END` (45 m) so grass is fully faded before a
 /// tile despawns (no pop).
 const GRASS_RADIUS_M: f32 = 47.0;
@@ -163,7 +163,7 @@ pub(crate) fn stream_grass_system(
         return;
     };
 
-    // (Re)bake the shared meshes when density changes or on first use — the only
+    // (Re)bake the shared meshes when density changes or on first use, the only
     // place grass meshes are (re)allocated, never per-frame.
     let density_changed = state.bound_density != Some(density);
     if density_changed || state.variants.is_empty() {
@@ -247,7 +247,7 @@ pub(crate) fn stream_grass_system(
                     Transform::from_xyz(cx, 0.0, cz).with_rotation(Quat::from_rotation_y(yaw)),
                     Visibility::Visible,
                     // Grass never casts shadows (too many tiny casters), and has
-                    // NO `VisibilityRange` — see the module docs.
+                    // NO `VisibilityRange`, see the module docs.
                     NotShadowCaster,
                 ))
                 .id();
@@ -262,7 +262,7 @@ const MENU_GRASS_BLADES_PER_M2: f32 = 11.0;
 /// Spawn a fixed patch of detail grass for the main-menu backdrop, tagged
 /// [`WorldGeometry`] so it's torn down with the rest of the backdrop on scene
 /// change. Uses the shared wind [`GrassMaterial`] + the same blade meshes as the
-/// in-game grass, but as a static patch — the menu camera barely drifts, so
+/// in-game grass, but as a static patch, the menu camera barely drifts, so
 /// streaming isn't needed and the shader's radial fade thins the far edge.
 ///
 /// The tile range covers the camera's visible foreground/midground (camera near
@@ -316,7 +316,7 @@ pub(crate) fn grass_material() -> GrassMaterial {
     ExtendedMaterial {
         base: StandardMaterial {
             // Vertex colours carry the green gradient; the base colour passes
-            // them through. Matte, near-zero reflectance — grass has no sheen.
+            // them through. Matte, near-zero reflectance, grass has no sheen.
             base_color: Color::WHITE,
             perceptual_roughness: 0.95,
             reflectance: 0.04,
@@ -363,7 +363,7 @@ fn tile_center(tx: i32, tz: i32) -> (f32, f32) {
 }
 
 /// Stable per-tile hash. Folds the two signed tile coords into one `u64` then
-/// runs it through `splitmix64`. No world seed — placement is seed-free.
+/// runs it through `splitmix64`. No world seed, placement is seed-free.
 fn tile_seed(tx: i32, tz: i32) -> u64 {
     let folded = ((tx as u32 as u64) << 32) | (tz as u32 as u64);
     splitmix64(folded ^ 0x9E37_79B9_7F4A_7C15)

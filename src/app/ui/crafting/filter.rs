@@ -17,9 +17,9 @@ use super::{RecipeListEntry, theme};
 /// so the most useful recipes float to the top.
 ///
 /// Sort order:
-/// 1. Craftable recipes before missing-material ones — the player almost
+/// 1. Craftable recipes before missing-material ones, the player almost
 ///    always wants to see what they *can* make first.
-/// 2. Higher [`RecipeDefinition::tier`] above lower — a stone pickaxe
+/// 2. Higher [`RecipeDefinition::tier`] above lower, a stone pickaxe
 ///    outranks plant twine when both are craftable.
 /// 3. Ties broken alphabetically by recipe name so the order is stable
 ///    across frames (otherwise the list could jitter as `HashMap`-backed
@@ -74,10 +74,10 @@ pub(super) fn draw_filter_row(ui: &mut egui::Ui, crafting_ui: &mut CraftingUiSta
             egui::Label::new(theme::field_label("Search")),
         );
         // Pin the TextEdit id so `request_focus` can target it across
-        // frames — egui auto-ids are stable enough here, but a named id
+        // frames, egui auto-ids are stable enough here, but a named id
         // also lets future "Ctrl+F to focus search"-style shortcuts hit
         // the same widget without scraping memory.
-        // Search field is *not* auto-focused on open — players use the
+        // Search field is *not* auto-focused on open, players use the
         // crafting screen mostly via category chips and clicking, not
         // typing. Clicking the field still focuses it normally. See the
         // toggle system for the rationale.

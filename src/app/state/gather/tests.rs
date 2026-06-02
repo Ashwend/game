@@ -60,7 +60,7 @@ fn gather_input_sends_at_swing_impact_and_repeats_while_held() {
     assert_eq!(impact.target, Some(SwingTarget::ResourceNode(4)));
     assert_eq!(impact.tool, tool);
 
-    // Same swing — no second impact even though we step further.
+    // Same swing, no second impact even though we step further.
     assert!(
         state
             .update(
@@ -139,7 +139,7 @@ fn gather_input_swings_without_target_and_yields_no_impact() {
     let duration = swing_duration_seconds(tool);
     let impact_time = duration * swing_impact_fraction(tool);
 
-    // Click with no target — swing still starts.
+    // Click with no target, swing still starts.
     let _ = state.update(0.01, true, true, Some(tool), None);
     assert!(state.swing_fraction() > 0.0);
 

@@ -59,7 +59,7 @@ impl GameServer {
             let physics_body =
                 dropped_item_physics.spawn_body(item.position, Vec3Net::ZERO, item.yaw);
             // Anchor the reloaded drop to its chunk so a returning
-            // player immediately sees it via room replication — without
+            // player immediately sees it via room replication, without
             // this the item exists server-side but is filtered out of
             // every AoI ring until something nudges its position.
             chunk_manager.track_dropped_item(item.id, item.position);

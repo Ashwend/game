@@ -43,8 +43,8 @@ pub(super) fn pause_ui(
             theme::panel_frame().show(ui, |ui| {
                 ui.set_width(272.0);
                 ui.vertical_centered(|ui| {
-                    // Gameplay never actually pauses — the authoritative server
-                    // keeps ticking while this overlay is up — so brand it with
+                    // Gameplay never actually pauses, the authoritative server
+                    // keeps ticking while this overlay is up, so brand it with
                     // the game name in the title typeface rather than a
                     // misleading "Paused". `Extend` keeps it on one line.
                     ui.add(

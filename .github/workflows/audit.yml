@@ -78,5 +78,5 @@ jobs:
           command: check
           # `bans` is configured as `warn` for multiple-versions in deny.toml
           # so the bevy/rapier/lightyear transitive graph doesn't block PRs
-          # — the noisier checks here are licenses, advisories, and sources.
+          #, the noisier checks here are licenses, advisories, and sources.
           command-arguments: "--hide-inclusion-graph"

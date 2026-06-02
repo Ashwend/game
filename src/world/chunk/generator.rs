@@ -25,27 +25,27 @@ use super::{
 };
 
 /// Global multiplier on every kind's per-chunk target count. Bumped to
-/// 2.0 because the world read as barren at 1.0 — sparse chunks especially
+/// 2.0 because the world read as barren at 1.0, sparse chunks especially
 /// felt empty. Spacing rules still cap how dense a single kind can get, so
 /// dense chunks fill in less than 2× while sparse ones gain the most.
 const DENSITY_MULTIPLIER: f32 = 2.0;
 /// Octaves for the per-kind density mask used during rejection sampling.
 const KIND_MASK_OCTAVES: u32 = 3;
 /// Feature scale of the per-kind density mask. Smaller than the
-/// classification frequency so clusters happen at the sub-grid level —
+/// classification frequency so clusters happen at the sub-grid level,
 /// i.e. trees bunch up in one corner of a forest chunk, leaving the other
 /// side sparse.
 const KIND_MASK_FREQUENCY: f32 = 1.0 / 28.0;
 /// Maximum candidate positions tried per node before giving up. Tuned so
 /// the worst case (a fully populated grid trying to squeeze in one more
-/// node) doesn't dominate generation time — at this point we'd rather
+/// node) doesn't dominate generation time, at this point we'd rather
 /// undershoot the capacity than burn cycles searching.
 const MAX_CANDIDATES_PER_NODE: u32 = 18;
 /// Margin from the chunk edge so neighbouring grids don't double-spawn
 /// against each other when a node lands right on the boundary.
 const EDGE_MARGIN_M: f32 = 0.5;
 /// Minimum distance between any two nodes regardless of kind. Loose
-/// enough that grass can grow right next to a stick or stone — the
+/// enough that grass can grow right next to a stick or stone, the
 /// crude clutter is small and walk-through, so visual overlap reads as
 /// "ground variety" rather than as broken placement.
 const CROSS_KIND_MIN_SPACING_M: f32 = 0.7;
@@ -53,7 +53,7 @@ const CROSS_KIND_MIN_SPACING_M: f32 = 0.7;
 /// Per-chunk target count for one kind: scale its classification base
 /// capacity by the channel intensity, then by the global density knob.
 /// Lives here so the generator and the regrow capacity table in
-/// `chunk_manager` share one formula — if they drift, generation and
+/// `chunk_manager` share one formula, if they drift, generation and
 /// regrow ceilings disagree and the world either over- or under-fills.
 pub fn kind_target(base_capacity: u16, channel: f32) -> u16 {
     (base_capacity as f32 * (0.55 + channel * 0.7) * DENSITY_MULTIPLIER).round() as u16
@@ -73,8 +73,8 @@ pub struct ChunkSpawn {
 /// allowed to place nodes inside. Matches the playable interior carved
 /// out by [`build_world_blocks`] minus a small clearance so node visuals
 /// (the widest tree trunk is ≈0.46 m half-width) don't clip into the
-/// stone perimeter. Without this, chunks at the world edge — which
-/// extend past the centre-aligned walls — drop trees and ore *outside*
+/// stone perimeter. Without this, chunks at the world edge, which
+/// extend past the centre-aligned walls, drop trees and ore *outside*
 /// the wall, where the player can never reach them.
 #[derive(Debug, Clone, Copy)]
 pub struct PlayableBounds {
@@ -94,7 +94,7 @@ impl PlayableBounds {
         // Mirror `build_world_blocks`: walls of thickness 0.5 sit inset
         // by their own thickness from the outer edge, so the inner face
         // lands at `half - wall_thickness * 2`. Walls are centred on
-        // the world origin even though the chunk grid is not — the
+        // the world origin even though the chunk grid is not, the
         // clamp here is what keeps spawns on the player side of the
         // wall on both axes.
         let half = dims.world_size_m() * 0.5;
@@ -114,7 +114,7 @@ impl PlayableBounds {
 }
 
 /// Generate all node spawns for every grid covered by `dims`. Node IDs
-/// are dense and contiguous starting from `1` — the server adopts these
+/// are dense and contiguous starting from `1`, the server adopts these
 /// for its `ResourceNodeId` counter so admin-spawned nodes pick up safely
 /// above the world-authored range.
 pub fn generate_world_spawns(world_seed: u64, dims: ChunkDims) -> Vec<ChunkSpawn> {
@@ -130,7 +130,7 @@ pub fn generate_world_spawns(world_seed: u64, dims: ChunkDims) -> Vec<ChunkSpawn
 
 /// Generate the node spawns for a single grid, advancing `next_id` so
 /// nodes across the whole world get unique IDs. Candidate positions
-/// outside `bounds` are silently rejected — chunks at the world edge
+/// outside `bounds` are silently rejected, chunks at the world edge
 /// extend past the centre-aligned perimeter walls, so without this
 /// filter the outermost rings would drop nodes into the void beyond
 /// the player's reach.
@@ -144,7 +144,7 @@ pub fn generate_chunk_spawns(
     let classification = channels.classify();
 
     // Track placed points across all kinds in this chunk for the
-    // cross-kind spacing rule — index is `(world_x, world_z)`. Each
+    // cross-kind spacing rule, index is `(world_x, world_z)`. Each
     // kind also enforces its own (looser) spacing in its inner loop.
     let mut placed_global: Vec<(f32, f32)> = Vec::new();
     let mut spawns = Vec::new();
@@ -185,14 +185,14 @@ pub fn generate_chunk_spawns(
                 continue;
             }
 
-            // Per-kind density mask — accept probability tracks the local
+            // Per-kind density mask, accept probability tracks the local
             // noise value. This is what turns a uniformly-sampled point
             // set into clusters: low-mask regions stay sparse, high-mask
             // regions accumulate nodes.
             let mask_seed = splitmix64(world_seed ^ (kind_stream(kind) as u64).wrapping_mul(0x57));
             let mask = fbm(mask_seed, x, z, KIND_MASK_FREQUENCY, KIND_MASK_OCTAVES);
             // Floor the threshold so even a "weak" cell still seeds a
-            // few placements — otherwise low-channel kinds (e.g. ore in
+            // few placements, otherwise low-channel kinds (e.g. ore in
             // a forest chunk) struggle to land even one.
             let accept_floor = 0.25;
             if rng.next_unit() > mask.max(accept_floor) {
@@ -244,7 +244,7 @@ pub fn generate_chunk_spawns(
 
 /// Build the static block geometry for a chunk world: a perimeter stone
 /// wall sized to the dims so players can't wander off the playable area.
-/// Internal blocks (the old hand-placed obstacle course) are gone —
+/// Internal blocks (the old hand-placed obstacle course) are gone,
 /// gameplay terrain is the resource nodes themselves now.
 pub fn build_world_blocks(dims: ChunkDims) -> Vec<WorldBlock> {
     let world_size = dims.world_size_m();
@@ -336,7 +336,7 @@ mod tests {
         for spawn in &spawns {
             kinds.insert(spawn.kind);
         }
-        // We should see several kinds across the map — exact set
+        // We should see several kinds across the map, exact set
         // depends on the seed, but a healthy mix is expected.
         assert!(
             kinds.len() >= 5,
@@ -399,7 +399,7 @@ mod tests {
     fn world_spawns_stay_inside_playable_bounds() {
         // Chunks for dims=5 span world x in [-128, 192] while the
         // walls sit at ±160. Without bounds clipping the eastmost
-        // ring would drop nodes past the wall — this test pins the
+        // ring would drop nodes past the wall, this test pins the
         // generator-side gate.
         let dims = ChunkDims::new(5);
         let bounds = PlayableBounds::from_dims(dims);

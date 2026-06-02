@@ -1,12 +1,12 @@
 //! Low-poly meshes for placed structures. The visuals are intentionally
 //! blocky and quick to read so the player can recognise a workbench or
-//! furnace at a glance — detail can come later without changing the
+//! furnace at a glance, detail can come later without changing the
 //! footprint, since the AABB collider is driven by the item's
 //! `DeployableProfile` half-extents and not by mesh bounds.
 //!
 //! Every box in these meshes is butted edge-to-edge against its
 //! neighbour with no overlap. Overlapping faces produce z-fighting
-//! flicker at distance — particularly visible on the furnace, which
+//! flicker at distance, particularly visible on the furnace, which
 //! the player walks around. If you tweak a dimension here, sanity-check
 //! it against the others on the same axis.
 
@@ -22,7 +22,7 @@ use super::builder::{
 /// plank tabletop, and a mounted iron vice on the right edge.
 ///
 /// Stretchers sit at the leg's bottom and butt cleanly against the
-/// inner face of each leg — earlier revisions had a single cross-brace
+/// inner face of each leg, earlier revisions had a single cross-brace
 /// floating in the middle (no leg contact), which read as "loose
 /// hovering bar" instead of a connected frame.
 pub(crate) fn low_poly_workbench_mesh() -> Mesh {
@@ -55,7 +55,7 @@ pub(crate) fn low_poly_workbench_mesh() -> Mesh {
     builder.add_box([-0.46, 0.18, 0.0], side_stretcher_half, WOOD_DARK);
     builder.add_box([0.46, 0.18, 0.0], side_stretcher_half, WOOD_DARK);
 
-    // Tabletop plank stack — two slabs to read as planks. Stacked
+    // Tabletop plank stack, two slabs to read as planks. Stacked
     // edge-to-edge (lower slab top y=0.96, upper slab bottom y=0.96)
     // so they don't z-fight.
     builder.add_box([0.0, 0.92, 0.0], [0.55, 0.04, 0.34], WOOD_LIGHT);
@@ -65,7 +65,7 @@ pub(crate) fn low_poly_workbench_mesh() -> Mesh {
     builder.add_box([0.36, 1.07, 0.18], [0.10, 0.05, 0.10], IRON_BAND);
     builder.add_box([0.36, 1.15, 0.18], [0.04, 0.03, 0.10], IRON_BAND);
 
-    // Hide-strap detail on the leg corners — leans into the "lashed
+    // Hide-strap detail on the leg corners, leans into the "lashed
     // together" early-game aesthetic that the existing tool meshes share.
     builder.add_box([-0.46, 0.86, -0.26], [0.07, 0.02, 0.07], LEATHER_WRAP);
     builder.add_box([0.46, 0.86, -0.26], [0.07, 0.02, 0.07], LEATHER_WRAP);
@@ -87,7 +87,7 @@ pub(crate) fn low_poly_crude_furnace_mesh() -> Mesh {
 
     // Four walls forming the hearth shell. y=0.20..0.92 for all walls.
     // Side walls cover the full footprint depth; the back wall fills
-    // the gap between them along z. The front side is left open — the
+    // the gap between them along z. The front side is left open, the
     // mouth.
     let wall_height_half = 0.36;
     let wall_y = 0.20 + wall_height_half;
@@ -116,7 +116,7 @@ pub(crate) fn low_poly_crude_furnace_mesh() -> Mesh {
     // shadowed interior.
     builder.add_box([0.0, 0.85, 0.0], [0.30, 0.07, 0.375], HEARTH_INTERIOR);
 
-    // Capstone lid sitting on top of the walls. y=0.92..1.00 — adjacent
+    // Capstone lid sitting on top of the walls. y=0.92..1.00, adjacent
     // to wall tops without overlap.
     builder.add_box([0.0, 0.96, 0.0], [0.52, 0.04, 0.47], STONE_EDGE);
 
@@ -133,7 +133,7 @@ pub(crate) fn low_poly_crude_furnace_mesh() -> Mesh {
     builder.build()
 }
 
-/// Used for the inside of the furnace cavity — darker than the outer
+/// Used for the inside of the furnace cavity, darker than the outer
 /// stones so the interior reads as a shadowed mouth even before the
 /// lit-furnace point light kicks in.
 const HEARTH_INTERIOR: MeshColor = [0.18, 0.16, 0.14, 1.0];

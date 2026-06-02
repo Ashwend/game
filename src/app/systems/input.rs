@@ -1,12 +1,12 @@
 //! Client input pipeline. Split into focused submodules:
 //!
-//! - `gating` — `gameplay_simulation_allowed`/`gameplay_accepts_controls`/
+//! - `gating`, `gameplay_simulation_allowed`/`gameplay_accepts_controls`/
 //!   `primary_window_focused`; the gating logic the others lean on.
-//! - `cursor` — cursor grab and focus-recentering.
-//! - `menu_toggles` — chat/pause/inventory shortcut keys.
-//! - `look` — mouse look + per-frame delta cap.
-//! - `movement` — `client_input_system` and the WASD→direction helper.
-//! - `inventory_shortcuts` — actionbar, drop/pickup, swing dispatch.
+//! - `cursor`, cursor grab and focus-recentering.
+//! - `menu_toggles`, chat/pause/inventory shortcut keys.
+//! - `look`, mouse look + per-frame delta cap.
+//! - `movement`, `client_input_system` and the WASD→direction helper.
+//! - `inventory_shortcuts`, actionbar, drop/pickup, swing dispatch.
 
 mod cursor;
 mod gating;

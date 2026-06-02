@@ -1,4 +1,4 @@
-# Analytics (PostHog) — local opt-in config.
+# Analytics (PostHog), local opt-in config.
 #
 # Copy this file to `analytics.local.toml` (gitignored) and fill it in to point
 # a local checkout at a PostHog project. Loaded by `src/analytics/config.rs`.

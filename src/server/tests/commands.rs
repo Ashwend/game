@@ -131,7 +131,7 @@ fn help_command_replies_as_server_chat_only_to_issuer() {
     );
 
     // Every help line should be a directed Chat message from "Server",
-    // never a Toast and never a Broadcast — the help reply must not pollute
+    // never a Toast and never a Broadcast, the help reply must not pollute
     // other players' chat logs.
     assert!(!envelopes.is_empty(), "/help should produce chat lines");
     let chat_lines: Vec<_> = envelopes

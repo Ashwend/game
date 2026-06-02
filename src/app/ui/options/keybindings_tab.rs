@@ -1,7 +1,7 @@
 //! Keybindings tab: list of every rebindable action with its current
 //! primary/secondary key, a per-row reset button, and a global "Reset All
 //! Defaults" button at the bottom. Clicking a slot pops the row into
-//! capture mode — the next physical key press is recorded as the new
+//! capture mode, the next physical key press is recorded as the new
 //! binding, any other action holding the same key is automatically
 //! cleared, and the player can press Escape to bail.
 //!
@@ -92,7 +92,7 @@ fn render_category_rows(
 
 /// Header strip above the action rows. Mirrors the action row layout so the
 /// "Primary" / "Secondary" captions sit directly above their button columns.
-/// The action column itself is intentionally unlabeled — the label text is
+/// The action column itself is intentionally unlabeled, the label text is
 /// self-evident from each row.
 fn column_header_row(ui: &mut egui::Ui) {
     keybinding_row(ui, "", |ui| {
@@ -227,7 +227,7 @@ fn slot_button(
 /// Render a button that fills exactly `width × SETTING_ROW_HEIGHT` and uses
 /// the project palette for the given [`theme::ButtonKind`]. `min_size` is
 /// what forces the rect to the requested width even when the label is
-/// short — it's the difference between "all rows aligned" and "rows
+/// short, it's the difference between "all rows aligned" and "rows
 /// staggering with label length".
 fn slot_styled_button(
     ui: &mut egui::Ui,
@@ -261,7 +261,7 @@ fn capture_label(ctx: &egui::Context) -> String {
 
 /// Reads the next physical key press while a rebind is pending. The capture
 /// is intentionally tied to the Bevy keyboard input rather than egui's
-/// input — egui's key events are filtered by IME and modifier state and
+/// input, egui's key events are filtered by IME and modifier state and
 /// would miss raw bindings (`ShiftLeft` alone, function keys, etc.).
 fn consume_pending_rebind(
     settings: &mut ClientSettings,

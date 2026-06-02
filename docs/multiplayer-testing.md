@@ -77,11 +77,11 @@ The producer side (`src/cli/multiplayer_test.rs`) and the consumer side
 |---|---|---|
 | `GAME_PLAYER_NAME` | string | Display name. |
 | `GAME_STEAM_ID` | u64 | Stable identity per client. |
-| `GAME_TEST_WINDOW_WIDTH` | u32 | Window logical width (px) — single-monitor fallback tiling only. |
-| `GAME_TEST_WINDOW_HEIGHT` | u32 | Window logical height (px) — single-monitor fallback tiling only. |
+| `GAME_TEST_WINDOW_WIDTH` | u32 | Window logical width (px), single-monitor fallback tiling only. |
+| `GAME_TEST_WINDOW_HEIGHT` | u32 | Window logical height (px), single-monitor fallback tiling only. |
 | `GAME_TEST_WINDOW_INDEX` | u32 | 0-based client index. Selects the monitor (0 = leftmost) on multi-monitor; the tile slot on single-monitor. |
 | `GAME_TEST_WINDOW_COUNT` | u32 | Total clients/tile slots (always 2 today). |
-| `GAME_TEST_WINDOW_GAP` | i32 | Pixel gap between sibling windows — single-monitor fallback tiling only. |
+| `GAME_TEST_WINDOW_GAP` | i32 | Pixel gap between sibling windows, single-monitor fallback tiling only. |
 | `GAME_TEST_SPAWN_OFFSET_X` | f32 | Meters added to spawn position along X. |
 | `GAME_TEST_SPAWN_OFFSET_Z` | f32 | Meters added to spawn position along Z. |
 | `GAME_TEST_SPAWN_YAW` | f32 | Initial yaw in radians (set after Welcome). |
@@ -92,12 +92,12 @@ The producer side (`src/cli/multiplayer_test.rs`) and the consumer side
 
 Defaults live as constants in `src/cli/multiplayer_test.rs`:
 
-- `TEST_WINDOW_WIDTH` / `TEST_WINDOW_HEIGHT` — single-monitor fallback
+- `TEST_WINDOW_WIDTH` / `TEST_WINDOW_HEIGHT`, single-monitor fallback
   only: sized to fit two windows side-by-side on a 1920-wide display with
   comfortable margins, and tall enough to show the inventory panel without
   scrolling. Ignored on multi-monitor (each client is borderless-fullscreen).
-- `TEST_WINDOW_GAP` — single-monitor fallback gap between the two windows.
-- `TEST_PLAYER_OFFSET_X` — half the spawn separation between the two
+- `TEST_WINDOW_GAP`, single-monitor fallback gap between the two windows.
+- `TEST_PLAYER_OFFSET_X`, half the spawn separation between the two
   players (so they end up `2 × TEST_PLAYER_OFFSET_X` apart). Tuned so
   voice indicators / nameplates are clearly visible without making
   interpolation jitter hard to spot.
@@ -128,7 +128,7 @@ See [Voice](voice.md) for the rest of the audio pipeline.
 
 ## Module map
 
-- `src/cli/multiplayer_test.rs`: the helper itself — server spawn, client
+- `src/cli/multiplayer_test.rs`: the helper itself, server spawn, client
   spawn, `TestClientLayout` tile-index/spawn-offset computation, and the
   unit tests for the symmetry of the layout.
 - `src/app/state/test_mode.rs`: `TestModeConfig`, `TestWindowLayout`,
@@ -145,6 +145,6 @@ gather, etc.), prefer the in-process tests under `src/net/tests.rs`
 and `src/server/tests/` that drive `ClientSession` against a
 `LightyearGameSession` without spawning child processes.
 `./cli multiplayer-test` is for the cases where you actually need to
-*see* two clients render the same world — voice chat, interpolation,
+*see* two clients render the same world, voice chat, interpolation,
 animation, nameplate behaviour, UI synchronisation, or visual
 verification of replicated state on chunk crossings.

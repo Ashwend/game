@@ -36,7 +36,7 @@ impl GameServer {
         // Hand-harvest fallback: if the active slot has no tool definition
         // (empty, or holding a non-tool item), use the synthesized
         // `HANDS_TOOL` profile. The node's `required_tool` decides whether
-        // hands are actually accepted — crude nodes (branch piles, surface
+        // hands are actually accepted, crude nodes (branch piles, surface
         // stones, grass) use `ToolKind::Hands` which is satisfied by any
         // tool *or* by hands; tree/ore nodes only by the matching tool.
         let tool: ToolProfile = client
@@ -84,7 +84,7 @@ impl GameServer {
         }
         let mut envelopes = item_acquired_toast_envelopes(client_id, &payout_id, accepted_quantity);
         if depleted {
-            // Remove the node entirely — the chunk manager schedules a
+            // Remove the node entirely, the chunk manager schedules a
             // fresh-position respawn 5-15 min later in the same grid.
             // Broadcast a `ResourceNodeDepleted` so clients can run the
             // death animation; without that, a Lightyear despawn alone
@@ -104,10 +104,10 @@ impl GameServer {
         // Storage post-gather: the ECS mirror picks up `node.storage`
         // on the next sync and Lightyear replicates the
         // `ResourceNodeStorage` diff. No reliable side-channel needed
-        // — see [Networking § Replication](../../docs/networking.md#replication).
+        //, see [Networking § Replication](../../docs/networking.md#replication).
 
         envelopes.push(ServerEnvelope {
-            // Skip the swinger — their client already played the impact via
+            // Skip the swinger, their client already played the impact via
             // local prediction. Sending a second copy from the server would
             // double-trigger both the sound and the chip burst.
             target: DeliveryTarget::BroadcastExcept(client_id),

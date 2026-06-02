@@ -1,7 +1,7 @@
 //! Always-on top-right stack of crafting progress cards.
 //!
 //! Split from the crafting browser ([`super::crafting`]) because the HUD
-//! survives closing the modal — keeping the recipe-browser layout
+//! survives closing the modal, keeping the recipe-browser layout
 //! separate from the persistent queue overlay makes both easier to
 //! reason about.
 
@@ -31,7 +31,7 @@ const QUEUE_RIGHT_MARGIN: f32 = 24.0;
 const QUEUE_CANCEL_BUTTON_SIZE: f32 = 22.0;
 /// Number of queue cards rendered before the HUD switches to a compact
 /// "+N more" overflow bar. Beyond this we don't paint per-job cards at
-/// all — the always-open recipe browser shows the full queue if the
+/// all, the always-open recipe browser shows the full queue if the
 /// player wants the rest.
 const QUEUE_VISIBLE_CARDS: usize = 3;
 /// Height of the compact "+N more" overflow indicator drawn below the
@@ -138,7 +138,7 @@ pub(super) fn crafting_queue_hud(
 /// final clamp at 1.0 keeps a stale or slow-arriving "completed"
 /// snapshot from painting past the bar's right edge.
 ///
-/// Queued (non-head) jobs always render at 0 — the server doesn't
+/// Queued (non-head) jobs always render at 0, the server doesn't
 /// advance them, so neither should we.
 fn smoothed_fraction(
     hud_state: &mut CraftingHudState,
@@ -203,7 +203,7 @@ struct QueueCardResponse {
 
 /// Slim "+N more" pill drawn under the last visible queue card when the
 /// queue runs deeper than [`QUEUE_VISIBLE_CARDS`]. Non-interactive on
-/// purpose — clicking it doesn't open or expand anything, since the
+/// purpose, clicking it doesn't open or expand anything, since the
 /// crafting modal already exposes the full queue count. The goal is a
 /// silent visual hint, not another button.
 fn draw_queue_overflow(ui: &mut egui::Ui, rect: Rect, hidden_count: usize) {
@@ -429,7 +429,7 @@ mod tests {
     fn smoothed_fraction_queued_jobs_render_at_zero() {
         let mut hud = CraftingHudState::default();
         let j = job(2, 20, 40);
-        // Non-head jobs always show 0 — the server doesn't advance them.
+        // Non-head jobs always show 0, the server doesn't advance them.
         let fraction = smoothed_fraction(&mut hud, &j, 100.0, false);
         assert_eq!(fraction, 0.0);
         // A baseline is still recorded so it can become the head later.

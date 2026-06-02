@@ -16,14 +16,14 @@ use crate::{
 // out in `swing_poses.rs`, otherwise the chop/impact sound drifts off the
 // visual contact. The hatchet is a deliberate heavy chop: a long wind-up that
 // hangs over the shoulder, then a fast strike that lands at pose phase 0.58
-// (see `hatchet_swing_pose`). The swing is slow enough (0.78s) that it — not
-// the 0.30s server gather cooldown — gates the attack cadence, so the heavy
+// (see `hatchet_swing_pose`). The swing is slow enough (0.78s) that it, not
+// the 0.30s server gather cooldown, gates the attack cadence, so the heavy
 // tempo is what the player feels. Keep these two constants in step.
 const AXE_SWING_SECONDS: f32 = 0.78;
 const AXE_IMPACT_FRACTION: f32 = 0.58;
 const PICKAXE_SWING_SECONDS: f32 = 1.60;
 const PICKAXE_IMPACT_FRACTION: f32 = 0.68;
-// Bare-hand "punch" — short, snappy. Sits between the axe and the
+// Bare-hand "punch", short, snappy. Sits between the axe and the
 // pickaxe so a sequence of hand-picks feels purposeful but doesn't lose
 // rhythm next to a hatchet swing.
 const HANDS_SWING_SECONDS: f32 = 0.42;
@@ -31,11 +31,11 @@ const HANDS_IMPACT_FRACTION: f32 = 0.55;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ImpactEffectKind {
-    /// Heavy wood-chip burst — full tree-felling palette, used when a
+    /// Heavy wood-chip burst, full tree-felling palette, used when a
     /// hatchet bites into a trunk or for branch-pile *deaths* if those
     /// ever scaled up.
     WoodChips,
-    /// Heavy stone-shard burst — full ore-pickaxe palette.
+    /// Heavy stone-shard burst, full ore-pickaxe palette.
     StoneShards,
     /// Small wood-toned burst for branch piles. Same palette as
     /// `WoodChips` but lower count/size/lifetime so picking up a
@@ -44,7 +44,7 @@ pub(crate) enum ImpactEffectKind {
     /// Small stone-toned burst for surface rocks. Same palette as
     /// `StoneShards` but lower count/size/lifetime.
     Pebbles,
-    /// Tiny green burst for hay/grass tufts — uses a dedicated
+    /// Tiny green burst for hay/grass tufts, uses a dedicated
     /// grass-coloured material and a very small footprint.
     GrassBlades,
     /// Small reddish-grey dust burst for PvP melee hits. Lower particle
@@ -121,7 +121,7 @@ pub(crate) struct PendingImpactEffect {
 /// Impact a remote player produced on a tree or ore node. Written by the
 /// network tick when a `ServerMessage::ResourceImpact` arrives so the
 /// audio and visual effect systems can render the same hit feedback we
-/// produce locally — minus the camera kick, which belongs to the swinger.
+/// produce locally, minus the camera kick, which belongs to the swinger.
 ///
 /// `tool` + `surface` drive the audio system's per-pair impact pool
 /// lookup; the visual `effect_kind` is computed at the receive site
@@ -169,7 +169,7 @@ const SWAP_DURATION_PICKAXE: f32 = 0.42;
 
 pub(crate) fn swap_duration_for_model(model: ItemModel) -> f32 {
     match model {
-        // Deployables are bulky like the bag — same lift cadence keeps
+        // Deployables are bulky like the bag, same lift cadence keeps
         // them feeling consistent without a bespoke pose.
         ItemModel::Bag | ItemModel::Deployable => SWAP_DURATION_BAG,
         ItemModel::Hatchet => SWAP_DURATION_HATCHET,
@@ -178,7 +178,7 @@ pub(crate) fn swap_duration_for_model(model: ItemModel) -> f32 {
 }
 
 /// Tracks the animation that plays when a new item enters the player's hand
-/// — used to lock out tool swings while the new tool is still being lifted
+///, used to lock out tool swings while the new tool is still being lifted
 /// into view, and to drive the held-item visual offset.
 #[derive(Resource, Debug, Default, Clone)]
 pub(crate) struct ToolSwapState {
@@ -255,11 +255,11 @@ pub(crate) struct PickupTargetState {
     /// is `Some`, sending `ClientMessage::AttackPlayer` to the server.
     pub(crate) player_id: Option<ClientId>,
     /// Loot bag the player is currently looking at. Drives the E-to-
-    /// open path — pressing E sends `LootBagCommand::Open` and the
+    /// open path, pressing E sends `LootBagCommand::Open` and the
     /// transfer UI panel becomes visible via `PlayerPrivate.open_loot_bag`.
     pub(crate) loot_bag_id: Option<crate::protocol::LootBagId>,
     /// Seconds since the last full pickup-target scan. The scan is throttled
-    /// to ~33 ms (≈ 30 Hz) — that's well above the cadence a player can
+    /// to ~33 ms (≈ 30 Hz), that's well above the cadence a player can
     /// react to a tooltip highlight and saves an O(N×M) sweep over every
     /// dropped item and resource node every render frame.
     pub(crate) elapsed_since_scan: f32,
@@ -325,14 +325,14 @@ pub(crate) struct SwingImpact {
 
 /// Anchor + (tool, surface) for a hit sound queued from the impact
 /// dispatcher. The audio system drains it the same frame to spawn a
-/// spatial sound — the pair drives selection of the per-tool, per-surface
+/// spatial sound, the pair drives selection of the per-tool, per-surface
 /// impact pool independently of the visual particle kind.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PendingAudioCue {
     pub(crate) anchor: Vec3,
     pub(crate) tool: ToolKind,
     pub(crate) surface: SurfaceMaterial,
-    /// Same flag as [`RemoteImpactEvent::is_player_hit`] — when `true`
+    /// Same flag as [`RemoteImpactEvent::is_player_hit`], when `true`
     /// the audio system picks the PvP-impact pool.
     pub(crate) is_player_hit: bool,
 }

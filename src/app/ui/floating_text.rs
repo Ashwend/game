@@ -2,13 +2,13 @@
 //!
 //! Spawn a `FloatingDamageText` entity at the impact site; one system
 //! ticks the lifetime and despawns expired entities, another renders
-//! every live entity via egui — projecting the world anchor to the
+//! every live entity via egui, projecting the world anchor to the
 //! viewport so the text rides above the target's chest.
 //!
 //! Two visual variants drive the colour:
 //!
-//! - **Dealt** (orange) — what the local attacker did to a peer.
-//! - **Taken** (red) — what a peer did to the local player.
+//! - **Dealt** (orange), what the local attacker did to a peer.
+//! - **Taken** (red), what a peer did to the local player.
 //!
 //! Each number gets a small randomised launch vector (a cone biased
 //! upward from the impact) so a flurry of hits spreads visually instead
@@ -24,7 +24,7 @@ use crate::{app::scene::MainCamera, util::hash::hashed_unit};
 /// to read at a glance, short enough that a flurry of hits doesn't
 /// stack into an unreadable column.
 const FLOATING_TEXT_LIFETIME_S: f32 = 1.1;
-/// Total world-space drift, in metres, over the text's lifetime —
+/// Total world-space drift, in metres, over the text's lifetime,
 /// magnitude only; the direction is randomised per spawn so a flurry
 /// of hits spreads instead of stacking.
 const FLOATING_TEXT_DRIFT_M: f32 = 1.2;
@@ -32,7 +32,7 @@ const FLOATING_TEXT_DRIFT_M: f32 = 1.2;
 /// off straight-up. ~32° gives a noticeable splash without numbers
 /// flying sideways enough to land outside the hit zone.
 const FLOATING_TEXT_CONE_HALF_ANGLE_RAD: f32 = 0.55;
-/// Cull text beyond this distance from the camera — past it the
+/// Cull text beyond this distance from the camera, past it the
 /// numbers would be unreadable anyway.
 const FLOATING_TEXT_DRAW_DISTANCE_M: f32 = 30.0;
 /// Inset (logical pixels) from the viewport edges before we stop
@@ -47,7 +47,7 @@ const FLOATING_TEXT_BASE_FONT_PX: f32 = 28.0;
 const FLOATING_TEXT_POP_PEAK_SCALE: f32 = 1.6;
 /// Fraction of the lifetime spent on the pop curve before the number
 /// settles into its drifting state. 0.18 reads as a quick snap-and-
-/// settle — long enough to register as a pop, short enough that the
+/// settle, long enough to register as a pop, short enough that the
 /// number is moving for most of its lifetime.
 const FLOATING_TEXT_POP_FRACTION: f32 = 0.18;
 
@@ -62,10 +62,10 @@ pub(crate) enum FloatingDamageRole {
 impl FloatingDamageRole {
     fn color(self) -> egui::Color32 {
         match self {
-            // Bright orange (`#FFAA33`) — reads as "I scored" without
+            // Bright orange (`#FFAA33`), reads as "I scored" without
             // being mistaken for a UI error.
             Self::Dealt => egui::Color32::from_rgb(0xFF, 0xAA, 0x33),
-            // Bright red (`#FF3333`) — strong enough to grab attention
+            // Bright red (`#FF3333`), strong enough to grab attention
             // through the peripheral vision when you're being hit.
             Self::Taken => egui::Color32::from_rgb(0xFF, 0x33, 0x33),
         }
@@ -121,7 +121,7 @@ impl FloatingDamageText {
         (self.elapsed / FLOATING_TEXT_LIFETIME_S).clamp(0.0, 1.0)
     }
 
-    /// World position the text currently occupies — anchor plus the
+    /// World position the text currently occupies, anchor plus the
     /// ease-out drift along this spawn's randomised launch vector.
     fn current_world(&self) -> Vec3 {
         let f = self.fraction();
@@ -145,7 +145,7 @@ impl FloatingDamageText {
 
     /// Font-scale multiplier driving the "pop". Snaps from 0 to the
     /// peak across the first chunk of the lifetime, then settles back
-    /// to 1.0 — reads as a quick scale-in overshoot rather than a
+    /// to 1.0, reads as a quick scale-in overshoot rather than a
     /// linear ramp.
     fn pop_scale(&self) -> f32 {
         let f = self.fraction();
@@ -188,7 +188,7 @@ fn cone_launch_direction(seed: u64) -> Vec3 {
 }
 
 /// Despawn expired floating-damage entities. Done as a separate system
-/// so the UI render loop doesn't have to filter by lifetime — every
+/// so the UI render loop doesn't have to filter by lifetime, every
 /// entity it sees is in-flight.
 pub(crate) fn tick_floating_damage_system(
     mut commands: Commands,
@@ -246,7 +246,7 @@ pub(crate) fn floating_damage_ui<'a>(
         let font_size = FLOATING_TEXT_BASE_FONT_PX * text.pop_scale();
         let label = format!("-{}", text.value);
 
-        // Foreground order: above the world, below modal dialogs —
+        // Foreground order: above the world, below modal dialogs,
         // identical to the peer overlay so numbers and nametags share
         // a layer.
         let area_id = egui::Id::new(("floating_damage", text.spawn_id));
@@ -377,7 +377,7 @@ mod tests {
 
         // Right at end-of-life the scale has settled to exactly 1.0.
         // Verify the easing function actually lands the value rather
-        // than asymptoting — without this guarantee the last frame
+        // than asymptoting, without this guarantee the last frame
         // would still render a slightly-larger number.
         text.elapsed = FLOATING_TEXT_LIFETIME_S;
         let settled = text.pop_scale();

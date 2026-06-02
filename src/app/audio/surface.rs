@@ -1,5 +1,5 @@
 //! World-surface taxonomy used for both footstep clip selection and tool
-//! impact selection. One enum, two consumers — the same "Stone" you walk
+//! impact selection. One enum, two consumers, the same "Stone" you walk
 //! on is the same "Stone" your pickaxe hits.
 //!
 //! Add a variant here when introducing a surface that needs its own
@@ -10,7 +10,7 @@
 
 use crate::{resources::ResourceNodeModel, world::BlockKind};
 
-// Some variants are unconstructed today — they exist so the audio
+// Some variants are unconstructed today, they exist so the audio
 // manifest's footstep + impact tables can declare pools for surfaces
 // that the world doesn't yet expose (Sand, Stone, …). Annotated rather
 // than removed because removing a variant rolls back the manifest's
@@ -37,7 +37,7 @@ impl SurfaceMaterial {
 
 /// Map a structural block's kind to the surface a player walks on /
 /// the tool would strike. Standard and stone blocks both read as masonry,
-/// so they share the concrete surface today — when a dedicated stone-floor
+/// so they share the concrete surface today, when a dedicated stone-floor
 /// footstep pool exists, route `BlockKind::Stone` to `Stone` here.
 pub(crate) fn surface_for_block_kind(kind: BlockKind) -> SurfaceMaterial {
     match kind {
@@ -60,7 +60,7 @@ pub(crate) fn surface_for_resource_model(model: ResourceNodeModel) -> SurfaceMat
         ResourceNodeModel::CoalOre => SurfaceMaterial::Coal,
         ResourceNodeModel::IronOre => SurfaceMaterial::Iron,
         ResourceNodeModel::SulfurOre => SurfaceMaterial::Sulfur,
-        // Plain rock vein — same impact pool as the small surface
+        // Plain rock vein, same impact pool as the small surface
         // stones, just at the heavier per-swing strike.
         ResourceNodeModel::StoneVein => SurfaceMaterial::Stone,
         // Crude materials: branches read as wood, surface stone as stone,

@@ -9,7 +9,7 @@ use crate::{
 /// Compute the largest batch quantity the player can currently afford
 /// for a given recipe, capped at [`MAX_CRAFT_BATCH_SIZE`].
 ///
-/// `0` means "can't even craft one" — the same condition the existing
+/// `0` means "can't even craft one", the same condition the existing
 /// `craftable` flag tracks, but expressed as a batch-aware ceiling so
 /// the recipe row can also disable the `+` button at the actual limit.
 pub(super) fn max_craftable_batch(

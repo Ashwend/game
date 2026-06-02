@@ -12,7 +12,7 @@ use crate::{
 impl ChunkManager {
     /// Convert a world position to the chunk coord that contains it,
     /// clamping into the loaded map. Used by every "where does this
-    /// entity anchor?" call so the rule is in one place — anything that
+    /// entity anchor?" call so the rule is in one place, anything that
     /// drifts outside the world's playable area still gets a legal home
     /// chunk to live in until it's despawned.
     fn anchor_chunk_for(&self, position: Vec3Net) -> ChunkCoord {
@@ -30,7 +30,7 @@ impl ChunkManager {
     }
 
     /// Register a dropped item with the chunk containing its current
-    /// position. Idempotent — calling twice with the same id is a no-op
+    /// position. Idempotent, calling twice with the same id is a no-op
     /// on the second call.
     pub fn track_dropped_item(&mut self, id: DroppedItemId, position: Vec3Net) {
         let coord = self.anchor_chunk_for(position);
@@ -79,7 +79,7 @@ impl ChunkManager {
                 self.dropped_item_chunks.insert(id, new_coord);
             }
             None => {
-                // Not previously tracked — fall through to a fresh
+                // Not previously tracked, fall through to a fresh
                 // registration so a missed `track_dropped_item` call
                 // can't permanently orphan the item.
                 self.track_dropped_item(id, position);
@@ -170,7 +170,7 @@ impl ChunkManager {
     }
 
     /// Live resource node ids anchored to `coord`. Empty iterator for
-    /// unloaded chunks. Cheap — backed by the per-chunk live set.
+    /// unloaded chunks. Cheap, backed by the per-chunk live set.
     pub fn nodes_in(&self, coord: ChunkCoord) -> impl Iterator<Item = ResourceNodeId> + '_ {
         self.grids.get(&coord).into_iter().flat_map(|grid| {
             grid.live_by_kind
@@ -207,7 +207,7 @@ impl ChunkManager {
     }
 
     /// Register a freshly-placed structure at the chunk containing its
-    /// world position. Idempotent — repeat calls with the same id move
+    /// world position. Idempotent, repeat calls with the same id move
     /// the membership rather than duplicating it.
     pub fn track_deployed_entity(&mut self, id: DeployedEntityId, position: Vec3Net) {
         let coord = self.anchor_chunk_for(position);

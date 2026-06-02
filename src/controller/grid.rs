@@ -16,7 +16,7 @@ const CELL_SIZE: f32 = 4.0;
 /// Uniform spatial hash over collidable AABBs. The grid owns its own block
 /// list so it can mix static `WorldData::blocks` with dynamic colliders
 /// (e.g. live tree trunks from the current snapshot). Cells are keyed by
-/// `(cell_x, cell_z)` in the horizontal plane — vertical extent is unbounded
+/// `(cell_x, cell_z)` in the horizontal plane, vertical extent is unbounded
 /// per cell because the world is mostly "flat with stuff on top." Built or
 /// rebuilt by the runtime; consulted by the collision routines.
 #[derive(Debug, Clone, Default)]
@@ -64,7 +64,7 @@ impl BlockGrid {
     }
 
     /// Yields candidate block indices that could overlap a player AABB
-    /// centered at `position`. May include some false positives — callers
+    /// centered at `position`. May include some false positives, callers
     /// still perform the precise per-block test.
     pub fn candidates_for_player(&self, position: Vec3Net) -> Candidates<'_> {
         let min_x = position.x - PLAYER_RADIUS;
@@ -91,7 +91,7 @@ impl BlockGrid {
         Candidates::new(self, min_x, min_z, max_x, max_z)
     }
 
-    /// Yields candidates for a vertical query — the horizontal footprint
+    /// Yields candidates for a vertical query, the horizontal footprint
     /// stays at the player AABB, the caller checks the Y axis itself.
     pub fn candidates_for_vertical(&self, position: Vec3Net) -> Candidates<'_> {
         let _ = PLAYER_HEIGHT; // documented dependency; vertical filtering happens in the per-block test.

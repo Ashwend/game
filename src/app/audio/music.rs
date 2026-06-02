@@ -1,6 +1,6 @@
 //! Menu/world music driven by [`AudioFader`].
 //!
-//! Music is a long-lived single-source layer — exactly one main menu
+//! Music is a long-lived single-source layer, exactly one main menu
 //! music entity at a time, never spatial. This file owns the "should the
 //! music be playing right now?" decision and the fade-out when the player
 //! leaves the menu; the audio mix math itself lives in
@@ -67,7 +67,7 @@ pub(crate) fn main_menu_music_system(
             ));
         }
 
-        // Cancel any in-flight fade-out — the player is back on the menu.
+        // Cancel any in-flight fade-out, the player is back on the menu.
         // The sink jumps to current target volume on the next frame.
         for (entity, sink, fader) in &mut music {
             if fader.is_some() {
@@ -80,7 +80,7 @@ pub(crate) fn main_menu_music_system(
         return;
     }
 
-    // Not on the menu backdrop — attach a fade-out to any music entity
+    // Not on the menu backdrop, attach a fade-out to any music entity
     // that doesn't already have one. The shared fader system handles the
     // rest (per-frame volume ramp + despawn on completion).
     for (entity, sink, fader) in &mut music {

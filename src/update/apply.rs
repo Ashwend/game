@@ -44,7 +44,7 @@ fn relaunch_target(game_binary: &Path) -> PathBuf {
 /// Launch the updater to swap `staged` over the running game binary and
 /// relaunch. The caller must trigger `AppExit` right after, so the old process
 /// releases the binary (matters on Windows) and the updater relaunches exactly
-/// one fresh instance — it waits for this pid to exit first.
+/// one fresh instance, it waits for this pid to exit first.
 pub(crate) fn spawn_updater(staged: &Path) -> Result<(), String> {
     let updater = updater_path().ok_or_else(|| "updater binary not found".to_owned())?;
     let target = std::env::current_exe().map_err(|e| format!("cannot locate current exe: {e}"))?;
@@ -66,31 +66,7 @@ pub(crate) fn spawn_updater(staged: &Path) -> Result<(), String> {
 /// Fallback when in-place update isn't possible (no updater binary or an
 /// unsupported host): open the releases page in the browser.
 pub(crate) fn open_download_page() {
-    let _ = open_url(&github::releases_page_url());
-}
-
-/// Best-effort open `url` in the system browser. (Mirrors the helper in the
-/// WorkOS login flow; kept local so this module has no cross-feature coupling.)
-fn open_url(url: &str) -> std::io::Result<()> {
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg(url);
-        command
-    };
-    #[cfg(target_os = "linux")]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(url);
-        command
-    };
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("cmd");
-        command.args(["/C", "start", "", url]);
-        command
-    };
-    command.spawn().map(|_| ())
+    let _ = crate::util::open_url(&github::releases_page_url());
 }
 
 #[cfg(test)]

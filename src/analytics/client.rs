@@ -1,6 +1,6 @@
 //! Background HTTP worker. One OS thread receives [`Envelope`]s from a
 //! bounded mpsc channel, batches them, and POSTs to the PostHog `/batch/`
-//! endpoint with `ureq`. Errors are logged once and the batch is dropped —
+//! endpoint with `ureq`. Errors are logged once and the batch is dropped,
 //! analytics must never block or panic the game.
 
 use std::{
@@ -181,7 +181,7 @@ fn run_worker(rx: Receiver<Envelope>, config: &WorkerConfig, dropped: Arc<Atomic
         }
     }
 
-    // One last drain on shutdown — the loop above guarantees buffer is
+    // One last drain on shutdown, the loop above guarantees buffer is
     // emptied on the previous iteration, but we drain any messages the
     // channel still holds (e.g. sender wrote after sentinel was sent).
     while let Ok(envelope) = rx.try_recv() {
@@ -219,7 +219,7 @@ fn flush(agent: &ureq::Agent, config: &WorkerConfig, buffer: &mut Vec<EventRecor
     });
     let url = format!("{}/batch/", config.host.trim_end_matches('/'));
     // Convert the ureq error to a `String` inside the closure so the
-    // outer `Result` carries only small values — `ureq::Error` weighs in
+    // outer `Result` carries only small values, `ureq::Error` weighs in
     // around 272 bytes and triggers `clippy::result_large_err` otherwise.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         agent
@@ -277,7 +277,7 @@ fn now_ms() -> u64 {
 }
 
 fn iso8601_ms(timestamp_ms: u64) -> String {
-    // Manual formatter — adding chrono just for ISO8601 would balloon the
+    // Manual formatter, adding chrono just for ISO8601 would balloon the
     // dependency surface for a single string. Always UTC.
     let secs = (timestamp_ms / 1000) as i64;
     let millis = (timestamp_ms % 1000) as u32;
@@ -285,7 +285,7 @@ fn iso8601_ms(timestamp_ms: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
 }
 
-/// Howard Hinnant's days_from_civil inverse — convert unix seconds to
+/// Howard Hinnant's days_from_civil inverse, convert unix seconds to
 /// (year, month, day, h, m, s) in UTC. Public-domain algorithm.
 fn epoch_to_civil(secs: i64) -> (i64, u32, u32, u32, u32, u32) {
     let days = secs.div_euclid(86_400);
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn iso8601_zero_pads_single_digit_fields() {
-        // 2001-02-03T04:05:06.007Z — every field needs zero-padding.
+        // 2001-02-03T04:05:06.007Z, every field needs zero-padding.
         // 2001-02-03T04:05:06 = 981173106 seconds since epoch.
         let ts = 981_173_106_007;
         assert_eq!(iso8601_ms(ts), "2001-02-03T04:05:06.007Z");

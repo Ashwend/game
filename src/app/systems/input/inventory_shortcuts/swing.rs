@@ -20,7 +20,7 @@ use super::predict::predict_gather;
 use super::send::send_gameplay_message;
 
 /// Tool kind backing a left-click swing. Only items with a real
-/// [`ToolProfile`] count — bare hands and non-tool items (ores, wood,
+/// [`ToolProfile`] count, bare hands and non-tool items (ores, wood,
 /// deployables-in-hand) return `None` so the swing never starts and no
 /// impact-detection fires. Fists can't damage anything in this game
 /// today, and an in-hand ore swinging at a tree shouldn't pretend to.
@@ -78,7 +78,7 @@ fn dispatch_resource_swing(
 ) {
     // Target was harvestable when the swing tick read it, but the resource
     // node's anchor / kind metadata could still be missing if the entity
-    // was despawned this same frame. Treat that as a miss — better a
+    // was despawned this same frame. Treat that as a miss, better a
     // whoosh than a silent swing.
     let Some(anchor) = resource_target_anchor(&params.pickup_target, node_id) else {
         params.gather_input.set_pending_miss_audio();
@@ -190,7 +190,7 @@ fn dispatch_deployable_swing(
     );
 }
 
-/// PvP swing dispatch — mirrors `dispatch_deployable_swing` but the
+/// PvP swing dispatch, mirrors `dispatch_deployable_swing` but the
 /// network payload is `AttackPlayer` (no inventory payout) and the
 /// impact visual uses the dedicated `FleshHit` palette (Phase 4 will
 /// flip the placeholder kind to `FleshHit`; today it uses the generic
@@ -206,7 +206,7 @@ fn dispatch_player_swing(
         .filter(|_| params.pickup_target.player_id == Some(target_player_id))
         .map(|pos| bevy::prelude::Vec3::new(pos.x, pos.y, pos.z))
     else {
-        // Target moved out of view between scan and impact — treat as
+        // Target moved out of view between scan and impact, treat as
         // a miss so the swing still produces a whoosh.
         params.gather_input.set_pending_miss_audio();
         return;
@@ -234,7 +234,7 @@ fn dispatch_player_swing(
         is_player_hit: true,
     });
 
-    // Predicted floating damage number — orange, since the local
+    // Predicted floating damage number, orange, since the local
     // client is the attacker. The server replies with
     // `PlayerImpact { damage_dealt }` so a desync would cost only
     // the brief mismatch between this predicted value and the

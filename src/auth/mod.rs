@@ -1,10 +1,10 @@
 //! Player authentication.
 //!
 //! Two modes (see [`AuthMode`]):
-//! - [`AuthMode::Workos`] — the real provider. The client presents a WorkOS
+//! - [`AuthMode::Workos`], the real provider. The client presents a WorkOS
 //!   access-token JWT, which the server verifies offline against the WorkOS
 //!   JWKS (see [`WorkosVerifier`]). The default for any dedicated server.
-//! - [`AuthMode::NoAuth`] — loopback/localhost only. The server trusts the
+//! - [`AuthMode::NoAuth`], loopback/localhost only. The server trusts the
 //!   client's claimed account id and display name with no token check. Used by
 //!   singleplayer (the in-process loopback host) and `./cli multiplayer-test`.
 //!
@@ -34,7 +34,7 @@ pub enum AuthMode {
     Workos,
     /// Local-only: trust the client's claimed account id and display name with
     /// no token check. Only ever correct for an in-process loopback host
-    /// (singleplayer) or a localhost `multiplayer-test` server — never expose a
+    /// (singleplayer) or a localhost `multiplayer-test` server, never expose a
     /// `NoAuth` server to the network, or a client could claim any identity.
     NoAuth,
 }

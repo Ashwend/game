@@ -1,9 +1,9 @@
 //! Client-side deployable systems.
 //!
-//! - `apply_deployed_entities_system` — diffs the replicated deployable
+//! - `apply_deployed_entities_system`, diffs the replicated deployable
 //!   entities against the world: spawns new ones, despawns missing ones,
 //!   updates kind/health if needed.
-//! - `maintain_world_grid_system` — rebuilds the client collision grid
+//! - `maintain_world_grid_system`, rebuilds the client collision grid
 //!   from the replicated resource-node and deployable sets when they
 //!   change.
 //!
@@ -56,7 +56,7 @@ pub(crate) fn apply_deployed_entities_system(
         return;
     };
     if runtime.client_id.is_none() {
-        // Not connected — tear down any visuals from a prior session.
+        // Not connected, tear down any visuals from a prior session.
         for (entity, _) in &existing {
             commands.entity(entity).despawn();
         }
@@ -116,14 +116,14 @@ pub(crate) fn apply_deployed_entities_system(
     }
     // Any fire rig whose parent disappeared (out of AoI / destroyed)
     // would normally despawn alongside its parent via Bevy's hierarchy
-    // cleanup, but a despawn-recursive isn't guaranteed everywhere —
+    // cleanup, but a despawn-recursive isn't guaranteed everywhere,
     // sweep here just in case.
     for (_, fire_entity) in fires_by_parent {
         commands.entity(fire_entity).despawn();
     }
 }
 
-/// Knuth golden-ratio mix constant for the fingerprint helpers — the
+/// Knuth golden-ratio mix constant for the fingerprint helpers, the
 /// XOR-of-ids accumulator gets multiplied by this to spread sequential
 /// id values across the `u64`.
 const FINGERPRINT_MIX: u64 = 0x9E37_79B9_7F4A_7C15;
@@ -133,7 +133,7 @@ const FINGERPRINT_MIX: u64 = 0x9E37_79B9_7F4A_7C15;
 /// and the replicated deployable set; rebuilds the grid when any of
 /// them changes.
 ///
-/// **Event-gated** — the previous fingerprint-based "idle frames cost a
+/// **Event-gated**, the previous fingerprint-based "idle frames cost a
 /// fingerprint compare and nothing else" was a lie at scale: with 1811
 /// resource nodes, the fingerprint scan was a 1-2 ms iteration *every
 /// frame*, calling `resource_node_collider_at` (string-keyed HashMap
@@ -165,7 +165,7 @@ pub(crate) fn maintain_world_grid_system(
 
     // At least one change is plausible. Compute the actual fingerprint
     // and bail if it matches (e.g. Added fired for an entity whose id
-    // already contributed to the prior fingerprint — shouldn't happen
+    // already contributed to the prior fingerprint, shouldn't happen
     // but cheap to verify).
     let resource_node_version = resource_node_set_fingerprint(resource_nodes.iter());
     let deployable_version = deployable_set_fingerprint(deployables.iter());
@@ -193,7 +193,7 @@ fn resource_node_set_fingerprint<'a>(iter: impl IntoIterator<Item = &'a Resource
     let mut count: u64 = 0;
     for node in iter {
         // Skip ids that contribute no collider so the fingerprint stays
-        // tight to the actual collision set — crude clutter (surface
+        // tight to the actual collision set, crude clutter (surface
         // stones, branch piles, hay grass) doesn't move the grid.
         if resource_node_collider_at(&node.definition_id, node.position).is_none() {
             continue;
@@ -222,7 +222,7 @@ fn deployable_set_fingerprint<'a>(
 
 /// Build the AABB collider for a placed structure from its replicated
 /// components. Returns `None` if the item id no longer resolves (e.g.
-/// a server using a newer item table than this client knows about — in
+/// a server using a newer item table than this client knows about, in
 /// which case skip the collider rather than crash, the renderer will
 /// still draw the structure).
 pub(crate) fn deployable_collider(

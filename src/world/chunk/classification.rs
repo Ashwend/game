@@ -1,4 +1,4 @@
-//! Chunk classification — pure functions that decide what a chunk "is"
+//! Chunk classification, pure functions that decide what a chunk "is"
 //! (forest, ore vein, plains, rocky outcrop, mixed) from a small set of
 //! seeded noise channels, and how many of each resource node kind a chunk
 //! of that classification should hold.
@@ -27,7 +27,7 @@ const CLASSIFICATION_FBM_OCTAVES: u32 = 4;
 const CLASSIFICATION_BASE_FREQUENCY: f32 = 1.0 / 220.0;
 
 /// Floor a channel must clear to count toward the classification.
-/// Channels below this contribute very little — they may still seed a few
+/// Channels below this contribute very little, they may still seed a few
 /// scatter nodes but won't push the classification toward their kind.
 const CLASSIFICATION_THRESHOLD: f32 = 0.42;
 
@@ -42,7 +42,7 @@ pub enum ChunkClassification {
     OreVein,
     /// Grass and open ground. High hay/grass capacity, scattered branches.
     Plains,
-    /// Roughly balanced — no single channel dominates. A transition cell.
+    /// Roughly balanced, no single channel dominates. A transition cell.
     #[default]
     Mixed,
 }
@@ -67,7 +67,7 @@ impl ChunkClassification {
     }
 }
 
-/// Per-classification channel samples — the raw blended-noise values that
+/// Per-classification channel samples, the raw blended-noise values that
 /// drove the classification. Kept around so the generator can scale
 /// sub-dominant kinds' capacity by `(channel × weight)` instead of using
 /// fixed numbers, which would make the boundaries between classifications
@@ -83,7 +83,7 @@ pub struct ClassificationChannels {
 impl ClassificationChannels {
     /// Sample all four channels at the chunk centre. Each channel has its
     /// own offset folded into the seed so they don't share a noise
-    /// pattern — otherwise the dominant channel would always win in the
+    /// pattern, otherwise the dominant channel would always win in the
     /// same way across the map.
     pub fn sample(world_seed: u64, coord: ChunkCoord) -> Self {
         let centre_x = coord.x as f32 * CHUNK_SIZE_M + CHUNK_SIZE_M * 0.5;
@@ -149,11 +149,11 @@ impl ClassificationChannels {
         match kind {
             NodeKind::TreeSmall | NodeKind::TreeMedium | NodeKind::TreeLarge => self.forest,
             // Stone vein follows the same rocky channel as the small
-            // surface lumps — wherever the ground is stony, both spawn.
+            // surface lumps, wherever the ground is stony, both spawn.
             NodeKind::SurfaceStone | NodeKind::StoneVein => self.stone,
             NodeKind::CoalOre | NodeKind::IronOre | NodeKind::SulfurOre => self.ore,
             NodeKind::HayGrass => self.hay,
-            // Branches are a fallout of trees + plains — they show up where
+            // Branches are a fallout of trees + plains, they show up where
             // forests and meadows are present. Take the max so a forest
             // edge still has plenty of branches.
             NodeKind::BranchPile => self.forest.max(self.hay),
@@ -191,7 +191,7 @@ pub fn base_capacity(classification: ChunkClassification, kind: NodeKind) -> u16
         (RockyOutcrop, CoalOre) => 1,
         (RockyOutcrop, IronOre) => 1,
         (RockyOutcrop, SulfurOre) => 0,
-        // The headline rock vein for rocky chunks — the player should be
+        // The headline rock vein for rocky chunks, the player should be
         // able to walk into one of these and gather stone in earnest.
         (RockyOutcrop, StoneVein) => 4,
 
@@ -204,7 +204,7 @@ pub fn base_capacity(classification: ChunkClassification, kind: NodeKind) -> u16
         (OreVein, CoalOre) => 3,
         (OreVein, IronOre) => 3,
         (OreVein, SulfurOre) => 2,
-        // Plain rock alongside the ore — visually grounds the ore-vein
+        // Plain rock alongside the ore, visually grounds the ore-vein
         // chunk as a bigger rocky region.
         (OreVein, StoneVein) => 2,
 
@@ -251,7 +251,7 @@ mod tests {
             }
         }
         // Across 49 chunks we should see at least three different
-        // classifications — otherwise the noise is too smooth or all
+        // classifications, otherwise the noise is too smooth or all
         // channels collapse to similar values.
         assert!(
             seen.len() >= 3,

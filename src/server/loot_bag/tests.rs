@@ -88,7 +88,7 @@ fn loot_bag_is_empty_reflects_slot_contents() {
 #[test]
 fn spawn_loot_bag_truncates_overflowing_item_list() {
     let mut server = test_server();
-    // More stacks than the bag has slots — the extras are dropped.
+    // More stacks than the bag has slots, the extras are dropped.
     let items: Vec<ItemStack> = (0..(LOOT_BAG_SLOT_COUNT + 3))
         .map(|_| ItemStack::new(WOOD_ID, 1))
         .collect();

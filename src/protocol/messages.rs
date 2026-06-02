@@ -1,4 +1,4 @@
-//! The two top-level wire messages — [`ClientMessage`] and [`ServerMessage`] —
+//! The two top-level wire messages, [`ClientMessage`] and [`ServerMessage`],
 //! plus the small payload enums/structs they carry and their channel-delivery
 //! preferences.
 
@@ -26,7 +26,7 @@ pub enum ClientMessage {
         text: String,
     },
     /// Server-evaluated slash command. The full text (without the leading
-    /// `/`) is shipped verbatim — the server is the source of truth for
+    /// `/`) is shipped verbatim, the server is the source of truth for
     /// parsing, validation, and the admin check.
     Command {
         text: String,
@@ -53,7 +53,7 @@ pub enum ClientMessage {
     /// `PlayerImpact` + `Knockback`. See `docs/pvp.md`.
     AttackPlayer(AttackPlayerCommand),
     /// Respawn the calling client after death. Rejected unless the
-    /// client is currently dead — the server is the authority on the
+    /// client is currently dead, the server is the authority on the
     /// lifecycle state.
     Respawn,
     /// Open / close / move-items in a loot bag (the container spawned
@@ -67,7 +67,7 @@ pub enum ClientMessage {
     SetViewRadius {
         tier: ViewRadiusTier,
     },
-    /// One Opus-encoded voice frame. Unreliable — losing a 20 ms frame is
+    /// One Opus-encoded voice frame. Unreliable, losing a 20 ms frame is
     /// better than waiting for a retransmit. The server routes these to
     /// peers within audible range only.
     Voice(VoiceFrame),
@@ -117,7 +117,7 @@ impl ClientMessage {
             | Self::SetViewRadius { .. }
             | Self::Disconnect => PacketDelivery::Reliable,
             // Voice frames are each independent (Opus packets carry their own
-            // decoder state) so we want every delivered frame played — *not*
+            // decoder state) so we want every delivered frame played, *not*
             // dropped for being slightly out-of-order, which is what
             // `Sequenced` would do. Movement is the opposite: a newer pose
             // makes an older one obsolete.
@@ -145,7 +145,7 @@ pub enum ServerMessage {
         world: WorldData,
         is_admin: bool,
         /// Prediction-seed for the connecting client's local
-        /// controller — position, velocity, yaw, pitch, health,
+        /// controller, position, velocity, yaw, pitch, health,
         /// grounded, last_processed_input. Phase 6.6 retired the
         /// full-snapshot Welcome payload; everything else now flows
         /// through Lightyear replication.
@@ -192,12 +192,12 @@ pub enum ServerMessage {
     /// A PvP attack landed on a player. Broadcast to every client
     /// except the attacker (the attacker already produced their own
     /// feedback via prediction). Drives the chip burst, hit audio,
-    /// floating damage number, and — on the target client only — the
+    /// floating damage number, and, on the target client only, the
     /// camera-kick hit reaction.
     PlayerImpact {
         attacker: ClientId,
         target: ClientId,
-        /// Chest-height world position of the target at impact time —
+        /// Chest-height world position of the target at impact time,
         /// the visual + audio anchor.
         position: Vec3Net,
         tool: crate::items::ToolKind,
@@ -218,7 +218,7 @@ pub enum ServerMessage {
         killer_name: Option<String>,
     },
     /// A resource node was actually depleted (storage drained, node
-    /// removed) — distinct from "the node just left this player's
+    /// removed), distinct from "the node just left this player's
     /// AoI". The client uses this to decide whether a node disappearing
     /// from the snapshot deserves a death animation (tree felling, ore
     /// shatter, crude pickup burst, …). Without this signal, every
@@ -267,7 +267,7 @@ impl ServerMessage {
             // Impact effects are pure cosmetic feedback. Dropping one is
             // far less bad than the extra latency of a reliable resend,
             // and the next swing will queue another regardless.
-            // See the matching comment on `ClientMessage::delivery` —
+            // See the matching comment on `ClientMessage::delivery`,
             // voice rides an unordered unreliable channel so every
             // delivered frame is played even if it arrives out of order.
             Self::Voice { .. } => PacketDelivery::UnreliableUnordered,
@@ -292,7 +292,7 @@ pub struct ChatMessage {
     pub text: String,
 }
 
-/// Snapshot of server-side perf counters relevant to the chunk system —
+/// Snapshot of server-side perf counters relevant to the chunk system,
 /// loaded chunks, live nodes, scheduled regrows, plus the requesting
 /// player's classification and AoI count.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -343,7 +343,7 @@ pub enum ResourceImpactKind {
     CoalOre,
     IronOre,
     SulfurOre,
-    /// Bare-rock vein — same stone-shard burst as the ore variants but
+    /// Bare-rock vein, same stone-shard burst as the ore variants but
     /// the audio cue routes through the plain-stone surface instead of
     /// an ore-specific one.
     StoneVein,

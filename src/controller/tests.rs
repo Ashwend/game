@@ -306,7 +306,7 @@ fn early_air_press_still_fires_jump_on_landing() {
     // The buffer was consumed by the jump that just fired.
     assert_eq!(controller.jump_buffer_timer, 0.0);
 
-    // Second press, while still going up — well before any landing.
+    // Second press, while still going up, well before any landing.
     controller.apply_input(PlayerInput {
         sequence: 2,
         direction: Vec3Net::ZERO,
@@ -318,7 +318,7 @@ fn early_air_press_still_fires_jump_on_landing() {
     let buffer_at_air_press = controller.jump_buffer_timer;
     assert!(buffer_at_air_press > 0.0, "press should refill the buffer");
 
-    // Step the rest of the arc — well past `JUMP_BUFFER_SECONDS` of airtime.
+    // Step the rest of the arc, well past `JUMP_BUFFER_SECONDS` of airtime.
     // The buffer must NOT decay while airborne; the OLD behaviour would have
     // chewed it down to zero long before landing.
     let mut saw_rejump = false;
@@ -341,7 +341,7 @@ fn early_air_press_still_fires_jump_on_landing() {
         // The auto-rejump signal: velocity.y was non-positive (falling or
         // grounded) before the substep, the buffer was full (we still had
         // the stored press), and afterwards velocity.y is sharply positive
-        // — the only path to that state is the jump branch firing on a
+        //, the only path to that state is the jump branch firing on a
         // landing-substep, which also zeros the buffer.
         if pre_velocity_y <= 0.0
             && pre_buffer > 0.0
@@ -490,7 +490,7 @@ fn fresh_press_after_full_landing_jumps_immediately() {
 fn high_framerate_jump_is_not_smothered_by_grounded_clamp() {
     // Repro for the "press Space and nothing happens" bug at high FPS.
     // At ~250 FPS each substep advances the player ~3 cm up after a jump
-    // — still inside `GROUND_EPSILON`. The end-of-substep `is_supported`
+    //, still inside `GROUND_EPSILON`. The end-of-substep `is_supported`
     // check therefore latches `grounded = true`, and on the *next*
     // substep the grounded velocity clamp must NOT wipe the upward
     // velocity. Pre-fix this happened reliably and the jump silently
@@ -511,7 +511,7 @@ fn high_framerate_jump_is_not_smothered_by_grounded_clamp() {
 
     // After one 4-ms substep, the player should still have most of the
     // upward jump velocity. Even if `grounded` reads true (because we're
-    // within GROUND_EPSILON), `velocity.y` must remain positive — the
+    // within GROUND_EPSILON), `velocity.y` must remain positive, the
     // jump survived the grounded clamp.
     assert!(
         controller.velocity.y > JUMP_SPEED * 0.9,

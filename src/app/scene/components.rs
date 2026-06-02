@@ -41,7 +41,7 @@ pub(crate) struct NetworkDeployedEntity {
 }
 
 /// Marker for the client-only ghost preview rendered while the player
-/// has a deployable selected. Single instance — the placement system
+/// has a deployable selected. Single instance, the placement system
 /// despawns and respawns when the kind changes.
 #[derive(Component)]
 pub(crate) struct DeployablePlacementGhost;

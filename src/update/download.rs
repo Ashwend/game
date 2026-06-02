@@ -3,7 +3,7 @@
 //! same-volume rename.
 //!
 //! The archive itself goes to the system temp dir (it's read once then
-//! deleted), but the *extracted* binary is staged in the install directory —
+//! deleted), but the *extracted* binary is staged in the install directory,
 //! `rename(staged → target)` is only atomic within one filesystem, and `/tmp`
 //! can be a different mount (tmpfs on Linux), so staging beside the target is
 //! what guarantees the updater's swap can't tear.
@@ -47,7 +47,7 @@ pub(crate) fn download_and_stage(
         Ok(staged_path.clone())
     })();
 
-    // The archive is only ever read for extraction — drop it either way.
+    // The archive is only ever read for extraction, drop it either way.
     let _ = fs::remove_file(&archive_path);
     if result.is_err() {
         let _ = fs::remove_file(&staged_path);

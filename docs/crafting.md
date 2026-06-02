@@ -4,9 +4,9 @@ Three distinct interaction surfaces share the same client/server pattern: a serv
 
 ## Crafting (recipe queue)
 
-**Authoritative state:** `GameServer::clients[id].crafting` — per-player `PlayerCraftingState` carrying a bounded queue of jobs. Each job tracks `recipe_id`, `quantity` (batch), `progress_ticks`, and `total_ticks`.
+**Authoritative state:** `GameServer::clients[id].crafting`, per-player `PlayerCraftingState` carrying a bounded queue of jobs. Each job tracks `recipe_id`, `quantity` (batch), `progress_ticks`, and `total_ticks`.
 
-**Wire shape:** `ClientMessage::Crafting(CraftingCommand)` with `Enqueue { recipe_id, quantity }` / `Cancel { job_id }`. State flows back via `PlayerPrivate` replication — the client UI reads its own crafting queue straight off the replicated component, no separate snapshot variant.
+**Wire shape:** `ClientMessage::Crafting(CraftingCommand)` with `Enqueue { recipe_id, quantity }` / `Cancel { job_id }`. State flows back via `PlayerPrivate` replication, the client UI reads its own crafting queue straight off the replicated component, no separate snapshot variant.
 
 **Flow:**
 
@@ -18,8 +18,8 @@ Three distinct interaction surfaces share the same client/server pattern: a serv
 
 **UI:**
 
-- [`src/app/ui/crafting.rs`](../src/app/ui/crafting.rs) — the full-screen modal browser. Recipe list with filter chips (categories) + search. Each row shows inputs/outputs, "craft" button.
-- [`src/app/ui/crafting_queue.rs`](../src/app/ui/crafting_queue.rs) — the always-on top-right HUD stack. Survives closing the browser. Animates the head job's progress between snapshots via a baseline-then-extrapolate scheme so the bar doesn't tick visibly with each replication frame.
+- [`src/app/ui/crafting.rs`](../src/app/ui/crafting.rs), the full-screen modal browser. Recipe list with filter chips (categories) + search. Each row shows inputs/outputs, "craft" button.
+- [`src/app/ui/crafting_queue.rs`](../src/app/ui/crafting_queue.rs), the always-on top-right HUD stack. Survives closing the browser. Animates the head job's progress between snapshots via a baseline-then-extrapolate scheme so the bar doesn't tick visibly with each replication frame.
 
 **Adding a new recipe:** append to the `RECIPES` slice in [`src/crafting.rs`](../src/crafting.rs). Fields:
 
@@ -41,13 +41,13 @@ The output item must exist in the items registry ([`src/items.rs`](../src/items.
 
 ## Furnaces
 
-**Authoritative state:** `GameServer::deployed_entities[id].furnace: Option<FurnaceState>` — per-furnace fuel slot + items grid + active flag + burn/smelt timers. Furnaces are deployables (placed via the deployable path) with this extra sub-state attached.
+**Authoritative state:** `GameServer::deployed_entities[id].furnace: Option<FurnaceState>`, per-furnace fuel slot + items grid + active flag + burn/smelt timers. Furnaces are deployables (placed via the deployable path) with this extra sub-state attached.
 
 **Module layout** (post-Phase-2 split):
 
-- [`src/server/furnace/state.rs`](../src/server/furnace/state.rs) — `FurnaceState`, constants re-exported from [`game_balance.rs`](../src/game_balance.rs), pure helpers (fuel lookup, smelt result table, stack merge primitives). No `GameServer` impl so the smelt math is unit-testable in isolation.
-- [`src/server/furnace/tick.rs`](../src/server/furnace/tick.rs) — `tick_one_furnace` + the `GameServer::tick_furnaces` entry point. Burn fuel, smelt the head input, auto-shutoff if fuel runs out or the output won't fit.
-- [`src/server/furnace/commands.rs`](../src/server/furnace/commands.rs) — `apply_furnace_command` dispatcher and all `Open`/`Close`/`SetActive`/`Move`/`QuickTransfer` handlers. Every post-`Open` command re-validates the player's distance to the furnace (`open_furnace_in_range`) so a stale client UI can't move items out of line-of-sight.
+- [`src/server/furnace/state.rs`](../src/server/furnace/state.rs), `FurnaceState`, constants re-exported from [`game_balance.rs`](../src/game_balance.rs), pure helpers (fuel lookup, smelt result table, stack merge primitives). No `GameServer` impl so the smelt math is unit-testable in isolation.
+- [`src/server/furnace/tick.rs`](../src/server/furnace/tick.rs), `tick_one_furnace` + the `GameServer::tick_furnaces` entry point. Burn fuel, smelt the head input, auto-shutoff if fuel runs out or the output won't fit.
+- [`src/server/furnace/commands.rs`](../src/server/furnace/commands.rs), `apply_furnace_command` dispatcher and all `Open`/`Close`/`SetActive`/`Move`/`QuickTransfer` handlers. Every post-`Open` command re-validates the player's distance to the furnace (`open_furnace_in_range`) so a stale client UI can't move items out of line-of-sight.
 
 **Smelt loop semantics:**
 
@@ -60,16 +60,16 @@ The output item must exist in the items registry ([`src/items.rs`](../src/items.
 
 - Player → furnace fuel slot: fuel items only, swap-with-displaced supported if the displaced fuel can fit back in the player's bag.
 - Player → furnace items grid: anything; merges into matching stacks first, then takes the first empty slot.
-- Furnace → player: routes through the same `add_stack_to_inventory` the pickup path uses — merging into matching stacks first, then first-empty.
+- Furnace → player: routes through the same `add_stack_to_inventory` the pickup path uses, merging into matching stacks first, then first-empty.
 - Partial drag (a `quantity` constraint) suppresses swap and never moves an item the player can't get back.
 
-**UI:** [`src/app/ui/furnace.rs`](../src/app/ui/furnace.rs) — modal panel rendered when `PlayerPrivate::open_furnace` is `Some`. Reads the live view (`OpenFurnaceView`) straight off the replicated component.
+**UI:** [`src/app/ui/furnace.rs`](../src/app/ui/furnace.rs), modal panel rendered when `PlayerPrivate::open_furnace` is `Some`. Reads the live view (`OpenFurnaceView`) straight off the replicated component.
 
 ## Loot bags
 
 **Authoritative state:** `GameServer::loot_bags: HashMap<LootBagId, LootBag>`. Spawned on player death carrying the dead player's inventory; despawned when fully looted or after a lifetime expiry.
 
-**Module:** [`src/server/loot_bag.rs`](../src/server/loot_bag.rs). Same range-revalidation pattern as furnaces — `open_loot_bag_in_range` gates every `Move`/`QuickTransfer` command.
+**Module:** [`src/server/loot_bag.rs`](../src/server/loot_bag.rs). Same range-revalidation pattern as furnaces, `open_loot_bag_in_range` gates every `Move`/`QuickTransfer` command.
 
 **UI:** [`src/app/ui/loot_bag.rs`](../src/app/ui/loot_bag.rs). The slot grid renders from the replicated `LootBagContents` component (server pushes diffs whenever stacks move in or out).
 
@@ -81,7 +81,7 @@ The output item must exist in the items registry ([`src/items.rs`](../src/items.
 
 **Placement** validates: reach (`DEPLOYABLE_PLACEMENT_REACH_M`), ground-level (`|y| ≤ 0.25 m`), no overlap with existing structures, item is present in the player's inventory. The placing player's steam id is stamped onto `DeployedEntity::owner` so damage can later be gated.
 
-**Damage** validates: tool present (bare hands rejected), per-tool cooldown via `next_gather_tick`, range (`DEPLOYABLE_DAMAGE_RANGE_M`), and — since [src/server/deployables.rs](../src/server/deployables.rs) — ownership. World-spawned entities (`owner = None`) are damageable by anyone; player-placed entities can only be damaged by their placer. Admins can still destroy by issuing a spawn-without-place command path.
+**Damage** validates: tool present (bare hands rejected), per-tool cooldown via `next_gather_tick`, range (`DEPLOYABLE_DAMAGE_RANGE_M`), and, since [src/server/deployables.rs](../src/server/deployables.rs), ownership. World-spawned entities (`owner = None`) are damageable by anyone; player-placed entities can only be damaged by their placer. Admins can still destroy by issuing a spawn-without-place command path.
 
 **Destruction:** removes from the map, untracks from the chunk manager, and clears any client's `open_furnace`/`open_loot_bag` pointer at this id.
 

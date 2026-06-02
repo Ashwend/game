@@ -5,7 +5,7 @@ use crate::app::state::{
 };
 
 /// Hardcoded F2 toggle for the performance overlay. Not rebindable in the
-/// keybind UI — the FPS/perf overlay sits in the "debug toggles" bucket
+/// keybind UI, the FPS/perf overlay sits in the "debug toggles" bucket
 /// where a fixed key is easier than a configurable one.
 pub(crate) fn toggle_perf_stats_system(
     keys: Res<ButtonInput<KeyCode>>,
@@ -62,7 +62,7 @@ pub(crate) fn toggle_pause_system(keys: Res<ButtonInput<KeyCode>>, mut menu: Res
     if menu.chat_open {
         return;
     }
-    // ESC during the death splash is a no-op — the player has one
+    // ESC during the death splash is a no-op, the player has one
     // exit (the Respawn button), not a pause menu hop.
     if menu.death_splash.is_some() {
         return;
@@ -217,7 +217,7 @@ pub(crate) fn toggle_inventory_system(
             // Inventory takes over the cursor; close every other modal
             // we don't want layered behind it. The furnace + loot bag
             // close via a network round-trip because their open state
-            // lives server-side — sending Close now means the next
+            // lives server-side, sending Close now means the next
             // replication tick clears the matching `*_open` flag on
             // its own.
             menu.crafting_open = false;
@@ -247,7 +247,7 @@ fn close_open_furnace(
     );
 }
 
-/// Same idea for the loot bag — opening inventory / crafting / a new
+/// Same idea for the loot bag, opening inventory / crafting / a new
 /// modal shouldn't leave a bag UI ghosted behind the new view.
 fn close_open_loot_bag(
     runtime: &mut crate::app::state::ClientRuntime,
@@ -271,7 +271,7 @@ pub(crate) fn toggle_crafting_system(
     mut runtime: ResMut<crate::app::state::ClientRuntime>,
     mut error_toasts: MessageWriter<crate::app::state::ClientErrorToast>,
 ) {
-    // Same hotkey opens and closes the screen — but a closing press has
+    // Same hotkey opens and closes the screen, but a closing press has
     // to be careful not to fight a focused egui text input. We check
     // `wants_keyboard_input` so typing `c` into the search box leaves
     // the modal open (the input absorbs the keystroke), while pressing

@@ -104,7 +104,7 @@ enum AuthModeArg {
     /// Verify WorkOS access tokens against the WorkOS JWKS. The default.
     Workos,
     /// Trust the client's claimed identity with no token check. Localhost only
-    /// (singleplayer loopback, `multiplayer-test`) — never expose to the net.
+    /// (singleplayer loopback, `multiplayer-test`), never expose to the net.
     NoAuth,
 }
 
@@ -196,7 +196,7 @@ fn load_server_world(
                     save
                 }
                 Err(error) => {
-                    // Dedicated servers run unattended — when a save format
+                    // Dedicated servers run unattended, when a save format
                     // version bump (or any other unreadable state) makes the
                     // existing file unloadable, preserve the broken file
                     // under a `.bak.<unix-ts>` suffix and start fresh.
@@ -248,7 +248,7 @@ fn load_server_world(
 /// geometry at generation time and can't be changed in place, so silently
 /// honoring the save's size (and ignoring the flag) would mask an operator
 /// mistake. Pointing `--world` at a fresh file is the intended way to switch
-/// sizes — that regenerates the world rather than corrupting one.
+/// sizes, that regenerates the world rather than corrupting one.
 fn ensure_map_size_matches(
     save: &WorldSave,
     requested: crate::world::ProceduralMapSize,

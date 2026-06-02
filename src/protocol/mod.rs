@@ -2,12 +2,12 @@
 //! shapes both sides serialise. Split by concern, re-exported flat so every
 //! `crate::protocol::X` path is unchanged:
 //!
-//! - [`math`] — `Vec3Net`/`QuatNet` wire-friendly vector types.
-//! - [`items`] — item stacks, containers, and inventory/crafting state.
-//! - [`commands`] — client action payloads (inventory, gather, deployable,
+//! - [`math`], `Vec3Net`/`QuatNet` wire-friendly vector types.
+//! - [`items`], item stacks, containers, and inventory/crafting state.
+//! - [`commands`], client action payloads (inventory, gather, deployable,
 //!   furnace, loot-bag) and the per-client open-container views.
-//! - [`world`] — server-internal world/entity state shapes (also persisted).
-//! - [`messages`] — the two top-level message enums and their small payloads.
+//! - [`world`], server-internal world/entity state shapes (also persisted).
+//! - [`messages`], the two top-level message enums and their small payloads.
 //!
 //! Channel delivery preferences live on the message enums (`*::delivery`);
 //! shared constants, id aliases, and the chat sanitiser stay here.
@@ -34,7 +34,7 @@ pub type AccountId = u64;
 /// is answered with [`ServerMessage::VersionMismatch`]. This is the primary
 /// protocol gate now that the netcode `protocol_id`
 /// ([`crate::net::channels::LIGHTYEAR_PROTOCOL_ID`]) is fixed and no longer
-/// tracks it — bump it on any breaking wire change so mismatched builds are
+/// tracks it, bump it on any breaking wire change so mismatched builds are
 /// cleanly rejected at the `Auth` handshake.
 pub const PROTOCOL_VERSION: u32 = 30;
 pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -59,7 +59,7 @@ pub const FURNACE_ITEM_SLOT_COUNT: usize = 6;
 /// quality tier, so we standardise both sides on it.
 pub const VOICE_SAMPLE_RATE_HZ: u32 = 48_000;
 /// Number of audio samples in one Opus frame. 960 samples @ 48 kHz = 20 ms,
-/// which is the standard VoIP frame length — long enough to keep the codec
+/// which is the standard VoIP frame length, long enough to keep the codec
 /// overhead reasonable, short enough to keep mouth-to-ear latency under the
 /// audible-glass-cliff threshold.
 pub const VOICE_FRAME_SAMPLES: usize = 960;
@@ -71,11 +71,11 @@ pub const MAX_VOICE_FRAME_BYTES: usize = 512;
 pub type DroppedItemId = u64;
 pub type ResourceNodeId = u64;
 /// Identifier for a loot bag (the container spawned at a dead
-/// player's feet — see `docs/pvp.md`). Stable for the bag's
+/// player's feet, see `docs/pvp.md`). Stable for the bag's
 /// lifetime; the server picks it from a monotonic counter and uses
 /// it to route `LootBagCommand` traffic.
 pub type LootBagId = u64;
-/// Slot count inside a loot bag — sized to hold the full inventory
+/// Slot count inside a loot bag, sized to hold the full inventory
 /// plus actionbar of one player, the worst case any death can produce.
 /// Bags spawned by death start with their slots filled from index 0;
 /// trailing slots stay empty.
@@ -105,7 +105,7 @@ pub enum PacketDelivery {
     Reliable,
     /// Unordered-unreliable: deliver every packet that survives the link in
     /// whatever order they arrive. Right for streams where each packet is
-    /// independent — most notably voice frames, where dropping a frame
+    /// independent, most notably voice frames, where dropping a frame
     /// because it arrived a few milliseconds late produces audible holes.
     UnreliableUnordered,
 }

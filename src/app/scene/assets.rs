@@ -39,7 +39,7 @@ pub(crate) const ATMOSPHERE_AMBIENT_INTENSITY: f32 = 1.0;
 /// IBL. Bevy's default is `512`, but that cubemap is **refiltered every frame**
 /// (no skip-if-unchanged gating in Bevy 0.18) and dominated our GPU cost
 /// (500→70 fps). Our materials are almost all matte and the shiniest (iron ore)
-/// is still roughness 0.78 — no mirrors — while diffuse irradiance needs almost
+/// is still roughness 0.78, no mirrors, while diffuse irradiance needs almost
 /// no resolution. So `64` is visually indistinguishable here yet ~64× cheaper
 /// to filter than the default. Raise it if a glossier material is ever added.
 pub(crate) const ATMOSPHERE_ENV_MAP_SIZE: u32 = 64;
@@ -107,7 +107,7 @@ pub(crate) struct DeployableVisualAssets {
     pub(crate) material: Handle<StandardMaterial>,
     /// Semi-transparent green tint used by the placement ghost when the
     /// slot is valid. Mirrors the convention from popular survival games
-    /// — green means "click to place", we pair it with a slight pulse.
+    ///, green means "click to place", we pair it with a slight pulse.
     pub(crate) ghost_valid_material: Handle<StandardMaterial>,
     /// Red variant for invalid placement (out of reach, overlapping).
     pub(crate) ghost_invalid_material: Handle<StandardMaterial>,
@@ -132,7 +132,7 @@ pub(crate) struct ImpactEffectAssets {
     pub(crate) stone_shard_material: Handle<StandardMaterial>,
     /// Green-tinted material used for the `GrassBlades` particle burst.
     /// The mesh is reused from the stone shard so we don't pay for a
-    /// second tiny mesh — the base-colour shift is enough to read as
+    /// second tiny mesh, the base-colour shift is enough to read as
     /// grass debris.
     pub(crate) grass_blade_material: Handle<StandardMaterial>,
 }
@@ -172,8 +172,8 @@ pub(crate) fn setup_scene(
         Hdr,
         // Opt this camera out of GPU-driven indirect batching. With it on, the
         // binned opaque phase intermittently dropped whole batches (regions of
-        // trees/ore vanishing until you moved) once a second pipeline — the
-        // custom grass material, and earlier `VisibilityRange` entities — shared
+        // trees/ore vanishing until you moved) once a second pipeline, the
+        // custom grass material, and earlier `VisibilityRange` entities, shared
         // the phase. Direct (non-indirect) drawing is stable here; with ~1k
         // visible meshes the CPU draw-submission cost is negligible, and macOS
         // Metal has limited multi-draw-indirect support anyway.
@@ -184,7 +184,7 @@ pub(crate) fn setup_scene(
         // with sensible defaults (scene units are already metres). The
         // atmosphere reads the sun `DirectionalLight` to place the sun disc and
         // tint sunlight through the air, and renders the sky behind all
-        // geometry — so the old hand-authored `ClearColor` sky is retired.
+        // geometry, so the old hand-authored `ClearColor` sky is retired.
         Atmosphere::earthlike(scattering_media.add(ScatteringMedium::default())),
         // The atmosphere recomputes its LUTs every frame (no skip-if-unchanged
         // gating in Bevy 0.18), so these are a per-frame GPU cost. We trim them
@@ -203,10 +203,10 @@ pub(crate) fn setup_scene(
         // Image-based ambient + reflections generated from the atmosphere.
         // This is the "free IBL" that lifts every PBR surface; it supplies the
         // daytime ambient term (the sky's `GlobalAmbientLight` floor fades to
-        // zero by day — see `sky.rs`). Strength via `ATMOSPHERE_AMBIENT_INTENSITY`.
+        // zero by day, see `sky.rs`). Strength via `ATMOSPHERE_AMBIENT_INTENSITY`.
         AtmosphereEnvironmentMapLight {
             intensity: ATMOSPHERE_AMBIENT_INTENSITY,
-            // Small cubemap — refiltered every frame, so this is the main GPU
+            // Small cubemap, refiltered every frame, so this is the main GPU
             // cost lever. See `ATMOSPHERE_ENV_MAP_SIZE`.
             size: UVec2::splat(ATMOSPHERE_ENV_MAP_SIZE),
             ..default()
@@ -224,7 +224,7 @@ pub(crate) fn setup_scene(
         }),
         Msaa::Off,
         menu_backdrop_depth_of_field(),
-        // ~17cm between ears — keeps L/R panning natural for nearby spatial
+        // ~17cm between ears, keeps L/R panning natural for nearby spatial
         // sound sources. Bevy's default (4.0) is tuned for huge open worlds
         // and exaggerates panning at first-person ranges.
         SpatialListener::new(0.17),
@@ -333,7 +333,7 @@ pub(crate) fn setup_scene(
         }),
         ghost_valid_material: materials.add(StandardMaterial {
             // Translucent green: visible against grass + stone without
-            // hiding the surface under the ghost. Alpha blending only —
+            // hiding the surface under the ghost. Alpha blending only,
             // no shadow casting, set on spawn so the preview never bakes
             // into the lighting pass.
             base_color: Color::srgba(0.36, 0.92, 0.42, 0.38),

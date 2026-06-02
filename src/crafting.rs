@@ -1,5 +1,5 @@
 //! Crafting recipe registry. Recipes are static, stable, server-authoritative,
-//! and exposed by id — clients and server both consult this module instead of
+//! and exposed by id, clients and server both consult this module instead of
 //! shipping recipe payloads on the wire.
 //!
 //! The shape mirrors [`crate::items`]:
@@ -35,11 +35,11 @@ pub const CRUDE_FURNACE_RECIPE_ID: &str = "crude_furnace";
 /// what to build first.
 ///
 /// Furnace-style "machine inside an entity" operations are intentionally
-/// not represented here — smelting happens inside the furnace's own UI,
+/// not represented here, smelting happens inside the furnace's own UI,
 /// not via the recipe registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecipeStation {
-    /// Hand-craftable — no nearby structure required.
+    /// Hand-craftable, no nearby structure required.
     None,
     /// A `DeployableKind::Workbench { tier }` with `tier >= min_tier`
     /// must be within its `station_radius` of the player.
@@ -67,7 +67,7 @@ impl RecipeStation {
 }
 
 /// Interned identifier shared between protocol messages, server state, and
-/// the UI. Same `Arc<str>` story as [`crate::items::ItemId`] — clones are a
+/// the UI. Same `Arc<str>` story as [`crate::items::ItemId`], clones are a
 /// refcount bump and deserialized ids reuse the cached `Arc` on hits.
 pub type RecipeId = Arc<str>;
 
@@ -136,7 +136,7 @@ pub struct RecipeDefinition {
     pub station: RecipeStation,
 }
 
-/// Static recipe table. Append-only — entries must keep stable ids so saves
+/// Static recipe table. Append-only, entries must keep stable ids so saves
 /// and queued jobs survive across versions.
 pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
     RecipeDefinition {

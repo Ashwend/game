@@ -3,14 +3,14 @@
 //! Holds the small observer systems that turn ambient state changes into
 //! discrete analytics events:
 //!
-//! - [`screen_viewed_system`] — fires `screen_viewed` when [`MenuState::screen`]
+//! - [`screen_viewed_system`], fires `screen_viewed` when [`MenuState::screen`]
 //!   transitions to a new value.
-//! - [`session_started_system`] — fires `session_started` when
+//! - [`session_started_system`], fires `session_started` when
 //!   [`ClientRuntime::session`] flips from `None` to `Some`. Mode is derived
 //!   from `active_world_id` (present → singleplayer, absent → multiplayer).
-//! - [`session_ended_system`] — fires `session_ended` when the session goes
+//! - [`session_ended_system`], fires `session_ended` when the session goes
 //!   away, with a reason taken from [`PendingSessionEndReason`].
-//! - [`error_relay_system`] — relays queued [`ClientErrorToast`] messages
+//! - [`error_relay_system`], relays queued [`ClientErrorToast`] messages
 //!   into typed `error` analytics events.
 //!
 //! These systems live here (not in `analytics::`) so the analytics crate

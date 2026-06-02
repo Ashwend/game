@@ -104,7 +104,7 @@ fn matches_search_hits_name_and_input_material() {
     let recipe = recipe_definition(STONE_HATCHET_RECIPE_ID).expect("recipe");
     // Recipe name.
     assert!(matches_search(recipe, "hatchet"));
-    // Input material name (wood) — not in the recipe name.
+    // Input material name (wood), not in the recipe name.
     assert!(matches_search(recipe, "wood"));
     // Nonsense never matches.
     assert!(!matches_search(recipe, "zzzznotathing"));

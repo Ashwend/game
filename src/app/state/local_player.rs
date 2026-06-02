@@ -86,7 +86,7 @@ pub(crate) fn update_local_player_state_system(
 /// `LocalPlayerState.private.inventory` *in place* with the predicted result.
 /// Every downstream consumer (inventory UI, actionbar, gather eligibility,
 /// `observe_inventory` sound/flash) reads through that field, so none of them
-/// need to know prediction exists — they just see the optimistic state, which
+/// need to know prediction exists, they just see the optimistic state, which
 /// reconciles to the authoritative one as the server confirms or rejects each
 /// action.
 ///

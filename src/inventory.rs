@@ -1,7 +1,7 @@
 //! Pure inventory math shared by the authoritative server and the
 //! client-side optimistic prediction overlay.
 //!
-//! Everything here operates on a [`PlayerInventoryState`] plus arguments —
+//! Everything here operates on a [`PlayerInventoryState`] plus arguments,
 //! no `GameServer`, no ECS, no side effects. The server applies these to its
 //! authoritative `ServerClient::inventory`; the client replays the same
 //! functions on top of the replicated inventory to predict the result of an
@@ -127,7 +127,7 @@ fn restore_stack(inventory: &mut PlayerInventoryState, slot: ItemContainerSlot, 
 /// there wasn't enough to satisfy the request.
 ///
 /// Designed for the crafting consume path. The caller is expected to verify
-/// totals up-front so the partial case shouldn't fire in practice — but the
+/// totals up-front so the partial case shouldn't fire in practice, but the
 /// function still drains what it can, since refusing to remove anything
 /// would leave the inventory in a worse state if a recipe definition ever
 /// goes out of sync with the take.
@@ -194,7 +194,7 @@ pub fn add_stack_to_inventory(
 
     // Tools and deployables are quick-access items the player reaches for
     // constantly, so a freshly crafted or picked-up one should land on the
-    // actionbar when there's an open slot — before it spills into the bag.
+    // actionbar when there's an open slot, before it spills into the bag.
     // Everything else keeps the original bag-first behaviour.
     if prefers_actionbar(&remaining.item_id) {
         for index in 0..inventory.actionbar_slots.len() {
@@ -216,8 +216,8 @@ pub fn add_stack_to_inventory(
 }
 
 /// Whether a freshly added stack of `item_id` should prefer an empty
-/// actionbar slot over the bag. True for tools and deployables — the items
-/// the player equips and uses directly — and false for everything else, so
+/// actionbar slot over the bag. True for tools and deployables, the items
+/// the player equips and uses directly, and false for everything else, so
 /// gathered resources still flow into the main inventory as before.
 fn prefers_actionbar(item_id: &str) -> bool {
     item_definition(item_id).is_some_and(|def| def.tool.is_some() || def.deployable.is_some())

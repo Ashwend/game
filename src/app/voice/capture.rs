@@ -174,7 +174,7 @@ fn run_capture(
     Ok(())
 }
 
-/// Looks for a 48 kHz config first (preferred — no resampling needed), then
+/// Looks for a 48 kHz config first (preferred, no resampling needed), then
 /// falls back to whatever the device picks as its default. We accept 1–2
 /// channels and downmix in software; macOS in particular reports stereo for
 /// most built-in mics even when the underlying signal is mono.

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 ///
 /// To embed a new asset:
 /// 1. Drop the file under `assets/<subdir>/<name>.<ext>`.
-/// 2. That's it — `include_dir!` picks it up at the next build.
+/// 2. That's it, `include_dir!` picks it up at the next build.
 ///
 /// The previous per-file `include_bytes!` table was a maintenance tax that
 /// scaled linearly with the clip count. With a directory tree of footstep
@@ -55,7 +55,7 @@ pub(crate) fn iter_embedded_assets() -> impl Iterator<Item = (&'static str, &'st
 ///
 /// egui builds its `FontDefinitions` synchronously and wants the raw
 /// `&'static [u8]` up front, which the async `AssetServer` path can't hand
-/// back — so the title font is pulled straight from the embedded tree here
+/// back, so the title font is pulled straight from the embedded tree here
 /// instead of round-tripping through `embedded://`.
 pub(crate) fn embedded_bytes(path: &str) -> Option<&'static [u8]> {
     iter_embedded_assets()
@@ -73,9 +73,7 @@ impl Plugin for EmbeddedAssetsPlugin {
         let registry = app
             .world_mut()
             .get_resource_mut::<EmbeddedAssetRegistry>()
-            .expect(
-                "EmbeddedAssetRegistry missing — add EmbeddedAssetsPlugin after DefaultPlugins",
-            );
+            .expect("EmbeddedAssetRegistry missing, add EmbeddedAssetsPlugin after DefaultPlugins");
         for (path, bytes) in iter_embedded_assets() {
             // Skip macOS finder droppings that sneak in from working
             // directories; they're harmless but pollute the registry.
@@ -109,7 +107,7 @@ mod tests {
             .any(|(path, _)| path.ends_with(".wav") || path.ends_with(".ogg"));
         assert!(
             has_audio,
-            "include_dir!(assets) produced no audio files — check CARGO_MANIFEST_DIR/assets exists"
+            "include_dir!(assets) produced no audio files, check CARGO_MANIFEST_DIR/assets exists"
         );
     }
 

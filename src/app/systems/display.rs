@@ -12,12 +12,12 @@ const DEFAULT_WINDOWED_HEIGHT: u32 = 720;
 /// Smallest window **logical** inner size the UI is laid out for. The main menu
 /// (a 360 pt panel under a 78 pt title) and the in-game overlays need roughly
 /// this much room; below it the egui viewport is too short for the menu to fit
-/// and it overflows off-screen entirely — the player sees only the 3D backdrop.
+/// and it overflows off-screen entirely, the player sees only the 3D backdrop.
 ///
 /// This is in *logical points*, not physical pixels, on purpose. The player's
 /// resolution setting is a physical-pixel count, but on a HiDPI display (e.g. a
 /// Retina Mac, scale factor 2) a 1280x720 *physical* window is only 640x360
-/// *points* — too small for the menu. Flooring the *logical* size fixes it
+/// *points*, too small for the menu. Flooring the *logical* size fixes it
 /// regardless of the display's scale factor.
 ///
 /// The height matches the default windowed resolution's height (720) because
@@ -91,7 +91,7 @@ pub(crate) fn apply_display_settings_system(
 /// Starts from the player's chosen physical [`DisplayResolution`], raises it so
 /// the resulting *logical* size is at least
 /// [`MIN_WINDOW_LOGICAL_WIDTH`]x[`MIN_WINDOW_LOGICAL_HEIGHT`] (so the menu always
-/// fits — see those constants), then caps it to the monitor's physical size so
+/// fits, see those constants), then caps it to the monitor's physical size so
 /// we never request a window larger than the screen. `monitor_physical` is
 /// `None` only on the first frames before the primary monitor is known; the cap
 /// is skipped until it arrives and the next frame re-runs with it.
@@ -115,7 +115,7 @@ fn windowed_physical_target(
 }
 
 /// `Limiter` doesn't derive `PartialEq` in `bevy_framepace`. We only
-/// ever swap between `Auto` and `Off` — `Manual` isn't used — so a
+/// ever swap between `Auto` and `Off`, `Manual` isn't used, so a
 /// match on the variant pair is enough to skip the change-detection
 /// trigger on frames where the user didn't touch vsync.
 fn limiters_eq(a: &Limiter, b: &Limiter) -> bool {
@@ -133,7 +133,7 @@ mod tests {
     #[test]
     fn windowed_floor_raises_tiny_logical_size_on_hidpi() {
         // 1280x720 physical on a Retina (scale 2) display is only 640x360
-        // points — too small for the menu. Floor it to 1000x720 logical, i.e.
+        // points, too small for the menu. Floor it to 1000x720 logical, i.e.
         // 2000x1440 physical.
         let target =
             windowed_physical_target(DisplayResolution::new(1280, 720), 2.0, Some((5120, 2880)));

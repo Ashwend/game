@@ -172,7 +172,7 @@ impl GameServer {
     /// (and schedules a fresh-position respawn via the chunk manager), and
     /// returns toasts mirroring the per-item gather path. Server-side
     /// gate: rejects nodes whose `required_tool` is anything other than
-    /// `Hands` — trees and ore veins still require a tool swing.
+    /// `Hands`, trees and ore veins still require a tool swing.
     fn pick_up_resource_node(
         &mut self,
         client_id: ClientId,
@@ -230,7 +230,7 @@ impl GameServer {
 
         let mut envelopes = Vec::new();
         if !any_leftover {
-            // Node fully picked up — remove and schedule the fresh-position
+            // Node fully picked up, remove and schedule the fresh-position
             // respawn the gather path uses on depletion. Broadcast a
             // `ResourceNodeDepleted` so clients can run the death effect:
             // a Lightyear despawn alone can't distinguish a real depletion
@@ -246,7 +246,7 @@ impl GameServer {
                 },
             });
         } else if let Some(node_mut) = self.resource_node_state_mut(resource_node_id) {
-            // Partial pickup — leave the rest in the node's storage so
+            // Partial pickup, leave the rest in the node's storage so
             // the player can come back with a bigger bag. The ECS
             // mirror picks up the new storage on the next sync and
             // Lightyear replicates the `ResourceNodeStorage` diff.

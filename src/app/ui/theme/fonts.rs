@@ -11,7 +11,7 @@ pub(in crate::app::ui) const TITLE_FONT: &str = "cinzel";
 
 /// `assets/`-relative path of the embedded title typeface. Cinzel is a
 /// Roman-inscription serif (SIL OFL, see `assets/fonts/OFL.txt`) whose
-/// capital letterforms are built for all-caps display — hence the
+/// capital letterforms are built for all-caps display, hence the
 /// uppercase "ASHWEND" on the main menu.
 const TITLE_FONT_PATH: &str = "fonts/Cinzel-Bold.ttf";
 

@@ -127,7 +127,7 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
             // the world item. A rejected/partial pickup reconciles when the
             // server advances `applied_action_seq`: the add evaporates / the
             // item un-hides. `seq == 0` means "not predicted" (unknown stack
-            // or full bag) — the server still processes the command.
+            // or full bag), the server still processes the command.
             let seq = predict_pickup(
                 &mut params.prediction,
                 &params.local_player,
@@ -147,8 +147,8 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
             && resource_target_is_crude(&params.pickup_target)
         {
             // Crude nodes (branches, surface stones, grass tufts) can be
-            // picked up with E. Predict the full drain into the bag and —
-            // when the whole node fits — hide the world visual instantly,
+            // picked up with E. Predict the full drain into the bag and,
+            // when the whole node fits, hide the world visual instantly,
             // exactly like a dropped-item pickup. The server gates on the
             // same crude check and a view-ray ping, so a rejected pickup
             // reverts (and the node un-hides) when `applied_action_seq`
@@ -209,7 +209,7 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
         }
     }
 
-    // Tool-swap entry locks out swings — the new tool is still being
+    // Tool-swap entry locks out swings, the new tool is still being
     // lifted into view, so it can't be used yet. Death does the same:
     // a corpse can't swing.
     let local_dead = matches!(
@@ -225,7 +225,7 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
     // Pick the swing target. Priority:
     //  1. Another player inside attack range. Players win over
     //     resource nodes / deployables because at melee range the
-    //     intent is unambiguous — if you're aiming at the avatar of
+    //     intent is unambiguous, if you're aiming at the avatar of
     //     someone running past a tree, that's the target you mean.
     //     Gated on a real tool being equipped (bare hands deal no PvP
     //     damage; the server rejects too).
@@ -233,7 +233,7 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
     //     tool nodes turn into "no target" so the impact frame resolves
     //     to a clean miss instead of a hit the server would reject.
     //  3. A placed structure the player is aimed at. Reaching this
-    //     branch already implies a real tool is equipped — bare hands
+    //     branch already implies a real tool is equipped, bare hands
     //     and non-tool items return `None` from `equipped_tool_kind`,
     //     which short-circuits the swing before this check runs.
     let target =

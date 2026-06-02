@@ -57,7 +57,7 @@ pub struct WorldStateSave {
     /// `None` while the world has never been hosted; once a server runs, this
     /// is always `Some` (even if empty) so harvested resources don't respawn.
     pub resource_nodes: Option<Vec<ResourceNodeState>>,
-    /// Chunk manager state — per-chunk capacity tracking + pending fresh-position
+    /// Chunk manager state, per-chunk capacity tracking + pending fresh-position
     /// regrows. `None` for brand-new worlds (the server boots a fresh manager
     /// from the seed).
     #[serde(default)]
@@ -71,7 +71,7 @@ pub struct WorldStateSave {
     /// counter starts well above them so the two ID spaces don't collide.
     #[serde(default = "default_next_resource_node_id")]
     pub next_resource_node_id: ResourceNodeId,
-    /// Persisted day/night clock — wall-clock seconds within the in-game
+    /// Persisted day/night clock, wall-clock seconds within the in-game
     /// day. Reload picks up wherever the last session left off so the world
     /// doesn't jump back to morning every restart.
     #[serde(default = "default_world_time_seconds")]
@@ -131,7 +131,7 @@ pub struct PersistedDeployedEntity {
     pub furnace: Option<PersistedFurnaceState>,
 }
 
-/// Persisted furnace state — fuel slot + item slots + active flag +
+/// Persisted furnace state, fuel slot + item slots + active flag +
 /// in-flight burn/smelt timers. Reloading restores these so a player
 /// who shuts the host down mid-smelt picks up where they left off.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -149,7 +149,7 @@ impl WorldStateSave {
             seconds_of_day: self.world_time_seconds_of_day,
             multiplier: self.world_time_multiplier,
         };
-        // Re-clamp on load — a save edited by hand or produced by a future
+        // Re-clamp on load, a save edited by hand or produced by a future
         // version we tolerate-via-default could carry a value outside
         // the safe range. Cheaper to fix once on load than on every tick.
         time.set_seconds(time.seconds_of_day);

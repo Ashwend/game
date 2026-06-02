@@ -20,13 +20,13 @@ pub(super) const STONE_WALL_COLOR: Color = Color::srgb(0.52, 0.53, 0.55);
 
 /// What world geometry we last spawned into the scene. Compared against the
 /// runtime's current selection in O(1) so we can skip the expensive respawn
-/// when nothing changed — `WorldData` itself is never kept around for the
+/// when nothing changed, `WorldData` itself is never kept around for the
 /// equality check.
 #[derive(Resource, Default, PartialEq, Eq, Clone, Copy, Debug)]
 pub(crate) enum WorldSceneSelection {
     #[default]
     None,
-    /// Menu fallback — `WorldData::test_world()` is deterministic so it's
+    /// Menu fallback, `WorldData::test_world()` is deterministic so it's
     /// fully identified by this variant.
     MenuBackdrop,
     /// A live world from a session. `version` ticks every time the runtime
@@ -78,7 +78,7 @@ pub(crate) fn apply_world_scene_system(
             let backdrop = WorldData::menu_backdrop_world();
             spawn_world_geometry(&mut commands, &mut meshes, &mut materials, &backdrop);
             // The session path renders resource nodes from snapshots, but
-            // the menu has no session — spawn them directly so the splash
+            // the menu has no session, spawn them directly so the splash
             // camera has something interesting to look at.
             if let Some(assets) = resource_assets.as_deref() {
                 spawn_menu_resource_nodes(&mut commands, assets, &backdrop);

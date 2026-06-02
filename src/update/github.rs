@@ -1,6 +1,6 @@
 //! GitHub Releases client + the pure "what's newer than me" logic.
 //!
-//! The repo is public, so the releases API needs no auth — only the
+//! The repo is public, so the releases API needs no auth, only the
 //! `User-Agent` header GitHub requires of every caller. Network I/O lives in
 //! [`fetch_releases`]; everything else here is pure and unit-tested.
 
@@ -118,6 +118,11 @@ pub(crate) fn latest_stable(releases: &[Release]) -> Option<&Release> {
 
 /// Concatenated markdown changelog for every stable release strictly newer
 /// than `current`, newest first. Empty when nothing is newer.
+///
+/// The bodies are compacted for the modal (see [`clean_release_body`]). When
+/// more than one release is stacked, each is labelled with its version and
+/// separated by a rule; for a single update the modal header already names it,
+/// so no label is added.
 pub(crate) fn changelog_since(releases: &[Release], current: Version) -> String {
     let mut newer: Vec<&Release> = releases
         .iter()
@@ -125,46 +130,86 @@ pub(crate) fn changelog_since(releases: &[Release], current: Version) -> String 
         .collect();
     newer.sort_by_key(|r| std::cmp::Reverse(r.version().expect("filtered to stable")));
 
+    let multi = newer.len() > 1;
     newer
         .iter()
         .map(|r| {
-            let body = strip_release_assets_section(&r.body);
+            let body = clean_release_body(&r.body);
             let body = body.trim();
-            if body.is_empty() {
-                format!("## {}\n\n_No release notes._", r.tag_name)
+            let notes = if body.is_empty() {
+                "_No release notes._"
             } else {
-                body.to_owned()
+                body
+            };
+            if multi {
+                format!("**{}**\n\n{notes}", display_version(&r.tag_name))
+            } else {
+                notes.to_owned()
             }
         })
         .collect::<Vec<_>>()
-        .join("\n\n")
+        .join("\n\n---\n\n")
 }
 
-/// Remove the auto-generated "Release Assets" section (download links) from a
-/// release body — useful in-app, where the player updates from the modal and
-/// doesn't need raw artifact links. Drops everything from a heading whose text
-/// is "Release Assets" up to the next heading of the same-or-shallower level
-/// (or end of body). Any other markdown is left untouched.
-fn strip_release_assets_section(body: &str) -> String {
+/// `vX.Y.Z` for a tag, tolerating tags with or without a leading `v`.
+fn display_version(tag: &str) -> String {
+    let trimmed = tag.trim();
+    if trimmed.starts_with(['v', 'V']) {
+        trimmed.to_owned()
+    } else {
+        format!("v{trimmed}")
+    }
+}
+
+/// Turn an auto-generated release body into compact in-app changelog markdown.
+///
+/// The release notes are written for the GitHub releases page, which repeats a
+/// lot the modal already frames. This drops the redundant `## Ashwend vX`
+/// title, the "Changes since vY." preamble, the "Release Assets" download
+/// links, and the "Changelog" label, and renders the per-category headings as
+/// **bold** lines instead of large markdown headings (so the modal isn't a
+/// cascade of oversized headers). Bullets and prose are kept as-is.
+fn clean_release_body(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
-    let mut skipping = false;
+    let mut skipping = false; // inside the "Release Assets" section
     let mut skip_level = 0usize;
     for line in body.lines() {
         if let Some((level, title)) = heading(line) {
+            // A heading at the same or shallower level ends a skipped section.
+            if skipping && level <= skip_level {
+                skipping = false;
+            }
             if title.eq_ignore_ascii_case("release assets") {
                 skipping = true;
                 skip_level = level;
                 continue;
             }
-            // A heading at the same or shallower level ends the skipped block.
-            if skipping && level <= skip_level {
-                skipping = false;
+            if skipping {
+                continue;
             }
+            // Drop the top-level version title and the "Changelog" label; turn
+            // every other heading (the categories) into a bold line.
+            if level <= 2 || title.eq_ignore_ascii_case("changelog") {
+                continue;
+            }
+            out.push_str("**");
+            out.push_str(title);
+            out.push_str("**\n");
+            continue;
         }
-        if !skipping {
-            out.push_str(line);
-            out.push('\n');
+        if skipping {
+            continue;
         }
+        // Drop the "Changes since vX." preamble.
+        if line
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("changes since")
+        {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
     }
     out
 }
@@ -218,10 +263,32 @@ mod tests {
             rel("v0.18.0", "## v0.18.0\nnew"),
         ];
         let log = changelog_since(&releases, Version::parse("0.16.2").unwrap());
-        let pos_new = log.find("## v0.18.0").expect("newest present");
-        let pos_mid = log.find("## v0.17.0").expect("middle present");
+        // Several stacked releases get bold version labels, newest first.
+        let pos_new = log.find("**v0.18.0**").expect("newest present");
+        let pos_mid = log.find("**v0.17.0**").expect("middle present");
         assert!(pos_new < pos_mid, "newest must come first");
-        assert!(!log.contains("## v0.16.2"), "current version excluded");
+        assert!(!log.contains("v0.16.2"), "current version excluded");
+        // The raw markdown title is dropped; the body prose is kept.
+        assert!(!log.contains("## v0.18.0"));
+        assert!(log.contains("new") && log.contains("mid"));
+    }
+
+    #[test]
+    fn changelog_single_release_omits_the_version_label() {
+        // One update → the modal header names the version, so the body doesn't
+        // repeat it; the `## Ashwend` title is stripped either way.
+        let body = "## Ashwend v0.17.0\n\nintro\n\n#### Feature\n- did a thing\n";
+        let log = changelog_since(&[rel("v0.17.0", body)], Version::parse("0.16.0").unwrap());
+        assert!(
+            !log.contains("**v0.17.0**"),
+            "no label for a single release"
+        );
+        assert!(!log.contains("## Ashwend"));
+        assert!(log.contains("intro"));
+        // Category heading is rendered as bold, not a large markdown heading.
+        assert!(log.contains("**Feature**"));
+        assert!(!log.contains("#### Feature"));
+        assert!(log.contains("did a thing"));
     }
 
     #[test]
@@ -233,23 +300,33 @@ mod tests {
 
     #[test]
     fn changelog_falls_back_when_body_is_only_assets() {
-        let body = "## Ashwend v0.17.0\n\n### Release Assets\n- [x](http://y)\n";
+        let body =
+            "## Ashwend v0.17.0\n\nChanges since v0.16.0.\n\n### Release Assets\n- [x](http://y)\n";
         let log = changelog_since(&[rel("v0.17.0", body)], Version::parse("0.16.0").unwrap());
-        assert!(log.contains("## Ashwend v0.17.0"));
+        assert_eq!(log, "_No release notes._");
         assert!(!log.contains("Release Assets"));
+        assert!(!log.contains("http://y"));
     }
 
     #[test]
-    fn strip_release_assets_keeps_changelog_and_drops_links() {
-        let body = "## Ashwend v0.17.0\n\nintro\n\n### Release Assets\n- [Linux](http://a)\n- [Mac](http://b)\n\n### Changelog\n\n#### Feature\n- did a thing\n";
-        let cleaned = strip_release_assets_section(body);
-        assert!(cleaned.contains("## Ashwend v0.17.0"));
+    fn clean_release_body_compacts_to_bold_categories_and_drops_boilerplate() {
+        let body = "## Ashwend v0.17.0\n\nChanges since v0.16.0.\n\nintro\n\n### Release Assets\n- [Linux](http://a)\n- [Mac](http://b)\n\n### Changelog\n\n#### Feature\n- did a thing\n";
+        let cleaned = clean_release_body(body);
         assert!(cleaned.contains("intro"));
-        assert!(cleaned.contains("### Changelog"));
+        assert!(cleaned.contains("**Feature**"));
         assert!(cleaned.contains("did a thing"));
+        assert!(!cleaned.contains("## Ashwend"));
+        assert!(!cleaned.contains("Changes since"));
+        assert!(!cleaned.contains("Changelog"));
         assert!(!cleaned.contains("Release Assets"));
         assert!(!cleaned.contains("http://a"));
         assert!(!cleaned.contains("http://b"));
+    }
+
+    #[test]
+    fn display_version_adds_v_prefix_when_missing() {
+        assert_eq!(display_version("0.17.0"), "v0.17.0");
+        assert_eq!(display_version("v0.17.0"), "v0.17.0");
     }
 
     #[test]

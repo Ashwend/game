@@ -62,7 +62,7 @@ pub(super) fn draw_recipe_row(
     );
     paint_recipe_icon(&painter, icon_rect, recipe);
 
-    // The right-side controls cluster — minus, quantity input, plus, then
+    // The right-side controls cluster, minus, quantity input, plus, then
     // Craft. We need their total width to know where the text column
     // ends, so compute the cluster width first and lay everything out
     // from the right edge.
@@ -362,7 +362,7 @@ fn paint_recipe_icon(painter: &egui::Painter, rect: Rect, recipe: &RecipeDefinit
 
 /// Build the per-recipe input line as a multi-color `Galley`. Each input
 /// reads as `"×needed Name  (need N more)"` when the player is short,
-/// or `"×needed Name  (have/needed)"` when they're not — the recipe cost
+/// or `"×needed Name  (have/needed)"` when they're not, the recipe cost
 /// is always visible, but the shortfall is what the player actually
 /// needs to act on, so it gets the red "(need N more)" callout. Built
 /// via `LayoutJob` because `painter.text` only supports one color per
@@ -406,7 +406,7 @@ pub(super) fn build_inputs_galley(
         let shortfall = needed.saturating_sub(have);
 
         // The base "×needed Name" chunk stays in the primary text colour
-        // even when short — the player can always read the actual cost.
+        // even when short, the player can always read the actual cost.
         let base_chunk = format!("×{needed} {name}");
         job.append(
             &base_chunk,

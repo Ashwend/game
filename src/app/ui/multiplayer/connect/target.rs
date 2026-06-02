@@ -191,7 +191,7 @@ mod tests {
     fn split_inline_host_port_only_splits_single_colon() {
         assert_eq!(split_inline_host_port("a:1"), Some(("a", "1")));
         // Bare IPv6 (multiple colons, no brackets) is ambiguous and is not
-        // split inline — it falls back to the port field.
+        // split inline, it falls back to the port field.
         assert_eq!(split_inline_host_port("2001:db8::1"), None);
         assert_eq!(split_inline_host_port("plainhost"), None);
         assert_eq!(split_inline_host_port("[::1]:9"), Some(("::1", "9")));

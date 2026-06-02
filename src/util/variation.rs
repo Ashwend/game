@@ -10,7 +10,7 @@ use super::hash::mix32;
 ///
 /// `fire_count` is advanced in place so each call gets a fresh hash;
 /// `last_index` is updated to the returned pick. A `count` of `0` is a
-/// caller bug (no pool to pick from) — the function returns `0` and does
+/// caller bug (no pool to pick from), the function returns `0` and does
 /// not touch `last_index`. A `count` of `1` always returns `0` since
 /// there's no other clip to alternate to.
 pub fn pick_variant_index(

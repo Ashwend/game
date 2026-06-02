@@ -59,7 +59,7 @@ pub(crate) fn camera_follow_system(
     let dip_y = motion.landing_dip_y();
     let base_rotation = Quat::from_euler(EulerRot::YXZ, player.yaw, player.pitch, 0.0);
     let rotation = base_rotation * Quat::from_rotation_x(-pitch_kick);
-    // Apply the downward drop in world space — feels like the shoulders
+    // Apply the downward drop in world space, feels like the shoulders
     // absorbing the strike without the camera diving along the look vector.
     // Head bob and landing dip stack on the same axis: bob adds a small
     // periodic offset, dip pulls down briefly on touchdown.

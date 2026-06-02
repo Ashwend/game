@@ -47,7 +47,7 @@ pub(in crate::app::ui) fn confirm_shortcut_pressed(ctx: &egui::Context) -> bool 
 /// Full-screen scrim used as the dim layer underneath pause / inventory /
 /// modal overlays. Returns the response so callers can react to a click on
 /// empty space (e.g. close-on-outside). The scrim itself is opaque to clicks
-/// — that's the whole point of having one — so layering multiple of these
+///, that's the whole point of having one, so layering multiple of these
 /// for different overlays is fine as long as each gets a unique `id`.
 pub(in crate::app::ui) fn backdrop_layer(
     ctx: &egui::Context,
@@ -141,8 +141,8 @@ pub(super) fn modal_shell<T>(
     // Apply a one-frame scale around the panel center on top of the slide
     // + fade. `transform_layer_shapes` retroactively scales every shape
     // that landed in the panel layer this frame. The interactive rect
-    // stays in original coordinates — which matters for very early clicks
-    // — but the 0.94 → 1.0 range is small enough that the visual and
+    // stays in original coordinates, which matters for very early clicks
+    //, but the 0.94 → 1.0 range is small enough that the visual and
     // interactive rectangles align within a few pixels at the worst point.
     let scale = MODAL_MIN_SCALE + (1.0 - MODAL_MIN_SCALE) * eased;
     if (scale - 1.0).abs() > f32::EPSILON {
@@ -274,7 +274,7 @@ mod tests {
         assert_eq!(ease_out_cubic(0.0), 0.0);
         assert_eq!(ease_out_cubic(1.0), 1.0);
         // Past halfway the curve should still be moving but well above the
-        // linear midpoint — that's the whole point of "ease-out".
+        // linear midpoint, that's the whole point of "ease-out".
         let half = ease_out_cubic(0.5);
         assert!(half > 0.5);
         assert!(half < 1.0);

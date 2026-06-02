@@ -67,14 +67,14 @@ impl NoticeDialog {
     pub(crate) fn version_mismatch(client_version: &str, server_version: &str) -> Self {
         let hint = match compare_versions(client_version, server_version) {
             Some(std::cmp::Ordering::Less) => {
-                "Your game is older than the server — update to the latest version to play."
+                "Your game is older than the server. Update to the latest version to play."
             }
             Some(std::cmp::Ordering::Greater) => {
                 "Your game is newer than the server, which hasn't been updated yet."
             }
             // Equal protocol numbers can still mismatch (different build with
             // the same parsed version), and unparseable versions fall here too.
-            _ => "Your game doesn't match the server — make sure you're on the latest version.",
+            _ => "Your game doesn't match the server. Make sure you're on the latest version.",
         };
         Self {
             title: "Version mismatch".to_owned(),
@@ -97,7 +97,7 @@ impl NoticeDialog {
     pub(crate) fn auth_rejected(reason: impl Into<String>) -> Self {
         let reason = reason.into();
         let body = if reason.trim().is_empty() {
-            "The server refused the connection — your login couldn't be verified.".to_owned()
+            "The server refused the connection. Your login couldn't be verified.".to_owned()
         } else {
             format!("The server refused the connection:\n{reason}")
         };

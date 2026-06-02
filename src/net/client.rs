@@ -75,7 +75,7 @@ pub(crate) struct ClientNetwork(Arc<ClientNetworkInner>);
 struct ClientNetworkInner {
     /// Messages produced by gameplay code waiting to be forwarded to
     /// Lightyear. The first entry after each `pending_connect` is the
-    /// `ClientMessage::Auth` handshake — it is only drained once the
+    /// `ClientMessage::Auth` handshake, it is only drained once the
     /// server-side handshake completes (`Connected` is observed).
     outbox: Mutex<VecDeque<ClientMessage>>,
     /// Server-originated messages received by Lightyear, awaiting drain
@@ -170,7 +170,7 @@ impl ClientSession {
     ) -> Result<Self> {
         // The loopback host runs in `NoAuth` mode and trusts the local player,
         // so the signed-in user's identity (and WorkOS access token) rides
-        // through unchanged — the token is ignored locally, and the real
+        // through unchanged, the token is ignored locally, and the real
         // account id keeps the player's save continuity.
         let spawned = spawn_loopback_server(
             save,
@@ -204,7 +204,7 @@ impl ClientSession {
             token: user.token.clone(),
         };
         // Singleplayer pairs the client with a loopback server we just spun
-        // up — both sides know the (default) key and the link doesn't leave
+        // up, both sides know the (default) key and the link doesn't leave
         // the box. Remote connections need real key material if the operator
         // sets `LIGHTYEAR_PRIVATE_KEY`, so they get the warning instead.
         let key_context = if local_server.is_some() {
@@ -297,7 +297,7 @@ impl ClientSession {
             .shutdown_request
             .store(true, Ordering::Release);
 
-        // Poll for the main app's graceful disconnect. Sleeping is fine —
+        // Poll for the main app's graceful disconnect. Sleeping is fine,
         // this runs on the dedicated `game-session-shutdown` worker, not
         // the main thread.
         let deadline = Instant::now() + SHUTDOWN_WAIT_TIMEOUT;
@@ -341,7 +341,7 @@ impl ClientHeartbeat {
     }
 
     /// Reset the silence timer because a real user message went out this
-    /// frame — no heartbeat is needed until we go quiet for a full interval
+    /// frame, no heartbeat is needed until we go quiet for a full interval
     /// again.
     fn note_traffic(&mut self) {
         self.elapsed = Duration::ZERO;

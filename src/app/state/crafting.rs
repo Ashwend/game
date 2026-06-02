@@ -1,5 +1,5 @@
 //! UI-local state for the crafting screen. Everything authoritative lives
-//! server-side and arrives in the per-tick snapshot — this resource only
+//! server-side and arrives in the per-tick snapshot, this resource only
 //! tracks transient widget state (search text, category filter, scroll).
 
 use std::collections::HashMap;
@@ -19,12 +19,12 @@ pub(crate) struct CraftingUiState {
     /// useful once the registry grows past a screenful.
     pub(crate) only_craftable: bool,
     /// Reset on each open of the crafting screen. Used by the renderer to
-    /// scroll the recipe list back to the top — without this, a player
+    /// scroll the recipe list back to the top, without this, a player
     /// who scrolled mid-list, closed, then reopened would re-enter at
     /// their last scroll position which feels disorienting.
     pub(crate) scroll_reset_pending: bool,
     /// Per-recipe batch-quantity buffer. Stored as a `String` (not a
-    /// `u16`) so the player can type freely — including transiently
+    /// `u16`) so the player can type freely, including transiently
     /// invalid values like an empty string or a number that exceeds
     /// what's currently craftable. The recipe row parses the buffer on
     /// each frame, clamps it where the +/- buttons act, and disables the
@@ -38,7 +38,7 @@ pub(crate) struct CraftingUiState {
 ///
 /// The server only ships `progress_ticks` at the snapshot cadence (20 Hz).
 /// Rendering that raw value at 60+ fps gives a visible 50 ms staircase on
-/// every bar — the player perceives stutter even though the underlying
+/// every bar, the player perceives stutter even though the underlying
 /// math is correct. We anchor a baseline each time we see a new
 /// `progress_ticks` value, then advance the rendered fraction off the
 /// local clock between snapshots. The next snapshot rebases the anchor,

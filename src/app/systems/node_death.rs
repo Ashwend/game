@@ -94,8 +94,8 @@ pub(crate) fn spawn_node_death(
 }
 
 /// Small upward burst for the "pickup completed" frame of a crude node
-/// (branch pile / surface stone / hay tuft). No camera kick — the player
-/// is just snatching something off the ground — and the per-model
+/// (branch pile / surface stone / hay tuft). No camera kick, the player
+/// is just snatching something off the ground, and the per-model
 /// [`ImpactEffectKind`] gives each kind its own colour and footprint.
 fn spawn_crude_pickup_burst(
     commands: &mut Commands,
@@ -140,7 +140,7 @@ fn spawn_tree_felling(
     // Fire the crash audio at the same instant the felling component
     // gets created. The clip's audible climax arrives ~0.6 s in, which
     // sits naturally with the pendulum-fall reaching horizontal for a
-    // typical tree — tall trees fall a little slower so the crash lands
+    // typical tree, tall trees fall a little slower so the crash lands
     // slightly early, short trees a little late, but the lead-in noise
     // hides the small mismatch.
     play.write(PlaySound::at(SoundId::TreeFall, transform.translation));
@@ -193,7 +193,7 @@ fn spawn_ore_shatter(
     transform: Transform,
     player_position: Option<Vec3>,
 ) {
-    // The death effect is purely particles — the rock visibly breaks apart
+    // The death effect is purely particles, the rock visibly breaks apart
     // and falls to the ground. Heavy gravity inside the shatter burst keeps
     // chunks from sailing through the air like an explosion.
     let burst_anchor = transform.translation + Vec3::Y * ORE_BURST_HEIGHT;
@@ -272,7 +272,7 @@ fn apply_base_transform(tree: &FellingTree, transform: &mut Transform) {
     transform.translation = tree.pivot + Vec3::Y * lift;
 }
 
-/// Tiny kinematic overshoot at landing — a damped oscillation around
+/// Tiny kinematic overshoot at landing, a damped oscillation around
 /// horizontal that reads as the trunk bouncing off the ground. Doesn't
 /// affect `angular_velocity` afterwards; once the overshoot window closes
 /// the trunk sits at exactly 90°.
@@ -309,7 +309,7 @@ fn fire_landing_feedback(
         // Spawn the chips at the centre of the lying trunk in world space.
         // The mesh's +Y axis is the trunk's length direction, so rotating
         // it by the current world rotation gives us whichever way the
-        // trunk is actually lying — regardless of which way it fell. The
+        // trunk is actually lying, regardless of which way it fell. The
         // small Y offset lifts the burst up to roughly the top surface of
         // the lying trunk so the chips read as flying off it.
         let lying_direction = transform.rotation * Vec3::Y;
@@ -541,7 +541,7 @@ mod tests {
         apply_landing_overshoot(&tree, &mut bouncing, TREE_OVERSHOOT_DURATION * 0.25);
         assert!(bouncing.rotation.dot(settled).abs() < 1.0 - 1e-5);
 
-        // Past the overshoot duration it's a no-op — leaves the pose alone.
+        // Past the overshoot duration it's a no-op, leaves the pose alone.
         let mut after = transform;
         apply_landing_overshoot(&tree, &mut after, TREE_OVERSHOOT_DURATION + 0.1);
         assert!(after.rotation.dot(settled).abs() > 1.0 - 1e-5);

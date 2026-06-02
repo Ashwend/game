@@ -109,7 +109,7 @@ fn held_item_visual(
     model: ItemModel,
 ) -> (Handle<Mesh>, Handle<StandardMaterial>) {
     match model {
-        // Deployables fall back to the bag visual in the player's hand —
+        // Deployables fall back to the bag visual in the player's hand,
         // the structure mesh is what gets dropped into the world on
         // placement, not what's held.
         ItemModel::Bag | ItemModel::Deployable => (
@@ -152,7 +152,7 @@ fn held_item_local_transform(
         + swing_translation;
     let base_quat = base_rotation * model_rotation;
 
-    // Entry animation: the tool is "picked off the player's back" — it
+    // Entry animation: the tool is "picked off the player's back", it
     // starts below the rest pose and slightly tilted forward, then eases up
     // into place. Heavier items (pickaxe) drop further and tilt more so the
     // lift reads as weightier without being noticeably slower.
@@ -181,7 +181,7 @@ mod tests {
     #[test]
     fn fully_swapped_in_tool_sits_at_its_rest_pose() {
         // swap_fraction == 1.0 means the tool has finished lifting into
-        // view, so no enter-offset is applied — the transform is the
+        // view, so no enter-offset is applied, the transform is the
         // canonical rest pose for the model.
         let rest = held_item_local_transform(ItemModel::Hatchet, 0.0, 1.0);
 
@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn entry_animation_drops_and_tilts_the_item_below_its_rest_pose() {
         // At swap_fraction == 0.0 the tool is freshly "picked off the
-        // back" — it starts lower than the rest pose.
+        // back", it starts lower than the rest pose.
         let entering = held_item_local_transform(ItemModel::Pickaxe, 0.0, 0.0);
         let rest = held_item_local_transform(ItemModel::Pickaxe, 0.0, 1.0);
         assert!(
@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn swing_phase_moves_the_held_item_relative_to_idle() {
         // A mid-swing phase displaces the hatchet from its idle (phase 0)
-        // pose — the swing animation actually drives the transform.
+        // pose, the swing animation actually drives the transform.
         let idle = held_item_local_transform(ItemModel::Hatchet, 0.0, 1.0);
         let mid = held_item_local_transform(ItemModel::Hatchet, 0.5, 1.0);
         assert!(idle.translation.distance(mid.translation) > 0.01);

@@ -1,6 +1,6 @@
 //! Server-authoritative loot bag state + open/close/move commands.
 //!
-//! A loot bag is the container spawned at a dead player's feet — it
+//! A loot bag is the container spawned at a dead player's feet, it
 //! holds every item the corpse was carrying so a killer can scoop up
 //! the kill in one stop instead of running a vacuum over a pile of
 //! individual `DroppedWorldItem`s. The bag persists until either:
@@ -62,7 +62,7 @@ pub struct LootBag {
     /// Vertical velocity for the spawn-time gravity settle. `0.0`
     /// once the bag is at rest; non-zero while the death drop is
     /// still falling from chest height. Horizontal velocity isn't
-    /// tracked — bags fall straight down.
+    /// tracked, bags fall straight down.
     pub(crate) velocity_y: f32,
     /// True once the bag has touched the ground. Skips the
     /// per-tick integration in [`GameServer::tick_loot_bags`] for
@@ -87,7 +87,7 @@ impl LootBag {
 impl GameServer {
     /// Authoritative bag-spawn entry point. Used by the death chain
     /// in `combat.rs` to drop the corpse's items as a single bag.
-    /// Empty input is allowed but pointless — the caller is expected
+    /// Empty input is allowed but pointless, the caller is expected
     /// to filter before calling. Returns the new bag id.
     pub(crate) fn spawn_loot_bag(
         &mut self,
@@ -236,7 +236,7 @@ impl GameServer {
             return;
         };
         // If no other client has this bag open and it's empty, the
-        // entity is just litter — clean it up.
+        // entity is just litter, clean it up.
         let still_open_elsewhere = self
             .clients
             .values()
@@ -344,7 +344,7 @@ impl GameServer {
                         stack,
                     );
                     if let Some(leftover) = leftover {
-                        // Couldn't fit it all — put what didn't fit back.
+                        // Couldn't fit it all, put what didn't fit back.
                         if let Some(bag) = self.loot_bags.get_mut(&bag_id) {
                             bag.slots[slot] = Some(leftover);
                         }
@@ -397,7 +397,7 @@ impl GameServer {
                 return Vec::new();
             }
         }
-        // Bag full — restore the stack to its origin slot so the
+        // Bag full, restore the stack to its origin slot so the
         // player doesn't drop it on the floor by accident.
         self.restore_to_player_slot(client_id, origin, stack);
         reply_warning(client_id, "Bag is full")
@@ -427,7 +427,7 @@ impl GameServer {
                     *target = Some(stack);
                 }
             }
-            // Bag origin can't be restored via this path — caller
+            // Bag origin can't be restored via this path, caller
             // routes through `deposit_to_first_empty_bag_slot` only
             // for player-origin transfers.
             LootBagSlotRef::Bag(_) => {}

@@ -13,7 +13,7 @@ use super::super::theme;
 pub(crate) const SLOT_SIZE: f32 = 56.0;
 
 /// Draw one inventory-style slot. Used by both the main inventory and
-/// the furnace modal — `slot` is a `UnifiedSlotRef` so a drag can move
+/// the furnace modal, `slot` is a `UnifiedSlotRef` so a drag can move
 /// items across either container without the widget needing to know
 /// the difference.
 ///
@@ -33,7 +33,7 @@ pub(crate) fn draw_slot(
     shift_transfer_enabled: bool,
     inventory_ui: &mut InventoryUiState,
 ) {
-    // Slot flashes are only tracked for player slots — they highlight
+    // Slot flashes are only tracked for player slots, they highlight
     // "you just gained items here", which is a property of the player's
     // inventory. Furnace and bag slots don't flash.
     let flash_strength = match slot {

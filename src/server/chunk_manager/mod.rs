@@ -1,29 +1,29 @@
 //! Server-side owner of the chunk system.
 //!
 //! Chunks are the single anchor point for AoI streaming. Every networked
-//! entity that lives in the world — resource nodes, dropped items, and
-//! eventually buildings — is registered with the chunk that contains its
+//! entity that lives in the world, resource nodes, dropped items, and
+//! eventually buildings, is registered with the chunk that contains its
 //! position. The snapshot builder asks the manager which chunks a given
 //! player should see, then collects all entities anchored to those
 //! chunks; there is no parallel per-entity AoI path.
 //!
 //! Responsibilities, all server-authoritative:
 //!
-//! 1. **Seeded generation** — builds the initial node spawn list for a
+//! 1. **Seeded generation**, builds the initial node spawn list for a
 //!    world from `(world_seed, dims)` by calling the pure chunk generator.
-//! 2. **Membership tracking** — for every entity type the chunk system
+//! 2. **Membership tracking**, for every entity type the chunk system
 //!    knows about, the manager remembers which chunk it belongs to so
 //!    snapshots can filter by AoI in O(visible_chunks × members).
 //!    Entities themselves live in their owning collections (resource
 //!    nodes in `GameServer::resource_nodes`, drops in `dropped_items`,
 //!    players in `clients`); the chunk manager only stores ids.
-//! 3. **Regrow scheduling** — when a node is depleted, schedules a fresh
+//! 3. **Regrow scheduling**, when a node is depleted, schedules a fresh
 //!    spawn 5–15 min later (jittered) at a noise-valid position in the
 //!    same grid, up to the chunk's capacity ceiling.
-//! 4. **AoI streaming** — given a player position and view radius tier,
+//! 4. **AoI streaming**, given a player position and view radius tier,
 //!    returns the set of chunk coords (and per-coord entity ids) the
 //!    player should see. Used to filter every per-player snapshot.
-//! 5. **Persistence** — serializes the per-chunk live counts and pending
+//! 5. **Persistence**, serializes the per-chunk live counts and pending
 //!    regrow events into [`ChunkManagerSave`], which the save layer
 //!    embeds in `WorldStateSave`. Reload reconstitutes the manager from
 //!    the seed + saved state.
@@ -60,7 +60,7 @@ pub use save::*;
 mod tests;
 
 /// Minimum delay before a depleted node respawns. Tied to a 20 Hz tick
-/// rate — keeps the player from camping a single grid for free yield.
+/// rate, keeps the player from camping a single grid for free yield.
 const MIN_REGROW_TICKS: u64 = 5 * 60 * crate::protocol::SERVER_TICK_RATE_HZ as u64;
 /// Maximum delay. Together with the floor, gives the regrow window the
 /// 5–15 min spec the design called for.
@@ -76,7 +76,7 @@ const VIEW_RADIUS_HIGH: u32 = 3;
 /// Extra ring loaded beyond the player's view tier, used purely as a
 /// collider-stability buffer. Without it, the moment the player crosses
 /// a chunk boundary the snapshot's resource-node set changes and the
-/// client rebuilds its collision grid — freshly-loaded tree/ore
+/// client rebuilds its collision grid, freshly-loaded tree/ore
 /// colliders can be placed as close as `EDGE_MARGIN_M` (0.5 m) from the
 /// boundary, while the player's per-tick movement past the boundary is
 /// only ~0.25 m at walking speed. That gap is smaller than the combined
@@ -105,7 +105,7 @@ const KEEP_MARGIN_RINGS: u32 = 2;
 /// fraction of their generated capacity, so distant areas still read as
 /// populated without paying the full per-node cost. This is the
 /// "density falloff" the design called for, implemented as a fixed
-/// spawn-budget instead of a moving culling window — players moving
+/// spawn-budget instead of a moving culling window, players moving
 /// around the world don't see neighbouring grids fade in/out, only
 /// brand-new grids respect the budget.
 const RING_BUDGET: [f32; 5] = [1.0, 0.85, 0.65, 0.45, 0.30];
@@ -144,7 +144,7 @@ struct ActiveChunkState {
     /// the AoI ring is centred on.
     players: HashSet<ClientId>,
     /// Placed structures (workbenches, furnaces, future deployables)
-    /// rooted to this chunk. Anchored once at place time — deployables
+    /// rooted to this chunk. Anchored once at place time, deployables
     /// do not move under physics.
     deployed_entities: HashSet<DeployedEntityId>,
 }
@@ -234,7 +234,7 @@ impl ChunkManager {
     /// those into its `resource_nodes` map as usual.
     pub fn new_for_world(world_seed: u64, dims: ChunkDims) -> (Self, Vec<ResourceNodeState>) {
         let mut spawns = generate_world_spawns(world_seed, dims);
-        // Trim outer rings to the spawn-budget table — strips out a
+        // Trim outer rings to the spawn-budget table, strips out a
         // deterministic suffix of spawns per (coord, kind) so the world's
         // outer rings sit at the budgeted density without us having to
         // re-run the Poisson sampler with a target multiplier.
@@ -381,7 +381,7 @@ impl ChunkManager {
 
 /// Build the per-chunk capacity tables for every coord in `dims`, leaving
 /// the live entity sets empty. Both `new_for_world` and `from_save` start
-/// here, and the cap derivation defers to [`kind_target`] — the same
+/// here, and the cap derivation defers to [`kind_target`], the same
 /// formula the generator uses at world-gen time. Keeping them on one
 /// function means generation and regrow ceilings can't drift; a save
 /// loaded by code that scaled differently would silently over- or

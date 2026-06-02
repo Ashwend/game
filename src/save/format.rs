@@ -31,7 +31,7 @@ pub(super) const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 /// embeds `ChunkManagerSave` (per-chunk capacities + pending fresh-position
 /// regrows) on `WorldStateSave`. Old saves don't carry the chunk state,
 /// and the test-world layout changed, so older saves wouldn't map onto
-/// the new world geometry — they're rejected at load.
+/// the new world geometry, they're rejected at load.
 ///
 /// `6` added persisted deployable entities (workbenches, furnaces) on
 /// `WorldStateSave::deployed_entities` plus the `next_deployed_entity_id`
@@ -39,13 +39,13 @@ pub(super) const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 ///
 /// `7` added per-deployable furnace state (fuel slot + smelt slots +
 /// active flag + burn/smelt timers). Old v6 saves don't carry this
-/// field — rejected and surfaced in the worlds-screen "couldn't load"
+/// field, rejected and surfaced in the worlds-screen "couldn't load"
 /// banner.
 ///
 /// `8` (Phase 7 of the Lightyear migration) dropped the vestigial
 /// `ResourceNodeState::respawn_progress` field. The server never wrote
-/// `Some(_)` to it post-Phase-1 — depleted nodes are removed entirely
-/// and regrow as fresh entities — so the field was always `None`. Old
+/// `Some(_)` to it post-Phase-1, depleted nodes are removed entirely
+/// and regrow as fresh entities, so the field was always `None`. Old
 /// v7 saves carry the trailing `Option<f32>` and would deserialise
 /// wrong; rejected at load.
 ///
@@ -304,7 +304,7 @@ mod tests {
     fn rejects_truncated_compressed_payload() {
         let save = WorldSave::new("Truncate", Some(1));
         let bytes = encode_world_save(&save).expect("encode");
-        // Snip 8 bytes off the end of the compressed payload — zstd
+        // Snip 8 bytes off the end of the compressed payload, zstd
         // should refuse it on decode.
         let truncated = &bytes[..bytes.len() - 8];
         assert!(

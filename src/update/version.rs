@@ -3,7 +3,7 @@
 //! The only versions this code ever compares are the running build's
 //! `CARGO_PKG_VERSION` (`MAJOR.MINOR.PATCH`) and GitHub release tags
 //! (`vMAJOR.MINOR.PATCH`, produced by the release pipeline). That's the whole
-//! grammar, so a three-`u32` newtype is enough — the full `semver` crate
+//! grammar, so a three-`u32` newtype is enough, the full `semver` crate
 //! (pre-release identifiers, build metadata, range matching) would be dead
 //! weight here.
 

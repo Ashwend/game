@@ -29,13 +29,13 @@ use spawn::spawn_resource_node_entity;
 /// Per-frame cap on resource-node *spawns*. Crossing a chunk boundary
 /// can pull tens of trees and ores into view in one snapshot tick. Doing
 /// every fresh `commands.spawn(...)` in the same frame produces a
-/// command-buffer / GPU-upload stall the player sees as a hitch — the
+/// command-buffer / GPU-upload stall the player sees as a hitch, the
 /// "feels like 40 FPS even at 500 FPS" pattern. Anything past the budget
 /// is left untouched in `previous_progress` so the *next* frame still
 /// classifies it as fresh and runs its pop-in animation. The snapshot
 /// stays valid until the next server tick (~50 ms), giving plenty of
 /// frames to drain a backlog. Existing-entity transform updates and
-/// despawns are uncapped — only first-time spawns are budgeted.
+/// despawns are uncapped, only first-time spawns are budgeted.
 const MAX_RESOURCE_NODE_SPAWNS_PER_FRAME: usize = 8;
 
 /// Component attached to a freshly-spawned resource node while it
@@ -50,7 +50,7 @@ pub(crate) struct ResourceNodePopIn {
 /// How many frames a disappeared node sits in
 /// `pending_depletion_check` before we conclude the
 /// `ResourceNodeDepleted` message isn't coming and silent-despawn.
-/// 3 frames at 60 FPS ≈ 50 ms, which is one full Lightyear server tick —
+/// 3 frames at 60 FPS ≈ 50 ms, which is one full Lightyear server tick,
 /// plenty of slack for the depleted message (reliable channel) to land
 /// after the entity-despawn diff (replication channel).
 const DEPLETION_GRACE_FRAMES: u8 = 3;
@@ -58,7 +58,7 @@ const DEPLETION_GRACE_FRAMES: u8 = 3;
 /// Visual entity whose replicated counterpart vanished but for which
 /// we haven't yet seen a matching `ResourceNodeDepleted` server
 /// message. The depleted message and the Lightyear entity-despawn ship
-/// on different channels and can arrive in either order — keeping the
+/// on different channels and can arrive in either order, keeping the
 /// visual alive for a few frames lets the death animation fire even
 /// when the despawn lands first.
 #[derive(Debug, Clone, Copy)]
@@ -102,7 +102,7 @@ pub(crate) struct ResourceNodeEntities {
     pending_depletion_check: HashMap<ResourceNodeId, PendingDepletion>,
     /// `true` once at least one reconciliation pass has fired.
     /// Suppresses the fresh-node pop-in animation for the initial wave
-    /// of world geometry — we don't want 30 trees and ores to all pop
+    /// of world geometry, we don't want 30 trees and ores to all pop
     /// up the moment the player connects.
     applied_first_snapshot: bool,
     /// Node ids whose visual we've hidden for an unconfirmed predicted
@@ -137,7 +137,7 @@ type ResourceEntityQuery<'w, 's> = Query<
 ///
 /// **Event-driven** since [the pickup-target investigation]: the
 /// previous design iterated all ~1811 replicated nodes every frame
-/// just to detect "nothing changed" — a 1.4 ms median / 4 ms slow-
+/// just to detect "nothing changed", a 1.4 ms median / 4 ms slow-
 /// frame cost that showed up as the second bimodal peak in the frame
 /// histogram. This version reads `Added<ResourceNode>` and
 /// `RemovedComponents<ResourceNode>` so steady-state frames (no
@@ -200,14 +200,14 @@ pub(crate) fn apply_resource_nodes_system(
     //    server already told us it was depleted) or queue grace.
     for replicated_entity in removed_nodes.read() {
         let Some(id) = entities.replicated_to_id.remove(&replicated_entity) else {
-            // Either we never tracked this entity (unlikely — we
+            // Either we never tracked this entity (unlikely, we
             // populate `replicated_to_id` on every `Added`) or it
             // was cleaned up by `clear_all_tracked_nodes`. Either
             // way nothing to do.
             continue;
         };
 
-        // If still queued for spawn, the mirror was never created —
+        // If still queued for spawn, the mirror was never created,
         // just drop the queue entry. The grace-period machinery
         // doesn't apply: there's no death animation to attach to
         // something that never appeared.
@@ -224,7 +224,7 @@ pub(crate) fn apply_resource_nodes_system(
         // Predicted crude pickup already played the depletion effect and
         // hid this node's visual. The server's confirming despawn (or an
         // AoI-leave before the command resolved) just finalises it: drop
-        // the hidden mirror silently — no second death effect, no grace
+        // the hidden mirror silently, no second death effect, no grace
         // window. Clearing `suppressed` here also keeps the reject-path
         // un-hide below from firing on an already-despawned node.
         if entities.suppressed.remove(&id) {
@@ -235,7 +235,7 @@ pub(crate) fn apply_resource_nodes_system(
         }
 
         if runtime.depleted_node_ids.remove(&id) {
-            // Server told us this was a depletion — death effect
+            // Server told us this was a depletion, death effect
             // fires immediately. No grace window needed.
             despawn_with_death_effect(
                 &mut commands,
@@ -249,7 +249,7 @@ pub(crate) fn apply_resource_nodes_system(
             );
             entities.entities.remove(&id);
         } else {
-            // No depletion message yet. Queue for grace — if the
+            // No depletion message yet. Queue for grace, if the
             // message arrives within [`DEPLETION_GRACE_FRAMES`],
             // `resolve_pending_depletions` will fire the death
             // effect; otherwise the entity silent-despawns.
@@ -268,7 +268,7 @@ pub(crate) fn apply_resource_nodes_system(
     //    reverse map and either cancel a pending depletion (AoI
     //    bounce / regrow reusing the id) or queue a spawn.
     for (replicated_entity, node) in &added_nodes {
-        // Skip entities we already know about — either the catch-up
+        // Skip entities we already know about, either the catch-up
         // above seeded them on the first run, or a previous Added
         // already enqueued them.
         if entities.replicated_to_id.contains_key(&replicated_entity) {
@@ -277,7 +277,7 @@ pub(crate) fn apply_resource_nodes_system(
         entities.replicated_to_id.insert(replicated_entity, node.id);
 
         if entities.pending_depletion_check.remove(&node.id).is_some() {
-            // AoI bounce — the mirror is still alive from before, so
+            // AoI bounce, the mirror is still alive from before, so
             // no spawn needed and no pop-in (the visual stayed put).
             continue;
         }
@@ -325,7 +325,7 @@ pub(crate) fn apply_resource_nodes_system(
         );
     }
 
-    // 4. Grace-period bookkeeping. Empty in steady state — when it
+    // 4. Grace-period bookkeeping. Empty in steady state, when it
     //    is empty the function returns immediately without iterating.
     let consumed = resolve_pending_depletions(
         &mut commands,
@@ -410,7 +410,7 @@ fn despawn_with_death_effect(
 /// Spawn the node depletion effect (chip burst / tree-fall + sound + camera
 /// kick) for `entity` *without* despawning it. Pulled out of
 /// [`despawn_with_death_effect`] so the predicted-pickup path can play the
-/// effect while merely *hiding* the mirror — the visual still has to survive
+/// effect while merely *hiding* the mirror, the visual still has to survive
 /// in case the server rejects the pickup and we un-hide it.
 #[allow(clippy::too_many_arguments)]
 fn fire_node_death_effect(
@@ -509,14 +509,14 @@ fn resolve_pending_depletions(
 /// set (never the full node list, so this stays within the event-driven
 /// budget the rest of the system was tuned to):
 ///
-/// * **New hide** — id is predicted-hidden but not yet suppressed: play the
+/// * **New hide**, id is predicted-hidden but not yet suppressed: play the
 ///   depletion effect once and hide the mirror, so the node vanishes the
 ///   instant the player presses E (the dropped-item pickup feel, extended to
 ///   the much-more-numerous resource nodes).
-/// * **Un-hide** — id is suppressed but no longer predicted-hidden while its
+/// * **Un-hide**, id is suppressed but no longer predicted-hidden while its
 ///   mirror still exists: the server *rejected* the pickup. (A confirmed
 ///   despawn instead clears `suppressed` and removes the entity in the
-///   departures pass, which runs first — so reaching here with a live mirror
+///   departures pass, which runs first, so reaching here with a live mirror
 ///   means a revert.) Make the node visible again.
 #[allow(clippy::too_many_arguments)]
 fn reconcile_predicted_pickups(

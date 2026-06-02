@@ -2,9 +2,9 @@
 //!
 //! Two channels, both pure functions of `(seed, coord)`:
 //!
-//! - `value_noise_2d` — single-octave value noise smoothed with a quintic
+//! - `value_noise_2d`, single-octave value noise smoothed with a quintic
 //!   fade. Cheap; used as the building block for [`fbm`].
-//! - `fbm` — fractional Brownian motion (sum of value-noise octaves at
+//! - `fbm`, fractional Brownian motion (sum of value-noise octaves at
 //!   doubling frequencies). Output is squashed into `[0.0, 1.0]`.
 //!
 //! The generator also calls `splitmix64`, which is exposed so callers can
@@ -15,7 +15,7 @@ const PERMUTATION_TABLE_SIZE: u32 = 256;
 
 /// SplitMix64 finalizer. Used both as a hash for the noise lattice and as a
 /// stream seed for the Poisson-disk sampler. Each input maps to a different
-/// 64-bit value with good avalanche behavior — exactly what we need to fold
+/// 64-bit value with good avalanche behavior, exactly what we need to fold
 /// `(world_seed, chunk_x, chunk_z, kind_id)` down to a deterministic stream.
 pub fn splitmix64(mut x: u64) -> u64 {
     x = x.wrapping_add(0x9E3779B97F4A7C15);
@@ -40,7 +40,7 @@ fn lattice_hash(seed: u64, x: i32, y: i32) -> f32 {
 }
 
 fn fade(t: f32) -> f32 {
-    // Quintic smoothstep: 6t^5 − 15t^4 + 10t^3. Perlin's improved fade — C2
+    // Quintic smoothstep: 6t^5 − 15t^4 + 10t^3. Perlin's improved fade, C2
     // continuous, so fbm derivatives stay clean.
     t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
 }
@@ -79,7 +79,7 @@ pub fn value_noise_2d(seed: u64, x: f32, y: f32) -> f32 {
 ///
 /// `frequency` is the input scale: smaller values stretch the features
 /// wider across the world. For 64 m grids, frequencies on the order of
-/// `1/200` produce features that span 3–4 chunks — about right for "this
+/// `1/200` produce features that span 3–4 chunks, about right for "this
 /// region is a forest, that one is rocky."
 pub fn fbm(seed: u64, x: f32, y: f32, frequency: f32, octaves: u32) -> f32 {
     let mut amplitude = 1.0_f32;
@@ -88,7 +88,7 @@ pub fn fbm(seed: u64, x: f32, y: f32, frequency: f32, octaves: u32) -> f32 {
     let mut max_amplitude = 0.0_f32;
     for octave in 0..octaves {
         // Stir the seed per-octave so subsequent octaves don't sample the
-        // same lattice — otherwise the fold-in just doubles the same
+        // same lattice, otherwise the fold-in just doubles the same
         // pattern at higher frequency.
         let octave_seed = splitmix64(seed ^ ((octave as u64).wrapping_mul(0xD1B54A32D192ED03)));
         let value = value_noise_2d(octave_seed, x * freq, y * freq);
@@ -105,7 +105,7 @@ pub fn fbm(seed: u64, x: f32, y: f32, frequency: f32, octaves: u32) -> f32 {
 }
 
 /// Tiny LCG-flavored pseudo-RNG seeded by `splitmix64`. Cheap and
-/// deterministic — used by the Poisson-disk sampler to pick candidate
+/// deterministic, used by the Poisson-disk sampler to pick candidate
 /// offsets within a chunk without pulling in `rand` (which would add a
 /// dependency for one consumer).
 #[derive(Debug, Clone, Copy)]
@@ -142,7 +142,7 @@ impl ChunkRng {
 }
 
 const _: () = {
-    // The permutation table size is referenced from a few places — keep
+    // The permutation table size is referenced from a few places, keep
     // it exported as a compile-time constant rather than a magic literal.
     assert!(PERMUTATION_TABLE_SIZE.is_power_of_two());
 };
@@ -207,7 +207,7 @@ mod tests {
     fn chunk_rng_streams_are_independent_per_stream() {
         let mut a = ChunkRng::from_components(7, 0, 0, 0);
         let mut b = ChunkRng::from_components(7, 0, 0, 1);
-        // First sample should differ — same seed/coord, different stream.
+        // First sample should differ, same seed/coord, different stream.
         assert_ne!(a.next_u64(), b.next_u64());
     }
 
@@ -215,7 +215,7 @@ mod tests {
     fn splitmix_avalanches() {
         let a = splitmix64(0x1234);
         let b = splitmix64(0x1235);
-        // Single-bit input difference should diffuse — at least ~half the
+        // Single-bit input difference should diffuse, at least ~half the
         // output bits flip on average. Just assert it's not the identity.
         assert!((a ^ b).count_ones() > 10);
     }

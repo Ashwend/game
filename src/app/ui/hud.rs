@@ -88,7 +88,7 @@ fn voice_indicator(ctx: &egui::Context, voice: &VoiceState) {
                         // Painter-drawn pulse dot. Using a text glyph like
                         // "●" rendered as a red tofu box on this machine
                         // because egui's bundled font doesn't include
-                        // U+25CF — a hand-drawn circle has no font dep.
+                        // U+25CF, a hand-drawn circle has no font dep.
                         let dot_radius = 4.5;
                         let (dot_rect, _) = ui.allocate_exact_size(
                             egui::vec2(dot_radius * 2.0, dot_radius * 2.0),
@@ -137,7 +137,7 @@ fn connection_lag_indicator(ctx: &egui::Context) {
 }
 
 /// Frame-pacing snapshot drawn by the perf overlay. The smoothed FPS that
-/// Bevy exposes by default hides periodic stalls — a stream of
+/// Bevy exposes by default hides periodic stalls, a stream of
 /// `[2 ms, 2 ms, 2 ms, 30 ms]` reads as "~120 FPS" but feels like a 30 ms
 /// hitch every fourth frame. `p99_ms` and `max_ms` are the actual signal
 /// for "the game *feels* slow".

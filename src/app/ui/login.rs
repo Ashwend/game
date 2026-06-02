@@ -111,7 +111,7 @@ mod tests {
         }
     }
 
-    /// A context with the title font bound — `theme::title` lays out with the
+    /// A context with the title font bound, `theme::title` lays out with the
     /// `cinzel` family, which panics if the family isn't registered.
     fn ctx() -> egui::Context {
         let ctx = egui::Context::default();
@@ -190,7 +190,7 @@ mod tests {
             login_overlay_ui(ctx, &mut auth, &workos, &mut menu);
         });
 
-        // Still authenticated and untouched — the overlay drew nothing.
+        // Still authenticated and untouched, the overlay drew nothing.
         assert!(matches!(auth, AuthFlow::Authenticated));
         assert!(!menu.quit_requested);
     }

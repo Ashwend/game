@@ -15,7 +15,7 @@ pub(super) fn pickup_tooltip(
 ) {
     // Any full-screen modal hides the world tooltip. Even though the
     // scrim is opaque on top, egui's foreground-area tooltip would
-    // still paint over it — the modal also blocks the input that would
+    // still paint over it, the modal also blocks the input that would
     // act on the target, so the tooltip would be lying about what
     // pressing E does.
     if menu.pause_open
@@ -63,7 +63,7 @@ fn pickup_tooltip_text(pickup_target: &PickupTargetState) -> Option<(String, Str
     // Placed structures fall through next so the player can see the
     // "Press E to open" affordance the same way they see "Press E to
     // pick up" on dropped items. Workbenches have no interactive view
-    // yet — they show a passive "in range" status instead so the
+    // yet, they show a passive "in range" status instead so the
     // player understands what the structure does without us inventing
     // an interaction that doesn't exist.
     if let Some(kind) = pickup_target.deployable_kind {
@@ -73,7 +73,7 @@ fn pickup_tooltip_text(pickup_target: &PickupTargetState) -> Option<(String, Str
     // Loot bags use the same "Press E to open" wording as a furnace;
     // the bag itself is a container so the interaction shape lines
     // up. Item count would be ideal here but the pickup target
-    // doesn't carry the bag's contents — the bag is opened
+    // doesn't carry the bag's contents, the bag is opened
     // server-side and contents arrive via `PlayerPrivate.open_loot_bag`.
     if pickup_target.loot_bag_id.is_some() {
         return Some((
@@ -100,7 +100,7 @@ fn pickup_tooltip_text(pickup_target: &PickupTargetState) -> Option<(String, Str
             .join("\n")
     };
     // Crude nodes (branches, surface stones, grass tufts) are quick-grab
-    // only — swinging at them does nothing, so the tooltip only mentions E.
+    // only, swinging at them does nothing, so the tooltip only mentions E.
     let action_line = if definition.required_tool.kind == ToolKind::Hands {
         "Press E to pick up".to_owned()
     } else {
@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn pickup_tooltip_is_hidden_when_ui_blocks_pickup() {
         // Every modal that gates pickup input should also hide the
-        // tooltip — otherwise the world-anchored label leaks through
+        // tooltip, otherwise the world-anchored label leaks through
         // the scrim and tells the player to press a key that no
         // longer does anything.
         type SetFlag = fn(&mut MenuState);

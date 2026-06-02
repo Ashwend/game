@@ -151,7 +151,7 @@ pub(in crate::app::ui) fn compact_button_in_rect_with_state(
 /// staying on-palette with the rest of the UI. Hover/active recolouring
 /// is dropped because most exact-size buttons are inside grids where
 /// rebuilding the button each frame from the live response would jitter
-/// the layout — accept the static appearance, gain the consistency.
+/// the layout, accept the static appearance, gain the consistency.
 pub(in crate::app::ui) fn button_paint_rest(
     kind: ButtonKind,
 ) -> (egui::Color32, egui::Stroke, egui::Color32) {

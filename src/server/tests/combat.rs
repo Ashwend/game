@@ -1,7 +1,7 @@
 //! Server-authoritative PvP combat tests.
 //!
 //! Each test forges a malicious or boundary `AttackPlayerCommand` and
-//! verifies the server's response — rejection without HP change for
+//! verifies the server's response, rejection without HP change for
 //! anti-cheat cases, the expected damage/knockback/peer broadcast for
 //! the happy path.
 
@@ -350,7 +350,7 @@ fn player_dies_spawns_loot_bag_and_emits_player_killed() {
         "PlayerKilled envelope should be emitted"
     );
     // Death should produce one loot bag containing the victim's
-    // wood pile — not a scattered set of `DroppedWorldItem`s.
+    // wood pile, not a scattered set of `DroppedWorldItem`s.
     let bags: Vec<_> = server.loot_bags_iter().collect();
     assert_eq!(bags.len(), 1, "death should spawn exactly one loot bag");
     let (_, bag) = bags[0];
@@ -466,7 +466,7 @@ fn attack_damage_clamps_at_zero_health() {
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_pickaxe(&mut server, attacker);
-    // 5 HP left — pickaxe deals 15 → must clamp at 0, no negative HP.
+    // 5 HP left, pickaxe deals 15 → must clamp at 0, no negative HP.
     server.clients.get_mut(&target).unwrap().controller.health = 5.0;
 
     attack(&mut server, attacker, target);

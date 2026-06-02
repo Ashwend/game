@@ -26,7 +26,7 @@ const DEFAULT_NAMES: [&str; 2] = ["player1", "player2"];
 /// as a separate player. Different from the default bypass ID
 /// (`76561197960287930`) to avoid colliding with a real local-dev session.
 const TEST_ACCOUNT_IDS: [u64; 2] = [76_561_197_960_287_001, 76_561_197_960_287_002];
-/// Map size for the ephemeral test world — the smallest procedural map so
+/// Map size for the ephemeral test world, the smallest procedural map so
 /// the helper boots fast and streams cheaply. Single source of truth: the
 /// seed save is generated at this size *and* the spawned `server --map-size`
 /// flag is derived from it, so the two can't drift apart and trip the
@@ -73,7 +73,7 @@ pub(super) fn run_multiplayer_test(port: u16, names_override: Option<Vec<String>
     );
 
     // Pre-create the temp save with the smallest procedural map so the
-    // helper boots into a tiny world — quick to generate, cheap to stream,
+    // helper boots into a tiny world, quick to generate, cheap to stream,
     // and uses the same map path as a real player-created world.
     let mut seeded = WorldSave::new_with_map(
         "Multiplayer Test",
@@ -84,7 +84,7 @@ pub(super) fn run_multiplayer_test(port: u16, names_override: Option<Vec<String>
         },
     );
     // Flag both test clients as admins so they can drive `/test-kit` and
-    // `/tp` straight out of the gate — those commands are admin-gated
+    // `/tp` straight out of the gate, those commands are admin-gated
     // and the multiplayer-test loop is the place where they're most
     // useful for verifying PvP / death / respawn.
     for account_id in TEST_ACCOUNT_IDS {
@@ -104,7 +104,7 @@ pub(super) fn run_multiplayer_test(port: u16, names_override: Option<Vec<String>
         bail!("server did not become ready: {error:#}");
     }
 
-    println!("multiplayer-test: server ready — launching clients {names:?}");
+    println!("multiplayer-test: server ready, launching clients {names:?}");
     let layouts = test_client_layouts();
     let mut clients = Vec::new();
     for (index, name) in names.iter().enumerate() {
@@ -145,8 +145,8 @@ fn resolve_port(requested: u16) -> Result<u16> {
         return Ok(requested);
     }
     // Bind+drop a TCP listener to reserve a port that's almost certainly
-    // free for the UDP server seconds later. Not bulletproof — the kernel
-    // can technically re-allocate it — but in practice it gives us a
+    // free for the UDP server seconds later. Not bulletproof, the kernel
+    // can technically re-allocate it, but in practice it gives us a
     // distinct port per test run with no manual configuration.
     let listener = TcpListener::bind(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0))
         .context("could not pick a free port for multiplayer-test")?;
@@ -250,7 +250,7 @@ fn wait_for_server_ready(server: &mut ServerProcess) -> Result<()> {
             Ok(ServerReady::Listening) => {
                 // The UDP socket is reservation-based; once the message
                 // landed we still pause briefly for the netcode server
-                // entity to start accepting connections. Tiny — but
+                // entity to start accepting connections. Tiny, but
                 // skipping it causes the first client to occasionally
                 // hit "connection refused".
                 wait_for_tcp_canary(server.addr);
@@ -274,10 +274,10 @@ fn wait_for_server_ready(server: &mut ServerProcess) -> Result<()> {
 /// The server prints its "listening" line as soon as the UDP socket is
 /// reserved, but the Lightyear netcode entity needs another tick or two to
 /// finish initialising before it accepts a session. We can't TCP-probe a
-/// UDP server, so just sleep a short, fixed window — short enough to feel
+/// UDP server, so just sleep a short, fixed window, short enough to feel
 /// instant, long enough to let the first `app.update()` complete.
 fn wait_for_tcp_canary(addr: SocketAddr) {
-    // Burn a couple of frame budgets — ~50 ms at 20 Hz is one server tick.
+    // Burn a couple of frame budgets, ~50 ms at 20 Hz is one server tick.
     let _ = addr;
     thread::sleep(Duration::from_millis(150));
 }
@@ -302,7 +302,7 @@ struct TestClientLayout {
 }
 
 /// Layout for the two test clients. Each is described abstractly (index 0/1);
-/// the client resolves the actual display once it can query the monitors —
+/// the client resolves the actual display once it can query the monitors,
 /// one client per monitor when two are present, side-by-side on one otherwise.
 ///
 /// Yaw convention matches the live mouse-look code (`look.yaw -= delta.x`
@@ -406,7 +406,7 @@ fn wait_for_clients(clients: &mut Vec<Child>, exit_signal: Arc<AtomicBool>) {
 
 impl ServerProcess {
     fn shutdown(self) {
-        // First try a clean wait — the server has a Ctrl-C handler and the
+        // First try a clean wait, the server has a Ctrl-C handler and the
         // process tree dies when the parent exits, but we still join so we
         // don't leak when the user closed clients gracefully.
         if let Ok(mut child) = self.child.lock() {
@@ -416,7 +416,7 @@ impl ServerProcess {
             let _ = child.wait();
         }
         // TCP probe just keeps the addr in scope for the lifetime of the
-        // server — match prevents the field from being warned as dead.
+        // server, match prevents the field from being warned as dead.
         let _ = TcpStream::connect_timeout(&self.addr, Duration::from_millis(1));
         // Drain readiness channel to make sure the stdout thread can exit.
         let _ = self.ready_rx;
@@ -429,7 +429,7 @@ fn ctrlc_listener(flag: Arc<AtomicBool>) {
         .name("multiplayer-test-ctrlc".to_owned())
         .spawn(move || {
             // No external crate dependency. POSIX ignore-SIGINT-and-flag
-            // pattern via the standard library only — install a tiny signal
+            // pattern via the standard library only, install a tiny signal
             // shim by spawning a child that re-reads stdin. We have no such
             // shim, so we just busy-wait until the parent's stdin is gone.
             //
@@ -499,7 +499,7 @@ mod tests {
         assert!((alpha.spawn_offset_x + bravo.spawn_offset_x).abs() < f32::EPSILON);
         assert!(alpha.spawn_offset_x < 0.0 && bravo.spawn_offset_x > 0.0);
 
-        // Yaws are also equal-and-opposite — facing each other.
+        // Yaws are also equal-and-opposite, facing each other.
         assert!((alpha.spawn_yaw + bravo.spawn_yaw).abs() < f32::EPSILON);
     }
 }

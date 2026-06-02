@@ -6,7 +6,7 @@ Flow:
 - Client builds `PlayerInput` from WASD, shift, space, and mouse look.
 - The client predicts locally with `PlayerController`, then sends `PlayerMovement` through the shared `ClientSession::Network` path.
 - Loopback singleplayer and direct multiplayer use the same Lightyear client/host message flow.
-- `GameServer` accepts newer finite movement states, normalizes/clamps view angles, and writes the accepted pose onto the player's ECS mirror entity. Lightyear replicates the resulting `PlayerPublic` to peers in the same chunk room — see [Networking § Replication](networking.md#replication).
+- `GameServer` accepts newer finite movement states, normalizes/clamps view angles, and writes the accepted pose onto the player's ECS mirror entity. Lightyear replicates the resulting `PlayerPublic` to peers in the same chunk room, see [Networking § Replication](networking.md#replication).
 - Future movement authority changes should happen in `PlayerController`, `ClientMessage`/`ServerMessage`, and `GameServer` so singleplayer and multiplayer keep exercising the same code.
 
 Movement lives in `src/controller/`:
@@ -18,7 +18,7 @@ Movement lives in `src/controller/`:
 
 ## Trust boundary
 
-Movement is intentionally **client-authoritative for responsiveness**. The client runs its full `PlayerController` simulation locally, then ships the resulting `PlayerMovement` state to the server. The server does not re-simulate the input — it accepts the client's reported pose if it passes a small set of cheap guards.
+Movement is intentionally **client-authoritative for responsiveness**. The client runs its full `PlayerController` simulation locally, then ships the resulting `PlayerMovement` state to the server. The server does not re-simulate the input, it accepts the client's reported pose if it passes a small set of cheap guards.
 
 What the server validates:
 - **Input sequence monotonicity.** Accepts a movement only if its `sequence` is strictly greater than the last one applied for that client (`src/server/movement.rs`). Replays and stale frames are dropped.
@@ -32,6 +32,6 @@ What the server deliberately does **not** validate:
 
 This is a conscious trade-off. Server-authoritative movement would require either (a) running the full controller simulation server-side and reconciling client-side, which adds end-to-end latency to every step, or (b) running plausibility checks (max delta per tick, anti-teleport) that bite legitimately fast network conditions and add false-positive friction.
 
-**When to revisit:** if the game adds competitive PvP modes where speed/wallhack cheats meaningfully affect outcomes, or if a sustained cheating incident is reported. Re-introducing server-side simulation is a non-trivial architecture change — discuss before starting.
+**When to revisit:** if the game adds competitive PvP modes where speed/wallhack cheats meaningfully affect outcomes, or if a sustained cheating incident is reported. Re-introducing server-side simulation is a non-trivial architecture change, discuss before starting.
 
-**What you can rely on right now:** combat ranges, gather ranges, placement ranges, furnace/loot-bag interact ranges, and inventory operations all re-validate the client's reported position server-side at the moment they fire. So a wallhack can move you to the wrong place, but you can't gather a tree you're not actually next to, or punch a player from across the map. The exploit surface from client-authoritative movement is "I appear to be standing somewhere implausible" — not "I can damage/loot/gather from there."
+**What you can rely on right now:** combat ranges, gather ranges, placement ranges, furnace/loot-bag interact ranges, and inventory operations all re-validate the client's reported position server-side at the moment they fire. So a wallhack can move you to the wrong place, but you can't gather a tree you're not actually next to, or punch a player from across the map. The exploit surface from client-authoritative movement is "I appear to be standing somewhere implausible", not "I can damage/loot/gather from there."

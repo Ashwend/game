@@ -28,7 +28,7 @@ pub(crate) mod env {
 }
 
 /// Window-tiling instructions. Stored as "I am window N of M, size W×H,
-/// with a G-pixel gap between siblings" — *not* resolved positions —
+/// with a G-pixel gap between siblings", *not* resolved positions,
 /// because the only reliable way to centre on the actual display is to
 /// query the monitor after Bevy has opened the window. The
 /// [`crate::app::systems::reposition_test_window_system`] system does that
@@ -164,7 +164,7 @@ mod tests {
         assert_eq!(pos_a.x, 388);
         // Second window is one width + gap to the right of the first.
         assert_eq!(pos_b.x, 388 + 880 + 24);
-        // Both y values match — they share a row.
+        // Both y values match, they share a row.
         assert_eq!(pos_a.y, pos_b.y);
         // Vertically centred: (1440 - 620) / 2 = 410.
         assert_eq!(pos_a.y, 410);

@@ -5,7 +5,7 @@
 //! 1. Bandwidth: a packet aimed at a teammate 200 m away costs nothing if it
 //!    never leaves the server.
 //! 2. Privacy: clients only learn another player's voice exists when they're
-//!    close enough to hear it — no IP exposure, no who-is-where leak.
+//!    close enough to hear it, no IP exposure, no who-is-where leak.
 //!
 //! Spatial mixing/attenuation still happens on the receiving client (using
 //! the speaker position we forward), so the wire payload stays small.
@@ -18,7 +18,7 @@ use super::{DeliveryTarget, GameServer, ServerEnvelope};
 /// at which one player can hear another. Used both server-side as the
 /// broadcast filter and client-side as the attenuation curve's endpoint,
 /// so neither half can drift from the other. Intentionally not a player
-/// setting — how far your voice carries is part of the design, not a
+/// setting, how far your voice carries is part of the design, not a
 /// preference.
 pub const VOICE_AUDIBLE_RANGE: f32 = 50.0;
 
@@ -28,7 +28,7 @@ pub(crate) const SERVER_VOICE_BROADCAST_RANGE: f32 = VOICE_AUDIBLE_RANGE;
 impl GameServer {
     /// Forwards a voice frame from `speaker` to every other connected client
     /// within [`SERVER_VOICE_BROADCAST_RANGE`]. Validates the payload up front
-    /// — empty or oversized frames are dropped so a misbehaving client can't
+    ///, empty or oversized frames are dropped so a misbehaving client can't
     /// burn server CPU or peer bandwidth.
     pub(super) fn apply_voice_frame(
         &mut self,

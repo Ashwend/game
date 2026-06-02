@@ -2,8 +2,8 @@
 //! player as a set of fading vertical "walls". Pure visual aid, gated
 //! behind the **Chunk Overlay** hud setting. No simulation impact.
 //!
-//! Implementation uses Bevy's gizmo system — a per-frame line stream
-//! with no allocated entities — so toggling it on/off is instant and
+//! Implementation uses Bevy's gizmo system, a per-frame line stream
+//! with no allocated entities, so toggling it on/off is instant and
 //! there's nothing to clean up between frames.
 
 use bevy::prelude::*;
@@ -18,7 +18,7 @@ use crate::{
 /// see where the next boundary lies, even at High view distance.
 const OVERLAY_RADIUS_GRIDS: i32 = 4;
 
-/// Height of the vertical wall — tall enough to read at a glance but
+/// Height of the vertical wall, tall enough to read at a glance but
 /// well below the canopy of a large pine so the visualization doesn't
 /// dominate the screen.
 const OVERLAY_WALL_HEIGHT_M: f32 = 6.0;
@@ -28,7 +28,7 @@ const OVERLAY_WALL_HEIGHT_M: f32 = 6.0;
 /// a separate gizmo line; this value is the sweet spot.
 const OVERLAY_FADE_SEGMENTS: u32 = 16;
 
-/// Floor accent — a flat line at the very bottom of every boundary
+/// Floor accent, a flat line at the very bottom of every boundary
 /// makes it obvious where the chunk edges are even when the player is
 /// looking straight down. Drawn at this Y so it sits just above the
 /// world floor without z-fighting.
@@ -98,7 +98,7 @@ pub(crate) fn chunk_overlay_system(
     }
 
     // Same dance for the perpendicular set of boundaries (constant-z
-    // lines). Floor accents only — the corner posts were already drawn
+    // lines). Floor accents only, the corner posts were already drawn
     // by the loop above.
     for dz in -radius..=radius + 1 {
         let z = (player_gz + dz) as f32 * CHUNK_SIZE_M;
@@ -127,7 +127,7 @@ fn draw_vertical_fade(gizmos: &mut Gizmos, base: Vec3) {
     let seg_h = OVERLAY_WALL_HEIGHT_M / OVERLAY_FADE_SEGMENTS as f32;
     for seg in 0..OVERLAY_FADE_SEGMENTS {
         let t = seg as f32 / OVERLAY_FADE_SEGMENTS as f32;
-        // Quadratic falloff — more weight near the ground, faster fade
+        // Quadratic falloff, more weight near the ground, faster fade
         // as we approach the top. Reads as a smooth gradient instead of
         // a flat ramp.
         let alpha = (1.0 - t).powi(2) * OVERLAY_BASE_ALPHA;

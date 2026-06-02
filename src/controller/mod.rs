@@ -183,7 +183,7 @@ impl PlayerController {
 
     /// Same as [`simulate`] but takes a pre-built [`BlockGrid`]. Use this from
     /// hot loops (server tick, client prediction) that already keep a chunk
-    /// alongside their world data — avoids rebuilding the chunk every call.
+    /// alongside their world data, avoids rebuilding the chunk every call.
     pub fn simulate_with_grid(&mut self, delta_seconds: f32, grid: &BlockGrid) {
         let mut remaining = if delta_seconds.is_finite() {
             delta_seconds.clamp(0.0, MAX_SIMULATION_DELTA)
@@ -234,7 +234,7 @@ impl PlayerController {
             // Only decay the buffer while the player is on the ground.
             // Freezing it in mid-air means a press anywhere during the jump
             // arc (early or late) persists until landing and fires on the
-            // very first substep we touch down — what bunny-hopping needs.
+            // very first substep we touch down, what bunny-hopping needs.
             // The buffer can't accumulate "ghost" jumps across long
             // airtime because it's always reset to 0 the instant a jump
             // fires, and `start_input` only sets it back to the cap when
@@ -263,7 +263,7 @@ impl PlayerController {
             // Clamp downward velocity to zero (no sinking into the floor) but
             // leave upward velocity alone. At high frame rates a fresh jump
             // can still register `grounded = true` here because the substep
-            // only moves the player a few centimetres up — still inside
+            // only moves the player a few centimetres up, still inside
             // `GROUND_EPSILON`. Replacing the upward `JUMP_SPEED` with 0
             // would silently eat the jump.
             self.velocity.y = self.velocity.y.max(0.0);

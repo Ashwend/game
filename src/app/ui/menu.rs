@@ -3,6 +3,7 @@ use bevy_egui::egui;
 use crate::{
     app::state::{CurrentUser, MenuState, SaveStore, Screen},
     protocol::GAME_VERSION,
+    util::open_url,
 };
 
 use super::{
@@ -10,6 +11,10 @@ use super::{
     theme::{self, MENU_BUTTON_WIDTH, MENU_WIDTH},
     worlds::refresh_worlds,
 };
+
+/// Community Discord invite. Same link the website uses (see
+/// `website/src/lib/config.ts`); keep them in sync if it ever rotates.
+const DISCORD_INVITE_URL: &str = "https://discord.gg/gVqTumNb8b";
 
 pub(super) fn main_menu_ui(
     ctx: &egui::Context,
@@ -67,6 +72,24 @@ pub(super) fn main_menu_ui(
             });
         });
     draw_version_indicator(ctx);
+    draw_discord_link(ctx);
+}
+
+/// Persistent "Join our Discord" affordance in the bottom-left corner of the
+/// title screen, balancing the version indicator on the right. Opens the same
+/// invite the website uses in the system browser.
+fn draw_discord_link(ctx: &egui::Context) {
+    egui::Area::new("main_menu_discord".into())
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::LEFT_BOTTOM, [18.0, -14.0])
+        .show(ctx, |ui| {
+            let link = ui
+                .link(egui::RichText::new("Join our Discord").color(theme::accent()))
+                .on_hover_text("Opens discord.gg in your browser");
+            if link.clicked() {
+                let _ = open_url(DISCORD_INVITE_URL);
+            }
+        });
 }
 
 fn draw_version_indicator(ctx: &egui::Context) {

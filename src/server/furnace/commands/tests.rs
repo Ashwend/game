@@ -137,7 +137,7 @@ fn quick_transfer_ore_from_player_lands_in_item_grid() {
         in_grid,
         "non-fuel quick-transfer should land in the item grid"
     );
-    // Fuel slot must remain empty — ore is not fuel.
+    // Fuel slot must remain empty, ore is not fuel.
     assert!(furnace_of(&server, furnace).fuel.is_none());
 }
 
@@ -202,7 +202,7 @@ fn set_active_off_resets_smelt_progress() {
 fn command_out_of_range_closes_and_drops_the_action() {
     let (mut server, client, furnace) = fixture();
     server.clients.get_mut(&client).unwrap().open_furnace = Some(furnace);
-    // Walk away beyond range, then issue a SetActive — the gate should
+    // Walk away beyond range, then issue a SetActive, the gate should
     // close the furnace instead of applying it.
     server.clients.get_mut(&client).unwrap().controller.position =
         Vec3Net::new(FURNACE_INTERACT_RANGE_M * 5.0, 0.0, 0.0);

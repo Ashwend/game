@@ -19,7 +19,7 @@ use crate::{
     protocol::{GAME_VERSION, ResourceImpactKind, ServerMessage, ToastKind, Vec3Net},
 };
 
-/// Fan-out writers for messages the network tick produces — voice frames,
+/// Fan-out writers for messages the network tick produces, voice frames,
 /// remote impacts, error toasts. Grouped so the system signature stays
 /// readable.
 #[derive(SystemParam)]
@@ -135,7 +135,7 @@ pub(crate) fn network_tick_system(
         if let ServerMessage::PlayerKilled { killer_name, .. } = &message {
             menu.death_splash = Some(crate::app::state::DeathSplash::new(killer_name.clone()));
             // Pop any pause/inventory overlays so the splash is the
-            // only modal — the player can't pause-out of the death
+            // only modal, the player can't pause-out of the death
             // screen.
             menu.pause_open = false;
             menu.inventory_open = false;
@@ -145,7 +145,7 @@ pub(crate) fn network_tick_system(
         }
         // The server replies to Respawn with a `Correction` carrying
         // full health, so the message itself is the reliable "the
-        // player just respawned" signal — more robust than watching
+        // player just respawned" signal, more robust than watching
         // the replicated `PlayerLifecycle` flip, which can be missed
         // if the player's mirror entity crosses a chunk-room boundary
         // at the same tick. Instead of clearing the splash outright
@@ -203,7 +203,7 @@ pub(crate) fn network_tick_system(
                 // Reconciliation: the attacker already spawned an
                 // orange number from prediction. If the server's
                 // damage disagrees, we don't bother chasing the
-                // delta — the chip burst from PlayerImpact never
+                // delta, the chip burst from PlayerImpact never
                 // arrives on the attacker side anyway, so any
                 // mismatch is silent. Future hook: spawn a
                 // corrective number here if the predicted value

@@ -68,7 +68,7 @@ impl SoundPool {
 #[derive(Resource)]
 pub(crate) struct SoundLibrary {
     pools: HashMap<SoundId, SoundPool>,
-    /// Polyphony rings per category — one-shot audio entities recently
+    /// Polyphony rings per category, one-shot audio entities recently
     /// spawned, oldest at the front. When a category exceeds its cap the
     /// front is despawned so the new sound replaces it instead of stacking
     /// on top. Categories without a cap (Music, Ambient*) aren't tracked
@@ -100,14 +100,14 @@ pub(crate) fn setup_sound_library(mut commands: Commands, asset_server: Res<Asse
     });
 }
 
-/// Request to play a sound. Any system can write one — the central
+/// Request to play a sound. Any system can write one, the central
 /// [`play_sounds_system`] handles asset lookup, volume math, spatial
 /// settings, and polyphony.
 #[derive(Message, Debug, Clone, Copy)]
 pub(crate) struct PlaySound {
     pub(crate) id: SoundId,
     /// World position for spatial sounds. `None` plays non-spatially even
-    /// if the manifest declares spatial defaults — useful for "play this
+    /// if the manifest declares spatial defaults, useful for "play this
     /// hit at the listener" cases.
     pub(crate) at: Option<Vec3>,
     /// Extra gain on top of [`SoundDefaults::base_gain_db`]. Caller can
@@ -165,7 +165,7 @@ pub(crate) fn play_sounds_system(
     for request in requests.read() {
         let defaults = sound_defaults(request.id);
         let Some(pool) = library.pools.get_mut(&request.id) else {
-            // Shouldn't happen — every SoundId is loaded at startup —
+            // Shouldn't happen, every SoundId is loaded at startup,
             // but treat as a soft failure rather than panic.
             continue;
         };
@@ -281,7 +281,7 @@ fn jittered_speed(jitter: f32, seed: u32) -> f32 {
 }
 
 /// Public helper for fixed-volume spawns that need to stand outside the
-/// normal `PlaySound` pipeline — currently the ambient-emitter system,
+/// normal `PlaySound` pipeline, currently the ambient-emitter system,
 /// which owns the loop entity itself so it can fade and despawn it
 /// independently. Returns the entity it spawned.
 pub(crate) fn spawn_managed_loop(
@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn multi_variant_pool_never_repeats_consecutively() {
-        // Five pool slots — identity doesn't matter here; we assert the
+        // Five pool slots, identity doesn't matter here; we assert the
         // picker's `last_index` never repeats consecutively.
         let handles: Vec<Handle<AudioSource>> =
             (0..5).map(|_| Handle::<AudioSource>::default()).collect();

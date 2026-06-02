@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::protocol::Vec3Net;
 
 /// Fixed seed used by [`WorldData::test_world`] and the default map so the
-/// generated world is the same every load — handy for tests and for the
+/// generated world is the same every load, handy for tests and for the
 /// loopback menu backdrop.
 pub const TEST_WORLD_SEED: u64 = 0x7E57_5EED_5EED_5EED;
 
@@ -77,7 +77,7 @@ impl ProceduralMapSize {
     pub const ALL: [Self; 3] = [Self::Small, Self::Medium, Self::Large];
 
     /// Chunk cells per side of the largest map. 63 chunks at the 64 m grid
-    /// size is 4032 m — an approximate 4 km square playable area. Medium and
+    /// size is 4032 m, an approximate 4 km square playable area. Medium and
     /// small are derived from this maximum so all three sizes scale together
     /// if it ever changes.
     const LARGE_DIMS: u32 = 63;
@@ -113,7 +113,7 @@ pub struct WorldData {
     pub floor_size: f32,
     pub blocks: Vec<WorldBlock>,
     /// Initial resource node spawn list. **Always empty for grid-generated
-    /// worlds** — the server's [`crate::server::ChunkManager`] owns initial
+    /// worlds**, the server's [`crate::server::ChunkManager`] owns initial
     /// generation and serves nodes per-player via AoI streaming. This
     /// field remains in the struct as the historical/test surface and as
     /// a hook for hand-authored levels.
@@ -131,7 +131,7 @@ impl WorldData {
     /// Build a chunk-driven world: perimeter walls sized to `dims`,
     /// empty `resource_nodes` (the server's chunk manager populates the
     /// live node map from the seed). `seed` is forwarded purely so this
-    /// function is consistent with `MapType::world_seed()` — the actual
+    /// function is consistent with `MapType::world_seed()`, the actual
     /// node generation happens server-side.
     pub fn chunk_world(seed: u64, dims: ChunkDims) -> Self {
         // Touch `seed` so callers can be confident this signature
@@ -147,7 +147,7 @@ impl WorldData {
         }
     }
 
-    /// Convenience helper used by tests and the menu backdrop fallback —
+    /// Convenience helper used by tests and the menu backdrop fallback,
     /// returns a deterministic small procedural world.
     pub fn test_world() -> Self {
         MapType::default().world_data()
@@ -160,7 +160,7 @@ impl WorldData {
     /// foreground / midground / background bands.
     ///
     /// The camera sits at `(-5.8, eye, 7.2)` looking towards
-    /// `(0.4, 0.85, -3.6)` — see
+    /// `(0.4, 0.85, -3.6)`, see
     /// `crate::app::systems::camera::menu_backdrop`. Positions below are
     /// hand-tuned to that view so the scene reads as a layered woodland
     /// regardless of which world the player ends up generating.
@@ -171,7 +171,7 @@ impl WorldData {
             PINE_TREE_LARGE_NODE_ID, PINE_TREE_NODE_ID, PINE_TREE_SMALL_NODE_ID, SULFUR_NODE_ID,
             SURFACE_STONE_NODE_ID,
         };
-        // `(definition_id, x, z, yaw)` — id is assigned sequentially below
+        // `(definition_id, x, z, yaw)`, id is assigned sequentially below
         // so reordering or adding entries doesn't break IDs. Yaw values are
         // hand-picked per node so each tree/ore reads as a distinct
         // silhouette instead of a cloned row.
@@ -219,13 +219,13 @@ impl WorldData {
             (IRON_NODE_ID, 9.0, -8.0, 0.2),
             (SULFUR_NODE_ID, -7.2, -9.2, -0.8),
             // --- FOREGROUND CLUSTER ------------------------------------
-            // Close-camera band — clear of full-size trees so the eye
+            // Close-camera band, clear of full-size trees so the eye
             // reads detail (crude nodes + a couple of saplings).
             (PINE_TREE_SMALL_NODE_ID, -4.6, -3.6, 0.2),
             (BIRCH_TREE_SMALL_NODE_ID, 5.6, -3.2, -0.6),
             (PINE_TREE_SMALL_NODE_ID, 7.4, -4.6, 1.1),
             (BIRCH_TREE_SMALL_NODE_ID, -2.0, -2.6, -1.4),
-            // Foreground ore — close enough to show the chunk detail.
+            // Foreground ore, close enough to show the chunk detail.
             (COAL_NODE_ID, 4.2, -4.1, 0.6),
             (IRON_NODE_ID, -0.6, -4.7, -0.4),
             (SULFUR_NODE_ID, 2.0, -2.8, 1.3),
@@ -285,7 +285,7 @@ impl WorldData {
             (BIRCH_TREE_SMALL_NODE_ID, 14.2, -6.6, 1.2),
             (PINE_TREE_SMALL_NODE_ID, 10.6, -7.0, 0.3),
             (BIRCH_TREE_NODE_ID, 16.4, -8.4, -0.7),
-            // Right-side foreground saplings — keep the close band
+            // Right-side foreground saplings, keep the close band
             // populated as the camera pans right.
             (BIRCH_TREE_SMALL_NODE_ID, 9.6, -5.0, -0.7),
             (PINE_TREE_SMALL_NODE_ID, 11.0, -3.8, 1.0),
@@ -410,7 +410,7 @@ impl WorldData {
             .collect();
 
         Self {
-            // Floor has to span the wide x range — the far-right fill
+            // Floor has to span the wide x range, the far-right fill
             // reaches x ≈ 38 and the deep-left fill reaches x ≈ -18 and
             // z ≈ -25. A 90 m plane covers both with margin against the
             // panning camera.
@@ -443,7 +443,7 @@ impl WorldResourceNodeSpawn {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockKind {
-    /// Default obstacle — gets the rotating block palette in the renderer.
+    /// Default obstacle, gets the rotating block palette in the renderer.
     #[default]
     Standard,
     /// Grayish stone block, used for perimeter walls and similar structural

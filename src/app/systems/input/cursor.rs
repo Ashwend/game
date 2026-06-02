@@ -22,7 +22,7 @@ pub(crate) fn update_cursor_system(
     // Compare-before-assign so Bevy's change detection only trips when
     // the value actually flips. Without this, `bevy_winit`'s
     // `changed_cursor_options` re-applies through the winit window API
-    // every frame — costs ~684 µs mean on the main thread plus a
+    // every frame, costs ~684 µs mean on the main thread plus a
     // 16 ms occasional spike when winit takes the slow path.
     if cursor_options.visible != visible {
         cursor_options.visible = visible;

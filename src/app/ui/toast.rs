@@ -60,7 +60,7 @@ pub(super) fn toast_ui(ctx: &egui::Context, toasts: &ToastState, actionbar_rect:
 
         // The slot the toast occupies in the layout shrinks during exit so
         // older toasts above it animate downward. The toast's painted rect
-        // is fixed at `TOAST_HEIGHT`, so the visual itself doesn't deform —
+        // is fixed at `TOAST_HEIGHT`, so the visual itself doesn't deform,
         // it just slides off to the right while its row collapses underneath.
         cumulative += (TOAST_HEIGHT + TOAST_GAP) * lifecycle.height_factor;
 
@@ -200,7 +200,7 @@ fn with_alpha(color: Color32, alpha: f32) -> Color32 {
 
 /// Per-kind text color. Tuned to read cleanly against the dark panel fill
 /// without being saturated enough to feel garish at a glance. The kind is
-/// communicated by the message hue alone — no border, dot, or badge.
+/// communicated by the message hue alone, no border, dot, or badge.
 fn text_color_for_kind(kind: ToastKind) -> Color32 {
     match kind {
         ToastKind::Info => Color32::from_rgb(206, 220, 234),

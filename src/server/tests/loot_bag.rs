@@ -126,7 +126,7 @@ fn close_loot_bag_empty_destroys_the_entity() {
     apply(&mut server, client, LootBagCommand::Open { id: bag_id });
     assert!(server.loot_bags.contains_key(&bag_id));
 
-    // Bag is empty (spawned with no items) — closing should destroy it.
+    // Bag is empty (spawned with no items), closing should destroy it.
     apply(&mut server, client, LootBagCommand::Close);
     assert!(
         !server.loot_bags.contains_key(&bag_id),
@@ -264,7 +264,7 @@ fn move_with_closed_bag_is_a_noop() {
         0.0,
         vec![ItemStack::new(WOOD_ID, 3)],
     );
-    // Note: no Open command — the move must be rejected on the open-
+    // Note: no Open command, the move must be rejected on the open-
     // bag gate, not by silently mutating the bag.
     apply(
         &mut server,

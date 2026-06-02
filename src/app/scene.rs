@@ -1,13 +1,13 @@
 //! Scene module: assets, components, mesh builders, and world geometry
 //! application. The submodule layout is:
 //!
-//! - `components` — Bevy components that mark gameplay-relevant entities
+//! - `components`, Bevy components that mark gameplay-relevant entities
 //!   (`MainCamera`, `NetworkPlayer`, `NetworkDroppedItem`, …).
-//! - `assets` — `Resource` definitions for shared meshes/materials plus the
+//! - `assets`, `Resource` definitions for shared meshes/materials plus the
 //!   `setup_scene` startup system and small visual helpers.
-//! - `mesh::*` — low-poly mesh builders for props (bag, tools, ore, trees,
+//! - `mesh::*`, low-poly mesh builders for props (bag, tools, ore, trees,
 //!   impact debris) and the shared color palette.
-//! - `world` — `apply_world_scene_system`, `WorldSceneState`, and
+//! - `world`, `apply_world_scene_system`, `WorldSceneState`, and
 //!   `WorldSceneSelection` (version-counter change detection).
 
 mod assets;
@@ -118,7 +118,7 @@ mod tests {
         app.update();
 
         let world = app.world_mut();
-        // Default in-game AA is FXAA (post-process), not MSAA and not TAA — so
+        // Default in-game AA is FXAA (post-process), not MSAA and not TAA, so
         // MSAA is off, FXAA is present, and there's no temporal double-image.
         let msaa = world
             .query_filtered::<&Msaa, With<MainCamera>>()

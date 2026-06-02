@@ -6,7 +6,7 @@ use crate::resources::{COAL_NODE_ID, IRON_NODE_ID, ResourceNodeModel, SULFUR_NOD
 fn pop_in_starts_below_floor_and_settles_to_base_transform() {
     let base = Transform::from_xyz(3.0, 0.0, -2.0).with_scale(Vec3::ONE);
 
-    // At t=0 the node is fully buried — the very first frame the
+    // At t=0 the node is fully buried, the very first frame the
     // animation runs the entity should be at the deepest point.
     let at_start = pop_in_transform(base, 0.0);
     assert!(

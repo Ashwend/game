@@ -2,7 +2,7 @@ use crate::protocol::Vec3Net;
 
 pub const WALK_SPEED: f32 = 5.2;
 // Boosted speed when holding the run key. Sized to feel like a grounded
-// run rather than a full-out sprint — at 8.4 m/s (the previous tuning)
+// run rather than a full-out sprint, at 8.4 m/s (the previous tuning)
 // the camera and terrain whipped past in a way that read as
 // teleporting. 7.0 m/s keeps a clear speed delta from `WALK_SPEED`
 // without losing the player's sense of scale.

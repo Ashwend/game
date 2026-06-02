@@ -7,7 +7,7 @@ use crate::items::ItemId;
 /// plus whether the server is expected to accept this pose, which the
 /// renderer uses to switch between green/red ghost materials.
 ///
-/// The state is reset whenever the active actionbar slot changes — held
+/// The state is reset whenever the active actionbar slot changes, held
 /// rotation does *not* persist across deployable swaps. This keeps the
 /// "what am I about to place?" mental model trivial.
 #[derive(Resource, Debug, Default, Clone)]

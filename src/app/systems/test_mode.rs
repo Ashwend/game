@@ -34,7 +34,7 @@ pub(crate) fn apply_test_mode_overrides_system(
 
     // Movement is client-authoritative: bump the predicted controller's
     // pose and the server will accept the next outbound packet at this
-    // new pose. Yaw lives in two places — on the controller (snapshot
+    // new pose. Yaw lives in two places, on the controller (snapshot
     // round-trip + remote rendering) and on `LookState` (the camera + the
     // next outbound input). Set both so the override isn't immediately
     // clobbered by `client_input_system` reading `LookState.yaw` and
@@ -54,7 +54,7 @@ pub(crate) fn apply_test_mode_overrides_system(
         && let Some(session) = runtime.session.as_mut()
     {
         // Fire-and-forget: any send error here is debug ergonomics
-        // only — the player can re-issue `/test-kit` from chat if it
+        // only, the player can re-issue `/test-kit` from chat if it
         // ever fails to land.
         let _ = session.send(ClientMessage::Command {
             text: "test-kit".to_owned(),
@@ -66,13 +66,13 @@ pub(crate) fn apply_test_mode_overrides_system(
 
 /// Places the multiplayer-test window on its target display once Bevy has
 /// surfaced the monitors. With two or more monitors each client gets its own
-/// screen, borderless-fullscreen — `player1` (index 0) on the leftmost
+/// screen, borderless-fullscreen, `player1` (index 0) on the leftmost
 /// monitor, `player2` (index 1) on the next one to the right. With a single
 /// monitor it falls back to the centered side-by-side tiling so both windows
 /// still fit. Runs once per session (gated by `Local<bool>`).
 ///
 /// We can't decide this at startup because monitor geometry isn't known until
-/// after the window opens — so the window comes up plain windowed (see the
+/// after the window opens, so the window comes up plain windowed (see the
 /// `WindowPlugin` setup in `app.rs`) and this snaps it into place on the first
 /// frame the monitors are queryable.
 pub(crate) fn reposition_test_window_system(
@@ -85,13 +85,13 @@ pub(crate) fn reposition_test_window_system(
         return;
     }
     let Some(layout) = config.window else {
-        // No test layout requested — leave winit's default placement
+        // No test layout requested, leave winit's default placement
         // alone and stop polling.
         *applied = true;
         return;
     };
     if monitors.is_empty() {
-        // Monitors not surfaced yet — winit reports them within a frame or
+        // Monitors not surfaced yet, winit reports them within a frame or
         // two of the window opening; retry until they're queryable.
         return;
     }
@@ -101,7 +101,7 @@ pub(crate) fn reposition_test_window_system(
 
     // Order monitors left-to-right by their virtual-desktop position so index
     // 0 is the leftmost screen. When two monitors share an x (or we otherwise
-    // can't tell them apart) the sort just keeps a stable order — i.e. it
+    // can't tell them apart) the sort just keeps a stable order, i.e. it
     // falls back to enumeration order, as requested.
     let mut ordered: Vec<(Entity, &Monitor)> = monitors.iter().collect();
     ordered.sort_by_key(|(_, monitor)| (monitor.physical_position.x, monitor.physical_position.y));
@@ -113,7 +113,7 @@ pub(crate) fn reposition_test_window_system(
     } else {
         // Single monitor: keep the centered side-by-side windowed tiling.
         // Bevy reports the monitor in *physical* pixels but `Window.position`
-        // is *logical* — divide by the scale factor so the math matches on
+        // is *logical*, divide by the scale factor so the math matches on
         // Retina/HiDPI displays (`scale_factor` is f64; cast to f32).
         let (_, monitor) = ordered[0];
         let scale = (monitor.scale_factor as f32).max(1.0);
@@ -131,7 +131,7 @@ pub(crate) fn reposition_test_window_system(
 }
 
 /// Run condition: true while this client is a `multiplayer-test` window, where
-/// the test harness — not the player's saved display settings — owns the
+/// the test harness, not the player's saved display settings, owns the
 /// window. [`apply_display_settings_system`](super::apply_display_settings_system)
 /// is gated off in that case so it can't fight
 /// [`reposition_test_window_system`], which may put the window

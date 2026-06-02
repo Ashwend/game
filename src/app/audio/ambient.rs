@@ -4,7 +4,7 @@
 //!
 //! - **Zone beds** ([`AmbientBed`]): non-spatial loops keyed off a
 //!   [`AmbientZone`]. Crossfade between zones as the player enters /
-//!   leaves them — e.g. moving from "Forest" to "Beach" smoothly fades
+//!   leaves them, e.g. moving from "Forest" to "Beach" smoothly fades
 //!   one bed out and the next in. There is at most one active bed per
 //!   zone slot.
 //!
@@ -15,7 +15,7 @@
 //!   impacts.
 //!
 //! Both kinds use [`AudioFader`] for their transitions, so the audio mix
-//! never jumps — the player never hears a snap.
+//! never jumps, the player never hears a snap.
 //!
 //! Gameplay code drives this layer by:
 //! - Writing to [`CurrentAmbientZone`] when the player moves into a new
@@ -47,12 +47,12 @@ pub(crate) struct CurrentAmbientZone(pub(crate) Option<AmbientZone>);
 /// (Forest, Beach, Cave, …) and a row in the manifest with the loop.
 /// Variants are intentionally pre-declared ahead of actual assets so
 /// gameplay code can write `CurrentAmbientZone(Some(ForestDay))` today
-/// — the bed-management system will pick up the audio once the
+///, the bed-management system will pick up the audio once the
 /// manifest is filled in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[allow(dead_code)]
 pub(crate) enum AmbientZone {
-    /// Forest at day — birds, wind through trees, distant fauna.
+    /// Forest at day, birds, wind through trees, distant fauna.
     ForestDay,
     /// Cavern echo. Drips, low rumble.
     Cave,
@@ -60,7 +60,7 @@ pub(crate) enum AmbientZone {
 
 impl AmbientZone {
     /// Which `SoundId` corresponds to this zone's bed loop. Returning
-    /// `None` means the bed sound hasn't been authored yet — the
+    /// `None` means the bed sound hasn't been authored yet, the
     /// CurrentAmbientZone update treats this as "no bed", same as
     /// `CurrentAmbientZone(None)`.
     pub(crate) fn bed_sound(self) -> Option<SoundId> {
@@ -89,7 +89,7 @@ pub(crate) struct AmbientBed {
 
 /// Spatial looping emitter attached to a world entity. The system
 /// fades it up when the player enters `audible_range`, fades it down
-/// when they leave. Range is a soft boundary — the loop entity exists
+/// when they leave. Range is a soft boundary, the loop entity exists
 /// at full mix gain whenever within range and gets faded by Bevy's
 /// own spatial attenuation on top.
 #[derive(Component, Debug, Clone, Copy)]
@@ -116,7 +116,7 @@ pub(crate) struct AmbientEmitter {
 }
 
 impl AmbientEmitter {
-    /// Construct an emitter with sensible defaults — no gain offset,
+    /// Construct an emitter with sensible defaults, no gain offset,
     /// audible range matching the impact-cue full-volume radius, a
     /// half-second fade. Used by gameplay code spawning a campfire or
     /// river ambient at a known world point.
@@ -154,7 +154,7 @@ pub(crate) fn manage_ambient_beds_system(
 
     let desired = zone.0.and_then(|z| z.bed_sound());
 
-    // Pass 1: find existing beds — fade out any whose ID no longer
+    // Pass 1: find existing beds, fade out any whose ID no longer
     // matches the desired one.
     let mut existing_for_desired: Option<Entity> = None;
     for (entity, bed, sink, fader) in &mut beds {
@@ -236,7 +236,7 @@ pub(crate) fn manage_ambient_emitters_system(
 
         match (in_range, emitter.active_sink) {
             (true, None) => {
-                // Just came into range — spawn the loop entity, fade in.
+                // Just came into range, spawn the loop entity, fade in.
                 let defaults = sound_defaults(emitter.id);
                 if let Some(entity) = spawn_managed_loop(
                     &mut commands,
@@ -261,7 +261,7 @@ pub(crate) fn manage_ambient_emitters_system(
                 }
             }
             (false, Some(entity)) => {
-                // Just left range — fade out & forget.
+                // Just left range, fade out & forget.
                 let current = sinks
                     .get(entity)
                     .map(|sink| sink.volume().to_linear())
@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn every_zone_has_no_authored_bed_today() {
         // The manifest ships no ambient assets yet, so every zone's bed
-        // resolves to `None` — the bed-management system treats this the
+        // resolves to `None`, the bed-management system treats this the
         // same as `CurrentAmbientZone(None)`. This guards the contract
         // documented on `bed_sound`.
         assert!(AmbientZone::ForestDay.bed_sound().is_none());

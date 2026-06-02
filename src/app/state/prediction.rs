@@ -4,7 +4,7 @@
 //! replicated `PlayerPrivate` component. To make gather / pickup / drop /
 //! move feel instant, the client predicts the *outcome* locally the moment
 //! the input fires, then reconciles against the server using a single
-//! monotonically-increasing action sequence — the inventory analogue of how
+//! monotonically-increasing action sequence, the inventory analogue of how
 //! movement reconciles via `last_processed_input`.
 //!
 //! ## Reconciliation invariant
@@ -12,11 +12,11 @@
 //! `rendered = replicated  folded-with  (ops where seq > applied_action_seq)`
 //!
 //! The server advances `applied_action_seq` for every predicted command it
-//! processes — accepted *or* rejected (see `GameServer::note_action_seq`).
+//! processes, accepted *or* rejected (see `GameServer::note_action_seq`).
 //! Each frame the client [`PredictionState::prune`]s ops whose seq the server
 //! has already processed, then [`PredictionState::rebuild_effective`] replays
 //! the survivors on top of the freshly-replicated inventory using the shared
-//! [`crate::inventory`] helpers — the exact same math the server runs, so a
+//! [`crate::inventory`] helpers, the exact same math the server runs, so a
 //! confirmed prediction lands identically and a rejected one simply evaporates
 //! when its op is pruned.
 //!
@@ -73,7 +73,7 @@ struct NodeTake {
 #[derive(Resource, Default)]
 pub(crate) struct PredictionState {
     /// Next sequence number to hand out. Starts at 0; `alloc_seq` pre-increments
-    /// so the first allocated seq is 1 — the server's default
+    /// so the first allocated seq is 1, the server's default
     /// `applied_action_seq = 0` then never prunes a live op before it's processed.
     next_seq: u32,
     /// Pending inventory ops in seq (== push) order.
@@ -87,7 +87,7 @@ pub(crate) struct PredictionState {
     /// present, the resource-node render system suppresses the world visual
     /// (and plays the depletion effect once); pruning un-hides it on reject
     /// or lets the confirmed despawn finalise it. The dropped-item analogue
-    /// for the much-more-numerous resource nodes — see [`Self::is_node_hidden`].
+    /// for the much-more-numerous resource nodes, see [`Self::is_node_hidden`].
     hidden_nodes: HashMap<ResourceNodeId, u32>,
     /// Per-node predicted storage decrements awaiting confirmation.
     node_takes: HashMap<ResourceNodeId, Vec<NodeTake>>,
@@ -116,7 +116,7 @@ impl PredictionState {
     }
 
     /// Predict a pickup: hide the world item and add the stack to the overlay.
-    /// Use only when the *whole* stack fits — the server removes the world
+    /// Use only when the *whole* stack fits, the server removes the world
     /// item from existence only on a full pickup. For a partial pickup (bag
     /// nearly full) use [`PredictionState::push_add`] without hiding, so the
     /// reduced ground stack stays visible and reconciles via replication.
@@ -130,8 +130,8 @@ impl PredictionState {
 
     /// Predict a crude (E-key) resource-node pickup: the server drains the
     /// whole node into the bag in one shot, so record one node take + one
-    /// inventory add per accepted stack (all under the same `seq`), and —
-    /// when the node is fully emptied — hide the world visual. A partial
+    /// inventory add per accepted stack (all under the same `seq`), and,
+    /// when the node is fully emptied, hide the world visual. A partial
     /// pickup (near-full bag leaves storage behind) mirrors the server by
     /// adding only what fit and leaving the node visible to reconcile via
     /// replication.
@@ -227,7 +227,7 @@ impl PredictionState {
     /// Rebuild the effective (predicted) inventory: clone the replicated base
     /// and replay every surviving pending op in seq order via the shared
     /// helpers. An op that no-ops against the current base (e.g. a `Remove`
-    /// whose slot the server already emptied) simply contributes nothing —
+    /// whose slot the server already emptied) simply contributes nothing,
     /// pruning by seq handles its eventual removal.
     pub(crate) fn rebuild_effective(
         &self,
@@ -267,7 +267,7 @@ impl PredictionState {
         storage
     }
 
-    /// Clear all prediction state. Called on disconnect and on respawn — a
+    /// Clear all prediction state. Called on disconnect and on respawn, a
     /// fresh authoritative inventory must not have stale ops replayed onto it.
     /// `next_seq` intentionally keeps climbing across reconnects so a
     /// late-arriving stale command can never collide with a fresh seq.
@@ -278,7 +278,7 @@ impl PredictionState {
         self.node_takes.clear();
     }
 
-    /// True when there is nothing to fold — lets the fold system skip the
+    /// True when there is nothing to fold, lets the fold system skip the
     /// clone+replay entirely on the common idle frame.
     pub(crate) fn is_idle(&self) -> bool {
         self.pending.is_empty()
@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn move_replayed_over_server_mutated_inventory_no_ops_gracefully() {
         // Pending move from slot 0, but the server already emptied slot 0. The
-        // replayed move finds nothing and contributes nothing — no corruption.
+        // replayed move finds nothing and contributes nothing, no corruption.
         let mut state = PredictionState::default();
         let seq = state.alloc_seq();
         state.push_move(

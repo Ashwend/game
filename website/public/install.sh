@@ -5,8 +5,8 @@
 #
 # Downloads the latest macOS build and installs it to /Applications. Because the
 # download happens via curl (not a browser), macOS does NOT attach the
-# `com.apple.quarantine` flag, so Ashwend.app opens normally — no "damaged" /
-# Gatekeeper prompt. (The app is ad-hoc signed but not yet notarized; this
+# `com.apple.quarantine` flag, so Ashwend.app opens normally, with no "damaged"
+# or Gatekeeper prompt. (The app is ad-hoc signed but not yet notarized; this
 # installer is the friction-free path until then.)
 set -eu
 
@@ -51,5 +51,5 @@ if ! cp -R "$src" "$DEST/" 2>/dev/null; then
   sudo cp -R "$src" "$DEST/"
 fi
 
-printf 'Done. Launching Ashwend — find it in %s.\n' "$DEST"
+printf 'Done. Launching Ashwend. Find it in %s.\n' "$DEST"
 open "$target" 2>/dev/null || printf 'Launch it any time with: open "%s"\n' "$target"

@@ -22,7 +22,7 @@ fn singleplayer_host_is_admin() {
 
 #[test]
 fn workos_mode_rejects_a_connection_it_cannot_verify() {
-    // `NoAuth` trusts the claim, so there's nothing to reject there — the real
+    // `NoAuth` trusts the claim, so there's nothing to reject there, the real
     // gate is `Workos` mode. A Workos-mode server with no configured verifier
     // can't validate the token, so the handshake is refused rather than
     // admitting the claimed identity.
@@ -309,8 +309,8 @@ fn reconnect_with_same_identity_takes_over_and_preserves_state() {
 
     assert_ne!(first, second, "takeover should issue a fresh client id");
 
-    // The old session is torn down — a Left for the old id and a transport
-    // Disconnect targeting it — and that teardown precedes the new Welcome so
+    // The old session is torn down, a Left for the old id and a transport
+    // Disconnect targeting it, and that teardown precedes the new Welcome so
     // peers and the host layer see the old session leave first.
     assert!(envelopes.iter().any(|envelope| matches!(
         &envelope.message,

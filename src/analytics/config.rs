@@ -10,7 +10,7 @@
 //!    dev builds to point at the dev PostHog project, or by a packaged
 //!    binary that ships a sibling TOML.
 //! 3. **Runtime environment variables** listed in [`env`]. Override
-//!    anything above — useful for one-off runs, CI smoke tests, or
+//!    anything above, useful for one-off runs, CI smoke tests, or
 //!    flipping analytics off (`POSTHOG_ENABLED=false`) without touching
 //!    the binary.
 //!
@@ -42,7 +42,7 @@ pub(crate) mod env {
 /// Compile-time fallbacks. Resolved by [`option_env!`] when `cargo build`
 /// runs, so whichever `POSTHOG_*` values are exported into the build's
 /// environment get baked into the binary as `&'static str` literals.
-/// Empty/unset at build time means "no default" — runtime env vars and
+/// Empty/unset at build time means "no default", runtime env vars and
 /// the TOML can still enable analytics on top.
 mod build {
     pub(super) const API_KEY: Option<&str> = option_env!("POSTHOG_API_KEY");

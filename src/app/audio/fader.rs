@@ -2,7 +2,7 @@
 //!
 //! The same fade machinery used by the menu music drives ambient-bed
 //! cross-fades and looping emitter approach/retreat. One component, one
-//! tick system — nobody has to re-implement linear interpolation against
+//! tick system, nobody has to re-implement linear interpolation against
 //! Time and the `AudioSink::set_volume` API again.
 
 use bevy::{
@@ -37,7 +37,7 @@ impl AudioFader {
         }
     }
 
-    /// Fade to zero and despawn when done — the typical "kill this loop"
+    /// Fade to zero and despawn when done, the typical "kill this loop"
     /// pattern.
     pub(crate) fn fade_out(current_volume: f32, duration_secs: f32) -> Self {
         Self {

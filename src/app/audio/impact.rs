@@ -2,7 +2,7 @@
 //!
 //! The local player's pending audio cues come out of [`GatherInputState`];
 //! remote players' come through [`RemoteImpactEvent`]. Both flow into
-//! [`PlaySound`] events on the central audio bus — choice of clip is a
+//! [`PlaySound`] events on the central audio bus, choice of clip is a
 //! `(ToolKind, SurfaceMaterial)` lookup against
 //! [`super::manifest::impact_sound_for`].
 
@@ -33,7 +33,7 @@ pub(crate) fn play_impact_sounds_system(
             play.write(PlaySound::at(id, cue.anchor));
         } else {
             // No dedicated impact clip for this (tool, surface). Fall
-            // back to the miss whoosh so the swing isn't silent — the
+            // back to the miss whoosh so the swing isn't silent, the
             // ear notices a missing transient way faster than a quiet
             // one.
             play.write(PlaySound::non_spatial(SoundId::SwingMiss));
@@ -57,7 +57,7 @@ pub(crate) fn play_impact_sounds_system(
 /// Emit the tree-fall crash sound at `anchor` (the trunk's base). The
 /// audio entity is independent of the felling tree so playback survives
 /// the trunk fading out and despawning when the animation finishes.
-/// Convenience wrapper for the bare `PlaySound::at` call — callers can
+/// Convenience wrapper for the bare `PlaySound::at` call, callers can
 /// still build the message manually if they need a gain offset.
 #[allow(dead_code)]
 pub(crate) fn emit_tree_fall_sound(play: &mut MessageWriter<PlaySound>, anchor: Vec3) {

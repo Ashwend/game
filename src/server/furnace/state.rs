@@ -1,7 +1,7 @@
 //! Furnace state shape, persistence shims, and pure helpers shared
 //! between the tick loop and command handlers.
 //!
-//! No `GameServer` impl in this module — keep it pure-data so unit tests
+//! No `GameServer` impl in this module, keep it pure-data so unit tests
 //! over the smelt math don't need to spin up a server.
 
 use crate::{
@@ -26,7 +26,7 @@ pub(crate) struct FurnaceState {
     pub(crate) items: [Option<ItemStack>; FURNACE_ITEM_SLOT_COUNT],
     pub(crate) active: bool,
     /// Remaining ticks of burn for the fuel unit currently being
-    /// consumed. 0 means no fuel is mid-burn — the next tick that
+    /// consumed. 0 means no fuel is mid-burn, the next tick that
     /// needs fuel will pop one off the `fuel` stack.
     pub(crate) fuel_burn_ticks_left: u32,
     /// Accumulated progress against the current smelt operation.
@@ -123,7 +123,7 @@ pub(super) enum FuelPlaceOutcome {
 
 /// Pull up to `quantity` (or the whole stack if `quantity` is `None`)
 /// out of `slot`. Returns the taken stack and whether the slot is now
-/// empty — the caller uses the `drained` flag to decide whether a
+/// empty, the caller uses the `drained` flag to decide whether a
 /// downstream deposit is allowed to swap with an occupied target.
 pub(super) fn take_partial(
     slot: &mut Option<ItemStack>,

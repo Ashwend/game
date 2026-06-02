@@ -1,4 +1,4 @@
-//! Cross-frame UI state for the options panel — which tab is active, and if
+//! Cross-frame UI state for the options panel, which tab is active, and if
 //! the user has a rebind capture in flight. Kept separate from `MenuState`
 //! because it's a UI-only artifact: leaving the panel and reopening it
 //! should restore the previous tab, but the rebind capture must reset.

@@ -61,7 +61,7 @@ fn welcome_seeds_local_prediction_from_local_seed() {
 #[test]
 fn correction_updates_health_without_realigning_small_position_drift() {
     // Within-threshold position drift (< 1 m) keeps client prediction
-    // — movement is client-authoritative for responsiveness. Only
+    //, movement is client-authoritative for responsiveness. Only
     // health is mirrored from the server.
     let mut correction = player_state(1, Vec3Net::new(0.4, 0.0, 0.0));
     correction.health = 42.0;
@@ -83,7 +83,7 @@ fn correction_updates_health_without_realigning_small_position_drift() {
 
 #[test]
 fn correction_snaps_local_prediction_on_large_position_delta() {
-    // Past-threshold position delta (> 1 m) snaps the predictor —
+    // Past-threshold position delta (> 1 m) snaps the predictor,
     // covers admin teleport, respawn, and any future anti-cheat
     // snap-back. Without this, /tp + Phase 5 respawn would only
     // change the server-side controller and the local view would
@@ -135,7 +135,7 @@ fn connection_lag_flag_requires_active_session_and_silence_threshold() {
     );
 
     // Even past the warning threshold, without an active session the flag
-    // stays false — `connection_is_lagging` gates on `session.is_some()`.
+    // stays false, `connection_is_lagging` gates on `session.is_some()`.
     let runtime = ClientRuntime {
         connection: super::connection::ConnectionWatch::with_silence(
             super::CONNECTION_LAG_WARNING_SECONDS + 1.0,

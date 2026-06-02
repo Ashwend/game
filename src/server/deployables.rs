@@ -6,7 +6,7 @@
 //! chunk manager so AoI snapshots filter by visible chunk.
 //!
 //! Placement validation lives here so the server is the single source of
-//! truth for "can this go here?" — the client only shows a best-guess
+//! truth for "can this go here?", the client only shows a best-guess
 //! preview. The same `placement_validation` helpers run on save load to
 //! drop entries that no longer fit (e.g. a deployable saved before the
 //! world geometry shifted).
@@ -151,7 +151,7 @@ impl GameServer {
         }
 
         // Recipe-station-style gating *of placement itself* is intentionally
-        // not enforced here — gating happens at crafting time. A player who
+        // not enforced here, gating happens at crafting time. A player who
         // somehow has a furnace in inventory (admin spawn, future trade)
         // can still place it without owning a workbench.
 
@@ -209,7 +209,7 @@ impl GameServer {
             .and_then(|stack| item_definition(&stack.item_id))
             .and_then(|def| def.tool)
             .unwrap_or(HANDS_TOOL);
-        // Bare hands don't damage placed structures — the client gates
+        // Bare hands don't damage placed structures, the client gates
         // this too, but defence in depth.
         if tool.kind == ToolKind::Hands {
             return Vec::new();
@@ -222,7 +222,7 @@ impl GameServer {
         };
         // Ownership gate: world-spawned entities (`owner = None`) are
         // damageable by anyone. Player-placed entities can only be
-        // damaged by their placer — except admins, who can demolish
+        // damaged by their placer, except admins, who can demolish
         // anyone's structures for moderation (clearing grief bases,
         // tidying derelict workbenches, etc.).
         if !attacker_is_admin
@@ -236,7 +236,7 @@ impl GameServer {
         if (dx * dx + dz * dz).sqrt() > DAMAGE_RANGE_M {
             return Vec::new();
         }
-        // Tool-vs-material multiplier — hatchet eats wood, pickaxe
+        // Tool-vs-material multiplier, hatchet eats wood, pickaxe
         // eats stone, mismatched proper tools still chip away but at
         // ~1/3 the rate of the matched pairing.
         let multiplier_pct = tool_damage_multiplier_pct(tool.kind, entity.kind.material());
@@ -245,7 +245,7 @@ impl GameServer {
 
         // Mutable borrow for the actual decrement. We re-fetch instead
         // of holding the earlier `entity` reference across the cooldown
-        // write below — borrow-checker convenience, not a hot path.
+        // write below, borrow-checker convenience, not a hot path.
         let Some(entity) = self.deployed_entities.get_mut(&command.id) else {
             return Vec::new();
         };

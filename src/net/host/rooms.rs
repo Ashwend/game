@@ -24,7 +24,7 @@ use super::{AuthoritativeServer, ChunkRoomMap, ClientChunkSubs};
 /// `Replicate::to_clients(NetworkTarget::All) + NetworkVisibility +
 /// ReplicationGroup::new_from_entity()` and then joins the chunk's room.
 /// `NetworkVisibility` narrows the `All` target down to the senders
-/// currently in a shared room with the entity — without it, every
+/// currently in a shared room with the entity, without it, every
 /// client would see every node.
 ///
 /// `ReplicationGroup::new_from_entity()` is the fix for the upstream
@@ -42,7 +42,7 @@ use super::{AuthoritativeServer, ChunkRoomMap, ClientChunkSubs};
 /// diagnostic showed Lightyear shipping the initial spawn but not
 /// subsequent component updates with `None + room`. The room machinery
 /// uses `gain_visibility` which inserts a fresh `PerSenderReplicationState`
-/// when the sender isn't already in the entity's targets — that path
+/// when the sender isn't already in the entity's targets, that path
 /// admits the sender for the spawn message but apparently does not
 /// register the sender for the subsequent change-detection update
 /// pipeline. Listing the sender in the `Replicate` target up front
@@ -176,7 +176,7 @@ fn ensure_chunk_room_commands(
 /// entity (a new pending or connected client). Adds the
 /// `ReplicationSender` Lightyear needs to actually ship per-component
 /// updates to that client. Connection plugins handle the
-/// `Disconnected` tear-down for us — `RoomPlugin::handle_disconnect`
+/// `Disconnected` tear-down for us, `RoomPlugin::handle_disconnect`
 /// removes the sender from all rooms automatically.
 pub(super) fn install_replication_sender_on_link(trigger: On<Add, LinkOf>, mut commands: Commands) {
     commands

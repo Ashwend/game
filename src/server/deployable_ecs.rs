@@ -51,13 +51,13 @@ pub struct DeployableTransform {
     pub yaw: f32,
 }
 
-/// Mutable HP — damage taken by the structure. Replicated to all players
+/// Mutable HP, damage taken by the structure. Replicated to all players
 /// in the same chunk room so they can see the destruction animation
 /// trigger when it hits zero.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct DeployableHealth(pub u32);
 
-/// Public "is it doing work?" flag — drives furnace glow/smoke on the
+/// Public "is it doing work?" flag, drives furnace glow/smoke on the
 /// client. Always `false` for kinds that have no active state
 /// (workbench).
 #[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

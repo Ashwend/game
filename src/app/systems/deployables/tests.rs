@@ -15,7 +15,7 @@ fn ground_hit_returns_none_for_horizon_aim() {
 
 #[test]
 fn ground_hit_returns_point_when_looking_down() {
-    // 45° downward look from eye height — should hit ground at the
+    // 45° downward look from eye height, should hit ground at the
     // same horizontal distance as the eye height.
     let transform = GlobalTransform::from(
         Transform::from_xyz(0.0, EYE_HEIGHT, 0.0).looking_at(Vec3::new(2.0, 0.0, 0.0), Vec3::Y),
@@ -223,7 +223,7 @@ fn deployable_set_fingerprint_distinguishes_membership() {
 #[test]
 fn resource_node_set_fingerprint_skips_colliderless_clutter() {
     // Crude clutter (hay grass) contributes no collider, so it doesn't
-    // move the fingerprint — only collidable nodes (trees/ore) do.
+    // move the fingerprint, only collidable nodes (trees/ore) do.
     let hay = ResourceNode {
         id: 1,
         definition_id: crate::resources::HAY_GRASS_NODE_ID.to_owned(),

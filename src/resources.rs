@@ -48,7 +48,7 @@ pub enum ResourceNodeModel {
     CoalOre,
     IronOre,
     SulfurOre,
-    /// Bare-rock vein — pickaxe-mineable, yields plain `stone`. Same
+    /// Bare-rock vein, pickaxe-mineable, yields plain `stone`. Same
     /// silhouette as the ore variants but no embedded coal/iron/sulfur
     /// chunks on top, so it reads as "the rock under the ore".
     StoneVein,
@@ -103,7 +103,7 @@ impl ToolRequirement {
     }
 
     pub fn allows(self, tool: ToolProfile) -> bool {
-        // A `Hands` requirement means "this node can't be swung at — pick
+        // A `Hands` requirement means "this node can't be swung at, pick
         // it up with E". Swinging any tool (or empty hands) at a Hands
         // node is rejected so the player learns to use the quick-pickup
         // key for crude clutter. The matching `kind == Hands` check is
@@ -346,7 +346,7 @@ pub fn resource_node_score_at(
     definition_id: &str,
     position: Vec3Net,
 ) -> Option<f32> {
-    // Position-only distance cull — runs BEFORE the HashMap lookup
+    // Position-only distance cull, runs BEFORE the HashMap lookup
     // in `resource_node_definition`. The 1811-node AoI ring would
     // otherwise pay 1811 string hashes per pickup-target scan.
     // Expanded radius covers the max possible `anchor_height` so we
@@ -451,7 +451,7 @@ pub fn resource_storage_is_empty(node: &ResourceNodeState) -> bool {
 ///
 /// Trees get a vertical pillar at the trunk base, slightly wider than the
 /// visible trunk so the player and camera don't clip the bark when brushing
-/// past. Height is fixed at 3m — taller than the player AABB so the player
+/// past. Height is fixed at 3m, taller than the player AABB so the player
 /// can't walk over or under it, but well below the canopy so the player's
 /// bounding box never touches foliage.
 ///
@@ -484,7 +484,7 @@ pub fn resource_node_collider_at(definition_id: &str, position: Vec3Net) -> Opti
         | ResourceNodeModel::SulfurOre
         | ResourceNodeModel::StoneVein => Some(ore_collider_block(position)),
         // Crude clutter (surface stones, branch piles, hay tufts) is
-        // walk-through — small enough that a collider feels buggy and the
+        // walk-through, small enough that a collider feels buggy and the
         // player needs to be able to stand on top to interact.
         ResourceNodeModel::SurfaceStone
         | ResourceNodeModel::BranchPile

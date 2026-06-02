@@ -2,7 +2,7 @@
 //!
 //! When a furnace's replicated `DeployableActive` flag flips on,
 //! `apply_deployed_entities_system` (see `deployables.rs`) attaches a fire rig
-//! — a flickering ember `PointLight` — as a child of the furnace structure, and
+//!, a flickering ember `PointLight`, as a child of the furnace structure, and
 //! tears it down when the furnace goes cold. This module owns the rig, the
 //! per-frame light flicker, and the particles it sheds while lit: a dense bed
 //! of small rising flame puffs that build into a soft glowing flame through
@@ -11,7 +11,7 @@
 //! Kept out of the deployable reconciler so the particle/animation concern
 //! doesn't bloat the entity-diffing system. A fire rig only exists for lit
 //! furnaces inside the AoI (a handful at most), so the per-frame iteration
-//! here is negligible — unlike the resource-node path this never approaches
+//! here is negligible, unlike the resource-node path this never approaches
 //! AoI scale, which is why a plain query walk is fine.
 
 use bevy::{light::NotShadowCaster, prelude::*};
@@ -26,7 +26,7 @@ const FURNACE_LIGHT_BASE_INTENSITY: f32 = 5_500.0;
 const FLAME_INTERVAL: f32 = 0.03;
 /// How many flame puffs each emission drops.
 const FLAME_PER_EMISSION: u32 = 3;
-/// Seconds between ember emissions — far sparser than the flame, so embers read
+/// Seconds between ember emissions, far sparser than the flame, so embers read
 /// as occasional flecks rising off the fire.
 const SPARK_INTERVAL: f32 = 0.11;
 
@@ -44,7 +44,7 @@ pub(crate) struct FurnaceFire {
     phase: f32,
 }
 
-/// A single fire particle — a flame puff or an ember. Lofts up, drifts,
+/// A single fire particle, a flame puff or an ember. Lofts up, drifts,
 /// shrinks, then despawns. Both kinds share the same integration; only their
 /// spawn parameters and material differ.
 #[derive(Component)]
@@ -83,14 +83,14 @@ pub(crate) fn sync_furnace_fire(
                     Name::new("Furnace Fire"),
                     FurnaceFire {
                         // Hold off one interval so the rig's GlobalTransform
-                        // propagates before the first particle — otherwise the
+                        // propagates before the first particle, otherwise the
                         // first puff would emit from the world origin.
                         flame_cooldown: FLAME_INTERVAL,
                         spark_cooldown: SPARK_INTERVAL,
                         phase,
                     },
                     PointLight {
-                        // Saturated ember glow — warm enough to read as fire,
+                        // Saturated ember glow, warm enough to read as fire,
                         // dim enough not to wash out the scene at night when
                         // several furnaces might be lit.
                         color: Color::srgb(1.0, 0.62, 0.28),
@@ -112,7 +112,7 @@ pub(crate) fn sync_furnace_fire(
         (false, Some(fire_entity)) => {
             commands.entity(fire_entity).despawn();
         }
-        // Already in the right state — leave it.
+        // Already in the right state, leave it.
         _ => {}
     }
 }
@@ -239,7 +239,7 @@ fn spawn_flame(commands: &mut Commands, assets: &FurnaceFireAssets, anchor: Vec3
     ));
 }
 
-/// A single rising ember — higher, longer-lived, and heavier than a flame puff
+/// A single rising ember, higher, longer-lived, and heavier than a flame puff
 /// so it arcs up off the fire and cools as it falls.
 fn spawn_spark(commands: &mut Commands, assets: &FurnaceFireAssets, anchor: Vec3, seed: u32) {
     let r1 = hashed_unit(seed);

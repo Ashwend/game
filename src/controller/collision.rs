@@ -44,7 +44,7 @@ pub(super) fn move_with_collisions(
     }
 
     // Inline the loop into each match arm so the candidate iterator stays a
-    // concrete type — no `Box<dyn Iterator>` allocation per substep.
+    // concrete type, no `Box<dyn Iterator>` allocation per substep.
     let mut visit = |index: usize| {
         let block = grid.block(index);
         if let Some(candidate) = swept_axis_collision(*position, attempted, block, axis, delta) {
@@ -230,7 +230,7 @@ pub(super) fn is_supported(position: Vec3Net, grid: &BlockGrid) -> bool {
 /// if any. Used by the footstep system to look up the material of the
 /// surface the player is standing on. Returns `None` when the player is
 /// standing on the world floor (i.e. no block directly under them) or is
-/// airborne — callers can substitute their own fallback in either case.
+/// airborne, callers can substitute their own fallback in either case.
 pub fn block_under_feet(position: Vec3Net, grid: &BlockGrid) -> Option<WorldBlock> {
     let mut best: Option<WorldBlock> = None;
     for index in grid.candidates_for_player(position) {

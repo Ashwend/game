@@ -1,9 +1,9 @@
-//! Placeholder meshes for the crude (hand-harvestable) resource nodes —
+//! Placeholder meshes for the crude (hand-harvestable) resource nodes,
 //! surface stones, branch piles, and hay tufts.
 //!
 //! Stones and sticks are a single low-poly primitive (one rock lump, one box).
 //! The hay tuft is a clump of the same tapered straws the streamed detail grass
-//! uses ([`GrassBladeMesh`]) — just taller and bunched — so the harvestable
+//! uses ([`GrassBladeMesh`]), just taller and bunched, so the harvestable
 //! plant reads as the same kind of grass, only a denser, taller pocket. Kept
 //! deliberately low-poly so the world can support a dense scatter without the
 //! tris/draw-call cost of a fuller model. The yaw applied at spawn rotates each
@@ -81,7 +81,7 @@ pub(crate) fn low_poly_hay_grass_mesh() -> Mesh {
             base_color: brighten(base_color, HAY_GRASS_BRIGHTNESS),
             tip_color: brighten(tip_color, HAY_GRASS_BRIGHTNESS),
             // `1.0` keeps the wind shader's distance dither from ever discarding
-            // a hay blade (`uv.x < fade` is never true) — a harvestable node
+            // a hay blade (`uv.x < fade` is never true), a harvestable node
             // shouldn't thin with distance; it just despawns at the AoI edge.
             dither: 1.0,
         });
@@ -89,7 +89,7 @@ pub(crate) fn low_poly_hay_grass_mesh() -> Mesh {
     builder.build()
 }
 
-/// Scale a blade colour's RGB toward brighter (alpha — the sway weight — is left
+/// Scale a blade colour's RGB toward brighter (alpha, the sway weight, is left
 /// untouched), clamped to white.
 fn brighten(color: [f32; 4], factor: f32) -> [f32; 4] {
     [

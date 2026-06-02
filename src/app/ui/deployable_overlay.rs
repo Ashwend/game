@@ -7,7 +7,7 @@
 //!
 //! Falls back to silence in every other case so undamaged props don't
 //! clutter the screen. Same screen-projection / fade-out / viewport-
-//! clamp pattern as [`super::peer_overlay`] — extracted helpers stay
+//! clamp pattern as [`super::peer_overlay`], extracted helpers stay
 //! local for now since deployable labels are simpler (no chat bubble,
 //! no voice indicator).
 
@@ -28,14 +28,14 @@ const DEPLOYABLE_DRAW_DISTANCE_M: f32 = 6.0;
 /// dissolves softly over the last metre.
 const DEPLOYABLE_FADE_START_M: f32 = 5.0;
 /// Cosine of the half-angle of the "looking at" cone. ~25° each side
-/// of the camera forward — generous enough that you don't have to
+/// of the camera forward, generous enough that you don't have to
 /// pixel-aim, tight enough that you can't see labels on structures
 /// off to your peripheral vision.
 const DEPLOYABLE_LOOK_CONE_COS: f32 = 0.91;
 /// Inset (logical pixels) before the viewport edge.
 const DEPLOYABLE_VIEWPORT_INSET_PX: f32 = 12.0;
 /// Vertical gap (world space) between the top of the structure's
-/// collider and the nameplate baseline. Small constant — actual
+/// collider and the nameplate baseline. Small constant, actual
 /// nameplate height comes from the structure's own collider so a
 /// short workbench gets a low label and a taller furnace gets a
 /// higher one.
@@ -51,7 +51,7 @@ pub(crate) struct DeployableOverlay<'world> {
 }
 
 pub(crate) struct DeployableOverlayEntry {
-    /// Where the nameplate sits in world space — just above the
+    /// Where the nameplate sits in world space, just above the
     /// structure's top.
     pub(crate) anchor_world: Vec3,
     /// Point used for the look-cone + range checks. The structure's
@@ -75,7 +75,7 @@ pub(super) fn deployable_overlay_ui(ctx: &egui::Context, overlay: DeployableOver
 
     for entry in overlay.entries {
         // Range + cone test use the structure's centre (`look_target_world`),
-        // not the floating label anchor — otherwise looking at the
+        // not the floating label anchor, otherwise looking at the
         // workbench body misses the cone and the label stays hidden
         // until the player tilts the camera up at the empty space
         // above the structure.
@@ -105,7 +105,7 @@ pub(super) fn deployable_overlay_ui(ctx: &egui::Context, overlay: DeployableOver
         // Always allocate the Area while the player is aiming at the
         // structure, even at full health. egui's first-show sizing
         // pass renders invisibly for one frame and fades in over the
-        // next few — if the Area only appeared the instant the
+        // next few, if the Area only appeared the instant the
         // structure took its first hit, the nameplate would stay
         // hidden until the player swung the camera off and back. By
         // pre-warming here, the sizing pass + fade-in happen once
@@ -181,7 +181,7 @@ fn nameplate(ui: &mut egui::Ui, entry: &DeployableOverlayEntry, fade: f32) {
         ),
     );
 
-    // Health bar — same fill colour ladder as `peer_overlay::health_fill_color`
+    // Health bar, same fill colour ladder as `peer_overlay::health_fill_color`
     // so the visual language for "low HP" matches across player and
     // structure labels.
     let max = entry.max_health.max(1) as f32;

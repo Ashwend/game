@@ -17,13 +17,13 @@ use super::slot::{SLOT_SIZE, paint_slot};
 /// the source + target kind:
 ///
 /// - Player → Player: `InventoryCommand::Move` (the existing path).
-/// - Anything involving a furnace slot: `FurnaceCommand::Move` —
+/// - Anything involving a furnace slot: `FurnaceCommand::Move`,
 ///   `FurnaceSlotRef` already covers all four combinations
 ///   (player↔furnace, furnace↔furnace).
 ///
 /// Drop-on-ground (release outside any inventory surface) only fires
 /// for player-sourced drags. Furnace-sourced items that get released
-/// in the void snap back to where they came from — better that than
+/// in the void snap back to where they came from, better that than
 /// silently dropping a stack of iron bars into the void.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_drag_release(
@@ -97,7 +97,7 @@ fn send_move_command(
     target: UnifiedSlotRef,
     quantity: Option<u16>,
 ) {
-    // Bag moves take priority — `as_loot_bag_ref` covers every
+    // Bag moves take priority, `as_loot_bag_ref` covers every
     // combination the bag command shape accepts (player↔bag,
     // bag↔bag). Furnace moves come next; only player↔player falls
     // through to the inventory-only command.
@@ -143,7 +143,7 @@ fn send_move_command(
 
 /// Predict a player-inventory drop, returning the action sequence the
 /// command should carry (`0` = not predicted). Predicts unconditionally when
-/// the local inventory is known — `remove_stack` no-ops harmlessly on replay
+/// the local inventory is known, `remove_stack` no-ops harmlessly on replay
 /// if the source slot turns out empty.
 fn predict_drop(
     prediction: &mut PredictionState,
@@ -168,7 +168,7 @@ fn predict_drop(
 
 /// Predict a player→player inventory move, returning the action sequence the
 /// command should carry (`0` = not predicted). Tier 1 predicts only the
-/// empty-destination case — swap/merge onto an occupied slot stays
+/// empty-destination case, swap/merge onto an occupied slot stays
 /// server-driven, since a mispredicted displacement is more jarring than a
 /// brief replication delay. The shared `move_stack` replay handles the actual
 /// relocation deterministically.

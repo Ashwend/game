@@ -93,7 +93,7 @@ pub(crate) const PLAYER_VISUAL_CENTER_Y: f32 = 0.9;
 /// One ordered list, one source of truth: every consecutive pair becomes an
 /// `after(prev)` edge in the schedule. Add new sets here in the slot that
 /// matches their data dependency, not in a side chain. The phases below are
-/// purely for human navigation — the runtime only sees the flat list.
+/// purely for human navigation, the runtime only sees the flat list.
 ///
 /// Phases:
 /// - Input/UI shortcut intake (Focus → InventoryShortcuts).
@@ -150,7 +150,7 @@ const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::FurnaceParticleTick,
     ClientSystemSet::NodeDeathTick,
     // Transition stingers (e.g. world-join) ride on `MenuState`
-    // edge-detection, not on the gameplay event stream — slotted just
+    // edge-detection, not on the gameplay event stream, slotted just
     // before the drain so the cue arrives in the same frame as the
     // screen change.
     ClientSystemSet::TransitionStingers,
@@ -175,7 +175,7 @@ const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::Analytics,
 ];
 
-/// Menu-only systems form their own short chain — independent of the main
+/// Menu-only systems form their own short chain, independent of the main
 /// gameplay flow because they read menu state, not snapshots.
 const CLIENT_MENU_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::MainMenuMusic,
@@ -281,7 +281,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
             DefaultPlugins.set(WindowPlugin {
                 // `multiplayer-test` overrides the window resolution via
                 // env vars and the actual position is set after the
-                // primary monitor has been queried — see
+                // primary monitor has been queried, see
                 // `reposition_test_window_system`. Trying to centre at
                 // startup would need a screen-size guess and that's exactly
                 // what we'd get wrong on the dev's actual monitor.
@@ -302,7 +302,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
                     mode: if test_mode.window.is_some() {
                         // Test windows always come up in plain windowed
                         // mode so the post-monitor reposition actually
-                        // applies — fullscreen would ignore it.
+                        // applies, fullscreen would ignore it.
                         bevy::window::WindowMode::Windowed
                     } else {
                         window_settings.window_mode(None)
@@ -315,7 +315,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         )
         // 480 sample history: ~1 second at 500 FPS, ~4 seconds at 120 FPS.
         // The perf HUD pulls p99/max from this window so the player sees
-        // hitches that the smoothed FPS number hides — 120 samples (default)
+        // hitches that the smoothed FPS number hides, 120 samples (default)
         // at 500 FPS is only 0.24 s, too short to catch periodic stalls.
         .add_plugins(FrameTimeDiagnosticsPlugin::new(480))
         // Lightyear client lives in the main Bevy app from Phase 3 of the
@@ -366,14 +366,14 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .add_plugins(EguiPlugin::default())
         // Software frame pacing. With this plugin running we can leave
         // `PresentMode` at `Immediate` everywhere and rely on a CPU-side
-        // sleep to cap the frame rate — `Fifo`/`AutoVsync` are not
+        // sleep to cap the frame rate, `Fifo`/`AutoVsync` are not
         // reliable on macOS Metal (flicker, no cap respectively). The
         // limiter starts in whatever state the saved settings ask for;
         // `apply_display_settings_system` keeps it in sync when the user
         // toggles vsync at runtime.
         .add_plugins(FramepacePlugin)
         // Analytics. Disabled by default; reads `analytics.local.toml` /
-        // `POSTHOG_*` env vars at startup. Client-only — dedicated server
+        // `POSTHOG_*` env vars at startup. Client-only, dedicated server
         // and admin CLI never load this plugin.
         .add_plugins(AnalyticsPlugin)
         // Update checker + self-updater. Client-only; spawns a background
@@ -515,7 +515,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         // animation. The reconciler lives in `ClientSystemSet::Players`;
         // ordering against the set (not the function) avoids the
         // transitive-cycle panic you'd otherwise get from naming the
-        // function directly. No `before` constraint — the death
+        // function directly. No `before` constraint, the death
         // animation only mutates the visual entity's transform +
         // material alpha, neither of which the later sets read.
         .add_systems(
@@ -630,7 +630,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         )
         .add_systems(
             Update,
-            // Same phase as the falling-tree tick — both ride the
+            // Same phase as the falling-tree tick, both ride the
             // post-snapshot scene update window and write to local
             // transforms that no other system reads after them.
             tick_resource_node_pop_in_system.in_set(ClientSystemSet::NodeDeathTick),

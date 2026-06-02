@@ -15,7 +15,7 @@ use crate::{
 use super::LootBag;
 
 /// Pull a stack out of a `LootBagSlotRef`. Returns `(taken, all_consumed)`
-/// — `taken` is what was extracted, `all_consumed` is true if the
+///, `taken` is what was extracted, `all_consumed` is true if the
 /// source slot is now empty (used to decide whether to restore the
 /// quantity on a failed move).
 pub(super) fn take_from_loot_ref(

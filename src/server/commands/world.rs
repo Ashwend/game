@@ -1,4 +1,4 @@
-//! `/spawn-ore` and `/tp` — world-mutation admin commands, plus the small
+//! `/spawn-ore` and `/tp`, world-mutation admin commands, plus the small
 //! PRNG and spawn-placement helpers they rely on.
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -83,7 +83,7 @@ impl GameServer {
             .unwrap_or("Ore");
 
         // Register with the chunk anchor index so the snapshot AoI
-        // includes the spawn — without this, admin-spawned nodes are
+        // includes the spawn, without this, admin-spawned nodes are
         // invisible because per-chunk membership is the AoI source of
         // truth.
         let kind = ore_node_kind(ore_id);
@@ -97,7 +97,7 @@ impl GameServer {
         )
     }
 
-    /// `/tp` — teleport every other connected player to the issuer's
+    /// `/tp`, teleport every other connected player to the issuer's
     /// position. Bread-and-butter PvP-test command: drop both clients
     /// into the same arms-length so death/respawn/melee can be
     /// exercised without manually walking them together.
@@ -206,7 +206,7 @@ pub(super) fn parse_ore_token(arg: &str) -> Option<&'static str> {
 
 /// Map an ore `definition_id` to the matching `NodeKind` for chunk
 /// membership bookkeeping. Defaults to `CoalOre` for unknown ids so the
-/// node still ends up tracked rather than silently invisible — callers
+/// node still ends up tracked rather than silently invisible, callers
 /// only pass ids that came out of `parse_ore_token`, so the fallback
 /// shouldn't fire in practice.
 fn ore_node_kind(ore_id: &str) -> NodeKind {
@@ -233,14 +233,14 @@ pub(super) fn random_position_around(center: Vec3Net, radius: f32, rng: &mut Sma
     let theta = rng.next_f32() * std::f32::consts::TAU;
     Vec3Net::new(
         center.x + r * theta.cos(),
-        // Floor-aligned spawn — matches the hand-authored ore nodes in the
+        // Floor-aligned spawn, matches the hand-authored ore nodes in the
         // test world (all at y=0).
         0.0,
         center.z + r * theta.sin(),
     )
 }
 
-/// Tiny xorshift32 PRNG. We don't need cryptographic randomness — just a
+/// Tiny xorshift32 PRNG. We don't need cryptographic randomness, just a
 /// stream of "feels different" numbers between admin command invocations.
 /// Avoids adding the `rand` crate just for one debug command.
 pub(super) struct SmallRng {
@@ -264,7 +264,7 @@ impl SmallRng {
     }
 
     pub(super) fn next_u32(&mut self) -> u32 {
-        // Classic xorshift32 — short period for our purposes is fine.
+        // Classic xorshift32, short period for our purposes is fine.
         let mut x = self.state;
         x ^= x << 13;
         x ^= x >> 17;

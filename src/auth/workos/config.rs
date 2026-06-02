@@ -13,7 +13,7 @@
 //!
 //! Only the public `client_id` is required (it drives both the OAuth authorize
 //! request and the server-side JWKS URL). The OAuth + JWKS endpoints are always
-//! `api.workos.com` — the AuthKit *domain* the website uses is not needed here.
+//! `api.workos.com`, the AuthKit *domain* the website uses is not needed here.
 
 use std::{fs, path::Path};
 
@@ -22,7 +22,7 @@ use serde::Deserialize;
 pub(super) const AUTHORIZE_URL: &str = "https://api.workos.com/user_management/authorize";
 pub(super) const AUTHENTICATE_URL: &str = "https://api.workos.com/user_management/authenticate";
 
-/// WorkOS client id used when nothing overrides it. Public — safe to ship.
+/// WorkOS client id used when nothing overrides it. Public, safe to ship.
 /// TODO: swap to the production client id before release.
 const DEFAULT_CLIENT_ID: &str = "client_01KSZSFDYP8ZVPE63P94ZWJ3WX";
 /// Loopback port the browser is redirected back to. Must be registered as a

@@ -1,11 +1,11 @@
-//! World save persistence — atomic file writes, binary format codec,
+//! World save persistence, atomic file writes, binary format codec,
 //! listing/recovery, and name validation. Submodules:
 //!
-//! - [`store`]  — `WorldStore`, the directory-rooted entry point
-//! - [`format`] — `GAMESAVE` magic, format version, encode/decode
-//! - [`types`]  — `WorldSave`, `WorldStateSave`, `PersistedPlayer`
-//! - [`listing`] — listing results, corrupted-file recovery
-//! - [`validate`] — player-supplied world-name validation
+//! - [`store`], `WorldStore`, the directory-rooted entry point
+//! - [`format`], `GAMESAVE` magic, format version, encode/decode
+//! - [`types`], `WorldSave`, `WorldStateSave`, `PersistedPlayer`
+//! - [`listing`], listing results, corrupted-file recovery
+//! - [`validate`], player-supplied world-name validation
 
 mod format;
 mod listing;

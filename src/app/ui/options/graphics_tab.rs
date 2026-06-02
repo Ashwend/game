@@ -1,5 +1,5 @@
-//! Graphics tab: client-side rendering options (bloom, anti-aliasing, and —
-//! added in later phases — sunshafts and grass density). HDR is a required
+//! Graphics tab: client-side rendering options (bloom, anti-aliasing, and,
+//! added in later phases, sunshafts and grass density). HDR is a required
 //! baseline for the atmosphere sky and so is intentionally not a toggle here.
 
 use bevy_egui::egui;

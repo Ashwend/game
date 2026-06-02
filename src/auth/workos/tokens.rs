@@ -27,7 +27,7 @@ struct WorkosUser {
 }
 
 /// POST a grant (`authorization_code` or `refresh_token`) to the WorkOS token
-/// endpoint. Public client — no secret; PKCE proves the app's identity.
+/// endpoint. Public client, no secret; PKCE proves the app's identity.
 pub(super) fn post_authenticate(body: serde_json::Value) -> Result<AuthResponse, String> {
     ureq::post(super::config::AUTHENTICATE_URL)
         .send_json(body)
@@ -55,7 +55,7 @@ pub(super) fn session_from(response: AuthResponse) -> Session {
     }
 }
 
-/// Read `exp` out of the access-token JWT (no verification — the client only
+/// Read `exp` out of the access-token JWT (no verification, the client only
 /// needs to know when to refresh; the server does the real verification).
 fn access_token_expiry(token: &str) -> Option<SystemTime> {
     #[derive(Deserialize)]

@@ -1,7 +1,7 @@
 //! Day/night visuals.
 //!
 //! The procedural [`Atmosphere`](bevy::pbr::Atmosphere) on the camera (set up
-//! in `assets.rs`) now renders the sky itself — physically-based scattering,
+//! in `assets.rs`) now renders the sky itself, physically-based scattering,
 //! the visible sun disc, and image-based ambient/reflection light via
 //! [`AtmosphereEnvironmentMapLight`]. This module's job shrank to:
 //!
@@ -10,13 +10,13 @@
 //!   tints it as it passes through the air),
 //! - supplementing the night with a **fixed** ambient floor + a dim moon light
 //!   so the player can still navigate after dark (intentionally not a user
-//!   setting — night visibility is a gameplay-fair constant),
+//!   setting, night visibility is a gameplay-fair constant),
 //! - and keeping a [`DistanceFog`] curtain that hides the far perimeter walls
 //!   before the camera's far plane clips them (the atmosphere's own aerial
 //!   perspective is negligible over our ~160 m view distance).
 //!
 //! The math driver is [`ClientRuntime::world_time`]. The server owns it and the
-//! client integrates between snapshots — by the time these systems run the
+//! client integrates between snapshots, by the time these systems run the
 //! value is the live mirror.
 //!
 //! ## Tuning knobs
@@ -57,7 +57,7 @@ const CELESTIAL_TILT_DEGREES: f32 = 18.0;
 /// `RAW_SUNLIGHT` + a manual camera `Exposure`: the atmosphere still renders the
 /// sky and filters/tints the light toward the horizon, but this value keeps the
 /// scene at a consistent brightness across the whole day under the renderer's
-/// default exposure — which suits a stylised game with a fixed, gameplay-fair
+/// default exposure, which suits a stylised game with a fixed, gameplay-fair
 /// night far better than raw sunlight (which really wants auto-exposure).
 const SUN_PEAK_ILLUMINANCE: f32 = 11_000.0;
 
@@ -136,7 +136,7 @@ pub(crate) fn setup_sky(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
-    // Sun: shadow-casting directional light. Colour stays neutral white — the
+    // Sun: shadow-casting directional light. Colour stays neutral white, the
     // atmosphere filters it through the air, warming it toward the horizon, so
     // tinting it here too would double-count. `SunDisk` makes the atmosphere
     // draw the visible solar disc (which bloom then makes glow).
@@ -165,7 +165,7 @@ pub(crate) fn setup_sky(
         Transform::from_xyz(0.0, 1.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
-    // Moon: dim cool directional light. Shadows off — a second shadow map is
+    // Moon: dim cool directional light. Shadows off, a second shadow map is
     // expensive and moonlit shadows in stylised low-poly art read as noise.
     // This is the documented way to do nighttime with the atmosphere: a dim
     // directional light for the moon while the sun sits below the horizon.

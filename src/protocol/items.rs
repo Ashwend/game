@@ -52,7 +52,7 @@ impl ItemContainerSlot {
 /// One in-progress crafting job. `progress_ticks` advances toward
 /// `total_ticks`; when they meet the server grants the recipe's output
 /// (multiplied by `quantity`) and pops the job. Inputs are not echoed back
-/// — they were taken at enqueue time and the recipe id lets the client
+///, they were taken at enqueue time and the recipe id lets the client
 /// reconstruct everything else from the static registry.
 ///
 /// `quantity` is the batch size. A job with `quantity = 3` ran with

@@ -2,7 +2,7 @@
 //! visible scene entities.
 //!
 //! Bags are static (no physics, no interpolation), so this is the
-//! simplest of the per-entity reconcilers — spawn a mesh on first
+//! simplest of the per-entity reconcilers, spawn a mesh on first
 //! sight, despawn when the replicated entity leaves the AoI ring.
 
 use std::collections::{HashMap, HashSet};

@@ -42,7 +42,7 @@ pub(crate) fn tick_one_furnace(furnace: &mut FurnaceState) {
 
     let head_index = find_smeltable_head(furnace);
     let Some(head_index) = head_index else {
-        // Nothing to smelt — auto-off so the player can tell at a
+        // Nothing to smelt, auto-off so the player can tell at a
         // glance the furnace isn't doing work, and the fuel doesn't
         // burn down while idle.
         furnace.active = false;
@@ -100,7 +100,7 @@ fn find_smeltable_head(furnace: &FurnaceState) -> Option<usize> {
     })
 }
 
-/// True if the smelt result can land somewhere — either merging into
+/// True if the smelt result can land somewhere, either merging into
 /// an existing matching stack (anywhere in the grid) or filling an
 /// empty slot. The current input's slot can take its own output once
 /// the input runs to 0, which is the common case.
@@ -145,6 +145,6 @@ fn deposit_smelt_output(furnace: &mut FurnaceState, output: ItemStack) {
             return;
         }
     }
-    // Output-fit was checked beforehand — this branch shouldn't trigger.
+    // Output-fit was checked beforehand, this branch shouldn't trigger.
     debug_assert!(false, "deposit_smelt_output called with no room");
 }

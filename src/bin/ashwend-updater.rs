@@ -6,7 +6,7 @@
 //! process then swaps the new binary over the old one and relaunches the game.
 //!
 //! It exists as a separate executable so the program doing the overwrite is
-//! never the file being overwritten — which also means on Windows the (now
+//! never the file being overwritten, which also means on Windows the (now
 //! exited) game's `.exe` is no longer locked, so the swap is a plain rename on
 //! every platform. No networking, no decompression: all of that already
 //! happened in the game before we were launched.
@@ -123,7 +123,7 @@ fn swap_into_place(staged: &Path, target: &Path) -> std::io::Result<()> {
                     let _ = std::fs::remove_file(staged);
                     return Ok(());
                 }
-                // Surface nothing on each retry — locks while the game shuts
+                // Surface nothing on each retry, locks while the game shuts
                 // down are expected. Keep the last error for the timeout path.
                 let _ = error;
                 sleep(SWAP_RETRY_DELAY);
@@ -151,7 +151,7 @@ fn relaunch(path: &Path) {
 /// Uses non-`--deep` on purpose: `--deep` would rewrite *this* updater binary
 /// (we run from inside the same bundle), which can fail; non-`--deep` re-signs
 /// the main executable and re-seals resources, leaving us untouched. Best
-/// effort — a de-quarantined bundle still launches from the inner binary's own
+/// effort, a de-quarantined bundle still launches from the inner binary's own
 /// signature if this fails.
 #[cfg(target_os = "macos")]
 fn resign_app_bundle(relaunch: &Path) {

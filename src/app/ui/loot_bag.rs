@@ -3,7 +3,7 @@
 //! Opens when the replicated `PlayerPrivate.open_loot_bag` is set.
 //! Renders two grids stacked vertically: the bag's contents on top
 //! and the player's inventory on the bottom. Drag works exactly like
-//! the main inventory and the furnace — same `draw_slot` widget,
+//! the main inventory and the furnace, same `draw_slot` widget,
 //! same `UnifiedSlotRef` drag pipeline, same drop-on-ground guard.
 //! Shift+click quick-transfers a stack between the two containers.
 //!
@@ -107,7 +107,7 @@ pub(super) fn loot_bag_ui(
         send_loot_bag_command(runtime, error_toasts, LootBagCommand::Close);
     }
 
-    // Shift+click quick-transfer is resolved here — exactly the same
+    // Shift+click quick-transfer is resolved here, exactly the same
     // shape as the furnace UI. A non-bag slot Shift+click while the
     // bag is open quick-transfers into the bag; a bag slot
     // Shift+click empties out into the player's inventory.

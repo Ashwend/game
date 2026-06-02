@@ -312,7 +312,7 @@ fn draw_corrupted_world_row(
     if let Some(world_id) = entry.id {
         delete_corrupted_button(ui, menu, world_id, &entry, delete_rect);
     } else {
-        // No recoverable id — we can't route to `WorldStore::delete_world`
+        // No recoverable id, we can't route to `WorldStore::delete_world`
         // (which keys off Uuid). Render a disabled Delete so the row is
         // still visually consistent, and put the reason in the tooltip.
         paint_disabled_button(ui, delete_rect, "Delete");

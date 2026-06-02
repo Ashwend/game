@@ -159,7 +159,7 @@ pub(crate) fn apply_ui_scale_system(
 
 /// Registers the custom title typeface on the primary egui context once.
 ///
-/// `ctx.set_fonts` rebuilds the font atlas, so this must not run per frame —
+/// `ctx.set_fonts` rebuilds the font atlas, so this must not run per frame,
 /// the `Local` flag latches after the first successful install. Runs ahead of
 /// [`ui_system`] in the context pass so the very first frame already has the
 /// font available.
@@ -186,7 +186,7 @@ pub(crate) fn ui_system(
     // display scale factor into egui's zoom every frame via
     // `set_pixels_per_point`; setting a different zoom here makes the two
     // ping-pong, and egui's `begin_pass` jitter-avoidance hack discards the
-    // real `screen_rect` on every zoom change — so the whole UI is laid out in
+    // real `screen_rect` on every zoom change, so the whole UI is laid out in
     // egui's ~5000x5000 default and centred menus render off-screen on HiDPI.
     // User UI scale is applied via `EguiContextSettings::scale_factor` in
     // `apply_ui_scale_system` instead.
@@ -357,7 +357,7 @@ pub(crate) fn ui_system(
                     &mut resources.error_toasts,
                 );
                 draw_drag_preview(ctx, &resources.inventory_ui);
-                // The queue HUD is always visible while jobs exist —
+                // The queue HUD is always visible while jobs exist,
                 // closing the crafting browser must not hide it, that
                 // would defeat the point of the queue being persistent.
                 crafting_queue_hud(

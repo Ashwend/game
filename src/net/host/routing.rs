@@ -9,7 +9,7 @@ use lightyear::{
 use super::super::channels::send_server_message;
 use super::AuthoritativeServer;
 use crate::{
-    protocol::{ClientId, ClientMessage, ServerMessage},
+    protocol::{ClientId, ClientMessage, GAME_VERSION, PROTOCOL_VERSION, ServerMessage},
     server::{DeliveryTarget, GameServer, ServerEnvelope, VersionMismatchRejection},
 };
 
@@ -169,11 +169,20 @@ fn handle_unauthenticated_message(
         token,
     } = message
     else {
+        // An unauthenticated client whose first message isn't `Auth` almost
+        // always means a version/wire skew: this server build couldn't parse
+        // the client's `Auth` (postcard isn't self-describing), so some other
+        // message surfaced first. Answer with the structured version mismatch
+        // (carrying our version) instead of a confusing "not authenticated",
+        // so the client renders the proper behind/ahead-version notice.
+        // Genuine token failures never reach here, a parseable `Auth` goes
+        // through `server.connect` below, which replies `AuthRejected`.
         send_to_entity(
             senders,
             entity,
-            ServerMessage::AuthRejected {
-                reason: "client is not authenticated".to_owned(),
+            ServerMessage::VersionMismatch {
+                server_version: GAME_VERSION.to_owned(),
+                server_protocol: PROTOCOL_VERSION,
             },
         );
         return;

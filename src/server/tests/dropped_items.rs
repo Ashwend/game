@@ -191,7 +191,7 @@ fn dropped_items_despawn_after_their_lifetime() {
     );
     assert_eq!(dropped_count(&server), 1);
 
-    // Tick just up to one cleanup boundary short of the lifetime — the item
+    // Tick just up to one cleanup boundary short of the lifetime, the item
     // should still be present.
     let stable_ticks = DROPPED_ITEM_LIFETIME_TICKS - DROPPED_ITEM_CLEANUP_INTERVAL_TICKS;
     for _ in 0..stable_ticks {
@@ -233,7 +233,7 @@ fn dropped_item_physics_settles_on_the_floor() {
         server.tick(1.0 / SERVER_TICK_RATE_HZ);
     }
 
-    // Grid-generated worlds have no internal blocks — items settle on
+    // Grid-generated worlds have no internal blocks, items settle on
     // the floor at y = DROPPED_ITEM_RADIUS plus a small jitter.
     let item = first_dropped_item(&server);
     assert!(item.position.y >= DROPPED_ITEM_RADIUS - 0.03);

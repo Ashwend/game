@@ -38,7 +38,7 @@ impl ToastState {
         });
 
         // Drop oldest if we exceeded the cap. Drains the front so the cap is
-        // a hard ceiling on the rendered stack — fast gathers produce a
+        // a hard ceiling on the rendered stack, fast gathers produce a
         // rolling stream rather than collapsing into one entry.
         while self.toasts.len() > MAX_VISIBLE_TOASTS {
             self.toasts.pop_front();

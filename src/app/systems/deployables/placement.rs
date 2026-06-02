@@ -1,9 +1,9 @@
 //! Client-side deployable placement:
 //!
-//! - `update_placement_ghost_system` — raycasts the camera look ray
+//! - `update_placement_ghost_system`, raycasts the camera look ray
 //!   against the ground, updates `DeployablePlacementState`, and
 //!   spawns / despawns the ghost preview entity.
-//! - `placement_input_system` — left-click sends the place command;
+//! - `placement_input_system`, left-click sends the place command;
 //!   holding right-click freezes the spot + camera and turns horizontal
 //!   mouse motion into ghost rotation, key `R` snaps to 90°. Until the
 //!   player rotates, the ghost auto-faces them (front toward the player).
@@ -35,7 +35,7 @@ use super::deployable_transform;
 /// and server validation agree on what the player can reach.
 const PLACEMENT_REACH_M: f32 = 5.0;
 /// Radians of ghost yaw per pixel of horizontal mouse motion while
-/// right-mouse is held. ~157 px sweeps a quarter turn — slow enough to
+/// right-mouse is held. ~157 px sweeps a quarter turn, slow enough to
 /// land precisely on the angle the player wants while fine-tuning.
 const PLACEMENT_ROTATE_RAD_PER_PIXEL: f32 = 0.01;
 
@@ -63,7 +63,7 @@ pub(crate) fn update_placement_ghost_system(
         != active.as_ref().map(|(id, _, _)| id.as_ref());
     if kind_changed {
         // Hand control back to auto-facing when the deployable type
-        // changes — otherwise the first frame after a swap would inherit
+        // changes, otherwise the first frame after a swap would inherit
         // a yaw the player dialled in for a different structure.
         placement.manual_yaw = false;
     }
@@ -217,7 +217,7 @@ pub(super) fn ground_under_aim(camera_transform: &GlobalTransform) -> Option<Vec
     let origin = camera_transform.translation();
     let forward = camera_transform.forward().as_vec3();
     // Clamp slightly steeper than vertical so the ghost doesn't latch
-    // onto a horizon-far point when the player looks straight ahead —
+    // onto a horizon-far point when the player looks straight ahead,
     // pure horizontal aim is unsolvable for a ground hit.
     if forward.y.abs() < 1e-3 {
         return None;
@@ -251,7 +251,7 @@ fn is_placement_valid(
         return false;
     }
     // Cheap AABB-vs-AABB overlap test against already-placed structures
-    // using a shared default half-extent — we don't know the placed
+    // using a shared default half-extent, we don't know the placed
     // entity's profile here (its kind would need a definition lookup),
     // so use a conservative footprint that matches both Workbench and
     // Furnace tier-1 widths.
@@ -265,7 +265,7 @@ fn is_placement_valid(
     );
     for (_, transform) in deployed.iter() {
         let p = transform.translation;
-        // Use the same conservative half-width on both sides — being
+        // Use the same conservative half-width on both sides, being
         // generous on overlap here matches the server's actual
         // per-profile check, which uses the persisted entity's profile.
         let other_min = Vec2::new(p.x - 0.55, p.z - 0.55);
@@ -343,7 +343,7 @@ fn refresh_ghost_entity(
         transform,
         Visibility::Visible,
         // Casting a shadow off a translucent placement preview reads as
-        // a hard floor blob — disable it so the ghost looks unbaked.
+        // a hard floor blob, disable it so the ghost looks unbaked.
         NotShadowCaster,
     ));
     let _ = profile; // silence unused-var if expansions never read it.

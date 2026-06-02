@@ -6,7 +6,7 @@
 //! the player gets a modal with the changelog since their version and can
 //! update in place or skip. Updating downloads the host's release archive,
 //! verifies it, stages the new binary beside the running one, and hands off to
-//! the sibling `ashwend-updater` process — which swaps the binary and relaunches
+//! the sibling `ashwend-updater` process, which swaps the binary and relaunches
 //! after this process exits.
 //!
 //! This module owns everything that does *not* touch the app's session/menu
@@ -46,7 +46,7 @@ impl Plugin for UpdatePlugin {
 pub(crate) enum UpdateStatus {
     /// Boot-time check in flight.
     Checking,
-    /// Newest release is not newer than us (or the check failed — same UX:
+    /// Newest release is not newer than us (or the check failed, same UX:
     /// nothing to show).
     UpToDate,
     /// A newer release exists and is described by [`UpdateState::available`].
@@ -306,7 +306,7 @@ fn check_latest(agent: &ureq::Agent) -> Msg {
     let releases = match github::fetch_releases(agent) {
         Ok(releases) => releases,
         Err(error) => {
-            // Treat any check failure as "up to date" — never block or nag on a
+            // Treat any check failure as "up to date", never block or nag on a
             // flaky network. Log once for diagnostics.
             eprintln!("update: check failed: {error}");
             return Msg::Checked { available: None };

@@ -13,7 +13,7 @@ use crate::{
 };
 
 /// Hard cutoff: anything farther than this is skipped entirely. Tuned to a
-/// conversational range — close enough that you'd realistically read a
+/// conversational range, close enough that you'd realistically read a
 /// nameplate or chat line and not have it cluttering the world otherwise.
 const PEER_DRAW_DISTANCE_METERS: f32 = 7.0;
 /// Distance at which the label starts fading toward invisible, so it
@@ -54,7 +54,7 @@ pub(crate) struct PeerOverlayEntry<'world> {
 /// the player sends chat (driven by the server's `chat_bubble` snapshot field).
 ///
 /// Each label is screen-projected from the player's head world position, so
-/// it tracks the camera automatically — billboard behaviour with no extra
+/// it tracks the camera automatically, billboard behaviour with no extra
 /// orientation math.
 pub(super) fn peer_overlay_ui(ctx: &egui::Context, overlay: PeerOverlay<'_>) {
     let Some((camera, camera_transform)) = overlay.camera else {
@@ -81,7 +81,7 @@ pub(super) fn peer_overlay_ui(ctx: &egui::Context, overlay: PeerOverlay<'_>) {
             continue;
         };
         // Hide labels whose anchor has drifted off-screen instead of letting
-        // egui clip them at the edge — half-clipped nameplates floating in
+        // egui clip them at the edge, half-clipped nameplates floating in
         // the corner read as a UI glitch.
         if !visible_rect.contains(egui::pos2(screen.x, screen.y)) {
             continue;
@@ -108,7 +108,7 @@ fn draw_peer_label(
     let id = egui::Id::new(("peer_overlay", client_id));
     let fade = distance_fade(distance);
 
-    // `anchor()` and `fixed_pos()` conflict — `anchor()` pins the area to a
+    // `anchor()` and `fixed_pos()` conflict, `anchor()` pins the area to a
     // screen edge and ignores the fixed position. We want the area's
     // bottom-center to sit at `screen` (above the player's head), so we use
     // `pivot(CENTER_BOTTOM) + fixed_pos(screen)` instead. Foreground order
@@ -170,7 +170,7 @@ fn nametag(ui: &mut egui::Ui, public: &PlayerPublic, fade: f32, speaking: bool) 
     );
 
     // Paint the speaking dot AFTER the name so we can anchor it to the
-    // actual rendered text rect — that's how we keep it immediately to the
+    // actual rendered text rect, that's how we keep it immediately to the
     // left of the name (with a small gap) regardless of how long the
     // player's display name is.
     if speaking {
@@ -235,7 +235,7 @@ fn chat_bubble(ui: &mut egui::Ui, text: &str, fade: f32) {
         egui::StrokeKind::Inside,
     );
 
-    // Small downward triangle pointing at the nametag below — bubble tail.
+    // Small downward triangle pointing at the nametag below, bubble tail.
     let tail_top_y = rect.bottom();
     let tail_center_x = rect.center().x;
     let tail = vec![
@@ -337,7 +337,7 @@ fn health_fill_color(fraction: f32) -> egui::Color32 {
 /// Collects the head world positions of each remote player into entries the
 /// overlay UI can project. The lookup is keyed by `client_id` so we can pair
 /// each `NetworkPlayer` visual entity with the matching replicated
-/// `PlayerPublic` — without that pairing, the overlay would have no
+/// `PlayerPublic`, without that pairing, the overlay would have no
 /// name/health/bubble to display.
 pub(crate) fn collect_peer_overlay_entries<'a>(
     network_players: impl IntoIterator<Item = (&'a NetworkPlayer, &'a GlobalTransform)>,
@@ -347,7 +347,7 @@ pub(crate) fn collect_peer_overlay_entries<'a>(
     local_client_id: Option<ClientId>,
     voice: &VoiceState,
 ) -> Vec<PeerOverlayEntry<'a>> {
-    // Dead peers get their nameplate suppressed entirely — a tag
+    // Dead peers get their nameplate suppressed entirely, a tag
     // floating over a tilted-and-fading corpse reads as a UI bug,
     // and a name on a hidden invisible-corpse entity even more so.
     let mut public_by_id: HashMap<ClientId, &PlayerPublic> = replicated_players

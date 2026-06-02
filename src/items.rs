@@ -39,7 +39,7 @@ pub fn intern_item_id(id: &str) -> ItemId {
     // overwrites with an Arc that hashes/compares equal.
     let fresh: Arc<str> = Arc::from(id);
     if let Ok(mut map) = registry.write() {
-        // Re-check after taking the write lock — another caller may have
+        // Re-check after taking the write lock, another caller may have
         // inserted between our read miss and now. Returning the cached value
         // keeps the registry's "one Arc per id" invariant in lockstep with
         // anything that already grabbed the earlier-inserted Arc.
@@ -73,7 +73,7 @@ pub enum ItemModel {
     Hatchet,
     Pickaxe,
     /// Deployable items render as the bag silhouette in the held-item
-    /// slot — the actual structure mesh is what gets placed in the world.
+    /// slot, the actual structure mesh is what gets placed in the world.
     Deployable,
 }
 
@@ -82,7 +82,7 @@ pub enum ToolKind {
     /// No tool equipped. Synthesized via [`HANDS_TOOL`] when the active
     /// actionbar slot has no tool. Crude pickup nodes carry a
     /// `ToolRequirement` of `Hands` to mark themselves as
-    /// E-pickup-only — no tool (including bare hands) can gather them
+    /// E-pickup-only, no tool (including bare hands) can gather them
     /// by swinging. See [`crate::resources::ToolRequirement::allows`].
     Hands,
     Axe,
@@ -110,8 +110,8 @@ pub struct ToolProfile {
 /// Synthesized tool profile used when no actionbar item is held. The
 /// server substitutes this in when the active stack carries no tool
 /// definition so the gather pipeline always has a `ToolProfile` to read.
-/// It's never accepted as a valid gather tool — crude nodes are E-pickup
-/// only and the tool-required nodes reject Hands explicitly — but it
+/// It's never accepted as a valid gather tool, crude nodes are E-pickup
+/// only and the tool-required nodes reject Hands explicitly, but it
 /// keeps the cooldown/payout math uniform across the gather path.
 pub const HANDS_TOOL: ToolProfile = ToolProfile {
     kind: ToolKind::Hands,
@@ -135,7 +135,7 @@ impl ItemTint {
 
 /// What kind of structure a deployable item places. The tier travels with
 /// the kind so a single `RecipeStation::Workbench { min_tier }` check can
-/// match any equal-or-higher workbench in range — same idea behind tool
+/// match any equal-or-higher workbench in range, same idea behind tool
 /// tiers (`ToolProfile`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DeployableKind {
@@ -154,7 +154,7 @@ impl DeployableKind {
     /// Source of truth for what the structure is built from. The damage
     /// path uses this for the tool-vs-material multiplier and the
     /// client uses it to pick the swing surface (audio/visual chip).
-    /// Tier doesn't change material today — a future "reinforced" tier
+    /// Tier doesn't change material today, a future "reinforced" tier
     /// can introduce a new kind variant if that ever needs to differ.
     pub const fn material(self) -> DeployableMaterial {
         match self {
@@ -165,7 +165,7 @@ impl DeployableKind {
 }
 
 /// What the structure is made of, for the damage / tool-matchup system.
-/// Kept deliberately coarse — wood vs stone is enough to express
+/// Kept deliberately coarse, wood vs stone is enough to express
 /// "hatchet eats workbenches, pickaxe eats furnaces" without forcing
 /// every future deployable to invent a new material.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -10,19 +10,19 @@
 //! client that tries to forge an `AttackPlayer` message for an
 //! out-of-range or wall-hidden target gets no damage and no toast:
 //!
-//! 1. Cooldown — the swinger's `next_attack_tick` must have elapsed.
-//! 2. Self-attack — `attacker == target` is silently dropped.
-//! 3. Target alive — no chain damage on a corpse.
-//! 4. Real tool — bare hands and non-tool items can't deal PvP damage.
-//! 5. Range — feet-to-feet distance must be within [`ATTACK_RANGE_M`].
-//! 6. View cone — target must sit inside the attacker's look cone.
-//! 7. Line-of-sight — no solid block between eye and chest.
+//! 1. Cooldown, the swinger's `next_attack_tick` must have elapsed.
+//! 2. Self-attack, `attacker == target` is silently dropped.
+//! 3. Target alive, no chain damage on a corpse.
+//! 4. Real tool, bare hands and non-tool items can't deal PvP damage.
+//! 5. Range, feet-to-feet distance must be within [`ATTACK_RANGE_M`].
+//! 6. View cone, target must sit inside the attacker's look cone.
+//! 7. Line-of-sight, no solid block between eye and chest.
 //!
 //! On success the post-armor damage is subtracted from the target's
 //! health, a `PlayerImpact` is broadcast to peers (except the
 //! attacker, who already produced their own predicted feedback), and
 //! a `Knockback` impulse is sent privately to the target. HP itself
-//! ships via the replicated `PlayerPublic.health` diff — no separate
+//! ships via the replicated `PlayerPublic.health` diff, no separate
 //! message.
 
 use crate::{
@@ -72,7 +72,7 @@ impl GameServer {
             .unwrap_or(HANDS_TOOL);
 
         let Some(damage_instance) = tool_player_damage(tool_profile.kind, attacker_id) else {
-            // Hands or non-combat tool — nothing to do. Cooldown is not
+            // Hands or non-combat tool, nothing to do. Cooldown is not
             // touched because no swing was accepted (the client gates
             // bare-hand swings too; defence in depth).
             return Vec::new();
@@ -112,7 +112,7 @@ impl GameServer {
             target_pos.z,
         );
 
-        // Range — feet-to-feet horizontal distance keeps the check
+        // Range, feet-to-feet horizontal distance keeps the check
         // close to "can my swing reach them?" without bias from
         // height differences (a target standing on a one-block step
         // is still meleeable).
@@ -122,7 +122,7 @@ impl GameServer {
             return Vec::new();
         }
 
-        // View cone — direction from eye to target chest must sit
+        // View cone, direction from eye to target chest must sit
         // inside the attacker's forward cone.
         let forward = crate::items::look_forward(attacker_yaw, attacker_pitch);
         let to_target = target_chest.minus(attacker_eye);
@@ -134,7 +134,7 @@ impl GameServer {
             return Vec::new();
         }
 
-        // LOS — refuse a swing that has to pass through a solid block.
+        // LOS, refuse a swing that has to pass through a solid block.
         if !line_of_sight_clear(&self.world_grid, attacker_eye, target_chest) {
             return Vec::new();
         }
@@ -213,7 +213,7 @@ impl GameServer {
         client.controller.health = MAX_HEALTH;
         client.controller.grounded = true;
         client.lifecycle = PlayerLifecycle::Alive;
-        // Don't keep the cooldown from before-death — the player just
+        // Don't keep the cooldown from before-death, the player just
         // returned to the world, swinging shouldn't be stunlocked.
         client.next_attack_tick = self.tick;
         client.next_gather_tick = self.tick;
@@ -344,7 +344,7 @@ impl GameServer {
         // RNG state mixes tick + respawner id so back-to-back respawns
         // by the same client land on different spots, and simultaneous
         // respawns by different clients don't collide on a single
-        // picked square. SplitMix64 keeps this self-contained — no
+        // picked square. SplitMix64 keeps this self-contained, no
         // dependency on the `commands.rs` private RNG type.
         let mut rng_state = self
             .tick

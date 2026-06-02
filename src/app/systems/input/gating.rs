@@ -5,8 +5,8 @@ use crate::app::state::{MenuState, Screen};
 /// True if local game simulation should run this frame (network ticks,
 /// prediction). Per CLAUDE.md's "gameplay never pauses" invariant, the
 /// only thing that halts simulation is leaving the in-game screen
-/// entirely. Every in-game overlay — pause, pause-options, inventory,
-/// chat, crafting, furnace, death splash — keeps the simulator
+/// entirely. Every in-game overlay, pause, pause-options, inventory,
+/// chat, crafting, furnace, death splash, keeps the simulator
 /// ticking so server-pushed effects (knockback, replication, deaths
 /// landing while the menu is open) all keep applying in real time.
 /// Overlays only gate local input via `gameplay_accepts_controls`
@@ -16,7 +16,7 @@ pub(super) fn gameplay_simulation_allowed(menu: &MenuState) -> bool {
 }
 
 /// True if the local player should accept movement/look/swing controls.
-/// Stricter than `gameplay_simulation_allowed` — the window must be focused
+/// Stricter than `gameplay_simulation_allowed`, the window must be focused
 /// and no modal UI (pause menu, inventory, chat, loot bag, death splash)
 /// can be in the way.
 pub(super) fn gameplay_accepts_controls(menu: &MenuState, window_focused: bool) -> bool {
@@ -28,7 +28,7 @@ pub(super) fn gameplay_accepts_controls(menu: &MenuState, window_focused: bool) 
         && !menu.furnace_open
         && !menu.loot_bag_open
         && !menu.chat_open
-        // Dead players can move the cursor over the respawn button —
+        // Dead players can move the cursor over the respawn button, 
         // gameplay controls (WASD, mouse-look, swing) stay frozen
         // until the respawn lands.
         && menu.death_splash.is_none()

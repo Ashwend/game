@@ -1,9 +1,9 @@
 //! In-game voice chat. Three concerns split across submodules:
 //!
-//! - [`codec`] — thin libopus wrapper.
-//! - [`capture`] — microphone input + opus encode worker.
-//! - [`playback`] — opus decode + per-speaker spatial mixer + output stream.
-//! - [`systems`] — Bevy resources/systems that bridge the worker threads
+//! - [`codec`], thin libopus wrapper.
+//! - [`capture`], microphone input + opus encode worker.
+//! - [`playback`], opus decode + per-speaker spatial mixer + output stream.
+//! - [`systems`], Bevy resources/systems that bridge the worker threads
 //!   to the protocol and to the UI indicator.
 
 pub(crate) mod capture;

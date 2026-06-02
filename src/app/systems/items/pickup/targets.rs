@@ -32,7 +32,7 @@ const DEPLOYABLE_INTERACT_RANGE_M: f32 = 5.5;
 /// player is mostly looking past the structure.
 const DEPLOYABLE_INTERACT_CONE_COS: f32 = 0.92;
 /// Max range at which a melee swing can reach another player. Tighter
-/// than gather range — players are smaller targets than ore veins, so
+/// than gather range, players are smaller targets than ore veins, so
 /// we need them well inside arm's reach before "swing at player" wins
 /// over "swing at the deployable behind them".
 pub(super) const ATTACK_RANGE_M: f32 = 3.0;
@@ -51,7 +51,7 @@ const PLAYER_BODY_CENTRE_Y: f32 = 0.95;
 /// the server's `LOOT_BAG_INTERACT_RANGE_M` so the tooltip never
 /// lies about reachability.
 const LOOT_BAG_INTERACT_RANGE_M: f32 = 4.5;
-/// Cone cosine for loot bag interaction — same as deployables since
+/// Cone cosine for loot bag interaction, same as deployables since
 /// bags sit at roughly the same eye-level cone an aimed E would
 /// expect to hit.
 const LOOT_BAG_INTERACT_CONE_COS: f32 = 0.92;

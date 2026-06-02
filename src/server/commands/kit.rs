@@ -1,4 +1,4 @@
-//! `/test-kit` — debug command that grants the full early-game kit.
+//! `/test-kit`, debug command that grants the full early-game kit.
 
 use crate::{
     items::{
@@ -12,7 +12,7 @@ use super::super::{GameServer, ServerEnvelope, inventory::add_stack_to_inventory
 use super::{reply_success, reply_warning};
 
 impl GameServer {
-    /// `/test-kit` — debug shortcut that fills the player's bag with the
+    /// `/test-kit`, debug shortcut that fills the player's bag with the
     /// full early-game kit:
     ///
     /// - Equipables (tools + deployables) → first empty actionbar slot,
@@ -21,7 +21,7 @@ impl GameServer {
     ///   so they don't shove existing actionbar contents around.
     ///
     /// Admin only. Any items that can't fit (e.g. inventory full from
-    /// earlier kits) are reported in the success toast — no silent loss.
+    /// earlier kits) are reported in the success toast, no silent loss.
     pub(super) fn command_test_kit(&mut self, client_id: ClientId) -> Vec<ServerEnvelope> {
         let Some(client) = self.clients.get_mut(&client_id) else {
             return Vec::new();

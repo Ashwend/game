@@ -99,7 +99,7 @@ pub(crate) fn low_poly_birch_tree_small_mesh() -> Mesh {
 }
 
 /// Stacks birch trunk segments end-to-end so the resulting cylinder reads as
-/// continuous — no horizontal gaps between bark and band sections. Each entry
+/// continuous, no horizontal gaps between bark and band sections. Each entry
 /// is `(half_width, total_height, color)`.
 fn stack_birch_trunk(builder: &mut LowPolyMeshBuilder, segments: &[(f32, f32, MeshColor)]) {
     let mut y = 0.0;
@@ -166,7 +166,7 @@ pub(crate) fn low_poly_birch_tree_large_mesh() -> Mesh {
             (0.225, 0.40, BIRCH_BARK),
         ],
     );
-    // Bigger, denser canopy — additional clusters for fullness.
+    // Bigger, denser canopy, additional clusters for fullness.
     builder.add_octa_rock([0.0, 5.75, 0.0], [2.10, 1.40, 1.95], LEAF_BIRCH);
     builder.add_octa_rock([-1.00, 5.30, 0.32], [1.20, 0.92, 1.08], LEAF_BIRCH_DARK);
     builder.add_octa_rock([1.04, 5.42, -0.20], [1.14, 0.88, 1.04], LEAF_BIRCH_DARK);
@@ -184,7 +184,7 @@ pub(crate) fn low_poly_birch_tree_large_mesh() -> Mesh {
 // Low-poly stand-ins swapped in past ~80 m via `VisibilityRange` hard switch (see
 // the resource-node spawn path). Each preserves its full-detail counterpart's
 // height, canopy extent, and colour palette so the hard switch reads as the same
-// tree — but with ~1/3 the triangles (single trunk box, few low-segment cones /
+// tree, but with ~1/3 the triangles (single trunk box, few low-segment cones /
 // canopy blobs). At 80 m+ on screen the facet count is imperceptible; the win
 // is the per-frame vertex throughput across a forest of distant trees.
 // ---------------------------------------------------------------------------

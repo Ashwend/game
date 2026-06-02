@@ -3,7 +3,7 @@
 Player-vs-player melee, server-authoritative. Hits, knockback, death,
 respawn, and the loot bag at the corpse all flow through the same
 `ClientMessage` / `ServerMessage` / per-component replication path the
-rest of the game uses — singleplayer loopback and direct multiplayer
+rest of the game uses, singleplayer loopback and direct multiplayer
 both exercise the full chain. The client predicts swing visuals/audio
 for responsiveness; the server is the only thing that decides whether
 a hit landed, how much damage to deal, who killed whom, and where the
@@ -36,32 +36,32 @@ ServerMessage::PlayerImpact (→ broadcast except attacker)
 PlayerPublic.health diff (→ all peers via replication)
 ```
 
-The attacker never receives `PlayerImpact` — they already produced
+The attacker never receives `PlayerImpact`, they already produced
 their own feedback via prediction. Peers see the chip burst + audio.
 Only the target gets the knockback impulse and the screen kick.
 
 When `controller.health` hits zero on the same swing, the kill chain
-runs inside `apply_attack_player_command` before it returns — see
+runs inside `apply_attack_player_command` before it returns, see
 [Death and respawn](#death-and-respawn) below.
 
 ## Damage model
 
 Damage primitives live in `src/combat.rs` and never ship on the wire.
 
-- `DamageKind` — `Blunt` today, `Projectile` reserved for the future
+- `DamageKind`, `Blunt` today, `Projectile` reserved for the future
   bow/gun pass.
-- `DamageInstance { raw, kind, knockback_speed, source }` — built on
+- `DamageInstance { raw, kind, knockback_speed, source }`, built on
   the server, lives on the stack while the damage path runs.
-- `DamageSource::Player { client_id, tool }` — credits the attacker
+- `DamageSource::Player { client_id, tool }`, credits the attacker
   for the death splash and any future hit-direction indicator.
-- `tool_player_damage(tool, attacker)` — returns `None` for
+- `tool_player_damage(tool, attacker)`, returns `None` for
   `ToolKind::Hands`, so bare-hand swings short-circuit before any
   state mutates.
-- `damage_after_armor(raw, armor)` — armor is clamped to `[0, 100]`
+- `damage_after_armor(raw, armor)`, armor is clamped to `[0, 100]`
   percent and applied as `raw * (100 - armor) / 100`.
 
 Armor is a per-player u8 (`PlayerArmor` component, replicated). Every
-player ships with 0 today — there are no armor items defined — but
+player ships with 0 today, there are no armor items defined, but
 the math is wired up so a future `PlayerArmor` mutation just works
 without any further protocol or path changes.
 
@@ -69,7 +69,7 @@ without any further protocol or path changes.
 
 All combat constants are in `src/combat.rs`, `src/server/combat.rs`,
 and `src/app/systems/items/pickup.rs`. Numbers chosen for "feels like
-a survival game's first tier" — easy to revise.
+a survival game's first tier", easy to revise.
 
 | Knob | Value | Where | Why |
 |---|---:|---|---|
@@ -93,23 +93,23 @@ the gather tools express.
 In `src/protocol.rs`:
 
 - `ClientMessage::AttackPlayer(AttackPlayerCommand { target_player_id })`
-  — server picks the damage from the attacker's active tool so the
+, server picks the damage from the attacker's active tool so the
   client can't lie about how hard they hit.
-- `ClientMessage::Respawn` — request the server to relocate + reset
+- `ClientMessage::Respawn`, request the server to relocate + reset
   health. Rejected unless the issuer is currently dead.
-- `ClientMessage::LootBag(LootBagCommand)` — `Open / Close / Move /
+- `ClientMessage::LootBag(LootBagCommand)`, `Open / Close / Move /
   QuickTransfer`, modelled on `FurnaceCommand` because the UI shape
   is identical.
 - `ServerMessage::PlayerImpact { attacker, target, position, tool, damage_dealt }`
-  — broadcast (except attacker) for the chip burst + impact audio +
+, broadcast (except attacker) for the chip burst + impact audio +
   floating damage text. The post-armor `damage_dealt` is what the
   client displays.
-- `ServerMessage::Knockback { impulse }` — target-only; the local
+- `ServerMessage::Knockback { impulse }`, target-only; the local
   prediction adds it to velocity.
-- `ServerMessage::PlayerKilled { killer, killer_name }` — target-only;
+- `ServerMessage::PlayerKilled { killer, killer_name }`, target-only;
   opens the death splash.
 
-All five are reliable channel — they aren't safe to drop.
+All five are reliable channel, they aren't safe to drop.
 
 HP itself ships via the replicated `PlayerPublic.health` diff. No
 separate message.
@@ -118,7 +118,7 @@ separate message.
 
 `PlayerLifecycle` (`src/server/player_ecs.rs`) is the authoritative
 state: `Alive` (default) or `Dead { since_tick, killer }`. Replicated
-to every peer in the chunk room — peers use it to drive the corpse
+to every peer in the chunk room, peers use it to drive the corpse
 animation, the local owner uses it to gate input.
 
 **Kill chain** (`kill_player` in `src/server/combat.rs`):
@@ -180,21 +180,21 @@ When a remote player flips to `Dead` the visual entity stays alive
 and gets a `DyingPlayer` component (`src/app/systems/players.rs`).
 The tick system drives:
 
-1. **Kick** (0.12 s) — small upward shudder off the feet.
-2. **Fall** (0.65 s) — rotates ~95° around the **feet pivot** (not
+1. **Kick** (0.12 s), small upward shudder off the feet.
+2. **Fall** (0.65 s), rotates ~95° around the **feet pivot** (not
    the chest), so the head sweeps down to the ground.
-3. **Bounce** — damped sine pulse layered on top of the fall angle
+3. **Bounce**, damped sine pulse layered on top of the fall angle
    right at impact.
-4. **Hold** (0.4 s) — settled.
-5. **Fade** (0.9 s) — alpha 1 → 0 via a per-spawn cloned
+4. **Hold** (0.4 s), settled.
+5. **Fade** (0.9 s), alpha 1 → 0 via a per-spawn cloned
    `StandardMaterial { alpha_mode: Blend }` so the fade doesn't drag
    every other remote player along.
 6. Visibility flips to `Hidden`; the entity stays in place so a
    respawn restores it without re-spawning the mesh.
 
 Per-spawn random roll axis + magnitude keep stacked kills from
-landing in identical poses. The animation isn't a true ragdoll — the
-player mesh is a single baked mesh, no skeleton — but the pivot + roll
+landing in identical poses. The animation isn't a true ragdoll, the
+player mesh is a single baked mesh, no skeleton, but the pivot + roll
 + bounce read as a collapse rather than a stiff tilt.
 
 Dead players are also filtered out of `collect_peer_overlay_entries`
@@ -207,10 +207,10 @@ the corpse was carrying. Replaces the older N-dropped-items pattern
 so a kill is one E-press away from full loot. Behaves like a furnace
 from the wire layer's perspective.
 
-**Authoritative state** — `LootBag` in `src/server/loot_bag.rs`:
-- `position, yaw, slots: Vec<Option<ItemStack>>` — fixed
+**Authoritative state**, `LootBag` in `src/server/loot_bag.rs`:
+- `position, yaw, slots: Vec<Option<ItemStack>>`, fixed
   `LOOT_BAG_SLOT_COUNT = 49` (one player's worst-case inventory).
-- `velocity_y, resting: bool` — gravity settles the bag from chest
+- `velocity_y, resting: bool`, gravity settles the bag from chest
   height (`+1.0 m`) at `BAG_GRAVITY = 18 m/s²` to `BAG_RESTING_Y =
   0.05 m`. `tick_loot_bags` integrates only non-resting bags so the
   cost is O(falling) not O(total).
@@ -218,19 +218,19 @@ from the wire layer's perspective.
 - Anchored via `chunk_manager.track_loot_bag` so the AoI ring
   replicates it like any other chunk-anchored entity.
 
-**Replication** — per-component, three components:
-- `LootBag { id }` — identity, immutable post-spawn.
-- `LootBagTransform { position, yaw }` — refreshed every tick by
+**Replication**, per-component, three components:
+- `LootBag { id }`, identity, immutable post-spawn.
+- `LootBagTransform { position, yaw }`, refreshed every tick by
   `sync_loot_bag_entities` in `src/net/host.rs` while gravity is
   running, then quiet.
-- `LootBagContents(Vec<Option<ItemStack>>)` — refreshed when a
+- `LootBagContents(Vec<Option<ItemStack>>)`, refreshed when a
   player drags items in/out.
 
 The client spawns a `NetworkLootBag` visual entity with the
 shared dropped-item mesh + material in
 `apply_loot_bags_system`.
 
-**Open/close/move** — `apply_loot_bag_command` mirrors the furnace's
+**Open/close/move**, `apply_loot_bag_command` mirrors the furnace's
 shape:
 
 - `Open { id }`: range check (`LOOT_BAG_INTERACT_RANGE_M = 4.5 m`)
@@ -246,14 +246,14 @@ shape:
   inventory slot (merging into matching stacks first); player slot
   → first empty bag slot.
 
-**Client UI** — `src/app/ui/loot_bag.rs`:
+**Client UI**, `src/app/ui/loot_bag.rs`:
 
 The bag panel renders bag contents + player inventory using the
 same `draw_slot` widget the main inventory + furnace use. The drag
 pipeline is unified via `UnifiedSlotRef::Bag(usize)`; drag releases
 across bag↔inventory route through `LootBagCommand::Move` in
 `drag.rs`. The actionbar is intentionally not drawn inside the bag
-panel — the hotbar at the bottom of the viewport already shows it,
+panel, the hotbar at the bottom of the viewport already shows it,
 and a player who wants to loot straight to a hotbar slot drags down
 into it.
 
@@ -263,7 +263,7 @@ bag instead of opening the pause menu (`close_loot_bag_on_escape_system`
 fires the Close; `handle_pause_escape` bails on `loot_bag_open`).
 
 Pickup tooltip: when the look ray hits a bag, the tooltip reads
-"Loot bag — Press E to open / Drag items between the bag and your
+"Loot bag, Press E to open / Drag items between the bag and your
 inventory."
 
 ## Client feedback
@@ -272,13 +272,13 @@ inventory."
 |---|---|---|
 | Chip burst on hit | Local prediction + `PlayerImpact` to peers | `ImpactEffectKind::FleshHit` in `app/state/gather.rs`, spawned by `spawn_impact_burst` |
 | Impact audio | Same; both attacker (predicted) and observers | `SoundId::ImpactPlayerBlunt`, routed via `impact_sound_for_player(tool)`; `RemoteImpactEvent.is_player_hit` switches the audio dispatcher |
-| Camera kick on attacker | Local prediction | `CameraImpactKick::trigger(tool)` — same kick as a deployable damage swing |
-| Camera kick on target | `PlayerImpact` whose `target == local_client_id` | `CameraImpactKick::trigger_from_hit(attacker_tool)` — sharper, downward-biased |
+| Camera kick on attacker | Local prediction | `CameraImpactKick::trigger(tool)`, same kick as a deployable damage swing |
+| Camera kick on target | `PlayerImpact` whose `target == local_client_id` | `CameraImpactKick::trigger_from_hit(attacker_tool)`, sharper, downward-biased |
 | Knockback | Server-only message, target snaps velocity | `ServerMessage::Knockback` handler in `runtime.rs` |
-| Floating damage text | Bevy entity with `FloatingDamageText` component | `app/ui/floating_text.rs` — orange for damage dealt, red for damage taken, randomised cone direction, sine-pop scale |
+| Floating damage text | Bevy entity with `FloatingDamageText` component | `app/ui/floating_text.rs`, orange for damage dealt, red for damage taken, randomised cone direction, sine-pop scale |
 
 The audio + chip burst use the same `RemoteImpactEvent` plumbing as
-resource impacts — adding `is_player_hit: bool` to the event was
+resource impacts, adding `is_player_hit: bool` to the event was
 cheaper than building a parallel pipeline.
 
 ## Multiplayer-test helpers
@@ -295,47 +295,47 @@ available without manual setup.
 player to the issuer's position. Useful for engineering a fight
 without walking the two clients into the same chunk manually. The
 server pushes `ServerMessage::Correction` so client predictors snap
-to the new pose — the runtime's 1 m position-delta threshold makes
+to the new pose, the runtime's 1 m position-delta threshold makes
 that snap happen.
 
 ## Code map
 
 Server-side:
-- `src/combat.rs` — `DamageKind`, `DamageInstance`, `DamageSource`,
+- `src/combat.rs`, `DamageKind`, `DamageInstance`, `DamageSource`,
   `damage_after_armor`, `tool_player_damage`, per-tool tuning.
-- `src/server/combat.rs` — `apply_attack_player_command`,
+- `src/server/combat.rs`, `apply_attack_player_command`,
   `apply_respawn_command`, `kill_player`, line-of-sight check,
   knockback impulse builder, safe-spawn picker.
-- `src/server/loot_bag.rs` — bag state struct, command handlers
+- `src/server/loot_bag.rs`, bag state struct, command handlers
   (`Open`/`Close`/`Move`/`QuickTransfer`), gravity tick,
   destroy-when-empty cleanup.
-- `src/server/loot_bag_ecs.rs` — `LootBag`, `LootBagTransform`,
+- `src/server/loot_bag_ecs.rs`, `LootBag`, `LootBagTransform`,
   `LootBagContents`, `LootBagIndex` components.
-- `src/server/player_ecs.rs` — `PlayerArmor`, `PlayerLifecycle`
+- `src/server/player_ecs.rs`, `PlayerArmor`, `PlayerLifecycle`
   components.
-- `src/server/tests/combat.rs` — full anti-cheat + death + respawn
+- `src/server/tests/combat.rs`, full anti-cheat + death + respawn
   test suite (16 cases). LOS unit tests in `src/server/combat.rs`.
 
 Client-side:
-- `src/app/systems/items/pickup.rs` — `best_player_target`,
+- `src/app/systems/items/pickup.rs`, `best_player_target`,
   `best_loot_bag_target`, ray-AABB intersection, body extents.
-- `src/app/systems/input/inventory_shortcuts.rs` —
+- `src/app/systems/input/inventory_shortcuts.rs`, 
   `dispatch_player_swing`, target-priority block, E-open routing.
-- `src/app/systems/network.rs` — `PlayerImpact` /
+- `src/app/systems/network.rs`, `PlayerImpact` /
   `Knockback` / `PlayerKilled` / `Correction` handlers, floating
   damage text spawning.
-- `src/app/systems/players.rs` — `DyingPlayer` component, fall
+- `src/app/systems/players.rs`, `DyingPlayer` component, fall
   axis picker, death animation tick.
-- `src/app/ui/death_splash.rs` — fade-in/out backdrop + Respawn
+- `src/app/ui/death_splash.rs`, fade-in/out backdrop + Respawn
   button.
-- `src/app/ui/floating_text.rs` — billboard damage numbers (cone
+- `src/app/ui/floating_text.rs`, billboard damage numbers (cone
   drift + pop scale).
-- `src/app/ui/loot_bag.rs` — bag transfer UI.
-- `src/app/ui/inventory/drag.rs` — unified drag-release pipeline
+- `src/app/ui/loot_bag.rs`, bag transfer UI.
+- `src/app/ui/inventory/drag.rs`, unified drag-release pipeline
   routing player↔player / player↔furnace / player↔bag.
 
 Wire protocol:
-- `src/protocol.rs` — `AttackPlayerCommand`, `Respawn`,
+- `src/protocol.rs`, `AttackPlayerCommand`, `Respawn`,
   `LootBagCommand`, `LootBagSlotRef`, `OpenLootBagView`,
   `PlayerImpact`, `Knockback`, `PlayerKilled`.
 
@@ -361,7 +361,7 @@ source is a server-side change only:
   pipeline picks up the new shape with no changes.
 - **Hit-direction indicator** (incoming chevron on screen edge): the
   client already receives `PlayerImpact` with the attacker's id, and
-  the attacker's `PlayerPublic.position` is replicated — the chevron
+  the attacker's `PlayerPublic.position` is replicated, the chevron
   reads angles off both. No additional server work.
 
 ## Out of scope today

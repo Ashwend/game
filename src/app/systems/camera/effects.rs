@@ -7,7 +7,7 @@ use crate::{
 
 // Axe kick: the chop is a slow, heavy wind-up into a deep committed strike
 // (see `hatchet_swing_pose`), so the camera punch is firm and lingers to sell
-// the weight of the contact — still short of the pickaxe's heavy slam.
+// the weight of the contact, still short of the pickaxe's heavy slam.
 const AXE_KICK_PITCH: f32 = 0.026;
 const AXE_KICK_DOWN: f32 = 0.016;
 const AXE_KICK_DURATION: f32 = 0.14;
@@ -22,7 +22,7 @@ const HANDS_KICK_DOWN: f32 = 0.002;
 const HANDS_KICK_DURATION: f32 = 0.06;
 
 // "I just got hit by a player" reaction. Larger and more downward-biased
-// than any swing-side kick — the camera jolts down rather than up, so the
+// than any swing-side kick, the camera jolts down rather than up, so the
 // recipient can tell at a glance whether the wobble was their own swing or
 // an incoming hit. Hatchet and pickaxe variants scale with the swinger's
 // tool so a pickaxe blow rocks the camera harder than a hatchet jab.
@@ -46,7 +46,7 @@ const BOB_AMP_LERP_RATE: f32 = 12.0;
 
 // Run FOV: full +RUN_FOV_BOOST_DEG when horizontal speed reaches
 // RUN_SPEED, linear ramp from WALK_SPEED upward. The boost is small on
-// purpose — enough to register peripherally without warping the geometry.
+// purpose, enough to register peripherally without warping the geometry.
 pub(super) const BASE_FOV_DEG: f32 = 65.0;
 pub(super) const RUN_FOV_BOOST_DEG: f32 = 5.0;
 const FOV_LERP_RATE: f32 = 8.0;
@@ -205,7 +205,7 @@ impl CameraImpactKick {
     }
 
     /// Trigger the "I just got hit by a player" kick. Distinct profile
-    /// from the swing-side kick — sharper, more downward-biased — so the
+    /// from the swing-side kick, sharper, more downward-biased, so the
     /// recipient can tell at a glance whether the wobble was their own
     /// swing or an incoming hit. `attacker_tool` scales the response:
     /// pickaxe blows rock the camera harder than hatchet jabs.
@@ -217,8 +217,8 @@ impl CameraImpactKick {
                 HIT_RECEIVED_PICKAXE_DURATION,
             ),
             // Axe and any future light-melee tool share the lighter
-            // profile. Bare hands shouldn't be reaching here — the
-            // server rejects bare-handed PvP — but using the lighter
+            // profile. Bare hands shouldn't be reaching here, the
+            // server rejects bare-handed PvP, but using the lighter
             // profile keeps the kick proportionate if the path ever
             // surfaces.
             ToolKind::Axe | ToolKind::Hands => (

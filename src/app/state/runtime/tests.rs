@@ -254,7 +254,7 @@ fn shutdown_tasks_drain_only_returns_finished() {
     // Poll until both spawned threads finish and have been drained.
     // `drain_finished` only returns *finished* tasks, so we accumulate
     // across iterations rather than breaking on the first non-empty
-    // batch — otherwise a slower second thread races the assertions.
+    // batch, otherwise a slower second thread races the assertions.
     let mut all = Vec::new();
     for _ in 0..200 {
         all.extend(tasks.drain_finished());

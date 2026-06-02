@@ -103,7 +103,7 @@ fn pickaxe_depletes_node_and_removes_it_from_the_world() {
 
     let client = server.clients.get(&client_id).expect("client exists");
     let inventory = &client.inventory;
-    // Depleted nodes are removed from the world entirely — the chunk
+    // Depleted nodes are removed from the world entirely, the chunk
     // manager schedules a fresh-position respawn 5-15 minutes later. The
     // server should no longer hold this node id.
     assert!(
@@ -145,7 +145,7 @@ fn applied_action_seq_advances_on_accepted_and_rejected_gather() {
     );
 
     // Look away → out of range (and still inside cooldown): the gather is
-    // rejected, leaving the inventory untouched — but the mark MUST still
+    // rejected, leaving the inventory untouched, but the mark MUST still
     // advance so the client can prune and revert its optimistic overlay op.
     let inventory_before = server.clients.get(&client_id).unwrap().inventory.clone();
     let mut look_away = movement(2, Vec3Net::ZERO);
@@ -196,7 +196,7 @@ fn second_gather_on_removed_node_is_silently_dropped() {
         ClientMessage::Inventory(InventoryCommand::SelectActionbarSlot { slot: 1 }),
     );
 
-    // First gather depletes the node — it's gone from the live map.
+    // First gather depletes the node, it's gone from the live map.
     server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
@@ -207,7 +207,7 @@ fn second_gather_on_removed_node_is_silently_dropped() {
     assert!(!server.resource_nodes.contains_key(&99));
 
     // Any further gather attempts against the removed id produce nothing
-    // — no toasts, no impacts, no inventory change.
+    //, no toasts, no impacts, no inventory change.
     let inventory_before = {
         let client = server.clients.get(&client_id).expect("host client");
         client.inventory.clone()
@@ -411,7 +411,7 @@ fn failed_gather_emits_no_impact_broadcast() {
     server.resource_nodes.clear();
     server.resource_nodes.insert(99, coal_node(99, 5));
     look_at_test_node(&mut server, client_id);
-    // Still holding the hatchet at slot 0 — wrong tool for coal.
+    // Still holding the hatchet at slot 0, wrong tool for coal.
 
     let envelopes = server.receive(
         client_id,

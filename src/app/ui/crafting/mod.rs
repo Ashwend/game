@@ -2,14 +2,14 @@
 //!
 //! Two distinct surfaces share this module:
 //!
-//! - [`crafting_ui`] — full-screen modal browser. Lists recipes from the
+//! - [`crafting_ui`], full-screen modal browser. Lists recipes from the
 //!   static registry, filters them by name and category, and lets the
 //!   player enqueue craft jobs. Open with `C` (or whatever the player has
 //!   rebound `OpenCrafting` to).
-//! - [`crafting_queue_hud`] — always-on top-right stack of progress
+//! - [`crafting_queue_hud`], always-on top-right stack of progress
 //!   cards. Each card shows the name of what's being crafted plus a
 //!   live bar, and an `×` button that cancels the job and refunds inputs.
-//!   Survives closing the crafting screen — that's the whole point.
+//!   Survives closing the crafting screen, that's the whole point.
 //!
 //! Authoritative state lives on the server; the UI only reads
 //! `runtime.local_player().crafting` and sends [`CraftingCommand`] messages.
@@ -35,7 +35,7 @@ const CRAFTING_PANEL_WIDTH: f32 = 760.0;
 const CRAFTING_PANEL_HEIGHT: f32 = 520.0;
 
 /// Render the crafting modal browser when `menu.crafting_open` is true.
-/// No-op otherwise — the call is cheap and keeps the top-level ui pipeline
+/// No-op otherwise, the call is cheap and keeps the top-level ui pipeline
 /// simple.
 pub(super) fn crafting_ui(
     ctx: &egui::Context,
@@ -49,7 +49,7 @@ pub(super) fn crafting_ui(
         return;
     }
 
-    // Scrim. Clicking outside the panel closes the screen — same gesture
+    // Scrim. Clicking outside the panel closes the screen, same gesture
     // pattern as the inventory modal.
     let backdrop = backdrop_layer(
         ctx,

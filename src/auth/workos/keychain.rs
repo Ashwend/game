@@ -3,7 +3,7 @@
 //! The short-lived access token stays in memory; only the long-lived refresh
 //! token is persisted, so the next launch can silently re-auth. Backed by the
 //! platform-native keystore (macOS Keychain, Windows Credential Manager, Linux
-//! kernel keyutils) — see the per-OS `keyring` features in `Cargo.toml`.
+//! kernel keyutils), see the per-OS `keyring` features in `Cargo.toml`.
 
 /// Keychain coordinates for the persisted refresh token.
 const KEYRING_SERVICE: &str = "ashwend";
