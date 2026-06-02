@@ -72,6 +72,10 @@ def info_plist(version: str) -> bytes:
         "CFBundleInfoDictionaryVersion": "6.0",
         "LSMinimumSystemVersion": "11.0",
         "NSHighResolutionCapable": True,
+        # Required for any bundled app that touches the microphone: without a
+        # usage-description string macOS TCC kills the process the moment it
+        # opens the mic. Ashwend captures voice for in-game chat.
+        "NSMicrophoneUsageDescription": "Ashwend uses your microphone for in-game voice chat.",
     }
     return plistlib.dumps(plist)
 
@@ -91,6 +95,31 @@ def build_app_bundle(game: Path, updater: Path, version: str) -> Path:
     (app / "Contents" / "Info.plist").write_bytes(info_plist(version))
     (app / "Contents" / "PkgInfo").write_text("APPL????")
     return app
+
+
+def adhoc_sign(app: Path) -> None:
+    # Ad-hoc sign the assembled bundle. The Rust toolchain only applies a
+    # *linker* ad-hoc signature to each bare binary, which is invalid as a
+    # bundle's main executable (no sealed `_CodeSignature/CodeResources`) — a
+    # broken signature is what makes Gatekeeper say "damaged, move to Trash"
+    # with no recourse. A proper ad-hoc bundle signature downgrades that to the
+    # ordinary "Apple can't check it" prompt (which has an "Open Anyway"
+    # button), and lets the curl installer's de-quarantined copy launch cleanly.
+    #
+    # `--deep` is fine here because nothing in the bundle is running at build
+    # time (the in-app self-updater uses non-`--deep` re-signing precisely
+    # because it *is* running from inside the bundle it re-signs).
+    #
+    # Not notarized — that needs a paid Developer ID. When that lands, swap the
+    # `-` identity for the Developer ID and add an `xcrun notarytool` step here.
+    subprocess.run(
+        ["codesign", "--force", "--deep", "--sign", "-", str(app)],
+        check=True,
+    )
+    subprocess.run(
+        ["codesign", "--verify", "--deep", "--strict", str(app)],
+        check=True,
+    )
 
 
 def zip_app_bundle(app: Path, output: Path) -> None:
@@ -124,6 +153,7 @@ def main() -> None:
 
     if "apple-darwin" in args.target:
         app = build_app_bundle(game, updater, args.version)
+        adhoc_sign(app)
         zip_app_bundle(app, output)
     elif output.suffix == ".zip":
         create_zip([game, updater], output)

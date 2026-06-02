@@ -66,7 +66,11 @@ fn main() {
     // 3. Restore the executable bit (rename preserves it, copy fallback may not).
     set_executable(&args.target);
 
-    // 4. Relaunch the (now updated) game.
+    // 4. macOS: the `.app` is ad-hoc signed, and swapping the inner binary just
+    //    broke the bundle seal. Re-sign before relaunch so it stays valid.
+    resign_app_bundle(&args.relaunch);
+
+    // 5. Relaunch the (now updated) game.
     relaunch(&args.relaunch);
 }
 
@@ -142,6 +146,31 @@ fn relaunch(path: &Path) {
     }
     let _ = command.spawn();
 }
+
+/// Re-apply the bundle's ad-hoc signature after swapping the inner binary.
+/// Uses non-`--deep` on purpose: `--deep` would rewrite *this* updater binary
+/// (we run from inside the same bundle), which can fail; non-`--deep` re-signs
+/// the main executable and re-seals resources, leaving us untouched. Best
+/// effort — a de-quarantined bundle still launches from the inner binary's own
+/// signature if this fails.
+#[cfg(target_os = "macos")]
+fn resign_app_bundle(relaunch: &Path) {
+    if relaunch.extension().is_none_or(|ext| ext != "app") {
+        return;
+    }
+    let ok = Command::new("codesign")
+        .args(["--force", "--sign", "-"])
+        .arg(relaunch)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if !ok {
+        eprintln!("ashwend-updater: ad-hoc re-sign failed; relaunching anyway");
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resign_app_bundle(_relaunch: &Path) {}
 
 #[cfg(unix)]
 fn wait_for_exit(pid: u32, timeout: Duration) {

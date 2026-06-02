@@ -77,14 +77,39 @@ Ashwend.app/Contents/
   MacOS/ashwend-updater    # the self-update helper
 ```
 
-The bundle is **unsigned** today (the inner Mach-O keeps the toolchain's
-automatic ad-hoc signature; the bundle itself is not codesigned, so there is no
-seal to break). Self-update replaces only `Contents/MacOS/ashwend`. First
-install from the website keeps the usual one-time Gatekeeper "unidentified
-developer" prompt (right-click → Open); auto-updates are seamless because we
-download them ourselves (no quarantine xattr). Developer-ID signing +
-notarization is a deliberately deferred, separate effort — when it lands, the
-self-updater must switch to swapping the whole bundle (see `apply.rs`).
+The bundle is **ad-hoc signed** (`codesign --force --deep --sign -` in
+`package-release.py`), **not notarized** — notarization needs a paid Developer
+ID, which is deferred. Why ad-hoc and not just unsigned: the Rust toolchain only
+applies a *linker* ad-hoc signature to the bare binary, which is invalid as a
+bundle's main executable (no sealed `_CodeSignature`), and a *broken* signature
+is exactly what makes Gatekeeper say **"damaged, move to Trash"** with no
+recourse. A proper ad-hoc bundle signature downgrades that to the ordinary
+"Apple can't check it for malware" prompt, which has an **"Open Anyway"** button.
+
+Because it isn't notarized, there's no clean *browser-download* double-click.
+Two friction-free paths instead:
+
+- **Install script** — `curl -fsSL https://ashwend.game/install.sh | sh`
+  ([website/public/install.sh](../website/public/install.sh)). curl doesn't set
+  the `com.apple.quarantine` flag (only browsers do), so the de-quarantined copy
+  it drops in `/Applications` launches with **no prompt at all**.
+- **Website download button** — quarantined, so first launch needs the one-click
+  System Settings → Privacy & Security → **Open Anyway**.
+
+Self-update replaces only `Contents/MacOS/ashwend`, which breaks the bundle
+seal, so the updater **re-signs ad-hoc** afterwards with `codesign --force
+--sign -` (note: *not* `--deep` — that would rewrite the running
+`ashwend-updater` inside the same bundle; non-`--deep` re-signs the main exec and
+re-seals resources, leaving the updater untouched). Self-downloaded updates
+aren't quarantined, so the re-signed bundle relaunches cleanly.
+
+`Info.plist` also carries `NSMicrophoneUsageDescription` — a bundled app that
+opens the mic without it is killed by macOS TCC, and Ashwend captures voice.
+
+**When notarization lands** (paid Developer ID): swap the ad-hoc `-` identity in
+`package-release.py` for the Developer ID + an `xcrun notarytool` step, and
+change self-update to swap the **whole bundle** (so the relaunched app stays
+notarized) instead of the inner binary + ad-hoc re-sign.
 
 Linux ships a `.tar.gz` and Windows a `.zip`, each now containing **both**
 binaries side by side.
