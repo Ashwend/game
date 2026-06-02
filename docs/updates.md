@@ -72,10 +72,21 @@ with `ditto`), not a bare binary. Layout:
 
 ```
 Ashwend.app/Contents/
-  Info.plist          # CFBundleIdentifier=com.Ashwend.Ashwend, version from the release
+  Info.plist               # CFBundleIdentifier=com.Ashwend.Ashwend, version, CFBundleIconFile=AppIcon
   MacOS/ashwend            # the game (CFBundleExecutable)
   MacOS/ashwend-updater    # the self-update helper
+  Resources/AppIcon.icns   # dock / Finder icon
 ```
+
+The icon is **pre-rendered and committed** at
+[`.github/assets/AppIcon.icns`](../.github/assets/AppIcon.icns), generated from
+the website favicon (`website/public/favicon.svg`). Regenerate only when the
+logo changes — rasterize with the **native QuickLook renderer** (ImageMagick
+silently drops the SVG's `linearGradient`), then `iconutil`:
+`qlmanage -t -s 1024 -o . favicon.svg` → `sips` to each iconset size →
+`iconutil -c icns AppIcon.iconset`. It's committed rather than built in CI
+because `qlmanage` is unreliable headless. `codesign --deep` seals it; the
+self-update re-sign re-seals it.
 
 The bundle is **ad-hoc signed** (`codesign --force --deep --sign -` in
 `package-release.py`), **not notarized** — notarization needs a paid Developer

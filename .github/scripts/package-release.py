@@ -31,6 +31,12 @@ UPDATER_BASE = "ashwend-updater"
 BUNDLE_NAME = "Ashwend.app"
 BUNDLE_IDENTIFIER = "com.Ashwend.Ashwend"
 
+# Pre-rendered macOS app icon (committed). Generated from the website favicon
+# with the native QuickLook renderer (ImageMagick can't render the SVG's
+# gradient) — see docs/updates.md. Regenerate only when the logo changes.
+ICON_SRC = Path(__file__).resolve().parents[1] / "assets" / "AppIcon.icns"
+ICON_NAME = "AppIcon"  # CFBundleIconFile (macOS appends .icns)
+
 
 def binary_name(target: str, base_name: str) -> str:
     if "windows" in target:
@@ -70,6 +76,7 @@ def info_plist(version: str) -> bytes:
         "CFBundleShortVersionString": version,
         "CFBundlePackageType": "APPL",
         "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleIconFile": ICON_NAME,
         "LSMinimumSystemVersion": "11.0",
         "NSHighResolutionCapable": True,
         # Required for any bundled app that touches the microphone: without a
@@ -91,6 +98,12 @@ def build_app_bundle(game: Path, updater: Path, version: str) -> Path:
         dest = macos / base
         shutil.copy2(source, dest)
         dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    if not ICON_SRC.exists():
+        raise SystemExit(f"app icon not found: {ICON_SRC}")
+    resources = app / "Contents" / "Resources"
+    resources.mkdir(parents=True)
+    shutil.copy2(ICON_SRC, resources / f"{ICON_NAME}.icns")
 
     (app / "Contents" / "Info.plist").write_bytes(info_plist(version))
     (app / "Contents" / "PkgInfo").write_text("APPL????")
