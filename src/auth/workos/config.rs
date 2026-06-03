@@ -22,9 +22,13 @@ use serde::Deserialize;
 pub(super) const AUTHORIZE_URL: &str = "https://api.workos.com/user_management/authorize";
 pub(super) const AUTHENTICATE_URL: &str = "https://api.workos.com/user_management/authenticate";
 
-/// WorkOS client id used when nothing overrides it. Public, safe to ship.
-/// TODO: swap to the production client id before release.
-const DEFAULT_CLIENT_ID: &str = "client_01KSZSFDYP8ZVPE63P94ZWJ3WX";
+/// WorkOS client id used when nothing overrides it. The production client.
+/// Public, safe to ship: it only drives the OAuth authorize request and the
+/// server-side JWKS URL, neither is a secret. CI still bakes
+/// `GAME_WORKOS_CLIENT_ID` over this, but the default is production so a build
+/// with the variable unset (or resolving empty) lands on production, not a dev
+/// environment.
+const DEFAULT_CLIENT_ID: &str = "client_01KSZSFEDY2M3DPNQGNKEN64RY";
 /// Loopback port the browser is redirected back to. Must be registered as a
 /// redirect URI in the WorkOS dashboard: `http://127.0.0.1:8765/callback`.
 const DEFAULT_REDIRECT_PORT: u16 = 8765;
