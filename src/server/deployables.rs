@@ -17,7 +17,7 @@ use crate::{
     crafting::RecipeStation,
     items::{
         DeployableKind, DeployableProfile, HANDS_TOOL, ItemId, ToolKind, item_definition,
-        tool_damage_multiplier_pct,
+        tool_effectiveness_pct,
     },
     protocol::{
         ClientId, DamageDeployableCommand, DeployedEntityId, PlaceDeployableCommand, ServerMessage,
@@ -239,7 +239,7 @@ impl GameServer {
         // Tool-vs-material multiplier, hatchet eats wood, pickaxe
         // eats stone, mismatched proper tools still chip away but at
         // ~1/3 the rate of the matched pairing.
-        let multiplier_pct = tool_damage_multiplier_pct(tool.kind, entity.kind.material());
+        let multiplier_pct = tool_effectiveness_pct(tool.kind, entity.kind.material());
         let base = (tool.gather_amount as u32).saturating_mul(DAMAGE_PER_GATHER_POINT);
         let damage = base.saturating_mul(multiplier_pct) / 100;
 

@@ -7,7 +7,7 @@ use crate::{
         scene::{HeldItemVisual, ItemVisualAssets, MainCamera},
         state::{GatherInputState, LocalPlayerState, MenuState, Screen, ToolSwapState},
     },
-    items::{ItemModel, item_definition},
+    items::{HeldMesh, ItemModel, item_definition},
 };
 
 use super::swing_poses::{
@@ -26,6 +26,7 @@ pub(crate) fn apply_held_item_visual_system(
     assets: Res<ItemVisualAssets>,
     gather_input: Res<GatherInputState>,
     swap_state: Res<ToolSwapState>,
+    time: Res<Time>,
     camera: Query<Entity, With<MainCamera>>,
     held: Query<(Entity, &HeldItemVisual)>,
 ) {
@@ -61,69 +62,128 @@ pub(crate) fn apply_held_item_visual_system(
     let Ok(camera_entity) = camera.single() else {
         return;
     };
-    let transform = held_item_local_transform(
-        definition.model,
-        gather_input.swing_fraction(),
-        swap_state.fraction(),
+    let transform = apply_idle_sway(
+        held_item_local_transform(
+            definition.model,
+            gather_input.swing_fraction(),
+            swap_state.fraction(),
+        ),
+        time.elapsed_secs(),
     );
-    if let Some((entity, held_visual)) = held.iter().next() {
-        // Transform updates every frame (swing/swap animations drive it);
-        // `ChildOf` and `Visibility` are set once on spawn and only re-applied
-        // when the held item changes, to avoid retriggering change-detection
-        // and hierarchy fix-ups every frame.
-        let mut entity_commands = commands.entity(entity);
-        entity_commands.insert(transform);
-        if held_visual.item_id != item_id {
-            let (mesh, material) = held_item_visual(&assets, definition.model);
-            entity_commands.insert((
-                HeldItemVisual {
-                    item_id: item_id.clone(),
-                },
-                ChildOf(camera_entity),
-                Mesh3d(mesh),
-                MeshMaterial3d(material),
-                Visibility::Visible,
-                // Held items sit right in front of the camera; their
-                // shadow would slash across the floor like a phantom
-                // player and dominate the frame. Skip the shadow pass.
-                NotShadowCaster,
-            ));
+    // The held item renders as one or more material layers sharing a single
+    // swing transform: most items are a single layer, iron tools are two (a
+    // matte handle body + a shiny iron head). Each layer is its own
+    // camera-child entity tagged with the active `item_id`.
+    //
+    // Steady state (layers already match the active item): just drive the
+    // swing/swap transform onto each layer, the cheap per-frame path. The
+    // hierarchy/mesh/material are only (re)built when the held item changes,
+    // so we don't retrigger change-detection or hierarchy fix-ups every frame.
+    let held_entities: Vec<Entity> = held.iter().map(|(entity, _)| entity).collect();
+    let layers_match_item =
+        !held_entities.is_empty() && held.iter().all(|(_, visual)| visual.item_id == item_id);
+
+    if layers_match_item {
+        for entity in held_entities {
+            commands.entity(entity).insert(transform);
         }
-    } else {
-        let (mesh, material) = held_item_visual(&assets, definition.model);
+        return;
+    }
+
+    // Held item changed: tear down the old layers and rebuild for the new one.
+    for entity in held_entities {
+        commands.entity(entity).despawn();
+    }
+    for (mesh, material) in held_item_layers(&assets, definition.held_mesh) {
         commands.spawn((
             Name::new("Held Item"),
-            HeldItemVisual { item_id },
+            HeldItemVisual {
+                item_id: item_id.clone(),
+            },
             ChildOf(camera_entity),
             Mesh3d(mesh),
             MeshMaterial3d(material),
             transform,
             Visibility::Visible,
+            // Held items sit right in front of the camera; their shadow would
+            // slash across the floor like a phantom player and dominate the
+            // frame. Skip the shadow pass.
             NotShadowCaster,
         ));
     }
 }
 
-fn held_item_visual(
+/// Mesh + material layers that make up the in-hand visual for `held_mesh`.
+/// One entry for single-material items; two for iron tools, whose matte handle
+/// body and shiny iron head need different materials (Bevy binds one material
+/// per mesh). Layers share the mesh-local frame so they overlay exactly under
+/// the same swing transform.
+fn held_item_layers(
     assets: &ItemVisualAssets,
-    model: ItemModel,
-) -> (Handle<Mesh>, Handle<StandardMaterial>) {
-    match model {
-        // Deployables fall back to the bag visual in the player's hand,
+    held_mesh: HeldMesh,
+) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>)> {
+    match held_mesh {
+        // The bag silhouette covers raw materials and deployables-in-hand,
         // the structure mesh is what gets dropped into the world on
         // placement, not what's held.
-        ItemModel::Bag | ItemModel::Deployable => (
+        HeldMesh::Bag => vec![(
             assets.held_bag_mesh.clone(),
             assets.held_bag_material.clone(),
-        ),
-        ItemModel::Hatchet => (
+        )],
+        HeldMesh::StoneHatchet => vec![(
             assets.held_hatchet_mesh.clone(),
             assets.held_tool_material.clone(),
-        ),
-        ItemModel::Pickaxe => (
+        )],
+        HeldMesh::StonePickaxe => vec![(
             assets.held_pickaxe_mesh.clone(),
             assets.held_tool_material.clone(),
-        ),
+        )],
+        HeldMesh::IronHatchet => vec![
+            (
+                assets.held_iron_hatchet_body_mesh.clone(),
+                assets.held_tool_material.clone(),
+            ),
+            (
+                assets.held_iron_hatchet_head_mesh.clone(),
+                assets.held_iron_head_material.clone(),
+            ),
+        ],
+        HeldMesh::IronPickaxe => vec![
+            (
+                assets.held_iron_pickaxe_body_mesh.clone(),
+                assets.held_tool_material.clone(),
+            ),
+            (
+                assets.held_iron_pickaxe_head_mesh.clone(),
+                assets.held_iron_head_material.clone(),
+            ),
+        ],
+    }
+}
+
+/// Very subtle passive sway layered on top of the rest/swing pose so the
+/// viewmodel breathes instead of sitting perfectly still. Two slow sine waves
+/// at incommensurate frequencies (a gentle Lissajous) avoid a robotic
+/// back-and-forth, and the amplitudes are deliberately tiny, a few millimetres
+/// of drift and well under a degree of tilt, so it reads as "alive" without
+/// ever competing with the swing or the aim. Always applied; during a swing
+/// the much larger swing motion swamps it.
+fn apply_idle_sway(transform: Transform, t: f32) -> Transform {
+    let drift = Vec3::new(
+        (t * 0.9).sin() * 0.0055,
+        (t * 1.3 + 0.7).sin() * 0.0040,
+        0.0,
+    );
+    let tilt = Quat::from_euler(
+        EulerRot::XYZ,
+        (t * 1.1).sin() * 0.0090,
+        (t * 0.8 + 1.3).sin() * 0.0110,
+        (t * 1.0 + 0.4).sin() * 0.0070,
+    );
+    Transform {
+        translation: transform.translation + drift,
+        rotation: tilt * transform.rotation,
+        scale: transform.scale,
     }
 }
 

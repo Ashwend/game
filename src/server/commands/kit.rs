@@ -2,8 +2,9 @@
 
 use crate::{
     items::{
-        BASIC_HATCHET_ID, BASIC_PICKAXE_ID, COAL_ID, CRUDE_FURNACE_ID, FIBER_ID, IRON_BAR_ID,
-        IRON_ORE_ID, PLANT_TWINE_ID, STONE_ID, SULFUR_ORE_ID, WOOD_ID, WORKBENCH_T1_ID,
+        BASIC_HATCHET_ID, BASIC_PICKAXE_ID, COAL_ID, CRUDE_FURNACE_ID, FIBER_ID, HEWN_LOG_ID,
+        IRON_BAR_ID, IRON_HATCHET_ID, IRON_ORE_ID, IRON_PICKAXE_ID, PLANT_TWINE_ID, STONE_ID,
+        SULFUR_ORE_ID, WOOD_ID, WORKBENCH_T1_ID,
     },
     protocol::{ClientId, ItemStack},
 };
@@ -36,6 +37,8 @@ impl GameServer {
         const EQUIPABLES: &[&str] = &[
             BASIC_HATCHET_ID,
             BASIC_PICKAXE_ID,
+            IRON_HATCHET_ID,
+            IRON_PICKAXE_ID,
             WORKBENCH_T1_ID,
             CRUDE_FURNACE_ID,
         ];
@@ -48,6 +51,7 @@ impl GameServer {
             FIBER_ID,
             PLANT_TWINE_ID,
             IRON_BAR_ID,
+            HEWN_LOG_ID,
         ];
         const RESOURCE_QUANTITY: u16 = 100;
 

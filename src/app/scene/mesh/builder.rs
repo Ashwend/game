@@ -13,6 +13,12 @@ pub(crate) const WOOD_LIGHT: MeshColor = [0.56, 0.36, 0.18, 1.0];
 pub(crate) const WOOD_MID: MeshColor = [0.44, 0.28, 0.14, 1.0];
 pub(crate) const LEATHER_WRAP: MeshColor = [0.19, 0.12, 0.07, 1.0];
 pub(crate) const IRON_BAND: MeshColor = [0.30, 0.30, 0.32, 1.0];
+// Forged-iron head palette (tier-2 tools). Brighter and cooler than the
+// stone palette so an iron tool reads as metal at a glance, with a honed
+// edge highlight that catches the light through a swing.
+pub(crate) const IRON_HEAD: MeshColor = [0.60, 0.63, 0.68, 1.0];
+pub(crate) const IRON_HEAD_DARK: MeshColor = [0.38, 0.40, 0.45, 1.0];
+pub(crate) const IRON_EDGE: MeshColor = [0.86, 0.89, 0.94, 1.0];
 pub(crate) const STONE_DARK: MeshColor = [0.32, 0.34, 0.33, 1.0];
 pub(crate) const STONE_LIGHT: MeshColor = [0.58, 0.61, 0.57, 1.0];
 pub(crate) const STONE_EDGE: MeshColor = [0.74, 0.76, 0.72, 1.0];

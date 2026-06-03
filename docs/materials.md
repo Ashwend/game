@@ -24,7 +24,8 @@ Rule of thumb: **if it's not actually shiny in the real world, set `reflectance`
 | Wood chip / stone shard impact debris | `0.88–0.95` | `0.12` | `0.0` | Matches its source material. |
 | Grass blade impact | `0.92` | `0.12` | `0.0` | Tinted via `base_color`; the vertex colour multiplies through. |
 | Leather/cloth (dropped bag, held bag) | `0.88–0.95` | `0.15` | `0.0` | Matte cloth/leather. |
-| Tool handle / wood + metal blend | `0.92` | `0.15` | `0.0` | Held tools are constantly in view, so this one matters more than its size suggests. |
+| Tool handle / wood + metal blend (stone tools, iron tool bodies) | `0.92` | `0.15` | `0.0` | Held tools are constantly in view, so this one matters more than its size suggests. Also used for the matte handle layer of the iron tools. |
+| Forged iron tool head (iron hatchet/pickaxe head layer) | `0.34` | _default 0.5_ | `1.0` | The shiny one. Iron tools render as two overlaid meshes so only the head gets this fully-metallic, low-roughness material, picking up the sky/IBL as bright steel while the handle stays matte. Grey iron vertex colours drive F0; don't add a base colour. |
 | Player remote (skin/cloth) | `0.92` | `0.2` | `0.0` | A touch of life, still matte. |
 | Iron ore (ore with visible metal content) | `0.78` | _default 0.5_ | `0.18` | The one intentional shine, sells "there's metal in this rock." Don't drop reflectance here; the metallic term governs F0 instead. |
 

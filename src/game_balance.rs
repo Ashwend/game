@@ -102,3 +102,21 @@ pub const FURNACE_INTERACT_RANGE_M: f32 = 5.5;
 /// drop-on-death bag is meant to be approached, not looted from
 /// across the room.
 pub const LOOT_BAG_INTERACT_RANGE_M: f32 = 4.5;
+
+// =====================================================================
+// Pickup (E-pickup of dropped items + crude resource nodes)
+// =====================================================================
+
+/// Extra reach, in metres, the *server* grants when accepting a pickup
+/// beyond the client's strict view-ray range. Movement is
+/// client-authoritative, so by the time a pickup command lands the player
+/// has often moved or flicked their view; re-running the client's strict
+/// view-cone test server-side would then reject pickups the player
+/// legitimately made, which the client (having predicted the pickup) has to
+/// visibly roll back, the "client says yes, server says no" pop. The server
+/// instead does a generous distance-only check (the client already chose
+/// *which* item via the view ray and only sends a command for a target it
+/// accepted), trading a little reach for far fewer false rejects. Picking up
+/// a nearby item you already targeted is low-stakes, so erring lenient here
+/// costs nothing and feels much smoother while sprinting around.
+pub const PICKUP_SERVER_REACH_SLACK_M: f32 = 1.5;

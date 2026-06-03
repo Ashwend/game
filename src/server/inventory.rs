@@ -1,10 +1,11 @@
 use crate::{
-    items::{ToolKind, can_pick_up, normalize_stack},
+    game_balance::PICKUP_SERVER_REACH_SLACK_M,
+    items::{ToolKind, normalize_stack, within_pickup_reach},
     protocol::{
         ACTIONBAR_SLOT_COUNT, ClientId, DroppedItemId, DroppedWorldItem, InventoryCommand,
         ItemStack, PlayerInventoryState, ResourceNodeId, Vec3Net,
     },
-    resources::{can_gather_resource_node, resource_node_definition},
+    resources::{resource_node_definition, within_gather_reach},
 };
 
 use super::{
@@ -133,11 +134,16 @@ impl GameServer {
         let Some(client) = self.clients.get(&client_id) else {
             return Vec::new();
         };
-        if !can_pick_up(
+        // Distance-only acceptance: the client already chose this exact item
+        // via the strict view ray and predicted the pickup. Re-running the
+        // cone test against the player's now-moved position would reject
+        // legitimate pickups and force a visible rollback, so the server only
+        // confirms the player is plausibly within reach (plus slack for the
+        // movement-prediction delta).
+        if !within_pickup_reach(
             player_eye_position(client.controller.position),
-            client.controller.yaw,
-            client.controller.pitch,
-            &item,
+            item.position,
+            PICKUP_SERVER_REACH_SLACK_M,
         ) {
             return Vec::new();
         }
@@ -190,13 +196,16 @@ impl GameServer {
         let Some(client) = self.clients.get(&client_id) else {
             return Vec::new();
         };
-        // Same view-ray gate as the gather path: the player must be
-        // looking at the node and within range.
-        if !can_gather_resource_node(
+        // Distance-only acceptance, same rationale as the dropped-item path:
+        // the client already targeted this node via the view ray and
+        // predicted the pickup, so the server just confirms the player is
+        // plausibly within reach rather than re-checking the cone against a
+        // moved position (which would cause false rejects + rollbacks).
+        if !within_gather_reach(
             player_eye_position(client.controller.position),
-            client.controller.yaw,
-            client.controller.pitch,
-            &node,
+            &node.definition_id,
+            node.position,
+            PICKUP_SERVER_REACH_SLACK_M,
         ) {
             return Vec::new();
         }

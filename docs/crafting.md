@@ -21,23 +21,28 @@ Three distinct interaction surfaces share the same client/server pattern: a serv
 - [`src/app/ui/crafting.rs`](../src/app/ui/crafting.rs), the full-screen modal browser. Recipe list with filter chips (categories) + search. Each row shows inputs/outputs, "craft" button.
 - [`src/app/ui/crafting_queue.rs`](../src/app/ui/crafting_queue.rs), the always-on top-right HUD stack. Survives closing the browser. Animates the head job's progress between snapshots via a baseline-then-extrapolate scheme so the bar doesn't tick visibly with each replication frame.
 
-**Adding a new recipe:** append to the `RECIPES` slice in [`src/crafting.rs`](../src/crafting.rs). Fields:
+**Adding a new recipe:** append to the `REGISTERED_RECIPES` slice in [`src/crafting.rs`](../src/crafting.rs). Fields:
 
 ```rust
 RecipeDefinition {
-    id: "stone_pickaxe",
-    name: "Stone Pickaxe",
+    id: IRON_PICKAXE_RECIPE_ID,
+    name: "Iron Pickaxe",
+    description: "Forge a heavy iron head and set it on hewn handle stock.",
     category: RecipeCategory::Tools,
-    station: RecipeStation::Workbench { min_tier: 1 },
-    inputs: &[(STONE_ID, 4), (STICK_ID, 2)],
-    output_item: BASIC_PICKAXE_ID,
+    inputs: &[
+        CraftingInput::new(HEWN_LOG_ID, 2),
+        CraftingInput::new(IRON_BAR_ID, 18),
+        CraftingInput::new(PLANT_TWINE_ID, 2),
+    ],
+    output_item: IRON_PICKAXE_ID,
     output_quantity: 1,
-    base_ticks: 2 * SERVER_TICK_RATE_HZ as u32,
-    tier: 1,
+    craft_seconds: 24.0,           // server converts to ticks at SERVER_TICK_RATE_HZ
+    tier: 2,                       // sort order in the browser; 1 = stone-age, 2 = iron
+    station: RecipeStation::Workbench { min_tier: 1 },
 }
 ```
 
-The output item must exist in the items registry ([`src/items.rs`](../src/items.rs)).
+The output item must exist in the items registry ([`src/items.rs`](../src/items.rs)). The tier-2 chain is a good template for new progression: a `Materials` recipe refines a raw input at the bench (`wood` → `hewn_log`), the furnace smelts ore into a bar (`iron_ore` → `iron_bar`), and a workbench-gated `Tools` recipe assembles the refined inputs into the higher-tier tool. The registry tests in `crafting.rs` automatically assert every recipe's inputs and output resolve to known items.
 
 ## Furnaces
 

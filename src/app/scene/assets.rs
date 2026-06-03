@@ -17,8 +17,9 @@ use super::{
         low_poly_birch_tree_medium_lod_mesh, low_poly_birch_tree_medium_mesh,
         low_poly_birch_tree_small_lod_mesh, low_poly_birch_tree_small_mesh,
         low_poly_branch_pile_mesh, low_poly_crude_furnace_mesh, low_poly_hatchet_mesh,
-        low_poly_hay_grass_mesh, low_poly_ore_node_mesh, low_poly_pickaxe_mesh,
-        low_poly_pine_tree_large_lod_mesh, low_poly_pine_tree_large_mesh,
+        low_poly_hay_grass_mesh, low_poly_iron_hatchet_body_mesh, low_poly_iron_hatchet_head_mesh,
+        low_poly_iron_pickaxe_body_mesh, low_poly_iron_pickaxe_head_mesh, low_poly_ore_node_mesh,
+        low_poly_pickaxe_mesh, low_poly_pine_tree_large_lod_mesh, low_poly_pine_tree_large_mesh,
         low_poly_pine_tree_medium_lod_mesh, low_poly_pine_tree_medium_mesh,
         low_poly_pine_tree_small_lod_mesh, low_poly_pine_tree_small_mesh, low_poly_player_mesh,
         low_poly_surface_stone_mesh, low_poly_workbench_mesh,
@@ -61,9 +62,23 @@ pub(crate) struct ItemVisualAssets {
     pub(crate) held_bag_mesh: Handle<Mesh>,
     pub(crate) held_hatchet_mesh: Handle<Mesh>,
     pub(crate) held_pickaxe_mesh: Handle<Mesh>,
+    /// Iron tools render as two overlaid layers so only the iron catches the
+    /// light: a matte `*_body` (the hewn handle, drawn with
+    /// `held_tool_material`) and a shiny `*_head` (the forged iron, drawn with
+    /// `held_iron_head_material`).
+    pub(crate) held_iron_hatchet_body_mesh: Handle<Mesh>,
+    pub(crate) held_iron_hatchet_head_mesh: Handle<Mesh>,
+    pub(crate) held_iron_pickaxe_body_mesh: Handle<Mesh>,
+    pub(crate) held_iron_pickaxe_head_mesh: Handle<Mesh>,
     pub(crate) dropped_material: Handle<StandardMaterial>,
     pub(crate) held_bag_material: Handle<StandardMaterial>,
     pub(crate) held_tool_material: Handle<StandardMaterial>,
+    /// Polished forged-iron material for the iron tool head layer. Fully
+    /// metallic + low roughness so it picks up the sky/IBL and reads as bright
+    /// steel against the matte handle. Because it only ever draws the iron head
+    /// mesh, it can be properly shiny without making the wood handle glossy.
+    /// See docs/materials.md.
+    pub(crate) held_iron_head_material: Handle<StandardMaterial>,
 }
 
 #[derive(Resource, Clone)]
@@ -252,6 +267,10 @@ pub(crate) fn setup_scene(
         held_bag_mesh: meshes.add(Cuboid::new(0.26, 0.22, 0.34)),
         held_hatchet_mesh: meshes.add(low_poly_hatchet_mesh()),
         held_pickaxe_mesh: meshes.add(low_poly_pickaxe_mesh()),
+        held_iron_hatchet_body_mesh: meshes.add(low_poly_iron_hatchet_body_mesh()),
+        held_iron_hatchet_head_mesh: meshes.add(low_poly_iron_hatchet_head_mesh()),
+        held_iron_pickaxe_body_mesh: meshes.add(low_poly_iron_pickaxe_body_mesh()),
+        held_iron_pickaxe_head_mesh: meshes.add(low_poly_iron_pickaxe_head_mesh()),
         dropped_material: materials.add(StandardMaterial {
             base_color: DROPPED_BAG_COLOR,
             perceptual_roughness: 0.95,
@@ -268,6 +287,17 @@ pub(crate) fn setup_scene(
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.92,
             reflectance: 0.15,
+            ..default()
+        }),
+        held_iron_head_material: materials.add(StandardMaterial {
+            base_color: VERTEX_MATERIAL_COLOR,
+            // Forged steel: fully metallic + low roughness so the head picks up
+            // the sky/IBL and reads as bright polished metal. The grey iron
+            // vertex colours drive F0, so the head tints steel without a
+            // separate base colour. Only ever draws the iron head layer, so it
+            // can be this shiny without touching the matte handle.
+            perceptual_roughness: 0.34,
+            metallic: 1.0,
             ..default()
         }),
     });

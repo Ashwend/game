@@ -270,7 +270,7 @@ fn pickup_merges_actionbar_stacks_before_inventory() {
 }
 
 #[test]
-fn pickup_requires_looking_at_dropped_item_and_restores_inventory() {
+fn pickup_is_distance_gated_not_look_gated_and_restores_inventory() {
     let mut server = server();
     let client_id = connect_host(&mut server);
     {
@@ -291,9 +291,13 @@ fn pickup_requires_looking_at_dropped_item_and_restores_inventory() {
     );
     let dropped_item_id = first_dropped_item_id(&server);
 
-    let mut look_away = movement(1, Vec3Net::ZERO);
-    look_away.yaw = std::f32::consts::PI;
-    server.receive(client_id, ClientMessage::Movement(look_away));
+    // Walk well out of reach. The server now accepts pickups on distance alone
+    // (the client already chose the item via the view ray), so the only thing
+    // that rejects here is being too far away, and the item stays on the ground.
+    server.receive(
+        client_id,
+        ClientMessage::Movement(movement(1, Vec3Net::new(0.0, 0.0, 30.0))),
+    );
     server.receive(
         client_id,
         ClientMessage::Inventory(InventoryCommand::PickUp {
@@ -301,10 +305,18 @@ fn pickup_requires_looking_at_dropped_item_and_restores_inventory() {
             seq: 0,
         }),
     );
-    assert_eq!(server.dropped_items_iter().count(), 1);
+    assert_eq!(
+        server.dropped_items_iter().count(),
+        1,
+        "out-of-reach pickup is rejected on distance"
+    );
 
-    let look_at_drop = movement(2, Vec3Net::ZERO);
-    server.receive(client_id, ClientMessage::Movement(look_at_drop));
+    // Back in reach but looking the other way: distance-only acceptance means
+    // the pickup still succeeds. This is exactly the moved-and-turned case that
+    // used to false-reject while sprinting around.
+    let mut back_but_looking_away = movement(2, Vec3Net::ZERO);
+    back_but_looking_away.yaw = std::f32::consts::PI;
+    server.receive(client_id, ClientMessage::Movement(back_but_looking_away));
     server.receive(
         client_id,
         ClientMessage::Inventory(InventoryCommand::PickUp {
@@ -499,11 +511,13 @@ fn failed_pickup_emits_no_toast() {
     );
     let dropped_item_id = first_dropped_item_id(&server);
 
-    // Turn the player around so the dropped item is behind them; the pickup
-    // line-of-sight check rejects the request and no toast should fire.
-    let mut look_away = movement(1, Vec3Net::ZERO);
-    look_away.yaw = std::f32::consts::PI;
-    server.receive(client_id, ClientMessage::Movement(look_away));
+    // Walk well out of reach so the pickup is rejected on distance; a rejected
+    // pickup should fire no toast. (Looking away no longer rejects, the server
+    // accepts on distance alone, so distance is what we test here.)
+    server.receive(
+        client_id,
+        ClientMessage::Movement(movement(1, Vec3Net::new(0.0, 0.0, 30.0))),
+    );
 
     let envelopes = server.receive(
         client_id,

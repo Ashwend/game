@@ -263,8 +263,13 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         model: ResourceNodeModel::HayGrass,
         required_tool: ToolRequirement::new(ToolKind::Hands, 0),
         storage: &[ResourceMaterial::new(FIBER_ID, 1)],
-        anchor_height: 0.22,
-        ray_radius: 0.45,
+        // The tuft's blades stand 0.55-0.9 m tall and fan out to ~0.34 m, but
+        // the old 0.22 m anchor + 0.45 m radius focus box sat low and narrow,
+        // so aiming at the visible grass missed it and E wouldn't prompt. Raise
+        // the anchor to the middle of the visible tuft and widen the radius so
+        // looking anywhere at the clump focuses it.
+        anchor_height: 0.42,
+        ray_radius: 0.68,
     },
 ];
 
@@ -394,6 +399,24 @@ pub fn can_gather_resource_node(
     node: &ResourceNodeState,
 ) -> bool {
     resource_node_score(eye, yaw, pitch, node).is_some()
+}
+
+/// Lenient, distance-only reach test the *server* uses to accept a crude-node
+/// E-pickup (hay grass, branch piles, surface stones), instead of re-running
+/// the strict view-ray [`can_gather_resource_node`]. Same rationale as
+/// [`crate::items::within_pickup_reach`]: the client already chose this node
+/// via the view ray, and re-checking the cone against the player's moved
+/// position causes false rejects + client rollbacks. `slack` is the extra
+/// reach beyond [`RESOURCE_GATHER_RANGE`]. Look direction is ignored.
+pub fn within_gather_reach(
+    eye: Vec3Net,
+    definition_id: &str,
+    position: Vec3Net,
+    slack: f32,
+) -> bool {
+    let anchor = resource_node_anchor_for(definition_id, position);
+    let reach = RESOURCE_GATHER_RANGE + slack.max(0.0);
+    anchor.minus(eye).length_squared() <= reach * reach
 }
 
 pub fn best_resource_node_target<'a>(
@@ -657,5 +680,54 @@ mod tests {
             -0.42,
             &node
         ));
+    }
+
+    #[test]
+    fn server_gather_reach_is_lenient_and_distance_only() {
+        let pos = Vec3Net::new(0.0, 0.0, -2.0);
+        let eye = Vec3Net::new(0.0, 1.62, 0.0);
+        let node = ResourceNodeState {
+            id: 1,
+            definition_id: HAY_GRASS_NODE_ID.to_owned(),
+            position: pos,
+            yaw: 0.0,
+            storage: vec![ItemStack::new(FIBER_ID, 1)],
+        };
+
+        // Looking away fails the strict gather test but the server's
+        // distance-only acceptance still picks it up, no false rollback.
+        assert!(!can_gather_resource_node(
+            eye,
+            std::f32::consts::PI,
+            0.0,
+            &node
+        ));
+        assert!(within_gather_reach(eye, HAY_GRASS_NODE_ID, pos, 1.5));
+
+        // Bounded: well beyond RESOURCE_GATHER_RANGE + slack is rejected.
+        let far = Vec3Net::new(0.0, 1.62, -12.0);
+        assert!(!within_gather_reach(far, HAY_GRASS_NODE_ID, pos, 1.5));
+    }
+
+    #[test]
+    fn tall_grass_focus_box_covers_the_visible_tuft() {
+        // Aim at the upper blades of the tuft (~0.7 m) from 2 m away. The old
+        // low/narrow focus box (anchor 0.22, radius 0.45) missed this; the
+        // raised, widened box should focus it so the E prompt appears.
+        let pos = Vec3Net::new(0.0, 0.0, -2.0);
+        let eye = Vec3Net::new(0.0, 1.62, 0.0);
+        // pitch that points the view ray at (0, 0.7, -2).
+        let pitch = (-(1.62 - 0.7) / 2.0_f32).atan();
+        let node = ResourceNodeState {
+            id: 1,
+            definition_id: HAY_GRASS_NODE_ID.to_owned(),
+            position: pos,
+            yaw: 0.0,
+            storage: vec![ItemStack::new(FIBER_ID, 1)],
+        };
+        assert!(
+            can_gather_resource_node(eye, 0.0, pitch, &node),
+            "aiming at the visible tuft should focus the hay grass"
+        );
     }
 }

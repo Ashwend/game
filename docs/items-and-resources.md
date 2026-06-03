@@ -13,7 +13,9 @@ An item is identified by a stable string id (`&'static str`) like `"basic_pickax
 
 - `id`, `name`, `tint`: identity + UI presentation.
 - `stack_size` / `effective_stack_size()`: how many units fit in one slot.
-- `tool`: `Option<ToolProfile>`, present only for tools. Carries `kind` (`Hatchet`, `Pickaxe`, `Hands`), `gather_amount`, `cooldown_ticks`, and `tier`.
+- `model`: `ItemModel`, the first-person **animation archetype** (`Hatchet`, `Pickaxe`, `Bag`, `Deployable`), drives the swing pose + tool-swap cadence. Same-kind tools share an archetype (an iron hatchet swings exactly like a stone one).
+- `held_mesh`: `HeldMesh`, the first-person **mesh** the renderer puts in hand (`StoneHatchet`, `IronHatchet`, `StonePickaxe`, `IronPickaxe`, `Bag`). Decoupled from `model` so a tool's look (stone vs iron head) is independent of how it animates. Adding a new tool material is a new `HeldMesh` variant plus one mesh handle in `src/app/scene/assets.rs`, no pose or gameplay change.
+- `tool`: `Option<ToolProfile>`, present only for tools. Carries `kind` (`Axe`, `Pickaxe`, `Hands`), `gather_amount`, `cooldown_ticks`, and `tier`. Tier is how progression scales: an iron tool is the same `kind` at `tier: 2` with a bigger `gather_amount`, so it satisfies every tier-1 node automatically and yields more per swing without any per-item branch.
 - `deployable`: `Option<DeployableProfile>`, present only for placeable structures (workbench, furnace). Carries `kind`, collider half-extents, max health, station radius (for crafting gating), and material classification.
 
 The active registry is constructed once via `item_definitions_by_id()` (a `LazyLock<HashMap<&str, &'static ItemDefinition>>`) and queried via:
@@ -26,12 +28,13 @@ The active registry is constructed once via `item_definitions_by_id()` (a `LazyL
 
 1. **Pick a stable id**. Snake case, lowercase, no version suffix. Once shipped it lives forever in player saves.
 2. **Add a `pub const X_ID: &str = "x";`** at the top of [`src/items.rs`](../src/items.rs) so call sites reference it symbolically.
-3. **Append an entry to the `ITEM_DEFINITIONS` array** with the full `ItemDefinition`. Fields:
+3. **Append an entry to the `REGISTERED_ITEMS` array** with the full `ItemDefinition`. Fields:
    - `id: X_ID`, `name: "Display Name"`, `tint: ItemTint::new(r, g, b)`.
    - `stack_size`, clamp this to the real limit. Tools default to 1, raw materials to higher (50–200).
+   - `model: ItemModel::...` (animation archetype) and `held_mesh: HeldMesh::...` (in-hand mesh). Raw materials + deployables use `Bag`.
    - `tool: Some(ToolProfile { ... })` only if it's a tool.
    - `deployable: Some(DeployableProfile { ... })` only if it's placeable.
-4. **If it's a tool**, set the right `ToolKind` and tune `gather_amount`/`cooldown_ticks` against the existing tiers. Tools also drive deployable damage via `DEPLOYABLE_DAMAGE_PER_GATHER_POINT` in [`src/game_balance.rs`](../src/game_balance.rs).
+4. **If it's a tool**, set the right `ToolKind` and tune `gather_amount`/`cooldown_ticks`/`tier` against the existing tiers (stone = tier 1, iron = tier 2). A higher tier satisfies every lower-tier node requirement automatically; the bigger `gather_amount` is what makes the upgrade felt. Tools also drive destructible-entity damage via `tool_effectiveness_pct` (the central tool-vs-material table) and `DEPLOYABLE_DAMAGE_PER_GATHER_POINT` in [`src/game_balance.rs`](../src/game_balance.rs).
 5. **If it's a deployable**, the placement reach and damage range come from `DEPLOYABLE_PLACEMENT_REACH_M` / `DEPLOYABLE_DAMAGE_RANGE_M` (see [`game_balance.rs`](../src/game_balance.rs)). The collider half-extents and `station_radius` are per-item.
 6. **If the item is a recipe output**, add the recipe to [`src/crafting.rs`](../src/crafting.rs), see "Crafting" below.
 7. **If the item should drop from a resource node**, reference it from the appropriate `ResourceNodeDefinition` in [`src/resources.rs`](../src/resources.rs).
@@ -78,7 +81,8 @@ Furnaces are a separate path: their state machine lives in [`src/server/furnace/
 
 - Never rename a shipped item or node id. Saves embed the string id; rename = corrupted save (rejected at load via the version bump in [`src/save/format.rs`](../src/save/format.rs)).
 - Removing an item is allowed but be aware that existing saves carrying that id will fail to load (intentional, the version bump catches it).
-- Tool tiers (`tier: u8` on `ToolProfile`) are how the gather/damage system scales; new tools should slot into the tier hierarchy rather than introducing a per-tool damage table.
+- Tool tiers (`tier: u8` on `ToolProfile`) are how the gather/damage system scales; new tools should slot into the tier hierarchy rather than introducing a per-tool damage table. The stone → iron jump (tier 1 → 2, `gather_amount` 6 → 12) is the canonical example: pure data, zero new branches.
+- Tool-vs-material effectiveness lives in **one** function, `tool_effectiveness_pct(ToolKind, DestructibleMaterial)` in [`src/items.rs`](../src/items.rs). Every destructible-entity damage path reads through it instead of branching on entity type, so balancing a matchup (hatchet→wood, pickaxe→stone, …) is a one-line edit and a new material (`metal`, `concrete`, …) is one new arm.
 
 ## Where to look next
 

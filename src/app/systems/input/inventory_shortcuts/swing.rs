@@ -160,8 +160,8 @@ fn dispatch_deployable_swing(
         .deployable_kind
         .map(|kind| kind.material())
     {
-        Some(crate::items::DeployableMaterial::Wood) => SurfaceMaterial::Wood,
-        Some(crate::items::DeployableMaterial::Stone) | None => SurfaceMaterial::Stone,
+        Some(crate::items::DestructibleMaterial::Wood) => SurfaceMaterial::Wood,
+        Some(crate::items::DestructibleMaterial::Stone) | None => SurfaceMaterial::Stone,
     };
     let visual_kind = ImpactEffectKind::for_surface(surface);
 

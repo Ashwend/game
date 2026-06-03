@@ -18,13 +18,17 @@ use std::{
 };
 
 use crate::items::{
-    BASIC_HATCHET_ID, BASIC_PICKAXE_ID, CRUDE_FURNACE_ID, DeployableKind, FIBER_ID, PLANT_TWINE_ID,
-    STONE_ID, WOOD_ID, WORKBENCH_T1_ID, item_definition,
+    BASIC_HATCHET_ID, BASIC_PICKAXE_ID, CRUDE_FURNACE_ID, DeployableKind, FIBER_ID, HEWN_LOG_ID,
+    IRON_BAR_ID, IRON_HATCHET_ID, IRON_PICKAXE_ID, PLANT_TWINE_ID, STONE_ID, WOOD_ID,
+    WORKBENCH_T1_ID, item_definition,
 };
 
 pub const PLANT_TWINE_RECIPE_ID: &str = "plant_twine";
+pub const HEWN_LOG_RECIPE_ID: &str = "hewn_log";
 pub const STONE_HATCHET_RECIPE_ID: &str = "wood_stone_hatchet";
 pub const STONE_PICKAXE_RECIPE_ID: &str = "wood_stone_pickaxe";
+pub const IRON_HATCHET_RECIPE_ID: &str = "iron_hatchet";
+pub const IRON_PICKAXE_RECIPE_ID: &str = "iron_pickaxe";
 pub const WORKBENCH_T1_RECIPE_ID: &str = "workbench_t1";
 pub const CRUDE_FURNACE_RECIPE_ID: &str = "crude_furnace";
 
@@ -152,6 +156,19 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         station: RecipeStation::None,
     },
     RecipeDefinition {
+        id: HEWN_LOG_RECIPE_ID,
+        name: "Hewn Log",
+        description: "Square up raw wood into a clean structural billet. \
+                      Worked at a bench, it takes a vice to hold the cut.",
+        category: RecipeCategory::Materials,
+        inputs: &[CraftingInput::new(WOOD_ID, 10)],
+        output_item: HEWN_LOG_ID,
+        output_quantity: 1,
+        craft_seconds: 5.0,
+        tier: 1,
+        station: RecipeStation::Workbench { min_tier: 1 },
+    },
+    RecipeDefinition {
         id: STONE_HATCHET_RECIPE_ID,
         name: "Stone Hatchet",
         description: "Lash a sharpened stone to a wooden handle with twine.",
@@ -182,6 +199,40 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         craft_seconds: 10.0,
         tier: 1,
         station: RecipeStation::None,
+    },
+    RecipeDefinition {
+        id: IRON_HATCHET_RECIPE_ID,
+        name: "Iron Hatchet",
+        description: "Forge an iron axe head and haft it on hewn handle stock. \
+                      Fells trees twice as fast as the stone hatchet.",
+        category: RecipeCategory::Tools,
+        inputs: &[
+            CraftingInput::new(HEWN_LOG_ID, 2),
+            CraftingInput::new(IRON_BAR_ID, 12),
+            CraftingInput::new(PLANT_TWINE_ID, 2),
+        ],
+        output_item: IRON_HATCHET_ID,
+        output_quantity: 1,
+        craft_seconds: 20.0,
+        tier: 2,
+        station: RecipeStation::Workbench { min_tier: 1 },
+    },
+    RecipeDefinition {
+        id: IRON_PICKAXE_RECIPE_ID,
+        name: "Iron Pickaxe",
+        description: "Forge a heavy iron head and set it on hewn handle stock. \
+                      Tears ore and stone loose twice as fast as the stone pickaxe.",
+        category: RecipeCategory::Tools,
+        inputs: &[
+            CraftingInput::new(HEWN_LOG_ID, 2),
+            CraftingInput::new(IRON_BAR_ID, 18),
+            CraftingInput::new(PLANT_TWINE_ID, 2),
+        ],
+        output_item: IRON_PICKAXE_ID,
+        output_quantity: 1,
+        craft_seconds: 24.0,
+        tier: 2,
+        station: RecipeStation::Workbench { min_tier: 1 },
     },
     RecipeDefinition {
         id: WORKBENCH_T1_RECIPE_ID,

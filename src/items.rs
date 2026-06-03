@@ -13,8 +13,14 @@ pub const IRON_BAR_ID: &str = "iron_bar";
 pub const SULFUR_ORE_ID: &str = "sulfur_ore";
 pub const FIBER_ID: &str = "fiber";
 pub const PLANT_TWINE_ID: &str = "plant_twine";
+/// Refined wood. Raw `wood` worked into a clean structural billet at a
+/// workbench, the handle stock for tier-2 tools and the building block for
+/// later construction.
+pub const HEWN_LOG_ID: &str = "hewn_log";
 pub const BASIC_HATCHET_ID: &str = "wood_stone_hatchet";
 pub const BASIC_PICKAXE_ID: &str = "wood_stone_pickaxe";
+pub const IRON_HATCHET_ID: &str = "iron_hatchet";
+pub const IRON_PICKAXE_ID: &str = "iron_pickaxe";
 pub const WORKBENCH_T1_ID: &str = "workbench_t1";
 pub const CRUDE_FURNACE_ID: &str = "crude_furnace";
 
@@ -67,6 +73,11 @@ pub const PICKUP_RANGE: f32 = 3.4;
 const PICKUP_RAY_RADIUS: f32 = 0.58;
 const PICKUP_ANCHOR_HEIGHT: f32 = 0.28;
 
+/// First-person *animation archetype* for a held item. Drives the swing
+/// pose and the tool-swap lift cadence, not the mesh. Iron and stone tools
+/// of the same kind share an archetype (an iron hatchet swings exactly like
+/// a stone one); only their [`HeldMesh`] differs. Keeping this coarse means
+/// adding a new tool material never touches the pose curves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemModel {
     Bag,
@@ -75,6 +86,21 @@ pub enum ItemModel {
     /// Deployable items render as the bag silhouette in the held-item
     /// slot, the actual structure mesh is what gets placed in the world.
     Deployable,
+}
+
+/// Which first-person *mesh* the registry tells the renderer to put in the
+/// player's hand. Decoupled from [`ItemModel`] so a tool's look (stone vs
+/// iron head) is independent of how it animates. Raw materials and
+/// deployables-in-hand fall back to the generic bag silhouette. Adding a
+/// new tool material is a new variant here plus one mesh handle, no pose or
+/// gameplay code changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeldMesh {
+    Bag,
+    StoneHatchet,
+    IronHatchet,
+    StonePickaxe,
+    IronPickaxe,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -156,34 +182,40 @@ impl DeployableKind {
     /// client uses it to pick the swing surface (audio/visual chip).
     /// Tier doesn't change material today, a future "reinforced" tier
     /// can introduce a new kind variant if that ever needs to differ.
-    pub const fn material(self) -> DeployableMaterial {
+    pub const fn material(self) -> DestructibleMaterial {
         match self {
-            Self::Workbench { .. } => DeployableMaterial::Wood,
-            Self::Furnace { .. } => DeployableMaterial::Stone,
+            Self::Workbench { .. } => DestructibleMaterial::Wood,
+            Self::Furnace { .. } => DestructibleMaterial::Stone,
         }
     }
 }
 
-/// What the structure is made of, for the damage / tool-matchup system.
-/// Kept deliberately coarse, wood vs stone is enough to express
-/// "hatchet eats workbenches, pickaxe eats furnaces" without forcing
-/// every future deployable to invent a new material.
+/// What a destructible thing is made of, for the tool-vs-material matchup
+/// system. The taxonomy is deliberately coarse: wood vs stone is enough to
+/// express "hatchet eats workbenches, pickaxe eats furnaces" today. New
+/// materials (metal, concrete, …) slot in here as the world gains them, and
+/// the single [`tool_effectiveness_pct`] table below is where their matchups
+/// are declared, no per-entity special-casing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeployableMaterial {
+pub enum DestructibleMaterial {
     Wood,
     Stone,
 }
 
-/// Tool-vs-material damage multiplier, expressed as a percentage so
-/// the server stays on integer math. Matched tool ≈ 1.5× damage,
-/// mismatched proper tool ≈ 0.5× damage; bare hands never reach this
-/// code path (they're rejected upstream).
-pub fn tool_damage_multiplier_pct(tool: ToolKind, material: DeployableMaterial) -> u32 {
+/// Central tool-vs-material effectiveness table, expressed as a percentage
+/// multiplier so the server stays on integer math. This is the one place
+/// that answers "how well does tool X bite material Y": matched tool ≈ 1.5×,
+/// mismatched proper tool ≈ 0.5×. Every destructible-entity damage path
+/// (deployables today, more later) reads through here rather than branching
+/// on entity type, so balancing a matchup is a single-line edit and adding a
+/// material is a single new arm. Bare hands never reach this code path
+/// (they're rejected upstream); the catch-all keeps the math total.
+pub fn tool_effectiveness_pct(tool: ToolKind, material: DestructibleMaterial) -> u32 {
     match (tool, material) {
-        (ToolKind::Axe, DeployableMaterial::Wood) => 150,
-        (ToolKind::Pickaxe, DeployableMaterial::Stone) => 150,
-        (ToolKind::Axe, DeployableMaterial::Stone) => 50,
-        (ToolKind::Pickaxe, DeployableMaterial::Wood) => 50,
+        (ToolKind::Axe, DestructibleMaterial::Wood) => 150,
+        (ToolKind::Pickaxe, DestructibleMaterial::Stone) => 150,
+        (ToolKind::Axe, DestructibleMaterial::Stone) => 50,
+        (ToolKind::Pickaxe, DestructibleMaterial::Wood) => 50,
         // Hands shouldn't reach here, but if they do treat them as
         // worst-case mismatched so they make minimal dents.
         (ToolKind::Hands, _) => 50,
@@ -217,7 +249,11 @@ pub struct ItemDefinition {
     pub description: &'static str,
     pub stack_size: u16,
     pub equipable: bool,
+    /// First-person animation archetype (swing pose + swap cadence).
     pub model: ItemModel,
+    /// First-person mesh the renderer puts in hand. Independent of `model`
+    /// so same-archetype tools (stone vs iron) can look different.
+    pub held_mesh: HeldMesh,
     pub tint: ItemTint,
     pub tool: Option<ToolProfile>,
     pub deployable: Option<DeployableProfile>,
@@ -241,6 +277,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         stack_size: 200,
         equipable: false,
         model: ItemModel::Bag,
+        held_mesh: HeldMesh::Bag,
         tint: ItemTint::new(139, 95, 56),
         tool: None,
         deployable: None,
@@ -252,6 +289,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         stack_size: 200,
         equipable: false,
         model: ItemModel::Bag,
+        held_mesh: HeldMesh::Bag,
         tint: ItemTint::new(122, 128, 126),
         tool: None,
         deployable: None,
@@ -263,6 +301,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         stack_size: 200,
         equipable: false,
         model: ItemModel::Bag,
+        held_mesh: HeldMesh::Bag,
         tint: ItemTint::new(42, 45, 48),
         tool: None,
         deployable: None,
@@ -274,6 +313,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         stack_size: 200,
         equipable: false,
         model: ItemModel::Bag,
+        held_mesh: HeldMesh::Bag,
         tint: ItemTint::new(155, 120, 94),
         tool: None,
         deployable: None,
@@ -285,6 +325,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         stack_size: 200,
         equipable: false,
         model: ItemModel::Bag,
+        held_mesh: HeldMesh::Bag,
         tint: ItemTint::new(218, 189, 73),
         tool: None,
         deployable: None,
@@ -296,6 +337,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         stack_size: 200,
         equipable: false,
         model: ItemModel::Bag,
+        held_mesh: HeldMesh::Bag,
         tint: ItemTint::new(168, 184, 96),
         tool: None,
         deployable: None,
@@ -307,6 +349,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         stack_size: 200,
         equipable: false,
         model: ItemModel::Bag,
+        held_mesh: HeldMesh::Bag,
         tint: ItemTint::new(196, 176, 110),
         tool: None,
         deployable: None,
@@ -318,7 +361,21 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         stack_size: 100,
         equipable: false,
         model: ItemModel::Bag,
+        held_mesh: HeldMesh::Bag,
         tint: ItemTint::new(196, 198, 204),
+        tool: None,
+        deployable: None,
+    },
+    ItemDefinition {
+        id: HEWN_LOG_ID,
+        name: "Hewn Log",
+        description: "Raw wood squared and worked into a clean structural billet. \
+                      Handle stock for iron tools and a staple of later building.",
+        stack_size: 100,
+        equipable: false,
+        model: ItemModel::Bag,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(120, 82, 48),
         tool: None,
         deployable: None,
     },
@@ -329,6 +386,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         stack_size: 1,
         equipable: true,
         model: ItemModel::Hatchet,
+        held_mesh: HeldMesh::StoneHatchet,
         tint: ItemTint::new(148, 122, 82),
         tool: Some(ToolProfile {
             kind: ToolKind::Axe,
@@ -345,12 +403,52 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         stack_size: 1,
         equipable: true,
         model: ItemModel::Pickaxe,
+        held_mesh: HeldMesh::StonePickaxe,
         tint: ItemTint::new(134, 128, 112),
         tool: Some(ToolProfile {
             kind: ToolKind::Pickaxe,
             tier: 1,
             gather_amount: 6,
             cooldown_ticks: 6,
+        }),
+        deployable: None,
+    },
+    ItemDefinition {
+        id: IRON_HATCHET_ID,
+        name: "Iron Hatchet",
+        description: "A forged iron axe head on a hewn handle. Bites twice as \
+                      deep into wood as the stone hatchet.",
+        stack_size: 1,
+        equipable: true,
+        model: ItemModel::Hatchet,
+        held_mesh: HeldMesh::IronHatchet,
+        tint: ItemTint::new(176, 180, 188),
+        tool: Some(ToolProfile {
+            kind: ToolKind::Axe,
+            tier: 2,
+            // Twice the stone hatchet's yield per swing. Cadence is gated by
+            // the swing animation, not this cooldown (see gather.rs), so the
+            // tier upgrade is felt as bigger payouts, not faster swings.
+            gather_amount: 12,
+            cooldown_ticks: 5,
+        }),
+        deployable: None,
+    },
+    ItemDefinition {
+        id: IRON_PICKAXE_ID,
+        name: "Iron Pickaxe",
+        description: "A forged iron head on a hewn handle. Tears ore and stone \
+                      loose twice as fast as the stone pickaxe.",
+        stack_size: 1,
+        equipable: true,
+        model: ItemModel::Pickaxe,
+        held_mesh: HeldMesh::IronPickaxe,
+        tint: ItemTint::new(170, 174, 182),
+        tool: Some(ToolProfile {
+            kind: ToolKind::Pickaxe,
+            tier: 2,
+            gather_amount: 12,
+            cooldown_ticks: 5,
         }),
         deployable: None,
     },
@@ -362,6 +460,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         stack_size: 1,
         equipable: true,
         model: ItemModel::Deployable,
+        held_mesh: HeldMesh::Bag,
         tint: ItemTint::new(136, 96, 56),
         tool: None,
         deployable: Some(DeployableProfile {
@@ -380,6 +479,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         stack_size: 1,
         equipable: true,
         model: ItemModel::Deployable,
+        held_mesh: HeldMesh::Bag,
         tint: ItemTint::new(102, 92, 84),
         tool: None,
         deployable: Some(DeployableProfile {
@@ -480,6 +580,21 @@ pub fn can_pick_up(eye: Vec3Net, yaw: f32, pitch: f32, item: &DroppedWorldItem) 
     pickup_score(eye, yaw, pitch, item).is_some()
 }
 
+/// Lenient, distance-only reach test the *server* uses to accept a pickup,
+/// instead of re-running the strict view-ray [`can_pick_up`]. The client
+/// already chose this exact item with the view ray and only sends a command
+/// for a target it accepted; by the time that command arrives the player has
+/// usually moved or turned, so the strict cone test would reject a legitimate
+/// pickup and force a visible client rollback. `slack` is the extra reach
+/// beyond [`PICKUP_RANGE`] that absorbs the movement-prediction delta (see
+/// `PICKUP_SERVER_REACH_SLACK_M` in `game_balance`). Look direction is
+/// intentionally ignored here.
+pub fn within_pickup_reach(eye: Vec3Net, item_position: Vec3Net, slack: f32) -> bool {
+    let anchor = pickup_anchor_from_position(item_position);
+    let reach = PICKUP_RANGE + slack.max(0.0);
+    anchor.minus(eye).length_squared() <= reach * reach
+}
+
 pub fn best_pickup_target<'a>(
     eye: Vec3Net,
     yaw: f32,
@@ -511,21 +626,21 @@ mod tests {
     fn tool_material_multiplier_favours_matched_pairings() {
         // Matched: hatchet→wood and pickaxe→stone hit hardest.
         assert_eq!(
-            tool_damage_multiplier_pct(ToolKind::Axe, DeployableMaterial::Wood),
+            tool_effectiveness_pct(ToolKind::Axe, DestructibleMaterial::Wood),
             150
         );
         assert_eq!(
-            tool_damage_multiplier_pct(ToolKind::Pickaxe, DeployableMaterial::Stone),
+            tool_effectiveness_pct(ToolKind::Pickaxe, DestructibleMaterial::Stone),
             150
         );
         // Mismatched proper tools still chip but at a third of the
         // matched rate (50 / 150 = 1/3).
         assert_eq!(
-            tool_damage_multiplier_pct(ToolKind::Axe, DeployableMaterial::Stone),
+            tool_effectiveness_pct(ToolKind::Axe, DestructibleMaterial::Stone),
             50
         );
         assert_eq!(
-            tool_damage_multiplier_pct(ToolKind::Pickaxe, DeployableMaterial::Wood),
+            tool_effectiveness_pct(ToolKind::Pickaxe, DestructibleMaterial::Wood),
             50
         );
     }
@@ -534,11 +649,11 @@ mod tests {
     fn deployable_kind_material_matches_visual_intent() {
         assert_eq!(
             DeployableKind::Workbench { tier: 1 }.material(),
-            DeployableMaterial::Wood
+            DestructibleMaterial::Wood
         );
         assert_eq!(
             DeployableKind::Furnace { tier: 1 }.material(),
-            DeployableMaterial::Stone
+            DestructibleMaterial::Stone
         );
     }
 
@@ -555,5 +670,28 @@ mod tests {
 
         assert!(can_pick_up(eye, 0.0, -0.16, &item));
         assert!(!can_pick_up(eye, std::f32::consts::PI, -0.16, &item));
+    }
+
+    #[test]
+    fn server_pickup_reach_is_lenient_and_distance_only() {
+        let item = DroppedWorldItem {
+            id: 1,
+            stack: ItemStack::new(COAL_ID, 1),
+            position: Vec3Net::new(0.0, 0.0, -2.0),
+            yaw: 0.0,
+            rotation: QuatNet::IDENTITY,
+        };
+        let eye = Vec3Net::new(0.0, 0.6, 0.0);
+
+        // Looking the other way fails the strict client test (used for
+        // highlighting) but the server's distance-only check still accepts it,
+        // so a player who turned away after pressing E isn't rolled back.
+        assert!(!can_pick_up(eye, std::f32::consts::PI, 0.0, &item));
+        assert!(within_pickup_reach(eye, item.position, 1.5));
+
+        // Beyond PICKUP_RANGE + slack it's still rejected, the leniency is
+        // bounded, not unlimited reach.
+        let far = Vec3Net::new(0.0, 0.6, -10.0);
+        assert!(!within_pickup_reach(far, item.position, 1.5));
     }
 }
