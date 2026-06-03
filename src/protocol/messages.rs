@@ -72,6 +72,15 @@ pub enum ClientMessage {
     /// peers within audible range only.
     Voice(VoiceFrame),
     Heartbeat,
+    /// Lightweight RTT probe. `client_time_ms` is the client's monotonic send
+    /// timestamp, which the server echoes back in [`ServerMessage::Pong`] so the
+    /// client can measure round-trip latency. `rtt_ms` is the client's most
+    /// recently measured RTT, reported so the server can surface every player's
+    /// ping in the roster ([`ServerMessage::PlayerList`]).
+    Ping {
+        client_time_ms: u32,
+        rtt_ms: u16,
+    },
     Disconnect,
 }
 
@@ -122,7 +131,7 @@ impl ClientMessage {
             // `Sequenced` would do. Movement is the opposite: a newer pose
             // makes an older one obsolete.
             Self::Voice(_) => PacketDelivery::UnreliableUnordered,
-            Self::Movement(_) | Self::Heartbeat => PacketDelivery::Unreliable,
+            Self::Movement(_) | Self::Heartbeat | Self::Ping { .. } => PacketDelivery::Unreliable,
         }
     }
 }
@@ -200,6 +209,10 @@ pub enum ServerMessage {
         /// Chest-height world position of the target at impact time,
         /// the visual + audio anchor.
         position: Vec3Net,
+        /// Attacker's world position at impact time. The target client uses
+        /// this to point a damage-direction indicator at the source; peers
+        /// ignore it.
+        attacker_position: Vec3Net,
         tool: crate::items::ToolKind,
         /// Post-armor damage in HP. Used for the floating damage text.
         damage_dealt: u32,
@@ -246,6 +259,17 @@ pub enum ServerMessage {
     /// when the perf HUD is being shown. The client uses this for the
     /// overlay panel; it doesn't affect gameplay.
     PerfStats(PerfStatsSnapshot),
+    /// Echo of a client [`ClientMessage::Ping`]'s timestamp, letting the client
+    /// compute its round-trip latency.
+    Pong {
+        client_time_ms: u32,
+    },
+    /// Full connected-player roster (name + measured ping), broadcast on a slow
+    /// cadence. Unlike per-entity replication this deliberately includes players
+    /// outside the receiver's AoI: the pause-screen player list needs everyone,
+    /// not just nearby mirrors, so it rides a small periodic presence message
+    /// rather than the chunk-gated replication path.
+    PlayerList(Vec<PlayerListEntry>),
     Heartbeat,
 }
 
@@ -275,6 +299,8 @@ impl ServerMessage {
             | Self::ResourceImpact { .. }
             | Self::WorldTime(_)
             | Self::PerfStats(_)
+            | Self::Pong { .. }
+            | Self::PlayerList(_)
             | Self::Heartbeat => PacketDelivery::Unreliable,
         }
     }
@@ -290,6 +316,16 @@ pub enum PlayerEvent {
 pub struct ChatMessage {
     pub from: String,
     pub text: String,
+}
+
+/// One row in the connected-player roster carried by
+/// [`ServerMessage::PlayerList`]: who is online and their measured ping.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlayerListEntry {
+    pub client_id: ClientId,
+    pub name: String,
+    /// Round-trip latency in milliseconds, as last reported by that client.
+    pub ping_ms: u16,
 }
 
 /// Snapshot of server-side perf counters relevant to the chunk system,

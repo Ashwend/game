@@ -3,6 +3,7 @@ mod auth;
 mod auto_connect;
 mod camera;
 mod chunk_overlay;
+mod combat_feedback;
 mod deployables;
 mod display;
 pub(crate) mod effects;
@@ -34,6 +35,7 @@ pub(crate) use camera::{
     CameraImpactKick, CameraMotionEffects, camera_follow_system, menu_backdrop_camera_system,
 };
 pub(crate) use chunk_overlay::chunk_overlay_system;
+pub(crate) use combat_feedback::tick_combat_feedback_system;
 pub(crate) use deployables::{
     apply_deployed_entities_system, maintain_world_grid_system, placement_input_system,
     update_placement_ghost_system,

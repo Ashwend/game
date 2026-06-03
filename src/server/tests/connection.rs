@@ -230,6 +230,59 @@ fn heartbeat_keeps_client_connected_until_it_stops() {
 }
 
 #[test]
+fn ping_is_echoed_as_pong_with_the_same_timestamp() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+
+    let out = server.receive(
+        client_id,
+        ClientMessage::Ping {
+            client_time_ms: 12_345,
+            rtt_ms: 42,
+        },
+    );
+
+    assert!(out.iter().any(|e| {
+        matches!(
+            (&e.target, &e.message),
+            (DeliveryTarget::Client(id), ServerMessage::Pong { client_time_ms })
+                if *id == client_id && *client_time_ms == 12_345
+        )
+    }));
+}
+
+#[test]
+fn reported_ping_surfaces_in_the_player_list_broadcast() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    let _ = server.receive(
+        client_id,
+        ClientMessage::Ping {
+            client_time_ms: 0,
+            rtt_ms: 73,
+        },
+    );
+
+    // Tick across at least one roster-broadcast interval and capture it.
+    let mut roster = None;
+    for _ in 0..(SERVER_TICK_RATE_HZ as usize + 2) {
+        for envelope in server.tick(1.0 / SERVER_TICK_RATE_HZ) {
+            if let ServerMessage::PlayerList(entries) = envelope.message {
+                roster = Some(entries);
+            }
+        }
+    }
+
+    let entries = roster.expect("a PlayerList broadcast should have fired within a second");
+    let me = entries
+        .iter()
+        .find(|entry| entry.client_id == client_id)
+        .expect("the connected player should be in the roster");
+    assert_eq!(me.ping_ms, 73);
+    assert_eq!(me.name, "Host");
+}
+
+#[test]
 fn kick_all_sends_reason_before_disconnects() {
     let mut server = server();
     let client_id = connect_host(&mut server);

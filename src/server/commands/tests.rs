@@ -56,6 +56,89 @@ fn unknown_command_warns() {
 }
 
 #[test]
+fn whisper_delivers_to_target_and_echoes_to_sender_without_broadcast() {
+    let (mut server, sender) = server_with_host(Some(1));
+    let (recipient, _) = server
+        .connect(
+            PROTOCOL_VERSION,
+            Some(GAME_VERSION.to_owned()),
+            2,
+            "Bob".to_owned(),
+            String::new(),
+        )
+        .expect("connect ok");
+
+    let out = server.apply_command(sender, "/w Bob hello there".to_owned());
+
+    let to_recipient = out.iter().any(|e| {
+        matches!(
+            (&e.target, &e.message),
+            (DeliveryTarget::Client(id), ServerMessage::Chat(c))
+                if *id == recipient && c.text == "hello there"
+        )
+    });
+    let to_sender = out.iter().any(|e| {
+        matches!(
+            (&e.target, &e.message),
+            (DeliveryTarget::Client(id), ServerMessage::Chat(c))
+                if *id == sender && c.text == "hello there"
+        )
+    });
+    assert!(to_recipient, "recipient should receive the whisper");
+    assert!(to_sender, "sender should get an echo");
+    assert!(
+        !out.iter()
+            .any(|e| matches!(e.target, DeliveryTarget::Broadcast)),
+        "a whisper must never broadcast"
+    );
+}
+
+#[test]
+fn whisper_matches_names_case_insensitively() {
+    let (mut server, sender) = server_with_host(Some(1));
+    let (recipient, _) = server
+        .connect(
+            PROTOCOL_VERSION,
+            Some(GAME_VERSION.to_owned()),
+            2,
+            "Bob".to_owned(),
+            String::new(),
+        )
+        .expect("connect ok");
+
+    let out = server.apply_command(sender, "/w bOb yo".to_owned());
+    assert!(out.iter().any(|e| {
+        matches!(
+            (&e.target, &e.message),
+            (DeliveryTarget::Client(id), ServerMessage::Chat(_)) if *id == recipient
+        )
+    }));
+}
+
+#[test]
+fn whisper_to_unknown_player_warns() {
+    let (mut server, sender) = server_with_host(Some(1));
+    let out = server.apply_command(sender, "/w Nobody hi".to_owned());
+    assert!(has_toast(&out, ToastKind::Warning));
+}
+
+#[test]
+fn whisper_without_a_message_warns() {
+    let (mut server, sender) = server_with_host(Some(1));
+    let _ = server
+        .connect(
+            PROTOCOL_VERSION,
+            Some(GAME_VERSION.to_owned()),
+            2,
+            "Bob".to_owned(),
+            String::new(),
+        )
+        .expect("connect ok");
+    let out = server.apply_command(sender, "/w Bob   ".to_owned());
+    assert!(has_toast(&out, ToastKind::Warning));
+}
+
+#[test]
 fn help_lists_commands_as_chat_for_admin_and_non_admin() {
     // Admin sees the unlocked descriptions; non-admin sees "admin
     // only" tags. Both get the list as Chat (not toast).

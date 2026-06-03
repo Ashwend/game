@@ -59,15 +59,22 @@ pub(super) fn crafting_body(
     } else {
         0
     };
+    // While the tutorial is focusing recipes, pin them to the top of the list.
+    let pin_tutorial = ui.ctx().memory(|mem| {
+        mem.data
+            .get_temp::<bool>(crate::app::ui::tutorial::pin_recipes_key())
+            .unwrap_or(false)
+    });
+
     // Bound the list to the height the panel left us so the fixed-size shell
     // doesn't grow when the registry overflows; the remainder scrolls.
     let body_height = ui.available_height();
-    egui::ScrollArea::vertical()
+    let scroll_output = egui::ScrollArea::vertical()
         .id_salt(("crafting_recipes_scroll", scroll_id_salt))
         .max_height(body_height)
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let visible_recipes = collect_sorted_recipes(crafting_ui, inventory);
+            let visible_recipes = collect_sorted_recipes(crafting_ui, inventory, pin_tutorial);
 
             if visible_recipes.is_empty() {
                 ui.add_space(40.0);
@@ -93,6 +100,15 @@ pub(super) fn crafting_body(
                 );
             }
         });
+
+    // Stash the scroll viewport so the tutorial overlay can clip its recipe
+    // outlines to it (a row scrolled out of view must not paint below the panel).
+    ui.ctx().memory_mut(|mem| {
+        mem.data.insert_temp(
+            crate::app::ui::tutorial::craft_viewport_key(),
+            scroll_output.inner_rect,
+        )
+    });
 }
 
 pub(super) struct RecipeListEntry<'a> {

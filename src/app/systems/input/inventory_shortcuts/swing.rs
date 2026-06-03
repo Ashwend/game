@@ -112,6 +112,7 @@ fn dispatch_resource_swing(
     });
 
     params.camera_kick.trigger(impact.tool);
+    params.combat_feedback.trigger_hit_marker(false);
 
     // Predict the payout landing in the bag instantly. The node's visual
     // shrink / death stays server-driven (we never predict depletion). A
@@ -181,6 +182,7 @@ fn dispatch_deployable_swing(
     });
 
     params.camera_kick.trigger(impact.tool);
+    params.combat_feedback.trigger_hit_marker(false);
 
     send_gameplay_message(
         &mut params.runtime,
@@ -251,6 +253,7 @@ fn dispatch_player_swing(
     }
 
     params.camera_kick.trigger(impact.tool);
+    params.combat_feedback.trigger_hit_marker(true);
 
     send_gameplay_message(
         &mut params.runtime,

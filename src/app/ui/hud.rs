@@ -3,7 +3,7 @@ use bevy_egui::egui;
 
 use crate::{
     app::{
-        state::{ClientRuntime, ClientSettings},
+        state::{ClientRuntime, ClientSettings, CombatFeedbackState},
         voice::VoiceState,
     },
     protocol::MAX_HEALTH,
@@ -26,6 +26,7 @@ pub(super) fn hud_ui(
     diagnostics: &DiagnosticsStore,
     settings: &ClientSettings,
     voice: &VoiceState,
+    combat: &CombatFeedbackState,
 ) {
     if settings.hud.show_perf_stats {
         perf_stats_ui(ctx, runtime, diagnostics);
@@ -39,6 +40,15 @@ pub(super) fn hud_ui(
     let Some(player) = runtime.local_view() else {
         return;
     };
+
+    low_health_vignette(ctx, player.health);
+    combat_feedback_ui(
+        ctx,
+        combat,
+        player.position.x,
+        player.position.z,
+        player.yaw,
+    );
 
     egui::Area::new("hud_bars".into())
         .anchor(egui::Align2::RIGHT_BOTTOM, [-18.0, -18.0])
@@ -276,6 +286,210 @@ fn perf_stats_ui(ctx: &egui::Context, runtime: &ClientRuntime, diagnostics: &Dia
         });
 }
 
+/// Fraction of max health at/under which the low-health vignette begins to
+/// fade in. Above this the screen edges stay clean.
+const VIGNETTE_THRESHOLD: f32 = 0.30;
+/// Peak edge alpha at zero health. Moderate on purpose: the effect should read
+/// as "you're badly hurt" without blacking out the periphery.
+const VIGNETTE_PEAK_ALPHA: f32 = 150.0;
+
+/// Red screen-edge vignette that fades in as the local player's health drops
+/// below [`VIGNETTE_THRESHOLD`]. Drawn as a single gradient mesh, opaque at the
+/// screen border and transparent toward the center, so it darkens the
+/// periphery without covering the crosshair area. Pulses gently once health is
+/// critical to nudge the player toward retreating or healing.
+fn low_health_vignette(ctx: &egui::Context, health: f32) {
+    let fraction = (health / MAX_HEALTH).clamp(0.0, 1.0);
+    if fraction >= VIGNETTE_THRESHOLD {
+        return;
+    }
+    // 0 at the threshold, 1 at empty.
+    let severity = ((VIGNETTE_THRESHOLD - fraction) / VIGNETTE_THRESHOLD).clamp(0.0, 1.0);
+
+    // Gentle 1.5 Hz pulse, scaled in only as health approaches zero so a
+    // low-but-stable bar doesn't throb forever.
+    let time = ctx.input(|input| input.time) as f32;
+    let wave = 0.85 + 0.15 * (time * std::f32::consts::TAU * 1.5).sin();
+    let critical = (1.0 - fraction / VIGNETTE_THRESHOLD).clamp(0.0, 1.0);
+    let pulse = 1.0 + (wave - 1.0) * critical;
+
+    let peak_alpha = (severity * VIGNETTE_PEAK_ALPHA * pulse).clamp(0.0, 255.0) as u8;
+    if peak_alpha == 0 {
+        return;
+    }
+
+    // A background-layer painter spans the whole screen, so the gradient mesh
+    // isn't clipped to an auto-sized Area (which collapses to nothing since we
+    // only paint and never allocate widgets).
+    let screen = ctx.content_rect();
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Background,
+        egui::Id::new("low_health_vignette"),
+    ));
+    let edge = egui::Color32::from_rgba_unmultiplied(120, 16, 16, peak_alpha);
+    let center = egui::Color32::from_rgba_unmultiplied(120, 16, 16, 0);
+    // Inset to where the red fully fades out. ~22% of the smaller dimension
+    // keeps the clear center generous on any aspect ratio (and well under half,
+    // so the inner rect can never invert).
+    let inset = screen.size().min_elem() * 0.22;
+    let inner = screen.shrink(inset);
+    painter.add(vignette_mesh(screen, inner, edge, center));
+
+    // Keep the pulse animating while the vignette is visible.
+    ctx.request_repaint();
+}
+
+/// On-crosshair hit marker plus the damage-direction arrows. Both are
+/// screen-space overlays painted on dedicated full-screen layers so they read
+/// against the world without an Area clipping them. `px`/`pz` are the local
+/// player's horizontal position and `yaw` their look heading, used to place the
+/// arrows relative to where the player is facing.
+fn combat_feedback_ui(
+    ctx: &egui::Context,
+    combat: &CombatFeedbackState,
+    px: f32,
+    pz: f32,
+    yaw: f32,
+) {
+    hit_marker(ctx, combat.hit_marker_fade(), combat.hit_marker_is_player());
+    damage_direction(ctx, combat, px, pz, yaw);
+
+    // Animate the fades while anything is on-screen.
+    if combat.is_active() {
+        ctx.request_repaint();
+    }
+}
+
+/// Classic four-tick "X" hit marker at screen center that fades and expands
+/// slightly as it decays. White for world hits, hot red for PvP connects.
+fn hit_marker(ctx: &egui::Context, fade: f32, is_player: bool) {
+    if fade <= 0.0 {
+        return;
+    }
+    let center = ctx.content_rect().center();
+    // Grow the gap as it fades so the marker reads as a quick "pop".
+    let grow = 1.0 + (1.0 - fade) * 0.6;
+    let gap = 4.0 * grow;
+    let len = 7.0;
+    let alpha = (fade * 235.0) as u8;
+    let color = if is_player {
+        egui::Color32::from_rgba_unmultiplied(255, 90, 78, alpha)
+    } else {
+        egui::Color32::from_rgba_unmultiplied(240, 242, 245, alpha)
+    };
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hit_marker"),
+    ));
+    let stroke = egui::Stroke::new(2.0, color);
+    for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        let inner = egui::pos2(center.x + sx * gap, center.y + sy * gap);
+        let outer = egui::pos2(center.x + sx * (gap + len), center.y + sy * (gap + len));
+        painter.line_segment([inner, outer], stroke);
+    }
+}
+
+/// Red chevrons on a ring around the crosshair, one per recent hit, each
+/// pointing toward the attacker's bearing relative to the player's facing.
+/// Fades with each arrow's remaining lifetime.
+fn damage_direction(ctx: &egui::Context, combat: &CombatFeedbackState, px: f32, pz: f32, yaw: f32) {
+    let arrows = combat.damage_arrows();
+    if arrows.is_empty() {
+        return;
+    }
+    let rect = ctx.content_rect();
+    let center = rect.center();
+    let radius = rect.size().min_elem() * 0.18;
+
+    // Horizontal forward + right basis from the look heading. `look_forward`
+    // owns the yaw convention; `right = forward x up` lines up with egui's
+    // screen axes (x right, y down) so a hit from world-right shows on the
+    // right of the ring.
+    let forward = crate::items::look_forward(yaw, 0.0);
+    let flen = (forward.x * forward.x + forward.z * forward.z)
+        .sqrt()
+        .max(1e-4);
+    let (fx, fz) = (forward.x / flen, forward.z / flen);
+
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("damage_direction"),
+    ));
+    for arrow in arrows {
+        let dx = arrow.source.x - px;
+        let dz = arrow.source.z - pz;
+        if dx * dx + dz * dz < 1e-4 {
+            continue;
+        }
+        let ahead = dx * fx + dz * fz;
+        let side = dx * (-fz) + dz * fx;
+        // angle 0 = directly ahead -> top of the ring; +angle (world-right) ->
+        // right side of the ring.
+        let angle = side.atan2(ahead);
+        let dir = egui::vec2(angle.sin(), -angle.cos());
+        let tangent = egui::vec2(-dir.y, dir.x);
+        let pos = center + dir * radius;
+        let tip = pos + dir * 13.0;
+        let base_a = pos - dir * 4.0 + tangent * 9.0;
+        let base_b = pos - dir * 4.0 - tangent * 9.0;
+        let alpha = (arrow.fade() * 220.0) as u8;
+        let fill = egui::Color32::from_rgba_unmultiplied(214, 40, 40, alpha);
+        painter.add(egui::Shape::convex_polygon(
+            vec![tip, base_a, base_b],
+            fill,
+            egui::Stroke::NONE,
+        ));
+    }
+}
+
+/// Build the four-quad "frame" mesh between `outer` (filled with `edge`) and
+/// `inner` (filled with `center`). Each side fades from the screen border
+/// inward; the shared corner vertices keep the corners strongest, which is the
+/// classic vignette falloff.
+fn vignette_mesh(
+    outer: egui::Rect,
+    inner: egui::Rect,
+    edge: egui::Color32,
+    center: egui::Color32,
+) -> egui::Shape {
+    use egui::epaint::{Vertex, WHITE_UV};
+    let mut mesh = egui::Mesh::default();
+
+    // 0..=3 outer corners (edge color), 4..=7 matching inner corners (center
+    // color), both in TL, TR, BR, BL order.
+    let corners = [
+        (outer.left_top(), edge),
+        (outer.right_top(), edge),
+        (outer.right_bottom(), edge),
+        (outer.left_bottom(), edge),
+        (inner.left_top(), center),
+        (inner.right_top(), center),
+        (inner.right_bottom(), center),
+        (inner.left_bottom(), center),
+    ];
+    for (pos, color) in corners {
+        mesh.vertices.push(Vertex {
+            pos,
+            uv: WHITE_UV,
+            color,
+        });
+    }
+
+    // Four border quads (top, right, bottom, left), each split into two
+    // triangles. Indices reference the vertex list above.
+    let quads: [(u32, u32, u32, u32); 4] = [
+        (0, 1, 5, 4), // top
+        (1, 2, 6, 5), // right
+        (2, 3, 7, 6), // bottom
+        (3, 0, 4, 7), // left
+    ];
+    for (o0, o1, i1, i0) in quads {
+        mesh.indices.extend_from_slice(&[o0, o1, i1, o0, i1, i0]);
+    }
+
+    egui::Shape::mesh(mesh)
+}
+
 fn health_bar(ui: &mut egui::Ui, health: f32) {
     let fraction = (health / MAX_HEALTH).clamp(0.0, 1.0);
     let (rect, _) = ui.allocate_exact_size(
@@ -377,6 +591,7 @@ mod tests {
                 &diagnostics,
                 &ClientSettings::default(),
                 &voice,
+                &CombatFeedbackState::default(),
             );
         });
 
@@ -395,6 +610,7 @@ mod tests {
                 &diagnostics,
                 &ClientSettings::default(),
                 &voice,
+                &CombatFeedbackState::default(),
             );
         });
 
@@ -449,6 +665,41 @@ mod tests {
     }
 
     #[test]
+    fn low_health_vignette_appears_only_when_hurt() {
+        // Full health: the edges stay clean (nothing drawn).
+        let ctx = egui::Context::default();
+        let healthy = ctx.run(raw_input(), |ctx| low_health_vignette(ctx, MAX_HEALTH));
+        assert!(healthy.shapes.is_empty());
+
+        // Critically low: the gradient mesh is emitted.
+        let ctx = egui::Context::default();
+        let hurt = ctx.run(raw_input(), |ctx| {
+            low_health_vignette(ctx, MAX_HEALTH * 0.1)
+        });
+        assert!(!hurt.shapes.is_empty());
+    }
+
+    #[test]
+    fn combat_feedback_overlay_draws_when_active() {
+        // Idle state: no hit marker, no arrows, nothing painted.
+        let ctx = egui::Context::default();
+        let idle = ctx.run(raw_input(), |ctx| {
+            combat_feedback_ui(ctx, &CombatFeedbackState::default(), 0.0, 0.0, 0.0);
+        });
+        assert!(idle.shapes.is_empty());
+
+        // Active marker + a directional arrow both emit shapes.
+        let mut combat = CombatFeedbackState::default();
+        combat.trigger_hit_marker(true);
+        combat.push_damage_from(bevy::math::Vec3::new(5.0, 0.0, 5.0));
+        let ctx = egui::Context::default();
+        let active = ctx.run(raw_input(), |ctx| {
+            combat_feedback_ui(ctx, &combat, 0.0, 0.0, 0.0);
+        });
+        assert!(!active.shapes.is_empty());
+    }
+
+    #[test]
     fn perf_overlay_is_gated_by_the_settings_toggle() {
         let runtime = ClientRuntime::default();
         let diagnostics = DiagnosticsStore::default();
@@ -460,7 +711,14 @@ mod tests {
         settings.hud.show_perf_stats = false;
         let ctx_off = egui::Context::default();
         let off = ctx_off.run(raw_input(), |ctx| {
-            hud_ui(ctx, &runtime, &diagnostics, &settings, &voice);
+            hud_ui(
+                ctx,
+                &runtime,
+                &diagnostics,
+                &settings,
+                &voice,
+                &CombatFeedbackState::default(),
+            );
         });
         assert!(off.shapes.is_empty());
 
@@ -469,7 +727,14 @@ mod tests {
         settings.hud.show_perf_stats = true;
         let ctx_on = egui::Context::default();
         let on = ctx_on.run(raw_input(), |ctx| {
-            hud_ui(ctx, &runtime, &diagnostics, &settings, &voice);
+            hud_ui(
+                ctx,
+                &runtime,
+                &diagnostics,
+                &settings,
+                &voice,
+                &CombatFeedbackState::default(),
+            );
         });
         assert!(!on.shapes.is_empty());
     }

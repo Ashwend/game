@@ -150,6 +150,7 @@ impl GameServer {
             open_furnace: None,
             open_loot_bag: None,
             applied_action_seq: 0,
+            ping_ms: 0,
         };
 
         let initial_position = client.controller.position;

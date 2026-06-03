@@ -175,6 +175,7 @@ impl GameServer {
                 attacker: attacker_id,
                 target: target_id,
                 position: target_chest,
+                attacker_position: attacker_pos,
                 tool: tool_profile.kind,
                 damage_dealt,
             },

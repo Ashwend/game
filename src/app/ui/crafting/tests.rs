@@ -99,7 +99,7 @@ fn collect_sorted_recipes_filters_by_category() {
         category_filter: Some(RecipeCategory::Tools),
         ..Default::default()
     };
-    let entries = collect_sorted_recipes(&ui_state, None);
+    let entries = collect_sorted_recipes(&ui_state, None, false);
     assert!(!entries.is_empty());
     assert!(
         entries
@@ -115,7 +115,7 @@ fn collect_sorted_recipes_search_narrows_to_one() {
         search: "handfuls".to_owned(),
         ..Default::default()
     };
-    let entries = collect_sorted_recipes(&ui_state, None);
+    let entries = collect_sorted_recipes(&ui_state, None, false);
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].recipe.id, PLANT_TWINE_RECIPE_ID);
 }
@@ -125,7 +125,7 @@ fn collect_sorted_recipes_orders_craftable_first() {
     // Inventory enough for plant twine but not the stone tools.
     let inv = inventory_with(FIBER_ID, 100);
     let ui_state = CraftingUiState::default();
-    let entries = collect_sorted_recipes(&ui_state, Some(&inv));
+    let entries = collect_sorted_recipes(&ui_state, Some(&inv), false);
     // The first craftable entry must precede any non-craftable one.
     let first_non_craftable = entries.iter().position(|e| !e.craftable);
     let last_craftable = entries.iter().rposition(|e| e.craftable);
@@ -144,13 +144,31 @@ fn collect_sorted_recipes_orders_craftable_first() {
 }
 
 #[test]
+fn collect_sorted_recipes_pins_tutorial_recipes_when_focused() {
+    // Only fiber on hand: without pinning the stone tools sort low (not
+    // craftable), but with the tutorial focusing them they float to the top so
+    // their highlight outlines stay on-screen.
+    let inv = inventory_with(FIBER_ID, 100);
+    let ui_state = CraftingUiState::default();
+    let entries = collect_sorted_recipes(&ui_state, Some(&inv), true);
+    assert!(entries.len() >= 3);
+    for entry in entries.iter().take(3) {
+        assert!(
+            crate::app::ui::tutorial::is_tutorial_recipe(entry.recipe.id),
+            "expected a pinned tutorial recipe at the top, got {}",
+            entry.recipe.id
+        );
+    }
+}
+
+#[test]
 fn collect_sorted_recipes_only_craftable_hides_unaffordable() {
     let inv = inventory_with(FIBER_ID, 100);
     let ui_state = CraftingUiState {
         only_craftable: true,
         ..Default::default()
     };
-    let entries = collect_sorted_recipes(&ui_state, Some(&inv));
+    let entries = collect_sorted_recipes(&ui_state, Some(&inv), false);
     assert!(entries.iter().all(|e| e.craftable));
     // Stone pickaxe (needs wood/stone) must be hidden.
     assert!(

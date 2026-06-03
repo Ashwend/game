@@ -43,6 +43,12 @@ pub enum InventoryCommand {
     SelectActionbarOffset {
         offset: i8,
     },
+    /// Auto-stack and tidy the main inventory bag: merge partial stacks of the
+    /// same item and re-order the result by name, packing freed slots to the
+    /// end. Server-authoritative and deliberately not client-predicted (it
+    /// rewrites many slots at once), so the tidied layout arrives via the
+    /// normal `PlayerPrivate` inventory replication.
+    Sort,
 }
 
 impl InventoryCommand {
@@ -58,7 +64,9 @@ impl InventoryCommand {
             | Self::Drop { seq, .. }
             | Self::PickUp { seq, .. }
             | Self::PickUpResourceNode { seq, .. } => Some(*seq),
-            Self::SelectActionbarSlot { .. } | Self::SelectActionbarOffset { .. } => None,
+            Self::SelectActionbarSlot { .. } | Self::SelectActionbarOffset { .. } | Self::Sort => {
+                None
+            }
         }
     }
 }

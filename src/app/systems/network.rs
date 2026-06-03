@@ -16,8 +16,15 @@ use crate::{
         voice::IncomingVoiceMessage,
     },
     items::ToolKind,
-    protocol::{GAME_VERSION, ResourceImpactKind, ServerMessage, ToastKind, Vec3Net},
+    protocol::{
+        ClientMessage, GAME_VERSION, ResourceImpactKind, ServerMessage, ToastKind, Vec3Net,
+    },
 };
+
+/// How often the client sends an RTT probe (`Ping`). One per second matches the
+/// server's roster broadcast cadence, so the pause-screen ping is never more
+/// than a second stale.
+const PING_INTERVAL_SECONDS: f32 = 1.0;
 
 /// Fan-out writers for messages the network tick produces, voice frames,
 /// remote impacts, error toasts. Grouped so the system signature stays
@@ -30,6 +37,9 @@ pub(crate) struct NetworkTickWriters<'w> {
     /// PvP "I got hit" camera reaction. Fired when a `PlayerImpact`
     /// arrives whose `target` matches the local client.
     pub(crate) camera_kick: ResMut<'w, crate::app::systems::CameraImpactKick>,
+    /// Transient hit marker + damage-direction state. The target side of a
+    /// `PlayerImpact` pushes a directional arrow toward the attacker here.
+    pub(crate) combat_feedback: ResMut<'w, crate::app::state::CombatFeedbackState>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -44,6 +54,7 @@ pub(crate) fn network_tick_system(
     mut pending_session_end: ResMut<PendingSessionEndReason>,
     store: Res<SaveStore>,
     mut shutdown_tasks: ResMut<SessionShutdownTasks>,
+    mut ping_accumulator: Local<f32>,
 ) {
     toasts.tick(time.delta_secs());
 
@@ -56,6 +67,22 @@ pub(crate) fn network_tick_system(
     // routine `WorldTime` broadcast realigns drift; this keeps the visible
     // sun/moon smooth in between.
     runtime.tick_world_time(time.delta_secs());
+
+    // Periodic RTT probe: stamp the client clock and report the last measured
+    // latency; the server echoes the timestamp back in `Pong` and stores the
+    // reported value for the roster broadcast.
+    *ping_accumulator += time.delta_secs();
+    if *ping_accumulator >= PING_INTERVAL_SECONDS {
+        *ping_accumulator = 0.0;
+        let client_time_ms = (time.elapsed_secs() * 1000.0) as u32;
+        let rtt_ms = runtime.local_ping_ms;
+        if let Some(session) = runtime.session.as_mut() {
+            let _ = session.send(ClientMessage::Ping {
+                client_time_ms,
+                rtt_ms,
+            });
+        }
+    }
 
     let tick_result = runtime
         .session
@@ -162,6 +189,7 @@ pub(crate) fn network_tick_system(
             attacker,
             target,
             position,
+            attacker_position,
             tool,
             damage_dealt,
         } = &message
@@ -194,6 +222,14 @@ pub(crate) fn network_tick_system(
             let local = runtime.client_id;
             if local == Some(*target) {
                 writers.camera_kick.trigger_from_hit(*tool);
+                // Point a fading direction arrow at the attacker so the
+                // target can tell where the hit came from, even from
+                // off-screen or behind.
+                writers.combat_feedback.push_damage_from(Vec3::new(
+                    attacker_position.x,
+                    attacker_position.y,
+                    attacker_position.z,
+                ));
                 commands.spawn(FloatingDamageText::new(
                     Vec3::new(position.x, position.y, position.z),
                     *damage_dealt,
@@ -232,6 +268,11 @@ pub(crate) fn network_tick_system(
                 position: *position,
                 frame: frame.clone(),
             });
+        }
+        if let ServerMessage::Pong { client_time_ms } = &message {
+            let now_ms = (time.elapsed_secs() * 1000.0) as u32;
+            let rtt = now_ms.saturating_sub(*client_time_ms).min(u16::MAX as u32) as u16;
+            runtime.set_local_ping(rtt);
         }
         runtime.apply_message(message);
     }

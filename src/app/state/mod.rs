@@ -1,5 +1,6 @@
 mod auth;
 mod backdrop;
+mod combat_feedback;
 mod connection;
 mod crafting;
 mod deployable;
@@ -20,6 +21,7 @@ mod toasts;
 
 pub(crate) use auth::{AuthFlow, WorkosAuth};
 pub(crate) use backdrop::MenuBackdropVisibility;
+pub(crate) use combat_feedback::CombatFeedbackState;
 #[cfg(test)]
 pub(crate) use connection::CONNECTION_LAG_WARNING_SECONDS;
 pub(crate) use crafting::{CraftingHudState, CraftingUiState, ProgressBaseline};

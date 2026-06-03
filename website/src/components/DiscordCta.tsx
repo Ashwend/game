@@ -13,9 +13,8 @@ export function DiscordCta() {
               Come hang out while it&rsquo;s being built
             </h2>
             <p className="mt-4 text-lg text-muted">
-              The Discord is where playtest builds land, where bugs get
-              reported, and where the next patch gets argued about. Pull up a
-              chair.
+              The Discord is where we talk about the game: the playtest, bug
+              reports, feedback, and the announcements when a new build ships.
             </p>
             <a
               href={siteConfig.discordInviteUrl}

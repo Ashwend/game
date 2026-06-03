@@ -76,6 +76,104 @@ pub(super) fn pause_ui(
                 });
             });
         });
+
+    player_list_panel(ctx, menu, runtime);
+}
+
+/// Connected-player roster shown beside the pause menu: each online player's
+/// name and ping, with a "Message" button that opens chat pre-filled with a
+/// whisper command. Reads `runtime.players` (the server's roster broadcast),
+/// which is AoI-independent so it lists everyone, not just nearby players.
+fn player_list_panel(ctx: &egui::Context, menu: &mut MenuState, runtime: &ClientRuntime) {
+    // Singleplayer is just you on a loopback host, so the roster is noise: only
+    // show it for remote (multiplayer) sessions.
+    if !runtime.is_multiplayer_session() {
+        return;
+    }
+    if runtime.players.is_empty() {
+        return;
+    }
+    let local_id = runtime.client_id;
+    // Clone the small roster so the row loop can mutate `menu` (whisper) without
+    // holding an immutable borrow of `runtime` across the closure.
+    let players = runtime.players.clone();
+
+    egui::Area::new("pause_player_list".into())
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::LEFT_CENTER, [28.0, 0.0])
+        .show(ctx, |ui| {
+            ui.set_width(300.0);
+            theme::panel_frame().show(ui, |ui| {
+                ui.set_width(252.0);
+                ui.label(
+                    egui::RichText::new(format!("Players online ({})", players.len()))
+                        .size(15.0)
+                        .strong()
+                        .color(theme::text()),
+                );
+                ui.add_space(8.0);
+                egui::ScrollArea::vertical()
+                    .max_height(280.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for entry in &players {
+                            player_row(ui, menu, entry, local_id == Some(entry.client_id));
+                        }
+                    });
+            });
+        });
+}
+
+/// One roster row: ping chip, name, and (for other players) a "Message" button.
+fn player_row(
+    ui: &mut egui::Ui,
+    menu: &mut MenuState,
+    entry: &crate::protocol::PlayerListEntry,
+    is_self: bool,
+) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!("{} ms", entry.ping_ms))
+                .size(11.0)
+                .monospace()
+                .color(ping_color(entry.ping_ms)),
+        );
+        ui.add_space(6.0);
+        let name = if is_self {
+            format!("{} (you)", entry.name)
+        } else {
+            entry.name.clone()
+        };
+        ui.label(egui::RichText::new(name).color(theme::text()));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if !is_self {
+                let response =
+                    theme::compact_button(ui, "Message", theme::ButtonKind::Secondary, 84.0);
+                if response.clicked() {
+                    theme::record_click_sound(ui, &response);
+                    // Hand off to chat with a whisper command pre-filled, then
+                    // close the pause overlay so the input is usable.
+                    menu.pause_open = false;
+                    menu.pause_options_open = false;
+                    menu.chat_open = true;
+                    menu.chat_focus_pending = true;
+                    menu.chat_input = format!("/w {} ", entry.name);
+                }
+            }
+        });
+    });
+    ui.add_space(3.0);
+}
+
+/// Latency color: green for snappy, amber for noticeable, red for laggy.
+fn ping_color(ping_ms: u16) -> egui::Color32 {
+    if ping_ms < 80 {
+        egui::Color32::from_rgb(125, 196, 55)
+    } else if ping_ms < 160 {
+        egui::Color32::from_rgb(228, 200, 120)
+    } else {
+        egui::Color32::from_rgb(228, 120, 120)
+    }
 }
 
 #[cfg(test)]

@@ -22,6 +22,8 @@ pub(crate) struct ClientSettings {
     #[serde(default)]
     pub(crate) hud: HudSettings,
     #[serde(default)]
+    pub(crate) onboarding: OnboardingSettings,
+    #[serde(default)]
     pub(crate) keybindings: KeyBindings,
 }
 
@@ -435,7 +437,7 @@ impl Default for InputSettings {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct HudSettings {
     /// Toggles the perf overlay (FPS, chunk position, loaded chunks, live
     /// nodes, regrow queue, AoI count). Bound to F2 in-game.
@@ -450,6 +452,43 @@ pub(crate) struct HudSettings {
     /// concentric Chebyshev ring of 1/2/3 chunks around the player.
     #[serde(default)]
     pub(crate) view_radius: crate::protocol::ViewRadiusTier,
+    /// Master toggle for the always-on HUD chrome: health bar, hotbar,
+    /// hit/damage feedback, crafting queue, toasts, nameplates, and
+    /// world-anchored labels. Turning it off gives a clean view for taking
+    /// screenshots. Chat is deliberately NOT included here, it has its own
+    /// [`Self::show_chat`] toggle so you can keep talking with the HUD hidden.
+    /// Interactive panels you explicitly open (inventory, crafting, furnace)
+    /// are unaffected, the game keeps simulating as always.
+    #[serde(default = "default_true")]
+    pub(crate) show_hud: bool,
+    /// Whether the chat log + input box is shown and usable. Fully independent
+    /// of `show_hud`: hiding the rest of the HUD for a screenshot can still
+    /// leave chat up, and hiding chat can still leave the rest of the HUD up.
+    #[serde(default = "default_true")]
+    pub(crate) show_chat: bool,
+}
+
+impl Default for HudSettings {
+    fn default() -> Self {
+        Self {
+            show_perf_stats: false,
+            show_chunk_overlay: false,
+            view_radius: crate::protocol::ViewRadiusTier::default(),
+            show_hud: true,
+            show_chat: true,
+        }
+    }
+}
+
+/// First-run tutorial progress. Persisted so the contextual tutorial only runs
+/// on a fresh install, or again after a manual reset from the options screen
+/// (handy for testing the new-player flow). The live step itself is recomputed
+/// from game state each frame, so nothing transient needs persisting here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct OnboardingSettings {
+    /// True once the player has finished (crafted their first tools) or reset.
+    #[serde(default)]
+    pub(crate) completed: bool,
 }
 
 pub(super) fn default_resolution() -> DisplayResolution {
@@ -457,6 +496,10 @@ pub(super) fn default_resolution() -> DisplayResolution {
 }
 
 fn default_vsync() -> bool {
+    true
+}
+
+fn default_true() -> bool {
     true
 }
 

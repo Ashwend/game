@@ -95,6 +95,12 @@ pub(crate) struct ClientRuntime {
     /// crude pickup burst) or just silently disappear because the node
     /// only left this client's AoI ring.
     pub(crate) depleted_node_ids: std::collections::HashSet<crate::protocol::ResourceNodeId>,
+    /// Local player's most recent measured round-trip latency, in ms. Reported
+    /// to the server on each `Ping` and shown in the pause-screen roster.
+    pub(crate) local_ping_ms: u16,
+    /// Latest connected-player roster from `ServerMessage::PlayerList`, name +
+    /// ping for every online player (AoI-independent). Cleared on disconnect.
+    pub(crate) players: Vec<crate::protocol::PlayerListEntry>,
 }
 
 /// Surfaces a client-side error string as a toast. Emitted by any system
@@ -239,7 +245,15 @@ impl ClientRuntime {
         self.predicted_local = None;
         self.is_admin = false;
         self.depleted_node_ids.clear();
+        self.players.clear();
+        self.local_ping_ms = 0;
         self.connection.reset();
+    }
+
+    /// Record the latest measured round-trip latency. Called from the network
+    /// tick (which has `Time`) when a `Pong` arrives.
+    pub(crate) fn set_local_ping(&mut self, rtt_ms: u16) {
+        self.local_ping_ms = rtt_ms;
     }
 
     /// Rebuilds the world collision grid from the current world plus
@@ -374,6 +388,13 @@ impl ClientRuntime {
                 // Voice frames are dispatched as `IncomingVoiceMessage`
                 // events by the network tick system before this point,
                 // the runtime keeps no per-frame voice history.
+            }
+            ServerMessage::Pong { .. } => {
+                // RTT is computed in the network tick (where `Time` is
+                // available) and written via `set_local_ping`; nothing to log.
+            }
+            ServerMessage::PlayerList(entries) => {
+                self.players = entries;
             }
             ServerMessage::Heartbeat => {}
         }

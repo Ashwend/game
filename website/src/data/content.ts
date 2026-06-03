@@ -77,27 +77,27 @@ export const HERO_META: ReadonlyArray<string> = [
 export const GALLERY: ReadonlyArray<Shot> = [
   {
     src: '/img/furnace-lit.jpg',
-    alt: 'A lit furnace burning beside a workbench, stone hatchet in hand',
+    alt: 'A lit furnace glowing beside a workbench under a night sky',
   },
   {
     src: '/img/furnace-ui.jpg',
-    alt: 'The furnace interface, smelting ore into ingots',
+    alt: 'Smelting ore down into ingots in the furnace interface',
   },
   {
     src: '/img/deploy.jpg',
-    alt: 'Placing a deployable in the world, shown as a green outline',
+    alt: 'Placing a workbench, previewed as a green build outline',
   },
   {
     src: '/img/workbench.jpg',
-    alt: 'Crafting at a workbench with a stone hatchet',
+    alt: 'A stone hatchet in hand beside a fire-lit camp at night',
   },
   {
     src: '/img/dusk.jpg',
-    alt: 'Dusk over the plains, a pine in silhouette',
+    alt: 'Golden dusk settling over the misty plains',
   },
   {
     src: '/img/sun-vista.jpg',
-    alt: 'Sun low over a hazy green plain',
+    alt: 'Clear midday light across the green plains, a base in the distance',
   },
 ]
 

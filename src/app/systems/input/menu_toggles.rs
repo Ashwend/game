@@ -25,6 +25,18 @@ pub(crate) fn chat_shortcut_system(
     settings: Res<ClientSettings>,
     mut menu: ResMut<MenuState>,
 ) {
+    // Chat visibility is independent of the HUD master toggle, so only the
+    // chat toggle gates it here. If chat is hidden but something opened it
+    // anyway (e.g. the multiplayer whisper button), force it closed: an
+    // invisible open chat would strand movement/look controls behind
+    // `chat_open` with no way to dismiss it (Escape leaves chat to its own
+    // input box, which isn't drawn).
+    if !settings.hud.show_chat && menu.chat_open {
+        menu.chat_open = false;
+        menu.chat_focus_pending = false;
+        return;
+    }
+
     // Any other modal screen suppresses the chat hotkey:
     //  - `pause_open` / `chat_open`: existing gates.
     //  - `crafting_open`: the crafting search is a text input. Letting
@@ -41,6 +53,10 @@ pub(crate) fn chat_shortcut_system(
         // Dead players can't chat, loot, or do anything but click
         // Respawn. The splash is the only modal on screen.
         || menu.death_splash.is_some()
+        // Chat hidden for screenshots: don't let the hotkey open an
+        // invisible chat box that would silently swallow controls. Gated on
+        // the chat toggle alone, the HUD master doesn't affect chat.
+        || !settings.hud.show_chat
     {
         return;
     }
@@ -55,10 +71,23 @@ pub(crate) fn chat_shortcut_system(
     }
 }
 
-pub(crate) fn toggle_pause_system(keys: Res<ButtonInput<KeyCode>>, mut menu: ResMut<MenuState>) {
+pub(crate) fn toggle_pause_system(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut menu: ResMut<MenuState>,
+    mut update: ResMut<crate::update::UpdateState>,
+) {
     if menu.screen != Screen::InGame {
         return;
     }
+    let escape = keys.just_pressed(KeyCode::Escape);
+
+    // ESC closes the update / changelog modal first if it's open, whether it was
+    // opened from the corner pill (no pause) or the pause menu's update row.
+    if escape && update.modal_open {
+        update.modal_open = false;
+        return;
+    }
+
     if menu.chat_open {
         return;
     }
@@ -68,7 +97,7 @@ pub(crate) fn toggle_pause_system(keys: Res<ButtonInput<KeyCode>>, mut menu: Res
         return;
     }
 
-    if keys.just_pressed(KeyCode::Escape) {
+    if escape {
         handle_pause_escape(&mut menu);
     }
 }

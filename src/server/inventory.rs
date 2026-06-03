@@ -21,7 +21,7 @@ use super::{
 // call sites across the server keep resolving unchanged.
 pub use crate::inventory::{
     accepted_inventory_quantity, add_stack_to_inventory, insert_stack_at, move_stack,
-    offset_actionbar_slot, remove_stack, take_items_from_inventory,
+    offset_actionbar_slot, remove_stack, sort_inventory, take_items_from_inventory,
 };
 
 pub(super) fn starting_inventory() -> PlayerInventoryState {
@@ -79,6 +79,12 @@ impl GameServer {
                 if let Some(client) = self.clients.get_mut(&client_id) {
                     client.inventory.active_actionbar_slot =
                         offset_actionbar_slot(client.inventory.active_actionbar_slot, offset);
+                }
+                Vec::new()
+            }
+            InventoryCommand::Sort => {
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    sort_inventory(&mut client.inventory);
                 }
                 Vec::new()
             }

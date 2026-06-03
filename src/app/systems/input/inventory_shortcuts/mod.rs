@@ -52,6 +52,7 @@ pub(crate) struct GameplayInventoryShortcutsParams<'w, 's> {
     swap_state: Res<'w, ToolSwapState>,
     settings: Res<'w, ClientSettings>,
     camera_kick: ResMut<'w, crate::app::systems::CameraImpactKick>,
+    combat_feedback: ResMut<'w, crate::app::state::CombatFeedbackState>,
     error_toasts: MessageWriter<'w, ClientErrorToast>,
     primary_window: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
 }

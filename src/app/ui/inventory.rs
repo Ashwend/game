@@ -26,10 +26,11 @@ const SLOT_GAP: f32 = 6.0;
 pub(in crate::app::ui) const INVENTORY_COLUMNS: usize = 12;
 /// Rows actually drawn in the grid. The first `INVENTORY_SLOT_COUNT` cells
 /// (12x5 = 60) are real, usable slots; any cells past that are inert filler
-/// tiles. We draw more rows than we have slots purely to give the shared panel
-/// more vertical height (which the crafting tab's recipe list benefits from)
-/// without leaving the inventory tab looking half-empty.
-const INVENTORY_DISPLAY_ROWS: usize = 7;
+/// tiles. We draw an extra row beyond the real slots so the inventory tab
+/// doesn't look half-empty inside the fixed-height shell, while leaving room
+/// above for the tab's Sort header (the crafting tab gets its vertical room
+/// from the panel height, not from this count).
+const INVENTORY_DISPLAY_ROWS: usize = 6;
 
 /// Draw the bag grid with the standard tight gaps. The panel width is sized to
 /// fit [`INVENTORY_COLUMNS`] exactly, so the rows fill the width edge-to-edge;

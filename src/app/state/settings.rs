@@ -59,6 +59,29 @@ mod tests {
         );
         assert_eq!(settings.display.present_mode(), PresentMode::Immediate);
         assert!(!settings.hud.show_perf_stats);
+        // HUD + chat default to visible: a fresh install should show the full
+        // interface, the screenshot toggles are opt-in.
+        assert!(settings.hud.show_hud);
+        assert!(settings.hud.show_chat);
+    }
+
+    #[test]
+    fn legacy_settings_default_hud_and_chat_visible() {
+        // A settings file written before the screenshot toggles existed has no
+        // `show_hud` / `show_chat` keys (and may omit the `hud` block entirely).
+        // Both must come back `true` so existing players don't boot into a
+        // headless HUD after updating.
+        let without_keys: ClientSettings =
+            serde_json::from_str(r#"{ "hud": { "show_perf_stats": true } }"#)
+                .expect("partial hud block should deserialize");
+        assert!(without_keys.hud.show_perf_stats);
+        assert!(without_keys.hud.show_hud);
+        assert!(without_keys.hud.show_chat);
+
+        let without_hud: ClientSettings =
+            serde_json::from_str("{}").expect("empty settings should deserialize");
+        assert!(without_hud.hud.show_hud);
+        assert!(without_hud.hud.show_chat);
     }
 
     #[test]
@@ -102,6 +125,7 @@ mod tests {
             hud: HudSettings::default(),
             graphics: Default::default(),
             voice: Default::default(),
+            onboarding: Default::default(),
             keybindings: Default::default(),
         }
         .sanitized();

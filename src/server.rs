@@ -32,6 +32,12 @@ const WORLD_TIME_BROADCAST_INTERVAL_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 
 /// payload is tiny, so 1 Hz keeps bandwidth negligible.
 const PERF_STATS_BROADCAST_INTERVAL_TICKS: u64 = SERVER_TICK_RATE_HZ as u64;
 
+/// Cadence of the routine [`ServerMessage::PlayerList`] roster broadcast, one
+/// per second. The pause-screen list never needs faster updates than the ping
+/// values themselves change, and the payload is small (a name + ping per
+/// connected player).
+const PLAYER_LIST_BROADCAST_INTERVAL_TICKS: u64 = SERVER_TICK_RATE_HZ as u64;
+
 pub mod chunk_manager;
 mod combat;
 mod commands;
@@ -242,6 +248,11 @@ pub(super) struct ServerClient {
     /// (advanced for accepted *and* rejected predicted commands). Mirrored into
     /// `PlayerPrivate::applied_action_seq` for the client's reconcile pass.
     pub(super) applied_action_seq: u32,
+    /// Most recent round-trip latency this client reported via
+    /// [`crate::protocol::ClientMessage::Ping`], in milliseconds. Surfaced to
+    /// every client in the roster broadcast so the pause-screen player list can
+    /// show each player's ping.
+    pub(super) ping_ms: u16,
 }
 
 #[derive(Debug, Clone)]

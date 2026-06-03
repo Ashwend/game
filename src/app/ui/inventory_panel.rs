@@ -19,6 +19,8 @@ use crate::app::state::{
     ClientRuntime, CraftingUiState, ErrorToastSink, InventoryUiState, LocalPlayerState, MenuState,
     PickupTargetState,
 };
+use crate::app::systems::send_inventory_command;
+use crate::protocol::InventoryCommand;
 
 use super::InventorySoundRequests;
 use super::crafting::crafting_body;
@@ -79,6 +81,7 @@ pub(super) fn inventory_panel_ui(
     inventory_sound_requests: &mut InventorySoundRequests,
     error_toasts: &mut dyn ErrorToastSink,
     delta_seconds: f32,
+    show_hud: bool,
 ) {
     // Per-frame inventory bookkeeping runs regardless of which tab (or none)
     // is up: slot flashes and pickup/move/drop cues track the replicated
@@ -130,7 +133,10 @@ pub(super) fn inventory_panel_ui(
         }
     }
 
-    if !menu.pause_open {
+    // The hotbar and the world-pickup prompt are always-on HUD chrome, so the
+    // HUD master toggle hides them (for clean screenshots) even though the
+    // panel's per-frame inventory bookkeeping above keeps running regardless.
+    if !menu.pause_open && show_hud {
         // The hotbar is a live drag surface only on the Inventory tab; on the
         // Crafting tab (or closed) it dims into a passive HUD strip. The
         // furnace stays the shift-transfer destination when one is open.
@@ -142,9 +148,8 @@ pub(super) fn inventory_panel_ui(
             inventory_tab,
             menu.furnace_open,
         );
+        pickup_tooltip(ctx, menu, pickup_target);
     }
-
-    pickup_tooltip(ctx, menu, pickup_target);
 
     // Drag release + preview deliberately run later in the top-level
     // `ui_system` so they see slots/rects painted by the furnace/loot-bag
@@ -198,6 +203,7 @@ fn draw_panel(
                 ui.add_space(14.0);
                 match tab {
                     Tab::Inventory => {
+                        inventory_toolbar(ui, runtime, error_toasts);
                         // The grid fills the panel width and centers itself
                         // vertically in the fixed-height shell.
                         draw_inventory_grid(ui, local_player, inventory_ui);
@@ -224,6 +230,32 @@ fn draw_panel(
     response.response.rect
 }
 
+/// Thin header above the bag grid on the Inventory tab. Right-aligned "Sort"
+/// button that asks the server to auto-stack and tidy the bag; the rest of the
+/// row is left for future per-tab controls. Lives only on the Inventory tab so
+/// the gesture has an obvious target (the grid right below it).
+fn inventory_toolbar(
+    ui: &mut egui::Ui,
+    runtime: &mut ClientRuntime,
+    error_toasts: &mut dyn ErrorToastSink,
+) {
+    // Constrain the header to a fixed-height row. A bare `with_layout` would
+    // claim the panel's full remaining height and center the button vertically,
+    // pushing the grid to the bottom of the panel.
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), 30.0),
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            let sort = theme::compact_button(ui, "Sort", ButtonKind::Secondary, 72.0)
+                .on_hover_text("Auto-stack and tidy your bag");
+            if sort.clicked() {
+                theme::record_click_sound(ui, &sort);
+                send_inventory_command(runtime, error_toasts, InventoryCommand::Sort);
+            }
+        },
+    );
+}
+
 fn tab_bar(
     ui: &mut egui::Ui,
     menu: &mut MenuState,
@@ -246,7 +278,17 @@ fn tab_bar(
                 } else {
                     ButtonKind::Secondary
                 };
-                if theme::compact_button(ui, tab.label(), kind, width).clicked() && tab != active {
+                let response = theme::compact_button(ui, tab.label(), kind, width);
+                if tab == Tab::Crafting {
+                    // Stash the rect so the tutorial overlay can outline this tab
+                    // without the step being threaded through the panel.
+                    let rect = response.rect;
+                    ui.ctx().memory_mut(|mem| {
+                        mem.data
+                            .insert_temp(super::tutorial::crafting_tab_rect_key(), rect)
+                    });
+                }
+                if response.clicked() && tab != active {
                     select_tab(menu, crafting_ui, tab);
                 }
             }
@@ -329,6 +371,7 @@ mod tests {
                 &mut sounds,
                 &mut toasts,
                 0.016,
+                true,
             );
         });
     }

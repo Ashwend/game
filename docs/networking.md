@@ -104,7 +104,14 @@ In practice with the `replication-trace` feature on a real loopback session: ser
 | Full disconnect + reconnect | Room re-subscription on `Connected`, every entity re-spawned | ~1 round trip |
 | Server-authoritative mutation while client has entity in view | `Changed<T>` → Lightyear diff → ack | ~3 ms observed |
 
-**Why we don't add periodic state broadcasts.** Every reliability failure mode above is already handled by the protocol. A periodic full-state ship-out would (a) be redundant, the replication layer is already re-sending unacked state every tick, (b) reintroduce the bandwidth waste the `WorldSnapshot` deletion eliminated, and (c) bypass `Changed<T>` by writing to components even when they didn't change, defeating Lightyear's per-component delta replication. The only periodic broadcast in tree is `ServerMessage::WorldTime` (1× per minute), and that exists because it's a global *clock* the client extrapolates locally between broadcasts, not entity state.
+**Why we don't add periodic state broadcasts.** Every reliability failure mode above is already handled by the protocol. A periodic full-state ship-out would (a) be redundant, the replication layer is already re-sending unacked state every tick, (b) reintroduce the bandwidth waste the `WorldSnapshot` deletion eliminated, and (c) bypass `Changed<T>` by writing to components even when they didn't change, defeating Lightyear's per-component delta replication.
+
+The handful of periodic broadcasts that *do* exist are deliberately **not entity state**, so the rule above doesn't apply to them:
+- `ServerMessage::WorldTime` (1× per minute): a global day/night *clock* the client extrapolates locally between broadcasts.
+- `ServerMessage::PerfStats` (1 Hz): a per-client diagnostics payload for the perf HUD; no gameplay effect.
+- `ServerMessage::PlayerList` (1 Hz): the connected-player *presence* roster (name + ping) that backs the pause-screen player list. It must include players outside the receiver's AoI ring, so it can't ride the chunk-gated replication path; it carries presence metadata, not per-entity world state. Ping itself is measured at the protocol layer (`ClientMessage::Ping` / `ServerMessage::Pong` round-trip; the client reports its own RTT, the server stores it per client), so it works identically for loopback singleplayer and dedicated multiplayer without touching Lightyear connection internals.
+
+When adding a new periodic broadcast, apply the same test: if it carries per-entity world state the client renders, it belongs in replication, not a message. Presence, clocks, and diagnostics are the only exceptions.
 
 **Special case, `ResourceNodeDepleted`:** Lightyear's entity-despawn alone can't tell the client apart "entity depleted (play death animation)" from "entity left my AoI ring (silent despawn)". We ship `ServerMessage::ResourceNodeDepleted` on the reliable channel as the disambiguator. The client's `pending_depletion_check` grace window pairs it with the matching Lightyear despawn. This is the one place in the codebase where a reliable message complements replication rather than replacing it, it's signalling intent, not patching dropped diffs.
 

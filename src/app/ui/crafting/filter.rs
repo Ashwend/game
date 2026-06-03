@@ -27,6 +27,7 @@ use super::{RecipeListEntry, theme};
 pub(super) fn collect_sorted_recipes<'a>(
     crafting_ui: &CraftingUiState,
     inventory: Option<&PlayerInventoryState>,
+    pin_tutorial: bool,
 ) -> Vec<RecipeListEntry<'a>> {
     let needle = crafting_ui.search.trim().to_lowercase();
     let mut entries: Vec<RecipeListEntry<'a>> = recipes_iter()
@@ -50,8 +51,13 @@ pub(super) fn collect_sorted_recipes<'a>(
         .filter(|entry| !crafting_ui.only_craftable || entry.craftable)
         .collect();
     entries.sort_by(|a, b| {
-        b.craftable
-            .cmp(&a.craftable)
+        // While the tutorial is focusing recipes, float them to the very top so
+        // their highlight outlines stay on-screen instead of below the fold.
+        let a_pin = pin_tutorial && crate::app::ui::tutorial::is_tutorial_recipe(a.recipe.id);
+        let b_pin = pin_tutorial && crate::app::ui::tutorial::is_tutorial_recipe(b.recipe.id);
+        b_pin
+            .cmp(&a_pin)
+            .then(b.craftable.cmp(&a.craftable))
             .then(b.recipe.tier.cmp(&a.recipe.tier))
             .then(a.recipe.name.cmp(b.recipe.name))
     });

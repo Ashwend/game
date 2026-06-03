@@ -42,6 +42,12 @@ pub(super) fn draw_recipe_row(
         vec2(ui.available_width(), RECIPE_ROW_HEIGHT),
         Sense::hover(),
     );
+    // Stash the row rect for the tutorial overlay to outline the starter-tool
+    // recipes, without threading the tutorial step through the crafting panel.
+    if crate::app::ui::tutorial::is_tutorial_recipe(recipe.id) {
+        let key = crate::app::ui::tutorial::recipe_rect_key(recipe.id);
+        ui.ctx().memory_mut(|mem| mem.data.insert_temp(key, rect));
+    }
     let painter = ui.painter().clone();
     painter.rect_filled(rect, CornerRadius::same(4), theme::input_fill());
     painter.rect_stroke(
@@ -69,9 +75,12 @@ pub(super) fn draw_recipe_row(
     let craft_button_width = 90.0;
     let qty_button_width = 28.0;
     let qty_input_width = 48.0;
+    let max_button_width = 44.0;
     let inter_widget_gap = 4.0;
     let cluster_to_craft_gap = 8.0;
-    let cluster_width = qty_button_width
+    let cluster_width = max_button_width
+        + inter_widget_gap
+        + qty_button_width
         + inter_widget_gap
         + qty_input_width
         + inter_widget_gap
@@ -182,6 +191,53 @@ pub(super) fn draw_recipe_row(
         ),
         Vec2::new(qty_button_width, button_height),
     );
+    let max_rect = Rect::from_min_size(
+        Pos2::new(
+            minus_rect.left() - inter_widget_gap - max_button_width,
+            cluster_top,
+        ),
+        Vec2::new(max_button_width, button_height),
+    );
+
+    // --- Max button: one click enqueues the largest batch the player can
+    // currently afford. `max_craftable_batch` already clamps to
+    // `MAX_CRAFT_BATCH_SIZE`, so this never exceeds the protocol cap. Disabled
+    // (with a hover reason) when nothing can be crafted or the queue is full,
+    // mirroring the Craft button's gating. ---
+    let max_disabled: Option<String> = if queue_full {
+        Some("The crafting queue is full.".to_owned())
+    } else if max_batch == 0 {
+        Some(format!(
+            "You don't have the materials to craft {}.",
+            recipe.name
+        ))
+    } else {
+        None
+    };
+    let max_response = theme::compact_button_in_rect(
+        ui,
+        ("crafting_qty_max", recipe.id),
+        max_rect,
+        "Max",
+        theme::ButtonKind::Secondary,
+    );
+    let max_response = match max_disabled {
+        Some(ref reason) => max_response.on_hover_text(reason),
+        None => {
+            max_response.on_hover_text(format!("Craft {max_batch} now (the most you can make)"))
+        }
+    };
+    if max_response.clicked() && max_disabled.is_none() {
+        theme::record_click_sound(ui, &max_response);
+        send_crafting_command(
+            runtime,
+            error_toasts,
+            CraftingCommand::Enqueue {
+                recipe_id: recipe.id.to_owned(),
+                quantity: max_batch,
+            },
+        );
+    }
 
     // --- Minus button. ---
     let minus_can_decrement = display_qty > 1;

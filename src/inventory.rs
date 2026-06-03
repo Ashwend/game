@@ -259,6 +259,61 @@ pub fn offset_actionbar_slot(current: usize, offset: i8) -> usize {
     (current as isize + offset as isize).rem_euclid(ACTIONBAR_SLOT_COUNT as isize) as usize
 }
 
+/// Auto-stack and tidy the main inventory bag in place. Partial stacks of the
+/// same item merge up to that item's stack limit, the distinct items are
+/// ordered by display name, and the freed slots collect at the end.
+///
+/// The actionbar is intentionally left untouched: it's the player's curated
+/// quick-access row, reordering it would shuffle tools out from under the
+/// number keys. Pure (no `GameServer`, no ECS), so it lives here with the rest
+/// of the shared inventory math and is unit-tested directly.
+pub fn sort_inventory(inventory: &mut PlayerInventoryState) {
+    // Sum every distinct item's total quantity across the bag. Stack-limit
+    // boundaries are re-applied on the way out, so the merge can ignore them.
+    let mut totals: Vec<(crate::items::ItemId, u32)> = Vec::new();
+    for stack in inventory.inventory_slots.iter().flatten() {
+        if stack.quantity == 0 {
+            continue;
+        }
+        if let Some(entry) = totals.iter_mut().find(|entry| entry.0 == stack.item_id) {
+            entry.1 += stack.quantity as u32;
+        } else {
+            totals.push((stack.item_id.clone(), stack.quantity as u32));
+        }
+    }
+
+    // Order by display name, then id, so the layout is deterministic and reads
+    // alphabetically rather than by whatever pickup order filled the bag.
+    totals.sort_by(|a, b| {
+        let name_a = item_definition(a.0.as_ref())
+            .map(|def| def.name)
+            .unwrap_or(a.0.as_ref());
+        let name_b = item_definition(b.0.as_ref())
+            .map(|def| def.name)
+            .unwrap_or(b.0.as_ref());
+        name_a
+            .to_ascii_lowercase()
+            .cmp(&name_b.to_ascii_lowercase())
+            .then_with(|| a.0.as_ref().cmp(b.0.as_ref()))
+    });
+
+    // Repack from slot 0 as full-then-remainder stacks. Merging can only ever
+    // free slots, never need more, so the result always fits.
+    for slot in inventory.inventory_slots.iter_mut() {
+        *slot = None;
+    }
+    let mut index = 0;
+    for (item_id, mut remaining) in totals {
+        let limit = stack_limit(&item_id).unwrap_or(1).max(1) as u32;
+        while remaining > 0 && index < inventory.inventory_slots.len() {
+            let take = remaining.min(limit) as u16;
+            inventory.inventory_slots[index] = Some(ItemStack::new(item_id.clone(), take));
+            remaining -= take as u32;
+            index += 1;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,5 +428,77 @@ mod tests {
     fn remove_stack_on_empty_slot_is_none() {
         let mut inventory = PlayerInventoryState::empty();
         assert!(remove_stack(&mut inventory, ItemContainerSlot::inventory(0), None).is_none());
+    }
+
+    #[test]
+    fn sort_merges_partial_stacks_and_packs_to_front() {
+        let mut inventory = PlayerInventoryState::empty();
+        inventory.inventory_slots[3] = Some(ItemStack::new(COAL_ID, 5));
+        inventory.inventory_slots[7] = Some(ItemStack::new(COAL_ID, 8));
+        inventory.inventory_slots[1] = Some(ItemStack::new(BASIC_PICKAXE_ID, 1));
+
+        sort_inventory(&mut inventory);
+
+        // Two distinct items survive, both packed to the front; the coal's two
+        // partial stacks merged into one of 13.
+        let occupied: Vec<_> = inventory
+            .inventory_slots
+            .iter()
+            .filter_map(|slot| slot.as_ref())
+            .collect();
+        assert_eq!(occupied.len(), 2);
+        let coal_qty: u16 = inventory
+            .inventory_slots
+            .iter()
+            .flatten()
+            .filter(|stack| stack.item_id.as_ref() == COAL_ID)
+            .map(|stack| stack.quantity)
+            .sum();
+        assert_eq!(coal_qty, 13);
+        assert!(inventory.inventory_slots[0].is_some());
+        assert!(inventory.inventory_slots[1].is_some());
+        assert!(inventory.inventory_slots[2..].iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn sort_splits_when_total_exceeds_stack_limit() {
+        let mut inventory = PlayerInventoryState::empty();
+        inventory.inventory_slots[0] = Some(ItemStack::new(COAL_ID, 150));
+        inventory.inventory_slots[5] = Some(ItemStack::new(COAL_ID, 100));
+
+        sort_inventory(&mut inventory);
+
+        // 250 coal at a 200 cap repacks into a full 200 stack plus a 50
+        // remainder, contiguous from slot 0.
+        assert_eq!(
+            inventory.inventory_slots[0].as_ref().map(|s| s.quantity),
+            Some(200)
+        );
+        assert_eq!(
+            inventory.inventory_slots[1].as_ref().map(|s| s.quantity),
+            Some(50)
+        );
+        assert!(inventory.inventory_slots[2..].iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn sort_leaves_the_actionbar_untouched() {
+        let mut inventory = PlayerInventoryState::empty();
+        inventory.actionbar_slots[2] = Some(ItemStack::new(BASIC_PICKAXE_ID, 1));
+        inventory.inventory_slots[4] = Some(ItemStack::new(COAL_ID, 3));
+
+        sort_inventory(&mut inventory);
+
+        // The pickaxe stays in its actionbar slot; only the bag is repacked.
+        assert_eq!(
+            inventory.actionbar_slots[2]
+                .as_ref()
+                .map(|s| s.item_id.as_ref()),
+            Some(BASIC_PICKAXE_ID)
+        );
+        assert_eq!(
+            inventory.inventory_slots[0].as_ref().map(|s| s.quantity),
+            Some(3)
+        );
     }
 }

@@ -103,6 +103,21 @@ impl GameServer {
             }
             ClientMessage::Voice(voice) => self.apply_voice_frame(client_id, voice),
             ClientMessage::Heartbeat => Vec::new(),
+            ClientMessage::Ping {
+                client_time_ms,
+                rtt_ms,
+            } => {
+                // Store the client's self-measured latency for the roster, then
+                // echo the timestamp straight back so the client can take a
+                // fresh round-trip sample.
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    client.ping_ms = rtt_ms;
+                }
+                vec![ServerEnvelope {
+                    target: DeliveryTarget::Client(client_id),
+                    message: ServerMessage::Pong { client_time_ms },
+                }]
+            }
             ClientMessage::Disconnect => self.disconnect(client_id),
         }
     }

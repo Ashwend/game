@@ -3,8 +3,8 @@ use bevy::log::info_span;
 use crate::protocol::{ClientId, ServerMessage, Vec3Net};
 
 use super::{
-    DeliveryTarget, GameServer, PERF_STATS_BROADCAST_INTERVAL_TICKS, ServerEnvelope,
-    WORLD_TIME_BROADCAST_INTERVAL_TICKS,
+    DeliveryTarget, GameServer, PERF_STATS_BROADCAST_INTERVAL_TICKS,
+    PLAYER_LIST_BROADCAST_INTERVAL_TICKS, ServerEnvelope, WORLD_TIME_BROADCAST_INTERVAL_TICKS,
     dropped_items::{DROPPED_ITEM_CLEANUP_INTERVAL_TICKS, DROPPED_ITEM_MERGE_INTERVAL_TICKS},
 };
 
@@ -86,6 +86,28 @@ impl GameServer {
                     message: ServerMessage::PerfStats(self.perf_stats_for(client_id)),
                 });
             }
+        }
+
+        // Roster broadcast: every connected player's name + reported ping.
+        // Sent to everyone (AoI-independent) so the pause-screen list can show
+        // the whole server, not just nearby mirrors.
+        if self
+            .tick
+            .is_multiple_of(PLAYER_LIST_BROADCAST_INTERVAL_TICKS)
+        {
+            let entries: Vec<crate::protocol::PlayerListEntry> = self
+                .clients
+                .values()
+                .map(|client| crate::protocol::PlayerListEntry {
+                    client_id: client.client_id,
+                    name: client.name.clone(),
+                    ping_ms: client.ping_ms,
+                })
+                .collect();
+            envelopes.push(ServerEnvelope {
+                target: DeliveryTarget::Broadcast,
+                message: ServerMessage::PlayerList(entries),
+            });
         }
         envelopes
     }

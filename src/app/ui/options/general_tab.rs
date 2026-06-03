@@ -18,6 +18,14 @@ pub(super) fn render(ui: &mut egui::Ui, settings: &mut ClientSettings) {
         setting_row(ui, "Performance Stats", |ui| {
             checkbox_with_click_sound(ui, &mut settings.hud.show_perf_stats, "Enabled (F2)");
         });
+        // Screenshot helpers: hide the always-on HUD chrome, or just the chat
+        // box, without pausing the game. The world keeps simulating underneath.
+        setting_row(ui, "HUD", |ui| {
+            checkbox_with_click_sound(ui, &mut settings.hud.show_hud, "Visible");
+        });
+        setting_row(ui, "Chat", |ui| {
+            checkbox_with_click_sound(ui, &mut settings.hud.show_chat, "Visible");
+        });
         setting_row(ui, "Chunk Overlay", |ui| {
             checkbox_with_click_sound(ui, &mut settings.hud.show_chunk_overlay, "Enabled");
         });
@@ -34,6 +42,29 @@ pub(super) fn render(ui: &mut egui::Ui, settings: &mut ClientSettings) {
                 })
                 .response;
             theme::record_click_sound(ui, &response);
+        });
+        // Re-arm the first-run tutorial. Clearing the flag is enough: the step
+        // machine recomputes from game state, so it picks up wherever the player
+        // currently is. Only offer the action once it's been completed; while it's
+        // still running there's nothing to replay, so show a plain status instead
+        // of a button that reads as a no-op.
+        setting_row(ui, "Tutorial", |ui| {
+            if settings.onboarding.completed {
+                // Content-sized button so it reads as a button, not a full-width
+                // bar. `compact_button` plays its own click sound.
+                let response = theme::compact_button(
+                    ui,
+                    "Replay tutorial",
+                    theme::ButtonKind::Secondary,
+                    140.0,
+                )
+                .on_hover_text("Show the first-run tutorial again");
+                if response.clicked() {
+                    settings.onboarding.completed = false;
+                }
+            } else {
+                ui.label(theme::muted("In progress"));
+            }
         });
     });
 }
