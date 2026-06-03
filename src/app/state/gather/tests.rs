@@ -239,13 +239,100 @@ fn each_started_swing_advances_the_seed() {
     let mut state = GatherInputState::default();
     let tool = ToolKind::Hands;
     let duration = swing_duration_seconds(tool);
+    // Land each swing (real target) so it rolls straight into the next
+    // while held; a whiff would charge the miss-recovery gap instead and
+    // not roll over until it elapsed.
+    let target = Some(SwingTarget::ResourceNode(4));
 
-    let _ = state.update(0.0, true, true, Some(tool), None);
+    let _ = state.update(0.0, true, true, Some(tool), target);
     let first = state.current_swing_seed();
     // Roll into a second swing by completing the first while held.
-    let _ = state.update(duration, false, true, Some(tool), None);
+    let _ = state.update(duration, false, true, Some(tool), target);
     let second = state.current_swing_seed();
     assert_ne!(first, second, "each swing should bump the seed");
+}
+
+#[test]
+fn missed_swing_locks_out_the_next_until_recovery_elapses() {
+    use crate::game_balance::COMBAT_MISS_RECOVERY_SECONDS;
+
+    let mut state = GatherInputState::default();
+    let tool = ToolKind::Axe;
+    let duration = swing_duration_seconds(tool);
+
+    // Hold LMB through a full swing that connects with nothing.
+    let _ = state.update(0.0, true, true, Some(tool), None);
+    let impact = state
+        .update(duration, false, true, Some(tool), None)
+        .expect("the whiff still emits an impact event");
+    assert!(impact.target.is_none());
+
+    // The held button must NOT roll straight into a new swing: the miss
+    // recovery gap is in effect, so the tool stays idle.
+    let _ = state.update(0.0, false, true, Some(tool), None);
+    assert_eq!(
+        state.swing_fraction(),
+        0.0,
+        "a whiffed swing should not repeat until the recovery gap elapses"
+    );
+
+    // Still holding, but only part of the gap has passed: still locked.
+    let _ = state.update(
+        COMBAT_MISS_RECOVERY_SECONDS * 0.5,
+        false,
+        true,
+        Some(tool),
+        None,
+    );
+    assert_eq!(
+        state.swing_fraction(),
+        0.0,
+        "half the recovery window is not enough to resume swinging"
+    );
+
+    // Once the rest of the gap elapses, the held button starts a new swing.
+    let _ = state.update(COMBAT_MISS_RECOVERY_SECONDS, false, true, Some(tool), None);
+    assert!(
+        state.swing_fraction() > 0.0,
+        "the swing resumes once the recovery gap has elapsed"
+    );
+}
+
+#[test]
+fn landed_swing_repeats_with_no_recovery_penalty() {
+    let mut state = GatherInputState::default();
+    let tool = ToolKind::Axe;
+    let duration = swing_duration_seconds(tool);
+    let target = Some(SwingTarget::Player(7));
+
+    // A swing that lands on a player should roll straight into the next
+    // one while LMB is held, no recovery gap, full cadence preserved.
+    let _ = state.update(0.0, true, true, Some(tool), target);
+    let _ = state.update(duration, false, true, Some(tool), target);
+    assert!(
+        state.swing_fraction() < 0.2,
+        "a landed swing repeats immediately while held"
+    );
+}
+
+#[test]
+fn tool_swap_or_death_clears_a_pending_miss_recovery() {
+    let mut state = GatherInputState::default();
+    let tool = ToolKind::Axe;
+    let duration = swing_duration_seconds(tool);
+
+    // Whiff to arm the recovery gap.
+    let _ = state.update(0.0, true, true, Some(tool), None);
+    let _ = state.update(duration, false, true, Some(tool), None);
+
+    // Cancel (tool swap / death) should wipe the lockout so the next tool
+    // is usable immediately rather than inheriting a stun.
+    state.cancel();
+    let _ = state.update(0.01, true, true, Some(tool), Some(SwingTarget::Player(3)));
+    assert!(
+        state.swing_fraction() > 0.0,
+        "after cancel a fresh click swings without waiting out the old recovery"
+    );
 }
 
 #[test]

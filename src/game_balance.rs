@@ -48,6 +48,16 @@ pub const COMBAT_TARGET_CHEST_HEIGHT: f32 = 0.95;
 /// instead of grinding into the floor on the first contact substep.
 pub const COMBAT_KNOCKBACK_VERTICAL_FRACTION: f32 = 0.25;
 
+/// Extra delay before the next swing can begin after a whiff (a swing
+/// whose impact frame connected with nothing: no player, node, or
+/// structure). A landed swing rolls straight into the next while LMB is
+/// held; a miss pays this recovery gap first. The point is to punish
+/// "hold left-click and pray" in PvP, a player who times their swings
+/// to land hits keeps full cadence, while spraying at empty air costs
+/// tempo. Kept deliberately small ("slight") so deliberate clicking
+/// stays the better play without making a single miss feel like a stun.
+pub const COMBAT_MISS_RECOVERY_SECONDS: f32 = 0.25;
+
 /// When choosing a safe respawn spot, no other live player may be
 /// closer than this distance. Prevents respawn camping.
 pub const RESPAWN_MIN_DISTANCE_M: f32 = 12.0;

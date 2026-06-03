@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use crate::{
     app::audio::surface::SurfaceMaterial,
+    game_balance::COMBAT_MISS_RECOVERY_SECONDS,
     items::{DeployableKind, ItemModel, ToolKind},
     protocol::{ClientId, DeployedEntityId, DroppedItemId, ItemStack, ResourceNodeId, Vec3Net},
 };
@@ -292,6 +293,12 @@ pub(crate) struct GatherInputState {
     pending_audio_cue: Option<PendingAudioCue>,
     pending_miss_audio: bool,
     swing_seed: u32,
+    /// Seconds of swing lockout left after a whiff. A missed swing sets
+    /// this to [`COMBAT_MISS_RECOVERY_SECONDS`] once it finishes; while
+    /// it ticks down no new swing can start, so spraying at empty air
+    /// costs tempo. A landed swing never sets it, so timing your hits
+    /// keeps full cadence.
+    recovery_remaining: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -302,6 +309,10 @@ struct ActiveSwing {
     elapsed: f32,
     impact_handled: bool,
     seed: u32,
+    /// Set at the impact frame when the swing connected with nothing.
+    /// Read when the swing completes to decide whether the post-swing
+    /// recovery gap applies before the next swing may start.
+    missed: bool,
 }
 
 /// What the swing connected with at its impact frame. Resource nodes
@@ -345,6 +356,12 @@ impl GatherInputState {
     /// is `Some` for a hit and `None` for a miss. The dispatcher decides hit
     /// vs. miss feedback (audio + visual + gather command) from that single
     /// event, so there's no separate audio path that could double-fire.
+    ///
+    /// A whiff (impact frame with `target == None`) imposes a
+    /// [`COMBAT_MISS_RECOVERY_SECONDS`] recovery gap before the next swing
+    /// can start: holding LMB through a miss no longer rolls straight into
+    /// the next swing, so spray-and-pray costs tempo while a player who
+    /// times their hits keeps full cadence.
     pub(crate) fn update(
         &mut self,
         delta_seconds: f32,
@@ -353,7 +370,17 @@ impl GatherInputState {
         equipped_tool: Option<ToolKind>,
         target: Option<SwingTarget>,
     ) -> Option<SwingImpact> {
+        let delta = delta_seconds.max(0.0);
+
+        // Burn down the post-miss recovery only in the gap between swings;
+        // it never overlaps an active swing (a miss ends the swing before
+        // the gap starts), but the guard keeps the bookkeeping obvious.
+        if self.active.is_none() && self.recovery_remaining > 0.0 {
+            self.recovery_remaining = (self.recovery_remaining - delta).max(0.0);
+        }
+
         if self.active.is_none()
+            && self.recovery_remaining <= 0.0
             && (just_pressed || pressed)
             && let Some(tool) = equipped_tool
         {
@@ -362,13 +389,18 @@ impl GatherInputState {
 
         let mut active = self.active?;
         let previous_elapsed = active.elapsed;
-        active.elapsed = (active.elapsed + delta_seconds.max(0.0)).min(active.duration);
+        active.elapsed = (active.elapsed + delta).min(active.duration);
 
         let crossed_impact = !active.impact_handled
             && previous_elapsed < active.impact_time
             && active.elapsed >= active.impact_time;
         let impact = if crossed_impact {
             active.impact_handled = true;
+            // A whiff is remembered here (at the impact frame, the same
+            // instant the dispatcher reads the target) so the recovery gap
+            // below keys off the moment of contact, not whatever the player
+            // happens to be aiming at when the animation finally ends.
+            active.missed = target.is_none();
             Some(SwingImpact {
                 target,
                 tool: active.tool,
@@ -378,17 +410,22 @@ impl GatherInputState {
         };
 
         if active.elapsed >= active.duration {
-            if pressed && let Some(tool) = equipped_tool {
-                // Continue swinging while LMB is held.
+            if active.missed {
+                // Whiffed: charge the recovery gap and stop here. Holding
+                // LMB resumes only after `recovery_remaining` ticks out.
+                self.recovery_remaining = COMBAT_MISS_RECOVERY_SECONDS;
+                self.active = None;
+            } else if pressed && let Some(tool) = equipped_tool {
+                // Landed (or hit something): continue swinging while LMB is
+                // held, no recovery penalty.
                 self.start_swing(tool);
             } else {
                 self.active = None;
-                return impact;
             }
-        } else {
-            self.active = Some(active);
+            return impact;
         }
 
+        self.active = Some(active);
         impact
     }
 
@@ -397,6 +434,9 @@ impl GatherInputState {
         self.pending_impact = None;
         self.pending_audio_cue = None;
         self.pending_miss_audio = false;
+        // A tool swap or death clears the swing entirely, including any
+        // pending miss penalty, the next tool shouldn't inherit a stun.
+        self.recovery_remaining = 0.0;
     }
 
     fn start_swing(&mut self, tool: ToolKind) {
@@ -410,6 +450,7 @@ impl GatherInputState {
             elapsed: 0.0,
             impact_handled: false,
             seed: self.swing_seed,
+            missed: false,
         });
     }
 
