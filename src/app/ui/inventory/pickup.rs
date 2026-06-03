@@ -8,7 +8,7 @@ use crate::{
 
 use super::super::theme;
 
-pub(super) fn pickup_tooltip(
+pub(in crate::app::ui) fn pickup_tooltip(
     ctx: &egui::Context,
     menu: &MenuState,
     pickup_target: &PickupTargetState,

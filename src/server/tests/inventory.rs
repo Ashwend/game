@@ -16,8 +16,14 @@ fn connect_seeds_empty_authoritative_inventory() {
     let client = server.clients.get(&client_id).expect("client exists");
     let inventory = &client.inventory;
 
-    assert_eq!(inventory.inventory_slots.len(), 40);
-    assert_eq!(inventory.actionbar_slots.len(), 9);
+    assert_eq!(
+        inventory.inventory_slots.len(),
+        crate::protocol::INVENTORY_SLOT_COUNT
+    );
+    assert_eq!(
+        inventory.actionbar_slots.len(),
+        crate::protocol::ACTIONBAR_SLOT_COUNT
+    );
     assert!(
         inventory
             .inventory_slots

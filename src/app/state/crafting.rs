@@ -34,6 +34,17 @@ pub(crate) struct CraftingUiState {
     pub(crate) quantities: HashMap<&'static str, String>,
 }
 
+impl CraftingUiState {
+    /// Reset the transient browser view to a fresh-open state: clear the
+    /// search filter and scroll the recipe list back to the top. Shared by
+    /// the `C` hotkey, the "open workbench" path, and the tab-bar switch into
+    /// the crafting tab so every entry behaves the same.
+    pub(crate) fn reset_browser(&mut self) {
+        self.search.clear();
+        self.scroll_reset_pending = true;
+    }
+}
+
 /// Client-only smoothing state for the queue HUD progress bars.
 ///
 /// The server only ships `progress_ticks` at the snapshot cadence (20 Hz).

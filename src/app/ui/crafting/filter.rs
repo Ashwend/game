@@ -59,40 +59,24 @@ pub(super) fn collect_sorted_recipes<'a>(
 }
 
 pub(super) fn draw_filter_row(ui: &mut egui::Ui, crafting_ui: &mut CraftingUiState) {
-    // Two rows so the right-anchored checkbox can't collide with the
-    // rightmost category chip when the panel is at its minimum width.
-    //  Row 1: search field on the left, "Only craftable" toggle on the right.
-    //  Row 2: category chips.
-    ui.horizontal(|ui| {
-        // Same `add_sized` trick the worlds-dialog forms use: pinning
-        // both label and input to `COMPACT_ROW_HEIGHT` lines their
-        // text baselines up. Without the sized label the bare `ui.label`
-        // is shorter than the padded input and rides at the top of the
-        // row, which reads as misalignment.
-        ui.add_sized(
-            [56.0, theme::COMPACT_ROW_HEIGHT],
-            egui::Label::new(theme::field_label("Search")),
-        );
-        // Pin the TextEdit id so `request_focus` can target it across
-        // frames, egui auto-ids are stable enough here, but a named id
-        // also lets future "Ctrl+F to focus search"-style shortcuts hit
-        // the same widget without scraping memory.
-        // Search field is *not* auto-focused on open, players use the
-        // crafting screen mostly via category chips and clicking, not
-        // typing. Clicking the field still focuses it normally. See the
-        // toggle system for the rationale.
-        let _ = ui.add_sized(
-            [260.0, theme::COMPACT_ROW_HEIGHT],
-            theme::text_input(&mut crafting_ui.search)
-                .id(egui::Id::new("crafting_search_input"))
-                .hint_text("Recipe or material…"),
-        );
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.checkbox(&mut crafting_ui.only_craftable, "Only craftable");
-        });
-    });
+    //  Row 1: full-width search field (no label, the placeholder carries it).
+    //  Row 2: category chips on the left, "Only craftable" toggle on the right.
+    // Pinning the toggle into the chip row (both `COMPACT_ROW_HEIGHT` tall and
+    // vertically centered) keeps it aligned with the chips and balances the
+    // row, instead of floating alone far to the right of the search field.
+
+    // Pin the TextEdit id so `request_focus` / the C-hotkey focus guard can
+    // target it across frames. The field is *not* auto-focused on open:
+    // players mostly browse via the chips, and clicking still focuses it.
+    let _ = ui.add_sized(
+        [ui.available_width(), theme::COMPACT_ROW_HEIGHT],
+        theme::text_input(&mut crafting_ui.search)
+            .id(egui::Id::new("crafting_search_input"))
+            .hint_text("Search…"),
+    );
     ui.add_space(6.0);
     ui.horizontal(|ui| {
+        ui.set_min_height(theme::COMPACT_ROW_HEIGHT);
         // Category chips behave like a radio group: clicking any chip
         // makes it the active filter, even if it was already selected.
         // "All" is the explicit way to clear the filter.
@@ -106,6 +90,11 @@ pub(super) fn draw_filter_row(ui: &mut egui::Ui, crafting_ui: &mut CraftingUiSta
                 crafting_ui.category_filter = Some(category);
             }
         }
+        // Toggle right-aligned on the same row, vertically centered against
+        // the chips.
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.checkbox(&mut crafting_ui.only_craftable, "Only craftable");
+        });
     });
 }
 

@@ -1,3 +1,9 @@
+//! Inventory tab rendering for the unified panel: the bag grid and the
+//! always-on hotbar (actionbar). The panel shell in
+//! [`crate::app::ui::inventory_panel`] owns the window chrome, backdrop, tab
+//! bar, and per-frame bookkeeping; this module only draws the slot grid, the
+//! hotbar, and (re-exported) the drag pipeline and pickup tooltip.
+
 pub(super) mod drag;
 mod pickup;
 pub(super) mod slot;
@@ -5,146 +11,84 @@ pub(super) mod slot;
 use bevy_egui::egui::{self, Align2, Color32, Stroke};
 
 use crate::{
-    app::{
-        state::{InventoryUiState, LocalPlayerState, MenuState, PickupTargetState, UnifiedSlotRef},
-        ui::InventorySoundRequests,
-    },
-    protocol::{ACTIONBAR_SLOT_COUNT, ItemContainerSlot},
+    app::state::{InventoryUiState, LocalPlayerState, UnifiedSlotRef},
+    protocol::{ACTIONBAR_SLOT_COUNT, INVENTORY_SLOT_COUNT, ItemContainerSlot},
 };
 
-use self::{
-    pickup::pickup_tooltip,
-    slot::{SLOT_SIZE, draw_slot, slot_stack},
-};
+use self::slot::{SLOT_SIZE, draw_disabled_slot, draw_slot, slot_stack};
 
 pub(super) use self::drag::{draw_drag_preview, handle_drag_release};
-use super::{modal::backdrop_layer, theme};
+pub(in crate::app::ui) use self::pickup::pickup_tooltip;
 
 const SLOT_GAP: f32 = 6.0;
-const INVENTORY_COLUMNS: usize = 10;
-const INVENTORY_ROWS: usize = 4;
-const INVENTORY_PANEL_WIDTH: f32 =
-    INVENTORY_COLUMNS as f32 * SLOT_SIZE + (INVENTORY_COLUMNS - 1) as f32 * SLOT_GAP + 48.0;
+/// Columns in the bag grid. Shared so the furnace's "Your inventory" mirror
+/// lays the bag out with the exact same shape (and sizes its panel to fit).
+pub(in crate::app::ui) const INVENTORY_COLUMNS: usize = 12;
+/// Rows actually drawn in the grid. The first `INVENTORY_SLOT_COUNT` cells
+/// (12x5 = 60) are real, usable slots; any cells past that are inert filler
+/// tiles. We draw more rows than we have slots purely to give the shared panel
+/// more vertical height (which the crafting tab's recipe list benefits from)
+/// without leaving the inventory tab looking half-empty.
+const INVENTORY_DISPLAY_ROWS: usize = 7;
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn inventory_ui(
-    ctx: &egui::Context,
-    menu: &mut MenuState,
-    local_player: &LocalPlayerState,
-    inventory_ui: &mut InventoryUiState,
-    pickup_target: &PickupTargetState,
-    inventory_sound_requests: &mut InventorySoundRequests,
-    delta_seconds: f32,
-) {
-    inventory_ui.begin_frame();
-    inventory_ui.tick_slot_flashes(delta_seconds);
-    match local_player.private.as_ref().map(|p| &p.inventory) {
-        Some(inventory) => {
-            if let Some(event) = inventory_ui.observe_inventory(inventory) {
-                inventory_sound_requests.push(event);
-            }
-        }
-        None => inventory_ui.clear_inventory_tracking(),
-    }
-    if inventory_ui.was_open && !menu.inventory_open {
-        ctx.memory_mut(|memory| memory.stop_text_input());
-        inventory_ui.cancel_drag();
-    }
-
-    if menu.inventory_open && !menu.pause_open {
-        inventory_backdrop(ctx);
-        draw_inventory_panel(ctx, local_player, inventory_ui);
-    }
-
-    if !menu.pause_open {
-        // Shift+click quick-transfer is only meaningful when a destination
-        // container is open. The bag and the furnace are mutually
-        // exclusive (opening one closes the other), so the actionbar's
-        // shift-click destination is "the furnace, if it's up." Closing
-        // the furnace immediately disables the gesture again.
-        draw_actionbar(
-            ctx,
-            local_player,
-            inventory_ui,
-            menu.inventory_open,
-            menu.furnace_open,
-        );
-    }
-
-    pickup_tooltip(ctx, menu, pickup_target);
-    // Drag release + preview deliberately run later in the top-level
-    // `ui_system` so they see slots/rects painted by the furnace modal
-    // too. Doing it here would race with the furnace UI's
-    // `hovered_slot` write and turn an inventory↔inventory drag,
-    // while the furnace is open, into a "drop on the ground" because
-    // no rect has been recorded yet this frame.
-    inventory_ui.was_open = menu.inventory_open;
-}
-
-fn inventory_backdrop(ctx: &egui::Context) {
-    let _ = backdrop_layer(
-        ctx,
-        "inventory_backdrop",
-        egui::Order::Middle,
-        theme::backdrop_color(),
-    );
-}
-
-fn draw_inventory_panel(
-    ctx: &egui::Context,
-    local_player: &LocalPlayerState,
-    inventory_ui: &mut InventoryUiState,
-) {
-    let response = egui::Area::new("inventory_panel".into())
-        .order(egui::Order::Foreground)
-        .anchor(Align2::CENTER_CENTER, [0.0, -26.0])
-        .show(ctx, |ui| {
-            ui.set_width(INVENTORY_PANEL_WIDTH);
-            theme::panel_frame().show(ui, |ui| {
-                ui.set_width(INVENTORY_PANEL_WIDTH - 48.0);
-                ui.label(theme::section("Inventory"));
-                ui.add_space(14.0);
-                draw_inventory_grid(ui, local_player, inventory_ui);
-            });
-        });
-    inventory_ui.inventory_rect = Some(response.response.rect);
-}
-
-fn draw_inventory_grid(
+/// Draw the bag grid with the standard tight gaps. The panel width is sized to
+/// fit [`INVENTORY_COLUMNS`] exactly, so the rows fill the width edge-to-edge;
+/// here we just center the grid vertically in whatever height the fixed-height
+/// shell gave us. The caller records the resulting rect as the drag surface.
+pub(super) fn draw_inventory_grid(
     ui: &mut egui::Ui,
     local_player: &LocalPlayerState,
     inventory_ui: &mut InventoryUiState,
 ) {
     let inventory = local_player.private.as_ref().map(|p| &p.inventory);
-    for row in 0..INVENTORY_ROWS {
+
+    let rows = INVENTORY_DISPLAY_ROWS as f32;
+    let grid_height = rows * SLOT_SIZE + (rows - 1.0) * SLOT_GAP;
+
+    // Drive the vertical spacing ourselves (the theme's default item spacing
+    // is larger) so the row-gap and centering math are exact.
+    ui.spacing_mut().item_spacing.y = 0.0;
+    ui.add_space(((ui.available_height() - grid_height) / 2.0).max(0.0));
+
+    for row in 0..INVENTORY_DISPLAY_ROWS {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = SLOT_GAP;
             for column in 0..INVENTORY_COLUMNS {
                 let index = row * INVENTORY_COLUMNS + column;
-                let slot = ItemContainerSlot::inventory(index);
-                let stack = inventory.and_then(|inventory| slot_stack(inventory, slot));
-                draw_slot(
-                    ui,
-                    UnifiedSlotRef::Player(slot),
-                    stack,
-                    None,
-                    false,
-                    true,
-                    // Bag and furnace are mutually exclusive surfaces;
-                    // shift+click out of the bag has no destination, so
-                    // the gesture falls through to the normal drag.
-                    false,
-                    inventory_ui,
-                );
+                if index < INVENTORY_SLOT_COUNT {
+                    let slot = ItemContainerSlot::inventory(index);
+                    let stack = inventory.and_then(|inventory| slot_stack(inventory, slot));
+                    draw_slot(
+                        ui,
+                        UnifiedSlotRef::Player(slot),
+                        stack,
+                        None,
+                        false,
+                        true,
+                        // Bag and furnace are mutually exclusive surfaces;
+                        // shift+click out of the bag has no destination, so
+                        // the gesture falls through to the normal drag.
+                        false,
+                        inventory_ui,
+                    );
+                } else {
+                    // Inert filler past the real slot count: present for layout,
+                    // never interactive.
+                    draw_disabled_slot(ui);
+                }
             }
         });
-        if row + 1 < INVENTORY_ROWS {
+        if row + 1 < INVENTORY_DISPLAY_ROWS {
             ui.add_space(SLOT_GAP);
         }
     }
 }
 
-fn draw_actionbar(
+/// Draw the always-on hotbar. `inventory_open` here means "the panel is on
+/// the Inventory tab", which is what makes the hotbar a live drag surface;
+/// on the Crafting tab (or with the panel closed) it recedes into a dim,
+/// non-interactive HUD strip.
+pub(super) fn draw_actionbar(
     ctx: &egui::Context,
     local_player: &LocalPlayerState,
     inventory_ui: &mut InventoryUiState,
@@ -234,14 +178,6 @@ mod tests {
         )
     }
 
-    fn render(menu: &mut MenuState, local: &LocalPlayerState, inv_ui: &mut InventoryUiState) {
-        let pickup = PickupTargetState::default();
-        let mut sounds = InventorySoundRequests::default();
-        run_ui(|ctx| {
-            inventory_ui(ctx, menu, local, inv_ui, &pickup, &mut sounds, 0.016);
-        });
-    }
-
     #[test]
     fn actionbar_frame_dims_when_inventory_closed() {
         // Closed inventory uses a lower alpha than open so the hotbar
@@ -252,27 +188,11 @@ mod tests {
     }
 
     #[test]
-    fn inventory_panel_only_renders_when_open() {
+    fn actionbar_records_rect_when_inventory_present() {
         let local = local_player(Some(PlayerInventoryState::empty()));
-
-        // Closed: actionbar paints but the inventory panel rect stays None.
-        let mut menu = MenuState {
-            inventory_open: false,
-            ..Default::default()
-        };
         let mut inv_ui = InventoryUiState::default();
-        render(&mut menu, &local, &mut inv_ui);
-        assert!(inv_ui.inventory_rect.is_none());
+        run_ui(|ctx| draw_actionbar(ctx, &local, &mut inv_ui, true, false));
         assert!(inv_ui.actionbar_rect.is_some());
-
-        // Open: the inventory panel rect is recorded.
-        let mut menu = MenuState {
-            inventory_open: true,
-            ..Default::default()
-        };
-        let mut inv_ui = InventoryUiState::default();
-        render(&mut menu, &local, &mut inv_ui);
-        assert!(inv_ui.inventory_rect.is_some());
     }
 
     #[test]
@@ -280,94 +200,32 @@ mod tests {
         // No private state → no inventory to draw, so the actionbar
         // early-returns and records no rect.
         let local = local_player(None);
-        let mut menu = MenuState::default();
         let mut inv_ui = InventoryUiState::default();
-        render(&mut menu, &local, &mut inv_ui);
+        run_ui(|ctx| draw_actionbar(ctx, &local, &mut inv_ui, true, false));
         assert!(inv_ui.actionbar_rect.is_none());
     }
 
     #[test]
-    fn pause_open_hides_both_inventory_and_actionbar() {
-        let local = local_player(Some(PlayerInventoryState::empty()));
-        let mut menu = MenuState {
-            inventory_open: true,
-            pause_open: true,
-            ..Default::default()
-        };
-        let mut inv_ui = InventoryUiState::default();
-        render(&mut menu, &local, &mut inv_ui);
-        // Pause suppresses the inventory panel and the actionbar.
-        assert!(inv_ui.inventory_rect.is_none());
-        assert!(inv_ui.actionbar_rect.is_none());
-    }
-
-    #[test]
-    fn closing_inventory_cancels_in_progress_drag() {
-        let local = local_player(Some(PlayerInventoryState::empty()));
-        // Simulate: was open last frame, now closed, with a live drag.
-        let mut inv_ui = InventoryUiState::default();
-        inv_ui.was_open = true;
-        inv_ui.drag = Some(crate::app::state::InventoryDrag {
-            source: UnifiedSlotRef::Player(ItemContainerSlot::inventory(0)),
-            stack: ItemStack::new(COAL_ID, 3),
-            quantity: 3,
-            button: crate::app::state::InventoryDragButton::Primary,
-        });
-        let mut menu = MenuState {
-            inventory_open: false,
-            ..Default::default()
-        };
-        render(&mut menu, &local, &mut inv_ui);
-        // The open→closed transition cancels the drag and clears was_open.
-        assert!(inv_ui.drag.is_none());
-        assert!(!inv_ui.was_open);
-    }
-
-    #[test]
-    fn populated_inventory_renders_more_than_empty() {
+    fn populated_grid_renders_more_than_empty() {
         // A populated grid paints item icons and count text on top of
         // the empty slot frames, so it produces strictly more shapes.
         let empty = local_player(Some(PlayerInventoryState::empty()));
         let mut full_inv = PlayerInventoryState::empty();
         full_inv.inventory_slots[0] = Some(ItemStack::new(COAL_ID, 42));
-        full_inv.actionbar_slots[0] = Some(ItemStack::new(COAL_ID, 7));
         let full = local_player(Some(full_inv));
 
-        let mut menu_a = MenuState {
-            inventory_open: true,
-            ..Default::default()
-        };
         let mut inv_ui_a = InventoryUiState::default();
-        let pickup = PickupTargetState::default();
-        let mut sounds = InventorySoundRequests::default();
         let empty_out = run_ui(|ctx| {
-            inventory_ui(
-                ctx,
-                &mut menu_a,
-                &empty,
-                &mut inv_ui_a,
-                &pickup,
-                &mut sounds,
-                0.016,
-            );
+            egui::CentralPanel::default().show(ctx, |ui| {
+                draw_inventory_grid(ui, &empty, &mut inv_ui_a);
+            });
         });
 
-        let mut menu_b = MenuState {
-            inventory_open: true,
-            ..Default::default()
-        };
         let mut inv_ui_b = InventoryUiState::default();
-        let mut sounds_b = InventorySoundRequests::default();
         let full_out = run_ui(|ctx| {
-            inventory_ui(
-                ctx,
-                &mut menu_b,
-                &full,
-                &mut inv_ui_b,
-                &pickup,
-                &mut sounds_b,
-                0.016,
-            );
+            egui::CentralPanel::default().show(ctx, |ui| {
+                draw_inventory_grid(ui, &full, &mut inv_ui_b);
+            });
         });
 
         assert!(full_out.shapes.len() > empty_out.shapes.len());

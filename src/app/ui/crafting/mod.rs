@@ -1,11 +1,13 @@
-//! Crafting screen and queue HUD.
+//! Crafting recipe browser and queue HUD.
 //!
 //! Two distinct surfaces share this module:
 //!
-//! - [`crafting_ui`], full-screen modal browser. Lists recipes from the
-//!   static registry, filters them by name and category, and lets the
-//!   player enqueue craft jobs. Open with `C` (or whatever the player has
-//!   rebound `OpenCrafting` to).
+//! - [`crafting_body`], the recipe browser. Lists recipes from the static
+//!   registry, filters them by name and category, and lets the player enqueue
+//!   craft jobs. It renders into a `Ui` supplied by the unified inventory +
+//!   crafting panel (see [`crate::app::ui::inventory_panel`]); the panel owns
+//!   the window chrome and tab bar, this just fills the body when the Crafting
+//!   tab is active.
 //! - [`crafting_queue_hud`], always-on top-right stack of progress
 //!   cards. Each card shows the name of what's being crafted plus a
 //!   live bar, and an `×` button that cancels the job and refunds inputs.
@@ -18,78 +20,25 @@ mod filter;
 mod recipes;
 mod rows;
 
-use bevy_egui::egui::{self, Align, Align2, Id, Layout, Order, RichText};
+use bevy_egui::egui::{self, RichText};
 
 use crate::{
-    app::state::{ClientRuntime, CraftingUiState, ErrorToastSink, LocalPlayerState, MenuState},
+    app::state::{ClientRuntime, CraftingUiState, ErrorToastSink},
     crafting::{MAX_CRAFTING_QUEUE_LEN, RecipeDefinition},
     protocol::{PlayerCraftingState, PlayerInventoryState},
 };
 
-use super::{modal::backdrop_layer, theme};
+use super::theme;
 
 use filter::{collect_sorted_recipes, draw_filter_row};
 use rows::draw_recipe_row;
 
-const CRAFTING_PANEL_WIDTH: f32 = 760.0;
-const CRAFTING_PANEL_HEIGHT: f32 = 520.0;
-
-/// Render the crafting modal browser when `menu.crafting_open` is true.
-/// No-op otherwise, the call is cheap and keeps the top-level ui pipeline
-/// simple.
-pub(super) fn crafting_ui(
-    ctx: &egui::Context,
-    menu: &mut MenuState,
-    runtime: &mut ClientRuntime,
-    local_player: &LocalPlayerState,
-    crafting_ui: &mut CraftingUiState,
-    error_toasts: &mut dyn ErrorToastSink,
-) {
-    if !menu.crafting_open || menu.pause_open {
-        return;
-    }
-
-    // Scrim. Clicking outside the panel closes the screen, same gesture
-    // pattern as the inventory modal.
-    let backdrop = backdrop_layer(
-        ctx,
-        "crafting_backdrop",
-        Order::Middle,
-        theme::backdrop_color(),
-    );
-    if backdrop.clicked() {
-        menu.crafting_open = false;
-        return;
-    }
-
-    let inventory = local_player.private.as_ref().map(|p| p.inventory.clone());
-    let crafting_state = local_player
-        .private
-        .as_ref()
-        .map(|p| p.crafting.clone())
-        .unwrap_or_default();
-
-    egui::Area::new(Id::new("crafting_panel"))
-        .order(Order::Foreground)
-        .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-        .show(ctx, |ui| {
-            ui.set_width(CRAFTING_PANEL_WIDTH);
-            theme::panel_frame().show(ui, |ui| {
-                ui.set_width(CRAFTING_PANEL_WIDTH - 48.0);
-                ui.set_min_height(CRAFTING_PANEL_HEIGHT);
-                draw_panel_contents(
-                    ui,
-                    crafting_ui,
-                    inventory.as_ref(),
-                    &crafting_state,
-                    runtime,
-                    error_toasts,
-                );
-            });
-        });
-}
-
-fn draw_panel_contents(
+/// Fill the body of the unified panel with the crafting browser: the filter
+/// row (search + category chips + craftable toggle) and the scrollable recipe
+/// list. The caller (the inventory panel shell) owns the surrounding `Area`,
+/// frame, fixed size, and tab bar, so this only lays out content into the `Ui`
+/// it's handed and bounds its scroll area to whatever height is left.
+pub(super) fn crafting_body(
     ui: &mut egui::Ui,
     crafting_ui: &mut CraftingUiState,
     inventory: Option<&PlayerInventoryState>,
@@ -97,27 +46,6 @@ fn draw_panel_contents(
     runtime: &mut ClientRuntime,
     error_toasts: &mut dyn ErrorToastSink,
 ) {
-    ui.horizontal(|ui| {
-        ui.label(theme::section("Crafting"));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(
-                RichText::new(format!(
-                    "Queue {}/{}",
-                    crafting_state.len(),
-                    MAX_CRAFTING_QUEUE_LEN
-                ))
-                .color(theme::muted_text()),
-            );
-        });
-    });
-    ui.add_space(8.0);
-    ui.label(
-        RichText::new("Browse recipes, queue what you need. Inputs are taken when you queue and refunded if you cancel.")
-            .color(theme::muted_text())
-            .small(),
-    );
-    ui.add_space(12.0);
-
     draw_filter_row(ui, crafting_ui);
     ui.add_space(10.0);
 
@@ -131,9 +59,12 @@ fn draw_panel_contents(
     } else {
         0
     };
+    // Bound the list to the height the panel left us so the fixed-size shell
+    // doesn't grow when the registry overflows; the remainder scrolls.
+    let body_height = ui.available_height();
     egui::ScrollArea::vertical()
         .id_salt(("crafting_recipes_scroll", scroll_id_salt))
-        .max_height(CRAFTING_PANEL_HEIGHT - 110.0)
+        .max_height(body_height)
         .auto_shrink([false, false])
         .show(ui, |ui| {
             let visible_recipes = collect_sorted_recipes(crafting_ui, inventory);

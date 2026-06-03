@@ -106,18 +106,25 @@ impl GameServer {
         let is_admin = self.is_admin(account_id) || persisted.as_ref().is_some_and(|p| p.is_admin);
         let name = clean_player_name(&display_name, client_id);
         let (controller, inventory) = match persisted {
-            Some(player) => (
-                PlayerController::from_persisted(
-                    player.position,
-                    player.velocity,
-                    player.yaw,
-                    player.pitch,
-                    player.health,
-                    player.grounded,
-                    player.last_processed_input,
-                ),
-                player.inventory,
-            ),
+            Some(player) => {
+                // A save written before an inventory-capacity change keeps its
+                // old slot count; pad it up so the returning player gets the
+                // current number of slots.
+                let mut inventory = player.inventory;
+                inventory.normalize_capacity();
+                (
+                    PlayerController::from_persisted(
+                        player.position,
+                        player.velocity,
+                        player.yaw,
+                        player.pitch,
+                        player.health,
+                        player.grounded,
+                        player.last_processed_input,
+                    ),
+                    inventory,
+                )
+            }
             None => (PlayerController::spawn(), starting_inventory()),
         };
         let client = ServerClient {

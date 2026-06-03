@@ -9,29 +9,12 @@ use crate::{
     },
     items::{FIBER_ID, STONE_ID, WOOD_ID},
     protocol::{ItemStack, MAX_CRAFT_BATCH_SIZE},
-    server::PlayerPrivate,
 };
 
 fn inventory_with(item: &str, qty: u16) -> PlayerInventoryState {
     let mut inv = PlayerInventoryState::empty();
     inv.inventory_slots[0] = Some(ItemStack::new(item, qty));
     inv
-}
-
-fn local_player_with_inventory(inventory: PlayerInventoryState) -> LocalPlayerState {
-    LocalPlayerState {
-        entity: None,
-        public: None,
-        private: Some(PlayerPrivate {
-            inventory,
-            crafting: Default::default(),
-            open_furnace: None,
-            open_loot_bag: None,
-            last_processed_input: 0,
-            applied_action_seq: 0,
-        }),
-        lifecycle: None,
-    }
 }
 
 fn run_ui(f: impl FnMut(&egui::Context)) -> egui::FullOutput {
@@ -204,52 +187,41 @@ fn build_inputs_galley_reports_shortfall_and_surplus() {
     assert!(batch.contains("×12"));
 }
 
-#[test]
-fn crafting_ui_noop_when_closed() {
-    let mut menu = MenuState {
-        crafting_open: false,
-        ..Default::default()
-    };
+/// Drive [`crafting_body`] inside a throwaway `CentralPanel` so the tests can
+/// exercise the recipe browser the same way the unified panel shell does
+/// (hand it a `Ui` and let it fill the body).
+fn render_body(
+    crafting_ui: &mut CraftingUiState,
+    inventory: Option<&PlayerInventoryState>,
+) -> egui::FullOutput {
+    let crafting_state = PlayerCraftingState::default();
     let mut runtime = ClientRuntime::default();
-    let local = local_player_with_inventory(PlayerInventoryState::empty());
-    let mut ui_state = CraftingUiState::default();
     let mut toasts: Vec<String> = Vec::new();
-
-    let output = run_ui(|ctx| {
-        crafting_ui(
-            ctx,
-            &mut menu,
-            &mut runtime,
-            &local,
-            &mut ui_state,
-            &mut toasts,
-        );
-    });
-    // Closed screen paints nothing meaningful.
-    assert!(output.shapes.is_empty());
+    run_ui(|ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            crafting_body(
+                ui,
+                crafting_ui,
+                inventory,
+                &crafting_state,
+                &mut runtime,
+                &mut toasts,
+            );
+        });
+    })
 }
 
 #[test]
-fn crafting_ui_renders_recipe_rows_when_open() {
-    let mut menu = MenuState {
-        crafting_open: true,
+fn crafting_body_renders_recipe_rows() {
+    let inventory = inventory_with(FIBER_ID, 9);
+    let mut ui_state = CraftingUiState {
+        // Simulate a fresh open: the body should consume the pending reset.
+        scroll_reset_pending: true,
         ..Default::default()
     };
-    let mut runtime = ClientRuntime::default();
-    let local = local_player_with_inventory(inventory_with(FIBER_ID, 9));
-    let mut ui_state = CraftingUiState::default();
-    let mut toasts: Vec<String> = Vec::new();
 
-    let output = run_ui(|ctx| {
-        crafting_ui(
-            ctx,
-            &mut menu,
-            &mut runtime,
-            &local,
-            &mut ui_state,
-            &mut toasts,
-        );
-    });
+    let output = render_body(&mut ui_state, Some(&inventory));
+
     assert!(!output.shapes.is_empty());
     // The scroll-reset flag is consumed by the draw.
     assert!(!ui_state.scroll_reset_pending);
@@ -258,29 +230,14 @@ fn crafting_ui_renders_recipe_rows_when_open() {
 }
 
 #[test]
-fn crafting_ui_filtered_to_nothing_still_renders_empty_state() {
-    let mut menu = MenuState {
-        crafting_open: true,
-        ..Default::default()
-    };
-    let mut runtime = ClientRuntime::default();
-    let local = local_player_with_inventory(PlayerInventoryState::empty());
+fn crafting_body_filtered_to_nothing_still_renders_empty_state() {
     let mut ui_state = CraftingUiState {
         search: "zzzznomatch".to_owned(),
         ..Default::default()
     };
-    let mut toasts: Vec<String> = Vec::new();
 
-    let output = run_ui(|ctx| {
-        crafting_ui(
-            ctx,
-            &mut menu,
-            &mut runtime,
-            &local,
-            &mut ui_state,
-            &mut toasts,
-        );
-    });
-    // Still draws the panel + "No recipes match your filter." copy.
+    let output = render_body(&mut ui_state, None);
+
+    // Still draws the "No recipes match your filter." copy.
     assert!(!output.shapes.is_empty());
 }

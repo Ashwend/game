@@ -165,6 +165,24 @@ pub(crate) fn paint_slot(
     }
 }
 
+/// Draw a non-interactive filler tile: a dimmer, flatter empty slot used to
+/// pad the inventory grid out to the panel height without handing the player a
+/// usable slot. It allocates the same footprint as a real slot but takes no
+/// input and reads as "locked / not available".
+pub(crate) fn draw_disabled_slot(ui: &mut egui::Ui) {
+    let (_, rect) = ui.allocate_space(Vec2::splat(SLOT_SIZE));
+    ui.painter().rect(
+        rect,
+        5,
+        // More transparent + darker than an empty usable slot so the panel
+        // background shows through and the tile visibly recedes; the stroke is
+        // a faint hint rather than the crisp border real slots get.
+        Color32::from_rgba_unmultiplied(6, 9, 13, 120),
+        Stroke::new(1.0, Color32::from_rgba_unmultiplied(70, 82, 96, 34)),
+        egui::StrokeKind::Inside,
+    );
+}
+
 /// Overlay drawn on top of a slot when its contents grew. A warm fill plus
 /// a brighter stroke pulse together: the fill makes the slot "glow" briefly,
 /// the stroke makes the rectangle pop out from neighboring slots.

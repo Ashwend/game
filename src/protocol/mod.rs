@@ -45,7 +45,13 @@ pub const MAX_HEALTH: f32 = 100.0;
 /// message. Long enough to read a sentence at a glance, short enough that
 /// idle chatter doesn't permanently clutter the world.
 pub const CHAT_BUBBLE_DURATION_SECONDS: f32 = 6.0;
-pub const INVENTORY_SLOT_COUNT: usize = 40;
+/// Player backpack capacity. Rendered as a 12x5 grid in the inventory panel
+/// (see [`crate::app::ui::inventory_panel`]); the panel width is sized to fit
+/// that column count exactly, so changing this also means re-checking the grid
+/// dimensions there. Returning players whose save predates a change are
+/// padded up to this length on load via
+/// [`PlayerInventoryState::normalize_capacity`].
+pub const INVENTORY_SLOT_COUNT: usize = 60;
 pub const ACTIONBAR_SLOT_COUNT: usize = 9;
 /// Number of input/output slots in a furnace. Small enough to fit on
 /// one row of the furnace UI and to keep the auto-smelt loop fast (the

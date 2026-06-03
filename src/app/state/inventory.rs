@@ -134,7 +134,14 @@ pub(crate) struct InventoryUiState {
     /// field. Cleared at frame start by [`begin_frame`] so a stale
     /// click from a previous frame can never fire twice.
     pub(crate) pending_quick_transfer: Option<UnifiedSlotRef>,
+    /// Whether the unified inventory + crafting panel was open last frame
+    /// (either tab). The open->closed transition drops keyboard focus and
+    /// cancels any in-progress drag.
     pub(crate) was_open: bool,
+    /// Whether the panel was specifically on the Crafting tab last frame.
+    /// Lets the panel drop a focused recipe-search text input when the
+    /// player flips Crafting->Inventory, not just when the panel closes.
+    pub(crate) was_crafting: bool,
     /// Per-slot flash elapsed time. A slot is inserted with elapsed = 0
     /// whenever its quantity grows (or a new stack lands in an empty slot)
     /// and is removed once the elapsed time passes [`SLOT_FLASH_DURATION_SECS`].
@@ -367,6 +374,7 @@ mod tests {
             loot_bag_rect: None,
             pending_quick_transfer: Some(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0))),
             was_open: true,
+            was_crafting: false,
             slot_flashes: HashMap::new(),
             last_seen_inventory: None,
             pickup_intent_secs_remaining: 0.0,

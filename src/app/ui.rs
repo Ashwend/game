@@ -8,6 +8,7 @@ pub(crate) mod floating_text;
 mod furnace;
 mod hud;
 mod inventory;
+mod inventory_panel;
 mod login;
 mod loot_bag;
 mod menu;
@@ -32,7 +33,6 @@ use super::audio::{PlaySound, SoundId};
 use self::{
     chat::chat_ui,
     confirm::{confirmation_ui, notice_ui},
-    crafting::crafting_ui,
     crafting_queue::crafting_queue_hud,
     death_splash::{death_splash_ui, send_respawn},
     deployable_overlay::{
@@ -42,7 +42,8 @@ use self::{
     floating_text::{FloatingDamageText, floating_damage_ui},
     furnace::furnace_ui,
     hud::hud_ui,
-    inventory::{draw_drag_preview, handle_drag_release, inventory_ui},
+    inventory::{draw_drag_preview, handle_drag_release},
+    inventory_panel::inventory_panel_ui,
     loot_bag::loot_bag_ui,
     menu::main_menu_ui,
     multiplayer::multiplayer_ui,
@@ -307,22 +308,20 @@ pub(crate) fn ui_system(
                     deployable_overlay_ui(ctx, DeployableOverlay { camera, entries });
                 }
 
-                inventory_ui(
-                    ctx,
-                    &mut resources.menu,
-                    &resources.local_player,
-                    &mut resources.inventory_ui,
-                    &resources.pickup_target,
-                    &mut resources.inventory_sound_requests,
-                    delta_seconds,
-                );
-                crafting_ui(
+                // Unified inventory + crafting panel: one fixed-size shell
+                // with a tab bar. Replaces the two separate modals; the
+                // toggle systems flip which tab is active.
+                inventory_panel_ui(
                     ctx,
                     &mut resources.menu,
                     &mut resources.runtime,
                     &resources.local_player,
+                    &mut resources.inventory_ui,
                     &mut resources.crafting_ui,
+                    &resources.pickup_target,
+                    &mut resources.inventory_sound_requests,
                     &mut resources.error_toasts,
+                    delta_seconds,
                 );
                 furnace_ui(
                     ctx,

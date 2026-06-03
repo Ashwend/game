@@ -32,19 +32,24 @@ use crate::{
 };
 
 use super::{
-    inventory::{drag::draw_drag_preview, slot::draw_slot},
+    inventory::{INVENTORY_COLUMNS, drag::draw_drag_preview, slot::SLOT_SIZE, slot::draw_slot},
     modal::backdrop_layer,
     theme,
 };
 
-const PANEL_WIDTH: f32 = 720.0;
-const PANEL_HEIGHT: f32 = 540.0;
 const SLOT_GAP: f32 = 6.0;
 // Match the main inventory's column count so a player who's used to the
-// bag's layout sees the same shape here. Actionbar is intentionally
-// omitted - the on-screen hotbar at the bottom of the viewport already
-// shows it, and the player can drag stacks straight to those slots.
-const INVENTORY_COLS: usize = 10;
+// bag's layout sees the same shape here. Shared with the inventory panel so
+// the two can't drift. Actionbar is intentionally omitted - the on-screen
+// hotbar at the bottom of the viewport already shows it, and the player can
+// drag stacks straight to those slots.
+const INVENTORY_COLS: usize = INVENTORY_COLUMNS;
+// Sized so the player-inventory grid (the widest element) fills the inner
+// content area exactly: `cols*slot + (cols-1)*gap + 48 (frame margins)`. The
+// fuel/contents cluster up top is naturally narrower and sits left-aligned.
+const PANEL_WIDTH: f32 =
+    INVENTORY_COLS as f32 * SLOT_SIZE + (INVENTORY_COLS - 1) as f32 * SLOT_GAP + 48.0;
+const PANEL_HEIGHT: f32 = 540.0;
 
 pub(super) fn furnace_ui(
     ctx: &egui::Context,

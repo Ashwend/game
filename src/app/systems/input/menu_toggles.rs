@@ -355,8 +355,7 @@ pub(crate) fn open_crafting_modal(
     // do NOT auto-focus the search field - the player can click it if
     // they want to type, and most opens are "scroll through and
     // click craft" rather than "type to filter".
-    crafting_ui.search.clear();
-    crafting_ui.scroll_reset_pending = true;
+    crafting_ui.reset_browser();
 }
 
 #[cfg(test)]

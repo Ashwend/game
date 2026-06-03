@@ -134,6 +134,20 @@ impl PlayerInventoryState {
         }
     }
 
+    /// Pad (or trim) the slot vectors to the current canonical capacities.
+    /// A persisted inventory written before a capacity change keeps its old
+    /// length on load; normalizing on restore exposes any newly-added empty
+    /// slots and keeps the on-wire shape consistent with fresh inventories.
+    /// Bounds checks already use the live vec length, so this is about making
+    /// the new slots usable, not about safety.
+    pub fn normalize_capacity(&mut self) {
+        self.inventory_slots.resize(INVENTORY_SLOT_COUNT, None);
+        self.actionbar_slots.resize(ACTIONBAR_SLOT_COUNT, None);
+        if self.active_actionbar_slot >= ACTIONBAR_SLOT_COUNT {
+            self.active_actionbar_slot = 0;
+        }
+    }
+
     pub fn active_actionbar_stack(&self) -> Option<&ItemStack> {
         self.actionbar_slots
             .get(self.active_actionbar_slot)
