@@ -54,8 +54,10 @@ pub(crate) struct DeployedEntity {
 }
 
 impl DeployedEntity {
-    /// AABB for placement-overlap and (future) collision use. Same
-    /// half-extents as the client builds, so the two stay aligned.
+    /// AABB for placement-overlap, the spawn-safety check, and (future)
+    /// collision use. Same half-extents as the client builds, so the two stay
+    /// aligned. The caller resolves the profile; [`Self::resolved_collider`]
+    /// wraps the id lookup for callers that only have the entity.
     pub(super) fn collider(&self, profile: DeployableProfile) -> WorldBlock {
         let center = Vec3Net::new(
             self.position.x,
@@ -68,6 +70,14 @@ impl DeployedEntity {
             profile.collider_half_width,
         );
         WorldBlock::new(center, half)
+    }
+
+    /// [`Self::collider`] with the item-id profile lookup folded in. `None` when
+    /// the item id no longer resolves a deployable profile (skip it rather than
+    /// crash). Used by the spawn-safety grid.
+    pub(super) fn resolved_collider(&self) -> Option<WorldBlock> {
+        let profile = item_definition(&self.item_id)?.deployable?;
+        Some(self.collider(profile))
     }
 }
 

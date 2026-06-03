@@ -18,7 +18,7 @@ fn make_server() -> GameServer {
 }
 
 fn connect_test_client(server: &mut GameServer) -> ClientId {
-    server
+    let client_id = server
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
@@ -27,7 +27,17 @@ fn connect_test_client(server: &mut GameServer) -> ClientId {
             String::new(),
         )
         .expect("connect ok")
-        .0
+        .0;
+    // Pin to origin: these tests place structures at fixed near-origin spots and
+    // assert placement-reach / overlap behaviour, which the random initial spawn
+    // would otherwise make non-deterministic.
+    server
+        .clients
+        .get_mut(&client_id)
+        .unwrap()
+        .controller
+        .position = Vec3Net::ZERO;
+    client_id
 }
 
 fn give_one(server: &mut GameServer, client_id: ClientId, item_id: &str) {

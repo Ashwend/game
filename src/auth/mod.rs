@@ -61,6 +61,9 @@ pub fn authenticate(
         AuthMode::NoAuth => Ok(VerifiedIdentity {
             account_id: claimed_id,
             display_name: None,
+            // Loopback/localhost only: admin there comes from the singleplayer
+            // host assignment, never from a self-claimed token.
+            is_admin: false,
         }),
         AuthMode::Workos => {
             let verifier = workos.ok_or_else(|| {
@@ -71,6 +74,7 @@ pub fn authenticate(
             let claims = verifier.verify(token)?;
             Ok(VerifiedIdentity {
                 account_id: account_id_from_sub(&claims.sub),
+                is_admin: claims.is_admin(),
                 display_name: claims.name,
             })
         }

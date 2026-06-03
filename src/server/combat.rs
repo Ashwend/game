@@ -204,7 +204,7 @@ impl GameServer {
             return Vec::new();
         }
 
-        let spawn = self.pick_safe_respawn_position(client_id);
+        let spawn = self.pick_safe_spawn(Some(client_id));
 
         let Some(client) = self.clients.get_mut(&client_id) else {
             return Vec::new();
@@ -324,52 +324,91 @@ impl GameServer {
         }
     }
 
-    /// Sample candidate spawn positions until one lands clear of other
-    /// players and inside playable bounds. The world floor is a flat
-    /// plane at y = 0, so "valid" today just means: at least
-    /// [`RESPAWN_MIN_DISTANCE_M`] from every other player. Bails out to
-    /// world origin after a fixed number of attempts so the call can't
-    /// hang.
-    fn pick_safe_respawn_position(&self, respawner: ClientId) -> Vec3Net {
-        const ATTEMPTS: u32 = 24;
-        const RADIUS_M: f32 = 32.0;
-        const MIN_RADIUS_M: f32 = 6.0;
+    /// Build a collision grid matching what clients actually collide with: the
+    /// world blocks (perimeter walls + terrain) plus resource-node and
+    /// deployable colliders. Rebuilt per spawn pick; spawns are rare so the
+    /// O(nodes + structures) build is cheap, and rebuilding keeps the check
+    /// honest as nodes regrow and structures come and go.
+    fn spawn_collision_grid(&self) -> BlockGrid {
+        let mut extras: Vec<crate::world::WorldBlock> = self
+            .resource_nodes
+            .values()
+            .filter_map(crate::resources::resource_node_collider)
+            .collect();
+        extras.extend(
+            self.deployed_entities
+                .values()
+                .filter_map(|e| e.resolved_collider()),
+        );
+        BlockGrid::build_with_extras(&self.world, &extras)
+    }
+
+    /// Pick a random spawn point anywhere inside the playable bounds that
+    /// doesn't drop the player inside a solid collider (wall, tree, ore, or
+    /// placed structure) and stays clear of other live players. `exclude` is
+    /// the respawning client (skipped in the player-distance test); pass `None`
+    /// for a fresh join. Used for both initial spawn and respawn so the two
+    /// behave identically. Falls back to the first collider-free sample if no
+    /// spot also clears the player-distance check, and only to the origin if
+    /// every sample landed in geometry (effectively never on an open map).
+    pub(super) fn pick_safe_spawn(&self, exclude: Option<ClientId>) -> Vec3Net {
+        use crate::world::PlayableBounds;
+        const ATTEMPTS: u32 = 64;
+        // Keep the player capsule clear of the inner wall face / bounds edge.
+        const EDGE_MARGIN_M: f32 = 4.0;
+
+        let bounds = PlayableBounds::from_dims(self.chunk_manager.dims());
+        let min_x = bounds.min_x + EDGE_MARGIN_M;
+        let max_x = bounds.max_x - EDGE_MARGIN_M;
+        let min_z = bounds.min_z + EDGE_MARGIN_M;
+        let max_z = bounds.max_z - EDGE_MARGIN_M;
+        let span_x = (max_x - min_x).max(0.0);
+        let span_z = (max_z - min_z).max(0.0);
+
+        let grid = self.spawn_collision_grid();
 
         let alive_positions: Vec<Vec3Net> = self
             .clients
             .values()
-            .filter(|c| c.client_id != respawner && c.lifecycle.is_alive())
+            .filter(|c| Some(c.client_id) != exclude && c.lifecycle.is_alive())
             .map(|c| c.controller.position)
             .collect();
 
-        // RNG state mixes tick + respawner id so back-to-back respawns
-        // by the same client land on different spots, and simultaneous
-        // respawns by different clients don't collide on a single
-        // picked square. SplitMix64 keeps this self-contained, no
-        // dependency on the `commands.rs` private RNG type.
+        // RNG mixes tick + the (optional) client id so back-to-back picks and
+        // simultaneous picks by different clients diverge. SplitMix64 keeps this
+        // self-contained, no dependency on the `commands.rs` private RNG type.
         let mut rng_state = self
             .tick
             .wrapping_mul(0x9E3779B97F4A7C15)
-            .wrapping_add(respawner.wrapping_mul(0xBF58476D1CE4E5B9))
+            .wrapping_add(exclude.unwrap_or(0).wrapping_mul(0xBF58476D1CE4E5B9))
             .wrapping_add(0xD1B54A32D192ED03);
 
-        for _ in 0..ATTEMPTS {
-            let angle = next_f32(&mut rng_state) * std::f32::consts::TAU;
-            let radius = MIN_RADIUS_M + next_f32(&mut rng_state) * (RADIUS_M - MIN_RADIUS_M);
-            let candidate = Vec3Net::new(angle.cos() * radius, 0.0, angle.sin() * radius);
+        let min_distance_sq = RESPAWN_MIN_DISTANCE_M * RESPAWN_MIN_DISTANCE_M;
+        let mut collider_free_fallback: Option<Vec3Net> = None;
 
-            let clear = alive_positions.iter().all(|other| {
+        for _ in 0..ATTEMPTS {
+            let x = min_x + next_f32(&mut rng_state) * span_x;
+            let z = min_z + next_f32(&mut rng_state) * span_z;
+            let candidate = Vec3Net::new(x, 0.0, z);
+
+            if crate::controller::player_overlaps_world(candidate, &grid) {
+                continue;
+            }
+            if collider_free_fallback.is_none() {
+                collider_free_fallback = Some(candidate);
+            }
+            let clear_of_players = alive_positions.iter().all(|other| {
                 let dx = candidate.x - other.x;
                 let dz = candidate.z - other.z;
-                (dx * dx + dz * dz).sqrt() >= RESPAWN_MIN_DISTANCE_M
+                dx * dx + dz * dz >= min_distance_sq
             });
-            if clear {
+            if clear_of_players {
                 return candidate;
             }
         }
-        // Fallback: world origin. Better a maybe-overlapping respawn
-        // than an infinite loop in the picker.
-        Vec3Net::ZERO
+        // Better a tight-but-open spot than the origin; origin only if every
+        // sample was inside geometry.
+        collider_free_fallback.unwrap_or(Vec3Net::ZERO)
     }
 }
 

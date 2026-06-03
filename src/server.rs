@@ -38,6 +38,16 @@ const PERF_STATS_BROADCAST_INTERVAL_TICKS: u64 = SERVER_TICK_RATE_HZ as u64;
 /// connected player).
 const PLAYER_LIST_BROADCAST_INTERVAL_TICKS: u64 = SERVER_TICK_RATE_HZ as u64;
 
+/// Cadence of the routine world auto-save (dedicated servers only). Thirty
+/// minutes bounds worst-case progress loss on a crash without thrashing the
+/// disk or hitching play too often. `pub(crate)` so the host wiring can pass it
+/// to [`GameServer::with_auto_save`].
+pub(crate) const AUTO_SAVE_INTERVAL_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 60 * 30;
+
+/// How far ahead of an auto-save the "saving soon" heads-up is announced, so
+/// players can brace for the brief hitch the synchronous write causes.
+const AUTO_SAVE_WARNING_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 30;
+
 pub mod chunk_manager;
 mod combat;
 mod commands;
@@ -193,6 +203,16 @@ pub struct GameServer {
     /// commands push an out-of-band immediate snapshot and reset this
     /// counter so the next routine broadcast is a full interval later.
     last_world_time_broadcast_tick: u64,
+    /// Auto-save cadence in ticks. `0` disables it (loopback singleplayer, which
+    /// saves on exit instead); dedicated hosts set it via
+    /// [`GameServer::with_auto_save`]. `tick` only schedules and announces; the
+    /// host performs the disk write so I/O stays out of the game-state module.
+    auto_save_interval_ticks: u64,
+    /// Tick of the last auto-save (or host start), the schedule counts from here.
+    last_auto_save_tick: u64,
+    /// Raised by `tick` when an auto-save comes due; the host drains it via
+    /// [`GameServer::take_auto_save_pending`], writes the world, then announces.
+    auto_save_pending: bool,
 }
 
 #[derive(Debug)]

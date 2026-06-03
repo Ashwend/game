@@ -143,6 +143,152 @@ fn chat_populates_speaker_bubble_for_broadcast_window() {
 }
 
 #[test]
+fn fresh_spawn_is_random_in_bounds_and_clear_of_colliders() {
+    use crate::controller::{BlockGrid, player_overlaps_world};
+    use crate::world::PlayableBounds;
+
+    // Raw connect (not the origin-pinning `connect_host` helper) so we observe
+    // the real random initial spawn.
+    let mut server = server();
+    let (client_id, _) = server
+        .connect(
+            PROTOCOL_VERSION,
+            Some(GAME_VERSION.to_owned()),
+            7,
+            "Wanderer".to_owned(),
+            String::new(),
+        )
+        .expect("connect ok");
+    let pos = server.clients[&client_id].controller.position;
+
+    // In-bounds and on the floor.
+    let bounds = PlayableBounds::from_dims(server.chunk_manager.dims());
+    assert!(
+        bounds.contains(pos.x, pos.z),
+        "spawn {pos:?} should land inside the playable bounds"
+    );
+    assert_eq!(pos.y, 0.0, "spawn sits on the flat floor");
+
+    // Rebuild the same collider set the picker used (world blocks + node and
+    // deployable colliders) and confirm the spawn isn't inside any of it.
+    let mut extras: Vec<_> = server
+        .resource_nodes
+        .values()
+        .filter_map(crate::resources::resource_node_collider)
+        .collect();
+    extras.extend(
+        server
+            .deployed_entities
+            .values()
+            .filter_map(|e| e.resolved_collider()),
+    );
+    let grid = BlockGrid::build_with_extras(&server.world, &extras);
+    assert!(
+        !player_overlaps_world(pos, &grid),
+        "spawn {pos:?} must not land inside a collider"
+    );
+}
+
+#[test]
+fn auto_save_warns_then_flags_a_save_on_schedule() {
+    // Pick an interval just past the 30s warning window so both the heads-up
+    // and the save fire within a short, fast loop.
+    let warning_ticks = (SERVER_TICK_RATE_HZ as u64) * 30;
+    let interval = warning_ticks + 4;
+    let mut server = server().with_auto_save(interval);
+
+    let dt = 1.0 / SERVER_TICK_RATE_HZ;
+    let mut warned = false;
+    let mut announced_saving = false;
+    let mut saw_pending = false;
+
+    for _ in 0..interval {
+        let envelopes = server.tick(dt);
+        for envelope in &envelopes {
+            if let ServerMessage::Chat(chat) = &envelope.message {
+                if chat.text.contains("30 seconds") {
+                    warned = true;
+                }
+                if chat.text.contains("Auto-saving") {
+                    announced_saving = true;
+                }
+            }
+        }
+        // The host drains this each tick to perform the write; here we just
+        // confirm it's raised exactly when the save announcement goes out.
+        if server.take_auto_save_pending() {
+            saw_pending = true;
+            assert!(
+                announced_saving,
+                "the save flag must not precede the saving announcement"
+            );
+        }
+    }
+
+    assert!(warned, "a 30-second heads-up should be announced");
+    assert!(announced_saving, "the save start should be announced");
+    assert!(
+        saw_pending,
+        "the host should be signalled to write the save"
+    );
+}
+
+#[test]
+fn auto_save_is_disabled_by_default() {
+    // Loopback/singleplayer never calls `with_auto_save`, so the schedule must
+    // stay dormant: no announcements, no pending flag, ever.
+    let mut server = server();
+    let dt = 1.0 / SERVER_TICK_RATE_HZ;
+    for _ in 0..((SERVER_TICK_RATE_HZ as u64) * 31) {
+        let envelopes = server.tick(dt);
+        assert!(
+            !envelopes.iter().any(|e| matches!(
+                &e.message,
+                ServerMessage::Chat(chat) if chat.text.contains("save")
+            )),
+            "auto-save must stay silent when disabled"
+        );
+        assert!(!server.take_auto_save_pending());
+    }
+}
+
+#[test]
+fn two_fresh_players_spawn_apart() {
+    // Both connect before any tick advances, so they share an RNG seed; the
+    // per-player distance check must still split them onto different spots
+    // rather than stacking them.
+    let mut server = server();
+    let (a, _) = server
+        .connect(
+            PROTOCOL_VERSION,
+            Some(GAME_VERSION.to_owned()),
+            11,
+            "A".to_owned(),
+            String::new(),
+        )
+        .expect("connect a");
+    let (b, _) = server
+        .connect(
+            PROTOCOL_VERSION,
+            Some(GAME_VERSION.to_owned()),
+            22,
+            "B".to_owned(),
+            String::new(),
+        )
+        .expect("connect b");
+
+    let pa = server.clients[&a].controller.position;
+    let pb = server.clients[&b].controller.position;
+    let dx = pa.x - pb.x;
+    let dz = pa.z - pb.z;
+    let distance = (dx * dx + dz * dz).sqrt();
+    assert!(
+        distance >= crate::game_balance::RESPAWN_MIN_DISTANCE_M,
+        "two fresh spawns should be at least the min spawn distance apart, got {distance}"
+    );
+}
+
+#[test]
 fn empty_chat_is_ignored_by_server() {
     let mut server = server();
     let client_id = connect_host(&mut server);

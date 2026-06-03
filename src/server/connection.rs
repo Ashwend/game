@@ -78,6 +78,11 @@ impl GameServer {
             &token,
         )?;
         let account_id = verified.account_id;
+        // A verified WorkOS token can flag the user as a pre-authorized admin
+        // via the `urn:ashwend:admin` claim (driven by WorkOS user metadata).
+        // Only ever true under WorkOS auth, so this grants admin on public
+        // servers without persisting anything or touching the loopback path.
+        let token_admin = verified.is_admin;
         // WorkOS may carry a display name in the token; otherwise trust the
         // (cleaned) name the client supplied.
         let display_name = verified.display_name.unwrap_or(display_name);
@@ -103,7 +108,9 @@ impl GameServer {
         // their inventory, position, and admin status. Their last display
         // name is overwritten with whatever the client provides this session.
         let persisted = self.take_persisted_player(account_id);
-        let is_admin = self.is_admin(account_id) || persisted.as_ref().is_some_and(|p| p.is_admin);
+        let is_admin = token_admin
+            || self.is_admin(account_id)
+            || persisted.as_ref().is_some_and(|p| p.is_admin);
         let name = clean_player_name(&display_name, client_id);
         let (controller, inventory) = match persisted {
             Some(player) => {
@@ -125,7 +132,14 @@ impl GameServer {
                     inventory,
                 )
             }
-            None => (PlayerController::spawn(), starting_inventory()),
+            None => {
+                // Fresh player: drop them at a random collision-free spot in
+                // the playable area instead of always at the origin. Same picker
+                // as respawn, so the two behave identically.
+                let mut controller = PlayerController::spawn();
+                controller.position = self.pick_safe_spawn(None);
+                (controller, starting_inventory())
+            }
         };
         let client = ServerClient {
             client_id,

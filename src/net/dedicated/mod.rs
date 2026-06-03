@@ -9,7 +9,7 @@ use crate::{
     save::{WorldSave, WorldStore, save_world_file},
 };
 
-use super::host::run_game_server;
+use super::host::{AutoSaveSink, run_game_server};
 
 pub use admin::{DedicatedAdminRequest, DedicatedAdminResponse, send_admin_request};
 
@@ -36,6 +36,19 @@ pub fn run_dedicated_server(
     persistence: DedicatedWorldPersistence,
     admin_socket: Option<PathBuf>,
 ) -> Result<()> {
-    let final_save = run_game_server(bind_addr, save, auth_mode, workos, admin_socket)?;
+    // Periodic auto-save writes through the same persistence target as the
+    // final shutdown save, so a crash mid-session loses at most one interval.
+    let auto_save_persistence = persistence.clone();
+    let auto_save = AutoSaveSink(Box::new(move |world: &WorldSave| {
+        auto_save_persistence.save(world)
+    }));
+    let final_save = run_game_server(
+        bind_addr,
+        save,
+        auth_mode,
+        workos,
+        admin_socket,
+        Some(auto_save),
+    )?;
     persistence.save(&final_save)
 }

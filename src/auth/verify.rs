@@ -40,6 +40,20 @@ pub(super) struct WorkosClaims {
     pub(super) sub: String,
     #[serde(default)]
     pub(super) name: Option<String>,
+    /// Custom claim injected by the WorkOS JWT template
+    /// (`urn:ashwend:admin` mapped to `{{ user.metadata.admin || 'false' }}`).
+    /// It arrives as a string, `"true"` flags the user as a pre-authorized
+    /// admin; absent or anything else is non-admin. Flag a user by setting the
+    /// `admin` metadata key to `true` in the WorkOS dashboard, no redeploy.
+    #[serde(rename = "urn:ashwend:admin", default)]
+    admin: String,
+}
+
+impl WorkosClaims {
+    /// Whether the verified token marks this user as a pre-authorized admin.
+    pub(super) fn is_admin(&self) -> bool {
+        self.admin.trim().eq_ignore_ascii_case("true")
+    }
 }
 
 impl WorkosVerifier {
@@ -140,6 +154,18 @@ mod tests {
             format!("{verifier:?}").contains("https://api.workos.com/sso/jwks/client_abc123"),
             "verifier should point at the per-client JWKS endpoint"
         );
+    }
+
+    #[test]
+    fn admin_claim_parses_truthy_string_only() {
+        let parse = |json: &str| serde_json::from_str::<WorkosClaims>(json).expect("valid claims");
+        // The template emits a string; only "true" (any case, trimmed) is admin.
+        assert!(parse(r#"{"sub":"user_1","urn:ashwend:admin":"true"}"#).is_admin());
+        assert!(parse(r#"{"sub":"user_1","urn:ashwend:admin":" TRUE "}"#).is_admin());
+        assert!(!parse(r#"{"sub":"user_1","urn:ashwend:admin":"false"}"#).is_admin());
+        assert!(!parse(r#"{"sub":"user_1","urn:ashwend:admin":""}"#).is_admin());
+        // Absent claim (older token / template not configured) is non-admin.
+        assert!(!parse(r#"{"sub":"user_1"}"#).is_admin());
     }
 
     #[test]

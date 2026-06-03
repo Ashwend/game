@@ -36,7 +36,7 @@ fn movement(sequence: u64, position: Vec3Net) -> PlayerMovement {
 }
 
 fn connect_host(server: &mut GameServer) -> ClientId {
-    server
+    let client_id = server
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
@@ -45,7 +45,17 @@ fn connect_host(server: &mut GameServer) -> ClientId {
             String::new(),
         )
         .expect("host should connect")
-        .0
+        .0;
+    // Pin to origin so position-dependent tests (pickup distance, drop spots,
+    // command ranges) stay deterministic despite the random initial spawn.
+    // Tests that care about a specific position set it themselves afterwards.
+    server
+        .clients
+        .get_mut(&client_id)
+        .unwrap()
+        .controller
+        .position = Vec3Net::ZERO;
+    client_id
 }
 
 /// Tests start from an empty inventory; helpers below seed the items each

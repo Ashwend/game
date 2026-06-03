@@ -132,6 +132,15 @@ fn removing_fuel_resets_the_burn_timer() {
             String::new(),
         )
         .expect("connect ok");
+    // Pin to origin: the furnace below is placed at origin and these tests
+    // assume the player stands within interact range of it. The random initial
+    // spawn would otherwise drop the player elsewhere.
+    server
+        .clients
+        .get_mut(&client_id)
+        .unwrap()
+        .controller
+        .position = crate::protocol::Vec3Net::ZERO;
 
     let entity_id = {
         let id = server.next_deployed_entity_id;
@@ -206,6 +215,15 @@ fn partial_fuel_drag_keeps_burn_timer_running() {
             String::new(),
         )
         .expect("connect ok");
+    // Pin to origin: the furnace below is placed at origin and these tests
+    // assume the player stands within interact range of it. The random initial
+    // spawn would otherwise drop the player elsewhere.
+    server
+        .clients
+        .get_mut(&client_id)
+        .unwrap()
+        .controller
+        .position = crate::protocol::Vec3Net::ZERO;
 
     let entity_id = {
         let id = server.next_deployed_entity_id;
@@ -285,6 +303,15 @@ fn moving_from_furnace_to_a_specific_player_inventory_slot_respects_the_target()
             String::new(),
         )
         .expect("connect ok");
+    // Pin to origin: the furnace below is placed at origin and these tests
+    // assume the player stands within interact range of it. The random initial
+    // spawn would otherwise drop the player elsewhere.
+    server
+        .clients
+        .get_mut(&client_id)
+        .unwrap()
+        .controller
+        .position = crate::protocol::Vec3Net::ZERO;
 
     let entity_id = {
         let id = server.next_deployed_entity_id;
@@ -384,6 +411,15 @@ fn furnace_test_fixture() -> (
             String::new(),
         )
         .expect("connect ok");
+    // Pin to origin: the furnace below is placed at origin and these tests
+    // assume the player stands within interact range of it. The random initial
+    // spawn would otherwise drop the player elsewhere.
+    server
+        .clients
+        .get_mut(&client_id)
+        .unwrap()
+        .controller
+        .position = crate::protocol::Vec3Net::ZERO;
 
     let entity_id = server.next_deployed_entity_id;
     server.next_deployed_entity_id += 1;

@@ -112,6 +112,19 @@ struct ClientChunkSubs {
     by_client: HashMap<ClientId, HashSet<ChunkCoord>>,
 }
 
+/// Persists a snapshotted world during a periodic auto-save. Boxed so the
+/// dedicated runner can close over its persistence target (a `WorldStore` or a
+/// file path) without the host knowing which.
+pub(crate) type AutoSaveWriter = Box<dyn Fn(&WorldSave) -> Result<()> + Send + Sync>;
+
+/// Host-side disk-write target for periodic auto-saves. Present only on hosts
+/// that persist while running (dedicated servers); loopback singleplayer omits
+/// it and saves on exit instead. The `GameServer` schedules and announces the
+/// save; this closure performs the actual write so I/O stays out of the
+/// game-state module. `pub(crate)` so the dedicated runner can construct one.
+#[derive(Resource)]
+pub(crate) struct AutoSaveSink(pub(crate) AutoSaveWriter);
+
 pub(super) fn spawn_loopback_server(
     save: WorldSave,
     settings: ServerSettings,
@@ -134,6 +147,7 @@ pub(super) fn spawn_loopback_server(
                 false,
                 Some(startup_tx.clone()),
                 PrivateKeyContext::Loopback,
+                None,
             ) {
                 let _ = startup_tx.send(Err(format!("{error:#}")));
                 eprintln!("Lightyear game server stopped: {error:#}");
@@ -172,6 +186,7 @@ pub(super) fn run_game_server(
     auth_mode: AuthMode,
     workos: Option<Arc<WorkosVerifier>>,
     admin_socket: Option<PathBuf>,
+    auto_save: Option<AutoSaveSink>,
 ) -> Result<WorldSave> {
     let reserved_addr = reserve_udp_addr(bind_addr)
         .with_context(|| format!("could not reserve Lightyear server address {bind_addr}"))?;
@@ -191,6 +206,7 @@ pub(super) fn run_game_server(
         true,
         None,
         PrivateKeyContext::NetworkExposed,
+        auto_save,
     )
 }
 
@@ -235,6 +251,7 @@ fn run_host(
     install_terminal_shutdown: bool,
     mut startup_tx: Option<mpsc::Sender<std::result::Result<(), String>>>,
     key_context: PrivateKeyContext,
+    auto_save: Option<AutoSaveSink>,
 ) -> Result<WorldSave> {
     let bind_addr = reserved_addr.addr();
     let mut app = App::new();
@@ -271,9 +288,17 @@ fn run_host(
         .id();
 
     app.insert_resource(HostCommandInbox(Mutex::new(command_rx)));
-    app.insert_resource(AuthoritativeServer(
-        GameServer::new(save, settings).with_workos(workos),
-    ));
+    // Enable the auto-save schedule only when a write sink is present (dedicated
+    // hosts). Loopback passes `None`, so its `GameServer` keeps the interval at
+    // 0 and never schedules/announces a save, it persists on exit instead.
+    let mut game_server = GameServer::new(save, settings).with_workos(workos);
+    if auto_save.is_some() {
+        game_server = game_server.with_auto_save(crate::server::AUTO_SAVE_INTERVAL_TICKS);
+    }
+    if let Some(sink) = auto_save {
+        app.insert_resource(sink);
+    }
+    app.insert_resource(AuthoritativeServer(game_server));
     app.insert_resource(ServerConnections::default());
     app.insert_resource(TickAccumulator::default());
     app.insert_resource(HostShutdown::default());
@@ -470,6 +495,7 @@ fn tick_authoritative_server(
     mut server: ResMut<AuthoritativeServer>,
     mut connections: ResMut<ServerConnections>,
     mut senders: Query<&mut MessageSender<ServerMessage>, With<ClientOf>>,
+    auto_save: Option<Res<AutoSaveSink>>,
 ) {
     let fixed_delta = Duration::from_secs_f32(1.0 / SERVER_TICK_RATE_HZ);
     let max_accumulator = fixed_delta.mul_f32(MAX_SERVER_TICKS_PER_LOOP);
@@ -482,6 +508,33 @@ fn tick_authoritative_server(
         route_span.in_scope(|| {
             route_envelopes(&mut commands, &mut connections, &mut senders, envelopes);
         });
+        // The server flags a save when its schedule comes due (after emitting
+        // the "Auto-saving..." line above). Perform the synchronous write here,
+        // off the game-state module, then announce completion. The write is
+        // intentionally inline: the brief hitch is what the heads-up warned of.
+        if server.0.take_auto_save_pending() {
+            let done = run_auto_save(&mut server.0, auto_save.as_deref());
+            route_envelopes(&mut commands, &mut connections, &mut senders, done);
+        }
         accumulator.0 -= fixed_delta;
+    }
+}
+
+/// Snapshot + write the world for a due auto-save, returning the completion (or
+/// failure) announcement envelopes for the host to route.
+fn run_auto_save(
+    server: &mut GameServer,
+    sink: Option<&AutoSaveSink>,
+) -> Vec<crate::server::ServerEnvelope> {
+    let Some(sink) = sink else {
+        return Vec::new();
+    };
+    let save = server.world_save();
+    match (sink.0)(&save) {
+        Ok(()) => server.announce("World saved."),
+        Err(error) => {
+            eprintln!("auto-save failed: {error:#}");
+            server.announce("Auto-save failed, see server logs.")
+        }
     }
 }

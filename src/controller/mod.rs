@@ -9,9 +9,7 @@ use crate::{
     world::WorldData,
 };
 
-use self::collision::{
-    Axis, is_supported, move_with_collisions, player_overlaps_world, support_height_between,
-};
+use self::collision::{Axis, is_supported, move_with_collisions, support_height_between};
 use self::movement::{
     accelerate_air, approach, approach_horizontal, clamp_horizontal_speed,
     clamped_local_move_input, desired_horizontal_velocity, horizontal_dot, horizontal_length,
@@ -20,6 +18,16 @@ use self::movement::{
 pub use self::collision::block_under_feet;
 pub use self::grid::BlockGrid;
 pub use self::movement::{RUN_SPEED, WALK_SPEED, first_person_move_direction};
+
+/// Whether a player capsule standing at `position` overlaps any solid block in
+/// `grid`. Movement itself is client-authoritative, so the server doesn't
+/// simulate against this; it's exposed for the server's spawn-placement check
+/// (keep random spawns out of walls, trees, ore, and placed structures). Build
+/// `grid` with [`BlockGrid::build_with_extras`] to include node/deployable
+/// colliders, matching what the client actually collides with.
+pub fn player_overlaps_world(position: Vec3Net, grid: &BlockGrid) -> bool {
+    self::collision::player_overlaps_world(position, grid)
+}
 
 pub const MAX_LOOK_PITCH: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 const GRAVITY: f32 = 18.0;

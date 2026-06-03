@@ -141,6 +141,9 @@ impl GameServer {
             next_loot_bag_id: 1,
             world_time,
             last_world_time_broadcast_tick: tick,
+            auto_save_interval_ticks: 0,
+            last_auto_save_tick: tick,
+            auto_save_pending: false,
         }
     }
 
@@ -152,6 +155,23 @@ impl GameServer {
     ) -> Self {
         self.workos = verifier;
         self
+    }
+
+    /// Enable periodic auto-save (dedicated hosts). `interval_ticks == 0` leaves
+    /// it disabled, which is the loopback/singleplayer default (those save on
+    /// exit). The schedule counts from the current tick, so the first auto-save
+    /// lands one interval after the host starts or a world is loaded.
+    pub fn with_auto_save(mut self, interval_ticks: u64) -> Self {
+        self.auto_save_interval_ticks = interval_ticks;
+        self.last_auto_save_tick = self.tick;
+        self
+    }
+
+    /// Drain the "auto-save is due" flag. The host calls this after `tick`,
+    /// snapshots [`GameServer::world_save`], writes it, and announces the
+    /// result, keeping disk I/O out of this authoritative game-state module.
+    pub fn take_auto_save_pending(&mut self) -> bool {
+        std::mem::take(&mut self.auto_save_pending)
     }
 
     pub fn announce(&self, text: impl AsRef<str>) -> Vec<ServerEnvelope> {

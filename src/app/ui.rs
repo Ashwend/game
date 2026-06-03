@@ -99,7 +99,10 @@ pub(crate) struct UiResources<'w, 's> {
     /// only read it once `auth.is_authenticated()`.
     user: Option<Res<'w, CurrentUser>>,
     auth: ResMut<'w, AuthFlow>,
-    workos: Res<'w, WorkosAuth>,
+    /// Absent on the test / `--connect` bypass path, which injects an
+    /// authenticated identity and never inserts the WorkOS config. Only read in
+    /// the unauthenticated login branch, which the bypass path never reaches.
+    workos: Option<Res<'w, WorkosAuth>>,
     time: Option<Res<'w, Time>>,
     diagnostics: Res<'w, DiagnosticsStore>,
     primary_monitor: Query<'w, 's, &'static Monitor, With<PrimaryMonitor>>,
@@ -214,12 +217,11 @@ pub(crate) fn ui_system(
     // the login splash (or the verifying/authenticating spinner) in place of
     // the menu. `drive_auth_flow_system` advances the spinner states.
     if !resources.auth.is_authenticated() {
-        login::login_overlay_ui(
-            ctx,
-            &mut resources.auth,
-            &resources.workos,
-            &mut resources.menu,
-        );
+        // `workos` is only ever absent on the authenticated bypass path, so if
+        // we're here it's present. Guard anyway rather than unwrap.
+        if let Some(workos) = resources.workos.as_ref() {
+            login::login_overlay_ui(ctx, &mut resources.auth, workos, &mut resources.menu);
+        }
         return Ok(());
     }
     let user = resources

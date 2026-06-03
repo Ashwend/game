@@ -27,6 +27,14 @@ fn fixture() -> (GameServer, ClientId, DeployedEntityId) {
             String::new(),
         )
         .expect("connect ok");
+    // Pin to origin so the furnace placed at origin below sits in interact
+    // range; the random initial spawn would otherwise drop the player away.
+    server
+        .clients
+        .get_mut(&client_id)
+        .unwrap()
+        .controller
+        .position = Vec3Net::ZERO;
 
     let id = server.next_deployed_entity_id;
     server.next_deployed_entity_id += 1;

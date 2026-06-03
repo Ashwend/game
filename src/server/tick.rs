@@ -3,7 +3,7 @@ use bevy::log::info_span;
 use crate::protocol::{ClientId, ServerMessage, Vec3Net};
 
 use super::{
-    DeliveryTarget, GameServer, PERF_STATS_BROADCAST_INTERVAL_TICKS,
+    AUTO_SAVE_WARNING_TICKS, DeliveryTarget, GameServer, PERF_STATS_BROADCAST_INTERVAL_TICKS,
     PLAYER_LIST_BROADCAST_INTERVAL_TICKS, ServerEnvelope, WORLD_TIME_BROADCAST_INTERVAL_TICKS,
     dropped_items::{DROPPED_ITEM_CLEANUP_INTERVAL_TICKS, DROPPED_ITEM_MERGE_INTERVAL_TICKS},
 };
@@ -57,6 +57,28 @@ impl GameServer {
             // entity, Lightyear ships the despawn to in-AoI clients, and
             // the visual goes away. Same lifecycle as pickups and merges.
             self.despawn_aging_dropped_items();
+        }
+
+        // Auto-save schedule (dedicated hosts; loopback leaves the interval 0
+        // and saves on exit instead). We only announce + flag here; the host
+        // drains `auto_save_pending`, writes the world, and announces that the
+        // save finished, so disk I/O stays out of this game-state module.
+        if self.auto_save_interval_ticks > 0 {
+            let since_save = self.tick.saturating_sub(self.last_auto_save_tick);
+            if since_save
+                == self
+                    .auto_save_interval_ticks
+                    .saturating_sub(AUTO_SAVE_WARNING_TICKS)
+            {
+                envelopes.extend(self.announce(
+                    "Heads up: the world auto-saves in 30 seconds, expect a brief hitch.",
+                ));
+            }
+            if since_save >= self.auto_save_interval_ticks {
+                envelopes.extend(self.announce("Auto-saving the world..."));
+                self.auto_save_pending = true;
+                self.last_auto_save_tick = self.tick;
+            }
         }
 
         if self

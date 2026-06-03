@@ -28,6 +28,10 @@ pub struct AuthenticatedUser {
 pub struct VerifiedIdentity {
     pub account_id: AccountId,
     pub display_name: Option<String>,
+    /// True when the *verified* token carries the `urn:ashwend:admin` claim set
+    /// to `"true"`. Only ever set under [`crate::auth::AuthMode::Workos`], so a
+    /// loopback/`NoAuth` client can never claim admin this way.
+    pub is_admin: bool,
 }
 
 /// Derive a stable 64-bit account id from a WorkOS subject (`sub`, e.g.
