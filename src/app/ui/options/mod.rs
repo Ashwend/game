@@ -44,7 +44,7 @@ pub(in crate::app::ui) fn options_ui(
     theme::screen_scrim(ctx, "options_scrim", 145);
     handle_options_escape(ctx, menu, options_ui_state, back_target);
 
-    theme::bounded_panel(
+    theme::grow_panel(
         ctx,
         "options_panel",
         OPTIONS_PANEL_WIDTH,

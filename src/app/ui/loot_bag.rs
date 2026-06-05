@@ -13,7 +13,7 @@
 //! their hotbar drags down into those slots.
 //!
 //! The server keeps the bag alive until it's empty AND closed by
-//! every looker (see `loot_bag::close_loot_bag`), so leaving the UI
+//! every looker (see `loot_bag::close_container`), so leaving the UI
 //! is the signal that says "I'm done with this pile".
 
 use bevy_egui::egui::{self, Align, Align2, Layout, Order, RichText};
@@ -33,15 +33,19 @@ use crate::{
 };
 
 use super::{
-    inventory::{draw_drag_preview, slot::draw_slot},
+    inventory::{INVENTORY_COLUMNS, draw_drag_preview, slot::SLOT_SIZE, slot::draw_slot},
     modal::backdrop_layer,
     theme,
 };
 
-const PANEL_WIDTH: f32 = 720.0;
 const SLOT_GAP: f32 = 6.0;
-const BAG_COLS: usize = 7;
-const INVENTORY_COLS: usize = 10;
+/// Both grids (bag + your inventory) use the same column count as the main
+/// inventory and furnace so all three line up edge to edge. Twelve wide keeps
+/// the bag short instead of stacking it into a tall 7-wide column.
+const GRID_COLS: usize = INVENTORY_COLUMNS;
+/// Panel width sized to fit `GRID_COLS` exactly with the standard gaps, matching
+/// `furnace.rs` and the inventory panel (`12*56 + 11*6 + 48 = 786`).
+const PANEL_WIDTH: f32 = GRID_COLS as f32 * SLOT_SIZE + (GRID_COLS - 1) as f32 * SLOT_GAP + 48.0;
 
 pub(super) fn loot_bag_ui(
     ctx: &egui::Context,
@@ -157,12 +161,12 @@ fn draw_panel(
     ui.add_space(12.0);
 
     ui.label(theme::field_label("Bag contents"));
-    let bag_rows = view.slots.len().div_ceil(BAG_COLS);
-    for row in 0..bag_rows {
+    let mut idx = 0;
+    while idx < view.slots.len() {
+        let row_end = (idx + GRID_COLS).min(view.slots.len());
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = SLOT_GAP;
-            for col in 0..BAG_COLS {
-                let index = row * BAG_COLS + col;
+            for index in idx..row_end {
                 let stack = view.slots.get(index).and_then(|slot| slot.as_ref());
                 draw_slot(
                     ui,
@@ -180,6 +184,7 @@ fn draw_panel(
             }
         });
         ui.add_space(SLOT_GAP);
+        idx = row_end;
     }
 
     ui.add_space(12.0);
@@ -190,7 +195,7 @@ fn draw_panel(
         ui.label(theme::field_label("Your inventory"));
         let mut idx = 0;
         while idx < INVENTORY_SLOT_COUNT {
-            let row_end = (idx + INVENTORY_COLS).min(INVENTORY_SLOT_COUNT);
+            let row_end = (idx + GRID_COLS).min(INVENTORY_SLOT_COUNT);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = SLOT_GAP;
                 for slot_index in idx..row_end {

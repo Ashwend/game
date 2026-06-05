@@ -16,7 +16,15 @@ const BACKPEDAL_SPEED: f32 = 3.8;
 const GROUND_ACCELERATION: f32 = 68.0;
 const GROUND_DECELERATION: f32 = 76.0;
 const AIR_ACCELERATION: f32 = 13.0;
-const AIR_MAX_HORIZONTAL_SPEED: f32 = 12.0;
+// Ceiling on the speed air control is allowed to *build toward*. Kept in
+// line with the leap takeoff cap (`LEAP_MAX_HORIZONTAL_SPEED`, 7.4) so a
+// jump never lets you accelerate past what a forward leap already grants.
+// The old 12.0 let diagonal air-strafe bunny-hopping ramp well past run
+// speed, which read as a movement exploit rather than intended feel.
+// Pre-existing over-speed (knockback, a leap) is preserved: `accelerate_air`
+// clamps to `max(cap, entry speed)`, so it only ever prevents *gaining*
+// speed past this ceiling.
+pub(super) const AIR_MAX_HORIZONTAL_SPEED: f32 = 7.4;
 
 pub fn first_person_move_direction(input: Vec3Net, yaw: f32) -> Vec3Net {
     let input = clamped_local_move_input(input).normalize_or_zero();
@@ -45,7 +53,17 @@ pub(super) fn desired_horizontal_velocity(input: Vec3Net, yaw: f32, run: bool) -
     } else {
         SIDE_WALK_SPEED
     };
-    let local_velocity = Vec3Net::new(input.x * side_speed, 0.0, input.z * forward_speed);
+    // Forward and strafe use different per-axis speeds, so a raw diagonal
+    // input combines them into a magnitude larger than either, e.g. running
+    // diagonally was sqrt(5.3^2 + 7.0^2) ~= 8.8 m/s, noticeably faster than
+    // the 7.0 m/s straight run. Clamp the combined magnitude to the faster of
+    // the two axes so moving at an angle is never quicker than moving straight
+    // along your fastest direction.
+    let max_speed = side_speed.max(forward_speed);
+    let local_velocity = clamp_horizontal_speed(
+        Vec3Net::new(input.x * side_speed, 0.0, input.z * forward_speed),
+        max_speed,
+    );
     rotate_local_horizontal(local_velocity, yaw)
 }
 
@@ -107,6 +125,14 @@ pub(super) fn accelerate_air(
         return velocity;
     }
 
+    // Speed we entered this substep with. Air control may not push the player
+    // *past* `AIR_MAX_HORIZONTAL_SPEED`, but it must never slow a pre-existing
+    // over-speed either: a server knockback or a fresh forward leap can
+    // legitimately exceed the cap. Clamping the result to `max(cap, entry
+    // speed)` enforces "air control can't speed you up past the cap" without
+    // crushing that momentum the instant a movement key is held.
+    let speed_before = horizontal_length(velocity);
+
     let target_direction = target_velocity.scale(target_speed.recip());
     let current_speed = horizontal_dot(velocity, target_direction);
     let added_speed = target_speed - current_speed;
@@ -117,7 +143,11 @@ pub(super) fn accelerate_air(
     let acceleration = (AIR_ACCELERATION * delta_seconds).min(added_speed);
     velocity.x += target_direction.x * acceleration;
     velocity.z += target_direction.z * acceleration;
-    clamp_horizontal_speed(velocity, AIR_MAX_HORIZONTAL_SPEED)
+    // Hard ceiling on the magnitude. Without it, repeatedly redirecting the
+    // input mid-air (diagonal air-strafe bunny-hopping) ratchets the speed up
+    // every frame, the exploit this guards against. The `max(.., speed_before)`
+    // keeps knockback/leap over-speed intact.
+    clamp_horizontal_speed(velocity, AIR_MAX_HORIZONTAL_SPEED.max(speed_before))
 }
 
 pub(super) fn clamp_horizontal_speed(mut velocity: Vec3Net, max_speed: f32) -> Vec3Net {

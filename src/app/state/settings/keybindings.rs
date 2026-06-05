@@ -1,6 +1,6 @@
 //! Rebindable keyboard input map. Each gameplay action carries a primary and
 //! optional secondary key; persisted as stable string identifiers so the
-//! `settings.json` survives a `KeyCode` reshuffle in a future Bevy release.
+//! `settings.dat` survives a `KeyCode` reshuffle in a future Bevy release.
 //!
 //! Gameplay systems should always go through [`KeyBindings`] (or [`Self::pressed`]
 //! / [`Self::just_pressed`] / [`Self::just_released`]) instead of touching
@@ -25,7 +25,7 @@ pub(crate) enum KeyAction {
     StrafeLeft,
     StrafeRight,
     Jump,
-    /// The `serde(alias = "Sprint")` keeps `settings.json` files written
+    /// The `serde(alias = "Sprint")` keeps settings files written
     /// before the rename (when this action was called `Sprint`) loading
     /// cleanly, any custom keybinding the player saved survives.
     #[serde(alias = "Sprint")]
@@ -206,7 +206,7 @@ impl Default for KeyBindings {
 }
 
 impl KeyBindings {
-    /// Backfill missing actions with their defaults so a `settings.json`
+    /// Backfill missing actions with their defaults so a settings file
     /// written before a new action was added still loads cleanly.
     pub(crate) fn sanitized(mut self) -> Self {
         for action in KeyAction::ALL {
@@ -610,7 +610,7 @@ mod tests {
 
     #[test]
     fn missing_actions_backfill_on_load() {
-        // Simulate an old `settings.json` from before PushToTalk existed.
+        // Simulate an old settings file from before PushToTalk existed.
         let mut bindings = KeyBindings::default();
         bindings.bindings.remove(&KeyAction::PushToTalk);
         let restored = bindings.sanitized();

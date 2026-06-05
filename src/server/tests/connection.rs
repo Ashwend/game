@@ -319,7 +319,7 @@ fn server_announcements_are_broadcast_as_chat() {
 }
 
 #[test]
-fn silent_clients_are_disconnected_after_timeout() {
+fn silent_clients_become_sleeping_bodies_after_timeout() {
     let mut server = server();
     let client_id = connect_host(&mut server);
     let mut envelopes = Vec::new();
@@ -343,22 +343,88 @@ fn silent_clients_are_disconnected_after_timeout() {
         )),
         "stale-client eviction must emit a transport-level Disconnect so Lightyear tears the session down"
     );
-    assert!(server.players_iter().next().is_none());
+    // The body does not leave the world, it becomes a sleeping body.
+    let client = server
+        .clients
+        .get(&client_id)
+        .expect("a timed-out client's body stays in the world as a sleeper");
+    assert!(!client.online, "the body should now be asleep");
+    assert_eq!(server.players_iter().count(), 1);
+
+    // Reconnecting the same account wakes the body in place (same id reused).
+    let (woken_id, _) = server
+        .connect(
+            PROTOCOL_VERSION,
+            Some(GAME_VERSION.to_owned()),
+            1,
+            "Host".to_owned(),
+            String::new(),
+        )
+        .expect("reconnect should wake the sleeper");
+    assert_eq!(woken_id, client_id, "wake reuses the sleeping body's id");
+    assert!(server.clients.get(&client_id).is_some_and(|c| c.online));
+}
+
+#[test]
+fn disconnect_sleeps_the_body_and_reconnect_wakes_it_in_place() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    // Stand the body at a known spot with an item so we can prove the woken
+    // body resumes exactly where it slept.
+    {
+        let client = server.clients.get_mut(&client_id).unwrap();
+        client.controller.position = Vec3Net::new(5.0, 0.0, -3.0);
+        client.inventory.inventory_slots[0] = Some(ItemStack::new(COAL_ID, 7));
+    }
+
+    let envelopes = server.disconnect(client_id);
+    // The body sleeps: still in the world, mirrored as sleeping, but offline.
+    let client = server.clients.get(&client_id).expect("body persists");
+    assert!(!client.online, "the body should be asleep");
+    let view = server
+        .players_iter()
+        .find(|view| view.client_id == client_id)
+        .expect("the sleeping body is still mirrored");
+    assert!(view.sleeping.0, "the mirror flags it as sleeping");
+    assert!(envelopes.iter().any(|envelope| matches!(
+        &envelope.message,
+        ServerMessage::PlayerEvent(PlayerEvent::Left { client_id: id, .. }) if *id == client_id
+    )));
+
+    // A repeat disconnect (the netcode `Disconnected` event after the clean
+    // quit) is a no-op rather than a second announcement.
+    assert!(server.disconnect(client_id).is_empty());
+
+    // Reconnecting the same account wakes the body in place.
+    let (woken, env) = server
+        .connect(
+            PROTOCOL_VERSION,
+            Some(GAME_VERSION.to_owned()),
+            1,
+            "Host".to_owned(),
+            String::new(),
+        )
+        .expect("reconnect wakes the sleeper");
+    assert_eq!(woken, client_id, "wake reuses the same body id");
+    let client = server.clients.get(&client_id).unwrap();
+    assert!(client.online);
     assert!(
-        server
-            .connect(
-                PROTOCOL_VERSION,
-                Some(GAME_VERSION.to_owned()),
-                1,
-                "Host".to_owned(),
-                String::new(),
-            )
-            .is_ok()
+        (client.controller.position.x - 5.0).abs() < f32::EPSILON,
+        "woke where it slept"
+    );
+    assert!(
+        client.inventory.inventory_slots[0].is_some(),
+        "kept its inventory through the sleep"
+    );
+    assert!(
+        env.iter()
+            .any(|envelope| matches!(&envelope.message, ServerMessage::Welcome { .. })),
+        "the wake delivers a Welcome"
     );
 }
 
 #[test]
-fn heartbeat_keeps_client_connected_until_it_stops() {
+fn heartbeat_keeps_client_online_until_it_stops() {
     let mut server = server();
     let client_id = connect_host(&mut server);
 
@@ -370,9 +436,61 @@ fn heartbeat_keeps_client_connected_until_it_stops() {
         server.tick(1.0 / SERVER_TICK_RATE_HZ);
     }
 
-    assert_eq!(server.players_iter().count(), 1);
+    assert!(
+        server.clients.get(&client_id).is_some_and(|c| c.online),
+        "the heartbeat kept the session online"
+    );
+    // Now it goes silent: the next sweep puts the body to sleep. It stays in
+    // the world (still one mirrored body) but is no longer online.
     server.tick(1.0 / SERVER_TICK_RATE_HZ);
-    assert!(server.players_iter().next().is_none());
+    let client = server
+        .clients
+        .get(&client_id)
+        .expect("body persists as a sleeper");
+    assert!(!client.online);
+    assert_eq!(server.players_iter().count(), 1);
+}
+
+#[test]
+fn reconnecting_at_zero_health_respawns_alive() {
+    // A player who disconnects while dead persists at 0 HP (lifecycle isn't
+    // saved). On reconnect they must come back alive at full health rather
+    // than as a 0-HP "zombie" the combat path refuses to hit.
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+
+    // Simulate the dead state that disconnect snapshots into the store.
+    server
+        .clients
+        .get_mut(&client_id)
+        .expect("connected client")
+        .controller
+        .health = 0.0;
+    let _ = server.disconnect(client_id);
+
+    let (reconnected, _envelopes) = server
+        .connect(
+            PROTOCOL_VERSION,
+            Some(GAME_VERSION.to_owned()),
+            1,
+            "Host".to_owned(),
+            String::new(),
+        )
+        .expect("returning host should reconnect");
+
+    let client = server
+        .clients
+        .get(&reconnected)
+        .expect("reconnected client exists");
+    assert_eq!(
+        client.controller.health,
+        crate::protocol::MAX_HEALTH,
+        "a player who died should not return as a 0-HP zombie"
+    );
+    assert!(
+        client.lifecycle.is_alive(),
+        "a respawned reconnect must be alive"
+    );
 }
 
 #[test]
@@ -467,7 +585,12 @@ fn kick_all_sends_reason_before_disconnects() {
                 if *left_id == client_id
         )
     }));
-    assert!(server.players_iter().next().is_none());
+    // A kick tears down the live session but leaves the body behind as a
+    // sleeper (so it persists across, e.g., a server-restart kick_all).
+    assert!(
+        server.clients.get(&client_id).is_some_and(|c| !c.online),
+        "the kicked player's body should stay as a sleeper"
+    );
 }
 
 #[test]

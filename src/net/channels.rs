@@ -14,7 +14,7 @@ use crate::{
     server::{
         Deployable, DeployableActive, DeployableHealth, DeployableTransform, DroppedItem,
         DroppedItemTransform, LootBagContents, LootBagEntity, LootBagTransform, Player,
-        PlayerArmor, PlayerLifecycle, PlayerPrivate, PlayerPublic, ResourceNode,
+        PlayerArmor, PlayerLifecycle, PlayerPrivate, PlayerPublic, PlayerSleeping, ResourceNode,
         ResourceNodeStorage,
     },
 };
@@ -95,6 +95,7 @@ impl Plugin for LightyearProtocolPlugin {
         app.register_component::<PlayerPrivate>();
         app.register_component::<PlayerArmor>();
         app.register_component::<PlayerLifecycle>();
+        app.register_component::<PlayerSleeping>();
         app.register_component::<LootBagEntity>();
         app.register_component::<LootBagTransform>();
         app.register_component::<LootBagContents>();

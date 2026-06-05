@@ -12,7 +12,7 @@ use crate::{
         AccountId, ClientMessage, GAME_VERSION, ItemStack, LOOT_BAG_SLOT_COUNT, LootBagCommand,
         LootBagSlotRef, PROTOCOL_VERSION, PlayerMovement, Vec3Net,
     },
-    server::loot_bag::LOOT_BAG_INTERACT_RANGE_M,
+    server::loot_bag::{LOOT_BAG_INTERACT_RANGE_M, OpenContainer},
 };
 
 fn connect_named(server: &mut GameServer, account_id: AccountId, name: &str) -> ClientId {
@@ -83,9 +83,9 @@ fn open_loot_bag_within_range_records_open_state() {
     apply(&mut server, client, LootBagCommand::Open { id: bag_id });
 
     assert_eq!(
-        server.clients[&client].open_loot_bag,
-        Some(bag_id),
-        "open should mark the client's open_loot_bag pointer"
+        server.clients[&client].open_container,
+        Some(OpenContainer::LootBag(bag_id)),
+        "open should mark the client's open-container pointer"
     );
     // The replicated view helper should mirror the bag contents.
     let view = server
@@ -111,7 +111,7 @@ fn open_loot_bag_out_of_range_is_rejected() {
     apply(&mut server, client, LootBagCommand::Open { id: bag_id });
 
     assert!(
-        server.clients[&client].open_loot_bag.is_none(),
+        server.clients[&client].open_container.is_none(),
         "out-of-range open must not set the open pointer"
     );
 }
@@ -132,7 +132,7 @@ fn close_loot_bag_empty_destroys_the_entity() {
         !server.loot_bags.contains_key(&bag_id),
         "empty bag should be GC'd when the last viewer closes it"
     );
-    assert!(server.clients[&client].open_loot_bag.is_none());
+    assert!(server.clients[&client].open_container.is_none());
 }
 
 #[test]
@@ -152,7 +152,7 @@ fn close_loot_bag_keeps_nonempty_entity_alive() {
         server.loot_bags.contains_key(&bag_id),
         "non-empty bag must persist so a follow-up looter can scoop it"
     );
-    assert!(server.clients[&client].open_loot_bag.is_none());
+    assert!(server.clients[&client].open_container.is_none());
 }
 
 #[test]
@@ -368,7 +368,7 @@ fn destroy_loot_bag_clears_open_pointer() {
 
     assert!(!server.loot_bags.contains_key(&bag_id));
     assert!(
-        server.clients[&client].open_loot_bag.is_none(),
+        server.clients[&client].open_container.is_none(),
         "destroying a bag must clear every client's open pointer so a stale Move can't reach in"
     );
 }

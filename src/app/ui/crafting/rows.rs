@@ -42,12 +42,6 @@ pub(super) fn draw_recipe_row(
         vec2(ui.available_width(), RECIPE_ROW_HEIGHT),
         Sense::hover(),
     );
-    // Stash the row rect for the tutorial overlay to outline the starter-tool
-    // recipes, without threading the tutorial step through the crafting panel.
-    if crate::app::ui::tutorial::is_tutorial_recipe(recipe.id) {
-        let key = crate::app::ui::tutorial::recipe_rect_key(recipe.id);
-        ui.ctx().memory_mut(|mem| mem.data.insert_temp(key, rect));
-    }
     let painter = ui.painter().clone();
     painter.rect_filled(rect, CornerRadius::same(4), theme::input_fill());
     painter.rect_stroke(
@@ -170,6 +164,15 @@ pub(super) fn draw_recipe_row(
         ),
         Vec2::new(craft_button_width, button_height),
     );
+    // Stash the Craft button rect (not the whole row) for the tutorial overlay
+    // to outline the starter-tool recipes, so the highlight rings just the
+    // button the player is meant to click, without threading the tutorial step
+    // through the crafting panel.
+    if crate::app::ui::tutorial::is_tutorial_recipe(recipe.id) {
+        let key = crate::app::ui::tutorial::recipe_rect_key(recipe.id);
+        ui.ctx()
+            .memory_mut(|mem| mem.data.insert_temp(key, craft_rect));
+    }
     let plus_rect = Rect::from_min_size(
         Pos2::new(
             craft_rect.left() - cluster_to_craft_gap - qty_button_width,

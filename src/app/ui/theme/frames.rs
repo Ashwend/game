@@ -100,13 +100,13 @@ pub(in crate::app::ui) fn inset_frame() -> Frame {
         .inner_margin(Margin::symmetric(14, 12))
 }
 
-/// Anchored panel that reserves explicit top and bottom window padding
-/// instead of centering. The contents receive a `Ui` already sized to the
-/// bounded inner height, so calls like `ui.available_height()` produce
-/// the right budget for child widgets (table heights, scroll areas). The
-/// panel always fills the bounded inner height so scrollable content can
-/// grow into the available space.
-pub(in crate::app::ui) fn bounded_panel(
+/// Anchored panel that reserves explicit top and bottom window padding instead
+/// of centering, and grows to fit its content. It is *capped* at the bounded
+/// inner height (viewport minus the padding), so content taller than the
+/// viewport scrolls: a child `ScrollArea` sized from `ui.available_height()`
+/// gets the right budget, while a short form renders a short panel anchored at
+/// the top.
+pub(in crate::app::ui) fn grow_panel(
     ctx: &egui::Context,
     id: &'static str,
     desired_width: f32,
@@ -128,8 +128,10 @@ pub(in crate::app::ui) fn bounded_panel(
             ui.set_width(width);
             panel_frame().show(ui, |ui| {
                 ui.set_width(width - 48.0);
+                // Cap the height so overflowing content scrolls within the
+                // viewport rather than spilling off-screen; leave the minimum
+                // unset so the frame shrinks to its content.
                 ui.set_max_height(inner_height);
-                ui.set_min_height(inner_height);
                 add_contents(ui);
             });
         });
@@ -172,7 +174,7 @@ mod tests {
         let output = ctx.run(input(), |ctx| {
             screen_scrim(ctx, "test_scrim", 120);
             backdrop_cover(ctx, 180);
-            bounded_panel(ctx, "test_panel", 500.0, 40.0, 40.0, |ui| {
+            grow_panel(ctx, "test_panel", 500.0, 40.0, 40.0, |ui| {
                 ui.label("content");
             });
         });

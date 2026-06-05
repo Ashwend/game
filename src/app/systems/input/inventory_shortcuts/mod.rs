@@ -207,6 +207,22 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
                 ClientMessage::LootBag(LootBagCommand::Open { id }),
                 "loot bag open",
             );
+        } else if params.pickup_target.sleeping_player.is_some() {
+            // Loot a logged-out sleeping body. The server spills their pack
+            // into a loot bag at their feet and opens it, so the transfer
+            // rides the same `PlayerPrivate.open_loot_bag` path. Only
+            // `sleeping_player` targets route here; a live (awake) player
+            // isn't lootable.
+            if let Some(target_id) = params.pickup_target.player_id {
+                send_gameplay_message(
+                    &mut params.runtime,
+                    &mut params.error_toasts,
+                    ClientMessage::LootSleeper {
+                        client_id: target_id,
+                    },
+                    "loot sleeper",
+                );
+            }
         }
     }
 

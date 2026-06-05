@@ -77,7 +77,8 @@ use self::{
         tick_felling_trees_system, tick_furnace_particles_system, tick_impact_chips_system,
         tick_resource_node_pop_in_system, toggle_crafting_system, toggle_inventory_system,
         toggle_pause_system, toggle_perf_stats_system, update_cursor_system,
-        update_pickup_target_system, update_placement_ghost_system, update_tool_swap_state_system,
+        update_link_ping_system, update_pickup_target_system, update_placement_ghost_system,
+        update_tool_swap_state_system,
     },
     ui::{
         ButtonSoundRequests, InventorySoundRequests, apply_ui_scale_system, button_sound_system,
@@ -465,6 +466,10 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
             gameplay_inventory_shortcuts_system.in_set(ClientSystemSet::InventoryShortcuts),
         )
         .add_systems(Update, network_tick_system.in_set(ClientSystemSet::Network))
+        .add_systems(
+            Update,
+            update_link_ping_system.in_set(ClientSystemSet::Network),
+        )
         .add_systems(
             Update,
             // Surfaces queued error toasts after the network tick has had

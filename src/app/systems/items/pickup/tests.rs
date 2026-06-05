@@ -40,11 +40,11 @@ fn player_in_view_within_range_resolves_as_target() {
         0.0,
         0.0,
         Some(1),
-        [(&target.0, &target.1)].into_iter(),
+        [(&target.0, &target.1, false)].into_iter(),
     )
     .expect("player should be in front and in range");
     assert_eq!(hit.0.client_id, 7);
-    assert!(hit.2 < ATTACK_RANGE_M);
+    assert!(hit.3 < ATTACK_RANGE_M);
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn local_player_is_skipped() {
         0.0,
         0.0,
         Some(1),
-        [(&target.0, &target.1)].into_iter(),
+        [(&target.0, &target.1, false)].into_iter(),
     );
     assert!(hit.is_none(), "local client must not target itself");
 }
@@ -73,7 +73,7 @@ fn player_out_of_range_is_skipped() {
         0.0,
         0.0,
         Some(1),
-        [(&target.0, &target.1)].into_iter(),
+        [(&target.0, &target.1, false)].into_iter(),
     );
     assert!(hit.is_none(), "player past attack range must not target");
 }
@@ -88,9 +88,28 @@ fn dead_player_is_skipped() {
         0.0,
         0.0,
         Some(1),
-        [(&target.0, &target.1)].into_iter(),
+        [(&target.0, &target.1, false)].into_iter(),
     );
     assert!(hit.is_none(), "dead targets are not attackable");
+}
+
+#[test]
+fn sleeping_body_resolves_as_a_low_target() {
+    // A logged-out body lies on the ground just ahead; looking down at it
+    // resolves via the low, wide sleeper hit box and flags it sleeping so the
+    // tooltip can identify it.
+    let attacker = Vec3Net::new(0.0, EYE_HEIGHT, 0.0);
+    let target = make_player(7, 0.0, -1.5, true);
+    let hit = best_player_target(
+        attacker,
+        0.0,
+        -0.8,
+        Some(1),
+        [(&target.0, &target.1, true)].into_iter(),
+    )
+    .expect("a sleeper looked down at should resolve");
+    assert_eq!(hit.0.client_id, 7);
+    assert!(hit.2, "the resolved target is flagged sleeping");
 }
 
 #[test]
@@ -104,7 +123,7 @@ fn player_behind_is_skipped() {
         0.0,
         0.0,
         Some(1),
-        [(&target.0, &target.1)].into_iter(),
+        [(&target.0, &target.1, false)].into_iter(),
     );
     assert!(hit.is_none(), "behind-camera targets must not register");
 }

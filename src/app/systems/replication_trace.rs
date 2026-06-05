@@ -33,7 +33,7 @@ use bevy::{ecs::change_detection::Ref, prelude::*};
 use crate::server::{
     Deployable, DeployableActive, DeployableHealth, DroppedItem, DroppedItemTransform,
     LootBagContents, LootBagEntity, Player, PlayerArmor, PlayerLifecycle, PlayerPrivate,
-    PlayerPublic, ResourceNode, ResourceNodeStorage,
+    PlayerPublic, PlayerSleeping, ResourceNode, ResourceNodeStorage,
 };
 
 /// Tracks the last-seen value per id so we can log a clean
@@ -45,6 +45,7 @@ pub(crate) struct ReplicationTraceState {
     deployable_active: std::collections::HashMap<u64, bool>,
     player_armor: std::collections::HashMap<u64, u8>,
     player_lifecycle: std::collections::HashMap<u64, PlayerLifecycle>,
+    player_sleeping: std::collections::HashMap<u64, bool>,
     loot_bag_occupied: std::collections::HashMap<u64, usize>,
 }
 
@@ -61,6 +62,7 @@ pub(crate) fn log_replicated_storage_changes_system(
     players_private: Query<(Entity, &Player, Ref<PlayerPrivate>)>,
     players_armor: Query<(Entity, &Player, Ref<PlayerArmor>)>,
     players_lifecycle: Query<(Entity, &Player, Ref<PlayerLifecycle>)>,
+    players_sleeping: Query<(Entity, &Player, Ref<PlayerSleeping>)>,
     loot_bags: Query<(Entity, &LootBagEntity, Ref<LootBagContents>)>,
     dropped_items: Query<(Entity, &DroppedItem, Ref<DroppedItemTransform>)>,
     mut state: ResMut<ReplicationTraceState>,
@@ -200,6 +202,29 @@ pub(crate) fn log_replicated_storage_changes_system(
                 player.client_id, *lifecycle
             );
             state.player_lifecycle.insert(player.client_id, *lifecycle);
+        }
+    }
+
+    for (entity, player, sleeping) in &players_sleeping {
+        if sleeping.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: PlayerSleeping     SPAWN  client={} entity={entity:?} sleeping={}",
+                player.client_id, sleeping.0
+            );
+            state.player_sleeping.insert(player.client_id, sleeping.0);
+        } else if sleeping.is_changed() {
+            let before = state
+                .player_sleeping
+                .get(&player.client_id)
+                .copied()
+                .unwrap_or(false);
+            info!(
+                target: "replication_trace",
+                "client: PlayerSleeping     RECV   client={} entity={entity:?} {before} -> {}",
+                player.client_id, sleeping.0
+            );
+            state.player_sleeping.insert(player.client_id, sleeping.0);
         }
     }
 

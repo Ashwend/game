@@ -37,11 +37,16 @@ pub(super) fn login_overlay_ui(
             LoginView::Busy("Finish signing in in your browser, then return here.")
         }
     };
+    // Whether a sign-in/restore is in flight, so the busy splash can offer a way
+    // out (a hung browser wait or a stalled restore would otherwise trap the
+    // player on a spinner with no escape).
+    let busy = matches!(*auth, AuthFlow::Verifying(_) | AuthFlow::Authenticating(_));
 
     theme::screen_scrim(ctx, "login_scrim", 170);
 
     let mut start: Option<ScreenHint> = None;
     let mut quit = false;
+    let mut cancel = false;
     egui::Area::new("login_overlay".into())
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, -20.0])
@@ -82,14 +87,26 @@ pub(super) fn login_overlay_ui(
                             ui.add(egui::Spinner::new().size(28.0));
                             ui.add_space(14.0);
                             ui.label(theme::muted(message));
+                            ui.add_space(16.0);
+                            if menu_button(ui, "Cancel").clicked() {
+                                cancel = true;
+                            }
                         }
                     });
                 });
             });
         });
 
+    // Escape is the same "get me out of here" as the Cancel button.
+    if busy && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        cancel = true;
+    }
+
     if let Some(hint) = start {
         *auth = AuthFlow::Authenticating(begin_login(&workos.0, hint));
+    }
+    if cancel {
+        menu.cancel_auth_requested = true;
     }
     if quit {
         menu.quit_requested = true;

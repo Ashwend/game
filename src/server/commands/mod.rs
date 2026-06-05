@@ -17,7 +17,7 @@ mod world;
 mod tests;
 
 use crate::protocol::{
-    ChatMessage, ClientId, ResourceNodeId, ServerMessage, ToastKind, ToastMessage, sanitize_chat,
+    ChatMessage, ClientId, ResourceNodeId, ServerMessage, ToastKind, ToastMessage,
 };
 
 use super::{DeliveryTarget, GameServer, ServerEnvelope};
@@ -46,63 +46,9 @@ impl GameServer {
             "speed" | "timescale" => self.command_set_time_multiplier(client_id, &args),
             "test-kit" | "testkit" => self.command_test_kit(client_id),
             "tp" | "teleport" => self.command_teleport_all(client_id),
-            "w" | "whisper" | "msg" | "tell" | "pm" => self.command_whisper(client_id, &args),
             "help" => self.command_help(client_id),
             other => reply_warning(client_id, format!("unknown command: /{other}")),
         }
-    }
-
-    /// `/w <player> <message>`: send a private message to one online player by
-    /// name (case-insensitive). Available to everyone, not admin-gated. The
-    /// recipient sees it prefixed with the sender's name; the sender gets an
-    /// echo so they know it landed.
-    fn command_whisper(&self, client_id: ClientId, args: &[&str]) -> Vec<ServerEnvelope> {
-        let Some((target_name, message_parts)) = args.split_first() else {
-            return reply_warning(client_id, "usage: /w <player> <message>");
-        };
-        let Some(message) = sanitize_chat(&message_parts.join(" ")) else {
-            return reply_warning(client_id, "usage: /w <player> <message>");
-        };
-
-        let Some(target) = self
-            .clients
-            .values()
-            .find(|client| client.name.eq_ignore_ascii_case(target_name))
-        else {
-            return reply_warning(
-                client_id,
-                format!("no player named \"{target_name}\" is online"),
-            );
-        };
-        let target_id = target.client_id;
-        let target_display = target.name.clone();
-        if target_id == client_id {
-            return reply_warning(client_id, "you can't whisper yourself");
-        }
-        let from_name = self
-            .clients
-            .get(&client_id)
-            .map(|client| client.name.clone())
-            .unwrap_or_default();
-
-        vec![
-            // Delivered to the recipient.
-            ServerEnvelope {
-                target: DeliveryTarget::Client(target_id),
-                message: ServerMessage::Chat(ChatMessage {
-                    from: format!("{from_name} whispers"),
-                    text: message.clone(),
-                }),
-            },
-            // Echoed back to the sender so the whisper shows in their log too.
-            ServerEnvelope {
-                target: DeliveryTarget::Client(client_id),
-                message: ServerMessage::Chat(ChatMessage {
-                    from: format!("to {target_display}"),
-                    text: message,
-                }),
-            },
-        ]
     }
 
     /// `/help`, drop the command list into the issuer's chat log as
@@ -150,7 +96,6 @@ impl GameServer {
             "  /tp: admin only"
         };
         lines.push(tp_line.to_owned());
-        lines.push("  /w <player> <message>: send a private message".to_owned());
 
         lines
             .into_iter()

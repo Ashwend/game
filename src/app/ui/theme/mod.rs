@@ -17,7 +17,7 @@ pub(super) use colors::{
 };
 pub(super) use fonts::{TITLE_FONT, install_title_font};
 pub(super) use frames::{
-    apply_game_style, backdrop_cover, bounded_panel, inset_frame, panel_frame, screen_scrim,
+    apply_game_style, backdrop_cover, grow_panel, inset_frame, panel_frame, screen_scrim,
 };
 pub(super) use spacing::{BOUNDED_PANEL_VERTICAL_PADDING, COMPACT_ROW_HEIGHT};
 pub(super) use text::{field_label, muted, section, status_text, text_input, title};

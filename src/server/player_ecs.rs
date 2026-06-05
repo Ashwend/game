@@ -119,6 +119,14 @@ impl PlayerLifecycle {
     }
 }
 
+/// Whether this body is a logged-out "sleeping" body (the player
+/// disconnected but their body stays in the world). Replicated so peers can
+/// render the sleeping pose plus a look-at tooltip, and loot/attack it. The
+/// local owner is never shown their own body as sleeping (they only exist as
+/// a body while connected). `false` for live players.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlayerSleeping(pub bool);
+
 /// Anchor chunk for room subscription. Updated when the player crosses
 /// a chunk boundary (mirror reads `ChunkManager::player_chunk`).
 #[derive(Component, Debug, Clone, Copy)]
@@ -167,6 +175,7 @@ pub struct PlayerView {
     pub private: PlayerPrivate,
     pub armor: PlayerArmor,
     pub lifecycle: PlayerLifecycle,
+    pub sleeping: PlayerSleeping,
 }
 
 pub fn spawn_player_entity(world: &mut World, view: PlayerView, chunk: ChunkCoord) -> Entity {
@@ -181,6 +190,7 @@ pub fn spawn_player_entity(world: &mut World, view: PlayerView, chunk: ChunkCoor
             view.private,
             view.armor,
             view.lifecycle,
+            view.sleeping,
             PlayerChunk(chunk),
         ))
         .id();
@@ -231,6 +241,7 @@ mod tests {
             },
             armor: PlayerArmor::default(),
             lifecycle: PlayerLifecycle::default(),
+            sleeping: PlayerSleeping::default(),
         }
     }
 

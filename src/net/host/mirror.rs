@@ -370,6 +370,24 @@ pub(super) fn sync_player_entities(world: &mut World) {
                     }
                     *lifecycle = view.lifecycle;
                 }
+                // Refresh the sleeping flag. Flips when a player logs out
+                // (their body stays as a sleeping body) or reconnects (the
+                // body wakes). Peers render the sleeping pose + tooltip off
+                // this.
+                if let Some(mut sleeping) = world.get_mut::<crate::server::PlayerSleeping>(entity)
+                    && *sleeping != view.sleeping
+                {
+                    #[cfg(feature = "replication-trace")]
+                    {
+                        let before = *sleeping;
+                        info!(
+                            target: "replication_trace",
+                            "server: PlayerSleeping     MUTATE client={} entity={entity:?} {before:?} -> {:?}",
+                            view.client_id, view.sleeping
+                        );
+                    }
+                    *sleeping = view.sleeping;
+                }
                 // Players walk; keep their room subscription aligned with
                 // chunk_manager so peers gain/lose visibility at the
                 // boundary instead of seeing the avatar pop out of view.

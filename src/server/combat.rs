@@ -40,6 +40,11 @@ use crate::game_balance::{
     COMBAT_TARGET_CHEST_HEIGHT as TARGET_CHEST_HEIGHT,
 };
 
+/// Hit-point height above the feet for a logged-out sleeping body. The avatar
+/// is laid flat on the ground, so the swing lands near floor level rather than
+/// at standing chest height.
+const SLEEPING_HIT_HEIGHT: f32 = 0.35;
+
 impl GameServer {
     /// Process a client's `AttackPlayer` request. All validation is
     /// re-done server-side: an exploited client that fabricates the
@@ -97,6 +102,13 @@ impl GameServer {
         if target.lifecycle.is_dead() || target.controller.health <= 0.0 {
             return Vec::new();
         }
+        // A logged-out body lies flat on the ground, so its hittable point is
+        // near the floor, not at standing chest height, and a standing
+        // attacker is looking steeply down at it. Aim the hit point low and
+        // waive the view cone for a helpless sleeper (range + line-of-sight
+        // still gate the swing); otherwise the upright chest point plus the
+        // tight cone make a lying body almost impossible to land on.
+        let target_sleeping = !target.online;
         let target_pos = target.controller.position;
         let target_armor = target.armor;
         let target_health_before = target.controller.health;
@@ -106,11 +118,12 @@ impl GameServer {
             attacker_pos.y + ATTACKER_EYE_HEIGHT,
             attacker_pos.z,
         );
-        let target_chest = Vec3Net::new(
-            target_pos.x,
-            target_pos.y + TARGET_CHEST_HEIGHT,
-            target_pos.z,
-        );
+        let hit_height = if target_sleeping {
+            SLEEPING_HIT_HEIGHT
+        } else {
+            TARGET_CHEST_HEIGHT
+        };
+        let target_chest = Vec3Net::new(target_pos.x, target_pos.y + hit_height, target_pos.z);
 
         // Range, feet-to-feet horizontal distance keeps the check
         // close to "can my swing reach them?" without bias from
@@ -123,14 +136,14 @@ impl GameServer {
         }
 
         // View cone, direction from eye to target chest must sit
-        // inside the attacker's forward cone.
+        // inside the attacker's forward cone (skipped for sleepers).
         let forward = crate::items::look_forward(attacker_yaw, attacker_pitch);
         let to_target = target_chest.minus(attacker_eye);
         let to_target_len = to_target.length_squared().sqrt();
         if to_target_len <= f32::EPSILON {
             return Vec::new();
         }
-        if to_target.dot(forward) / to_target_len < ATTACK_CONE_COS {
+        if !target_sleeping && to_target.dot(forward) / to_target_len < ATTACK_CONE_COS {
             return Vec::new();
         }
 
@@ -154,6 +167,34 @@ impl GameServer {
             target_mut.controller.health = new_health;
         }
         let _ = target_health_before;
+
+        // Tell the victim their HP dropped. Health is server-authoritative,
+        // the client never predicts its own damage, so the target's local
+        // prediction (which drives their HP bar) only changes when a
+        // `Correction` arrives. Peers learn the new HP through the player
+        // mirror's replicated `health`, but the victim renders themselves from
+        // prediction, not their own mirror, so without this their bar stays
+        // full even as the server records every hit. Pushed before the
+        // knockback envelope so the knockback impulse is applied last on the
+        // client and survives even if this correction snaps position on a
+        // high-latency link (`apply_non_movement_correction` only snaps past a
+        // 1 m divergence; a normal hit just overwrites health).
+        if let Some(target_ref) = self.clients.get(&target_id) {
+            let controller = &target_ref.controller;
+            envelopes.push(ServerEnvelope {
+                target: DeliveryTarget::Client(target_id),
+                message: ServerMessage::Correction(PlayerState {
+                    client_id: target_id,
+                    position: controller.position,
+                    velocity: controller.velocity,
+                    yaw: controller.yaw,
+                    pitch: controller.pitch,
+                    health: new_health,
+                    grounded: controller.grounded,
+                    last_processed_input: controller.last_processed_input,
+                }),
+            });
+        }
 
         // Knockback direction: horizontal attacker → target, with a
         // small upward component so the target slides instead of
@@ -274,7 +315,7 @@ impl GameServer {
         // bag at the death position. Looters scoop the corpse with
         // one E-open instead of vacuuming a pile of individual
         // dropped stacks. The bag despawns when emptied + closed
-        // (see `loot_bag::close_loot_bag`).
+        // (see `loot_bag::close_container`).
         let drops: Vec<crate::protocol::ItemStack> = {
             let Some(client) = self.clients.get_mut(&target_id) else {
                 return Vec::new();
@@ -295,6 +336,10 @@ impl GameServer {
         if !drops.is_empty() {
             self.spawn_loot_bag(death_position, 0.0, drops);
         }
+        // If this was a sleeping body someone had open, their live-inventory
+        // view just emptied into the death bag; close it so a stale Move can't
+        // reach into the now-dead body.
+        self.close_sleeper_views(target_id);
 
         // Now flip lifecycle + lock health at zero so any pending
         // damage path with stale state can't double-kill or knock the

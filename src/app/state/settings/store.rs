@@ -5,11 +5,15 @@ use bevy::prelude::*;
 use directories::ProjectDirs;
 
 use super::data::ClientSettings;
+use crate::local_crypto;
 
 const QUALIFIER: &str = "com";
 const ORGANIZATION: &str = "Ashwend";
 const APPLICATION: &str = "Ashwend";
-const SETTINGS_FILE: &str = "settings.json";
+// Encrypted-at-rest config (see `save`). The `.dat` extension reflects the
+// sealed binary contents; a pre-encryption `settings.json` is a different path
+// and is simply ignored (the player starts from defaults).
+const SETTINGS_FILE: &str = "settings.dat";
 
 #[derive(Resource, Debug, Clone)]
 pub(crate) struct ClientSettingsStore {
@@ -32,9 +36,16 @@ impl ClientSettingsStore {
             return Ok(ClientSettings::default());
         }
 
-        let json = fs::read_to_string(&self.path)
+        // The file is sealed (see `save`). A blob we can't open (a plain-text
+        // file from a build that predates encryption, a tampered file, or one
+        // written under a different key) returns `Err` here; the caller in
+        // `app.rs` already turns that into "fall back to defaults", which
+        // doubles as the reset path for the old config format.
+        let sealed = fs::read(&self.path)
             .with_context(|| format!("could not read settings {}", self.path.display()))?;
-        let settings = serde_json::from_str::<ClientSettings>(&json)
+        let json = local_crypto::open(&sealed)
+            .with_context(|| format!("could not decrypt settings {}", self.path.display()))?;
+        let settings = serde_json::from_slice::<ClientSettings>(&json)
             .with_context(|| format!("could not parse settings {}", self.path.display()))?;
         Ok(settings.sanitized())
     }
@@ -45,9 +56,11 @@ impl ClientSettingsStore {
                 format!("could not create settings directory {}", parent.display())
             })?;
         }
-        let json = serde_json::to_string_pretty(&settings.clone().sanitized())
+        let json = serde_json::to_vec(&settings.clone().sanitized())
             .context("could not serialize client settings")?;
-        fs::write(&self.path, json)
+        // Seal the whole config so it isn't readable plain text on disk.
+        let sealed = local_crypto::seal(&json);
+        fs::write(&self.path, sealed)
             .with_context(|| format!("could not write settings {}", self.path.display()))
     }
 

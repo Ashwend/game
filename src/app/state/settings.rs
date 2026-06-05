@@ -85,17 +85,25 @@ mod tests {
     }
 
     #[test]
-    fn settings_store_round_trips_json() {
+    fn settings_store_round_trips_through_sealed_file() {
         let root = std::env::temp_dir().join(format!("game-settings-{}", uuid::Uuid::new_v4()));
-        let store = ClientSettingsStore::new(root.join("settings.json"));
+        let store = ClientSettingsStore::new(root.join("settings.dat"));
         let mut settings = ClientSettings::default();
         settings.display.mode = DisplayMode::BorderlessFullscreen;
         settings.audio.music_volume = 0.42;
         settings.input.invert_mouse_y = true;
 
         store.save(&settings).expect("settings should save");
-        let loaded = store.load().expect("settings should load");
+        // The on-disk bytes are sealed, not plain-text JSON: the field names
+        // must not appear verbatim.
+        let on_disk = std::fs::read(store.path()).expect("settings file written");
+        let contains = |needle: &[u8]| on_disk.windows(needle.len()).any(|w| w == needle);
+        assert!(
+            !contains(b"music_volume"),
+            "sealed settings should not contain plain-text JSON"
+        );
 
+        let loaded = store.load().expect("settings should load");
         assert_eq!(loaded.display.mode, DisplayMode::BorderlessFullscreen);
         assert_eq!(loaded.audio.music_volume, 0.42);
         assert!(loaded.input.invert_mouse_y);

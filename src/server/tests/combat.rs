@@ -10,9 +10,10 @@ use crate::{
     combat::{HATCHET_PVP_DAMAGE, PICKAXE_PVP_DAMAGE},
     items::{BASIC_HATCHET_ID, BASIC_PICKAXE_ID},
     protocol::{
-        AccountId, AttackPlayerCommand, ClientMessage, ItemStack, MAX_HEALTH, PROTOCOL_VERSION,
-        PlayerMovement,
+        AccountId, AttackPlayerCommand, ClientMessage, ItemStack, LootBagCommand, LootBagSlotRef,
+        MAX_HEALTH, PROTOCOL_VERSION, PlayerMovement,
     },
+    server::loot_bag::OpenContainer,
 };
 
 fn connect_named(server: &mut GameServer, account_id: AccountId, name: &str) -> ClientId {
@@ -109,6 +110,249 @@ fn attack_in_range_with_axe_applies_damage_and_emits_player_impact() {
             .iter()
             .any(|e| matches!(&e.message, ServerMessage::Knockback { .. })),
         "Knockback should be in the envelope set"
+    );
+}
+
+#[test]
+fn non_fatal_hit_sends_the_victim_a_health_correction() {
+    // The victim renders their HP bar from local prediction, which only moves
+    // when the server sends a `Correction`. A landed hit must therefore push
+    // one to the target carrying the reduced health.
+    let mut server = server();
+    let attacker = connect_named(&mut server, 1, "Attacker");
+    let target = connect_named(&mut server, 2, "Target");
+    place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
+    place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
+    equip_axe(&mut server, attacker);
+
+    let start_hp = target_health(&server, target);
+    let envelopes = attack(&mut server, attacker, target);
+    let new_hp = target_health(&server, target);
+    assert!(new_hp < start_hp, "the hit must reduce server-side HP");
+    assert!(new_hp > 0.0, "this fixture is a non-fatal hit");
+
+    let correction = envelopes
+        .iter()
+        .find_map(|e| match (&e.target, &e.message) {
+            (DeliveryTarget::Client(id), ServerMessage::Correction(state)) if *id == target => {
+                Some(state)
+            }
+            _ => None,
+        })
+        .expect("a landed hit must send the victim a health Correction");
+    assert_eq!(correction.client_id, target);
+    assert_eq!(
+        correction.health, new_hp,
+        "the correction must carry the victim's reduced health"
+    );
+}
+
+#[test]
+fn a_sleeping_body_can_be_attacked_and_damaged() {
+    // A logged-out player's body stays in the world as a sleeper; it is a
+    // living body, so it can be swung on and killed (its gear then drops as a
+    // loot bag, and the owner respawns fresh on their next login).
+    let mut server = server();
+    let attacker = connect_named(&mut server, 1, "Attacker");
+    let victim = connect_named(&mut server, 2, "Victim");
+    place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
+    place_player(&mut server, victim, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
+    equip_axe(&mut server, attacker);
+
+    // Victim logs out: their body sleeps where it stood.
+    server.disconnect(victim);
+    assert!(
+        server
+            .clients
+            .get(&victim)
+            .is_some_and(|client| !client.online),
+        "the victim's body should be asleep"
+    );
+
+    let start_hp = target_health(&server, victim);
+    let envelopes = attack(&mut server, attacker, victim);
+    assert!(
+        target_health(&server, victim) < start_hp,
+        "a sleeping body still takes damage"
+    );
+    assert!(
+        envelopes
+            .iter()
+            .any(|e| matches!(&e.message, ServerMessage::PlayerImpact { .. })),
+        "the hit on a sleeper is broadcast like any other"
+    );
+}
+
+#[test]
+fn a_sleeper_is_hittable_without_facing_it() {
+    // The aim cone is waived for a helpless laid-out sleeper (range + LOS still
+    // apply), so a standing player can strike the body without centring it. A
+    // standing target facing away the same way would be out of the cone.
+    let mut server = server();
+    let attacker = connect_named(&mut server, 1, "Attacker");
+    let victim = connect_named(&mut server, 2, "Victim");
+    // Attacker faces +Z (yaw = PI), away from the victim sitting at -Z.
+    place_player(
+        &mut server,
+        attacker,
+        Vec3Net::new(0.0, 0.0, 0.0),
+        std::f32::consts::PI,
+    );
+    place_player(&mut server, victim, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
+    equip_axe(&mut server, attacker);
+
+    // While the victim is online, facing away misses the aim cone.
+    let start_hp = target_health(&server, victim);
+    let _ = attack(&mut server, attacker, victim);
+    assert_eq!(
+        target_health(&server, victim),
+        start_hp,
+        "a standing target outside the aim cone is not hit"
+    );
+
+    // Once asleep, the cone is waived and the same swing lands.
+    server.disconnect(victim);
+    let _ = attack(&mut server, attacker, victim);
+    assert!(
+        target_health(&server, victim) < start_hp,
+        "a sleeper is hittable even when not centred in the aim cone"
+    );
+}
+
+#[test]
+fn looting_a_sleeper_opens_their_live_inventory_non_destructively() {
+    let mut server = server();
+    let looter = connect_named(&mut server, 1, "Looter");
+    let target = connect_named(&mut server, 2, "Sleeper");
+    place_player(&mut server, looter, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
+    place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -1.0), 0.0);
+    server
+        .clients
+        .get_mut(&target)
+        .unwrap()
+        .inventory
+        .inventory_slots[0] = Some(ItemStack::new(BASIC_HATCHET_ID, 1));
+
+    // An awake player can't be looted.
+    assert!(server.apply_loot_sleeper(looter, target).is_empty());
+    assert!(
+        server.clients[&looter].open_container.is_none(),
+        "an online player can't be opened for looting"
+    );
+
+    // Once they sleep, opening loots their *live* inventory: nothing is moved,
+    // the view mirrors the body's slots, and the body's pack is untouched.
+    server.disconnect(target);
+    let _ = server.apply_loot_sleeper(looter, target);
+    assert_eq!(
+        server.clients[&looter].open_container,
+        Some(OpenContainer::Sleeper(target)),
+        "the looter has the sleeper's live inventory open"
+    );
+    assert!(
+        server.clients[&target].inventory.inventory_slots[0].is_some(),
+        "opening alone moves nothing off the body"
+    );
+    let view = server
+        .open_loot_bag_view_for(looter)
+        .expect("the open sleeper has a view");
+    assert_eq!(
+        view.slots.iter().flatten().count(),
+        1,
+        "the view mirrors the sleeper's one item"
+    );
+
+    // Re-opening and closing without taking leaves the body exactly as it was
+    // (the bug this fixes: the old spill-to-bag emptied the body on first open).
+    server.close_container(looter);
+    let _ = server.apply_loot_sleeper(looter, target);
+    assert!(
+        server.clients[&target].inventory.inventory_slots[0].is_some(),
+        "a closed-then-reopened body still holds its items"
+    );
+
+    // Taking the item via a Move removes only that stack from the body. Clear
+    // the looter's destination slot first so the starting kit can't force a swap
+    // that would push an item back onto the body.
+    server
+        .clients
+        .get_mut(&looter)
+        .unwrap()
+        .inventory
+        .inventory_slots[0] = None;
+    let _ = server.apply_loot_bag_command(
+        looter,
+        LootBagCommand::Move {
+            from: LootBagSlotRef::Bag(0),
+            to: LootBagSlotRef::PlayerInventory(0),
+            quantity: None,
+        },
+    );
+    assert!(
+        server.clients[&target].inventory.inventory_slots[0].is_none(),
+        "the looted slot is emptied on the body"
+    );
+    assert_eq!(
+        server.clients[&looter].inventory.inventory_slots[0]
+            .as_ref()
+            .map(|s| s.item_id.as_ref()),
+        Some(BASIC_HATCHET_ID),
+        "the looter received the item"
+    );
+}
+
+#[test]
+fn an_empty_sleeper_still_opens_showing_nothing() {
+    let mut server = server();
+    let looter = connect_named(&mut server, 1, "Looter");
+    let target = connect_named(&mut server, 2, "Sleeper");
+    place_player(&mut server, looter, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
+    place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -1.0), 0.0);
+
+    server.disconnect(target);
+    let envelopes = server.apply_loot_sleeper(looter, target);
+    assert!(
+        envelopes.is_empty(),
+        "opening an empty body is not a rejected warning, it just opens"
+    );
+    assert_eq!(
+        server.clients[&looter].open_container,
+        Some(OpenContainer::Sleeper(target)),
+        "an empty body still opens"
+    );
+    let view = server
+        .open_loot_bag_view_for(looter)
+        .expect("the empty sleeper still has a view");
+    assert_eq!(
+        view.slots.iter().flatten().count(),
+        0,
+        "the view shows an empty body"
+    );
+}
+
+#[test]
+fn waking_a_sleeper_closes_anyone_looting_it() {
+    let mut server = server();
+    let looter = connect_named(&mut server, 1, "Looter");
+    let target = connect_named(&mut server, 2, "Sleeper");
+    place_player(&mut server, looter, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
+    place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -1.0), 0.0);
+
+    server.disconnect(target);
+    let _ = server.apply_loot_sleeper(looter, target);
+    assert!(server.clients[&looter].open_container.is_some());
+
+    // The body wakes (reconnects): the looter's view must close.
+    let _ = server.connect(
+        PROTOCOL_VERSION,
+        Some(crate::protocol::GAME_VERSION.to_owned()),
+        2,
+        "Sleeper".to_owned(),
+        String::new(),
+    );
+    assert!(
+        server.clients[&looter].open_container.is_none(),
+        "waking the body closes any looter viewing it"
     );
 }
 

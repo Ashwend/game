@@ -60,6 +60,7 @@ pub(crate) use items::{
 };
 pub(crate) use network::{
     network_tick_system, session_shutdown_poll_system, surface_client_error_toasts_system,
+    update_link_ping_system,
 };
 pub(crate) use node_death::tick_felling_trees_system;
 pub(crate) use players::{RemotePlayerEntities, apply_snapshot_system, tick_dying_players_system};

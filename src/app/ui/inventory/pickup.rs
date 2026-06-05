@@ -60,6 +60,20 @@ fn pickup_tooltip_text(pickup_target: &PickupTargetState) -> Option<(String, Str
         return Some((title, body));
     }
 
+    // A logged-out sleeping body identifies itself: who it is and how much
+    // health it has left, so a passer-by can decide whether to execute or
+    // rob it. (E-to-loot is wired separately; until then the player can still
+    // swing on the body to kill it and loot the dropped bag.)
+    if let Some((name, health)) = pickup_target.sleeping_player.as_ref() {
+        return Some((
+            name.clone(),
+            format!(
+                "Sleeping\n{} HP\nPress E to loot",
+                health.round().max(0.0) as i32
+            ),
+        ));
+    }
+
     // Placed structures fall through next so the player can see the
     // "Press E to open" affordance the same way they see "Press E to
     // pick up" on dropped items. Workbenches have no interactive view

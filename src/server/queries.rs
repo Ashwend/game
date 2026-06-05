@@ -189,6 +189,7 @@ impl GameServer {
             },
             armor: PlayerArmor(client.armor),
             lifecycle: client.lifecycle,
+            sleeping: player_ecs::PlayerSleeping(!client.online),
         })
     }
 

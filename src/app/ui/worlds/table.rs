@@ -20,11 +20,12 @@ const EDIT_BUTTON_WIDTH: f32 = 64.0;
 const DELETE_BUTTON_WIDTH: f32 = 82.0;
 const ACTION_BUTTON_GAP: f32 = 10.0;
 
-/// Vertical budget for the worlds table inside the bounded worlds panel.
-/// Uses the remaining `ui.available_height()` minus whatever the caller
-/// still needs to render below (status line, padding), so the table grows
-/// to fill the panel on tall windows and stays at least one row tall on
-/// short ones.
+/// Vertical *cap* for the worlds table inside the grow panel. Uses the
+/// remaining `ui.available_height()` (which the grow panel caps at the
+/// viewport) minus whatever the caller still needs to render below (status
+/// line, padding). The table itself shrinks to its content, so this only kicks
+/// in once there are enough worlds to overflow the viewport, at which point the
+/// table scrolls within this height instead of pushing the panel off-screen.
 pub(super) fn available_table_height(ui: &egui::Ui, reserve_below: f32) -> f32 {
     (ui.available_height() - reserve_below).max(180.0)
 }
@@ -42,65 +43,53 @@ pub(super) fn draw_world_table(
     theme::inset_frame().show(ui, |ui| {
         let table_content_width = (table_outer_width - INSET_FRAME_HORIZONTAL_PADDING).max(0.0);
         ui.set_width(table_content_width);
-        ui.set_min_height(table_height);
         if menu.worlds.is_empty() && menu.corrupted_worlds.is_empty() {
-            draw_empty_worlds_state(ui, menu, table_content_width, table_height);
+            draw_empty_worlds_state(ui, menu, table_content_width);
             return;
         }
 
-        ui.allocate_ui_with_layout(
-            egui::vec2(table_content_width, table_height),
-            egui::Layout::top_down(egui::Align::Min),
-            |ui| {
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .max_height(table_height)
-                    .show(ui, |ui| {
-                        ui.set_width(table_content_width);
-                        let worlds = menu.worlds.clone();
-                        for world in worlds {
-                            draw_world_row(
-                                ui,
-                                menu,
-                                store,
-                                user,
-                                network,
-                                analytics,
-                                world,
-                                table_content_width,
-                            );
-                            ui.add_space(8.0);
-                        }
-                        let corrupted = menu.corrupted_worlds.clone();
-                        for entry in corrupted {
-                            draw_corrupted_world_row(ui, menu, entry, table_content_width);
-                            ui.add_space(8.0);
-                        }
-                    });
-            },
-        );
+        // Shrink to the rows' height so a couple of worlds renders a short
+        // panel; cap at `table_height` (the viewport budget) so a long list
+        // scrolls inside the inset instead of growing past the screen.
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, true])
+            .max_height(table_height)
+            .show(ui, |ui| {
+                ui.set_width(table_content_width);
+                let worlds = menu.worlds.clone();
+                for world in worlds {
+                    draw_world_row(
+                        ui,
+                        menu,
+                        store,
+                        user,
+                        network,
+                        analytics,
+                        world,
+                        table_content_width,
+                    );
+                    ui.add_space(8.0);
+                }
+                let corrupted = menu.corrupted_worlds.clone();
+                for entry in corrupted {
+                    draw_corrupted_world_row(ui, menu, entry, table_content_width);
+                    ui.add_space(8.0);
+                }
+            });
     });
 }
 
-fn draw_empty_worlds_state(
-    ui: &mut egui::Ui,
-    menu: &mut MenuState,
-    table_content_width: f32,
-    table_height: f32,
-) {
-    ui.allocate_ui_with_layout(
-        egui::vec2(table_content_width, table_height),
-        egui::Layout::top_down(egui::Align::Center),
-        |ui| {
-            let content_height = 14.0 + 8.0 + COMPACT_ROW_HEIGHT;
-            ui.add_space(((table_height - content_height) * 0.5).max(24.0));
-            ui.label(theme::muted("No worlds found."));
-            ui.add_space(8.0);
-            if theme::compact_button(ui, "Create New World", ButtonKind::Primary, 154.0).clicked() {
-                open_create_world_dialog(menu);
-            }
-        },
-    );
+fn draw_empty_worlds_state(ui: &mut egui::Ui, menu: &mut MenuState, table_content_width: f32) {
+    ui.set_width(table_content_width);
+    ui.add_space(24.0);
+    ui.vertical_centered(|ui| {
+        ui.label(theme::muted("No worlds found."));
+        ui.add_space(8.0);
+        if theme::compact_button(ui, "Create New World", ButtonKind::Primary, 154.0).clicked() {
+            open_create_world_dialog(menu);
+        }
+    });
+    ui.add_space(24.0);
 }
 
 pub(super) fn draw_world_headers(ui: &mut egui::Ui) {

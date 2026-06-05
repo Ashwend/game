@@ -169,14 +169,32 @@ fn handle_unauthenticated_message(
         token,
     } = message
     else {
-        // An unauthenticated client whose first message isn't `Auth` almost
-        // always means a version/wire skew: this server build couldn't parse
-        // the client's `Auth` (postcard isn't self-describing), so some other
-        // message surfaced first. Answer with the structured version mismatch
-        // (carrying our version) instead of a confusing "not authenticated",
-        // so the client renders the proper behind/ahead-version notice.
+        // Benign, version-agnostic control messages can legitimately reach the
+        // server before `Auth` on a fresh link: a client that just left a
+        // prior in-process session (singleplayer -> main menu -> multiplayer)
+        // can have a leftover heartbeat/ping/disconnect queued, and packet
+        // reordering can float one ahead of the reliable `Auth`. A same-version
+        // client always follows with that `Auth`, so swallow these and wait for
+        // it rather than bouncing the player with a false "version mismatch".
+        if matches!(
+            message,
+            ClientMessage::Heartbeat | ClientMessage::Ping { .. } | ClientMessage::Disconnect
+        ) {
+            return;
+        }
+        // Any *other* pre-auth message points at a genuine version/wire skew:
+        // this build couldn't parse the client's `Auth` (postcard isn't
+        // self-describing), so a different variant surfaced. Answer with the
+        // structured version mismatch (carrying our version) so the client
+        // renders the proper behind/ahead-version notice, and log what
+        // surfaced so a recurrence is diagnosable rather than mysterious.
         // Genuine token failures never reach here, a parseable `Auth` goes
         // through `server.connect` below, which replies `AuthRejected`.
+        warn!(
+            "unauthenticated client {entity:?} sent {} before Auth; \
+             treating as version/wire skew (server {GAME_VERSION}, protocol {PROTOCOL_VERSION})",
+            client_message_kind(&message)
+        );
         send_to_entity(
             senders,
             entity,
@@ -222,6 +240,32 @@ fn forget_connection(entity: Entity, connections: &mut ServerConnections) -> Opt
     let client_id = connections.by_entity.remove(&entity)?;
     connections.client_to_entity.remove(&client_id);
     Some(client_id)
+}
+
+/// Variant name of a `ClientMessage` for diagnostic logging, without dumping
+/// the (potentially large) payload of variants like `Voice` or `Movement`.
+fn client_message_kind(message: &ClientMessage) -> &'static str {
+    match message {
+        ClientMessage::Auth { .. } => "Auth",
+        ClientMessage::Movement(_) => "Movement",
+        ClientMessage::Chat { .. } => "Chat",
+        ClientMessage::Command { .. } => "Command",
+        ClientMessage::Inventory(_) => "Inventory",
+        ClientMessage::Crafting(_) => "Crafting",
+        ClientMessage::Gather(_) => "Gather",
+        ClientMessage::PlaceDeployable(_) => "PlaceDeployable",
+        ClientMessage::Furnace(_) => "Furnace",
+        ClientMessage::DamageDeployable(_) => "DamageDeployable",
+        ClientMessage::AttackPlayer(_) => "AttackPlayer",
+        ClientMessage::Respawn => "Respawn",
+        ClientMessage::LootBag(_) => "LootBag",
+        ClientMessage::LootSleeper { .. } => "LootSleeper",
+        ClientMessage::SetViewRadius { .. } => "SetViewRadius",
+        ClientMessage::Voice(_) => "Voice",
+        ClientMessage::Heartbeat => "Heartbeat",
+        ClientMessage::Ping { .. } => "Ping",
+        ClientMessage::Disconnect => "Disconnect",
+    }
 }
 
 fn send_to_entity(

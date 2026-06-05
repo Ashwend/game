@@ -27,10 +27,9 @@ pub(crate) fn chat_shortcut_system(
 ) {
     // Chat visibility is independent of the HUD master toggle, so only the
     // chat toggle gates it here. If chat is hidden but something opened it
-    // anyway (e.g. the multiplayer whisper button), force it closed: an
-    // invisible open chat would strand movement/look controls behind
-    // `chat_open` with no way to dismiss it (Escape leaves chat to its own
-    // input box, which isn't drawn).
+    // anyway, force it closed: an invisible open chat would strand
+    // movement/look controls behind `chat_open` with no way to dismiss it
+    // (Escape leaves chat to its own input box, which isn't drawn).
     if !settings.hud.show_chat && menu.chat_open {
         menu.chat_open = false;
         menu.chat_focus_pending = false;

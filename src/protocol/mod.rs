@@ -174,9 +174,12 @@ mod tests {
 
     #[test]
     fn message_delivery_maps_network_channels() {
+        // The client heartbeat rides the reliable channel: it's the server's
+        // liveness signal, so a single dropped packet must not look like a
+        // vanished client.
         assert_eq!(
             ClientMessage::Heartbeat.delivery(),
-            PacketDelivery::Unreliable
+            PacketDelivery::Reliable
         );
         assert_eq!(
             ClientMessage::Chat {

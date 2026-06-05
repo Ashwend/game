@@ -4,8 +4,8 @@ use crate::{
     auth::authenticate,
     controller::PlayerController,
     protocol::{
-        AccountId, ClientId, GAME_VERSION, PROTOCOL_VERSION, PlayerEvent, PlayerState,
-        ServerMessage,
+        AccountId, ClientId, GAME_VERSION, MAX_HEALTH, PROTOCOL_VERSION, PlayerEvent, PlayerState,
+        ServerMessage, Vec3Net,
     },
 };
 
@@ -87,19 +87,25 @@ impl GameServer {
         // (cleaned) name the client supplied.
         let display_name = verified.display_name.unwrap_or(display_name);
 
-        // Takeover: if this identity is still attached to a prior session, tear
-        // the old one down before admitting the new one instead of rejecting
-        // the reconnect. This fires on a quick reconnect (the previous link
-        // hasn't timed out yet) or a second login from the same install.
-        // `disconnect` snapshots the old client's inventory/position into the
-        // persisted-player store, which `take_persisted_player` below then
-        // restores onto the new session, so a reconnect resumes exactly where
-        // it left off rather than getting bounced for the ~10s it takes the
-        // stale-client / netcode timeout to release the old slot.
-        let mut envelopes = match self.account_to_client.get(&account_id).copied() {
-            Some(old_client_id) => self.disconnect(old_client_id),
-            None => Vec::new(),
-        };
+        // This account may already own a body in the world. A logged-out body
+        // is asleep (no live transport), so we wake it in place, the player
+        // resumes exactly where they left off, including any looting or a kill
+        // that happened while they slept. A body that is still *online* means a
+        // second live login from the same account, so we hard-drop that session
+        // (snapshotting its state) and fall through to restore it fresh under a
+        // new id, which sidesteps reusing a still-mapped client id.
+        let mut envelopes = Vec::new();
+        if let Some(existing_id) = self.account_to_client.get(&account_id).copied() {
+            if self
+                .clients
+                .get(&existing_id)
+                .is_some_and(|client| client.online)
+            {
+                envelopes = self.hard_disconnect(existing_id);
+            } else {
+                return Ok(self.wake_sleeper(existing_id, display_name, token_admin));
+            }
+        }
 
         let client_id = self.next_client_id;
         self.next_client_id += 1;
@@ -119,18 +125,29 @@ impl GameServer {
                 // current number of slots.
                 let mut inventory = player.inventory;
                 inventory.normalize_capacity();
-                (
-                    PlayerController::from_persisted(
-                        player.position,
-                        player.velocity,
-                        player.yaw,
-                        player.pitch,
-                        player.health,
-                        player.grounded,
-                        player.last_processed_input,
-                    ),
-                    inventory,
-                )
+                let mut controller = PlayerController::from_persisted(
+                    player.position,
+                    player.velocity,
+                    player.yaw,
+                    player.pitch,
+                    player.health,
+                    player.grounded,
+                    player.last_processed_input,
+                );
+                // A player who disconnected while dead persists at 0 health
+                // (lifecycle isn't saved), and would otherwise return as a
+                // living-but-zero-health "zombie" the combat path refuses to
+                // hit (`new_health <= 0` already counts as dead). Treat a
+                // reconnect at non-positive health as a fresh respawn: full
+                // health at a safe spawn. Their gear was already dropped into
+                // a loot bag at the moment of death, so nothing extra is lost.
+                if controller.health <= 0.0 {
+                    controller.position = self.pick_safe_spawn(None);
+                    controller.velocity = Vec3Net::ZERO;
+                    controller.health = MAX_HEALTH;
+                    controller.grounded = true;
+                }
+                (controller, inventory)
             }
             None => {
                 // Fresh player: drop them at a random collision-free spot in
@@ -145,6 +162,7 @@ impl GameServer {
             client_id,
             account_id,
             name: name.clone(),
+            online: true,
             controller,
             inventory,
             // Phase 1 ships armor on the wire (per-component replicated),
@@ -162,7 +180,7 @@ impl GameServer {
             crafting: starting_crafting_state(),
             next_craft_job_id: 1,
             open_furnace: None,
-            open_loot_bag: None,
+            open_container: None,
             applied_action_seq: 0,
             ping_ms: 0,
         };
@@ -208,37 +226,79 @@ impl GameServer {
         Ok((client_id, envelopes))
     }
 
+    /// A player's live connection ended (clean quit, transport drop, kick, or
+    /// stale-timeout). Their body does NOT leave the world: it stays as a
+    /// logged-out "sleeping" body (Rust-style), frozen in place, still
+    /// replicated, lootable, and killable, until the same account reconnects
+    /// and wakes it. Idempotent: the disconnect path fires more than once per
+    /// drop (clean `Disconnect` message, then the netcode `Disconnected` event).
     pub fn disconnect(&mut self, client_id: ClientId) -> Vec<ServerEnvelope> {
-        // Refund any queued crafting inputs before we snapshot the
-        // persisted state, the player shouldn't pay for jobs that never
-        // finished. Overflow lands as drops at their last position.
+        if !self
+            .clients
+            .get(&client_id)
+            .is_some_and(|client| client.online)
+        {
+            return Vec::new();
+        }
+        // Offline housekeeping: refund queued crafting (the player shouldn't pay
+        // for jobs that never finished) and close any open containers so a peer
+        // snapshot can't reach into a stale open-furnace/bag pointer.
         self.cancel_all_jobs_for_disconnect(client_id);
-        // Drop any open-furnace reference so the next snapshot for any
-        // peer doesn't reach into a stale client entry.
         self.close_furnace(client_id);
-        // Same for loot bags, drops the player's open-bag pointer
-        // and, if no one else has the bag open and it's empty,
-        // despawns the bag entity.
-        self.close_loot_bag(client_id);
+        self.close_container(client_id);
+
+        let (name, persisted) = {
+            let Some(client) = self.clients.get_mut(&client_id) else {
+                return Vec::new();
+            };
+            client.online = false;
+            // Freeze the activity clock; the stale-timeout only sweeps online
+            // clients, so a sleeper is never re-evicted.
+            client.last_seen_tick = self.tick;
+            (client.name.clone(), persisted_player_from(client))
+        };
+        // Mirror the final pre-sleep state into the persisted store too, so a
+        // crash or auto-save still captures it even though the live body also
+        // stays in `clients`.
+        self.remember_player(persisted);
+
+        vec![
+            ServerEnvelope {
+                target: DeliveryTarget::Broadcast,
+                message: ServerMessage::PlayerEvent(PlayerEvent::Left { client_id, name }),
+            },
+            // Tear down only the transport: the host layer inserts Lightyear's
+            // `Disconnecting` and drops the entity↔client mapping. The body
+            // stays in `clients`.
+            ServerEnvelope {
+                target: DeliveryTarget::Disconnect(client_id),
+                message: ServerMessage::Heartbeat,
+            },
+        ]
+    }
+
+    /// Fully evict a player: remove their body and fold their state back into
+    /// the persisted store. Used when a second live login from the same account
+    /// takes over, the old session is replaced outright rather than left as a
+    /// sleeper. Normal logouts go through [`GameServer::disconnect`] and become
+    /// sleeping bodies instead.
+    fn hard_disconnect(&mut self, client_id: ClientId) -> Vec<ServerEnvelope> {
+        self.cancel_all_jobs_for_disconnect(client_id);
+        self.close_furnace(client_id);
+        self.close_container(client_id);
+        // This body is leaving the world, so close anyone who had it open as a
+        // sleeper.
+        self.close_sleeper_views(client_id);
 
         let Some(client) = self.clients.remove(&client_id) else {
             return Vec::new();
         };
-
-        // Snapshot the client's live state before tearing them down so the
-        // next shutdown save (or reconnect) sees their final position and
-        // inventory, not the prior persisted copy.
         let persisted = persisted_player_from(&client);
         self.account_to_client.remove(&client.account_id);
         self.chunk_manager.untrack_player(client_id);
         let name = client.name;
         self.remember_player(persisted);
 
-        // The trailing Disconnect envelope signals the host transport layer
-        // to insert Lightyear's `Disconnecting` and drop the entity↔client
-        // mapping. The carried message is ignored at routing time but kept
-        // legible for logs in case an envelope dump is dredged out of a bug
-        // report.
         vec![
             ServerEnvelope {
                 target: DeliveryTarget::Broadcast,
@@ -249,6 +309,98 @@ impl GameServer {
                 message: ServerMessage::Heartbeat,
             },
         ]
+    }
+
+    /// Reconnect path for an account whose body is asleep in the world: wake it
+    /// in place. The body keeps its current position, inventory, and health, so
+    /// the player resumes exactly where they slept (including anything looted
+    /// off them). A body killed while sleeping comes back as a fresh respawn.
+    fn wake_sleeper(
+        &mut self,
+        client_id: ClientId,
+        display_name: String,
+        token_admin: bool,
+    ) -> (ClientId, Vec<ServerEnvelope>) {
+        let account_id = self
+            .clients
+            .get(&client_id)
+            .map(|client| client.account_id)
+            .unwrap_or_default();
+        // The live body is authoritative now; drop any stale crash-safety copy.
+        let _ = self.take_persisted_player(account_id);
+        let admin_grant = token_admin || self.is_admin(account_id);
+        let name = clean_player_name(&display_name, client_id);
+
+        // A body killed while it slept comes back dead (or at 0 HP); waking it
+        // is then a fresh respawn rather than a resume-in-place.
+        let respawn = self
+            .clients
+            .get(&client_id)
+            .map(|client| client.lifecycle.is_dead() || client.controller.health <= 0.0)
+            .unwrap_or(false);
+        let spawn = respawn.then(|| self.pick_safe_spawn(Some(client_id)));
+
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.online = true;
+            client.name = name.clone();
+            client.is_admin = client.is_admin || admin_grant;
+            client.last_seen_tick = self.tick;
+            // A fresh wake shouldn't inherit a pre-sleep swing/gather cooldown.
+            client.next_attack_tick = self.tick;
+            client.next_gather_tick = self.tick;
+            if let Some(spawn) = spawn {
+                client.controller.position = spawn;
+                client.controller.velocity = Vec3Net::ZERO;
+                client.controller.health = MAX_HEALTH;
+                client.controller.grounded = true;
+                client.lifecycle = crate::server::PlayerLifecycle::Alive;
+            }
+        }
+        if let Some(spawn) = spawn {
+            self.chunk_manager.update_player_chunk(client_id, spawn);
+        }
+        // The body is awake (and authoritative again); close anyone who was
+        // looting it as a sleeper so their stale view doesn't reach in.
+        self.close_sleeper_views(client_id);
+
+        let (is_admin, local_seed) = {
+            let client = self.clients.get(&client_id).expect("woken body exists");
+            (
+                client.is_admin,
+                PlayerState {
+                    client_id,
+                    position: client.controller.position,
+                    velocity: client.controller.velocity,
+                    yaw: client.controller.yaw,
+                    pitch: client.controller.pitch,
+                    health: client.controller.health,
+                    grounded: client.controller.grounded,
+                    last_processed_input: client.controller.last_processed_input,
+                },
+            )
+        };
+        let world_time = self.world_time_snapshot();
+
+        (
+            client_id,
+            vec![
+                ServerEnvelope {
+                    target: DeliveryTarget::Client(client_id),
+                    message: ServerMessage::Welcome {
+                        client_id,
+                        map: self.save.map.clone(),
+                        world: self.world.clone(),
+                        is_admin,
+                        local_seed,
+                        world_time,
+                    },
+                },
+                ServerEnvelope {
+                    target: DeliveryTarget::Broadcast,
+                    message: ServerMessage::PlayerEvent(PlayerEvent::Joined { client_id, name }),
+                },
+            ],
+        )
     }
 
     fn is_admin(&self, account_id: AccountId) -> bool {
@@ -288,7 +440,11 @@ impl GameServer {
             .clients
             .values()
             .filter(|client| {
-                self.tick.saturating_sub(client.last_seen_tick) > CLIENT_STALE_TIMEOUT_TICKS
+                // Sleepers are deliberately silent; only sweep live sessions
+                // that have gone quiet (their transport died without a clean
+                // disconnect). The sweep just puts them to sleep too.
+                client.online
+                    && self.tick.saturating_sub(client.last_seen_tick) > CLIENT_STALE_TIMEOUT_TICKS
             })
             .map(|client| client.client_id)
             .collect::<Vec<_>>();

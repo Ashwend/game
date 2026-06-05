@@ -259,6 +259,10 @@ pub(crate) struct PickupTargetState {
     /// open path, pressing E sends `LootBagCommand::Open` and the
     /// transfer UI panel becomes visible via `PlayerPrivate.open_loot_bag`.
     pub(crate) loot_bag_id: Option<crate::protocol::LootBagId>,
+    /// Set when the look ray lands on a logged-out sleeping body: the
+    /// sleeper's display name and current health, for the look-at tooltip.
+    /// `player_id` is set alongside it so a swing still lands on the body.
+    pub(crate) sleeping_player: Option<(String, f32)>,
     /// Seconds since the last full pickup-target scan. The scan is throttled
     /// to ~33 ms (≈ 30 Hz), that's well above the cadence a player can
     /// react to a tooltip highlight and saves an O(N×M) sweep over every
@@ -283,6 +287,7 @@ impl PickupTargetState {
         self.deployable_kind = None;
         self.player_id = None;
         self.loot_bag_id = None;
+        self.sleeping_player = None;
     }
 }
 

@@ -95,6 +95,9 @@ impl GameServer {
             }
             ClientMessage::Respawn => self.apply_respawn_command(client_id),
             ClientMessage::LootBag(command) => self.apply_loot_bag_command(client_id, command),
+            ClientMessage::LootSleeper {
+                client_id: target_id,
+            } => self.apply_loot_sleeper(client_id, target_id),
             ClientMessage::SetViewRadius { tier } => {
                 if let Some(client) = self.clients.get_mut(&client_id) {
                     client.view_tier = tier;

@@ -24,6 +24,22 @@ pub(crate) fn drive_auth_flow_system(
         return;
     }
 
+    // The player escaped the sign-in wait (closed the browser, changed their
+    // mind, or relaunched the app). Tell the worker to stop holding the
+    // loopback listener, then drop back to the login splash with no error so
+    // they can retry cleanly.
+    if menu.cancel_auth_requested {
+        menu.cancel_auth_requested = false;
+        let in_flight = matches!(*auth, AuthFlow::Authenticating(_) | AuthFlow::Verifying(_));
+        if let AuthFlow::Authenticating(handle) | AuthFlow::Verifying(handle) = &*auth {
+            handle.cancel();
+        }
+        if in_flight {
+            *auth = AuthFlow::LoggedOut { error: None };
+        }
+        return;
+    }
+
     let (outcome, was_explicit) = match &*auth {
         AuthFlow::Verifying(handle) => (handle.poll(), false),
         AuthFlow::Authenticating(handle) => (handle.poll(), true),

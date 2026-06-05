@@ -60,6 +60,13 @@ pub enum ClientMessage {
     /// at a dead player's feet). Server keeps the authoritative slots
     /// and gates the move on the player having the bag open.
     LootBag(LootBagCommand),
+    /// Loot a logged-out sleeping body. The server spills the sleeper's
+    /// inventory into a fresh loot bag at their feet and opens it for the
+    /// looter, so the rest of the transfer flows through the normal loot-bag
+    /// path. Validated server-side: the target must be a sleeper in range.
+    LootSleeper {
+        client_id: ClientId,
+    },
     /// Client's view-radius preference (Low/Medium/High). The server uses
     /// this to decide how many concentric chunk rings to include in this
     /// client's per-tick snapshot. Sent on connect and whenever the
@@ -123,7 +130,13 @@ impl ClientMessage {
             | Self::AttackPlayer(_)
             | Self::Respawn
             | Self::LootBag(_)
+            | Self::LootSleeper { .. }
             | Self::SetViewRadius { .. }
+            // Heartbeat is the server's liveness signal: it drives the
+            // stale-client sweep. Sending it reliably means a single dropped
+            // packet can't look like a vanished client, so the timeout can be
+            // tightened without false-disconnecting players on a lossy link.
+            | Self::Heartbeat
             | Self::Disconnect => PacketDelivery::Reliable,
             // Voice frames are each independent (Opus packets carry their own
             // decoder state) so we want every delivered frame played, *not*
@@ -131,7 +144,7 @@ impl ClientMessage {
             // `Sequenced` would do. Movement is the opposite: a newer pose
             // makes an older one obsolete.
             Self::Voice(_) => PacketDelivery::UnreliableUnordered,
-            Self::Movement(_) | Self::Heartbeat | Self::Ping { .. } => PacketDelivery::Unreliable,
+            Self::Movement(_) | Self::Ping { .. } => PacketDelivery::Unreliable,
         }
     }
 }

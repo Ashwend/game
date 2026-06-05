@@ -2,7 +2,9 @@ use super::*;
 use crate::world::WorldBlock;
 
 use super::grid::BlockGrid;
-use super::movement::{desired_horizontal_velocity, horizontal_length};
+use super::movement::{
+    AIR_MAX_HORIZONTAL_SPEED, accelerate_air, desired_horizontal_velocity, horizontal_length,
+};
 
 fn test_world() -> WorldData {
     WorldData::test_world()
@@ -52,6 +54,58 @@ fn running_is_forward_weighted_and_sidewalking_is_slower() {
     assert!(horizontal_length(diagonal) <= RUN_SPEED);
     assert!(diagonal.x > 0.0);
     assert!(diagonal.z < 0.0);
+}
+
+/// Rotate a horizontal vector by `radians` about the vertical axis. Test
+/// helper for synthesising an air-strafe (continuously turning wishdir).
+fn rotate_horizontal(value: Vec3Net, radians: f32) -> Vec3Net {
+    let (sin, cos) = radians.sin_cos();
+    Vec3Net::new(
+        value.x * cos - value.z * sin,
+        0.0,
+        value.x * sin + value.z * cos,
+    )
+}
+
+#[test]
+fn air_strafing_cannot_ratchet_speed_past_the_air_cap() {
+    // Start at a full forward run and emulate the classic bunny-hop exploit:
+    // hold a movement key while continuously turning so the wishdir stays
+    // offset from the velocity. Each frame nudges speed up; without a cap it
+    // would climb well past run speed. The hard ceiling must hold it.
+    let mut velocity = Vec3Net::new(0.0, 0.0, -RUN_SPEED);
+    let delta = 1.0 / 64.0;
+    for frame in 0..600 {
+        // Wishdir trails the current heading by a constant angle so the player
+        // is always strafing into a turn, the worst case for speed gain.
+        let wish_dir = rotate_horizontal(velocity, 0.6).normalize_or_zero();
+        let target = wish_dir.scale(RUN_SPEED);
+        velocity = accelerate_air(velocity, target, delta);
+        assert!(
+            horizontal_length(velocity) <= AIR_MAX_HORIZONTAL_SPEED + 1e-3,
+            "air speed exceeded the cap on frame {frame}: {}",
+            horizontal_length(velocity)
+        );
+    }
+}
+
+#[test]
+fn air_control_preserves_knockback_overspeed() {
+    // A server knockback can fling the player faster than the air cap. Holding
+    // a movement key (perpendicular to the launch) must not crush that speed
+    // back down to the cap, air control may steer it but not brake it.
+    let knockback_speed = 15.0;
+    let mut velocity = Vec3Net::new(knockback_speed, 0.0, 0.0);
+    let target = Vec3Net::new(0.0, 0.0, -RUN_SPEED); // pressing forward, across the launch
+    let delta = 1.0 / 64.0;
+    for _ in 0..16 {
+        velocity = accelerate_air(velocity, target, delta);
+    }
+    assert!(
+        horizontal_length(velocity) > AIR_MAX_HORIZONTAL_SPEED + 5.0,
+        "knockback over-speed was crushed by air control: {}",
+        horizontal_length(velocity)
+    );
 }
 
 #[test]

@@ -13,7 +13,7 @@ Client resources live in `src/app/state/`:
 - `inventory.rs`: inventory UI state, drag state, pickup target, swing impacts, tool-swap animation state.
 - `options_ui.rs`: which options tab is selected and any in-flight rebind capture state (cross-frame UI state that shouldn't leak into `MenuState`).
 - `toasts.rs`: queued toasts plus fade/visible timing constants.
-- `settings.rs` + `settings/`: persisted client settings (display, audio, voice, input, keybindings, HUD flags) and the platform-aware `ClientSettingsStore`. Keybindings serialise as stable string identifiers (not raw `KeyCode` ordinals) so `settings.json` survives a Bevy `KeyCode` reshuffle.
+- `settings.rs` + `settings/`: persisted client settings (display, audio, voice, input, keybindings, HUD flags) and the platform-aware `ClientSettingsStore`. The file (`settings.dat`) is encrypted at rest via `src/local_crypto.rs`; an undecryptable file (including a pre-encryption `settings.json`) resets to defaults. Keybindings serialise as stable string identifiers (not raw `KeyCode` ordinals) so the file survives a Bevy `KeyCode` reshuffle.
 - `test_mode.rs`: `TestModeConfig` + env-var parsing for the `./cli multiplayer-test` helper. Production builds see `TestModeConfig::default()` and the apply-once systems no-op. See [Multiplayer testing](multiplayer-testing.md).
 
 The singleplayer worlds UI lives in `src/app/ui/worlds/`:

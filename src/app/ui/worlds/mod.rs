@@ -32,7 +32,7 @@ pub(super) fn worlds_ui(
     if poll_singleplayer_start(menu, runtime) {
         ctx.request_repaint();
     }
-    theme::bounded_panel(
+    theme::grow_panel(
         ctx,
         "worlds_panel",
         920.0,

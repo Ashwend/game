@@ -3,12 +3,12 @@
 //! Split by concern: [`config`] resolves the client config (build/TOML/env),
 //! [`login`] drives the loopback OAuth round-trip, [`tokens`] talks to the
 //! WorkOS token endpoint, [`pkce`] holds the PKCE/encoding helpers, and
-//! [`keychain`] persists the refresh token.
+//! [`token_store`] persists the refresh token (sealed on disk).
 
 mod config;
-mod keychain;
 mod login;
 mod pkce;
+mod token_store;
 mod tokens;
 
 use std::process::Command;

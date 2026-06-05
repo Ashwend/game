@@ -86,8 +86,13 @@ pub(crate) struct MenuState {
     pub(crate) death_splash: Option<DeathSplash>,
     pub(crate) quit_requested: bool,
     /// Set by the title-screen "Sign out" link; consumed by
-    /// `drive_auth_flow_system` (keychain cleared + back to the login splash).
+    /// `drive_auth_flow_system` (token store cleared + back to the login splash).
     pub(crate) sign_out_requested: bool,
+    /// Set by the login splash's Cancel button / Escape while a sign-in (or
+    /// startup restore) is in flight; consumed by `drive_auth_flow_system`,
+    /// which tells the worker to stop waiting on the browser and drops back to
+    /// the login splash with no error.
+    pub(crate) cancel_auth_requested: bool,
 }
 
 /// Snapshot of "I just died" UI state. Stored on `MenuState` because
@@ -159,6 +164,7 @@ impl Default for MenuState {
             death_splash: None,
             quit_requested: false,
             sign_out_requested: false,
+            cancel_auth_requested: false,
         }
     }
 }

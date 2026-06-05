@@ -5,7 +5,7 @@ use bevy::{ecs::change_detection::Ref, prelude::*};
 use crate::{
     app::PLAYER_VISUAL_CENTER_Y,
     protocol::ClientId,
-    server::{Player, PlayerLifecycle, PlayerPublic},
+    server::{Player, PlayerLifecycle, PlayerPublic, PlayerSleeping},
 };
 
 use super::super::{
@@ -52,6 +52,15 @@ const DEATH_IMPACT_BOUNCE_RAD: f32 = 0.10;
 #[derive(Component, Debug, Clone)]
 pub(crate) struct DyingPlayer {
     elapsed: f32,
+    /// Set once the fade has fully played out. The component is kept
+    /// (not removed) so a later respawn can still find it and restore
+    /// the avatar; `tick_dying_players_system` skips finished corpses so
+    /// they stay frozen and hidden until then.
+    finished: bool,
+    /// True when the body was a logged-out sleeper at the moment of death.
+    /// It's already lying on the ground, so the collapse animation is
+    /// skipped, the corpse just holds its lying pose and fades out.
+    from_sleep: bool,
     /// World-space rotation axis the body falls around. Picked once
     /// at death time so the corpse picks a direction and sticks with
     /// it. Horizontal, the rotation tips the body forward, not
@@ -75,6 +84,39 @@ pub(crate) struct DyingPlayer {
     material: Handle<StandardMaterial>,
 }
 
+/// Marks a remote body as a logged-out "sleeping" body. Stamped while the
+/// replicated `PlayerSleeping` is set; the body is laid into a static
+/// lying-down pose and frozen (the interpolator is parked at its upright
+/// target) until the owner reconnects and the flag clears.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct SleepingPlayer;
+
+/// Roughly half the body's depth once it's lying on its back. The supine avatar
+/// rests this far off the ground; we lift the pose by it so the mesh sits on top
+/// of the floor instead of sinking its back through it.
+const SLEEPING_GROUND_CLEARANCE: f32 = 0.1;
+
+/// World-space transform that lays an upright body flat on its back, face to the
+/// sky, held statically for a sleeper. The mesh's local frame is +Y up and -Z
+/// forward (the visor/nose), so pitching it backward 90 degrees about its own
+/// right axis (local X) drops the face toward the sky while keeping the body's
+/// compass facing, giving a consistent supine pose for every observer. (The
+/// death collapse, by contrast, tilts in a per-client random direction for a
+/// limp face-plant.)
+fn lying_transform(upright: Transform) -> Transform {
+    let tilt = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+    let rotation = upright.rotation * tilt;
+    // Rotate around the feet pivot, not the visual centre, so the body lies on
+    // the ground instead of pivoting through it, then lift it by its
+    // half-depth so the back rests on top of the floor rather than clipping in.
+    let pivot_offset = Vec3::Y * PLAYER_VISUAL_CENTER_Y;
+    let rotated_offset = rotation * pivot_offset;
+    Transform::from_translation(
+        upright.translation - pivot_offset + rotated_offset + Vec3::Y * SLEEPING_GROUND_CLEARANCE,
+    )
+    .with_rotation(rotation)
+}
+
 /// Persistent `client_id → Entity` map for remote players. Mirrors the live
 /// entity set so the reconciliation system doesn't have to rebuild it from
 /// a `Query` every frame.
@@ -85,7 +127,7 @@ pub(crate) struct RemotePlayerEntities(pub(crate) std::collections::HashMap<Clie
 /// Lightyear-replicated `(Player, PlayerPublic)` entities. Spawn,
 /// despawn, and interpolation re-target all flow off the replicated
 /// query, one visual entity per replicated entity.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn apply_snapshot_system(
     mut commands: Commands,
     time: Res<Time>,
@@ -98,10 +140,16 @@ pub(crate) fn apply_snapshot_system(
             &Transform,
             &mut NetworkPlayerInterpolation,
             Option<&DyingPlayer>,
+            Option<&SleepingPlayer>,
         ),
         With<NetworkPlayer>,
     >,
-    replicated: Query<(&Player, Ref<PlayerPublic>, Option<&PlayerLifecycle>)>,
+    replicated: Query<(
+        &Player,
+        Ref<PlayerPublic>,
+        Option<&PlayerLifecycle>,
+        Option<&PlayerSleeping>,
+    )>,
 ) {
     let Some(local_client_id) = runtime.client_id else {
         // Not connected, tear down any remote visuals from a prior
@@ -118,11 +166,12 @@ pub(crate) fn apply_snapshot_system(
     let mut visible_ids = HashSet::new();
     let entities = &mut *entities;
 
-    for (player, public, lifecycle) in &replicated {
+    for (player, public, lifecycle, sleeping) in &replicated {
         if player.client_id == local_client_id {
             continue;
         }
         let is_dead = matches!(lifecycle, Some(PlayerLifecycle::Dead { .. }));
+        let is_sleeping = matches!(sleeping, Some(PlayerSleeping(true)));
         // Keep the entity around even while dead so the tilt-and-fade
         // animation can finish playing. The tick system below
         // despawns the visual once the fade completes.
@@ -132,7 +181,7 @@ pub(crate) fn apply_snapshot_system(
         let target = Transform::from_translation(player_visual_position(feet))
             .with_rotation(Quat::from_rotation_y(public.yaw));
         if let Some(entity) = entities.0.get(&player.client_id).copied() {
-            if let Ok((current, mut interpolation, dying)) = players.get_mut(entity) {
+            if let Ok((current, mut interpolation, dying, asleep)) = players.get_mut(entity) {
                 if is_dead && dying.is_none() {
                     // Just-died this frame, stamp the dying state so
                     // the tick system below takes over the transform.
@@ -154,6 +203,10 @@ pub(crate) fn apply_snapshot_system(
                     commands.entity(entity).insert((
                         DyingPlayer {
                             elapsed: 0.0,
+                            finished: false,
+                            // A sleeper killed in place is already on the
+                            // ground; skip the collapse and just fade.
+                            from_sleep: is_sleeping,
                             fall_axis,
                             roll_axis,
                             roll_magnitude,
@@ -162,9 +215,15 @@ pub(crate) fn apply_snapshot_system(
                         },
                         MeshMaterial3d(cloned_material),
                     ));
-                } else if !is_dead && dying.is_some() {
-                    // Respawned, drop the dying state, restore the
-                    // shared remote material and full visibility.
+                }
+                // Dead -> Alive this frame: the player respawned. True
+                // whether the death animation was still playing or had
+                // already faded out (we keep `DyingPlayer` around until
+                // now precisely so this transition is always detectable).
+                let just_respawned = !is_dead && dying.is_some();
+                if just_respawned {
+                    // Drop the dying state, restore the shared remote
+                    // material and full visibility.
                     commands.entity(entity).remove::<DyingPlayer>().insert((
                         MeshMaterial3d(assets.remote_material.clone()),
                         Visibility::Visible,
@@ -176,9 +235,37 @@ pub(crate) fn apply_snapshot_system(
                 // pose so a stray late-arriving movement update
                 // can't slide a corpse.
                 if !is_dead {
-                    interpolation.retarget(tick, current, target);
-                    let transform = interpolation.advance(time.delta_secs());
-                    commands.entity(entity).insert(transform);
+                    // Track the sleep<->awake transition so the marker, the
+                    // pose, and the interpolation stay in sync.
+                    let woke = asleep.is_some() && !is_sleeping;
+                    if is_sleeping && asleep.is_none() {
+                        commands.entity(entity).insert(SleepingPlayer);
+                    } else if woke {
+                        commands.entity(entity).remove::<SleepingPlayer>();
+                    }
+
+                    if is_sleeping {
+                        // Logged-out body: hold a static lying-down pose and
+                        // freeze the interpolator at the upright target so the
+                        // body stands straight back up when it wakes.
+                        interpolation.snap_to(tick, target);
+                        commands.entity(entity).insert(lying_transform(target));
+                    } else {
+                        if just_respawned || woke {
+                            // A respawn or a wake is a teleport, not a walk.
+                            // Hard-snap instead of blending: when the new pose
+                            // lands within interpolation range of the old one,
+                            // `retarget` would otherwise slide the avatar across
+                            // for a few frames (the "flicker before disappearing
+                            // to spawn" the killer sees, and the slow rise from
+                            // a lying pose on wake).
+                            interpolation.snap_to(tick, target);
+                        } else {
+                            interpolation.retarget(tick, current, target);
+                        }
+                        let transform = interpolation.advance(time.delta_secs());
+                        commands.entity(entity).insert(transform);
+                    }
                 }
             }
         } else if !is_dead {
@@ -187,6 +274,15 @@ pub(crate) fn apply_snapshot_system(
             // already Dead (rare; would only happen on AoI cross-in
             // mid-death-anim), we let them stay invisible until the
             // server sends Alive again.
+            // A body first seen while sleeping (AoI cross-in onto a logged-out
+            // sleeper) spawns already lying down, so it never flashes upright
+            // for a frame. The interpolator is still parked at the upright
+            // target so it stands up cleanly on wake.
+            let spawn_transform = if is_sleeping {
+                lying_transform(target)
+            } else {
+                target
+            };
             let entity = commands
                 .spawn((
                     Name::new(format!("Player {}", player.client_id)),
@@ -196,10 +292,13 @@ pub(crate) fn apply_snapshot_system(
                     NetworkPlayerInterpolation::new(tick, target),
                     Mesh3d(assets.mesh.clone()),
                     MeshMaterial3d(assets.remote_material.clone()),
-                    target,
+                    spawn_transform,
                     Visibility::Visible,
                 ))
                 .id();
+            if is_sleeping {
+                commands.entity(entity).insert(SleepingPlayer);
+            }
             entities.0.insert(player.client_id, entity);
         }
     }
@@ -275,71 +374,88 @@ fn compute_fall_axes(client_id: ClientId, current: Transform) -> (Vec3, Vec3, f3
 /// restored upstream), and recreating the mesh + material pair every
 /// kill would churn allocations.
 pub(crate) fn tick_dying_players_system(
-    mut commands: Commands,
     time: Res<Time>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut players: Query<(Entity, &mut Transform, &mut DyingPlayer, &mut Visibility)>,
+    mut players: Query<(&mut Transform, &mut DyingPlayer, &mut Visibility)>,
 ) {
     let dt = time.delta_secs().max(0.0);
-    for (entity, mut transform, mut dying, mut visibility) in &mut players {
+    for (mut transform, mut dying, mut visibility) in &mut players {
+        if dying.finished {
+            // Fully faded already. Hold it hidden and frozen; the
+            // component stays so `apply_snapshot_system` can restore the
+            // avatar if the player respawns, or despawn it on AoI exit.
+            continue;
+        }
         dying.elapsed += dt;
 
-        // --- Phase 1+2: kick + fall, blended ---
-        let kick_t = (dying.elapsed / DEATH_UPWARD_KICK_S).clamp(0.0, 1.0);
-        // Half-sine pulse so the kick rises and settles inside its
-        // own window without a hard step.
-        let kick_pulse = (kick_t * std::f32::consts::PI).sin();
-        let kick_y = DEATH_UPWARD_KICK_M * kick_pulse;
-
-        let fall_t = (dying.elapsed / DEATH_FALL_DURATION_S).clamp(0.0, 1.0);
-        // Ease-in cubic so the body hangs briefly before
-        // accelerating downward, reads like "weight gives out".
-        let fall_eased = fall_t * fall_t * fall_t;
-
-        // Bounce: a damped sine pulse layered on top of the fall
-        // angle once the body's mostly down. Peaks just past
-        // impact and decays smoothly.
-        let bounce_t = (dying.elapsed - DEATH_FALL_DURATION_S * 0.85).max(0.0) / 0.35;
-        let bounce_pulse = if bounce_t > 0.0 && bounce_t < 1.0 {
-            (bounce_t * std::f32::consts::PI).sin() * (1.0 - bounce_t)
+        let fade_t = if dying.from_sleep {
+            // Killed in its sleep: the body is already lying on the ground, so
+            // there's no collapse to play. Hold the resting (lying) pose and
+            // fade out from the moment of death.
+            transform.translation = dying.rest.translation;
+            transform.rotation = dying.rest.rotation;
+            (dying.elapsed / DEATH_FADE_DURATION_S).clamp(0.0, 1.0)
         } else {
-            0.0
+            // --- Phase 1+2: kick + fall, blended ---
+            let kick_t = (dying.elapsed / DEATH_UPWARD_KICK_S).clamp(0.0, 1.0);
+            // Half-sine pulse so the kick rises and settles inside its
+            // own window without a hard step.
+            let kick_pulse = (kick_t * std::f32::consts::PI).sin();
+            let kick_y = DEATH_UPWARD_KICK_M * kick_pulse;
+
+            let fall_t = (dying.elapsed / DEATH_FALL_DURATION_S).clamp(0.0, 1.0);
+            // Ease-in cubic so the body hangs briefly before
+            // accelerating downward, reads like "weight gives out".
+            let fall_eased = fall_t * fall_t * fall_t;
+
+            // Bounce: a damped sine pulse layered on top of the fall
+            // angle once the body's mostly down. Peaks just past
+            // impact and decays smoothly.
+            let bounce_t = (dying.elapsed - DEATH_FALL_DURATION_S * 0.85).max(0.0) / 0.35;
+            let bounce_pulse = if bounce_t > 0.0 && bounce_t < 1.0 {
+                (bounce_t * std::f32::consts::PI).sin() * (1.0 - bounce_t)
+            } else {
+                0.0
+            };
+            let fall_angle =
+                DEATH_FALL_ANGLE_RAD * fall_eased - DEATH_IMPACT_BOUNCE_RAD * bounce_pulse;
+
+            // Roll ramps in alongside the fall so the body twists onto
+            // its side while it tips over rather than snapping into the
+            // tilt mid-fall.
+            let roll_angle = dying.roll_magnitude * fall_eased;
+
+            let tilt = Quat::from_axis_angle(dying.fall_axis, fall_angle);
+            let roll = Quat::from_axis_angle(dying.roll_axis, roll_angle);
+            let new_rotation = roll * tilt * dying.rest.rotation;
+
+            // Rotate around the feet pivot, not the visual centre. The
+            // visual entity sits at `rest.translation`, which is
+            // `PLAYER_VISUAL_CENTER_Y` above the feet. To pivot at the
+            // feet we offset by that amount, rotate, then offset back.
+            let pivot_offset = Vec3::Y * PLAYER_VISUAL_CENTER_Y;
+            let rotated_offset = roll * tilt * pivot_offset;
+            transform.rotation = new_rotation;
+            transform.translation =
+                dying.rest.translation - pivot_offset + rotated_offset + Vec3::Y * kick_y;
+
+            // --- Phase 5: fade alpha ---
+            let fade_start = DEATH_FALL_DURATION_S + DEATH_HOLD_DURATION_S;
+            ((dying.elapsed - fade_start) / DEATH_FADE_DURATION_S).clamp(0.0, 1.0)
         };
-        let fall_angle = DEATH_FALL_ANGLE_RAD * fall_eased - DEATH_IMPACT_BOUNCE_RAD * bounce_pulse;
-
-        // Roll ramps in alongside the fall so the body twists onto
-        // its side while it tips over rather than snapping into the
-        // tilt mid-fall.
-        let roll_angle = dying.roll_magnitude * fall_eased;
-
-        let tilt = Quat::from_axis_angle(dying.fall_axis, fall_angle);
-        let roll = Quat::from_axis_angle(dying.roll_axis, roll_angle);
-        let new_rotation = roll * tilt * dying.rest.rotation;
-
-        // Rotate around the feet pivot, not the visual centre. The
-        // visual entity sits at `rest.translation`, which is
-        // `PLAYER_VISUAL_CENTER_Y` above the feet. To pivot at the
-        // feet we offset by that amount, rotate, then offset back.
-        let pivot_offset = Vec3::Y * PLAYER_VISUAL_CENTER_Y;
-        let rotated_offset = roll * tilt * pivot_offset;
-        transform.rotation = new_rotation;
-        transform.translation =
-            dying.rest.translation - pivot_offset + rotated_offset + Vec3::Y * kick_y;
-
-        // --- Phase 5: fade alpha ---
-        let fade_start = DEATH_FALL_DURATION_S + DEATH_HOLD_DURATION_S;
-        let fade_t = ((dying.elapsed - fade_start) / DEATH_FADE_DURATION_S).clamp(0.0, 1.0);
         let alpha = (1.0 - fade_t).clamp(0.0, 1.0);
         if let Some(material) = materials.get_mut(&dying.material) {
             material.base_color = material.base_color.with_alpha(alpha);
         }
 
         if fade_t >= 1.0 {
-            // Fully gone. Drop visibility but leave the entity in
-            // place so apply_snapshot can re-show it on respawn
-            // without re-spawning a fresh `NetworkPlayer`.
+            // Fully gone. Hide it and mark the corpse finished, but keep
+            // the `DyingPlayer` component so `apply_snapshot_system` can
+            // re-show the avatar on respawn (without re-spawning a fresh
+            // `NetworkPlayer`). Removing it here would strand a
+            // late-respawning player invisible.
             *visibility = Visibility::Hidden;
-            commands.entity(entity).remove::<DyingPlayer>();
+            dying.finished = true;
         }
     }
 }
@@ -360,6 +476,18 @@ impl NetworkPlayerInterpolation {
             to: transform,
             elapsed: REMOTE_PLAYER_INTERPOLATION_SECONDS,
         }
+    }
+
+    /// Hard-snap the interpolation onto `target` with no blend, and mark
+    /// it fully advanced so `advance` returns `target` immediately. Used
+    /// for respawn, which teleports the avatar: blending would slide it
+    /// across the world (or briefly hold it at the old death spot) for a
+    /// few frames.
+    fn snap_to(&mut self, snapshot_tick: u64, target: Transform) {
+        self.from = target;
+        self.to = target;
+        self.elapsed = REMOTE_PLAYER_INTERPOLATION_SECONDS;
+        self.snapshot_tick = snapshot_tick;
     }
 
     fn retarget(&mut self, snapshot_tick: u64, current: &Transform, target: Transform) {
@@ -410,6 +538,21 @@ mod tests {
         assert!((halfway.translation.x - 2.0).abs() < 0.001);
         assert!(halfway.rotation.angle_between(current.rotation) > 0.1);
         assert!(halfway.rotation.angle_between(target.rotation) > 0.1);
+    }
+
+    #[test]
+    fn remote_player_interpolation_snaps_on_respawn_regardless_of_distance() {
+        // A respawn teleport must jump even when the new spawn is well
+        // within the blend's snap distance, otherwise the revived avatar
+        // slides from the death spot (the killer-side flicker).
+        let current = Transform::from_xyz(0.0, 0.0, 0.0);
+        let mut interpolation = NetworkPlayerInterpolation::new(1, current);
+        let nearby_spawn = Transform::from_xyz(2.0, 0.0, 0.0);
+        assert!(nearby_spawn.translation.length() < REMOTE_PLAYER_INTERPOLATION_SNAP_DISTANCE);
+
+        interpolation.snap_to(2, nearby_spawn);
+        let result = interpolation.advance(REMOTE_PLAYER_INTERPOLATION_SECONDS * 0.1);
+        assert_eq!(result.translation, nearby_spawn.translation);
     }
 
     #[test]

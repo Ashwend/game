@@ -120,6 +120,9 @@ impl GameServer {
             let entries: Vec<crate::protocol::PlayerListEntry> = self
                 .clients
                 .values()
+                // Sleeping (logged-out) bodies aren't "online", so they stay
+                // off the roster even though their body is still in the world.
+                .filter(|client| client.online)
                 .map(|client| crate::protocol::PlayerListEntry {
                     client_id: client.client_id,
                     name: client.name.clone(),

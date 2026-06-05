@@ -178,12 +178,6 @@ fn draw_message(ui: &mut egui::Ui, message: &ClientLogEntry) {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 ui.label(
-                    egui::RichText::new("[Global]")
-                        .size(12.5)
-                        .strong()
-                        .color(egui::Color32::from_rgb(91, 168, 255)),
-                );
-                ui.label(
                     egui::RichText::new(from)
                         .size(12.5)
                         .strong()

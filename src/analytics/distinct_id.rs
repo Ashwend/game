@@ -2,9 +2,9 @@
 //!
 //! Stored as a plain UUID v4 string at `<data_dir>/analytics_id`, sibling to
 //! [`crate::app::state::ClientSettingsStore`]'s settings file. Kept out of
-//! the settings JSON so resetting display/audio settings does not also reset
+//! the settings file so resetting display/audio settings does not also reset
 //! the user's analytics identity, and so a player who deletes
-//! `settings.json` to "start fresh" does not have their analytics history
+//! `settings.dat` to "start fresh" does not have their analytics history
 //! re-key.
 
 use std::{

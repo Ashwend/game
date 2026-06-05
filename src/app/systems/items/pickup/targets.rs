@@ -47,6 +47,14 @@ const PLAYER_BODY_HALF_HEIGHT: f32 = 0.95;
 /// `PLAYER_VISUAL_CENTER_Y` so the look-ray hits the same volume the
 /// remote avatar visually occupies.
 const PLAYER_BODY_CENTRE_Y: f32 = 0.95;
+/// Hit volume for a logged-out sleeping body. The avatar is laid flat on the
+/// ground (see `lying_transform`), so the standing column above the feet would
+/// miss most of it. A low, wide box centred just above the floor covers the
+/// ~1 m sprawl in any lie direction, so looking at the body anywhere lands the
+/// swing / loot prompt.
+const SLEEPING_BODY_HALF_WIDTH: f32 = 0.9;
+const SLEEPING_BODY_HALF_HEIGHT: f32 = 0.4;
+const SLEEPING_BODY_CENTRE_Y: f32 = 0.35;
 /// Max range, in metres, at which E latches onto a loot bag. Matches
 /// the server's `LOOT_BAG_INTERACT_RANGE_M` so the tooltip never
 /// lies about reachability.
@@ -122,43 +130,56 @@ pub(super) fn best_player_target<'a>(
     yaw: f32,
     pitch: f32,
     local_client_id: Option<crate::protocol::ClientId>,
-    players: impl Iterator<Item = (&'a Player, &'a PlayerPublic)>,
-) -> Option<(&'a Player, &'a PlayerPublic, f32)> {
+    players: impl Iterator<Item = (&'a Player, &'a PlayerPublic, bool)>,
+) -> Option<(&'a Player, &'a PlayerPublic, bool, f32)> {
     let forward = look_forward(yaw, pitch);
     if forward.length_squared() <= f32::EPSILON {
         return None;
     }
-    let mut best: Option<(&Player, &PlayerPublic, f32)> = None;
-    for (player, public) in players {
+    let mut best: Option<(&Player, &PlayerPublic, bool, f32)> = None;
+    for (player, public, sleeping) in players {
         if Some(player.client_id) == local_client_id {
             continue;
         }
         // Dead targets don't count; the swing should fall through to
-        // whatever is behind them. Health below 1 (saturating-clamped
-        // at zero on the server) is the "dead" marker today; Phase 5
-        // replaces this with `PlayerLifecycle::Dead`.
+        // whatever is behind them (a killed sleeper's loot is its dropped
+        // bag, not the corpse). Health at zero is the "dead" marker.
         if public.health <= 0.0 {
             continue;
         }
+        // A laid-out sleeper uses a low, wide hit box; a standing player uses
+        // the upright column.
+        let (centre_y, half_width, half_height) = if sleeping {
+            (
+                SLEEPING_BODY_CENTRE_Y,
+                SLEEPING_BODY_HALF_WIDTH,
+                SLEEPING_BODY_HALF_HEIGHT,
+            )
+        } else {
+            (
+                PLAYER_BODY_CENTRE_Y,
+                PLAYER_BODY_HALF_WIDTH,
+                PLAYER_BODY_HALF_HEIGHT,
+            )
+        };
         let centre = Vec3Net::new(
             public.position.x,
-            public.position.y + PLAYER_BODY_CENTRE_Y,
+            public.position.y + centre_y,
             public.position.z,
         );
-        let Some(distance) = ray_aabb_entry_distance(
-            eye,
-            forward,
-            centre,
-            PLAYER_BODY_HALF_WIDTH,
-            PLAYER_BODY_HALF_HEIGHT,
-        ) else {
+        let Some(distance) = ray_aabb_entry_distance(eye, forward, centre, half_width, half_height)
+        else {
             continue;
         };
         if distance > ATTACK_RANGE_M {
             continue;
         }
-        if best.as_ref().map(|(_, _, s)| distance < *s).unwrap_or(true) {
-            best = Some((player, public, distance));
+        if best
+            .as_ref()
+            .map(|(_, _, _, s)| distance < *s)
+            .unwrap_or(true)
+        {
+            best = Some((player, public, sleeping, distance));
         }
     }
     best
@@ -224,13 +245,23 @@ pub(super) fn set_player_pickup_target(
     pickup_target: &mut PickupTargetState,
     meta: &Player,
     public: &PlayerPublic,
+    sleeping: bool,
     camera: &Query<(&Camera, &Transform), With<MainCamera>>,
 ) {
     pickup_target.clear();
     pickup_target.player_id = Some(meta.client_id);
+    // A sleeper also carries name + health so the tooltip can identify the
+    // logged-out body and anchors low (over the laid-out mesh). A live player
+    // is purely a swing target with no tooltip.
+    let centre_y = if sleeping {
+        pickup_target.sleeping_player = Some((public.name.clone(), public.health));
+        SLEEPING_BODY_CENTRE_Y
+    } else {
+        PLAYER_BODY_CENTRE_Y
+    };
     let anchor = Vec3Net::new(
         public.position.x,
-        public.position.y + PLAYER_BODY_CENTRE_Y,
+        public.position.y + centre_y,
         public.position.z,
     );
     pickup_target.world_position = Some(anchor);

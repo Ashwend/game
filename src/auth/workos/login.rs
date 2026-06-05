@@ -8,8 +8,8 @@
 //! the code for tokens (public client, no secret, PKCE proves it's the same
 //! app). The short-lived access token rides the game's `Auth` handshake and is
 //! verified server-side against the JWKS (see [`crate::auth::WorkosVerifier`]);
-//! the refresh token is kept in the OS keychain so we can silently re-auth on
-//! the next launch.
+//! the refresh token is kept in a sealed local file (see [`super::token_store`])
+//! so we can silently re-auth on the next launch.
 //!
 //! A few `Session` fields (`email`, `expires_at`) are kept for upcoming work
 //! (profile display, proactive token refresh) and aren't read yet.
@@ -18,7 +18,11 @@
 use std::{
     io::{BufRead, BufReader, Write},
     net::{Ipv4Addr, TcpListener, TcpStream},
-    sync::{Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant, SystemTime},
 };
@@ -27,8 +31,8 @@ use crate::protocol::AccountId;
 
 use super::{
     config::{AUTHORIZE_URL, WorkosConfig},
-    keychain::{clear_refresh_token, load_refresh_token, store_refresh_token},
     pkce::{code_challenge, percent_decode, percent_encode, random_token},
+    token_store::{clear_refresh_token, load_refresh_token, store_refresh_token},
     tokens::{post_authenticate, session_from},
 };
 
@@ -113,6 +117,10 @@ pub struct LoginHandle {
     // `Mutex` so the handle is `Sync` (an `mpsc::Receiver` is `Send` but not
     // `Sync`) and can live inside the Bevy `AuthFlow` resource.
     rx: Mutex<mpsc::Receiver<Result<Session, String>>>,
+    // Flipped by [`LoginHandle::cancel`] when the player bails out of the
+    // browser wait; the interactive login worker watches it and stops polling
+    // the loopback listener so the bound port is released for a later attempt.
+    cancel: Arc<AtomicBool>,
 }
 
 impl LoginHandle {
@@ -129,6 +137,15 @@ impl LoginHandle {
             }
         }
     }
+
+    /// Tell the background worker to stop waiting on the browser callback. The
+    /// interactive-login worker checks this each poll and returns promptly,
+    /// dropping its loopback listener so the next sign-in can re-bind the port.
+    /// A no-op for workers that don't watch the flag (the silent startup
+    /// restore is a single blocking refresh, not a listener poll).
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]
@@ -138,7 +155,10 @@ impl LoginHandle {
     pub(crate) fn ready(outcome: Result<Session, String>) -> Self {
         let (tx, rx) = mpsc::channel();
         let _ = tx.send(outcome);
-        Self { rx: Mutex::new(rx) }
+        Self {
+            rx: Mutex::new(rx),
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     /// Test-only handle that stays `Pending`. The returned sender keeps the
@@ -146,7 +166,13 @@ impl LoginHandle {
     /// handle report `Disconnected`).
     pub(crate) fn pending() -> (Self, mpsc::Sender<Result<Session, String>>) {
         let (tx, rx) = mpsc::channel();
-        (Self { rx: Mutex::new(rx) }, tx)
+        (
+            Self {
+                rx: Mutex::new(rx),
+                cancel: Arc::new(AtomicBool::new(false)),
+            },
+            tx,
+        )
     }
 }
 
@@ -154,17 +180,22 @@ impl LoginHandle {
 /// listens on the loopback from a worker thread, then reports via the handle.
 pub fn begin_login(config: &WorkosConfig, hint: ScreenHint) -> LoginHandle {
     let (tx, rx) = mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let worker_cancel = Arc::clone(&cancel);
     let config = config.clone();
     thread::Builder::new()
         .name("workos-login".to_owned())
         .spawn(move || {
-            let _ = tx.send(run_login_flow(&config, hint));
+            let _ = tx.send(run_login_flow(&config, hint, &worker_cancel));
         })
         .ok();
-    LoginHandle { rx: Mutex::new(rx) }
+    LoginHandle {
+        rx: Mutex::new(rx),
+        cancel,
+    }
 }
 
-/// Whether a refresh token is stored (a fast, local keychain read). Lets the
+/// Whether a refresh token is stored (a fast, local file read). Lets the
 /// caller decide between the "verifying" spinner and the login splash without
 /// blocking on a network refresh.
 pub fn has_stored_session() -> bool {
@@ -184,7 +215,10 @@ pub fn begin_restore(config: &WorkosConfig) -> LoginHandle {
             let _ = tx.send(result);
         })
         .ok();
-    LoginHandle { rx: Mutex::new(rx) }
+    LoginHandle {
+        rx: Mutex::new(rx),
+        cancel: Arc::new(AtomicBool::new(false)),
+    }
 }
 
 /// Silently restore a session at startup from the stored refresh token. Returns
@@ -220,7 +254,11 @@ pub fn logout() {
     clear_refresh_token();
 }
 
-fn run_login_flow(config: &WorkosConfig, hint: ScreenHint) -> Result<Session, String> {
+fn run_login_flow(
+    config: &WorkosConfig,
+    hint: ScreenHint,
+    cancel: &AtomicBool,
+) -> Result<Session, String> {
     let verifier = random_token(64);
     let challenge = code_challenge(&verifier);
     let state = random_token(24);
@@ -234,7 +272,7 @@ fn run_login_flow(config: &WorkosConfig, hint: ScreenHint) -> Result<Session, St
     super::open_url(&authorize_url(config, &challenge, &state, hint))
         .map_err(|err| format!("could not open the browser: {err}"))?;
 
-    let (code, returned_state) = accept_callback(&listener)?;
+    let (code, returned_state) = accept_callback(&listener, cancel)?;
     if returned_state != state {
         return Err("sign-in could not be verified (state mismatch)".to_owned());
     }
@@ -250,10 +288,17 @@ fn run_login_flow(config: &WorkosConfig, hint: ScreenHint) -> Result<Session, St
     Ok(session)
 }
 
-/// Poll-accept the single loopback callback within [`LOGIN_TIMEOUT`].
-fn accept_callback(listener: &TcpListener) -> Result<(String, String), String> {
+/// Poll-accept the single loopback callback within [`LOGIN_TIMEOUT`], bailing
+/// early if `cancel` is raised (the player escaped the browser wait).
+fn accept_callback(
+    listener: &TcpListener,
+    cancel: &AtomicBool,
+) -> Result<(String, String), String> {
     let deadline = Instant::now() + LOGIN_TIMEOUT;
     loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("sign-in cancelled".to_owned());
+        }
         match listener.accept() {
             Ok((stream, _)) => return handle_callback(stream),
             Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {

@@ -13,7 +13,13 @@ use crate::{
     world_time::WorldTime,
 };
 
-const CLIENT_STALE_TIMEOUT_TICKS: u64 = 20 * 10;
+// Seconds of silence (no Heartbeat) before a live client is swept to sleep.
+// The client heartbeats once a second on the reliable channel, so three
+// missed beats means the link is genuinely gone, not just lossy. Kept short so
+// a disconnect (a quit that didn't send a clean `Disconnect`, or a crash)
+// propagates to peers as a sleeping body within a few seconds instead of
+// waiting on the much longer netcode token timeout.
+const CLIENT_STALE_TIMEOUT_TICKS: u64 = 20 * 3;
 
 /// How many ticks a chat bubble floats above the speaker before the
 /// server clears it from the replicated `PlayerPublic.chat_bubble`
@@ -90,7 +96,7 @@ pub use loot_bag_ecs::{
 };
 pub use player_ecs::{
     Player, PlayerArmor, PlayerChunk, PlayerIndex, PlayerLifecycle, PlayerPrivate, PlayerPublic,
-    PlayerView, despawn_player_entity, spawn_player_entity,
+    PlayerSleeping, PlayerView, despawn_player_entity, spawn_player_entity,
 };
 pub use resource_node_ecs::{
     ResourceNode, ResourceNodeChunk, ResourceNodeIndex, ResourceNodeStorage,
@@ -220,6 +226,12 @@ pub(super) struct ServerClient {
     pub(super) client_id: ClientId,
     pub(super) account_id: AccountId,
     pub(super) name: String,
+    /// Whether a live network connection is currently driving this body.
+    /// `false` means the player logged out and their body stays in the world
+    /// as a "sleeping" body (Rust-style): still replicated, lootable, and
+    /// killable, but frozen and excluded from the online roster / stale-timeout.
+    /// A reconnect from the same account wakes the body in place.
+    pub(super) online: bool,
     pub(super) controller: PlayerController,
     pub(super) inventory: PlayerInventoryState,
     /// Authoritative damage reduction (0–100, percent). Today always
@@ -260,10 +272,11 @@ pub(super) struct ServerClient {
     /// open at a time, opening a new furnace closes the previous.
     /// Cleared on disconnect.
     pub(super) open_furnace: Option<DeployedEntityId>,
-    /// The loot bag the player currently has open, if any. Same
-    /// "one open container at a time" rule as furnaces, opening a
-    /// bag closes any previously-open bag. Cleared on disconnect.
-    pub(super) open_loot_bag: Option<crate::protocol::LootBagId>,
+    /// The loot container (a world bag or a sleeper's live inventory) the
+    /// player currently has open, if any. Same "one open container at a time"
+    /// rule as furnaces, opening one closes any previously-open container.
+    /// Cleared on disconnect.
+    pub(super) open_container: Option<loot_bag::OpenContainer>,
     /// Highest optimistic-prediction action sequence processed for this client
     /// (advanced for accepted *and* rejected predicted commands). Mirrored into
     /// `PlayerPrivate::applied_action_seq` for the client's reconcile pass.

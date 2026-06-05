@@ -39,6 +39,14 @@ bevy_egui = "0.39.1"
 # not. The `framepace_debug` feature would add a debug overlay we don't
 # need, so default features are off.
 bevy_framepace = { version = "0.21", default-features = false }
+# Local at-rest obfuscation for the settings file and the WorkOS refresh-token
+# store (see `src/local_crypto.rs`). NOT a security boundary: the seal key is
+# baked into the binary; this only keeps those files out of plain text so a
+# casual file/process scan can't lift a session token or read the config as a
+# string. Pure Rust, no system deps. `alloc` gives the heap encrypt/decrypt
+# helpers; the per-write nonce is sliced from a `uuid` (already a dep), so we
+# don't pull a separate RNG.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 clap = { version = "4.6.1", features = ["derive"] }
 # Cross-platform microphone capture + speaker output for the voice pipeline.
 # Pulls native APIs (CoreAudio on darwin, WASAPI on Windows, ALSA on Linux).
@@ -58,10 +66,6 @@ egui_commonmark = { version = "0.22", default-features = false }
 # source, adding a new clip is now "drop the file in `assets/`", no per-file
 # `include_bytes!` row to maintain.
 include_dir = "0.7"
-# OS keychain for the WorkOS refresh token on the client, see the per-OS
-# `[target.…]` sections below for the backend on each platform. The refresh
-# token is the only credential we persist, never in plain text; the short-lived
-# access token stays in memory.
 # Offline JWT verification for WorkOS access tokens on the authoritative server
 # (RS256 against the WorkOS JWKS) plus JWK parsing. No secrets needed, the
 # server only ever holds the public client id and the public signing keys.
@@ -98,32 +102,21 @@ ureq = { version = "2.10", default-features = false, features = ["tls", "json"] 
 uuid = { version = "1.23.1", features = ["serde", "v4"] }
 zstd = "0.13.3"
 
-# Per-OS keychain backend for the WorkOS refresh token. Kept target-specific on
-# purpose: the catch-all `sync-secret-service` backend drags in `dbus`
-# (`libdbus-sys`), a system C library that the headless Linux server image and
-# the CI runners don't have, breaking every Linux build. The native backends
-# below need no system libraries:
-#   - macOS:   Keychain Services (Security.framework)
-#   - Windows: Credential Manager
-#   - Linux:   kernel keyutils via `linux-keyutils` (raw syscalls, no dbus)
-# The self-updater downloads the host platform's release archive and extracts
-# the new game binary from it. macOS and Windows ship a `.zip` (the macOS one
-# wraps `Ashwend.app`), so those builds need the `zip` reader; Linux ships a
-# `.tar.gz`, so that build needs `flate2` + `tar`. Each backend is gated to the
-# OS that actually consumes it, same pattern as the per-OS `keyring` below, 
-# so no platform compiles an extractor it never calls. `zip` runs with
-# `default-features = off` + just `deflate`, the only codec `ditto`/the release
-# zips use, which reuses the `flate2`/`miniz_oxide` already in the tree.
+# Per-OS self-updater archive extractors. The self-updater downloads the host
+# platform's release archive and extracts the new game binary from it. macOS
+# and Windows ship a `.zip` (the macOS one wraps `Ashwend.app`), so those builds
+# need the `zip` reader; Linux ships a `.tar.gz`, so that build needs `flate2` +
+# `tar`. Each extractor is gated to the OS that actually consumes it, so no
+# platform compiles one it never calls. `zip` runs with `default-features = off`
+# + just `deflate`, the only codec `ditto`/the release zips use, which reuses
+# the `flate2`/`miniz_oxide` already in the tree.
 [target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "3", features = ["apple-native"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-keyring = { version = "3", features = ["windows-native"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3", features = ["linux-native"] }
 flate2 = "1"
 tar = "0.4"
 

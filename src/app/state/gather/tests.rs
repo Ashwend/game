@@ -15,6 +15,7 @@ fn pickup_target_clear_removes_cached_target() {
         deployable_kind: Some(crate::items::DeployableKind::Furnace { tier: 1 }),
         player_id: Some(99),
         loot_bag_id: Some(123),
+        sleeping_player: Some(("Sleeper".to_owned(), 50.0)),
         elapsed_since_scan: 0.0,
     };
 
@@ -29,6 +30,7 @@ fn pickup_target_clear_removes_cached_target() {
     assert!(state.screen_position.is_none());
     assert!(state.player_id.is_none());
     assert!(state.loot_bag_id.is_none());
+    assert!(state.sleeping_player.is_none());
 }
 
 #[test]

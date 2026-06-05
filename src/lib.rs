@@ -8,6 +8,7 @@ pub mod crafting;
 pub mod game_balance;
 pub mod inventory;
 pub mod items;
+pub mod local_crypto;
 pub mod net;
 pub mod protocol;
 pub mod resources;

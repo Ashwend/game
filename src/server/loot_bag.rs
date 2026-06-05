@@ -15,14 +15,28 @@ use crate::{
     items::normalize_stack,
     protocol::{
         ClientId, ItemStack, LOOT_BAG_SLOT_COUNT, LootBagCommand, LootBagId, LootBagSlotRef,
-        OpenLootBagView, Vec3Net,
+        OpenLootBagView, PlayerInventoryState, Vec3Net,
     },
     server::{GameServer, ServerEnvelope},
 };
 
 mod slots;
 
-use slots::{insert_into_loot_ref, reply_warning, restore_into_loot_ref, take_from_loot_ref};
+use slots::{ContainerSlots, move_within, quick_transfer_within, reply_warning};
+
+/// What a player currently has open in the loot-transfer UI. Both kinds drive
+/// the same `OpenLootBagView` on the wire and the same `LootBagCommand`
+/// handlers; they differ only in where the "container" slots live.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OpenContainer {
+    /// A world loot bag (death drop), by id.
+    LootBag(LootBagId),
+    /// A logged-out sleeping player's *live* inventory, by their client id. The
+    /// looter reads and writes the sleeper's own slots directly, so looting is
+    /// non-destructive: nothing is copied, closing leaves whatever wasn't taken
+    /// on the body, and an empty body still opens (it just shows empty).
+    Sleeper(ClientId),
+}
 
 /// Max range, in metres, at which a player can open / interact with
 /// a loot bag. Loosened from the swing range so a kill that knocks
@@ -151,50 +165,115 @@ impl GameServer {
         match command {
             LootBagCommand::Open { id } => self.open_loot_bag(client_id, id),
             LootBagCommand::Close => {
-                self.close_loot_bag(client_id);
+                self.close_container(client_id);
                 Vec::new()
             }
             LootBagCommand::Move { from, to, quantity } => {
-                if !self.open_loot_bag_in_range(client_id) {
-                    self.close_loot_bag(client_id);
+                if !self.open_container_in_range(client_id) {
+                    self.close_container(client_id);
                     return Vec::new();
                 }
-                self.move_loot_bag_stack(client_id, from, to, quantity)
+                self.move_container_stack(client_id, from, to, quantity)
             }
             LootBagCommand::QuickTransfer { from } => {
-                if !self.open_loot_bag_in_range(client_id) {
-                    self.close_loot_bag(client_id);
+                if !self.open_container_in_range(client_id) {
+                    self.close_container(client_id);
                     return Vec::new();
                 }
-                self.quick_transfer_loot_bag(client_id, from)
+                self.quick_transfer_container(client_id, from)
             }
         }
     }
 
-    /// Re-validate that the client's currently-open loot bag is still
-    /// within interact range. The bag UI can persist client-side while
-    /// the player walks away; without this check, stacks could be moved
-    /// out of line-of-sight.
-    fn open_loot_bag_in_range(&self, client_id: ClientId) -> bool {
+    /// Loot a logged-out sleeping body by opening its *live* inventory as a
+    /// container. Nothing is copied or moved: the looter reads and writes the
+    /// sleeper's own slots, so closing without taking leaves the body exactly as
+    /// it was, taking removes only what was grabbed, and an empty body still
+    /// opens (showing empty) instead of being rejected. The body keeps whatever
+    /// is left when it wakes.
+    pub(super) fn apply_loot_sleeper(
+        &mut self,
+        looter_id: ClientId,
+        target_id: ClientId,
+    ) -> Vec<ServerEnvelope> {
+        if looter_id == target_id {
+            return Vec::new();
+        }
+        let Some(looter_pos) = self
+            .clients
+            .get(&looter_id)
+            .map(|looter| looter.controller.position)
+        else {
+            return Vec::new();
+        };
+        // The target must be a logged-out, still-living sleeper within reach.
+        let Some(target) = self.clients.get(&target_id) else {
+            return Vec::new();
+        };
+        if target.online || target.lifecycle.is_dead() || target.controller.health <= 0.0 {
+            return Vec::new();
+        }
+        let target_pos = target.controller.position;
+        let dx = target_pos.x - looter_pos.x;
+        let dz = target_pos.z - looter_pos.z;
+        if (dx * dx + dz * dz).sqrt() > LOOT_BAG_INTERACT_RANGE_M {
+            return Vec::new();
+        }
+
+        if let Some(looter_mut) = self.clients.get_mut(&looter_id) {
+            looter_mut.open_container = Some(OpenContainer::Sleeper(target_id));
+        }
+        Vec::new()
+    }
+
+    /// Re-validate that the client's open container is still in interact range
+    /// (and, for a sleeper, still a lootable logged-out body). The UI can
+    /// persist client-side while the player walks away; without this check
+    /// stacks could be moved out of reach, or out of a body that just woke.
+    fn open_container_in_range(&self, client_id: ClientId) -> bool {
         let Some(client) = self.clients.get(&client_id) else {
             return false;
         };
-        let Some(bag_id) = client.open_loot_bag else {
+        let Some(container) = client.open_container else {
             return true;
         };
-        let Some(bag) = self.loot_bags.get(&bag_id) else {
-            return false;
+        let pos = client.controller.position;
+        let target_pos = match container {
+            OpenContainer::LootBag(bag_id) => match self.loot_bags.get(&bag_id) {
+                Some(bag) => bag.position,
+                None => return false,
+            },
+            OpenContainer::Sleeper(sleeper_id) => match self.clients.get(&sleeper_id) {
+                Some(sleeper)
+                    if !sleeper.online
+                        && !sleeper.lifecycle.is_dead()
+                        && sleeper.controller.health > 0.0 =>
+                {
+                    sleeper.controller.position
+                }
+                _ => return false,
+            },
         };
-        let dx = bag.position.x - client.controller.position.x;
-        let dz = bag.position.z - client.controller.position.z;
+        let dx = target_pos.x - pos.x;
+        let dz = target_pos.z - pos.z;
         (dx * dx + dz * dz).sqrt() <= LOOT_BAG_INTERACT_RANGE_M
     }
 
-    /// Quick membership / view helper for the player-private replication
-    /// path.
+    /// Quick membership / view helper for the player-private replication path.
+    /// Resolves whichever container the client has open into the wire view.
     pub(crate) fn open_loot_bag_view_for(&self, client_id: ClientId) -> Option<OpenLootBagView> {
-        let bag_id = self.clients.get(&client_id)?.open_loot_bag?;
-        self.loot_bags.get(&bag_id).map(LootBag::to_view)
+        match self.clients.get(&client_id)?.open_container? {
+            OpenContainer::LootBag(bag_id) => self.loot_bags.get(&bag_id).map(LootBag::to_view),
+            OpenContainer::Sleeper(sleeper_id) => {
+                let sleeper = self.clients.get(&sleeper_id)?;
+                // A body that woke, died, or left is no longer lootable; drop the
+                // view so the looter's UI closes.
+                if sleeper.online || sleeper.lifecycle.is_dead() {
+                    return None;
+                }
+                Some(sleeper_inventory_view(sleeper_id, &sleeper.inventory))
+            }
+        }
     }
 
     pub(crate) fn loot_bags_iter(&self) -> impl Iterator<Item = (LootBagId, &LootBag)> + '_ {
@@ -219,28 +298,31 @@ impl GameServer {
             return Vec::new();
         }
         if let Some(client_mut) = self.clients.get_mut(&client_id) {
-            client_mut.open_loot_bag = Some(id);
+            client_mut.open_container = Some(OpenContainer::LootBag(id));
         }
         Vec::new()
     }
 
-    pub(crate) fn close_loot_bag(&mut self, client_id: ClientId) {
-        // Take the open id out of the client record first so the
-        // "is the bag empty after this player walked away from it?"
-        // check below sees the up-to-date open state.
+    /// Close whatever container the client has open. A loot bag that's empty and
+    /// no longer viewed by anyone is GC'd; a sleeper container needs no cleanup
+    /// (nothing was spawned, the body's items live on the body).
+    pub(crate) fn close_container(&mut self, client_id: ClientId) {
+        // Take the open pointer out of the client record first so the
+        // "is the bag empty after this player walked away from it?" check below
+        // sees the up-to-date open state.
         let opened = self
             .clients
             .get_mut(&client_id)
-            .and_then(|c| c.open_loot_bag.take());
-        let Some(bag_id) = opened else {
+            .and_then(|c| c.open_container.take());
+        let Some(OpenContainer::LootBag(bag_id)) = opened else {
             return;
         };
-        // If no other client has this bag open and it's empty, the
-        // entity is just litter, clean it up.
+        // If no other client has this bag open and it's empty, the entity is
+        // just litter, clean it up.
         let still_open_elsewhere = self
             .clients
             .values()
-            .any(|c| c.open_loot_bag == Some(bag_id));
+            .any(|c| c.open_container == Some(OpenContainer::LootBag(bag_id)));
         if still_open_elsewhere {
             return;
         }
@@ -254,183 +336,118 @@ impl GameServer {
         }
     }
 
+    /// Drop any looter's open view of `sleeper_id`. Called when the body wakes,
+    /// dies, or is evicted so a stale view can't keep reading a changed body.
+    pub(crate) fn close_sleeper_views(&mut self, sleeper_id: ClientId) {
+        for client in self.clients.values_mut() {
+            if client.open_container == Some(OpenContainer::Sleeper(sleeper_id)) {
+                client.open_container = None;
+            }
+        }
+    }
+
     pub(crate) fn destroy_loot_bag(&mut self, id: LootBagId) {
         if self.loot_bags.remove(&id).is_none() {
             return;
         }
         self.chunk_manager.untrack_loot_bag(id);
-        // Clear any client's pointer at this id so a stale Move
+        // Clear any client's pointer at this bag so a stale Move
         // doesn't reach into a removed bag.
         for client in self.clients.values_mut() {
-            if client.open_loot_bag == Some(id) {
-                client.open_loot_bag = None;
+            if client.open_container == Some(OpenContainer::LootBag(id)) {
+                client.open_container = None;
             }
         }
     }
 
-    fn move_loot_bag_stack(
+    fn move_container_stack(
         &mut self,
         client_id: ClientId,
         from: LootBagSlotRef,
         to: LootBagSlotRef,
         quantity: Option<u16>,
     ) -> Vec<ServerEnvelope> {
-        let Some(client) = self.clients.get(&client_id) else {
+        let Some(container) = self.clients.get(&client_id).and_then(|c| c.open_container) else {
             return Vec::new();
         };
-        let Some(bag_id) = client.open_loot_bag else {
-            return Vec::new();
-        };
-        let Some(bag) = self.loot_bags.get_mut(&bag_id) else {
-            return Vec::new();
-        };
-
-        // Pull the source stack out into a temporary.
-        let Some(removed) = take_from_loot_ref(&mut self.clients, client_id, bag, from, quantity)
-        else {
-            return Vec::new();
-        };
-
-        // Try to insert into the destination. If the dest write fails,
-        // restore the removed amount at the source so the move is
-        // atomic.
-        let (took, all_consumed) = removed;
-        let restore = insert_into_loot_ref(&mut self.clients, client_id, bag, to, took.clone());
-        if let Some(remainder) = restore {
-            restore_into_loot_ref(
-                &mut self.clients,
-                client_id,
-                bag,
-                from,
-                remainder,
-                all_consumed,
-            );
+        match container {
+            OpenContainer::LootBag(bag_id) => {
+                // Looter (in `clients`) and bag (in `loot_bags`) are disjoint
+                // fields, so both borrow mutably at once.
+                let Some(looter) = self.clients.get_mut(&client_id) else {
+                    return Vec::new();
+                };
+                let Some(bag) = self.loot_bags.get_mut(&bag_id) else {
+                    return Vec::new();
+                };
+                move_within(
+                    &mut looter.inventory,
+                    &mut ContainerSlots::Bag(&mut bag.slots),
+                    from,
+                    to,
+                    quantity,
+                );
+            }
+            OpenContainer::Sleeper(sleeper_id) => {
+                if sleeper_id == client_id {
+                    return Vec::new();
+                }
+                let [looter, sleeper] = self.clients.get_disjoint_mut([&client_id, &sleeper_id]);
+                let (Some(looter), Some(sleeper)) = (looter, sleeper) else {
+                    return Vec::new();
+                };
+                move_within(
+                    &mut looter.inventory,
+                    &mut ContainerSlots::Sleeper(&mut sleeper.inventory),
+                    from,
+                    to,
+                    quantity,
+                );
+            }
         }
         Vec::new()
     }
 
-    fn quick_transfer_loot_bag(
+    fn quick_transfer_container(
         &mut self,
         client_id: ClientId,
         from: LootBagSlotRef,
     ) -> Vec<ServerEnvelope> {
-        let Some(client) = self.clients.get(&client_id) else {
+        let Some(container) = self.clients.get(&client_id).and_then(|c| c.open_container) else {
             return Vec::new();
         };
-        let Some(bag_id) = client.open_loot_bag else {
-            return Vec::new();
-        };
-        let bag_present = self.loot_bags.contains_key(&bag_id);
-        if !bag_present {
-            return Vec::new();
-        }
-
-        match from {
-            LootBagSlotRef::Bag(slot) => {
-                // From bag → first empty inventory slot, merging into
-                // a matching stack first.
+        let warning = match container {
+            OpenContainer::LootBag(bag_id) => {
+                let Some(looter) = self.clients.get_mut(&client_id) else {
+                    return Vec::new();
+                };
                 let Some(bag) = self.loot_bags.get_mut(&bag_id) else {
                     return Vec::new();
                 };
-                let Some(slot_ref) = bag.slots.get_mut(slot) else {
+                quick_transfer_within(
+                    &mut looter.inventory,
+                    &mut ContainerSlots::Bag(&mut bag.slots),
+                    from,
+                )
+            }
+            OpenContainer::Sleeper(sleeper_id) => {
+                if sleeper_id == client_id {
                     return Vec::new();
-                };
-                let Some(stack) = slot_ref.take() else {
-                    return Vec::new();
-                };
-                if let Some(client_mut) = self.clients.get_mut(&client_id) {
-                    let leftover = crate::server::inventory::add_stack_to_inventory(
-                        &mut client_mut.inventory,
-                        stack,
-                    );
-                    if let Some(leftover) = leftover {
-                        // Couldn't fit it all, put what didn't fit back.
-                        if let Some(bag) = self.loot_bags.get_mut(&bag_id) {
-                            bag.slots[slot] = Some(leftover);
-                        }
-                        return reply_warning(client_id, "Inventory full");
-                    }
                 }
-                Vec::new()
-            }
-            LootBagSlotRef::PlayerInventory(slot) => {
-                let Some(stack) = self.clients.get_mut(&client_id).and_then(|c| {
-                    c.inventory
-                        .inventory_slots
-                        .get_mut(slot)
-                        .and_then(Option::take)
-                }) else {
+                let [looter, sleeper] = self.clients.get_disjoint_mut([&client_id, &sleeper_id]);
+                let (Some(looter), Some(sleeper)) = (looter, sleeper) else {
                     return Vec::new();
                 };
-                self.deposit_to_first_empty_bag_slot(bag_id, client_id, stack, from)
+                quick_transfer_within(
+                    &mut looter.inventory,
+                    &mut ContainerSlots::Sleeper(&mut sleeper.inventory),
+                    from,
+                )
             }
-            LootBagSlotRef::PlayerActionbar(slot) => {
-                let Some(stack) = self.clients.get_mut(&client_id).and_then(|c| {
-                    c.inventory
-                        .actionbar_slots
-                        .get_mut(slot)
-                        .and_then(Option::take)
-                }) else {
-                    return Vec::new();
-                };
-                self.deposit_to_first_empty_bag_slot(bag_id, client_id, stack, from)
-            }
-        }
-    }
-
-    fn deposit_to_first_empty_bag_slot(
-        &mut self,
-        bag_id: LootBagId,
-        client_id: ClientId,
-        stack: ItemStack,
-        origin: LootBagSlotRef,
-    ) -> Vec<ServerEnvelope> {
-        let Some(bag) = self.loot_bags.get_mut(&bag_id) else {
-            // Bag vanished mid-flight; restore the stack so the
-            // player doesn't lose items to a race.
-            self.restore_to_player_slot(client_id, origin, stack);
-            return Vec::new();
         };
-        for slot in bag.slots.iter_mut() {
-            if slot.is_none() {
-                *slot = Some(stack);
-                return Vec::new();
-            }
-        }
-        // Bag full, restore the stack to its origin slot so the
-        // player doesn't drop it on the floor by accident.
-        self.restore_to_player_slot(client_id, origin, stack);
-        reply_warning(client_id, "Bag is full")
-    }
-
-    fn restore_to_player_slot(
-        &mut self,
-        client_id: ClientId,
-        origin: LootBagSlotRef,
-        stack: ItemStack,
-    ) {
-        let Some(client) = self.clients.get_mut(&client_id) else {
-            return;
-        };
-        match origin {
-            LootBagSlotRef::PlayerInventory(slot) => {
-                if let Some(target) = client.inventory.inventory_slots.get_mut(slot)
-                    && target.is_none()
-                {
-                    *target = Some(stack);
-                }
-            }
-            LootBagSlotRef::PlayerActionbar(slot) => {
-                if let Some(target) = client.inventory.actionbar_slots.get_mut(slot)
-                    && target.is_none()
-                {
-                    *target = Some(stack);
-                }
-            }
-            // Bag origin can't be restored via this path, caller
-            // routes through `deposit_to_first_empty_bag_slot` only
-            // for player-origin transfers.
-            LootBagSlotRef::Bag(_) => {}
+        match warning {
+            Some(text) => reply_warning(client_id, text),
+            None => Vec::new(),
         }
     }
 
@@ -438,6 +455,24 @@ impl GameServer {
         let id = self.next_loot_bag_id;
         self.next_loot_bag_id = self.next_loot_bag_id.saturating_add(1);
         id
+    }
+}
+
+/// Build the wire view of a sleeper's live inventory: the backpack slots
+/// followed by the hotbar, laid out flat into the same
+/// [`LOOT_BAG_SLOT_COUNT`]-wide grid the loot-bag UI renders. The view `id` is
+/// the sleeper's client id (stable across reopens; the client treats it as an
+/// opaque handle, so it never collides meaningfully with a real bag id).
+fn sleeper_inventory_view(
+    sleeper_id: ClientId,
+    inventory: &PlayerInventoryState,
+) -> OpenLootBagView {
+    let mut slots: Vec<Option<ItemStack>> = Vec::with_capacity(LOOT_BAG_SLOT_COUNT);
+    slots.extend(inventory.inventory_slots.iter().cloned());
+    slots.extend(inventory.actionbar_slots.iter().cloned());
+    OpenLootBagView {
+        id: sleeper_id,
+        slots,
     }
 }
 

@@ -1,4 +1,5 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
+use lightyear::prelude::{Link, client};
 
 use crate::{
     analytics::SessionEndReason,
@@ -17,7 +18,8 @@ use crate::{
     },
     items::ToolKind,
     protocol::{
-        ClientMessage, GAME_VERSION, ResourceImpactKind, ServerMessage, ToastKind, Vec3Net,
+        ClientMessage, GAME_VERSION, PROTOCOL_VERSION, ResourceImpactKind, ServerMessage,
+        ToastKind, Vec3Net,
     },
 };
 
@@ -121,9 +123,15 @@ pub(crate) fn network_tick_system(
         if let ServerMessage::AuthRejected { reason } = &message {
             let reason = reason.clone();
             // The server refused us at the handshake (bad/expired auth
-            // ticket, protocol or version mismatch). Bucket it as a
-            // disconnect for analytics, log it, gracefully tear the session
-            // down, and bounce back to the main menu with a friendly notice.
+            // ticket, protocol or version mismatch), or the transport dropped
+            // mid-game (`report_client_disconnect_system` reuses this variant
+            // for that). Either way: bucket it as a disconnect for analytics,
+            // log it, gracefully tear the session down, and bounce back to the
+            // main menu with a friendly notice.
+            warn!(
+                "session ended by AuthRejected: {reason} (was connected as {:?})",
+                runtime.client_id
+            );
             pending_session_end.0 = Some(SessionEndReason::Disconnect);
             runtime.apply_message(message);
             // Graceful, non-blocking teardown: the DISCONNECT handshake runs
@@ -136,8 +144,31 @@ pub(crate) fn network_tick_system(
             toasts.clear();
             continue;
         }
-        if let ServerMessage::VersionMismatch { server_version, .. } = &message {
+        if let ServerMessage::VersionMismatch {
+            server_version,
+            server_protocol,
+        } = &message
+        {
+            // A version mismatch is only ever sent during the handshake, before
+            // we receive a `Welcome`. If we already have a `client_id` we're an
+            // established in-world session, so this is a stale message left over
+            // from a previous connection (e.g. the shared client network reused
+            // across a singleplayer -> main menu -> multiplayer transition).
+            // Ignoring it keeps a phantom mismatch from yanking a live session
+            // back to the menu. Log it so a genuine recurrence is diagnosable.
+            if runtime.client_id.is_some() {
+                warn!(
+                    "ignoring stale VersionMismatch (server {server_version}, protocol \
+                     {server_protocol}) while connected as {:?}",
+                    runtime.client_id
+                );
+                continue;
+            }
             let server_version = server_version.clone();
+            warn!(
+                "version mismatch joining server: server {server_version} (protocol \
+                 {server_protocol}), client {GAME_VERSION} (protocol {PROTOCOL_VERSION})"
+            );
             // Client/server build mismatch. Same graceful teardown as an auth
             // rejection, but the modal shows both versions so the player can
             // see whether they're ahead of or behind the server.
@@ -269,13 +300,38 @@ pub(crate) fn network_tick_system(
                 frame: frame.clone(),
             });
         }
-        if let ServerMessage::Pong { client_time_ms } = &message {
-            let now_ms = (time.elapsed_secs() * 1000.0) as u32;
-            let rtt = now_ms.saturating_sub(*client_time_ms).min(u16::MAX as u32) as u16;
-            runtime.set_local_ping(rtt);
-        }
+        // `Pong` no longer feeds the ping readout, that comes from the
+        // transport-measured RTT in `update_link_ping_system`. The app-level
+        // round trip was quantised by the 20 Hz server tick and read ~40 ms
+        // even on loopback. The message is still echoed by the server and
+        // handled as a no-op in `apply_message` for wire compatibility.
         runtime.apply_message(message);
     }
+}
+
+/// Surface the true network round-trip time onto the runtime for the HUD and
+/// player-list roster.
+///
+/// Lightyear's `PingManager` measures link RTT directly (and subtracts the
+/// peer's think-time), mirroring it onto `Link.stats.rtt`. We read that rather
+/// than the app-level `Ping`/`Pong`, whose round trip is quantised by the 20 Hz
+/// server tick, on loopback it read ~40 ms even though the real link latency is
+/// ~0. The loopback host client has no `PingManager` (Lightyear filters it out
+/// with `Without<HostClient>`), so its `Link.stats.rtt` stays zero, which is
+/// exactly right for in-process singleplayer. The value still rides to the
+/// server via `ClientMessage::Ping { rtt_ms, .. }` so the roster can show every
+/// player's latency.
+pub(crate) fn update_link_ping_system(
+    links: Query<&Link, With<client::Client>>,
+    mut runtime: ResMut<ClientRuntime>,
+) {
+    let Some(link) = links.iter().next() else {
+        return;
+    };
+    let rtt_ms = (link.stats.rtt.as_secs_f32() * 1000.0)
+        .round()
+        .clamp(0.0, u16::MAX as f32) as u16;
+    runtime.set_local_ping(rtt_ms);
 }
 
 /// Reads queued [`ClientErrorToast`] events and surfaces them on
