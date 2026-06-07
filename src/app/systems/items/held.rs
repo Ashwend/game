@@ -148,14 +148,17 @@ fn held_item_layers(
                 assets.held_iron_head_material.clone(),
             ),
         ],
+        // The iron pickaxe is an authored glb and carries its own materials
+        // (matte haft + metallic head), so it does not borrow the shared
+        // `held_tool_material` / `held_iron_head_material` like the hatchet does.
         HeldMesh::IronPickaxe => vec![
             (
                 assets.held_iron_pickaxe_body_mesh.clone(),
-                assets.held_tool_material.clone(),
+                assets.held_iron_pickaxe_body_material.clone(),
             ),
             (
                 assets.held_iron_pickaxe_head_mesh.clone(),
-                assets.held_iron_head_material.clone(),
+                assets.held_iron_pickaxe_head_material.clone(),
             ),
         ],
     }

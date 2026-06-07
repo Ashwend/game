@@ -1,6 +1,7 @@
 use bevy::{
     audio::SpatialListener,
     core_pipeline::tonemapping::Tonemapping,
+    gltf::GltfAssetLabel,
     light::AtmosphereEnvironmentMapLight,
     pbr::{Atmosphere, AtmosphereSettings, ScatteringMedium},
     post_process::dof::{DepthOfField, DepthOfFieldMode},
@@ -18,16 +19,16 @@ use super::{
         low_poly_birch_tree_small_lod_mesh, low_poly_birch_tree_small_mesh,
         low_poly_branch_pile_mesh, low_poly_crude_furnace_mesh, low_poly_hatchet_mesh,
         low_poly_hay_grass_mesh, low_poly_iron_hatchet_body_mesh, low_poly_iron_hatchet_head_mesh,
-        low_poly_iron_pickaxe_body_mesh, low_poly_iron_pickaxe_head_mesh, low_poly_ore_node_mesh,
-        low_poly_pickaxe_mesh, low_poly_pine_tree_large_lod_mesh, low_poly_pine_tree_large_mesh,
-        low_poly_pine_tree_medium_lod_mesh, low_poly_pine_tree_medium_mesh,
-        low_poly_pine_tree_small_lod_mesh, low_poly_pine_tree_small_mesh, low_poly_player_mesh,
-        low_poly_surface_stone_mesh, low_poly_workbench_mesh,
+        low_poly_ore_node_mesh, low_poly_pickaxe_mesh, low_poly_pine_tree_large_lod_mesh,
+        low_poly_pine_tree_large_mesh, low_poly_pine_tree_medium_lod_mesh,
+        low_poly_pine_tree_medium_mesh, low_poly_pine_tree_small_lod_mesh,
+        low_poly_pine_tree_small_mesh, low_poly_player_mesh, low_poly_surface_stone_mesh,
+        low_poly_workbench_mesh,
     },
     sky::{initial_distance_fog, setup_sky},
 };
 
-use crate::app::{EYE_HEIGHT, PLAYER_VISUAL_CENTER_Y};
+use crate::app::{EYE_HEIGHT, PLAYER_VISUAL_CENTER_Y, embedded_asset_path};
 
 /// Strength of the image-based ambient/reflection light generated from the
 /// procedural sky. The sun is kept at a daylight-calibrated illuminance (see
@@ -70,6 +71,12 @@ pub(crate) struct ItemVisualAssets {
     pub(crate) held_iron_hatchet_head_mesh: Handle<Mesh>,
     pub(crate) held_iron_pickaxe_body_mesh: Handle<Mesh>,
     pub(crate) held_iron_pickaxe_head_mesh: Handle<Mesh>,
+    /// The iron pickaxe is an authored glb, so unlike the other iron tools it
+    /// brings its *own* two materials (matte haft + metallic head) rather than
+    /// borrowing the shared base-white tool materials. Keeps the whole look in
+    /// the model. Source: `art/items/iron_pickaxe/iron_pickaxe.blend`.
+    pub(crate) held_iron_pickaxe_body_material: Handle<StandardMaterial>,
+    pub(crate) held_iron_pickaxe_head_material: Handle<StandardMaterial>,
     pub(crate) dropped_material: Handle<StandardMaterial>,
     pub(crate) held_bag_material: Handle<StandardMaterial>,
     pub(crate) held_tool_material: Handle<StandardMaterial>,
@@ -154,6 +161,7 @@ pub(crate) struct ImpactEffectAssets {
 
 pub(crate) fn setup_scene(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut scattering_media: ResMut<Assets<ScatteringMedium>>,
@@ -262,6 +270,11 @@ pub(crate) fn setup_scene(
             ..default()
         }),
     });
+    // The iron pickaxe ships as an authored Blender glb (matching the inventory
+    // icon). Its geometry *and* materials are loaded straight from the model, so
+    // the whole look is owned by the asset, not the shared base-white tool
+    // materials. Same `embedded://` path for every sub-asset below.
+    let pickaxe_glb = embedded_asset_path("items/iron_pickaxe/model.glb");
     commands.insert_resource(ItemVisualAssets {
         dropped_mesh: meshes.add(low_poly_bag_mesh()),
         held_bag_mesh: meshes.add(Cuboid::new(0.26, 0.22, 0.34)),
@@ -269,8 +282,40 @@ pub(crate) fn setup_scene(
         held_pickaxe_mesh: meshes.add(low_poly_pickaxe_mesh()),
         held_iron_hatchet_body_mesh: meshes.add(low_poly_iron_hatchet_body_mesh()),
         held_iron_hatchet_head_mesh: meshes.add(low_poly_iron_hatchet_head_mesh()),
-        held_iron_pickaxe_body_mesh: meshes.add(low_poly_iron_pickaxe_body_mesh()),
-        held_iron_pickaxe_head_mesh: meshes.add(low_poly_iron_pickaxe_head_mesh()),
+        // Two primitives -> the two layers every iron tool uses: primitive 0 =
+        // matte wooden haft, primitive 1 = metallic iron head. Source:
+        // `art/items/iron_pickaxe/iron_pickaxe.blend`.
+        held_iron_pickaxe_body_mesh: asset_server.load(
+            GltfAssetLabel::Primitive {
+                mesh: 0,
+                primitive: 0,
+            }
+            .from_asset(pickaxe_glb.clone()),
+        ),
+        held_iron_pickaxe_head_mesh: asset_server.load(
+            GltfAssetLabel::Primitive {
+                mesh: 0,
+                primitive: 1,
+            }
+            .from_asset(pickaxe_glb.clone()),
+        ),
+        // The pickaxe's own materials (authored in Blender): material 0 = matte
+        // wood, material 1 = metallic iron. Both are base-white and tint from the
+        // model's COLOR_0 vertex colours, so the look is fully defined in the glb.
+        held_iron_pickaxe_body_material: asset_server.load(
+            GltfAssetLabel::Material {
+                index: 0,
+                is_scale_inverted: false,
+            }
+            .from_asset(pickaxe_glb.clone()),
+        ),
+        held_iron_pickaxe_head_material: asset_server.load(
+            GltfAssetLabel::Material {
+                index: 1,
+                is_scale_inverted: false,
+            }
+            .from_asset(pickaxe_glb.clone()),
+        ),
         dropped_material: materials.add(StandardMaterial {
             base_color: DROPPED_BAG_COLOR,
             perceptual_roughness: 0.95,

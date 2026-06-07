@@ -161,6 +161,7 @@ Line-delimited JSON, one request per connection; the reply is
 | `{"command":"dump_state"}` | JSON snapshot: `client_id`, `in_world`, `screen`, the `*_open` flags, player position/yaw/pitch/health, ping, roster. |
 | `{"command":"screenshot","path":"/tmp/shot.png"}` | Capture the primary window (3D scene + egui UI) to PNG. Async: the file lands a frame or two later, so poll for it. |
 | `{"command":"send_command","text":"test-kit"}` | Forward a slash command (no leading `/`) to the server. |
+| `{"command":"select_actionbar_slot","slot":3}` | Select a 0-based actionbar slot, putting that slot's item in hand (verifying a held viewmodel). After `test-kit` the iron pickaxe is in slot 3. |
 | `{"command":"set_screen","screen":"worlds"}` | Navigate menu screens. Does not start a session; connect via `--connect`. |
 | `{"command":"set_inventory_open","open":true}` | Open/close the inventory panel. |
 

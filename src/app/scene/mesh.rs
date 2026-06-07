@@ -18,7 +18,7 @@ pub(crate) use ore::{COAL_ORE, IRON_ORE, STONE_VEIN, SULFUR_ORE, low_poly_ore_no
 pub(crate) use player::{PLAYER_HEAD_TOP_LOCAL_Y, low_poly_player_mesh};
 pub(crate) use tools::{
     low_poly_hatchet_mesh, low_poly_iron_hatchet_body_mesh, low_poly_iron_hatchet_head_mesh,
-    low_poly_iron_pickaxe_body_mesh, low_poly_iron_pickaxe_head_mesh, low_poly_pickaxe_mesh,
+    low_poly_pickaxe_mesh,
 };
 pub(crate) use trees::{
     low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_large_mesh,

@@ -54,9 +54,24 @@ mod tests {
     use crate::app::state::{MenuState, Screen};
 
     fn app_with_scene_resources() -> App {
+        // The glb load is dispatched on the IO task pool, which a bare `App`
+        // (no `TaskPoolPlugin`) never initializes. Idempotent across tests.
+        bevy::tasks::IoTaskPool::get_or_init(Default::default);
         let mut app = App::new();
-        app.init_resource::<Assets<Mesh>>();
-        app.init_resource::<Assets<StandardMaterial>>();
+        // `setup_scene` loads the iron-pickaxe glb through the `AssetServer`
+        // (from the `embedded://` source), so the test app needs both. The
+        // load runs async and never completes in a one-shot `update()`, which
+        // is fine: these tests assert scene wiring, not mesh contents.
+        app.add_plugins((
+            bevy::asset::AssetPlugin::default(),
+            crate::app::embedded_assets::EmbeddedAssetsPlugin,
+        ));
+        // `init_asset` (not `init_resource`) so the `AssetServer` knows these
+        // types, `setup_scene` calls `asset_server.load::<Mesh>` and
+        // `load::<StandardMaterial>` for the iron-pickaxe glb and panics if the
+        // type was never registered.
+        app.init_asset::<Mesh>();
+        app.init_asset::<StandardMaterial>();
         // `setup_scene` adds an earthlike `Atmosphere` to the camera, which
         // pulls a `ScatteringMedium` handle out of this asset collection.
         app.init_resource::<Assets<ScatteringMedium>>();

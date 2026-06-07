@@ -173,58 +173,11 @@ pub(crate) fn low_poly_iron_hatchet_head_mesh() -> Mesh {
     builder.build()
 }
 
-/// Iron pickaxe, matte body layer: hewn handle, pommel, and leather wraps.
-pub(crate) fn low_poly_iron_pickaxe_body_mesh() -> Mesh {
-    let mut builder = LowPolyMeshBuilder::default();
-    builder.add_box([0.0, -0.08, 0.0], [0.028, 0.34, 0.028], WOOD_MID);
-    builder.add_box([0.0, -0.38, 0.0], [0.032, 0.060, 0.032], WOOD_DARK);
-    // Pommel cap.
-    builder.add_box([0.0, -0.46, 0.0], [0.042, 0.030, 0.040], WOOD_DARK);
-    // Leather grip wraps.
-    builder.add_box([0.0, -0.24, 0.0], [0.035, 0.022, 0.035], LEATHER_WRAP);
-    builder.add_box([0.0, -0.12, 0.0], [0.035, 0.014, 0.035], LEATHER_WRAP);
-    builder.add_box([0.0, 0.00, 0.0], [0.035, 0.014, 0.035], LEATHER_WRAP);
-    builder.build()
-}
-
-/// Iron pickaxe, shiny head layer: forward pick, stubby back tail, eye block,
-/// band, and bright crown. Asymmetric so it never reads as a double-headed
-/// hammer. Drawn with the metallic iron material.
-pub(crate) fn low_poly_iron_pickaxe_head_mesh() -> Mesh {
-    let mut builder = LowPolyMeshBuilder::default();
-    // Iron eye block clamping the head to the haft, plus a binding band.
-    builder.add_box([0.0, 0.24, 0.0], [0.052, 0.050, 0.052], IRON_HEAD_DARK);
-    builder.add_box([0.0, 0.235, 0.0], [0.060, 0.020, 0.046], IRON_BAND);
-    // Bright crown catching light along the top of the head.
-    builder.add_box([0.0, 0.292, 0.0], [0.050, 0.014, 0.046], IRON_EDGE);
-
-    // Forward pick, long tapered iron spike to a sharp point.
-    builder.add_quad_prism(
-        [[0.052, 0.300], [0.24, 0.270], [0.24, 0.250], [0.052, 0.225]],
-        0.028,
-        IRON_HEAD,
-    );
-    builder.add_tri_prism(
-        [[0.24, 0.270], [0.34, 0.260], [0.24, 0.250]],
-        0.015,
-        IRON_EDGE,
-    );
-
-    // Back tail, short blunt chisel counterweight opposite the pick.
-    builder.add_quad_prism(
-        [
-            [-0.052, 0.300],
-            [-0.17, 0.286],
-            [-0.17, 0.232],
-            [-0.052, 0.225],
-        ],
-        0.032,
-        IRON_HEAD,
-    );
-    builder.add_tri_prism(
-        [[-0.17, 0.286], [-0.215, 0.260], [-0.17, 0.232]],
-        0.020,
-        IRON_EDGE,
-    );
-    builder.build()
-}
+// The iron pickaxe is no longer built here: its in-hand model is an authored
+// Blender glb (`assets/items/iron_pickaxe/model.glb`, source
+// `art/items/iron_pickaxe/iron_pickaxe.blend`) matching the inventory icon. It
+// is still drawn as the same two layers as the iron hatchet (a matte handle body
+// + a metallic iron head), but the geometry *and* the materials come from the
+// glb's two primitives, loaded in `scene::assets`, rather than from
+// `LowPolyMeshBuilder` here. See `held_item_layers` in
+// `app::systems::items::held`.

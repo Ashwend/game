@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use super::HeadlessCapture;
 use crate::{
     app::state::{ClientRuntime, LocalPlayerState, MenuState, Screen},
-    protocol::ClientMessage,
+    protocol::{ClientMessage, InventoryCommand},
 };
 
 /// Owner+group only, matching the server admin socket. The socket grants full
@@ -51,6 +51,11 @@ pub(crate) enum ControlRequest {
     Screenshot { path: PathBuf },
     /// Forward a slash command to the server (no leading `/`), e.g. `test-kit`.
     SendCommand { text: String },
+    /// Select an actionbar slot (0-based), making that slot's item the held /
+    /// active one, exactly as pressing its number key would. Lets an agent put
+    /// a specific tool in hand to verify its held viewmodel (e.g. after
+    /// `test-kit`, the iron pickaxe lands in slot 3).
+    SelectActionbarSlot { slot: usize },
     /// Navigate between menu screens (main_menu / worlds / multiplayer /
     /// options / in_game). Does not start a session; connect via `--connect`.
     SetScreen { screen: String },
@@ -232,6 +237,16 @@ fn handle_request(
             session.send(ClientMessage::Command { text })?;
             Ok("command queued".to_owned())
         }
+        ControlRequest::SelectActionbarSlot { slot } => {
+            let session = runtime
+                .session
+                .as_mut()
+                .context("no active session (not in a world)")?;
+            session.send(ClientMessage::Inventory(
+                InventoryCommand::SelectActionbarSlot { slot },
+            ))?;
+            Ok(format!("selected actionbar slot {slot}"))
+        }
         ControlRequest::SetScreen { screen } => {
             menu.screen = parse_screen(&screen)?;
             Ok(format!("screen set to {:?}", menu.screen))
@@ -361,6 +376,13 @@ mod tests {
         let cmd: ControlRequest =
             serde_json::from_str(r#"{"command":"send_command","text":"test-kit"}"#).unwrap();
         assert!(matches!(cmd, ControlRequest::SendCommand { text } if text == "test-kit"));
+
+        let slot: ControlRequest =
+            serde_json::from_str(r#"{"command":"select_actionbar_slot","slot":3}"#).unwrap();
+        assert!(matches!(
+            slot,
+            ControlRequest::SelectActionbarSlot { slot: 3 }
+        ));
 
         let shot: ControlRequest =
             serde_json::from_str(r#"{"command":"screenshot","path":"/tmp/a.png"}"#).unwrap();
