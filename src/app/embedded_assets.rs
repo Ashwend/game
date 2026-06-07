@@ -2,6 +2,16 @@ use bevy::{asset::io::embedded::EmbeddedAssetRegistry, prelude::*};
 use include_dir::{Dir, include_dir};
 use std::path::{Path, PathBuf};
 
+// `include_dir!` (below) is a proc macro, so on stable Rust it can't tell Cargo
+// which files it embedded; editing an asset would otherwise leave the *stale*
+// bytes baked in until this module happened to recompile for another reason.
+// This `include!` pulls in a fingerprint of the `assets/` tree that `build.rs`
+// regenerates whenever any asset changes, making this module a recompile
+// dependency of that fingerprint and forcing `include_dir!` to re-read the tree.
+// Do not remove it. (Plain comment, not a doc comment: the target is a macro
+// invocation, which can't carry docs.)
+include!(concat!(env!("OUT_DIR"), "/embedded_assets_fingerprint.rs"));
+
 /// Compile-time snapshot of the entire `assets/` tree, baked into the
 /// binary. Every file under `assets/` is registered into Bevy's
 /// [`EmbeddedAssetRegistry`] at startup, exposed to the rest of the engine

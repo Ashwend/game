@@ -16,8 +16,12 @@ use bevy::diagnostic::{
     EntityCountDiagnosticsPlugin, LogDiagnosticsPlugin, SystemInformationDiagnosticsPlugin,
 };
 use bevy::{
-    diagnostic::FrameTimeDiagnosticsPlugin, prelude::*, transform::TransformSystems,
-    window::WindowPosition, winit::WinitSettings,
+    audio::{GlobalVolume, Volume},
+    diagnostic::FrameTimeDiagnosticsPlugin,
+    prelude::*,
+    transform::TransformSystems,
+    window::WindowPosition,
+    winit::WinitSettings,
 };
 use bevy_egui::{EguiPlugin, EguiPostUpdateSet, EguiPreUpdateSet, EguiPrimaryContextPass};
 use bevy_framepace::{FramepacePlugin, FramepaceSettings};
@@ -34,7 +38,7 @@ use crate::{
 };
 
 use self::voice::{
-    IncomingVoiceMessage, apply_voice_settings_system, manage_voice_capture_system,
+    IncomingVoiceMessage, VoiceDisabled, apply_voice_settings_system, manage_voice_capture_system,
     receive_voice_system, setup_voice_system, transmit_voice_system,
 };
 
@@ -82,9 +86,21 @@ use self::{
     },
     ui::{
         ButtonSoundRequests, InventorySoundRequests, apply_ui_scale_system, button_sound_system,
-        install_egui_fonts_system, inventory_sound_system, ui_system,
+        install_egui_fonts_system, inventory_sound_system, setup_item_icons, ui_system,
     },
 };
+
+// Agent automation surface (control socket + off-screen capture) is dev-only:
+// gated on `debug_assertions` so it compiles out of shipped release builds and
+// can't be driven by a bot in the final game.
+#[cfg(debug_assertions)]
+use self::systems::{HeadlessCapture, insert_capture_target, redirect_camera_to_capture};
+
+#[cfg(all(unix, debug_assertions))]
+use self::systems::{ClientControlSocket, drain_control_socket};
+
+#[cfg(all(debug_assertions, target_os = "macos"))]
+use self::systems::relinquish_macos_focus_system;
 
 pub(crate) const EYE_HEIGHT: f32 = 1.62;
 pub(crate) const PLAYER_VISUAL_CENTER_Y: f32 = 0.9;
@@ -209,6 +225,27 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
     });
     let window_settings = settings.display;
     let test_mode = TestModeConfig::from_env();
+    // Dev-only off-screen capture: when set, the primary camera renders into an
+    // image instead of the window and the window comes up hidden so frames keep
+    // advancing without an on-screen surface. See `systems::headless_capture`.
+    // Compiled out of release builds; always `None` there so the window stays
+    // visible and the capture wiring below is dropped entirely.
+    #[cfg(debug_assertions)]
+    let headless_capture = HeadlessCapture::resolution_from_env();
+    #[cfg(not(debug_assertions))]
+    let headless_capture: Option<(u32, u32)> = None;
+    // Agent-driven sessions (off-screen capture and/or the control socket)
+    // should come up in the background: the primary window is created unfocused
+    // (winit `with_active(false)`), so launching the agent doesn't steal focus
+    // or jump in front of whatever the user is doing. Normal `./cli client`
+    // play is untouched. Always `false` in release (agent paths compile out).
+    #[cfg(all(unix, debug_assertions))]
+    let agent_driven =
+        headless_capture.is_some() || std::env::var_os(ClientControlSocket::ENV).is_some();
+    #[cfg(all(not(unix), debug_assertions))]
+    let agent_driven = headless_capture.is_some();
+    #[cfg(not(debug_assertions))]
+    let agent_driven = false;
     // A plain `client` launch must sign in through WorkOS before the title
     // screen appears; only the test / `--connect` path bypasses the gate with
     // an identity injected from the environment.
@@ -310,6 +347,14 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
                         window_settings.window_mode(None)
                     },
                     resizable: false,
+                    // Headless capture renders to an off-screen image, so the
+                    // window is created hidden. winit then runs the schedule
+                    // each cycle (its `all_invisible` path) so the capture image
+                    // stays fresh without an on-screen surface to throttle.
+                    visible: headless_capture.is_none(),
+                    // Agent-driven sessions come up unfocused so the window
+                    // doesn't steal focus or jump in front of other windows.
+                    focused: !agent_driven,
                     ..default()
                 }),
                 ..default()
@@ -392,8 +437,57 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
 
     configure_client_schedule(&mut app);
 
+    // Agent-driven sessions don't exercise voice chat, so disable it entirely.
+    // This keeps automated runs from opening the microphone, which on macOS
+    // forces a Bluetooth headset out of A2DP into low-quality HFP mode. We also
+    // mute the global volume so a headless/automated run is silent, there's no
+    // one listening. Muting (rather than disabling the audio plugin) keeps the
+    // pipeline intact, so audio sinks still despawn normally.
+    if agent_driven {
+        app.insert_resource(VoiceDisabled);
+        app.insert_resource(GlobalVolume::new(Volume::Linear(0.0)));
+    }
+
+    // Dev-only off-screen capture: allocate the render-target image, insert the
+    // resource the screenshot path keys off of, and point `MainCamera` at it
+    // once the scene spawns. After `DefaultPlugins`, so `Assets<Image>` exists.
+    // The whole block compiles out of release builds.
+    #[cfg(debug_assertions)]
+    if let Some((width, height)) = headless_capture {
+        insert_capture_target(&mut app, width, height);
+        app.add_systems(Startup, redirect_camera_to_capture.after(setup_scene));
+        eprintln!("headless capture enabled: rendering to {width}x{height} off-screen image");
+    }
+
+    // Dev-only client control socket: bound only when GAME_CONTROL_SOCKET names
+    // a path, and only in dev builds (`debug_assertions`), so shipped release
+    // builds don't even contain the code, a bot can't drive the final game by
+    // setting the env var. Lets an agent drive the client for automated testing
+    // (screenshot / command / state dump).
+    #[cfg(all(unix, debug_assertions))]
+    if let Some(path) = std::env::var_os(ClientControlSocket::ENV) {
+        match ClientControlSocket::bind(std::path::PathBuf::from(path)) {
+            Ok(socket) => {
+                app.insert_resource(socket);
+                app.add_systems(Update, drain_control_socket);
+                eprintln!("client control socket listening (GAME_CONTROL_SOCKET)");
+            }
+            Err(error) => eprintln!("could not bind client control socket: {error:#}"),
+        }
+    }
+
+    // Dev-only (macOS): an agent-driven launch should not steal focus. winit
+    // activates the app on launch regardless of the window's `focused` flag, so
+    // on the first frame we drop to a background accessory app and hand focus
+    // back. Other platforms get unfocused spawn from `focused: false` above.
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    if agent_driven {
+        app.add_systems(Startup, relinquish_macos_focus_system);
+    }
+
     app.add_systems(Startup, setup_scene)
         .add_systems(Startup, setup_voice_system)
+        .add_systems(Startup, setup_item_icons)
         .add_systems(
             EguiPrimaryContextPass,
             (ui_system, button_sound_system, inventory_sound_system).chain(),

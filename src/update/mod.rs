@@ -80,6 +80,13 @@ pub(crate) struct UpdateState {
     /// Whether the changelog modal is showing. Auto-opens once on boot when an
     /// un-skipped update is found; the corner pill toggles it afterwards.
     pub(crate) modal_open: bool,
+    /// Release notes for the build the player is *currently* running, fetched in
+    /// the same boot-time check as the update probe. Drives the title-screen
+    /// "what's new" modal opened from the version label. `None` until the check
+    /// returns, when offline, or for a dev build with no matching release.
+    current_changelog: Option<String>,
+    /// Whether the title-screen "what's new" modal is showing.
+    current_changelog_open: bool,
     skipped_version: Option<String>,
     channels: Option<Channels>,
 }
@@ -94,9 +101,12 @@ enum Cmd {
 }
 
 enum Msg {
-    /// `None` ⇒ up to date / check failed.
+    /// `available: None` ⇒ up to date / check failed. `current_changelog`
+    /// carries the running build's own release notes regardless, for the
+    /// title-screen "what's new" view.
     Checked {
         available: Option<AvailableUpdate>,
+        current_changelog: Option<String>,
     },
     Progress {
         received: u64,
@@ -121,6 +131,8 @@ impl UpdateState {
                 status: UpdateStatus::Checking,
                 available: None,
                 modal_open: false,
+                current_changelog: None,
+                current_changelog_open: false,
                 skipped_version,
                 channels: Some(Channels { cmd_tx, msg_rx }),
             },
@@ -130,6 +142,8 @@ impl UpdateState {
                     status: UpdateStatus::UpToDate,
                     available: None,
                     modal_open: false,
+                    current_changelog: None,
+                    current_changelog_open: false,
                     skipped_version,
                     channels: None,
                 }
@@ -161,6 +175,24 @@ impl UpdateState {
 
     pub(crate) fn dismiss_modal(&mut self) {
         self.modal_open = false;
+    }
+
+    /// Release notes for the running build, if the boot check found a matching
+    /// release. Drives the title-screen "what's new" modal.
+    pub(crate) fn current_changelog(&self) -> Option<&str> {
+        self.current_changelog.as_deref()
+    }
+
+    pub(crate) fn current_changelog_open(&self) -> bool {
+        self.current_changelog_open
+    }
+
+    pub(crate) fn open_current_changelog(&mut self) {
+        self.current_changelog_open = true;
+    }
+
+    pub(crate) fn dismiss_current_changelog(&mut self) {
+        self.current_changelog_open = false;
     }
 
     /// Whether this install can update itself (supported host + the sibling
@@ -231,6 +263,8 @@ impl UpdateState {
             status: UpdateStatus::UpToDate,
             available: None,
             modal_open: false,
+            current_changelog: None,
+            current_changelog_open: false,
             skipped_version: None,
             channels: None,
         }
@@ -245,18 +279,24 @@ fn poll_update_messages_system(mut state: ResMut<UpdateState>) {
     };
     for message in messages {
         match message {
-            Msg::Checked { available } => match available {
-                Some(available) => {
-                    let skipped =
-                        state.skipped_version.as_deref() == Some(available.version.as_str());
-                    state.available = Some(available);
-                    state.status = UpdateStatus::Available;
-                    // Auto-open on boot unless the player already skipped this
-                    // exact version; the pill still appears either way.
-                    state.modal_open = !skipped;
+            Msg::Checked {
+                available,
+                current_changelog,
+            } => {
+                state.current_changelog = current_changelog;
+                match available {
+                    Some(available) => {
+                        let skipped =
+                            state.skipped_version.as_deref() == Some(available.version.as_str());
+                        state.available = Some(available);
+                        state.status = UpdateStatus::Available;
+                        // Auto-open on boot unless the player already skipped this
+                        // exact version; the pill still appears either way.
+                        state.modal_open = !skipped;
+                    }
+                    None => state.status = UpdateStatus::UpToDate,
                 }
-                None => state.status = UpdateStatus::UpToDate,
-            },
+            }
             Msg::Progress { received, total } => {
                 if matches!(state.status, UpdateStatus::Downloading { .. }) {
                     state.status = UpdateStatus::Downloading { received, total };
@@ -309,27 +349,37 @@ fn check_latest(agent: &ureq::Agent) -> Msg {
             // Treat any check failure as "up to date", never block or nag on a
             // flaky network. Log once for diagnostics.
             eprintln!("update: check failed: {error}");
-            return Msg::Checked { available: None };
+            return Msg::Checked {
+                available: None,
+                current_changelog: None,
+            };
         }
     };
 
+    // Always capture the running build's own notes for the "what's new" view,
+    // independent of whether a newer release exists.
     let current = Version::current();
-    let Some(latest) = github::latest_stable(&releases) else {
-        return Msg::Checked { available: None };
-    };
-    let Some(latest_version) = Version::parse(&latest.tag_name) else {
-        return Msg::Checked { available: None };
-    };
-    if latest_version <= current {
-        return Msg::Checked { available: None };
-    }
-
+    let current_changelog = github::changelog_for(&releases, current);
+    let available = newer_release(&releases, current);
     Msg::Checked {
-        available: Some(AvailableUpdate {
-            version: latest_version.to_string(),
-            changelog_md: github::changelog_since(&releases, current),
-            asset: latest.host_asset().cloned(),
-            staged_path: None,
-        }),
+        available,
+        current_changelog,
     }
+}
+
+/// The newest stable release strictly newer than `current`, packaged for the
+/// update modal. `None` when the player is already on the latest stable build
+/// or the release list carries no usable tag.
+fn newer_release(releases: &[github::Release], current: Version) -> Option<AvailableUpdate> {
+    let latest = github::latest_stable(releases)?;
+    let latest_version = Version::parse(&latest.tag_name)?;
+    if latest_version <= current {
+        return None;
+    }
+    Some(AvailableUpdate {
+        version: latest_version.to_string(),
+        changelog_md: github::changelog_since(releases, current),
+        asset: latest.host_asset().cloned(),
+        staged_path: None,
+    })
 }

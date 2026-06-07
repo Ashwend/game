@@ -9,6 +9,7 @@ mod furnace;
 mod hud;
 mod inventory;
 mod inventory_panel;
+mod item_icons;
 mod login;
 mod loot_bag;
 mod menu;
@@ -55,13 +56,14 @@ use self::{
     theme::{ButtonKind, MENU_BUTTON_WIDTH, game_button},
     toast::toast_ui,
     tutorial::{TutorialStep, tutorial_step, tutorial_ui},
-    update::{update_corner_pill, update_modal},
+    update::{current_changelog_modal, update_corner_pill, update_modal},
     worlds::worlds_ui,
 };
 
 use egui_commonmark::CommonMarkCache;
 
 pub(crate) use death_splash::tick_death_splash_system;
+pub(crate) use item_icons::setup_item_icons;
 
 use super::scene::WorldSceneState;
 use super::state::{
@@ -230,7 +232,13 @@ pub(crate) fn ui_system(
         .expect("authenticated state implies CurrentUser is present");
 
     match resources.menu.screen {
-        Screen::MainMenu => main_menu_ui(ctx, &mut resources.menu, &resources.store, user),
+        Screen::MainMenu => main_menu_ui(
+            ctx,
+            &mut resources.menu,
+            &resources.store,
+            user,
+            &mut resources.update,
+        ),
         Screen::Worlds => worlds_ui(
             ctx,
             &mut resources.menu,
@@ -525,10 +533,14 @@ pub(crate) fn ui_system(
         update_corner_pill(ctx, &mut resources.update);
     }
     update_modal(ctx, &mut resources.update, &mut commonmark_cache);
+    // The "what's new in this version" modal, opened from the title-screen
+    // version label. Global overlay so it animates closed cleanly from anywhere.
+    current_changelog_modal(ctx, &mut resources.update, &mut commonmark_cache);
 
     confirmation_ui(
         ctx,
         &mut resources.menu,
+        &mut resources.settings,
         &resources.store,
         &resources.analytics,
     );

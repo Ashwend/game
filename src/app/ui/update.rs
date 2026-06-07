@@ -78,6 +78,63 @@ pub(super) fn update_modal(
     }
 }
 
+/// The title-screen "what's new" modal: the release notes for the build the
+/// player is *currently* running. Opened from the white version label, distinct
+/// from [`update_modal`] (which is about a newer release to install). Renders
+/// only while [`UpdateState::current_changelog_open`] is set, animating closed
+/// via the shared modal shell otherwise.
+pub(super) fn current_changelog_modal(
+    ctx: &egui::Context,
+    update: &mut UpdateState,
+    cache: &mut CommonMarkCache,
+) {
+    let open = update.current_changelog_open();
+
+    // Snapshot the read-only changelog so the body closure can borrow `update`
+    // mutably for the buttons without aliasing.
+    let changelog = update.current_changelog().unwrap_or_default().to_owned();
+
+    let output = modal_shell(
+        ctx,
+        "current_changelog_modal",
+        open,
+        420.0,
+        560.0,
+        |ui, _choice: &mut Option<()>| {
+            ui.label(theme::section(&format!("What's new in v{GAME_VERSION}")));
+            ui.add_space(10.0);
+
+            egui::ScrollArea::vertical()
+                .max_height(340.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    if changelog.trim().is_empty() {
+                        ui.label(theme::muted(
+                            "Release notes for this version aren't available right now.",
+                        ));
+                    } else {
+                        CommonMarkViewer::new().show(ui, cache, &changelog);
+                    }
+                });
+
+            ui.add_space(16.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if compact_button(ui, "Close", ButtonKind::Primary, 92.0).clicked() {
+                    update.dismiss_current_changelog();
+                }
+                if compact_button(ui, "All releases", ButtonKind::Secondary, 108.0).clicked() {
+                    update.open_download_page();
+                }
+            });
+        },
+    );
+
+    // Outside click or Enter dismisses, matching the other overlays.
+    if output.clicked_outside || output.confirm_shortcut_pressed {
+        update.dismiss_current_changelog();
+    }
+}
+
 fn render_actions(
     ui: &mut egui::Ui,
     update: &mut UpdateState,
@@ -113,7 +170,7 @@ fn render_actions(
             });
         }
         UpdateStatus::Failed(message) => {
-            ui.label(egui::RichText::new(message).color(egui::Color32::from_rgb(235, 130, 130)));
+            ui.label(egui::RichText::new(message).color(theme::error_text()));
             ui.add_space(10.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if compact_button(ui, "Open download page", ButtonKind::Primary, BUTTON_WIDTH)

@@ -75,7 +75,7 @@ impl GameServer {
                 ));
             }
             if since_save >= self.auto_save_interval_ticks {
-                envelopes.extend(self.announce("Auto-saving the world..."));
+                envelopes.extend(self.announce("Auto-saving the world…"));
                 self.auto_save_pending = true;
                 self.last_auto_save_tick = self.tick;
             }

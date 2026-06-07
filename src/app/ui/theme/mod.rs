@@ -12,8 +12,8 @@ pub(super) use buttons::{
     game_button, record_click_sound, take_button_sounds,
 };
 pub(super) use colors::{
-    accent, accent_dark, backdrop_color, button_fill, button_hover_fill, button_stroke, input_fill,
-    muted_text, panel_fill, panel_stroke, text,
+    accent, accent_dark, backdrop_color, button_fill, button_hover_fill, button_stroke, error_text,
+    input_fill, muted_text, panel_fill, panel_stroke, text,
 };
 pub(super) use fonts::{TITLE_FONT, install_title_font};
 pub(super) use frames::{

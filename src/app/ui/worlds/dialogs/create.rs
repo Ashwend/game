@@ -182,6 +182,13 @@ fn draw_create_world_form(
             [ui.available_width(), COMPACT_ROW_HEIGHT],
             theme::text_input(&mut dialog.name).id(egui::Id::new(CREATE_WORLD_NAME_INPUT_ID)),
         );
+        // Grab focus on the dialog's first frame so the player can type a name
+        // and press Enter without clicking the field first. One-shot, so it
+        // never fights the player if they tab to the seed field.
+        if dialog.autofocus_pending {
+            name_response.request_focus();
+            dialog.autofocus_pending = false;
+        }
         if name_response.gained_focus() {
             select_all_text(ui, name_response.id, dialog.name.chars().count());
         }
@@ -233,7 +240,7 @@ fn draw_create_world_form(
         ui.label(
             egui::RichText::new(error)
                 .size(13.0)
-                .color(egui::Color32::from_rgb(255, 154, 130)),
+                .color(theme::error_text()),
         );
     }
 

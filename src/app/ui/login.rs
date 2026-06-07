@@ -76,10 +76,7 @@ pub(super) fn login_overlay_ui(
                             }
                             if let Some(error) = error {
                                 ui.add_space(12.0);
-                                ui.label(
-                                    egui::RichText::new(error)
-                                        .color(egui::Color32::from_rgb(231, 132, 110)),
-                                );
+                                ui.label(egui::RichText::new(error).color(theme::error_text()));
                             }
                         }
                         LoginView::Busy(message) => {

@@ -144,6 +144,7 @@ fn create_world_from_dialog_persists_selected_map() {
         error: None,
         closing: false,
         confirmed: true,
+        autofocus_pending: false,
     };
 
     create_world_from_dialog(

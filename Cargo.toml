@@ -112,6 +112,11 @@ zstd = "0.13.3"
 # the `flate2`/`miniz_oxide` already in the tree.
 [target.'cfg(target_os = "macos")'.dependencies]
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# Used only by the dev-only agent harness to drop the process to a background
+# (accessory) app so launching it doesn't steal focus. Versions match what winit
+# already pulls in, so this adds no new crates to the build.
+objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSResponder"] }
+objc2-foundation = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 zip = { version = "2", default-features = false, features = ["deflate"] }

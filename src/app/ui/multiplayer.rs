@@ -83,11 +83,7 @@ fn draw_join_prompt(ctx: &egui::Context, menu: &MenuState, connecting: bool) -> 
 
             if let Some(error) = &error {
                 ui.add_space(8.0);
-                ui.label(
-                    RichText::new(error)
-                        .size(13.0)
-                        .color(egui::Color32::from_rgb(255, 154, 130)),
-                );
+                ui.label(RichText::new(error).size(13.0).color(theme::error_text()));
             }
 
             ui.add_space(18.0);

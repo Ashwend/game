@@ -29,6 +29,9 @@ const TEXT_RIGHT_PADDING: f32 = 10.0;
 const TOAST_ACTIONBAR_GAP: f32 = 16.0;
 const TOAST_FONT_SIZE: f32 = 13.5;
 const CORNER_RADIUS: u8 = 5;
+/// Width of the colored severity spine on the toast's left edge. Sits inside
+/// the text's left padding so it never crowds the message.
+const ACCENT_BAR_WIDTH: f32 = 3.0;
 
 pub(super) fn toast_ui(ctx: &egui::Context, toasts: &ToastState, actionbar_rect: Option<Rect>) {
     if toasts.is_empty() {
@@ -160,6 +163,26 @@ fn paint_toast(
         );
     }
 
+    // Severity spine. A colored bar on the left so info / success / warning /
+    // error read at a glance and survive color blindness better than the text
+    // hue alone. Inset 1px so it sits within the panel border, left corners
+    // rounded to match the panel.
+    let spine_color = with_alpha(accent_color_for_kind(toast.kind), alpha);
+    let spine = Rect::from_min_max(
+        Pos2::new(rect.left() + 1.0, rect.top() + 1.0),
+        Pos2::new(rect.left() + 1.0 + ACCENT_BAR_WIDTH, rect.bottom() - 1.0),
+    );
+    painter.rect_filled(
+        spine,
+        CornerRadius {
+            nw: CORNER_RADIUS,
+            sw: CORNER_RADIUS,
+            ne: 0,
+            se: 0,
+        },
+        spine_color,
+    );
+
     let text_pos = Pos2::new(rect.left() + TEXT_LEFT_PADDING, rect.center().y);
     let text_max_width = (rect.width() - TEXT_LEFT_PADDING - TEXT_RIGHT_PADDING).max(0.0);
     let galley = layout_single_line(ctx, &toast.text, text_color, text_max_width);
@@ -207,6 +230,18 @@ fn text_color_for_kind(kind: ToastKind) -> Color32 {
         ToastKind::Success => Color32::from_rgb(168, 215, 168),
         ToastKind::Warning => Color32::from_rgb(228, 196, 134),
         ToastKind::Error => Color32::from_rgb(228, 154, 154),
+    }
+}
+
+/// Per-kind spine color. More saturated than [`text_color_for_kind`] so the
+/// thin bar carries the severity signal the desaturated body text only hints
+/// at. Info matches the UI accent blue.
+fn accent_color_for_kind(kind: ToastKind) -> Color32 {
+    match kind {
+        ToastKind::Info => theme::accent(),
+        ToastKind::Success => Color32::from_rgb(120, 198, 110),
+        ToastKind::Warning => Color32::from_rgb(232, 176, 84),
+        ToastKind::Error => Color32::from_rgb(228, 96, 96),
     }
 }
 
@@ -285,6 +320,28 @@ mod tests {
         assert_ne!(info, success);
         assert_ne!(success, warning);
         assert_ne!(warning, error);
+    }
+
+    #[test]
+    fn kind_accent_colors_are_distinct_and_bolder_than_text() {
+        for kind in [
+            ToastKind::Info,
+            ToastKind::Success,
+            ToastKind::Warning,
+            ToastKind::Error,
+        ] {
+            // The spine carries the same hue family as the text but should not
+            // be the identical desaturated value, that's the whole point.
+            assert_ne!(accent_color_for_kind(kind), text_color_for_kind(kind));
+        }
+        assert_ne!(
+            accent_color_for_kind(ToastKind::Warning),
+            accent_color_for_kind(ToastKind::Error)
+        );
+        assert_ne!(
+            accent_color_for_kind(ToastKind::Info),
+            accent_color_for_kind(ToastKind::Success)
+        );
     }
 
     #[test]

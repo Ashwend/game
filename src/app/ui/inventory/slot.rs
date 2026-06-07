@@ -8,7 +8,7 @@ use crate::{
     protocol::{ItemContainer, ItemContainerSlot, ItemStack, PlayerInventoryState},
 };
 
-use super::super::theme;
+use super::super::{item_icons, theme};
 
 pub(crate) const SLOT_SIZE: f32 = 56.0;
 
@@ -203,6 +203,37 @@ fn paint_slot_flash(ui: &egui::Ui, rect: Rect, strength: f32) {
 }
 
 fn paint_item_icon(ui: &egui::Ui, rect: Rect, stack: &ItemStack, is_drag_source: bool) {
+    if let Some(texture_id) = item_icons::texture_for(&stack.item_id) {
+        // Real artwork: draw the transparent icon PNG. The drag source is
+        // dimmed so the slot reads as "this is being carried", matching the
+        // placeholder's faded alpha.
+        let icon_rect = rect.shrink(6.0);
+        let tint = Color32::from_white_alpha(if is_drag_source { 110 } else { 255 });
+        ui.painter().image(
+            texture_id,
+            icon_rect,
+            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+            tint,
+        );
+    } else {
+        paint_placeholder_icon(ui, rect, stack, is_drag_source);
+    }
+
+    if stack.quantity > 1 {
+        ui.painter().text(
+            rect.right_bottom() - vec2(6.0, 5.0),
+            Align2::RIGHT_BOTTOM,
+            stack.quantity.to_string(),
+            FontId::new(13.0, FontFamily::Monospace),
+            Color32::WHITE,
+        );
+    }
+}
+
+/// Fallback when an item has no shipped icon PNG (and in headless/test
+/// contexts where icon textures were never registered): the original
+/// tinted-rectangle-with-gloss placeholder, tinted from the item registry.
+fn paint_placeholder_icon(ui: &egui::Ui, rect: Rect, stack: &ItemStack, is_drag_source: bool) {
     let definition = item_definition(&stack.item_id);
     let tint = definition
         .map(|definition| {
@@ -225,16 +256,6 @@ fn paint_item_icon(ui: &egui::Ui, rect: Rect, stack: &ItemStack, is_drag_source:
         7.0,
         Color32::from_rgba_unmultiplied(255, 255, 255, alpha / 3),
     );
-
-    if stack.quantity > 1 {
-        ui.painter().text(
-            rect.right_bottom() - vec2(6.0, 5.0),
-            Align2::RIGHT_BOTTOM,
-            stack.quantity.to_string(),
-            FontId::new(13.0, FontFamily::Monospace),
-            Color32::WHITE,
-        );
-    }
 }
 
 fn item_tooltip(response: egui::Response, stack: &ItemStack) -> egui::Response {
@@ -249,7 +270,25 @@ fn item_tooltip_body(stack: &ItemStack) -> String {
     let Some(definition) = item_definition(&stack.item_id) else {
         return format!("Unknown item\nQuantity: {}", stack.quantity);
     };
-    let stack_line = if definition.equipable {
+
+    let mut lines = vec![definition.description.to_owned()];
+
+    // Surface the registry data the player otherwise can't see from the bag:
+    // a tool's class/tier/yield, and that a deployable is placeable + how.
+    if let Some(tool) = definition.tool {
+        lines.push(format!(
+            "{} · Tier {} · gathers {} per hit",
+            tool.kind.label(),
+            tool.tier,
+            tool.gather_amount
+        ));
+    }
+    if let Some(deployable) = definition.deployable {
+        lines.push(format!("Deployable: {}", deployable.kind.label()));
+        lines.push("Hold it, then left-click to place".to_owned());
+    }
+
+    lines.push(if definition.equipable {
         "Equipable\nStack: 1".to_owned()
     } else {
         format!(
@@ -257,8 +296,9 @@ fn item_tooltip_body(stack: &ItemStack) -> String {
             stack.quantity,
             stack_limit(definition.id).unwrap_or(1)
         )
-    };
-    format!("{}\n{}", definition.description, stack_line)
+    });
+
+    lines.join("\n")
 }
 
 fn begin_drag(
@@ -321,6 +361,27 @@ mod tests {
     fn tooltip_body_uses_registry_stack_limits() {
         let body = item_tooltip_body(&ItemStack::new(COAL_ID, 3));
         assert!(body.contains("3/200"));
+    }
+
+    #[test]
+    fn tooltip_body_surfaces_tool_stats() {
+        use crate::items::BASIC_PICKAXE_ID;
+        let body = item_tooltip_body(&ItemStack::new(BASIC_PICKAXE_ID, 1));
+        // The pickaxe's class and per-hit yield come from its ToolProfile,
+        // which the bag otherwise never exposes.
+        assert!(body.contains("Pickaxe"), "tool class shown: {body}");
+        assert!(body.contains("per hit"), "gather yield shown: {body}");
+    }
+
+    #[test]
+    fn tooltip_body_marks_deployables_as_placeable() {
+        use crate::items::CRUDE_FURNACE_ID;
+        let body = item_tooltip_body(&ItemStack::new(CRUDE_FURNACE_ID, 1));
+        assert!(body.contains("Deployable"), "placeable hint shown: {body}");
+        assert!(
+            body.contains("left-click"),
+            "placement control shown: {body}"
+        );
     }
 
     #[test]

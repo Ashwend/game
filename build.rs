@@ -14,9 +14,35 @@
 //! "rerun if any tracked file changed" heuristic for this script, so we add the
 //! file watch back explicitly.
 
+use std::{
+    hash::{Hash, Hasher},
+    path::Path,
+};
+
 fn main() {
     // The build script itself.
     println!("cargo::rerun-if-changed=build.rs");
+
+    // Assets are baked into the binary at compile time by `include_dir!` in
+    // `src/app/embedded_assets.rs`. That's a proc macro, and on stable Rust it
+    // can't report which files it read, so Cargo doesn't know to rebuild when an
+    // asset changes: edit an item icon and a plain `cargo build`/`cargo run`
+    // keeps the *stale* bytes embedded. We close that gap here. We watch the
+    // assets tree and write a fingerprint of it into OUT_DIR; `embedded_assets.rs`
+    // `include!`s that file, so when any asset changes the fingerprint changes,
+    // which forces `embedded_assets.rs` to recompile and `include_dir!` to
+    // re-read the tree. Without this, asset edits silently no-op until something
+    // unrelated triggers a rebuild of that module.
+    println!("cargo::rerun-if-changed=assets");
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    fingerprint_dir(Path::new("assets"), &mut hasher);
+    let fingerprint = hasher.finish();
+    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR is set by Cargo");
+    let dest = Path::new(&out_dir).join("embedded_assets_fingerprint.rs");
+    // Anonymous const: exists only so `include!`ing this file makes the
+    // fingerprint a recompile dependency. Never read, never warns.
+    std::fs::write(&dest, format!("const _: u64 = {fingerprint};\n"))
+        .expect("write embedded asset fingerprint");
 
     // Every variable consumed by `option_env!` in the crate. Keep this in sync
     // with the `mod build { ... option_env!(...) }` blocks in
@@ -48,5 +74,31 @@ fn main() {
         println!(
             "cargo::warning=GAME_WORKOS_CLIENT_ID is unset or empty for this release build; baking the default WorkOS client id from src/auth/workos/config.rs"
         );
+    }
+}
+
+/// Hash every file under `dir` (path + length + mtime) into `hasher`, recursively
+/// and in a stable order, so the result changes iff an asset is added, removed,
+/// or edited. Uses the fixed-key `DefaultHasher`, so identical trees produce the
+/// same value across builds (no spurious recompiles).
+fn fingerprint_dir(dir: &Path, hasher: &mut impl Hasher) {
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = read_dir.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for path in entries {
+        if path.is_dir() {
+            fingerprint_dir(&path, hasher);
+        } else if let Ok(meta) = std::fs::metadata(&path) {
+            path.to_string_lossy().hash(hasher);
+            meta.len().hash(hasher);
+            if let Ok(mtime) = meta.modified().and_then(|t| {
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| std::io::Error::other(e.to_string()))
+            }) {
+                mtime.as_nanos().hash(hasher);
+            }
+        }
     }
 }

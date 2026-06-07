@@ -1,8 +1,9 @@
 use bevy_egui::egui;
 
 use crate::{
-    app::state::{CurrentUser, MenuState, SaveStore, Screen},
+    app::state::{ConfirmationDialog, CurrentUser, MenuState, SaveStore, Screen},
     protocol::GAME_VERSION,
+    update::UpdateState,
     util::open_url,
 };
 
@@ -21,6 +22,7 @@ pub(super) fn main_menu_ui(
     menu: &mut MenuState,
     store: &SaveStore,
     user: &CurrentUser,
+    update: &mut UpdateState,
 ) {
     theme::screen_scrim(ctx, "main_menu_scrim", 118);
     egui::Area::new("main_menu".into())
@@ -63,7 +65,7 @@ pub(super) fn main_menu_ui(
                 );
                 ui.add_space(8.0);
                 if ui.link(theme::muted("Sign out")).clicked() {
-                    menu.sign_out_requested = true;
+                    menu.confirmation = Some(ConfirmationDialog::sign_out());
                 }
                 if let Some(status) = &menu.status {
                     ui.add_space(4.0);
@@ -71,7 +73,7 @@ pub(super) fn main_menu_ui(
                 }
             });
         });
-    draw_version_indicator(ctx);
+    draw_version_indicator(ctx, update);
     draw_discord_link(ctx);
 }
 
@@ -92,12 +94,22 @@ fn draw_discord_link(ctx: &egui::Context) {
         });
 }
 
-fn draw_version_indicator(ctx: &egui::Context) {
+/// Bottom-right version label. White (not muted) and clickable: opens the
+/// "what's new in this version" changelog modal so players can see what shipped
+/// in the build they're on without leaving the game.
+fn draw_version_indicator(ctx: &egui::Context, update: &mut UpdateState) {
     egui::Area::new("main_menu_version".into())
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::RIGHT_BOTTOM, [-18.0, -14.0])
         .show(ctx, |ui| {
-            ui.label(theme::muted(format!("v{GAME_VERSION}")));
+            let label = egui::RichText::new(format!("v{GAME_VERSION}")).color(egui::Color32::WHITE);
+            if ui
+                .link(label)
+                .on_hover_text("See what's new in this version")
+                .clicked()
+            {
+                update.open_current_changelog();
+            }
         });
 }
 
@@ -142,9 +154,10 @@ mod tests {
         };
         let store = store();
         let user = user();
+        let mut update = UpdateState::idle_for_test();
 
         let output = ctx.run(raw_input(), |ctx| {
-            main_menu_ui(ctx, &mut menu, &store, &user);
+            main_menu_ui(ctx, &mut menu, &store, &user, &mut update);
         });
 
         assert!(output.shapes.len() > 1);

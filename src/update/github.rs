@@ -151,6 +151,24 @@ pub(crate) fn changelog_since(releases: &[Release], current: Version) -> String 
         .join("\n\n---\n\n")
 }
 
+/// Cleaned changelog markdown for the build the player is *currently* running,
+/// taken from the GitHub release whose tag matches `version`. `None` when no
+/// stable release matches it (a local/dev build ahead of any tag, or an empty
+/// release list), so the caller can show a graceful fallback rather than a
+/// blank panel.
+pub(crate) fn changelog_for(releases: &[Release], version: Version) -> Option<String> {
+    let release = releases
+        .iter()
+        .find(|r| r.is_stable() && r.version() == Some(version))?;
+    let body = clean_release_body(&release.body);
+    let body = body.trim();
+    Some(if body.is_empty() {
+        "_No release notes._".to_owned()
+    } else {
+        body.to_owned()
+    })
+}
+
 /// `vX.Y.Z` for a tag, tolerating tags with or without a leading `v`.
 fn display_version(tag: &str) -> String {
     let trimmed = tag.trim();
@@ -289,6 +307,39 @@ mod tests {
         assert!(log.contains("**Feature**"));
         assert!(!log.contains("#### Feature"));
         assert!(log.contains("did a thing"));
+    }
+
+    #[test]
+    fn changelog_for_returns_the_matching_release_body_compacted() {
+        let releases = vec![
+            rel("v0.16.2", "## Ashwend v0.16.2\n\n#### Fixes\n- old fix\n"),
+            rel(
+                "v0.17.0",
+                "## Ashwend v0.17.0\n\n#### Feature\n- shiny thing\n",
+            ),
+        ];
+        let log = changelog_for(&releases, Version::parse("0.17.0").unwrap())
+            .expect("matching release present");
+        // The title is dropped and the category heading compacted to bold.
+        assert!(!log.contains("## Ashwend"));
+        assert!(log.contains("**Feature**"));
+        assert!(log.contains("shiny thing"));
+        // Only the matching release, not the older one.
+        assert!(!log.contains("old fix"));
+    }
+
+    #[test]
+    fn changelog_for_is_none_when_no_release_matches() {
+        let releases = vec![rel("v0.17.0", "notes")];
+        // A dev build ahead of any published release has no notes to show.
+        assert!(changelog_for(&releases, Version::parse("0.18.0").unwrap()).is_none());
+    }
+
+    #[test]
+    fn changelog_for_falls_back_when_matching_body_is_empty() {
+        let releases = vec![rel("v0.17.0", "## Ashwend v0.17.0\n")];
+        let log = changelog_for(&releases, Version::parse("0.17.0").unwrap()).unwrap();
+        assert_eq!(log, "_No release notes._");
     }
 
     #[test]

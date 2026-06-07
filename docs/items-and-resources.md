@@ -39,6 +39,19 @@ The active registry is constructed once via `item_definitions_by_id()` (a `LazyL
 6. **If the item is a recipe output**, add the recipe to [`src/crafting.rs`](../src/crafting.rs), see "Crafting" below.
 7. **If the item should drop from a resource node**, reference it from the appropriate `ResourceNodeDefinition` in [`src/resources.rs`](../src/resources.rs).
 8. **Add the item's mesh/material** in the client scene module (`src/app/scene/`). Materials follow the conventions in [docs/materials.md](materials.md).
+9. **Add the inventory icon** at `assets/items/<id>/icon.png` (160px). See "Item icons" below. Without one the slot falls back to a flat tinted rectangle, so it is optional for a working item but expected for a shipped one.
+
+## Item icons
+
+Each item ships a transparent inventory icon at `assets/items/<id>/icon.png` (160px), with the editable high-res master kept under `art/items/<id>/icon_master_512.png` (committed; `art/` is otherwise generation scratch and gitignored). Icons are baked into the binary by `include_dir!` (see [`src/app/embedded_assets.rs`](../src/app/embedded_assets.rs)), loaded once by `setup_item_icons` ([`src/app/ui/item_icons.rs`](../src/app/ui/item_icons.rs)), and drawn by `paint_item_icon` ([`src/app/ui/inventory/slot.rs`](../src/app/ui/inventory/slot.rs)). A missing icon falls back to the old tinted-rectangle placeholder.
+
+**Pipeline (master to game icon).**
+
+1. **Generate the master** with the `lowpoly-game-assets` skill: `generate.py icon` (txt2img) for a new subject, or the skill's `gen_icon_ref.py` (img2img) to restyle/regenerate from an existing icon while keeping its silhouette. Both drive the local Draw Things API. Save the chosen 512px result to `art/items/<id>/icon_master_512.png`.
+2. **Finalize to 160px** with [`scripts/icon_finalize.py`](../scripts/icon_finalize.py): `python3 scripts/icon_finalize.py --master art/items/<id>/icon_master_512.png --out assets/items/<id>/icon.png`. This does the downscale with edge-bleed plus a Triangle filter (the safe transforms) and prints a gradient/saturation QA line. Opt-in `--desaturate`/`--smooth`/`--despeckle` exist for problem icons; do not use them blanket (they would wreck colorful icons like ores or the furnace ember).
+3. **Rebuild.** `build.rs` fingerprints the `assets/` tree into `OUT_DIR`, which `embedded_assets.rs` `include!`s, so any icon change forces a re-embed on the next `cargo build`. Editing a PNG alone does NOT trigger a rebuild (`include_dir!` is a proc macro), the fingerprint is what makes it stick.
+
+**The aliasing gotcha (why icons can look "pixelated" in-game).** egui user textures have no mipmaps, so the inventory/actionbar minifies each 160px icon roughly 3.3x into its slot with plain bilinear. High-frequency, high-contrast detail (bright specular streaks on a dark metal head, thin pointed shapes) undersamples into white sparkle speckles; flat low-contrast art does not. Mean RGB gradient is a rough gauge (the clean set sits at ~1.8 to 2.7) but does NOT by itself predict sparkle: organic icons like fiber carry lots of detail and look fine, because their aliasing reads as texture rather than wrong pixels. The reliable fix is to reduce detail at the source (img2img `gen_icon_ref.py --steps 1` collapses it) and let `icon_finalize.py` handle the safe downscale. **Always verify a new tool/metal icon in-game at the real Retina 2x scale**, not a 1x headless capture, the speckles only show at 2x. The harness recipe in [docs/multiplayer-testing.md](multiplayer-testing.md) (`/test-kit` puts every tool on the actionbar) makes the side-by-side check trivial.
 
 ## Resource nodes
 

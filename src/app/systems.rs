@@ -1,14 +1,24 @@
+// Dev-only: corrects macOS focus-stealing for agent-driven launches. Gated on
+// `debug_assertions` + macOS so it compiles out of shipped builds.
+#[cfg(all(debug_assertions, target_os = "macos"))]
+mod agent_window;
 pub(crate) mod analytics;
 mod auth;
 mod auto_connect;
 mod camera;
 mod chunk_overlay;
 mod combat_feedback;
+// Dev-only agent automation: the control socket and off-screen capture are
+// gated on `debug_assertions` so they compile out of shipped release builds.
+#[cfg(all(unix, debug_assertions))]
+mod control_socket;
 mod deployables;
 mod display;
 pub(crate) mod effects;
 mod furnace_fire;
 mod graphics;
+#[cfg(debug_assertions)]
+mod headless_capture;
 pub(crate) mod input;
 mod items;
 mod network;
@@ -23,6 +33,8 @@ mod update;
 
 use bevy::prelude::SystemSet;
 
+#[cfg(all(debug_assertions, target_os = "macos"))]
+pub(crate) use agent_window::relinquish_macos_focus_system;
 pub(crate) use analytics::{
     LastTrackedScreen, PendingSessionEndReason, SessionTracker, error_relay_system,
     screen_viewed_system, session_ended_system, session_started_system,
@@ -36,6 +48,8 @@ pub(crate) use camera::{
 };
 pub(crate) use chunk_overlay::chunk_overlay_system;
 pub(crate) use combat_feedback::tick_combat_feedback_system;
+#[cfg(all(unix, debug_assertions))]
+pub(crate) use control_socket::{ClientControlSocket, drain_control_socket};
 pub(crate) use deployables::{
     apply_deployed_entities_system, maintain_world_grid_system, placement_input_system,
     update_placement_ghost_system,
@@ -44,6 +58,10 @@ pub(crate) use display::apply_display_settings_system;
 pub(crate) use effects::{spawn_impact_effects_system, tick_impact_chips_system};
 pub(crate) use furnace_fire::{animate_furnace_fire_system, tick_furnace_particles_system};
 pub(crate) use graphics::apply_graphics_settings_system;
+#[cfg(debug_assertions)]
+pub(crate) use headless_capture::{
+    HeadlessCapture, insert_capture_target, redirect_camera_to_capture,
+};
 pub(crate) use input::{
     center_cursor_on_focus_system, chat_shortcut_system, client_input_system,
     close_furnace_on_escape_system, close_loot_bag_on_escape_system,

@@ -341,8 +341,8 @@ impl DangerButtonPalette {
         match density {
             ButtonDensity::Menu => Self {
                 rest: Color32::from_rgba_unmultiplied(92, 35, 38, 224),
-                hovered: Color32::from_rgba_unmultiplied(92, 35, 38, 224),
-                active: Color32::from_rgba_unmultiplied(92, 35, 38, 224),
+                hovered: Color32::from_rgba_unmultiplied(112, 45, 49, 236),
+                active: Color32::from_rgba_unmultiplied(72, 26, 29, 232),
                 stroke: Color32::from_rgb(165, 72, 76),
             },
             ButtonDensity::Compact => Self {
@@ -380,6 +380,31 @@ mod tests {
         assert_eq!(rest, Color32::from_rgba_unmultiplied(75, 31, 34, 218));
         assert_eq!(hovered, Color32::from_rgba_unmultiplied(94, 36, 40, 238));
         assert_eq!(active, Color32::from_rgba_unmultiplied(62, 22, 25, 236));
+    }
+
+    #[test]
+    fn menu_danger_button_reacts_to_hover_and_press() {
+        let (rest, _, _) = button_paint(
+            ButtonKind::Danger,
+            ButtonDensity::Menu,
+            ButtonInteraction::Rest,
+        );
+        let (hovered, _, _) = button_paint(
+            ButtonKind::Danger,
+            ButtonDensity::Menu,
+            ButtonInteraction::Hovered,
+        );
+        let (active, _, _) = button_paint(
+            ButtonKind::Danger,
+            ButtonDensity::Menu,
+            ButtonInteraction::Active,
+        );
+
+        // Hover lightens, press darkens; all three must be distinct so the
+        // button visibly responds instead of looking dead.
+        assert_ne!(rest, hovered);
+        assert_ne!(rest, active);
+        assert_ne!(hovered, active);
     }
 
     #[test]

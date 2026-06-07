@@ -34,11 +34,41 @@ impl ConfirmationDialog {
             confirmed: false,
         }
     }
+
+    /// Guard the sign-out link so a stray click can't drop the player out of
+    /// the only identity system.
+    pub(crate) fn sign_out() -> Self {
+        Self {
+            title: "Sign out".to_owned(),
+            body: "Sign out of Ashwend? You'll need to sign in again to play.".to_owned(),
+            confirm_label: "Sign out".to_owned(),
+            cancel_label: "Cancel".to_owned(),
+            action: ConfirmationAction::SignOut,
+            closing: false,
+            confirmed: false,
+        }
+    }
+
+    /// Guard the options Reset button: it wipes every tab, including
+    /// keybindings, so confirm before discarding the player's setup.
+    pub(crate) fn reset_settings() -> Self {
+        Self {
+            title: "Reset settings".to_owned(),
+            body: "Reset all settings to their defaults? This affects every tab, including your keybindings.".to_owned(),
+            confirm_label: "Reset all".to_owned(),
+            cancel_label: "Cancel".to_owned(),
+            action: ConfirmationAction::ResetSettings,
+            closing: false,
+            confirmed: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub(crate) enum ConfirmationAction {
     DeleteWorld { world_id: Uuid },
+    SignOut,
+    ResetSettings,
 }
 
 #[derive(Debug, Clone)]
@@ -317,6 +347,9 @@ pub(crate) struct CreateWorldDialog {
     pub(crate) error: Option<String>,
     pub(crate) closing: bool,
     pub(crate) confirmed: bool,
+    /// Set on open, cleared after the name field grabs focus on its first
+    /// frame, so the player can name-and-Enter without reaching for the mouse.
+    pub(crate) autofocus_pending: bool,
 }
 
 impl Default for CreateWorldDialog {
@@ -334,6 +367,7 @@ impl CreateWorldDialog {
             error: None,
             closing: false,
             confirmed: false,
+            autofocus_pending: true,
         }
     }
 
@@ -363,6 +397,9 @@ pub(crate) struct EditWorldDialog {
     pub(crate) error: Option<String>,
     pub(crate) closing: bool,
     pub(crate) confirmed: bool,
+    /// Set on open, cleared after the name field grabs focus on its first
+    /// frame (which also selects the existing name for quick replacement).
+    pub(crate) autofocus_pending: bool,
 }
 
 impl EditWorldDialog {
@@ -374,6 +411,7 @@ impl EditWorldDialog {
             error: None,
             closing: false,
             confirmed: false,
+            autofocus_pending: true,
         }
     }
 }

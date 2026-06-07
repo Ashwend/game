@@ -17,7 +17,9 @@ use bevy::prelude::KeyCode;
 use bevy::window::Monitor;
 use bevy_egui::egui;
 
-use crate::app::state::{ClientSettings, MenuState, OptionsTab, OptionsUiState, Screen};
+use crate::app::state::{
+    ClientSettings, ConfirmationDialog, MenuState, OptionsTab, OptionsUiState, Screen,
+};
 
 use super::theme::{self, BOUNDED_PANEL_VERTICAL_PADDING, ButtonKind, COMPACT_ROW_HEIGHT};
 
@@ -59,7 +61,9 @@ pub(in crate::app::ui) fn options_ui(
                         close_options(menu, options_ui_state, back_target);
                     }
                     if theme::compact_button(ui, "Reset", ButtonKind::Secondary, 78.0).clicked() {
-                        *settings = ClientSettings::default();
+                        // Confirm first: this wipes every tab, not just the one
+                        // on screen. The global confirmation modal applies it.
+                        menu.confirmation = Some(ConfirmationDialog::reset_settings());
                     }
                 });
             });

@@ -65,6 +65,14 @@ pub(crate) struct VoiceState {
     peer_talk_envelope: HashMap<ClientId, f32>,
 }
 
+/// Marker resource that disables all voice audio I/O (mic capture and
+/// playback). Inserted for agent-driven automated sessions so a test run never
+/// opens the microphone, which on macOS forces a Bluetooth headset out of A2DP
+/// into low-quality HFP/HSP. Voice chat isn't part of what the harness exercises,
+/// so there's nothing lost by leaving the audio devices untouched.
+#[derive(Resource, Default)]
+pub(crate) struct VoiceDisabled;
+
 /// How fast the per-peer talking envelope decays once packets stop arriving.
 /// 1/(decay_per_second) ≈ how long the indicator lingers after the last
 /// frame; 5/s ≈ 200 ms of carry-over, which masks Bevy/network jitter
@@ -86,7 +94,15 @@ impl VoiceState {
     }
 }
 
-pub(crate) fn setup_voice_system(mut commands: Commands) {
+pub(crate) fn setup_voice_system(mut commands: Commands, disabled: Option<Res<VoiceDisabled>>) {
+    // Agent-driven sessions disable voice entirely: don't even open the
+    // output stream, and (via `manage_voice_capture_system`) never open the
+    // mic. Leaves a default `VoiceState` so the other voice systems keep
+    // running as harmless no-ops.
+    if disabled.is_some() {
+        commands.insert_resource(VoiceState::default());
+        return;
+    }
     // Playback is cheap to leave open, it's an output-only audio stream
     // and (crucially) doesn't trigger Bluetooth profile switching the way
     // an open input stream does. Mic capture is started lazily by
@@ -126,9 +142,12 @@ pub(crate) fn manage_voice_capture_system(
     runtime: Res<ClientRuntime>,
     menu: Res<MenuState>,
     mut voice: ResMut<VoiceState>,
+    disabled: Option<Res<VoiceDisabled>>,
 ) {
-    let want_capture =
-        settings.voice.enabled && menu.screen == Screen::InGame && runtime.is_multiplayer_session();
+    let want_capture = disabled.is_none()
+        && settings.voice.enabled
+        && menu.screen == Screen::InGame
+        && runtime.is_multiplayer_session();
 
     match (want_capture, voice.capture.is_some()) {
         (true, false) => match VoiceCapture::spawn() {

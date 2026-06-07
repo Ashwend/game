@@ -2,7 +2,7 @@ use bevy_egui::egui;
 
 use crate::{
     analytics::{Analytics, Event},
-    app::state::{ConfirmationAction, MenuState, SaveStore},
+    app::state::{ClientSettings, ConfirmationAction, MenuState, SaveStore},
 };
 
 use super::{
@@ -13,6 +13,7 @@ use super::{
 pub(super) fn confirmation_ui(
     ctx: &egui::Context,
     menu: &mut MenuState,
+    settings: &mut ClientSettings,
     store: &SaveStore,
     analytics: &Analytics,
 ) {
@@ -42,7 +43,7 @@ pub(super) fn confirmation_ui(
         };
 
         if dialog.confirmed {
-            apply_confirmation_action(dialog.action, menu, store, analytics);
+            apply_confirmation_action(dialog.action, menu, settings, store, analytics);
         }
     }
 }
@@ -74,6 +75,7 @@ pub(super) fn notice_ui(ctx: &egui::Context, menu: &mut MenuState) {
 fn apply_confirmation_action(
     action: ConfirmationAction,
     menu: &mut MenuState,
+    settings: &mut ClientSettings,
     store: &SaveStore,
     analytics: &Analytics,
 ) {
@@ -85,6 +87,10 @@ fn apply_confirmation_action(
             }
             Err(error) => menu.status = Some(format!("delete failed: {error}")),
         },
+        // The auth system consumes this flag next frame and tears down the
+        // session; the dialog just gates it behind a confirm.
+        ConfirmationAction::SignOut => menu.sign_out_requested = true,
+        ConfirmationAction::ResetSettings => *settings = ClientSettings::default(),
     }
 }
 
@@ -117,6 +123,7 @@ mod tests {
         apply_confirmation_action(
             ConfirmationAction::DeleteWorld { world_id: save.id },
             &mut menu,
+            &mut ClientSettings::default(),
             &store,
             &Analytics::disabled(),
         );
@@ -124,6 +131,47 @@ mod tests {
         assert!(menu.worlds.is_empty());
         assert!(menu.status.is_none());
 
+        let _ = fs::remove_dir_all(store.0.root());
+    }
+
+    #[test]
+    fn sign_out_confirmation_sets_the_request_flag() {
+        let store = temp_store();
+        let mut menu = MenuState::default();
+        assert!(!menu.sign_out_requested);
+
+        apply_confirmation_action(
+            ConfirmationAction::SignOut,
+            &mut menu,
+            &mut ClientSettings::default(),
+            &store,
+            &Analytics::disabled(),
+        );
+
+        assert!(menu.sign_out_requested, "confirm should arm the sign-out");
+        let _ = fs::remove_dir_all(store.0.root());
+    }
+
+    #[test]
+    fn reset_settings_confirmation_restores_defaults() {
+        let store = temp_store();
+        let mut menu = MenuState::default();
+        let mut settings = ClientSettings::default();
+        // Mutate a value away from default, then confirm reset restores it.
+        settings.display.ui_scale = 1.75;
+
+        apply_confirmation_action(
+            ConfirmationAction::ResetSettings,
+            &mut menu,
+            &mut settings,
+            &store,
+            &Analytics::disabled(),
+        );
+
+        assert_eq!(
+            settings.display.ui_scale,
+            ClientSettings::default().display.ui_scale
+        );
         let _ = fs::remove_dir_all(store.0.root());
     }
 
@@ -139,6 +187,7 @@ mod tests {
                 world_id: Uuid::new_v4(),
             },
             &mut menu,
+            &mut ClientSettings::default(),
             &store,
             &Analytics::disabled(),
         );

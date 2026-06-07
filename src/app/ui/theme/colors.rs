@@ -8,6 +8,14 @@ pub(in crate::app::ui) fn muted_text() -> Color32 {
     Color32::from_rgb(146, 158, 171)
 }
 
+/// Inline error / validation text (failed logins, invalid world names, connect
+/// failures, update failures). One warm red so every error state across the UI
+/// reads as the same thing, instead of the several near-identical hand-rolled
+/// reds that drifted apart per screen.
+pub(in crate::app::ui) fn error_text() -> Color32 {
+    Color32::from_rgb(236, 124, 112)
+}
+
 pub(in crate::app::ui) fn accent() -> Color32 {
     Color32::from_rgb(92, 162, 255)
 }
@@ -56,6 +64,7 @@ mod tests {
     fn palette_values_are_stable() {
         assert_eq!(text(), Color32::from_rgb(224, 231, 238));
         assert_eq!(muted_text(), Color32::from_rgb(146, 158, 171));
+        assert_eq!(error_text(), Color32::from_rgb(236, 124, 112));
         assert_eq!(accent(), Color32::from_rgb(92, 162, 255));
         assert_eq!(accent_dark(), Color32::from_rgb(31, 82, 141));
         assert_eq!(

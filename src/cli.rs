@@ -9,6 +9,7 @@ use crate::{
     app,
     auth::{AuthMode, WorkosVerifier, workos::WorkosConfig},
     net,
+    protocol::AccountId,
     save::{WorldSave, WorldStore, load_world_file, save_world_file},
     world_time::parse_time_token,
 };
@@ -55,6 +56,15 @@ enum Command {
         workos_client_id: Option<String>,
         #[arg(long)]
         admin_socket: Option<PathBuf>,
+        /// Grant admin to these account ids on boot, merged into the world's
+        /// admin list. Pass once per id (`--admin 1 --admin 2`). Intended for
+        /// `--auth no-auth` dev/automation: it lets a control-socket agent
+        /// whose `GAME_ACCOUNT_ID` matches run admin-gated slash commands
+        /// (`/test-kit`, `/spawn-ore`, `/time`, `/speed`) without a WorkOS
+        /// token. Under `--auth workos`, prefer the `urn:ashwend:admin` token
+        /// claim so admin isn't pinned to a raw account id.
+        #[arg(long = "admin")]
+        admins: Vec<AccountId>,
         /// Map size used only when generating a *fresh* world. Existing
         /// saves keep whatever size they were authored with.
         #[arg(long, value_enum, default_value_t = MapSizeArg::Medium)]
@@ -149,6 +159,7 @@ pub fn run() -> Result<()> {
             auth,
             workos_client_id,
             admin_socket,
+            admins,
             map_size,
         } => {
             let auth_mode: AuthMode = auth.into();
@@ -163,7 +174,8 @@ pub fn run() -> Result<()> {
                 }
                 AuthMode::NoAuth => None,
             };
-            let world = load_server_world(world, map_size.into())?;
+            let mut world = load_server_world(world, map_size.into())?;
+            seed_admin_accounts(&mut world.save, &admins);
             net::run_dedicated_server(
                 bind,
                 world.save,
@@ -175,6 +187,19 @@ pub fn run() -> Result<()> {
         }
         Command::Admin { socket, command } => run_admin_command(socket, command),
         Command::MultiplayerTest { port, names } => run_multiplayer_test(port, names),
+    }
+}
+
+/// Merge operator-supplied `--admin` account ids into the world's admin list,
+/// skipping ids already present (and the never-valid `0`). The in-memory save
+/// is what the running `GameServer` checks in `is_admin`, so this grants admin
+/// for the session and persists with the next auto-save/shutdown write. Mirrors
+/// how `multiplayer-test` pre-seeds `save.admins` before launch.
+fn seed_admin_accounts(save: &mut WorldSave, admins: &[AccountId]) {
+    for &account_id in admins {
+        if account_id != 0 && !save.admins.contains(&account_id) {
+            save.admins.push(account_id);
+        }
     }
 }
 
@@ -321,6 +346,17 @@ mod tests {
 
     fn temp_world_path() -> PathBuf {
         std::env::temp_dir().join(format!("game-cli-world-test-{}.save", Uuid::new_v4()))
+    }
+
+    #[test]
+    fn seed_admin_accounts_appends_unique_nonzero_ids() {
+        let mut save = WorldSave::new_with_map("seed test", None, MapType::default());
+        save.admins = vec![10];
+
+        // 0 is skipped, 10 is already present (no dup), 20 and 30 are added.
+        seed_admin_accounts(&mut save, &[0, 10, 20, 20, 30]);
+
+        assert_eq!(save.admins, vec![10, 20, 30]);
     }
 
     #[test]
