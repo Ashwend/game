@@ -114,10 +114,10 @@ pub(crate) fn apply_held_item_visual_system(
 }
 
 /// Mesh + material layers that make up the in-hand visual for `held_mesh`.
-/// One entry for single-material items; two for iron tools, whose matte handle
-/// body and shiny iron head need different materials (Bevy binds one material
-/// per mesh). Layers share the mesh-local frame so they overlay exactly under
-/// the same swing transform.
+/// One entry for single-material items; two for the authored tool glbs (stone
+/// and iron), whose matte haft body and worked head need different materials
+/// (Bevy binds one material per mesh). Layers share the mesh-local frame so they
+/// overlay exactly under the same swing transform.
 fn held_item_layers(
     assets: &ItemVisualAssets,
     held_mesh: HeldMesh,
@@ -130,27 +130,38 @@ fn held_item_layers(
             assets.held_bag_mesh.clone(),
             assets.held_bag_material.clone(),
         )],
-        HeldMesh::StoneHatchet => vec![(
-            assets.held_hatchet_mesh.clone(),
-            assets.held_tool_material.clone(),
-        )],
-        HeldMesh::StonePickaxe => vec![(
-            assets.held_pickaxe_mesh.clone(),
-            assets.held_tool_material.clone(),
-        )],
+        // Every tool tier is an authored glb carrying its own two materials
+        // (matte haft + worked head), drawn as a body layer plus a head layer.
+        HeldMesh::StoneHatchet => vec![
+            (
+                assets.held_stone_hatchet_body_mesh.clone(),
+                assets.held_stone_hatchet_body_material.clone(),
+            ),
+            (
+                assets.held_stone_hatchet_head_mesh.clone(),
+                assets.held_stone_hatchet_head_material.clone(),
+            ),
+        ],
+        HeldMesh::StonePickaxe => vec![
+            (
+                assets.held_stone_pickaxe_body_mesh.clone(),
+                assets.held_stone_pickaxe_body_material.clone(),
+            ),
+            (
+                assets.held_stone_pickaxe_head_mesh.clone(),
+                assets.held_stone_pickaxe_head_material.clone(),
+            ),
+        ],
         HeldMesh::IronHatchet => vec![
             (
                 assets.held_iron_hatchet_body_mesh.clone(),
-                assets.held_tool_material.clone(),
+                assets.held_iron_hatchet_body_material.clone(),
             ),
             (
                 assets.held_iron_hatchet_head_mesh.clone(),
-                assets.held_iron_head_material.clone(),
+                assets.held_iron_hatchet_head_material.clone(),
             ),
         ],
-        // The iron pickaxe is an authored glb and carries its own materials
-        // (matte haft + metallic head), so it does not borrow the shared
-        // `held_tool_material` / `held_iron_head_material` like the hatchet does.
         HeldMesh::IronPickaxe => vec![
             (
                 assets.held_iron_pickaxe_body_mesh.clone(),

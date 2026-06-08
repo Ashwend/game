@@ -17,13 +17,11 @@ use super::{
         low_poly_bag_mesh, low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_large_mesh,
         low_poly_birch_tree_medium_lod_mesh, low_poly_birch_tree_medium_mesh,
         low_poly_birch_tree_small_lod_mesh, low_poly_birch_tree_small_mesh,
-        low_poly_branch_pile_mesh, low_poly_crude_furnace_mesh, low_poly_hatchet_mesh,
-        low_poly_hay_grass_mesh, low_poly_iron_hatchet_body_mesh, low_poly_iron_hatchet_head_mesh,
-        low_poly_ore_node_mesh, low_poly_pickaxe_mesh, low_poly_pine_tree_large_lod_mesh,
-        low_poly_pine_tree_large_mesh, low_poly_pine_tree_medium_lod_mesh,
-        low_poly_pine_tree_medium_mesh, low_poly_pine_tree_small_lod_mesh,
-        low_poly_pine_tree_small_mesh, low_poly_player_mesh, low_poly_surface_stone_mesh,
-        low_poly_workbench_mesh,
+        low_poly_branch_pile_mesh, low_poly_crude_furnace_mesh, low_poly_hay_grass_mesh,
+        low_poly_ore_node_mesh, low_poly_pine_tree_large_lod_mesh, low_poly_pine_tree_large_mesh,
+        low_poly_pine_tree_medium_lod_mesh, low_poly_pine_tree_medium_mesh,
+        low_poly_pine_tree_small_lod_mesh, low_poly_pine_tree_small_mesh, low_poly_player_mesh,
+        low_poly_surface_stone_mesh, low_poly_workbench_mesh,
     },
     sky::{initial_distance_fog, setup_sky},
 };
@@ -61,31 +59,33 @@ pub(crate) struct PlayerVisualAssets {
 pub(crate) struct ItemVisualAssets {
     pub(crate) dropped_mesh: Handle<Mesh>,
     pub(crate) held_bag_mesh: Handle<Mesh>,
-    pub(crate) held_hatchet_mesh: Handle<Mesh>,
-    pub(crate) held_pickaxe_mesh: Handle<Mesh>,
-    /// Iron tools render as two overlaid layers so only the iron catches the
-    /// light: a matte `*_body` (the hewn handle, drawn with
-    /// `held_tool_material`) and a shiny `*_head` (the forged iron, drawn with
-    /// `held_iron_head_material`).
+    /// Both tool tiers (stone and iron) are authored Blender glbs matching their
+    /// inventory icons. Each renders as two overlaid layers sharing one swing
+    /// transform: a matte `*_body` (the wood haft plus its leather/twine
+    /// bindings) and a `*_head` (worked stone or forged iron, the latter shiny).
+    /// Both the geometry *and* the materials come from the glb's two primitives
+    /// (see `setup_scene`), so the whole look is owned by the model.
+    pub(crate) held_stone_hatchet_body_mesh: Handle<Mesh>,
+    pub(crate) held_stone_hatchet_head_mesh: Handle<Mesh>,
+    pub(crate) held_stone_pickaxe_body_mesh: Handle<Mesh>,
+    pub(crate) held_stone_pickaxe_head_mesh: Handle<Mesh>,
     pub(crate) held_iron_hatchet_body_mesh: Handle<Mesh>,
     pub(crate) held_iron_hatchet_head_mesh: Handle<Mesh>,
     pub(crate) held_iron_pickaxe_body_mesh: Handle<Mesh>,
     pub(crate) held_iron_pickaxe_head_mesh: Handle<Mesh>,
-    /// The iron pickaxe is an authored glb, so unlike the other iron tools it
-    /// brings its *own* two materials (matte haft + metallic head) rather than
-    /// borrowing the shared base-white tool materials. Keeps the whole look in
-    /// the model. Source: `art/items/iron_pickaxe/iron_pickaxe.blend`.
+    /// Per-tool materials carried by each glb (matte haft + stone/iron head),
+    /// tinted by the model's COLOR_0 vertex colours. Sources:
+    /// `art/items/{wood_stone,iron}_{hatchet,pickaxe}/*.blend`.
+    pub(crate) held_stone_hatchet_body_material: Handle<StandardMaterial>,
+    pub(crate) held_stone_hatchet_head_material: Handle<StandardMaterial>,
+    pub(crate) held_stone_pickaxe_body_material: Handle<StandardMaterial>,
+    pub(crate) held_stone_pickaxe_head_material: Handle<StandardMaterial>,
+    pub(crate) held_iron_hatchet_body_material: Handle<StandardMaterial>,
+    pub(crate) held_iron_hatchet_head_material: Handle<StandardMaterial>,
     pub(crate) held_iron_pickaxe_body_material: Handle<StandardMaterial>,
     pub(crate) held_iron_pickaxe_head_material: Handle<StandardMaterial>,
     pub(crate) dropped_material: Handle<StandardMaterial>,
     pub(crate) held_bag_material: Handle<StandardMaterial>,
-    pub(crate) held_tool_material: Handle<StandardMaterial>,
-    /// Polished forged-iron material for the iron tool head layer. Fully
-    /// metallic + low roughness so it picks up the sky/IBL and reads as bright
-    /// steel against the matte handle. Because it only ever draws the iron head
-    /// mesh, it can be properly shiny without making the wood handle glossy.
-    /// See docs/materials.md.
-    pub(crate) held_iron_head_material: Handle<StandardMaterial>,
 }
 
 #[derive(Resource, Clone)]
@@ -270,52 +270,49 @@ pub(crate) fn setup_scene(
             ..default()
         }),
     });
-    // The iron pickaxe ships as an authored Blender glb (matching the inventory
-    // icon). Its geometry *and* materials are loaded straight from the model, so
-    // the whole look is owned by the asset, not the shared base-white tool
-    // materials. Same `embedded://` path for every sub-asset below.
+    // Every tool ships as an authored Blender glb (matching its inventory icon).
+    // Both geometry *and* materials load straight from each model: two primitives
+    // -> the two layers every tool uses (primitive 0 = matte wooden haft, with the
+    // leather/twine bindings; primitive 1 = the worked stone or forged iron head),
+    // and two base-white materials tinted by the model's COLOR_0 vertex colours. So
+    // the whole look is owned by the asset. Sources:
+    // `art/items/{wood_stone,iron}_{pickaxe,hatchet}/*.blend`.
+    let stone_pickaxe_glb = embedded_asset_path("items/wood_stone_pickaxe/model.glb");
+    let stone_hatchet_glb = embedded_asset_path("items/wood_stone_hatchet/model.glb");
     let pickaxe_glb = embedded_asset_path("items/iron_pickaxe/model.glb");
+    let hatchet_glb = embedded_asset_path("items/iron_hatchet/model.glb");
+    let prim_mesh = |glb: &str, primitive: usize| -> Handle<Mesh> {
+        asset_server
+            .load(GltfAssetLabel::Primitive { mesh: 0, primitive }.from_asset(glb.to_owned()))
+    };
+    let glb_material = |glb: &str, index: usize| -> Handle<StandardMaterial> {
+        asset_server.load(
+            GltfAssetLabel::Material {
+                index,
+                is_scale_inverted: false,
+            }
+            .from_asset(glb.to_owned()),
+        )
+    };
     commands.insert_resource(ItemVisualAssets {
         dropped_mesh: meshes.add(low_poly_bag_mesh()),
         held_bag_mesh: meshes.add(Cuboid::new(0.26, 0.22, 0.34)),
-        held_hatchet_mesh: meshes.add(low_poly_hatchet_mesh()),
-        held_pickaxe_mesh: meshes.add(low_poly_pickaxe_mesh()),
-        held_iron_hatchet_body_mesh: meshes.add(low_poly_iron_hatchet_body_mesh()),
-        held_iron_hatchet_head_mesh: meshes.add(low_poly_iron_hatchet_head_mesh()),
-        // Two primitives -> the two layers every iron tool uses: primitive 0 =
-        // matte wooden haft, primitive 1 = metallic iron head. Source:
-        // `art/items/iron_pickaxe/iron_pickaxe.blend`.
-        held_iron_pickaxe_body_mesh: asset_server.load(
-            GltfAssetLabel::Primitive {
-                mesh: 0,
-                primitive: 0,
-            }
-            .from_asset(pickaxe_glb.clone()),
-        ),
-        held_iron_pickaxe_head_mesh: asset_server.load(
-            GltfAssetLabel::Primitive {
-                mesh: 0,
-                primitive: 1,
-            }
-            .from_asset(pickaxe_glb.clone()),
-        ),
-        // The pickaxe's own materials (authored in Blender): material 0 = matte
-        // wood, material 1 = metallic iron. Both are base-white and tint from the
-        // model's COLOR_0 vertex colours, so the look is fully defined in the glb.
-        held_iron_pickaxe_body_material: asset_server.load(
-            GltfAssetLabel::Material {
-                index: 0,
-                is_scale_inverted: false,
-            }
-            .from_asset(pickaxe_glb.clone()),
-        ),
-        held_iron_pickaxe_head_material: asset_server.load(
-            GltfAssetLabel::Material {
-                index: 1,
-                is_scale_inverted: false,
-            }
-            .from_asset(pickaxe_glb.clone()),
-        ),
+        held_stone_hatchet_body_mesh: prim_mesh(&stone_hatchet_glb, 0),
+        held_stone_hatchet_head_mesh: prim_mesh(&stone_hatchet_glb, 1),
+        held_stone_pickaxe_body_mesh: prim_mesh(&stone_pickaxe_glb, 0),
+        held_stone_pickaxe_head_mesh: prim_mesh(&stone_pickaxe_glb, 1),
+        held_iron_hatchet_body_mesh: prim_mesh(&hatchet_glb, 0),
+        held_iron_hatchet_head_mesh: prim_mesh(&hatchet_glb, 1),
+        held_iron_pickaxe_body_mesh: prim_mesh(&pickaxe_glb, 0),
+        held_iron_pickaxe_head_mesh: prim_mesh(&pickaxe_glb, 1),
+        held_stone_hatchet_body_material: glb_material(&stone_hatchet_glb, 0),
+        held_stone_hatchet_head_material: glb_material(&stone_hatchet_glb, 1),
+        held_stone_pickaxe_body_material: glb_material(&stone_pickaxe_glb, 0),
+        held_stone_pickaxe_head_material: glb_material(&stone_pickaxe_glb, 1),
+        held_iron_hatchet_body_material: glb_material(&hatchet_glb, 0),
+        held_iron_hatchet_head_material: glb_material(&hatchet_glb, 1),
+        held_iron_pickaxe_body_material: glb_material(&pickaxe_glb, 0),
+        held_iron_pickaxe_head_material: glb_material(&pickaxe_glb, 1),
         dropped_material: materials.add(StandardMaterial {
             base_color: DROPPED_BAG_COLOR,
             perceptual_roughness: 0.95,
@@ -326,23 +323,6 @@ pub(crate) fn setup_scene(
             base_color: HELD_BAG_COLOR,
             perceptual_roughness: 0.88,
             reflectance: 0.15,
-            ..default()
-        }),
-        held_tool_material: materials.add(StandardMaterial {
-            base_color: VERTEX_MATERIAL_COLOR,
-            perceptual_roughness: 0.92,
-            reflectance: 0.15,
-            ..default()
-        }),
-        held_iron_head_material: materials.add(StandardMaterial {
-            base_color: VERTEX_MATERIAL_COLOR,
-            // Forged steel: fully metallic + low roughness so the head picks up
-            // the sky/IBL and reads as bright polished metal. The grey iron
-            // vertex colours drive F0, so the head tints steel without a
-            // separate base colour. Only ever draws the iron head layer, so it
-            // can be this shiny without touching the matte handle.
-            perceptual_roughness: 0.34,
-            metallic: 1.0,
             ..default()
         }),
     });

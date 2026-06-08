@@ -25,7 +25,7 @@ Start here:
 - `src/save/`: world persistence (`WorldStore`, `WorldSave`, atomic writes, format version).
 - `src/world/`: `MapType`, world block geometry, perimeter walls, and the chunk-based generation pipeline under `src/world/chunk/` (classification, value noise, Poisson-disk spawn generator).
 - `src/server/chunk_manager.rs`: server-side owner of the chunk grid, every networked entity (resource nodes, drops, eventually buildings) is anchored to a chunk; the room-subscription system in `src/net/host.rs` adds the client's sender to the matching chunk's Lightyear `Room` so replication is AoI-filtered. Also schedules 5–15 min node respawns and persists per-chunk live counts.
-- `src/app/scene/assets.rs` and `src/app/scene/world.rs`: shared `StandardMaterial` setup for players, items, resource nodes, ground, and stone walls. See [Materials](docs/materials.md) before adding or tuning a material.
+- `src/app/scene/assets.rs` and `src/app/scene/world.rs`: shared `StandardMaterial` setup for players, items, resource nodes, ground, and stone walls. See [Materials](docs/materials.md) before adding or tuning a material. Held items whose look should match a painted icon (the four tools) are authored Blender glbs, not procedural meshes; see [Icon to 3D model](docs/icon-to-model.md) for that pipeline.
 
 Use `./cli check`, `./cli test`, and `./cli lint`.
 
@@ -60,6 +60,7 @@ Open docs only when the task touches that area:
 - [UI and client flow](docs/ui-and-client.md)
 - [Multiplayer testing](docs/multiplayer-testing.md)
 - [Materials](docs/materials.md): PBR conventions for the scene (reflectance, roughness, metallic). Consult before adding a new `StandardMaterial` or tweaking an existing one.
+- [Icon to 3D model](docs/icon-to-model.md): the repeatable pipeline for turning a painted icon or concept into an authored Blender glb (Blender MCP, OpenCV silhouette measurement, the held-item reference frame, glb export, and the winding / vertex-colour / export gotchas). Consult before modelling a new held item or icon-matched prop. The four tools are the worked examples.
 - [Profiling](docs/profiling.md): Chrome-trace capture, Perfetto `trace_processor` SQL queries, and the diagnostic patterns that surfaced during the frame-pacing investigation. Consult before reaching for "rewrite to make it faster"; the canonical bugs (per-frame iteration over N replicated entities, spurious change-detection, `Ref::is_changed()` lying for Lightyear-touched components) all have cheap fixes documented here.
 
 Keep changes small and preserve module boundaries.

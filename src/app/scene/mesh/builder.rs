@@ -13,12 +13,10 @@ pub(crate) const WOOD_LIGHT: MeshColor = [0.56, 0.36, 0.18, 1.0];
 pub(crate) const WOOD_MID: MeshColor = [0.44, 0.28, 0.14, 1.0];
 pub(crate) const LEATHER_WRAP: MeshColor = [0.19, 0.12, 0.07, 1.0];
 pub(crate) const IRON_BAND: MeshColor = [0.30, 0.30, 0.32, 1.0];
-// Forged-iron head palette (tier-2 tools). Brighter and cooler than the
-// stone palette so an iron tool reads as metal at a glance, with a honed
-// edge highlight that catches the light through a swing.
-pub(crate) const IRON_HEAD: MeshColor = [0.60, 0.63, 0.68, 1.0];
-pub(crate) const IRON_HEAD_DARK: MeshColor = [0.38, 0.40, 0.45, 1.0];
-pub(crate) const IRON_EDGE: MeshColor = [0.86, 0.89, 0.94, 1.0];
+// The forged-iron head palette (IRON_HEAD / IRON_HEAD_DARK / IRON_EDGE) used to
+// live here for the procedural iron tools. Those tools are now authored Blender
+// glbs (`art/items/iron_{hatchet,pickaxe}/*.blend`), which bake the same linear
+// iron tones into their vertex colours, so the constants moved into the models.
 pub(crate) const STONE_DARK: MeshColor = [0.32, 0.34, 0.33, 1.0];
 pub(crate) const STONE_LIGHT: MeshColor = [0.58, 0.61, 0.57, 1.0];
 pub(crate) const STONE_EDGE: MeshColor = [0.74, 0.76, 0.72, 1.0];
@@ -111,70 +109,6 @@ impl LowPolyMeshBuilder {
         ];
         for (a, b, c) in triangles {
             self.push_triangle_away_from(center, vertices[a], vertices[b], vertices[c], color);
-        }
-    }
-
-    pub(crate) fn add_quad_prism(
-        &mut self,
-        points: [[f32; 2]; 4],
-        half_depth: f32,
-        color: MeshColor,
-    ) {
-        let origin = [
-            (points[0][0] + points[1][0] + points[2][0] + points[3][0]) / 4.0,
-            (points[0][1] + points[1][1] + points[2][1] + points[3][1]) / 4.0,
-            0.0,
-        ];
-        let front = [
-            [points[0][0], points[0][1], -half_depth],
-            [points[1][0], points[1][1], -half_depth],
-            [points[2][0], points[2][1], -half_depth],
-            [points[3][0], points[3][1], -half_depth],
-        ];
-        let back = [
-            [points[0][0], points[0][1], half_depth],
-            [points[1][0], points[1][1], half_depth],
-            [points[2][0], points[2][1], half_depth],
-            [points[3][0], points[3][1], half_depth],
-        ];
-        self.push_triangle_away_from(origin, front[0], front[1], front[2], color);
-        self.push_triangle_away_from(origin, front[0], front[2], front[3], color);
-        self.push_triangle_away_from(origin, back[0], back[2], back[1], color);
-        self.push_triangle_away_from(origin, back[0], back[3], back[2], color);
-        for side in 0..4 {
-            let next = (side + 1) % 4;
-            self.push_triangle_away_from(origin, front[side], front[next], back[next], color);
-            self.push_triangle_away_from(origin, front[side], back[next], back[side], color);
-        }
-    }
-
-    pub(crate) fn add_tri_prism(
-        &mut self,
-        points: [[f32; 2]; 3],
-        half_depth: f32,
-        color: MeshColor,
-    ) {
-        let origin = [
-            (points[0][0] + points[1][0] + points[2][0]) / 3.0,
-            (points[0][1] + points[1][1] + points[2][1]) / 3.0,
-            0.0,
-        ];
-        let front = [
-            [points[0][0], points[0][1], -half_depth],
-            [points[1][0], points[1][1], -half_depth],
-            [points[2][0], points[2][1], -half_depth],
-        ];
-        let back = [
-            [points[0][0], points[0][1], half_depth],
-            [points[1][0], points[1][1], half_depth],
-            [points[2][0], points[2][1], half_depth],
-        ];
-        self.push_triangle_away_from(origin, front[0], front[2], front[1], color);
-        self.push_triangle_away_from(origin, back[0], back[1], back[2], color);
-        for side in 0..3 {
-            let next = (side + 1) % 3;
-            self.push_triangle_away_from(origin, front[side], front[next], back[next], color);
-            self.push_triangle_away_from(origin, front[side], back[next], back[side], color);
         }
     }
 
