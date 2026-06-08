@@ -265,21 +265,44 @@ with a few differences from held tools:
 - **Rough stone = one displaced surface, NOT discrete tiles.** A first pass tiled
   the furnace with separate protruding cobble boxes; it read as "stone slabs glued
   on concrete". The fix that worked: build the body as ONE lumpy rock. Make a
-  cube, `bmesh.ops.subdivide_edges(cuts=7, use_grid_fill=True)`, `bm.normal_update()`,
-  then push every vertex along its normal by two-octave hash noise (a coarse
-  bump + a fine roughness, biased mostly outward so it bulges). Keep the bottom
-  ring flat (skip verts with `z < 0.04`, and clamp the base normal's downward
-  push) so it still sits on the ground. Then **boolean-difference** an arch-shaped
-  cutter (a rectangle-plus-semicircle profile extruded along the mouth axis) to
-  carve the mouth and a clean cavity in one step. This is both more organic and
-  far cheaper than tiles (~390 polys / ~65 KB vs ~2700 / ~420 KB).
-- **Shade the facets, don't paint tiles.** Colour each exterior face by a *small*
-  per-face grey jitter (keep the range tight, e.g. `0.31 + 0.075*hash`, or it
-  reads as a checkerboard) times a lambert term against a fixed key-light vector
-  (`0.50 + 0.62*max(0, n·L)`). The displacement gives the normals enough spread
-  that the lambert alone reads as rough stone. Classify cavity faces by an AABB on
-  the centroid (inside the cutter region) and colour them very dark so the hollow
-  reads through the mouth.
+  cube, `bmesh.ops.subdivide_edges(cuts=6, use_grid_fill=True)`, `bm.normal_update()`,
+  then push every vertex along its normal. Keep the bottom ring flat (skip verts
+  with `z < 0.04`, and clamp the base normal's downward push) so it still sits on
+  the ground. Then **boolean-difference** an arch-shaped cutter (a
+  rectangle-plus-semicircle profile extruded along the mouth axis) to carve the
+  mouth and a clean cavity in one step. ~300 polys before triangulation, ~65 to
+  75 KB (vs the tiled version's ~2700 / ~420 KB).
+- **Use COHERENT (value) noise for the displacement, not per-vertex white noise.**
+  Hashing each vertex independently makes neighbours jump apart -> spiky, angular,
+  rectangular bumps. Sample a trilinearly-interpolated value-noise field instead
+  (random values on an integer lattice, smoothstep-blended) so adjacent verts move
+  together into smooth rounded mounds. The lattice `scale` sets the stone size:
+  larger scale (~0.45) gives bigger, well-spaced rocks; add a smaller second
+  octave (~0.20) for gentle secondary undulation. One light Laplacian relax pass
+  (lerp each non-base vert ~0.2 toward its neighbour average) takes the last edge
+  off without flattening the rocks. Then `bmesh.ops.triangulate(quad_method='BEAUTY')`
+  so the facets read as organic rock rather than a rectangular quad grid.
+- **Round the top edges with a bevel BEFORE the noise.** The icon's furnace has a
+  rounded top, but a plain displaced cube keeps fairly sharp top edges. Select the
+  four top edges of the base cube (`both verts at z ~= top`) and
+  `bmesh.ops.bevel(geom=top_edges, offset~0.17, segments=6, affect='EDGES',
+  clamp_overlap=True)` first, THEN subdivide and displace. The bevel rounds the
+  top silhouette + corners; the noise then textures that rounded shape. Order
+  matters: bevel the few big cube edges first, because after subdivision the top
+  edge is many short segments and per-segment bevels just conflict.
+- **Shade the facets, don't paint tiles.** Colour each exterior face by a tone
+  taken from the SAME coherent noise field that shaped the rocks (so each bump
+  reads as its own stone), plus a tiny per-face break-up, times a lambert term
+  against a fixed key-light vector (`0.52 + 0.60*max(0, n·L)`). Keep the albedo
+  range tight or it reads as a checkerboard; let the lambert + displaced normals
+  do the work. Classify cavity faces by an AABB on the centroid (inside the cutter
+  region) and colour them very dark so the hollow reads through the mouth.
+- **No fake ember in the model.** An early version put a warm coal pyramid on the
+  cavity floor; it just looked like an object sitting in an idle furnace. The fire
+  spawn point is hardcoded in the furnace-fire system (a child at local
+  `(0, 0.30, 0.36)`), not read from the model, so the model needs no ember marker:
+  leave the cavity empty and dark, and let the fire particles + point light fill
+  it while smelting.
 - **Boolean needs object context.** `modifier_add('BOOLEAN')` + `modifier_apply`
   require the body to be the active, selected object in object mode, so do the
   build-plus-boolean in a call with no `read_homefile` (clear via the data API
