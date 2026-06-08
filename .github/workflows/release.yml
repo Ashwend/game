@@ -176,6 +176,12 @@ jobs:
       - prepare
       - verify_quality_gate
     runs-on: ${{ matrix.runner }}
+    # The POSTHOG_* and GAME_WORKOS_CLIENT_ID values baked into the binary via
+    # option_env! live on the BleedingEdge GitHub Environment, not at repo level.
+    # `vars.*` only resolves environment-scoped variables when the job is
+    # attached to that environment; without this the build sees empty strings
+    # and ships analytics-disabled binaries with the default WorkOS client id.
+    environment: BleedingEdge
     strategy:
       fail-fast: false
       matrix:
