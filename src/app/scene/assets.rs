@@ -17,11 +17,11 @@ use super::{
         low_poly_bag_mesh, low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_large_mesh,
         low_poly_birch_tree_medium_lod_mesh, low_poly_birch_tree_medium_mesh,
         low_poly_birch_tree_small_lod_mesh, low_poly_birch_tree_small_mesh,
-        low_poly_branch_pile_mesh, low_poly_crude_furnace_mesh, low_poly_hay_grass_mesh,
-        low_poly_ore_node_mesh, low_poly_pine_tree_large_lod_mesh, low_poly_pine_tree_large_mesh,
+        low_poly_branch_pile_mesh, low_poly_hay_grass_mesh, low_poly_ore_node_mesh,
+        low_poly_pine_tree_large_lod_mesh, low_poly_pine_tree_large_mesh,
         low_poly_pine_tree_medium_lod_mesh, low_poly_pine_tree_medium_mesh,
         low_poly_pine_tree_small_lod_mesh, low_poly_pine_tree_small_mesh, low_poly_player_mesh,
-        low_poly_surface_stone_mesh, low_poly_workbench_mesh,
+        low_poly_surface_stone_mesh,
     },
     sky::{initial_distance_fog, setup_sky},
 };
@@ -377,9 +377,18 @@ pub(crate) fn setup_scene(
             ..default()
         }),
     });
+    // Placed structures are authored Blender glbs matching their inventory icons
+    // (a splay-legged wooden bench, a cobblestone furnace with an arched glowing
+    // mouth). Like the tools, each look is carried by the model's COLOR_0 vertex
+    // colours; only the mesh primitive is loaded here, the shared `material` below
+    // stays base-white so those vertex colours show through, exactly as the
+    // procedural trees/ore nodes do. Sources:
+    // `art/items/{workbench_t1,crude_furnace}/*.blend`.
+    let workbench_glb = embedded_asset_path("items/workbench_t1/model.glb");
+    let furnace_glb = embedded_asset_path("items/crude_furnace/model.glb");
     commands.insert_resource(DeployableVisualAssets {
-        workbench_mesh: meshes.add(low_poly_workbench_mesh()),
-        furnace_mesh: meshes.add(low_poly_crude_furnace_mesh()),
+        workbench_mesh: prim_mesh(&workbench_glb, 0),
+        furnace_mesh: prim_mesh(&furnace_glb, 0),
         material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.92,

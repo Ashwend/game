@@ -11,11 +11,12 @@ not have to be rediscovered each time.
 - **Authored glb (this doc):** held-item viewmodels and props that should match
   a painted icon or concept closely, especially organic or faceted shapes that
   boxes and prisms read poorly (a curved double pick, a chunky faceted maul, a
-  star-shaped stone head). The model carries its own geometry **and** materials.
+  star-shaped stone head). Also the placed structures (workbench, furnace), which
+  now match their icons too; see [Structures and deployables](#structures-and-deployables-single-mesh-shared-material).
 - **Procedural `LowPolyMeshBuilder`** (`src/app/scene/mesh/`): still the right
-  tool for algorithmic or blocky shapes (ore nodes, trees, debris, deployable
-  structures). Do not author those in Blender, and do not reshape a procedural
-  mesh to chase an icon, author a glb instead.
+  tool for algorithmic or blocky shapes (ore nodes, trees, debris). Do not author
+  those in Blender, and do not reshape a procedural mesh to chase an icon, author
+  a glb instead.
 
 ## Tools
 
@@ -238,6 +239,66 @@ meshes (same shape, same fibre lashing) and differ purely in the head, matte
 grey stone (`metallic 0, rough 0.9`) versus metallic steel (`metallic 1, rough
 0.34`). Each tier is still its own glb so they can diverge later, but keeping the
 geometry identical is the cheapest way to make a progression read as one family.
+
+## Structures and deployables (single mesh, shared material)
+
+Placed structures (workbench, furnace) follow the same author-from-icon pipeline,
+with a few differences from held tools:
+
+- **One mesh, one material slot, shared vertex material.** Unlike a tool (two
+  primitives with their own materials for the iron sheen), a structure exports a
+  single primitive. Rust loads only that mesh, `workbench_mesh: prim_mesh(glb, 0)`
+  in `assets.rs`, and reuses the base-white `DeployableVisualAssets.material` so
+  the model's `COLOR_0` vertex colours tint it, exactly as the procedural trees /
+  ore nodes do. Do **not** call `glb_material` for these. Spawn is unchanged
+  (`deployable_visual` in `src/app/systems/deployables/mod.rs`).
+- **In-game vs Blender axes (with `export_yup=True`).** Build with Blender Z up.
+  Then in-game `+X = Blender +X`, in-game `+Y` (up) `= Blender +Z`, in-game
+  `+Z = Blender -Y`.
+- **Orientation can matter.** The furnace mouth must face in-game `+Z` (so build
+  it on Blender `-Y`) because the furnace-fire rig is a child at local
+  `(0, 0.30, 0.36)`; a mouth on the wrong face would put the glow outside the
+  stone. Symmetric structures (the bench) don't care.
+- **Footprint must match the collider.** Size the model to the item's
+  `DeployableProfile` half-extents in `items.rs` (workbench half-width 0.55,
+  furnace 0.50), so the visual and the placement/destruction AABB agree.
+- **Rough stone = one displaced surface, NOT discrete tiles.** A first pass tiled
+  the furnace with separate protruding cobble boxes; it read as "stone slabs glued
+  on concrete". The fix that worked: build the body as ONE lumpy rock. Make a
+  cube, `bmesh.ops.subdivide_edges(cuts=7, use_grid_fill=True)`, `bm.normal_update()`,
+  then push every vertex along its normal by two-octave hash noise (a coarse
+  bump + a fine roughness, biased mostly outward so it bulges). Keep the bottom
+  ring flat (skip verts with `z < 0.04`, and clamp the base normal's downward
+  push) so it still sits on the ground. Then **boolean-difference** an arch-shaped
+  cutter (a rectangle-plus-semicircle profile extruded along the mouth axis) to
+  carve the mouth and a clean cavity in one step. This is both more organic and
+  far cheaper than tiles (~390 polys / ~65 KB vs ~2700 / ~420 KB).
+- **Shade the facets, don't paint tiles.** Colour each exterior face by a *small*
+  per-face grey jitter (keep the range tight, e.g. `0.31 + 0.075*hash`, or it
+  reads as a checkerboard) times a lambert term against a fixed key-light vector
+  (`0.50 + 0.62*max(0, n·L)`). The displacement gives the normals enough spread
+  that the lambert alone reads as rough stone. Classify cavity faces by an AABB on
+  the centroid (inside the cutter region) and colour them very dark so the hollow
+  reads through the mouth.
+- **Boolean needs object context.** `modifier_add('BOOLEAN')` + `modifier_apply`
+  require the body to be the active, selected object in object mode, so do the
+  build-plus-boolean in a call with no `read_homefile` (clear via the data API
+  instead). Re-open the result in a fresh `bmesh` to colour it.
+- **No emissive on a single material.** The ember pile is just a dark-warm coal
+  colour; the existing furnace-fire particles + point light supply the glow while
+  smelting. Don't make the ember emissive (an idle furnace shouldn't glow, and
+  the shared material is non-emissive anyway).
+- **Round pointy box edges with a global bevel** (used on the workbench): after
+  building, `bmesh.ops.bevel(bm, geom=list(bm.edges), segments=2, offset=~0.018,
+  clamp_overlap=True)`. The boxes are never welded (each is its own verts), so one
+  global edge bevel rounds every box independently, and bevel **interpolates the
+  `COLOR_0` loop layer** onto the new facets, so colour first, then bevel. The
+  displaced-rock furnace doesn't need this (the displacement already breaks up the
+  edges).
+- **Verify in-world headless.** `ashwend-control.py <sock> place-deployable
+  <item_id> [distance]` drops the carried structure on the floor in front of the
+  player, turned to face them (position from the view yaw, not the look ray, so it
+  works without aiming at the ground). After `/test-kit` you carry one of each.
 
 ## See also
 

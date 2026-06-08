@@ -34,7 +34,8 @@ use serde::{Deserialize, Serialize};
 use super::HeadlessCapture;
 use crate::{
     app::state::{ClientRuntime, LocalPlayerState, MenuState, Screen},
-    protocol::{ClientMessage, InventoryCommand},
+    items::intern_item_id,
+    protocol::{ClientMessage, InventoryCommand, PlaceDeployableCommand, Vec3Net},
 };
 
 /// Owner+group only, matching the server admin socket. The socket grants full
@@ -56,6 +57,18 @@ pub(crate) enum ControlRequest {
     /// a specific tool in hand to verify its held viewmodel (e.g. after
     /// `test-kit`, the iron pickaxe lands in slot 3).
     SelectActionbarSlot { slot: usize },
+    /// Place a deployable the player is carrying (e.g. `workbench_t1`,
+    /// `crude_furnace`) onto level ground a short distance in front of them,
+    /// turned to face the player. Position is derived from the local view yaw
+    /// rather than the look ray, so it works headless without aiming at the
+    /// floor. Lets an agent drop a structure to verify its authored in-world
+    /// model. `distance` (metres, default ~2.2) must stay within placement
+    /// reach; the server still validates inventory, ground, and overlap.
+    PlaceDeployable {
+        item_id: String,
+        #[serde(default)]
+        distance: Option<f32>,
+    },
     /// Navigate between menu screens (main_menu / worlds / multiplayer /
     /// options / in_game). Does not start a session; connect via `--connect`.
     SetScreen { screen: String },
@@ -247,6 +260,35 @@ fn handle_request(
             ))?;
             Ok(format!("selected actionbar slot {slot}"))
         }
+        ControlRequest::PlaceDeployable { item_id, distance } => {
+            let view = runtime
+                .local_view()
+                .context("no local player view (not in a world)")?;
+            let dist = distance.unwrap_or(2.2);
+            // Player forward is `(-sin yaw, 0, -cos yaw)` (see
+            // `controller::movement`), so drop the structure that far ahead on
+            // the floor (y = 0). A deployable's front is +Z, so leaving its yaw
+            // equal to the view yaw turns that front back toward the camera.
+            let (sin_yaw, cos_yaw) = view.yaw.sin_cos();
+            let position = Vec3Net::new(
+                view.position.x - sin_yaw * dist,
+                0.0,
+                view.position.z - cos_yaw * dist,
+            );
+            let session = runtime
+                .session
+                .as_mut()
+                .context("no active session (not in a world)")?;
+            session.send(ClientMessage::PlaceDeployable(PlaceDeployableCommand {
+                item_id: intern_item_id(&item_id),
+                position,
+                yaw: view.yaw,
+            }))?;
+            Ok(format!(
+                "place {item_id} queued at [{:.2}, 0.00, {:.2}]",
+                position.x, position.z
+            ))
+        }
         ControlRequest::SetScreen { screen } => {
             menu.screen = parse_screen(&screen)?;
             Ok(format!("screen set to {:?}", menu.screen))
@@ -390,6 +432,23 @@ mod tests {
 
         let dump: ControlRequest = serde_json::from_str(r#"{"command":"dump_state"}"#).unwrap();
         assert!(matches!(dump, ControlRequest::DumpState));
+
+        // `distance` is optional and defaults to None when omitted.
+        let place: ControlRequest =
+            serde_json::from_str(r#"{"command":"place_deployable","item_id":"crude_furnace"}"#)
+                .unwrap();
+        assert!(matches!(
+            place,
+            ControlRequest::PlaceDeployable { item_id, distance: None } if item_id == "crude_furnace"
+        ));
+        let place_dist: ControlRequest = serde_json::from_str(
+            r#"{"command":"place_deployable","item_id":"workbench_t1","distance":3.0}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            place_dist,
+            ControlRequest::PlaceDeployable { distance: Some(d), .. } if (d - 3.0).abs() < f32::EPSILON
+        ));
     }
 
     #[test]

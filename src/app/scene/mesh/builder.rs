@@ -8,17 +8,15 @@ pub(crate) type MeshColor = [f32; 4];
 
 // Shared palette for low-poly props. Kept together so cross-prop visual
 // consistency stays managed in one place.
-pub(crate) const WOOD_DARK: MeshColor = [0.34, 0.21, 0.10, 1.0];
 pub(crate) const WOOD_LIGHT: MeshColor = [0.56, 0.36, 0.18, 1.0];
 pub(crate) const WOOD_MID: MeshColor = [0.44, 0.28, 0.14, 1.0];
-pub(crate) const LEATHER_WRAP: MeshColor = [0.19, 0.12, 0.07, 1.0];
-pub(crate) const IRON_BAND: MeshColor = [0.30, 0.30, 0.32, 1.0];
-// The forged-iron head palette (IRON_HEAD / IRON_HEAD_DARK / IRON_EDGE) used to
-// live here for the procedural iron tools. Those tools are now authored Blender
-// glbs (`art/items/iron_{hatchet,pickaxe}/*.blend`), which bake the same linear
-// iron tones into their vertex colours, so the constants moved into the models.
+// The forged-iron head palette (IRON_HEAD / IRON_HEAD_DARK / IRON_EDGE) and the
+// procedural deployable tones (WOOD_DARK / STONE_LIGHT / IRON_BAND /
+// LEATHER_WRAP) used to live here. Those props are now authored Blender glbs
+// (`art/items/iron_{hatchet,pickaxe}` tools, `art/items/{workbench_t1,crude_furnace}`
+// structures), which bake the same linear tones into their COLOR_0 vertex
+// colours, so the constants moved into the models.
 pub(crate) const STONE_DARK: MeshColor = [0.32, 0.34, 0.33, 1.0];
-pub(crate) const STONE_LIGHT: MeshColor = [0.58, 0.61, 0.57, 1.0];
 pub(crate) const STONE_EDGE: MeshColor = [0.74, 0.76, 0.72, 1.0];
 pub(crate) const LEAF_PINE: MeshColor = [0.16, 0.36, 0.20, 1.0];
 pub(crate) const LEAF_PINE_DARK: MeshColor = [0.08, 0.22, 0.11, 1.0];

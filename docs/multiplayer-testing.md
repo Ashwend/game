@@ -162,6 +162,7 @@ Line-delimited JSON, one request per connection; the reply is
 | `{"command":"screenshot","path":"/tmp/shot.png"}` | Capture the primary window (3D scene + egui UI) to PNG. Async: the file lands a frame or two later, so poll for it. |
 | `{"command":"send_command","text":"test-kit"}` | Forward a slash command (no leading `/`) to the server. |
 | `{"command":"select_actionbar_slot","slot":3}` | Select a 0-based actionbar slot, putting that slot's item in hand (verifying a held viewmodel). After `test-kit` the iron pickaxe is in slot 3. |
+| `{"command":"place_deployable","item_id":"crude_furnace","distance":4.5}` | Drop a carried structure on the floor `distance` m (default ~2.2) in front of the player, turned to face them. Position is from the view yaw, not the look ray, so it works headless without aiming at the ground. `distance` is optional. After `test-kit` you carry one `workbench_t1` and one `crude_furnace`; place ~4.5 m out so the front face clears the bottom of the FOV. |
 | `{"command":"set_screen","screen":"worlds"}` | Navigate menu screens. Does not start a session; connect via `--connect`. |
 | `{"command":"set_inventory_open","open":true}` | Open/close the inventory panel. |
 

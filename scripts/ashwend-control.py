@@ -12,6 +12,7 @@ Usage:
   ashwend-control.py <socket> screenshot <png-path>
   ashwend-control.py <socket> send-command <text>        # slash command, no leading '/'
   ashwend-control.py <socket> select-actionbar-slot <n>  # 0-based; puts that slot's item in hand
+  ashwend-control.py <socket> place-deployable <item_id> [distance]  # drop a carried structure in front, facing you
   ashwend-control.py <socket> set-screen <name>          # main_menu|worlds|multiplayer|options|in_game
   ashwend-control.py <socket> set-inventory-open <true|false>
   ashwend-control.py <socket> wait-in-world [timeout_s]   # poll dump-state until in_world
@@ -73,6 +74,11 @@ def main(argv):
         "select-actionbar-slot": lambda: {
             "command": "select_actionbar_slot",
             "slot": int(rest[0]),
+        },
+        "place-deployable": lambda: {
+            "command": "place_deployable",
+            "item_id": rest[0],
+            **({"distance": float(rest[1])} if len(rest) > 1 else {}),
         },
         "set-screen": lambda: {"command": "set_screen", "screen": rest[0]},
         "set-inventory-open": lambda: {
