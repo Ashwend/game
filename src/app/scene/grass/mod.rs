@@ -335,14 +335,17 @@ fn update_grass_field(
     }
 }
 
-/// Blade density for the static menu-backdrop grass carpet (Medium-ish).
-const MENU_GRASS_BLADES_PER_M2: f32 = 11.0;
+/// Tuft density (patches/m²) for the static menu backdrop. A touch denser than
+/// in-world Medium ([`patch_density_per_m2`]) since it's a curated close-up shot,
+/// but the same scattered-tuft aesthetic (not the old dense carpet).
+const MENU_GRASS_PATCHES_PER_M2: f32 = 0.7;
 
 /// Spawn a fixed patch of detail grass for the main-menu backdrop, tagged
 /// [`WorldGeometry`] so it's torn down with the rest of the backdrop on scene
-/// change. Uses the shared wind [`GrassMaterial`] + the same blade meshes as the
-/// in-game grass, but as a static patch, the menu camera barely drifts, so
-/// streaming isn't needed and the shader's radial fade thins the far edge.
+/// change. Uses the same GPU-instanced tuft pipeline as the in-game grass (same
+/// blade mesh, colours, curve, and wind), just as one static buffer, the menu
+/// camera barely drifts so streaming isn't needed and the shader's radial fade
+/// thins the far edge.
 ///
 /// The tile range covers the camera's visible foreground/midground (camera near
 /// `(-5.8, 7.2)` looking toward `(0.4, -3.6)`); tiles past the fade radius are
@@ -350,7 +353,7 @@ const MENU_GRASS_BLADES_PER_M2: f32 = 11.0;
 pub(crate) fn spawn_menu_grass(commands: &mut Commands, meshes: &mut Assets<Mesh>) {
     let blade_mesh = meshes.add(build_instanced_blade_mesh());
     let layouts: Vec<Vec<InstanceData>> = (0..GRASS_LAYOUT_COUNT)
-        .map(|layout| generate_layout_instances(layout, MENU_GRASS_BLADES_PER_M2))
+        .map(|layout| generate_layout_instances(layout, MENU_GRASS_PATCHES_PER_M2))
         .collect();
 
     // One combined instance buffer over the visible ground band (8 m tiles).
