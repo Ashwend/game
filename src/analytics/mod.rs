@@ -126,7 +126,17 @@ impl Plugin for AnalyticsPlugin {
             .insert_resource(SuperPropsHandle(shared_props))
             .add_systems(Startup, app_started_system)
             .add_systems(Update, fill_render_props_system)
-            .add_systems(Update, app_quit_drain_system);
+            // MUST be `Last`, not `Update`: on the normal quit path the in-game
+            // Quit button and the OS window-close both route through
+            // `WindowCloseRequested` (see `app/systems/quit.rs`), and Bevy only
+            // writes `AppExit` afterwards, in `PostUpdate` (`exit_on_all_closed`).
+            // The app then stops after that same frame, so an `Update` reader
+            // runs *before* the exit is ever written and never observes it,
+            // silently skipping the shutdown flush. A `Last` system runs after
+            // `PostUpdate` in that final frame and does see it. Verified
+            // empirically: an `Update` reader misses the close, a `Last` reader
+            // catches it.
+            .add_systems(Last, app_quit_drain_system);
     }
 }
 
@@ -233,7 +243,9 @@ fn app_started_system(analytics: Res<Analytics>) {
 }
 
 /// Catch [`AppExit`] and flush the worker before the process exits. Bounded
-/// to a few hundred ms inside the worker so quit never hangs.
+/// to a few hundred ms inside the worker so quit never hangs. Registered in the
+/// `Last` schedule, see the comment at its registration: an `Update` reader
+/// never observes the window-close exit.
 fn app_quit_drain_system(
     analytics: Res<Analytics>,
     started: Res<AnalyticsAppStart>,

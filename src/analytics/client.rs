@@ -43,8 +43,13 @@ const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Max time the shutdown drain blocks the game on quit. The user already
-/// pressed quit; we will not hold them hostage for telemetry.
-const SHUTDOWN_DRAIN_BUDGET: Duration = Duration::from_millis(500);
+/// pressed quit; we will not hold them hostage for telemetry. 1.5s is the
+/// balance: still feels instant, but gives the final POST room to finish even
+/// when it's the *only* flush of a short session and therefore runs on a cold
+/// TLS connection (DNS + handshake + send), which can brush past a tighter
+/// budget. Longer sessions flush earlier on the 10s timer, warming the
+/// keep-alive connection so the quit POST reuses it and finishes well under this.
+const SHUTDOWN_DRAIN_BUDGET: Duration = Duration::from_millis(1500);
 
 /// One unit of work delivered to the worker. Either a real event to
 /// serialize and send, or a shutdown sentinel that forces a final flush.
