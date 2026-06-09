@@ -114,18 +114,59 @@ pub(super) fn attach_player_replication(
             Replicate::to_clients(NetworkTarget::All),
             ReplicationGroup::new_from_entity(),
             NetworkVisibility,
+            player_private_overrides(owner_sender),
+            OwnerSender(owner_sender),
         ));
-        let mut overrides =
-            ComponentReplicationOverrides::<crate::server::PlayerPrivate>::default().disable_all();
-        if let Some(sender) = owner_sender {
-            overrides = overrides.enable_for(sender);
-        }
-        entity_mut.insert(overrides);
     }
     world.trigger(RoomEvent {
         room: room_entity,
         target: RoomTarget::AddEntity(entity),
     });
+}
+
+/// The sender entity the player's owner-only `PlayerPrivate` override currently
+/// targets. Lives on the mirror entity so [`rebind_player_owner_if_changed`] can
+/// notice when a reconnect hands the same player a new sender. Server-side only,
+/// never replicated.
+#[derive(Component)]
+pub(super) struct OwnerSender(Option<Entity>);
+
+/// Build the `PlayerPrivate` per-component override: disabled for everyone,
+/// then re-enabled only for the owner's sender (if any). The owner already
+/// predicts their own inventory, so gating the wire bytes to them keeps peers
+/// from ever receiving another player's private state.
+fn player_private_overrides(
+    owner_sender: Option<Entity>,
+) -> ComponentReplicationOverrides<crate::server::PlayerPrivate> {
+    let overrides =
+        ComponentReplicationOverrides::<crate::server::PlayerPrivate>::default().disable_all();
+    match owner_sender {
+        Some(sender) => overrides.enable_for(sender),
+        None => overrides,
+    }
+}
+
+/// Re-point a persisted player entity's owner-only `PlayerPrivate` override at
+/// the client's *current* sender when it has changed. The mirror entity for a
+/// sleeping body survives the owner's logout, so when they reconnect and
+/// `wake_sleeper` reuses the same client id, the entity is refreshed in place
+/// (not respawned) and its override still names the old, now-despawned sender.
+/// Without this re-bind the woken player's inventory/crafting never reaches
+/// their new connection. Cheap: only writes on an actual sender change.
+pub(super) fn rebind_player_owner_if_changed(
+    world: &mut World,
+    entity: Entity,
+    current_sender: Option<Entity>,
+) {
+    if world.get::<OwnerSender>(entity).map(|o| o.0) == Some(current_sender) {
+        return;
+    }
+    if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+        entity_mut.insert((
+            player_private_overrides(current_sender),
+            OwnerSender(current_sender),
+        ));
+    }
 }
 
 /// World-side lazy lookup: returns the Room entity for `chunk`, spawning
@@ -207,6 +248,21 @@ pub(super) fn update_client_room_subscriptions(
 
     for client_id in live_clients {
         let Some(sender_entity) = connections.entity_for_client(client_id) else {
+            // This client id is "in the world" but has no live sender right
+            // now, the classic case is a sleeping body: the player logged out,
+            // their body stays in the world (so the id remains in
+            // `connected_client_ids`), but the transport, and thus the
+            // `ReplicationSender`, is gone. Drop the cached AoI anchor and
+            // subscribed-chunk set so that when a sender reappears, i.e. the
+            // player reconnects and `wake_sleeper` reuses this same id with a
+            // brand-new sender, the next reconcile re-subscribes that new sender
+            // from scratch. Without this, the stale anchor short-circuits the
+            // reconcile (and the stale subscribed-set's `insert` guard suppresses
+            // the AddSender), so the new sender is never put into any room: the
+            // woken player receives nothing, not even its own entity, and the
+            // join splash hangs forever (`local_player_entity` never arrives).
+            anchors.by_client.remove(&client_id);
+            subs.by_client.remove(&client_id);
             continue;
         };
         // Spatial short-circuit: if the client's anchor chunk and view tier are

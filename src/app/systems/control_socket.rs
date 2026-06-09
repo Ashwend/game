@@ -96,6 +96,10 @@ struct ClientStateDump {
     /// Strong "the world finished loading" signal: connected, world installed,
     /// and the local player's replicated entity has arrived.
     in_world: bool,
+    /// Whether the owner-only `PlayerPrivate` (inventory/crafting) replicated.
+    /// Distinguishes a fresh-but-empty inventory (Some) from one that never
+    /// arrived (None), e.g. after a sleeping-body wake with a stale owner override.
+    private_present: bool,
     screen: String,
     inventory_open: bool,
     crafting_open: bool,
@@ -318,6 +322,7 @@ fn build_dump(
         in_world: runtime.client_id.is_some()
             && runtime.world.is_some()
             && local_player.entity.is_some(),
+        private_present: local_player.private.is_some(),
         screen: format!("{:?}", menu.screen),
         inventory_open: menu.inventory_open,
         crafting_open: menu.crafting_open,

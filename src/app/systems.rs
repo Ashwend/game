@@ -83,7 +83,9 @@ pub(crate) use network::{
 pub(crate) use node_death::tick_felling_trees_system;
 pub(crate) use players::{RemotePlayerEntities, apply_snapshot_system, tick_dying_players_system};
 pub(crate) use quit::app_quit_system;
-pub(crate) use settings::{save_client_settings_system, sync_view_radius_system};
+pub(crate) use settings::{
+    flush_settings_on_exit_system, save_client_settings_system, sync_view_radius_system,
+};
 pub(crate) use test_mode::{
     apply_test_mode_overrides_system, multiplayer_test_owns_window, reposition_test_window_system,
 };

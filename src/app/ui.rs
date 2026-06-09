@@ -182,6 +182,7 @@ pub(crate) fn ui_system(
     mut contexts: EguiContexts,
     mut resources: UiResources,
     mut commonmark_cache: Local<CommonMarkCache>,
+    mut splash_diag_throttle: Local<f32>,
 ) -> bevy::prelude::Result {
     let ctx = contexts.ctx_mut()?;
     theme::apply_game_style(ctx);
@@ -283,6 +284,40 @@ pub(crate) fn ui_system(
     // (world entry, server join). World-entry splashes hold until the joined
     // world is actually ready to play (see `world_ready_for_play`).
     let world_ready = world_ready_for_play(&resources);
+    // Diagnostic breadcrumb for the "I'm in-game but can only see the loader"
+    // report: when a world-entry splash is up and the readiness gate hasn't
+    // cleared, log which of the four conditions is still missing, throttled to
+    // ~once a second. Otherwise the 20s fallback silently hides the culprit.
+    // Reproduce, then read <data_dir>/logs/ashwend.log to see what's stuck.
+    if let Some(splash) = resources.menu.loading_splash.as_ref() {
+        let world_entry = matches!(
+            splash.kind,
+            crate::app::state::LoadingSplashKind::JoiningServer
+                | crate::app::state::LoadingSplashKind::EnteringWorld
+        );
+        if world_entry && !world_ready {
+            *splash_diag_throttle += delta_seconds;
+            if *splash_diag_throttle >= 1.0 {
+                *splash_diag_throttle = 0.0;
+                let scene_applied = resources.scene_state.applied_live_version()
+                    == Some(resources.runtime.world_version);
+                bevy::log::warn!(
+                    "loading splash waiting on world-ready ({:.0}s): client_id={} world_data={} \
+                     local_player_entity={} scene_applied={} [world_version={}, scene_version={:?}, screen={:?}]",
+                    splash.elapsed_seconds,
+                    resources.runtime.client_id.is_some(),
+                    resources.runtime.world.is_some(),
+                    resources.local_player.entity.is_some(),
+                    scene_applied,
+                    resources.runtime.world_version,
+                    resources.scene_state.applied_live_version(),
+                    resources.menu.screen,
+                );
+            }
+        } else {
+            *splash_diag_throttle = 0.0;
+        }
+    }
     loading_splash_ui(
         ctx,
         &mut resources.menu,

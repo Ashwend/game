@@ -13,6 +13,7 @@ use crate::world::ChunkCoord;
 use super::AuthoritativeServer;
 use super::rooms::{
     attach_player_replication, attach_room_gated_replication, move_entity_between_rooms,
+    rebind_player_owner_if_changed,
 };
 use super::routing::ServerConnections;
 
@@ -313,6 +314,15 @@ pub(super) fn sync_player_entities(world: &mut World) {
             .get(view.client_id);
         match existing {
             Some(entity) => {
+                // Re-point the owner-only PlayerPrivate override if this
+                // player's sender changed (a reconnect that woke a sleeping
+                // body keeps this same mirror entity but gets a brand-new
+                // sender), otherwise the woken player's inventory/crafting
+                // never replicates to their new connection.
+                let current_sender = world
+                    .resource::<ServerConnections>()
+                    .entity_for_client(view.client_id);
+                rebind_player_owner_if_changed(world, entity, current_sender);
                 // Refresh public, position/velocity tick every frame.
                 if let Some(mut public) = world.get_mut::<crate::server::PlayerPublic>(entity)
                     && *public != view.public

@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{app::AppExit, prelude::*};
 
 use super::super::state::{ClientRuntime, ClientSettings, ClientSettingsStore};
 use crate::protocol::{ClientMessage, ViewRadiusTier};
@@ -56,4 +56,30 @@ pub(crate) fn save_client_settings_system(
         warn!("could not save client settings: {error}");
     }
     *pending_save = None;
+}
+
+/// Persist settings on quit, regardless of the debounce above.
+///
+/// The options panel marks `ClientSettings` changed every frame it's open (the
+/// egui code takes `&mut`), so [`save_client_settings_system`]'s debounce keeps
+/// resetting and never fires *while* you're in the menu, only ~0.35s after you
+/// leave it. Quitting straight from the settings screen (or within that window)
+/// would otherwise drop your most recent change, which is exactly the "I turned
+/// X off, restarted, and it was back on" report.
+///
+/// Runs in `Last`: an `Update` reader never observes the window-close `AppExit`
+/// (the app stops the same frame Bevy writes it, in `PostUpdate`), the same
+/// reason the analytics drain runs in `Last`. Saving the whole settings blob is
+/// a single small file write, so doing it unconditionally on exit is fine.
+pub(crate) fn flush_settings_on_exit_system(
+    settings: Res<ClientSettings>,
+    store: Res<ClientSettingsStore>,
+    mut exit: MessageReader<AppExit>,
+) {
+    if exit.read().next().is_none() {
+        return;
+    }
+    if let Err(error) = store.save(&settings) {
+        warn!("could not save client settings on exit: {error}");
+    }
 }
