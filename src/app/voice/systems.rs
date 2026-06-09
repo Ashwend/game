@@ -253,6 +253,20 @@ pub(crate) fn receive_voice_system(
         return;
     };
 
+    // The master voice toggle gates *both* directions. The microphone is
+    // released by `manage_voice_capture_system`; here we make sure flipping
+    // voice off mid-session also stops us *hearing* other players. Without
+    // this the receive path ignores the setting, so disabling voice keeps
+    // mixing incoming speech (and re-enabling looks like a no-op because it
+    // never stopped). Drop any half-buffered audio so it goes quiet at once.
+    // The per-peer talking envelope decays to zero in `transmit_voice_system`
+    // on its own once we stop feeding it here.
+    if !settings.voice.enabled {
+        events.clear();
+        playback.forget_all();
+        return;
+    }
+
     let listener = listener_pose(&runtime);
 
     // Buffer the envelope updates before borrowing `voice` mutably, since

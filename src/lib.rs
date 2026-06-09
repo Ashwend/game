@@ -9,6 +9,7 @@ pub mod game_balance;
 pub mod inventory;
 pub mod items;
 pub mod local_crypto;
+pub mod logging;
 pub mod net;
 pub mod protocol;
 pub mod resources;

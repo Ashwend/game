@@ -150,15 +150,15 @@ fn spawn_tree_felling(
     let fall_axis = fall_axis_from_direction(fall_direction);
 
     // Clone the source material so we can drive this falling tree's alpha
-    // without touching the shared material that other resource nodes use.
-    // AlphaMode::Blend lets us smoothly fade the trunk out at the end of
-    // the death animation.
+    // without touching the shared material every other resource node uses.
+    // Keep the clone opaque for now: an opaque trunk draws in the opaque
+    // phase and correctly depth-occludes the detail grass (which renders in
+    // the transparent phase but still writes depth). Only the end-of-life
+    // fade flips this to `AlphaMode::Blend`, see `apply_fade_out`. Forcing
+    // Blend up front put the still-solid, upright trunk into the transparent
+    // phase, so grass behind it punched through on the first frame of the fall.
     let fade_material = match materials.get(&source_material) {
-        Some(source) => {
-            let mut clone = source.clone();
-            clone.alpha_mode = AlphaMode::Blend;
-            materials.add(clone)
-        }
+        Some(source) => materials.add(source.clone()),
         None => source_material,
     };
 
@@ -343,6 +343,12 @@ fn apply_fade_out(
     let fade_t = ((since_land - TREE_LANDED_HOLD) / TREE_FADE_DURATION).clamp(0.0, 1.0);
     let alpha = (1.0 - fade_t).clamp(0.0, 1.0);
     if let Some(material) = materials.get_mut(&tree.material) {
+        // Now that we're actually lowering alpha, switch to blended
+        // transparency. Up to this point the trunk was opaque so it occluded
+        // the grass correctly; by the time we get here it's lying flat on the
+        // ground and dissolving, so the brief transparent-phase sorting against
+        // grass is no longer visible.
+        material.alpha_mode = AlphaMode::Blend;
         material.base_color.set_alpha(alpha);
     }
     if fade_t >= 1.0 {

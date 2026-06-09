@@ -162,6 +162,12 @@ pub fn run() -> Result<()> {
             admins,
             map_size,
         } => {
+            // The server runs MinimalPlugins (no LogPlugin), so install our own
+            // tracing subscriber + file log and the crash/exception reporter
+            // before anything else can log or panic. Mirrors what the client
+            // gets through LogPlugin + AnalyticsPlugin.
+            crate::logging::init_dedicated_server_logging();
+            crate::analytics::install_dedicated_server_crash_reporter();
             let auth_mode: AuthMode = auth.into();
             let workos = match auth_mode {
                 AuthMode::Workos => {

@@ -218,6 +218,15 @@ impl VoicePlayback {
             guard.speakers.remove(&speaker);
         }
     }
+
+    /// Drops every active speaker slot at once. Used when the player turns
+    /// voice chat off mid-session so any half-buffered speech goes quiet
+    /// immediately instead of trailing off as the ring buffers drain.
+    pub(crate) fn forget_all(&self) {
+        if let Ok(mut guard) = self.mixer.lock() {
+            guard.speakers.clear();
+        }
+    }
 }
 
 impl Drop for VoicePlayback {

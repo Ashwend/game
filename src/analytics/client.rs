@@ -231,41 +231,63 @@ fn flush(agent: &ureq::Agent, config: &WorkerConfig, buffer: &mut Vec<EventRecor
     match result {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
-            eprintln!("analytics: posthog batch send failed: {error}");
+            bevy::log::warn!("analytics: posthog batch send failed: {error}");
         }
         Err(_) => {
-            eprintln!("analytics: posthog batch send panicked; dropping batch");
+            bevy::log::warn!("analytics: posthog batch send panicked; dropping batch");
         }
     }
 }
 
 fn build_envelope_value(config: &WorkerConfig, record: EventRecord) -> Value {
-    let mut properties = Map::new();
+    build_event_envelope(
+        config.distinct_id,
+        config.disable_geoip,
+        &config.super_props,
+        record.name,
+        record.properties,
+        record.timestamp_ms,
+    )
+}
+
+/// Build one PostHog capture envelope: merge the shared super-props under the
+/// event's own properties, promote person keys into `$set`, and stamp the
+/// distinct id + timestamp. Shared so the async worker and the synchronous
+/// crash reporter (see [`super::crash`]) emit byte-identical event shapes.
+pub(super) fn build_event_envelope(
+    distinct_id: Uuid,
+    disable_geoip: bool,
+    super_props: &SharedProps,
+    event_name: &str,
+    properties: Map<String, Value>,
+    timestamp_ms: u64,
+) -> Value {
+    let mut merged = Map::new();
     let mut person_set = Map::new();
-    if let Ok(super_props) = config.super_props.lock() {
+    if let Ok(super_props) = super_props.lock() {
         for (key, value) in super_props.iter() {
-            properties.insert(key.clone(), value.clone());
+            merged.insert(key.clone(), value.clone());
         }
         person_set = context::person_set(&super_props);
     }
-    for (key, value) in record.properties.into_iter() {
-        properties.insert(key, value);
+    for (key, value) in properties.into_iter() {
+        merged.insert(key, value);
     }
-    if config.disable_geoip {
-        properties.insert("$ip".to_owned(), Value::Null);
-        properties.insert("$geoip_disable".to_owned(), Value::Bool(true));
+    if disable_geoip {
+        merged.insert("$ip".to_owned(), Value::Null);
+        merged.insert("$geoip_disable".to_owned(), Value::Bool(true));
     }
     // PostHog convention: `$set` inside event properties updates the
     // Person profile. We promote hardware / OS / app-build keys so the
     // user's profile in PostHog shows them, not just per-event rows.
     if !person_set.is_empty() {
-        properties.insert("$set".to_owned(), Value::Object(person_set));
+        merged.insert("$set".to_owned(), Value::Object(person_set));
     }
     json!({
-        "event": record.name,
-        "distinct_id": config.distinct_id.as_hyphenated().to_string(),
-        "timestamp": iso8601_ms(record.timestamp_ms),
-        "properties": properties,
+        "event": event_name,
+        "distinct_id": distinct_id.as_hyphenated().to_string(),
+        "timestamp": iso8601_ms(timestamp_ms),
+        "properties": merged,
     })
 }
 

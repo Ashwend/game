@@ -364,48 +364,56 @@ fn add_window_and_default_plugins(
 ) {
     let window_settings = settings.display;
     app.add_plugins(
-        DefaultPlugins.set(WindowPlugin {
-            // `multiplayer-test` overrides the window resolution via
-            // env vars and the actual position is set after the
-            // primary monitor has been queried, see
-            // `reposition_test_window_system`. Trying to centre at
-            // startup would need a screen-size guess and that's exactly
-            // what we'd get wrong on the dev's actual monitor.
-            primary_window: Some(Window {
-                title: "Ashwend".to_owned(),
-                resolution: test_mode
-                    .window
-                    .map(|w| (w.width, w.height).into())
-                    .unwrap_or_else(|| {
-                        (
-                            window_settings.resolution.width,
-                            window_settings.resolution.height,
-                        )
-                            .into()
-                    }),
-                position: WindowPosition::default(),
-                present_mode: window_settings.present_mode(),
-                mode: if test_mode.window.is_some() {
-                    // Test windows always come up in plain windowed
-                    // mode so the post-monitor reposition actually
-                    // applies, fullscreen would ignore it.
-                    bevy::window::WindowMode::Windowed
-                } else {
-                    window_settings.window_mode(None)
-                },
-                resizable: false,
-                // Headless capture renders to an off-screen image, so the
-                // window is created hidden. winit then runs the schedule
-                // each cycle (its `all_invisible` path) so the capture image
-                // stays fresh without an on-screen surface to throttle.
-                visible: headless_capture.is_none(),
-                // Agent-driven sessions come up unfocused so the window
-                // doesn't steal focus or jump in front of other windows.
-                focused: !agent_driven,
+        DefaultPlugins
+            // Mirror every log line into <data_dir>/logs/ashwend.log so a
+            // packaged release (no attached terminal) still leaves something
+            // to inspect. See `crate::logging`.
+            .set(bevy::log::LogPlugin {
+                custom_layer: crate::logging::install_file_layer,
+                ..default()
+            })
+            .set(WindowPlugin {
+                // `multiplayer-test` overrides the window resolution via
+                // env vars and the actual position is set after the
+                // primary monitor has been queried, see
+                // `reposition_test_window_system`. Trying to centre at
+                // startup would need a screen-size guess and that's exactly
+                // what we'd get wrong on the dev's actual monitor.
+                primary_window: Some(Window {
+                    title: "Ashwend".to_owned(),
+                    resolution: test_mode
+                        .window
+                        .map(|w| (w.width, w.height).into())
+                        .unwrap_or_else(|| {
+                            (
+                                window_settings.resolution.width,
+                                window_settings.resolution.height,
+                            )
+                                .into()
+                        }),
+                    position: WindowPosition::default(),
+                    present_mode: window_settings.present_mode(),
+                    mode: if test_mode.window.is_some() {
+                        // Test windows always come up in plain windowed
+                        // mode so the post-monitor reposition actually
+                        // applies, fullscreen would ignore it.
+                        bevy::window::WindowMode::Windowed
+                    } else {
+                        window_settings.window_mode(None)
+                    },
+                    resizable: false,
+                    // Headless capture renders to an off-screen image, so the
+                    // window is created hidden. winit then runs the schedule
+                    // each cycle (its `all_invisible` path) so the capture image
+                    // stays fresh without an on-screen surface to throttle.
+                    visible: headless_capture.is_none(),
+                    // Agent-driven sessions come up unfocused so the window
+                    // doesn't steal focus or jump in front of other windows.
+                    focused: !agent_driven,
+                    ..default()
+                }),
                 ..default()
             }),
-            ..default()
-        }),
     );
 }
 

@@ -128,8 +128,12 @@ mismatch:
 `VoiceSettings` (in `src/app/state/settings/data.rs`) carries the player's
 preferences:
 
-- `enabled`: master switch. Disabling drains the capture channel but stops
-  sending.
+- `enabled`: master switch over *both* directions. Disabling releases the
+  microphone (`manage_voice_capture_system` drops the capture stream) and
+  stops mixing incoming speech (`receive_voice_system` clears the queue and
+  forgets every active speaker), so the toggle goes quiet immediately whether
+  you were talking or listening. Re-enabling reopens the mic and resumes
+  playback as new packets arrive.
 - `output_volume`: master gain applied to every incoming voice stream
   (multiplied by the per-speaker spatial gain in the mixer).
 - `input_volume`: pre-encode gain on the microphone.

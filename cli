@@ -13,13 +13,15 @@ cd "$ROOT"
 # asset root.
 export BEVY_ASSET_ROOT="$ROOT"
 
-# Periodic build-artifact cleanup, see maybe_sweep_target. cargo never
+# Build-artifact cleanup retention for the manual `./cli sweep`. cargo never
 # garbage-collects old dependency versions or dead incremental caches, so
-# target/ creeps toward tens of GB over a project's life. These let you
-# override the cadence and retention without editing the script.
+# target/ creeps toward tens of GB over a project's life. Sweeping is manual
+# (not wired into `dev`/`dev-fast`): `cargo sweep --time` keys off file mtime
+# and will delete the artifacts of any dependency that simply hasn't been
+# rebuilt in that window, forcing a needless recompile on the next launch. We
+# don't want housekeeping silently lengthening a dev launch, so run it yourself
+# when target/ gets big.
 SWEEP_KEEP_DAYS="${ASHWEND_SWEEP_KEEP_DAYS:-30}"
-SWEEP_INTERVAL_DAYS="${ASHWEND_SWEEP_INTERVAL_DAYS:-7}"
-SWEEP_STAMP="target/.cli-last-sweep"
 
 cmd="${1:-help}"
 if [[ $# -gt 0 ]]; then
@@ -30,27 +32,6 @@ close_existing_game() {
   pkill -x "Ashwend" >/dev/null 2>&1 || true
   pkill -x "ashwend" >/dev/null 2>&1 || true
   pkill -f "target/debug/ashwend" >/dev/null 2>&1 || true
-}
-
-# Trim stale build artifacts so target/ doesn't balloon. Runs at most once
-# per SWEEP_INTERVAL_DAYS (gated by the stamp file) so daily dev launches
-# stay fast, and only removes artifacts untouched for SWEEP_KEEP_DAYS, so
-# the warm build feeding the launch we're about to do is never swept. A
-# silent no-op when cargo-sweep isn't installed: dev must never be blocked
-# by housekeeping.
-maybe_sweep_target() {
-  [[ -d target ]] || return 0
-  # Skip if we swept within the interval (stamp is newer than the cutoff).
-  if [[ -f "$SWEEP_STAMP" && -z "$(find "$SWEEP_STAMP" -mtime +"$SWEEP_INTERVAL_DAYS" 2>/dev/null)" ]]; then
-    return 0
-  fi
-  if ! cargo sweep --version >/dev/null 2>&1; then
-    echo "cli: cargo-sweep not installed; skipping cleanup (run ./cli sweep, or: cargo install cargo-sweep)" >&2
-    return 0
-  fi
-  echo "cli: trimming build artifacts older than ${SWEEP_KEEP_DAYS}d (cargo-sweep)..." >&2
-  cargo sweep --time "$SWEEP_KEEP_DAYS" || true
-  touch "$SWEEP_STAMP"
 }
 
 copy_release_binary() {
@@ -88,12 +69,10 @@ publish_target() {
 case "$cmd" in
   dev)
     close_existing_game
-    maybe_sweep_target
     cargo run --bin ashwend -- client "$@"
     ;;
   dev-fast)
     close_existing_game
-    maybe_sweep_target
     cargo run --features dev-fast --bin ashwend -- client "$@"
     ;;
   profile)
@@ -162,9 +141,10 @@ case "$cmd" in
     cargo build --locked "$@"
     ;;
   sweep)
-    # Manual, unconditional artifact trim (ignores the dev-path interval
-    # gate). Installs cargo-sweep if missing. Pass a day count to override
-    # retention, e.g. `./cli sweep 14` keeps only the last 14 days.
+    # Manual artifact trim. Installs cargo-sweep if missing. Pass a day count
+    # to override retention, e.g. `./cli sweep 14` keeps only the last 14 days.
+    # Heads-up: `--time` keys off mtime, so a too-aggressive value can delete a
+    # still-needed dependency's artifacts and trigger a full recompile next run.
     if ! cargo sweep --version >/dev/null 2>&1; then
       echo "cargo-sweep not installed; installing..." >&2
       cargo install --locked cargo-sweep
@@ -172,7 +152,6 @@ case "$cmd" in
     keep="${1:-$SWEEP_KEEP_DAYS}"
     echo "sweeping build artifacts older than ${keep} days..."
     cargo sweep --time "$keep"
-    touch "$SWEEP_STAMP"
     ;;
   publish)
     rm -rf builds
