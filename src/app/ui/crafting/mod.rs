@@ -107,7 +107,7 @@ pub(super) fn crafting_body(
         mem.data.insert_temp(
             crate::app::ui::tutorial::craft_viewport_key(),
             scroll_output.inner_rect,
-        )
+        );
     });
 }
 

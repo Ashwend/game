@@ -60,15 +60,19 @@ pub(crate) fn low_poly_hay_grass_mesh() -> Mesh {
         let base = Vec2::new(radius * theta.cos(), radius * theta.sin());
 
         let yaw = next_unit(&mut rng) * TAU;
-        // Well above the detail grass (0.16–0.36 m) so the tuft stands out.
+        // Well above the detail grass so the tuft stands out.
         let height = 0.55 + next_unit(&mut rng) * 0.35;
-        let half_width = 0.018 + next_unit(&mut rng) * 0.014;
-        // Taller straws lean a touch more, fanning the tuft outward.
-        let lean = 0.04 + next_unit(&mut rng) * 0.10;
+        let half_width = 0.012 + next_unit(&mut rng) * 0.009;
+        // Hay stands up more than detail grass: a modest tilt fans the tuft out.
+        let tilt = 0.15 + next_unit(&mut rng) * 0.20;
         let lean_dir = next_unit(&mut rng) * TAU;
-        let bend = Vec2::new(lean_dir.cos() * lean, lean_dir.sin() * lean);
+        let lean_mag = height * tilt;
+        let lean = Vec2::new(lean_dir.cos() * lean_mag, lean_dir.sin() * lean_mag);
+        let flex = 0.10 + next_unit(&mut rng) * 0.12;
         let shade = 0.72 + next_unit(&mut rng) * 0.28;
-        let warm = next_unit(&mut rng) * 2.0 - 1.0;
+        // Cool-biased hue jitter so the tuft reads green, not golden (matches the
+        // detail grass).
+        let warm = next_unit(&mut rng) * 1.2 - 0.9;
         let (base_color, tip_color) = grass_blade_colors(shade, warm);
 
         builder.push_blade(&GrassBlade {
@@ -76,7 +80,8 @@ pub(crate) fn low_poly_hay_grass_mesh() -> Mesh {
             yaw,
             height,
             half_width,
-            bend,
+            lean,
+            flex,
             // Lift the green so the tuft pops against the darker ground cover.
             base_color: brighten(base_color, HAY_GRASS_BRIGHTNESS),
             tip_color: brighten(tip_color, HAY_GRASS_BRIGHTNESS),

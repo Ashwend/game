@@ -96,6 +96,22 @@ case "$cmd" in
     cargo fmt --all -- --check
     cargo clippy --locked --all-targets --all-features -- -D warnings
     ;;
+  ci)
+    # Reproduce the GitHub Quality Gate locally in one command. Mirrors
+    # .github/workflows/quality-gate.yml: fmt, clippy (-D warnings), check, and
+    # tests, including the `--all-features` leg that exercises the
+    # `replication-trace`/`profile`/`dev-fast` cfg-gated code paths a plain
+    # `./cli check` (default features only) never compiles.
+    cargo fmt --all -- --check
+    cargo clippy --locked --all-targets --all-features -- -D warnings
+    cargo check --locked --all-targets --all-features
+    cargo test --locked --all-targets
+    ;;
+  setup-hooks)
+    # Point git at the checked-in hooks dir so `./cli lint` runs before push.
+    git config core.hooksPath .githooks
+    echo "git hooks enabled (core.hooksPath=.githooks). pre-push now runs ./cli lint."
+    ;;
   audit)
     if ! cargo audit --version >/dev/null 2>&1; then
       echo "cargo-audit not installed; installing..." >&2
@@ -172,6 +188,8 @@ Commands:
   check        Run cargo check for all targets.
   test         Run unit/integration tests.
   lint         Run rustfmt check and clippy with warnings denied.
+  ci           Reproduce the full CI Quality Gate locally (fmt, clippy, check, test, incl. --all-features).
+  setup-hooks  Enable the checked-in git hooks (.githooks) so ./cli lint runs on push.
   audit        Run cargo audit against the RustSec advisory database (installs cargo-audit if missing).
   coverage     Print text coverage when cargo-llvm-cov is installed, otherwise run tests.
   build        Run cargo build with any extra args.

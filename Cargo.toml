@@ -25,11 +25,34 @@ replication-trace = []
 # cost and the trace file grows fast.
 profile = ["bevy/trace_chrome"]
 
+# Lint policy, versioned with the code so every `cargo` invocation and editor
+# sees the same bar (CI also runs `cargo clippy -- -D warnings`, which promotes
+# every `warn` below to a hard gate). Kept to a curated, high-signal set rather
+# than blanket `pedantic`, which is too noisy for Bevy systems with many params.
+# `unwrap_used`/`expect_used` are intentionally NOT enabled crate-wide yet (the
+# production code has documented-invariant `expect`s that would need individual
+# review first); `clippy.toml` already exempts tests so they can be adopted
+# later without churning the ~200 test-only unwraps.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+uninlined_format_args = "warn"
+semicolon_if_nothing_returned = "warn"
+manual_let_else = "warn"
+cloned_instead_of_copied = "warn"
+unnested_or_patterns = "warn"
+
 [dependencies]
 anyhow = "1.0.102"
 # PKCE code-challenge + state encoding for the native WorkOS login (RFC 8252).
 base64 = "0.22"
-bevy = { version = "0.18.1", features = ["mp3", "wav"] }
+# Only `wav` is enabled on top of Bevy's defaults: every shipped clip in
+# `assets/` is a `.wav` (decoded via `rodio wav`). We deliberately do NOT
+# enable `mp3`, that feature drags in the whole `symphonia-bundle-mp3` decoder
+# stack for zero benefit since the game ships no `.mp3`. Re-add `"mp3"` here if
+# that ever changes.
+bevy = { version = "0.18.1", features = ["wav"] }
 bevy_egui = "0.39.1"
 # Software frame-pacer. Caps the frame rate to the display refresh by
 # sleeping on the CPU before each frame is presented. We rely on this
@@ -39,6 +62,10 @@ bevy_egui = "0.39.1"
 # not. The `framepace_debug` feature would add a debug overlay we don't
 # need, so default features are off.
 bevy_framepace = { version = "0.21", default-features = false }
+# `Pod`/`Zeroable` derives + byte-casting for the GPU-instanced grass per-blade
+# instance buffer (`src/app/scene/grass/instancing.rs`). Already present
+# transitively via Bevy; this just makes it a direct dependency.
+bytemuck = "1"
 # Local at-rest obfuscation for the settings file and the WorkOS refresh-token
 # store (see `src/local_crypto.rs`). NOT a security boundary: the seal key is
 # baked into the binary; this only keeps those files out of plain text so a

@@ -94,7 +94,7 @@ fn parse_args(mut argv: impl Iterator<Item = String>) -> Result<Args, String> {
                     next_value(&mut argv, &flag)?
                         .parse::<u32>()
                         .map_err(|_| "invalid --wait-pid".to_owned())?,
-                )
+                );
             }
             other => return Err(format!("unknown argument: {other}")),
         }

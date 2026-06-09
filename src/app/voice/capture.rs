@@ -94,12 +94,9 @@ fn run_capture(
     gain_micro: Arc<AtomicU32>,
 ) -> Result<()> {
     let host = cpal::default_host();
-    let device = match host.default_input_device() {
-        Some(device) => device,
-        None => {
-            let _ = ready_tx.send(Err("no default audio input device".to_owned()));
-            return Ok(());
-        }
+    let Some(device) = host.default_input_device() else {
+        let _ = ready_tx.send(Err("no default audio input device".to_owned()));
+        return Ok(());
     };
     let supported = match find_supported_config(&device) {
         Ok(config) => config,

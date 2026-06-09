@@ -7,16 +7,25 @@
 //! [`ContainerSlots`] hides that difference so the move/quick-transfer logic
 //! doesn't care which it's shuffling stacks into.
 //!
+//! The take/insert/restore arithmetic itself lives in
+//! [`crate::server::container_slots`], shared with the furnace; this module only
+//! supplies the loot-bag/sleeper [`Container`] impl and the player-side slot
+//! resolution.
+//!
 //! They're kept out of `loot_bag.rs` so the command-routing `impl GameServer`
 //! block stays focused on flow rather than slot arithmetic.
 
 use crate::{
     protocol::{
-        ClientId, INVENTORY_SLOT_COUNT, ItemStack, LOOT_BAG_SLOT_COUNT, LootBagSlotRef,
-        PlayerInventoryState, ServerMessage, ToastKind, ToastMessage,
+        INVENTORY_SLOT_COUNT, ItemStack, LOOT_BAG_SLOT_COUNT, LootBagSlotRef, PlayerInventoryState,
     },
-    server::{DeliveryTarget, ServerEnvelope},
+    server::container_slots::{Container, PlayerSlot, SlotSide, take_from_slot},
 };
+
+// `insert_into_slot` and `restore_slot` are re-exported (not just `use`d) so the
+// loot-bag unit tests can exercise these slot-level primitives directly through
+// `super::slots::*`; the implementations live in the shared module.
+pub(super) use crate::server::container_slots::{insert_into_slot, reply_warning, restore_slot};
 
 /// The non-player side of an open container, abstracting a loot bag's flat slot
 /// vec from a sleeping player's split inventory/actionbar.
@@ -28,8 +37,8 @@ pub(super) enum ContainerSlots<'a> {
     Sleeper(&'a mut PlayerInventoryState),
 }
 
-impl ContainerSlots<'_> {
-    fn len(&self) -> usize {
+impl Container for ContainerSlots<'_> {
+    fn slot_count(&self) -> usize {
         match self {
             ContainerSlots::Bag(slots) => slots.len(),
             ContainerSlots::Sleeper(_) => LOOT_BAG_SLOT_COUNT,
@@ -41,6 +50,11 @@ impl ContainerSlots<'_> {
             ContainerSlots::Bag(slots) => slots.get_mut(index),
             ContainerSlots::Sleeper(inventory) => sleeper_slot_mut(inventory, index),
         }
+    }
+
+    fn insert(&mut self, index: usize, stack: ItemStack) -> Option<ItemStack> {
+        let target = self.slot_mut(index)?;
+        insert_into_slot(target, stack)
     }
 }
 
@@ -59,16 +73,12 @@ fn sleeper_slot_mut(
     }
 }
 
-/// Resolve a player-side slot ref against the *looter's* inventory. `Bag` refs
-/// belong to the container, not the looter, so they resolve to `None` here.
-fn looter_slot_mut(
-    looter: &mut PlayerInventoryState,
-    slot: LootBagSlotRef,
-) -> Option<&mut Option<ItemStack>> {
+/// Normalise a loot-bag slot ref into the shared player/container distinction.
+fn side_of(slot: LootBagSlotRef) -> SlotSide {
     match slot {
-        LootBagSlotRef::PlayerInventory(index) => looter.inventory_slots.get_mut(index),
-        LootBagSlotRef::PlayerActionbar(index) => looter.actionbar_slots.get_mut(index),
-        LootBagSlotRef::Bag(_) => None,
+        LootBagSlotRef::PlayerInventory(index) => SlotSide::Player(PlayerSlot::Inventory(index)),
+        LootBagSlotRef::PlayerActionbar(index) => SlotSide::Player(PlayerSlot::Actionbar(index)),
+        LootBagSlotRef::Bag(index) => SlotSide::Container(index),
     }
 }
 
@@ -82,6 +92,8 @@ pub(super) fn move_within(
     to: LootBagSlotRef,
     quantity: Option<u16>,
 ) {
+    let from = side_of(from);
+    let to = side_of(to);
     let Some((took, all_consumed)) = take_from_ref(looter, container, from, quantity) else {
         return;
     };
@@ -99,8 +111,8 @@ pub(super) fn quick_transfer_within(
     container: &mut ContainerSlots,
     from: LootBagSlotRef,
 ) -> Option<&'static str> {
-    match from {
-        LootBagSlotRef::Bag(index) => {
+    match side_of(from) {
+        SlotSide::Container(index) => {
             let stack = container.slot_mut(index).and_then(Option::take)?;
             if let Some(leftover) = crate::server::inventory::add_stack_to_inventory(looter, stack)
             {
@@ -112,10 +124,10 @@ pub(super) fn quick_transfer_within(
             }
             None
         }
-        LootBagSlotRef::PlayerInventory(_) | LootBagSlotRef::PlayerActionbar(_) => {
-            let stack = looter_slot_mut(looter, from).and_then(Option::take)?;
+        SlotSide::Player(player_slot) => {
+            let stack = player_slot.resolve(looter).and_then(Option::take)?;
             // First empty container slot.
-            for index in 0..container.len() {
+            for index in 0..container.slot_count() {
                 if let Some(target) = container.slot_mut(index)
                     && target.is_none()
                 {
@@ -125,7 +137,7 @@ pub(super) fn quick_transfer_within(
             }
             // Container full, restore the stack to its origin so the player
             // doesn't drop it on the floor by accident.
-            if let Some(target) = looter_slot_mut(looter, from) {
+            if let Some(target) = player_slot.resolve(looter) {
                 *target = Some(stack);
             }
             Some("No room left")
@@ -139,24 +151,14 @@ pub(super) fn quick_transfer_within(
 fn take_from_ref(
     looter: &mut PlayerInventoryState,
     container: &mut ContainerSlots,
-    slot: LootBagSlotRef,
+    slot: SlotSide,
     quantity: Option<u16>,
 ) -> Option<(ItemStack, bool)> {
     let target = match slot {
-        LootBagSlotRef::Bag(index) => container.slot_mut(index)?,
-        _ => looter_slot_mut(looter, slot)?,
+        SlotSide::Container(index) => container.slot_mut(index)?,
+        SlotSide::Player(player_slot) => player_slot.resolve(looter)?,
     };
-    let current = target.as_mut()?;
-    let amount = quantity
-        .unwrap_or(current.quantity)
-        .clamp(1, current.quantity);
-    let all = amount == current.quantity;
-    let taken = ItemStack::new(current.item_id.as_ref(), amount);
-    current.quantity -= amount;
-    if current.quantity == 0 {
-        *target = None;
-    }
-    Some((taken, all))
+    take_from_slot(target, quantity)
 }
 
 /// Insert a stack into a slot ref. Returns the leftover if the destination
@@ -164,14 +166,16 @@ fn take_from_ref(
 fn insert_into_ref(
     looter: &mut PlayerInventoryState,
     container: &mut ContainerSlots,
-    slot: LootBagSlotRef,
+    slot: SlotSide,
     stack: ItemStack,
 ) -> Option<ItemStack> {
-    let target = match slot {
-        LootBagSlotRef::Bag(index) => container.slot_mut(index)?,
-        _ => looter_slot_mut(looter, slot)?,
-    };
-    insert_into_slot(target, stack)
+    match slot {
+        SlotSide::Container(index) => container.insert(index, stack),
+        SlotSide::Player(player_slot) => {
+            let target = player_slot.resolve(looter)?;
+            insert_into_slot(target, stack)
+        }
+    }
 }
 
 /// Restore an `ItemStack` to its source slot after a failed `Move`, so the
@@ -179,71 +183,15 @@ fn insert_into_ref(
 fn restore_into_ref(
     looter: &mut PlayerInventoryState,
     container: &mut ContainerSlots,
-    slot: LootBagSlotRef,
+    slot: SlotSide,
     stack: ItemStack,
     removed_all: bool,
 ) {
     let target = match slot {
-        LootBagSlotRef::Bag(index) => container.slot_mut(index),
-        _ => looter_slot_mut(looter, slot),
+        SlotSide::Container(index) => container.slot_mut(index),
+        SlotSide::Player(player_slot) => player_slot.resolve(looter),
     };
     if let Some(target) = target {
         restore_slot(target, stack, removed_all);
     }
-}
-
-/// Slot-level insert helper. If the target is empty, the stack moves in whole.
-/// If it holds the same item id, the quantities merge up to the item's stack
-/// limit, returning any overflow. Mismatched ids swap (returns the original
-/// contents).
-pub(super) fn insert_into_slot(
-    target: &mut Option<ItemStack>,
-    incoming: ItemStack,
-) -> Option<ItemStack> {
-    match target {
-        None => {
-            *target = Some(incoming);
-            None
-        }
-        Some(existing) if existing.item_id == incoming.item_id => {
-            let limit = crate::items::stack_limit(&existing.item_id).unwrap_or(u16::MAX);
-            let space = limit.saturating_sub(existing.quantity);
-            if space == 0 {
-                return Some(incoming);
-            }
-            let take = incoming.quantity.min(space);
-            existing.quantity += take;
-            let remainder = incoming.quantity - take;
-            if remainder == 0 {
-                None
-            } else {
-                Some(ItemStack::new(incoming.item_id.as_ref(), remainder))
-            }
-        }
-        Some(existing) => {
-            // Swap: caller wanted to put `incoming` here but a different item is
-            // in the way. Move the existing stack out and put the incoming one in.
-            let displaced = existing.clone();
-            *target = Some(incoming);
-            Some(displaced)
-        }
-    }
-}
-
-pub(super) fn restore_slot(target: &mut Option<ItemStack>, stack: ItemStack, removed_all: bool) {
-    match (target.as_mut(), removed_all) {
-        (Some(existing), false) if existing.item_id == stack.item_id => {
-            existing.quantity = existing.quantity.saturating_add(stack.quantity);
-        }
-        _ => {
-            *target = Some(stack);
-        }
-    }
-}
-
-pub(super) fn reply_warning(client_id: ClientId, text: impl Into<String>) -> Vec<ServerEnvelope> {
-    vec![ServerEnvelope {
-        target: DeliveryTarget::Client(client_id),
-        message: ServerMessage::Toast(ToastMessage::new(ToastKind::Warning, text)),
-    }]
 }

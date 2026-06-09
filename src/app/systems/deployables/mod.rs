@@ -43,7 +43,7 @@ pub(crate) fn apply_deployed_entities_system(
     mut commands: Commands,
     runtime: Res<ClientRuntime>,
     assets: Option<Res<DeployableVisualAssets>>,
-    existing: Query<(Entity, &NetworkDeployedEntity)>,
+    existing: Query<(Entity, &NetworkDeployedEntity, &Transform)>,
     existing_fires: Query<(Entity, &ChildOf), With<FurnaceFire>>,
     replicated: Query<(
         &Deployable,
@@ -57,15 +57,15 @@ pub(crate) fn apply_deployed_entities_system(
     };
     if runtime.client_id.is_none() {
         // Not connected, tear down any visuals from a prior session.
-        for (entity, _) in &existing {
+        for (entity, _, _) in &existing {
             commands.entity(entity).despawn();
         }
         return;
     }
 
-    let mut existing_by_id: HashMap<DeployedEntityId, Entity> = existing
+    let mut existing_by_id: HashMap<DeployedEntityId, (Entity, Transform)> = existing
         .iter()
-        .map(|(entity, marker)| (marker.id, entity))
+        .map(|(entity, marker, transform)| (marker.id, (entity, *transform)))
         .collect();
     let mut visible_ids: HashSet<DeployedEntityId> = HashSet::new();
 
@@ -80,8 +80,15 @@ pub(crate) fn apply_deployed_entities_system(
     for (meta, transform, _health, active) in &replicated {
         visible_ids.insert(meta.id);
         let visual_transform = deployable_transform(transform.position.into(), transform.yaw);
-        let parent_entity = if let Some(entity) = existing_by_id.remove(&meta.id) {
-            commands.entity(entity).insert(visual_transform);
+        let parent_entity = if let Some((entity, current)) = existing_by_id.remove(&meta.id) {
+            // Only write the Transform when it actually moved. The replicated
+            // transform stops changing once a deployable is placed, so an
+            // unconditional insert would trip change detection (and the
+            // renderer) every frame for a static structure, the spurious
+            // change-detection pattern docs/profiling.md warns about.
+            if current != visual_transform {
+                commands.entity(entity).insert(visual_transform);
+            }
             entity
         } else {
             let (mesh, material) = deployable_visual(&assets, meta.kind);
@@ -109,7 +116,7 @@ pub(crate) fn apply_deployed_entities_system(
         );
     }
 
-    for (id, entity) in existing_by_id {
+    for (id, (entity, _)) in existing_by_id {
         if !visible_ids.contains(&id) {
             commands.entity(entity).despawn();
         }

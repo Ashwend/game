@@ -39,27 +39,41 @@ pub(crate) mod surface;
 pub(crate) mod transitions;
 
 // Re-exports kept as the audio module's public surface. Items marked
-// `#[allow(unused_imports)]` are part of the API gameplay code consumes
-// today (audio bus, music, footsteps, impact) plus the future-facing
-// hooks (ambient beds + emitters, fader component, library handle) that
-// new sounds and gameplay systems can wire up without reaching past
-// this module's boundary. Suppressing the warning is correct here, the
-// items are intentionally exported even when nothing inside the binary
-// references them yet.
-#[allow(unused_imports)]
+// `#[expect(unused_imports)]` are the future-facing hooks (ambient beds +
+// emitters, fader component, library handle) that new sounds and gameplay
+// systems can wire up without reaching past this module's boundary. They are
+// intentionally exported even when nothing inside the binary references one of
+// the group yet. `expect` (rather than `allow`) means the suppression
+// self-removes the moment the whole group is consumed, so it can never go stale.
+#[expect(
+    unused_imports,
+    reason = "future-facing audio API surface; some items not wired up yet"
+)]
 pub(crate) use ambient::{
     AmbientBed, AmbientEmitter, AmbientZone, CurrentAmbientZone, manage_ambient_beds_system,
     manage_ambient_emitters_system,
 };
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "future-facing audio API surface; some items not wired up yet"
+)]
 pub(crate) use fader::{AudioFader, tick_audio_faders_system};
 pub(crate) use footsteps::{FootstepState, play_footsteps_system};
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "future-facing audio API surface; some items not wired up yet"
+)]
 pub(crate) use impact::{emit_tree_fall_sound, play_impact_sounds_system};
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "future-facing audio API surface; some items not wired up yet"
+)]
 pub(crate) use library::{PlaySound, SoundLibrary, play_sounds_system, setup_sound_library};
 pub(crate) use manifest::SoundId;
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "future-facing audio API surface; some items not wired up yet"
+)]
 pub(crate) use music::{MainMenuMusic, main_menu_music_system};
 pub(crate) use transitions::{ScreenTransitionWatch, play_transition_stingers_system};
 

@@ -285,7 +285,7 @@ fn tab_bar(
                     let rect = response.rect;
                     ui.ctx().memory_mut(|mem| {
                         mem.data
-                            .insert_temp(super::tutorial::crafting_tab_rect_key(), rect)
+                            .insert_temp(super::tutorial::crafting_tab_rect_key(), rect);
                     });
                 }
                 if response.clicked() && tab != active {

@@ -244,7 +244,7 @@ fn wait_for_server_ready(server: &mut ServerProcess) -> Result<()> {
     let deadline = Instant::now() + SERVER_READY_TIMEOUT;
     loop {
         if Instant::now() >= deadline {
-            bail!("timed out after {:?}", SERVER_READY_TIMEOUT);
+            bail!("timed out after {SERVER_READY_TIMEOUT:?}");
         }
         match server.ready_rx.recv_timeout(Duration::from_millis(250)) {
             Ok(ServerReady::Listening) => {

@@ -674,7 +674,7 @@ mod tests {
         // Critically low: the gradient mesh is emitted.
         let ctx = egui::Context::default();
         let hurt = ctx.run(raw_input(), |ctx| {
-            low_health_vignette(ctx, MAX_HEALTH * 0.1)
+            low_health_vignette(ctx, MAX_HEALTH * 0.1);
         });
         assert!(!hurt.shapes.is_empty());
     }

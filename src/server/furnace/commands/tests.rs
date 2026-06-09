@@ -1,40 +1,18 @@
 use super::*;
 use crate::server::furnace::FurnaceState;
 use crate::{
-    auth::AuthMode,
     items::{COAL_ID, IRON_ORE_ID, WOOD_ID},
-    protocol::{GAME_VERSION, PROTOCOL_VERSION, Vec3Net},
-    save::WorldSave,
-    server::ServerSettings,
+    protocol::Vec3Net,
+    server::test_support::{connect_named, server},
 };
 
 /// Build a server with one connected admin client and a furnace
 /// placed at the origin. Returns the server, client id, and furnace id.
 fn fixture() -> (GameServer, ClientId, DeployedEntityId) {
-    let mut server = GameServer::new(
-        WorldSave::new("Test", Some(1)),
-        ServerSettings {
-            auth_mode: AuthMode::NoAuth,
-            singleplayer_host: Some(1),
-        },
-    );
-    let (client_id, _) = server
-        .connect(
-            PROTOCOL_VERSION,
-            Some(GAME_VERSION.to_owned()),
-            1,
-            "Tester".to_owned(),
-            String::new(),
-        )
-        .expect("connect ok");
-    // Pin to origin so the furnace placed at origin below sits in interact
-    // range; the random initial spawn would otherwise drop the player away.
-    server
-        .clients
-        .get_mut(&client_id)
-        .unwrap()
-        .controller
-        .position = Vec3Net::ZERO;
+    // `connect_named` pins the client to the origin so the furnace placed at
+    // origin below sits in interact range despite the random initial spawn.
+    let mut server = server();
+    let client_id = connect_named(&mut server, "Tester");
 
     let id = server.next_deployed_entity_id;
     server.next_deployed_entity_id += 1;

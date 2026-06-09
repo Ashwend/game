@@ -165,3 +165,94 @@ impl PlayerInventoryState {
         .and_then(Option::as_ref)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::items::{COAL_ID, IRON_ORE_ID, intern_item_id};
+
+    use super::*;
+
+    #[test]
+    fn normalize_capacity_grows_short_inventory_and_preserves_stacks() {
+        let mut state = PlayerInventoryState::empty();
+        // Simulate a save written before a capacity bump: a short slot vec
+        // with stacks at known indices.
+        state.inventory_slots = vec![
+            Some(ItemStack::new(IRON_ORE_ID, 4)),
+            None,
+            Some(ItemStack::new(COAL_ID, 7)),
+        ];
+
+        state.normalize_capacity();
+
+        assert_eq!(state.inventory_slots.len(), INVENTORY_SLOT_COUNT);
+        // Original stacks stay put at their indices.
+        assert_eq!(
+            state.inventory_slots[0],
+            Some(ItemStack::new(IRON_ORE_ID, 4))
+        );
+        assert_eq!(state.inventory_slots[1], None);
+        assert_eq!(state.inventory_slots[2], Some(ItemStack::new(COAL_ID, 7)));
+        // Every newly-added trailing slot is empty.
+        assert!(state.inventory_slots[3..].iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn normalize_capacity_trims_over_long_inventory() {
+        let mut state = PlayerInventoryState::empty();
+        state.inventory_slots = vec![None; INVENTORY_SLOT_COUNT + 10];
+        state.actionbar_slots = vec![None; ACTIONBAR_SLOT_COUNT + 5];
+
+        state.normalize_capacity();
+
+        assert_eq!(state.inventory_slots.len(), INVENTORY_SLOT_COUNT);
+        assert_eq!(state.actionbar_slots.len(), ACTIONBAR_SLOT_COUNT);
+    }
+
+    #[test]
+    fn normalize_capacity_resets_out_of_range_active_slot() {
+        let mut state = PlayerInventoryState::empty();
+        state.active_actionbar_slot = ACTIONBAR_SLOT_COUNT + 3;
+        state.normalize_capacity();
+        assert_eq!(state.active_actionbar_slot, 0);
+
+        // An in-range value is left untouched.
+        let mut in_range = PlayerInventoryState::empty();
+        in_range.active_actionbar_slot = ACTIONBAR_SLOT_COUNT - 1;
+        in_range.normalize_capacity();
+        assert_eq!(in_range.active_actionbar_slot, ACTIONBAR_SLOT_COUNT - 1);
+    }
+
+    #[test]
+    fn item_stack_round_trips_and_reuses_the_interned_arc() {
+        let stack = ItemStack::new(IRON_ORE_ID, 4);
+        let encoded = postcard::to_allocvec(&stack).expect("encode item stack");
+        let decoded: ItemStack = postcard::from_bytes(&encoded).expect("decode item stack");
+
+        assert_eq!(decoded, stack);
+        // The `deserialize_interned_item_id` hook routes the decoded id
+        // through the global intern table, so the decoded `Arc<str>` is the
+        // same allocation the registry already holds (refcount bump, not a
+        // fresh heap copy).
+        assert!(Arc::ptr_eq(&decoded.item_id, &intern_item_id(IRON_ORE_ID)));
+    }
+
+    #[test]
+    fn crafting_job_recipe_id_round_trips_and_reuses_the_interned_arc() {
+        use crate::crafting::{STONE_HATCHET_RECIPE_ID, intern_recipe_id};
+
+        let job = CraftingJob::new(7, STONE_HATCHET_RECIPE_ID, 120, 2);
+        let encoded = postcard::to_allocvec(&job).expect("encode crafting job");
+        let decoded: CraftingJob = postcard::from_bytes(&encoded).expect("decode crafting job");
+
+        assert_eq!(decoded, job);
+        // Same interning guarantee as the item id, via
+        // `deserialize_interned_recipe_id`.
+        assert!(Arc::ptr_eq(
+            &decoded.recipe_id,
+            &intern_recipe_id(STONE_HATCHET_RECIPE_ID)
+        ));
+    }
+}

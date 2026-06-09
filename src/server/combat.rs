@@ -129,9 +129,7 @@ impl GameServer {
         // close to "can my swing reach them?" without bias from
         // height differences (a target standing on a one-block step
         // is still meleeable).
-        let dx = target_pos.x - attacker_pos.x;
-        let dz = target_pos.z - attacker_pos.z;
-        if (dx * dx + dz * dz).sqrt() > ATTACK_RANGE_M {
+        if !attacker_pos.within_horizontal_range(target_pos, ATTACK_RANGE_M) {
             return Vec::new();
         }
 
@@ -442,11 +440,9 @@ impl GameServer {
             if collider_free_fallback.is_none() {
                 collider_free_fallback = Some(candidate);
             }
-            let clear_of_players = alive_positions.iter().all(|other| {
-                let dx = candidate.x - other.x;
-                let dz = candidate.z - other.z;
-                dx * dx + dz * dz >= min_distance_sq
-            });
+            let clear_of_players = alive_positions
+                .iter()
+                .all(|other| candidate.horizontal_distance_squared(*other) >= min_distance_sq);
             if clear_of_players {
                 return candidate;
             }

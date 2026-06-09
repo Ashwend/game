@@ -1,0 +1,292 @@
+use bevy::prelude::*;
+use bevy_egui::egui;
+
+use super::super::audio::{PlaySound, SoundId};
+use super::chat::chat_ui;
+use super::crafting_queue::crafting_queue_hud;
+use super::death_splash::{death_splash_ui, send_respawn};
+use super::deployable_overlay::{
+    DeployableOverlay, collect_deployable_overlay_entries, deployable_overlay_ui,
+};
+use super::floating_text::floating_damage_ui;
+use super::furnace::furnace_ui;
+use super::hud::hud_ui;
+use super::inventory::{draw_drag_preview, handle_drag_release};
+use super::inventory_panel::inventory_panel_ui;
+use super::loot_bag::loot_bag_ui;
+use super::options::{OptionsBackTarget, options_ui};
+use super::pause::pause_ui;
+use super::peer_overlay::{PeerOverlay, collect_peer_overlay_entries, peer_overlay_ui};
+use super::toast::toast_ui;
+use super::tutorial::{self, TutorialStep, tutorial_step, tutorial_ui};
+use super::{UiResources, world_ready_for_play};
+
+/// Scans the player's in-AoI resource nodes for crude (hand-pickup) nodes,
+/// pairing each with the item it yields.
+///
+/// Crude (hand-pickup) nodes only, paired with what they yield, so the gather
+/// ring points at branches/stones/grass, never a tree or rock that needs a tool
+/// the player doesn't have yet. Registry access (`crate::resources` /
+/// `crate::items`) lives here next to the tutorial logic that consumes it.
+fn nearby_crude_nodes(
+    resource_nodes: &Query<&'static crate::server::ResourceNode>,
+) -> Vec<(Vec3, &'static str)> {
+    resource_nodes
+        .iter()
+        .filter_map(|node| {
+            let definition = crate::resources::resource_node_definition(&node.definition_id)?;
+            if definition.required_tool.kind != crate::items::ToolKind::Hands {
+                return None;
+            }
+            let yield_item = definition.storage.first().map(|mat| mat.item_id)?;
+            Some((
+                Vec3::new(node.position.x, node.position.y, node.position.z),
+                yield_item,
+            ))
+        })
+        .collect()
+}
+
+/// Renders the whole in-game UI stack for the `Screen::InGame` arm: HUD, peer
+/// overlay, floating damage, deployable overlay, tutorial, inventory + crafting
+/// panel, furnace, loot bag, drag release/preview, crafting queue HUD, chat,
+/// toast, death splash, and pause. egui draw ordering is significant here, so
+/// the sequence below is preserved verbatim from the dispatcher.
+pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta_seconds: f32) {
+    if resources.menu.pause_options_open {
+        let primary_monitor = resources.primary_monitor.single().ok();
+        options_ui(
+            ctx,
+            &mut resources.menu,
+            &mut resources.settings,
+            &mut resources.options_ui,
+            &resources.physical_keys,
+            primary_monitor,
+            OptionsBackTarget::PauseMenu,
+        );
+    } else {
+        // Screenshot toggles. `show_hud` is the master switch for all
+        // always-on HUD chrome; `show_chat` additionally hides just the
+        // chat box. Neither pauses the game: the world keeps simulating,
+        // these only gate what's painted on top.
+        let show_hud = resources.settings.hud.show_hud;
+        let show_chat = resources.settings.hud.show_chat;
+        if show_hud {
+            hud_ui(
+                ctx,
+                &resources.runtime,
+                &resources.diagnostics,
+                &resources.settings,
+                &resources.voice,
+                &resources.combat_feedback,
+            );
+        }
+        // Suppress the peer overlay (nameplates, chat bubbles)
+        // whenever a full-screen modal is up. Nameplates
+        // render at Order::Foreground; without this gate
+        // they'd poke through the bag / furnace / inventory /
+        // crafting panels.
+        let world_overlays_visible = !resources.menu.inventory_open
+            && !resources.menu.crafting_open
+            && !resources.menu.furnace_open
+            && !resources.menu.loot_bag_open;
+        let camera = resources
+            .peer_overlay
+            .camera
+            .single()
+            .ok()
+            .map(|(camera, transform)| (camera, *transform));
+        if world_overlays_visible && show_hud {
+            let peers = collect_peer_overlay_entries(
+                resources.peer_overlay.network_players.iter(),
+                resources.peer_overlay.replicated_players.iter(),
+                resources.runtime.client_id,
+                &resources.voice,
+            );
+            peer_overlay_ui(ctx, PeerOverlay { camera, peers });
+        }
+
+        // Floating damage + deployable nametags are also
+        // world-overlay layers; suppress them under the same
+        // gate so a full-screen modal isn't pocked with
+        // floating numbers and structure labels.
+        if world_overlays_visible && show_hud {
+            floating_damage_ui(ctx, camera, resources.floating_damage.iter());
+
+            let entries = collect_deployable_overlay_entries(
+                resources.deployable_overlay.placed.iter(),
+                resources.deployable_overlay.replicated.iter(),
+            );
+            deployable_overlay_ui(ctx, DeployableOverlay { camera, entries });
+        }
+
+        // Compute the tutorial step before the panel so the crafting
+        // list can pin the focused recipes to the top (keeps their
+        // outlines on-screen instead of below the scroll fold). The
+        // overlay itself is drawn after the panel.
+        let tutorial = tutorial_step(
+            resources
+                .local_player
+                .private
+                .as_ref()
+                .map(|p| &p.inventory),
+            resources.local_player.private.as_ref().map(|p| &p.crafting),
+            resources.menu.inventory_open,
+            resources.menu.crafting_open,
+        );
+        let tutorial_active = !resources.settings.onboarding.completed
+            && show_hud
+            && world_ready_for_play(resources)
+            && !resources.menu.pause_open
+            && resources.menu.death_splash.is_none();
+        ctx.memory_mut(|mem| {
+            mem.data.insert_temp(
+                tutorial::pin_recipes_key(),
+                tutorial_active && tutorial == TutorialStep::CraftTools,
+            );
+        });
+
+        // Unified inventory + crafting panel: one fixed-size shell
+        // with a tab bar. Replaces the two separate modals; the
+        // toggle systems flip which tab is active.
+        inventory_panel_ui(
+            ctx,
+            &mut resources.menu,
+            &mut resources.runtime,
+            &resources.local_player,
+            &mut resources.inventory_ui,
+            &mut resources.crafting_ui,
+            &resources.pickup_target,
+            &mut resources.inventory_sound_requests,
+            &mut resources.error_toasts,
+            delta_seconds,
+            show_hud,
+        );
+
+        // Draw the tutorial overlay (card + focus highlights). Runs after
+        // the panel so the tab/recipe rects it outlines are already
+        // stashed in egui memory this frame; `tutorial`/`tutorial_active`
+        // were computed above (before the panel) for the recipe pinning.
+        if tutorial_active && tutorial == TutorialStep::Done {
+            resources.settings.onboarding.completed = true;
+            // Celebrate: the same arrival sting as the menu reveal, plus a
+            // completion banner timed off this moment.
+            resources
+                .play_sound
+                .write(PlaySound::non_spatial(SoundId::WorldJoin));
+            let now = ctx.input(|input| input.time);
+            ctx.memory_mut(|mem| mem.data.insert_temp(tutorial::celebrate_key(), now));
+        } else if tutorial_active {
+            let inventory = resources
+                .local_player
+                .private
+                .as_ref()
+                .map(|p| &p.inventory);
+            let crafting = resources.local_player.private.as_ref().map(|p| &p.crafting);
+            let player_position = resources.runtime.local_player_position();
+            let crude_nodes = nearby_crude_nodes(&resources.resource_nodes);
+            tutorial_ui(
+                ctx,
+                tutorial,
+                inventory,
+                crafting,
+                camera,
+                &crude_nodes,
+                player_position,
+            );
+        }
+
+        // Completion banner, self-gated off the timestamp stamped above,
+        // so it lingers for a few seconds after the tutorial finishes.
+        if show_hud {
+            tutorial::completion_banner(ctx);
+        }
+
+        furnace_ui(
+            ctx,
+            &mut resources.menu,
+            &mut resources.runtime,
+            &resources.local_player,
+            &mut resources.inventory_ui,
+            &mut resources.error_toasts,
+        );
+        loot_bag_ui(
+            ctx,
+            &mut resources.menu,
+            &mut resources.runtime,
+            &resources.local_player,
+            &mut resources.inventory_ui,
+            &mut resources.error_toasts,
+        );
+        // Drag release + preview run after every slot-drawing
+        // surface (inventory, furnace) so the release decision
+        // sees `hovered_slot` and the panel rects populated by
+        // *this* frame. Without this ordering, a drag inside
+        // the inventory while the furnace is open releases on
+        // a `None` hovered_slot and falls through to the
+        // drop-on-ground branch.
+        handle_drag_release(
+            ctx,
+            &resources.menu,
+            &mut resources.runtime,
+            &mut resources.prediction,
+            &resources.local_player,
+            &mut resources.inventory_ui,
+            &mut resources.error_toasts,
+        );
+        draw_drag_preview(ctx, &resources.inventory_ui);
+        // The queue HUD is always visible while jobs exist,
+        // closing the crafting browser must not hide it, that
+        // would defeat the point of the queue being persistent.
+        // The HUD master toggle still hides it for screenshots.
+        if show_hud {
+            crafting_queue_hud(
+                ctx,
+                &mut resources.runtime,
+                &resources.local_player,
+                &mut resources.crafting_hud,
+                &mut resources.error_toasts,
+            );
+        }
+        let inventory_open = resources.menu.inventory_open;
+        let actionbar_rect = resources.inventory_ui.actionbar_rect;
+        // Chat is independent of the HUD master: hiding the HUD for a
+        // clean screenshot can still leave chat up and usable if the
+        // chat toggle stays on.
+        if show_chat {
+            chat_ui(
+                ctx,
+                &mut resources.menu,
+                &mut resources.runtime,
+                &mut resources.error_toasts,
+                inventory_open,
+                actionbar_rect,
+            );
+        }
+        if show_hud {
+            toast_ui(ctx, &resources.toasts, actionbar_rect);
+        }
+        // Death splash sits above every other in-game UI but
+        // below modal dialogs / loading splash. Renders only
+        // while `menu.death_splash` is set (server flipped the
+        // local player to Dead and the runtime stored the
+        // killer name).
+        if let Some(splash) = resources.menu.death_splash.clone() {
+            let respawn_clicked = death_splash_ui(ctx, &splash);
+            if respawn_clicked {
+                send_respawn(&mut resources.runtime);
+            }
+        }
+    }
+    if resources.menu.pause_open && !resources.menu.pause_options_open {
+        pause_ui(
+            ctx,
+            &mut resources.menu,
+            &mut resources.runtime,
+            &mut resources.shutdown_tasks,
+            &resources.store,
+            &mut resources.pending_session_end,
+            &mut resources.update,
+        );
+    }
+}

@@ -28,7 +28,9 @@ pub(crate) use components::{
     DeployablePlacementGhost, HeldItemVisual, MainCamera, NetworkDeployedEntity,
     NetworkDroppedItem, NetworkLootBag, NetworkPlayer, NetworkResourceNode, tree_mesh_height,
 };
-pub(crate) use grass::{GrassMaterial, GrassMaterialHandle, GrassState, stream_grass_system};
+pub(crate) use grass::{
+    GrassInstancingPlugin, GrassMaterial, GrassMaterialHandle, GrassState, stream_grass_system,
+};
 pub(crate) use mesh::PLAYER_HEAD_TOP_LOCAL_Y;
 pub(crate) use sky::{SunLight, update_sky_system};
 pub(crate) use world::{WorldSceneState, apply_world_scene_system};
@@ -113,7 +115,7 @@ mod tests {
         let lights: Vec<DirectionalLight> = world
             .query::<&DirectionalLight>()
             .iter(world)
-            .cloned()
+            .copied()
             .collect();
         assert_eq!(lights.len(), 2, "sun + moon directional lights");
         let shadow_casters = lights.iter().filter(|light| light.shadows_enabled).count();

@@ -11,8 +11,6 @@
 //! splitting lets Lightyear's per-component delta replication ship just
 //! the toggle without re-sending position/health.
 
-use std::collections::HashMap;
-
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -67,36 +65,10 @@ pub struct DeployableActive(pub bool);
 #[derive(Component, Debug, Clone, Copy)]
 pub struct DeployableChunk(pub ChunkCoord);
 
-/// `DeployedEntityId → Entity` for O(1) gameplay-side lookup.
-#[derive(Resource, Default, Debug)]
-pub struct DeployableIndex {
-    by_id: HashMap<DeployedEntityId, Entity>,
-}
-
-impl DeployableIndex {
-    pub fn get(&self, id: DeployedEntityId) -> Option<Entity> {
-        self.by_id.get(&id).copied()
-    }
-
-    pub fn insert(&mut self, id: DeployedEntityId, entity: Entity) {
-        self.by_id.insert(id, entity);
-    }
-
-    pub fn remove(&mut self, id: DeployedEntityId) -> Option<Entity> {
-        self.by_id.remove(&id)
-    }
-
-    pub fn len(&self) -> usize {
-        self.by_id.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.by_id.is_empty()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (DeployedEntityId, Entity)> + '_ {
-        self.by_id.iter().map(|(id, entity)| (*id, *entity))
-    }
+crate::server::entity_index::entity_index! {
+    /// `DeployedEntityId → Entity` for O(1) gameplay-side lookup.
+    DeployableIndex, DeployedEntityId;
+    despawn_deployable_entity
 }
 
 /// Wire-shape view of a deployable, used by the mirror tests and the
@@ -138,14 +110,6 @@ pub fn spawn_deployable_entity(
         .id();
     world.resource_mut::<DeployableIndex>().insert(id, entity);
     entity
-}
-
-pub fn despawn_deployable_entity(world: &mut World, id: DeployedEntityId) -> Option<Entity> {
-    let entity = world.resource_mut::<DeployableIndex>().remove(id)?;
-    if let Ok(entity_world) = world.get_entity_mut(entity) {
-        entity_world.despawn();
-    }
-    Some(entity)
 }
 
 #[cfg(test)]

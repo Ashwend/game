@@ -107,7 +107,7 @@ fn options_body_contents(
         OptionsTab::Voice => voice_tab::render(ui, settings),
         OptionsTab::Controls => controls_tab::render(ui, settings),
         OptionsTab::Keybindings => {
-            keybindings_tab::render(ui, settings, options_ui_state, physical_keys)
+            keybindings_tab::render(ui, settings, options_ui_state, physical_keys);
         }
     }
     ui.add_space(OPTIONS_SCROLL_PADDING_Y);

@@ -30,7 +30,10 @@ pub const SURFACE_STONE_NODE_ID: &str = "surface_stone";
 pub const BRANCH_PILE_NODE_ID: &str = "branch_pile";
 pub const HAY_GRASS_NODE_ID: &str = "hay_grass";
 
-pub const RESOURCE_GATHER_RANGE: f32 = 3.75;
+/// Max reach, in metres, for harvesting a resource node. Single source for
+/// both the client targeting ray and the server's `within_gather_reach`
+/// validation, so this one knob controls how close you must stand to a node.
+pub const RESOURCE_GATHER_RANGE: f32 = 2.75;
 // Loose upper bound used only for the cheap distance cull in
 // `resource_node_score`. Must be >= any definition's `ray_radius`; correctness
 // of the actual ray test does not depend on it.

@@ -30,10 +30,18 @@ easier to review and land than sweeping ones.
    structure (see [`CLAUDE.md`](CLAUDE.md) and [`docs/`](docs/)). Add tests next to
    the code they cover, especially for protocol, server authority, persistence,
    and layout or state helpers.
+   - Run the client with `./cli dev`. For faster rebuilds during local
+     iteration use `./cli dev-fast`, which enables `bevy/dynamic_linking`. It is
+     a dev-only shortcut: never publish a `dev-fast` build. `./cli profile`
+     captures a Chrome trace for performance work.
 4. **Run the checks** before you push:
    - `./cli check` (compiles all targets)
    - `./cli test` (unit and integration tests)
    - `./cli lint` (rustfmt check and clippy with warnings denied)
+   - `./cli ci` runs all of the above the way CI does (including the
+     `--all-features` leg), so you can reproduce a Quality Gate failure locally
+     in one command. Optionally install the git hook with `./cli setup-hooks`
+     to run the lint step automatically on `git push`.
 5. **Use Conventional Commits** for your commit subjects. The release pipeline
    parses these to build the changelog. Examples:
    - `feat: add water rendering to coastal chunks`

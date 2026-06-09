@@ -323,7 +323,7 @@ impl ClientRuntime {
                 self.clear_session_state();
             }
             ServerMessage::PlayerEvent(event) => {
-                self.push_system_message(format_player_event(event))
+                self.push_system_message(format_player_event(event));
             }
             ServerMessage::Correction(player) => {
                 self.apply_non_movement_correction(&player);

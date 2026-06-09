@@ -37,7 +37,7 @@ pub(crate) struct DeployablePlacementState {
 }
 
 impl DeployablePlacementState {
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "reset helper kept for the placement-cancel path")]
     pub(crate) fn clear(&mut self) {
         self.item_id = None;
         self.world_position = None;

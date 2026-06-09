@@ -49,6 +49,22 @@ impl Vec3Net {
         self.x
             .mul_add(other.x, self.y.mul_add(other.y, self.z * other.z))
     }
+
+    /// Squared distance between `self` and `other` on the XZ ground plane,
+    /// ignoring Y. Gameplay reach checks ("within arm's length on the ground")
+    /// use this so a vertical offset between a player and a node, deployable,
+    /// furnace, or loot bag never changes the interact range.
+    pub fn horizontal_distance_squared(self, other: Self) -> f32 {
+        let dx = self.x - other.x;
+        let dz = self.z - other.z;
+        dx.mul_add(dx, dz * dz)
+    }
+
+    /// True when `other` is within `range` of `self` on the XZ plane. Compares
+    /// squared values so no `sqrt` is taken.
+    pub fn within_horizontal_range(self, other: Self, range: f32) -> bool {
+        self.horizontal_distance_squared(other) <= range * range
+    }
 }
 
 impl From<Vec3Net> for Vec3 {

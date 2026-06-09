@@ -16,7 +16,10 @@ use crate::{resources::ResourceNodeModel, world::BlockKind};
 // than removed because removing a variant rolls back the manifest's
 // readiness for those surfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "covers surfaces the world doesn't expose yet (Sand, Stone, ...)"
+)]
 pub(crate) enum SurfaceMaterial {
     Dirt,
     Wood,

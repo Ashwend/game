@@ -161,6 +161,12 @@ pub(super) fn sync_dropped_item_entities(world: &mut World) {
                 if let Some(mut drop) = world.get_mut::<crate::server::DroppedItem>(entity)
                     && drop.stack != item.stack
                 {
+                    #[cfg(feature = "replication-trace")]
+                    info!(
+                        target: "replication_trace",
+                        "server: DroppedItem          MUTATE id={id} entity={entity:?} stack {:?} -> {:?}",
+                        drop.stack, item.stack
+                    );
                     drop.stack = item.stack;
                 }
                 // Dropped items can roll between chunks while their physics

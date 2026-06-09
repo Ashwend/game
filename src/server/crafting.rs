@@ -16,14 +16,14 @@ use crate::{
     items::{intern_item_id, item_definition},
     protocol::{
         ClientId, CraftingCommand, CraftingJob, CraftingJobId, ItemStack, MAX_CRAFT_BATCH_SIZE,
-        PlayerCraftingState, SERVER_TICK_RATE_HZ, ServerMessage, ToastKind, ToastMessage, Vec3Net,
+        PlayerCraftingState, SERVER_TICK_RATE_HZ, ServerMessage, ToastKind, ToastMessage,
     },
 };
 
 use super::{
     DeliveryTarget, GameServer, ServerClient, ServerEnvelope,
     inventory::{add_stack_to_inventory, take_items_from_inventory},
-    movement::{drop_position, drop_velocity},
+    movement::{DropOrigin, drop_origin_for},
 };
 
 /// Convert a recipe's wall-clock duration into a tick count for a single
@@ -285,7 +285,7 @@ impl GameServer {
     /// one helper keeps the recovery path consistent.
     fn spawn_refund_drops(&mut self, stacks: Vec<ItemStack>, origin: DropOrigin) {
         for stack in stacks {
-            self.spawn_dropped_item(stack, origin.position, origin.velocity, origin.yaw);
+            self.spawn_dropped_item_at(origin, stack);
         }
     }
 
@@ -359,21 +359,6 @@ fn count_item_in_inventory(client: &ServerClient, item_id: &str) -> u16 {
         }
     }
     total.min(u16::MAX as u32) as u16
-}
-
-#[derive(Debug, Clone, Copy)]
-struct DropOrigin {
-    position: Vec3Net,
-    velocity: Vec3Net,
-    yaw: f32,
-}
-
-fn drop_origin_for(client: &ServerClient) -> DropOrigin {
-    DropOrigin {
-        position: drop_position(&client.controller),
-        velocity: drop_velocity(&client.controller),
-        yaw: client.controller.yaw,
-    }
 }
 
 /// Default-empty starting crafting queue. Mirrors

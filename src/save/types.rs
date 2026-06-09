@@ -201,3 +201,45 @@ fn now_unix() -> u64 {
         .map(|duration| duration.as_secs())
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::world_time::{MAX_MULTIPLIER, SECONDS_PER_DAY};
+
+    use super::*;
+
+    #[test]
+    fn world_time_reclamps_out_of_range_persisted_values_on_load() {
+        // A hand-edited / future-tolerated save could carry values well
+        // outside the safe range; `world_time()` re-clamps once on load.
+        // Negative seconds-of-day must wrap forward into the valid day range.
+        let state = WorldStateSave {
+            world_time_multiplier: 10_000.0,
+            world_time_seconds_of_day: -100.0,
+            ..Default::default()
+        };
+
+        let time = state.world_time();
+
+        // Multiplier clamps to the hardcoded ceiling.
+        assert_eq!(time.multiplier, MAX_MULTIPLIER);
+        // Seconds-of-day wraps into `[0, SECONDS_PER_DAY)` via rem_euclid:
+        // -100 wraps to SECONDS_PER_DAY - 100.
+        assert!((0.0..SECONDS_PER_DAY).contains(&time.seconds_of_day));
+        assert!((time.seconds_of_day - (SECONDS_PER_DAY - 100.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn world_time_wraps_seconds_above_one_day() {
+        let state = WorldStateSave {
+            world_time_multiplier: 1.0,
+            world_time_seconds_of_day: SECONDS_PER_DAY + 50.0,
+            ..Default::default()
+        };
+
+        let time = state.world_time();
+
+        assert!((0.0..SECONDS_PER_DAY).contains(&time.seconds_of_day));
+        assert!((time.seconds_of_day - 50.0).abs() < 0.01);
+    }
+}

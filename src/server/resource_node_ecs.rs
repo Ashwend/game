@@ -11,8 +11,6 @@
 //! detection cheap: only the changed component ships through Lightyear
 //! per tick instead of the whole node.
 
-use std::collections::HashMap;
-
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -48,41 +46,13 @@ pub struct ResourceNodeStorage(pub Vec<ItemStack>);
 #[derive(Component, Debug, Clone, Copy)]
 pub struct ResourceNodeChunk(pub ChunkCoord);
 
-/// `ResourceNodeId → Entity` so the gather/admin paths can resolve a node
-/// in O(1) without iterating a query.
-#[derive(Resource, Default, Debug)]
-pub struct ResourceNodeIndex {
-    by_id: HashMap<ResourceNodeId, Entity>,
-}
-
-impl ResourceNodeIndex {
-    pub fn get(&self, id: ResourceNodeId) -> Option<Entity> {
-        self.by_id.get(&id).copied()
-    }
-
-    pub fn insert(&mut self, id: ResourceNodeId, entity: Entity) {
-        self.by_id.insert(id, entity);
-    }
-
-    pub fn remove(&mut self, id: ResourceNodeId) -> Option<Entity> {
-        self.by_id.remove(&id)
-    }
-
-    pub fn len(&self) -> usize {
-        self.by_id.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.by_id.is_empty()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (ResourceNodeId, Entity)> + '_ {
-        self.by_id.iter().map(|(id, entity)| (*id, *entity))
-    }
-
-    pub fn clear(&mut self) {
-        self.by_id.clear();
-    }
+crate::server::entity_index::entity_index! {
+    /// `ResourceNodeId → Entity` so the gather/admin paths can resolve a node
+    /// in O(1) without iterating a query.
+    ResourceNodeIndex, ResourceNodeId;
+    /// Despawn the entity for `id` if present, removing it from the index.
+    /// Returns the despawned entity (useful for tests / assertions).
+    despawn_resource_node_entity
 }
 
 /// Spawn a fresh entity for `state`, register it in the index, and return
@@ -108,16 +78,6 @@ pub fn spawn_resource_node_entity(
         .id();
     world.resource_mut::<ResourceNodeIndex>().insert(id, entity);
     entity
-}
-
-/// Despawn the entity for `id` if present, removing it from the index.
-/// Returns the despawned entity (useful for tests / assertions).
-pub fn despawn_resource_node_entity(world: &mut World, id: ResourceNodeId) -> Option<Entity> {
-    let entity = world.resource_mut::<ResourceNodeIndex>().remove(id)?;
-    if let Ok(entity_world) = world.get_entity_mut(entity) {
-        entity_world.despawn();
-    }
-    Some(entity)
 }
 
 #[cfg(test)]

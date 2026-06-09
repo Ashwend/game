@@ -50,6 +50,9 @@ pub(crate) struct CurrentAmbientZone(pub(crate) Option<AmbientZone>);
 ///, the bed-management system will pick up the audio once the
 /// manifest is filled in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+// Only constructed by tests today; the live zone-detection path is not wired up
+// yet, so `allow` (not `expect`) is correct, a non-test build sees these
+// variants as unconstructed.
 #[allow(dead_code)]
 pub(crate) enum AmbientZone {
     /// Forest at day, birds, wind through trees, distant fauna.
@@ -82,7 +85,7 @@ impl AmbientZone {
 /// the bed alive.
 #[derive(Component, Debug, Clone, Copy)]
 pub(crate) struct AmbientBed {
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "carried for future zone-aware bed selection")]
     pub(crate) zone: AmbientZone,
     pub(crate) id: SoundId,
 }
@@ -120,6 +123,8 @@ impl AmbientEmitter {
     /// audible range matching the impact-cue full-volume radius, a
     /// half-second fade. Used by gameplay code spawning a campfire or
     /// river ambient at a known world point.
+    // Exercised by tests; the gameplay path that spawns point ambients is not
+    // wired up yet, so `allow` (not `expect`) is correct for non-test builds.
     #[allow(dead_code)]
     pub(crate) fn new(id: SoundId, anchor: Vec3, audible_range: f32) -> Self {
         Self {

@@ -13,8 +13,6 @@
 //!     player drags items in or out; per-component replication keeps
 //!     wire traffic to just the contents diff.
 
-use std::collections::HashMap;
-
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -48,28 +46,10 @@ pub struct LootBagContents(pub Vec<Option<ItemStack>>);
 #[derive(Component, Debug, Clone, Copy)]
 pub struct LootBagChunk(pub ChunkCoord);
 
-/// `LootBagId → Entity` lookup for gameplay-side O(1) reads.
-#[derive(Resource, Default, Debug)]
-pub struct LootBagIndex {
-    by_id: HashMap<LootBagId, Entity>,
-}
-
-impl LootBagIndex {
-    pub fn get(&self, id: LootBagId) -> Option<Entity> {
-        self.by_id.get(&id).copied()
-    }
-
-    pub fn insert(&mut self, id: LootBagId, entity: Entity) {
-        self.by_id.insert(id, entity);
-    }
-
-    pub fn remove(&mut self, id: LootBagId) -> Option<Entity> {
-        self.by_id.remove(&id)
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (LootBagId, Entity)> + '_ {
-        self.by_id.iter().map(|(id, entity)| (*id, *entity))
-    }
+crate::server::entity_index::entity_index! {
+    /// `LootBagId → Entity` lookup for gameplay-side O(1) reads.
+    LootBagIndex, LootBagId;
+    despawn_loot_bag_entity
 }
 
 /// Wire-shape view used by the mirror to spawn or refresh a bag
@@ -96,14 +76,6 @@ pub fn spawn_loot_bag_entity(world: &mut World, view: LootBagView, chunk: ChunkC
         .id();
     world.resource_mut::<LootBagIndex>().insert(id, entity);
     entity
-}
-
-pub fn despawn_loot_bag_entity(world: &mut World, id: LootBagId) -> Option<Entity> {
-    let entity = world.resource_mut::<LootBagIndex>().remove(id)?;
-    if let Ok(entity_world) = world.get_entity_mut(entity) {
-        entity_world.despawn();
-    }
-    Some(entity)
 }
 
 #[cfg(test)]

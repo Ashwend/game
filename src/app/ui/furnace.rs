@@ -26,29 +26,24 @@ use crate::{
         systems::send_furnace_command,
     },
     protocol::{
-        FURNACE_ITEM_SLOT_COUNT, FurnaceCommand, FurnaceSlotRef, INVENTORY_SLOT_COUNT,
-        ItemContainerSlot, OpenFurnaceView, PlayerInventoryState,
+        FURNACE_ITEM_SLOT_COUNT, FurnaceCommand, FurnaceSlotRef, OpenFurnaceView,
+        PlayerInventoryState,
     },
 };
 
 use super::{
-    inventory::{INVENTORY_COLUMNS, drag::draw_drag_preview, slot::SLOT_SIZE, slot::draw_slot},
+    inventory::{
+        CONTAINER_PANEL_WIDTH, drag::draw_drag_preview, draw_container_inventory_mirror,
+        slot::draw_slot,
+    },
     modal::backdrop_layer,
     theme,
 };
 
 const SLOT_GAP: f32 = 6.0;
-// Match the main inventory's column count so a player who's used to the
-// bag's layout sees the same shape here. Shared with the inventory panel so
-// the two can't drift. Actionbar is intentionally omitted - the on-screen
-// hotbar at the bottom of the viewport already shows it, and the player can
-// drag stacks straight to those slots.
-const INVENTORY_COLS: usize = INVENTORY_COLUMNS;
-// Sized so the player-inventory grid (the widest element) fills the inner
-// content area exactly: `cols*slot + (cols-1)*gap + 48 (frame margins)`. The
-// fuel/contents cluster up top is naturally narrower and sits left-aligned.
-const PANEL_WIDTH: f32 =
-    INVENTORY_COLS as f32 * SLOT_SIZE + (INVENTORY_COLS - 1) as f32 * SLOT_GAP + 48.0;
+// Shared with the loot bag so the two drag-enabled container panels are sized
+// identically (wide enough for the player-inventory mirror grid at the bottom).
+const PANEL_WIDTH: f32 = CONTAINER_PANEL_WIDTH;
 const PANEL_HEIGHT: f32 = 540.0;
 
 pub(super) fn furnace_ui(
@@ -233,36 +228,7 @@ fn draw_panel(
     ui.separator();
     ui.add_space(12.0);
 
-    if let Some(inventory) = inventory {
-        ui.label(theme::field_label("Your inventory"));
-        let mut idx = 0;
-        while idx < INVENTORY_SLOT_COUNT {
-            let row_end = (idx + INVENTORY_COLS).min(INVENTORY_SLOT_COUNT);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = SLOT_GAP;
-                for slot_index in idx..row_end {
-                    let stack = inventory
-                        .inventory_slots
-                        .get(slot_index)
-                        .and_then(|s| s.as_ref());
-                    draw_slot(
-                        ui,
-                        UnifiedSlotRef::Player(ItemContainerSlot::inventory(slot_index)),
-                        stack,
-                        None,
-                        false,
-                        true,
-                        true,
-                        inventory_ui,
-                    );
-                }
-            });
-            ui.add_space(SLOT_GAP);
-            idx = row_end;
-        }
-    } else {
-        ui.label(RichText::new("Inventory unavailable").color(theme::muted_text()));
-    }
+    draw_container_inventory_mirror(ui, inventory, inventory_ui);
 }
 
 fn draw_progress_bar(ui: &mut egui::Ui, fraction: f32, fill_color: Color32) {

@@ -12,7 +12,9 @@ use bevy_egui::egui::{self, Align2, Color32, Stroke};
 
 use crate::{
     app::state::{InventoryUiState, LocalPlayerState, UnifiedSlotRef},
-    protocol::{ACTIONBAR_SLOT_COUNT, INVENTORY_SLOT_COUNT, ItemContainerSlot},
+    protocol::{
+        ACTIONBAR_SLOT_COUNT, INVENTORY_SLOT_COUNT, ItemContainerSlot, PlayerInventoryState,
+    },
 };
 
 use self::slot::{SLOT_SIZE, draw_disabled_slot, draw_slot, slot_stack};
@@ -31,6 +33,56 @@ pub(in crate::app::ui) const INVENTORY_COLUMNS: usize = 12;
 /// above for the tab's Sort header (the crafting tab gets its vertical room
 /// from the panel height, not from this count).
 const INVENTORY_DISPLAY_ROWS: usize = 6;
+
+/// Width of a drag-enabled container modal (furnace, loot bag) sized so the
+/// shared player-inventory mirror grid (the widest element) fills the inner
+/// content area exactly: `cols*slot + (cols-1)*gap + 48` frame margins. Shared
+/// so the two panels can't drift apart.
+pub(in crate::app::ui) const CONTAINER_PANEL_WIDTH: f32 =
+    INVENTORY_COLUMNS as f32 * SLOT_SIZE + (INVENTORY_COLUMNS - 1) as f32 * SLOT_GAP + 48.0;
+
+/// Draw the "Your inventory" mirror grid shown at the bottom of a container
+/// modal (furnace, loot bag). Unlike [`draw_inventory_grid`] this enables
+/// shift+click transfer into the open container and iterates only the real
+/// [`INVENTORY_SLOT_COUNT`] slots (no filler tiles). Shared so the furnace and
+/// loot-bag panels render the player's bag identically and can't drift.
+pub(in crate::app::ui) fn draw_container_inventory_mirror(
+    ui: &mut egui::Ui,
+    inventory: Option<&PlayerInventoryState>,
+    inventory_ui: &mut InventoryUiState,
+) {
+    let Some(inventory) = inventory else {
+        ui.label(egui::RichText::new("Inventory unavailable").color(super::theme::muted_text()));
+        return;
+    };
+
+    ui.label(super::theme::field_label("Your inventory"));
+    let mut idx = 0;
+    while idx < INVENTORY_SLOT_COUNT {
+        let row_end = (idx + INVENTORY_COLUMNS).min(INVENTORY_SLOT_COUNT);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = SLOT_GAP;
+            for slot_index in idx..row_end {
+                let stack = inventory
+                    .inventory_slots
+                    .get(slot_index)
+                    .and_then(|s| s.as_ref());
+                draw_slot(
+                    ui,
+                    UnifiedSlotRef::Player(ItemContainerSlot::inventory(slot_index)),
+                    stack,
+                    None,
+                    false,
+                    true,
+                    true,
+                    inventory_ui,
+                );
+            }
+        });
+        ui.add_space(SLOT_GAP);
+        idx = row_end;
+    }
+}
 
 /// Draw the bag grid with the standard tight gaps. The panel width is sized to
 /// fit [`INVENTORY_COLUMNS`] exactly, so the rows fill the width edge-to-edge;

@@ -13,6 +13,13 @@ use crate::{
         scene::{MainCamera, NetworkDroppedItem},
         state::PickupTargetState,
     },
+    // The interact ranges come straight from the authoritative balance
+    // constants (not redefined here) so the client tooltip/targeting can never
+    // disagree with what the server will accept, no "tooltip says reachable,
+    // server says no" pops, and there is a single tuning knob per range.
+    game_balance::{
+        DEPLOYABLE_DAMAGE_RANGE_M as DEPLOYABLE_INTERACT_RANGE_M, LOOT_BAG_INTERACT_RANGE_M,
+    },
     items::{item_definition, look_forward, pickup_anchor_from_position},
     protocol::Vec3Net,
     resources::resource_node_anchor_for,
@@ -24,9 +31,6 @@ use crate::{
 
 use super::viewport_position;
 
-/// Max range at which `E` lands on a placed structure. Matches the
-/// furnace open-range so the tooltip never lies about reachability.
-const DEPLOYABLE_INTERACT_RANGE_M: f32 = 5.5;
 /// Cone half-angle (cosine) the player must aim through to lock onto
 /// a deployable. Tight enough that the tooltip doesn't latch when the
 /// player is mostly looking past the structure.
@@ -55,10 +59,6 @@ const PLAYER_BODY_CENTRE_Y: f32 = 0.95;
 const SLEEPING_BODY_HALF_WIDTH: f32 = 0.9;
 const SLEEPING_BODY_HALF_HEIGHT: f32 = 0.4;
 const SLEEPING_BODY_CENTRE_Y: f32 = 0.35;
-/// Max range, in metres, at which E latches onto a loot bag. Matches
-/// the server's `LOOT_BAG_INTERACT_RANGE_M` so the tooltip never
-/// lies about reachability.
-const LOOT_BAG_INTERACT_RANGE_M: f32 = 4.5;
 /// Cone cosine for loot bag interaction, same as deployables since
 /// bags sit at roughly the same eye-level cone an aimed E would
 /// expect to hit.

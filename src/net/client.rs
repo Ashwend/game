@@ -53,7 +53,6 @@ const NETCODE_DISCONNECT_FLUSH_TICKS: u32 = 4;
 /// actually finished its handshake and is safe to drive gameplay against.
 /// Some variants are read only by the systems that write them today;
 /// they're part of the public state surface so allow the dead-code lint.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) enum ClientConnectionStatus {
     #[default]
@@ -605,7 +604,7 @@ fn drive_shutdown_system(
 impl ClientNetwork {
     /// Snapshot of the current connection state. Polled by the UI to
     /// decide when a session has actually become live.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "polled by UI once session-live gating is wired")]
     pub(crate) fn status(&self) -> ClientConnectionStatus {
         self.0
             .status

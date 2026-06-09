@@ -242,20 +242,38 @@ impl LowPolyMeshBuilder {
 // shader's distance fade; harmless for nodes that don't read it).
 // ---------------------------------------------------------------------------
 
-/// Base (dark) and tip (light) green for a blade, before the per-blade shade /
-/// warmth tweaks. Tuned to sit at/just below the ground tone.
-pub(crate) const GRASS_BLADE_BASE: [f32; 3] = [0.08, 0.18, 0.07];
-pub(crate) const GRASS_BLADE_TIP: [f32; 3] = [0.19, 0.34, 0.13];
+/// Base (lower) and tip (upper) green for a blade, before the per-blade shade /
+/// warmth tweaks.
+///
+/// These are **linear** values (vertex colours are linear, unlike `Color::srgb`).
+/// The ground is `Color::srgb(0.18, 0.34, 0.22)`, which is linear
+/// `(0.027, 0.095, 0.040)`, so to read as *subtle terrain* rather than bright
+/// spots, the grass must sit at that linear tone: base at/just below the ground,
+/// tip only slightly above so the tips gently catch the eye. (Eyeballing these as
+/// if they were sRGB made the grass ~5x brighter than the ground.)
+pub(crate) const GRASS_BLADE_BASE: [f32; 3] = [0.022, 0.085, 0.040];
+pub(crate) const GRASS_BLADE_TIP: [f32; 3] = [0.040, 0.130, 0.058];
 
-/// One grass blade. `base_color`/`tip_color` already include the shade/warmth
-/// (their alpha is the sway weight, 0 base, 1 tip). `dither` is written to every
-/// vertex's `uv.x` as a stable per-blade key.
+/// One grass blade, shaped as a cubic-Bézier arch (root → leaned-over tip).
+/// `base_color`/`tip_color` already include the shade/warmth (their alpha is the
+/// sway weight, 0 base, 1 tip). `dither` is written to every vertex's `uv.x` as a
+/// stable per-blade key.
 pub(crate) struct GrassBlade {
+    /// Root position in the mesh's local XZ plane.
     pub(crate) base: Vec2,
+    /// Orientation of the blade's width axis (radians). Independent of `lean` so
+    /// a blade can face any way regardless of which way it bows.
     pub(crate) yaw: f32,
+    /// Blade length along its arc (m).
     pub(crate) height: f32,
+    /// Half blade width at the root (m); tapers to a point at the tip.
     pub(crate) half_width: f32,
-    pub(crate) bend: Vec2,
+    /// Horizontal offset of the tip from the root (m): the direction and amount
+    /// the blade leans over. Its magnitude must stay below `height`.
+    pub(crate) lean: Vec2,
+    /// Mid-blade arch as a fraction of `height`: how far the Bézier control
+    /// points bow off the straight root→tip chord, giving the curl. 0 = straight.
+    pub(crate) flex: f32,
     pub(crate) base_color: [f32; 4],
     pub(crate) tip_color: [f32; 4],
     pub(crate) dither: f32,
@@ -276,6 +294,61 @@ pub(crate) fn grass_blade_colors(shade: f32, warm: f32) -> ([f32; 4], [f32; 4]) 
     (tint(GRASS_BLADE_BASE, 0.0), tint(GRASS_BLADE_TIP, 1.0))
 }
 
+/// Length-wise segments per blade. Each ring is one quad along the Bézier arc, so
+/// a blade has `2 * (BLADE_SEGMENTS + 1)` verts and `2 * BLADE_SEGMENTS` tris.
+/// Enough to read as a smooth curl without bloating the baked tile meshes.
+const BLADE_SEGMENTS: usize = 5;
+
+/// Cross-blade normal fan, radians. The two edge verts of each ring tilt their
+/// normals out by `±` this around the blade's tangent, so a flat ribbon lights
+/// like a rounded blade (the "rounded normal" trick from the Ghost-of-Tsushima /
+/// Acerola grass talks). 0 = flat.
+const BLADE_NORMAL_CURVE: f32 = 0.5;
+
+/// How far each baked normal is pulled back toward straight-up (+Y), 0..1. A
+/// vertical ribbon's true face normal is horizontal, which reads as a dark wall
+/// under a top-down sun; biasing toward up keeps blades lit-from-above (bright)
+/// while the fan + arch still give a soft rounded gradient. 0 = true face
+/// normals (dark walls), 1 = pure up (flat, the pre-Bézier look).
+const BLADE_NORMAL_UP_BIAS: f32 = 0.82;
+
+/// Component-wise lerp of two RGBA colours (used to graduate colour + sway
+/// weight up a multi-segment blade). Exact at the endpoints (`t == 0`/`1`).
+fn lerp4(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+        a[3] + (b[3] - a[3]) * t,
+    ]
+}
+
+/// Normalize, falling back to `fallback` for a degenerate (near-zero) vector.
+fn norm_or(v: Vec3, fallback: Vec3) -> Vec3 {
+    v.try_normalize().unwrap_or(fallback)
+}
+
+fn cubic_bezier(t: f32, p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3) -> Vec3 {
+    let u = 1.0 - t;
+    u * u * u * p0 + 3.0 * u * u * t * p1 + 3.0 * u * t * t * p2 + t * t * t * p3
+}
+
+fn cubic_bezier_tangent(t: f32, p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3) -> Vec3 {
+    let u = 1.0 - t;
+    3.0 * u * u * (p1 - p0) + 6.0 * u * t * (p2 - p1) + 3.0 * t * t * (p3 - p2)
+}
+
+/// Rodrigues rotation of `v` about unit axis `k` by `angle` radians.
+fn rotate_about_axis(v: Vec3, k: Vec3, angle: f32) -> Vec3 {
+    let (s, c) = angle.sin_cos();
+    v * c + k.cross(v) * s + k * k.dot(v) * (1.0 - c)
+}
+
+/// Bias a normal back toward +Y (see [`BLADE_NORMAL_UP_BIAS`]) and emit it.
+fn bias_up(n: Vec3) -> [f32; 3] {
+    norm_or(n.lerp(Vec3::Y, BLADE_NORMAL_UP_BIAS), Vec3::Y).to_array()
+}
+
 /// Indexed mesh builder for grass-blade clumps. Keeps the upward-normal /
 /// gradient / dither convention out of `LowPolyMeshBuilder` (which is flat-normal
 /// and per-face colour).
@@ -289,47 +362,76 @@ pub(crate) struct GrassBladeMesh {
 }
 
 impl GrassBladeMesh {
-    /// Append one tapered blade quad (base → near-point tip).
+    /// Append one cubic-Bézier blade: [`BLADE_SEGMENTS`] stacked quads sampled
+    /// along the arc from a full-width root ring to a point tip. The blade leans
+    /// over by `lean` and bows by `flex`; per-vertex normals are the ribbon's
+    /// face normal, fanned across the width ([`BLADE_NORMAL_CURVE`]) for a rounded
+    /// look and biased toward +Y ([`BLADE_NORMAL_UP_BIAS`]) so it stays lit from
+    /// above. Colour and sway weight (vertex-colour alpha) graduate up the blade;
+    /// the dither key is identical on every vert (whole-blade discard).
     pub(crate) fn push_blade(&mut self, blade: &GrassBlade) {
         let (s, c) = blade.yaw.sin_cos();
-        // Width runs along the yaw-rotated local X axis (in the XZ plane).
-        let ax = Vec2::new(c, s);
-        let top_width = blade.half_width * 0.18;
-        let base = blade.base;
+        // Width axis in the local XZ plane (the ribbon spans `±width_axis`).
+        let width_axis = Vec3::new(c, 0.0, s);
 
-        let bl = [
-            base.x - ax.x * blade.half_width,
-            0.0,
-            base.y - ax.y * blade.half_width,
-        ];
-        let br = [
-            base.x + ax.x * blade.half_width,
-            0.0,
-            base.y + ax.y * blade.half_width,
-        ];
-        let tcx = base.x + blade.bend.x;
-        let tcz = base.y + blade.bend.y;
-        let tl = [tcx - ax.x * top_width, blade.height, tcz - ax.y * top_width];
-        let tr = [tcx + ax.x * top_width, blade.height, tcz + ax.y * top_width];
+        // Bézier control points in blade-local space (root at origin, +Y up).
+        let p0 = Vec3::ZERO;
+        let lean = Vec3::new(blade.lean.x, 0.0, blade.lean.y);
+        // Tip height so the straight-line root→tip length stays ~`height`.
+        let tip_y = (blade.height * blade.height - lean.length_squared())
+            .max(1.0e-4)
+            .sqrt();
+        let p3 = Vec3::new(lean.x, tip_y, lean.y);
+        // Arch axis: up-ish and perpendicular to the lean, so the blade curls
+        // over its lean direction rather than twisting sideways.
+        let lean_side = if blade.lean.length_squared() > 1.0e-6 {
+            norm_or(Vec3::new(-blade.lean.y, 0.0, blade.lean.x), width_axis)
+        } else {
+            width_axis
+        };
+        let arch =
+            norm_or(norm_or(p3, Vec3::Y).cross(lean_side), Vec3::Y) * (blade.height * blade.flex);
+        let p1 = p0.lerp(p3, 0.33) + arch;
+        let p2 = p0.lerp(p3, 0.66) + arch * 0.8;
 
         let base_index = self.positions.len() as u32;
-        self.positions.extend_from_slice(&[bl, br, tr, tl]);
-        self.normals.extend_from_slice(&[[0.0, 1.0, 0.0]; 4]);
-        self.colors.extend_from_slice(&[
-            blade.base_color,
-            blade.base_color,
-            blade.tip_color,
-            blade.tip_color,
-        ]);
-        self.uvs.extend_from_slice(&[[blade.dither, 0.0]; 4]);
-        self.indices.extend_from_slice(&[
-            base_index,
-            base_index + 1,
-            base_index + 2,
-            base_index,
-            base_index + 2,
-            base_index + 3,
-        ]);
+        for ring in 0..=BLADE_SEGMENTS {
+            let t = ring as f32 / BLADE_SEGMENTS as f32;
+            let center = cubic_bezier(t, p0, p1, p2, p3);
+            let tangent = norm_or(cubic_bezier_tangent(t, p0, p1, p2, p3), Vec3::Y);
+            let half_width = blade.half_width * (1.0 - t * t);
+
+            let left = center - width_axis * half_width;
+            let right = center + width_axis * half_width;
+            self.positions.extend_from_slice(&[
+                [blade.base.x + left.x, left.y, blade.base.y + left.z],
+                [blade.base.x + right.x, right.y, blade.base.y + right.z],
+            ]);
+
+            // Ribbon face normal, kept pointing up-ish, then fanned per edge.
+            let mut face = norm_or(tangent.cross(width_axis), Vec3::Y);
+            if face.y < 0.0 {
+                face = -face;
+            }
+            self.normals.extend_from_slice(&[
+                bias_up(rotate_about_axis(face, tangent, BLADE_NORMAL_CURVE)),
+                bias_up(rotate_about_axis(face, tangent, -BLADE_NORMAL_CURVE)),
+            ]);
+
+            let color = lerp4(blade.base_color, blade.tip_color, t);
+            self.colors.extend_from_slice(&[color, color]);
+            // uv.x = stable per-blade dither key; uv.y = height fraction (unused
+            // by the shader today, handy for debugging the gradient).
+            self.uvs.extend_from_slice(&[[blade.dither, t]; 2]);
+        }
+
+        for seg in 0..BLADE_SEGMENTS as u32 {
+            // Ring `seg` verts are (b, b+1) = (left, right); ring `seg + 1` are
+            // (b+2, b+3). Two triangles span the quad: (lb, rb, rt), (lb, rt, lt).
+            let b = base_index + seg * 2;
+            self.indices
+                .extend_from_slice(&[b, b + 1, b + 3, b, b + 3, b + 2]);
+        }
     }
 
     pub(crate) fn build(self) -> Mesh {
@@ -358,19 +460,29 @@ mod tests {
             yaw: 0.3,
             height: 0.3,
             half_width: 0.03,
-            bend: Vec2::ZERO,
+            lean: Vec2::ZERO,
+            flex: 0.0,
             base_color,
             tip_color,
             dither: 0.42,
         });
-        // Sway weight in colour alpha: base verts 0, tip verts 1.
+        // Sway weight in colour alpha: base ring 0, tip ring 1.
         assert_eq!(b.colors[0][3], 0.0);
-        assert_eq!(b.colors[2][3], 1.0);
-        // Dither key in uv.x, identical on all four verts (whole-blade decision).
+        assert_eq!(b.colors.last().unwrap()[3], 1.0);
+        // Dither key in uv.x, identical on every vert (whole-blade decision).
         assert!(b.uvs.iter().all(|uv| uv[0] == 0.42));
-        // Tip sits above the base; normals point up.
-        assert!(b.positions[2][1] > b.positions[0][1], "tip above base");
-        assert!(b.normals.iter().all(|n| n[1] == 1.0), "upward normals");
+        // Tip ring sits above the base ring.
+        let tip_y = b.positions.last().unwrap()[1];
+        assert!(tip_y > b.positions[0][1], "tip above base");
+        // Normals are unit length and biased upward (lit-from-above, no dark
+        // walls), not the old hard-coded pure +Y.
+        assert!(
+            b.normals.iter().all(|n| {
+                let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                (len - 1.0).abs() < 1.0e-3 && n[1] > 0.0
+            }),
+            "unit, upward-biased normals"
+        );
     }
 
     #[test]

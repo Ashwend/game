@@ -106,9 +106,7 @@ impl GameServer {
         // PLACEMENT_REACH_M, and the target must be at the world floor
         // (y≈0) so the player can't snipe a structure onto a rooftop.
         let feet = client.controller.position;
-        let dx = command.position.x - feet.x;
-        let dz = command.position.z - feet.z;
-        if (dx * dx + dz * dz).sqrt() > PLACEMENT_REACH_M {
+        if !feet.within_horizontal_range(command.position, PLACEMENT_REACH_M) {
             return place_toast(client_id, ToastKind::Warning, "Too far away".to_owned());
         }
         if command.position.y.abs() > 0.25 {
@@ -241,9 +239,7 @@ impl GameServer {
         {
             return Vec::new();
         }
-        let dx = entity.position.x - player_pos.x;
-        let dz = entity.position.z - player_pos.z;
-        if (dx * dx + dz * dz).sqrt() > DAMAGE_RANGE_M {
+        if !player_pos.within_horizontal_range(entity.position, DAMAGE_RANGE_M) {
             return Vec::new();
         }
         // Tool-vs-material multiplier, hatchet eats wood, pickaxe
@@ -314,9 +310,7 @@ impl GameServer {
             else {
                 continue;
             };
-            let dx = entity.position.x - player_pos.x;
-            let dz = entity.position.z - player_pos.z;
-            if dx * dx + dz * dz <= profile.station_radius * profile.station_radius {
+            if player_pos.within_horizontal_range(entity.position, profile.station_radius) {
                 return true;
             }
         }

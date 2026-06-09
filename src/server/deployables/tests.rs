@@ -1,44 +1,12 @@
 use super::*;
 use crate::{
-    auth::AuthMode,
     items::{CRUDE_FURNACE_ID, WORKBENCH_T1_ID, intern_item_id},
     protocol::{GAME_VERSION, ItemStack, PROTOCOL_VERSION},
-    save::WorldSave,
-    server::{ServerSettings, inventory::add_stack_to_inventory},
+    server::{
+        inventory::add_stack_to_inventory,
+        test_support::{connect_named, server},
+    },
 };
-
-fn make_server() -> GameServer {
-    GameServer::new(
-        WorldSave::new("Test", Some(1)),
-        ServerSettings {
-            auth_mode: AuthMode::NoAuth,
-            singleplayer_host: Some(1),
-        },
-    )
-}
-
-fn connect_test_client(server: &mut GameServer) -> ClientId {
-    let client_id = server
-        .connect(
-            PROTOCOL_VERSION,
-            Some(GAME_VERSION.to_owned()),
-            1,
-            "Tester".to_owned(),
-            String::new(),
-        )
-        .expect("connect ok")
-        .0;
-    // Pin to origin: these tests place structures at fixed near-origin spots and
-    // assert placement-reach / overlap behaviour, which the random initial spawn
-    // would otherwise make non-deterministic.
-    server
-        .clients
-        .get_mut(&client_id)
-        .unwrap()
-        .controller
-        .position = Vec3Net::ZERO;
-    client_id
-}
 
 fn give_one(server: &mut GameServer, client_id: ClientId, item_id: &str) {
     let client = server.clients.get_mut(&client_id).unwrap();
@@ -47,8 +15,8 @@ fn give_one(server: &mut GameServer, client_id: ClientId, item_id: &str) {
 
 #[test]
 fn placing_a_workbench_consumes_one_item_and_tracks_chunk() {
-    let mut server = make_server();
-    let client_id = connect_test_client(&mut server);
+    let mut server = server();
+    let client_id = connect_named(&mut server, "Tester");
     give_one(&mut server, client_id, WORKBENCH_T1_ID);
 
     let envelopes = server.apply_place_deployable_command(
@@ -70,8 +38,8 @@ fn placing_a_workbench_consumes_one_item_and_tracks_chunk() {
 
 #[test]
 fn placement_out_of_reach_is_rejected() {
-    let mut server = make_server();
-    let client_id = connect_test_client(&mut server);
+    let mut server = server();
+    let client_id = connect_named(&mut server, "Tester");
     give_one(&mut server, client_id, WORKBENCH_T1_ID);
 
     let envelopes = server.apply_place_deployable_command(
@@ -104,8 +72,8 @@ fn placement_out_of_reach_is_rejected() {
 
 #[test]
 fn overlapping_placement_is_rejected() {
-    let mut server = make_server();
-    let client_id = connect_test_client(&mut server);
+    let mut server = server();
+    let client_id = connect_named(&mut server, "Tester");
     give_one(&mut server, client_id, WORKBENCH_T1_ID);
     give_one(&mut server, client_id, CRUDE_FURNACE_ID);
 
@@ -196,8 +164,8 @@ fn place_furnace(server: &mut GameServer, client_id: ClientId) -> DeployedEntity
 #[test]
 fn damage_reduces_health_and_respects_tool_cooldown() {
     use crate::protocol::DamageDeployableCommand;
-    let mut server = make_server();
-    let client_id = connect_test_client(&mut server);
+    let mut server = server();
+    let client_id = connect_named(&mut server, "Tester");
     give_one(&mut server, client_id, WORKBENCH_T1_ID);
     let id = place_workbench(&mut server, client_id);
     equip_pickaxe(&mut server, client_id);
@@ -219,8 +187,8 @@ fn damage_reduces_health_and_respects_tool_cooldown() {
 #[test]
 fn damage_destroys_at_zero_health() {
     use crate::protocol::DamageDeployableCommand;
-    let mut server = make_server();
-    let client_id = connect_test_client(&mut server);
+    let mut server = server();
+    let client_id = connect_named(&mut server, "Tester");
     give_one(&mut server, client_id, WORKBENCH_T1_ID);
     let id = place_workbench(&mut server, client_id);
     equip_pickaxe(&mut server, client_id);
@@ -242,8 +210,8 @@ fn matched_tool_outdamages_mismatched_tool() {
     use crate::protocol::DamageDeployableCommand;
     // Workbench (wood) vs hatchet should deal 3× the per-hit damage
     // of pickaxe vs the same workbench (150% vs 50%).
-    let mut axe_server = make_server();
-    let axe_client = connect_test_client(&mut axe_server);
+    let mut axe_server = server();
+    let axe_client = connect_named(&mut axe_server, "Tester");
     give_one(&mut axe_server, axe_client, WORKBENCH_T1_ID);
     let axe_target = place_workbench(&mut axe_server, axe_client);
     equip_hatchet(&mut axe_server, axe_client);
@@ -253,8 +221,8 @@ fn matched_tool_outdamages_mismatched_tool() {
         .apply_damage_deployable_command(axe_client, DamageDeployableCommand { id: axe_target });
     let axe_damage = start_hp - axe_server.deployed_entities[&axe_target].health;
 
-    let mut pick_server = make_server();
-    let pick_client = connect_test_client(&mut pick_server);
+    let mut pick_server = server();
+    let pick_client = connect_named(&mut pick_server, "Tester");
     give_one(&mut pick_server, pick_client, WORKBENCH_T1_ID);
     let pick_target = place_workbench(&mut pick_server, pick_client);
     equip_pickaxe(&mut pick_server, pick_client);
@@ -273,8 +241,8 @@ fn matched_tool_outdamages_mismatched_tool() {
 #[test]
 fn pickaxe_outdamages_hatchet_on_furnace() {
     use crate::protocol::DamageDeployableCommand;
-    let mut pick_server = make_server();
-    let pick_client = connect_test_client(&mut pick_server);
+    let mut pick_server = server();
+    let pick_client = connect_named(&mut pick_server, "Tester");
     give_one(&mut pick_server, pick_client, CRUDE_FURNACE_ID);
     let pick_target = place_furnace(&mut pick_server, pick_client);
     equip_pickaxe(&mut pick_server, pick_client);
@@ -284,8 +252,8 @@ fn pickaxe_outdamages_hatchet_on_furnace() {
         .apply_damage_deployable_command(pick_client, DamageDeployableCommand { id: pick_target });
     let pick_damage = start_hp - pick_server.deployed_entities[&pick_target].health;
 
-    let mut axe_server = make_server();
-    let axe_client = connect_test_client(&mut axe_server);
+    let mut axe_server = server();
+    let axe_client = connect_named(&mut axe_server, "Tester");
     give_one(&mut axe_server, axe_client, CRUDE_FURNACE_ID);
     let axe_target = place_furnace(&mut axe_server, axe_client);
     equip_hatchet(&mut axe_server, axe_client);
@@ -304,8 +272,8 @@ fn pickaxe_outdamages_hatchet_on_furnace() {
 #[test]
 fn bare_hands_cannot_damage_deployables() {
     use crate::protocol::DamageDeployableCommand;
-    let mut server = make_server();
-    let client_id = connect_test_client(&mut server);
+    let mut server = server();
+    let client_id = connect_named(&mut server, "Tester");
     give_one(&mut server, client_id, WORKBENCH_T1_ID);
     let id = place_workbench(&mut server, client_id);
 
@@ -317,8 +285,8 @@ fn bare_hands_cannot_damage_deployables() {
 
 #[test]
 fn station_in_range_matches_only_close_workbench() {
-    let mut server = make_server();
-    let client_id = connect_test_client(&mut server);
+    let mut server = server();
+    let client_id = connect_named(&mut server, "Tester");
     give_one(&mut server, client_id, WORKBENCH_T1_ID);
 
     // Place a workbench right next to the player (spawn is near origin).
@@ -337,8 +305,8 @@ fn station_in_range_matches_only_close_workbench() {
 
 #[test]
 fn placement_records_owner_account_id() {
-    let mut server = make_server();
-    let client_id = connect_test_client(&mut server);
+    let mut server = server();
+    let client_id = connect_named(&mut server, "Tester");
     give_one(&mut server, client_id, WORKBENCH_T1_ID);
     let id = place_workbench(&mut server, client_id);
 
@@ -354,8 +322,8 @@ fn placement_records_owner_account_id() {
 fn another_player_cannot_damage_an_owned_deployable() {
     use crate::protocol::DamageDeployableCommand;
 
-    let mut server = make_server();
-    let owner_id = connect_test_client(&mut server);
+    let mut server = server();
+    let owner_id = connect_named(&mut server, "Tester");
     give_one(&mut server, owner_id, WORKBENCH_T1_ID);
     let id = place_workbench(&mut server, owner_id);
     let start_hp = server.deployed_entities[&id].health;
@@ -389,8 +357,8 @@ fn another_player_cannot_damage_an_owned_deployable() {
 fn owner_can_damage_their_own_deployable() {
     use crate::protocol::DamageDeployableCommand;
 
-    let mut server = make_server();
-    let client_id = connect_test_client(&mut server);
+    let mut server = server();
+    let client_id = connect_named(&mut server, "Tester");
     give_one(&mut server, client_id, WORKBENCH_T1_ID);
     let id = place_workbench(&mut server, client_id);
     let start_hp = server.deployed_entities[&id].health;
@@ -411,8 +379,8 @@ fn admin_bypasses_ownership_gate_on_damage() {
     // up and damages it. The ownership gate must defer to the admin
     // bit so moderation works without exposing a side door for
     // regular players.
-    let mut server = make_server();
-    let owner_id = connect_test_client(&mut server);
+    let mut server = server();
+    let owner_id = connect_named(&mut server, "Tester");
     give_one(&mut server, owner_id, WORKBENCH_T1_ID);
     let id = place_workbench(&mut server, owner_id);
     let start_hp = server.deployed_entities[&id].health;
@@ -427,7 +395,7 @@ fn admin_bypasses_ownership_gate_on_damage() {
         )
         .expect("connect ok")
         .0;
-    // The make_server fixture marks singleplayer host=1 as admin;
+    // The server() fixture marks singleplayer host=1 as admin;
     // for a multiplayer-shaped test we promote the second client
     // explicitly.
     if let Some(client) = server.clients.get_mut(&admin_id) {

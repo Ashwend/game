@@ -59,7 +59,10 @@ pub(crate) fn play_impact_sounds_system(
 /// the trunk fading out and despawning when the animation finishes.
 /// Convenience wrapper for the bare `PlaySound::at` call, callers can
 /// still build the message manually if they need a gain offset.
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "convenience wrapper kept for callers that need it"
+)]
 pub(crate) fn emit_tree_fall_sound(play: &mut MessageWriter<PlaySound>, anchor: Vec3) {
     play.write(PlaySound::at(SoundId::TreeFall, anchor));
 }

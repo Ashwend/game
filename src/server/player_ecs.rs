@@ -12,8 +12,6 @@
 //! now means the replication wiring later just needs `Replicate` markers
 //! with the right `NetworkTarget`, no further refactor.
 
-use std::collections::HashMap;
-
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -132,37 +130,11 @@ pub struct PlayerSleeping(pub bool);
 #[derive(Component, Debug, Clone, Copy)]
 pub struct PlayerChunk(pub ChunkCoord);
 
-/// `ClientId → Entity` lookup so gather/chat/inventory paths can resolve
-/// a player in O(1).
-#[derive(Resource, Default, Debug)]
-pub struct PlayerIndex {
-    by_id: HashMap<ClientId, Entity>,
-}
-
-impl PlayerIndex {
-    pub fn get(&self, id: ClientId) -> Option<Entity> {
-        self.by_id.get(&id).copied()
-    }
-
-    pub fn insert(&mut self, id: ClientId, entity: Entity) {
-        self.by_id.insert(id, entity);
-    }
-
-    pub fn remove(&mut self, id: ClientId) -> Option<Entity> {
-        self.by_id.remove(&id)
-    }
-
-    pub fn len(&self) -> usize {
-        self.by_id.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.by_id.is_empty()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (ClientId, Entity)> + '_ {
-        self.by_id.iter().map(|(id, entity)| (*id, *entity))
-    }
+crate::server::entity_index::entity_index! {
+    /// `ClientId → Entity` lookup so gather/chat/inventory paths can resolve
+    /// a player in O(1).
+    PlayerIndex, ClientId;
+    despawn_player_entity
 }
 
 /// Wire-shape view used by the mirror to spawn or refresh a player
@@ -196,14 +168,6 @@ pub fn spawn_player_entity(world: &mut World, view: PlayerView, chunk: ChunkCoor
         .id();
     world.resource_mut::<PlayerIndex>().insert(id, entity);
     entity
-}
-
-pub fn despawn_player_entity(world: &mut World, id: ClientId) -> Option<Entity> {
-    let entity = world.resource_mut::<PlayerIndex>().remove(id)?;
-    if let Ok(entity_world) = world.get_entity_mut(entity) {
-        entity_world.despawn();
-    }
-    Some(entity)
 }
 
 #[cfg(test)]

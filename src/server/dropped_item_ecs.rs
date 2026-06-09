@@ -7,8 +7,6 @@
 //! into ECS entities so Phase 4 room replication can attach `Replicate`
 //! to the entities without changing the HashMap-driven gameplay paths.
 
-use std::collections::HashMap;
-
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -47,37 +45,11 @@ pub struct DroppedItemTransform {
 #[derive(Component, Debug, Clone, Copy)]
 pub struct DroppedItemChunk(pub ChunkCoord);
 
-/// `DroppedItemId → Entity` so the pickup path can resolve a drop in O(1)
-/// without scanning a query.
-#[derive(Resource, Default, Debug)]
-pub struct DroppedItemIndex {
-    by_id: HashMap<DroppedItemId, Entity>,
-}
-
-impl DroppedItemIndex {
-    pub fn get(&self, id: DroppedItemId) -> Option<Entity> {
-        self.by_id.get(&id).copied()
-    }
-
-    pub fn insert(&mut self, id: DroppedItemId, entity: Entity) {
-        self.by_id.insert(id, entity);
-    }
-
-    pub fn remove(&mut self, id: DroppedItemId) -> Option<Entity> {
-        self.by_id.remove(&id)
-    }
-
-    pub fn len(&self) -> usize {
-        self.by_id.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.by_id.is_empty()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (DroppedItemId, Entity)> + '_ {
-        self.by_id.iter().map(|(id, entity)| (*id, *entity))
-    }
+crate::server::entity_index::entity_index! {
+    /// `DroppedItemId → Entity` so the pickup path can resolve a drop in O(1)
+    /// without scanning a query.
+    DroppedItemIndex, DroppedItemId;
+    despawn_dropped_item_entity
 }
 
 pub fn spawn_dropped_item_entity(
@@ -103,14 +75,6 @@ pub fn spawn_dropped_item_entity(
         .id();
     world.resource_mut::<DroppedItemIndex>().insert(id, entity);
     entity
-}
-
-pub fn despawn_dropped_item_entity(world: &mut World, id: DroppedItemId) -> Option<Entity> {
-    let entity = world.resource_mut::<DroppedItemIndex>().remove(id)?;
-    if let Ok(entity_world) = world.get_entity_mut(entity) {
-        entity_world.despawn();
-    }
-    Some(entity)
 }
 
 #[cfg(test)]

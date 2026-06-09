@@ -11,6 +11,7 @@ use crate::{
 };
 
 use crate::server::ServerClient;
+use crate::server::container_slots::Container;
 
 pub(crate) use crate::game_balance::{
     FURNACE_COAL_BURN_TICKS as COAL_BURN_TICKS, FURNACE_INTERACT_RANGE_M,
@@ -80,6 +81,59 @@ impl FurnaceState {
                     (self.fuel_burn_ticks_left as f32 / max as f32).clamp(0.0, 1.0)
                 }
             },
+        }
+    }
+}
+
+/// Flat container index of the furnace's single fuel slot, as seen by the
+/// shared [`Container`] skeleton. Item slots follow at `1..=FURNACE_ITEM_SLOT_COUNT`.
+pub(super) const FUEL_SLOT_INDEX: usize = 0;
+
+/// Adapter that lets the shared player <-> container move skeleton drive a
+/// furnace. The flat index space is `0` for the fuel slot and `1 + i` for item
+/// slot `i`, mirroring [`FurnaceSlotRef::Fuel`] / [`FurnaceSlotRef::Item`].
+///
+/// The insert policy is the furnace's *move-path* placement: the fuel slot only
+/// accepts fuel and never swaps; item slots merge and never swap. (The
+/// quick-transfer fuel swap lives in `commands.rs` because it needs the player's
+/// inventory to re-house the displaced fuel.) [`Container::after_take`] cancels
+/// the in-flight burn timer when the fuel slot empties, so the UI bar reads 0%.
+///
+/// [`FurnaceSlotRef::Fuel`]: crate::protocol::FurnaceSlotRef::Fuel
+/// [`FurnaceSlotRef::Item`]: crate::protocol::FurnaceSlotRef::Item
+pub(super) struct FurnaceContainer<'a>(pub(super) &'a mut FurnaceState);
+
+impl Container for FurnaceContainer<'_> {
+    fn slot_count(&self) -> usize {
+        1 + FURNACE_ITEM_SLOT_COUNT
+    }
+
+    fn slot_mut(&mut self, index: usize) -> Option<&mut Option<ItemStack>> {
+        if index == FUEL_SLOT_INDEX {
+            Some(&mut self.0.fuel)
+        } else {
+            self.0.items.get_mut(index - 1)
+        }
+    }
+
+    fn insert(&mut self, index: usize, stack: ItemStack) -> Option<ItemStack> {
+        if index == FUEL_SLOT_INDEX {
+            if fuel_burn_ticks_for(stack.item_id.as_ref()).is_none() {
+                return Some(stack);
+            }
+            return merge_into_optional_slot(&mut self.0.fuel, stack);
+        }
+        let target = self.0.items.get_mut(index - 1)?;
+        merge_into_optional_slot(target, stack)
+    }
+
+    fn after_take(&mut self, index: usize, drained: bool) {
+        // Removing the fuel stack cancels the in-flight burn timer. The burn bar
+        // reads `fuel_burn_ticks_left / max_burn_ticks`, so without this reset
+        // the indicator stays high while the previously ignited unit ticks down
+        // invisibly.
+        if index == FUEL_SLOT_INDEX && drained {
+            self.0.fuel_burn_ticks_left = 0;
         }
     }
 }
@@ -235,41 +289,4 @@ pub(super) fn inventory_has_room_for(client: Option<&ServerClient>, stack: &Item
     client.inventory.inventory_slots.iter().any(Option::is_none)
 }
 
-pub(crate) fn merge_into_optional_slot(
-    target: &mut Option<ItemStack>,
-    mut incoming: ItemStack,
-) -> Option<ItemStack> {
-    let limit = crate::items::stack_limit(incoming.item_id.as_ref()).unwrap_or(u16::MAX);
-    match target {
-        Some(existing) if existing.item_id == incoming.item_id => {
-            let space = limit.saturating_sub(existing.quantity);
-            if space == 0 {
-                return Some(incoming);
-            }
-            let take = incoming.quantity.min(space);
-            existing.quantity = existing.quantity.saturating_add(take);
-            incoming.quantity -= take;
-            if incoming.quantity == 0 {
-                None
-            } else {
-                Some(incoming)
-            }
-        }
-        Some(_) => Some(incoming),
-        None => {
-            // Honour stack limit even when placing into an empty slot.
-            let take = incoming.quantity.min(limit);
-            let placed = ItemStack {
-                item_id: incoming.item_id.clone(),
-                quantity: take,
-            };
-            *target = Some(placed);
-            incoming.quantity -= take;
-            if incoming.quantity == 0 {
-                None
-            } else {
-                Some(incoming)
-            }
-        }
-    }
-}
+pub(crate) use crate::server::container_slots::merge_into_optional_slot;

@@ -259,14 +259,7 @@ fn is_two_part_suffix(second_last: &str, last: &str) -> bool {
             second_last.to_ascii_lowercase().as_str(),
             last.to_ascii_lowercase().as_str()
         ),
-        ("co", "uk")
-            | ("co", "jp")
-            | ("co", "nz")
-            | ("com", "au")
-            | ("com", "br")
-            | ("org", "uk")
-            | ("gov", "uk")
-            | ("ac", "uk"),
+        ("co" | "org" | "gov" | "ac", "uk") | ("co", "jp" | "nz") | ("com", "au" | "br"),
     )
 }
 

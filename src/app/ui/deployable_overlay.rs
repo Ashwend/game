@@ -16,17 +16,19 @@ use bevy_egui::egui;
 
 use crate::{
     app::scene::NetworkDeployedEntity,
+    game_balance::DEPLOYABLE_DAMAGE_RANGE_M,
     items::{DeployableKind, item_definition},
     server::{Deployable, DeployableHealth},
 };
 
-/// Hard cutoff distance for the nameplate. Past this the label hides
-/// entirely. Matches the conversational range the peer overlay uses
-/// so the two UIs feel like the same family of feedback.
-const DEPLOYABLE_DRAW_DISTANCE_M: f32 = 6.0;
-/// Distance at which the alpha starts ramping down so the label
-/// dissolves softly over the last metre.
-const DEPLOYABLE_FADE_START_M: f32 = 5.0;
+/// Distance at which the nameplate is fully solid: the reach at which you can
+/// actually hit the structure, so the health bar is readable wherever a swing
+/// lands. Derived from [`DEPLOYABLE_DAMAGE_RANGE_M`] so the label tracks the
+/// real interact range instead of drifting on its own magic number.
+const DEPLOYABLE_FADE_START_M: f32 = DEPLOYABLE_DAMAGE_RANGE_M;
+/// Hard cutoff distance for the nameplate. One metre past the reach limit, so
+/// the label dissolves softly just as you step out of range.
+const DEPLOYABLE_DRAW_DISTANCE_M: f32 = DEPLOYABLE_DAMAGE_RANGE_M + 1.0;
 /// Cosine of the half-angle of the "looking at" cone. ~25° each side
 /// of the camera forward, generous enough that you don't have to
 /// pixel-aim, tight enough that you can't see labels on structures

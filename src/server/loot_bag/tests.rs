@@ -1,6 +1,7 @@
 use super::slots::{insert_into_slot, restore_slot};
 use super::*;
 use crate::items::{COAL_ID, WOOD_ID, stack_limit};
+use crate::server::test_support::server;
 
 #[test]
 fn insert_into_empty_slot_fills_it() {
@@ -87,7 +88,7 @@ fn loot_bag_is_empty_reflects_slot_contents() {
 
 #[test]
 fn spawn_loot_bag_truncates_overflowing_item_list() {
-    let mut server = test_server();
+    let mut server = server();
     // More stacks than the bag has slots, the extras are dropped.
     let items: Vec<ItemStack> = (0..(LOOT_BAG_SLOT_COUNT + 3))
         .map(|_| ItemStack::new(WOOD_ID, 1))
@@ -96,15 +97,4 @@ fn spawn_loot_bag_truncates_overflowing_item_list() {
     let bag = &server.loot_bags[&id];
     assert_eq!(bag.slots.len(), LOOT_BAG_SLOT_COUNT);
     assert!(bag.slots.iter().all(Option::is_some));
-}
-
-fn test_server() -> GameServer {
-    use crate::{auth::AuthMode, save::WorldSave, server::ServerSettings};
-    GameServer::new(
-        WorldSave::new("Test", Some(1)),
-        ServerSettings {
-            auth_mode: AuthMode::NoAuth,
-            singleplayer_host: Some(1),
-        },
-    )
 }

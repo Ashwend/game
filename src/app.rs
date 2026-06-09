@@ -49,16 +49,17 @@ use self::{
         play_sounds_system, play_transition_stingers_system, tick_audio_faders_system,
     },
     scene::{
-        GrassMaterial, GrassState, apply_world_scene_system, setup_scene, stream_grass_system,
-        update_sky_system,
+        GrassInstancingPlugin, GrassMaterial, GrassState, apply_world_scene_system, setup_scene,
+        stream_grass_system, update_sky_system,
     },
     state::{
-        AuthFlow, ClientErrorToast, ClientRuntime, ClientSettingsStore, CombatFeedbackState,
-        CraftingHudState, CraftingUiState, CurrentUser, DeployablePlacementState, GatherInputState,
-        InventoryUiState, LocalPlayerState, LookState, MenuBackdropVisibility, MenuState,
-        OptionsUiState, PickupTargetState, PredictionState, RemoteImpactEvent, SaveStore,
-        SessionShutdownTasks, TestModeConfig, ToastState, ToolSwapState, WorkosAuth,
-        apply_prediction_overlay_system, update_local_player_state_system,
+        AuthFlow, ClientErrorToast, ClientRuntime, ClientSettings, ClientSettingsStore,
+        CombatFeedbackState, CraftingHudState, CraftingUiState, CurrentUser,
+        DeployablePlacementState, GatherInputState, InventoryUiState, LocalPlayerState, LookState,
+        MenuBackdropVisibility, MenuState, OptionsUiState, PickupTargetState, PredictionState,
+        RemoteImpactEvent, SaveStore, SessionShutdownTasks, TestModeConfig, ToastState,
+        ToolSwapState, WorkosAuth, apply_prediction_overlay_system,
+        update_local_player_state_system,
     },
     systems::{
         AutoConnectRequest, CameraImpactKick, CameraMotionEffects, ClientSystemSet,
@@ -223,7 +224,6 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         eprintln!("could not load client settings: {error:#}");
         Default::default()
     });
-    let window_settings = settings.display;
     let test_mode = TestModeConfig::from_env();
     // Dev-only off-screen capture: when set, the primary camera renders into an
     // image instead of the window and the window comes up hidden so frames keep
@@ -271,10 +271,44 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         });
         app.insert_resource(WorkosAuth(workos));
     }
+    insert_client_resources(&mut app, store, settings_store, &settings, &test_mode);
+    add_window_and_default_plugins(
+        &mut app,
+        &test_mode,
+        &settings,
+        headless_capture,
+        agent_driven,
+    );
+    add_third_party_plugins(&mut app, &settings);
+
+    configure_client_schedule(&mut app);
+
+    install_dev_agent_wiring(&mut app, headless_capture, agent_driven);
+
+    add_client_systems(&mut app);
+
+    app.run();
+
+    Ok(())
+}
+
+/// Client-state resource and message registrations.
+///
+/// Roughly 45 `insert_resource`/`init_resource`/`add_message` calls plus the
+/// `ClearColor`/`WinitSettings` setup. Order is preserved verbatim: these must
+/// run before `add_window_and_default_plugins` so the chain matches the original
+/// top-to-bottom sequence.
+fn insert_client_resources(
+    app: &mut App,
+    store: WorldStore,
+    settings_store: ClientSettingsStore,
+    settings: &ClientSettings,
+    test_mode: &TestModeConfig,
+) {
     app.insert_resource(ClearColor(Color::srgb(0.015, 0.018, 0.023)))
         .insert_resource(SaveStore(store))
         .insert_resource(settings_store)
-        .insert_resource(settings)
+        .insert_resource(settings.clone())
         .insert_resource(MenuState::default())
         .insert_resource(OptionsUiState::default())
         .insert_resource(test_mode.clone())
@@ -315,51 +349,73 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .init_resource::<InventorySoundRequests>()
         .add_message::<RemoteImpactEvent>()
         .add_message::<ClientErrorToast>()
-        .add_message::<IncomingVoiceMessage>()
-        .add_plugins(
-            DefaultPlugins.set(WindowPlugin {
-                // `multiplayer-test` overrides the window resolution via
-                // env vars and the actual position is set after the
-                // primary monitor has been queried, see
-                // `reposition_test_window_system`. Trying to centre at
-                // startup would need a screen-size guess and that's exactly
-                // what we'd get wrong on the dev's actual monitor.
-                primary_window: Some(Window {
-                    title: "Ashwend".to_owned(),
-                    resolution: test_mode
-                        .window
-                        .map(|w| (w.width, w.height).into())
-                        .unwrap_or_else(|| {
-                            (
-                                window_settings.resolution.width,
-                                window_settings.resolution.height,
-                            )
-                                .into()
-                        }),
-                    position: WindowPosition::default(),
-                    present_mode: window_settings.present_mode(),
-                    mode: if test_mode.window.is_some() {
-                        // Test windows always come up in plain windowed
-                        // mode so the post-monitor reposition actually
-                        // applies, fullscreen would ignore it.
-                        bevy::window::WindowMode::Windowed
-                    } else {
-                        window_settings.window_mode(None)
-                    },
-                    resizable: false,
-                    // Headless capture renders to an off-screen image, so the
-                    // window is created hidden. winit then runs the schedule
-                    // each cycle (its `all_invisible` path) so the capture image
-                    // stays fresh without an on-screen surface to throttle.
-                    visible: headless_capture.is_none(),
-                    // Agent-driven sessions come up unfocused so the window
-                    // doesn't steal focus or jump in front of other windows.
-                    focused: !agent_driven,
-                    ..default()
-                }),
+        .add_message::<IncomingVoiceMessage>();
+}
+
+/// `DefaultPlugins` plus the `WindowPlugin` configuration, including the
+/// test-window / headless-capture / agent-driven branches that drive resolution,
+/// window mode, visibility, and focus at startup.
+fn add_window_and_default_plugins(
+    app: &mut App,
+    test_mode: &TestModeConfig,
+    settings: &ClientSettings,
+    headless_capture: Option<(u32, u32)>,
+    agent_driven: bool,
+) {
+    let window_settings = settings.display;
+    app.add_plugins(
+        DefaultPlugins.set(WindowPlugin {
+            // `multiplayer-test` overrides the window resolution via
+            // env vars and the actual position is set after the
+            // primary monitor has been queried, see
+            // `reposition_test_window_system`. Trying to centre at
+            // startup would need a screen-size guess and that's exactly
+            // what we'd get wrong on the dev's actual monitor.
+            primary_window: Some(Window {
+                title: "Ashwend".to_owned(),
+                resolution: test_mode
+                    .window
+                    .map(|w| (w.width, w.height).into())
+                    .unwrap_or_else(|| {
+                        (
+                            window_settings.resolution.width,
+                            window_settings.resolution.height,
+                        )
+                            .into()
+                    }),
+                position: WindowPosition::default(),
+                present_mode: window_settings.present_mode(),
+                mode: if test_mode.window.is_some() {
+                    // Test windows always come up in plain windowed
+                    // mode so the post-monitor reposition actually
+                    // applies, fullscreen would ignore it.
+                    bevy::window::WindowMode::Windowed
+                } else {
+                    window_settings.window_mode(None)
+                },
+                resizable: false,
+                // Headless capture renders to an off-screen image, so the
+                // window is created hidden. winit then runs the schedule
+                // each cycle (its `all_invisible` path) so the capture image
+                // stays fresh without an on-screen surface to throttle.
+                visible: headless_capture.is_none(),
+                // Agent-driven sessions come up unfocused so the window
+                // doesn't steal focus or jump in front of other windows.
+                focused: !agent_driven,
                 ..default()
             }),
-        )
+            ..default()
+        }),
+    );
+}
+
+/// Third-party plugin registration: frame-time diagnostics, the Lightyear
+/// client protocol/network stack, the optional replication-trace and profile
+/// diagnostics, embedded assets, the grass material, audio, egui, frame pacing,
+/// analytics, the update checker, and the egui end-pass ordering.
+fn add_third_party_plugins(app: &mut App, settings: &ClientSettings) {
+    let window_settings = settings.display;
+    app
         // 480 sample history: ~1 second at 500 FPS, ~4 seconds at 120 FPS.
         // The perf HUD pulls p99/max from this window so the player sees
         // hitches that the smoothed FPS number hides, 120 samples (default)
@@ -400,11 +456,19 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         // sibling `assets/` folder. Must come after DefaultPlugins so
         // AssetPlugin (and therefore `EmbeddedAssetRegistry`) exists.
         .add_plugins(embedded_assets::EmbeddedAssetsPlugin)
-        // Detail-grass material: the custom wind + distance-fade shader, an
-        // `ExtendedMaterial<StandardMaterial, GrassWindExtension>`. Client-only
-        // (the dedicated server has no render app); after EmbeddedAssetsPlugin so
-        // the embedded `shaders/grass.wgsl` resolves when grass first spawns.
+        // Grass wind material: the custom wind + distance-fade shader, an
+        // `ExtendedMaterial<StandardMaterial, GrassWindExtension>`. Now used only
+        // by the hay-grass resource node; the cosmetic detail grass moved to the
+        // GPU-instanced pipeline below. Client-only (the dedicated server has no
+        // render app); after EmbeddedAssetsPlugin so `shaders/grass.wgsl`
+        // resolves when hay grass first spawns.
         .add_plugins(MaterialPlugin::<GrassMaterial>::default())
+        // GPU-instanced detail grass: the project's one custom render pipeline.
+        // Draws one shared blade mesh thousands of times per tile from a per-blade
+        // instance buffer, so the field can be far denser than baking every blade
+        // into a tile mesh. Client-only; after EmbeddedAssetsPlugin so
+        // `shaders/grass_instanced.wgsl` resolves.
+        .add_plugins(GrassInstancingPlugin)
         // Audio: registers PlaySound event, SoundLibrary, FootstepState,
         // and the global ambient-zone resource. Must come after
         // EmbeddedAssetsPlugin so the asset paths it loads at startup
@@ -434,9 +498,22 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
             PostUpdate,
             EguiPostUpdateSet::EndPass.before(TransformSystems::Propagate),
         );
+}
 
-    configure_client_schedule(&mut app);
-
+/// Dev-only agent-automation wiring: voice/volume muting for agent-driven runs,
+/// off-screen headless capture, the Unix control socket, and macOS focus
+/// relinquish. The agent-mute block runs in every build; the capture / socket /
+/// focus blocks keep their original `cfg` gates so they compile out of release.
+fn install_dev_agent_wiring(
+    app: &mut App,
+    // Only consumed by the `debug_assertions`-gated capture block below; in
+    // release every reader compiles out and the value is always `None`.
+    #[cfg_attr(not(debug_assertions), allow(unused_variables))] headless_capture: Option<(
+        u32,
+        u32,
+    )>,
+    agent_driven: bool,
+) {
     // Agent-driven sessions don't exercise voice chat, so disable it entirely.
     // This keeps automated runs from opening the microphone, which on macOS
     // forces a Bluetooth headset out of A2DP into low-quality HFP mode. We also
@@ -454,7 +531,7 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
     // The whole block compiles out of release builds.
     #[cfg(debug_assertions)]
     if let Some((width, height)) = headless_capture {
-        insert_capture_target(&mut app, width, height);
+        insert_capture_target(app, width, height);
         app.add_systems(Startup, redirect_camera_to_capture.after(setup_scene));
         eprintln!("headless capture enabled: rendering to {width}x{height} off-screen image");
     }
@@ -484,7 +561,26 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
     if agent_driven {
         app.add_systems(Startup, relinquish_macos_focus_system);
     }
+}
 
+/// All client system registrations across the Startup, PreUpdate, Update,
+/// PostUpdate, and egui passes. Split by phase into the helpers below; the order
+/// of those calls reproduces the original top-to-bottom registration sequence.
+fn add_client_systems(app: &mut App) {
+    add_startup_and_egui_systems(app);
+    add_input_systems(app);
+    add_network_systems(app);
+    add_display_systems(app);
+    add_scene_systems(app);
+    add_audio_systems(app);
+    add_menu_and_auth_systems(app);
+    add_voice_systems(app);
+    add_test_and_analytics_systems(app);
+}
+
+/// Startup spawns plus the egui passes (the primary-context UI chain and the
+/// font installer that must run before bevy_egui's `begin_pass`).
+fn add_startup_and_egui_systems(app: &mut App) {
     app.add_systems(Startup, setup_scene)
         .add_systems(Startup, setup_voice_system)
         .add_systems(Startup, setup_item_icons)
@@ -502,64 +598,73 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
             install_egui_fonts_system
                 .after(EguiPreUpdateSet::ProcessInput)
                 .before(EguiPreUpdateSet::BeginPass),
+        );
+}
+
+/// Local-player sync, input/UI shortcut intake, and the tool-swap animation.
+fn add_input_systems(app: &mut App) {
+    app.add_systems(
+        Update,
+        // Sync the local player's replicated components, then fold the
+        // optimistic prediction overlay onto the fresh inventory. Chained
+        // so the overlay always reads the just-synced replicated base.
+        (
+            update_local_player_state_system,
+            apply_prediction_overlay_system,
         )
-        .add_systems(
-            Update,
-            // Sync the local player's replicated components, then fold the
-            // optimistic prediction overlay onto the fresh inventory. Chained
-            // so the overlay always reads the just-synced replicated base.
-            (
-                update_local_player_state_system,
-                apply_prediction_overlay_system,
-            )
-                .chain()
-                .in_set(ClientSystemSet::LocalPlayerSync),
+            .chain()
+            .in_set(ClientSystemSet::LocalPlayerSync),
+    )
+    .add_systems(
+        Update,
+        chat_shortcut_system.in_set(ClientSystemSet::ChatShortcut),
+    )
+    .add_systems(
+        Update,
+        toggle_pause_system.in_set(ClientSystemSet::PauseToggle),
+    )
+    // Both run alongside the pause toggle so they share its place
+    // in the schedule (input intake before gameplay simulation).
+    .add_systems(
+        Update,
+        (
+            sync_furnace_open_flag_system,
+            close_furnace_on_escape_system,
+            sync_loot_bag_open_flag_system,
+            close_loot_bag_on_escape_system,
         )
-        .add_systems(
-            Update,
-            chat_shortcut_system.in_set(ClientSystemSet::ChatShortcut),
-        )
-        .add_systems(
-            Update,
-            toggle_pause_system.in_set(ClientSystemSet::PauseToggle),
-        )
-        // Both run alongside the pause toggle so they share its place
-        // in the schedule (input intake before gameplay simulation).
-        .add_systems(
-            Update,
-            (
-                sync_furnace_open_flag_system,
-                close_furnace_on_escape_system,
-                sync_loot_bag_open_flag_system,
-                close_loot_bag_on_escape_system,
-            )
-                .in_set(ClientSystemSet::PauseToggle),
-        )
-        .add_systems(
-            Update,
-            toggle_inventory_system.in_set(ClientSystemSet::InventoryToggle),
-        )
-        .add_systems(
-            Update,
-            toggle_crafting_system.in_set(ClientSystemSet::CraftingToggle),
-        )
-        .add_systems(Update, toggle_perf_stats_system)
-        .add_systems(
-            Update,
-            center_cursor_on_focus_system.in_set(ClientSystemSet::Focus),
-        )
-        .add_systems(Update, update_cursor_system.in_set(ClientSystemSet::Cursor))
-        .add_systems(Update, mouse_look_system.in_set(ClientSystemSet::Look))
-        .add_systems(Update, client_input_system.in_set(ClientSystemSet::Input))
-        .add_systems(
-            Update,
-            update_tool_swap_state_system.in_set(ClientSystemSet::ToolSwap),
-        )
-        .add_systems(
-            Update,
-            gameplay_inventory_shortcuts_system.in_set(ClientSystemSet::InventoryShortcuts),
-        )
-        .add_systems(Update, network_tick_system.in_set(ClientSystemSet::Network))
+            .in_set(ClientSystemSet::PauseToggle),
+    )
+    .add_systems(
+        Update,
+        toggle_inventory_system.in_set(ClientSystemSet::InventoryToggle),
+    )
+    .add_systems(
+        Update,
+        toggle_crafting_system.in_set(ClientSystemSet::CraftingToggle),
+    )
+    .add_systems(Update, toggle_perf_stats_system)
+    .add_systems(
+        Update,
+        center_cursor_on_focus_system.in_set(ClientSystemSet::Focus),
+    )
+    .add_systems(Update, update_cursor_system.in_set(ClientSystemSet::Cursor))
+    .add_systems(Update, mouse_look_system.in_set(ClientSystemSet::Look))
+    .add_systems(Update, client_input_system.in_set(ClientSystemSet::Input))
+    .add_systems(
+        Update,
+        update_tool_swap_state_system.in_set(ClientSystemSet::ToolSwap),
+    )
+    .add_systems(
+        Update,
+        gameplay_inventory_shortcuts_system.in_set(ClientSystemSet::InventoryShortcuts),
+    );
+}
+
+/// Network tick, link ping, error-toast surfacing, session shutdown, quit, and
+/// the staged self-update applier.
+fn add_network_systems(app: &mut App) {
+    app.add_systems(Update, network_tick_system.in_set(ClientSystemSet::Network))
         .add_systems(
             Update,
             update_link_ping_system.in_set(ClientSystemSet::Network),
@@ -581,30 +686,41 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
         .add_systems(Update, app_quit_system.in_set(ClientSystemSet::Quit))
         // Applies a staged self-update: saves any open world, then launches the
         // updater and quits. Reacts to `UpdateState::Applying` set by the modal.
-        .add_systems(Update, apply_update_system)
-        .add_systems(
-            Update,
-            (
-                // Gated off for multiplayer-test windows: there the test
-                // harness owns the window (it may sit borderless-fullscreen on
-                // a non-primary monitor), so letting the saved display
-                // settings re-assert themselves would fight the placement.
-                apply_display_settings_system.run_if(not(multiplayer_test_owns_window)),
-                apply_ui_scale_system,
-            )
-                .in_set(ClientSystemSet::Display),
+        .add_systems(Update, apply_update_system);
+}
+
+/// Display/graphics/settings application plus the always-on view-radius and
+/// chunk-overlay helpers.
+fn add_display_systems(app: &mut App) {
+    app.add_systems(
+        Update,
+        (
+            // Gated off for multiplayer-test windows: there the test
+            // harness owns the window (it may sit borderless-fullscreen on
+            // a non-primary monitor), so letting the saved display
+            // settings re-assert themselves would fight the placement.
+            apply_display_settings_system.run_if(not(multiplayer_test_owns_window)),
+            apply_ui_scale_system,
         )
-        .add_systems(
-            Update,
-            apply_graphics_settings_system.in_set(ClientSystemSet::Display),
-        )
-        .add_systems(
-            Update,
-            save_client_settings_system.in_set(ClientSystemSet::SettingsSave),
-        )
-        .add_systems(Update, sync_view_radius_system)
-        .add_systems(Update, chunk_overlay_system)
-        .add_systems(Update, tick_combat_feedback_system)
+            .in_set(ClientSystemSet::Display),
+    )
+    .add_systems(
+        Update,
+        apply_graphics_settings_system.in_set(ClientSystemSet::Display),
+    )
+    .add_systems(
+        Update,
+        save_client_settings_system.in_set(ClientSystemSet::SettingsSave),
+    )
+    .add_systems(Update, sync_view_radius_system)
+    .add_systems(Update, chunk_overlay_system);
+}
+
+/// Combat-feedback HUD, scene application from the freshest snapshot, world-grid
+/// rebuild, placement preview/input, camera follow, the held-item visual, and
+/// the sky update.
+fn add_scene_systems(app: &mut App) {
+    app.add_systems(Update, tick_combat_feedback_system)
         .add_systems(
             Update,
             crate::app::ui::floating_text::tick_floating_damage_system,
@@ -672,122 +788,137 @@ pub fn run_app(auto_connect: Option<SocketAddr>) -> Result<()> {
             Update,
             apply_held_item_visual_system.in_set(ClientSystemSet::HeldItem),
         )
-        .add_systems(Update, update_sky_system.in_set(ClientSystemSet::Sky))
-        .add_systems(
-            Update,
-            update_pickup_target_system.in_set(ClientSystemSet::PickupTarget),
-        )
-        .add_systems(
-            Update,
-            play_impact_sounds_system.in_set(ClientSystemSet::ImpactSounds),
-        )
-        .add_systems(
-            Update,
-            play_transition_stingers_system.in_set(ClientSystemSet::TransitionStingers),
-        )
-        .add_systems(
-            Update,
-            play_footsteps_system.in_set(ClientSystemSet::Footsteps),
-        )
-        // Central audio bus: drains PlaySound events and spawns the
-        // audio entities. Must run after every system that writes
-        // PlaySound (impact, footsteps, node death, button) so a single
-        // frame's worth of events is one round-trip.
-        .add_systems(
-            Update,
-            play_sounds_system.in_set(ClientSystemSet::PlaySounds),
-        )
-        .add_systems(
-            Update,
-            tick_audio_faders_system.in_set(ClientSystemSet::AudioFaderTick),
-        )
-        .add_systems(
-            Update,
-            manage_ambient_beds_system.in_set(ClientSystemSet::AmbientBeds),
-        )
-        .add_systems(
-            Update,
-            manage_ambient_emitters_system.in_set(ClientSystemSet::AmbientEmitters),
-        )
-        .add_systems(
-            Update,
-            spawn_impact_effects_system.in_set(ClientSystemSet::ImpactEffectsSpawn),
-        )
-        .add_systems(
-            Update,
-            tick_impact_chips_system.in_set(ClientSystemSet::ImpactEffectsTick),
-        )
-        .add_systems(
-            Update,
-            animate_furnace_fire_system.in_set(ClientSystemSet::FurnaceFireAnimate),
-        )
-        .add_systems(
-            Update,
-            tick_furnace_particles_system.in_set(ClientSystemSet::FurnaceParticleTick),
-        )
-        .add_systems(
-            Update,
-            tick_felling_trees_system.in_set(ClientSystemSet::NodeDeathTick),
-        )
-        .add_systems(
-            Update,
-            // Same phase as the falling-tree tick, both ride the
-            // post-snapshot scene update window and write to local
-            // transforms that no other system reads after them.
-            tick_resource_node_pop_in_system.in_set(ClientSystemSet::NodeDeathTick),
-        )
-        .add_systems(
-            Update,
-            main_menu_music_system.in_set(ClientSystemSet::MainMenuMusic),
-        )
-        .add_systems(
-            Update,
-            menu_backdrop_camera_system.in_set(ClientSystemSet::MenuBackdropCamera),
-        )
-        .add_systems(
-            Update,
-            (auto_connect_start_system, auto_connect_poll_system)
-                .chain()
-                .in_set(ClientSystemSet::AutoConnect),
-        )
-        // Polls the in-flight WorkOS login/refresh and advances the auth gate.
-        .add_systems(Update, drive_auth_flow_system)
-        .add_systems(
-            Update,
-            manage_voice_capture_system.in_set(ClientSystemSet::VoiceCaptureManage),
-        )
-        .add_systems(
-            Update,
-            transmit_voice_system.in_set(ClientSystemSet::VoiceTransmit),
-        )
-        .add_systems(
-            Update,
-            receive_voice_system.in_set(ClientSystemSet::VoiceReceive),
-        )
-        .add_systems(
-            Update,
-            apply_voice_settings_system.in_set(ClientSystemSet::VoiceSettings),
-        )
-        .add_systems(
-            Update,
-            apply_test_mode_overrides_system.in_set(ClientSystemSet::TestModeApply),
-        )
-        .add_systems(
-            Update,
-            reposition_test_window_system.in_set(ClientSystemSet::TestWindowReposition),
-        )
-        .add_systems(
-            Update,
-            (
-                screen_viewed_system,
-                session_started_system,
-                session_ended_system,
-                error_relay_system,
-            )
-                .chain()
-                .in_set(ClientSystemSet::Analytics),
-        )
-        .run();
+        .add_systems(Update, update_sky_system.in_set(ClientSystemSet::Sky));
+}
 
-    Ok(())
+/// Look-target scan, the impact-effect pipeline, furnace/node ticks, transition
+/// stingers, and the central audio drain plus faders and ambient management.
+fn add_audio_systems(app: &mut App) {
+    app.add_systems(
+        Update,
+        update_pickup_target_system.in_set(ClientSystemSet::PickupTarget),
+    )
+    .add_systems(
+        Update,
+        play_impact_sounds_system.in_set(ClientSystemSet::ImpactSounds),
+    )
+    .add_systems(
+        Update,
+        play_transition_stingers_system.in_set(ClientSystemSet::TransitionStingers),
+    )
+    .add_systems(
+        Update,
+        play_footsteps_system.in_set(ClientSystemSet::Footsteps),
+    )
+    // Central audio bus: drains PlaySound events and spawns the
+    // audio entities. Must run after every system that writes
+    // PlaySound (impact, footsteps, node death, button) so a single
+    // frame's worth of events is one round-trip.
+    .add_systems(
+        Update,
+        play_sounds_system.in_set(ClientSystemSet::PlaySounds),
+    )
+    .add_systems(
+        Update,
+        tick_audio_faders_system.in_set(ClientSystemSet::AudioFaderTick),
+    )
+    .add_systems(
+        Update,
+        manage_ambient_beds_system.in_set(ClientSystemSet::AmbientBeds),
+    )
+    .add_systems(
+        Update,
+        manage_ambient_emitters_system.in_set(ClientSystemSet::AmbientEmitters),
+    )
+    .add_systems(
+        Update,
+        spawn_impact_effects_system.in_set(ClientSystemSet::ImpactEffectsSpawn),
+    )
+    .add_systems(
+        Update,
+        tick_impact_chips_system.in_set(ClientSystemSet::ImpactEffectsTick),
+    )
+    .add_systems(
+        Update,
+        animate_furnace_fire_system.in_set(ClientSystemSet::FurnaceFireAnimate),
+    )
+    .add_systems(
+        Update,
+        tick_furnace_particles_system.in_set(ClientSystemSet::FurnaceParticleTick),
+    )
+    .add_systems(
+        Update,
+        tick_felling_trees_system.in_set(ClientSystemSet::NodeDeathTick),
+    )
+    .add_systems(
+        Update,
+        // Same phase as the falling-tree tick, both ride the
+        // post-snapshot scene update window and write to local
+        // transforms that no other system reads after them.
+        tick_resource_node_pop_in_system.in_set(ClientSystemSet::NodeDeathTick),
+    );
+}
+
+/// Main-menu music, menu backdrop camera, auto-connect, and the WorkOS auth gate.
+fn add_menu_and_auth_systems(app: &mut App) {
+    app.add_systems(
+        Update,
+        main_menu_music_system.in_set(ClientSystemSet::MainMenuMusic),
+    )
+    .add_systems(
+        Update,
+        menu_backdrop_camera_system.in_set(ClientSystemSet::MenuBackdropCamera),
+    )
+    .add_systems(
+        Update,
+        (auto_connect_start_system, auto_connect_poll_system)
+            .chain()
+            .in_set(ClientSystemSet::AutoConnect),
+    )
+    // Polls the in-flight WorkOS login/refresh and advances the auth gate.
+    .add_systems(Update, drive_auth_flow_system);
+}
+
+/// Voice capture, transmit, receive, and settings systems.
+fn add_voice_systems(app: &mut App) {
+    app.add_systems(
+        Update,
+        manage_voice_capture_system.in_set(ClientSystemSet::VoiceCaptureManage),
+    )
+    .add_systems(
+        Update,
+        transmit_voice_system.in_set(ClientSystemSet::VoiceTransmit),
+    )
+    .add_systems(
+        Update,
+        receive_voice_system.in_set(ClientSystemSet::VoiceReceive),
+    )
+    .add_systems(
+        Update,
+        apply_voice_settings_system.in_set(ClientSystemSet::VoiceSettings),
+    );
+}
+
+/// Test-mode overrides, the test-window reposition, and the analytics observer
+/// chain that runs last so it reflects every other system's writes this frame.
+fn add_test_and_analytics_systems(app: &mut App) {
+    app.add_systems(
+        Update,
+        apply_test_mode_overrides_system.in_set(ClientSystemSet::TestModeApply),
+    )
+    .add_systems(
+        Update,
+        reposition_test_window_system.in_set(ClientSystemSet::TestWindowReposition),
+    )
+    .add_systems(
+        Update,
+        (
+            screen_viewed_system,
+            session_started_system,
+            session_ended_system,
+            error_relay_system,
+        )
+            .chain()
+            .in_set(ClientSystemSet::Analytics),
+    );
 }

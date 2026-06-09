@@ -6,6 +6,8 @@ use crate::{
     protocol::{ClientId, PlayerMovement, Vec3Net},
 };
 
+use super::ServerClient;
+
 pub(super) const SERVER_EYE_HEIGHT: f32 = 1.62;
 const DROP_FORWARD_DISTANCE: f32 = 0.48;
 const DROPPED_ITEM_DROP_HEIGHT: f32 = SERVER_EYE_HEIGHT + 0.04;
@@ -32,6 +34,26 @@ pub(super) fn drop_velocity(controller: &PlayerController) -> Vec3Net {
 
 pub(super) fn player_eye_position(position: Vec3Net) -> Vec3Net {
     position.plus(Vec3Net::new(0.0, SERVER_EYE_HEIGHT, 0.0))
+}
+
+/// Where a stack a player drops originates: their feet-plus-forward toss
+/// position, the inherited+forward toss velocity, and their facing yaw. One
+/// type so every "drop these stacks at the player" site (inventory drop, craft
+/// refund/overflow, furnace eject) shares the same physics instead of
+/// re-inlining the `(drop_position, drop_velocity, yaw)` tuple.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct DropOrigin {
+    pub(super) position: Vec3Net,
+    pub(super) velocity: Vec3Net,
+    pub(super) yaw: f32,
+}
+
+pub(super) fn drop_origin_for(client: &ServerClient) -> DropOrigin {
+    DropOrigin {
+        position: drop_position(&client.controller),
+        velocity: drop_velocity(&client.controller),
+        yaw: client.controller.yaw,
+    }
 }
 
 pub(super) fn accept_client_movement(controller: &mut PlayerController, movement: PlayerMovement) {

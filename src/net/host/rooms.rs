@@ -196,17 +196,29 @@ pub(super) fn update_client_room_subscriptions(
     server: Res<AuthoritativeServer>,
     connections: Res<ServerConnections>,
     mut subs: ResMut<ClientChunkSubs>,
+    mut anchors: ResMut<super::ClientAoiAnchors>,
     mut chunk_rooms: ResMut<ChunkRoomMap>,
     mut commands: Commands,
 ) {
     let _span = info_span!("update_client_room_subscriptions").entered();
     let live_clients: HashSet<ClientId> = server.0.connected_client_ids().collect();
     subs.by_client.retain(|id, _| live_clients.contains(id));
+    anchors.by_client.retain(|id, _| live_clients.contains(id));
 
     for client_id in live_clients {
         let Some(sender_entity) = connections.entity_for_client(client_id) else {
             continue;
         };
+        // Spatial short-circuit: if the client's anchor chunk and view tier are
+        // unchanged since last reconcile, the loaded-chunk grid being fixed
+        // means the add/keep sets are identical to last time, so there is
+        // nothing to add or remove. Skip the grid scan + set diff entirely.
+        let aoi_key = server.0.client_aoi_key(client_id);
+        if let Some(key) = aoi_key
+            && anchors.by_client.get(&client_id) == Some(&key)
+        {
+            continue;
+        }
         let add_set: HashSet<ChunkCoord> = server.0.visible_chunks_for_client(client_id);
         let keep_set: HashSet<ChunkCoord> = server.0.retained_chunks_for_client(client_id);
         let subscribed = subs.by_client.entry(client_id).or_default();
@@ -233,5 +245,79 @@ pub(super) fn update_client_room_subscriptions(
                 });
             }
         }
+
+        // Remember the key we just reconciled so an idle player short-circuits
+        // next tick.
+        if let Some(key) = aoi_key {
+            anchors.by_client.insert(client_id, key);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use bevy::app::App;
+    use lightyear::prelude::{ReplicationGroupId, RoomPlugin, server::ServerPlugins};
+
+    use super::*;
+
+    /// `attach_room_gated_replication` must give the spawned entity its own
+    /// per-entity `ReplicationGroup` (the fix for the Lightyear 0.26.4
+    /// post-spawn-diff dropout) alongside the `Replicate` marker.
+    ///
+    /// Inserting `Replicate` fires Lightyear component hooks that touch
+    /// server-side replication resources (`ReplicableRootEntities`, the
+    /// authority broker, …), so a bare `World` panics. We stand up the same
+    /// minimal plugin set the host uses (`ServerPlugins` + `RoomPlugin`) so
+    /// the hooks resolve, then assert the helper attached both components and
+    /// allocated a room for the chunk. The `RoomEvent` path is exercised by
+    /// the integration tests in `net/tests.rs`; here we guard the
+    /// component-attachment contract specifically.
+    #[test]
+    fn attach_room_gated_replication_adds_replicate_and_per_entity_group() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(ServerPlugins {
+            tick_duration: Duration::from_secs_f32(1.0 / 60.0),
+        });
+        app.add_plugins(RoomPlugin);
+        app.insert_resource(ChunkRoomMap::default());
+        app.finish();
+        app.cleanup();
+
+        let world = app.world_mut();
+        let entity = world.spawn_empty().id();
+        let chunk = ChunkCoord::new(3, -1);
+
+        attach_room_gated_replication(world, entity, chunk);
+        // Flush the deferred component-hook commands the inserts queued.
+        world.flush();
+
+        // Both replication components were attached.
+        assert!(
+            world.get::<Replicate>(entity).is_some(),
+            "entity should carry the Replicate marker"
+        );
+        let group = world
+            .get::<ReplicationGroup>(entity)
+            .expect("entity should carry a ReplicationGroup");
+
+        // A per-entity group resolves to the entity bits, NOT the shared
+        // default group 0 that the upstream bug routes everything into.
+        assert_eq!(
+            group.group_id(Some(entity)),
+            ReplicationGroupId(entity.to_bits())
+        );
+        assert_ne!(group.group_id(Some(entity)), ReplicationGroupId(0));
+
+        // A chunk room was lazily allocated for the entity's chunk.
+        assert!(
+            world
+                .resource::<ChunkRoomMap>()
+                .by_coord
+                .contains_key(&chunk)
+        );
     }
 }

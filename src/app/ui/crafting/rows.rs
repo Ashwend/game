@@ -349,8 +349,7 @@ pub(super) fn draw_recipe_row(
         }
     } else {
         Some(format!(
-            "Enter a quantity between 1 and {} (max you can craft right now).",
-            max_batch
+            "Enter a quantity between 1 and {max_batch} (max you can craft right now)."
         ))
     };
 

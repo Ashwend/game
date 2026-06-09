@@ -284,28 +284,9 @@ fn small_rng_emits_changing_values() {
 
 #[test]
 fn test_kit_command_grants_full_kit_and_routes_equipables_to_actionbar() {
-    use crate::{
-        auth::AuthMode,
-        protocol::{GAME_VERSION, PROTOCOL_VERSION},
-        save::WorldSave,
-        server::ServerSettings,
-    };
-    let mut server = crate::server::GameServer::new(
-        WorldSave::new("Test", Some(1)),
-        ServerSettings {
-            auth_mode: AuthMode::NoAuth,
-            singleplayer_host: Some(1),
-        },
-    );
-    let (client_id, _) = server
-        .connect(
-            PROTOCOL_VERSION,
-            Some(GAME_VERSION.to_owned()),
-            1,
-            "Tester".to_owned(),
-            String::new(),
-        )
-        .expect("connect ok");
+    use crate::server::test_support::{connect_named, server};
+    let mut server = server();
+    let client_id = connect_named(&mut server, "Tester");
 
     // The singleplayer host gets admin status implicitly, so the
     // command should succeed on this freshly-connected client.
@@ -368,30 +349,9 @@ fn test_kit_command_grants_full_kit_and_routes_equipables_to_actionbar() {
 
 #[test]
 fn test_kit_command_refused_for_non_admin() {
-    use crate::{
-        auth::AuthMode,
-        protocol::{GAME_VERSION, PROTOCOL_VERSION},
-        save::WorldSave,
-        server::ServerSettings,
-    };
     // Singleplayer host is admin; spin up a server with NO host so
-    // the connecting client is a plain non-admin.
-    let mut server = crate::server::GameServer::new(
-        WorldSave::new("Test", None),
-        ServerSettings {
-            auth_mode: AuthMode::NoAuth,
-            singleplayer_host: None,
-        },
-    );
-    let (client_id, _) = server
-        .connect(
-            PROTOCOL_VERSION,
-            Some(GAME_VERSION.to_owned()),
-            7,
-            "Tester".to_owned(),
-            String::new(),
-        )
-        .expect("connect ok");
+    // the connecting client is a plain non-admin (account id 7).
+    let (mut server, client_id) = server_with_host(None);
 
     let envelopes = server.apply_command(client_id, "/test-kit".to_owned());
     assert!(

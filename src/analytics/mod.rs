@@ -112,9 +112,8 @@ impl Plugin for AnalyticsPlugin {
 }
 
 fn spawn_worker(cfg: &AnalyticsConfig, shared_props: context::SharedProps) -> Analytics {
-    let api_key = match cfg.api_key.clone() {
-        Some(key) => key,
-        None => return Analytics::disabled(),
+    let Some(api_key) = cfg.api_key.clone() else {
+        return Analytics::disabled();
     };
     let distinct_id = match resolve_distinct_id() {
         Ok(id) => id,

@@ -88,6 +88,29 @@ struct HostCommandInbox(Mutex<mpsc::Receiver<HostCommand>>);
 #[derive(Resource, Default)]
 struct TickAccumulator(Duration);
 
+/// Set true by [`tick_authoritative_server`] on any `app.update()` where the
+/// fixed-step accumulator actually crossed a tick boundary, false otherwise.
+///
+/// The host loop sleeps [`HOST_SLEEP`] (1 ms) then calls `app.update()`, so the
+/// `Update` schedule runs ~500-1000x/second, but authoritative state only
+/// changes when a 20 Hz tick advances. The mirror-sync systems and the room
+/// subscription system reconcile that authoritative state into the ECS, so they
+/// only have work to do on updates where a tick advanced. Gating them on this
+/// pulse turns ~98% of their passes (the pure no-op allocate/clone/compare
+/// churn) into a single bool read. This is the host-loop analogue of the
+/// "don't iterate every frame to discover nothing changed" rule in
+/// docs/profiling.md.
+#[derive(Resource, Default)]
+struct ServerTickPulse {
+    advanced: bool,
+}
+
+/// Run condition: only let the mirror/room systems run on updates where a tick
+/// advanced (see [`ServerTickPulse`]).
+fn server_tick_advanced(pulse: Res<ServerTickPulse>) -> bool {
+    pulse.advanced
+}
+
 #[derive(Resource, Default)]
 struct HostShutdown {
     requested: bool,
@@ -110,6 +133,16 @@ struct ChunkRoomMap {
 #[derive(Resource, Default)]
 struct ClientChunkSubs {
     by_client: HashMap<ClientId, HashSet<ChunkCoord>>,
+}
+
+/// Per-client cache of the last AoI key (anchor chunk + view tier) the room
+/// subscription system reconciled. The loaded-chunk grid is fixed after world
+/// construction, so when a client's key is unchanged their add/keep chunk sets
+/// are identical to last tick and the whole grid scan + set diff can be skipped.
+/// A player wobbling within one chunk costs a single map lookup here.
+#[derive(Resource, Default)]
+struct ClientAoiAnchors {
+    by_client: HashMap<ClientId, (ChunkCoord, crate::protocol::ViewRadiusTier)>,
 }
 
 /// Persists a snapshotted world during a periodic auto-save. Boxed so the
@@ -271,6 +304,7 @@ fn run_host(
     app.add_plugins(RoomPlugin);
     app.insert_resource(ChunkRoomMap::default());
     app.insert_resource(ClientChunkSubs::default());
+    app.insert_resource(ClientAoiAnchors::default());
     app.add_observer(install_replication_sender_on_link);
 
     let server_entity = app
@@ -301,6 +335,7 @@ fn run_host(
     app.insert_resource(AuthoritativeServer(game_server));
     app.insert_resource(ServerConnections::default());
     app.insert_resource(TickAccumulator::default());
+    app.insert_resource(ServerTickPulse::default());
     app.insert_resource(HostShutdown::default());
     // Per-id → ECS-entity lookup for each networked entity type. The
     // `HashMap`s on `GameServer` are still the authoritative store; the
@@ -319,6 +354,20 @@ fn run_host(
             entity: server_entity,
         });
     });
+    // The mirror-sync + room systems only have work when a tick advanced, so
+    // they share a `server_tick_advanced` run condition. Everything before
+    // `tick_authoritative_server` (command/admin drains, message receive,
+    // disconnect handling) must run every update and stays ungated.
+    let mirror_systems = (
+        sync_resource_node_entities,
+        sync_dropped_item_entities,
+        sync_deployable_entities,
+        sync_player_entities,
+        sync_loot_bag_entities,
+        update_client_room_subscriptions,
+    )
+        .chain()
+        .run_if(server_tick_advanced);
     #[cfg(unix)]
     app.add_systems(
         Update,
@@ -328,12 +377,7 @@ fn run_host(
             receive_client_messages,
             handle_disconnected_clients,
             tick_authoritative_server,
-            sync_resource_node_entities,
-            sync_dropped_item_entities,
-            sync_deployable_entities,
-            sync_player_entities,
-            sync_loot_bag_entities,
-            update_client_room_subscriptions,
+            mirror_systems,
         )
             .chain(),
     );
@@ -345,12 +389,7 @@ fn run_host(
             receive_client_messages,
             handle_disconnected_clients,
             tick_authoritative_server,
-            sync_resource_node_entities,
-            sync_dropped_item_entities,
-            sync_deployable_entities,
-            sync_player_entities,
-            sync_loot_bag_entities,
-            update_client_room_subscriptions,
+            mirror_systems,
         )
             .chain(),
     );
@@ -470,6 +509,12 @@ fn sync_loot_bag_entities(world: &mut World) {
                     && (transform.position != new_transform.position
                         || transform.yaw != new_transform.yaw)
                 {
+                    #[cfg(feature = "replication-trace")]
+                    info!(
+                        target: "replication_trace",
+                        "server: LootBagTransform     MUTATE id={} entity={entity:?} pos {:?} -> {:?}",
+                        view.id, transform.position, new_transform.position
+                    );
                     *transform = new_transform;
                 }
             }
@@ -488,10 +533,12 @@ fn sync_loot_bag_entities(world: &mut World) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn tick_authoritative_server(
     mut commands: Commands,
     time: Res<Time>,
     mut accumulator: ResMut<TickAccumulator>,
+    mut pulse: ResMut<ServerTickPulse>,
     mut server: ResMut<AuthoritativeServer>,
     mut connections: ResMut<ServerConnections>,
     mut senders: Query<&mut MessageSender<ServerMessage>, With<ClientOf>>,
@@ -500,6 +547,10 @@ fn tick_authoritative_server(
     let fixed_delta = Duration::from_secs_f32(1.0 / SERVER_TICK_RATE_HZ);
     let max_accumulator = fixed_delta.mul_f32(MAX_SERVER_TICKS_PER_LOOP);
     accumulator.0 = (accumulator.0 + time.delta()).min(max_accumulator);
+
+    // Default to "no tick this update"; flip true below if the accumulator
+    // crosses at least one fixed step. The gated mirror/room systems read this.
+    pulse.advanced = accumulator.0 >= fixed_delta;
 
     while accumulator.0 >= fixed_delta {
         let _span = info_span!("host_fixed_tick").entered();

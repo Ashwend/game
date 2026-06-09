@@ -11,7 +11,7 @@ use crate::{
 use super::{
     GameServer, ServerEnvelope,
     dropped_items::{DroppedItemBody, yaw_rotation},
-    movement::{drop_position, drop_velocity, player_eye_position},
+    movement::{DropOrigin, drop_origin_for, player_eye_position},
     toasts::{inventory_full_toast_envelopes, item_acquired_toast_envelopes},
 };
 
@@ -44,21 +44,13 @@ impl GameServer {
                 Vec::new()
             }
             InventoryCommand::Drop { from, quantity, .. } => {
-                let Some((stack, position, velocity, yaw)) =
-                    self.clients.get_mut(&client_id).and_then(|client| {
-                        remove_stack(&mut client.inventory, from, quantity).map(|stack| {
-                            (
-                                stack,
-                                drop_position(&client.controller),
-                                drop_velocity(&client.controller),
-                                client.controller.yaw,
-                            )
-                        })
-                    })
-                else {
+                let Some((stack, origin)) = self.clients.get_mut(&client_id).and_then(|client| {
+                    remove_stack(&mut client.inventory, from, quantity)
+                        .map(|stack| (stack, drop_origin_for(client)))
+                }) else {
                     return Vec::new();
                 };
-                self.spawn_dropped_item(stack, position, velocity, yaw);
+                self.spawn_dropped_item_at(origin, stack);
                 Vec::new()
             }
             InventoryCommand::PickUp {
@@ -89,6 +81,13 @@ impl GameServer {
                 Vec::new()
             }
         }
+    }
+
+    /// Spawn a stack at a player's [`DropOrigin`] (feet + forward toss). The
+    /// single entry point for "eject this stack to the world in front of the
+    /// player" used by inventory drops, craft refunds, and furnace ejects.
+    pub(super) fn spawn_dropped_item_at(&mut self, origin: DropOrigin, stack: ItemStack) {
+        self.spawn_dropped_item(stack, origin.position, origin.velocity, origin.yaw);
     }
 
     pub(super) fn spawn_dropped_item(

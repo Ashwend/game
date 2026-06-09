@@ -83,7 +83,10 @@ impl WorldSummary {
 /// ignored.
 #[derive(Debug, Clone, Deserialize)]
 struct WorldSaveNamePrefix {
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "decoded positionally to reach `name`; the id field is not read here"
+    )]
     id: Uuid,
     name: String,
 }
@@ -119,4 +122,94 @@ fn decode_world_name_best_effort(bytes: &[u8]) -> Option<String> {
         return None;
     }
     Some(name.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::format::{SAVE_FORMAT_VERSION, decode_world_save, encode_world_save};
+    use super::*;
+
+    /// Canonical migration scenario: a save written by a newer build the
+    /// loader rejects on version, but whose name we can still surface in the
+    /// "couldn't load" banner because the postcard prefix (`id` then `name`)
+    /// is unchanged.
+    #[test]
+    fn recovers_name_from_a_future_version_save() {
+        let save = WorldSave::new("Future World", Some(1));
+        let mut bytes = encode_world_save(&save).expect("encode");
+        // Bump the format version byte to a value the loader does not accept.
+        let future_version = SAVE_FORMAT_VERSION + 1;
+        bytes[SAVE_MAGIC.len()..SAVE_MAGIC.len() + 4]
+            .copy_from_slice(&future_version.to_le_bytes());
+
+        // Strict decode refuses it (version gate)...
+        assert!(decode_world_save(&bytes).is_err());
+        // ...but the best-effort name recovery still reads the original name.
+        assert_eq!(
+            decode_world_name_best_effort(&bytes).as_deref(),
+            Some("Future World")
+        );
+    }
+
+    #[test]
+    fn rejects_all_control_or_whitespace_names() {
+        // A name that is nothing but control characters does not survive the
+        // best-effort filter (postcard layout drift produces junk like this).
+        let save = WorldSave::new("\u{7}\u{1}\u{2}", Some(1));
+        let bytes = encode_world_save(&save).expect("encode");
+        assert_eq!(decode_world_name_best_effort(&bytes), None);
+    }
+
+    #[test]
+    fn rejects_truncated_and_wrong_magic_bytes() {
+        // Shorter than magic + version field: nothing to peel back.
+        assert_eq!(decode_world_name_best_effort(b"short"), None);
+        // Right length but the magic header is wrong.
+        let mut wrong_magic = Vec::new();
+        wrong_magic.extend_from_slice(b"NOTGAME!");
+        wrong_magic.extend_from_slice(&SAVE_FORMAT_VERSION.to_le_bytes());
+        wrong_magic.extend_from_slice(b"payload bytes that never get read");
+        assert_eq!(decode_world_name_best_effort(&wrong_magic), None);
+    }
+
+    #[test]
+    fn uuid_from_save_file_name_parses_uuid_stem_only() {
+        let id = Uuid::new_v4();
+        let file_name = format!("{id}.save");
+        assert_eq!(uuid_from_save_file_name(&file_name), Some(id));
+        // A non-uuid stem is rejected even with the right extension.
+        assert_eq!(uuid_from_save_file_name("not-a-uuid.save"), None);
+        // Missing the `.save` extension is rejected too.
+        assert_eq!(uuid_from_save_file_name(&id.to_string()), None);
+    }
+
+    #[test]
+    fn display_name_falls_back_to_file_name() {
+        // Recovered name present and non-blank: used directly.
+        let with_name = CorruptedWorld {
+            file_name: "abc.save".to_owned(),
+            id: None,
+            recovered_name: Some("My World".to_owned()),
+            error: "boom".to_owned(),
+        };
+        assert_eq!(with_name.display_name(), "My World");
+
+        // Recovered name is `None`: fall back to the file name.
+        let no_name = CorruptedWorld {
+            file_name: "abc.save".to_owned(),
+            id: None,
+            recovered_name: None,
+            error: "boom".to_owned(),
+        };
+        assert_eq!(no_name.display_name(), "abc.save");
+
+        // Recovered name is blank: also falls back to the file name.
+        let blank_name = CorruptedWorld {
+            file_name: "abc.save".to_owned(),
+            id: None,
+            recovered_name: Some("   ".to_owned()),
+            error: "boom".to_owned(),
+        };
+        assert_eq!(blank_name.display_name(), "abc.save");
+    }
 }

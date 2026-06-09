@@ -21,9 +21,10 @@
 //! Coverage:
 //!   - `ResourceNodeStorage`
 //!   - `DeployableHealth`, `DeployableActive`
-//!   - `PlayerPublic`, `PlayerPrivate`, `PlayerArmor`, `PlayerLifecycle`
-//!   - `LootBagContents`
-//!   - `DroppedItemTransform`
+//!   - `PlayerPublic`, `PlayerPrivate`, `PlayerArmor`, `PlayerLifecycle`,
+//!     `PlayerSleeping`
+//!   - `LootBagContents`, `LootBagTransform`
+//!   - `DroppedItemTransform`, `DroppedItem` (stack-merge)
 //!
 //! If a server `MUTATE` line fires but the client `RECV` line doesn't,
 //! Lightyear is not delivering the update after the initial spawn.
@@ -32,8 +33,8 @@ use bevy::{ecs::change_detection::Ref, prelude::*};
 
 use crate::server::{
     Deployable, DeployableActive, DeployableHealth, DroppedItem, DroppedItemTransform,
-    LootBagContents, LootBagEntity, Player, PlayerArmor, PlayerLifecycle, PlayerPrivate,
-    PlayerPublic, PlayerSleeping, ResourceNode, ResourceNodeStorage,
+    LootBagContents, LootBagEntity, LootBagTransform, Player, PlayerArmor, PlayerLifecycle,
+    PlayerPrivate, PlayerPublic, PlayerSleeping, ResourceNode, ResourceNodeStorage,
 };
 
 /// Tracks the last-seen value per id so we can log a clean
@@ -47,6 +48,7 @@ pub(crate) struct ReplicationTraceState {
     player_lifecycle: std::collections::HashMap<u64, PlayerLifecycle>,
     player_sleeping: std::collections::HashMap<u64, bool>,
     loot_bag_occupied: std::collections::HashMap<u64, usize>,
+    dropped_item_qty: std::collections::HashMap<u64, u16>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -64,7 +66,8 @@ pub(crate) fn log_replicated_storage_changes_system(
     players_lifecycle: Query<(Entity, &Player, Ref<PlayerLifecycle>)>,
     players_sleeping: Query<(Entity, &Player, Ref<PlayerSleeping>)>,
     loot_bags: Query<(Entity, &LootBagEntity, Ref<LootBagContents>)>,
-    dropped_items: Query<(Entity, &DroppedItem, Ref<DroppedItemTransform>)>,
+    loot_bag_transforms: Query<(Entity, &LootBagEntity, Ref<LootBagTransform>)>,
+    dropped_items: Query<(Entity, Ref<DroppedItem>, Ref<DroppedItemTransform>)>,
     mut state: ResMut<ReplicationTraceState>,
 ) {
     for (entity, node, storage) in &nodes {
@@ -248,6 +251,22 @@ pub(crate) fn log_replicated_storage_changes_system(
         }
     }
 
+    for (entity, bag, transform) in &loot_bag_transforms {
+        if transform.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: LootBagTransform     SPAWN  id={} entity={entity:?} pos={:?}",
+                bag.id, transform.position
+            );
+        } else if transform.is_changed() {
+            info!(
+                target: "replication_trace",
+                "client: LootBagTransform     RECV   id={} entity={entity:?} pos={:?}",
+                bag.id, transform.position
+            );
+        }
+    }
+
     for (entity, drop, transform) in &dropped_items {
         if transform.is_added() {
             info!(
@@ -255,12 +274,29 @@ pub(crate) fn log_replicated_storage_changes_system(
                 "client: DroppedItemTransform SPAWN id={} entity={entity:?} pos={:?}",
                 drop.id, transform.position
             );
+            state.dropped_item_qty.insert(drop.id, drop.stack.quantity);
         } else if transform.is_changed() {
             info!(
                 target: "replication_trace",
                 "client: DroppedItemTransform RECV  id={} entity={entity:?} pos={:?}",
                 drop.id, transform.position
             );
+        }
+        // Stack quantity changes ship on the `DroppedItem` component when two
+        // nearby drops merge. `Ref::is_changed()` fires every replication tick
+        // for Lightyear-touched components, so gate the log on a real
+        // before -> after delta (see the CLAUDE.md replication notes).
+        if !drop.is_added() && drop.is_changed() {
+            let before = state.dropped_item_qty.get(&drop.id).copied().unwrap_or(0);
+            let after = drop.stack.quantity;
+            if before != after {
+                info!(
+                    target: "replication_trace",
+                    "client: DroppedItem          RECV   id={} entity={entity:?} qty {before} -> {after}",
+                    drop.id
+                );
+                state.dropped_item_qty.insert(drop.id, after);
+            }
         }
     }
 }

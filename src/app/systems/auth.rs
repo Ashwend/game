@@ -151,7 +151,7 @@ mod tests {
         app.update();
         match app.world().resource::<AuthFlow>() {
             AuthFlow::LoggedOut { error } => {
-                assert!(error.is_none(), "a silent refresh failure stays quiet")
+                assert!(error.is_none(), "a silent refresh failure stays quiet");
             }
             _ => panic!("expected LoggedOut after a silent restore failure"),
         }

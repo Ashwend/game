@@ -197,7 +197,7 @@ mod tests {
         assert_eq!(props["environment"], json!("dev"));
         assert!(matches!(
             props["build_profile"].as_str(),
-            Some("debug") | Some("release")
+            Some("debug" | "release")
         ));
     }
 }

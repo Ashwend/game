@@ -67,9 +67,15 @@ pub const RESPAWN_MIN_DISTANCE_M: f32 = 12.0;
 // =====================================================================
 
 /// Maximum distance at which a player can damage a placed structure.
-/// Matches the furnace open-range so the swing flow stays consistent,
-/// if E reaches it, your tool reaches it too.
-pub const DEPLOYABLE_DAMAGE_RANGE_M: f32 = 5.5;
+/// Kept close to the player melee range (`COMBAT_ATTACK_RANGE_M`) so you
+/// have to stand next to a workbench/furnace to hit it rather than chipping
+/// it from across the room; a little extra over melee accounts for the
+/// structure's body size (the check is feet-to-centre). Kept equal to
+/// `FURNACE_INTERACT_RANGE_M` so the swing/open flow stays consistent: if E
+/// reaches it, your tool reaches it too. The client targeting in
+/// `app::systems::items::pickup::targets` and the nameplate overlay both
+/// derive their ranges from this constant, so this is the single tuning knob.
+pub const DEPLOYABLE_DAMAGE_RANGE_M: f32 = 3.0;
 
 /// Per-tool damage scalar. The tool's `gather_amount` already scales
 /// with tier (stone tools = 6, future iron tools = higher), so re-using
@@ -99,10 +105,12 @@ pub const FURNACE_WOOD_BURN_TICKS: u32 = (4.0 * SERVER_TICK_RATE_HZ) as u32;
 /// from wood.
 pub const FURNACE_COAL_BURN_TICKS: u32 = (16.0 * SERVER_TICK_RATE_HZ) as u32;
 
-/// Maximum interaction range, in metres, for `E`-to-open. Slightly
-/// larger than `DEPLOYABLE_PLACEMENT_REACH_M` so a player who placed
-/// at max reach can still interact without having to step forward.
-pub const FURNACE_INTERACT_RANGE_M: f32 = 5.5;
+/// Maximum interaction range, in metres, for `E`-to-open. Kept equal to
+/// `DEPLOYABLE_DAMAGE_RANGE_M` so opening and hitting a furnace use the same
+/// reach: you stand next to it to use it. This is below
+/// `DEPLOYABLE_PLACEMENT_REACH_M`, so a furnace placed at max reach needs a
+/// step forward to open, an intentional trade for not interacting from afar.
+pub const FURNACE_INTERACT_RANGE_M: f32 = 3.0;
 
 // =====================================================================
 // Loot bags

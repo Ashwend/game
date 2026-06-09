@@ -297,19 +297,23 @@ impl ServerMessage {
             | Self::Chat(_)
             | Self::ItemMerged { .. }
             | Self::ResourceNodeDepleted { .. }
-            | Self::PlayerImpact { .. }
             | Self::Knockback { .. }
             | Self::PlayerKilled { .. }
             | Self::Toast(_) => PacketDelivery::Reliable,
-            // Impact effects are pure cosmetic feedback. Dropping one is
-            // far less bad than the extra latency of a reliable resend,
-            // and the next swing will queue another regardless.
-            // See the matching comment on `ClientMessage::delivery`,
-            // voice rides an unordered unreliable channel so every
-            // delivered frame is played even if it arrives out of order.
+            // Voice rides an unordered unreliable channel so every delivered
+            // frame is played even if it arrives out of order. See the
+            // matching comment on `ClientMessage::delivery`.
             Self::Voice { .. } => PacketDelivery::UnreliableUnordered,
+            // Impact effects (chip bursts, hit audio, floating damage numbers)
+            // are pure cosmetic feedback: the authoritative damage already
+            // lands via the replicated `PlayerPublic.health`, and the next
+            // swing queues another effect regardless. Dropping one is far
+            // cheaper than a reliable resend, so both the resource-node and
+            // player variants ride the unreliable channel. The
+            // gameplay-affecting `Knockback`/`PlayerKilled` stay reliable.
             Self::Correction(_)
             | Self::ResourceImpact { .. }
+            | Self::PlayerImpact { .. }
             | Self::WorldTime(_)
             | Self::PerfStats(_)
             | Self::Pong { .. }

@@ -10,12 +10,14 @@ use crate::protocol::{
 
 use crate::server::{
     DeliveryTarget, GameServer, ServerEnvelope,
+    container_slots::Container,
     inventory::{add_stack_to_inventory, insert_stack_at},
 };
 
 use super::state::{
-    FURNACE_INTERACT_RANGE_M, FuelPlaceOutcome, add_stack_to_furnace_items, fuel_burn_ticks_for,
-    inventory_has_room_for, merge_into_optional_slot, take_partial,
+    FUEL_SLOT_INDEX, FURNACE_INTERACT_RANGE_M, FuelPlaceOutcome, FurnaceContainer,
+    add_stack_to_furnace_items, fuel_burn_ticks_for, inventory_has_room_for,
+    merge_into_optional_slot, take_partial,
 };
 
 impl GameServer {
@@ -70,9 +72,10 @@ impl GameServer {
         let Some(entity) = self.deployed_entities.get(&furnace_id) else {
             return false;
         };
-        let dx = entity.position.x - client.controller.position.x;
-        let dz = entity.position.z - client.controller.position.z;
-        (dx * dx + dz * dz).sqrt() <= FURNACE_INTERACT_RANGE_M
+        client
+            .controller
+            .position
+            .within_horizontal_range(entity.position, FURNACE_INTERACT_RANGE_M)
     }
 
     /// Resolve a shift+click "send this somewhere useful" intent.
@@ -281,15 +284,12 @@ impl GameServer {
         if let Some(leftover) =
             self.deposit_into_furnace_slot(client_id, furnace_id, from, stack, false)
         {
-            let drop_origin = self.clients.get(&client_id).map(|client| {
-                (
-                    crate::server::movement::drop_position(&client.controller),
-                    crate::server::movement::drop_velocity(&client.controller),
-                    client.controller.yaw,
-                )
-            });
-            if let Some((position, velocity, yaw)) = drop_origin {
-                self.spawn_dropped_item(leftover, position, velocity, yaw);
+            let drop_origin = self
+                .clients
+                .get(&client_id)
+                .map(crate::server::movement::drop_origin_for);
+            if let Some(origin) = drop_origin {
+                self.spawn_dropped_item_at(origin, leftover);
             }
         }
     }
@@ -309,9 +309,7 @@ impl GameServer {
         if entity.furnace.is_none() {
             return furnace_toast(client_id, ToastKind::Warning, "Not a furnace".to_owned());
         }
-        let dx = entity.position.x - player_pos.x;
-        let dz = entity.position.z - player_pos.z;
-        if (dx * dx + dz * dz).sqrt() > FURNACE_INTERACT_RANGE_M {
+        if !player_pos.within_horizontal_range(entity.position, FURNACE_INTERACT_RANGE_M) {
             return furnace_toast(
                 client_id,
                 ToastKind::Warning,
@@ -368,18 +366,17 @@ impl GameServer {
             return Vec::new();
         };
 
-        // Removing the fuel stack cancels the in-flight burn timer.
-        // The burn bar reads `fuel_burn_ticks_left / max_burn_ticks`,
-        // so without this reset the indicator stays high while the
-        // previously ignited unit ticks down invisibly.
-        if matches!(from, FurnaceSlotRef::Fuel)
-            && source_drained
+        // Fire the container's post-take hook so the furnace can cancel the
+        // in-flight burn timer when the fuel slot empties (see
+        // `FurnaceContainer::after_take`). Only container-side takes have a
+        // hook; player-slot takes don't.
+        if let Some(index) = container_index(from)
             && let Some(furnace) = self
                 .deployed_entities
                 .get_mut(&furnace_id)
                 .and_then(|entity| entity.furnace.as_mut())
         {
-            furnace.fuel_burn_ticks_left = 0;
+            FurnaceContainer(furnace).after_take(index, source_drained);
         }
 
         let leftover =
@@ -388,15 +385,12 @@ impl GameServer {
             let leftover2 =
                 self.deposit_into_furnace_slot(client_id, furnace_id, from, remainder, false);
             if let Some(stack) = leftover2 {
-                let drop_origin = self.clients.get(&client_id).map(|client| {
-                    (
-                        crate::server::movement::drop_position(&client.controller),
-                        crate::server::movement::drop_velocity(&client.controller),
-                        client.controller.yaw,
-                    )
-                });
-                if let Some((position, velocity, yaw)) = drop_origin {
-                    self.spawn_dropped_item(stack, position, velocity, yaw);
+                let drop_origin = self
+                    .clients
+                    .get(&client_id)
+                    .map(crate::server::movement::drop_origin_for);
+                if let Some(origin) = drop_origin {
+                    self.spawn_dropped_item_at(origin, stack);
                 }
             }
         }
@@ -429,15 +423,12 @@ impl GameServer {
                 };
                 take_partial(slot_ref, quantity)
             }
-            FurnaceSlotRef::Fuel => {
+            FurnaceSlotRef::Fuel | FurnaceSlotRef::Item(_) => {
+                let index = container_index(slot)?;
                 let entity = self.deployed_entities.get_mut(&furnace_id)?;
                 let furnace = entity.furnace.as_mut()?;
-                take_partial(&mut furnace.fuel, quantity)
-            }
-            FurnaceSlotRef::Item(slot_index) => {
-                let entity = self.deployed_entities.get_mut(&furnace_id)?;
-                let furnace = entity.furnace.as_mut()?;
-                let slot_ref = furnace.items.get_mut(slot_index)?;
+                let mut container = FurnaceContainer(furnace);
+                let slot_ref = container.slot_mut(index)?;
                 take_partial(slot_ref, quantity)
             }
         }
@@ -480,29 +471,24 @@ impl GameServer {
                     allow_swap,
                 )
             }
-            FurnaceSlotRef::Fuel => {
+            FurnaceSlotRef::Fuel | FurnaceSlotRef::Item(_) => {
+                let Some(index) = container_index(slot) else {
+                    return Some(stack);
+                };
                 let Some(entity) = self.deployed_entities.get_mut(&furnace_id) else {
                     return Some(stack);
                 };
                 let Some(furnace) = entity.furnace.as_mut() else {
                     return Some(stack);
                 };
-                if fuel_burn_ticks_for(stack.item_id.as_ref()).is_none() {
+                let mut container = FurnaceContainer(furnace);
+                // An out-of-range item index keeps the stack instead of dropping
+                // it; `Container::insert` can't tell us OOB from "placed", so the
+                // range check stays explicit here.
+                if index >= container.slot_count() {
                     return Some(stack);
                 }
-                merge_into_optional_slot(&mut furnace.fuel, stack)
-            }
-            FurnaceSlotRef::Item(slot_index) => {
-                let Some(entity) = self.deployed_entities.get_mut(&furnace_id) else {
-                    return Some(stack);
-                };
-                let Some(furnace) = entity.furnace.as_mut() else {
-                    return Some(stack);
-                };
-                let Some(target) = furnace.items.get_mut(slot_index) else {
-                    return Some(stack);
-                };
-                merge_into_optional_slot(target, stack)
+                container.insert(index, stack)
             }
         }
     }
@@ -517,6 +503,17 @@ impl GameServer {
         let entity = self.deployed_entities.get(&furnace_id)?;
         let furnace = entity.furnace.as_ref()?;
         Some(furnace.to_view(furnace_id))
+    }
+}
+
+/// Flat [`Container`] index for a furnace-side slot ref, or `None` for a player
+/// slot. `Fuel` is index `0`; `Item(i)` is `i + 1`, matching
+/// [`FurnaceContainer`]'s index space.
+fn container_index(slot: FurnaceSlotRef) -> Option<usize> {
+    match slot {
+        FurnaceSlotRef::Fuel => Some(FUEL_SLOT_INDEX),
+        FurnaceSlotRef::Item(index) => Some(index + 1),
+        FurnaceSlotRef::PlayerInventory(_) | FurnaceSlotRef::PlayerActionbar(_) => None,
     }
 }
 

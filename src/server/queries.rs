@@ -22,6 +22,19 @@ impl GameServer {
         self.clients.keys().copied()
     }
 
+    /// The cheap key that decides a client's AoI subscription set: their anchor
+    /// chunk plus view tier. The loaded-chunk grid is fixed after world
+    /// construction, so when this key is unchanged the add/keep chunk sets are
+    /// identical to last tick and the room-subscription system can skip the
+    /// per-chunk grid scan entirely. `None` if the client isn't connected.
+    pub fn client_aoi_key(
+        &self,
+        client_id: ClientId,
+    ) -> Option<(crate::world::ChunkCoord, crate::protocol::ViewRadiusTier)> {
+        self.client_view(client_id)
+            .map(|(pos, tier)| (crate::world::ChunkCoord::from_world(pos.x, pos.z), tier))
+    }
+
     /// Chunks the given client's AoI ring currently covers. Returns an
     /// empty set if the client isn't connected.
     pub fn visible_chunks_for_client(

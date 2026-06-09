@@ -396,10 +396,10 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         SoundId::ImpactPickaxeOnWood => &PICKAXE_WOOD,
         SoundId::ImpactPlayerBlunt => &PLAYER_BLUNT,
         SoundId::SwingMiss => &MISS,
-        SoundId::FootstepDirt => footstep_paths("dirt"),
-        SoundId::FootstepWood => footstep_paths("wood"),
-        SoundId::FootstepConcrete => footstep_paths("concrete"),
-        SoundId::FootstepSand => footstep_paths("sand"),
+        SoundId::FootstepDirt => footstep_paths(FootstepMaterial::Dirt),
+        SoundId::FootstepWood => footstep_paths(FootstepMaterial::Wood),
+        SoundId::FootstepConcrete => footstep_paths(FootstepMaterial::Concrete),
+        SoundId::FootstepSand => footstep_paths(FootstepMaterial::Sand),
         SoundId::InventoryPickup => &INVENTORY_PICKUP,
         SoundId::InventoryDrop => &INVENTORY_DROP,
         SoundId::InventoryMove => &INVENTORY_MOVE,
@@ -429,9 +429,10 @@ pub(crate) fn impact_sound_for(tool: ToolKind, surface: SurfaceMaterial) -> Opti
         // so the match stays exhaustive against future ToolKind /
         // SurfaceMaterial additions.
         (ToolKind::Hands, _)
-        | (ToolKind::Pickaxe, SurfaceMaterial::Dirt)
-        | (ToolKind::Pickaxe, SurfaceMaterial::Concrete)
-        | (ToolKind::Pickaxe, SurfaceMaterial::Sand) => None,
+        | (
+            ToolKind::Pickaxe,
+            SurfaceMaterial::Dirt | SurfaceMaterial::Concrete | SurfaceMaterial::Sand,
+        ) => None,
     }
 }
 
@@ -448,17 +449,41 @@ pub(crate) fn impact_sound_for_player(tool: ToolKind) -> Option<SoundId> {
     }
 }
 
-/// Lazily-built `Vec<String>` of `movement/footstep-<material>-01.wav` …
+/// The surface materials that have a dedicated footstep recording pool. Using
+/// an enum here (rather than a `&str`) keeps [`footstep_paths`] total: the match
+/// is exhaustive at compile time, so there is no "unknown material" panic arm a
+/// future typo could trip.
+#[derive(Clone, Copy)]
+enum FootstepMaterial {
+    Dirt,
+    Wood,
+    Concrete,
+    Sand,
+}
+
+impl FootstepMaterial {
+    /// Filename prefix under `assets/footsteps/`.
+    const fn prefix(self) -> &'static str {
+        match self {
+            FootstepMaterial::Dirt => "dirt",
+            FootstepMaterial::Wood => "wood",
+            FootstepMaterial::Concrete => "concrete",
+            FootstepMaterial::Sand => "sand",
+        }
+    }
+}
+
+/// Lazily-built `Vec<String>` of `footsteps/<material>-01.wav` …
 /// `-12.wav`. Cached behind a `OnceLock` per material so the pool array
 /// is built exactly once per process. The pool size matches the embedded
 /// asset count, drop more files in and bump `12`.
-fn footstep_paths(material: &'static str) -> &'static [&'static str] {
-    fn pool_for(material: &'static str) -> &'static [&'static str] {
+fn footstep_paths(material: FootstepMaterial) -> &'static [&'static str] {
+    fn pool_for(prefix: &'static str) -> &'static [&'static str] {
         // Twelve variants per material; the anti-repeat picker can't
         // produce an audible loop at running cadence with a pool this big.
         let strings: Vec<&'static str> = (1..=12)
             .map(|n| {
-                let owned = format!("footsteps/{material}-{n:02}.wav");
+                let owned = format!("footsteps/{prefix}-{n:02}.wav");
                 // Leak: cheap, one-time per material at startup. Returning
                 // `&'static str` keeps the call site allocation-free.
                 Box::leak(owned.into_boxed_str()) as &'static str
@@ -473,13 +498,12 @@ fn footstep_paths(material: &'static str) -> &'static [&'static str] {
     static SAND: OnceLock<&'static [&'static str]> = OnceLock::new();
 
     let slot = match material {
-        "dirt" => &DIRT,
-        "wood" => &WOOD,
-        "concrete" => &CONCRETE,
-        "sand" => &SAND,
-        other => panic!("footstep_paths called with unknown material {other:?}"),
+        FootstepMaterial::Dirt => &DIRT,
+        FootstepMaterial::Wood => &WOOD,
+        FootstepMaterial::Concrete => &CONCRETE,
+        FootstepMaterial::Sand => &SAND,
     };
-    slot.get_or_init(|| pool_for(material))
+    slot.get_or_init(|| pool_for(material.prefix()))
 }
 
 /// Map a [`SurfaceMaterial`] to the footstep `SoundId` that plays when

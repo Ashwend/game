@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Opt-in pre-push hook. Enable with `./cli setup-hooks`
+# (sets git config core.hooksPath=.githooks).
+#
+# Runs the fast lint gate (rustfmt + clippy) before a push so the most common
+# CI Quality Gate failures are caught locally. The heavier test/coverage legs
+# are left to CI to keep the hook quick. Skip in a pinch with `git push
+# --no-verify`.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+exec "$ROOT/cli" lint

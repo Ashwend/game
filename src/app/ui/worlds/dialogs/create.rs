@@ -10,27 +10,15 @@ use crate::{
     world::ProceduralMapSize,
 };
 
-use super::super::super::{
-    modal,
-    theme::{self, ButtonKind, COMPACT_ROW_HEIGHT},
-};
+use super::super::super::theme::{self, ButtonKind, COMPACT_ROW_HEIGHT};
 use super::super::session::{refresh_worlds, start_singleplayer_in_background};
-use super::shared::{field_label, select_all_text};
+use super::shared::{
+    ConfirmCancel, ModalDecision, confirm_button_row, confirm_modal, error_line, field_label,
+    name_field,
+};
 
 const CREATE_WORLD_NAME_INPUT_ID: &str = "create_world_name_input";
 const CREATE_WORLD_SEED_INPUT_ID: &str = "create_world_seed_input";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CreateWorldChoice {
-    Create,
-    Cancel,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct CreateWorldModalOutput {
-    choice: Option<CreateWorldChoice>,
-    finished_closing: bool,
-}
 
 pub(in crate::app::ui::worlds) fn open_create_world_dialog(menu: &mut MenuState) {
     menu.create_world = Some(CreateWorldDialog::new());
@@ -50,35 +38,45 @@ pub(in crate::app::ui::worlds) fn create_world_dialog_ui(
             return;
         };
 
-        let output = create_world_modal(ctx, dialog, !dialog.closing);
-        if let Some(choice) = output.choice {
-            match choice {
-                CreateWorldChoice::Create => {
-                    match (validate_world_name(&dialog.name), dialog.selected_map()) {
-                        (Ok(_), Ok(_)) => {
-                            dialog.error = None;
-                            dialog.closing = true;
-                            dialog.confirmed = true;
-                            ctx.request_repaint();
-                        }
-                        (Err(error), _) => {
-                            dialog.error = Some(error.to_owned());
-                            ctx.request_repaint();
-                        }
-                        (_, Err(error)) => {
-                            dialog.error = Some(error.to_owned());
-                            ctx.request_repaint();
-                        }
+        match confirm_modal(
+            ctx,
+            "create_world_modal",
+            !dialog.closing,
+            340.0,
+            480.0,
+            |ui, choice| {
+                draw_create_world_form(ui, dialog, choice);
+            },
+        ) {
+            ModalDecision::Confirm => {
+                match (validate_world_name(&dialog.name), dialog.selected_map()) {
+                    (Ok(_), Ok(_)) => {
+                        dialog.error = None;
+                        dialog.closing = true;
+                        dialog.confirmed = true;
+                        ctx.request_repaint();
+                    }
+                    (Err(error), _) => {
+                        dialog.error = Some(error.to_owned());
+                        ctx.request_repaint();
+                    }
+                    (_, Err(error)) => {
+                        dialog.error = Some(error.to_owned());
+                        ctx.request_repaint();
                     }
                 }
-                CreateWorldChoice::Cancel => {
-                    dialog.closing = true;
-                    dialog.confirmed = false;
-                    ctx.request_repaint();
-                }
+                finished_closing = false;
             }
+            ModalDecision::Cancel => {
+                dialog.closing = true;
+                dialog.confirmed = false;
+                ctx.request_repaint();
+                finished_closing = false;
+            }
+            ModalDecision::Pending {
+                finished_closing: fc,
+            } => finished_closing = fc,
         }
-        finished_closing = output.finished_closing;
     }
 
     if !finished_closing {
@@ -120,7 +118,7 @@ pub(in crate::app::ui::worlds) fn create_world_from_dialog(
         }
     };
 
-    let map_type = format!("{:?}", map);
+    let map_type = format!("{map:?}");
     match store
         .0
         .create_world_with_map(&dialog.name, Some(user.0.account_id), map)
@@ -137,77 +135,21 @@ pub(in crate::app::ui::worlds) fn create_world_from_dialog(
     }
 }
 
-fn create_world_modal(
-    ctx: &egui::Context,
-    dialog: &mut CreateWorldDialog,
-    open: bool,
-) -> CreateWorldModalOutput {
-    let output = modal::modal_shell(
-        ctx,
-        "create_world_modal",
-        open,
-        340.0,
-        480.0,
-        |ui, choice| {
-            draw_create_world_form(ui, dialog, choice);
-        },
-    );
-
-    let mut choice = output.choice;
-    if choice.is_none() && output.confirm_shortcut_pressed {
-        choice = Some(CreateWorldChoice::Create);
-    }
-    if choice.is_none() && output.clicked_outside {
-        choice = Some(CreateWorldChoice::Cancel);
-    }
-
-    CreateWorldModalOutput {
-        choice,
-        finished_closing: output.finished_closing,
-    }
-}
-
 fn draw_create_world_form(
     ui: &mut egui::Ui,
     dialog: &mut CreateWorldDialog,
-    choice: &mut Option<CreateWorldChoice>,
+    choice: &mut Option<ConfirmCancel>,
 ) {
     ui.label(theme::section("Create World"));
     ui.add_space(12.0);
 
-    let mut name_changed = false;
-    ui.horizontal(|ui| {
-        field_label(ui, "Name");
-        let name_response = ui.add_sized(
-            [ui.available_width(), COMPACT_ROW_HEIGHT],
-            theme::text_input(&mut dialog.name).id(egui::Id::new(CREATE_WORLD_NAME_INPUT_ID)),
-        );
-        // Grab focus on the dialog's first frame so the player can type a name
-        // and press Enter without clicking the field first. One-shot, so it
-        // never fights the player if they tab to the seed field.
-        if dialog.autofocus_pending {
-            name_response.request_focus();
-            dialog.autofocus_pending = false;
-        }
-        if name_response.gained_focus() {
-            select_all_text(ui, name_response.id, dialog.name.chars().count());
-        }
-        if name_response.changed() {
-            name_changed = true;
-        }
-    });
-
-    // Refresh the inline error every keystroke so the user sees their typo
-    // disappear the moment they fix it, rather than only on the next submit.
-    // `name_is_valid` is detached from `dialog.name`'s borrow so the rest of
-    // the form (which needs `&mut dialog`) can keep mutating freely.
-    let name_is_valid = {
-        let validation = validate_world_name(&dialog.name);
-        if name_changed {
-            dialog.error = validation.err().map(str::to_owned);
-        }
-        validation.is_ok()
-    };
+    let name_is_valid = name_field(
+        ui,
+        &mut dialog.name,
+        &mut dialog.error,
+        &mut dialog.autofocus_pending,
+        CREATE_WORLD_NAME_INPUT_ID,
+    );
 
     ui.add_space(6.0);
     ui.horizontal(|ui| {
@@ -235,24 +177,6 @@ fn draw_create_world_form(
         }
     });
 
-    if let Some(error) = &dialog.error {
-        ui.add_space(6.0);
-        ui.label(
-            egui::RichText::new(error)
-                .size(13.0)
-                .color(theme::error_text()),
-        );
-    }
-
-    ui.add_space(18.0);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        ui.add_enabled_ui(name_is_valid, |ui| {
-            if theme::compact_button(ui, "Create", ButtonKind::Primary, 92.0).clicked() {
-                *choice = Some(CreateWorldChoice::Create);
-            }
-        });
-        if theme::compact_button(ui, "Cancel", ButtonKind::Secondary, 92.0).clicked() {
-            *choice = Some(CreateWorldChoice::Cancel);
-        }
-    });
+    error_line(ui, dialog.error.as_ref());
+    confirm_button_row(ui, "Create", name_is_valid, choice);
 }

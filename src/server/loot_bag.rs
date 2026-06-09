@@ -71,7 +71,7 @@ pub struct LootBag {
     /// Tick the bag was created on. The client uses death-time as a
     /// "I just killed them" handle for UI cues (loot glints, etc.)
     /// in the future; today this is just bookkeeping.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "bookkeeping for future loot-glint / kill-cue UI")]
     pub(crate) spawn_tick: u64,
     /// Vertical velocity for the spawn-time gravity settle. `0.0`
     /// once the bag is at rest; non-zero while the death drop is
@@ -214,9 +214,7 @@ impl GameServer {
             return Vec::new();
         }
         let target_pos = target.controller.position;
-        let dx = target_pos.x - looter_pos.x;
-        let dz = target_pos.z - looter_pos.z;
-        if (dx * dx + dz * dz).sqrt() > LOOT_BAG_INTERACT_RANGE_M {
+        if !looter_pos.within_horizontal_range(target_pos, LOOT_BAG_INTERACT_RANGE_M) {
             return Vec::new();
         }
 
@@ -254,9 +252,7 @@ impl GameServer {
                 _ => return false,
             },
         };
-        let dx = target_pos.x - pos.x;
-        let dz = target_pos.z - pos.z;
-        (dx * dx + dz * dz).sqrt() <= LOOT_BAG_INTERACT_RANGE_M
+        pos.within_horizontal_range(target_pos, LOOT_BAG_INTERACT_RANGE_M)
     }
 
     /// Quick membership / view helper for the player-private replication path.
@@ -292,9 +288,7 @@ impl GameServer {
         let Some(bag) = self.loot_bags.get(&id) else {
             return Vec::new();
         };
-        let dx = bag.position.x - player_pos.x;
-        let dz = bag.position.z - player_pos.z;
-        if (dx * dx + dz * dz).sqrt() > LOOT_BAG_INTERACT_RANGE_M {
+        if !player_pos.within_horizontal_range(bag.position, LOOT_BAG_INTERACT_RANGE_M) {
             return Vec::new();
         }
         if let Some(client_mut) = self.clients.get_mut(&client_id) {

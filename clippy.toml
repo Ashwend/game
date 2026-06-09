@@ -1,0 +1,9 @@
+# Clippy configuration. The lint *levels* live in `[lints.clippy]` in
+# Cargo.toml; this file holds clippy's tunables.
+#
+# Exempt tests from the unwrap/expect restriction lints so the project can
+# adopt `unwrap_used`/`expect_used` for production code later without annotating
+# the ~200 deliberate unwraps in the test suite. (Those restriction lints are
+# not enabled yet; this just makes adopting them a one-line change.)
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

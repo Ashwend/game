@@ -11,7 +11,6 @@ pub(crate) struct NetworkPlayer {
     // The id is also kept in `RemotePlayerEntities`; this copy is here so the
     // component carries enough context to be inspected in isolation (debug
     // overlays, future per-player queries).
-    #[allow(dead_code)]
     pub(crate) client_id: ClientId,
 }
 
@@ -36,7 +35,10 @@ pub(crate) struct NetworkDeployedEntity {
     // mesh selection has already happened by spawn time. Kept on the
     // component so the overlay doesn't have to walk the snapshot to
     // recover it.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "nameplate overlay reads this once that path is wired"
+    )]
     pub(crate) kind: DeployableKind,
 }
 
@@ -51,7 +53,10 @@ pub(crate) struct DeployablePlacementGhost;
 /// distinguish bags from regular dropped items.
 #[derive(Component)]
 pub(crate) struct NetworkLootBag {
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "carried so the bag marker can be inspected in isolation"
+    )]
     pub(crate) id: LootBagId,
 }
 
