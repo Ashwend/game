@@ -59,12 +59,15 @@ pub(crate) enum SoundId {
     /// 0.26 s, a short, tight slump of rock under the strike rather than
     /// another pick transient.
     OreStageCrumble,
-    /// The "node finished" pop when an ore/vein is mined empty, the
+    /// The "node finished" reward when an ore/vein is mined empty, the
     /// signal to stop swinging (trees get the same from [`Self::TreeFall`]).
-    /// Derived offline from the pickaxe-ore pool: a +2-semitone crack
-    /// with a 35 ms slapback double, a -5-semitone body at 60 ms, and a
-    /// quiet -9-semitone lowpassed rubble tail at 150 ms, so the break
-    /// reads as the rock splitting apart and settling.
+    /// The satisfaction comes from weight, not brightness: anything
+    /// tonal up top (tuned chimes, sparkle) read as birdsong / MMO
+    /// level-up in playtests, so the mix is deliberately all low-mid.
+    /// Derived offline: a -2-semitone ore crack over a -12-semitone
+    /// lowpassed boom (the chest-thump), a short lowpassed slice of the
+    /// tree-fall crash climax for full-spectrum body, and a quiet
+    /// -8-semitone settle at 90 ms; everything is gone by half a second.
     OreNodeBreak,
 
     // --- Swing whoosh (tool swung but no target) ---
