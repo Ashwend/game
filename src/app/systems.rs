@@ -8,6 +8,7 @@ mod auto_connect;
 mod camera;
 mod chunk_overlay;
 mod combat_feedback;
+mod crafting_feedback;
 // Dev-only agent automation: the control socket and off-screen capture are
 // gated on `debug_assertions` so they compile out of shipped release builds.
 #[cfg(all(unix, debug_assertions))]
@@ -50,6 +51,7 @@ pub(crate) use chunk_overlay::chunk_overlay_system;
 pub(crate) use combat_feedback::tick_combat_feedback_system;
 #[cfg(all(unix, debug_assertions))]
 pub(crate) use control_socket::{ClientControlSocket, drain_control_socket};
+pub(crate) use crafting_feedback::{CraftCompletionWatch, craft_complete_cue_system};
 pub(crate) use deployables::{
     apply_deployed_entities_system, maintain_world_grid_system, placement_input_system,
     update_placement_ghost_system,

@@ -188,9 +188,13 @@ pub(super) fn take_partial(
     if want == 0 {
         return None;
     }
+    // Durability rides along with the taken portion. Tools have a stack
+    // limit of 1 so a take is always the whole stack; stackable items
+    // carry `None` and the copy is a no-op.
     let taken = ItemStack {
         item_id: stack.item_id.clone(),
         quantity: want,
+        durability: stack.durability,
     };
     stack.quantity -= want;
     let drained = stack.quantity == 0;
@@ -242,6 +246,7 @@ pub(super) fn add_stack_to_furnace_items(
         *slot = Some(ItemStack {
             item_id: remaining.item_id.clone(),
             quantity: take,
+            durability: remaining.durability,
         });
         remaining.quantity -= take;
         if remaining.quantity == 0 {

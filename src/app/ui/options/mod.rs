@@ -12,6 +12,8 @@ mod keybindings_tab;
 mod voice_tab;
 mod widgets;
 
+pub(in crate::app::ui) use audio_tab::take_test_sounds;
+
 use bevy::input::ButtonInput;
 use bevy::prelude::KeyCode;
 use bevy::window::Monitor;

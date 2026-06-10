@@ -170,9 +170,13 @@ pub(crate) fn merge_into_optional_slot(
         None => {
             // Honour stack limit even when placing into an empty slot.
             let take = incoming.quantity.min(limit);
+            // Carry durability along: a tool (stack limit 1) always moves
+            // whole, and rebuilding the stack without the field would hand
+            // back a factory-fresh tool.
             let placed = ItemStack {
                 item_id: incoming.item_id.clone(),
                 quantity: take,
+                durability: incoming.durability,
             };
             *target = Some(placed);
             incoming.quantity -= take;

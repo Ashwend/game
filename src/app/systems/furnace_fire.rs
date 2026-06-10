@@ -16,7 +16,14 @@
 
 use bevy::{light::NotShadowCaster, prelude::*};
 
-use crate::{app::scene::FurnaceFireAssets, items::DeployableKind, util::hash::hashed_unit};
+use crate::{
+    app::{
+        audio::{PlaySound, SoundId},
+        scene::FurnaceFireAssets,
+    },
+    items::DeployableKind,
+    util::hash::hashed_unit,
+};
 
 /// Base lumen output of the furnace mouth light, before the per-frame flicker
 /// multiplies it up and down.
@@ -64,13 +71,18 @@ pub(crate) struct FurnaceParticle {
 /// flag. Called once per furnace from the deployable reconciler, which already
 /// holds the local visual parent and the replicated `DeployableActive` value.
 /// `existing_fire` is the rig child currently parented to `parent_entity`, if
-/// any.
+/// any. `position` is the furnace's world position, used to anchor the
+/// shutoff cue; `play_sound` receives that cue when a lit furnace goes cold
+/// (batch finished, fuel ran out, or the owner switched it off), the audible
+/// "come check the furnace" moment.
 pub(crate) fn sync_furnace_fire(
     commands: &mut Commands,
     parent_entity: Entity,
     kind: DeployableKind,
     active: bool,
     existing_fire: Option<Entity>,
+    position: Vec3,
+    play_sound: &mut MessageWriter<PlaySound>,
 ) {
     let is_furnace = matches!(kind, DeployableKind::Furnace { .. });
     match (is_furnace && active, existing_fire) {
@@ -111,6 +123,12 @@ pub(crate) fn sync_furnace_fire(
         }
         (false, Some(fire_entity)) => {
             commands.entity(fire_entity).despawn();
+            // The fire just went out on a furnace that is still in view:
+            // play the shutoff cue at the furnace so the player can find
+            // the one that finished by ear. AoI exits never reach this
+            // arm (the parent despawns wholesale), so leaving the area
+            // stays silent.
+            play_sound.write(PlaySound::at(SoundId::FurnaceComplete, position));
         }
         // Already in the right state, leave it.
         _ => {}

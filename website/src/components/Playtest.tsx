@@ -71,7 +71,7 @@ function DownloadCallout() {
       </p>
 
       <div className="mt-8 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm text-muted">
-        <span className="text-muted/70">Also on</span>
+        <span className="text-muted/85">Also on</span>
         {others.map((build, i) => (
           <span key={build.asset} className="flex items-center gap-2">
             {i > 0 && (

@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     analytics::{Analytics, Event},
-    app::state::{CreateWorldDialog, CurrentUser, MenuState, SaveStore},
+    app::state::{CreateWorldDialog, CurrentUser, MenuState, NoticeDialog, SaveStore},
     net::ClientNetwork,
     save::validate_world_name,
     world::ProceduralMapSize,
@@ -113,7 +113,10 @@ pub(in crate::app::ui::worlds) fn create_world_from_dialog(
     let map = match dialog.selected_map() {
         Ok(map) => map,
         Err(error) => {
-            menu.status = Some(error.to_owned());
+            // Defensive: the dialog validates before confirming, so this
+            // only fires if a future caller skips that. Still a modal, a
+            // footer line under a closed dialog reads as nothing happening.
+            menu.notice = Some(NoticeDialog::error("Couldn't create world", error));
             return None;
         }
     };
@@ -129,7 +132,10 @@ pub(in crate::app::ui::worlds) fn create_world_from_dialog(
             Some(save.id)
         }
         Err(error) => {
-            menu.status = Some(format!("create failed: {error}"));
+            menu.notice = Some(NoticeDialog::error(
+                "Couldn't create world",
+                format!("The world could not be saved.\n\n{error}"),
+            ));
             None
         }
     }

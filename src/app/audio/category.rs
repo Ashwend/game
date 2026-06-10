@@ -23,9 +23,13 @@ pub(crate) enum SoundCategory {
     /// Short, spatial, one-shot world sounds (impacts, tree-fall, future
     /// wildlife). Heard relative to the listener.
     Sfx3d,
-    /// Short, non-spatial one-shots (swing whoosh, the local player's own
-    /// footsteps, UI confirmations not in the chrome).
+    /// Short, non-spatial one-shots (swing whoosh, UI confirmations not
+    /// in the chrome).
     Sfx2d,
+    /// The local player's own footsteps. Split off the effects bus
+    /// because they fire constantly: some players want them ducked
+    /// without quieting impacts and world events.
+    Footsteps,
     /// Chrome cues, button click/hover, slider tick, dialog open.
     Ui,
 }
@@ -40,6 +44,7 @@ impl SoundCategory {
             Self::AmbientBed | Self::AmbientEmitter | Self::Sfx3d | Self::Sfx2d => {
                 settings.audio.sfx_volume
             }
+            Self::Footsteps => settings.audio.footsteps_volume,
             Self::Ui => settings.audio.ui_volume,
         };
         let master = settings.audio.master_volume.clamp(0.0, 1.0);
@@ -53,7 +58,7 @@ impl SoundCategory {
         match self {
             Self::Music | Self::AmbientBed | Self::AmbientEmitter => None,
             Self::Sfx3d => Some(16),
-            Self::Sfx2d => Some(8),
+            Self::Sfx2d | Self::Footsteps => Some(8),
             Self::Ui => Some(6),
         }
     }

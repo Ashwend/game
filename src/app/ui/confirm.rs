@@ -2,7 +2,7 @@ use bevy_egui::egui;
 
 use crate::{
     analytics::{Analytics, Event},
-    app::state::{ClientSettings, ConfirmationAction, MenuState, SaveStore},
+    app::state::{ClientSettings, ConfirmationAction, MenuState, NoticeDialog, SaveStore},
 };
 
 use super::{
@@ -85,7 +85,12 @@ fn apply_confirmation_action(
                 analytics.track(Event::WorldDeleted);
                 refresh_worlds(menu, store);
             }
-            Err(error) => menu.status = Some(format!("delete failed: {error}")),
+            Err(error) => {
+                menu.notice = Some(NoticeDialog::error(
+                    "Couldn't delete world",
+                    error.to_string(),
+                ));
+            }
         },
         // The auth system consumes this flag next frame and tears down the
         // session; the dialog just gates it behind a confirm.
@@ -192,10 +197,12 @@ mod tests {
             &Analytics::disabled(),
         );
 
-        assert!(
-            menu.status
-                .expect("status should exist")
-                .contains("world list failed")
+        // The delete itself tolerates the missing world; the follow-up
+        // list refresh is what fails on the bad store, and that failure
+        // must surface as an acknowledged notice, not a footer line.
+        assert_eq!(
+            menu.notice.expect("notice should exist").title,
+            "Couldn't load worlds"
         );
 
         let _ = fs::remove_file(bad_root);

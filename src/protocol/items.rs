@@ -10,13 +10,29 @@ pub struct ItemStack {
     #[serde(deserialize_with = "super::deserialize_interned_item_id")]
     pub item_id: crate::items::ItemId,
     pub quantity: u16,
+    /// Remaining impact budget for tools, counted down by the server on
+    /// swings that connect. `None` for items without wear (materials,
+    /// deployables). Initialised to the registry's `max_durability` at
+    /// creation; code that splits or moves stacks must carry the value
+    /// along rather than rebuilding the stack, or a worn tool comes out
+    /// of the move factory-fresh.
+    pub durability: Option<u32>,
 }
 
 impl ItemStack {
+    /// Build a stack with full durability for tools (looked up from the
+    /// item registry) and `None` for everything else. Every "the world
+    /// just produced this item" site (crafting grants, admin gives, test
+    /// kits) routes through here so new tools always spawn pristine.
     pub fn new(item_id: impl AsRef<str>, quantity: u16) -> Self {
+        let item_id = crate::items::intern_item_id(item_id.as_ref());
+        let durability = crate::items::item_definition(&item_id)
+            .and_then(|definition| definition.tool)
+            .and_then(|tool| tool.max_durability);
         Self {
-            item_id: crate::items::intern_item_id(item_id.as_ref()),
+            item_id,
             quantity,
+            durability,
         }
     }
 }

@@ -13,7 +13,7 @@
 
 use crate::{
     crafting::{MAX_CRAFTING_QUEUE_LEN, RecipeDefinition, RecipeStation, recipe_definition},
-    items::{intern_item_id, item_definition},
+    items::item_definition,
     protocol::{
         ClientId, CraftingCommand, CraftingJob, CraftingJobId, ItemStack, MAX_CRAFT_BATCH_SIZE,
         PlayerCraftingState, SERVER_TICK_RATE_HZ, ServerMessage, ToastKind, ToastMessage,
@@ -178,10 +178,10 @@ impl GameServer {
         // bag and the excess at their feet.
         let mut overflow = Vec::new();
         for input in recipe.inputs {
-            let stack = ItemStack {
-                item_id: intern_item_id(input.item_id),
-                quantity: batch_input_quantity(input.quantity, job.quantity),
-            };
+            let stack = ItemStack::new(
+                input.item_id,
+                batch_input_quantity(input.quantity, job.quantity),
+            );
             if let Some(remainder) = add_stack_to_inventory(&mut client.inventory, stack) {
                 overflow.push(remainder);
             }
@@ -257,10 +257,9 @@ impl GameServer {
             while remaining > 0 {
                 let chunk = remaining.min(u16::MAX as u32) as u16;
                 remaining -= chunk as u32;
-                let stack = ItemStack {
-                    item_id: intern_item_id(recipe.output_item),
-                    quantity: chunk,
-                };
+                // `ItemStack::new` initialises full durability for tool
+                // outputs, so a freshly crafted hatchet spawns pristine.
+                let stack = ItemStack::new(recipe.output_item, chunk);
                 if let Some(remainder) = add_stack_to_inventory(&mut client.inventory, stack) {
                     overflow.push(remainder);
                 }
@@ -308,10 +307,10 @@ impl GameServer {
                 continue;
             };
             for input in recipe.inputs {
-                let stack = ItemStack {
-                    item_id: intern_item_id(input.item_id),
-                    quantity: batch_input_quantity(input.quantity, job.quantity),
-                };
+                let stack = ItemStack::new(
+                    input.item_id,
+                    batch_input_quantity(input.quantity, job.quantity),
+                );
                 if let Some(remainder) = add_stack_to_inventory(&mut client.inventory, stack) {
                     overflow.push(remainder);
                 }

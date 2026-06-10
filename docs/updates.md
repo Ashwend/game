@@ -127,8 +127,14 @@ binaries side by side.
 
 ## Adding/adjusting
 
-- New release-asset names must stay in sync across:
-  `release.yml` (matrix `asset:`), `package-release.py`, `prepare-release.py`,
-  `update-release-asset-links.py`, and `website/src/data/content.ts`.
+- Release-asset names have a single source of truth:
+  [`.github/scripts/release_assets.py`](../.github/scripts/release_assets.py).
+  `prepare-release.py` and `update-release-asset-links.py` import it. The
+  remaining sites cannot read it and stay hardcoded with a pointer comment;
+  when renaming an asset, update all of them: `release.yml` (matrix `asset:`),
+  `deploy-hetzner.yml`, `src/update/asset.rs` (`HOST_ASSET_NAME` constants and
+  their test), `website/src/data/content.ts`, `website/src/lib/config.test.ts`,
+  `website/public/install.sh`, and the macOS asset name mentioned earlier in
+  this doc.
 - The in-archive binary path is `asset::ARCHIVE_GAME_MEMBER`, keep it matching
   what the packaging script produces.

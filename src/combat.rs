@@ -13,7 +13,12 @@
 //! Keeping all of this off the wire shape (no `DamageInstance` ever ships
 //! to a client) means new damage kinds slot in without a protocol bump.
 
-use crate::{items::ToolKind, protocol::ClientId};
+use crate::{
+    items::{ToolKind, ToolProfile},
+    protocol::ClientId,
+};
+
+pub(crate) use crate::game_balance::{HATCHET_KNOCKBACK_SPEED, PICKAXE_KNOCKBACK_SPEED};
 
 /// Category of damage. Future kinds (Pierce, Fire, Bleed, …) plug in
 /// here without touching the wire protocol. Today only `Blunt` is used
@@ -51,31 +56,30 @@ pub enum DamageSource {
     Player { client_id: ClientId, tool: ToolKind },
 }
 
-/// Per-tool melee damage profile. The hatchet is the DPS option (short
-/// swing, light knockback); the pickaxe is the burst option (long
-/// swing, heavy knockback). Same trade as the gather tools express.
-pub const HATCHET_PVP_DAMAGE: u32 = 8;
-pub const HATCHET_KNOCKBACK_SPEED: f32 = 1.8;
-pub const PICKAXE_PVP_DAMAGE: u32 = 15;
-pub const PICKAXE_KNOCKBACK_SPEED: f32 = 4.0;
-
-/// Build the PvP damage profile for one swing of `tool`. Returns `None`
-/// for tool kinds that can't damage a player, Hands today, future
-/// non-combat tools (a shovel, say) would also return `None` here so the
-/// server can reject the swing in one branch.
-pub fn tool_player_damage(tool: ToolKind, attacker: ClientId) -> Option<DamageInstance> {
-    let (raw, knockback_speed) = match tool {
-        ToolKind::Axe => (HATCHET_PVP_DAMAGE, HATCHET_KNOCKBACK_SPEED),
-        ToolKind::Pickaxe => (PICKAXE_PVP_DAMAGE, PICKAXE_KNOCKBACK_SPEED),
+/// Build the PvP damage profile for one swing of `tool`. The damage
+/// amount comes from the tool's own profile so higher tiers hit harder
+/// (an iron pickaxe outdamages a stone one); knockback stays a
+/// kind-level trait, the hatchet is the DPS option (short swing, light
+/// knockback) and the pickaxe the burst option (long swing, heavy
+/// knockback). Returns `None` for tools that can't damage a player,
+/// Hands today; future non-combat tools (a shovel, say) declare
+/// `player_damage: 0` and get rejected in the same branch.
+pub fn tool_player_damage(tool: ToolProfile, attacker: ClientId) -> Option<DamageInstance> {
+    let knockback_speed = match tool.kind {
+        ToolKind::Axe => HATCHET_KNOCKBACK_SPEED,
+        ToolKind::Pickaxe => PICKAXE_KNOCKBACK_SPEED,
         ToolKind::Hands => return None,
     };
+    if tool.player_damage == 0 {
+        return None;
+    }
     Some(DamageInstance {
-        raw,
+        raw: tool.player_damage,
         kind: DamageKind::Blunt,
         knockback_speed,
         source: DamageSource::Player {
             client_id: attacker,
-            tool,
+            tool: tool.kind,
         },
     })
 }
@@ -107,11 +111,18 @@ mod tests {
         assert_eq!(damage_after_armor(100, 250), 0);
     }
 
+    fn registered_tool(item_id: &str) -> ToolProfile {
+        crate::items::item_definition(item_id)
+            .and_then(|definition| definition.tool)
+            .expect("registered tool profile")
+    }
+
     #[test]
     fn tool_player_damage_rejects_hands() {
-        assert!(tool_player_damage(ToolKind::Hands, 1).is_none());
-        let axe = tool_player_damage(ToolKind::Axe, 7).expect("axe damage");
-        assert_eq!(axe.raw, HATCHET_PVP_DAMAGE);
+        assert!(tool_player_damage(crate::items::HANDS_TOOL, 1).is_none());
+        let axe = tool_player_damage(registered_tool(crate::items::BASIC_HATCHET_ID), 7)
+            .expect("axe damage");
+        assert_eq!(axe.raw, crate::game_balance::STONE_HATCHET_PVP_DAMAGE);
         assert!(matches!(axe.kind, DamageKind::Blunt));
         assert!(matches!(
             axe.source,
@@ -120,7 +131,26 @@ mod tests {
                 tool: ToolKind::Axe
             }
         ));
-        let pick = tool_player_damage(ToolKind::Pickaxe, 7).expect("pickaxe damage");
-        assert_eq!(pick.raw, PICKAXE_PVP_DAMAGE);
+        let pick = tool_player_damage(registered_tool(crate::items::BASIC_PICKAXE_ID), 7)
+            .expect("pickaxe damage");
+        assert_eq!(pick.raw, crate::game_balance::STONE_PICKAXE_PVP_DAMAGE);
+    }
+
+    #[test]
+    fn iron_tools_outdamage_their_stone_counterparts() {
+        let stone_axe = tool_player_damage(registered_tool(crate::items::BASIC_HATCHET_ID), 1)
+            .expect("stone axe damage");
+        let iron_axe = tool_player_damage(registered_tool(crate::items::IRON_HATCHET_ID), 1)
+            .expect("iron axe damage");
+        assert!(iron_axe.raw > stone_axe.raw);
+        // Knockback is a kind trait, not a tier trait: upgrading the tool
+        // changes damage, not the shove.
+        assert_eq!(iron_axe.knockback_speed, stone_axe.knockback_speed);
+
+        let stone_pick = tool_player_damage(registered_tool(crate::items::BASIC_PICKAXE_ID), 1)
+            .expect("stone pickaxe damage");
+        let iron_pick = tool_player_damage(registered_tool(crate::items::IRON_PICKAXE_ID), 1)
+            .expect("iron pickaxe damage");
+        assert!(iron_pick.raw > stone_pick.raw);
     }
 }

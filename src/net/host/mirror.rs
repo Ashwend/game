@@ -103,40 +103,56 @@ pub(super) fn sync_resource_node_entities(world: &mut World) {
 }
 
 /// Reconciles `GameServer::dropped_items` into ECS entities. Same shape
-/// as `sync_resource_node_entities`: despawn ids that left the live map,
-/// spawn fresh entities for new ids, refresh transform + stack in place
-/// for surviving ids. Stack writes are change-detected so the
-/// `Changed<DroppedItem>` signal only fires on real merges.
+/// as `sync_resource_node_entities`: the authoritative map records which
+/// item ids changed (`dirty`) or were removed since the last pass, so we
+/// only touch the delta instead of walking every live drop each tick.
+/// The physics step marks an id dirty only while its transform actually
+/// changes, so settled items cost nothing here. Stack writes are
+/// change-detected so the `Changed<DroppedItem>` signal only fires on
+/// real merges.
 pub(super) fn sync_dropped_item_entities(world: &mut World) {
     let _span = info_span!("sync_dropped_item_entities").entered();
-    let authoritative: Vec<(
-        crate::protocol::DroppedItemId,
-        crate::protocol::DroppedWorldItem,
-    )> = {
-        let server = world.resource::<AuthoritativeServer>();
-        server.0.dropped_items_iter().collect()
+    // Snapshot the (small) set of changed states + anchor chunks up front
+    // so the `Res` borrow is released before the spawn/despawn calls need
+    // `&mut World`.
+    #[allow(clippy::type_complexity)]
+    let (dirty_states, removed): (
+        Vec<(
+            crate::protocol::DroppedItemId,
+            crate::protocol::DroppedWorldItem,
+            Option<ChunkCoord>,
+        )>,
+        Vec<crate::protocol::DroppedItemId>,
+    ) = {
+        let mut server = world.resource_mut::<AuthoritativeServer>();
+        let (dirty_ids, removed_ids) = server.0.drain_dropped_item_sync();
+        let dirty_states = dirty_ids
+            .into_iter()
+            .filter_map(|id| {
+                server
+                    .0
+                    .dropped_item_state(id)
+                    .map(|state| (id, state.clone(), server.0.dropped_item_chunk(id)))
+            })
+            .collect();
+        (dirty_states, removed_ids)
     };
-    let live_ids: std::collections::HashSet<crate::protocol::DroppedItemId> =
-        authoritative.iter().map(|(id, _)| *id).collect();
 
-    let stale: Vec<crate::protocol::DroppedItemId> = {
-        let index = world.resource::<crate::server::DroppedItemIndex>();
-        index
-            .iter()
-            .filter_map(|(id, _)| (!live_ids.contains(&id)).then_some(id))
-            .collect()
-    };
-    for id in stale {
+    // 1. Despawn the mirror entities for removed ids (no-op if one was added
+    //    and removed within the same sync window, it never got an entity).
+    for id in removed {
         crate::server::despawn_dropped_item_entity(world, id);
     }
 
-    for (id, item) in authoritative {
+    // 2. Spawn fresh entities for new ids; refresh transform + stack for
+    //    changed ones.
+    for (id, item, live_chunk) in dirty_states {
         let existing = world.resource::<crate::server::DroppedItemIndex>().get(id);
         match existing {
             Some(entity) => {
                 // Transform changes every physics tick while the body is
-                // settling; refresh unconditionally but rely on Bevy's
-                // change tick model to suppress no-op writes.
+                // settling; the value compare suppresses no-op writes so
+                // only real moves emit a `Changed` tick.
                 let new_transform = crate::server::DroppedItemTransform {
                     position: item.position,
                     yaw: item.yaw,
@@ -175,10 +191,6 @@ pub(super) fn sync_dropped_item_entities(world: &mut World) {
                 // `DroppedItemChunk` mirror in step so observing clients
                 // gain/lose visibility at the boundary instead of seeing
                 // the entity disappear off-screen.
-                let live_chunk = world
-                    .resource::<AuthoritativeServer>()
-                    .0
-                    .dropped_item_chunk(id);
                 let old_chunk = world
                     .get::<crate::server::DroppedItemChunk>(entity)
                     .map(|c| c.0);
@@ -194,13 +206,12 @@ pub(super) fn sync_dropped_item_entities(world: &mut World) {
                 }
             }
             None => {
-                let chunk = world
-                    .resource::<AuthoritativeServer>()
-                    .0
-                    .dropped_item_chunk(id)
-                    .unwrap_or_else(|| {
-                        crate::world::ChunkCoord::from_world(item.position.x, item.position.z)
-                    });
+                // If chunk_manager hasn't tracked the drop yet, fall back
+                // to the position's chunk so the entity still has a coord;
+                // the next dirty mark will resync the membership.
+                let chunk = live_chunk.unwrap_or_else(|| {
+                    crate::world::ChunkCoord::from_world(item.position.x, item.position.z)
+                });
                 let entity = crate::server::spawn_dropped_item_entity(world, item, chunk);
                 attach_room_gated_replication(world, entity, chunk);
             }
@@ -208,31 +219,45 @@ pub(super) fn sync_dropped_item_entities(world: &mut World) {
     }
 }
 
-/// Reconciles `GameServer::deployed_entities` into ECS entities. Each
-/// surviving id has its `DeployableHealth` and `DeployableActive`
-/// refreshed in place so a furnace switching on/off or a wall taking a
-/// hit ships exactly one component delta in the future replication path.
+/// Reconciles `GameServer::deployed_entities` into ECS entities. Same
+/// delta shape as `sync_resource_node_entities`: drain the dirty/removed
+/// sets and only touch the changed ids. Each surviving id has its
+/// `DeployableHealth` and `DeployableActive` refreshed in place so a
+/// furnace switching on/off or a wall taking a hit ships exactly one
+/// component delta.
 pub(super) fn sync_deployable_entities(world: &mut World) {
     let _span = info_span!("sync_deployable_entities").entered();
-    let authoritative: Vec<crate::server::DeployableView> = {
-        let server = world.resource::<AuthoritativeServer>();
-        server.0.deployables_iter().collect()
+    // Snapshot the (small) set of changed views + anchor chunks up front
+    // so the `Res` borrow is released before the spawn/despawn calls need
+    // `&mut World`.
+    #[allow(clippy::type_complexity)]
+    let (dirty_views, removed): (
+        Vec<(crate::server::DeployableView, Option<ChunkCoord>)>,
+        Vec<crate::protocol::DeployedEntityId>,
+    ) = {
+        let mut server = world.resource_mut::<AuthoritativeServer>();
+        let (dirty_ids, removed_ids) = server.0.drain_deployable_sync();
+        let dirty_views = dirty_ids
+            .into_iter()
+            .filter_map(|id| {
+                server
+                    .0
+                    .deployable_view(id)
+                    .map(|view| (view, server.0.deployable_chunk(id)))
+            })
+            .collect();
+        (dirty_views, removed_ids)
     };
-    let live_ids: std::collections::HashSet<crate::protocol::DeployedEntityId> =
-        authoritative.iter().map(|view| view.id).collect();
 
-    let stale: Vec<crate::protocol::DeployedEntityId> = {
-        let index = world.resource::<crate::server::DeployableIndex>();
-        index
-            .iter()
-            .filter_map(|(id, _)| (!live_ids.contains(&id)).then_some(id))
-            .collect()
-    };
-    for id in stale {
+    // 1. Despawn the mirror entities for removed ids (no-op if one was added
+    //    and removed within the same sync window, it never got an entity).
+    for id in removed {
         crate::server::despawn_deployable_entity(world, id);
     }
 
-    for view in authoritative {
+    // 2. Spawn fresh entities for new ids; refresh health/active for
+    //    changed ones.
+    for (view, live_chunk) in dirty_views {
         let existing = world
             .resource::<crate::server::DeployableIndex>()
             .get(view.id);
@@ -268,13 +293,12 @@ pub(super) fn sync_deployable_entities(world: &mut World) {
                 }
             }
             None => {
-                let chunk = world
-                    .resource::<AuthoritativeServer>()
-                    .0
-                    .deployable_chunk(view.id)
-                    .unwrap_or_else(|| {
-                        crate::world::ChunkCoord::from_world(view.position.x, view.position.z)
-                    });
+                // If chunk_manager hasn't tracked the placement yet, fall
+                // back to the position's chunk so the entity still has a
+                // coord; the next dirty mark will resync the membership.
+                let chunk = live_chunk.unwrap_or_else(|| {
+                    crate::world::ChunkCoord::from_world(view.position.x, view.position.z)
+                });
                 let entity = crate::server::spawn_deployable_entity(world, view, chunk);
                 attach_room_gated_replication(world, entity, chunk);
             }

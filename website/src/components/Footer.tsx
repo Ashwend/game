@@ -42,7 +42,7 @@ export function Footer() {
           </nav>
         </div>
 
-        <div className="mt-10 flex flex-col gap-1 border-t border-white/5 pt-6 text-xs text-muted/70">
+        <div className="mt-10 flex flex-col gap-1 border-t border-white/5 pt-6 text-xs text-muted/85">
           <span>
             Ashwend&trade;. Source-available under PolyForm Strict 1.0.0.
           </span>

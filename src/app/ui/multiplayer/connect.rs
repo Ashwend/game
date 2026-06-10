@@ -110,16 +110,53 @@ pub(super) fn finish(
             menu.enter_in_game();
         }
         Err(error) => {
-            analytics.track(Event::ConnectFailed {
-                reason: classify_connect_error(&error),
-            });
+            let reason = classify_connect_error(&error);
+            analytics.track(Event::ConnectFailed { reason });
+            let message = friendly_connect_error(reason, &error);
             if let Some(dialog) = menu.direct_connect.as_mut() {
-                dialog.error = Some(format!("Connection failed: {error}"));
+                dialog.error = Some(message);
             } else {
-                menu.status = Some(format!("Connection failed: {error}"));
+                // Dialog already closed (e.g. quick-join from the screen
+                // button): a footer status line is too easy to miss for a
+                // failed join, raise the acknowledged notice instead.
+                menu.notice = Some(crate::app::state::NoticeDialog::error(
+                    "Couldn't join server",
+                    message,
+                ));
             }
             menu.loading_splash = None;
         }
+    }
+}
+
+/// Player-facing copy for a failed connection attempt. The classification
+/// buckets double as the analytics reason, so the message and the metric
+/// can't drift apart. The raw error rides along on a second line: the
+/// headline tells the player what to do, the detail gives a server admin
+/// (or a bug report) something concrete.
+fn friendly_connect_error(reason: ConnectFailReason, raw: &str) -> String {
+    let headline = match reason {
+        ConnectFailReason::Timeout => {
+            "Server unreachable. Check the address and your internet connection, then try again."
+        }
+        ConnectFailReason::Refused => {
+            "The server refused the connection. It may be offline or restarting."
+        }
+        ConnectFailReason::VersionMismatch => {
+            "Your game version doesn't match the server. Update Ashwend and try again."
+        }
+        ConnectFailReason::AuthRejected => {
+            "Your login couldn't be verified. Try signing out and back in."
+        }
+        ConnectFailReason::BadAddress => {
+            "That address couldn't be found. Check the host name and port."
+        }
+        ConnectFailReason::Other => "Connection failed.",
+    };
+    if raw.trim().is_empty() {
+        headline.to_owned()
+    } else {
+        format!("{headline}\nDetails: {raw}")
     }
 }
 
@@ -190,6 +227,37 @@ mod tests {
             classify_connect_error("timeout: connection refused"),
             ConnectFailReason::Timeout
         );
+    }
+
+    #[test]
+    fn friendly_connect_error_pairs_actionable_copy_with_raw_detail() {
+        let message = friendly_connect_error(ConnectFailReason::Timeout, "socket timed out");
+        assert!(
+            message.starts_with("Server unreachable."),
+            "headline tells the player what to do: {message}"
+        );
+        assert!(
+            message.contains("Details: socket timed out"),
+            "raw error preserved for reports: {message}"
+        );
+
+        // Every classified bucket gets copy that is not the generic line.
+        for reason in [
+            ConnectFailReason::Refused,
+            ConnectFailReason::VersionMismatch,
+            ConnectFailReason::AuthRejected,
+            ConnectFailReason::BadAddress,
+        ] {
+            let copy = friendly_connect_error(reason, "raw");
+            assert!(
+                !copy.starts_with("Connection failed."),
+                "{reason:?} should have dedicated copy"
+            );
+        }
+
+        // No raw detail still reads cleanly.
+        let bare = friendly_connect_error(ConnectFailReason::Other, "  ");
+        assert_eq!(bare, "Connection failed.");
     }
 
     #[test]

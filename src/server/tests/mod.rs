@@ -29,3 +29,4 @@ mod inventory;
 mod loot_bag;
 mod movement;
 mod resource_nodes;
+mod tool_wear;

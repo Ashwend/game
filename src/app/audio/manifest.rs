@@ -72,6 +72,22 @@ pub(crate) enum SoundId {
     InventoryPickup,
     InventoryDrop,
     InventoryMove,
+
+    // --- Progress cues (something the player queued has finished) ---
+    /// A crafting job completed and its output landed in the bag.
+    /// Derived offline from `inventory/pickup-item.wav` (pitched down
+    /// 2 semitones) so it reads as a weightier "finished work" landing.
+    CraftComplete,
+    /// A furnace went cold (smelt batch finished or fuel ran out), worth
+    /// walking over to check. Derived offline from
+    /// `impacts/pickaxe-ore-1.wav` (pitched down 5 semitones, lowpass,
+    /// short stone tail) so it reads as the last bar settling in the
+    /// firebox.
+    FurnaceComplete,
+    /// Actionbar slot selection (number key or wheel). Derived offline
+    /// from `ui/button-click.wav` (pitched up 3 semitones), a lighter,
+    /// shorter tick than the menu click.
+    HotbarSelect,
 }
 
 /// Returns every defined sound. Useful for the loader at startup so we
@@ -99,6 +115,9 @@ pub(crate) fn all_sound_ids() -> &'static [SoundId] {
         SoundId::InventoryPickup,
         SoundId::InventoryDrop,
         SoundId::InventoryMove,
+        SoundId::CraftComplete,
+        SoundId::FurnaceComplete,
+        SoundId::HotbarSelect,
     ]
 }
 
@@ -254,28 +273,28 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
         // gain-offset switch. Pitch jitter ±3% gives subtle variation that
         // reads as natural footfall rather than identical repeats.
         SoundId::FootstepDirt => SoundDefaults {
-            category: SoundCategory::Sfx2d,
+            category: SoundCategory::Footsteps,
             base_gain_db: -8.0 + 13.0,
             spatial: None,
             pitch_jitter: 0.03,
             looped: false,
         },
         SoundId::FootstepWood => SoundDefaults {
-            category: SoundCategory::Sfx2d,
+            category: SoundCategory::Footsteps,
             base_gain_db: -8.0 + -7.0,
             spatial: None,
             pitch_jitter: 0.03,
             looped: false,
         },
         SoundId::FootstepConcrete => SoundDefaults {
-            category: SoundCategory::Sfx2d,
+            category: SoundCategory::Footsteps,
             base_gain_db: -8.0 + 3.0,
             spatial: None,
             pitch_jitter: 0.03,
             looped: false,
         },
         SoundId::FootstepSand => SoundDefaults {
-            category: SoundCategory::Sfx2d,
+            category: SoundCategory::Footsteps,
             base_gain_db: -8.0 + 12.0,
             spatial: None,
             pitch_jitter: 0.03,
@@ -314,6 +333,37 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
             base_gain_db: -28.0,
             spatial: None,
             pitch_jitter: 0.05,
+            looped: false,
+        },
+        // Craft-complete lands between the pickup cue and the UI chrome:
+        // audible over ambience as a small reward, no jitter so the
+        // completion signature always sounds the same.
+        SoundId::CraftComplete => SoundDefaults {
+            category: SoundCategory::Sfx2d,
+            base_gain_db: -14.0,
+            spatial: None,
+            pitch_jitter: 0.0,
+            looped: false,
+        },
+        // Furnace shutoff anchors at the furnace so the player can locate
+        // which one went quiet by ear; carries like the impact pool.
+        SoundId::FurnaceComplete => SoundDefaults {
+            category: SoundCategory::Sfx3d,
+            base_gain_db: -8.0,
+            spatial: Some(SpatialDefaults {
+                scale: 0.06,
+                height_offset: 1.0,
+            }),
+            pitch_jitter: 0.0,
+            looped: false,
+        },
+        // Hotbar slot tick, quieter than the menu click; slight jitter so
+        // scrolling across slots doesn't machine-gun one identical tick.
+        SoundId::HotbarSelect => SoundDefaults {
+            category: SoundCategory::Ui,
+            base_gain_db: -22.0,
+            spatial: None,
+            pitch_jitter: 0.03,
             looped: false,
         },
     }
@@ -376,6 +426,9 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
     static INVENTORY_PICKUP: [&str; 1] = ["inventory/pickup-item.wav"];
     static INVENTORY_DROP: [&str; 1] = ["inventory/drop-item.wav"];
     static INVENTORY_MOVE: [&str; 1] = ["inventory/inventory-move.wav"];
+    static CRAFT_COMPLETE: [&str; 1] = ["crafting/craft-complete.wav"];
+    static FURNACE_COMPLETE: [&str; 1] = ["crafting/furnace-complete.wav"];
+    static HOTBAR_SELECT: [&str; 1] = ["ui/hotbar-select.wav"];
 
     match id {
         SoundId::UiButtonClick => &UI_CLICK,
@@ -403,6 +456,9 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         SoundId::InventoryPickup => &INVENTORY_PICKUP,
         SoundId::InventoryDrop => &INVENTORY_DROP,
         SoundId::InventoryMove => &INVENTORY_MOVE,
+        SoundId::CraftComplete => &CRAFT_COMPLETE,
+        SoundId::FurnaceComplete => &FURNACE_COMPLETE,
+        SoundId::HotbarSelect => &HOTBAR_SELECT,
     }
 }
 

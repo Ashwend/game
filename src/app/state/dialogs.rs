@@ -138,6 +138,20 @@ impl NoticeDialog {
             closing: false,
         }
     }
+
+    /// Generic error notice: a failure the player must acknowledge rather
+    /// than a transient status line they can miss (failed world create or
+    /// load, failed delete, failed rename). `title` names the action that
+    /// failed in plain words ("Couldn't create world"); `body` carries the
+    /// underlying error text.
+    pub(crate) fn error(title: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            body: body.into(),
+            confirm_label: "OK".to_owned(),
+            closing: false,
+        }
+    }
 }
 
 /// Order `a` against `b` as dotted version strings (`"0.14.1"`). Compares

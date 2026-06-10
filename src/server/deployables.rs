@@ -187,7 +187,7 @@ impl GameServer {
             entity.furnace = Some(super::furnace::FurnaceState::default());
         }
         let position = entity.position;
-        self.deployed_entities.insert(id, entity);
+        self.insert_deployed_entity(id, entity);
         self.chunk_manager.track_deployed_entity(id, position);
 
         place_toast(
@@ -252,7 +252,9 @@ impl GameServer {
         // Mutable borrow for the actual decrement. We re-fetch instead
         // of holding the earlier `entity` reference across the cooldown
         // write below, borrow-checker convenience, not a hot path.
-        let Some(entity) = self.deployed_entities.get_mut(&command.id) else {
+        // `deployed_entity_mut` flags the entity dirty so the mirror
+        // re-syncs `DeployableHealth` next pass.
+        let Some(entity) = self.deployed_entity_mut(command.id) else {
             return Vec::new();
         };
         entity.health = entity.health.saturating_sub(damage);
@@ -270,7 +272,9 @@ impl GameServer {
         // Survivor health change replicates via the ECS mirror →
         // Lightyear's `DeployableHealth` diff. See
         // [Networking § Replication](../../docs/networking.md#replication).
-        Vec::new()
+
+        // The swing connected with the structure, so the tool wears.
+        self.consume_active_tool_durability(client_id)
     }
 
     /// Remove a placed structure entirely (gameplay death + tracker
@@ -278,7 +282,7 @@ impl GameServer {
     /// to the world view automatically because the snapshot's
     /// `open_furnace` view stops resolving once the entity is gone.
     pub(super) fn destroy_deployed_entity(&mut self, id: DeployedEntityId) {
-        if self.deployed_entities.remove(&id).is_none() {
+        if self.remove_deployed_entity(id).is_none() {
             return;
         }
         self.chunk_manager.untrack_deployed_entity(id);

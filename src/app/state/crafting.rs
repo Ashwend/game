@@ -57,6 +57,39 @@ impl CraftingUiState {
 #[derive(Resource, Debug, Default)]
 pub(crate) struct CraftingHudState {
     pub(crate) progress: HashMap<CraftingJobId, ProgressBaseline>,
+    /// Job ids the player explicitly cancelled from the queue HUD. The
+    /// craft-complete cue consults this so a cancelled job vanishing from
+    /// the replicated queue doesn't chime like a completion. Bounded by
+    /// [`Self::note_cancel_requested`]; ids are never reused within a
+    /// session (the server allocator only wraps after `u64::MAX` jobs),
+    /// so stale entries are harmless.
+    pub(crate) recently_cancelled: Vec<CraftingJobId>,
+}
+
+impl CraftingHudState {
+    /// Remember that the player asked to cancel `job_id`, so its
+    /// disappearance from the queue stays silent. Kept tiny: the list
+    /// only needs to cover cancels still in flight to the server.
+    pub(crate) fn note_cancel_requested(&mut self, job_id: CraftingJobId) {
+        self.recently_cancelled.push(job_id);
+        let overflow = self.recently_cancelled.len().saturating_sub(16);
+        if overflow > 0 {
+            self.recently_cancelled.drain(..overflow);
+        }
+    }
+
+    /// True (and forgets the entry) when `job_id` was locally cancelled.
+    pub(crate) fn consume_cancelled(&mut self, job_id: CraftingJobId) -> bool {
+        if let Some(index) = self
+            .recently_cancelled
+            .iter()
+            .position(|cancelled| *cancelled == job_id)
+        {
+            self.recently_cancelled.swap_remove(index);
+            return true;
+        }
+        false
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

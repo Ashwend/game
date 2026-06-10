@@ -35,6 +35,7 @@ pub(crate) mod impact;
 pub(crate) mod library;
 pub(crate) mod manifest;
 pub(crate) mod music;
+pub(crate) mod scheduled;
 pub(crate) mod surface;
 pub(crate) mod transitions;
 
@@ -75,6 +76,7 @@ pub(crate) use manifest::SoundId;
     reason = "future-facing audio API surface; some items not wired up yet"
 )]
 pub(crate) use music::{MainMenuMusic, main_menu_music_system};
+pub(crate) use scheduled::{ScheduledSounds, tick_scheduled_sounds_system};
 pub(crate) use transitions::{ScreenTransitionWatch, play_transition_stingers_system};
 
 /// Bevy plugin wiring up audio resources, events, and startup loaders.
@@ -89,6 +91,7 @@ impl Plugin for AudioPlugin {
         app.init_resource::<FootstepState>()
             .init_resource::<CurrentAmbientZone>()
             .init_resource::<ScreenTransitionWatch>()
+            .init_resource::<ScheduledSounds>()
             .add_message::<PlaySound>()
             .add_systems(Startup, setup_sound_library);
     }

@@ -84,10 +84,9 @@ fn refresh_worlds_handles_success_and_list_errors() {
     refresh_worlds(&mut menu, &bad_store);
 
     assert!(menu.worlds.is_empty());
-    assert!(
-        menu.status
-            .expect("status should exist")
-            .contains("world list failed")
+    assert_eq!(
+        menu.notice.expect("notice should exist").title,
+        "Couldn't load worlds"
     );
 
     let _ = fs::remove_dir_all(store.0.root());
@@ -123,10 +122,9 @@ fn start_singleplayer_updates_runtime_or_reports_load_error() {
         uuid::Uuid::new_v4(),
     );
 
-    assert!(
-        menu.status
-            .expect("status should exist")
-            .contains("start failed")
+    assert_eq!(
+        menu.notice.expect("notice should exist").title,
+        "Couldn't start world"
     );
 
     let _ = fs::remove_dir_all(store.0.root());

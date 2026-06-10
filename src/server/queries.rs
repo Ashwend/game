@@ -2,7 +2,10 @@ use crate::protocol::{
     ClientId, DeployedEntityId, DroppedItemId, ResourceNodeId, ResourceNodeState, Vec3Net,
 };
 
-use super::{GameServer, PlayerArmor, deployable_ecs, player_ecs};
+use super::{
+    GameServer, PlayerArmor, deployable_ecs, deployables::DeployedEntity,
+    dropped_items::DroppedItemBody, player_ecs,
+};
 
 impl GameServer {
     /// Read-only view of a connected player's anchor position and AoI tier.
@@ -135,8 +138,9 @@ impl GameServer {
         )
     }
 
-    /// Iterate live dropped items (id + wire-shape view) for the
-    /// `sync_dropped_item_entities` mirror.
+    /// Read-only iteration over live dropped items (id + wire-shape view).
+    /// The mirror sync reads per-id deltas via [`Self::dropped_item_state`];
+    /// this stays for tests and diagnostics.
     pub fn dropped_items_iter(
         &self,
     ) -> impl Iterator<Item = (DroppedItemId, crate::protocol::DroppedWorldItem)> + '_ {
@@ -150,9 +154,69 @@ impl GameServer {
         self.chunk_manager.dropped_item_chunk(id)
     }
 
-    /// Iterate live deployables as the wire-shape view the mirror needs.
-    pub fn deployables_iter(&self) -> impl Iterator<Item = deployable_ecs::DeployableView> + '_ {
-        self.deployed_entities.values().map(|entity| {
+    /// Read a single dropped item's wire-shape state. Used by the mirror
+    /// sync to fetch only the items it needs to (re)spawn or update.
+    pub fn dropped_item_state(
+        &self,
+        id: DroppedItemId,
+    ) -> Option<&crate::protocol::DroppedWorldItem> {
+        self.dropped_items.get(&id).map(|body| &body.item)
+    }
+
+    /// Insert (or replace) a dropped item and record it for the next mirror
+    /// sync. The single entry point for adding drops, keeps
+    /// `dropped_item_sync_dirty` accurate.
+    pub(super) fn insert_dropped_item(&mut self, id: DroppedItemId, body: DroppedItemBody) {
+        self.dropped_items.insert(id, body);
+        self.dropped_item_sync_dirty.insert(id);
+        self.dropped_item_sync_removed.remove(&id);
+    }
+
+    /// Remove a dropped item and record it for the next mirror sync (which
+    /// despawns the replicated entity). Returns the removed body, mirroring
+    /// `HashMap`.
+    pub(super) fn remove_dropped_item(&mut self, id: DroppedItemId) -> Option<DroppedItemBody> {
+        let removed = self.dropped_items.remove(&id);
+        if removed.is_some() {
+            self.dropped_item_sync_removed.insert(id);
+            self.dropped_item_sync_dirty.remove(&id);
+        }
+        removed
+    }
+
+    /// Mutable access to a dropped item's body, conservatively flagging it
+    /// dirty for the next mirror sync (any hand-out of `&mut` may change the
+    /// item). The single entry point for in-place drop edits. The per-tick
+    /// physics step does NOT go through here, it marks only the bodies whose
+    /// transform actually changed so at-rest items stay out of the delta.
+    pub(super) fn dropped_item_body_mut(
+        &mut self,
+        id: DroppedItemId,
+    ) -> Option<&mut DroppedItemBody> {
+        if self.dropped_items.contains_key(&id) {
+            self.dropped_item_sync_dirty.insert(id);
+            self.dropped_item_sync_removed.remove(&id);
+        }
+        self.dropped_items.get_mut(&id)
+    }
+
+    /// Drain the accumulated mirror-sync deltas: `(dirty ids, removed ids)`.
+    /// Called once per tick by `sync_dropped_item_entities`.
+    pub fn drain_dropped_item_sync(&mut self) -> (Vec<DroppedItemId>, Vec<DroppedItemId>) {
+        (
+            self.dropped_item_sync_dirty.drain().collect(),
+            self.dropped_item_sync_removed.drain().collect(),
+        )
+    }
+
+    /// Chunk a deployable is anchored to.
+    pub fn deployable_chunk(&self, id: DeployedEntityId) -> Option<crate::world::ChunkCoord> {
+        self.chunk_manager.deployed_entity_chunk(id)
+    }
+
+    /// Read a single deployable as the wire-shape view the mirror needs.
+    pub fn deployable_view(&self, id: DeployedEntityId) -> Option<deployable_ecs::DeployableView> {
+        self.deployed_entities.get(&id).map(|entity| {
             let active = entity.furnace.as_ref().map(|f| f.active).unwrap_or(false);
             deployable_ecs::DeployableView {
                 id: entity.id,
@@ -167,9 +231,59 @@ impl GameServer {
         })
     }
 
-    /// Chunk a deployable is anchored to.
-    pub fn deployable_chunk(&self, id: DeployedEntityId) -> Option<crate::world::ChunkCoord> {
-        self.chunk_manager.deployed_entity_chunk(id)
+    /// Insert (or replace) a deployable and record it for the next mirror
+    /// sync. The single entry point for adding placed structures, keeps
+    /// `deployable_sync_dirty` accurate.
+    pub(super) fn insert_deployed_entity(&mut self, id: DeployedEntityId, entity: DeployedEntity) {
+        self.deployed_entities.insert(id, entity);
+        self.deployable_sync_dirty.insert(id);
+        self.deployable_sync_removed.remove(&id);
+    }
+
+    /// Remove a deployable and record it for the next mirror sync (which
+    /// despawns the replicated entity). Returns the removed state, mirroring
+    /// `HashMap`.
+    pub(super) fn remove_deployed_entity(
+        &mut self,
+        id: DeployedEntityId,
+    ) -> Option<DeployedEntity> {
+        let removed = self.deployed_entities.remove(&id);
+        if removed.is_some() {
+            self.deployable_sync_removed.insert(id);
+            self.deployable_sync_dirty.remove(&id);
+        }
+        removed
+    }
+
+    /// Mutable access to a deployable, conservatively flagging it dirty for
+    /// the next mirror sync (any hand-out of `&mut` may change the entity).
+    /// The single entry point for in-place deployable edits.
+    pub(super) fn deployed_entity_mut(
+        &mut self,
+        id: DeployedEntityId,
+    ) -> Option<&mut DeployedEntity> {
+        self.mark_deployable_dirty(id);
+        self.deployed_entities.get_mut(&id)
+    }
+
+    /// Record a deployable as needing a mirror re-sync without handing out a
+    /// `&mut`. Used by the furnace tick, which iterates the map directly and
+    /// only flags the entities whose replicated `active` flag actually
+    /// flipped, so idle furnaces never enter the delta.
+    pub(super) fn mark_deployable_dirty(&mut self, id: DeployedEntityId) {
+        if self.deployed_entities.contains_key(&id) {
+            self.deployable_sync_dirty.insert(id);
+            self.deployable_sync_removed.remove(&id);
+        }
+    }
+
+    /// Drain the accumulated mirror-sync deltas: `(dirty ids, removed ids)`.
+    /// Called once per tick by `sync_deployable_entities`.
+    pub fn drain_deployable_sync(&mut self) -> (Vec<DeployedEntityId>, Vec<DeployedEntityId>) {
+        (
+            self.deployable_sync_dirty.drain().collect(),
+            self.deployable_sync_removed.drain().collect(),
+        )
     }
 
     /// Iterate connected players as wire-shape views (public + private

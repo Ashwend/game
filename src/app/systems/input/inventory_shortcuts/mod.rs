@@ -54,6 +54,7 @@ pub(crate) struct GameplayInventoryShortcutsParams<'w, 's> {
     camera_kick: ResMut<'w, crate::app::systems::CameraImpactKick>,
     combat_feedback: ResMut<'w, crate::app::state::CombatFeedbackState>,
     error_toasts: MessageWriter<'w, ClientErrorToast>,
+    play_sound: MessageWriter<'w, crate::app::audio::PlaySound>,
     primary_window: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
 }
 
@@ -64,8 +65,22 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
         return;
     }
 
+    let active_actionbar_slot = params
+        .local_player
+        .private
+        .as_ref()
+        .map(|private| private.inventory.active_actionbar_slot);
     for slot in 0..ACTIONBAR_SLOT_COUNT {
         if actionbar_key_pressed(&params.keys, &params.settings, slot) {
+            // The selection tick only fires when the slot actually
+            // changes; re-pressing the active slot's key stays silent.
+            if active_actionbar_slot != Some(slot) {
+                params
+                    .play_sound
+                    .write(crate::app::audio::PlaySound::non_spatial(
+                        crate::app::audio::SoundId::HotbarSelect,
+                    ));
+            }
             send_inventory_command(
                 &mut params.runtime,
                 &mut params.error_toasts,
@@ -80,6 +95,13 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
         .map(|event| event.y.signum() as i8)
         .sum::<i8>();
     if wheel_delta != 0 {
+        // Wheel scrolling always lands on a different slot (the offset
+        // wraps), so it always ticks.
+        params
+            .play_sound
+            .write(crate::app::audio::PlaySound::non_spatial(
+                crate::app::audio::SoundId::HotbarSelect,
+            ));
         send_inventory_command(
             &mut params.runtime,
             &mut params.error_toasts,

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rapier3d::prelude::{
     BroadPhaseBvh, CCDSolver, ColliderBuilder, ColliderSet, ImpulseJointSet, IntegrationParameters,
@@ -177,10 +177,15 @@ impl DroppedItemPhysics {
         );
     }
 
+    /// Step the simulation and write the resulting poses back onto the
+    /// bodies. Items whose pose actually changed are recorded in
+    /// `sync_dirty` so the ECS mirror only re-syncs movers; a settled
+    /// (sleeping) body produces no dirty entry and costs nothing downstream.
     pub(super) fn step(
         &mut self,
         delta_seconds: f32,
         dropped_items: &mut HashMap<DroppedItemId, DroppedItemBody>,
+        sync_dirty: &mut HashSet<DroppedItemId>,
     ) {
         let mut remaining = if delta_seconds.is_finite() {
             delta_seconds.clamp(0.0, DROPPED_ITEM_MAX_SIMULATION_DELTA)
@@ -208,19 +213,29 @@ impl DroppedItemPhysics {
             remaining -= step;
         }
 
-        for body in dropped_items.values_mut() {
+        for (id, body) in dropped_items.iter_mut() {
             let Some(rigid_body) = self.bodies.get(body.body_handle) else {
                 continue;
             };
             let translation = rigid_body.translation();
             let rotation = rigid_body.rotation();
-            body.item.position = Vec3Net::new(translation.x, translation.y, translation.z);
-            body.item.rotation = QuatNet::new(rotation.x, rotation.y, rotation.z, rotation.w);
+            let new_position = Vec3Net::new(translation.x, translation.y, translation.z);
+            let new_rotation = QuatNet::new(rotation.x, rotation.y, rotation.z, rotation.w);
+            let mut changed =
+                body.item.position != new_position || body.item.rotation != new_rotation;
+            body.item.position = new_position;
+            body.item.rotation = new_rotation;
 
             let linvel = rigid_body.linvel();
             let horizontal_speed_sq = linvel.x.mul_add(linvel.x, linvel.z * linvel.z);
             if horizontal_speed_sq > 0.0025 {
-                body.item.yaw = (-linvel.x).atan2(-linvel.z);
+                let new_yaw = (-linvel.x).atan2(-linvel.z);
+                changed |= body.item.yaw != new_yaw;
+                body.item.yaw = new_yaw;
+            }
+
+            if changed {
+                sync_dirty.insert(*id);
             }
         }
     }
@@ -284,7 +299,7 @@ impl GameServer {
             })
             .collect();
         for id in expired {
-            if let Some(body) = self.dropped_items.remove(&id) {
+            if let Some(body) = self.remove_dropped_item(id) {
                 self.dropped_item_physics.remove_body(body.body_handle);
                 self.chunk_manager.untrack_dropped_item(id);
             }
@@ -338,17 +353,17 @@ impl GameServer {
         }
 
         let item_id = {
-            let target = self.dropped_items.get_mut(&target_id)?;
+            let target = self.dropped_item_body_mut(target_id)?;
             target.item.stack.quantity += moved;
             target.item.stack.item_id.clone()
         };
 
         let drain_source = {
-            let source = self.dropped_items.get_mut(&source_id)?;
+            let source = self.dropped_item_body_mut(source_id)?;
             source.item.stack.quantity -= moved;
             source.item.stack.quantity == 0
         };
-        if drain_source && let Some(body) = self.dropped_items.remove(&source_id) {
+        if drain_source && let Some(body) = self.remove_dropped_item(source_id) {
             self.dropped_item_physics.remove_body(body.body_handle);
             self.chunk_manager.untrack_dropped_item(source_id);
         }

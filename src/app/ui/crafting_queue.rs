@@ -126,6 +126,9 @@ pub(super) fn crafting_queue_hud(
     }
 
     if let Some(job_id) = cancel_target {
+        // Mark before sending so the job's disappearance from the next
+        // snapshot reads as a cancel, not a completion chime.
+        hud_state.note_cancel_requested(job_id);
         send_crafting_command(runtime, error_toasts, CraftingCommand::Cancel { job_id });
     }
 }

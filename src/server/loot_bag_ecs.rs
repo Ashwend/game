@@ -118,22 +118,30 @@ mod tests {
         let entity = spawn_loot_bag_entity(&mut world, view, chunk);
 
         // Every replicated component should be present on the entity.
-        let id = world.entity(entity).get::<LootBag>().copied().unwrap();
+        let id = world
+            .entity(entity)
+            .get::<LootBag>()
+            .copied()
+            .expect("spawn attaches LootBag identity");
         assert_eq!(id.id, 9);
         let transform = world
             .entity(entity)
             .get::<LootBagTransform>()
             .copied()
-            .unwrap();
+            .expect("spawn attaches LootBagTransform pose");
         assert_eq!(transform.position, Vec3Net::new(1.0, 2.0, 3.0));
         assert_eq!(transform.yaw, 0.25);
         let contents = world
             .entity(entity)
             .get::<LootBagContents>()
             .cloned()
-            .unwrap();
+            .expect("spawn attaches LootBagContents slots");
         assert_eq!(contents.0.len(), 2);
-        let LootBagChunk(coord) = world.entity(entity).get::<LootBagChunk>().copied().unwrap();
+        let LootBagChunk(coord) = world
+            .entity(entity)
+            .get::<LootBagChunk>()
+            .copied()
+            .expect("spawn attaches LootBagChunk anchor");
         assert_eq!(coord, chunk);
 
         // The index should know about the new bag for O(1) ECS lookup.

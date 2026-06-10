@@ -256,18 +256,26 @@ mod tests {
     }
 
     #[test]
-    fn category_volume_for_footsteps_obeys_sfx_slider() {
+    fn category_volume_for_footsteps_obeys_footsteps_slider() {
         // Sanity-check the wiring: the manifest's footstep sounds route
-        // through Sfx2d, so the SFX slider must scale them.
+        // through the dedicated Footsteps category, so the footsteps
+        // slider scales them and the general effects slider does not.
         let defaults = sound_defaults(SoundId::FootstepDirt);
-        assert_eq!(defaults.category, SoundCategory::Sfx2d);
+        assert_eq!(defaults.category, SoundCategory::Footsteps);
         let mut settings = ClientSettings::default();
         let full =
             category_volume(defaults.category, &settings, defaults.base_gain_db, 0.0).to_linear();
         settings.audio.sfx_volume = 0.0;
+        let sfx_muted =
+            category_volume(defaults.category, &settings, defaults.base_gain_db, 0.0).to_linear();
+        settings.audio.footsteps_volume = 0.0;
         let muted =
             category_volume(defaults.category, &settings, defaults.base_gain_db, 0.0).to_linear();
         assert!(full > 0.0);
+        assert_eq!(
+            sfx_muted, full,
+            "effects slider must not touch footsteps any more"
+        );
         assert_eq!(muted, 0.0);
     }
 
@@ -350,13 +358,13 @@ mod tests {
         // per-material `base_gain_db` deliberately sits above 0 dB for the
         // quieter source recordings (dirt is captured ~13 dB below the
         // others); the audio engine clips on its own so we just verify
-        // the math composes and scales linearly with the SFX slider.
+        // the math composes and scales linearly with the footsteps slider.
         let defaults = sound_defaults(SoundId::FootstepDirt);
         let mut settings = ClientSettings::default();
         let peak =
             category_volume(defaults.category, &settings, defaults.base_gain_db, 0.0).to_linear();
         assert!(peak > 0.0);
-        settings.audio.sfx_volume = 0.5;
+        settings.audio.footsteps_volume = 0.5;
         let half =
             category_volume(defaults.category, &settings, defaults.base_gain_db, 0.0).to_linear();
         assert!((half - peak * 0.5).abs() < 1e-5);

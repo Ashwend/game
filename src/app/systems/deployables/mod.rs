@@ -51,6 +51,7 @@ pub(crate) fn apply_deployed_entities_system(
         &DeployableHealth,
         &DeployableActive,
     )>,
+    mut play_sound: MessageWriter<crate::app::audio::PlaySound>,
 ) {
     let Some(assets) = assets else {
         return;
@@ -113,6 +114,8 @@ pub(crate) fn apply_deployed_entities_system(
             meta.kind,
             active.0,
             fires_by_parent.remove(&parent_entity),
+            visual_transform.translation,
+            &mut play_sound,
         );
     }
 

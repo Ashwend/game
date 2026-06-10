@@ -51,7 +51,12 @@ pub(super) const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 ///
 /// `9` added `PersistedDeployedEntity::owner: Option<AccountId>` so
 /// damage gating can survive reloads. Old v8 saves are rejected.
-pub(super) const SAVE_FORMAT_VERSION: u32 = 9;
+///
+/// `10` added `ItemStack::durability: Option<u32>` (tool wear). Every
+/// persisted inventory, furnace slot, dropped item, and loot bag embeds
+/// `ItemStack`, and postcard is positional, so old v9 saves would
+/// deserialise wrong; rejected at load.
+pub(super) const SAVE_FORMAT_VERSION: u32 = 10;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
 /// at >100MB/s compression and ~1GB/s decompression.
 const ZSTD_LEVEL: i32 = 5;

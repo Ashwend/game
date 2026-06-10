@@ -75,13 +75,33 @@ impl GameServer {
             );
         }
 
-        let persisted_players = std::mem::take(&mut save.state.players)
-            .into_iter()
-            .map(|player| (player.account_id, player))
-            .collect();
-
         let next_dropped_item_id = save.state.next_dropped_item_id.max(1);
-        let next_client_id = save.state.next_client_id.max(1);
+        let mut next_client_id = save.state.next_client_id.max(1);
+
+        // Rebuild every persisted player as a logged-out sleeping body so
+        // a server restart doesn't despawn anyone: bodies come back at
+        // their saved position with their saved health and inventory,
+        // replicated, lootable, and killable, exactly as they were before
+        // the shutdown. A reconnect from the same account routes through
+        // the regular wake-sleeper path because `account_to_client` is
+        // seeded here too. Sorted by account id so client-id assignment
+        // is deterministic across boots.
+        let mut persisted = std::mem::take(&mut save.state.players);
+        persisted.sort_by_key(|player| player.account_id);
+        let mut clients = HashMap::new();
+        let mut account_to_client = HashMap::new();
+        for player in persisted {
+            let client_id = next_client_id;
+            next_client_id += 1;
+            let body = super::sleeping_body_from_persisted(player, client_id, load_tick);
+            account_to_client.insert(body.account_id, client_id);
+            chunk_manager.track_player(client_id, body.controller.position);
+            clients.insert(client_id, body);
+        }
+        // Bodies are authoritative now; the crash-safety snapshot list
+        // starts empty and refills as bodies change (`world_save` captures
+        // live client state directly).
+        let persisted_players = HashMap::new();
         // Floor at the chunk-generator's high-water mark so admin-spawned
         // ids can't collide with chunk-issued node ids, regardless of how
         // many nodes the world generator produced.
@@ -111,10 +131,14 @@ impl GameServer {
         let world_time = save.state.world_time();
         let tick = save.state.last_authoritative_tick;
 
-        // Seed the mirror-sync dirty set with every initial node so the first
-        // `sync_resource_node_entities` pass spawns all mirror entities once;
-        // after that only mutated nodes are reprocessed.
+        // Seed the mirror-sync dirty sets with every initial entry so the
+        // first sync pass spawns all mirror entities once; after that only
+        // mutated ids are reprocessed.
         let node_sync_dirty: HashSet<ResourceNodeId> = resource_nodes.keys().copied().collect();
+        let dropped_item_sync_dirty: HashSet<crate::protocol::DroppedItemId> =
+            dropped_items.keys().copied().collect();
+        let deployable_sync_dirty: HashSet<crate::protocol::DeployedEntityId> =
+            deployed_entities.keys().copied().collect();
 
         Self {
             tick,
@@ -123,16 +147,20 @@ impl GameServer {
             world_grid,
             settings,
             workos: None,
-            clients: HashMap::new(),
-            account_to_client: HashMap::new(),
+            clients,
+            account_to_client,
             persisted_players,
             dropped_items,
+            dropped_item_sync_dirty,
+            dropped_item_sync_removed: HashSet::new(),
             dropped_item_physics,
             resource_nodes,
             node_sync_dirty,
             node_sync_removed: HashSet::new(),
             chunk_manager,
             deployed_entities,
+            deployable_sync_dirty,
+            deployable_sync_removed: HashSet::new(),
             loot_bags: HashMap::new(),
             next_dropped_item_id,
             next_client_id,

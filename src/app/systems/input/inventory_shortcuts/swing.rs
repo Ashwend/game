@@ -241,8 +241,11 @@ fn dispatch_player_swing(
     // `PlayerImpact { damage_dealt }` so a desync would cost only
     // the brief mismatch between this predicted value and the
     // armor-reduced server value. Today every player has armor 0
-    // so the prediction is always exact.
-    if let Some(damage) = crate::combat::tool_player_damage(impact.tool, 0) {
+    // so the prediction is always exact. Damage is per tool profile
+    // (iron hits harder than stone), so resolve the held item the
+    // same way the server does rather than going by kind alone.
+    let held_tool = equipped_tool_profile(&params.local_player);
+    if let Some(damage) = crate::combat::tool_player_damage(held_tool, 0) {
         params
             .commands
             .spawn(crate::app::ui::floating_text::FloatingDamageText::new(

@@ -206,6 +206,51 @@ fn damage_destroys_at_zero_health() {
 }
 
 #[test]
+fn mirror_sync_deltas_track_place_damage_and_destroy() {
+    use crate::protocol::DamageDeployableCommand;
+    let mut server = server();
+    let client_id = connect_named(&mut server, "Tester");
+    give_one(&mut server, client_id, WORKBENCH_T1_ID);
+    let (dirty, removed) = server.drain_deployable_sync();
+    assert!(
+        dirty.is_empty() && removed.is_empty(),
+        "a fresh world has no deployable deltas"
+    );
+
+    // Placement is recorded as dirty (→ sync spawns a mirror entity).
+    let id = place_workbench(&mut server, client_id);
+    let (dirty, removed) = server.drain_deployable_sync();
+    assert_eq!(dirty, vec![id]);
+    assert!(removed.is_empty());
+
+    // Damage re-flags it dirty (→ DeployableHealth diff).
+    equip_pickaxe(&mut server, client_id);
+    let start_hp = server.deployed_entities[&id].health;
+    server.apply_damage_deployable_command(client_id, DamageDeployableCommand { id });
+    assert!(
+        server.deployed_entities[&id].health < start_hp,
+        "damage should land"
+    );
+    let (dirty, removed) = server.drain_deployable_sync();
+    assert_eq!(dirty, vec![id]);
+    assert!(removed.is_empty());
+
+    // Destruction lands in the removed set, not dirty (→ sync despawns it).
+    server.deployed_entity_mut(id).expect("placed").health = 1;
+    let _ = server.drain_deployable_sync();
+    // Reset the swing cooldown so the killing blow isn't throttled.
+    server.clients.get_mut(&client_id).unwrap().next_gather_tick = 0;
+    server.apply_damage_deployable_command(client_id, DamageDeployableCommand { id });
+    assert!(
+        !server.deployed_entities.contains_key(&id),
+        "killing blow should remove the deployable"
+    );
+    let (dirty, removed) = server.drain_deployable_sync();
+    assert!(dirty.is_empty(), "destroyed deployable must not stay dirty");
+    assert_eq!(removed, vec![id]);
+}
+
+#[test]
 fn matched_tool_outdamages_mismatched_tool() {
     use crate::protocol::DamageDeployableCommand;
     // Workbench (wood) vs hatchet should deal 3× the per-hit damage

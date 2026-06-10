@@ -560,6 +560,8 @@ mod tests {
             tier: 1,
             gather_amount: 3,
             cooldown_ticks: 1,
+            max_durability: Some(50),
+            player_damage: 10,
         };
 
         assert_eq!(
@@ -587,12 +589,16 @@ mod tests {
                 tier: 1,
                 gather_amount: 3,
                 cooldown_ticks: 1,
+                max_durability: Some(50),
+                player_damage: 10,
             },
             ToolProfile {
                 kind: ToolKind::Axe,
                 tier: 2,
                 gather_amount: 6,
                 cooldown_ticks: 6,
+                max_durability: Some(100),
+                player_damage: 12,
             },
         ];
         let storages = [

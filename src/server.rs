@@ -81,6 +81,7 @@ mod resource_nodes;
 mod test_support;
 mod tick;
 mod toasts;
+mod tool_wear;
 mod voice;
 mod world_time;
 
@@ -168,6 +169,14 @@ pub struct GameServer {
     /// picks up their inventory, position, and admin status.
     persisted_players: HashMap<AccountId, PersistedPlayer>,
     dropped_items: HashMap<DroppedItemId, DroppedItemBody>,
+    /// Mirror-sync deltas for `dropped_items`, same contract as
+    /// `node_sync_dirty`/`node_sync_removed` below: every mutation MUST go
+    /// through `insert_dropped_item` / `remove_dropped_item` /
+    /// `dropped_item_body_mut` (or the physics step, which marks only the
+    /// bodies whose transform actually changed) so the sync never misses a
+    /// diff and items at rest cost nothing.
+    dropped_item_sync_dirty: HashSet<DroppedItemId>,
+    dropped_item_sync_removed: HashSet<DroppedItemId>,
     dropped_item_physics: DroppedItemPhysics,
     /// Authoritative live resource node state, keyed by id. A sync system
     /// (`sync_resource_node_entities`) mirrors this map into ECS entities
@@ -195,6 +204,13 @@ pub struct GameServer {
     /// chunks are owned by `chunk_manager` so AoI filtering matches the
     /// same pipeline as resource nodes and dropped items.
     pub(super) deployed_entities: HashMap<DeployedEntityId, deployables::DeployedEntity>,
+    /// Mirror-sync deltas for `deployed_entities`, same contract as
+    /// `node_sync_dirty`/`node_sync_removed`: every mutation MUST go through
+    /// `insert_deployed_entity` / `remove_deployed_entity` /
+    /// `deployed_entity_mut` (or `mark_deployable_dirty` for the furnace
+    /// tick, which only flags entities whose replicated state flipped).
+    deployable_sync_dirty: HashSet<DeployedEntityId>,
+    deployable_sync_removed: HashSet<DeployedEntityId>,
     /// Death-loot containers, keyed by id. Spawned by the PvP kill
     /// chain in `combat.rs`; despawned when emptied + closed by every
     /// looker. Anchor chunks tracked via `chunk_manager` so the
@@ -311,6 +327,63 @@ pub(super) fn persisted_player_from(client: &ServerClient) -> PersistedPlayer {
         last_processed_input: client.controller.last_processed_input,
         is_admin: client.is_admin,
         inventory: client.inventory.clone(),
+    }
+}
+
+/// Inverse of [`persisted_player_from`]: rebuild a logged-out sleeping body
+/// from its persisted snapshot. Used at world load so bodies survive a
+/// server restart exactly as they were when the world was saved: same
+/// position, health, and inventory, still replicated, lootable, and
+/// killable. A persisted player at zero health comes back as a dead body
+/// (lifecycle isn't saved); the wake path already turns logging into a
+/// dead body into a fresh respawn.
+pub(super) fn sleeping_body_from_persisted(
+    player: PersistedPlayer,
+    client_id: ClientId,
+    tick: u64,
+) -> ServerClient {
+    // A save written before an inventory-capacity change keeps its old
+    // slot count; pad it up the same way the reconnect path does.
+    let mut inventory = player.inventory;
+    inventory.normalize_capacity();
+    let controller = PlayerController::from_persisted(
+        player.position,
+        player.velocity,
+        player.yaw,
+        player.pitch,
+        player.health,
+        player.grounded,
+        player.last_processed_input,
+    );
+    let lifecycle = if player.health <= 0.0 {
+        PlayerLifecycle::Dead {
+            since_tick: tick,
+            killer: None,
+        }
+    } else {
+        PlayerLifecycle::Alive
+    };
+    ServerClient {
+        client_id,
+        account_id: player.account_id,
+        name: player.name,
+        online: false,
+        controller,
+        inventory,
+        armor: 0,
+        lifecycle,
+        is_admin: player.is_admin,
+        last_seen_tick: tick,
+        next_gather_tick: tick,
+        next_attack_tick: tick,
+        chat_bubble: None,
+        view_tier: crate::protocol::ViewRadiusTier::default(),
+        crafting: PlayerCraftingState::default(),
+        next_craft_job_id: 1,
+        open_furnace: None,
+        open_container: None,
+        applied_action_seq: 0,
+        ping_ms: 0,
     }
 }
 

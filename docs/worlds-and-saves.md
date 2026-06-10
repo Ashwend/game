@@ -4,7 +4,7 @@
 
 `WorldStateSave` captures everything the authoritative server owns:
 - `last_authoritative_tick`
-- `players: Vec<PersistedPlayer>` keyed in-memory by Steam ID; on reconnect a returning player keeps their position, velocity, look, health, admin flag, inventory, and active actionbar slot
+- `players: Vec<PersistedPlayer>`; world load rebuilds every entry as an offline sleeping body (visible, lootable, killable), so bodies survive a server restart, and a returning player wakes their body in place keeping position, velocity, look, health, admin flag, inventory, and active actionbar slot
 - `dropped_items: Vec<DroppedWorldItem>`, re-spawned with fresh physics bodies at load time
 - `resource_nodes: Option<Vec<ResourceNodeState>>`, `None` for a freshly created world (initial nodes are seeded from the world definition); `Some(_)` once the world has been hosted, so harvested nodes don't respawn
 - `next_dropped_item_id`, `next_client_id`

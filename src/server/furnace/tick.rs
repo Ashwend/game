@@ -10,8 +10,16 @@ use super::state::{FurnaceState, SMELT_TICKS_PER_OUTPUT, fuel_burn_ticks_for, sm
 impl GameServer {
     /// Advance every furnace one tick: burn fuel, smelt the head input,
     /// auto-shutoff when output won't fit. Called once per server tick.
+    ///
+    /// Mirror-sync note: of the furnace fields this tick mutates, only the
+    /// `active` flag is replicated through the deployable mirror
+    /// (`DeployableActive`); fuel/progress reach the owning viewer through
+    /// the per-player `OpenFurnaceView` instead. So we flag a deployable
+    /// dirty only when `active` flips (auto-shutoff), idle furnaces and
+    /// steady burns never enter the sync delta.
     pub(in crate::server) fn tick_furnaces(&mut self) {
-        for entity in self.deployed_entities.values_mut() {
+        let mut shut_off: Vec<crate::protocol::DeployedEntityId> = Vec::new();
+        for (id, entity) in self.deployed_entities.iter_mut() {
             let Some(furnace) = entity.furnace.as_mut() else {
                 continue;
             };
@@ -19,6 +27,12 @@ impl GameServer {
                 continue;
             }
             tick_one_furnace(furnace);
+            if !furnace.active {
+                shut_off.push(*id);
+            }
+        }
+        for id in shut_off {
+            self.mark_deployable_dirty(id);
         }
     }
 }

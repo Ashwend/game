@@ -3,16 +3,21 @@ import { siteConfig } from '#/lib/config'
 import { HERO_META } from '#/data/content'
 import { buttonClasses } from './ui'
 import { DiscordIcon } from './icons'
+import { Picture } from './Picture'
 
 export function Hero() {
   return (
     <section className="relative flex min-h-[100svh] items-center overflow-hidden">
       {/* Lone-pine hero, captured in-engine. Decorative, described by the page copy. */}
       <div className="absolute inset-0" aria-hidden="true">
-        <img
+        <Picture
           src="/img/hero.jpg"
           alt=""
-          fetchPriority="high"
+          widths={[768, 1280, 1920]}
+          sizes="100vw"
+          width={2200}
+          height={1237}
+          eager
           className="size-full object-cover object-center"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-ink-900 via-ink-900/45 to-ink-900/20" />

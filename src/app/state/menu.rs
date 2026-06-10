@@ -115,6 +115,11 @@ pub(crate) struct DeathSplash {
     /// clears itself when the fade completes, so the new HUD doesn't
     /// pop in for a frame underneath a still-black screen.
     pub(crate) closing_elapsed: Option<f32>,
+    /// True once the player pressed Escape on the full-screen splash.
+    /// The blackout collapses into a compact respawn pill so chat and
+    /// the pause menu become reachable while dead; respawning is still
+    /// one click away on the pill.
+    pub(crate) minimized: bool,
 }
 
 impl DeathSplash {
@@ -123,6 +128,7 @@ impl DeathSplash {
             killer_name,
             elapsed: 0.0,
             closing_elapsed: None,
+            minimized: false,
         }
     }
 

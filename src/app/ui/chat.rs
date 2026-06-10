@@ -214,6 +214,10 @@ fn draw_active_input(
         theme::text_input(&mut menu.chat_input)
             .id(input_id)
             .frame(false)
+            // Cap at the wire limit so what the player types is exactly
+            // what peers see; without this the server silently truncates
+            // at MAX_CHAT_LEN and the tail of a long message vanishes.
+            .char_limit(crate::protocol::MAX_CHAT_LEN)
             .hint_text("Chat"),
     );
 

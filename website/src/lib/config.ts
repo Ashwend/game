@@ -12,7 +12,7 @@ export interface SiteConfig {
 }
 
 export const siteConfig: SiteConfig = {
-  siteUrl: 'https://ashwend.game',
+  siteUrl: 'https://www.ashwend.com',
   discordInviteUrl: 'https://discord.gg/gVqTumNb8b',
   githubRepoUrl: 'https://github.com/Ashwend/game',
 }

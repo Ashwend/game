@@ -1,6 +1,6 @@
 # Architecture
 
-One Rust binary, `game`, defaults to the `client` subcommand. `server` runs the dedicated Lightyear host. `admin` sends one-shot administrative commands to a running dedicated server over a Unix socket.
+One Rust binary, `ashwend`, defaults to the `client` subcommand. `server` runs the dedicated Lightyear host. `admin` sends one-shot administrative commands to a running dedicated server over a Unix socket.
 
 Modules:
 - `app`: Bevy client, scene, input, audio, local prediction, session polling, and egui UI. `src/app.rs` wires runtime systems through named `ClientSystemSet`s instead of long per-system ordering chains.

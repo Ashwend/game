@@ -489,8 +489,11 @@ fn join_with_and(names: &[&str]) -> String {
         [one] => (*one).to_owned(),
         [a, b] => format!("{a} and {b}"),
         _ => {
-            let (last, rest) = names.split_last().unwrap();
-            format!("{}, and {last}", rest.join(", "))
+            if let Some((last, rest)) = names.split_last() {
+                format!("{}, and {last}", rest.join(", "))
+            } else {
+                String::new()
+            }
         }
     }
 }

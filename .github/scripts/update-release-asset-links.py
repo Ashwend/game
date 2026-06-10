@@ -5,13 +5,10 @@ import argparse
 import json
 from pathlib import Path
 
-
-ASSETS = [
-    ("Linux Intel", "ashwend-x86_64-unknown-linux-gnu.tar.gz"),
-    ("Linux ARM", "ashwend-aarch64-unknown-linux-gnu.tar.gz"),
-    ("macOS ARM", "ashwend-aarch64-apple-darwin.zip"),
-    ("Windows Intel", "ashwend-x86_64-pc-windows-msvc.zip"),
-]
+# Asset names live in release_assets.py (same directory), the single source
+# of truth shared by the release scripts. Works because Python puts the
+# script's directory on sys.path when invoked as `python <path>/<script>.py`.
+from release_assets import ASSETS
 
 
 def build_asset_section(release_json: Path, *, require_all: bool) -> list[str]:

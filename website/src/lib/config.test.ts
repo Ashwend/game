@@ -21,6 +21,8 @@ describe('releasesUrl', () => {
 
 describe('latestDownloadUrl', () => {
   it('builds a latest-release asset link from the asset filename', () => {
+    // Sample asset name; the source of truth for release asset names is
+    // .github/scripts/release_assets.py.
     expect(latestDownloadUrl('ashwend-x86_64-pc-windows-msvc.zip')).toBe(
       `${siteConfig.githubRepoUrl}/releases/latest/download/ashwend-x86_64-pc-windows-msvc.zip`,
     )

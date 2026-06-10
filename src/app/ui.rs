@@ -113,6 +113,9 @@ pub(crate) struct UiResources<'w, 's> {
     /// One-shot sound cues (used here to play the completion sting when the
     /// tutorial finishes).
     play_sound: MessageWriter<'w, PlaySound>,
+    /// Delayed one-shots: the audio tab's test sequences ride through here
+    /// so they start after the test button's own click cue.
+    scheduled_sounds: ResMut<'w, crate::app::audio::ScheduledSounds>,
 }
 
 /// Whether the just-joined world is ready for the player to interact with:
@@ -329,6 +332,15 @@ pub(crate) fn ui_system(
         .button_sound_requests
         .0
         .extend(theme::take_button_sounds(ctx));
+    // Audio-tab test buttons queue (delay, sound) pairs in egui memory
+    // the same way button clicks do; hand them to the scheduler so the
+    // sequence starts after the button's own click cue has cleared and
+    // each sample plays at whatever the sliders say when it fires.
+    for (delay_secs, sound_id) in options::take_test_sounds(ctx) {
+        resources
+            .scheduled_sounds
+            .push(delay_secs, PlaySound::non_spatial(sound_id));
+    }
 
     Ok(())
 }

@@ -20,6 +20,24 @@ If you are planning a large change, please open an issue first so we can agree o
 the approach before you invest the time. Small, focused pull requests are much
 easier to review and land than sweeping ones.
 
+## Build dependencies
+
+A fresh machine needs a Rust toolchain installed via [rustup](https://rustup.rs)
+(the pinned version in `rust-toolchain.toml` is picked up automatically) plus the
+system packages below before `./cli dev` builds. The only third-party C library
+is libopus, used by voice chat; the rest are the usual Bevy desktop deps.
+
+- **Linux** (Debian/Ubuntu):
+  `sudo apt-get install -y g++ pkg-config libx11-dev libasound2-dev libudev-dev libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev libopus-dev`
+- **macOS**: `brew install opus`. If the build falls back to compiling a bundled
+  Opus and fails under CMake 4.x, point pkg-config at the brew install:
+  `export PKG_CONFIG_PATH="$(brew --prefix opus)/lib/pkgconfig:${PKG_CONFIG_PATH:-}"`
+- **Windows** (MSVC): install Opus through vcpkg and point the build at it, the
+  Opus bindings do not use pkg-config on Windows and their bundled CMake build
+  fails on CMake 4.x:
+  `vcpkg install opus:x64-windows-static-md`, then set
+  `OPUS_LIB_DIR=<vcpkg root>\installed\x64-windows-static-md` and `OPUS_STATIC=1`.
+
 ## How to contribute
 
 1. **Open an issue** for bugs or proposals, or comment on an existing one.

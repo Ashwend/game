@@ -7,7 +7,7 @@
 
 use super::*;
 use crate::{
-    combat::{HATCHET_PVP_DAMAGE, PICKAXE_PVP_DAMAGE},
+    game_balance::{STONE_HATCHET_PVP_DAMAGE, STONE_PICKAXE_PVP_DAMAGE},
     items::{BASIC_HATCHET_ID, BASIC_PICKAXE_ID},
     protocol::{
         AccountId, AttackPlayerCommand, ClientMessage, ItemStack, LootBagCommand, LootBagSlotRef,
@@ -96,8 +96,8 @@ fn attack_in_range_with_axe_applies_damage_and_emits_player_impact() {
 
     assert_eq!(
         start_hp - new_hp,
-        HATCHET_PVP_DAMAGE as f32,
-        "axe should deal HATCHET_PVP_DAMAGE in HP",
+        STONE_HATCHET_PVP_DAMAGE as f32,
+        "stone axe should deal STONE_HATCHET_PVP_DAMAGE in HP",
     );
     assert!(
         envelopes
@@ -493,8 +493,8 @@ fn pickaxe_deals_more_damage_than_axe_in_one_swing() {
     attack(&mut pick_server, pick_attacker, pick_target);
     let pick_damage = pick_start - target_health(&pick_server, pick_target);
 
-    assert_eq!(axe_damage, HATCHET_PVP_DAMAGE as f32);
-    assert_eq!(pick_damage, PICKAXE_PVP_DAMAGE as f32);
+    assert_eq!(axe_damage, STONE_HATCHET_PVP_DAMAGE as f32);
+    assert_eq!(pick_damage, STONE_PICKAXE_PVP_DAMAGE as f32);
     assert!(
         pick_damage > axe_damage,
         "pickaxe (slow burst) should deal more per-swing than axe (fast DPS)"
@@ -515,7 +515,7 @@ fn attack_applies_armor_reduction() {
     attack(&mut server, attacker, target);
     let damage = start - target_health(&server, target);
     // 8 raw × (100-50)/100 = 4
-    assert_eq!(damage, (HATCHET_PVP_DAMAGE as f32) / 2.0);
+    assert_eq!(damage, (STONE_HATCHET_PVP_DAMAGE as f32) / 2.0);
 }
 
 #[test]

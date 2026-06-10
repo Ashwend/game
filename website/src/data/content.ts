@@ -23,7 +23,9 @@ export interface Download {
   readonly asset: string
 }
 
-// Built straight from the release matrix in `.github/workflows/release.yml`. The
+// Built straight from the release matrix in `.github/workflows/release.yml`,
+// whose source of truth is `.github/scripts/release_assets.py`; keep the
+// `asset` values below in sync with it when an asset is renamed. The
 // asset names carry Rust target triples (e.g. `x86_64-unknown-linux-gnu`); the
 // "unknown" there is the triple's vendor field, not a mistake; we just show
 // friendly OS/arch labels here instead of the raw filename. For a detected

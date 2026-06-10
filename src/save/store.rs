@@ -346,6 +346,7 @@ mod tests {
         inventory.actionbar_slots[3] = Some(ItemStack {
             item_id: "test.item".into(),
             quantity: 7,
+            durability: Some(123),
         });
 
         save.state.last_authoritative_tick = 12345;

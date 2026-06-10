@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { GALLERY } from '#/data/content'
+import { Picture } from './Picture'
 
 export function Gallery() {
   const [active, setActive] = useState<number | null>(null)
@@ -39,10 +40,13 @@ export function Gallery() {
               aria-label={`Open screenshot: ${shot.alt}`}
               className="group relative block aspect-[16/9] cursor-zoom-in overflow-hidden rounded-2xl border border-white/8 bg-ink-850"
             >
-              <img
+              <Picture
                 src={shot.src}
                 alt={shot.alt}
-                loading="lazy"
+                widths={[640, 1280]}
+                sizes="(min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
+                width={1600}
+                height={900}
                 className="size-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.05]"
               />
               <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-ink-950/55 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />

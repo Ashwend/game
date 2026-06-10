@@ -185,6 +185,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # The `asset:` file names below must match ASSETS in
+        # .github/scripts/release_assets.py, the source of truth for release
+        # asset names (its docstring lists every other hardcoded site).
         include:
           - label: Linux Intel
             runner: ubuntu-24.04

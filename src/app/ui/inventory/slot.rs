@@ -228,6 +228,48 @@ fn paint_item_icon(ui: &egui::Ui, rect: Rect, stack: &ItemStack, is_drag_source:
             Color32::WHITE,
         );
     }
+
+    paint_durability_bar(ui, rect, stack);
+}
+
+/// Thin wear bar along the slot's bottom edge for stacks that carry
+/// durability (tools). Width tracks the remaining fraction; the color
+/// runs green → yellow → red as the tool wears so a glance at the
+/// actionbar answers "how long until this breaks".
+fn paint_durability_bar(ui: &egui::Ui, rect: Rect, stack: &ItemStack) {
+    let Some(remaining) = stack.durability else {
+        return;
+    };
+    let Some(max) = item_definition(&stack.item_id)
+        .and_then(|definition| definition.tool)
+        .and_then(|tool| tool.max_durability)
+        .filter(|max| *max > 0)
+    else {
+        return;
+    };
+    let fraction = (remaining as f32 / max as f32).clamp(0.0, 1.0);
+
+    let track_left = rect.left() + 6.0;
+    let track_right = rect.right() - 6.0;
+    let track_y = rect.bottom() - 6.0;
+    let track = Rect::from_min_max(pos2(track_left, track_y - 3.0), pos2(track_right, track_y));
+    ui.painter()
+        .rect_filled(track, 2.0, Color32::from_rgba_unmultiplied(0, 0, 0, 150));
+
+    if fraction <= 0.0 {
+        return;
+    }
+    // Green above half, fading through yellow into red as it empties.
+    let color = if fraction > 0.5 {
+        let t = (fraction - 0.5) * 2.0;
+        Color32::from_rgb((230.0 * (1.0 - t)) as u8 + 25, 200, 70)
+    } else {
+        let t = fraction * 2.0;
+        Color32::from_rgb(235, (200.0 * t) as u8 + 30, 50)
+    };
+    let fill_right = track_left + (track_right - track_left) * fraction;
+    let fill = Rect::from_min_max(track.left_top(), pos2(fill_right, track.bottom()));
+    ui.painter().rect_filled(fill, 2.0, color);
 }
 
 /// Fallback when an item has no shipped icon PNG (and in headless/test
@@ -282,6 +324,9 @@ fn item_tooltip_body(stack: &ItemStack) -> String {
             tool.tier,
             tool.gather_amount
         ));
+        if let (Some(remaining), Some(max)) = (stack.durability, tool.max_durability) {
+            lines.push(format!("Durability: {remaining}/{max}"));
+        }
     }
     if let Some(deployable) = definition.deployable {
         lines.push(format!("Deployable: {}", deployable.kind.label()));
@@ -314,6 +359,10 @@ fn begin_drag(
         quantity,
         button,
     });
+    // No audio on drag start by design: the drop/move cue at the end of
+    // the drag is the informative one, and a grab cue stacked on top
+    // reads as the same tick twice when shuffling fast. The drag-source
+    // dim is the pick-up feedback.
 }
 
 pub(crate) fn slot_stack(

@@ -110,6 +110,12 @@ const KEEP_MARGIN_RINGS: u32 = 2;
 /// brand-new grids respect the budget.
 const RING_BUDGET: [f32; 5] = [1.0, 0.85, 0.65, 0.45, 0.30];
 
+/// Budget multiplier for rings beyond the end of [`RING_BUDGET`]. Always the
+/// table's last entry; the const index is evaluated at compile time, so an
+/// accidentally emptied table fails the build instead of panicking in
+/// `apply_ring_budget`.
+const OUTERMOST_RING_BUDGET: f32 = RING_BUDGET[RING_BUDGET.len() - 1];
+
 /// Server-side resolution of [`ViewRadiusTier`] to Chebyshev grid radius.
 /// Defined here rather than on the protocol enum so the wire type doesn't
 /// have to know the server's ring-count tuning.
@@ -431,7 +437,7 @@ fn apply_ring_budget(spawns: &mut Vec<ChunkSpawn>) {
         let multiplier = RING_BUDGET
             .get(ring)
             .copied()
-            .unwrap_or(*RING_BUDGET.last().unwrap());
+            .unwrap_or(OUTERMOST_RING_BUDGET);
         let keep_n = (indices.len() as f32 * multiplier).round() as usize;
         for idx in indices.into_iter().take(keep_n) {
             keep.insert(idx);

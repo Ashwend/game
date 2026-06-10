@@ -100,6 +100,53 @@ fn auto_shutoff_when_nothing_to_smelt() {
 }
 
 #[test]
+fn furnace_auto_shutoff_marks_the_deployable_dirty_for_the_mirror() {
+    let mut server = crate::server::test_support::server();
+    let id = server.next_deployed_entity_id;
+    server.next_deployed_entity_id += 1;
+    let entity = crate::server::deployables::DeployedEntity {
+        id,
+        item_id: crate::items::intern_item_id(crate::items::CRUDE_FURNACE_ID),
+        kind: crate::items::DeployableKind::Furnace { tier: 1 },
+        position: crate::protocol::Vec3Net::ZERO,
+        yaw: 0.0,
+        health: 800,
+        max_health: 800,
+        owner: Some(1),
+        // Active but with no fuel, so the very next tick auto-shuts it off.
+        furnace: Some(FurnaceState {
+            active: true,
+            ..Default::default()
+        }),
+    };
+    server.insert_deployed_entity(id, entity);
+    let _ = server.drain_deployable_sync();
+
+    // The `active` flip is replicated as `DeployableActive`, so the tick
+    // must flag the deployable for the mirror sync.
+    server.tick_furnaces();
+    assert!(
+        !server.deployed_entities[&id]
+            .furnace
+            .as_ref()
+            .unwrap()
+            .active,
+        "no fuel → auto-off"
+    );
+    let (dirty, removed) = server.drain_deployable_sync();
+    assert_eq!(dirty, vec![id]);
+    assert!(removed.is_empty());
+
+    // Once idle, further ticks produce no delta at all.
+    server.tick_furnaces();
+    let (dirty, removed) = server.drain_deployable_sync();
+    assert!(
+        dirty.is_empty() && removed.is_empty(),
+        "an idle furnace must not re-enter the dirty set"
+    );
+}
+
+#[test]
 fn non_fuel_rejected_in_fuel_slot_via_merge_helper() {
     let mut slot: Option<ItemStack> = None;
     let leftover = merge_into_optional_slot(&mut slot, ItemStack::new(IRON_ORE_ID, 4));

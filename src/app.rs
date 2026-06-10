@@ -63,16 +63,17 @@ use self::{
     },
     systems::{
         AutoConnectRequest, CameraImpactKick, CameraMotionEffects, ClientSystemSet,
-        DroppedItemEntities, LastTrackedScreen, LootBagEntities, PendingSessionEndReason,
-        RemotePlayerEntities, ResourceNodeEntities, SessionTracker, animate_furnace_fire_system,
-        app_quit_system, apply_deployed_entities_system, apply_display_settings_system,
-        apply_dropped_items_system, apply_graphics_settings_system, apply_held_item_visual_system,
-        apply_loot_bags_system, apply_resource_nodes_system, apply_snapshot_system,
-        apply_test_mode_overrides_system, apply_update_system, auto_connect_poll_system,
-        auto_connect_start_system, camera_follow_system, center_cursor_on_focus_system,
-        chat_shortcut_system, chunk_overlay_system, client_input_system,
-        close_furnace_on_escape_system, close_loot_bag_on_escape_system, drive_auth_flow_system,
-        error_relay_system, flush_settings_on_exit_system, gameplay_inventory_shortcuts_system,
+        CraftCompletionWatch, DroppedItemEntities, LastTrackedScreen, LootBagEntities,
+        PendingSessionEndReason, RemotePlayerEntities, ResourceNodeEntities, SessionTracker,
+        animate_furnace_fire_system, app_quit_system, apply_deployed_entities_system,
+        apply_display_settings_system, apply_dropped_items_system, apply_graphics_settings_system,
+        apply_held_item_visual_system, apply_loot_bags_system, apply_resource_nodes_system,
+        apply_snapshot_system, apply_test_mode_overrides_system, apply_update_system,
+        auto_connect_poll_system, auto_connect_start_system, camera_follow_system,
+        center_cursor_on_focus_system, chat_shortcut_system, chunk_overlay_system,
+        client_input_system, close_furnace_on_escape_system, close_loot_bag_on_escape_system,
+        craft_complete_cue_system, drive_auth_flow_system, error_relay_system,
+        flush_settings_on_exit_system, gameplay_inventory_shortcuts_system,
         maintain_world_grid_system, menu_backdrop_camera_system, mouse_look_system,
         multiplayer_test_owns_window, network_tick_system, placement_input_system,
         reposition_test_window_system, save_client_settings_system, screen_viewed_system,
@@ -320,6 +321,7 @@ fn insert_client_resources(
         .insert_resource(InventoryUiState::default())
         .insert_resource(CraftingUiState::default())
         .insert_resource(CraftingHudState::default())
+        .insert_resource(CraftCompletionWatch::default())
         .insert_resource(DeployablePlacementState::default())
         .insert_resource(PickupTargetState::default())
         .insert_resource(GatherInputState::default())
@@ -734,6 +736,7 @@ fn add_display_systems(app: &mut App) {
 /// the sky update.
 fn add_scene_systems(app: &mut App) {
     app.add_systems(Update, tick_combat_feedback_system)
+        .add_systems(Update, craft_complete_cue_system)
         .add_systems(
             Update,
             crate::app::ui::floating_text::tick_floating_damage_system,
@@ -830,6 +833,12 @@ fn add_audio_systems(app: &mut App) {
     .add_systems(
         Update,
         play_sounds_system.in_set(ClientSystemSet::PlaySounds),
+    )
+    // The scheduler runs just before the bus drain so an entry expiring
+    // this frame plays this frame instead of waiting one out.
+    .add_systems(
+        Update,
+        crate::app::audio::tick_scheduled_sounds_system.before(ClientSystemSet::PlaySounds),
     )
     .add_systems(
         Update,

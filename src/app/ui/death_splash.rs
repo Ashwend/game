@@ -44,6 +44,17 @@ const CLOSE_FADE_SECS: f32 = 0.45;
 pub(super) fn death_splash_ui(ctx: &egui::Context, splash: &DeathSplash) -> bool {
     let mut respawn_requested = false;
 
+    // Escape-minimized: the blackout is gone so the player can chat or
+    // open the pause menu while dead; a compact pill keeps the respawn
+    // one click away. While the close fade runs (respawn landed) the
+    // pill simply disappears, there is nothing left to interact with.
+    if splash.minimized {
+        if splash.closing_elapsed.is_none() {
+            respawn_requested = death_pill_ui(ctx, splash);
+        }
+        return respawn_requested;
+    }
+
     // Two-phase alpha: rising while the player is dead, dropping
     // back to zero once the respawn lands. `multiplier` is 1.0 until
     // `begin_closing()` fires, then ramps down through the close-
@@ -136,10 +147,70 @@ pub(super) fn death_splash_ui(ctx: &egui::Context, splash: &DeathSplash) -> bool
                 if button.clicked() {
                     respawn_requested = true;
                 }
+                ui.add_space(10.0);
+                // Hint that the splash is escapable: dismissing keeps a
+                // compact respawn pill while freeing up chat + pause.
+                let hint_color =
+                    egui::Color32::from_rgba_unmultiplied(0x8A, 0x88, 0x84, title_alpha / 2 + 40);
+                ui.label(
+                    egui::RichText::new("Esc to look around")
+                        .font(egui::FontId::new(14.0, egui::FontFamily::Proportional))
+                        .color(hint_color),
+                );
                 ui.add_space(12.0);
             });
         });
 
+    respawn_requested
+}
+
+/// Compact "you are dead" pill drawn while the full splash is
+/// Escape-minimized: a slim top-center banner with the death line and a
+/// small Respawn button. Deliberately unobtrusive so chat and the pause
+/// menu stay the focus; clicking Respawn behaves exactly like the full
+/// splash's button.
+fn death_pill_ui(ctx: &egui::Context, splash: &DeathSplash) -> bool {
+    let mut respawn_requested = false;
+    egui::Area::new(egui::Id::new("death_splash_pill"))
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 18.0))
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(egui::Color32::from_rgba_unmultiplied(10, 8, 8, 220))
+                .stroke(egui::Stroke::new(
+                    1.0,
+                    egui::Color32::from_rgba_unmultiplied(0xCC, 0x33, 0x33, 140),
+                ))
+                .corner_radius(6)
+                .inner_margin(egui::Margin::symmetric(14, 8))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("YOU DIED")
+                                .font(egui::FontId::new(16.0, egui::FontFamily::Proportional))
+                                .color(egui::Color32::from_rgb(0xCC, 0x33, 0x33))
+                                .strong(),
+                        );
+                        if let Some(name) = splash.killer_name.as_deref() {
+                            ui.label(
+                                egui::RichText::new(format!("· {name}"))
+                                    .font(egui::FontId::new(14.0, egui::FontFamily::Proportional))
+                                    .color(egui::Color32::from_rgb(0xCC, 0xC8, 0xC0)),
+                            );
+                        }
+                        ui.add_space(8.0);
+                        let button = super::theme::game_button(
+                            ui,
+                            "Respawn",
+                            super::theme::ButtonKind::Primary,
+                            110.0,
+                        );
+                        if button.clicked() {
+                            respawn_requested = true;
+                        }
+                    });
+                });
+        });
     respawn_requested
 }
 

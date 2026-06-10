@@ -63,6 +63,39 @@ pub const COMBAT_MISS_RECOVERY_SECONDS: f32 = 0.25;
 pub const RESPAWN_MIN_DISTANCE_M: f32 = 12.0;
 
 // =====================================================================
+// Tools (durability + PvP damage)
+// =====================================================================
+
+/// Impacts a tier-1 (stone) tool survives before breaking. Only swings
+/// that actually connect (a gather payout, a player hit, a structure
+/// hit) consume durability; whiffs are free. At ~12 swings to drain a
+/// full ore node this is roughly 16 nodes per stone tool, enough to
+/// feel the wear without making the early game a re-crafting chore.
+pub const STONE_TOOL_DURABILITY: u32 = 200;
+
+/// Impacts a tier-2 (iron) tool survives. 3x the stone budget on top of
+/// the 2x gather yield: the iron upgrade is felt both as bigger payouts
+/// and as far fewer trips back to the workbench.
+pub const IRON_TOOL_DURABILITY: u32 = 600;
+
+/// Per-swing PvP damage for each tool. The hatchet stays the
+/// fast/light option and the pickaxe the slow/heavy one within a tier,
+/// while the iron tier hits ~1.5x harder than stone so weapon quality
+/// tracks tool progression instead of being flat across tiers.
+pub const STONE_HATCHET_PVP_DAMAGE: u32 = 8;
+pub const IRON_HATCHET_PVP_DAMAGE: u32 = 12;
+pub const STONE_PICKAXE_PVP_DAMAGE: u32 = 15;
+pub const IRON_PICKAXE_PVP_DAMAGE: u32 = 22;
+
+/// Magnitude of the PvP knockback impulse, in m/s, per tool kind. The
+/// hatchet's light tap keeps melee chases tight; the pickaxe's heavy
+/// shove is its compensation for the slower swing. Knockback stays a
+/// kind-level trait (not per tier) so upgrading tools changes damage,
+/// not the feel of getting hit.
+pub const HATCHET_KNOCKBACK_SPEED: f32 = 1.8;
+pub const PICKAXE_KNOCKBACK_SPEED: f32 = 4.0;
+
+// =====================================================================
 // Deployables (workbenches, furnaces, walls, …)
 // =====================================================================
 

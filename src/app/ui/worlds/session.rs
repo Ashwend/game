@@ -11,8 +11,8 @@ use uuid::Uuid;
 
 use crate::{
     app::state::{
-        ClientRuntime, CurrentUser, LoadingSplash, LoadingSplashKind, MenuState, SaveStore,
-        WorldStartAttempt, WorldStartResult,
+        ClientRuntime, CurrentUser, LoadingSplash, LoadingSplashKind, MenuState, NoticeDialog,
+        SaveStore, WorldStartAttempt, WorldStartResult,
     },
     auth::AuthenticatedUser,
     net::{ClientNetwork, ClientSession},
@@ -29,7 +29,12 @@ pub(in crate::app::ui) fn refresh_worlds(menu: &mut MenuState, store: &SaveStore
         Err(error) => {
             menu.worlds.clear();
             menu.corrupted_worlds.clear();
-            menu.status = Some(format!("world list failed: {error}"));
+            // A failed listing means the whole screen is empty; that needs
+            // an acknowledged modal, not a footer line under an empty table.
+            menu.notice = Some(NoticeDialog::error(
+                "Couldn't load worlds",
+                format!("The world list could not be read.\n\n{error}"),
+            ));
         }
     }
 }
@@ -54,7 +59,12 @@ pub(super) fn start_singleplayer(
             runtime.start_session(session, Some(world_id));
             menu.enter_in_game();
         }
-        Err(error) => menu.status = Some(format!("start failed: {error}")),
+        Err(error) => {
+            menu.notice = Some(NoticeDialog::error(
+                "Couldn't start world",
+                error.to_string(),
+            ));
+        }
     }
 }
 
@@ -107,7 +117,10 @@ pub(super) fn start_singleplayer_in_background(
             menu.status = None;
         }
         Err(error) => {
-            menu.status = Some(format!("start failed: could not start loader: {error}"));
+            menu.notice = Some(NoticeDialog::error(
+                "Couldn't start world",
+                format!("The world loader could not be started.\n\n{error}"),
+            ));
         }
     }
 }
@@ -169,7 +182,10 @@ fn finish_singleplayer_start(
             menu.enter_in_game();
         }
         Err(error) => {
-            menu.status = Some(format!("start failed: {error}"));
+            menu.notice = Some(NoticeDialog::error(
+                "Couldn't start world",
+                error.to_string(),
+            ));
             menu.loading_splash = None;
         }
     }

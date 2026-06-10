@@ -49,9 +49,13 @@ pub(crate) fn chat_shortcut_system(
         || menu.chat_open
         || menu.crafting_open
         || menu.inventory_open
-        // Dead players can't chat, loot, or do anything but click
-        // Respawn. The splash is the only modal on screen.
-        || menu.death_splash.is_some()
+        // The full-screen splash is the only modal on screen; once the
+        // player Escape-minimizes it into the respawn pill, chat works
+        // again so they can talk while waiting to respawn.
+        || menu
+            .death_splash
+            .as_ref()
+            .is_some_and(|splash| !splash.minimized)
         // Chat hidden for screenshots: don't let the hotkey open an
         // invisible chat box that would silently swallow controls. Gated on
         // the chat toggle alone, the HUD master doesn't affect chat.
@@ -90,9 +94,16 @@ pub(crate) fn toggle_pause_system(
     if menu.chat_open {
         return;
     }
-    // ESC during the death splash is a no-op, the player has one
-    // exit (the Respawn button), not a pause menu hop.
-    if menu.death_splash.is_some() {
+    // The full-screen death splash owns the first Escape: it collapses
+    // the blackout into the compact respawn pill so chat and the pause
+    // menu become reachable while waiting to respawn. Once minimized,
+    // Escape falls through to the normal pause handling below.
+    if let Some(splash) = menu.death_splash.as_mut()
+        && !splash.minimized
+    {
+        if escape && splash.closing_elapsed.is_none() {
+            splash.minimized = true;
+        }
         return;
     }
 

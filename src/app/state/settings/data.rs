@@ -34,6 +34,7 @@ impl ClientSettings {
         self.audio.music_volume = self.audio.music_volume.clamp(0.0, 1.0);
         self.audio.ui_volume = self.audio.ui_volume.clamp(0.0, 1.0);
         self.audio.sfx_volume = self.audio.sfx_volume.clamp(0.0, 1.0);
+        self.audio.footsteps_volume = self.audio.footsteps_volume.clamp(0.0, 1.0);
         self.voice = self.voice.sanitized();
         self.input.mouse_sensitivity = self.input.mouse_sensitivity.clamp(0.25, 3.0);
         self.keybindings = self.keybindings.sanitized();
@@ -366,6 +367,11 @@ pub(crate) struct AudioSettings {
     pub(crate) ui_volume: f32,
     #[serde(default = "default_volume")]
     pub(crate) sfx_volume: f32,
+    /// Footsteps get their own slider because they fire constantly: some
+    /// players want them ducked without quieting the rest of the effects
+    /// bus. Defaults to unity so existing mixes are unchanged.
+    #[serde(default = "default_volume")]
+    pub(crate) footsteps_volume: f32,
 }
 
 impl Default for AudioSettings {
@@ -375,6 +381,7 @@ impl Default for AudioSettings {
             music_volume: 1.0,
             ui_volume: 1.0,
             sfx_volume: 1.0,
+            footsteps_volume: 1.0,
         }
     }
 }

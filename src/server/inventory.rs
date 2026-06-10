@@ -105,7 +105,7 @@ impl GameServer {
         let physics_body = self
             .dropped_item_physics
             .spawn_body(position, velocity, yaw);
-        self.dropped_items.insert(
+        self.insert_dropped_item(
             id,
             DroppedItemBody {
                 item: DroppedWorldItem {
@@ -163,12 +163,12 @@ impl GameServer {
             None => requested,
         };
         if remainder.is_none() {
-            if let Some(body) = self.dropped_items.remove(&dropped_item_id) {
+            if let Some(body) = self.remove_dropped_item(dropped_item_id) {
                 self.dropped_item_physics.remove_body(body.body_handle);
                 self.chunk_manager.untrack_dropped_item(dropped_item_id);
             }
         } else if accepted > 0
-            && let Some(body) = self.dropped_items.get_mut(&dropped_item_id)
+            && let Some(body) = self.dropped_item_body_mut(dropped_item_id)
         {
             body.item.stack.quantity = body.item.stack.quantity.saturating_sub(accepted);
         }

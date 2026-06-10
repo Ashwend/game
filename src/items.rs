@@ -131,6 +131,15 @@ pub struct ToolProfile {
     pub tier: u8,
     pub gather_amount: u16,
     pub cooldown_ticks: u64,
+    /// Impacts the tool survives before breaking. Only swings that
+    /// connect with something (gather payout, player hit, structure
+    /// hit) consume durability; whiffs are free. `None` means the tool
+    /// never wears (bare hands).
+    pub max_durability: Option<u32>,
+    /// Raw per-swing PvP damage before armor. `0` means the tool can't
+    /// damage players at all (bare hands); the combat path rejects the
+    /// swing instead of landing a zero-damage hit.
+    pub player_damage: u32,
 }
 
 /// Synthesized tool profile used when no actionbar item is held. The
@@ -144,6 +153,8 @@ pub const HANDS_TOOL: ToolProfile = ToolProfile {
     tier: 0,
     gather_amount: 1,
     cooldown_ticks: 10,
+    max_durability: None,
+    player_damage: 0,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -393,6 +404,8 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
             tier: 1,
             gather_amount: 6,
             cooldown_ticks: 6,
+            max_durability: Some(crate::game_balance::STONE_TOOL_DURABILITY),
+            player_damage: crate::game_balance::STONE_HATCHET_PVP_DAMAGE,
         }),
         deployable: None,
     },
@@ -410,6 +423,8 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
             tier: 1,
             gather_amount: 6,
             cooldown_ticks: 6,
+            max_durability: Some(crate::game_balance::STONE_TOOL_DURABILITY),
+            player_damage: crate::game_balance::STONE_PICKAXE_PVP_DAMAGE,
         }),
         deployable: None,
     },
@@ -431,6 +446,8 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
             // tier upgrade is felt as bigger payouts, not faster swings.
             gather_amount: 12,
             cooldown_ticks: 5,
+            max_durability: Some(crate::game_balance::IRON_TOOL_DURABILITY),
+            player_damage: crate::game_balance::IRON_HATCHET_PVP_DAMAGE,
         }),
         deployable: None,
     },
@@ -449,6 +466,8 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
             tier: 2,
             gather_amount: 12,
             cooldown_ticks: 5,
+            max_durability: Some(crate::game_balance::IRON_TOOL_DURABILITY),
+            player_damage: crate::game_balance::IRON_PICKAXE_PVP_DAMAGE,
         }),
         deployable: None,
     },
@@ -516,8 +535,11 @@ pub fn stack_limit(item_id: &str) -> Option<u16> {
 
 pub fn normalize_stack(stack: &ItemStack) -> Option<ItemStack> {
     let limit = stack_limit(&stack.item_id)?;
-    let quantity = stack.quantity.clamp(1, limit);
-    Some(ItemStack::new(stack.item_id.clone(), quantity))
+    // Clone rather than rebuild via `ItemStack::new`: rebuilding would
+    // reset a worn tool's remaining durability back to factory-fresh.
+    let mut normalized = stack.clone();
+    normalized.quantity = stack.quantity.clamp(1, limit);
+    Some(normalized)
 }
 
 pub fn look_forward(yaw: f32, pitch: f32) -> Vec3Net {

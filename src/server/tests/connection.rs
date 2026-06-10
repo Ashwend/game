@@ -737,3 +737,118 @@ fn world_save_round_trips_player_inventory_and_position() {
 
     drop(restored_envelopes);
 }
+
+#[test]
+fn world_save_restores_sleeping_bodies_on_boot() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    equip_basic_tools(&mut server, client_id);
+    server.receive(
+        client_id,
+        ClientMessage::Movement(PlayerMovement {
+            sequence: 1,
+            position: Vec3Net::new(3.0, 0.0, -9.0),
+            velocity: Vec3Net::ZERO,
+            yaw: 1.1,
+            pitch: 0.0,
+            grounded: true,
+        }),
+    );
+
+    let save = server.world_save();
+    let restored = GameServer::new(
+        save,
+        ServerSettings {
+            auth_mode: AuthMode::NoAuth,
+            singleplayer_host: Some(1),
+        },
+    );
+
+    // The body is back before anyone reconnects: offline, at its saved
+    // pose, with its saved inventory, and reachable through the account
+    // index so a reconnect routes into the wake path.
+    assert_eq!(restored.clients.len(), 1);
+    let (body_id, body) = restored.clients.iter().next().expect("restored body");
+    assert!(
+        !body.online,
+        "restored body sleeps until the account returns"
+    );
+    assert!((body.controller.position.x - 3.0).abs() < f32::EPSILON);
+    assert!((body.controller.position.z + 9.0).abs() < f32::EPSILON);
+    assert!(body.inventory.actionbar_slots[0].is_some());
+    assert_eq!(restored.account_to_client.get(&1), Some(body_id));
+}
+
+#[test]
+fn restored_sleeping_body_wakes_in_place_on_reconnect() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    equip_basic_tools(&mut server, client_id);
+    server.receive(
+        client_id,
+        ClientMessage::Movement(PlayerMovement {
+            sequence: 1,
+            position: Vec3Net::new(3.0, 0.0, -9.0),
+            velocity: Vec3Net::ZERO,
+            yaw: 1.1,
+            pitch: 0.0,
+            grounded: true,
+        }),
+    );
+
+    let save = server.world_save();
+    let mut restored = GameServer::new(
+        save,
+        ServerSettings {
+            auth_mode: AuthMode::NoAuth,
+            singleplayer_host: Some(1),
+        },
+    );
+    let body_id = *restored.account_to_client.get(&1).expect("body indexed");
+
+    let (woken_id, _envelopes) = restored
+        .connect(
+            PROTOCOL_VERSION,
+            Some(GAME_VERSION.to_owned()),
+            1,
+            "Host".to_owned(),
+            String::new(),
+        )
+        .expect("returning host should wake the body");
+
+    assert_eq!(woken_id, body_id, "reconnect reuses the body's client id");
+    let client = restored.clients.get(&woken_id).expect("woken body");
+    assert!(client.online);
+    assert!((client.controller.position.x - 3.0).abs() < f32::EPSILON);
+    assert!(client.inventory.actionbar_slots[0].is_some());
+}
+
+#[test]
+fn dead_persisted_player_restores_as_dead_body() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    {
+        let client = server.clients.get_mut(&client_id).expect("client exists");
+        client.controller.health = 0.0;
+        client.lifecycle = crate::server::PlayerLifecycle::Dead {
+            since_tick: 0,
+            killer: None,
+        };
+    }
+
+    let save = server.world_save();
+    let restored = GameServer::new(
+        save,
+        ServerSettings {
+            auth_mode: AuthMode::NoAuth,
+            singleplayer_host: Some(1),
+        },
+    );
+
+    let body = restored.clients.values().next().expect("restored body");
+    assert!(!body.online);
+    assert!(
+        body.lifecycle.is_dead(),
+        "zero-health persisted player comes back as a dead body, not a zombie"
+    );
+}

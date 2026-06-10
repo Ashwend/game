@@ -545,4 +545,101 @@ mod tests {
         assert!(!state.is_dropped_hidden(1));
         assert!(!state.is_node_hidden(NODE));
     }
+
+    #[test]
+    fn prune_is_a_high_water_mark_not_a_full_flush() {
+        // Two in-flight predictions; the server has only processed the first.
+        // Pruning to seq1 must keep every seq2 effect alive: the pending op,
+        // the hidden ids, and the node-take ledger.
+        let mut state = PredictionState::default();
+        let seq1 = state.alloc_seq();
+        state.push_pickup(seq1, 7, ItemStack::new(COAL_ID, 1));
+        let seq2 = state.alloc_seq();
+        state.push_node_pickup(seq2, NODE, vec![ItemStack::new(COAL_ID, 2)], true);
+
+        state.prune(seq1);
+        assert!(!state.is_dropped_hidden(7), "processed pickup must unhide");
+        assert!(state.is_node_hidden(NODE), "later op must stay hidden");
+        assert!(!state.is_idle());
+        let effective = state.rebuild_effective(&PlayerInventoryState::empty());
+        assert_eq!(
+            effective.inventory_slots[0].as_ref().map(|s| s.quantity),
+            Some(2),
+            "only the surviving op replays"
+        );
+        let storage = state.effective_node_storage(NODE, &[ItemStack::new(COAL_ID, 2)]);
+        assert!(storage.is_empty(), "surviving node take still subtracts");
+    }
+
+    #[test]
+    fn clear_keeps_seq_climbing_across_reconnects() {
+        // Documented invariant on `clear`: `next_seq` keeps climbing so a
+        // late-arriving stale command can never collide with a fresh seq.
+        let mut state = PredictionState::default();
+        let before = state.alloc_seq();
+        state.push_gather(before, NODE, ItemStack::new(COAL_ID, 1));
+        state.clear();
+        let after = state.alloc_seq();
+        assert!(
+            after > before,
+            "seq must not reset on clear, got {after} after {before}"
+        );
+    }
+
+    #[test]
+    fn drop_with_none_quantity_removes_whole_stack() {
+        let mut state = PredictionState::default();
+        let seq = state.alloc_seq();
+        state.push_drop(seq, ItemContainerSlot::inventory(0), None);
+
+        let replicated = inv_with(Some(ItemStack::new(COAL_ID, 3)));
+        let effective = state.rebuild_effective(&replicated);
+        assert!(
+            effective.inventory_slots[0].is_none(),
+            "None quantity predicts a full-stack drop"
+        );
+    }
+
+    #[test]
+    fn node_storage_subtracts_by_item_id_across_stacks_and_drops_empties() {
+        use crate::items::WOOD_ID;
+        let mut state = PredictionState::default();
+        let base = vec![
+            ItemStack::new(COAL_ID, 2),
+            ItemStack::new(WOOD_ID, 4),
+            ItemStack::new(COAL_ID, 3),
+        ];
+
+        // One take larger than the first coal stack: drains stack 0 (which is
+        // then dropped) and spills into stack 2, leaving the wood untouched.
+        let seq = state.alloc_seq();
+        state.push_gather(seq, NODE, ItemStack::new(COAL_ID, 3));
+
+        let storage = state.effective_node_storage(NODE, &base);
+        assert_eq!(storage.len(), 2, "emptied coal stack must be dropped");
+        assert_eq!(storage[0].item_id.as_ref(), WOOD_ID);
+        assert_eq!(storage[0].quantity, 4, "other item ids stay untouched");
+        assert_eq!(storage[1].item_id.as_ref(), COAL_ID);
+        assert_eq!(storage[1].quantity, 2, "spill reduces the second stack");
+
+        // A different node sees the untouched base; takes are per-node.
+        let other = state.effective_node_storage(NODE + 1, &base);
+        assert_eq!(other.len(), 3);
+    }
+
+    #[test]
+    fn hidden_node_without_pending_ops_still_counts_as_active() {
+        // A crude pickup can hide a node while contributing zero inventory ops
+        // (empty accepted list). The fold must not treat that frame as idle,
+        // otherwise the un-hide on reject would never run.
+        let mut state = PredictionState::default();
+        let seq = state.alloc_seq();
+        state.push_node_pickup(seq, NODE, vec![], true);
+        assert!(state.is_node_hidden(NODE));
+        assert!(!state.is_idle(), "hidden node alone keeps the fold alive");
+
+        state.prune(seq);
+        assert!(!state.is_node_hidden(NODE));
+        assert!(state.is_idle());
+    }
 }

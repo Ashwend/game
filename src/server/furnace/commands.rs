@@ -176,7 +176,7 @@ impl GameServer {
                 FuelPlaceOutcome::Rejected(stack) => stack,
             };
         } else {
-            let Some(entity) = self.deployed_entities.get_mut(&furnace_id) else {
+            let Some(entity) = self.deployed_entity_mut(furnace_id) else {
                 self.restore_to_source(client_id, furnace_id, from, taken);
                 return;
             };
@@ -226,6 +226,10 @@ impl GameServer {
         furnace_id: DeployedEntityId,
         stack: ItemStack,
     ) -> FuelPlaceOutcome {
+        // Direct field borrow (not `deployed_entity_mut`) because the swap
+        // branch below also reads `self.clients` while `furnace` is live;
+        // the explicit mark keeps the mirror-sync contract intact.
+        self.mark_deployable_dirty(furnace_id);
         let Some(entity) = self.deployed_entities.get_mut(&furnace_id) else {
             return FuelPlaceOutcome::Rejected(stack);
         };
@@ -332,7 +336,9 @@ impl GameServer {
         let Some(furnace_id) = self.client_open_furnace(client_id) else {
             return;
         };
-        let Some(entity) = self.deployed_entities.get_mut(&furnace_id) else {
+        // `deployed_entity_mut` flags the entity dirty so the mirror
+        // re-syncs `DeployableActive` next pass.
+        let Some(entity) = self.deployed_entity_mut(furnace_id) else {
             return;
         };
         let Some(furnace) = entity.furnace.as_mut() else {
@@ -372,8 +378,7 @@ impl GameServer {
         // hook; player-slot takes don't.
         if let Some(index) = container_index(from)
             && let Some(furnace) = self
-                .deployed_entities
-                .get_mut(&furnace_id)
+                .deployed_entity_mut(furnace_id)
                 .and_then(|entity| entity.furnace.as_mut())
         {
             FurnaceContainer(furnace).after_take(index, source_drained);
@@ -425,7 +430,7 @@ impl GameServer {
             }
             FurnaceSlotRef::Fuel | FurnaceSlotRef::Item(_) => {
                 let index = container_index(slot)?;
-                let entity = self.deployed_entities.get_mut(&furnace_id)?;
+                let entity = self.deployed_entity_mut(furnace_id)?;
                 let furnace = entity.furnace.as_mut()?;
                 let mut container = FurnaceContainer(furnace);
                 let slot_ref = container.slot_mut(index)?;
@@ -475,7 +480,7 @@ impl GameServer {
                 let Some(index) = container_index(slot) else {
                     return Some(stack);
                 };
-                let Some(entity) = self.deployed_entities.get_mut(&furnace_id) else {
+                let Some(entity) = self.deployed_entity_mut(furnace_id) else {
                     return Some(stack);
                 };
                 let Some(furnace) = entity.furnace.as_mut() else {

@@ -76,7 +76,7 @@ impl GameServer {
             .and_then(|def| def.tool)
             .unwrap_or(HANDS_TOOL);
 
-        let Some(damage_instance) = tool_player_damage(tool_profile.kind, attacker_id) else {
+        let Some(damage_instance) = tool_player_damage(tool_profile, attacker_id) else {
             // Hands or non-combat tool, nothing to do. Cooldown is not
             // touched because no swing was accepted (the client gates
             // bare-hand swings too; defence in depth).
@@ -224,6 +224,11 @@ impl GameServer {
         if new_health <= 0.0 {
             envelopes.extend(self.kill_player(target_id, Some(attacker_id), &attacker_name));
         }
+
+        // The swing connected, so the attacker's tool wears. After the
+        // kill handling on purpose: the killing blow lands even if it is
+        // also the swing that breaks the tool.
+        envelopes.extend(self.consume_active_tool_durability(attacker_id));
 
         self.set_attack_cooldown(attacker_id, tool_profile.cooldown_ticks);
         envelopes

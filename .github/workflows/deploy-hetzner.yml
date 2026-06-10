@@ -44,6 +44,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
+        # The artifact name (here and in the scp step below) must match the
+        # Linux ARM entry in .github/scripts/release_assets.py, the source of
+        # truth for release asset names.
         run: |
           mkdir -p release-artifacts
           gh run download "${RELEASE_RUN_ID}" --name release-metadata --dir release-artifacts

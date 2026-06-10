@@ -70,19 +70,26 @@ impl GameServer {
         let accepted_quantity = accepted_inventory_quantity(&mut client.inventory, payout.clone());
         if accepted_quantity == 0 {
             // Apply the cooldown anyway so the player can't spam a "full"
-            // toast every swing impact while their bag is full.
+            // toast every swing impact while their bag is full. The tool
+            // still struck the node, so wear applies too.
             client.next_gather_tick = self.tick + tool.cooldown_ticks.max(1);
-            return inventory_full_toast_envelopes(client_id);
+            let mut envelopes = inventory_full_toast_envelopes(client_id);
+            envelopes.extend(self.consume_active_tool_durability(client_id));
+            return envelopes;
         }
         client.next_gather_tick = self.tick + tool.cooldown_ticks.max(1);
 
         let payout_id = payout.item_id.clone();
+        // Wear lands after the payout: the swing that breaks the tool
+        // still pays out its gather.
+        let wear_envelopes = self.consume_active_tool_durability(client_id);
         let mut depleted = false;
         if let Some(node) = self.resource_node_state_mut(command.resource_node_id) {
             remove_resource_from_storage(node, &payout_id, accepted_quantity);
             depleted = resource_storage_is_empty(node);
         }
         let mut envelopes = item_acquired_toast_envelopes(client_id, &payout_id, accepted_quantity);
+        envelopes.extend(wear_envelopes);
         if depleted {
             // Remove the node entirely, the chunk manager schedules a
             // fresh-position respawn 5-15 min later in the same grid.

@@ -1,7 +1,7 @@
 use bevy_egui::egui;
 
 use crate::{
-    app::state::{EditWorldDialog, MenuState, SaveStore},
+    app::state::{EditWorldDialog, MenuState, NoticeDialog, SaveStore},
     save::validate_world_name,
     world::MapType,
 };
@@ -84,7 +84,12 @@ pub(in crate::app::ui::worlds) fn rename_world_from_dialog(
 ) {
     match store.0.rename_world(dialog.world_id, &dialog.name) {
         Ok(_) => refresh_worlds(menu, store),
-        Err(error) => menu.status = Some(format!("rename failed: {error}")),
+        Err(error) => {
+            menu.notice = Some(NoticeDialog::error(
+                "Couldn't rename world",
+                error.to_string(),
+            ));
+        }
     }
 }
 
@@ -311,11 +316,9 @@ mod tests {
 
         rename_world_from_dialog(dialog, &mut menu, &store);
 
-        assert!(
-            menu.status
-                .as_deref()
-                .expect("status set")
-                .contains("rename failed")
+        assert_eq!(
+            menu.notice.expect("notice set").title,
+            "Couldn't rename world"
         );
         let _ = fs::remove_dir_all(store.0.root());
     }

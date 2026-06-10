@@ -11,6 +11,8 @@
 set -eu
 
 REPO="Ashwend/game"
+# Must match the macOS ARM entry in .github/scripts/release_assets.py, the
+# source of truth for release asset names.
 ASSET="ashwend-aarch64-apple-darwin.zip"
 APP="Ashwend.app"
 DEST="${ASHWEND_INSTALL_DIR:-/Applications}"
