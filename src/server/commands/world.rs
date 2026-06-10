@@ -1,21 +1,21 @@
-//! `/spawn` and `/tp`, world-mutation admin commands, plus the small
-//! PRNG they rely on.
+//! `/spawn`, `/drain`, and `/tp`, world-mutation admin commands, plus
+//! the small PRNG they rely on.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
-    protocol::{ClientId, ServerMessage, ToastKind, ToastMessage, Vec3Net},
+    protocol::{ClientId, ItemStack, ServerMessage, ToastKind, ToastMessage, Vec3Net},
     resources::{
         BIRCH_TREE_LARGE_NODE_ID, BIRCH_TREE_NODE_ID, BIRCH_TREE_SMALL_NODE_ID,
         BRANCH_PILE_NODE_ID, COAL_NODE_ID, HAY_GRASS_NODE_ID, IRON_NODE_ID,
         PINE_TREE_LARGE_NODE_ID, PINE_TREE_NODE_ID, PINE_TREE_SMALL_NODE_ID,
         RESOURCE_NODE_DEFINITIONS, STONE_NODE_ID, SULFUR_NODE_ID, SURFACE_STONE_NODE_ID,
-        resource_node_definition, spawn_resource_node,
+        best_resource_node_target, resource_node_definition, spawn_resource_node,
     },
     world::{NodeKind, WorldResourceNodeSpawn},
 };
 
-use super::super::{DeliveryTarget, GameServer, ServerEnvelope};
+use super::super::{DeliveryTarget, GameServer, ServerEnvelope, movement::player_eye_position};
 use super::{reply_success, reply_warning};
 
 /// Hard limit on `/spawn` distance. Keeps an admin debug command from
@@ -118,6 +118,111 @@ impl GameServer {
         reply_success(
             client_id,
             format!("spawned {label} {distance:.1}m ahead (id {node_id})"),
+        )
+    }
+
+    /// `/drain [remaining-fraction]`
+    ///
+    /// Sets the storage of the resource node the issuer is looking at
+    /// (same view-ray targeting and reach as a gather swing) to a
+    /// fraction of its definition's spawn quantity, default 0.5. Accepts
+    /// `0..=1` or a percentage (`/drain 25`). Draining to zero removes
+    /// the node through the regular depletion path, including the
+    /// `ResourceNodeDepleted` broadcast, so clients play the death
+    /// effect. Admin-only debug command, built to exercise the ore
+    /// depletion-stage visuals end to end (storage mutation → mirror
+    /// sync → Lightyear diff → client stage swap) without swinging a
+    /// pickaxe forty times.
+    pub(super) fn command_drain(
+        &mut self,
+        client_id: ClientId,
+        args: &[&str],
+    ) -> Vec<ServerEnvelope> {
+        let Some(client) = self.clients.get(&client_id) else {
+            return Vec::new();
+        };
+        if !client.is_admin {
+            return reply_warning(client_id, "admin only");
+        }
+
+        let mut fraction = 0.5_f32;
+        if let Some(arg) = args.first() {
+            let Ok(value) = arg.parse::<f32>() else {
+                return reply_warning(
+                    client_id,
+                    "usage: /drain [remaining-fraction], e.g. /drain 0.4 or /drain 40",
+                );
+            };
+            // Accept percentages so `/drain 40` reads naturally.
+            fraction = if value > 1.0 { value / 100.0 } else { value };
+        }
+        if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction) {
+            return reply_warning(client_id, "fraction must be within 0 to 1 (or 0 to 100)");
+        }
+
+        let eye = player_eye_position(client.controller.position);
+        let yaw = client.controller.yaw;
+        let pitch = client.controller.pitch;
+        let Some(target_id) =
+            best_resource_node_target(eye, yaw, pitch, self.resource_nodes.values())
+                .map(|(node, _)| node.id)
+        else {
+            return reply_warning(
+                client_id,
+                "no resource node in view; stand within gather reach and look at one",
+            );
+        };
+        let definition_id = self
+            .resource_nodes
+            .get(&target_id)
+            .map(|node| node.definition_id.clone())
+            .unwrap_or_default();
+        let Some(definition) = resource_node_definition(&definition_id) else {
+            return reply_warning(client_id, "targeted node has no definition");
+        };
+
+        // Absolute, not relative: storage is rebuilt from the definition's
+        // spawn quantities so repeated `/drain 0.5` calls are idempotent.
+        let new_storage: Vec<ItemStack> = definition
+            .storage
+            .iter()
+            .map(|material| {
+                ItemStack::new(
+                    material.item_id,
+                    (material.quantity as f32 * fraction).round() as u16,
+                )
+            })
+            .filter(|stack| stack.quantity > 0)
+            .collect();
+
+        if new_storage.is_empty() {
+            // Same path a final gather swing takes, so clients see the
+            // shatter/fell death effect and the chunk manager schedules
+            // the regular respawn.
+            self.remove_resource_node(target_id);
+            self.chunk_manager
+                .handle_node_depleted(target_id, self.tick);
+            let mut envelopes = reply_success(
+                client_id,
+                format!("{} drained empty (removed)", definition.name),
+            );
+            envelopes.push(ServerEnvelope {
+                target: DeliveryTarget::Broadcast,
+                message: ServerMessage::ResourceNodeDepleted { id: target_id },
+            });
+            return envelopes;
+        }
+
+        if let Some(node) = self.resource_node_state_mut(target_id) {
+            node.storage = new_storage;
+        }
+        reply_success(
+            client_id,
+            format!(
+                "{} set to {:.0}% remaining",
+                definition.name,
+                fraction * 100.0
+            ),
         )
     }
 

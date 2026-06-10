@@ -24,10 +24,15 @@ pub(super) fn spawn_resource_node_entity(
     id: ResourceNodeId,
     position: Vec3Net,
     model: ResourceNodeModel,
+    stage: u8,
     target_transform: Transform,
     should_pop_in: bool,
 ) {
     let (mesh, material) = resource_node_visual(assets, model);
+    // Ore/vein nodes that arrive already part-mined (a vein someone else
+    // worked, or persisted partial storage from a save) spawn straight at
+    // their depletion-stage mesh instead of briefly flashing full.
+    let mesh = ore_stage_mesh(assets, model, stage).unwrap_or(mesh);
     let lod_mesh = tree_lod_mesh(assets, model);
     let mut spawn_command = commands.spawn((
         Name::new(format!("Resource Node {id}")),
@@ -71,6 +76,7 @@ pub(super) fn spawn_resource_node_entity(
     }
     let entity = spawn_command.id();
     entities.entities.insert(id, entity);
+    entities.stages.insert(id, stage);
 
     if let Some(lod_mesh) = lod_mesh {
         commands.entity(entity).with_children(|parent| {
@@ -166,19 +172,44 @@ fn spawn_pop_in_chip_burst(
     );
 }
 
+/// The depletion-stage mesh for an ore/vein model, or `None` for models
+/// that don't step through mining stages (trees, crude clutter). `stage`
+/// indexes the per-style array and is clamped to the last stage.
+pub(crate) fn ore_stage_mesh(
+    assets: &ResourceVisualAssets,
+    model: ResourceNodeModel,
+    stage: u8,
+) -> Option<Handle<Mesh>> {
+    let meshes = match model {
+        ResourceNodeModel::CoalOre => &assets.coal_node_meshes,
+        ResourceNodeModel::IronOre => &assets.iron_node_meshes,
+        ResourceNodeModel::SulfurOre => &assets.sulfur_node_meshes,
+        ResourceNodeModel::StoneVein => &assets.stone_vein_meshes,
+        _ => return None,
+    };
+    let index = (stage as usize).min(meshes.len() - 1);
+    Some(meshes[index].clone())
+}
+
 pub(crate) fn resource_node_visual(
     assets: &ResourceVisualAssets,
     model: ResourceNodeModel,
 ) -> (Handle<Mesh>, Handle<StandardMaterial>) {
     match model {
-        ResourceNodeModel::CoalOre => (assets.coal_node_mesh.clone(), assets.coal_material.clone()),
-        ResourceNodeModel::IronOre => (assets.iron_node_mesh.clone(), assets.iron_material.clone()),
+        ResourceNodeModel::CoalOre => (
+            assets.coal_node_meshes[0].clone(),
+            assets.coal_material.clone(),
+        ),
+        ResourceNodeModel::IronOre => (
+            assets.iron_node_meshes[0].clone(),
+            assets.iron_material.clone(),
+        ),
         ResourceNodeModel::SulfurOre => (
-            assets.sulfur_node_mesh.clone(),
+            assets.sulfur_node_meshes[0].clone(),
             assets.sulfur_material.clone(),
         ),
         ResourceNodeModel::StoneVein => (
-            assets.stone_vein_mesh.clone(),
+            assets.stone_vein_meshes[0].clone(),
             assets.stone_vein_material.clone(),
         ),
         ResourceNodeModel::PineTreeSmall => (

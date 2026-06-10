@@ -42,6 +42,7 @@ impl GameServer {
 
         match name.as_str() {
             "spawn" => self.command_spawn(client_id, &args),
+            "drain" => self.command_drain(client_id, &args),
             "time" => self.command_set_time(client_id, &args),
             "speed" | "timescale" => self.command_set_time_multiplier(client_id, &args),
             "test-kit" | "testkit" => self.command_test_kit(client_id),
@@ -72,6 +73,12 @@ impl GameServer {
             "  /spawn <kind> [distance]: admin only"
         };
         lines.push(spawn_line.to_owned());
+        let drain_line = if is_admin {
+            "  /drain [fraction]: set the looked-at node's remaining storage (e.g. /drain 0.4)"
+        } else {
+            "  /drain [fraction]: admin only"
+        };
+        lines.push(drain_line.to_owned());
         let time_line = if is_admin {
             "  /time <HH:MM|HHMM|hour>: set the time of day"
         } else {

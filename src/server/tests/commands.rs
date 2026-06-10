@@ -128,6 +128,168 @@ fn spawn_command_handles_non_ore_kinds_and_warns_when_kind_is_missing() {
     );
 }
 
+/// Spawn a node 2.2 m ahead of the host and aim the host's pitch down at
+/// its anchor so the gather view-ray targeting (which `/drain` reuses)
+/// resolves it. Returns the new node's id.
+fn spawn_node_in_view(server: &mut GameServer, host_id: ClientId, kind: &str) -> u64 {
+    let known_ids: std::collections::HashSet<u64> =
+        server.resource_nodes_iter().map(|(id, _)| *id).collect();
+    let envelopes = server.receive(
+        host_id,
+        ClientMessage::Command {
+            text: format!("spawn {kind} 2.2"),
+        },
+    );
+    assert!(
+        envelopes.iter().any(|envelope| matches!(
+            &envelope.message,
+            ServerMessage::Toast(payload) if payload.kind == ToastKind::Success
+        )),
+        "admin spawn should succeed"
+    );
+    // Aim at the node anchor (~0.66 m up, 2.2 m out) the way a player
+    // mining it would; matches the pitch used by the targeting tests in
+    // `resources.rs`.
+    server
+        .clients
+        .get_mut(&host_id)
+        .expect("host client")
+        .controller
+        .pitch = -0.42;
+    server
+        .resource_nodes_iter()
+        .find(|(id, _)| !known_ids.contains(id))
+        .map(|(id, _)| *id)
+        .expect("spawned node id")
+}
+
+#[test]
+fn drain_command_sets_the_looked_at_node_storage_fraction() {
+    let mut server = server();
+    let host_id = connect_host(&mut server);
+    let node_id = spawn_node_in_view(&mut server, host_id, "coal");
+
+    let envelopes = server.receive(
+        host_id,
+        ClientMessage::Command {
+            text: "drain 0.5".to_owned(),
+        },
+    );
+    assert!(
+        envelopes.iter().any(|envelope| matches!(
+            &envelope.message,
+            ServerMessage::Toast(payload) if payload.kind == ToastKind::Success
+        )),
+        "admin drain should succeed"
+    );
+
+    let node = server
+        .resource_nodes_iter()
+        .find(|(id, _)| **id == node_id)
+        .map(|(_, node)| node.clone())
+        .expect("node still present");
+    let remaining: u16 = node.storage.iter().map(|stack| stack.quantity).sum();
+    // Coal spawns with 72; half rounds to 36.
+    assert_eq!(remaining, 36);
+
+    // Percent form is accepted and absolute (not stacking on the
+    // previous drain): /drain 25 leaves 18 of 72.
+    server.receive(
+        host_id,
+        ClientMessage::Command {
+            text: "drain 25".to_owned(),
+        },
+    );
+    let node = server
+        .resource_nodes_iter()
+        .find(|(id, _)| **id == node_id)
+        .map(|(_, node)| node.clone())
+        .expect("node still present");
+    let remaining: u16 = node.storage.iter().map(|stack| stack.quantity).sum();
+    assert_eq!(remaining, 18);
+}
+
+#[test]
+fn drain_to_zero_removes_the_node_and_broadcasts_depletion() {
+    let mut server = server();
+    let host_id = connect_host(&mut server);
+    let node_id = spawn_node_in_view(&mut server, host_id, "iron");
+
+    let envelopes = server.receive(
+        host_id,
+        ClientMessage::Command {
+            text: "drain 0".to_owned(),
+        },
+    );
+
+    assert!(
+        server.resource_nodes_iter().all(|(id, _)| *id != node_id),
+        "node should be removed"
+    );
+    assert!(
+        envelopes.iter().any(|envelope| matches!(
+            (&envelope.target, &envelope.message),
+            (
+                super::DeliveryTarget::Broadcast,
+                ServerMessage::ResourceNodeDepleted { id }
+            ) if *id == node_id
+        )),
+        "clients need the depletion broadcast to play the death effect"
+    );
+}
+
+#[test]
+fn drain_requires_admin_and_a_targeted_node() {
+    let mut server = server();
+    let host_id = connect_host(&mut server);
+
+    // No node in view: a warning, no mutation.
+    let envelopes = server.receive(
+        host_id,
+        ClientMessage::Command {
+            text: "drain".to_owned(),
+        },
+    );
+    assert!(
+        envelopes.iter().any(|envelope| matches!(
+            &envelope.message,
+            ServerMessage::Toast(payload) if payload.kind == ToastKind::Warning
+        )),
+        "drain with no target should warn"
+    );
+
+    // Non-admin: rejected.
+    let _ = server
+        .connect(
+            PROTOCOL_VERSION,
+            Some(GAME_VERSION.to_owned()),
+            2,
+            "Guest".to_owned(),
+            String::new(),
+        )
+        .expect("guest should connect");
+    let guest_id = server
+        .players_iter()
+        .find(|player| player.account_id == 2)
+        .map(|player| player.client_id)
+        .expect("guest client id");
+    let envelopes = server.receive(
+        guest_id,
+        ClientMessage::Command {
+            text: "drain 0.5".to_owned(),
+        },
+    );
+    let warning = envelopes
+        .iter()
+        .find_map(|envelope| match &envelope.message {
+            ServerMessage::Toast(payload) => Some(payload.clone()),
+            _ => None,
+        })
+        .expect("non-admin drain should warn");
+    assert_eq!(warning.kind, ToastKind::Warning);
+    assert!(warning.text.to_ascii_lowercase().contains("admin"));
+}
+
 #[test]
 fn help_command_replies_as_server_chat_only_to_issuer() {
     let mut server = server();

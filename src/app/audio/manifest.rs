@@ -52,6 +52,21 @@ pub(crate) enum SoundId {
     /// lighter hatchet.
     ImpactPickaxeOnWood,
 
+    /// An ore/vein node crossing a visual depletion-stage threshold (the
+    /// mound visibly breaking down a size). Derived offline from the
+    /// pickaxe-ore pool: two takes layered 45 ms apart, pitched down 3
+    /// and 6 semitones, lowpassed at 3.2 kHz with a fast fade-out from
+    /// 0.26 s, a short, tight slump of rock under the strike rather than
+    /// another pick transient.
+    OreStageCrumble,
+    /// The "node finished" pop when an ore/vein is mined empty, the
+    /// signal to stop swinging (trees get the same from [`Self::TreeFall`]).
+    /// Derived offline from the pickaxe-ore pool: a +2-semitone crack
+    /// with a 35 ms slapback double, a -5-semitone body at 60 ms, and a
+    /// quiet -9-semitone lowpassed rubble tail at 150 ms, so the break
+    /// reads as the rock splitting apart and settling.
+    OreNodeBreak,
+
     // --- Swing whoosh (tool swung but no target) ---
     SwingMiss,
 
@@ -106,6 +121,8 @@ pub(crate) fn all_sound_ids() -> &'static [SoundId] {
         SoundId::ImpactPickaxeOnIron,
         SoundId::ImpactPickaxeOnSulfur,
         SoundId::ImpactPickaxeOnWood,
+        SoundId::OreStageCrumble,
+        SoundId::OreNodeBreak,
         SoundId::ImpactPlayerBlunt,
         SoundId::SwingMiss,
         SoundId::FootstepDirt,
@@ -238,6 +255,37 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
                 height_offset: 1.0,
             }),
             pitch_jitter: 0.05,
+            looped: false,
+        },
+
+        // Stage-crossing crumble: plays layered under the same swing's
+        // pick transient, so it sits a touch above the impact pool and
+        // relies on its lower register (not level) to read as a separate
+        // event. The crack belongs to the rock near the ground, hence
+        // the lower height offset than the strike cues.
+        SoundId::OreStageCrumble => SoundDefaults {
+            category: SoundCategory::Sfx3d,
+            base_gain_db: -9.0,
+            spatial: Some(SpatialDefaults {
+                scale: 0.06,
+                height_offset: 0.6,
+            }),
+            pitch_jitter: 0.05,
+            looped: false,
+        },
+
+        // Node-finished break: the completion signature, slightly louder
+        // than the per-hit pool so it lands as the event that ends the
+        // mining loop, and jitter-free so it always sounds the same (a
+        // signal the player learns, like the tree-fall crash).
+        SoundId::OreNodeBreak => SoundDefaults {
+            category: SoundCategory::Sfx3d,
+            base_gain_db: -8.0,
+            spatial: Some(SpatialDefaults {
+                scale: 0.06,
+                height_offset: 0.6,
+            }),
+            pitch_jitter: 0.0,
             looped: false,
         },
 
@@ -411,6 +459,11 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         "impacts/miss-2.wav",
         "impacts/miss-3.wav",
     ];
+    // Depletion-stage crumble and node-finished break, see the
+    // `OreStageCrumble` / `OreNodeBreak` variant docs for the offline
+    // derivation recipes.
+    static ORE_CRUMBLE: [&str; 1] = ["impacts/ore-crumble.wav"];
+    static ORE_BREAK: [&str; 1] = ["impacts/ore-break.wav"];
 
     // PvP player-impact pool. Today shares the axe-wood sample set,
     // the "meaty thump" character is roughly right and re-using the
@@ -447,6 +500,8 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         | SoundId::ImpactPickaxeOnIron
         | SoundId::ImpactPickaxeOnSulfur => &PICKAXE_ORE,
         SoundId::ImpactPickaxeOnWood => &PICKAXE_WOOD,
+        SoundId::OreStageCrumble => &ORE_CRUMBLE,
+        SoundId::OreNodeBreak => &ORE_BREAK,
         SoundId::ImpactPlayerBlunt => &PLAYER_BLUNT,
         SoundId::SwingMiss => &MISS,
         SoundId::FootstepDirt => footstep_paths(FootstepMaterial::Dirt),

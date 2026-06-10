@@ -33,7 +33,8 @@ use serde::{Deserialize, Serialize};
 
 use super::HeadlessCapture;
 use crate::{
-    app::state::{ClientRuntime, LocalPlayerState, MenuState, Screen},
+    app::state::{ClientRuntime, LocalPlayerState, LookState, MenuState, Screen},
+    controller::MAX_LOOK_PITCH,
     items::intern_item_id,
     protocol::{ClientMessage, InventoryCommand, PlaceDeployableCommand, Vec3Net},
 };
@@ -69,6 +70,12 @@ pub(crate) enum ControlRequest {
         #[serde(default)]
         distance: Option<f32>,
     },
+    /// Point the camera: absolute yaw/pitch in radians, exactly as if the
+    /// mouse had moved there. Pitch is clamped to the same limit as mouse
+    /// look. Lets an agent aim at ground-level targets (resource nodes,
+    /// placed structures) for screenshots and for commands that target
+    /// along the view ray (e.g. `/drain`).
+    SetLook { yaw: f32, pitch: f32 },
     /// Navigate between menu screens (main_menu / worlds / multiplayer /
     /// options / in_game). Does not start a session; connect via `--connect`.
     SetScreen { screen: String },
@@ -166,11 +173,13 @@ impl Drop for ClientControlSocket {
 /// Non-blocking drain of pending control requests, one per accepted connection.
 /// Registered bare in the `Update` schedule (no ordering dependency) and a
 /// no-op whenever the socket resource is absent.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn drain_control_socket(
     mut commands: Commands,
     socket: Option<Res<ClientControlSocket>>,
     mut runtime: ResMut<ClientRuntime>,
     mut menu: ResMut<MenuState>,
+    mut look: ResMut<LookState>,
     local_player: Res<LocalPlayerState>,
     capture: Option<Res<HeadlessCapture>>,
 ) {
@@ -193,17 +202,20 @@ pub(crate) fn drain_control_socket(
             &mut commands,
             &mut runtime,
             &mut menu,
+            &mut look,
             &local_player,
             capture,
         );
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_stream(
     mut stream: UnixStream,
     commands: &mut Commands,
     runtime: &mut ClientRuntime,
     menu: &mut MenuState,
+    look: &mut LookState,
     local_player: &LocalPlayerState,
     capture: Option<&HeadlessCapture>,
 ) {
@@ -211,7 +223,15 @@ fn handle_stream(
         stream.set_read_timeout(Some(Duration::from_secs(2)))?;
         stream.set_write_timeout(Some(Duration::from_secs(2)))?;
         let request = serde_json::from_reader(&mut stream)?;
-        handle_request(request, commands, runtime, menu, local_player, capture)
+        handle_request(
+            request,
+            commands,
+            runtime,
+            menu,
+            look,
+            local_player,
+            capture,
+        )
     })();
 
     let (ok, message) = match result {
@@ -221,11 +241,13 @@ fn handle_stream(
     write_response(&mut stream, ok, message);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_request(
     request: ControlRequest,
     commands: &mut Commands,
     runtime: &mut ClientRuntime,
     menu: &mut MenuState,
+    look: &mut LookState,
     local_player: &LocalPlayerState,
     capture: Option<&HeadlessCapture>,
 ) -> Result<String> {
@@ -291,6 +313,17 @@ fn handle_request(
             Ok(format!(
                 "place {item_id} queued at [{:.2}, 0.00, {:.2}]",
                 position.x, position.z
+            ))
+        }
+        ControlRequest::SetLook { yaw, pitch } => {
+            if !yaw.is_finite() || !pitch.is_finite() {
+                bail!("yaw/pitch must be finite radians");
+            }
+            look.yaw = yaw;
+            look.pitch = pitch.clamp(-MAX_LOOK_PITCH, MAX_LOOK_PITCH);
+            Ok(format!(
+                "look set to yaw {:.3}, pitch {:.3}",
+                look.yaw, look.pitch
             ))
         }
         ControlRequest::SetScreen { screen } => {
@@ -437,6 +470,14 @@ mod tests {
 
         let dump: ControlRequest = serde_json::from_str(r#"{"command":"dump_state"}"#).unwrap();
         assert!(matches!(dump, ControlRequest::DumpState));
+
+        let look: ControlRequest =
+            serde_json::from_str(r#"{"command":"set_look","yaw":1.5,"pitch":-0.42}"#).unwrap();
+        assert!(matches!(
+            look,
+            ControlRequest::SetLook { yaw, pitch }
+                if (yaw - 1.5).abs() < f32::EPSILON && (pitch + 0.42).abs() < f32::EPSILON
+        ));
 
         // `distance` is optional and defaults to None when omitted.
         let place: ControlRequest =

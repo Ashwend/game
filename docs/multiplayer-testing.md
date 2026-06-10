@@ -171,6 +171,7 @@ Line-delimited JSON, one request per connection; the reply is
 | `{"command":"send_command","text":"test-kit"}` | Forward a slash command (no leading `/`) to the server. |
 | `{"command":"select_actionbar_slot","slot":3}` | Select a 0-based actionbar slot, putting that slot's item in hand (verifying a held viewmodel). After `test-kit` the iron pickaxe is in slot 3. |
 | `{"command":"place_deployable","item_id":"crude_furnace","distance":4.5}` | Drop a carried structure on the floor `distance` m (default ~2.2) in front of the player, turned to face them. Position is from the view yaw, not the look ray, so it works headless without aiming at the ground. `distance` is optional. After `test-kit` you carry one `workbench_t1` and one `crude_furnace`; place ~4.5 m out so the front face clears the bottom of the FOV. |
+| `{"command":"set_look","yaw":0.0,"pitch":-0.37}` | Point the camera: absolute radians, exactly as if the mouse had moved there (pitch clamped like mouse look). Use to aim at ground-level targets for screenshots, the pickup tooltip, and view-ray commands like `/drain`. For a node `d` m ahead, `pitch = -atan((1.62 - anchor_height) / d)`. |
 | `{"command":"set_screen","screen":"worlds"}` | Navigate menu screens. Does not start a session; connect via `--connect`. |
 | `{"command":"set_inventory_open","open":true}` | Open/close the inventory panel. |
 

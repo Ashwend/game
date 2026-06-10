@@ -13,15 +13,15 @@ use super::{
     components::MainCamera,
     grass::{GrassMaterial, GrassMaterialHandle, grass_material},
     mesh::{
-        COAL_ORE, IRON_ORE, STONE_VEIN, SULFUR_ORE, impact_stone_shard_mesh, impact_wood_chip_mesh,
-        low_poly_bag_mesh, low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_large_mesh,
-        low_poly_birch_tree_medium_lod_mesh, low_poly_birch_tree_medium_mesh,
-        low_poly_birch_tree_small_lod_mesh, low_poly_birch_tree_small_mesh,
-        low_poly_branch_pile_mesh, low_poly_hay_grass_mesh, low_poly_ore_node_mesh,
-        low_poly_pine_tree_large_lod_mesh, low_poly_pine_tree_large_mesh,
-        low_poly_pine_tree_medium_lod_mesh, low_poly_pine_tree_medium_mesh,
-        low_poly_pine_tree_small_lod_mesh, low_poly_pine_tree_small_mesh, low_poly_player_mesh,
-        low_poly_surface_stone_mesh,
+        COAL_ORE, IRON_ORE, ORE_NODE_STAGE_COUNT, STONE_VEIN, SULFUR_ORE, impact_stone_shard_mesh,
+        impact_wood_chip_mesh, low_poly_bag_mesh, low_poly_birch_tree_large_lod_mesh,
+        low_poly_birch_tree_large_mesh, low_poly_birch_tree_medium_lod_mesh,
+        low_poly_birch_tree_medium_mesh, low_poly_birch_tree_small_lod_mesh,
+        low_poly_birch_tree_small_mesh, low_poly_branch_pile_mesh, low_poly_hay_grass_mesh,
+        low_poly_ore_node_stage_meshes, low_poly_pine_tree_large_lod_mesh,
+        low_poly_pine_tree_large_mesh, low_poly_pine_tree_medium_lod_mesh,
+        low_poly_pine_tree_medium_mesh, low_poly_pine_tree_small_lod_mesh,
+        low_poly_pine_tree_small_mesh, low_poly_player_mesh, low_poly_surface_stone_mesh,
     },
     sky::{initial_distance_fog, setup_sky},
 };
@@ -90,10 +90,14 @@ pub(crate) struct ItemVisualAssets {
 
 #[derive(Resource, Clone)]
 pub(crate) struct ResourceVisualAssets {
-    pub(crate) coal_node_mesh: Handle<Mesh>,
-    pub(crate) iron_node_mesh: Handle<Mesh>,
-    pub(crate) sulfur_node_mesh: Handle<Mesh>,
-    pub(crate) stone_vein_mesh: Handle<Mesh>,
+    /// Ore/vein meshes indexed by visual depletion stage (0 = untouched,
+    /// see `ORE_NODE_STAGE_COUNT`). The mirror entity's mesh handle is
+    /// swapped between these as the replicated storage crosses the stage
+    /// thresholds.
+    pub(crate) coal_node_meshes: [Handle<Mesh>; ORE_NODE_STAGE_COUNT],
+    pub(crate) iron_node_meshes: [Handle<Mesh>; ORE_NODE_STAGE_COUNT],
+    pub(crate) sulfur_node_meshes: [Handle<Mesh>; ORE_NODE_STAGE_COUNT],
+    pub(crate) stone_vein_meshes: [Handle<Mesh>; ORE_NODE_STAGE_COUNT],
     pub(crate) pine_tree_small_mesh: Handle<Mesh>,
     pub(crate) pine_tree_medium_mesh: Handle<Mesh>,
     pub(crate) pine_tree_large_mesh: Handle<Mesh>,
@@ -327,10 +331,10 @@ pub(crate) fn setup_scene(
         }),
     });
     commands.insert_resource(ResourceVisualAssets {
-        coal_node_mesh: meshes.add(low_poly_ore_node_mesh(COAL_ORE)),
-        iron_node_mesh: meshes.add(low_poly_ore_node_mesh(IRON_ORE)),
-        sulfur_node_mesh: meshes.add(low_poly_ore_node_mesh(SULFUR_ORE)),
-        stone_vein_mesh: meshes.add(low_poly_ore_node_mesh(STONE_VEIN)),
+        coal_node_meshes: low_poly_ore_node_stage_meshes(COAL_ORE).map(|mesh| meshes.add(mesh)),
+        iron_node_meshes: low_poly_ore_node_stage_meshes(IRON_ORE).map(|mesh| meshes.add(mesh)),
+        sulfur_node_meshes: low_poly_ore_node_stage_meshes(SULFUR_ORE).map(|mesh| meshes.add(mesh)),
+        stone_vein_meshes: low_poly_ore_node_stage_meshes(STONE_VEIN).map(|mesh| meshes.add(mesh)),
         pine_tree_small_mesh: meshes.add(low_poly_pine_tree_small_mesh()),
         pine_tree_medium_mesh: meshes.add(low_poly_pine_tree_medium_mesh()),
         pine_tree_large_mesh: meshes.add(low_poly_pine_tree_large_mesh()),

@@ -85,6 +85,7 @@ pub(crate) fn spawn_node_death(
         spawn_ore_shatter(
             commands,
             impact_assets,
+            play,
             camera_kick,
             node_id,
             transform,
@@ -185,9 +186,11 @@ fn spawn_tree_felling(
     ));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_ore_shatter(
     commands: &mut Commands,
     impact_assets: &ImpactEffectAssets,
+    play: &mut MessageWriter<PlaySound>,
     camera_kick: &mut CameraImpactKick,
     node_id: ResourceNodeId,
     transform: Transform,
@@ -204,7 +207,14 @@ fn spawn_ore_shatter(
         impact_assets,
         burst_anchor,
         (node_id as u32).wrapping_mul(0xC2B2AE35),
+        1.0,
     );
+
+    // The "that's the whole node" finisher: a distinct break sound so the
+    // player knows to stop swinging without watching the storage tooltip,
+    // the same role the node-finished pop plays in Rust. Trees get the
+    // equivalent signal from `TreeFall`.
+    play.write(PlaySound::at(SoundId::OreNodeBreak, burst_anchor));
 
     camera_kick.trigger(ToolKind::Pickaxe);
 }

@@ -226,7 +226,11 @@ mod tests {
 
         let (_, body) = pickup_tooltip_text(&pickup_target).expect("resource tooltip");
 
-        assert!(body.contains("Pickaxe tier 1"));
+        // Any pickaxe mines a tier-1 node, so the requirement names just the
+        // tool kind. "tier 1" in the tooltip implied a tool level that
+        // doesn't exist for the player.
+        assert!(body.contains("Requires: Pickaxe"));
+        assert!(!body.contains("tier"));
         assert!(body.contains("Coal: 6"));
     }
 }

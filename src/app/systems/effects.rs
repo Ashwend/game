@@ -66,18 +66,27 @@ pub(crate) fn spawn_impact_effects_system(
 }
 
 /// Spawn a radial shatter burst, the "rock cracked apart" effect we play
-/// when an ore node is depleted. Chunks fly outward in every horizontal
-/// direction with a strong upward kick, tumble, then fall under gravity.
+/// when an ore node is depleted. Chunks tumble outward at near-ground
+/// level in every horizontal direction, then fall under heavy gravity.
+///
+/// `magnitude` scales the burst: `1.0` is the full depletion shatter;
+/// smaller values (the depletion-stage crossings use ~0.5) shed fewer,
+/// slightly smaller chunks over a tighter radius, the mound crumbling
+/// down a size rather than exploding.
 pub(crate) fn spawn_ore_shatter_burst(
     commands: &mut Commands,
     assets: &ImpactEffectAssets,
     anchor: Vec3,
     seed: u32,
+    magnitude: f32,
 ) {
-    let count: u32 = 20;
-    let speed = 2.6;
+    let magnitude = magnitude.clamp(0.1, 1.0);
+    let count: u32 = ((20.0 * magnitude).round() as u32).max(6);
+    // Square-root scaling keeps a half-magnitude burst from looking
+    // limp: chunk travel shrinks slower than chunk count.
+    let speed = 2.6 * magnitude.sqrt();
     let lifetime = 0.45;
-    let chunk_scale = 1.30;
+    let chunk_scale = 1.30 * (0.72 + 0.28 * magnitude);
     // Heavy gravity, chunks of rock are dense, they don't drift. Combined
     // with the very low upward kick below, this gives a "crumbling" feel
     // where pieces tumble outward and fall straight to the ground rather

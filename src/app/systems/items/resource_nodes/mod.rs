@@ -12,19 +12,22 @@ use crate::{
     },
     protocol::{ResourceNodeId, Vec3Net},
     resources::resource_node_definition,
-    server::ResourceNode,
+    server::{ResourceNode, ResourceNodeStorage},
 };
 
 mod pop_in;
 mod spawn;
+mod stages;
 
 #[cfg(test)]
 mod tests;
 
 pub(crate) use pop_in::{resource_node_transform_at, tick_resource_node_pop_in_system};
 pub(crate) use spawn::resource_node_visual;
+pub(crate) use stages::apply_resource_node_stage_system;
 
 use spawn::spawn_resource_node_entity;
+use stages::initial_node_stage;
 
 /// Per-frame cap on resource-node *spawns*. Crossing a chunk boundary
 /// can pull tens of trees and ores into view in one snapshot tick. Doing
@@ -77,6 +80,10 @@ struct PendingSpawn {
     definition_id: String,
     position: Vec3Net,
     yaw: f32,
+    /// Visual depletion stage at enqueue time (always 0 for anything but
+    /// a part-mined ore/vein). If the storage changes while the spawn is
+    /// still queued, the stage system refreshes this in place.
+    stage: u8,
 }
 
 /// Persistent `id → Entity` lookup. Mirrors the live replicated set so
@@ -95,6 +102,11 @@ pub(crate) struct ResourceNodeEntities {
     /// Persisting across frames keeps the spawn rate-limit working
     /// without re-iterating the replicated query each frame.
     pending_spawns: VecDeque<PendingSpawn>,
+    /// Current visual depletion stage per spawned ore/vein mirror (0 for
+    /// every other model). The stage system compares freshly computed
+    /// stages against this to detect real threshold crossings, replicated
+    /// storage diffs that don't cross a threshold are no-ops here.
+    stages: HashMap<ResourceNodeId, u8>,
     /// Disappeared visuals waiting for a possible
     /// `ResourceNodeDepleted` message before deciding silent-despawn
     /// vs. death-effect. See [`PendingDepletion`] / the
@@ -155,8 +167,8 @@ pub(crate) fn apply_resource_nodes_system(
     mut entities: ResMut<ResourceNodeEntities>,
     prediction: Res<PredictionState>,
     resource_entities: ResourceEntityQuery,
-    all_nodes: Query<(Entity, &ResourceNode)>,
-    added_nodes: Query<(Entity, &ResourceNode), Added<ResourceNode>>,
+    all_nodes: Query<(Entity, &ResourceNode, Option<&ResourceNodeStorage>)>,
+    added_nodes: Query<(Entity, &ResourceNode, Option<&ResourceNodeStorage>), Added<ResourceNode>>,
     mut removed_nodes: RemovedComponents<ResourceNode>,
 ) {
     if runtime.client_id.is_none() {
@@ -176,7 +188,7 @@ pub(crate) fn apply_resource_nodes_system(
     // query once to seed the spawn queue and the reverse map. After
     // that, event-driven Added/Removed handles everything.
     if !entities.applied_first_snapshot {
-        for (replicated_entity, node) in &all_nodes {
+        for (replicated_entity, node, storage) in &all_nodes {
             entities.replicated_to_id.insert(replicated_entity, node.id);
             if entities.entities.contains_key(&node.id) {
                 continue;
@@ -186,6 +198,7 @@ pub(crate) fn apply_resource_nodes_system(
                 definition_id: node.definition_id.clone(),
                 position: node.position,
                 yaw: node.yaw,
+                stage: initial_node_stage(&node.definition_id, storage),
             });
         }
     }
@@ -230,6 +243,7 @@ pub(crate) fn apply_resource_nodes_system(
         if entities.suppressed.remove(&id) {
             commands.entity(mirror).despawn();
             entities.entities.remove(&id);
+            entities.stages.remove(&id);
             runtime.depleted_node_ids.remove(&id);
             continue;
         }
@@ -248,6 +262,7 @@ pub(crate) fn apply_resource_nodes_system(
                 Some(mirror),
             );
             entities.entities.remove(&id);
+            entities.stages.remove(&id);
         } else {
             // No depletion message yet. Queue for grace, if the
             // message arrives within [`DEPLETION_GRACE_FRAMES`],
@@ -267,7 +282,7 @@ pub(crate) fn apply_resource_nodes_system(
     //    entity, the frame after Lightyear spawns it. Record the
     //    reverse map and either cancel a pending depletion (AoI
     //    bounce / regrow reusing the id) or queue a spawn.
-    for (replicated_entity, node) in &added_nodes {
+    for (replicated_entity, node, storage) in &added_nodes {
         // Skip entities we already know about, either the catch-up
         // above seeded them on the first run, or a previous Added
         // already enqueued them.
@@ -292,6 +307,7 @@ pub(crate) fn apply_resource_nodes_system(
             definition_id: node.definition_id.clone(),
             position: node.position,
             yaw: node.yaw,
+            stage: initial_node_stage(&node.definition_id, storage),
         });
     }
 
@@ -320,6 +336,7 @@ pub(crate) fn apply_resource_nodes_system(
             spawn.id,
             spawn.position,
             definition.model,
+            spawn.stage,
             target_transform,
             pop_in_enabled,
         );
@@ -377,6 +394,7 @@ fn clear_all_tracked_nodes(commands: &mut Commands, entities: &mut ResourceNodeE
     entities.replicated_to_id.clear();
     entities.pending_spawns.clear();
     entities.suppressed.clear();
+    entities.stages.clear();
     entities.applied_first_snapshot = false;
 }
 
@@ -471,6 +489,7 @@ fn resolve_pending_depletions(
                 .remove(&id)
                 .expect("just iterated this key");
             entities.entities.remove(&id);
+            entities.stages.remove(&id);
             consumed.push(id);
             despawn_with_death_effect(
                 commands,
@@ -495,6 +514,7 @@ fn resolve_pending_depletions(
                 .remove(&id)
                 .expect("just iterated this key");
             entities.entities.remove(&id);
+            entities.stages.remove(&id);
             // AoI-leave: silent despawn. The depleted message never
             // arrived, so this was a chunk-boundary leave rather than
             // a real depletion.

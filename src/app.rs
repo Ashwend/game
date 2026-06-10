@@ -67,13 +67,13 @@ use self::{
         PendingSessionEndReason, RemotePlayerEntities, ResourceNodeEntities, SessionTracker,
         animate_furnace_fire_system, app_quit_system, apply_deployed_entities_system,
         apply_display_settings_system, apply_dropped_items_system, apply_graphics_settings_system,
-        apply_held_item_visual_system, apply_loot_bags_system, apply_resource_nodes_system,
-        apply_snapshot_system, apply_test_mode_overrides_system, apply_update_system,
-        auto_connect_poll_system, auto_connect_start_system, camera_follow_system,
-        center_cursor_on_focus_system, chat_shortcut_system, chunk_overlay_system,
-        client_input_system, close_furnace_on_escape_system, close_loot_bag_on_escape_system,
-        craft_complete_cue_system, drive_auth_flow_system, error_relay_system,
-        flush_settings_on_exit_system, gameplay_inventory_shortcuts_system,
+        apply_held_item_visual_system, apply_loot_bags_system, apply_resource_node_stage_system,
+        apply_resource_nodes_system, apply_snapshot_system, apply_test_mode_overrides_system,
+        apply_update_system, auto_connect_poll_system, auto_connect_start_system,
+        camera_follow_system, center_cursor_on_focus_system, chat_shortcut_system,
+        chunk_overlay_system, client_input_system, close_furnace_on_escape_system,
+        close_loot_bag_on_escape_system, craft_complete_cue_system, drive_auth_flow_system,
+        error_relay_system, flush_settings_on_exit_system, gameplay_inventory_shortcuts_system,
         maintain_world_grid_system, menu_backdrop_camera_system, mouse_look_system,
         multiplayer_test_owns_window, network_tick_system, placement_input_system,
         reposition_test_window_system, save_client_settings_system, screen_viewed_system,
@@ -773,7 +773,15 @@ fn add_scene_systems(app: &mut App) {
         )
         .add_systems(
             Update,
-            apply_resource_nodes_system.in_set(ClientSystemSet::ResourceNodes),
+            // Stage swaps run after the reconcile so a node spawned this
+            // frame is already tracked (and its spawn already picked the
+            // right stage mesh).
+            (
+                apply_resource_nodes_system,
+                apply_resource_node_stage_system,
+            )
+                .chain()
+                .in_set(ClientSystemSet::ResourceNodes),
         )
         .add_systems(Update, stream_grass_system.in_set(ClientSystemSet::Grass))
         .add_systems(

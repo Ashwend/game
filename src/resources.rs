@@ -121,7 +121,14 @@ impl ToolRequirement {
         if self.kind == ToolKind::Hands {
             return "Pick up with E".to_owned();
         }
-        format!("{} tier {}", self.kind.label(), self.min_tier)
+        // `min_tier` 1 means "any pickaxe/hatchet works", so naming a tier
+        // in the tooltip sent players hunting for a "tier 1" tool that
+        // isn't a concept the game surfaces. Only call the tier out when a
+        // node genuinely demands an upgraded tool.
+        if self.min_tier <= 1 {
+            return self.kind.label().to_owned();
+        }
+        format!("{} (tier {}+)", self.kind.label(), self.min_tier)
     }
 }
 
@@ -545,6 +552,26 @@ fn ore_collider_block(position: Vec3Net) -> WorldBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn requirement_label_names_the_tool_without_a_phantom_tier() {
+        // Tier-1 requirements are satisfied by any tool of the kind, so the
+        // label is just the tool name; only genuinely upgraded requirements
+        // mention a tier.
+        assert_eq!(
+            ToolRequirement::new(ToolKind::Pickaxe, 1).label(),
+            "Pickaxe"
+        );
+        assert_eq!(ToolRequirement::new(ToolKind::Axe, 1).label(), "Hatchet");
+        assert_eq!(
+            ToolRequirement::new(ToolKind::Pickaxe, 2).label(),
+            "Pickaxe (tier 2+)"
+        );
+        assert_eq!(
+            ToolRequirement::new(ToolKind::Hands, 0).label(),
+            "Pick up with E"
+        );
+    }
 
     #[test]
     fn resource_payout_uses_tool_amount_and_storage_remaining() {
