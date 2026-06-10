@@ -1,12 +1,16 @@
-//! `/spawn-ore` and `/tp`, world-mutation admin commands, plus the small
-//! PRNG and spawn-placement helpers they rely on.
+//! `/spawn` and `/tp`, world-mutation admin commands, plus the small
+//! PRNG they rely on.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     protocol::{ClientId, ServerMessage, ToastKind, ToastMessage, Vec3Net},
     resources::{
-        COAL_NODE_ID, IRON_NODE_ID, SULFUR_NODE_ID, resource_node_definition, spawn_resource_node,
+        BIRCH_TREE_LARGE_NODE_ID, BIRCH_TREE_NODE_ID, BIRCH_TREE_SMALL_NODE_ID,
+        BRANCH_PILE_NODE_ID, COAL_NODE_ID, HAY_GRASS_NODE_ID, IRON_NODE_ID,
+        PINE_TREE_LARGE_NODE_ID, PINE_TREE_NODE_ID, PINE_TREE_SMALL_NODE_ID,
+        RESOURCE_NODE_DEFINITIONS, STONE_NODE_ID, SULFUR_NODE_ID, SURFACE_STONE_NODE_ID,
+        resource_node_definition, spawn_resource_node,
     },
     world::{NodeKind, WorldResourceNodeSpawn},
 };
@@ -14,20 +18,28 @@ use crate::{
 use super::super::{DeliveryTarget, GameServer, ServerEnvelope};
 use super::{reply_success, reply_warning};
 
-/// Hard limit on `/spawn-ore` radius. Keeps an admin debug command from
+/// Hard limit on `/spawn` distance. Keeps an admin debug command from
 /// accidentally placing a node hundreds of meters away in a flat world.
-const MAX_SPAWN_ORE_RADIUS: f32 = 30.0;
-const DEFAULT_SPAWN_ORE_RADIUS: f32 = 8.0;
+const MAX_SPAWN_DISTANCE: f32 = 30.0;
+/// How far ahead the node lands when no distance is given. Far enough
+/// that a tall node (tree) doesn't fill the whole screen.
+const DEFAULT_SPAWN_DISTANCE: f32 = 4.0;
 /// Minimum distance between the spawned node and the issuer. Keeps the
 /// new node from materialising inside the player's collision radius.
-pub(super) const MIN_SPAWN_ORE_DISTANCE: f32 = 1.75;
+const MIN_SPAWN_DISTANCE: f32 = 1.75;
+
+/// Alias list echoed back on a bad `/spawn` argument.
+const SPAWN_KINDS_HELP: &str =
+    "coal, iron, sulfur, stone, pine[-small|-large], birch[-small|-large], rock, sticks, hay";
 
 impl GameServer {
-    /// `/spawn-ore [coal|iron|sulfur] [radius]`
+    /// `/spawn <kind> [distance]`
     ///
-    /// Picks a random horizontal offset within `radius` of the issuing
-    /// player and inserts a fresh node at floor level. Admin-only.
-    pub(super) fn command_spawn_ore(
+    /// Inserts a fresh resource node at floor level, directly in front of
+    /// the issuing player (along their view yaw), `distance` meters out
+    /// (default [`DEFAULT_SPAWN_DISTANCE`]). Admin-only debug command;
+    /// accepts any registry node kind, see [`parse_node_token`].
+    pub(super) fn command_spawn(
         &mut self,
         client_id: ClientId,
         args: &[&str],
@@ -39,61 +51,73 @@ impl GameServer {
             return reply_warning(client_id, "admin only");
         }
 
-        let mut chosen_ore: Option<&'static str> = None;
-        let mut radius = DEFAULT_SPAWN_ORE_RADIUS;
+        let mut chosen: Option<&'static str> = None;
+        let mut distance = DEFAULT_SPAWN_DISTANCE;
         for arg in args {
-            if let Some(ore) = parse_ore_token(arg) {
-                chosen_ore = Some(ore);
+            if let Some(definition_id) = parse_node_token(arg) {
+                chosen = Some(definition_id);
             } else if let Ok(value) = arg.parse::<f32>() {
-                radius = value;
+                distance = value;
             } else {
                 return reply_warning(
                     client_id,
-                    format!("unknown argument '{arg}'; expected ore type or radius"),
+                    format!("unknown node kind '{arg}'; kinds: {SPAWN_KINDS_HELP}"),
                 );
             }
         }
-
-        if !radius.is_finite() || radius <= 0.0 {
-            return reply_warning(client_id, "radius must be a positive number");
+        let Some(definition_id) = chosen else {
+            return reply_warning(
+                client_id,
+                format!("usage: /spawn <kind> [distance]; kinds: {SPAWN_KINDS_HELP}"),
+            );
+        };
+        if !distance.is_finite() || distance <= 0.0 {
+            return reply_warning(client_id, "distance must be a positive number");
         }
-        let radius = radius.min(MAX_SPAWN_ORE_RADIUS);
+        let distance = distance.clamp(MIN_SPAWN_DISTANCE, MAX_SPAWN_DISTANCE);
 
+        // Straight ahead along the view yaw; same forward convention as
+        // the movement sim (see `src/server/movement.rs`). Floor-aligned
+        // y=0 matches the generated world's node placement.
         let player_position = client.controller.position;
-        let mut rng = SmallRng::seed_from_time_and(client_id);
-        let ore_id = chosen_ore.unwrap_or_else(|| random_ore_id(&mut rng));
-        let position = random_position_around(player_position, radius, &mut rng);
+        let yaw = client.controller.yaw;
+        let position = Vec3Net::new(
+            player_position.x - yaw.sin() * distance,
+            0.0,
+            player_position.z - yaw.cos() * distance,
+        );
 
+        let mut rng = SmallRng::seed_from_time_and(client_id);
         let node_id = self.allocate_resource_node_id();
         let spawn = WorldResourceNodeSpawn::new(
             node_id,
-            ore_id,
+            definition_id,
             position,
             rng.next_f32() * std::f32::consts::TAU,
         );
         let Some(node) = spawn_resource_node(&spawn) else {
-            return reply_warning(client_id, "could not build node: unknown ore type");
+            return reply_warning(client_id, "could not build node: unknown kind");
         };
-
-        let distance = ((position.x - player_position.x).powi(2)
-            + (position.z - player_position.z).powi(2))
-        .sqrt();
-        let label = resource_node_definition(ore_id)
-            .map(|definition| definition.name)
-            .unwrap_or("Ore");
+        // `parse_node_token` only returns registry ids, so the kind lookup
+        // can't miss; the guard keeps a future registry mismatch loud.
+        let Some(kind) = NodeKind::from_definition_id(definition_id) else {
+            return reply_warning(client_id, "could not map node kind for chunk tracking");
+        };
 
         // Register with the chunk anchor index so the snapshot AoI
         // includes the spawn, without this, admin-spawned nodes are
         // invisible because per-chunk membership is the AoI source of
         // truth.
-        let kind = ore_node_kind(ore_id);
         self.chunk_manager
             .track_resource_node(node_id, kind, position);
         self.insert_resource_node(node_id, node);
 
+        let label = resource_node_definition(definition_id)
+            .map(|definition| definition.name)
+            .unwrap_or("Node");
         reply_success(
             client_id,
-            format!("spawned {label} {distance:.1}m away (id {node_id})"),
+            format!("spawned {label} {distance:.1}m ahead (id {node_id})"),
         )
     }
 
@@ -195,49 +219,33 @@ impl GameServer {
     }
 }
 
-pub(super) fn parse_ore_token(arg: &str) -> Option<&'static str> {
-    match arg.to_ascii_lowercase().as_str() {
+/// Resolve a `/spawn` kind token to a registry `definition_id`. Accepts
+/// short aliases (`pine`, `sticks`, `rock`), hyphen or underscore
+/// separators, and any exact registry id (`pine_tree_small`, `coal_node`).
+pub(super) fn parse_node_token(arg: &str) -> Option<&'static str> {
+    let normalized = arg.to_ascii_lowercase().replace('-', "_");
+    let alias = match normalized.as_str() {
         "coal" => Some(COAL_NODE_ID),
         "iron" => Some(IRON_NODE_ID),
         "sulfur" | "sulphur" => Some(SULFUR_NODE_ID),
+        "stone" | "stone_vein" | "vein" => Some(STONE_NODE_ID),
+        "pine_small" | "pine_sapling" => Some(PINE_TREE_SMALL_NODE_ID),
+        "pine" => Some(PINE_TREE_NODE_ID),
+        "pine_large" | "old_pine" => Some(PINE_TREE_LARGE_NODE_ID),
+        "birch_small" | "birch_sapling" => Some(BIRCH_TREE_SMALL_NODE_ID),
+        "birch" => Some(BIRCH_TREE_NODE_ID),
+        "birch_large" | "old_birch" => Some(BIRCH_TREE_LARGE_NODE_ID),
+        "rock" | "loose_stone" => Some(SURFACE_STONE_NODE_ID),
+        "sticks" | "stick" | "branch" | "branches" | "branch_pile" => Some(BRANCH_PILE_NODE_ID),
+        "hay" | "grass" | "tall_grass" => Some(HAY_GRASS_NODE_ID),
         _ => None,
-    }
-}
-
-/// Map an ore `definition_id` to the matching `NodeKind` for chunk
-/// membership bookkeeping. Defaults to `CoalOre` for unknown ids so the
-/// node still ends up tracked rather than silently invisible, callers
-/// only pass ids that came out of `parse_ore_token`, so the fallback
-/// shouldn't fire in practice.
-fn ore_node_kind(ore_id: &str) -> NodeKind {
-    match ore_id {
-        IRON_NODE_ID => NodeKind::IronOre,
-        SULFUR_NODE_ID => NodeKind::SulfurOre,
-        _ => NodeKind::CoalOre,
-    }
-}
-
-fn random_ore_id(rng: &mut SmallRng) -> &'static str {
-    const ORES: [&str; 3] = [COAL_NODE_ID, IRON_NODE_ID, SULFUR_NODE_ID];
-    ORES[(rng.next_u32() as usize) % ORES.len()]
-}
-
-pub(super) fn random_position_around(center: Vec3Net, radius: f32, rng: &mut SmallRng) -> Vec3Net {
-    // Uniform sampling over an annulus (MIN_SPAWN_ORE_DISTANCE .. radius)
-    // using inverse-CDF in r² so the points are area-uniform rather than
-    // clustered toward the center.
-    let inner = MIN_SPAWN_ORE_DISTANCE.min(radius * 0.5);
-    let inner_sq = inner * inner;
-    let outer_sq = radius * radius;
-    let r = (inner_sq + rng.next_f32() * (outer_sq - inner_sq)).sqrt();
-    let theta = rng.next_f32() * std::f32::consts::TAU;
-    Vec3Net::new(
-        center.x + r * theta.cos(),
-        // Floor-aligned spawn, matches the hand-authored ore nodes in the
-        // test world (all at y=0).
-        0.0,
-        center.z + r * theta.sin(),
-    )
+    };
+    alias.or_else(|| {
+        RESOURCE_NODE_DEFINITIONS
+            .iter()
+            .find(|definition| definition.id == normalized)
+            .map(|definition| definition.id)
+    })
 }
 
 /// Tiny xorshift32 PRNG. We don't need cryptographic randomness, just a

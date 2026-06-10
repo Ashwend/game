@@ -119,7 +119,25 @@ enum Msg {
 }
 
 impl UpdateState {
+    /// Env var that disables the boot-time update check entirely (dev builds
+    /// only). Used by the agent-driven test harness so the "update available"
+    /// modal can't cover the scene mid-screenshot.
+    #[cfg(debug_assertions)]
+    const SKIP_ENV: &'static str = "GAME_SKIP_UPDATE_CHECK";
+
     fn spawn() -> Self {
+        #[cfg(debug_assertions)]
+        if std::env::var_os(Self::SKIP_ENV).is_some() {
+            return Self {
+                status: UpdateStatus::UpToDate,
+                available: None,
+                modal_open: false,
+                current_changelog: None,
+                current_changelog_open: false,
+                skipped_version: None,
+                channels: None,
+            };
+        }
         let skipped_version = skipped::load();
         let (cmd_tx, cmd_rx) = unbounded::<Cmd>();
         let (msg_tx, msg_rx) = unbounded::<Msg>();

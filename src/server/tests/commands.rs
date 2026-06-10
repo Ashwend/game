@@ -1,11 +1,11 @@
 use super::*;
 use crate::{
     protocol::{ServerMessage, ToastKind},
-    resources::{IRON_NODE_ID, SULFUR_NODE_ID},
+    resources::{IRON_NODE_ID, PINE_TREE_LARGE_NODE_ID},
 };
 
 #[test]
-fn spawn_ore_command_requires_admin_and_warns_otherwise() {
+fn spawn_command_requires_admin_and_warns_otherwise() {
     let mut server = server();
     // Connect a second player as a non-admin (host account_id is 1, this one is 2).
     let (_, _) = server
@@ -27,7 +27,7 @@ fn spawn_ore_command_requires_admin_and_warns_otherwise() {
     let envelopes = server.receive(
         guest_id,
         ClientMessage::Command {
-            text: "spawn-ore coal 5".to_owned(),
+            text: "spawn coal 5".to_owned(),
         },
     );
 
@@ -48,7 +48,7 @@ fn spawn_ore_command_requires_admin_and_warns_otherwise() {
 }
 
 #[test]
-fn spawn_ore_command_inserts_a_new_node_for_an_admin() {
+fn spawn_command_inserts_a_new_node_for_an_admin() {
     let mut server = server();
     let host_id = connect_host(&mut server);
     let before = server.resource_nodes_iter().count();
@@ -58,7 +58,7 @@ fn spawn_ore_command_inserts_a_new_node_for_an_admin() {
     let envelopes = server.receive(
         host_id,
         ClientMessage::Command {
-            text: "spawn-ore iron 12".to_owned(),
+            text: "spawn iron 12".to_owned(),
         },
     );
 
@@ -83,39 +83,49 @@ fn spawn_ore_command_inserts_a_new_node_for_an_admin() {
 }
 
 #[test]
-fn spawn_ore_command_defaults_to_a_random_ore_when_type_is_omitted() {
+fn spawn_command_handles_non_ore_kinds_and_warns_when_kind_is_missing() {
     let mut server = server();
     let host_id = connect_host(&mut server);
     let before: std::collections::HashSet<u64> =
         server.resource_nodes_iter().map(|(id, _)| *id).collect();
 
+    // A tree alias goes through the same registry + chunk-tracking path
+    // as the ores.
     let envelopes = server.receive(
         host_id,
         ClientMessage::Command {
-            text: "spawn-ore".to_owned(),
+            text: "spawn pine-large".to_owned(),
         },
     );
-
-    let success = envelopes
-        .iter()
-        .find_map(|envelope| match &envelope.message {
-            ServerMessage::Toast(payload) if payload.kind == ToastKind::Success => {
-                Some(payload.clone())
-            }
-            _ => None,
-        })
-        .expect("admin spawn should get a success toast even without args");
-    let _ = success;
-
+    assert!(
+        envelopes.iter().any(|envelope| matches!(
+            &envelope.message,
+            ServerMessage::Toast(payload) if payload.kind == ToastKind::Success
+        )),
+        "admin spawn of a tree should succeed"
+    );
     let nodes_after: Vec<_> = server.resource_nodes_iter().collect();
     let new_node = nodes_after
         .into_iter()
         .find(|(id, _)| !before.contains(id))
         .expect("a new node should have been spawned");
-    assert!(matches!(
-        new_node.1.definition_id.as_str(),
-        COAL_NODE_ID | IRON_NODE_ID | SULFUR_NODE_ID
-    ));
+    assert_eq!(new_node.1.definition_id, PINE_TREE_LARGE_NODE_ID);
+
+    // Without a kind there is nothing sensible to spawn; the issuer gets
+    // a usage warning instead.
+    let envelopes = server.receive(
+        host_id,
+        ClientMessage::Command {
+            text: "spawn".to_owned(),
+        },
+    );
+    assert!(
+        envelopes.iter().any(|envelope| matches!(
+            &envelope.message,
+            ServerMessage::Toast(payload) if payload.kind == ToastKind::Warning
+        )),
+        "missing kind should warn with usage"
+    );
 }
 
 #[test]
@@ -148,15 +158,11 @@ fn help_command_replies_as_server_chat_only_to_issuer() {
     assert_eq!(chat_lines.len(), envelopes.len());
     assert!(chat_lines.iter().all(|chat| chat.from == "Server"));
     assert!(chat_lines.iter().any(|chat| chat.text.contains("/help")));
-    assert!(
-        chat_lines
-            .iter()
-            .any(|chat| chat.text.contains("/spawn-ore"))
-    );
+    assert!(chat_lines.iter().any(|chat| chat.text.contains("/spawn")));
 }
 
 #[test]
-fn help_marks_spawn_ore_as_admin_only_for_non_admins() {
+fn help_marks_spawn_as_admin_only_for_non_admins() {
     let mut server = server();
     // Guest is account_id 2; the host (account_id 1) is the singleplayer admin.
     let _ = server
@@ -181,18 +187,16 @@ fn help_marks_spawn_ore_as_admin_only_for_non_admins() {
         },
     );
 
-    let spawn_ore_line = envelopes
+    let spawn_line = envelopes
         .iter()
         .find_map(|envelope| match &envelope.message {
-            ServerMessage::Chat(chat) if chat.text.contains("/spawn-ore") => {
-                Some(chat.text.clone())
-            }
+            ServerMessage::Chat(chat) if chat.text.contains("/spawn") => Some(chat.text.clone()),
             _ => None,
         })
-        .expect("help should list /spawn-ore for non-admins too");
+        .expect("help should list /spawn for non-admins too");
     assert!(
-        spawn_ore_line.to_ascii_lowercase().contains("admin"),
-        "non-admin help should signal that /spawn-ore is admin-only, got: {spawn_ore_line}"
+        spawn_line.to_ascii_lowercase().contains("admin"),
+        "non-admin help should signal that /spawn is admin-only, got: {spawn_line}"
     );
 }
 

@@ -109,7 +109,8 @@ fn spawn_menu_resource_nodes(
             continue;
         };
         let (mesh, material) = resource_node_visual(assets, definition.model);
-        let transform = resource_node_transform_at(node.position, node.yaw, definition.model);
+        let transform =
+            resource_node_transform_at(node.id, node.position, node.yaw, definition.model);
         commands.spawn((
             Name::new(format!("Menu Resource Node {}", node.id)),
             WorldGeometry,

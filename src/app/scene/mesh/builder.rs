@@ -8,26 +8,46 @@ pub(crate) type MeshColor = [f32; 4];
 
 // Shared palette for low-poly props. Kept together so cross-prop visual
 // consistency stays managed in one place.
-pub(crate) const WOOD_LIGHT: MeshColor = [0.56, 0.36, 0.18, 1.0];
-pub(crate) const WOOD_MID: MeshColor = [0.44, 0.28, 0.14, 1.0];
+//
+// These are **linear** albedos (vertex colours bypass the sRGB decode that
+// `Color::srgb` applies). The terrain anchor is the ground at linear
+// (0.027, 0.095, 0.040), so prop values must live in the same range to sit
+// in the scene rather than glow against it: rock ~0.08-0.25, bark ~0.03-0.09,
+// foliage green channel ~0.06-0.22. Picking these as if they were sRGB makes
+// every prop render 2-5x brighter than intended (chalk-white rocks, pastel
+// trees); see GRASS_BLADE_BASE below, where the same lesson was learned first.
+pub(crate) const WOOD_LIGHT: MeshColor = [0.260, 0.110, 0.035, 1.0];
+pub(crate) const WOOD_MID: MeshColor = [0.160, 0.065, 0.020, 1.0];
 // The forged-iron head palette (IRON_HEAD / IRON_HEAD_DARK / IRON_EDGE) and the
 // procedural deployable tones (WOOD_DARK / STONE_LIGHT / IRON_BAND /
 // LEATHER_WRAP) used to live here. Those props are now authored Blender glbs
 // (`art/items/iron_{hatchet,pickaxe}` tools, `art/items/{workbench_t1,crude_furnace}`
 // structures), which bake the same linear tones into their COLOR_0 vertex
 // colours, so the constants moved into the models.
-pub(crate) const STONE_DARK: MeshColor = [0.32, 0.34, 0.33, 1.0];
-pub(crate) const STONE_EDGE: MeshColor = [0.74, 0.76, 0.72, 1.0];
-pub(crate) const LEAF_PINE: MeshColor = [0.16, 0.36, 0.20, 1.0];
-pub(crate) const LEAF_PINE_DARK: MeshColor = [0.08, 0.22, 0.11, 1.0];
-pub(crate) const LEAF_PINE_LIGHT: MeshColor = [0.26, 0.50, 0.28, 1.0];
-pub(crate) const LEAF_BIRCH: MeshColor = [0.42, 0.58, 0.28, 1.0];
-pub(crate) const LEAF_BIRCH_DARK: MeshColor = [0.28, 0.42, 0.20, 1.0];
-pub(crate) const LEAF_BIRCH_LIGHT: MeshColor = [0.60, 0.74, 0.36, 1.0];
-pub(crate) const BIRCH_BARK: MeshColor = [0.85, 0.82, 0.74, 1.0];
-pub(crate) const BIRCH_BARK_BAND: MeshColor = [0.18, 0.16, 0.14, 1.0];
-pub(crate) const BARK_DARK: MeshColor = [0.20, 0.13, 0.06, 1.0];
-pub(crate) const BARK_MID: MeshColor = [0.32, 0.20, 0.11, 1.0];
+pub(crate) const STONE_DARK: MeshColor = [0.080, 0.090, 0.085, 1.0];
+pub(crate) const STONE_EDGE: MeshColor = [0.380, 0.400, 0.360, 1.0];
+pub(crate) const LEAF_PINE: MeshColor = [0.030, 0.110, 0.042, 1.0];
+pub(crate) const LEAF_PINE_DARK: MeshColor = [0.016, 0.062, 0.026, 1.0];
+pub(crate) const LEAF_PINE_LIGHT: MeshColor = [0.055, 0.160, 0.060, 1.0];
+pub(crate) const LEAF_BIRCH: MeshColor = [0.110, 0.215, 0.050, 1.0];
+pub(crate) const LEAF_BIRCH_DARK: MeshColor = [0.058, 0.135, 0.030, 1.0];
+pub(crate) const LEAF_BIRCH_LIGHT: MeshColor = [0.210, 0.350, 0.082, 1.0];
+pub(crate) const BIRCH_BARK: MeshColor = [0.500, 0.480, 0.420, 1.0];
+pub(crate) const BIRCH_BARK_BAND: MeshColor = [0.030, 0.026, 0.022, 1.0];
+pub(crate) const BARK_DARK: MeshColor = [0.040, 0.022, 0.010, 1.0];
+pub(crate) const BARK_MID: MeshColor = [0.085, 0.042, 0.018, 1.0];
+
+/// Scale a colour's RGB by `factor`, leaving alpha untouched. Used to bake
+/// cheap ambient-occlusion-ish darkening (undersides, ground-contact bands)
+/// into the flat-shaded props without growing the palette.
+pub(crate) fn scale_rgb(color: MeshColor, factor: f32) -> MeshColor {
+    [
+        (color[0] * factor).clamp(0.0, 1.0),
+        (color[1] * factor).clamp(0.0, 1.0),
+        (color[2] * factor).clamp(0.0, 1.0),
+        color[3],
+    ]
+}
 
 #[derive(Default)]
 pub(crate) struct LowPolyMeshBuilder {
@@ -118,12 +138,26 @@ impl LowPolyMeshBuilder {
         segments: usize,
         color: MeshColor,
     ) {
-        let apex = [0.0, base_y + height, 0.0];
-        let origin = [0.0, base_y + height * 0.35, 0.0];
+        self.add_cone_at([0.0, base_y, 0.0], height, radius, segments, color);
+    }
+
+    /// `add_cone` with an explicit base-centre, so foliage layers can sit
+    /// slightly off the trunk axis (real conifers aren't lathe-symmetric).
+    pub(crate) fn add_cone_at(
+        &mut self,
+        base_center: [f32; 3],
+        height: f32,
+        radius: f32,
+        segments: usize,
+        color: MeshColor,
+    ) {
+        let [bx, base_y, bz] = base_center;
+        let apex = [bx, base_y + height, bz];
+        let origin = [bx, base_y + height * 0.35, bz];
         let ring = (0..segments)
             .map(|index| {
                 let angle = index as f32 / segments as f32 * std::f32::consts::TAU;
-                [angle.cos() * radius, base_y, angle.sin() * radius]
+                [bx + angle.cos() * radius, base_y, bz + angle.sin() * radius]
             })
             .collect::<Vec<_>>();
         // Side faces (apex → ring).
@@ -134,11 +168,66 @@ impl LowPolyMeshBuilder {
         // Bottom cap, closes the underside so the cone is solid when seen
         // from below (e.g. once a tree falls over). The `push_triangle_away`
         // helper picks the winding that points the normal outward from the
-        // interior origin.
-        let base_center = [0.0, base_y, 0.0];
+        // interior origin. Darkened: a foliage layer's underside is in its
+        // own shadow, and the visible rim of the cap is what sells the
+        // canopy as dense from eye level.
+        let cap_color = scale_rgb(color, 0.45);
         for index in 0..segments {
             let next = (index + 1) % segments;
-            self.push_triangle_away_from(origin, base_center, ring[index], ring[next], color);
+            self.push_triangle_away_from(origin, base_center, ring[index], ring[next], cap_color);
+        }
+    }
+
+    /// An `add_box` rotated by `yaw` (about Y) then `pitch` (about its local
+    /// length axis' perpendicular, tipping the +X end up/down). Lets sticks
+    /// and stub branches cross and lean instead of stacking axis-aligned.
+    pub(crate) fn add_box_oriented(
+        &mut self,
+        center: [f32; 3],
+        half: [f32; 3],
+        yaw: f32,
+        pitch: f32,
+        color: MeshColor,
+    ) {
+        let [cx, cy, cz] = center;
+        let [hx, hy, hz] = half;
+        let corners = [
+            [-hx, -hy, -hz],
+            [hx, -hy, -hz],
+            [hx, hy, -hz],
+            [-hx, hy, -hz],
+            [-hx, -hy, hz],
+            [hx, -hy, hz],
+            [hx, hy, hz],
+            [-hx, hy, hz],
+        ];
+        let (sin_pitch, cos_pitch) = pitch.sin_cos();
+        let (sin_yaw, cos_yaw) = yaw.sin_cos();
+        let vertices = corners.map(|[x, y, z]| {
+            // Pitch about Z (tips the +X end), then yaw about Y, then place.
+            let (px, py) = (x * cos_pitch - y * sin_pitch, x * sin_pitch + y * cos_pitch);
+            [
+                cx + px * cos_yaw + z * sin_yaw,
+                cy + py,
+                cz - px * sin_yaw + z * cos_yaw,
+            ]
+        });
+        let triangles = [
+            (0, 2, 1),
+            (0, 3, 2),
+            (4, 5, 6),
+            (4, 6, 7),
+            (0, 7, 3),
+            (0, 4, 7),
+            (1, 2, 6),
+            (1, 6, 5),
+            (0, 1, 5),
+            (0, 5, 4),
+            (3, 7, 6),
+            (3, 6, 2),
+        ];
+        for (a, b, c) in triangles {
+            self.push_triangle_away_from(center, vertices[a], vertices[b], vertices[c], color);
         }
     }
 
@@ -172,6 +261,10 @@ impl LowPolyMeshBuilder {
             ]
         };
 
+        // The base→shoulder band is darkened: it's the ground-contact zone,
+        // and the baked contact shading seats the lump on the terrain
+        // instead of letting a bright bottom edge make it float.
+        let base_color = scale_rgb(color, 0.72);
         for index in 0..base.len() {
             let next = (index + 1) % base.len();
             self.push_triangle_away_from(
@@ -179,14 +272,14 @@ impl LowPolyMeshBuilder {
                 transform(base[index]),
                 transform(base[next]),
                 transform(shoulder[next]),
-                color,
+                base_color,
             );
             self.push_triangle_away_from(
                 origin,
                 transform(base[index]),
                 transform(shoulder[next]),
                 transform(shoulder[index]),
-                color,
+                base_color,
             );
             self.push_triangle_away_from(
                 origin,
@@ -211,10 +304,14 @@ impl LowPolyMeshBuilder {
             [cx - sx * 0.46, cy + sy * 0.02, cz - sz * 0.78],
             [cx + sx * 0.38, cy - sy * 0.10, cz - sz * 0.82],
         ];
+        // Underside fan darkened: canopy blobs and embedded chunks read as
+        // lit-from-above, with their shadowed belly facing the viewer at
+        // eye level.
+        let bottom_color = scale_rgb(color, 0.58);
         for index in 0..ring.len() {
             let next = (index + 1) % ring.len();
             self.push_triangle_away_from(center, top, ring[index], ring[next], color);
-            self.push_triangle_away_from(center, bottom, ring[next], ring[index], color);
+            self.push_triangle_away_from(center, bottom, ring[next], ring[index], bottom_color);
         }
     }
 

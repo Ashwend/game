@@ -162,6 +162,31 @@ impl NodeKind {
         }
     }
 
+    /// Reverse of [`Self::definition_id`] / [`Self::variant_definition_id`]:
+    /// map any registry `definition_id` (including the birch tree variants)
+    /// back to the kind used for chunk membership bookkeeping.
+    pub fn from_definition_id(definition_id: &str) -> Option<Self> {
+        use crate::resources::{
+            BIRCH_TREE_LARGE_NODE_ID, BIRCH_TREE_NODE_ID, BIRCH_TREE_SMALL_NODE_ID,
+            BRANCH_PILE_NODE_ID, COAL_NODE_ID, HAY_GRASS_NODE_ID, IRON_NODE_ID,
+            PINE_TREE_LARGE_NODE_ID, PINE_TREE_NODE_ID, PINE_TREE_SMALL_NODE_ID, STONE_NODE_ID,
+            SULFUR_NODE_ID, SURFACE_STONE_NODE_ID,
+        };
+        match definition_id {
+            PINE_TREE_SMALL_NODE_ID | BIRCH_TREE_SMALL_NODE_ID => Some(Self::TreeSmall),
+            PINE_TREE_NODE_ID | BIRCH_TREE_NODE_ID => Some(Self::TreeMedium),
+            PINE_TREE_LARGE_NODE_ID | BIRCH_TREE_LARGE_NODE_ID => Some(Self::TreeLarge),
+            SURFACE_STONE_NODE_ID => Some(Self::SurfaceStone),
+            BRANCH_PILE_NODE_ID => Some(Self::BranchPile),
+            HAY_GRASS_NODE_ID => Some(Self::HayGrass),
+            COAL_NODE_ID => Some(Self::CoalOre),
+            IRON_NODE_ID => Some(Self::IronOre),
+            SULFUR_NODE_ID => Some(Self::SulfurOre),
+            STONE_NODE_ID => Some(Self::StoneVein),
+            _ => None,
+        }
+    }
+
     /// Per-spawn species pick for tree kinds, alternating pine/birch
     /// deterministically by an unsigned counter. Non-tree kinds ignore
     /// the counter and return [`Self::definition_id`].

@@ -1,4 +1,4 @@
-use super::world::{MIN_SPAWN_ORE_DISTANCE, SmallRng, parse_ore_token, random_position_around};
+use super::world::{SmallRng, parse_node_token};
 use super::*;
 use crate::{
     auth::AuthMode,
@@ -7,7 +7,10 @@ use crate::{
         IRON_ORE_ID, PLANT_TWINE_ID, STONE_ID, SULFUR_ORE_ID, WOOD_ID, WORKBENCH_T1_ID,
     },
     protocol::{GAME_VERSION, PROTOCOL_VERSION, Vec3Net},
-    resources::{COAL_NODE_ID, IRON_NODE_ID, SULFUR_NODE_ID},
+    resources::{
+        BIRCH_TREE_LARGE_NODE_ID, BRANCH_PILE_NODE_ID, COAL_NODE_ID, IRON_NODE_ID,
+        PINE_TREE_NODE_ID, PINE_TREE_SMALL_NODE_ID, SULFUR_NODE_ID,
+    },
     save::WorldSave,
     server::ServerSettings,
 };
@@ -148,27 +151,84 @@ fn set_speed_applies_clamped_multiplier_and_rejects_garbage() {
 }
 
 #[test]
-fn spawn_ore_admin_inserts_a_node_within_radius() {
+fn spawn_admin_inserts_a_node_directly_in_front_of_the_player() {
     let (mut server, client) = server_with_host(Some(1));
-    let before = server.resource_nodes.len();
-    let out = server.apply_command(client, "/spawn-ore iron 10".to_owned());
+    {
+        let c = server.clients.get_mut(&client).unwrap();
+        c.controller.position = Vec3Net::new(10.0, 0.0, -4.0);
+        // Yaw 0 looks down -Z (forward = (-sin, 0, -cos) = (0, 0, -1)).
+        c.controller.yaw = 0.0;
+    }
+    let known_ids: std::collections::HashSet<u64> = server.resource_nodes.keys().copied().collect();
+
+    let out = server.apply_command(client, "/spawn iron 6".to_owned());
     assert!(has_toast(&out, ToastKind::Success));
-    assert_eq!(
-        server.resource_nodes.len(),
-        before + 1,
-        "spawn-ore should insert exactly one node"
+
+    let (_, node) = server
+        .resource_nodes
+        .iter()
+        .find(|(id, _)| !known_ids.contains(id))
+        .expect("spawn should insert exactly one new node");
+    assert_eq!(node.definition_id, IRON_NODE_ID);
+    assert!((node.position.x - 10.0).abs() < 1e-3);
+    assert!((node.position.z - (-10.0)).abs() < 1e-3, "6m down -Z");
+    assert_eq!(node.position.y, 0.0);
+}
+
+#[test]
+fn spawn_uses_default_distance_when_omitted_and_clamps_tiny_values() {
+    let (mut server, client) = server_with_host(Some(1));
+    {
+        let c = server.clients.get_mut(&client).unwrap();
+        c.controller.position = Vec3Net::ZERO;
+        c.controller.yaw = 0.0;
+    }
+
+    // The generated world already contains pines and branch piles, so
+    // identify the spawned node by id diff, not by definition lookup.
+    let known_ids: std::collections::HashSet<u64> = server.resource_nodes.keys().copied().collect();
+    let out = server.apply_command(client, "/spawn pine".to_owned());
+    assert!(has_toast(&out, ToastKind::Success));
+    let (default_id, default_node) = server
+        .resource_nodes
+        .iter()
+        .find(|(id, _)| !known_ids.contains(id))
+        .expect("pine should spawn");
+    assert_eq!(default_node.definition_id, PINE_TREE_NODE_ID);
+    assert!(
+        (default_node.position.z - (-4.0)).abs() < 1e-3,
+        "default 4m"
+    );
+    let default_id = *default_id;
+
+    // A sub-minimum distance is clamped up instead of placing the node
+    // inside the player's collision radius.
+    let out = server.apply_command(client, "/spawn sticks 0.1".to_owned());
+    assert!(has_toast(&out, ToastKind::Success));
+    let (_, clamped) = server
+        .resource_nodes
+        .iter()
+        .find(|(id, _)| !known_ids.contains(id) && **id != default_id)
+        .expect("branch pile should spawn");
+    assert_eq!(clamped.definition_id, BRANCH_PILE_NODE_ID);
+    assert!(
+        (clamped.position.z - (-1.75)).abs() < 1e-3,
+        "clamped to min"
     );
 }
 
 #[test]
-fn spawn_ore_rejects_bad_argument_and_nonpositive_radius() {
+fn spawn_rejects_bad_kind_missing_kind_and_nonpositive_distance() {
     let (mut server, client) = server_with_host(Some(1));
     let before = server.resource_nodes.len();
-    let bad_arg = server.apply_command(client, "/spawn-ore granite".to_owned());
+    let bad_arg = server.apply_command(client, "/spawn granite".to_owned());
     assert!(has_toast(&bad_arg, ToastKind::Warning));
 
-    let bad_radius = server.apply_command(client, "/spawn-ore iron -2".to_owned());
-    assert!(has_toast(&bad_radius, ToastKind::Warning));
+    let no_kind = server.apply_command(client, "/spawn".to_owned());
+    assert!(has_toast(&no_kind, ToastKind::Warning));
+
+    let bad_distance = server.apply_command(client, "/spawn iron -2".to_owned());
+    assert!(has_toast(&bad_distance, ToastKind::Warning));
     assert_eq!(
         server.resource_nodes.len(),
         before,
@@ -177,10 +237,10 @@ fn spawn_ore_rejects_bad_argument_and_nonpositive_radius() {
 }
 
 #[test]
-fn spawn_ore_rejected_for_non_admin() {
+fn spawn_rejected_for_non_admin() {
     let (mut server, client) = server_with_host(None);
     let before = server.resource_nodes.len();
-    let out = server.apply_command(client, "/spawn-ore iron".to_owned());
+    let out = server.apply_command(client, "/spawn iron".to_owned());
     assert!(has_toast(&out, ToastKind::Warning));
     assert_eq!(
         server.resource_nodes.len(),
@@ -249,29 +309,21 @@ fn teleport_all_moves_other_players_and_sends_corrections() {
 }
 
 #[test]
-fn parse_ore_token_accepts_canonical_and_alternate_spellings() {
-    assert_eq!(parse_ore_token("coal"), Some(COAL_NODE_ID));
-    assert_eq!(parse_ore_token("IRON"), Some(IRON_NODE_ID));
-    assert_eq!(parse_ore_token("sulphur"), Some(SULFUR_NODE_ID));
-    assert_eq!(parse_ore_token("granite"), None);
-}
-
-#[test]
-fn random_position_lands_inside_the_radius_and_outside_the_inner_ring() {
-    let mut rng = SmallRng { state: 0x1234_5678 };
-    let center = Vec3Net::new(10.0, 0.0, -3.0);
-    for _ in 0..200 {
-        let position = random_position_around(center, 12.0, &mut rng);
-        let dx = position.x - center.x;
-        let dz = position.z - center.z;
-        let r = (dx * dx + dz * dz).sqrt();
-        assert!(r <= 12.0 + 1e-3, "{r} should stay inside the outer ring");
-        assert!(
-            r >= MIN_SPAWN_ORE_DISTANCE.min(12.0 * 0.5) - 1e-3,
-            "{r} should not land inside the inner cull"
-        );
-        assert_eq!(position.y, 0.0);
-    }
+fn parse_node_token_accepts_aliases_separators_and_registry_ids() {
+    assert_eq!(parse_node_token("coal"), Some(COAL_NODE_ID));
+    assert_eq!(parse_node_token("IRON"), Some(IRON_NODE_ID));
+    assert_eq!(parse_node_token("sulphur"), Some(SULFUR_NODE_ID));
+    assert_eq!(parse_node_token("pine"), Some(PINE_TREE_NODE_ID));
+    assert_eq!(
+        parse_node_token("birch-large"),
+        Some(BIRCH_TREE_LARGE_NODE_ID)
+    );
+    assert_eq!(parse_node_token("sticks"), Some(BRANCH_PILE_NODE_ID));
+    assert_eq!(
+        parse_node_token("pine_tree_small"),
+        Some(PINE_TREE_SMALL_NODE_ID)
+    );
+    assert_eq!(parse_node_token("granite"), None);
 }
 
 #[test]

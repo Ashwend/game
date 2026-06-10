@@ -10,35 +10,43 @@ pub(crate) struct OreNodeStyle {
     pub(crate) chunk_highlight: MeshColor,
 }
 
+// Linear albedos (see the palette note in `builder.rs`). Each ore tints the
+// *whole* base rock toward its mineral, not just the embedded chunks: the
+// chunks alone are too small to identify a node past ~8m, the mass of the
+// mound is what reads at gameplay distance.
+
+/// Charcoal-dark rock with near-black seams.
 pub(crate) const COAL_ORE: OreNodeStyle = OreNodeStyle {
-    base_color: [0.26, 0.27, 0.28, 1.0],
-    accent_color: [0.18, 0.19, 0.20, 1.0],
-    chunk_color: [0.05, 0.05, 0.06, 1.0],
-    chunk_highlight: [0.12, 0.12, 0.13, 1.0],
+    base_color: [0.052, 0.054, 0.058, 1.0],
+    accent_color: [0.034, 0.036, 0.040, 1.0],
+    chunk_color: [0.010, 0.010, 0.012, 1.0],
+    chunk_highlight: [0.085, 0.088, 0.098, 1.0],
 };
 
+/// Rust-stained warm brown rock with vivid oxide chunks.
 pub(crate) const IRON_ORE: OreNodeStyle = OreNodeStyle {
-    base_color: [0.52, 0.50, 0.46, 1.0],
-    accent_color: [0.40, 0.38, 0.34, 1.0],
-    chunk_color: [0.62, 0.30, 0.18, 1.0],
-    chunk_highlight: [0.78, 0.42, 0.24, 1.0],
+    base_color: [0.200, 0.150, 0.105, 1.0],
+    accent_color: [0.128, 0.092, 0.060, 1.0],
+    chunk_color: [0.340, 0.085, 0.028, 1.0],
+    chunk_highlight: [0.500, 0.160, 0.050, 1.0],
 };
 
+/// Ochre-cast gray rock with bright yellow crystal pockets.
 pub(crate) const SULFUR_ORE: OreNodeStyle = OreNodeStyle {
-    base_color: [0.48, 0.46, 0.42, 1.0],
-    accent_color: [0.36, 0.34, 0.30, 1.0],
-    chunk_color: [0.96, 0.80, 0.18, 1.0],
-    chunk_highlight: [1.00, 0.92, 0.36, 1.0],
+    base_color: [0.165, 0.148, 0.105, 1.0],
+    accent_color: [0.105, 0.094, 0.066, 1.0],
+    chunk_color: [0.850, 0.560, 0.030, 1.0],
+    chunk_highlight: [0.950, 0.760, 0.110, 1.0],
 };
 
 /// Plain rock vein, same silhouette as the ore variants, but the
 /// "chunks" embedded in the top are just darker rock instead of a
 /// metallic/coal/sulfur colour. Reads as "weathered exposed stone".
 pub(crate) const STONE_VEIN: OreNodeStyle = OreNodeStyle {
-    base_color: [0.58, 0.56, 0.52, 1.0],
-    accent_color: [0.46, 0.44, 0.41, 1.0],
-    chunk_color: [0.42, 0.40, 0.38, 1.0],
-    chunk_highlight: [0.66, 0.64, 0.60, 1.0],
+    base_color: [0.260, 0.250, 0.225, 1.0],
+    accent_color: [0.155, 0.148, 0.130, 1.0],
+    chunk_color: [0.120, 0.112, 0.100, 1.0],
+    chunk_highlight: [0.360, 0.345, 0.305, 1.0],
 };
 
 pub(crate) fn low_poly_ore_node_mesh(style: OreNodeStyle) -> Mesh {
@@ -59,20 +67,20 @@ fn add_ore_chunks(builder: &mut LowPolyMeshBuilder, style: OreNodeStyle) {
     // around y=0.30–0.43), with the centre tuned to sink under the local
     // surface so the visible portion pokes out by a similar amount on
     // every chunk. Without that, chunks placed over a slope used to look
-    // like they were floating in mid-air.
+    // like they were floating in mid-air. Five large chunks rather than
+    // many small ones: the deposit has to be readable at the ~10m the
+    // player actually decides "worth mining?" from.
     let placements: &[([f32; 3], [f32; 3])] = &[
         // Main outcrop on the central peak.
-        ([0.04, 0.42, -0.04], [0.17, 0.18, 0.16]),
-        // Smaller chunk on the upper front-right shoulder of the central mound.
-        ([0.20, 0.30, 0.10], [0.12, 0.13, 0.12]),
+        ([0.04, 0.40, -0.04], [0.24, 0.25, 0.22]),
+        // Chunk on the upper front-right shoulder of the central mound.
+        ([0.22, 0.27, 0.11], [0.17, 0.18, 0.17]),
         // Sitting on the back-left flanking stone's peak (~(-0.30, 0.43, 0.17)).
-        ([-0.28, 0.30, 0.18], [0.13, 0.14, 0.13]),
+        ([-0.29, 0.27, 0.18], [0.18, 0.19, 0.18]),
         // Sitting on the front-right flanking stone's peak (~(0.39, 0.36, -0.13)).
-        ([0.34, 0.22, -0.10], [0.11, 0.12, 0.11]),
+        ([0.35, 0.19, -0.10], [0.15, 0.16, 0.15]),
         // Sitting on the back flanking stone's peak (~(0.05, 0.30, -0.39)).
-        ([0.05, 0.18, -0.34], [0.10, 0.11, 0.10]),
-        // Filler on the left slope between the central mound and stone 2.
-        ([-0.18, 0.22, 0.04], [0.10, 0.11, 0.10]),
+        ([0.05, 0.16, -0.33], [0.14, 0.15, 0.14]),
     ];
     for (centre, scale) in placements {
         builder.add_octa_rock(*centre, *scale, style.chunk_color);

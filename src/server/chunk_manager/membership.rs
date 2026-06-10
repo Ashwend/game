@@ -254,7 +254,7 @@ impl ChunkManager {
 
     /// Register an externally-spawned resource node (admin command, etc.)
     /// so it appears in the AoI snapshot for clients in range. Without
-    /// this, a `/spawn-ore` node would exist in `resource_nodes` but be
+    /// this, a `/spawn` node would exist in `resource_nodes` but be
     /// invisible in every snapshot because the per-chunk membership set
     /// is the AoI source of truth.
     pub fn track_resource_node(

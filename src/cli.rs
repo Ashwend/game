@@ -60,7 +60,7 @@ enum Command {
         /// admin list. Pass once per id (`--admin 1 --admin 2`). Intended for
         /// `--auth no-auth` dev/automation: it lets a control-socket agent
         /// whose `GAME_ACCOUNT_ID` matches run admin-gated slash commands
-        /// (`/test-kit`, `/spawn-ore`, `/time`, `/speed`) without a WorkOS
+        /// (`/test-kit`, `/spawn`, `/time`, `/speed`) without a WorkOS
         /// token. Under `--auth workos`, prefer the `urn:ashwend:admin` token
         /// claim so admin isn't pinned to a raw account id.
         #[arg(long = "admin")]

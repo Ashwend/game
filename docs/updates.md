@@ -8,7 +8,10 @@ that this depends on.
 
 - On boot, a background thread (the app has no async runtime, so this mirrors
   the [analytics](../src/analytics) worker: one OS thread + blocking `ureq`)
-  asks the **public** GitHub releases API for `Ashwend/game`.
+  asks the **public** GitHub releases API for `Ashwend/game`. Dev builds can
+  set `GAME_SKIP_UPDATE_CHECK` to disable the check entirely (used by the
+  agent test harness so the modal can't cover screenshots; compiled out of
+  release builds).
 - If the newest stable release is newer than `CARGO_PKG_VERSION`
   (`crate::protocol::GAME_VERSION`), the player sees a modal with the changelog
   for every version between theirs and latest, rendered as markdown

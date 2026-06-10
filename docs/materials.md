@@ -38,6 +38,21 @@ These are the values currently set; treat them as the live reference and update 
 3. **Always set `reflectance` explicitly for dielectrics.** `0.1–0.2` for matte natural surfaces, `0.3–0.4` for polished wood / smooth ceramic if you ever want it, `0.5` is plastic and should be a deliberate choice.
 4. If the new mesh is a **large flat surface** that the sun can grazingly hit (floors, water, table tops, roof tiles), do not rely on roughness alone to kill the specular band. See below.
 
+## Vertex-colour albedos are linear, pick them physically
+
+The low-poly props (trees, ore nodes, sticks, stones; `src/app/scene/mesh/`) carry their colour in `Mesh::ATTRIBUTE_COLOR`, multiplied into a white `StandardMaterial`. **That attribute is linear RGBA**, it never goes through the sRGB decode `Color::srgb` performs, so a value eyeballed as a perceptual mid-grey (`0.55`) actually renders ~1.5-2x brighter (chalk white in daylight). This bit the prop set once already: every rock, trunk, and stick rendered pastel until the palette was rebuilt in linear terms.
+
+When picking new values:
+
+- The calibration anchor is the ground at linear `(0.027, 0.095, 0.040)`. Anything that should read as "sits in the scene" belongs within a few multiples of that.
+- Physical albedo ranges (linear): coal `0.02-0.05`, dark soil/bark `0.03-0.09`, rock `0.08-0.26`, foliage green channel `0.06-0.22`, dry straw `0.2-0.3`, paper-birch white `~0.5` tops.
+- Quick conversion if you have an sRGB pick: raise it to ~2.2 power, then tune by eye in the headless harness (spawn the node with `/spawn`, screenshot at 4-10m).
+- Identity needs to live in the *mass* of a node, not in small accents: the per-ore tint is on the whole base rock (see `OreNodeStyle` in `mesh/ore.rs`), because the embedded chunks alone are unreadable past ~8m.
+
+The mesh builder bakes cheap fake ambient occlusion in the same currency: cone bottom caps at 0.45x, octa-rock undersides at 0.58x, rock-lump ground-contact bands at 0.72x (`scale_rgb` in `mesh/builder.rs`). Per-instance size variety comes from a deterministic node-id-hashed uniform scale jitter in `resource_node_transform_at`, not from mesh duplicates.
+
+The held tools and placed structures (workbench, furnace) are authored Blender glbs with their own baked `COLOR_0` values; they got the matching correction pass (dielectric colours `v^2.2`; iron-head grays untouched since a metal's colour drives F0, not albedo; the furnace's AO-baked colours took a flat warm-biased scale instead, see [Icon to 3D model](icon-to-model.md#vertex-colour-albedos)).
+
 ## Flat surfaces and the "wet glass" problem
 
 A perfectly planar mesh has identical normals across the whole face. Under a directional light, that produces one continuous Fresnel-driven specular band whose intensity depends only on view + light + surface angle, even with `roughness: 1.0` you still see it at grazing angles, because Fresnel ignores roughness for the F0 term.

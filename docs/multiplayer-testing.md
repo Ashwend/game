@@ -135,20 +135,28 @@ the `--connect` bypass path (which injects an identity from `GAME_ACCOUNT_ID` /
 ```bash
 # 1. Dedicated server, no auth, throwaway deterministic world (auto-created).
 #    `--admin <id>` grants admin to the agent's GAME_ACCOUNT_ID so admin-gated
-#    slash commands (test-kit, spawn-ore, time, speed) work over the socket.
+#    slash commands (test-kit, spawn, time, speed) work over the socket.
 ./cli server --bind 127.0.0.1:7777 --auth no-auth --world /tmp/agent.save \
   --map-size small --admin 1
 
-# 2. Client: bypasses login, auto-connects, opens the control socket:
+# 2. Client: bypasses login, auto-connects, opens the control socket.
+#    (Run the binary directly; the ./cli wrapper's equivalent is `dev`,
+#    which also closes existing game windows and goes through cargo run.)
 GAME_CONTROL_SOCKET=/tmp/ashwend-control.sock \
+GAME_SKIP_UPDATE_CHECK=1 \
 GAME_ACCOUNT_ID=1 GAME_PLAYER_NAME=Agent \
-./cli client --connect 127.0.0.1:7777
+./target/debug/ashwend client --connect 127.0.0.1:7777
 ```
 
 The `GAME_ACCOUNT_ID` passed to the client must match an id passed to the
 server's `--admin`; otherwise admin-gated commands reply `"admin only"` and the
 kit/spawns are silently skipped. Without `--admin` the agent still spawns,
 moves, and screenshots fine, it just can't issue admin commands.
+
+`GAME_SKIP_UPDATE_CHECK` (dev builds only, like the rest of the harness)
+disables the boot-time GitHub release check. Set it for any screenshotting
+session: when a newer release exists, the "update available" modal otherwise
+opens a few seconds after boot and covers the scene.
 
 ### Requests
 
@@ -194,8 +202,9 @@ frame includes the full UI (inventory, menus, hotbar), not just the 3D scene.
 ```bash
 GAME_HEADLESS_CAPTURE=1280x720 \
 GAME_CONTROL_SOCKET=/tmp/ashwend-control.sock \
+GAME_SKIP_UPDATE_CHECK=1 \
 GAME_ACCOUNT_ID=1 GAME_PLAYER_NAME=Agent \
-./cli client --connect 127.0.0.1:7777
+./target/debug/ashwend client --connect 127.0.0.1:7777
 ```
 
 `GAME_HEADLESS_CAPTURE` accepts `WIDTHxHEIGHT` or a bare `1` for the default

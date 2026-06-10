@@ -1,6 +1,10 @@
 use bevy::prelude::*;
 
-use crate::{protocol::Vec3Net, resources::ResourceNodeModel};
+use crate::{
+    protocol::{ResourceNodeId, Vec3Net},
+    resources::ResourceNodeModel,
+    world::splitmix64,
+};
 
 use super::ResourceNodePopIn;
 
@@ -69,16 +73,18 @@ pub(super) fn ease_out_cubic(t: f32) -> f32 {
 }
 
 pub(crate) fn resource_node_transform_at(
+    id: ResourceNodeId,
     position: Vec3Net,
     yaw: f32,
     model: ResourceNodeModel,
 ) -> Transform {
     // Trees bake their full size into the mesh and sit on the ground at
-    // unit scale, which keeps each variant a single canonical mesh that
-    // can be GPU-instanced. Ore nodes keep their per-instance scale
-    // jitter for shape variety. Both the tree trunks and the ore rock
-    // lumps have their lowest vertices at local y=0, so no height offset
-    // is needed, adding one would float the geometry above the floor.
+    // unit base scale, which keeps each variant a single canonical mesh
+    // that can be GPU-instanced (per-instance transforms don't break
+    // batching). Ore nodes keep their per-model scale shaping for shape
+    // variety. Both the tree trunks and the ore rock lumps have their
+    // lowest vertices at local y=0, so no height offset is needed, adding
+    // one would float the geometry above the floor.
     let (height_offset, scale) = match model {
         ResourceNodeModel::CoalOre => (0.0, Vec3::new(1.0, 1.0, 1.0)),
         ResourceNodeModel::IronOre => (0.0, Vec3::new(1.1, 1.05, 0.95)),
@@ -96,7 +102,34 @@ pub(crate) fn resource_node_transform_at(
         ResourceNodeModel::BranchPile => (0.0, Vec3::ONE),
         ResourceNodeModel::HayGrass => (0.0, Vec3::ONE),
     };
+    let scale = scale * size_jitter(id, model);
     Transform::from_xyz(position.x, position.y + height_offset, position.z)
         .with_rotation(Quat::from_rotation_y(yaw))
         .with_scale(scale)
+}
+
+/// Deterministic per-instance uniform scale jitter, on top of the per-model
+/// base scale. Hashed from the node id so every client (and every reconnect)
+/// agrees on a given node's size; without it, identical canonical meshes make
+/// a forest read as stamped copies. Kept within ~±12% so the visual stays
+/// honest to the server's gather/aim geometry, which uses fixed per-definition
+/// radii.
+fn size_jitter(id: ResourceNodeId, model: ResourceNodeModel) -> f32 {
+    let unit = (splitmix64(id ^ 0x5EED_C0DE_BADC_0FFE) >> 40) as f32 / (1u64 << 24) as f32;
+    let (lo, hi) = match model {
+        ResourceNodeModel::PineTreeSmall
+        | ResourceNodeModel::PineTreeMedium
+        | ResourceNodeModel::PineTreeLarge
+        | ResourceNodeModel::BirchTreeSmall
+        | ResourceNodeModel::BirchTreeMedium
+        | ResourceNodeModel::BirchTreeLarge => (0.88, 1.12),
+        ResourceNodeModel::CoalOre
+        | ResourceNodeModel::IronOre
+        | ResourceNodeModel::SulfurOre
+        | ResourceNodeModel::StoneVein => (0.94, 1.08),
+        ResourceNodeModel::SurfaceStone => (0.85, 1.10),
+        ResourceNodeModel::BranchPile => (0.85, 1.12),
+        ResourceNodeModel::HayGrass => (0.92, 1.08),
+    };
+    lo + (hi - lo) * unit
 }

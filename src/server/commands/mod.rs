@@ -41,7 +41,7 @@ impl GameServer {
         let args: Vec<&str> = parts.collect();
 
         match name.as_str() {
-            "spawn-ore" | "spawnore" => self.command_spawn_ore(client_id, &args),
+            "spawn" => self.command_spawn(client_id, &args),
             "time" => self.command_set_time(client_id, &args),
             "speed" | "timescale" => self.command_set_time_multiplier(client_id, &args),
             "test-kit" | "testkit" => self.command_test_kit(client_id),
@@ -66,12 +66,12 @@ impl GameServer {
 
         let mut lines: Vec<String> = vec!["Available commands:".to_owned()];
         lines.push("  /help: show this list".to_owned());
-        let spawn_ore_line = if is_admin {
-            "  /spawn-ore [coal|iron|sulfur] [radius]: drop a fresh ore node nearby"
+        let spawn_line = if is_admin {
+            "  /spawn <kind> [distance]: drop a resource node in front of you (e.g. /spawn pine 6)"
         } else {
-            "  /spawn-ore [coal|iron|sulfur] [radius]: admin only"
+            "  /spawn <kind> [distance]: admin only"
         };
-        lines.push(spawn_ore_line.to_owned());
+        lines.push(spawn_line.to_owned());
         let time_line = if is_admin {
             "  /time <HH:MM|HHMM|hour>: set the time of day"
         } else {

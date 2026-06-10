@@ -310,7 +310,7 @@ pub(crate) fn apply_resource_nodes_system(
         };
         spawn_budget -= 1;
         let target_transform =
-            resource_node_transform_at(spawn.position, spawn.yaw, definition.model);
+            resource_node_transform_at(spawn.id, spawn.position, spawn.yaw, definition.model);
         spawn_resource_node_entity(
             &mut commands,
             &assets,

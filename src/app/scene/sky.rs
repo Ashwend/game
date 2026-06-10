@@ -212,7 +212,12 @@ pub(crate) fn initial_distance_fog() -> DistanceFog {
         color: Color::srgb(0.55, 0.65, 0.78),
         directional_light_color: Color::srgba(1.0, 0.92, 0.78, 0.5),
         directional_light_exponent: 30.0,
-        falloff: FogFalloff::from_visibility(140.0),
+        // Squared falloff, not plain exponential: both hit 5% contrast at
+        // the visibility distance, but the squared curve stays nearly clear
+        // through the 0-40m gameplay range (plain exponential already mixed
+        // ~30% fog into a prop at 17m, washing everything toward pastel) and
+        // ramps up near the horizon where the haze belongs.
+        falloff: FogFalloff::from_visibility_squared(140.0),
     }
 }
 
@@ -273,7 +278,9 @@ pub(crate) fn update_sky_system(
 
     if let Ok(mut fog) = fog.single_mut() {
         fog.color = vec3_to_color(lighting.fog_color);
-        fog.falloff = FogFalloff::from_visibility(lighting.fog_distance);
+        // Squared falloff to keep the near field clear; see
+        // `initial_distance_fog`.
+        fog.falloff = FogFalloff::from_visibility_squared(lighting.fog_distance);
     }
 
     // Moon visual follows the camera at a fixed dome radius so it feels

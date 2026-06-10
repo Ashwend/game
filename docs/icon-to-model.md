@@ -104,6 +104,29 @@ Per-face tone comes from a `COLOR_0` vertex-colour attribute, using the **linear
 palette in `src/app/scene/mesh/builder.rs` so authored models match procedural
 ones.
 
+<a name="vertex-colour-albedos"></a>
+**Author those colours as linear albedos, not perceptual picks.** `COLOR_0`
+bypasses the sRGB decode, so a value chosen "by eye" as a mid tone renders
+1.5-2x brighter in-game; see the calibration note at the top of the palette in
+`builder.rs` and the target ranges in [Materials](materials.md) (wood
+`0.03-0.16`, stone `0.08-0.26`, paper-birch white `~0.5` tops). Two extra rules
+for authored models specifically:
+
+- **Metal slots are exempt.** A metal's vertex colour drives F0 (the mirror
+  tint), not diffuse albedo; the iron heads' bright grays (`0.38-0.94`) are
+  correct and must not be darkened with the dielectric slots.
+- **Cool neutral grays amplify the blue sky IBL** into a washed pale look on
+  large surfaces. Bias stone tones warm (R above B, like the procedural
+  `STONE_VEIN` palette) so daylight reads as stone rather than haze.
+
+The 2026-06 correction pass that brought the six authored models in line used
+headless Blender (`Blender --background <blend> --python darken.py`) to apply
+`v^2.2` per channel to every dielectric slot's corner colours (tools,
+workbench), and a flat warm-biased scale of `(0.39, 0.36, 0.30)` to the crude
+furnace (its colours carry baked AO with an intentionally dark mouth; a power
+curve would crush those darks to black), then re-exported with the standard
+settings above.
+
 Material setup (each slot needs a Vertex Color node wired to Base Color, or
 `COLOR_0` exports white):
 
