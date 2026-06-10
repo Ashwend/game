@@ -87,10 +87,15 @@ impl UnifiedSlotRef {
 /// change is most informative, gains beat losses, losses beat shuffles,
 /// since a tick that did all three at once is dominated by the "new item
 /// arrived" cue.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InventorySoundEvent {
     /// Total inventory quantity grew, an item entered the player's bag.
-    Pickup,
+    /// Carries the id of the item that gained the most units this diff so
+    /// the cue can match the material (stick clatter, stone clack) instead
+    /// of one generic rustle; `None` when the gaining slot is ambiguous.
+    Pickup {
+        item_id: Option<crate::items::ItemId>,
+    },
     /// Total inventory quantity shrank, an item left the bag (drop, use).
     Drop,
     /// Per-slot contents changed but the total stayed the same, a move,
@@ -243,7 +248,7 @@ impl InventoryUiState {
             // matching command sent within the last few frames; consume
             // the intent flag so a delayed harvest delta that arrives
             // after a successful pickup doesn't replay the cue.
-            if matches!(event, Some(InventorySoundEvent::Pickup)) {
+            if matches!(event, Some(InventorySoundEvent::Pickup { .. })) {
                 if self.pickup_intent_secs_remaining > 0.0 {
                     self.pickup_intent_secs_remaining = 0.0;
                 } else {
@@ -283,7 +288,9 @@ fn inventory_sound_event(
     let previous_total = total_quantity(previous);
     let current_total = total_quantity(current);
     if current_total > previous_total {
-        Some(InventorySoundEvent::Pickup)
+        Some(InventorySoundEvent::Pickup {
+            item_id: dominant_gained_item(previous, current),
+        })
     } else if current_total < previous_total {
         Some(InventorySoundEvent::Drop)
     } else if slots_rearranged(previous, current) {
@@ -291,6 +298,43 @@ fn inventory_sound_event(
     } else {
         None
     }
+}
+
+/// The item whose slot gained the most units between the two snapshots.
+/// A pickup that splits across several slots reports the largest single
+/// gain, good enough to pick the material cue. Slots whose item changed
+/// entirely count their full new quantity as the gain.
+fn dominant_gained_item(
+    previous: &PlayerInventoryState,
+    current: &PlayerInventoryState,
+) -> Option<crate::items::ItemId> {
+    let mut best: Option<(u16, crate::items::ItemId)> = None;
+    let pairs = previous
+        .inventory_slots
+        .iter()
+        .zip(current.inventory_slots.iter())
+        .chain(
+            previous
+                .actionbar_slots
+                .iter()
+                .zip(current.actionbar_slots.iter()),
+        );
+    for (previous_stack, current_stack) in pairs {
+        let Some(current_stack) = current_stack else {
+            continue;
+        };
+        let previous_quantity = match previous_stack {
+            Some(stack) if stack.item_id == current_stack.item_id => stack.quantity,
+            _ => 0,
+        };
+        if current_stack.quantity > previous_quantity {
+            let gain = current_stack.quantity - previous_quantity;
+            if best.as_ref().is_none_or(|(top, _)| gain > *top) {
+                best = Some((gain, current_stack.item_id.clone()));
+            }
+        }
+    }
+    best.map(|(_, item_id)| item_id)
 }
 
 fn total_quantity(inventory: &PlayerInventoryState) -> u64 {
@@ -441,13 +485,17 @@ mod tests {
         assert_eq!(state.observe_inventory(&baseline), None);
 
         // A noted pickup intent followed by a quantity gain reads as
-        // Pickup. Without the intent, the same gain would be silent.
+        // Pickup carrying the gained item's id (the material cue picks
+        // its sound off this). Without the intent, the same gain would
+        // be silent.
         state.note_pickup_intent();
         let mut after_pickup = baseline.clone();
         after_pickup.inventory_slots[0] = Some(ItemStack::new("coal", 3));
         assert_eq!(
             state.observe_inventory(&after_pickup),
-            Some(InventorySoundEvent::Pickup)
+            Some(InventorySoundEvent::Pickup {
+                item_id: Some("coal".into())
+            })
         );
 
         // Stack consolidated into the same total → Move (same total,
@@ -517,7 +565,9 @@ mod tests {
         snapshot.inventory_slots[0] = Some(ItemStack::new("ore", 2));
         assert_eq!(
             state.observe_inventory(&snapshot),
-            Some(InventorySoundEvent::Pickup)
+            Some(InventorySoundEvent::Pickup {
+                item_id: Some("ore".into())
+            })
         );
 
         // A second gain in the same window (e.g. a harvest tick that

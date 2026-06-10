@@ -88,6 +88,19 @@ pub(crate) enum SoundId {
 
     // --- Inventory cues ---
     InventoryPickup,
+    /// Material-matched pickup variant for wood (branch piles, dropped
+    /// wood stacks): the grass-brush rustle with three light twig ticks
+    /// scattered through it, sticks snatched up off the ground. Derived
+    /// offline: `pickup-item.wav` (+9 dB) under the first 80-90 ms of
+    /// `axe-wood-1/3/2` attack transients (pitched up 9/6/11 semitones,
+    /// highpassed, fast-faded so only the snap remains) at 40/130/210 ms.
+    /// An earlier wood-footstep version read as hollow door knocks.
+    PickupSticks,
+    /// Material-matched pickup variant for stone and ore chunks: two dry
+    /// pebble clacks with a gravelly settle. Derived offline from the
+    /// concrete footstep pool (`concrete-03/08/05` pitched up 5/8/2
+    /// semitones at 0/70/130 ms, highpassed at 250-300 Hz).
+    PickupStones,
     InventoryDrop,
     InventoryMove,
 
@@ -133,6 +146,8 @@ pub(crate) fn all_sound_ids() -> &'static [SoundId] {
         SoundId::FootstepConcrete,
         SoundId::FootstepSand,
         SoundId::InventoryPickup,
+        SoundId::PickupSticks,
+        SoundId::PickupStones,
         SoundId::InventoryDrop,
         SoundId::InventoryMove,
         SoundId::CraftComplete,
@@ -367,6 +382,18 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
             pitch_jitter: 0.04,
             looped: false,
         },
+        // Material pickup variants. Their files peak near full scale
+        // (unlike the very quiet grass-rustle recording above), so they
+        // take a real trim to land at the same deliberately subtle level
+        // the pickup family sits at. ±5% jitter keeps a gathering spree
+        // from machine-gunning one identical rattle.
+        SoundId::PickupSticks | SoundId::PickupStones => SoundDefaults {
+            category: SoundCategory::Sfx2d,
+            base_gain_db: -19.0,
+            spatial: None,
+            pitch_jitter: 0.05,
+            looped: false,
+        },
         // Drop cue, slightly more body, hits a touch quieter than pickup
         // because dropping is a deliberate negative-feedback action, not
         // an achievement.
@@ -480,6 +507,8 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
     ];
 
     static INVENTORY_PICKUP: [&str; 1] = ["inventory/pickup-item.wav"];
+    static PICKUP_STICKS: [&str; 1] = ["inventory/pickup-sticks.wav"];
+    static PICKUP_STONES: [&str; 1] = ["inventory/pickup-stones.wav"];
     static INVENTORY_DROP: [&str; 1] = ["inventory/drop-item.wav"];
     static INVENTORY_MOVE: [&str; 1] = ["inventory/inventory-move.wav"];
     static CRAFT_COMPLETE: [&str; 1] = ["crafting/craft-complete.wav"];
@@ -512,6 +541,8 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         SoundId::FootstepConcrete => footstep_paths(FootstepMaterial::Concrete),
         SoundId::FootstepSand => footstep_paths(FootstepMaterial::Sand),
         SoundId::InventoryPickup => &INVENTORY_PICKUP,
+        SoundId::PickupSticks => &PICKUP_STICKS,
+        SoundId::PickupStones => &PICKUP_STONES,
         SoundId::InventoryDrop => &INVENTORY_DROP,
         SoundId::InventoryMove => &INVENTORY_MOVE,
         SoundId::CraftComplete => &CRAFT_COMPLETE,

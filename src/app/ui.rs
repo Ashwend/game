@@ -410,9 +410,24 @@ pub(crate) fn inventory_sound_system(
 
 fn inventory_sound_id(event: InventorySoundEvent) -> SoundId {
     match event {
-        InventorySoundEvent::Pickup => SoundId::InventoryPickup,
+        InventorySoundEvent::Pickup { item_id } => {
+            pickup_sound_for(item_id.as_ref().map(|id| id.as_ref()))
+        }
         InventorySoundEvent::Drop => SoundId::InventoryDrop,
         InventorySoundEvent::Move => SoundId::InventoryMove,
+    }
+}
+
+/// Material-matched pickup cue: grabbing sticks rattles wood, grabbing a
+/// stone (or any ore chunk) clacks rock, everything else keeps the
+/// generic brushed-from-the-grass rustle (which is exactly right for the
+/// fiber/hay pickup it was originally cut for).
+fn pickup_sound_for(item_id: Option<&str>) -> SoundId {
+    use crate::items::{COAL_ID, IRON_ORE_ID, STONE_ID, SULFUR_ORE_ID, WOOD_ID};
+    match item_id {
+        Some(WOOD_ID) => SoundId::PickupSticks,
+        Some(STONE_ID | COAL_ID | IRON_ORE_ID | SULFUR_ORE_ID) => SoundId::PickupStones,
+        _ => SoundId::InventoryPickup,
     }
 }
 
@@ -470,7 +485,7 @@ mod tests {
     #[test]
     fn inventory_sounds_map_to_distinct_pool_ids() {
         assert_eq!(
-            inventory_sound_id(InventorySoundEvent::Pickup),
+            inventory_sound_id(InventorySoundEvent::Pickup { item_id: None }),
             SoundId::InventoryPickup
         );
         assert_eq!(
@@ -481,6 +496,30 @@ mod tests {
             inventory_sound_id(InventorySoundEvent::Move),
             SoundId::InventoryMove
         );
+    }
+
+    #[test]
+    fn pickup_cue_matches_the_material() {
+        // Sticks rattle wood, stone and every ore chunk clack rock, and
+        // anything else (fiber, tools, unknown ids) keeps the grass
+        // rustle the generic cue was recorded for.
+        assert_eq!(
+            pickup_sound_for(Some(crate::items::WOOD_ID)),
+            SoundId::PickupSticks
+        );
+        assert_eq!(
+            pickup_sound_for(Some(crate::items::STONE_ID)),
+            SoundId::PickupStones
+        );
+        assert_eq!(
+            pickup_sound_for(Some(crate::items::IRON_ORE_ID)),
+            SoundId::PickupStones
+        );
+        assert_eq!(
+            pickup_sound_for(Some(crate::items::FIBER_ID)),
+            SoundId::InventoryPickup
+        );
+        assert_eq!(pickup_sound_for(None), SoundId::InventoryPickup);
     }
 
     #[test]
