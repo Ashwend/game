@@ -1,6 +1,7 @@
 pub mod analytics;
 pub mod app;
 pub mod auth;
+pub mod building;
 pub mod cli;
 pub mod combat;
 pub mod controller;

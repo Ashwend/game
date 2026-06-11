@@ -357,11 +357,19 @@ impl GameServer {
         }
 
         let killer_name = (!killer_name.is_empty()).then(|| killer_name.to_owned());
+        // Offer the dying player their placed sleeping bags as spawn
+        // points; the death screen renders one button per bag.
+        let respawn_bags = self
+            .clients
+            .get(&target_id)
+            .map(|client| self.respawn_bag_options(client.account_id))
+            .unwrap_or_default();
         vec![ServerEnvelope {
             target: DeliveryTarget::Client(target_id),
             message: ServerMessage::PlayerKilled {
                 killer: killer_id,
                 killer_name,
+                respawn_bags,
             },
         }]
     }
@@ -377,7 +385,7 @@ impl GameServer {
     /// deployable colliders. Rebuilt per spawn pick; spawns are rare so the
     /// O(nodes + structures) build is cheap, and rebuilding keeps the check
     /// honest as nodes regrow and structures come and go.
-    fn spawn_collision_grid(&self) -> BlockGrid {
+    pub(super) fn spawn_collision_grid(&self) -> BlockGrid {
         let mut extras: Vec<crate::world::WorldBlock> = self
             .resource_nodes
             .values()
@@ -386,7 +394,7 @@ impl GameServer {
         extras.extend(
             self.deployed_entities
                 .values()
-                .filter_map(|e| e.resolved_collider()),
+                .flat_map(|e| e.resolved_collider_blocks()),
         );
         BlockGrid::build_with_extras(&self.world, &extras)
     }

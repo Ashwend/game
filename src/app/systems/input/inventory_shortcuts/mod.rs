@@ -26,7 +26,8 @@ mod tests;
 
 pub(crate) use send::*;
 
-use send::{send_gameplay_message, send_place_deployable_or_furnace_open};
+pub(in crate::app::systems::input) use send::send_gameplay_message;
+use send::send_place_deployable_or_furnace_open;
 
 use predict::{predict_pickup, predict_resource_node_pickup};
 use swing::{
@@ -53,6 +54,7 @@ pub(crate) struct GameplayInventoryShortcutsParams<'w, 's> {
     settings: Res<'w, ClientSettings>,
     camera_kick: ResMut<'w, crate::app::systems::CameraImpactKick>,
     combat_feedback: ResMut<'w, crate::app::state::CombatFeedbackState>,
+    wheel: Res<'w, crate::app::state::WheelMenuState>,
     error_toasts: MessageWriter<'w, ClientErrorToast>,
     play_sound: MessageWriter<'w, crate::app::audio::PlaySound>,
     primary_window: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
@@ -60,6 +62,14 @@ pub(crate) struct GameplayInventoryShortcutsParams<'w, 's> {
 
 pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryShortcutsParams) {
     if !gameplay_accepts_controls(&params.menu, primary_window_focused(&params.primary_window)) {
+        params.mouse_wheel.clear();
+        params.gather_input.cancel();
+        return;
+    }
+    // While a radial wheel is open the mouse drives the wheel pointer
+    // and E may be the wheel's hold trigger; swings, pickups, and slot
+    // selection all wait for the wheel to close.
+    if params.wheel.blocks_input() {
         params.mouse_wheel.clear();
         params.gather_input.cancel();
         return;
@@ -216,7 +226,37 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
                         &mut params.error_toasts,
                     );
                 }
-                None => {}
+                Some(DeployableKind::Door) => {
+                    // Toggle open/closed. If the sender isn't authorized
+                    // on the lock, the server answers with
+                    // `DoorCodePrompt` and the code dialog opens.
+                    send_gameplay_message(
+                        &mut params.runtime,
+                        &mut params.error_toasts,
+                        ClientMessage::Door(crate::protocol::DoorCommand::Interact { id }),
+                        "door interact",
+                    );
+                }
+                // Sleeping bag E handling (tap = pick up, hold = rename
+                // wheel) lives in the hold-aware path in
+                // `super::super::wheel`; nothing fires on plain press.
+                Some(DeployableKind::SleepingBag) => {}
+                Some(DeployableKind::StorageBox { .. }) => {
+                    // Open the box's container UI. The server validates
+                    // range + kind and replies by populating
+                    // `PlayerPrivate.open_loot_bag` (shared container
+                    // view), so the transfer panel appears on the next
+                    // replication tick.
+                    send_gameplay_message(
+                        &mut params.runtime,
+                        &mut params.error_toasts,
+                        ClientMessage::OpenStorageBox { id },
+                        "storage box open",
+                    );
+                }
+                // Building blocks have no E interaction; the hammer is
+                // their interface.
+                Some(DeployableKind::Building { .. }) | None => {}
             }
         } else if let Some(id) = params.pickup_target.loot_bag_id {
             // Open the death loot bag. Server validates range +

@@ -54,6 +54,7 @@ pub(crate) const AUTO_SAVE_INTERVAL_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 
 /// players can brace for the brief hitch the synchronous write causes.
 const AUTO_SAVE_WARNING_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 30;
 
+mod building;
 pub mod chunk_manager;
 mod combat;
 mod commands;
@@ -63,6 +64,7 @@ mod crafting;
 pub mod deployable_ecs;
 mod deployables;
 mod dispatch;
+mod door;
 pub mod dropped_item_ecs;
 mod dropped_items;
 mod entity_index;
@@ -77,6 +79,9 @@ pub mod player_ecs;
 mod queries;
 pub mod resource_node_ecs;
 mod resource_nodes;
+mod sleeping_bag;
+mod stability;
+mod storage_box;
 #[cfg(test)]
 mod test_support;
 mod tick;
@@ -89,7 +94,8 @@ pub use chunk_manager::{ChunkManager, ChunkManagerSave, view_tier_radius};
 pub use connection::VersionMismatchRejection;
 pub use deployable_ecs::{
     Deployable, DeployableActive, DeployableChunk, DeployableHealth, DeployableIndex,
-    DeployableTransform, DeployableView, despawn_deployable_entity, spawn_deployable_entity,
+    DeployableLabel, DeployableStability, DeployableTransform, DeployableView,
+    despawn_deployable_entity, spawn_deployable_entity,
 };
 pub use dropped_item_ecs::{
     DroppedItem, DroppedItemChunk, DroppedItemIndex, DroppedItemTransform,

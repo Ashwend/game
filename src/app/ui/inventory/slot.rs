@@ -333,15 +333,15 @@ fn item_tooltip_body(stack: &ItemStack) -> String {
         lines.push("Hold it, then left-click to place".to_owned());
     }
 
-    lines.push(if definition.equipable {
-        "Equipable\nStack: 1".to_owned()
-    } else {
-        format!(
-            "Stack: {}/{}",
-            stack.quantity,
-            stack_limit(definition.id).unwrap_or(1)
-        )
-    });
+    if definition.equipable {
+        lines.push("Equipable".to_owned());
+    }
+    // A stack line only carries information for items that actually
+    // stack; "Stack: 1" on a tool or deployable is noise.
+    let limit = stack_limit(definition.id).unwrap_or(1);
+    if limit > 1 {
+        lines.push(format!("Stack: {}/{}", stack.quantity, limit));
+    }
 
     lines.join("\n")
 }
@@ -410,6 +410,14 @@ mod tests {
     fn tooltip_body_uses_registry_stack_limits() {
         let body = item_tooltip_body(&ItemStack::new(COAL_ID, 3));
         assert!(body.contains("3/200"));
+    }
+
+    #[test]
+    fn tooltip_body_hides_the_stack_line_for_unstackable_items() {
+        use crate::items::BASIC_PICKAXE_ID;
+        let body = item_tooltip_body(&ItemStack::new(BASIC_PICKAXE_ID, 1));
+        assert!(!body.contains("Stack:"), "no stack line for tools: {body}");
+        assert!(body.contains("Equipable"));
     }
 
     #[test]

@@ -26,6 +26,11 @@ fn fixture() -> (GameServer, ClientId, DeployedEntityId) {
         max_health: 800,
         owner: Some(1),
         furnace: Some(FurnaceState::default()),
+        placed_at_tick: 0,
+        door: None,
+        label: None,
+        stability: 100,
+        storage: None,
     };
     server.deployed_entities.insert(id, entity);
     (server, client_id, id)

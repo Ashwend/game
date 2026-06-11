@@ -26,7 +26,9 @@ use crate::{
         },
         systems::send_loot_bag_command,
     },
-    protocol::{LootBagCommand, LootBagSlotRef, OpenLootBagView, PlayerInventoryState},
+    protocol::{
+        ContainerViewKind, LootBagCommand, LootBagSlotRef, OpenLootBagView, PlayerInventoryState,
+    },
 };
 
 use super::{
@@ -138,8 +140,13 @@ fn draw_panel(
     inventory_ui: &mut InventoryUiState,
     close_requested: &mut bool,
 ) {
+    let title = match view.kind {
+        ContainerViewKind::LootBag => "Loot bag",
+        ContainerViewKind::Sleeper => "Sleeping player",
+        ContainerViewKind::StorageBox => "Storage box",
+    };
     ui.horizontal(|ui| {
-        ui.label(theme::section("Loot bag"));
+        ui.label(theme::section(title));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let close_response =
                 theme::compact_button(ui, "Close", theme::ButtonKind::Secondary, 84.0);
@@ -152,15 +159,15 @@ fn draw_panel(
     ui.add_space(8.0);
     ui.label(
         RichText::new(
-            "Drag items between the bag and your inventory. Right-click to split a stack, \
-             Shift+click to quick-transfer to the other container.",
+            "Drag items between the container and your inventory. Right-click to split a \
+             stack, Shift+click to quick-transfer to the other container.",
         )
         .color(theme::muted_text())
         .small(),
     );
     ui.add_space(12.0);
 
-    ui.label(theme::field_label("Bag contents"));
+    ui.label(theme::field_label("Contents"));
     let mut idx = 0;
     while idx < view.slots.len() {
         let row_end = (idx + GRID_COLS).min(view.slots.len());
@@ -205,7 +212,11 @@ mod tests {
             slots[0] = Some(ItemStack::new(COAL_ID, 8));
             slots[3] = Some(ItemStack::new(COAL_ID, 2));
         }
-        OpenLootBagView { id: 7, slots }
+        OpenLootBagView {
+            id: 7,
+            slots,
+            kind: ContainerViewKind::LootBag,
+        }
     }
 
     fn local_player(open_loot_bag: Option<OpenLootBagView>) -> LocalPlayerState {

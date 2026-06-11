@@ -38,11 +38,19 @@ const TITLE_FADE_SECS: f32 = 0.6;
 /// don't visibly pop into existence on a black screen.
 const CLOSE_FADE_SECS: f32 = 0.45;
 
-/// Render the death splash if present. Returns true when the player
-/// just clicked Respawn so the caller can send the network message
-/// from a system that owns the runtime mut-borrow.
-pub(super) fn death_splash_ui(ctx: &egui::Context, splash: &DeathSplash) -> bool {
-    let mut respawn_requested = false;
+/// What the player picked on the death screen: the random respawn or one
+/// of their sleeping bags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RespawnChoice {
+    Random,
+    Bag(crate::protocol::DeployedEntityId),
+}
+
+/// Render the death splash if present. Returns the player's respawn
+/// choice when they just clicked one, so the caller can send the network
+/// message from a system that owns the runtime mut-borrow.
+pub(super) fn death_splash_ui(ctx: &egui::Context, splash: &DeathSplash) -> Option<RespawnChoice> {
+    let mut respawn_requested = None;
 
     // Escape-minimized: the blackout is gone so the player can chat or
     // open the pause menu while dead; a compact pill keeps the respawn
@@ -145,7 +153,22 @@ pub(super) fn death_splash_ui(ctx: &egui::Context, splash: &DeathSplash) -> bool
                     super::theme::MENU_BUTTON_WIDTH,
                 );
                 if button.clicked() {
-                    respawn_requested = true;
+                    respawn_requested = Some(RespawnChoice::Random);
+                }
+                // One button per placed sleeping bag, capped so a bag
+                // hoarder can't push the hint off-screen. Secondary
+                // styling keeps the random respawn the visual default.
+                for bag in splash.respawn_bags.iter().take(5) {
+                    ui.add_space(6.0);
+                    let bag_button = super::theme::game_button(
+                        ui,
+                        &bag.name,
+                        super::theme::ButtonKind::Secondary,
+                        super::theme::MENU_BUTTON_WIDTH,
+                    );
+                    if bag_button.clicked() {
+                        respawn_requested = Some(RespawnChoice::Bag(bag.id));
+                    }
                 }
                 ui.add_space(10.0);
                 // Hint that the splash is escapable: dismissing keeps a
@@ -169,8 +192,8 @@ pub(super) fn death_splash_ui(ctx: &egui::Context, splash: &DeathSplash) -> bool
 /// small Respawn button. Deliberately unobtrusive so chat and the pause
 /// menu stay the focus; clicking Respawn behaves exactly like the full
 /// splash's button.
-fn death_pill_ui(ctx: &egui::Context, splash: &DeathSplash) -> bool {
-    let mut respawn_requested = false;
+fn death_pill_ui(ctx: &egui::Context, splash: &DeathSplash) -> Option<RespawnChoice> {
+    let mut respawn_requested = None;
     egui::Area::new(egui::Id::new("death_splash_pill"))
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 18.0))
@@ -206,7 +229,7 @@ fn death_pill_ui(ctx: &egui::Context, splash: &DeathSplash) -> bool {
                             110.0,
                         );
                         if button.clicked() {
-                            respawn_requested = true;
+                            respawn_requested = Some(RespawnChoice::Random);
                         }
                     });
                 });
@@ -214,14 +237,18 @@ fn death_pill_ui(ctx: &egui::Context, splash: &DeathSplash) -> bool {
     respawn_requested
 }
 
-/// Try to send `ClientMessage::Respawn`. Doesn't touch `MenuState`,
+/// Try to send the chosen respawn message. Doesn't touch `MenuState`,
 /// the server's `Correction` reply is what clears the splash, handled
 /// by the network tick.
-pub(super) fn send_respawn(runtime: &mut ClientRuntime) {
+pub(super) fn send_respawn(runtime: &mut ClientRuntime, choice: RespawnChoice) {
     let Some(session) = runtime.session.as_mut() else {
         return;
     };
-    let _ = session.send(ClientMessage::Respawn);
+    let message = match choice {
+        RespawnChoice::Random => ClientMessage::Respawn,
+        RespawnChoice::Bag(id) => ClientMessage::RespawnAtBag { id },
+    };
+    let _ = session.send(message);
 }
 
 /// Advance the splash fade timer once per frame and self-clear once

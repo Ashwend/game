@@ -12,7 +12,15 @@ Usage:
   ashwend-control.py <socket> screenshot <png-path>
   ashwend-control.py <socket> send-command <text>        # slash command, no leading '/'
   ashwend-control.py <socket> select-actionbar-slot <n>  # 0-based; puts that slot's item in hand
-  ashwend-control.py <socket> place-deployable <item_id> [distance]  # drop a carried structure in front, facing you
+  ashwend-control.py <socket> place-deployable <item_id> [distance] [height]  # drop a carried structure in front, facing you; height = platform top for on-floor placement
+  ashwend-control.py <socket> place-building <piece> [distance] [height]  # foundation|wall|window_wall|doorway|ceiling|stairs, server snaps; height raises a free foundation
+  ashwend-control.py <socket> place-door <code> [flip]   # hang a carried door in the nearest doorway
+  ashwend-control.py <socket> door-interact              # E-press the nearest door
+  ashwend-control.py <socket> open-storage-box          # open the nearest storage box's transfer UI
+  ashwend-control.py <socket> close-container            # close the open loot-bag/sleeper/storage-box panel
+  ashwend-control.py <socket> upgrade-building [piece]   # hammer-upgrade the nearest building block (optionally one piece kind)
+  ashwend-control.py <socket> demolish-building [piece]  # hammer-demolish the nearest building block (cascade follows)
+  ashwend-control.py <socket> door-enter-code <code>     # enter a code at the nearest door
   ashwend-control.py <socket> set-look <yaw> <pitch>     # absolute radians; pitch clamped like mouse look
   ashwend-control.py <socket> set-screen <name>          # main_menu|worlds|multiplayer|options|in_game
   ashwend-control.py <socket> set-inventory-open <true|false>
@@ -80,7 +88,35 @@ def main(argv):
             "command": "place_deployable",
             "item_id": rest[0],
             **({"distance": float(rest[1])} if len(rest) > 1 else {}),
+            **({"height": float(rest[2])} if len(rest) > 2 else {}),
         },
+        "place-building": lambda: {
+            "command": "place_building",
+            "piece": rest[0],
+            **({"distance": float(rest[1])} if len(rest) > 1 else {}),
+            **({"height": float(rest[2])} if len(rest) > 2 else {}),
+        },
+        "place-door": lambda: {
+            "command": "place_door",
+            "code": rest[0],
+            **(
+                {"flip": rest[1].lower() in ("1", "true", "yes", "on")}
+                if len(rest) > 1
+                else {}
+            ),
+        },
+        "door-interact": lambda: {"command": "door_interact"},
+        "open-storage-box": lambda: {"command": "open_storage_box"},
+        "close-container": lambda: {"command": "close_container"},
+        "upgrade-building": lambda: {
+            "command": "upgrade_building",
+            **({"piece": rest[0]} if rest else {}),
+        },
+        "demolish-building": lambda: {
+            "command": "demolish_building",
+            **({"piece": rest[0]} if rest else {}),
+        },
+        "door-enter-code": lambda: {"command": "door_enter_code", "code": rest[0]},
         "set-look": lambda: {
             "command": "set_look",
             "yaw": float(rest[0]),

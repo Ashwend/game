@@ -79,6 +79,11 @@ pub(crate) struct MenuState {
     pub(crate) chat_input: String,
     pub(crate) confirmation: Option<ConfirmationDialog>,
     pub(crate) notice: Option<NoticeDialog>,
+    /// In-game single-field text dialog (door codes, sleeping-bag
+    /// rename). One slot: opening a new prompt replaces any current one.
+    /// Gates controls through `gameplay_accepts_controls` like every
+    /// other overlay.
+    pub(crate) text_prompt: Option<TextPrompt>,
     /// Set when the server tells the local client they died. Drives
     /// the "You died, Killed by …, Respawn" splash. Cleared when the
     /// respawn lands (server pushes a `Correction` and the runtime
@@ -120,15 +125,23 @@ pub(crate) struct DeathSplash {
     /// the pause menu become reachable while dead; respawning is still
     /// one click away on the pill.
     pub(crate) minimized: bool,
+    /// The dying player's placed sleeping bags, straight from
+    /// `PlayerKilled`. Rendered as one "spawn here" button per bag next
+    /// to the random respawn.
+    pub(crate) respawn_bags: Vec<crate::protocol::RespawnBagOption>,
 }
 
 impl DeathSplash {
-    pub(crate) fn new(killer_name: Option<String>) -> Self {
+    pub(crate) fn new(
+        killer_name: Option<String>,
+        respawn_bags: Vec<crate::protocol::RespawnBagOption>,
+    ) -> Self {
         Self {
             killer_name,
             elapsed: 0.0,
             closing_elapsed: None,
             minimized: false,
+            respawn_bags,
         }
     }
 
@@ -139,6 +152,54 @@ impl DeathSplash {
     pub(crate) fn begin_closing(&mut self) {
         if self.closing_elapsed.is_none() {
             self.closing_elapsed = Some(0.0);
+        }
+    }
+}
+
+/// What the in-game text prompt is for, and where its submission goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TextPromptKind {
+    /// Choose the lock code while hanging a door. The placement command
+    /// only fires once this confirms, cancelling places nothing.
+    DoorSetCode {
+        doorway_id: crate::protocol::DeployedEntityId,
+        flip: bool,
+    },
+    /// The server prompted for the code of door `door_id`.
+    DoorEnterCode {
+        door_id: crate::protocol::DeployedEntityId,
+    },
+    /// Rotate the code of a door the player is authorized on.
+    DoorChangeCode {
+        door_id: crate::protocol::DeployedEntityId,
+    },
+    /// Rename an owned sleeping bag.
+    RenameBag {
+        bag_id: crate::protocol::DeployedEntityId,
+    },
+}
+
+/// One single-field in-game dialog. Numeric for door codes, free text
+/// for bag names; the UI reads the kind to pick labels and validation.
+#[derive(Debug, Clone)]
+pub(crate) struct TextPrompt {
+    pub(crate) kind: TextPromptKind,
+    pub(crate) input: String,
+    pub(crate) autofocus_pending: bool,
+}
+
+impl TextPrompt {
+    pub(crate) fn new(kind: TextPromptKind) -> Self {
+        // The rename prompt opens from the sleeping-bag wheel, whose
+        // trigger is a *held* E; autofocusing the free-text field would
+        // let the still-held key type itself into the name ("e"). The
+        // door prompts keep autofocus: their field is digits-only, so a
+        // held letter key can't leak in.
+        let autofocus_pending = !matches!(kind, TextPromptKind::RenameBag { .. });
+        Self {
+            kind,
+            input: String::new(),
+            autofocus_pending,
         }
     }
 }
@@ -167,6 +228,7 @@ impl Default for MenuState {
             chat_input: String::new(),
             confirmation: None,
             notice: None,
+            text_prompt: None,
             death_splash: None,
             quit_requested: false,
             sign_out_requested: false,
@@ -197,6 +259,7 @@ impl MenuState {
         self.loot_bag_open = false;
         self.chat_open = false;
         self.chat_focus_pending = false;
+        self.text_prompt = None;
         self.status = None;
     }
 }
@@ -207,7 +270,7 @@ mod tests {
 
     #[test]
     fn death_splash_new_has_no_killer_and_no_closing_timer() {
-        let splash = DeathSplash::new(None);
+        let splash = DeathSplash::new(None, Vec::new());
         assert!(splash.killer_name.is_none());
         assert_eq!(splash.elapsed, 0.0);
         assert!(
@@ -218,13 +281,26 @@ mod tests {
 
     #[test]
     fn death_splash_remembers_killer_name() {
-        let splash = DeathSplash::new(Some("Murderer".into()));
+        let splash = DeathSplash::new(Some("Murderer".into()), Vec::new());
         assert_eq!(splash.killer_name.as_deref(), Some("Murderer"));
     }
 
     #[test]
+    fn death_splash_carries_respawn_bags() {
+        let splash = DeathSplash::new(
+            None,
+            vec![crate::protocol::RespawnBagOption {
+                id: 7,
+                name: "home".to_owned(),
+            }],
+        );
+        assert_eq!(splash.respawn_bags.len(), 1);
+        assert_eq!(splash.respawn_bags[0].name, "home");
+    }
+
+    #[test]
     fn begin_closing_starts_the_fade() {
-        let mut splash = DeathSplash::new(None);
+        let mut splash = DeathSplash::new(None, Vec::new());
         splash.begin_closing();
         assert_eq!(
             splash.closing_elapsed,
@@ -238,7 +314,7 @@ mod tests {
         // A second `Correction` that lands while the fade is already
         // running must not reset the curve, that would freeze the
         // player on a black screen for an extra fade window.
-        let mut splash = DeathSplash::new(None);
+        let mut splash = DeathSplash::new(None, Vec::new());
         splash.begin_closing();
         splash.closing_elapsed = Some(0.25);
         splash.begin_closing();

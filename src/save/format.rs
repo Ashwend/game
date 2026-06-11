@@ -56,7 +56,19 @@ pub(super) const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 /// persisted inventory, furnace slot, dropped item, and loot bag embeds
 /// `ItemStack`, and postcard is positional, so old v9 saves would
 /// deserialise wrong; rejected at load.
-pub(super) const SAVE_FORMAT_VERSION: u32 = 10;
+///
+/// `11` added the base-building fields on `PersistedDeployedEntity`:
+/// `placed_at_tick` (hammer demolish window), `door`
+/// (`PersistedDoorState`: lock code, authorized accounts, open flag,
+/// parent doorway), and `label` (sleeping-bag names). `DeployableKind`
+/// also grew the `Building`/`Door`/`SleepingBag` variants. Positional
+/// postcard layout drift on both, so old v10 saves are rejected.
+///
+/// `12` added `PersistedDeployedEntity::storage`
+/// (`PersistedStorageBoxState`: the slot grid of a placed storage box)
+/// and the `DeployableKind::StorageBox` variant. Positional postcard
+/// layout drift again, so old v11 saves are rejected.
+pub(super) const SAVE_FORMAT_VERSION: u32 = 12;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
 /// at >100MB/s compression and ~1GB/s decompression.
 const ZSTD_LEVEL: i32 = 5;
@@ -288,6 +300,10 @@ mod tests {
             health: 800,
             max_health: 800,
             owner: Some(1),
+            placed_at_tick: 4_200,
+            door: None,
+            label: None,
+            storage: None,
             furnace: Some(PersistedFurnaceState {
                 fuel: Some(ItemStack::new(WOOD_ID, 3)),
                 items: vec![Some(ItemStack::new(IRON_ORE_ID, 2)), None, None],

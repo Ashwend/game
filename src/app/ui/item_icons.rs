@@ -22,7 +22,10 @@ use std::{collections::HashMap, sync::OnceLock};
 use bevy::prelude::*;
 use bevy_egui::{EguiTextureHandle, EguiUserTextures, egui};
 
-use crate::{app::embedded_asset_path, items::REGISTERED_ITEMS};
+use crate::{
+    app::embedded_asset_path,
+    items::{DeployableKind, REGISTERED_ITEMS},
+};
 
 /// Write-once `item id -> egui texture id` map, populated by
 /// [`setup_item_icons`] at startup and read by the inventory renderer.
@@ -47,6 +50,15 @@ pub(crate) fn setup_item_icons(
 ) {
     let mut map = HashMap::with_capacity(REGISTERED_ITEMS.len());
     for definition in REGISTERED_ITEMS {
+        // Building blocks are hidden registry entries (placed via the
+        // building plan, never held in an inventory), so they ship no
+        // icon; skip them rather than logging a missing-asset error.
+        if matches!(
+            definition.deployable.map(|profile| profile.kind),
+            Some(DeployableKind::Building { .. })
+        ) {
+            continue;
+        }
         let path = embedded_asset_path(&format!("items/{}/icon.png", definition.id));
         let handle: Handle<Image> = asset_server.load(path);
         let texture_id = user_textures.add_image(EguiTextureHandle::Strong(handle));

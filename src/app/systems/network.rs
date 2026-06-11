@@ -36,6 +36,7 @@ pub(crate) struct NetworkTickWriters<'w> {
     pub(crate) remote_impacts: MessageWriter<'w, RemoteImpactEvent>,
     pub(crate) error_toasts: MessageWriter<'w, ClientErrorToast>,
     pub(crate) voice_messages: MessageWriter<'w, IncomingVoiceMessage>,
+    pub(crate) play_sound: MessageWriter<'w, crate::app::audio::PlaySound>,
     /// PvP "I got hit" camera reaction. Fired when a `PlayerImpact`
     /// arrives whose `target` matches the local client.
     pub(crate) camera_kick: ResMut<'w, crate::app::systems::CameraImpactKick>,
@@ -190,8 +191,16 @@ pub(crate) fn network_tick_system(
                 .remote_impacts
                 .write(remote_impact_event(*position, *kind));
         }
-        if let ServerMessage::PlayerKilled { killer_name, .. } = &message {
-            menu.death_splash = Some(crate::app::state::DeathSplash::new(killer_name.clone()));
+        if let ServerMessage::PlayerKilled {
+            killer_name,
+            respawn_bags,
+            ..
+        } = &message
+        {
+            menu.death_splash = Some(crate::app::state::DeathSplash::new(
+                killer_name.clone(),
+                respawn_bags.clone(),
+            ));
             // Pop any pause/inventory overlays so the splash is the
             // only modal, the player can't pause-out of the death
             // screen.
@@ -200,6 +209,27 @@ pub(crate) fn network_tick_system(
             menu.crafting_open = false;
             menu.furnace_open = false;
             menu.chat_open = false;
+            menu.text_prompt = None;
+        }
+        // The player tried a locked door without being authorized; the
+        // server asks for the code. One prompt slot: a newer ask replaces
+        // an older one.
+        if let ServerMessage::DoorCodePrompt { id } = &message {
+            menu.text_prompt = Some(crate::app::state::TextPrompt::new(
+                crate::app::state::TextPromptKind::DoorEnterCode { door_id: *id },
+            ));
+        }
+        // Keypad feedback: a soft accept or deny sound for the player
+        // who just entered a door code (the toast carries the words).
+        if let ServerMessage::DoorCodeResult { accepted } = &message {
+            let id = if *accepted {
+                crate::app::audio::SoundId::DoorCodeCorrect
+            } else {
+                crate::app::audio::SoundId::DoorCodeWrong
+            };
+            writers
+                .play_sound
+                .write(crate::app::audio::PlaySound::non_spatial(id));
         }
         // The server replies to Respawn with a `Correction` carrying
         // full health, so the message itself is the reliable "the

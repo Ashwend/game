@@ -20,7 +20,7 @@
 //!
 //! Coverage:
 //!   - `ResourceNodeStorage`
-//!   - `DeployableHealth`, `DeployableActive`
+//!   - `DeployableHealth`, `DeployableActive`, `DeployableLabel`, `DeployableStability`
 //!   - `PlayerPublic`, `PlayerPrivate`, `PlayerArmor`, `PlayerLifecycle`,
 //!     `PlayerSleeping`
 //!   - `LootBagContents`, `LootBagTransform`
@@ -32,9 +32,10 @@
 use bevy::{ecs::change_detection::Ref, prelude::*};
 
 use crate::server::{
-    Deployable, DeployableActive, DeployableHealth, DroppedItem, DroppedItemTransform,
-    LootBagContents, LootBagEntity, LootBagTransform, Player, PlayerArmor, PlayerLifecycle,
-    PlayerPrivate, PlayerPublic, PlayerSleeping, ResourceNode, ResourceNodeStorage,
+    Deployable, DeployableActive, DeployableHealth, DeployableLabel, DeployableStability,
+    DroppedItem, DroppedItemTransform, LootBagContents, LootBagEntity, LootBagTransform, Player,
+    PlayerArmor, PlayerLifecycle, PlayerPrivate, PlayerPublic, PlayerSleeping, ResourceNode,
+    ResourceNodeStorage,
 };
 
 /// Tracks the last-seen value per id so we can log a clean
@@ -44,6 +45,8 @@ pub(crate) struct ReplicationTraceState {
     node_qty: std::collections::HashMap<u64, u16>,
     deployable_health: std::collections::HashMap<u64, u32>,
     deployable_active: std::collections::HashMap<u64, bool>,
+    deployable_label: std::collections::HashMap<u64, Option<String>>,
+    deployable_stability: std::collections::HashMap<u64, u8>,
     player_armor: std::collections::HashMap<u64, u8>,
     player_lifecycle: std::collections::HashMap<u64, PlayerLifecycle>,
     player_sleeping: std::collections::HashMap<u64, bool>,
@@ -51,7 +54,7 @@ pub(crate) struct ReplicationTraceState {
     dropped_item_qty: std::collections::HashMap<u64, u16>,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn log_replicated_storage_changes_system(
     nodes: Query<(Entity, &ResourceNode, Ref<ResourceNodeStorage>)>,
     deployables: Query<(
@@ -59,6 +62,8 @@ pub(crate) fn log_replicated_storage_changes_system(
         &Deployable,
         Ref<DeployableHealth>,
         Ref<DeployableActive>,
+        Ref<DeployableLabel>,
+        Ref<DeployableStability>,
     )>,
     players_public: Query<(Entity, &Player, Ref<PlayerPublic>)>,
     players_private: Query<(Entity, &Player, Ref<PlayerPrivate>)>,
@@ -90,7 +95,7 @@ pub(crate) fn log_replicated_storage_changes_system(
         }
     }
 
-    for (entity, meta, health, active) in &deployables {
+    for (entity, meta, health, active, label, stability) in &deployables {
         if health.is_added() {
             info!(
                 target: "replication_trace",
@@ -127,6 +132,53 @@ pub(crate) fn log_replicated_storage_changes_system(
                 meta.id, active.0
             );
             state.deployable_active.insert(meta.id, active.0);
+        }
+
+        // Sleeping-bag renames. `Ref::is_changed()` fires every replication
+        // tick for Lightyear-touched components, so gate on a real value
+        // delta like the dropped-item stack log below.
+        if label.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: DeployableLabel    SPAWN  id={} entity={entity:?} label={:?}",
+                meta.id, label.0
+            );
+            state.deployable_label.insert(meta.id, label.0.clone());
+        } else if label.is_changed() {
+            let before = state.deployable_label.get(&meta.id).cloned().flatten();
+            if before.as_deref() != label.0.as_deref() {
+                info!(
+                    target: "replication_trace",
+                    "client: DeployableLabel    RECV   id={} entity={entity:?} {:?} -> {:?}",
+                    meta.id, before, label.0
+                );
+                state.deployable_label.insert(meta.id, label.0.clone());
+            }
+        }
+
+        // Structural stability updates. Value-delta gated like the label
+        // log: Lightyear bumps the change tick on every replication tick.
+        if stability.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: DeployableStability SPAWN  id={} entity={entity:?} pct={}",
+                meta.id, stability.0
+            );
+            state.deployable_stability.insert(meta.id, stability.0);
+        } else if stability.is_changed() {
+            let before = state
+                .deployable_stability
+                .get(&meta.id)
+                .copied()
+                .unwrap_or(0);
+            if before != stability.0 {
+                info!(
+                    target: "replication_trace",
+                    "client: DeployableStability RECV   id={} entity={entity:?} {before} -> {}",
+                    meta.id, stability.0
+                );
+                state.deployable_stability.insert(meta.id, stability.0);
+            }
         }
     }
 

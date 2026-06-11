@@ -13,15 +13,17 @@ use super::{
     components::MainCamera,
     grass::{GrassMaterial, GrassMaterialHandle, grass_material},
     mesh::{
-        COAL_ORE, IRON_ORE, ORE_NODE_STAGE_COUNT, STONE_VEIN, SULFUR_ORE, impact_stone_shard_mesh,
-        impact_wood_chip_mesh, low_poly_bag_mesh, low_poly_birch_tree_large_lod_mesh,
-        low_poly_birch_tree_large_mesh, low_poly_birch_tree_medium_lod_mesh,
-        low_poly_birch_tree_medium_mesh, low_poly_birch_tree_small_lod_mesh,
-        low_poly_birch_tree_small_mesh, low_poly_branch_pile_mesh, low_poly_hay_grass_mesh,
-        low_poly_ore_node_stage_meshes, low_poly_pine_tree_large_lod_mesh,
-        low_poly_pine_tree_large_mesh, low_poly_pine_tree_medium_lod_mesh,
-        low_poly_pine_tree_medium_mesh, low_poly_pine_tree_small_lod_mesh,
-        low_poly_pine_tree_small_mesh, low_poly_player_mesh, low_poly_surface_stone_mesh,
+        COAL_ORE, IRON_ORE, ORE_NODE_STAGE_COUNT, STONE_VEIN, SULFUR_ORE, building_piece_mesh,
+        door_ghost_mesh, door_panel_mesh, held_building_plan_mesh, held_hammer_mesh,
+        impact_stone_shard_mesh, impact_wood_chip_mesh, low_poly_bag_mesh,
+        low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_large_mesh,
+        low_poly_birch_tree_medium_lod_mesh, low_poly_birch_tree_medium_mesh,
+        low_poly_birch_tree_small_lod_mesh, low_poly_birch_tree_small_mesh,
+        low_poly_branch_pile_mesh, low_poly_hay_grass_mesh, low_poly_ore_node_stage_meshes,
+        low_poly_pine_tree_large_lod_mesh, low_poly_pine_tree_large_mesh,
+        low_poly_pine_tree_medium_lod_mesh, low_poly_pine_tree_medium_mesh,
+        low_poly_pine_tree_small_lod_mesh, low_poly_pine_tree_small_mesh, low_poly_player_mesh,
+        low_poly_surface_stone_mesh, sleeping_bag_mesh,
     },
     sky::{initial_distance_fog, setup_sky},
 };
@@ -86,6 +88,12 @@ pub(crate) struct ItemVisualAssets {
     pub(crate) held_iron_pickaxe_head_material: Handle<StandardMaterial>,
     pub(crate) dropped_material: Handle<StandardMaterial>,
     pub(crate) held_bag_material: Handle<StandardMaterial>,
+    /// Procedural construction-hammer and building-plan viewmodels.
+    /// Vertex-coloured like the world props; candidates for the authored
+    /// glb pipeline later.
+    pub(crate) held_hammer_mesh: Handle<Mesh>,
+    pub(crate) held_building_plan_mesh: Handle<Mesh>,
+    pub(crate) held_vertex_material: Handle<StandardMaterial>,
 }
 
 #[derive(Resource, Clone)]
@@ -126,6 +134,20 @@ pub(crate) struct ResourceVisualAssets {
 pub(crate) struct DeployableVisualAssets {
     pub(crate) workbench_mesh: Handle<Mesh>,
     pub(crate) furnace_mesh: Handle<Mesh>,
+    /// Building piece meshes indexed `[piece][tier]` via
+    /// [`Self::building_mesh`]. Procedural composites built from the same
+    /// boxes as the collision grid, so visuals and collision agree.
+    pub(crate) building_meshes: [[Handle<Mesh>; 3]; 6],
+    /// Door panel (hinge at origin, spans +X), spawned as an animated
+    /// child of the door root entity.
+    pub(crate) door_panel_mesh: Handle<Mesh>,
+    /// Door placement ghost: closed panel + swing-arc indicator.
+    pub(crate) door_ghost_mesh: Handle<Mesh>,
+    pub(crate) sleeping_bag_mesh: Handle<Mesh>,
+    /// Authored storage box models (Blender glbs, vertex-coloured like
+    /// the workbench/furnace).
+    pub(crate) storage_box_small_mesh: Handle<Mesh>,
+    pub(crate) storage_box_large_mesh: Handle<Mesh>,
     /// Shared material used for placed structures. Vertex colours from
     /// the mesh do the heavy lifting; the material just supplies PBR
     /// reflectance + roughness so the wood/stone reads correctly under
@@ -137,6 +159,39 @@ pub(crate) struct DeployableVisualAssets {
     pub(crate) ghost_valid_material: Handle<StandardMaterial>,
     /// Red variant for invalid placement (out of reach, overlapping).
     pub(crate) ghost_invalid_material: Handle<StandardMaterial>,
+}
+
+impl DeployableVisualAssets {
+    pub(crate) fn building_mesh(
+        &self,
+        piece: crate::building::BuildingPiece,
+        tier: crate::building::BuildingTier,
+    ) -> Handle<Mesh> {
+        use crate::building::{BuildingPiece, BuildingTier};
+        let piece_index = match piece {
+            BuildingPiece::Foundation => 0,
+            BuildingPiece::Wall => 1,
+            BuildingPiece::WindowWall => 2,
+            BuildingPiece::Doorway => 3,
+            BuildingPiece::Ceiling => 4,
+            BuildingPiece::Stairs => 5,
+        };
+        let tier_index = match tier {
+            BuildingTier::Sticks => 0,
+            BuildingTier::Wood => 1,
+            BuildingTier::Stone => 2,
+        };
+        self.building_meshes[piece_index][tier_index].clone()
+    }
+
+    /// Storage box mesh for a tier (1 = small, 2+ = large).
+    pub(crate) fn storage_box_mesh(&self, tier: u8) -> Handle<Mesh> {
+        if tier >= 2 {
+            self.storage_box_large_mesh.clone()
+        } else {
+            self.storage_box_small_mesh.clone()
+        }
+    }
 }
 
 /// Mesh + material handles for the furnace fire visuals (the flickering flame
@@ -329,6 +384,14 @@ pub(crate) fn setup_scene(
             reflectance: 0.15,
             ..default()
         }),
+        held_hammer_mesh: meshes.add(held_hammer_mesh()),
+        held_building_plan_mesh: meshes.add(held_building_plan_mesh()),
+        held_vertex_material: materials.add(StandardMaterial {
+            base_color: VERTEX_MATERIAL_COLOR,
+            perceptual_roughness: 0.90,
+            reflectance: 0.15,
+            ..default()
+        }),
     });
     commands.insert_resource(ResourceVisualAssets {
         coal_node_meshes: low_poly_ore_node_stage_meshes(COAL_ORE).map(|mesh| meshes.add(mesh)),
@@ -387,12 +450,36 @@ pub(crate) fn setup_scene(
     // colours; only the mesh primitive is loaded here, the shared `material` below
     // stays base-white so those vertex colours show through, exactly as the
     // procedural trees/ore nodes do. Sources:
-    // `art/items/{workbench_t1,crude_furnace}/*.blend`.
+    // `art/items/{workbench_t1,crude_furnace,storage_box_small,storage_box_large}/*.blend`.
     let workbench_glb = embedded_asset_path("items/workbench_t1/model.glb");
     let furnace_glb = embedded_asset_path("items/crude_furnace/model.glb");
+    let storage_box_small_glb = embedded_asset_path("items/storage_box_small/model.glb");
+    let storage_box_large_glb = embedded_asset_path("items/storage_box_large/model.glb");
+    let building_meshes = [
+        crate::building::BuildingPiece::Foundation,
+        crate::building::BuildingPiece::Wall,
+        crate::building::BuildingPiece::WindowWall,
+        crate::building::BuildingPiece::Doorway,
+        crate::building::BuildingPiece::Ceiling,
+        crate::building::BuildingPiece::Stairs,
+    ]
+    .map(|piece| {
+        [
+            crate::building::BuildingTier::Sticks,
+            crate::building::BuildingTier::Wood,
+            crate::building::BuildingTier::Stone,
+        ]
+        .map(|tier| meshes.add(building_piece_mesh(piece, tier)))
+    });
     commands.insert_resource(DeployableVisualAssets {
         workbench_mesh: prim_mesh(&workbench_glb, 0),
         furnace_mesh: prim_mesh(&furnace_glb, 0),
+        building_meshes,
+        door_panel_mesh: meshes.add(door_panel_mesh()),
+        door_ghost_mesh: meshes.add(door_ghost_mesh()),
+        sleeping_bag_mesh: meshes.add(sleeping_bag_mesh()),
+        storage_box_small_mesh: prim_mesh(&storage_box_small_glb, 0),
+        storage_box_large_mesh: prim_mesh(&storage_box_large_glb, 0),
         material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.92,

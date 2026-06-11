@@ -20,10 +20,12 @@ mod options;
 mod pause;
 mod peer_overlay;
 mod splash;
+mod text_prompt;
 mod theme;
 mod toast;
 mod tutorial;
 mod update;
+mod wheel;
 mod worlds;
 
 use bevy::input::ButtonInput;
@@ -107,6 +109,9 @@ pub(crate) struct UiResources<'w, 's> {
     scene_state: Res<'w, WorldSceneState>,
     update: ResMut<'w, UpdateState>,
     combat_feedback: Res<'w, crate::app::state::CombatFeedbackState>,
+    /// Radial wheel overlay state (building plan / hammer / door / bag).
+    /// Input lives in `systems::input::wheel`; the UI only paints it.
+    wheel: Res<'w, crate::app::state::WheelMenuState>,
     /// Replicated resource nodes in the player's AoI, used by the tutorial to
     /// ring the nearest gatherable node during the gather step.
     resource_nodes: Query<'w, 's, &'static crate::server::ResourceNode>,

@@ -64,6 +64,8 @@ Two more small per-field components ride alongside: **`PlayerLifecycle`** (Alive
 
 **Read this before adding any new replicated state that mutates after the initial spawn.**
 
+A second 0.26.4 wart: `lightyear_replication::send::components` resolves a `NetworkTarget::All` target by iterating the server's whole link collection on every replicated mutation, and logs an ERROR for any link still mid-handshake (no `ClientOf` / `ReplicationSender` yet), which means hundreds of spurious "ClientOf ... not found or does not have ReplicationSender" lines in the seconds around every connect. Upstream logs the identical condition at `debug` in a sibling code path, so it carries no signal; both default log filters (the client's `LogPlugin` filter in `src/app.rs` and `DEFAULT_SERVER_FILTER` in `src/logging.rs`) mute that module. Setting `RUST_LOG` explicitly re-enables it for replication debugging.
+
 Lightyear 0.26.4 has a known upstream bug ([issue #740](https://github.com/cBournhonesque/lightyear/issues/740)) where post-spawn component diffs are silently dropped for slow-changing entities. The root cause: Lightyear's `SendUpdatesMode::SinceLastAck` (the default) gates each component update on a per-`(sender, ReplicationGroupId)` ack tick. The `DEFAULT_GROUP = ReplicationGroupId(0)` is shared by every entity that doesn't set its own group. A frequently-updated entity in the group can advance the shared ack past a slowly-changing entity's local `Changed` mark, after which Lightyear concludes "nothing new to send" for the slow entity even though it just changed.
 
 **The fix in this codebase: every replicated entity gets its own `ReplicationGroup::new_from_entity()` at spawn.** That uses `Entity::to_bits()` as the group id, so each entity has its own ack tick and the shared-group race goes away. Empirically verified: with this in place, post-spawn `MUTATE` always pairs with a client-side `RECV` within ~3 ms, without it, the MUTATE→RECV pairing broke down for any entity not in the every-tick changeset.
@@ -80,6 +82,8 @@ The upstream fix is [PR #1361](https://github.com/cBournhonesque/lightyear/pull/
 4. **Attach replication** at spawn via `attach_room_gated_replication` (static room-only entities) or `attach_player_replication` (player public/private split). Both helpers attach `ReplicationGroup::new_from_entity()`, don't bypass them.
 5. **Consume on the client** with a `Query<&YourComponent>`, never via `ServerMessage`. Tear-down keys on `runtime.client_id.is_none()` (session ended).
 6. **Add `replication-trace` coverage** for the new component in [src/app/systems/replication_trace.rs](../src/app/systems/replication_trace.rs) and a matching server-side MUTATE log in the mirror sync. Makes diagnosing the next dropout symptom a one-line check: `RUST_LOG=replication_trace=info cargo run --features replication-trace -- client`, reproduce the gameplay action, and confirm `MUTATE` pairs with `RECV` within a few ms.
+
+When an authoritative change can't be expressed as a component diff because it touches identity (immutable-post-spawn) state, the mirror despawns and respawns the entity instead: building-block tier upgrades change `Deployable.kind`, so `sync_deployable_entities` detects the kind mismatch, despawns the mirror, and spawns a fresh one (logged as `RESPAWN` under `replication-trace`). Clients see an ordinary remove + add through the `Added`/`RemovedComponents` lifecycle, no special-casing needed.
 
 ### Reliability and recovery
 

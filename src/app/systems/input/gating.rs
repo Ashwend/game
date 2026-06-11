@@ -28,7 +28,10 @@ pub(super) fn gameplay_accepts_controls(menu: &MenuState, window_focused: bool) 
         && !menu.furnace_open
         && !menu.loot_bag_open
         && !menu.chat_open
-        // Dead players can move the cursor over the respawn button, 
+        // Single-field text dialogs (door codes, bag rename) capture the
+        // keyboard; gameplay controls stay frozen while one is up.
+        && menu.text_prompt.is_none()
+        // Dead players can move the cursor over the respawn button,
         // gameplay controls (WASD, mouse-look, swing) stay frozen
         // until the respawn lands.
         && menu.death_splash.is_none()

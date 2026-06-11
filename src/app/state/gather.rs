@@ -148,7 +148,9 @@ pub(crate) struct RemoteImpactEvent {
 pub(crate) fn swing_duration_seconds(tool: ToolKind) -> f32 {
     match tool {
         ToolKind::Hands => HANDS_SWING_SECONDS,
-        ToolKind::Axe => AXE_SWING_SECONDS,
+        // The hammer shares the hatchet's cadence: repair taps should
+        // feel like deliberate work, same weight class of swing.
+        ToolKind::Axe | ToolKind::Hammer => AXE_SWING_SECONDS,
         ToolKind::Pickaxe => PICKAXE_SWING_SECONDS,
     }
 }
@@ -156,7 +158,7 @@ pub(crate) fn swing_duration_seconds(tool: ToolKind) -> f32 {
 pub(crate) fn swing_impact_fraction(tool: ToolKind) -> f32 {
     match tool {
         ToolKind::Hands => HANDS_IMPACT_FRACTION,
-        ToolKind::Axe => AXE_IMPACT_FRACTION,
+        ToolKind::Axe | ToolKind::Hammer => AXE_IMPACT_FRACTION,
         ToolKind::Pickaxe => PICKAXE_IMPACT_FRACTION,
     }
 }
@@ -250,6 +252,9 @@ pub(crate) struct PickupTargetState {
     /// the right entity-specific action (e.g. open furnace UI).
     pub(crate) deployable_id: Option<DeployedEntityId>,
     pub(crate) deployable_kind: Option<DeployableKind>,
+    /// Replicated structural stability of the targeted building piece,
+    /// for the tooltip readout. `None` for non-structural targets.
+    pub(crate) deployable_stability: Option<u8>,
     /// Remote player the swing would land on. Set when the look ray
     /// intersects a remote player's body AABB within attack range. The
     /// swing dispatch routes through `dispatch_player_swing` when this
@@ -285,6 +290,7 @@ impl PickupTargetState {
         self.screen_position = None;
         self.deployable_id = None;
         self.deployable_kind = None;
+        self.deployable_stability = None;
         self.player_id = None;
         self.loot_bag_id = None;
         self.sleeping_player = None;

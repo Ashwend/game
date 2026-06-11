@@ -7,6 +7,9 @@ use crate::protocol::{DroppedWorldItem, ItemStack, Vec3Net};
 
 pub const WOOD_ID: &str = "wood";
 pub const STONE_ID: &str = "stone";
+/// Dry branches snapped to length. Gathered from branch piles; the
+/// material of the sticks building tier.
+pub const STICKS_ID: &str = "sticks";
 pub const COAL_ID: &str = "coal";
 pub const IRON_ORE_ID: &str = "iron_ore";
 pub const IRON_BAR_ID: &str = "iron_bar";
@@ -23,6 +26,20 @@ pub const IRON_HATCHET_ID: &str = "iron_hatchet";
 pub const IRON_PICKAXE_ID: &str = "iron_pickaxe";
 pub const WORKBENCH_T1_ID: &str = "workbench_t1";
 pub const CRUDE_FURNACE_ID: &str = "crude_furnace";
+/// Holdable blueprint that drives the building system: hold right click to
+/// pick a piece, left click to place its ghost.
+pub const BUILDING_PLAN_ID: &str = "building_plan";
+/// Construction hammer: left click repairs building blocks, hold right
+/// click for the upgrade / demolish wheel.
+pub const HAMMER_ID: &str = "hammer";
+/// Code-locked door deployable that mounts only in doorway openings.
+pub const HEWN_LOG_DOOR_ID: &str = "hewn_log_door";
+/// Respawn-anchor deployable crafted from plant fiber.
+pub const SLEEPING_BAG_ID: &str = "sleeping_bag";
+/// Placeable item containers; small is hand-craftable, large needs a
+/// workbench.
+pub const STORAGE_BOX_SMALL_ID: &str = "storage_box_small";
+pub const STORAGE_BOX_LARGE_ID: &str = "storage_box_large";
 
 /// Identifier shared between `ItemStack`, `ItemMerged`, and item definitions.
 /// Backed by `Arc<str>` so clones are a refcount bump instead of a heap copy.
@@ -101,6 +118,12 @@ pub enum HeldMesh {
     IronHatchet,
     StonePickaxe,
     IronPickaxe,
+    /// Procedural construction hammer (head + haft). A candidate for the
+    /// authored-glb pipeline later; the procedural stand-in keeps the
+    /// registry total.
+    Hammer,
+    /// Rolled-up building plan scroll.
+    BuildingPlan,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -113,6 +136,10 @@ pub enum ToolKind {
     Hands,
     Axe,
     Pickaxe,
+    /// Construction hammer. Never gathers and never damages; its swing
+    /// repairs building blocks and its held-right-click wheel upgrades or
+    /// demolishes them.
+    Hammer,
 }
 
 impl ToolKind {
@@ -121,6 +148,7 @@ impl ToolKind {
             Self::Hands => "Bare hands",
             Self::Axe => "Hatchet",
             Self::Pickaxe => "Pickaxe",
+            Self::Hammer => "Hammer",
         }
     }
 }
@@ -176,8 +204,32 @@ impl ItemTint {
 /// tiers (`ToolProfile`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DeployableKind {
-    Workbench { tier: u8 },
-    Furnace { tier: u8 },
+    Workbench {
+        tier: u8,
+    },
+    Furnace {
+        tier: u8,
+    },
+    /// A base-building block placed via the building plan. The tier is
+    /// mutable server-side (hammer upgrades); a tier change respawns the
+    /// mirror entity since `Deployable` identity is immutable post-spawn.
+    Building {
+        piece: crate::building::BuildingPiece,
+        tier: crate::building::BuildingTier,
+    },
+    /// Code-locked door mounted in a doorway opening. The hinge side and
+    /// swing direction are fully captured by the entity's yaw (flipping a
+    /// door during placement rotates it half a turn), so the kind carries
+    /// no fields.
+    Door,
+    /// Respawn-anchor sleeping bag.
+    SleepingBag,
+    /// Placeable item container. `tier` 1 is the small box, 2 the large
+    /// one; slot counts live in [`crate::game_balance`] and resolve via
+    /// `crate::server` storage helpers.
+    StorageBox {
+        tier: u8,
+    },
 }
 
 impl DeployableKind {
@@ -185,19 +237,47 @@ impl DeployableKind {
         match self {
             Self::Workbench { .. } => "Workbench",
             Self::Furnace { .. } => "Furnace",
+            Self::Building { piece, .. } => piece.label(),
+            Self::Door => "Hewn Log Door",
+            Self::SleepingBag => "Sleeping Bag",
+            Self::StorageBox { tier } => {
+                if tier >= 2 {
+                    "Large Storage Box"
+                } else {
+                    "Storage Box"
+                }
+            }
         }
     }
 
     /// Source of truth for what the structure is built from. The damage
     /// path uses this for the tool-vs-material multiplier and the
     /// client uses it to pick the swing surface (audio/visual chip).
-    /// Tier doesn't change material today, a future "reinforced" tier
-    /// can introduce a new kind variant if that ever needs to differ.
+    /// Building blocks change material as they're upgraded, which is the
+    /// entire raid-balance lever: see the building arms in
+    /// [`tool_effectiveness_pct`].
     pub const fn material(self) -> DestructibleMaterial {
         match self {
             Self::Workbench { .. } => DestructibleMaterial::Wood,
             Self::Furnace { .. } => DestructibleMaterial::Stone,
+            Self::Building { tier, .. } => match tier {
+                crate::building::BuildingTier::Sticks => DestructibleMaterial::Sticks,
+                crate::building::BuildingTier::Wood => DestructibleMaterial::WoodBuilding,
+                crate::building::BuildingTier::Stone => DestructibleMaterial::StoneBuilding,
+            },
+            Self::Door => DestructibleMaterial::WoodBuilding,
+            Self::SleepingBag => DestructibleMaterial::Cloth,
+            Self::StorageBox { .. } => DestructibleMaterial::Wood,
         }
+    }
+
+    /// True for the entity kinds anyone may damage, regardless of who
+    /// placed them. Raid targets (building blocks, doors, sleeping bags)
+    /// must be damageable by non-owners or raiding can't exist; utility
+    /// stations (workbench, furnace) keep the owner-only damage gate so
+    /// griefers can't idly chew through someone's crafting corner.
+    pub const fn raidable(self) -> bool {
+        matches!(self, Self::Building { .. } | Self::Door | Self::SleepingBag)
     }
 }
 
@@ -211,6 +291,17 @@ impl DeployableKind {
 pub enum DestructibleMaterial {
     Wood,
     Stone,
+    /// Sticks-tier building blocks. Deliberately fragile: any proper tool
+    /// tears through in a few swings.
+    Sticks,
+    /// Wood-tier building blocks and doors. Raidable with tools but
+    /// slowly, the soft side of a base.
+    WoodBuilding,
+    /// Stone-tier building blocks. Immune to every tool; raiding stone
+    /// waits for future siege equipment.
+    StoneBuilding,
+    /// Sleeping bags. Tears in a couple of hits.
+    Cloth,
 }
 
 /// Central tool-vs-material effectiveness table, expressed as a percentage
@@ -227,6 +318,20 @@ pub fn tool_effectiveness_pct(tool: ToolKind, material: DestructibleMaterial) ->
         (ToolKind::Pickaxe, DestructibleMaterial::Stone) => 150,
         (ToolKind::Axe, DestructibleMaterial::Stone) => 50,
         (ToolKind::Pickaxe, DestructibleMaterial::Wood) => 50,
+        // Building materials, the raid-balance table. Sticks shred under
+        // any proper tool; wood-tier buildings take a trickle (slow but
+        // real raids); stone-tier buildings are immune to tools entirely.
+        (ToolKind::Axe, DestructibleMaterial::Sticks) => 300,
+        (ToolKind::Pickaxe, DestructibleMaterial::Sticks) => 200,
+        (ToolKind::Axe, DestructibleMaterial::WoodBuilding) => 15,
+        (ToolKind::Pickaxe, DestructibleMaterial::WoodBuilding) => 5,
+        (_, DestructibleMaterial::StoneBuilding) => 0,
+        // Sleeping bags tear under anything with an edge.
+        (ToolKind::Axe | ToolKind::Pickaxe, DestructibleMaterial::Cloth) => 300,
+        // The hammer builds, it never breaks. Repair/upgrade/demolish all
+        // ride their own commands, so zero here closes the "hammer as a
+        // free raid tool" hole outright.
+        (ToolKind::Hammer, _) => 0,
         // Hands shouldn't reach here, but if they do treat them as
         // worst-case mismatched so they make minimal dents.
         (ToolKind::Hands, _) => 50,
@@ -507,6 +612,263 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
             collider_half_width: 0.50,
             collider_half_height: 0.60,
             station_radius: 5.0,
+        }),
+    },
+    ItemDefinition {
+        id: STICKS_ID,
+        name: "Sticks",
+        description: "Dry branches snapped to length. The makings of the \
+                      flimsiest walls a base can have.",
+        stack_size: 200,
+        equipable: false,
+        model: ItemModel::Bag,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(151, 116, 72),
+        tool: None,
+        deployable: None,
+    },
+    ItemDefinition {
+        id: BUILDING_PLAN_ID,
+        name: "Building Plan",
+        description: "Sketched construction lines on rough parchment. Hold \
+                      right click to choose a piece, left click to place it.",
+        stack_size: 1,
+        equipable: true,
+        model: ItemModel::Bag,
+        held_mesh: HeldMesh::BuildingPlan,
+        tint: ItemTint::new(204, 188, 150),
+        tool: None,
+        deployable: None,
+    },
+    ItemDefinition {
+        id: HAMMER_ID,
+        name: "Hammer",
+        description: "A heavy construction mallet. Swing at your buildings \
+                      to repair them; hold right click for upgrades.",
+        stack_size: 1,
+        equipable: true,
+        model: ItemModel::Hatchet,
+        held_mesh: HeldMesh::Hammer,
+        tint: ItemTint::new(140, 110, 78),
+        tool: Some(ToolProfile {
+            kind: ToolKind::Hammer,
+            tier: 1,
+            // Hammers never gather; the profile exists so the swing
+            // pipeline (cadence, durability) treats it like a tool.
+            gather_amount: 0,
+            cooldown_ticks: 8,
+            max_durability: Some(crate::game_balance::HAMMER_DURABILITY),
+            player_damage: 0,
+        }),
+        deployable: None,
+    },
+    ItemDefinition {
+        id: HEWN_LOG_DOOR_ID,
+        name: "Hewn Log Door",
+        description: "A heavy door of squared logs with a settable code \
+                      lock. Mounts only in a doorway opening.",
+        stack_size: 1,
+        equipable: true,
+        model: ItemModel::Deployable,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(112, 78, 46),
+        tool: None,
+        deployable: Some(DeployableProfile {
+            kind: DeployableKind::Door,
+            max_health: crate::game_balance::DOOR_MAX_HP,
+            collider_half_width: 0.55,
+            collider_half_height: 1.1,
+            station_radius: 0.0,
+        }),
+    },
+    ItemDefinition {
+        id: SLEEPING_BAG_ID,
+        name: "Sleeping Bag",
+        description: "A bedroll of woven plant fiber. Place it to set a \
+                      respawn point; hold E on it to rename.",
+        stack_size: 1,
+        equipable: true,
+        model: ItemModel::Deployable,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(96, 122, 92),
+        tool: None,
+        deployable: Some(DeployableProfile {
+            kind: DeployableKind::SleepingBag,
+            max_health: crate::game_balance::SLEEPING_BAG_MAX_HP,
+            collider_half_width: 0.8,
+            collider_half_height: 0.12,
+            station_radius: 0.0,
+        }),
+    },
+    ItemDefinition {
+        id: STORAGE_BOX_SMALL_ID,
+        name: "Storage Box",
+        description: "A small wooden chest. Place it down and press E to \
+                      stash items inside; anyone who finds it can open it.",
+        stack_size: 1,
+        equipable: true,
+        model: ItemModel::Deployable,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(140, 100, 58),
+        tool: None,
+        deployable: Some(DeployableProfile {
+            kind: DeployableKind::StorageBox { tier: 1 },
+            max_health: crate::game_balance::STORAGE_BOX_SMALL_HP,
+            collider_half_width: 0.5,
+            collider_half_height: 0.35,
+            station_radius: 0.0,
+        }),
+    },
+    ItemDefinition {
+        id: STORAGE_BOX_LARGE_ID,
+        name: "Large Storage Box",
+        description: "A long banded chest with more than twice the room of \
+                      the small box. Press E on the placed box to open it.",
+        stack_size: 1,
+        equipable: true,
+        model: ItemModel::Deployable,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(150, 104, 56),
+        tool: None,
+        deployable: Some(DeployableProfile {
+            kind: DeployableKind::StorageBox { tier: 2 },
+            max_health: crate::game_balance::STORAGE_BOX_LARGE_HP,
+            collider_half_width: 0.75,
+            collider_half_height: 0.42,
+            station_radius: 0.0,
+        }),
+    },
+    // Hidden definitions for placed building blocks. Never craftable and
+    // never in an inventory; they exist so `DeployedEntity::item_id`
+    // resolves through the registry (saves, mirror views, colliders).
+    // Their profile kind carries the spawn tier; the live tier lives on
+    // the entity and changes with hammer upgrades.
+    ItemDefinition {
+        id: crate::building::BUILDING_FOUNDATION_ITEM_ID,
+        name: "Foundation",
+        description: "A structural platform. The base of every building.",
+        stack_size: 1,
+        equipable: false,
+        model: ItemModel::Deployable,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(151, 116, 72),
+        tool: None,
+        deployable: Some(DeployableProfile {
+            kind: DeployableKind::Building {
+                piece: crate::building::BuildingPiece::Foundation,
+                tier: crate::building::BuildingTier::Sticks,
+            },
+            max_health: crate::game_balance::BUILDING_STICKS_WALL_HP,
+            collider_half_width: crate::building::FOUNDATION_SIZE_M / 2.0,
+            collider_half_height: crate::building::FOUNDATION_HEIGHT_M / 2.0,
+            station_radius: 0.0,
+        }),
+    },
+    ItemDefinition {
+        id: crate::building::BUILDING_WALL_ITEM_ID,
+        name: "Wall",
+        description: "A solid building wall.",
+        stack_size: 1,
+        equipable: false,
+        model: ItemModel::Deployable,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(151, 116, 72),
+        tool: None,
+        deployable: Some(DeployableProfile {
+            kind: DeployableKind::Building {
+                piece: crate::building::BuildingPiece::Wall,
+                tier: crate::building::BuildingTier::Sticks,
+            },
+            max_health: crate::game_balance::BUILDING_STICKS_WALL_HP,
+            collider_half_width: crate::building::FOUNDATION_SIZE_M / 2.0,
+            collider_half_height: crate::building::WALL_HEIGHT_M / 2.0,
+            station_radius: 0.0,
+        }),
+    },
+    ItemDefinition {
+        id: crate::building::BUILDING_WINDOW_WALL_ITEM_ID,
+        name: "Window Wall",
+        description: "A building wall with a window opening.",
+        stack_size: 1,
+        equipable: false,
+        model: ItemModel::Deployable,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(151, 116, 72),
+        tool: None,
+        deployable: Some(DeployableProfile {
+            kind: DeployableKind::Building {
+                piece: crate::building::BuildingPiece::WindowWall,
+                tier: crate::building::BuildingTier::Sticks,
+            },
+            max_health: crate::game_balance::BUILDING_STICKS_WALL_HP,
+            collider_half_width: crate::building::FOUNDATION_SIZE_M / 2.0,
+            collider_half_height: crate::building::WALL_HEIGHT_M / 2.0,
+            station_radius: 0.0,
+        }),
+    },
+    ItemDefinition {
+        id: crate::building::BUILDING_DOORWAY_ITEM_ID,
+        name: "Doorway",
+        description: "A building wall with a door-sized opening.",
+        stack_size: 1,
+        equipable: false,
+        model: ItemModel::Deployable,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(151, 116, 72),
+        tool: None,
+        deployable: Some(DeployableProfile {
+            kind: DeployableKind::Building {
+                piece: crate::building::BuildingPiece::Doorway,
+                tier: crate::building::BuildingTier::Sticks,
+            },
+            max_health: crate::game_balance::BUILDING_STICKS_WALL_HP,
+            collider_half_width: crate::building::FOUNDATION_SIZE_M / 2.0,
+            collider_half_height: crate::building::WALL_HEIGHT_M / 2.0,
+            station_radius: 0.0,
+        }),
+    },
+    ItemDefinition {
+        id: crate::building::BUILDING_CEILING_ITEM_ID,
+        name: "Ceiling",
+        description: "A structural slab roofing a walled storey; the floor \
+                      of the storey above.",
+        stack_size: 1,
+        equipable: false,
+        model: ItemModel::Deployable,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(151, 116, 72),
+        tool: None,
+        deployable: Some(DeployableProfile {
+            kind: DeployableKind::Building {
+                piece: crate::building::BuildingPiece::Ceiling,
+                tier: crate::building::BuildingTier::Sticks,
+            },
+            max_health: crate::game_balance::BUILDING_STICKS_WALL_HP,
+            collider_half_width: crate::building::FOUNDATION_SIZE_M / 2.0,
+            collider_half_height: crate::building::CEILING_THICKNESS_M / 2.0,
+            station_radius: 0.0,
+        }),
+    },
+    ItemDefinition {
+        id: crate::building::BUILDING_STAIRS_ITEM_ID,
+        name: "Stairs",
+        description: "A flight of stairs spanning one cell, rising a full \
+                      storey to the floor above.",
+        stack_size: 1,
+        equipable: false,
+        model: ItemModel::Deployable,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(151, 116, 72),
+        tool: None,
+        deployable: Some(DeployableProfile {
+            kind: DeployableKind::Building {
+                piece: crate::building::BuildingPiece::Stairs,
+                tier: crate::building::BuildingTier::Sticks,
+            },
+            max_health: crate::game_balance::BUILDING_STICKS_WALL_HP,
+            collider_half_width: crate::building::FOUNDATION_SIZE_M / 2.0,
+            collider_half_height: crate::building::STAIR_RISE_M / 2.0,
+            station_radius: 0.0,
         }),
     },
 ];

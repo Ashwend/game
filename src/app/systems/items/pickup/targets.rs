@@ -20,21 +20,17 @@ use crate::{
     game_balance::{
         DEPLOYABLE_DAMAGE_RANGE_M as DEPLOYABLE_INTERACT_RANGE_M, LOOT_BAG_INTERACT_RANGE_M,
     },
-    items::{item_definition, look_forward, pickup_anchor_from_position},
+    items::{look_forward, pickup_anchor_from_position},
     protocol::Vec3Net,
     resources::resource_node_anchor_for,
     server::{
-        Deployable, DeployableTransform, DroppedItem, DroppedItemTransform, LootBagEntity,
-        LootBagTransform, Player, PlayerPublic, ResourceNode, ResourceNodeStorage,
+        Deployable, DeployableStability, DeployableTransform, DroppedItem, DroppedItemTransform,
+        LootBagEntity, LootBagTransform, Player, PlayerPublic, ResourceNode, ResourceNodeStorage,
     },
 };
 
 use super::viewport_position;
 
-/// Cone half-angle (cosine) the player must aim through to lock onto
-/// a deployable. Tight enough that the tooltip doesn't latch when the
-/// player is mostly looking past the structure.
-const DEPLOYABLE_INTERACT_CONE_COS: f32 = 0.92;
 /// Max range at which a melee swing can reach another player. Tighter
 /// than gather range, players are smaller targets than ore veins, so
 /// we need them well inside arm's reach before "swing at player" wins
@@ -268,69 +264,128 @@ pub(super) fn set_player_pickup_target(
     pickup_target.screen_position = viewport_position(camera, anchor);
 }
 
-/// Find the closest placed structure inside the player's look cone.
-/// `score` is the distance from the eye to the structure centre so the
-/// caller can compare it directly against the dropped-item / resource-
-/// node ray scores.
+/// Find the placed structure whose solid collider boxes the look ray
+/// actually enters first, within [`DEPLOYABLE_INTERACT_RANGE_M`]. A real
+/// ray test (not a cone toward the entity centre) is required for
+/// building pieces: a 3 m wall's centre sits far off the look ray at
+/// point-blank range, and a cone test would skip the wall in front of
+/// the player to latch onto a piece behind it. Multi-box colliders also
+/// give correct openings, a ray through a doorway hits whatever is
+/// genuinely behind it.
+///
+/// Returns the entry distance (the cross-category score) plus a tooltip
+/// anchor at the centre of the *hit box*. The box centre, unlike the ray
+/// hit point, doesn't shift with every camera micro-movement, so the
+/// tooltip glues to one world position per box instead of stuttering at
+/// the throttled-rescan cadence.
 pub(super) fn best_deployable_target<'a>(
     eye: Vec3Net,
     yaw: f32,
     pitch: f32,
-    deployables: impl Iterator<Item = (&'a Deployable, &'a DeployableTransform)>,
-) -> Option<(&'a Deployable, &'a DeployableTransform, f32)> {
+    deployables: impl Iterator<
+        Item = (
+            &'a Deployable,
+            &'a DeployableTransform,
+            &'a DeployableStability,
+        ),
+    >,
+) -> Option<(&'a Deployable, &'a DeployableTransform, u8, f32, Vec3Net)> {
     let forward = look_forward(yaw, pitch);
     if forward.length_squared() <= f32::EPSILON {
         return None;
     }
-    let max_sq = DEPLOYABLE_INTERACT_RANGE_M * DEPLOYABLE_INTERACT_RANGE_M;
-    let mut best: Option<(&Deployable, &DeployableTransform, f32)> = None;
-    for (meta, transform) in deployables {
-        // Aim point sits at half the entity's collider height so the
-        // cone test isn't biased toward the floor.
-        let aim = deployable_aim_point(meta, transform);
-        let to = aim.minus(eye);
-        let dist_sq = to.length_squared();
-        if dist_sq > max_sq {
+    let mut best: Option<(&Deployable, &DeployableTransform, u8, f32, Vec3Net)> = None;
+    for (meta, transform, stability) in deployables {
+        // Doors are targeted through their closed-panel volume even
+        // while open (`active = false` below): the swung panel leaves
+        // the opening, but E must still be able to close the door, so
+        // the doorway plane stays the interaction volume.
+        let mut hit: Option<(f32, Vec3Net)> = None;
+        for block in crate::app::systems::deployables::deployable_colliders(meta, transform, false)
+        {
+            let Some(distance) = ray_block_entry_distance(eye, forward, &block) else {
+                continue;
+            };
+            if hit.is_none_or(|(best_distance, _)| distance < best_distance) {
+                hit = Some((distance, block.center));
+            }
+        }
+        let Some((distance, anchor)) = hit else {
+            continue;
+        };
+        if distance > DEPLOYABLE_INTERACT_RANGE_M {
             continue;
         }
-        let dist = dist_sq.sqrt();
-        if dist <= 1e-3 {
-            return Some((meta, transform, 0.0));
-        }
-        let cosine = to.dot(forward) / dist;
-        if cosine < DEPLOYABLE_INTERACT_CONE_COS {
-            continue;
-        }
-        let score = dist;
-        if best.as_ref().map(|(_, _, s)| score < *s).unwrap_or(true) {
-            best = Some((meta, transform, score));
+        if best
+            .as_ref()
+            .map(|(_, _, _, s, _)| distance < *s)
+            .unwrap_or(true)
+        {
+            best = Some((meta, transform, stability.0, distance, anchor));
         }
     }
     best
 }
 
-pub(super) fn deployable_aim_point(meta: &Deployable, transform: &DeployableTransform) -> Vec3Net {
-    // Approximate the structure's optical centre. 0.6 m up reads well
-    // for both the workbench tabletop and the furnace mouth; the
-    // profile-based half-height is preferred when we can resolve it.
-    let mut aim = transform.position;
-    aim.y += 0.6;
-    if let Some(profile) = item_definition(&meta.item_id).and_then(|def| def.deployable) {
-        aim.y = transform.position.y + profile.collider_half_height;
+/// Slab-method ray entry distance against an arbitrary [`WorldBlock`]
+/// (per-axis half-extents, unlike [`ray_aabb_entry_distance`]'s square
+/// footprint). Returns 0 when the eye is inside the box.
+fn ray_block_entry_distance(
+    origin: Vec3Net,
+    direction: Vec3Net,
+    block: &crate::world::WorldBlock,
+) -> Option<f32> {
+    let min = block.min();
+    let max = block.max();
+    let mut t_near: f32 = f32::NEG_INFINITY;
+    let mut t_far: f32 = f32::INFINITY;
+    for axis in 0..3 {
+        let (o, d, mn, mx) = match axis {
+            0 => (origin.x, direction.x, min.x, max.x),
+            1 => (origin.y, direction.y, min.y, max.y),
+            _ => (origin.z, direction.z, min.z, max.z),
+        };
+        if d.abs() < 1e-6 {
+            if o < mn || o > mx {
+                return None;
+            }
+            continue;
+        }
+        let inv_d = d.recip();
+        let mut t1 = (mn - o) * inv_d;
+        let mut t2 = (mx - o) * inv_d;
+        if t1 > t2 {
+            std::mem::swap(&mut t1, &mut t2);
+        }
+        t_near = t_near.max(t1);
+        t_far = t_far.min(t2);
+        if t_near > t_far {
+            return None;
+        }
     }
-    aim
+    if t_far < 0.0 {
+        return None;
+    }
+    Some(t_near.max(0.0))
 }
 
+/// `anchor` is the centre of the collider box the look ray hit, not the
+/// entity origin: for a 3 m wall the origin sits at the base of one edge
+/// (off to the side and at foot height), while the hit box centre is on
+/// the piece the player is actually looking at, and it stays put between
+/// rescans so the tooltip tracks smoothly.
 pub(super) fn set_deployable_pickup_target(
     pickup_target: &mut PickupTargetState,
     meta: &Deployable,
-    transform: &DeployableTransform,
+    stability: u8,
+    anchor: Vec3Net,
     camera: &Query<(&Camera, &Transform), With<MainCamera>>,
 ) {
     pickup_target.clear();
     pickup_target.deployable_id = Some(meta.id);
     pickup_target.deployable_kind = Some(meta.kind);
-    let anchor = deployable_aim_point(meta, transform);
+    pickup_target.deployable_stability =
+        matches!(meta.kind, crate::items::DeployableKind::Building { .. }).then_some(stability);
     pickup_target.world_position = Some(anchor);
     pickup_target.screen_position = viewport_position(camera, anchor);
 }

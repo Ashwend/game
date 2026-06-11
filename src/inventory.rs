@@ -131,6 +131,21 @@ fn restore_stack(inventory: &mut PlayerInventoryState, slot: ItemContainerSlot, 
 /// function still drains what it can, since refusing to remove anything
 /// would leave the inventory in a worse state if a recipe definition ever
 /// goes out of sync with the take.
+/// Total units of `item_id` across the actionbar + inventory. Used by
+/// cost checks ("can the player afford this?") before a
+/// [`take_items_from_inventory`] so a failed purchase never drains a
+/// partial amount.
+pub fn count_items_in_inventory(inventory: &PlayerInventoryState, item_id: &str) -> u32 {
+    inventory
+        .actionbar_slots
+        .iter()
+        .chain(inventory.inventory_slots.iter())
+        .filter_map(|slot| slot.as_ref())
+        .filter(|stack| stack.item_id.as_ref() == item_id)
+        .map(|stack| u32::from(stack.quantity))
+        .sum()
+}
+
 pub fn take_items_from_inventory(
     inventory: &mut PlayerInventoryState,
     item_id: &str,

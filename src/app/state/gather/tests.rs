@@ -13,6 +13,7 @@ fn pickup_target_clear_removes_cached_target() {
         screen_position: Some(Vec2::new(10.0, 20.0)),
         deployable_id: Some(42),
         deployable_kind: Some(crate::items::DeployableKind::Furnace { tier: 1 }),
+        deployable_stability: Some(100),
         player_id: Some(99),
         loot_bag_id: Some(123),
         sleeping_player: Some(("Sleeper".to_owned(), 50.0)),

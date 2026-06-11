@@ -119,6 +119,26 @@ pub(crate) enum SoundId {
     /// from `ui/button-click.wav` (pitched up 3 semitones), a lighter,
     /// shorter tick than the menu click.
     HotbarSelect,
+
+    // --- Doors ---
+    /// Keypad accepted the entered code: the dry latch click with a
+    /// brighter +4-semitone tick on top at 90 ms. Derived offline from
+    /// `ui/button-click.wav`.
+    DoorCodeCorrect,
+    /// Keypad rejected the code: two dull low knocks. Derived offline
+    /// from `ui/button-click.wav` pitched down ~5 and ~6.5 semitones,
+    /// lowpassed at 1.0-1.2 kHz, second knock at 140 ms.
+    DoorCodeWrong,
+    /// A door panel starting to swing: a soft latch release
+    /// (`ui/button-click.wav` down 2 semitones) over a low wood shift
+    /// (`footsteps/wood-04.wav` down 6 semitones, slowed 15%,
+    /// lowpassed at 2 kHz).
+    DoorOpen,
+    /// A door panel falling shut: a heavy wood thunk
+    /// (`footsteps/wood-07.wav` down 8 semitones, lowpassed) ended by
+    /// the latch catching (`ui/button-click.wav` down 1 semitone at
+    /// 110 ms).
+    DoorClose,
 }
 
 /// Returns every defined sound. Useful for the loader at startup so we
@@ -153,6 +173,10 @@ pub(crate) fn all_sound_ids() -> &'static [SoundId] {
         SoundId::CraftComplete,
         SoundId::FurnaceComplete,
         SoundId::HotbarSelect,
+        SoundId::DoorCodeCorrect,
+        SoundId::DoorCodeWrong,
+        SoundId::DoorOpen,
+        SoundId::DoorClose,
     ]
 }
 
@@ -444,6 +468,27 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
             pitch_jitter: 0.03,
             looped: false,
         },
+        // Keypad feedback for the player at the door: quiet chrome, no
+        // jitter (a lock always sounds like itself).
+        SoundId::DoorCodeCorrect | SoundId::DoorCodeWrong => SoundDefaults {
+            category: SoundCategory::Ui,
+            base_gain_db: -16.0,
+            spatial: None,
+            pitch_jitter: 0.0,
+            looped: false,
+        },
+        // Door swings are world events everyone nearby hears; light
+        // jitter so a base full of doors doesn't sound copy-pasted.
+        SoundId::DoorOpen | SoundId::DoorClose => SoundDefaults {
+            category: SoundCategory::Sfx3d,
+            base_gain_db: -15.0,
+            spatial: Some(SpatialDefaults {
+                scale: 0.06,
+                height_offset: 1.2,
+            }),
+            pitch_jitter: 0.04,
+            looped: false,
+        },
     }
 }
 
@@ -514,6 +559,10 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
     static CRAFT_COMPLETE: [&str; 1] = ["crafting/craft-complete.wav"];
     static FURNACE_COMPLETE: [&str; 1] = ["crafting/furnace-complete.wav"];
     static HOTBAR_SELECT: [&str; 1] = ["ui/hotbar-select.wav"];
+    static DOOR_CODE_CORRECT: [&str; 1] = ["ui/door-code-correct.wav"];
+    static DOOR_CODE_WRONG: [&str; 1] = ["ui/door-code-wrong.wav"];
+    static DOOR_OPEN: [&str; 1] = ["world/door-open.wav"];
+    static DOOR_CLOSE: [&str; 1] = ["world/door-close.wav"];
 
     match id {
         SoundId::UiButtonClick => &UI_CLICK,
@@ -548,6 +597,10 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         SoundId::CraftComplete => &CRAFT_COMPLETE,
         SoundId::FurnaceComplete => &FURNACE_COMPLETE,
         SoundId::HotbarSelect => &HOTBAR_SELECT,
+        SoundId::DoorCodeCorrect => &DOOR_CODE_CORRECT,
+        SoundId::DoorCodeWrong => &DOOR_CODE_WRONG,
+        SoundId::DoorOpen => &DOOR_OPEN,
+        SoundId::DoorClose => &DOOR_CLOSE,
     }
 }
 
@@ -569,6 +622,10 @@ pub(crate) fn impact_sound_for(tool: ToolKind, surface: SurfaceMaterial) -> Opti
         (ToolKind::Pickaxe, SurfaceMaterial::Coal) => Some(SoundId::ImpactPickaxeOnCoal),
         (ToolKind::Pickaxe, SurfaceMaterial::Iron) => Some(SoundId::ImpactPickaxeOnIron),
         (ToolKind::Pickaxe, SurfaceMaterial::Sulfur) => Some(SoundId::ImpactPickaxeOnSulfur),
+        // Hammer repairs thunk like axe work: wood-on-wood for wooden
+        // structures, the generic bite for everything else.
+        (ToolKind::Hammer, SurfaceMaterial::Wood) => Some(SoundId::ImpactAxeOnWood),
+        (ToolKind::Hammer, _) => Some(SoundId::ImpactAxeGeneric),
         // Bare hands never reach here, the input layer suppresses the
         // swing entirely when no real tool is equipped. The arm exists
         // so the match stays exhaustive against future ToolKind /
@@ -587,10 +644,9 @@ pub(crate) fn impact_sound_for(tool: ToolKind, surface: SurfaceMaterial) -> Opti
 pub(crate) fn impact_sound_for_player(tool: ToolKind) -> Option<SoundId> {
     match tool {
         ToolKind::Axe | ToolKind::Pickaxe => Some(SoundId::ImpactPlayerBlunt),
-        // Hands shouldn't reach this path, the server gates bare-hand
-        // PvP, but if it does, fall through to "no sound" rather
-        // than playing a misleading "tool" thump.
-        ToolKind::Hands => None,
+        // Hands and hammers can't damage players (the server rejects
+        // both), so neither produces a PvP impact sound.
+        ToolKind::Hands | ToolKind::Hammer => None,
     }
 }
 

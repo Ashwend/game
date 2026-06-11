@@ -160,6 +160,7 @@ fn player_killed_logs_you_died() {
     runtime.apply_message(ServerMessage::PlayerKilled {
         killer: Some(2),
         killer_name: Some("Bob".to_owned()),
+        respawn_bags: Vec::new(),
     });
     assert!(runtime.messages.iter().any(|m| m.text == "you died"));
 }

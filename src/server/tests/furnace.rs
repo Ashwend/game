@@ -118,6 +118,11 @@ fn furnace_auto_shutoff_marks_the_deployable_dirty_for_the_mirror() {
             active: true,
             ..Default::default()
         }),
+        placed_at_tick: 0,
+        door: None,
+        label: None,
+        stability: 100,
+        storage: None,
     };
     server.insert_deployed_entity(id, entity);
     let _ = server.drain_deployable_sync();
@@ -208,6 +213,11 @@ fn removing_fuel_resets_the_burn_timer() {
             max_health: 800,
             owner: Some(1),
             furnace: Some(furnace),
+            placed_at_tick: 0,
+            door: None,
+            label: None,
+            stability: 100,
+            storage: None,
         };
         server.deployed_entities.insert(id, entity);
         id
@@ -291,6 +301,11 @@ fn partial_fuel_drag_keeps_burn_timer_running() {
             max_health: 800,
             owner: Some(1),
             furnace: Some(furnace),
+            placed_at_tick: 0,
+            door: None,
+            label: None,
+            stability: 100,
+            storage: None,
         };
         server.deployed_entities.insert(id, entity);
         id
@@ -373,6 +388,11 @@ fn moving_from_furnace_to_a_specific_player_inventory_slot_respects_the_target()
             max_health: 800,
             owner: Some(1),
             furnace: Some(FurnaceState::default()),
+            placed_at_tick: 0,
+            door: None,
+            label: None,
+            stability: 100,
+            storage: None,
         };
         server.deployed_entities.insert(id, entity);
         id
@@ -480,6 +500,11 @@ fn furnace_test_fixture() -> (
         max_health: 800,
         owner: Some(1),
         furnace: Some(FurnaceState::default()),
+        placed_at_tick: 0,
+        door: None,
+        label: None,
+        stability: 100,
+        storage: None,
     };
     server.deployed_entities.insert(entity_id, entity);
     server.clients.get_mut(&client_id).unwrap().open_furnace = Some(entity_id);

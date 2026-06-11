@@ -161,8 +161,17 @@ fn dispatch_deployable_swing(
         .deployable_kind
         .map(|kind| kind.material())
     {
-        Some(crate::items::DestructibleMaterial::Wood) => SurfaceMaterial::Wood,
-        Some(crate::items::DestructibleMaterial::Stone) | None => SurfaceMaterial::Stone,
+        Some(
+            crate::items::DestructibleMaterial::Wood
+            | crate::items::DestructibleMaterial::Sticks
+            | crate::items::DestructibleMaterial::WoodBuilding
+            | crate::items::DestructibleMaterial::Cloth,
+        ) => SurfaceMaterial::Wood,
+        Some(
+            crate::items::DestructibleMaterial::Stone
+            | crate::items::DestructibleMaterial::StoneBuilding,
+        )
+        | None => SurfaceMaterial::Stone,
     };
     let visual_kind = ImpactEffectKind::for_surface(surface);
 
@@ -184,10 +193,20 @@ fn dispatch_deployable_swing(
     params.camera_kick.trigger(impact.tool);
     params.combat_feedback.trigger_hit_marker(false);
 
+    // A hammer swing on any placed structure is a repair tap, not
+    // damage; the server applies the material cost + HP restore
+    // (tier materials for building blocks and doors, the crafting
+    // recipe's primary material for crafted deployables). The hammer
+    // never damages anything.
+    let message = if impact.tool == crate::items::ToolKind::Hammer {
+        ClientMessage::Building(crate::protocol::BuildingCommand::Repair { id: deployable_id })
+    } else {
+        ClientMessage::DamageDeployable(DamageDeployableCommand { id: deployable_id })
+    };
     send_gameplay_message(
         &mut params.runtime,
         &mut params.error_toasts,
-        ClientMessage::DamageDeployable(DamageDeployableCommand { id: deployable_id }),
+        message,
         "damage command",
     );
 }

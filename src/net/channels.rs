@@ -12,10 +12,10 @@ use lightyear::prelude::{
 use crate::{
     protocol::{ClientMessage, PacketDelivery, ServerMessage},
     server::{
-        Deployable, DeployableActive, DeployableHealth, DeployableTransform, DroppedItem,
-        DroppedItemTransform, LootBagContents, LootBagEntity, LootBagTransform, Player,
-        PlayerArmor, PlayerLifecycle, PlayerPrivate, PlayerPublic, PlayerSleeping, ResourceNode,
-        ResourceNodeStorage,
+        Deployable, DeployableActive, DeployableHealth, DeployableLabel, DeployableStability,
+        DeployableTransform, DroppedItem, DroppedItemTransform, LootBagContents, LootBagEntity,
+        LootBagTransform, Player, PlayerArmor, PlayerLifecycle, PlayerPrivate, PlayerPublic,
+        PlayerSleeping, ResourceNode, ResourceNodeStorage,
     },
 };
 
@@ -90,6 +90,8 @@ impl Plugin for LightyearProtocolPlugin {
         app.register_component::<DeployableTransform>();
         app.register_component::<DeployableHealth>();
         app.register_component::<DeployableActive>();
+        app.register_component::<DeployableLabel>();
+        app.register_component::<DeployableStability>();
         app.register_component::<Player>();
         app.register_component::<PlayerPublic>();
         app.register_component::<PlayerPrivate>();

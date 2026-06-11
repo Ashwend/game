@@ -1,8 +1,7 @@
 use super::*;
 
-use super::targets::{ATTACK_RANGE_M, deployable_aim_point, ray_aabb_entry_distance};
+use super::targets::{ATTACK_RANGE_M, ray_aabb_entry_distance};
 
-use crate::items::item_definition;
 use crate::protocol::{MAX_HEALTH, Vec3Net};
 
 fn make_player(
@@ -173,26 +172,60 @@ fn workbench(
     id: crate::protocol::DeployedEntityId,
     x: f32,
     z: f32,
-) -> (Deployable, DeployableTransform) {
+) -> (
+    Deployable,
+    DeployableTransform,
+    crate::server::DeployableStability,
+) {
     (
         Deployable {
             id,
             item_id: crate::items::intern_item_id(crate::items::WORKBENCH_T1_ID),
             kind: crate::items::DeployableKind::Workbench { tier: 1 },
             max_health: 500,
+            owner: None,
         },
         DeployableTransform {
             position: Vec3Net::new(x, 0.0, z),
             yaw: 0.0,
         },
+        crate::server::DeployableStability(100),
+    )
+}
+
+fn building_wall(
+    id: crate::protocol::DeployedEntityId,
+    x: f32,
+    z: f32,
+) -> (
+    Deployable,
+    DeployableTransform,
+    crate::server::DeployableStability,
+) {
+    (
+        Deployable {
+            id,
+            item_id: crate::items::intern_item_id(crate::building::BUILDING_WALL_ITEM_ID),
+            kind: crate::items::DeployableKind::Building {
+                piece: crate::building::BuildingPiece::Wall,
+                tier: crate::building::BuildingTier::Sticks,
+            },
+            max_health: 250,
+            owner: None,
+        },
+        DeployableTransform {
+            // Walls sit on a foundation top (base at y = 0.5).
+            position: Vec3Net::new(x, 0.5, z),
+            yaw: 0.0,
+        },
+        crate::server::DeployableStability(100),
     )
 }
 
 #[test]
-fn best_deployable_target_picks_the_closest_in_cone() {
-    // Aim slightly downward (pitch < 0) so the look ray lines up with
-    // the aim points, which sit at the structure's collider half-height
-    // below eye level. Both structures are in front; the nearer one wins.
+fn best_deployable_target_picks_the_closest_ray_hit() {
+    // Aim slightly downward so the look ray passes through the boxes.
+    // Both structures are in front; the nearer one wins.
     let eye = Vec3Net::new(0.0, EYE_HEIGHT, 0.0);
     let near = workbench(1, 0.0, -2.0);
     let far = workbench(2, 0.0, -3.0);
@@ -201,24 +234,97 @@ fn best_deployable_target_picks_the_closest_in_cone() {
         eye,
         0.0,
         pitch,
-        [(&near.0, &near.1), (&far.0, &far.1)].into_iter(),
+        [(&near.0, &near.1, &near.2), (&far.0, &far.1, &far.2)].into_iter(),
     )
     .expect("a deployable in front should be targeted");
     assert_eq!(hit.0.id, 1);
-    // The winning score is the smaller eye→centre distance.
-    assert!(hit.2 < 3.0);
+    assert!(hit.3 < 3.0);
 }
 
 #[test]
-fn best_deployable_target_skips_out_of_range_and_off_cone() {
+fn best_deployable_target_skips_out_of_range_and_missed() {
     let eye = Vec3Net::new(0.0, EYE_HEIGHT, 0.0);
-    // Far beyond the 5.5m interact range.
+    // Far beyond the interact range.
     let far = workbench(1, 0.0, -50.0);
-    assert!(best_deployable_target(eye, 0.0, 0.0, [(&far.0, &far.1)].into_iter()).is_none());
+    assert!(
+        best_deployable_target(eye, 0.0, -0.05, [(&far.0, &far.1, &far.2)].into_iter()).is_none()
+    );
 
-    // In range but off to the side, outside the look cone.
+    // In range but off to the side, the ray never enters its box.
     let side = workbench(2, 5.0, 0.0);
-    assert!(best_deployable_target(eye, 0.0, 0.0, [(&side.0, &side.1)].into_iter()).is_none());
+    assert!(
+        best_deployable_target(eye, 0.0, 0.0, [(&side.0, &side.1, &side.2)].into_iter()).is_none()
+    );
+}
+
+#[test]
+fn point_blank_wall_wins_over_the_wall_behind_it() {
+    // Regression: the old cone-toward-centre test skipped a 3 m wall the
+    // player stood right in front of (its centre sat far outside the
+    // cone at point-blank range) and latched onto a wall further away
+    // whose centre happened to line up with the ray. The ray-vs-boxes
+    // test must pick the nearer wall.
+    let eye = Vec3Net::new(0.0, EYE_HEIGHT, 0.0);
+    let near = building_wall(1, 1.0, -0.5);
+    let behind = building_wall(2, 0.0, -2.8);
+    let hit = best_deployable_target(
+        eye,
+        0.0,
+        0.0,
+        [
+            (&near.0, &near.1, &near.2),
+            (&behind.0, &behind.1, &behind.2),
+        ]
+        .into_iter(),
+    )
+    .expect("the near wall must be targetable at point-blank range");
+    assert_eq!(
+        hit.0.id, 1,
+        "must hit the wall in front, not the one behind"
+    );
+    assert!(
+        hit.3 < 1.0,
+        "hit distance is the entry point, got {}",
+        hit.3
+    );
+}
+
+#[test]
+fn ray_through_a_doorway_opening_hits_the_piece_behind() {
+    // The doorway's collider has a genuine hole; aiming through it must
+    // resolve to the wall behind, not the doorway frame.
+    let doorway = (
+        Deployable {
+            id: 1,
+            item_id: crate::items::intern_item_id(crate::building::BUILDING_DOORWAY_ITEM_ID),
+            kind: crate::items::DeployableKind::Building {
+                piece: crate::building::BuildingPiece::Doorway,
+                tier: crate::building::BuildingTier::Sticks,
+            },
+            max_health: 250,
+            owner: None,
+        },
+        DeployableTransform {
+            position: Vec3Net::new(0.0, 0.0, -1.0),
+            yaw: 0.0,
+        },
+        crate::server::DeployableStability(100),
+    );
+    let wall_behind = building_wall(2, 0.0, -2.5);
+    // Eye at standing height aiming straight through the opening centre.
+    let eye = Vec3Net::new(0.0, 1.2, 0.0);
+    let hit = best_deployable_target(
+        eye,
+        0.0,
+        0.0,
+        [
+            (&doorway.0, &doorway.1, &doorway.2),
+            (&wall_behind.0, &wall_behind.1, &wall_behind.2),
+        ]
+        .into_iter(),
+    )
+    .expect("the wall behind the opening should be hit");
+    assert_eq!(hit.0.id, 2);
 }
 
 #[test]
@@ -239,12 +345,4 @@ fn best_loot_bag_target_finds_bag_in_front() {
         yaw: 0.0,
     };
     assert!(best_loot_bag_target(eye, 0.0, 0.0, [(&bag, &far)].into_iter()).is_none());
-}
-
-#[test]
-fn deployable_aim_point_lifts_to_the_collider_half_height() {
-    let (meta, transform) = workbench(1, 0.0, 0.0);
-    let profile = item_definition(&meta.item_id).unwrap().deployable.unwrap();
-    let aim = deployable_aim_point(&meta, &transform);
-    assert!((aim.y - profile.collider_half_height).abs() < 1e-4);
 }

@@ -180,7 +180,7 @@ fn fresh_spawn_is_random_in_bounds_and_clear_of_colliders() {
         server
             .deployed_entities
             .values()
-            .filter_map(|e| e.resolved_collider()),
+            .flat_map(|e| e.resolved_collider_blocks()),
     );
     let grid = BlockGrid::build_with_extras(&server.world, &extras);
     assert!(

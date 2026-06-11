@@ -44,11 +44,19 @@ pub(crate) fn chat_shortcut_system(
     //  - `inventory_open`: opening chat on top of the inventory makes a
     //    visual mess; if the player wants chat they can close the bag
     //    first.
+    //  - `text_prompt`: it IS a text input. Without this gate, typing a
+    //    bag name containing `t` (or confirming with Enter, the
+    //    secondary chat key) opened chat underneath the modal and the
+    //    player came out of the rename stuck in the chat input.
+    //  - `confirmation` / `notice`: their confirm shortcut is Enter too.
     if menu.screen != Screen::InGame
         || menu.pause_open
         || menu.chat_open
         || menu.crafting_open
         || menu.inventory_open
+        || menu.text_prompt.is_some()
+        || menu.confirmation.is_some()
+        || menu.notice.is_some()
         // The full-screen splash is the only modal on screen; once the
         // player Escape-minimizes it into the respawn pill, chat works
         // again so they can talk while waiting to respawn.

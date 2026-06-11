@@ -193,7 +193,7 @@ impl CameraImpactKick {
     pub(crate) fn trigger(&mut self, tool: ToolKind) {
         let (pitch, down, duration) = match tool {
             ToolKind::Hands => (HANDS_KICK_PITCH, HANDS_KICK_DOWN, HANDS_KICK_DURATION),
-            ToolKind::Axe => (AXE_KICK_PITCH, AXE_KICK_DOWN, AXE_KICK_DURATION),
+            ToolKind::Axe | ToolKind::Hammer => (AXE_KICK_PITCH, AXE_KICK_DOWN, AXE_KICK_DURATION),
             ToolKind::Pickaxe => (PICKAXE_KICK_PITCH, PICKAXE_KICK_DOWN, PICKAXE_KICK_DURATION),
         };
         // If a previous kick is still decaying, take the stronger of the two so
@@ -221,7 +221,7 @@ impl CameraImpactKick {
             // server rejects bare-handed PvP, but using the lighter
             // profile keeps the kick proportionate if the path ever
             // surfaces.
-            ToolKind::Axe | ToolKind::Hands => (
+            ToolKind::Axe | ToolKind::Hands | ToolKind::Hammer => (
                 HIT_RECEIVED_AXE_PITCH,
                 HIT_RECEIVED_AXE_DOWN,
                 HIT_RECEIVED_AXE_DURATION,

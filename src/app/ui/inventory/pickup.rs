@@ -12,6 +12,7 @@ pub(in crate::app::ui) fn pickup_tooltip(
     ctx: &egui::Context,
     menu: &MenuState,
     pickup_target: &PickupTargetState,
+    hammer_equipped: bool,
 ) {
     // Any full-screen modal hides the world tooltip. Even though the
     // scrim is opaque on top, egui's foreground-area tooltip would
@@ -33,7 +34,7 @@ pub(in crate::app::ui) fn pickup_tooltip(
         return;
     };
 
-    let Some((title, body)) = pickup_tooltip_text(pickup_target) else {
+    let Some((title, body)) = pickup_tooltip_text(pickup_target, hammer_equipped) else {
         return;
     };
 
@@ -46,7 +47,10 @@ pub(in crate::app::ui) fn pickup_tooltip(
     );
 }
 
-fn pickup_tooltip_text(pickup_target: &PickupTargetState) -> Option<(String, String)> {
+fn pickup_tooltip_text(
+    pickup_target: &PickupTargetState,
+    hammer_equipped: bool,
+) -> Option<(String, String)> {
     if let Some(stack) = pickup_target.stack.as_ref() {
         let title = item_definition(&stack.item_id)
             .map(|definition: &ItemDefinition| definition.name)
@@ -81,7 +85,16 @@ fn pickup_tooltip_text(pickup_target: &PickupTargetState) -> Option<(String, Str
     // player understands what the structure does without us inventing
     // an interaction that doesn't exist.
     if let Some(kind) = pickup_target.deployable_kind {
-        return Some(deployable_tooltip_text(kind));
+        // Building blocks only matter when the hammer is in hand (their
+        // tooltip is the repair/upgrade/stability readout); without it
+        // the label is noise over every wall the player walks past.
+        if matches!(kind, DeployableKind::Building { .. }) && !hammer_equipped {
+            return None;
+        }
+        return Some(deployable_tooltip_text(
+            kind,
+            pickup_target.deployable_stability,
+        ));
     }
 
     // Loot bags use the same "Press E to open" wording as a furnace;
@@ -127,7 +140,7 @@ fn pickup_tooltip_text(pickup_target: &PickupTargetState) -> Option<(String, Str
     Some((definition.name.to_owned(), body))
 }
 
-fn deployable_tooltip_text(kind: DeployableKind) -> (String, String) {
+fn deployable_tooltip_text(kind: DeployableKind, stability: Option<u8>) -> (String, String) {
     match kind {
         DeployableKind::Furnace { tier } => (
             format!("Furnace T{tier}"),
@@ -137,6 +150,28 @@ fn deployable_tooltip_text(kind: DeployableKind) -> (String, String) {
             format!("Workbench lvl {tier}"),
             "Crafting station. Tier-1 recipes unlock while you're in range.".to_owned(),
         ),
+        DeployableKind::Building { piece, tier } => {
+            let stability_line = stability
+                .map(|pct| format!("Stability: {pct}%\n"))
+                .unwrap_or_default();
+            (
+                format!("{} ({})", piece.label(), tier.label()),
+                format!(
+                    "{stability_line}Repair with a hammer swing\nHold right click with a hammer for options"
+                ),
+            )
+        }
+        DeployableKind::Door => (
+            "Hewn Log Door".to_owned(),
+            "Press E to open or close\nHold right click to change the code".to_owned(),
+        ),
+        DeployableKind::SleepingBag => (
+            "Sleeping Bag".to_owned(),
+            "Press E to pick up\nHold E to rename".to_owned(),
+        ),
+        DeployableKind::StorageBox { .. } => {
+            (kind.label().to_owned(), "Press E to open".to_owned())
+        }
     }
 }
 
@@ -172,7 +207,7 @@ mod tests {
         };
 
         let output = ctx.run(raw_input(), |ctx| {
-            pickup_tooltip(ctx, &menu, &pickup_target);
+            pickup_tooltip(ctx, &menu, &pickup_target, false);
         });
 
         assert!(!output.shapes.is_empty());
@@ -204,7 +239,7 @@ mod tests {
             };
 
             let output = ctx.run(raw_input(), |ctx| {
-                pickup_tooltip(ctx, &menu, &pickup_target);
+                pickup_tooltip(ctx, &menu, &pickup_target, false);
             });
 
             assert!(
@@ -212,6 +247,35 @@ mod tests {
                 "tooltip should be hidden for {label}",
             );
         }
+    }
+
+    #[test]
+    fn building_tooltip_only_shows_with_the_hammer() {
+        let target = PickupTargetState {
+            deployable_id: Some(1),
+            deployable_kind: Some(DeployableKind::Building {
+                piece: crate::building::BuildingPiece::Wall,
+                tier: crate::building::BuildingTier::Sticks,
+            }),
+            deployable_stability: Some(90),
+            screen_position: Some(Vec2::new(100.0, 120.0)),
+            ..Default::default()
+        };
+        assert!(
+            pickup_tooltip_text(&target, false).is_none(),
+            "building blocks stay quiet without the hammer"
+        );
+        let (_, body) = pickup_tooltip_text(&target, true).expect("hammer shows the readout");
+        assert!(body.contains("Stability: 90%"));
+
+        // Non-building deployables keep their tooltip regardless.
+        let bag = PickupTargetState {
+            deployable_id: Some(2),
+            deployable_kind: Some(DeployableKind::SleepingBag),
+            screen_position: Some(Vec2::new(100.0, 120.0)),
+            ..Default::default()
+        };
+        assert!(pickup_tooltip_text(&bag, false).is_some());
     }
 
     #[test]
@@ -224,7 +288,7 @@ mod tests {
             ..Default::default()
         };
 
-        let (_, body) = pickup_tooltip_text(&pickup_target).expect("resource tooltip");
+        let (_, body) = pickup_tooltip_text(&pickup_target, false).expect("resource tooltip");
 
         // Any pickaxe mines a tier-1 node, so the requirement names just the
         // tool kind. "tier 1" in the tooltip implied a tool level that

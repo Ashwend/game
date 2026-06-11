@@ -65,6 +65,7 @@ pub(crate) fn apply_held_item_visual_system(
     let transform = apply_idle_sway(
         held_item_local_transform(
             definition.model,
+            definition.held_mesh,
             gather_input.swing_fraction(),
             swap_state.fraction(),
         ),
@@ -172,6 +173,15 @@ fn held_item_layers(
                 assets.held_iron_pickaxe_head_material.clone(),
             ),
         ],
+        // Procedural vertex-coloured viewmodels; single layer each.
+        HeldMesh::Hammer => vec![(
+            assets.held_hammer_mesh.clone(),
+            assets.held_vertex_material.clone(),
+        )],
+        HeldMesh::BuildingPlan => vec![(
+            assets.held_building_plan_mesh.clone(),
+            assets.held_vertex_material.clone(),
+        )],
     }
 }
 
@@ -203,6 +213,7 @@ fn apply_idle_sway(transform: Transform, t: f32) -> Transform {
 
 fn held_item_local_transform(
     model: ItemModel,
+    held_mesh: HeldMesh,
     swing_fraction: f32,
     swap_fraction: f32,
 ) -> Transform {
@@ -216,6 +227,17 @@ fn held_item_local_transform(
         ItemModel::Bag | ItemModel::Deployable => (bag_idle_pose(phase), Quat::IDENTITY),
         ItemModel::Hatchet => (hatchet_swing_pose(phase), Quat::from_rotation_y(PI * 0.5)),
         ItemModel::Pickaxe => (pickaxe_swing_pose(phase), Quat::from_rotation_y(PI * 0.5)),
+    };
+    // The hatchet/pickaxe glbs carry their blade in the X plane, so the
+    // shared quarter-turn yaw above faces it forward. The hammer's head
+    // strikes along its local Z instead: skip the yaw, and give it only a
+    // gentle forward tip so it stands in the hand like the hatchet does
+    // (haft near vertical) while the striking face still points at what
+    // the player is about to hit.
+    let model_rotation = if matches!(held_mesh, HeldMesh::Hammer) {
+        Quat::from_rotation_x(-0.35)
+    } else {
+        model_rotation
     };
 
     let swing_translation = Vec3::NEG_Z * pose.forward + Vec3::X * pose.right + Vec3::Y * pose.up;
@@ -257,7 +279,7 @@ mod tests {
         // swap_fraction == 1.0 means the tool has finished lifting into
         // view, so no enter-offset is applied, the transform is the
         // canonical rest pose for the model.
-        let rest = held_item_local_transform(ItemModel::Hatchet, 0.0, 1.0);
+        let rest = held_item_local_transform(ItemModel::Hatchet, HeldMesh::StoneHatchet, 0.0, 1.0);
 
         // The base rest translation sits forward (-Z), right (+X) and down.
         assert!(rest.translation.z < 0.0, "held item is in front of camera");
@@ -269,8 +291,9 @@ mod tests {
     fn entry_animation_drops_and_tilts_the_item_below_its_rest_pose() {
         // At swap_fraction == 0.0 the tool is freshly "picked off the
         // back", it starts lower than the rest pose.
-        let entering = held_item_local_transform(ItemModel::Pickaxe, 0.0, 0.0);
-        let rest = held_item_local_transform(ItemModel::Pickaxe, 0.0, 1.0);
+        let entering =
+            held_item_local_transform(ItemModel::Pickaxe, HeldMesh::StonePickaxe, 0.0, 0.0);
+        let rest = held_item_local_transform(ItemModel::Pickaxe, HeldMesh::StonePickaxe, 0.0, 1.0);
         assert!(
             entering.translation.y < rest.translation.y,
             "entering item starts below rest"
@@ -281,8 +304,9 @@ mod tests {
 
     #[test]
     fn heavier_pickaxe_drops_further_on_entry_than_the_bag() {
-        let pickaxe = held_item_local_transform(ItemModel::Pickaxe, 0.0, 0.0);
-        let bag = held_item_local_transform(ItemModel::Bag, 0.0, 0.0);
+        let pickaxe =
+            held_item_local_transform(ItemModel::Pickaxe, HeldMesh::StonePickaxe, 0.0, 0.0);
+        let bag = held_item_local_transform(ItemModel::Bag, HeldMesh::Bag, 0.0, 0.0);
         // The pickaxe's entry drop is the largest of the three models, so at
         // the start of the swap it sits lower than the bag.
         assert!(pickaxe.translation.y < bag.translation.y);
@@ -292,8 +316,8 @@ mod tests {
     fn swing_phase_moves_the_held_item_relative_to_idle() {
         // A mid-swing phase displaces the hatchet from its idle (phase 0)
         // pose, the swing animation actually drives the transform.
-        let idle = held_item_local_transform(ItemModel::Hatchet, 0.0, 1.0);
-        let mid = held_item_local_transform(ItemModel::Hatchet, 0.5, 1.0);
+        let idle = held_item_local_transform(ItemModel::Hatchet, HeldMesh::StoneHatchet, 0.0, 1.0);
+        let mid = held_item_local_transform(ItemModel::Hatchet, HeldMesh::StoneHatchet, 0.5, 1.0);
         assert!(idle.translation.distance(mid.translation) > 0.01);
     }
 }

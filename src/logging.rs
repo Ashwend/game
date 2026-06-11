@@ -60,7 +60,16 @@ const SERVER_PREV_LOG_FILE_NAME: &str = "ashwend-server.prev.log";
 /// Default server log filter when `RUST_LOG` is unset. `info` everywhere, with
 /// the usual render-crate spam muted (harmless on a headless server, but keeps
 /// the filter identical should a future tool pull those crates in).
-const DEFAULT_SERVER_FILTER: &str = "info,wgpu=error,naga=warn";
+///
+/// `lightyear_replication::send::components` is muted because its sender
+/// resolution iterates the server's whole link collection on every
+/// replicated mutation and logs an ERROR for links still mid-handshake
+/// (no `ClientOf`/`ReplicationSender` yet), hundreds of spurious lines
+/// per connect. Upstream logs the identical condition at `debug` in a
+/// sibling path, so this is noise, not signal; setting `RUST_LOG`
+/// explicitly (the replication-debug workflow) re-enables the module.
+const DEFAULT_SERVER_FILTER: &str =
+    "info,wgpu=error,naga=warn,lightyear_replication::send::components=off";
 
 /// The single shared handle the `tracing` layer and [`write_raw`] both write
 /// through. Behind a `Mutex` so the normal log path and a synchronous crash

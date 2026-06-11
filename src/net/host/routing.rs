@@ -258,6 +258,11 @@ fn client_message_kind(message: &ClientMessage) -> &'static str {
         ClientMessage::DamageDeployable(_) => "DamageDeployable",
         ClientMessage::AttackPlayer(_) => "AttackPlayer",
         ClientMessage::Respawn => "Respawn",
+        ClientMessage::RespawnAtBag { .. } => "RespawnAtBag",
+        ClientMessage::PlaceBuilding(_) => "PlaceBuilding",
+        ClientMessage::Building(_) => "Building",
+        ClientMessage::Door(_) => "Door",
+        ClientMessage::SleepingBag(_) => "SleepingBag",
         ClientMessage::LootBag(_) => "LootBag",
         ClientMessage::LootSleeper { .. } => "LootSleeper",
         ClientMessage::SetViewRadius { .. } => "SetViewRadius",
@@ -265,6 +270,7 @@ fn client_message_kind(message: &ClientMessage) -> &'static str {
         ClientMessage::Heartbeat => "Heartbeat",
         ClientMessage::Ping { .. } => "Ping",
         ClientMessage::Disconnect => "Disconnect",
+        ClientMessage::OpenStorageBox { .. } => "OpenStorageBox",
     }
 }
 

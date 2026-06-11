@@ -335,6 +335,46 @@ fn small_rng_emits_changing_values() {
 }
 
 #[test]
+fn give_grants_a_specific_resource_in_registry_stacks() {
+    let (mut server, client) = server_with_host(Some(1));
+    let out = server.apply_command(client, "/give stone".to_owned());
+    assert!(has_toast(&out, ToastKind::Success));
+    let total =
+        crate::inventory::count_items_in_inventory(&server.clients[&client].inventory, STONE_ID);
+    assert_eq!(total, 1000, "default count is 1000");
+}
+
+#[test]
+fn give_all_grants_every_base_resource_at_the_requested_count() {
+    let (mut server, client) = server_with_host(Some(1));
+    let out = server.apply_command(client, "/give all 50".to_owned());
+    assert!(has_toast(&out, ToastKind::Success));
+    for item_id in [WOOD_ID, STONE_ID, FIBER_ID, IRON_ORE_ID] {
+        let total =
+            crate::inventory::count_items_in_inventory(&server.clients[&client].inventory, item_id);
+        assert_eq!(total, 50, "{item_id} should be granted");
+    }
+}
+
+#[test]
+fn give_rejects_unknown_items_bad_counts_and_non_admins() {
+    let (mut server, client) = server_with_host(Some(1));
+    let out = server.apply_command(client, "/give frobnium".to_owned());
+    assert!(has_toast(&out, ToastKind::Warning));
+    let out = server.apply_command(client, "/give stone 0".to_owned());
+    assert!(has_toast(&out, ToastKind::Warning));
+    let out = server.apply_command(client, "/give".to_owned());
+    assert!(has_toast(&out, ToastKind::Warning));
+
+    let (mut server, client) = server_with_host(None);
+    let out = server.apply_command(client, "/give stone".to_owned());
+    assert!(has_toast(&out, ToastKind::Warning));
+    let total =
+        crate::inventory::count_items_in_inventory(&server.clients[&client].inventory, STONE_ID);
+    assert_eq!(total, 0, "non-admins get nothing");
+}
+
+#[test]
 fn test_kit_command_grants_full_kit_and_routes_equipables_to_actionbar() {
     use crate::server::test_support::{connect_named, server};
     let mut server = server();

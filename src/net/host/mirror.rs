@@ -255,12 +255,36 @@ pub(super) fn sync_deployable_entities(world: &mut World) {
         crate::server::despawn_deployable_entity(world, id);
     }
 
-    // 2. Spawn fresh entities for new ids; refresh health/active for
-    //    changed ones.
+    // 2. Spawn fresh entities for new ids; refresh health/active/label
+    //    for changed ones. A kind change (hammer tier upgrade) can't be
+    //    expressed as a diff, `Deployable` identity is immutable
+    //    post-spawn by design, so the mirror entity is despawned and
+    //    respawned; clients see a remove + add through the normal
+    //    `Added`/`RemovedComponents` lifecycle.
     for (view, live_chunk) in dirty_views {
         let existing = world
             .resource::<crate::server::DeployableIndex>()
             .get(view.id);
+        let existing = match existing {
+            Some(entity) => {
+                let kind_changed = world
+                    .get::<crate::server::Deployable>(entity)
+                    .is_some_and(|meta| meta.kind != view.kind);
+                if kind_changed {
+                    #[cfg(feature = "replication-trace")]
+                    info!(
+                        target: "replication_trace",
+                        "server: Deployable         RESPAWN id={} entity={entity:?} kind changed to {:?}",
+                        view.id, view.kind
+                    );
+                    crate::server::despawn_deployable_entity(world, view.id);
+                    None
+                } else {
+                    Some(entity)
+                }
+            }
+            None => None,
+        };
         match existing {
             Some(entity) => {
                 if let Some(mut health) = world.get_mut::<crate::server::DeployableHealth>(entity)
@@ -290,6 +314,34 @@ pub(super) fn sync_deployable_entities(world: &mut World) {
                         );
                     }
                     active.0 = view.active;
+                }
+                if let Some(mut label) = world.get_mut::<crate::server::DeployableLabel>(entity)
+                    && label.0 != view.label
+                {
+                    #[cfg(feature = "replication-trace")]
+                    {
+                        info!(
+                            target: "replication_trace",
+                            "server: DeployableLabel    MUTATE id={} entity={entity:?} {:?} -> {:?}",
+                            view.id, label.0, view.label
+                        );
+                    }
+                    label.0 = view.label;
+                }
+                if let Some(mut stability) =
+                    world.get_mut::<crate::server::DeployableStability>(entity)
+                    && stability.0 != view.stability
+                {
+                    #[cfg(feature = "replication-trace")]
+                    {
+                        let before = stability.0;
+                        info!(
+                            target: "replication_trace",
+                            "server: DeployableStability MUTATE id={} entity={entity:?} {before} -> {}",
+                            view.id, view.stability
+                        );
+                    }
+                    stability.0 = view.stability;
                 }
             }
             None => {

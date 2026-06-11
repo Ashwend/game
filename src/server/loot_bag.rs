@@ -14,8 +14,8 @@
 use crate::{
     items::normalize_stack,
     protocol::{
-        ClientId, ItemStack, LOOT_BAG_SLOT_COUNT, LootBagCommand, LootBagId, LootBagSlotRef,
-        OpenLootBagView, PlayerInventoryState, Vec3Net,
+        ClientId, ContainerViewKind, DeployedEntityId, ItemStack, LOOT_BAG_SLOT_COUNT,
+        LootBagCommand, LootBagId, LootBagSlotRef, OpenLootBagView, PlayerInventoryState, Vec3Net,
     },
     server::{GameServer, ServerEnvelope},
 };
@@ -36,6 +36,10 @@ pub(crate) enum OpenContainer {
     /// non-destructive: nothing is copied, closing leaves whatever wasn't taken
     /// on the body, and an empty body still opens (it just shows empty).
     Sleeper(ClientId),
+    /// A placed storage box deployable, by entity id. Opened through
+    /// `ClientMessage::OpenStorageBox` (see `super::storage_box`); the
+    /// slots live on the `DeployedEntity` and persist with the world.
+    StorageBox(DeployedEntityId),
 }
 
 /// Max range, in metres, at which a player can open / interact with
@@ -94,6 +98,7 @@ impl LootBag {
         OpenLootBagView {
             id: self.id,
             slots: self.slots.clone(),
+            kind: ContainerViewKind::LootBag,
         }
     }
 }
@@ -236,9 +241,9 @@ impl GameServer {
             return true;
         };
         let pos = client.controller.position;
-        let target_pos = match container {
+        let (target_pos, range) = match container {
             OpenContainer::LootBag(bag_id) => match self.loot_bags.get(&bag_id) {
-                Some(bag) => bag.position,
+                Some(bag) => (bag.position, LOOT_BAG_INTERACT_RANGE_M),
                 None => return false,
             },
             OpenContainer::Sleeper(sleeper_id) => match self.clients.get(&sleeper_id) {
@@ -247,12 +252,19 @@ impl GameServer {
                         && !sleeper.lifecycle.is_dead()
                         && sleeper.controller.health > 0.0 =>
                 {
-                    sleeper.controller.position
+                    (sleeper.controller.position, LOOT_BAG_INTERACT_RANGE_M)
                 }
                 _ => return false,
             },
+            OpenContainer::StorageBox(entity_id) => match self.deployed_entities.get(&entity_id) {
+                Some(entity) => (
+                    entity.position,
+                    super::storage_box::STORAGE_BOX_INTERACT_RANGE_M,
+                ),
+                None => return false,
+            },
         };
-        pos.within_horizontal_range(target_pos, LOOT_BAG_INTERACT_RANGE_M)
+        pos.within_horizontal_range(target_pos, range)
     }
 
     /// Quick membership / view helper for the player-private replication path.
@@ -268,6 +280,15 @@ impl GameServer {
                     return None;
                 }
                 Some(sleeper_inventory_view(sleeper_id, &sleeper.inventory))
+            }
+            OpenContainer::StorageBox(entity_id) => {
+                let entity = self.deployed_entities.get(&entity_id)?;
+                let storage = entity.storage.as_ref()?;
+                Some(OpenLootBagView {
+                    id: entity_id,
+                    slots: storage.slots.clone(),
+                    kind: ContainerViewKind::StorageBox,
+                })
             }
         }
     }
@@ -398,6 +419,27 @@ impl GameServer {
                     quantity,
                 );
             }
+            OpenContainer::StorageBox(entity_id) => {
+                // Player (in `clients`) and box (in `deployed_entities`)
+                // are disjoint fields, so both borrow mutably at once.
+                let Some(player) = self.clients.get_mut(&client_id) else {
+                    return Vec::new();
+                };
+                let Some(storage) = self
+                    .deployed_entities
+                    .get_mut(&entity_id)
+                    .and_then(|entity| entity.storage.as_mut())
+                else {
+                    return Vec::new();
+                };
+                move_within(
+                    &mut player.inventory,
+                    &mut ContainerSlots::Bag(&mut storage.slots),
+                    from,
+                    to,
+                    quantity,
+                );
+            }
         }
         Vec::new()
     }
@@ -438,6 +480,23 @@ impl GameServer {
                     from,
                 )
             }
+            OpenContainer::StorageBox(entity_id) => {
+                let Some(player) = self.clients.get_mut(&client_id) else {
+                    return Vec::new();
+                };
+                let Some(storage) = self
+                    .deployed_entities
+                    .get_mut(&entity_id)
+                    .and_then(|entity| entity.storage.as_mut())
+                else {
+                    return Vec::new();
+                };
+                quick_transfer_within(
+                    &mut player.inventory,
+                    &mut ContainerSlots::Bag(&mut storage.slots),
+                    from,
+                )
+            }
         };
         match warning {
             Some(text) => reply_warning(client_id, text),
@@ -467,6 +526,7 @@ fn sleeper_inventory_view(
     OpenLootBagView {
         id: sleeper_id,
         slots,
+        kind: ContainerViewKind::Sleeper,
     }
 }
 

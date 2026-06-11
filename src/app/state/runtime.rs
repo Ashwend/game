@@ -370,6 +370,14 @@ impl ClientRuntime {
                 // shows what happened.
                 self.push_system_message("you died".to_owned());
             }
+            ServerMessage::DoorCodePrompt { .. } => {
+                // Handled in the network tick system, which owns
+                // `MenuState` and opens the code-entry dialog.
+            }
+            ServerMessage::DoorCodeResult { .. } => {
+                // Handled in the network tick system, which plays the
+                // keypad accept/deny sound.
+            }
             ServerMessage::WorldTime(snapshot) => {
                 self.apply_world_time_snapshot(snapshot);
             }

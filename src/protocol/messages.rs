@@ -56,6 +56,23 @@ pub enum ClientMessage {
     /// client is currently dead, the server is the authority on the
     /// lifecycle state.
     Respawn,
+    /// Respawn at one of the caller's own sleeping bags. Same lifecycle
+    /// gate as [`Self::Respawn`]; additionally rejected when the bag is
+    /// gone or belongs to someone else (falls back to nothing, the
+    /// client can still pick the random respawn).
+    RespawnAtBag {
+        id: DeployedEntityId,
+    },
+    /// Place a building block via the building plan. The server is the
+    /// authority on snapping, costs, and overlap; see
+    /// [`PlaceBuildingCommand`].
+    PlaceBuilding(PlaceBuildingCommand),
+    /// Hammer repair / upgrade / demolish on a building block.
+    Building(BuildingCommand),
+    /// Door placement, interaction, and code-lock management.
+    Door(DoorCommand),
+    /// Sleeping-bag rename + pickup.
+    SleepingBag(SleepingBagCommand),
     /// Open / close / move-items in a loot bag (the container spawned
     /// at a dead player's feet). Server keeps the authoritative slots
     /// and gates the move on the player having the bag open.
@@ -89,6 +106,14 @@ pub enum ClientMessage {
         rtt_ms: u16,
     },
     Disconnect,
+    /// Open a placed storage box's container UI. The server validates
+    /// kind + range and replies by populating
+    /// `PlayerPrivate.open_loot_bag` (the shared container view);
+    /// close/move/quick-transfer then ride [`LootBagCommand`] like any
+    /// other open container.
+    OpenStorageBox {
+        id: DeployedEntityId,
+    },
 }
 
 /// Player-controlled view radius for chunk AoI streaming. Resolved to a
@@ -129,8 +154,14 @@ impl ClientMessage {
             | Self::DamageDeployable(_)
             | Self::AttackPlayer(_)
             | Self::Respawn
+            | Self::RespawnAtBag { .. }
+            | Self::PlaceBuilding(_)
+            | Self::Building(_)
+            | Self::Door(_)
+            | Self::SleepingBag(_)
             | Self::LootBag(_)
             | Self::LootSleeper { .. }
+            | Self::OpenStorageBox { .. }
             | Self::SetViewRadius { .. }
             // Heartbeat is the server's liveness signal: it drives the
             // stale-client sweep. Sending it reliably means a single dropped
@@ -239,9 +270,20 @@ pub enum ServerMessage {
     /// Sent to the dying player when their HP reaches zero. Triggers the
     /// death splash and the respawn UI. `killer_name` is resolved
     /// server-side so the client doesn't have to look it up.
+    /// `respawn_bags` lists the dying player's placed sleeping bags so
+    /// the death screen can offer them as spawn points alongside the
+    /// random respawn.
     PlayerKilled {
         killer: Option<ClientId>,
         killer_name: Option<String>,
+        #[serde(default)]
+        respawn_bags: Vec<RespawnBagOption>,
+    },
+    /// Reply to a [`ClientMessage::Door`] interact from an account that
+    /// isn't authorized on the door's code lock: tells the client to
+    /// open the code-entry dialog for door `id`.
+    DoorCodePrompt {
+        id: DeployedEntityId,
     },
     /// A resource node was actually depleted (storage drained, node
     /// removed), distinct from "the node just left this player's
@@ -284,6 +326,12 @@ pub enum ServerMessage {
     /// rather than the chunk-gated replication path.
     PlayerList(Vec<PlayerListEntry>),
     Heartbeat,
+    /// Reply to a [`ClientMessage::Door`] code entry: whether the code
+    /// was accepted (the account is now authorized) or wrong. Drives the
+    /// client's keypad feedback sounds; the toast carries the text.
+    DoorCodeResult {
+        accepted: bool,
+    },
 }
 
 impl ServerMessage {
@@ -299,6 +347,8 @@ impl ServerMessage {
             | Self::ResourceNodeDepleted { .. }
             | Self::Knockback { .. }
             | Self::PlayerKilled { .. }
+            | Self::DoorCodePrompt { .. }
+            | Self::DoorCodeResult { .. }
             | Self::Toast(_) => PacketDelivery::Reliable,
             // Voice rides an unordered unreliable channel so every delivered
             // frame is played even if it arrives out of order. See the

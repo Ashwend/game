@@ -27,18 +27,13 @@ pub(crate) struct NetworkResourceNode {
 
 /// Marker for a placed structure entity (workbench, furnace, …).
 /// The kind drives mesh/material lookups and the nameplate UI uses
-/// `id` to match snapshot health updates.
+/// `id` to match snapshot health updates. `kind` is also the visual's
+/// memory of what mesh it carries: when the replicated kind diverges
+/// (a hammer tier upgrade), the reconcile system swaps the mesh in
+/// place and fires the upgrade burst.
 #[derive(Component)]
 pub(crate) struct NetworkDeployedEntity {
     pub(crate) id: DeployedEntityId,
-    // The nameplate overlay reads `kind` to label the structure; the
-    // mesh selection has already happened by spawn time. Kept on the
-    // component so the overlay doesn't have to walk the snapshot to
-    // recover it.
-    #[expect(
-        dead_code,
-        reason = "nameplate overlay reads this once that path is wired"
-    )]
     pub(crate) kind: DeployableKind,
 }
 

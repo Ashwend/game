@@ -17,8 +17,10 @@ use super::loot_bag::loot_bag_ui;
 use super::options::{OptionsBackTarget, options_ui};
 use super::pause::pause_ui;
 use super::peer_overlay::{PeerOverlay, collect_peer_overlay_entries, peer_overlay_ui};
+use super::text_prompt::text_prompt_ui;
 use super::toast::toast_ui;
 use super::tutorial::{self, TutorialStep, tutorial_step, tutorial_ui};
+use super::wheel::wheel_ui;
 use super::{UiResources, world_ready_for_play};
 
 /// Scans the player's in-AoI resource nodes for crude (hand-pickup) nodes,
@@ -266,16 +268,27 @@ pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta
         if show_hud {
             toast_ui(ctx, &resources.toasts, actionbar_rect);
         }
+        // Radial wheel (building plan piece select, hammer actions, door
+        // code, bag rename). Input lives in the wheel system; this only
+        // paints whatever is open.
+        wheel_ui(ctx, &resources.wheel);
+        // Single-field text dialog (door codes, bag rename). Drawn above
+        // the wheel so a wheel-spawned prompt lands on top.
+        text_prompt_ui(
+            ctx,
+            &mut resources.menu,
+            &mut resources.runtime,
+            &mut resources.error_toasts,
+        );
         // Death splash sits above every other in-game UI but
         // below modal dialogs / loading splash. Renders only
         // while `menu.death_splash` is set (server flipped the
         // local player to Dead and the runtime stored the
         // killer name).
-        if let Some(splash) = resources.menu.death_splash.clone() {
-            let respawn_clicked = death_splash_ui(ctx, &splash);
-            if respawn_clicked {
-                send_respawn(&mut resources.runtime);
-            }
+        if let Some(splash) = resources.menu.death_splash.clone()
+            && let Some(choice) = death_splash_ui(ctx, &splash)
+        {
+            send_respawn(&mut resources.runtime, choice);
         }
     }
     if resources.menu.pause_open && !resources.menu.pause_options_open {

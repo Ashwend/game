@@ -1,5 +1,6 @@
 pub(crate) mod bag;
 pub(crate) mod builder;
+pub(crate) mod building;
 pub(crate) mod crude;
 pub(crate) mod impact;
 pub(crate) mod ore;
@@ -7,6 +8,10 @@ pub(crate) mod player;
 pub(crate) mod trees;
 
 pub(crate) use bag::low_poly_bag_mesh;
+pub(crate) use building::{
+    building_piece_mesh, door_ghost_mesh, door_panel_mesh, held_building_plan_mesh,
+    held_hammer_mesh, sleeping_bag_mesh,
+};
 pub(crate) use crude::{
     low_poly_branch_pile_mesh, low_poly_hay_grass_mesh, low_poly_surface_stone_mesh,
 };

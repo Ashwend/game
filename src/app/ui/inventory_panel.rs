@@ -148,7 +148,15 @@ pub(super) fn inventory_panel_ui(
             inventory_tab,
             menu.furnace_open,
         );
-        pickup_tooltip(ctx, menu, pickup_target);
+        // Building-block tooltips are the hammer's readout
+        // (stability/repair); they only show while the hammer is the
+        // active item so every wall the player walks past stays quiet.
+        let hammer_equipped = local_player
+            .private
+            .as_ref()
+            .and_then(|private| private.inventory.active_actionbar_stack())
+            .is_some_and(|stack| stack.item_id.as_ref() == crate::items::HAMMER_ID);
+        pickup_tooltip(ctx, menu, pickup_target, hammer_equipped);
     }
 
     // Drag release + preview deliberately run later in the top-level

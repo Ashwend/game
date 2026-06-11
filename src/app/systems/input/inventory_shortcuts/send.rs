@@ -84,7 +84,7 @@ pub(super) fn send_place_deployable_or_furnace_open(
     );
 }
 
-pub(super) fn send_gameplay_message(
+pub(in crate::app::systems::input) fn send_gameplay_message(
     runtime: &mut ClientRuntime,
     error_toasts: &mut dyn ErrorToastSink,
     message: ClientMessage,

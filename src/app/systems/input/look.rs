@@ -5,7 +5,7 @@ use bevy::{
 };
 
 use crate::{
-    app::state::{ClientSettings, DeployablePlacementState, LookState, MenuState},
+    app::state::{ClientSettings, DeployablePlacementState, LookState, MenuState, WheelMenuState},
     controller::MAX_LOOK_PITCH,
 };
 
@@ -18,16 +18,25 @@ use super::gating::{gameplay_accepts_controls, primary_window_focused};
 /// so it only kicks in when a frame genuinely hiccups.
 const MAX_MOUSE_DELTA_PER_FRAME: f32 = 2000.0;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn mouse_look_system(
     accumulated_mouse_motion: Res<AccumulatedMouseMotion>,
     mut look: ResMut<LookState>,
     menu: Res<MenuState>,
     settings: Res<ClientSettings>,
     placement: Res<DeployablePlacementState>,
+    wheel: Res<WheelMenuState>,
     mouse: Res<ButtonInput<MouseButton>>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
 ) {
     if !gameplay_accepts_controls(&menu, primary_window_focused(&primary_window)) {
+        return;
+    }
+
+    // While a radial wheel is open, mouse motion is the wheel's sector
+    // pointer, not camera input. Freeze the camera so flicking toward an
+    // option doesn't spin the view underneath the overlay.
+    if wheel.blocks_input() {
         return;
     }
 

@@ -68,7 +68,9 @@ pub fn tool_player_damage(tool: ToolProfile, attacker: ClientId) -> Option<Damag
     let knockback_speed = match tool.kind {
         ToolKind::Axe => HATCHET_KNOCKBACK_SPEED,
         ToolKind::Pickaxe => PICKAXE_KNOCKBACK_SPEED,
-        ToolKind::Hands => return None,
+        // Hands and the hammer can't damage players; the hammer is a
+        // construction tool, not a weapon.
+        ToolKind::Hands | ToolKind::Hammer => return None,
     };
     if tool.player_damage == 0 {
         return None;

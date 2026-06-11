@@ -1,12 +1,19 @@
-//! Client-side deployable placement:
+//! Client-side placement preview + input for everything placeable:
 //!
-//! - `update_placement_ghost_system`, raycasts the camera look ray
-//!   against the ground, updates `DeployablePlacementState`, and
-//!   spawns / despawns the ghost preview entity.
-//! - `placement_input_system`, left-click sends the place command;
-//!   holding right-click freezes the spot + camera and turns horizontal
-//!   mouse motion into ghost rotation, key `R` snaps to 90°. Until the
-//!   player rotates, the ghost auto-faces them (front toward the player).
+//! - Classic deployables (workbench, furnace, sleeping bag): free ground
+//!   placement, right-mouse-hold rotates, exactly the original flow.
+//! - Building plan pieces: the ghost snaps to the building grid
+//!   (foundations onto the 3 m neighbour grid of existing foundations,
+//!   wall-like pieces onto foundation edge sockets) and left click sends
+//!   `PlaceBuilding`. The piece comes from the plan's wheel selection.
+//! - Hewn log doors: the ghost (panel + swing-arc indicator) snaps to the
+//!   nearest free doorway; right-click flips hinge/swing (a half-turn);
+//!   left click opens the set-code prompt, and only confirming that sends
+//!   `DoorCommand::Place`.
+//!
+//! The server re-derives every snap and re-validates every cost; this
+//! module exists so the preview the player sees is the pose the server
+//! will accept.
 
 use bevy::{
     input::mouse::AccumulatedMouseMotion, light::NotShadowCaster, prelude::*, window::PrimaryWindow,
@@ -15,17 +22,22 @@ use bevy::{
 use crate::{
     analytics::{Analytics, Event},
     app::{
-        scene::{
-            DeployablePlacementGhost, DeployableVisualAssets, MainCamera, NetworkDeployedEntity,
-        },
+        scene::{DeployablePlacementGhost, DeployableVisualAssets, MainCamera},
         state::{
-            ClientErrorToast, ClientRuntime, DeployablePlacementState, LocalPlayerState, MenuState,
-            Screen,
+            BuildingPlanState, ClientErrorToast, ClientRuntime, DeployablePlacementState,
+            LocalPlayerState, MenuState, Screen, TextPrompt, TextPromptKind, WheelMenuState,
         },
         systems::input::send_place_deployable_command,
     },
-    items::{DeployableKind, DeployableProfile, ItemId, ItemModel, item_definition},
-    protocol::{PlaceDeployableCommand, Vec3Net},
+    building::{
+        BuildingPiece, BuildingTier, StabilitySupport, candidate_stability_pct,
+        cell_neighbor_sockets, platform_wall_sockets, positions_match, snap_yaw_quarter_turn,
+        stairs_socket_on, wall_ceiling_sockets, wall_slot_blocked, wall_top_socket,
+    },
+    game_balance::{BUILDING_MIN_PLACEMENT_STABILITY_PCT, FOUNDATION_RAISE_MAX_M},
+    items::{BUILDING_PLAN_ID, DeployableKind, DeployableProfile, ItemId, item_definition},
+    protocol::{DeployedEntityId, PlaceBuildingCommand, PlaceDeployableCommand, Vec3Net},
+    server::{Deployable, DeployableStability, DeployableTransform},
 };
 
 use super::deployable_transform;
@@ -38,6 +50,29 @@ const PLACEMENT_REACH_M: f32 = 5.0;
 /// right-mouse is held. ~157 px sweeps a quarter turn, slow enough to
 /// land precisely on the angle the player wants while fine-tuning.
 const PLACEMENT_ROTATE_RAD_PER_PIXEL: f32 = 0.01;
+/// How far the aim point may sit from a building socket before the ghost
+/// snaps onto it. Matches the server's `SNAP_TOLERANCE_M`.
+const SNAP_TOLERANCE_M: f32 = 0.75;
+/// Latch radius for cell-sized targets (ceilings, stairs): half a cell
+/// plus a touch of slack. The ghost sends the exact snapped pose, so the
+/// server's tighter tolerance still passes; this only controls how
+/// forgiving the aim is.
+const CELL_SNAP_RANGE_M: f32 = 1.6;
+/// How far the aim point may sit from a doorway before the door ghost
+/// latches onto it. More generous than the socket snap, doorways are
+/// big targets and there's at most a handful nearby.
+const DOOR_SNAP_RANGE_M: f32 = 2.5;
+
+/// What the placement preview is currently showing.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum GhostIntent {
+    /// A classic deployable item with its profile kind.
+    Deployable(ItemId, DeployableProfile),
+    /// A building-plan piece (always previewed at the sticks tier).
+    Building(BuildingPiece),
+    /// The hewn log door, snapping to doorways.
+    Door,
+}
 
 /// Update the placement state from the active actionbar item + camera
 /// look ray. Also spawns / despawns the single ghost preview entity.
@@ -45,6 +80,7 @@ const PLACEMENT_ROTATE_RAD_PER_PIXEL: f32 = 0.01;
 pub(crate) fn update_placement_ghost_system(
     mut commands: Commands,
     mut placement: ResMut<DeployablePlacementState>,
+    plan: Res<BuildingPlanState>,
     mouse: Res<ButtonInput<MouseButton>>,
     runtime: Res<ClientRuntime>,
     local_player: Res<LocalPlayerState>,
@@ -52,26 +88,31 @@ pub(crate) fn update_placement_ghost_system(
     assets: Option<Res<DeployableVisualAssets>>,
     camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     ghosts: Query<(Entity, &DeployablePlacementGhost)>,
-    deployed: Query<(&NetworkDeployedEntity, &Transform)>,
+    replicated: Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
 ) {
     let Some(assets) = assets else {
         return;
     };
 
-    let active = current_deployable(&local_player, &menu);
+    let intent = current_ghost_intent(&local_player, &menu, &plan);
+    // Track the held item id (not the intent) for kind-change detection:
+    // swapping between any two placeables resets manual rotation + flip.
+    let active_item_id = intent.as_ref().and_then(|_| current_item_id(&local_player));
     let kind_changed = placement.item_id.as_ref().map(|id| id.as_ref())
-        != active.as_ref().map(|(id, _, _)| id.as_ref());
+        != active_item_id.as_ref().map(|id| id.as_ref());
     if kind_changed {
         // Hand control back to auto-facing when the deployable type
         // changes, otherwise the first frame after a swap would inherit
         // a yaw the player dialled in for a different structure.
         placement.manual_yaw = false;
+        placement.door_flip = false;
     }
-    placement.item_id = active.as_ref().map(|(id, _, _)| id.clone());
+    placement.item_id = active_item_id;
 
-    let Some((_, profile, _)) = active else {
+    let Some(intent) = intent else {
         placement.world_position = None;
         placement.valid = false;
+        placement.door_target = None;
         despawn_ghost(&mut commands, &ghosts);
         return;
     };
@@ -81,6 +122,52 @@ pub(crate) fn update_placement_ghost_system(
         return;
     };
 
+    let player_feet = runtime.local_player_position();
+    let ghost_kind = match intent {
+        GhostIntent::Deployable(_, profile) => {
+            update_free_placement(
+                &mut placement,
+                profile,
+                &mouse,
+                camera_transform,
+                player_feet,
+                &replicated,
+            );
+            profile.kind
+        }
+        GhostIntent::Building(piece) => {
+            update_building_placement(
+                &mut placement,
+                piece,
+                camera_transform,
+                player_feet,
+                &replicated,
+            );
+            DeployableKind::Building {
+                piece,
+                tier: BuildingTier::Sticks,
+            }
+        }
+        GhostIntent::Door => {
+            update_door_placement(&mut placement, camera_transform, player_feet, &replicated);
+            DeployableKind::Door
+        }
+    };
+
+    refresh_ghost_entity(&mut commands, &ghosts, &assets, &placement, ghost_kind);
+}
+
+/// The original free-ground flow for classic deployables: ghost follows
+/// the look ray, right-mouse freezes the spot for rotation, auto-faces
+/// the player until manually rotated.
+fn update_free_placement(
+    placement: &mut DeployablePlacementState,
+    profile: DeployableProfile,
+    mouse: &ButtonInput<MouseButton>,
+    camera_transform: &GlobalTransform,
+    player_feet: Option<Vec3>,
+    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
+) {
     // While right-mouse rotates the ghost, freeze the spot: the camera is
     // also locked this frame, so re-aiming would otherwise let a tiny
     // residual look-ray shift drift the position the player just settled
@@ -89,15 +176,15 @@ pub(crate) fn update_placement_ghost_system(
     let world_position = if rotating {
         placement.world_position
     } else {
-        ground_under_aim(camera_transform)
+        surface_under_aim(camera_transform, replicated)
     };
-    let player_feet = runtime.local_player_position();
     let valid = match world_position {
-        Some(target) => is_placement_valid(target, profile, player_feet, &deployed),
+        Some(target) => is_free_placement_valid(target, profile, player_feet, replicated),
         None => false,
     };
     placement.world_position = world_position;
     placement.valid = valid;
+    placement.door_target = None;
 
     // Until the player takes manual control, keep the front of the ghost
     // turned toward them so a freshly selected deployable reads the right
@@ -108,76 +195,311 @@ pub(crate) fn update_placement_ghost_system(
     {
         placement.yaw = yaw;
     }
+}
 
-    refresh_ghost_entity(&mut commands, &ghosts, &assets, &placement, profile);
+/// Building-plan ghost: snap to the building grid. Foundations prefer an
+/// existing foundation's neighbour socket and otherwise sit free on the
+/// ground (quarter-turn yaw); wall-like pieces only ever sit on a
+/// platform edge socket; ceilings cap a walled storey; stairs stand on a
+/// platform cell.
+fn update_building_placement(
+    placement: &mut DeployablePlacementState,
+    piece: BuildingPiece,
+    camera_transform: &GlobalTransform,
+    player_feet: Option<Vec3>,
+    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
+) {
+    placement.door_target = None;
+    let ground_aim = ground_under_aim(camera_transform);
+
+    let (pose, socketed_valid) = match piece {
+        BuildingPiece::Wall | BuildingPiece::WindowWall | BuildingPiece::Doorway => {
+            match nearest_wall_socket(camera_transform, replicated) {
+                Some(socket) => {
+                    let occupied = wall_socket_occupied(socket.position, socket.yaw, replicated);
+                    (Some((socket.position, socket.yaw)), !occupied)
+                }
+                None => (None, false),
+            }
+        }
+        BuildingPiece::Foundation => {
+            let Some(aim) = foundation_aim(camera_transform, player_feet) else {
+                placement.world_position = None;
+                placement.valid = false;
+                return;
+            };
+            let aim_net = Vec3Net::new(aim.x, aim.y, aim.z);
+            match nearest_foundation_neighbor(aim_net, replicated) {
+                Some(socket) => {
+                    // A snapped extension can still overlap a foundation
+                    // sitting on a *different* (offset) grid; check the
+                    // boxes like the server does, not just the cell, or
+                    // the ghost shows green for a doomed placement.
+                    let blocks = crate::building::building_collider_blocks(
+                        piece,
+                        socket.position,
+                        socket.yaw,
+                    );
+                    let clear = !foundation_cell_occupied(socket.position, replicated)
+                        && !any_replicated_overlap(&blocks, replicated, false);
+                    (Some((socket.position, socket.yaw)), clear)
+                }
+                None => {
+                    // Free foundation: quarter-turn grid placement at the
+                    // aim-driven height (see `foundation_aim`), one face
+                    // kept toward the player (like the furnace/workbench
+                    // ghosts) until R takes manual control. Overlap with
+                    // existing structures is the server's final word; the
+                    // preview checks the same boxes.
+                    if !placement.manual_yaw
+                        && let Some(feet) = player_feet
+                        && let Some(facing) = yaw_facing_player(aim, feet)
+                    {
+                        placement.yaw = facing;
+                    }
+                    let yaw = snap_yaw_quarter_turn(placement.yaw);
+                    let blocks = crate::building::building_collider_blocks(piece, aim_net, yaw);
+                    let clear = !any_replicated_overlap(&blocks, replicated, false);
+                    (Some((aim_net, yaw)), clear)
+                }
+            }
+        }
+        BuildingPiece::Ceiling => match nearest_ceiling_cell(camera_transform, replicated) {
+            Some((position, yaw)) => {
+                let blocks = crate::building::building_collider_blocks(piece, position, yaw);
+                // A duplicate ceiling or stairs rising through the cell
+                // shows up as a box overlap, same as the server's check.
+                // Wall-plane pairs are skipped: a stacked wall shares the
+                // slab's height band at the edge by construction.
+                let clear = !any_replicated_overlap(&blocks, replicated, true);
+                (Some((position, yaw)), clear)
+            }
+            None => (None, false),
+        },
+        BuildingPiece::Stairs => {
+            match nearest_stairs_cell(camera_transform, replicated) {
+                Some(base) => {
+                    let yaw = snap_yaw_quarter_turn(placement.yaw);
+                    let blocks = crate::building::building_collider_blocks(piece, base, yaw);
+                    // Stairs legitimately clip the wall/door plane at the
+                    // cell edges; collide with platforms, ceilings, and
+                    // other stairs only.
+                    let clear = !any_replicated_overlap(&blocks, replicated, true);
+                    (Some((base, yaw)), clear)
+                }
+                None => (None, false),
+            }
+        }
+    };
+
+    let Some((position, yaw)) = pose else {
+        // No snap target near the aim: park the ghost at the ground aim
+        // (when there is one) so the player sees what they're holding,
+        // but red.
+        placement.world_position = ground_aim;
+        placement.yaw = snap_yaw_quarter_turn(placement.yaw);
+        placement.valid = false;
+        return;
+    };
+
+    let in_reach = player_feet.is_some_and(|feet| {
+        let dx = position.x - feet.x;
+        let dz = position.z - feet.z;
+        (dx * dx + dz * dz).sqrt() <= PLACEMENT_REACH_M
+    });
+    // Mirror of the server's stability gate, predicted from replicated
+    // per-piece stabilities, so the ghost goes red where the server
+    // would refuse ("too far up / too far out").
+    let supports: Vec<StabilitySupport> = replicated
+        .iter()
+        .filter_map(|(meta, transform, stability)| {
+            let DeployableKind::Building { piece, .. } = meta.kind else {
+                return None;
+            };
+            Some((
+                piece,
+                transform.position,
+                transform.yaw,
+                u32::from(stability.0),
+            ))
+        })
+        .collect();
+    let stable = candidate_stability_pct(piece, position, yaw, &supports)
+        >= BUILDING_MIN_PLACEMENT_STABILITY_PCT;
+    placement.world_position = Some(Vec3::new(position.x, position.y, position.z));
+    placement.yaw = yaw;
+    placement.valid = socketed_valid && in_reach && stable;
+}
+
+/// Door ghost: latch onto the nearest free doorway around the aim point.
+/// The flip toggle is a half-turn, mirroring hinge + swing together,
+/// which the arc indicator baked into the ghost mesh makes visible.
+fn update_door_placement(
+    placement: &mut DeployablePlacementState,
+    camera_transform: &GlobalTransform,
+    player_feet: Option<Vec3>,
+    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
+) {
+    let aim = ground_under_aim(camera_transform);
+    let aim_net = aim.map(|aim| Vec3Net::new(aim.x, 0.0, aim.z));
+
+    let target = aim_net.and_then(|aim| nearest_free_doorway(aim, replicated));
+    match target {
+        Some((doorway_id, position, doorway_yaw)) => {
+            let yaw = snap_yaw_quarter_turn(
+                doorway_yaw
+                    + if placement.door_flip {
+                        std::f32::consts::PI
+                    } else {
+                        0.0
+                    },
+            );
+            let in_reach = player_feet.is_some_and(|feet| {
+                let dx = position.x - feet.x;
+                let dz = position.z - feet.z;
+                (dx * dx + dz * dz).sqrt() <= PLACEMENT_REACH_M
+            });
+            placement.world_position = Some(Vec3::new(position.x, position.y, position.z));
+            placement.yaw = yaw;
+            placement.valid = in_reach;
+            placement.door_target = Some(doorway_id);
+        }
+        None => {
+            placement.world_position = aim;
+            placement.valid = false;
+            placement.door_target = None;
+        }
+    }
 }
 
 /// React to placement input: left-click commits, held right-mouse
-/// freezes the spot and turns mouse motion into rotation, R nudges by 90°.
+/// freezes the spot and turns mouse motion into rotation (classic
+/// deployables), right-click flips the door ghost, R nudges by 90°.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn placement_input_system(
     mouse_motion: Res<AccumulatedMouseMotion>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut placement: ResMut<DeployablePlacementState>,
+    plan: Res<BuildingPlanState>,
+    wheel: Res<WheelMenuState>,
     mut runtime: ResMut<ClientRuntime>,
     mut error_toasts: MessageWriter<ClientErrorToast>,
-    menu: Res<MenuState>,
+    mut menu: ResMut<MenuState>,
+    local_player: Res<LocalPlayerState>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
     analytics: Res<Analytics>,
 ) {
-    if !gameplay_accepts_input(&menu, &primary_window) {
+    if !gameplay_accepts_input(&menu, &primary_window) || wheel.blocks_input() {
         return;
     }
-    let Some(item_id) = placement.item_id.clone() else {
+    let intent = current_ghost_intent(&local_player, &menu, &plan);
+    let Some(intent) = intent else {
         return;
     };
 
-    // Hold right mouse to take manual control: the camera is frozen (see
-    // `mouse_look_system`) and the spot is frozen (see
-    // `update_placement_ghost_system`), so horizontal mouse motion only
-    // turns the ghost. This lets the player settle on a spot, grab it,
-    // and slowly rotate it into place without nudging the location.
-    if mouse.pressed(MouseButton::Right) {
-        let dx = mouse_motion.delta.x;
-        if dx != 0.0 {
-            placement.yaw = wrap_angle(placement.yaw + dx * PLACEMENT_ROTATE_RAD_PER_PIXEL);
-            placement.manual_yaw = true;
+    match &intent {
+        GhostIntent::Deployable(_, _) => {
+            // Hold right mouse to take manual control: the camera is
+            // frozen (see `mouse_look_system`) and the spot is frozen
+            // (see the ghost system), so horizontal mouse motion only
+            // turns the ghost.
+            if mouse.pressed(MouseButton::Right) {
+                let dx = mouse_motion.delta.x;
+                if dx != 0.0 {
+                    placement.yaw = wrap_angle(placement.yaw + dx * PLACEMENT_ROTATE_RAD_PER_PIXEL);
+                    placement.manual_yaw = true;
+                }
+            }
+            if keys.just_pressed(KeyCode::KeyR) {
+                placement.yaw = wrap_angle(placement.yaw + std::f32::consts::FRAC_PI_2);
+                placement.manual_yaw = true;
+            }
         }
-    }
-    if keys.just_pressed(KeyCode::KeyR) {
-        placement.yaw = wrap_angle(placement.yaw + std::f32::consts::FRAC_PI_2);
-        placement.manual_yaw = true;
+        GhostIntent::Building(_) => {
+            // Free foundations rotate on the quarter-turn grid; snapped
+            // poses own their orientation, so R is only felt off-grid.
+            if keys.just_pressed(KeyCode::KeyR) {
+                placement.yaw = snap_yaw_quarter_turn(placement.yaw + std::f32::consts::FRAC_PI_2);
+                placement.manual_yaw = true;
+            }
+        }
+        GhostIntent::Door => {
+            // Right-click flips hinge + swing side (a half-turn of the
+            // ghost; the swing-arc indicator shows the result).
+            if mouse.just_pressed(MouseButton::Right) {
+                placement.door_flip = !placement.door_flip;
+            }
+        }
     }
 
-    if mouse.just_pressed(MouseButton::Left) {
-        let Some(position) = placement.world_position else {
-            return;
-        };
-        if !placement.valid {
-            return;
+    if !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+    let Some(position) = placement.world_position else {
+        return;
+    };
+    if !placement.valid {
+        return;
+    }
+
+    match intent {
+        GhostIntent::Deployable(item_id, _) => {
+            let kind_label = deployable_kind_label(&item_id);
+            send_place_deployable_command(
+                &mut runtime,
+                &mut error_toasts,
+                PlaceDeployableCommand {
+                    item_id,
+                    position: Vec3Net::from(position),
+                    yaw: placement.yaw,
+                },
+            );
+            placement.manual_yaw = false;
+            if let Some(kind) = kind_label {
+                analytics.track(Event::DeployablePlaced { kind });
+            }
         }
-        let kind_label = deployable_kind_label(&item_id);
-        send_place_deployable_command(
-            &mut runtime,
-            &mut error_toasts,
-            PlaceDeployableCommand {
-                item_id,
-                position: Vec3Net::from(position),
-                yaw: placement.yaw,
-            },
-        );
-        // Drop manual control so the next ghost (same deployable type,
-        // another in the stack) starts by auto-facing the player again.
-        placement.manual_yaw = false;
-        if let Some(kind) = kind_label {
-            analytics.track(Event::DeployablePlaced { kind });
+        GhostIntent::Building(piece) => {
+            send_place_building_command(
+                &mut runtime,
+                &mut error_toasts,
+                PlaceBuildingCommand {
+                    piece,
+                    position: Vec3Net::from(position),
+                    yaw: placement.yaw,
+                },
+            );
+            analytics.track(Event::DeployablePlaced {
+                kind: piece.label().to_lowercase(),
+            });
         }
-        // Keep `manual_yaw` set: the ghost stays visible until the
-        // actionbar count replicates down, so resetting here would snap
-        // it back to auto-facing for a frame or two before it vanishes.
-        // It resets when the deployable type changes (see the ghost
-        // system), which also leaves repeat placements at the same angle.
+        GhostIntent::Door => {
+            let Some(doorway_id) = placement.door_target else {
+                return;
+            };
+            // The door only ships once the player confirms a lock code;
+            // cancelling the prompt places nothing.
+            menu.text_prompt = Some(TextPrompt::new(TextPromptKind::DoorSetCode {
+                doorway_id,
+                flip: placement.door_flip,
+            }));
+        }
+    }
+}
+
+fn send_place_building_command(
+    runtime: &mut ClientRuntime,
+    error_toasts: &mut MessageWriter<ClientErrorToast>,
+    command: PlaceBuildingCommand,
+) {
+    use crate::app::state::ErrorToastSink;
+    let Some(session) = runtime.session.as_mut() else {
+        error_toasts.push_error("place failed: not connected".to_owned());
+        return;
+    };
+    if let Err(error) = session.send(crate::protocol::ClientMessage::PlaceBuilding(command)) {
+        error_toasts.push_error(format!("place failed: {error}"));
     }
 }
 
@@ -187,20 +509,42 @@ pub(super) fn deployable_kind_label(item_id: &ItemId) -> Option<String> {
     Some(match profile.kind {
         DeployableKind::Workbench { .. } => "workbench".to_owned(),
         DeployableKind::Furnace { .. } => "furnace".to_owned(),
+        DeployableKind::Building { piece, .. } => piece.label().to_lowercase(),
+        DeployableKind::Door => "door".to_owned(),
+        DeployableKind::SleepingBag => "sleeping_bag".to_owned(),
+        DeployableKind::StorageBox { tier } => {
+            if tier >= 2 {
+                "storage_box_large".to_owned()
+            } else {
+                "storage_box_small".to_owned()
+            }
+        }
     })
 }
 
-pub(super) fn current_deployable(
+fn current_item_id(local_player: &LocalPlayerState) -> Option<ItemId> {
+    local_player
+        .private
+        .as_ref()?
+        .inventory
+        .active_actionbar_stack()
+        .map(|stack| stack.item_id.clone())
+}
+
+/// What the active actionbar item wants the ghost to preview. The same
+/// modal-suppression rules as the original `current_deployable` apply.
+pub(super) fn current_ghost_intent(
     local_player: &LocalPlayerState,
     menu: &MenuState,
-) -> Option<(ItemId, DeployableProfile, ItemModel)> {
+    plan: &BuildingPlanState,
+) -> Option<GhostIntent> {
     if menu.screen != Screen::InGame || menu.pause_open {
         return None;
     }
-    // Any modal-open state (inventory, crafting, chat) suppresses the
-    // ghost so we don't draw it while the player can't actually click
-    // to place. `menu.inventory_open`/`crafting_open` cover those.
-    if menu.inventory_open || menu.crafting_open || menu.chat_open {
+    // Any modal-open state (inventory, crafting, chat, text prompt)
+    // suppresses the ghost so we don't draw it while the player can't
+    // actually click to place.
+    if menu.inventory_open || menu.crafting_open || menu.chat_open || menu.text_prompt.is_some() {
         return None;
     }
     let stack = local_player
@@ -208,9 +552,107 @@ pub(super) fn current_deployable(
         .as_ref()?
         .inventory
         .active_actionbar_stack()?;
+    if stack.item_id.as_ref() == BUILDING_PLAN_ID {
+        return Some(GhostIntent::Building(plan.selected_piece));
+    }
     let definition = item_definition(&stack.item_id)?;
     let profile = definition.deployable?;
-    Some((stack.item_id.clone(), profile, definition.model))
+    if matches!(profile.kind, DeployableKind::Door) {
+        return Some(GhostIntent::Door);
+    }
+    // Hidden building items can't be held, but keep the gate total: only
+    // free-placeable kinds ride the classic flow.
+    if matches!(profile.kind, DeployableKind::Building { .. }) {
+        return None;
+    }
+    Some(GhostIntent::Deployable(stack.item_id.clone(), profile))
+}
+
+/// Aim point for a free foundation, with aim-driven height. Looking at
+/// the ground inside reach places at ground level, exactly the old
+/// behaviour. Raising the aim past the reach ring keeps the ghost on the
+/// ring and lifts it continuously with the look ray, up to
+/// [`FOUNDATION_RAISE_MAX_M`], which is how stilted platforms are
+/// placed: look where you want the slab, then look up to raise it.
+fn foundation_aim(camera_transform: &GlobalTransform, player_feet: Option<Vec3>) -> Option<Vec3> {
+    let origin = camera_transform.translation();
+    let forward = camera_transform.forward().as_vec3();
+    let feet = player_feet?;
+    if forward.y < -1e-3 {
+        let t = -origin.y / forward.y;
+        if t > 0.0 && t <= 60.0 {
+            let hit = origin + forward * t;
+            let dx = hit.x - feet.x;
+            let dz = hit.z - feet.z;
+            if (dx * dx + dz * dz).sqrt() <= PLACEMENT_REACH_M {
+                return Some(Vec3::new(hit.x, 0.0, hit.z));
+            }
+        }
+    }
+    // The ground hit is out of reach (or the player is looking level or
+    // up): clamp the aim to the reach ring and take the ray's height
+    // there. As the look ray crosses the ring higher and higher, the
+    // slab rises with it; the band cap keeps it honest.
+    let horizontal = (forward.x * forward.x + forward.z * forward.z).sqrt();
+    if horizontal < 1e-3 {
+        return None;
+    }
+    // A hair inside the ring so the reach check never flickers on f32
+    // rounding.
+    let t = (PLACEMENT_REACH_M - 0.01) / horizontal;
+    let point = origin + forward * t;
+    let y = point.y.clamp(0.0, FOUNDATION_RAISE_MAX_M);
+    Some(Vec3::new(point.x, y, point.z))
+}
+
+/// Where the look ray lands for a free deployable: the ground plane or
+/// the walkable top of a building platform (foundation or ceiling),
+/// whichever the ray reaches first. This is what lets furnaces, beds,
+/// and boxes stand on foundations and upstairs floors, not just dirt.
+fn surface_under_aim(
+    camera_transform: &GlobalTransform,
+    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
+) -> Option<Vec3> {
+    let origin = camera_transform.translation();
+    let forward = camera_transform.forward().as_vec3();
+    if forward.y >= -1e-3 {
+        return None;
+    }
+
+    let mut best: Option<(f32, Vec3)> = None;
+    let ground_t = -origin.y / forward.y;
+    if ground_t > 0.0 && ground_t <= 50.0 {
+        let hit = origin + forward * ground_t;
+        best = Some((ground_t, Vec3::new(hit.x, 0.0, hit.z)));
+    }
+    let half = crate::building::FOUNDATION_SIZE_M / 2.0;
+    for (meta, transform, _) in replicated.iter() {
+        let DeployableKind::Building { piece, .. } = meta.kind else {
+            continue;
+        };
+        let Some(top_offset) = crate::building::platform_top_offset(piece) else {
+            continue;
+        };
+        let top = transform.position.y + top_offset;
+        // Only surfaces below the camera count: hitting a slab from
+        // underneath would place the ghost on the floor above the
+        // player's head, through the ceiling.
+        if origin.y <= top {
+            continue;
+        }
+        let t = (top - origin.y) / forward.y;
+        if t <= 0.0 || t > 50.0 {
+            continue;
+        }
+        let hit = origin + forward * t;
+        if (hit.x - transform.position.x).abs() <= half
+            && (hit.z - transform.position.z).abs() <= half
+            && best.is_none_or(|(best_t, _)| t < best_t)
+        {
+            best = Some((t, Vec3::new(hit.x, top, hit.z)));
+        }
+    }
+    best.map(|(_, point)| point)
 }
 
 pub(super) fn ground_under_aim(camera_transform: &GlobalTransform) -> Option<Vec3> {
@@ -236,11 +678,11 @@ pub(super) fn ground_under_aim(camera_transform: &GlobalTransform) -> Option<Vec
     Some(Vec3::new(hit.x, 0.0, hit.z))
 }
 
-fn is_placement_valid(
+fn is_free_placement_valid(
     target: Vec3,
     profile: DeployableProfile,
     player_feet: Option<Vec3>,
-    deployed: &Query<(&NetworkDeployedEntity, &Transform)>,
+    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
 ) -> bool {
     let Some(player_feet) = player_feet else {
         return false;
@@ -250,35 +692,282 @@ fn is_placement_valid(
     if (dx * dx + dz * dz).sqrt() > PLACEMENT_REACH_M {
         return false;
     }
-    // Cheap AABB-vs-AABB overlap test against already-placed structures
-    // using a shared default half-extent, we don't know the placed
-    // entity's profile here (its kind would need a definition lookup),
-    // so use a conservative footprint that matches both Workbench and
-    // Furnace tier-1 widths.
-    let candidate_min = Vec2::new(
-        target.x - profile.collider_half_width,
-        target.z - profile.collider_half_width,
+    // Real 3D box check against every replicated deployable, buildings
+    // included; the millimetre epsilon means standing exactly on a
+    // platform top (touching faces) is not a collision. This replaced
+    // an XZ-only heuristic that could never have allowed placing on a
+    // foundation (the foundation itself always "overlapped" in XZ).
+    let candidate = crate::world::WorldBlock::new(
+        Vec3Net::new(target.x, target.y + profile.collider_half_height, target.z),
+        Vec3Net::new(
+            profile.collider_half_width,
+            profile.collider_half_height,
+            profile.collider_half_width,
+        ),
     );
-    let candidate_max = Vec2::new(
-        target.x + profile.collider_half_width,
-        target.z + profile.collider_half_width,
-    );
-    for (_, transform) in deployed.iter() {
-        let p = transform.translation;
-        // Use the same conservative half-width on both sides, being
-        // generous on overlap here matches the server's actual
-        // per-profile check, which uses the persisted entity's profile.
-        let other_min = Vec2::new(p.x - 0.55, p.z - 0.55);
-        let other_max = Vec2::new(p.x + 0.55, p.z + 0.55);
-        if candidate_min.x < other_max.x
-            && candidate_max.x > other_min.x
-            && candidate_min.y < other_max.y
-            && candidate_max.y > other_min.y
+    !any_replicated_overlap(&[candidate], replicated, false)
+}
+
+// ---------------------------------------------------------------------
+// Building snap helpers (client mirrors of the server's snap logic)
+// ---------------------------------------------------------------------
+
+/// Where the look ray crosses the horizontal plane at `plane_y`. Unlike
+/// [`ground_under_aim`] this accepts upward rays, second-storey sockets
+/// sit above the camera when the player stands at ground level.
+fn aim_on_plane(camera_transform: &GlobalTransform, plane_y: f32) -> Option<Vec3> {
+    let origin = camera_transform.translation();
+    let forward = camera_transform.forward().as_vec3();
+    if forward.y.abs() < 1e-4 {
+        return None;
+    }
+    let t = (plane_y - origin.y) / forward.y;
+    if t <= 0.0 || t > 60.0 {
+        return None;
+    }
+    let hit = origin + forward * t;
+    Some(Vec3::new(hit.x, plane_y, hit.z))
+}
+
+/// Distance from where the player is aiming (on the socket's own height
+/// plane) to the socket, or `None` when the look ray can't reach that
+/// plane. Aiming per-plane is what makes upper-storey sockets judged
+/// where the player points, not by a ground projection far behind them.
+fn aim_distance_to(camera_transform: &GlobalTransform, position: Vec3Net) -> Option<f32> {
+    let aim = aim_on_plane(camera_transform, position.y)?;
+    let dx = position.x - aim.x;
+    let dz = position.z - aim.z;
+    Some((dx * dx + dz * dz).sqrt())
+}
+
+fn nearest_wall_socket(
+    camera_transform: &GlobalTransform,
+    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
+) -> Option<crate::building::WallSocket> {
+    let mut best: Option<(f32, crate::building::WallSocket)> = None;
+    let mut consider = |socket: crate::building::WallSocket| {
+        let Some(distance) = aim_distance_to(camera_transform, socket.position) else {
+            return;
+        };
+        if distance <= SNAP_TOLERANCE_M
+            && best.as_ref().is_none_or(|(current, _)| distance < *current)
         {
-            return false;
+            best = Some((distance, socket));
+        }
+    };
+    for (meta, transform, _) in replicated.iter() {
+        let DeployableKind::Building { piece, .. } = meta.kind else {
+            continue;
+        };
+        if let Some(sockets) = platform_wall_sockets(piece, transform.position, transform.yaw) {
+            for socket in sockets {
+                consider(socket);
+            }
+        }
+        // Walls also stack directly on walls (no floor needed per storey).
+        if let Some(top) = wall_top_socket(piece, transform.position, transform.yaw) {
+            consider(top);
         }
     }
-    true
+    best.map(|(_, socket)| socket)
+}
+
+/// The ceiling pose nearest the aim: cells flanking a wall's top edge,
+/// or cells adjacent to an existing ceiling (extending a ledge). Whether
+/// the spot is stable enough is the stability gate's call.
+fn nearest_ceiling_cell(
+    camera_transform: &GlobalTransform,
+    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
+) -> Option<(Vec3Net, f32)> {
+    let mut best: Option<(f32, Vec3Net, f32)> = None;
+    let mut consider = |position: Vec3Net, yaw: f32| {
+        let Some(distance) = aim_distance_to(camera_transform, position) else {
+            return;
+        };
+        if distance <= CELL_SNAP_RANGE_M
+            && best
+                .as_ref()
+                .is_none_or(|(current, _, _)| distance < *current)
+        {
+            best = Some((distance, position, yaw));
+        }
+    };
+    for (meta, transform, _) in replicated.iter() {
+        let DeployableKind::Building { piece, .. } = meta.kind else {
+            continue;
+        };
+        if let Some(cells) = wall_ceiling_sockets(piece, transform.position, transform.yaw) {
+            for cell in cells {
+                consider(cell.position, cell.yaw);
+            }
+        }
+        if matches!(piece, BuildingPiece::Ceiling) {
+            for socket in cell_neighbor_sockets(transform.position, transform.yaw) {
+                consider(socket.position, socket.yaw);
+            }
+        }
+    }
+    best.map(|(_, position, yaw)| (position, yaw))
+}
+
+/// The stairs base pose on the platform cell nearest the aim.
+fn nearest_stairs_cell(
+    camera_transform: &GlobalTransform,
+    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
+) -> Option<Vec3Net> {
+    let mut best: Option<(f32, Vec3Net)> = None;
+    for (meta, transform, _) in replicated.iter() {
+        let DeployableKind::Building { piece, .. } = meta.kind else {
+            continue;
+        };
+        let Some(socket) = stairs_socket_on(piece, transform.position, 0.0) else {
+            continue;
+        };
+        let Some(aim) = aim_on_plane(camera_transform, socket.position.y) else {
+            continue;
+        };
+        let dx = socket.position.x - aim.x;
+        let dz = socket.position.z - aim.z;
+        let distance = (dx * dx + dz * dz).sqrt();
+        if distance <= CELL_SNAP_RANGE_M
+            && best.as_ref().is_none_or(|(current, _)| distance < *current)
+        {
+            best = Some((distance, socket.position));
+        }
+    }
+    best.map(|(_, position)| position)
+}
+
+fn nearest_foundation_neighbor(
+    aim: Vec3Net,
+    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
+) -> Option<crate::building::WallSocket> {
+    let mut best: Option<(f32, crate::building::WallSocket)> = None;
+    for (meta, transform, _) in replicated.iter() {
+        let DeployableKind::Building {
+            piece: BuildingPiece::Foundation,
+            ..
+        } = meta.kind
+        else {
+            continue;
+        };
+        for socket in cell_neighbor_sockets(transform.position, transform.yaw) {
+            let dx = socket.position.x - aim.x;
+            let dz = socket.position.z - aim.z;
+            let distance = (dx * dx + dz * dz).sqrt();
+            if distance <= SNAP_TOLERANCE_M
+                && best.as_ref().is_none_or(|(current, _)| distance < *current)
+            {
+                best = Some((distance, socket));
+            }
+        }
+    }
+    best.map(|(_, socket)| socket)
+}
+
+fn wall_socket_occupied(
+    position: Vec3Net,
+    yaw: f32,
+    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
+) -> bool {
+    replicated.iter().any(|(meta, transform, _)| {
+        matches!(meta.kind, DeployableKind::Building { piece, .. } if piece.is_wall_like())
+            && wall_slot_blocked(transform.position, transform.yaw, position, yaw)
+    })
+}
+
+fn foundation_cell_occupied(
+    position: Vec3Net,
+    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
+) -> bool {
+    replicated.iter().any(|(meta, transform, _)| {
+        matches!(
+            meta.kind,
+            DeployableKind::Building {
+                piece: BuildingPiece::Foundation,
+                ..
+            }
+        ) && positions_match(transform.position, position)
+    })
+}
+
+fn any_replicated_overlap(
+    blocks: &[crate::world::WorldBlock],
+    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
+    skip_wall_plane: bool,
+) -> bool {
+    for (meta, transform, _) in replicated.iter() {
+        // Stairs candidates legitimately clip walls/doors on their cell
+        // edges; the caller opts out of those pairs.
+        if skip_wall_plane {
+            let wall_plane = matches!(meta.kind, DeployableKind::Door)
+                || matches!(meta.kind, DeployableKind::Building { piece, .. } if piece.is_wall_like());
+            if wall_plane {
+                continue;
+            }
+        }
+        // Open/closed doesn't matter for placement previews; treat doors
+        // as closed (worst case). The millimetre epsilon mirrors the
+        // server's: touching faces plus f32 rounding aren't a collision.
+        const EPSILON: f32 = 0.001;
+        for other in super::deployable_colliders(meta, transform, false) {
+            for candidate in blocks {
+                let a_min = candidate.min();
+                let a_max = candidate.max();
+                let b_min = other.min();
+                let b_max = other.max();
+                if a_min.x + EPSILON < b_max.x
+                    && a_max.x > b_min.x + EPSILON
+                    && a_min.y + EPSILON < b_max.y
+                    && a_max.y > b_min.y + EPSILON
+                    && a_min.z + EPSILON < b_max.z
+                    && a_max.z > b_min.z + EPSILON
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// The nearest doorway (by horizontal distance to the aim point) that
+/// doesn't already hold a door. Doors sit at exactly their doorway's
+/// position, so occupancy is a position match against door entities.
+fn nearest_free_doorway(
+    aim: Vec3Net,
+    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
+) -> Option<(DeployedEntityId, Vec3Net, f32)> {
+    let mut best: Option<(f32, DeployedEntityId, Vec3Net, f32)> = None;
+    for (meta, transform, _) in replicated.iter() {
+        let DeployableKind::Building {
+            piece: BuildingPiece::Doorway,
+            ..
+        } = meta.kind
+        else {
+            continue;
+        };
+        let dx = transform.position.x - aim.x;
+        let dz = transform.position.z - aim.z;
+        let distance = (dx * dx + dz * dz).sqrt();
+        if distance > DOOR_SNAP_RANGE_M {
+            continue;
+        }
+        let occupied = replicated.iter().any(|(other, other_transform, _)| {
+            matches!(other.kind, DeployableKind::Door)
+                && positions_match(other_transform.position, transform.position)
+        });
+        if occupied {
+            continue;
+        }
+        if best
+            .as_ref()
+            .is_none_or(|(current, _, _, _)| distance < *current)
+        {
+            best = Some((distance, meta.id, transform.position, transform.yaw));
+        }
+    }
+    best.map(|(_, id, position, yaw)| (id, position, yaw))
 }
 
 /// Yaw that turns the deployable's local +Z front toward the player.
@@ -300,24 +989,19 @@ fn refresh_ghost_entity(
     ghosts: &Query<(Entity, &DeployablePlacementGhost)>,
     assets: &DeployableVisualAssets,
     placement: &DeployablePlacementState,
-    profile: DeployableProfile,
+    kind: DeployableKind,
 ) {
     let Some(position) = placement.world_position else {
-        despawn_ghost(commands, ghosts);
-        return;
-    };
-    let item_id = placement.item_id.as_ref();
-    let kind = item_id
-        .and_then(|id| item_definition(id))
-        .and_then(|def| def.deployable)
-        .map(|profile| profile.kind);
-    let Some(kind) = kind else {
         despawn_ghost(commands, ghosts);
         return;
     };
     let mesh = match kind {
         DeployableKind::Workbench { .. } => assets.workbench_mesh.clone(),
         DeployableKind::Furnace { .. } => assets.furnace_mesh.clone(),
+        DeployableKind::Building { piece, tier } => assets.building_mesh(piece, tier),
+        DeployableKind::Door => assets.door_ghost_mesh.clone(),
+        DeployableKind::SleepingBag => assets.sleeping_bag_mesh.clone(),
+        DeployableKind::StorageBox { tier } => assets.storage_box_mesh(tier),
     };
     let material = if placement.valid {
         assets.ghost_valid_material.clone()
@@ -346,7 +1030,6 @@ fn refresh_ghost_entity(
         // a hard floor blob, disable it so the ghost looks unbaked.
         NotShadowCaster,
     ));
-    let _ = profile; // silence unused-var if expansions never read it.
 }
 
 fn despawn_ghost(commands: &mut Commands, ghosts: &Query<(Entity, &DeployablePlacementGhost)>) {
@@ -362,7 +1045,7 @@ fn gameplay_accepts_input(
     if menu.screen != Screen::InGame || menu.pause_open {
         return false;
     }
-    if menu.inventory_open || menu.crafting_open || menu.chat_open {
+    if menu.inventory_open || menu.crafting_open || menu.chat_open || menu.text_prompt.is_some() {
         return false;
     }
     primary_window

@@ -16,13 +16,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     items::{DeployableKind, ItemId},
-    protocol::{DeployedEntityId, Vec3Net},
+    protocol::{AccountId, DeployedEntityId, Vec3Net},
     world::ChunkCoord,
 };
 
-/// Identity + immutable-after-spawn fields. `item_id`, `kind`, and
-/// `max_health` never change after placement, so this component stays
-/// quiet on the change-detection front.
+/// Identity + immutable-after-spawn fields. None of these change after
+/// placement (a building-block tier upgrade despawns and respawns the
+/// mirror entity, see `sync_deployable_entities`), so this component
+/// stays quiet on the change-detection front. `owner` is replicated so
+/// the client can gate owner-only affordances (hammer upgrade/demolish
+/// wheel, bag rename/pickup) before the server's authoritative check.
 #[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Deployable {
     pub id: DeployedEntityId,
@@ -30,6 +33,7 @@ pub struct Deployable {
     pub item_id: ItemId,
     pub kind: DeployableKind,
     pub max_health: u32,
+    pub owner: Option<AccountId>,
 }
 
 fn deserialize_interned_item_id<'de, D>(deserializer: D) -> Result<ItemId, D::Error>
@@ -56,10 +60,25 @@ pub struct DeployableTransform {
 pub struct DeployableHealth(pub u32);
 
 /// Public "is it doing work?" flag, drives furnace glow/smoke on the
-/// client. Always `false` for kinds that have no active state
-/// (workbench).
+/// client, and doubles as the open/closed flag for doors (open = true,
+/// drives the swing animation + drops the door's collider). Always
+/// `false` for kinds that have no active state (workbench).
 #[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct DeployableActive(pub bool);
+
+/// Player-given display name, `None` for everything except renamed
+/// sleeping bags. Mutable post-spawn (the rename wheel), so it gets its
+/// own component and its own replication diff.
+#[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeployableLabel(pub Option<String>);
+
+/// Structural stability percentage (0-100). Changes whenever the support
+/// graph around the piece changes (a neighbour placed or destroyed), so
+/// it's its own component and its own replication diff. The client uses
+/// it to predict ghost validity and to show the tooltip readout. Always
+/// 100 for free-standing deployables.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct DeployableStability(pub u8);
 
 /// Anchor chunk for room subscription.
 #[derive(Component, Debug, Clone, Copy)]
@@ -83,6 +102,9 @@ pub struct DeployableView {
     pub health: u32,
     pub max_health: u32,
     pub active: bool,
+    pub owner: Option<AccountId>,
+    pub label: Option<String>,
+    pub stability: u8,
 }
 
 pub fn spawn_deployable_entity(
@@ -98,6 +120,7 @@ pub fn spawn_deployable_entity(
                 item_id: view.item_id,
                 kind: view.kind,
                 max_health: view.max_health,
+                owner: view.owner,
             },
             DeployableTransform {
                 position: view.position,
@@ -105,6 +128,8 @@ pub fn spawn_deployable_entity(
             },
             DeployableHealth(view.health),
             DeployableActive(view.active),
+            DeployableLabel(view.label),
+            DeployableStability(view.stability),
             DeployableChunk(chunk),
         ))
         .id();
@@ -133,6 +158,9 @@ mod tests {
             health: 100,
             max_health: 100,
             active: false,
+            owner: None,
+            label: None,
+            stability: 100,
         }
     }
 

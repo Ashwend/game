@@ -18,9 +18,10 @@ use std::{
 };
 
 use crate::items::{
-    BASIC_HATCHET_ID, BASIC_PICKAXE_ID, CRUDE_FURNACE_ID, DeployableKind, FIBER_ID, HEWN_LOG_ID,
-    IRON_BAR_ID, IRON_HATCHET_ID, IRON_PICKAXE_ID, PLANT_TWINE_ID, STONE_ID, WOOD_ID,
-    WORKBENCH_T1_ID, item_definition,
+    BASIC_HATCHET_ID, BASIC_PICKAXE_ID, BUILDING_PLAN_ID, CRUDE_FURNACE_ID, DeployableKind,
+    FIBER_ID, HAMMER_ID, HEWN_LOG_DOOR_ID, HEWN_LOG_ID, IRON_BAR_ID, IRON_HATCHET_ID,
+    IRON_PICKAXE_ID, PLANT_TWINE_ID, SLEEPING_BAG_ID, STONE_ID, STORAGE_BOX_LARGE_ID,
+    STORAGE_BOX_SMALL_ID, WOOD_ID, WORKBENCH_T1_ID, item_definition,
 };
 
 pub const PLANT_TWINE_RECIPE_ID: &str = "plant_twine";
@@ -31,6 +32,12 @@ pub const IRON_HATCHET_RECIPE_ID: &str = "iron_hatchet";
 pub const IRON_PICKAXE_RECIPE_ID: &str = "iron_pickaxe";
 pub const WORKBENCH_T1_RECIPE_ID: &str = "workbench_t1";
 pub const CRUDE_FURNACE_RECIPE_ID: &str = "crude_furnace";
+pub const BUILDING_PLAN_RECIPE_ID: &str = "building_plan";
+pub const HAMMER_RECIPE_ID: &str = "hammer";
+pub const HEWN_LOG_DOOR_RECIPE_ID: &str = "hewn_log_door";
+pub const SLEEPING_BAG_RECIPE_ID: &str = "sleeping_bag";
+pub const STORAGE_BOX_SMALL_RECIPE_ID: &str = "storage_box_small";
+pub const STORAGE_BOX_LARGE_RECIPE_ID: &str = "storage_box_large";
 
 /// Crafting station a recipe needs to be in range of. Cheap value type so
 /// it lives next to the recipe definition without a registry lookup. The
@@ -266,7 +273,120 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         tier: 2,
         station: RecipeStation::Workbench { min_tier: 1 },
     },
+    RecipeDefinition {
+        id: BUILDING_PLAN_RECIPE_ID,
+        name: "Building Plan",
+        description: "Construction sketches on rough parchment. Equip it, hold \
+                      right click to pick a piece, left click to place.",
+        category: RecipeCategory::Building,
+        inputs: &[
+            CraftingInput::new(WOOD_ID, 10),
+            CraftingInput::new(FIBER_ID, 5),
+        ],
+        output_item: BUILDING_PLAN_ID,
+        output_quantity: 1,
+        craft_seconds: 5.0,
+        tier: 0,
+        station: RecipeStation::None,
+    },
+    RecipeDefinition {
+        id: HAMMER_RECIPE_ID,
+        name: "Hammer",
+        description: "A heavy construction mallet. Swing it at your buildings \
+                      to repair them; hold right click to upgrade or demolish.",
+        category: RecipeCategory::Building,
+        inputs: &[
+            CraftingInput::new(WOOD_ID, 10),
+            CraftingInput::new(STONE_ID, 5),
+            CraftingInput::new(PLANT_TWINE_ID, 1),
+        ],
+        output_item: HAMMER_ID,
+        output_quantity: 1,
+        craft_seconds: 8.0,
+        tier: 0,
+        station: RecipeStation::None,
+    },
+    RecipeDefinition {
+        id: HEWN_LOG_DOOR_RECIPE_ID,
+        name: "Hewn Log Door",
+        description: "A heavy code-locked door of squared logs. Mounts in a \
+                      doorway; you set the code when you hang it.",
+        category: RecipeCategory::Building,
+        inputs: &[
+            CraftingInput::new(HEWN_LOG_ID, 5),
+            CraftingInput::new(PLANT_TWINE_ID, 2),
+        ],
+        output_item: HEWN_LOG_DOOR_ID,
+        output_quantity: 1,
+        craft_seconds: 12.0,
+        tier: 1,
+        station: RecipeStation::Workbench { min_tier: 1 },
+    },
+    RecipeDefinition {
+        id: SLEEPING_BAG_RECIPE_ID,
+        name: "Sleeping Bag",
+        description: "A bedroll of woven plant fiber. Place it to anchor your \
+                      respawn; hold E on it to rename it.",
+        category: RecipeCategory::Building,
+        inputs: &[
+            CraftingInput::new(FIBER_ID, 20),
+            CraftingInput::new(PLANT_TWINE_ID, 2),
+        ],
+        output_item: SLEEPING_BAG_ID,
+        output_quantity: 1,
+        craft_seconds: 8.0,
+        tier: 0,
+        station: RecipeStation::None,
+    },
+    RecipeDefinition {
+        id: STORAGE_BOX_SMALL_RECIPE_ID,
+        name: "Storage Box",
+        description: "A small wooden chest. Place it down and press E to \
+                      stash items inside.",
+        category: RecipeCategory::Building,
+        inputs: &[
+            CraftingInput::new(WOOD_ID, 60),
+            CraftingInput::new(PLANT_TWINE_ID, 2),
+        ],
+        output_item: STORAGE_BOX_SMALL_ID,
+        output_quantity: 1,
+        craft_seconds: 10.0,
+        tier: 0,
+        station: RecipeStation::None,
+    },
+    RecipeDefinition {
+        id: STORAGE_BOX_LARGE_RECIPE_ID,
+        name: "Large Storage Box",
+        description: "A long banded chest with more than twice the room of \
+                      the small box.",
+        category: RecipeCategory::Building,
+        inputs: &[
+            CraftingInput::new(WOOD_ID, 150),
+            CraftingInput::new(HEWN_LOG_ID, 2),
+            CraftingInput::new(PLANT_TWINE_ID, 4),
+        ],
+        output_item: STORAGE_BOX_LARGE_ID,
+        output_quantity: 1,
+        craft_seconds: 14.0,
+        tier: 1,
+        station: RecipeStation::Workbench { min_tier: 1 },
+    },
 ];
+
+/// The single material a hammer repair hit consumes for a crafted
+/// deployable: the recipe's *primary* (first) input, stone for the
+/// furnace, wood for the workbench and boxes, fiber for the bag, at a
+/// quarter of the recipe amount per hit. One repair hit restores a
+/// quarter of max HP, so a full repair from near-dead costs about the
+/// primary input of crafting it fresh, without the secondary materials.
+/// `None` when nothing crafts into `item_id` (world-spawned kinds).
+pub fn repair_material_for(item_id: &str) -> Option<(&'static str, u16)> {
+    let recipe = REGISTERED_RECIPES
+        .iter()
+        .find(|recipe| recipe.output_item == item_id)?;
+    let input = recipe.inputs.first()?;
+    Some((input.item_id, (input.quantity / 4).max(1)))
+}
 
 fn recipes_by_id() -> &'static HashMap<&'static str, &'static RecipeDefinition> {
     static INDEX: OnceLock<HashMap<&'static str, &'static RecipeDefinition>> = OnceLock::new();

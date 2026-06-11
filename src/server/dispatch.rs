@@ -94,10 +94,20 @@ impl GameServer {
                 self.apply_attack_player_command(client_id, command)
             }
             ClientMessage::Respawn => self.apply_respawn_command(client_id),
+            ClientMessage::RespawnAtBag { id } => self.apply_respawn_at_bag_command(client_id, id),
+            ClientMessage::PlaceBuilding(command) => {
+                self.apply_place_building_command(client_id, command)
+            }
+            ClientMessage::Building(command) => self.apply_building_command(client_id, command),
+            ClientMessage::Door(command) => self.apply_door_command(client_id, command),
+            ClientMessage::SleepingBag(command) => {
+                self.apply_sleeping_bag_command(client_id, command)
+            }
             ClientMessage::LootBag(command) => self.apply_loot_bag_command(client_id, command),
             ClientMessage::LootSleeper {
                 client_id: target_id,
             } => self.apply_loot_sleeper(client_id, target_id),
+            ClientMessage::OpenStorageBox { id } => self.apply_open_storage_box(client_id, id),
             ClientMessage::SetViewRadius { tier } => {
                 if let Some(client) = self.clients.get_mut(&client_id) {
                     client.view_tier = tier;

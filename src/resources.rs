@@ -263,7 +263,12 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         name: "Branch Pile",
         model: ResourceNodeModel::BranchPile,
         required_tool: ToolRequirement::new(ToolKind::Hands, 0),
-        storage: &[ResourceMaterial::new(WOOD_ID, 1)],
+        // Wood keeps the no-axe tool-crafting bootstrap alive; sticks
+        // feed the sticks-tier building loop.
+        storage: &[
+            ResourceMaterial::new(WOOD_ID, 1),
+            ResourceMaterial::new(crate::items::STICKS_ID, 5),
+        ],
         anchor_height: 0.16,
         ray_radius: 0.55,
     },

@@ -20,13 +20,17 @@ use crate::{
 // keep reaching them through `use super::*`.
 pub(super) use crate::server::test_support::{connect_host, equip_basic_tools, movement, server};
 
+mod building;
 mod combat;
 mod commands;
 mod connection;
+mod door;
 mod dropped_items;
 mod furnace;
 mod inventory;
 mod loot_bag;
 mod movement;
 mod resource_nodes;
+mod sleeping_bag;
+mod storage_box;
 mod tool_wear;

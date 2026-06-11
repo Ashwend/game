@@ -53,8 +53,8 @@ pub(crate) use combat_feedback::tick_combat_feedback_system;
 pub(crate) use control_socket::{ClientControlSocket, drain_control_socket};
 pub(crate) use crafting_feedback::{CraftCompletionWatch, craft_complete_cue_system};
 pub(crate) use deployables::{
-    apply_deployed_entities_system, maintain_world_grid_system, placement_input_system,
-    update_placement_ghost_system,
+    animate_door_panels_system, apply_deployed_entities_system, door_swing_audio_system,
+    maintain_world_grid_system, placement_input_system, update_placement_ghost_system,
 };
 pub(crate) use display::apply_display_settings_system;
 pub(crate) use effects::{spawn_impact_effects_system, tick_impact_chips_system};
@@ -71,6 +71,7 @@ pub(crate) use input::{
     send_furnace_command, send_inventory_command, send_loot_bag_command,
     sync_furnace_open_flag_system, sync_loot_bag_open_flag_system, toggle_crafting_system,
     toggle_inventory_system, toggle_pause_system, toggle_perf_stats_system, update_cursor_system,
+    wheel_menu_system,
 };
 pub(crate) use items::{
     DroppedItemEntities, LootBagEntities, ResourceNodeEntities, apply_dropped_items_system,

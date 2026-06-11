@@ -124,6 +124,121 @@ pub const DEPLOYABLE_DAMAGE_PER_GATHER_POINT: u32 = 5;
 pub const DEPLOYABLE_PLACEMENT_REACH_M: f32 = 5.0;
 
 // =====================================================================
+// Base building (building blocks, hammer, doors, sleeping bags)
+// =====================================================================
+
+/// Wall-piece HP per tier (foundations carry 1.5x, see
+/// `building::building_max_health`). The numbers are chosen against the
+/// `tool_effectiveness_pct` building arms so that:
+/// - Sticks fall in a few swings of any proper tool (a stone hatchet at
+///   300% does 90/hit, three hits and the wall is kindling).
+/// - Wood is raidable with tools but slow: an iron hatchet at 15% does
+///   9/hit, so a wall costs ~400 swings (~5 minutes of continuous
+///   swinging) and most of the tool's 600 durability. Possible, loud,
+///   and expensive, exactly the "soft side" feel.
+/// - Stone takes zero damage from every tool (0% arms), so tool-raiding
+///   a stone base is impossible by construction. The HP still matters
+///   for future siege equipment.
+pub const BUILDING_STICKS_WALL_HP: u32 = 250;
+pub const BUILDING_WOOD_WALL_HP: u32 = 3_600;
+pub const BUILDING_STONE_WALL_HP: u32 = 6_000;
+
+/// Placement costs (always at the Sticks tier; upgrades pay the
+/// difference-tier costs below). Branch piles yield a handful of sticks
+/// each, so a starter 1x1 (foundation + 3 walls + doorway) is a short
+/// gathering loop, not an afternoon.
+pub const BUILDING_STICKS_COST_FOUNDATION: u16 = 30;
+pub const BUILDING_STICKS_COST_WALL: u16 = 25;
+
+/// Upgrade costs to the wood tier.
+pub const BUILDING_WOOD_COST_FOUNDATION: u16 = 120;
+pub const BUILDING_WOOD_COST_WALL: u16 = 100;
+
+/// Upgrade costs to the stone tier.
+pub const BUILDING_STONE_COST_FOUNDATION: u16 = 150;
+pub const BUILDING_STONE_COST_WALL: u16 = 125;
+
+/// Materials consumed by one hammer repair hit, in the piece's own tier
+/// material. Each hit restores `BUILDING_REPAIR_FRACTION_PCT` of max HP.
+pub const BUILDING_REPAIR_COST_STICKS: u16 = 5;
+pub const BUILDING_REPAIR_COST_WOOD: u16 = 15;
+pub const BUILDING_REPAIR_COST_STONE: u16 = 20;
+
+/// Percentage of max HP restored per hammer repair hit.
+pub const BUILDING_REPAIR_FRACTION_PCT: u32 = 25;
+
+/// How long after placement (or upgrade) the owner's hammer can still
+/// demolish a piece, in ticks. 15 minutes: long enough to fix layout
+/// mistakes, short enough that a compromised base can't be deleted out
+/// from under a raid by its panicking owner.
+pub const BUILDING_DEMOLISH_WINDOW_TICKS: u64 = (15.0 * 60.0 * SERVER_TICK_RATE_HZ) as u64;
+
+/// Structural stability: percentage of support retained per vertical hop
+/// (wall on a platform or on another wall, ceiling on a wall, stairs on
+/// a platform). 90% halves a tower's stability roughly every 6 storeys,
+/// pairing with the placement minimum below to cap practical height.
+pub const STABILITY_RETENTION_VERTICAL_PCT: u32 = 90;
+
+/// Stability retained by a ceiling hanging off an adjacent ceiling (a
+/// cantilevered ledge). 35% per tile cuts a first-storey overhang off at
+/// two tiles past the carrying wall (81 -> 28 -> 9, under the placement
+/// minimum), so real roofs need walls under them, not chains of ledges.
+pub const STABILITY_RETENTION_CEILING_NEIGHBOR_PCT: u32 = 35;
+
+/// Minimum stability a new piece must compute to be placeable. Pieces
+/// whose support drops to exactly zero (their ground path is gone) are
+/// destroyed on the next structural update.
+pub const BUILDING_MIN_PLACEMENT_STABILITY_PCT: u32 = 10;
+
+/// How far above the ground a free-placed foundation may sit. Raising is
+/// aim-driven during placement; the foundation mesh carries a skirt deep
+/// enough to reach the ground at this raise, so elevated platforms never
+/// float visually. Snapped extensions inherit their neighbour's height
+/// instead of consulting this band.
+pub const FOUNDATION_RAISE_MAX_M: f32 = 1.5;
+
+/// How far below the ground a foundation base may sink. A quarter of the
+/// platform height: enough to hug small terrain wobble without letting
+/// the slab disappear into the ground.
+pub const FOUNDATION_SINK_MAX_M: f32 = 0.25;
+
+/// Hewn log door HP. WoodBuilding material, so it's the designated soft
+/// spot of a stone base: an iron hatchet chews through in ~2.5 minutes.
+pub const DOOR_MAX_HP: u32 = 1_500;
+
+/// Sleeping bag HP. Cloth tears fast; bags are respawn anchors, not cover.
+pub const SLEEPING_BAG_MAX_HP: u32 = 100;
+
+/// Storage box HP (plain Wood material, so any proper tool opens one up
+/// eventually). Boxes are loot pinatas by design: keeping valuables safe
+/// is what walls and doors are for.
+pub const STORAGE_BOX_SMALL_HP: u32 = 400;
+pub const STORAGE_BOX_LARGE_HP: u32 = 700;
+
+/// Slot counts for the two storage box sizes. Small is a starter stash
+/// (most of an inventory row); large holds a serious stockpile but still
+/// less than the player's own pack, so banking always costs trips.
+pub const STORAGE_BOX_SMALL_SLOT_COUNT: usize = 8;
+pub const STORAGE_BOX_LARGE_SLOT_COUNT: usize = 18;
+
+/// Max range for opening (and continuing to use) a placed storage box.
+/// Matches `FURNACE_INTERACT_RANGE_M` so every "press E on a structure"
+/// interaction feels identical.
+pub const STORAGE_BOX_INTERACT_RANGE_M: f32 = 3.0;
+
+/// Allowed door code lengths (digits). Four digits is the genre classic;
+/// six leaves room for the paranoid.
+pub const DOOR_CODE_MIN_LEN: usize = 4;
+pub const DOOR_CODE_MAX_LEN: usize = 6;
+
+/// Longest sleeping bag name the server accepts after trimming.
+pub const SLEEPING_BAG_NAME_MAX_LEN: usize = 24;
+
+/// Hammer durability: same budget as an iron tool, repairs and upgrades
+/// are frequent but cheap taps.
+pub const HAMMER_DURABILITY: u32 = 600;
+
+// =====================================================================
 // Furnace
 // =====================================================================
 

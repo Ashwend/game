@@ -129,6 +129,29 @@ pub struct PersistedDeployedEntity {
     /// (workbench). Keeps the per-kind shape out of the top-level
     /// struct so adding more deployable types later doesn't grow it.
     pub furnace: Option<PersistedFurnaceState>,
+    /// Server tick this entity was placed or last upgraded. Drives the
+    /// hammer's demolish window across reloads.
+    #[serde(default)]
+    pub placed_at_tick: u64,
+    /// Door-only code-lock sub-state, same pattern as `furnace`.
+    #[serde(default)]
+    pub door: Option<PersistedDoorState>,
+    /// Player-given display name (sleeping bags).
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Storage-box-only contents, same pattern as `furnace`.
+    #[serde(default)]
+    pub storage: Option<PersistedStorageBoxState>,
+}
+
+/// Persisted door state: the lock code, the accounts that have entered
+/// it, the open flag, and the doorway the door hangs in.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PersistedDoorState {
+    pub code: String,
+    pub authorized: Vec<AccountId>,
+    pub open: bool,
+    pub parent: DeployedEntityId,
 }
 
 /// Persisted furnace state, fuel slot + item slots + active flag +
@@ -141,6 +164,12 @@ pub struct PersistedFurnaceState {
     pub active: bool,
     pub fuel_burn_ticks_left: u32,
     pub smelt_progress_ticks: u32,
+}
+
+/// Persisted storage box contents: just the slot grid.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PersistedStorageBoxState {
+    pub slots: Vec<Option<ItemStack>>,
 }
 
 impl WorldStateSave {

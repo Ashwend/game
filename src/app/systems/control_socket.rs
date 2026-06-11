@@ -69,7 +69,59 @@ pub(crate) enum ControlRequest {
         item_id: String,
         #[serde(default)]
         distance: Option<f32>,
+        /// Surface height for the request (a platform top such as a
+        /// foundation's `y + 0.5`); defaults to the ground.
+        #[serde(default)]
+        height: Option<f32>,
     },
+    /// Place a building block (`foundation` / `wall` / `window_wall` /
+    /// `doorway`) a short distance ahead along the view yaw, like
+    /// `PlaceDeployable`. The server snaps the request to the building
+    /// grid (walls onto the nearest foundation edge socket), so aim the
+    /// distance near a socket rather than exactly on it.
+    PlaceBuilding {
+        piece: String,
+        #[serde(default)]
+        distance: Option<f32>,
+        /// Raise the request above the ground (free foundations only;
+        /// the server validates the raise band and snapped pieces ignore
+        /// it). Lets the agent verify stilted foundations headless.
+        #[serde(default)]
+        height: Option<f32>,
+    },
+    /// Hang a carried hewn log door in the nearest free doorway (within
+    /// reach), setting its lock code. `flip` mirrors hinge + swing.
+    PlaceDoor {
+        code: String,
+        #[serde(default)]
+        flip: bool,
+    },
+    /// E-press the nearest door (toggle, or get the code prompt when
+    /// unauthorized).
+    DoorInteract,
+    /// Open the nearest storage box's container UI (the shared loot-bag
+    /// transfer panel), like an E-press on the placed box.
+    OpenStorageBox,
+    /// Close whatever container (loot bag / sleeper / storage box) is
+    /// open, like clicking the panel's Close button.
+    CloseContainer,
+    /// Hammer-upgrade the nearest building block to its next tier. The
+    /// server enforces the hammer-in-hand, ownership, and material cost;
+    /// select the hammer slot first. `piece` narrows the target to one
+    /// piece kind (foundation/wall/...), nearest-of-any otherwise.
+    UpgradeBuilding {
+        #[serde(default)]
+        piece: Option<String>,
+    },
+    /// Hammer-demolish the nearest building block (optionally narrowed to
+    /// one piece kind). Server enforces hammer, ownership, and the
+    /// demolish window; structural cascade follows automatically.
+    DemolishBuilding {
+        #[serde(default)]
+        piece: Option<String>,
+    },
+    /// Enter a code at the nearest door (the first-open authorization).
+    DoorEnterCode { code: String },
     /// Point the camera: absolute yaw/pitch in radians, exactly as if the
     /// mouse had moved there. Pitch is clamped to the same limit as mouse
     /// look. Lets an agent aim at ground-level targets (resource nodes,
@@ -121,6 +173,9 @@ struct ClientStateDump {
     health: Option<f32>,
     local_ping_ms: u16,
     players: Vec<PlayerDump>,
+    /// Replicated deployables in AoI (placed structures, building blocks,
+    /// doors, bags) so an agent can assert on placements and resolve ids.
+    deployables: Vec<DeployableDump>,
 }
 
 #[derive(Debug, Serialize)]
@@ -128,6 +183,17 @@ struct PlayerDump {
     client_id: u64,
     name: String,
     ping_ms: u16,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct DeployableDump {
+    id: u64,
+    kind: String,
+    position: [f32; 3],
+    yaw: f32,
+    health: u32,
+    max_health: u32,
+    active: bool,
 }
 
 #[derive(Resource)]
@@ -182,11 +248,36 @@ pub(crate) fn drain_control_socket(
     mut look: ResMut<LookState>,
     local_player: Res<LocalPlayerState>,
     capture: Option<Res<HeadlessCapture>>,
+    replicated_deployables: Query<(
+        &crate::server::Deployable,
+        &crate::server::DeployableTransform,
+        &crate::server::DeployableHealth,
+        &crate::server::DeployableActive,
+    )>,
 ) {
     let Some(socket) = socket else {
         return;
     };
     let capture = capture.as_deref();
+
+    // Snapshot once per drain; requests are rare (agent-paced) and the
+    // AoI deployable set is small.
+    let deployables: Vec<DeployableDump> = replicated_deployables
+        .iter()
+        .map(|(meta, transform, health, active)| DeployableDump {
+            id: meta.id,
+            kind: format!("{:?}", meta.kind),
+            position: [
+                transform.position.x,
+                transform.position.y,
+                transform.position.z,
+            ],
+            yaw: transform.yaw,
+            health: health.0,
+            max_health: meta.max_health,
+            active: active.0,
+        })
+        .collect();
 
     loop {
         let (stream, _) = match socket.listener.accept() {
@@ -205,6 +296,7 @@ pub(crate) fn drain_control_socket(
             &mut look,
             &local_player,
             capture,
+            &deployables,
         );
     }
 }
@@ -218,6 +310,7 @@ fn handle_stream(
     look: &mut LookState,
     local_player: &LocalPlayerState,
     capture: Option<&HeadlessCapture>,
+    deployables: &[DeployableDump],
 ) {
     let result = (|| -> Result<String> {
         stream.set_read_timeout(Some(Duration::from_secs(2)))?;
@@ -231,6 +324,7 @@ fn handle_stream(
             look,
             local_player,
             capture,
+            deployables,
         )
     })();
 
@@ -250,6 +344,7 @@ fn handle_request(
     look: &mut LookState,
     local_player: &LocalPlayerState,
     capture: Option<&HeadlessCapture>,
+    deployables: &[DeployableDump],
 ) -> Result<String> {
     match request {
         ControlRequest::Screenshot { path } => {
@@ -286,19 +381,24 @@ fn handle_request(
             ))?;
             Ok(format!("selected actionbar slot {slot}"))
         }
-        ControlRequest::PlaceDeployable { item_id, distance } => {
+        ControlRequest::PlaceDeployable {
+            item_id,
+            distance,
+            height,
+        } => {
             let view = runtime
                 .local_view()
                 .context("no local player view (not in a world)")?;
             let dist = distance.unwrap_or(2.2);
             // Player forward is `(-sin yaw, 0, -cos yaw)` (see
             // `controller::movement`), so drop the structure that far ahead on
-            // the floor (y = 0). A deployable's front is +Z, so leaving its yaw
-            // equal to the view yaw turns that front back toward the camera.
+            // the floor (or the surface at `height`). A deployable's front is
+            // +Z, so leaving its yaw equal to the view yaw turns that front
+            // back toward the camera.
             let (sin_yaw, cos_yaw) = view.yaw.sin_cos();
             let position = Vec3Net::new(
                 view.position.x - sin_yaw * dist,
-                0.0,
+                height.unwrap_or(0.0),
                 view.position.z - cos_yaw * dist,
             );
             let session = runtime
@@ -314,6 +414,123 @@ fn handle_request(
                 "place {item_id} queued at [{:.2}, 0.00, {:.2}]",
                 position.x, position.z
             ))
+        }
+        ControlRequest::PlaceBuilding {
+            piece,
+            distance,
+            height,
+        } => {
+            let piece = parse_building_piece(&piece)?;
+            let view = runtime
+                .local_view()
+                .context("no local player view (not in a world)")?;
+            let dist = distance.unwrap_or(3.0);
+            let (sin_yaw, cos_yaw) = view.yaw.sin_cos();
+            let aim = Vec3Net::new(
+                view.position.x - sin_yaw * dist,
+                height.unwrap_or(0.0),
+                view.position.z - cos_yaw * dist,
+            );
+            let (position, yaw) = resolve_building_pose(piece, aim, view.yaw, deployables);
+            let session = runtime
+                .session
+                .as_mut()
+                .context("no active session (not in a world)")?;
+            session.send(ClientMessage::PlaceBuilding(
+                crate::protocol::PlaceBuildingCommand {
+                    piece,
+                    position,
+                    yaw,
+                },
+            ))?;
+            Ok(format!(
+                "place building {piece:?} queued at [{:.2}, {:.2}, {:.2}] (server snaps)",
+                position.x, position.y, position.z
+            ))
+        }
+        ControlRequest::PlaceDoor { code, flip } => {
+            let doorway = nearest_deployable_id(runtime, deployables, "Doorway")
+                .context("no doorway building block in AoI")?;
+            let session = runtime
+                .session
+                .as_mut()
+                .context("no active session (not in a world)")?;
+            session.send(ClientMessage::Door(crate::protocol::DoorCommand::Place {
+                doorway_id: doorway,
+                flip,
+                code,
+            }))?;
+            Ok(format!("door placement queued in doorway {doorway}"))
+        }
+        ControlRequest::DoorInteract => {
+            let door =
+                nearest_deployable_id(runtime, deployables, "Door").context("no door in AoI")?;
+            let session = runtime
+                .session
+                .as_mut()
+                .context("no active session (not in a world)")?;
+            session.send(ClientMessage::Door(
+                crate::protocol::DoorCommand::Interact { id: door },
+            ))?;
+            Ok(format!("door interact queued for {door}"))
+        }
+        ControlRequest::OpenStorageBox => {
+            let target = nearest_deployable_id(runtime, deployables, "StorageBox")
+                .context("no storage box in AoI")?;
+            let session = runtime
+                .session
+                .as_mut()
+                .context("no active session (not in a world)")?;
+            session.send(ClientMessage::OpenStorageBox { id: target })?;
+            Ok(format!("storage box open queued for {target}"))
+        }
+        ControlRequest::CloseContainer => {
+            let session = runtime
+                .session
+                .as_mut()
+                .context("no active session (not in a world)")?;
+            session.send(ClientMessage::LootBag(
+                crate::protocol::LootBagCommand::Close,
+            ))?;
+            Ok("container close queued".to_owned())
+        }
+        ControlRequest::UpgradeBuilding { piece } => {
+            let needle = building_piece_needle(piece.as_deref())?;
+            let target = nearest_deployable_id(runtime, deployables, &needle)
+                .context("no matching building block in AoI")?;
+            let session = runtime
+                .session
+                .as_mut()
+                .context("no active session (not in a world)")?;
+            session.send(ClientMessage::Building(
+                crate::protocol::BuildingCommand::Upgrade { id: target },
+            ))?;
+            Ok(format!("upgrade queued for building {target}"))
+        }
+        ControlRequest::DemolishBuilding { piece } => {
+            let needle = building_piece_needle(piece.as_deref())?;
+            let target = nearest_deployable_id(runtime, deployables, &needle)
+                .context("no matching building block in AoI")?;
+            let session = runtime
+                .session
+                .as_mut()
+                .context("no active session (not in a world)")?;
+            session.send(ClientMessage::Building(
+                crate::protocol::BuildingCommand::Demolish { id: target },
+            ))?;
+            Ok(format!("demolish queued for building {target}"))
+        }
+        ControlRequest::DoorEnterCode { code } => {
+            let door =
+                nearest_deployable_id(runtime, deployables, "Door").context("no door in AoI")?;
+            let session = runtime
+                .session
+                .as_mut()
+                .context("no active session (not in a world)")?;
+            session.send(ClientMessage::Door(
+                crate::protocol::DoorCommand::EnterCode { id: door, code },
+            ))?;
+            Ok(format!("door code entry queued for {door}"))
         }
         ControlRequest::SetLook { yaw, pitch } => {
             if !yaw.is_finite() || !pitch.is_finite() {
@@ -335,16 +552,178 @@ fn handle_request(
             Ok(format!("inventory_open = {open}"))
         }
         ControlRequest::DumpState => {
-            let dump = build_dump(runtime, menu, local_player);
+            let dump = build_dump(runtime, menu, local_player, deployables);
             Ok(serde_json::to_string(&dump)?)
         }
     }
+}
+
+/// Kind-string needle for targeting a building block by piece, e.g.
+/// `Some("wall")` → `"piece: Wall,"`. `None` matches any building block.
+/// The trailing comma keeps `Wall` from matching `WindowWall`'s debug
+/// representation.
+fn building_piece_needle(piece: Option<&str>) -> Result<String> {
+    Ok(match piece {
+        None => "Building".to_owned(),
+        Some(raw) => format!("piece: {:?},", parse_building_piece(raw)?),
+    })
+}
+
+fn parse_building_piece(piece: &str) -> Result<crate::building::BuildingPiece> {
+    use crate::building::BuildingPiece;
+    Ok(match piece {
+        "foundation" => BuildingPiece::Foundation,
+        "wall" => BuildingPiece::Wall,
+        "window_wall" | "window-wall" | "window" => BuildingPiece::WindowWall,
+        "doorway" => BuildingPiece::Doorway,
+        "ceiling" => BuildingPiece::Ceiling,
+        "stairs" => BuildingPiece::Stairs,
+        other => bail!(
+            "unknown building piece {other:?} (foundation|wall|window_wall|doorway|ceiling|stairs)"
+        ),
+    })
+}
+
+/// Resolve the exact snapped pose for a scripted building placement.
+/// Foundations ride the flat `y = 0` aim (the server snaps them); every
+/// other piece re-derives the nearest socket from the replicated
+/// building set, because the server snap is 3D and a ground-level
+/// request can't reach an upper-storey socket. Falls back to the raw aim
+/// when nothing is in range (the server will toast the reason).
+fn resolve_building_pose(
+    piece: crate::building::BuildingPiece,
+    aim: Vec3Net,
+    requested_yaw: f32,
+    deployables: &[DeployableDump],
+) -> (Vec3Net, f32) {
+    use crate::building::{
+        BuildingPiece, cell_neighbor_sockets, platform_wall_sockets, positions_match,
+        stairs_socket_on, wall_ceiling_sockets, wall_slot_blocked, wall_top_socket,
+    };
+    if matches!(piece, BuildingPiece::Foundation) {
+        return (aim, requested_yaw);
+    }
+    let dump_position =
+        |dump: &DeployableDump| Vec3Net::new(dump.position[0], dump.position[1], dump.position[2]);
+    let dump_piece = |dump: &DeployableDump| -> Option<BuildingPiece> {
+        // Match the longer names first: "piece: Wall" is a substring
+        // hazard only against itself, but order keeps this future-proof.
+        if dump.kind.contains("piece: Foundation") {
+            Some(BuildingPiece::Foundation)
+        } else if dump.kind.contains("piece: WindowWall") {
+            Some(BuildingPiece::WindowWall)
+        } else if dump.kind.contains("piece: Wall") {
+            Some(BuildingPiece::Wall)
+        } else if dump.kind.contains("piece: Doorway") {
+            Some(BuildingPiece::Doorway)
+        } else if dump.kind.contains("piece: Ceiling") {
+            Some(BuildingPiece::Ceiling)
+        } else if dump.kind.contains("piece: Stairs") {
+            Some(BuildingPiece::Stairs)
+        } else {
+            None
+        }
+    };
+    let wall_slot_taken = |position: Vec3Net, yaw: f32| {
+        deployables.iter().any(|dump| {
+            dump_piece(dump).is_some_and(|p| p.is_wall_like())
+                && wall_slot_blocked(dump_position(dump), dump.yaw, position, yaw)
+        })
+    };
+    let ceiling_at = |position: Vec3Net| {
+        deployables.iter().any(|dump| {
+            matches!(dump_piece(dump), Some(BuildingPiece::Ceiling))
+                && positions_match(dump_position(dump), position)
+        })
+    };
+    let mut best: Option<(f32, Vec3Net, f32)> = None;
+    for dump in deployables {
+        let Some(existing_piece) = dump_piece(dump) else {
+            continue;
+        };
+        let position = dump_position(dump);
+        let sockets: Vec<(Vec3Net, f32)> = match piece {
+            BuildingPiece::Wall | BuildingPiece::WindowWall | BuildingPiece::Doorway => {
+                let platform = platform_wall_sockets(existing_piece, position, dump.yaw)
+                    .into_iter()
+                    .flatten();
+                let stacked = wall_top_socket(existing_piece, position, dump.yaw).into_iter();
+                platform
+                    .chain(stacked)
+                    .filter(|socket| !wall_slot_taken(socket.position, socket.yaw))
+                    .map(|socket| (socket.position, socket.yaw))
+                    .collect()
+            }
+            BuildingPiece::Ceiling => {
+                let carried = wall_ceiling_sockets(existing_piece, position, dump.yaw)
+                    .into_iter()
+                    .flatten();
+                let neighbors = matches!(existing_piece, BuildingPiece::Ceiling)
+                    .then(|| cell_neighbor_sockets(position, dump.yaw))
+                    .into_iter()
+                    .flatten();
+                carried
+                    .chain(neighbors)
+                    .filter(|socket| !ceiling_at(socket.position))
+                    .map(|socket| (socket.position, socket.yaw))
+                    .collect()
+            }
+            BuildingPiece::Stairs => stairs_socket_on(existing_piece, position, requested_yaw)
+                .into_iter()
+                .map(|socket| (socket.position, socket.yaw))
+                .collect(),
+            BuildingPiece::Foundation => Vec::new(),
+        };
+        for (socket_position, socket_yaw) in sockets {
+            let dx = socket_position.x - aim.x;
+            let dz = socket_position.z - aim.z;
+            let distance = (dx * dx + dz * dz).sqrt();
+            if distance <= 1.6
+                && best
+                    .as_ref()
+                    .is_none_or(|(current, _, _)| distance < *current)
+            {
+                best = Some((distance, socket_position, socket_yaw));
+            }
+        }
+    }
+    match best {
+        Some((_, position, yaw)) => (position, yaw),
+        None => (aim, requested_yaw),
+    }
+}
+
+/// Nearest replicated deployable whose `kind` debug string starts with
+/// `kind_prefix` (e.g. "Doorway" matches `Building {{ piece: Doorway, … }}`
+/// via the contains check below; "Door" matches the door kind exactly).
+fn nearest_deployable_id(
+    runtime: &ClientRuntime,
+    deployables: &[DeployableDump],
+    kind_prefix: &str,
+) -> Option<u64> {
+    let position = runtime.local_view().map(|view| view.position)?;
+    deployables
+        .iter()
+        .filter(|dump| {
+            if kind_prefix == "Door" {
+                dump.kind == "Door"
+            } else {
+                dump.kind.contains(kind_prefix)
+            }
+        })
+        .min_by(|a, b| {
+            let da = (a.position[0] - position.x).powi(2) + (a.position[2] - position.z).powi(2);
+            let db = (b.position[0] - position.x).powi(2) + (b.position[2] - position.z).powi(2);
+            da.total_cmp(&db)
+        })
+        .map(|dump| dump.id)
 }
 
 fn build_dump(
     runtime: &ClientRuntime,
     menu: &MenuState,
     local_player: &LocalPlayerState,
+    deployables: &[DeployableDump],
 ) -> ClientStateDump {
     let view = runtime.local_view();
     ClientStateDump {
@@ -378,6 +757,7 @@ fn build_dump(
                 ping_ms: p.ping_ms,
             })
             .collect(),
+        deployables: deployables.to_vec(),
     }
 }
 
@@ -485,7 +865,7 @@ mod tests {
                 .unwrap();
         assert!(matches!(
             place,
-            ControlRequest::PlaceDeployable { item_id, distance: None } if item_id == "crude_furnace"
+            ControlRequest::PlaceDeployable { item_id, distance: None, height: None } if item_id == "crude_furnace"
         ));
         let place_dist: ControlRequest = serde_json::from_str(
             r#"{"command":"place_deployable","item_id":"workbench_t1","distance":3.0}"#,

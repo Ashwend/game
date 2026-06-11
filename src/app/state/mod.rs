@@ -18,6 +18,7 @@ mod test_mode;
 #[cfg(test)]
 mod tests;
 mod toasts;
+mod wheel;
 
 pub(crate) use auth::{AuthFlow, WorkosAuth};
 pub(crate) use backdrop::MenuBackdropVisibility;
@@ -36,6 +37,11 @@ pub(crate) use gather::{
     PendingImpactEffect, PickupTargetState, RemoteImpactEvent, SwingImpact, SwingTarget,
     ToolSwapState,
 };
+pub(crate) use wheel::{
+    ActiveWheel, BuildingPlanState, PICKUP_HOLD_WHEEL_SECS, PickupHold, WHEEL_DEADZONE_PX,
+    WHEEL_POINTER_MAX_PX, WheelAction, WheelMenuState, WheelOption, WheelTrigger,
+};
+
 pub(crate) use inventory::{
     InventoryDrag, InventoryDragButton, InventorySoundEvent, InventoryUiState, UnifiedSlotRef,
 };
@@ -43,7 +49,9 @@ pub(crate) use local_player::{
     LocalPlayerState, apply_prediction_overlay_system, update_local_player_state_system,
 };
 pub(crate) use look::LookState;
-pub(crate) use menu::{CurrentUser, DeathSplash, MenuState, SaveStore, Screen};
+pub(crate) use menu::{
+    CurrentUser, DeathSplash, MenuState, SaveStore, Screen, TextPrompt, TextPromptKind,
+};
 pub(crate) use options_ui::{OptionsTab, OptionsUiState, PendingRebind};
 pub(crate) use prediction::PredictionState;
 pub(crate) use runtime::{

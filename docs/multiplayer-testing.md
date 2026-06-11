@@ -135,7 +135,7 @@ the `--connect` bypass path (which injects an identity from `GAME_ACCOUNT_ID` /
 ```bash
 # 1. Dedicated server, no auth, throwaway deterministic world (auto-created).
 #    `--admin <id>` grants admin to the agent's GAME_ACCOUNT_ID so admin-gated
-#    slash commands (test-kit, spawn, time, speed) work over the socket.
+#    slash commands (test-kit, give, spawn, time, speed) work over the socket.
 ./cli server --bind 127.0.0.1:7777 --auth no-auth --world /tmp/agent.save \
   --map-size small --admin 1
 
@@ -166,11 +166,19 @@ Line-delimited JSON, one request per connection; the reply is
 
 | Request | Effect |
 |---|---|
-| `{"command":"dump_state"}` | JSON snapshot: `client_id`, `in_world`, `screen`, the `*_open` flags, player position/yaw/pitch/health, ping, roster. |
+| `{"command":"dump_state"}` | JSON snapshot: `client_id`, `in_world`, `screen`, the `*_open` flags, player position/yaw/pitch/health, ping, roster, and `deployables` (every replicated placed structure in AoI with id/kind/position/health/active, the source for resolving door/doorway ids and asserting on placements). |
 | `{"command":"screenshot","path":"/tmp/shot.png"}` | Capture the primary window (3D scene + egui UI) to PNG. Async: the file lands a frame or two later, so poll for it. |
 | `{"command":"send_command","text":"test-kit"}` | Forward a slash command (no leading `/`) to the server. |
 | `{"command":"select_actionbar_slot","slot":3}` | Select a 0-based actionbar slot, putting that slot's item in hand (verifying a held viewmodel). After `test-kit` the iron pickaxe is in slot 3. |
-| `{"command":"place_deployable","item_id":"crude_furnace","distance":4.5}` | Drop a carried structure on the floor `distance` m (default ~2.2) in front of the player, turned to face them. Position is from the view yaw, not the look ray, so it works headless without aiming at the ground. `distance` is optional. After `test-kit` you carry one `workbench_t1` and one `crude_furnace`; place ~4.5 m out so the front face clears the bottom of the FOV. |
+| `{"command":"place_deployable","item_id":"crude_furnace","distance":4.5,"height":0.5}` | Drop a carried structure `distance` m (default ~2.2) in front of the player, turned to face them, standing at `height` (a platform top such as a foundation's `y + 0.5`; defaults to the ground). Position is from the view yaw, not the look ray, so it works headless without aiming at the ground. Both extras are optional. After `test-kit` you carry one `workbench_t1` and one `crude_furnace`; place ~4.5 m out so the front face clears the bottom of the FOV. |
+| `{"command":"place_building","piece":"foundation","distance":3.0}` | Place a building block (`foundation` / `wall` / `window_wall` / `doorway` / `ceiling` / `stairs`) `distance` m (default 3.0) ahead along the view yaw; an optional `height` raises a free foundation off the ground (the server validates the `FOUNDATION_RAISE_MAX_M` band; snapped extensions inherit their neighbour's height instead). For everything except foundations the client resolves the nearest free socket to that aim point from the replicated building set (the server snap is 3D, so elevated pieces need the exact pose): with `set_look` yaw 0, a foundation at 3.0 puts its near/far wall sockets at 1.5/4.5 and its side sockets at yaw ±0.4636, distance 3.354; walls also stack on wall tops; a `ceiling` lands on the cells flanking a wall top or adjacent to another ceiling; `stairs` land on the platform top. Placement additionally needs ≥10% structural stability, server-toasted otherwise. Costs sticks (`test-kit` grants 200). |
+| `{"command":"place_door","code":"1234","flip":false}` | Hang a carried hewn log door in the nearest doorway in AoI with the given 4-6 digit lock code. `flip` mirrors hinge + swing. |
+| `{"command":"open_storage_box"}` | Open the nearest storage box's transfer UI (the shared loot-bag container panel); the box must be within 3 m. |
+| `{"command":"close_container"}` | Close whatever container panel (loot bag / sleeper / storage box) is open. |
+| `{"command":"door_interact"}` | E-press the nearest door: toggles for authorized accounts, otherwise the server answers `DoorCodePrompt` (the code dialog opens). |
+| `{"command":"door_enter_code","code":"1234"}` | Enter a code at the nearest door; a correct code *authorizes only* (the door stays shut until a `door_interact`), and both outcomes ship `DoorCodeResult` for the keypad sound. |
+| `{"command":"upgrade_building","piece":"wall"}` | Hammer-upgrade the nearest building block to its next tier; the optional `piece` narrows the target to one piece kind. Select the hammer slot first; the server enforces hammer-in-hand, ownership, and the material cost. |
+| `{"command":"demolish_building","piece":"foundation"}` | Hammer-demolish the nearest building block (optional `piece` filter). Server enforces hammer, ownership, and the 15-minute demolish window; the structural-support cascade then collapses everything the piece held up. |
 | `{"command":"set_look","yaw":0.0,"pitch":-0.37}` | Point the camera: absolute radians, exactly as if the mouse had moved there (pitch clamped like mouse look). Use to aim at ground-level targets for screenshots, the pickup tooltip, and view-ray commands like `/drain`. For a node `d` m ahead, `pitch = -atan((1.62 - anchor_height) / d)`. |
 | `{"command":"set_screen","screen":"worlds"}` | Navigate menu screens. Does not start a session; connect via `--connect`. |
 | `{"command":"set_inventory_open","open":true}` | Open/close the inventory panel. |

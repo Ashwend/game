@@ -215,6 +215,12 @@ fn kind_label(kind: DeployableKind) -> String {
     match kind {
         DeployableKind::Workbench { tier } => format!("Workbench T{tier}"),
         DeployableKind::Furnace { tier } => format!("Furnace T{tier}"),
+        DeployableKind::Building { piece, tier } => {
+            format!("{} ({})", piece.label(), tier.label())
+        }
+        DeployableKind::Door | DeployableKind::SleepingBag | DeployableKind::StorageBox { .. } => {
+            kind.label().to_owned()
+        }
     }
 }
 
@@ -434,12 +440,14 @@ mod tests {
             item_id: intern_item_id(WORKBENCH_T1_ID),
             kind: DeployableKind::Workbench { tier: 1 },
             max_health: 500,
+            owner: None,
         };
         let dep_furnace = Deployable {
             id: 11,
             item_id: intern_item_id(CRUDE_FURNACE_ID),
             kind: DeployableKind::Furnace { tier: 1 },
             max_health: 800,
+            owner: None,
         };
         let hp_wb = DeployableHealth(250);
         let hp_furnace = DeployableHealth(800);

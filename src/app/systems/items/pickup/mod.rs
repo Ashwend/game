@@ -26,8 +26,9 @@ use crate::{
     items::pickup_score_at_position,
     resources::resource_node_score_at,
     server::{
-        Deployable, DeployableTransform, DroppedItem, DroppedItemTransform, LootBagEntity,
-        LootBagTransform, Player, PlayerPublic, PlayerSleeping, ResourceNode, ResourceNodeStorage,
+        Deployable, DeployableStability, DeployableTransform, DroppedItem, DroppedItemTransform,
+        LootBagEntity, LootBagTransform, Player, PlayerPublic, PlayerSleeping, ResourceNode,
+        ResourceNodeStorage,
     },
 };
 
@@ -41,7 +42,7 @@ pub(crate) fn update_pickup_target_system(
     dropped_entities: Query<(&NetworkDroppedItem, &Transform)>,
     dropped_replicated: Query<(&DroppedItem, &DroppedItemTransform)>,
     resource_nodes: Query<(&ResourceNode, &ResourceNodeStorage)>,
-    deployables: Query<(&Deployable, &DeployableTransform)>,
+    deployables: Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
     remote_players: Query<(&Player, &PlayerPublic, Option<&PlayerSleeping>)>,
     loot_bags: Query<(&LootBagEntity, &LootBagTransform)>,
     mut pickup_target: ResMut<PickupTargetState>,
@@ -121,7 +122,7 @@ pub(crate) fn update_pickup_target_system(
     // we treat the deployable's centre-distance the same way.
     let item_score = dropped_target.as_ref().map(|(_, _, score)| *score);
     let node_score = resource_target.as_ref().map(|(_, _, score)| *score);
-    let deployable_score = deployable_target.as_ref().map(|(_, _, score)| *score);
+    let deployable_score = deployable_target.as_ref().map(|(_, _, _, score, _)| *score);
     let player_score = player_target.as_ref().map(|(_, _, _, score)| *score);
     let loot_bag_score = loot_bag_target.as_ref().map(|(_, _, score)| *score);
     let best = [
@@ -162,8 +163,8 @@ pub(crate) fn update_pickup_target_system(
         if let Some((meta, transform, _)) = loot_bag_target {
             set_loot_bag_pickup_target(&mut pickup_target, meta, transform, &camera);
         }
-    } else if let Some((meta, transform, _)) = deployable_target {
-        set_deployable_pickup_target(&mut pickup_target, meta, transform, &camera);
+    } else if let Some((meta, _, stability, _, anchor)) = deployable_target {
+        set_deployable_pickup_target(&mut pickup_target, meta, stability, anchor, &camera);
     }
 }
 

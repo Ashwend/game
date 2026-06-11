@@ -46,6 +46,7 @@ impl GameServer {
             "time" => self.command_set_time(client_id, &args),
             "speed" | "timescale" => self.command_set_time_multiplier(client_id, &args),
             "test-kit" | "testkit" => self.command_test_kit(client_id),
+            "give" => self.command_give(client_id, &args),
             "tp" | "teleport" => self.command_teleport_all(client_id),
             "help" => self.command_help(client_id),
             other => reply_warning(client_id, format!("unknown command: /{other}")),
@@ -97,6 +98,12 @@ impl GameServer {
             "  /test-kit: admin only"
         };
         lines.push(test_kit_line.to_owned());
+        let give_line = if is_admin {
+            "  /give <item_id|all> [count]: grant materials (default 1000, e.g. /give stone, /give all)"
+        } else {
+            "  /give <item_id|all> [count]: admin only"
+        };
+        lines.push(give_line.to_owned());
         let tp_line = if is_admin {
             "  /tp: teleport every other connected player to your position (for PvP/death testing)"
         } else {

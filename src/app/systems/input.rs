@@ -7,6 +7,8 @@
 //! - `look`, mouse look + per-frame delta cap.
 //! - `movement`, `client_input_system` and the WASD→direction helper.
 //! - `inventory_shortcuts`, actionbar, drop/pickup, swing dispatch.
+//! - `wheel`, hold-to-open radial menus (building plan, hammer, door,
+//!   sleeping bag).
 
 mod cursor;
 mod gating;
@@ -14,6 +16,7 @@ mod inventory_shortcuts;
 mod look;
 mod menu_toggles;
 mod movement;
+mod wheel;
 
 pub(crate) use cursor::{center_cursor_on_focus_system, update_cursor_system};
 pub(crate) use inventory_shortcuts::{
@@ -27,3 +30,4 @@ pub(crate) use menu_toggles::{
     toggle_crafting_system, toggle_inventory_system, toggle_pause_system, toggle_perf_stats_system,
 };
 pub(crate) use movement::client_input_system;
+pub(crate) use wheel::wheel_menu_system;

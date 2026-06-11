@@ -1,11 +1,12 @@
 use super::*;
 
 use super::placement::{
-    current_deployable, deployable_kind_label, ground_under_aim, wrap_angle, yaw_facing_player,
+    GhostIntent, current_ghost_intent, deployable_kind_label, ground_under_aim, wrap_angle,
+    yaw_facing_player,
 };
 
 use crate::app::EYE_HEIGHT;
-use crate::app::state::{MenuState, Screen};
+use crate::app::state::{BuildingPlanState, MenuState, Screen};
 
 #[test]
 fn ground_hit_returns_none_for_horizon_aim() {
@@ -86,13 +87,16 @@ fn deployable_collider_uses_profile_extents_and_lifts_center() {
         item_id: intern_item_id(WORKBENCH_T1_ID),
         kind: DeployableKind::Workbench { tier: 1 },
         max_health: 500,
+        owner: None,
     };
     let transform = DeployableTransform {
         position: Vec3Net::new(2.0, 0.0, -3.0),
         yaw: 0.0,
     };
     let profile = item_definition(&meta.item_id).unwrap().deployable.unwrap();
-    let block = deployable_collider(&meta, &transform).expect("known item resolves a collider");
+    let blocks = deployable_colliders(&meta, &transform, false);
+    assert_eq!(blocks.len(), 1, "classic deployables are one box");
+    let block = blocks[0];
     // Center is raised by the collider half-height off the ground.
     assert!((block.center.y - profile.collider_half_height).abs() < 1e-4);
     assert!((block.center.x - 2.0).abs() < 1e-4);
@@ -103,8 +107,40 @@ fn deployable_collider_uses_profile_extents_and_lifts_center() {
         item_id: intern_item_id("not_a_real_item"),
         kind: DeployableKind::Workbench { tier: 1 },
         max_health: 1,
+        owner: None,
     };
-    assert!(deployable_collider(&unknown, &transform).is_none());
+    assert!(deployable_colliders(&unknown, &transform, false).is_empty());
+}
+
+#[test]
+fn door_colliders_drop_while_open_and_doorways_stay_passable() {
+    use crate::items::{HEWN_LOG_DOOR_ID, intern_item_id};
+    let door = Deployable {
+        id: 3,
+        item_id: intern_item_id(HEWN_LOG_DOOR_ID),
+        kind: DeployableKind::Door,
+        max_health: 1,
+        owner: Some(1),
+    };
+    let transform = DeployableTransform {
+        position: Vec3Net::new(0.0, 0.5, 0.0),
+        yaw: 0.0,
+    };
+    assert_eq!(deployable_colliders(&door, &transform, false).len(), 1);
+    assert!(deployable_colliders(&door, &transform, true).is_empty());
+
+    let doorway = Deployable {
+        id: 4,
+        item_id: intern_item_id(crate::building::BUILDING_DOORWAY_ITEM_ID),
+        kind: DeployableKind::Building {
+            piece: crate::building::BuildingPiece::Doorway,
+            tier: crate::building::BuildingTier::Sticks,
+        },
+        max_health: 1,
+        owner: Some(1),
+    };
+    // Two jambs + header, the opening itself stays clear.
+    assert_eq!(deployable_colliders(&doorway, &transform, false).len(), 3);
 }
 
 #[test]
@@ -116,16 +152,14 @@ fn deployable_transform_applies_position_and_yaw() {
     assert!(transform.rotation.dot(expected).abs() > 1.0 - 1e-5);
 }
 
-#[test]
-fn current_deployable_suppressed_by_modal_states() {
+fn player_holding(item_id: &str) -> crate::app::state::LocalPlayerState {
     use crate::app::state::LocalPlayerState;
-    use crate::items::WORKBENCH_T1_ID;
     use crate::protocol::{ItemStack, PlayerInventoryState};
     use crate::server::PlayerPrivate;
 
     let mut inventory = PlayerInventoryState::empty();
-    inventory.actionbar_slots[0] = Some(ItemStack::new(WORKBENCH_T1_ID, 1));
-    let player = LocalPlayerState {
+    inventory.actionbar_slots[0] = Some(ItemStack::new(item_id, 1));
+    LocalPlayerState {
         entity: None,
         public: None,
         private: Some(PlayerPrivate {
@@ -137,14 +171,25 @@ fn current_deployable_suppressed_by_modal_states() {
             applied_action_seq: 0,
         }),
         lifecycle: None,
-    };
+    }
+}
+
+#[test]
+fn ghost_intent_suppressed_by_modal_states() {
+    use crate::items::WORKBENCH_T1_ID;
+
+    let player = player_holding(WORKBENCH_T1_ID);
+    let plan = BuildingPlanState::default();
 
     // In-game with a deployable selected -> Some.
     let in_game = MenuState {
         screen: Screen::InGame,
         ..Default::default()
     };
-    assert!(current_deployable(&player, &in_game).is_some());
+    assert!(matches!(
+        current_ghost_intent(&player, &in_game, &plan),
+        Some(GhostIntent::Deployable(_, _))
+    ));
 
     // Inventory overlay open -> suppressed.
     let inv_open = MenuState {
@@ -152,42 +197,46 @@ fn current_deployable_suppressed_by_modal_states() {
         inventory_open: true,
         ..Default::default()
     };
-    assert!(current_deployable(&player, &inv_open).is_none());
+    assert!(current_ghost_intent(&player, &inv_open, &plan).is_none());
 
     // Not in game -> suppressed.
     let menu = MenuState {
         screen: Screen::MainMenu,
         ..Default::default()
     };
-    assert!(current_deployable(&player, &menu).is_none());
+    assert!(current_ghost_intent(&player, &menu, &plan).is_none());
 }
 
 #[test]
-fn current_deployable_none_for_non_deployable_item() {
-    use crate::app::state::LocalPlayerState;
-    use crate::protocol::{ItemStack, PlayerInventoryState};
-    use crate::server::PlayerPrivate;
-
-    let mut inventory = PlayerInventoryState::empty();
-    inventory.actionbar_slots[0] = Some(ItemStack::new(crate::items::WOOD_ID, 1));
-    let player = LocalPlayerState {
-        entity: None,
-        public: None,
-        private: Some(PlayerPrivate {
-            inventory,
-            crafting: Default::default(),
-            open_furnace: None,
-            open_loot_bag: None,
-            last_processed_input: 0,
-            applied_action_seq: 0,
-        }),
-        lifecycle: None,
-    };
+fn ghost_intent_none_for_non_deployable_item() {
+    let player = player_holding(crate::items::WOOD_ID);
     let in_game = MenuState {
         screen: Screen::InGame,
         ..Default::default()
     };
-    assert!(current_deployable(&player, &in_game).is_none());
+    assert!(current_ghost_intent(&player, &in_game, &BuildingPlanState::default()).is_none());
+}
+
+#[test]
+fn ghost_intent_routes_plan_and_door_to_their_flows() {
+    use crate::building::BuildingPiece;
+    use crate::items::{BUILDING_PLAN_ID, HEWN_LOG_DOOR_ID};
+
+    let in_game = MenuState {
+        screen: Screen::InGame,
+        ..Default::default()
+    };
+    let plan = BuildingPlanState {
+        selected_piece: BuildingPiece::Doorway,
+    };
+    assert_eq!(
+        current_ghost_intent(&player_holding(BUILDING_PLAN_ID), &in_game, &plan),
+        Some(GhostIntent::Building(BuildingPiece::Doorway))
+    );
+    assert_eq!(
+        current_ghost_intent(&player_holding(HEWN_LOG_DOOR_ID), &in_game, &plan),
+        Some(GhostIntent::Door)
+    );
 }
 
 #[test]
@@ -200,24 +249,50 @@ fn deployable_set_fingerprint_distinguishes_membership() {
                 item_id: intern_item_id(WORKBENCH_T1_ID),
                 kind: DeployableKind::Workbench { tier: 1 },
                 max_health: 1,
+                owner: None,
             },
             DeployableTransform {
                 position: Vec3Net::new(0.0, 0.0, 0.0),
                 yaw: 0.0,
             },
+            DeployableActive(false),
         )
     };
     let one = make(1);
     let two = make(2);
 
     let empty = deployable_set_fingerprint(std::iter::empty());
-    let single = deployable_set_fingerprint([(&one.0, &one.1)]);
-    let pair = deployable_set_fingerprint([(&one.0, &one.1), (&two.0, &two.1)]);
+    let single = deployable_set_fingerprint([(&one.0, &one.1, &one.2)]);
+    let pair = deployable_set_fingerprint([(&one.0, &one.1, &one.2), (&two.0, &two.1, &two.2)]);
 
     assert_ne!(empty, single);
     assert_ne!(single, pair);
     // Stable across recomputation.
-    assert_eq!(single, deployable_set_fingerprint([(&one.0, &one.1)]));
+    assert_eq!(
+        single,
+        deployable_set_fingerprint([(&one.0, &one.1, &one.2)])
+    );
+}
+
+#[test]
+fn deployable_set_fingerprint_tracks_door_open_state() {
+    use crate::items::{HEWN_LOG_DOOR_ID, intern_item_id};
+    let door = Deployable {
+        id: 9,
+        item_id: intern_item_id(HEWN_LOG_DOOR_ID),
+        kind: DeployableKind::Door,
+        max_health: 1,
+        owner: None,
+    };
+    let transform = DeployableTransform {
+        position: Vec3Net::new(0.0, 0.0, 0.0),
+        yaw: 0.0,
+    };
+    let closed = deployable_set_fingerprint([(&door, &transform, &DeployableActive(false))]);
+    let open = deployable_set_fingerprint([(&door, &transform, &DeployableActive(true))]);
+    // Opening a door changes the collider set, so the fingerprint must
+    // move or the grid rebuild would be skipped.
+    assert_ne!(closed, open);
 }
 
 #[test]

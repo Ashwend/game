@@ -140,7 +140,7 @@ impl GameServer {
         let deployable_sync_dirty: HashSet<crate::protocol::DeployedEntityId> =
             deployed_entities.keys().copied().collect();
 
-        Self {
+        let mut server = Self {
             tick,
             save,
             world,
@@ -172,7 +172,12 @@ impl GameServer {
             auto_save_interval_ticks: 0,
             last_auto_save_tick: tick,
             auto_save_pending: false,
-        }
+        };
+        // Stability is not persisted: recompute it from the restored
+        // pieces (which also culls anything a legacy save left without a
+        // ground path).
+        server.refresh_structural_stability();
+        server
     }
 
     /// Attach a WorkOS access-token verifier (dedicated [`AuthMode::Workos`]

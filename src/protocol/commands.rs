@@ -110,6 +110,76 @@ pub struct AttackPlayerCommand {
     pub target_player_id: ClientId,
 }
 
+/// Client → server intent to place a building block from the building
+/// plan. Pieces always spawn at the sticks tier; the server re-derives
+/// the snap (ground for foundations, a foundation wall socket for
+/// wall-like pieces), validates the material cost, and snaps the pose,
+/// the client preview is a best guess exactly like deployable placement.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct PlaceBuildingCommand {
+    pub piece: crate::building::BuildingPiece,
+    pub position: Vec3Net,
+    pub yaw: f32,
+}
+
+/// Hammer actions on an existing building block (and doors, for
+/// demolish). No payloads beyond the id: costs, tier walks, and the
+/// demolish window all resolve server-side so the client can't lie.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BuildingCommand {
+    /// One hammer repair hit: restores a fraction of max HP and consumes
+    /// tier materials from the swinger.
+    Repair { id: DeployedEntityId },
+    /// Upgrade the piece to the next tier (sticks → wood → stone).
+    /// Owner-only; consumes the target tier's materials and refills HP.
+    Upgrade { id: DeployedEntityId },
+    /// Demolish the piece outright. Owner-only and rejected once the
+    /// piece has stood longer than the demolish window.
+    Demolish { id: DeployedEntityId },
+}
+
+/// Door lifecycle + code-lock commands.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DoorCommand {
+    /// Hang a door (consumed from inventory) in the doorway opening of
+    /// building block `doorway_id`. `flip` mirrors the hinge side chosen
+    /// during ghost placement; `code` is the lock code the placer set.
+    /// Nobody, including the placer, is authorized until they enter the
+    /// code at the door once.
+    Place {
+        doorway_id: DeployedEntityId,
+        flip: bool,
+        code: String,
+    },
+    /// E-press on the door: toggles open/closed when the sender is
+    /// authorized, otherwise the server replies with
+    /// [`super::ServerMessage::DoorCodePrompt`].
+    Interact { id: DeployedEntityId },
+    /// Code entry from the prompt. A correct code authorizes the sender's
+    /// account on this door and opens it.
+    EnterCode { id: DeployedEntityId, code: String },
+    /// Change the lock code. Only an already-authorized account may
+    /// change it; doing so revokes every other authorization so a stolen
+    /// code can be rotated away.
+    ChangeCode { id: DeployedEntityId, code: String },
+}
+
+/// Sleeping-bag commands: rename (hold-E wheel) and pick-up (tap E).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SleepingBagCommand {
+    Rename { id: DeployedEntityId, name: String },
+    PickUp { id: DeployedEntityId },
+}
+
+/// One sleeping-bag respawn option, carried by
+/// [`super::ServerMessage::PlayerKilled`] so the death screen can offer
+/// "spawn at <bag>" buttons without an extra round trip.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RespawnBagOption {
+    pub id: DeployedEntityId,
+    pub name: String,
+}
+
 /// Loot bag commands. Same Open/Close/Move shape as
 /// `FurnaceCommand`, the bag is essentially "a furnace with no
 /// smelt loop" from the wire layer's perspective. The server gates
@@ -149,13 +219,31 @@ pub enum LootBagSlotRef {
     Bag(usize),
 }
 
-/// Per-client view of the bag currently open on the server.
+/// What kind of container an [`OpenLootBagView`] describes. Purely a
+/// UI hint (panel title and copy); the slots and commands are
+/// identical for every kind.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ContainerViewKind {
+    /// A death-drop loot bag on the ground.
+    #[default]
+    LootBag,
+    /// A logged-out sleeping player's live inventory.
+    Sleeper,
+    /// A placed storage box deployable.
+    StorageBox,
+}
+
+/// Per-client view of the container currently open on the server (loot
+/// bag, sleeping body, or storage box; they share one transfer UI).
 /// Replicated as a field of `PlayerPrivate.open_loot_bag` so the
-/// owning client renders the transfer UI off its replicated data.
+/// owning client renders the transfer UI off its replicated data. `id`
+/// is an opaque handle scoped to `kind`: a `LootBagId`, the sleeper's
+/// `ClientId`, or a `DeployedEntityId`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OpenLootBagView {
     pub id: LootBagId,
     pub slots: Vec<Option<ItemStack>>,
+    pub kind: ContainerViewKind,
 }
 
 /// Client → server messages for furnace interaction. The server gates

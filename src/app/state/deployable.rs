@@ -34,6 +34,13 @@ pub(crate) struct DeployablePlacementState {
     /// Whether the current pose is a legal placement. Drives the ghost
     /// material and gates the place command.
     pub(crate) valid: bool,
+    /// Door placement: hinge/swing mirror toggled by right-click while
+    /// the door ghost is up. Mirroring is a half-turn of the ghost (and
+    /// the placed door), so this only feeds the yaw computation.
+    pub(crate) door_flip: bool,
+    /// Door placement: the doorway building block the ghost is snapped
+    /// to. `None` while no free doorway is near the aim point.
+    pub(crate) door_target: Option<crate::protocol::DeployedEntityId>,
 }
 
 impl DeployablePlacementState {
