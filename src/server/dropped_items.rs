@@ -306,7 +306,10 @@ impl GameServer {
         }
     }
 
-    pub(super) fn merge_nearby_dropped_items(&mut self) -> Vec<(ItemId, u16)> {
+    /// Each entry is `(item id, quantity moved, target position)`; the
+    /// position lets the tick loop deliver the merge cue only to clients
+    /// close enough to care.
+    pub(super) fn merge_nearby_dropped_items(&mut self) -> Vec<(ItemId, u16, Vec3Net)> {
         // Returns the interned `ItemId` (not a fresh `String`) so the
         // resulting `ServerMessage::ItemMerged` doesn't allocate per merge.
         let mut merges = Vec::new();
@@ -322,7 +325,7 @@ impl GameServer {
         &mut self,
         first_id: DroppedItemId,
         second_id: DroppedItemId,
-    ) -> Option<(ItemId, u16)> {
+    ) -> Option<(ItemId, u16, Vec3Net)> {
         // Compute the merge up-front from immutable reads so we never have
         // to remove-then-reinsert when a validation step fails. Once `moved`
         // is finalised the mutation is straight-through.
@@ -352,10 +355,10 @@ impl GameServer {
             return None;
         }
 
-        let item_id = {
+        let (item_id, target_position) = {
             let target = self.dropped_item_body_mut(target_id)?;
             target.item.stack.quantity += moved;
-            target.item.stack.item_id.clone()
+            (target.item.stack.item_id.clone(), target.item.position)
         };
 
         let drain_source = {
@@ -368,7 +371,7 @@ impl GameServer {
             self.chunk_manager.untrack_dropped_item(source_id);
         }
 
-        Some((item_id, moved))
+        Some((item_id, moved, target_position))
     }
 
     fn merge_target_and_source(

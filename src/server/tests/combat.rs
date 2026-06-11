@@ -169,6 +169,11 @@ fn a_sleeping_body_can_be_attacked_and_damaged() {
         "the victim's body should be asleep"
     );
 
+    // A nearby online witness; the impact cue is range-gated to online
+    // clients, so the sleeping victim itself receives nothing.
+    let witness = connect_named(&mut server, 3, "Witness");
+    place_player(&mut server, witness, Vec3Net::new(2.0, 0.0, 0.0), 0.0);
+
     let start_hp = target_health(&server, victim);
     let envelopes = attack(&mut server, attacker, victim);
     assert!(
@@ -178,8 +183,9 @@ fn a_sleeping_body_can_be_attacked_and_damaged() {
     assert!(
         envelopes
             .iter()
-            .any(|e| matches!(&e.message, ServerMessage::PlayerImpact { .. })),
-        "the hit on a sleeper is broadcast like any other"
+            .any(|e| matches!(&e.message, ServerMessage::PlayerImpact { .. })
+                && matches!(e.target, DeliveryTarget::Client(id) if id == witness)),
+        "the hit on a sleeper reaches nearby online peers like any other"
     );
 }
 
@@ -534,23 +540,34 @@ fn attack_behind_attacker_is_rejected_by_view_cone() {
 }
 
 #[test]
-fn player_impact_is_broadcast_except_attacker() {
+fn player_impact_reaches_nearby_peers_but_not_attacker_or_distant_clients() {
     let mut server = server();
     let attacker = connect_named(&mut server, 1, "Attacker");
     let target = connect_named(&mut server, 2, "Target");
+    // A spectator far outside IMPACT_MESSAGE_RANGE_M: the cosmetic cue
+    // must not be shipped across the map to clients who can neither
+    // hear nor see it.
+    let distant = connect_named(&mut server, 3, "Distant");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
+    place_player(
+        &mut server,
+        distant,
+        Vec3Net::new(crate::game_balance::IMPACT_MESSAGE_RANGE_M * 2.0, 0.0, 0.0),
+        0.0,
+    );
     equip_axe(&mut server, attacker);
 
     let envelopes = attack(&mut server, attacker, target);
-    let impact = envelopes
+    let impact_targets: Vec<_> = envelopes
         .iter()
-        .find(|e| matches!(&e.message, ServerMessage::PlayerImpact { .. }))
-        .expect("PlayerImpact envelope present");
-    assert!(
-        matches!(impact.target, DeliveryTarget::BroadcastExcept(id) if id == attacker),
-        "PlayerImpact should target every client except the attacker, got {:?}",
-        impact.target
+        .filter(|e| matches!(&e.message, ServerMessage::PlayerImpact { .. }))
+        .map(|e| e.target.clone())
+        .collect();
+    assert_eq!(
+        impact_targets,
+        vec![DeliveryTarget::Client(target)],
+        "PlayerImpact goes to nearby peers only: not the attacker (their          client predicted it) and not out-of-range clients"
     );
 
     let knockback = envelopes

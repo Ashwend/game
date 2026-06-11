@@ -26,6 +26,7 @@ pub(crate) fn apply_loot_bags_system(
     runtime: Res<ClientRuntime>,
     assets: Res<ItemVisualAssets>,
     mut entities: ResMut<LootBagEntities>,
+    visuals: Query<&Transform, With<NetworkLootBag>>,
     replicated: Query<(&LootBagEntity, &LootBagTransform)>,
 ) {
     if runtime.client_id.is_none() {
@@ -48,7 +49,15 @@ pub(crate) fn apply_loot_bags_system(
         .with_scale(Vec3::new(1.45, 1.45, 1.45));
 
         if let Some(entity) = entities.0.get(&bag.id).copied() {
-            commands.entity(entity).insert(world_transform);
+            // Bags are static, so the recomputed transform matches the
+            // spawned one every frame; only write on a real change to
+            // avoid per-frame change-detection churn on at-rest bags.
+            if visuals
+                .get(entity)
+                .is_ok_and(|current| *current != world_transform)
+            {
+                commands.entity(entity).insert(world_transform);
+            }
         } else {
             let entity = commands
                 .spawn((

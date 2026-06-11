@@ -85,7 +85,7 @@ pub(crate) fn building_piece_mesh(piece: BuildingPiece, tier: BuildingTier) -> M
         // T-junction that tears into hairline cracks. Tuck the bands
         // behind the jambs instead: recessed a hair in Z, widened to
         // overlap inside them, so the joint has no visible seam at all.
-        if tier == BuildingTier::Wood
+        if tier == BuildingTier::HewnWood
             && matches!(piece, BuildingPiece::WindowWall | BuildingPiece::Doorway)
             && index >= 2
         {
@@ -93,11 +93,11 @@ pub(crate) fn building_piece_mesh(piece: BuildingPiece, tier: BuildingTier) -> M
         }
         match tier {
             BuildingTier::Sticks => stick_lattice_segment(&mut builder, center, half),
-            BuildingTier::Wood => builder.add_box(center, half, WOOD_PLANK),
+            BuildingTier::HewnWood => builder.add_box(center, half, WOOD_PLANK),
             BuildingTier::Stone => stone_segment(&mut builder, center, half),
         }
     }
-    if tier == BuildingTier::Wood {
+    if tier == BuildingTier::HewnWood {
         // Horizontal plank seams every ~0.6 m, split around openings.
         let proud = crate::building::WALL_THICKNESS_M / 2.0 + 0.012;
         for i in 1..5 {
@@ -271,7 +271,7 @@ fn foundation_mesh(builder: &mut LowPolyMeshBuilder, tier: BuildingTier) {
                 );
             }
         }
-        BuildingTier::Wood => {
+        BuildingTier::HewnWood => {
             builder.add_box(
                 [0.0, height / 2.0, 0.0],
                 [half, height / 2.0, half],
@@ -388,7 +388,7 @@ fn ceiling_mesh(builder: &mut LowPolyMeshBuilder, tier: BuildingTier) {
                 );
             }
         }
-        BuildingTier::Wood => {
+        BuildingTier::HewnWood => {
             builder.add_box(
                 [0.0, thickness / 2.0, 0.0],
                 [half, thickness / 2.0, half],
@@ -462,7 +462,7 @@ fn stairs_mesh(builder: &mut LowPolyMeshBuilder, tier: BuildingTier) {
                 );
             }
         }
-        BuildingTier::Wood => {
+        BuildingTier::HewnWood => {
             for (index, (center, half)) in steps.iter().enumerate() {
                 builder.add_box(
                     [center.0, center.1, center.2],

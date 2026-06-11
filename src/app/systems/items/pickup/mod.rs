@@ -27,10 +27,12 @@ use crate::{
     resources::resource_node_score_at,
     server::{
         Deployable, DeployableStability, DeployableTransform, DroppedItem, DroppedItemTransform,
-        LootBagEntity, LootBagTransform, Player, PlayerPublic, PlayerSleeping, ResourceNode,
-        ResourceNodeStorage,
+        LootBagEntity, LootBagTransform, Player, PlayerHealth, PlayerPose, PlayerProfile,
+        PlayerSleeping, ResourceNode, ResourceNodeStorage,
     },
 };
+
+use targets::PlayerTargetCandidate;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update_pickup_target_system(
@@ -43,7 +45,13 @@ pub(crate) fn update_pickup_target_system(
     dropped_replicated: Query<(&DroppedItem, &DroppedItemTransform)>,
     resource_nodes: Query<(&ResourceNode, &ResourceNodeStorage)>,
     deployables: Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
-    remote_players: Query<(&Player, &PlayerPublic, Option<&PlayerSleeping>)>,
+    remote_players: Query<(
+        &Player,
+        &PlayerProfile,
+        &PlayerPose,
+        &PlayerHealth,
+        Option<&PlayerSleeping>,
+    )>,
     loot_bags: Query<(&LootBagEntity, &LootBagTransform)>,
     mut pickup_target: ResMut<PickupTargetState>,
 ) {
@@ -107,13 +115,17 @@ pub(crate) fn update_pickup_target_system(
         look.yaw,
         look.pitch,
         local_client_id,
-        remote_players.iter().map(|(player, public, sleeping)| {
-            (
-                player,
-                public,
-                matches!(sleeping, Some(PlayerSleeping(true))),
-            )
-        }),
+        remote_players
+            .iter()
+            .map(
+                |(player, profile, pose, health, sleeping)| PlayerTargetCandidate {
+                    player,
+                    name: &profile.name,
+                    position: pose.position,
+                    health: health.0,
+                    sleeping: matches!(sleeping, Some(PlayerSleeping(true))),
+                },
+            ),
     );
     let loot_bag_target = best_loot_bag_target(eye, look.yaw, look.pitch, loot_bags.iter());
 
@@ -123,7 +135,7 @@ pub(crate) fn update_pickup_target_system(
     let item_score = dropped_target.as_ref().map(|(_, _, score)| *score);
     let node_score = resource_target.as_ref().map(|(_, _, score)| *score);
     let deployable_score = deployable_target.as_ref().map(|(_, _, _, score, _)| *score);
-    let player_score = player_target.as_ref().map(|(_, _, _, score)| *score);
+    let player_score = player_target.as_ref().map(|(_, score)| *score);
     let loot_bag_score = loot_bag_target.as_ref().map(|(_, _, score)| *score);
     let best = [
         item_score,
@@ -156,8 +168,8 @@ pub(crate) fn update_pickup_target_system(
             set_resource_pickup_target(&mut pickup_target, node, storage, &camera);
         }
     } else if player_score == Some(best) {
-        if let Some((meta, public, sleeping, _)) = player_target {
-            set_player_pickup_target(&mut pickup_target, meta, public, sleeping, &camera);
+        if let Some((candidate, _)) = player_target {
+            set_player_pickup_target(&mut pickup_target, &candidate, &camera);
         }
     } else if loot_bag_score == Some(best) {
         if let Some((meta, transform, _)) = loot_bag_target {

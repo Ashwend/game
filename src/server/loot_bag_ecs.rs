@@ -36,9 +36,18 @@ pub struct LootBagTransform {
     pub yaw: f32,
 }
 
-/// Mutable slot grid. Stack list of fixed length
-/// (`LOOT_BAG_SLOT_COUNT`); a slot is `None` when empty. The client
-/// renders the grid directly off this component.
+/// Slot grid snapshot. Stack list of fixed length
+/// (`LOOT_BAG_SLOT_COUNT`); a slot is `None` when empty.
+///
+/// **Release builds neither replicate nor refresh this component
+/// post-spawn.** Nothing client-side consumes it, the bag UI renders
+/// from the owner-only `PlayerOpenContainers::open_loot_bag` view, so
+/// shipping every bag's full contents to every client in the chunk
+/// room (~1-1.5 KB per packed death bag, re-sent on every loot move)
+/// was pure bandwidth waste plus an information leak. The
+/// `replication-trace` build re-enables both the per-tick refresh and
+/// the wire path so MUTATE/RECV coverage stays available. Do not query
+/// this client-side for gameplay.
 #[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LootBagContents(pub Vec<Option<ItemStack>>);
 
@@ -53,12 +62,13 @@ crate::server::entity_index::entity_index! {
 }
 
 /// Wire-shape view used by the mirror to spawn or refresh a bag
-/// entity.
+/// entity. `slots` is `None` when the caller skipped the clone (the
+/// release-build steady state; see [`LootBagContents`]).
 pub struct LootBagView {
     pub id: LootBagId,
     pub position: Vec3Net,
     pub yaw: f32,
-    pub slots: Vec<Option<ItemStack>>,
+    pub slots: Option<Vec<Option<ItemStack>>>,
 }
 
 pub fn spawn_loot_bag_entity(world: &mut World, view: LootBagView, chunk: ChunkCoord) -> Entity {
@@ -70,7 +80,7 @@ pub fn spawn_loot_bag_entity(world: &mut World, view: LootBagView, chunk: ChunkC
                 position: view.position,
                 yaw: view.yaw,
             },
-            LootBagContents(view.slots),
+            LootBagContents(view.slots.unwrap_or_default()),
             LootBagChunk(chunk),
         ))
         .id();
@@ -112,7 +122,7 @@ mod tests {
             id: 9,
             position: Vec3Net::new(1.0, 2.0, 3.0),
             yaw: 0.25,
-            slots: vec![Some(ItemStack::new("wood", 4)), None],
+            slots: Some(vec![Some(ItemStack::new("wood", 4)), None]),
         };
         let chunk = ChunkCoord::new(0, 0);
         let entity = spawn_loot_bag_entity(&mut world, view, chunk);
@@ -155,7 +165,7 @@ mod tests {
             id: 3,
             position: Vec3Net::ZERO,
             yaw: 0.0,
-            slots: vec![],
+            slots: None,
         };
         let _ = spawn_loot_bag_entity(&mut world, view, ChunkCoord::new(0, 0));
         assert!(world.resource::<LootBagIndex>().get(3).is_some());

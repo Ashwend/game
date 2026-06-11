@@ -24,7 +24,6 @@ fn local_player_holding(item_id: Option<&str>) -> LocalPlayerState {
     }
     LocalPlayerState {
         entity: None,
-        public: None,
         private: Some(PlayerPrivate {
             inventory,
             crafting: Default::default(),

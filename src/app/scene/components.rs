@@ -1,7 +1,6 @@
 use bevy::prelude::*;
 
 use crate::{
-    items::DeployableKind,
     protocol::{ClientId, DeployedEntityId, DroppedItemId, LootBagId, ResourceNodeId},
     resources::ResourceNodeModel,
 };
@@ -25,16 +24,13 @@ pub(crate) struct NetworkResourceNode {
     pub(crate) model: ResourceNodeModel,
 }
 
-/// Marker for a placed structure entity (workbench, furnace, …).
-/// The kind drives mesh/material lookups and the nameplate UI uses
-/// `id` to match snapshot health updates. `kind` is also the visual's
-/// memory of what mesh it carries: when the replicated kind diverges
-/// (a hammer tier upgrade), the reconcile system swaps the mesh in
-/// place and fires the upgrade burst.
+/// Marker for a placed structure entity (workbench, furnace, …). The
+/// nameplate UI uses `id` to match the replicated state. What mesh the
+/// visual carries (and when an upgrade has to swap it) is tracked in
+/// the reconciler's `DeployedEntityVisuals` resource, not here.
 #[derive(Component)]
 pub(crate) struct NetworkDeployedEntity {
     pub(crate) id: DeployedEntityId,
-    pub(crate) kind: DeployableKind,
 }
 
 /// Marker for the client-only ghost preview rendered while the player

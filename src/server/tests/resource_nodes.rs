@@ -364,6 +364,28 @@ fn successful_gather_broadcasts_impact_to_peers_only() {
 
     let mut server = server();
     let client_id = connect_host(&mut server);
+    // The impact cue is range-gated and skips the swinger, so a nearby
+    // peer is the expected (only) recipient. Connected under its own
+    // account id; reusing the host's would wake-reconnect that client.
+    let peer = {
+        let id = server
+            .connect(
+                crate::protocol::PROTOCOL_VERSION,
+                Some(crate::protocol::GAME_VERSION.to_owned()),
+                2,
+                "Peer".to_owned(),
+                String::new(),
+            )
+            .expect("peer connects")
+            .0;
+        server
+            .clients
+            .get_mut(&id)
+            .expect("connected client should exist")
+            .controller
+            .position = Vec3Net::ZERO;
+        id
+    };
     equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
     server.resource_nodes.insert(99, coal_node(99, 5));
@@ -393,9 +415,9 @@ fn successful_gather_broadcasts_impact_to_peers_only() {
 
     assert_eq!(
         target,
-        super::DeliveryTarget::BroadcastExcept(client_id),
+        super::DeliveryTarget::Client(peer),
         "the swinger's client already played the impact locally; the echo \
-         must skip them",
+         goes to nearby peers only",
     );
     assert_eq!(kind, ResourceImpactKind::CoalOre);
     assert_eq!(position, Vec3Net::new(0.0, 0.0, -2.2));

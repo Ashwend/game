@@ -113,16 +113,19 @@ impl GameServer {
         // `ResourceNodeStorage` diff. No reliable side-channel needed
         //, see [Networking § Replication](../../docs/networking.md#replication).
 
-        envelopes.push(ServerEnvelope {
-            // Skip the swinger, their client already played the impact via
-            // local prediction. Sending a second copy from the server would
-            // double-trigger both the sound and the chip burst.
-            target: DeliveryTarget::BroadcastExcept(client_id),
-            message: ServerMessage::ResourceImpact {
+        // Skip the swinger, their client already played the impact via
+        // local prediction (a second copy would double-trigger the sound
+        // and chip burst), and only deliver to clients close enough to
+        // perceive the effect at all.
+        envelopes.extend(self.envelopes_within_range(
+            node.position,
+            crate::game_balance::IMPACT_MESSAGE_RANGE_M,
+            Some(client_id),
+            ServerMessage::ResourceImpact {
                 position: node.position,
                 kind: resource_impact_kind(node_definition.model),
             },
-        });
+        ));
         envelopes
     }
 }

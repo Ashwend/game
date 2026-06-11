@@ -124,7 +124,7 @@ fn chat_populates_speaker_bubble_for_broadcast_window() {
         .players_iter()
         .find(|player| player.client_id == client_id)
         .expect("speaker should be in players_iter");
-    assert_eq!(speaker.public.chat_bubble.as_deref(), Some("hi there"));
+    assert_eq!(speaker.chat_bubble.0.as_deref(), Some("hi there"));
 
     let dt = 1.0 / SERVER_TICK_RATE_HZ;
     let ticks_to_expire = (CHAT_BUBBLE_DURATION_SECONDS * SERVER_TICK_RATE_HZ) as u64 + 1;
@@ -137,7 +137,7 @@ fn chat_populates_speaker_bubble_for_broadcast_window() {
         .find(|player| player.client_id == client_id)
         .expect("speaker should still be present");
     assert!(
-        speaker.public.chat_bubble.is_none(),
+        speaker.chat_bubble.0.is_none(),
         "bubble should auto-clear after the broadcast window"
     );
 }
@@ -722,10 +722,10 @@ fn world_save_round_trips_player_inventory_and_position() {
         .players_iter()
         .find(|player| player.client_id == restored_client_id)
         .expect("restored client should appear in the live state");
-    assert!((player.public.position.x - 12.0).abs() < f32::EPSILON);
-    assert!((player.public.position.y - 4.5).abs() < f32::EPSILON);
-    assert!((player.public.position.z + 7.0).abs() < f32::EPSILON);
-    assert!((player.public.yaw - 0.75).abs() < f32::EPSILON);
+    assert!((player.pose.position.x - 12.0).abs() < f32::EPSILON);
+    assert!((player.pose.position.y - 4.5).abs() < f32::EPSILON);
+    assert!((player.pose.position.z + 7.0).abs() < f32::EPSILON);
+    assert!((player.pose.yaw - 0.75).abs() < f32::EPSILON);
 
     let client = restored
         .clients

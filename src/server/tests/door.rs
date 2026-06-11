@@ -5,7 +5,7 @@
 use super::*;
 use crate::{
     building::BuildingPiece,
-    items::{DeployableKind, HEWN_LOG_DOOR_ID, STICKS_ID},
+    items::{DeployableKind, HEWN_LOG_DOOR_ID, WOOD_ID},
     protocol::{DeployedEntityId, DoorCommand, PlaceBuildingCommand, ServerMessage},
 };
 
@@ -43,7 +43,7 @@ fn give(server: &mut GameServer, client_id: ClientId, item_id: &str, quantity: u
 /// Foundation + doorway + a door item in the inventory; returns the
 /// doorway's entity id.
 fn build_doorway(server: &mut GameServer, client_id: ClientId) -> DeployedEntityId {
-    give(server, client_id, STICKS_ID, 200);
+    give(server, client_id, WOOD_ID, 200);
     give(server, client_id, HEWN_LOG_DOOR_ID, 1);
     server.receive(
         client_id,

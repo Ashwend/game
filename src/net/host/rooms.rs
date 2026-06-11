@@ -94,12 +94,14 @@ pub(super) fn move_entity_between_rooms(
     });
 }
 
-/// Phase 5 player replication: broadcast `PlayerPublic` to every sender
-/// in the same room (peer-visible), and gate `PlayerPrivate` behind a
-/// per-component override so only the owning client receives the
-/// inventory/crafting wire bytes. The owner's prediction supplies their
-/// own `PlayerPublic` locally, so them re-receiving it is a small,
-/// acceptable redundancy.
+/// Player replication: broadcast the peer-visible components
+/// (`PlayerProfile` / `PlayerPose` / `PlayerHealth` / `PlayerChatBubble`
+/// and the lifecycle/armor/sleeping markers) to every sender in the same
+/// room, and gate each owner-only component (`PlayerInventory`,
+/// `PlayerCrafting`, `PlayerOpenContainers`, `PlayerInputAck`) behind a
+/// per-component override so only the owning client receives those wire
+/// bytes. The owner's prediction supplies their own pose locally, so
+/// them re-receiving it is a small, acceptable redundancy.
 pub(super) fn attach_player_replication(
     world: &mut World,
     entity: Entity,
@@ -114,7 +116,10 @@ pub(super) fn attach_player_replication(
             Replicate::to_clients(NetworkTarget::All),
             ReplicationGroup::new_from_entity(),
             NetworkVisibility,
-            player_private_overrides(owner_sender),
+            owner_only_overrides::<crate::server::PlayerInventory>(owner_sender),
+            owner_only_overrides::<crate::server::PlayerCrafting>(owner_sender),
+            owner_only_overrides::<crate::server::PlayerOpenContainers>(owner_sender),
+            owner_only_overrides::<crate::server::PlayerInputAck>(owner_sender),
             OwnerSender(owner_sender),
         ));
     }
@@ -124,33 +129,32 @@ pub(super) fn attach_player_replication(
     });
 }
 
-/// The sender entity the player's owner-only `PlayerPrivate` override currently
-/// targets. Lives on the mirror entity so [`rebind_player_owner_if_changed`] can
-/// notice when a reconnect hands the same player a new sender. Server-side only,
-/// never replicated.
+/// The sender entity the player's owner-only component overrides
+/// currently target. Lives on the mirror entity so
+/// [`rebind_player_owner_if_changed`] can notice when a reconnect hands
+/// the same player a new sender. Server-side only, never replicated.
 #[derive(Component)]
 pub(super) struct OwnerSender(Option<Entity>);
 
-/// Build the `PlayerPrivate` per-component override: disabled for everyone,
-/// then re-enabled only for the owner's sender (if any). The owner already
-/// predicts their own inventory, so gating the wire bytes to them keeps peers
-/// from ever receiving another player's private state.
-fn player_private_overrides(
+/// Build the per-component override for one owner-only component:
+/// disabled for everyone, then re-enabled only for the owner's sender
+/// (if any). Applied to each private player component so peers never
+/// receive another player's private state.
+fn owner_only_overrides<T: Component>(
     owner_sender: Option<Entity>,
-) -> ComponentReplicationOverrides<crate::server::PlayerPrivate> {
-    let overrides =
-        ComponentReplicationOverrides::<crate::server::PlayerPrivate>::default().disable_all();
+) -> ComponentReplicationOverrides<T> {
+    let overrides = ComponentReplicationOverrides::<T>::default().disable_all();
     match owner_sender {
         Some(sender) => overrides.enable_for(sender),
         None => overrides,
     }
 }
 
-/// Re-point a persisted player entity's owner-only `PlayerPrivate` override at
+/// Re-point a persisted player entity's owner-only component overrides at
 /// the client's *current* sender when it has changed. The mirror entity for a
 /// sleeping body survives the owner's logout, so when they reconnect and
 /// `wake_sleeper` reuses the same client id, the entity is refreshed in place
-/// (not respawned) and its override still names the old, now-despawned sender.
+/// (not respawned) and its overrides still name the old, now-despawned sender.
 /// Without this re-bind the woken player's inventory/crafting never reaches
 /// their new connection. Cheap: only writes on an actual sender change.
 pub(super) fn rebind_player_owner_if_changed(
@@ -163,7 +167,10 @@ pub(super) fn rebind_player_owner_if_changed(
     }
     if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
         entity_mut.insert((
-            player_private_overrides(current_sender),
+            owner_only_overrides::<crate::server::PlayerInventory>(current_sender),
+            owner_only_overrides::<crate::server::PlayerCrafting>(current_sender),
+            owner_only_overrides::<crate::server::PlayerOpenContainers>(current_sender),
+            owner_only_overrides::<crate::server::PlayerInputAck>(current_sender),
             OwnerSender(current_sender),
         ));
     }

@@ -9,7 +9,7 @@ use crate::{
         voice::VoiceState,
     },
     protocol::{ClientId, MAX_HEALTH},
-    server::{Player, PlayerLifecycle, PlayerPublic},
+    server::{Player, PlayerChatBubble, PlayerHealth, PlayerLifecycle, PlayerProfile},
 };
 
 /// Hard cutoff: anything farther than this is skipped entirely. Tuned to a
@@ -42,7 +42,9 @@ pub(crate) struct PeerOverlay<'world> {
 pub(crate) struct PeerOverlayEntry<'world> {
     pub(crate) head_world: Vec3,
     pub(crate) client_id: ClientId,
-    pub(crate) public: &'world PlayerPublic,
+    pub(crate) profile: &'world PlayerProfile,
+    pub(crate) health: f32,
+    pub(crate) chat_bubble: Option<&'world str>,
     /// `true` when the peer has spoken within roughly the last 200 ms.
     /// Drives the small microphone glyph that appears beside the
     /// nameplate so listeners can tell who's talking.
@@ -86,26 +88,12 @@ pub(super) fn peer_overlay_ui(ctx: &egui::Context, overlay: PeerOverlay<'_>) {
         if !visible_rect.contains(egui::pos2(screen.x, screen.y)) {
             continue;
         }
-        draw_peer_label(
-            ctx,
-            screen,
-            distance,
-            peer.client_id,
-            peer.public,
-            peer.speaking,
-        );
+        draw_peer_label(ctx, screen, distance, &peer);
     }
 }
 
-fn draw_peer_label(
-    ctx: &egui::Context,
-    screen: Vec2,
-    distance: f32,
-    client_id: ClientId,
-    public: &PlayerPublic,
-    speaking: bool,
-) {
-    let id = egui::Id::new(("peer_overlay", client_id));
+fn draw_peer_label(ctx: &egui::Context, screen: Vec2, distance: f32, peer: &PeerOverlayEntry<'_>) {
+    let id = egui::Id::new(("peer_overlay", peer.client_id));
     let fade = distance_fade(distance);
 
     // `anchor()` and `fixed_pos()` conflict, `anchor()` pins the area to a
@@ -122,18 +110,18 @@ fn draw_peer_label(
         .fixed_pos(egui::pos2(screen.x, screen.y))
         .show(ctx, |ui| {
             ui.vertical_centered(|ui| {
-                if let Some(text) = public.chat_bubble.as_deref()
+                if let Some(text) = peer.chat_bubble
                     && !text.is_empty()
                 {
                     chat_bubble(ui, text, fade);
                     ui.add_space(CHAT_BUBBLE_GAP_PX);
                 }
-                nametag(ui, public, fade, speaking);
+                nametag(ui, peer.profile, peer.health, fade, peer.speaking);
             });
         });
 }
 
-fn nametag(ui: &mut egui::Ui, public: &PlayerPublic, fade: f32, speaking: bool) {
+fn nametag(ui: &mut egui::Ui, profile: &PlayerProfile, health: f32, fade: f32, speaking: bool) {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(NAMETAG_WIDTH, NAMETAG_HEIGHT),
         egui::Sense::hover(),
@@ -152,7 +140,7 @@ fn nametag(ui: &mut egui::Ui, public: &PlayerPublic, fade: f32, speaking: bool) 
         egui::StrokeKind::Inside,
     );
 
-    let name_text_color = if public.is_admin {
+    let name_text_color = if profile.is_admin {
         egui::Color32::from_rgb(255, 214, 130)
     } else {
         egui::Color32::from_rgb(232, 238, 246)
@@ -164,7 +152,7 @@ fn nametag(ui: &mut egui::Ui, public: &PlayerPublic, fade: f32, speaking: bool) 
     let text_rect = ui.painter().text(
         name_rect.center(),
         egui::Align2::CENTER_CENTER,
-        truncated_name(&public.name, 22),
+        truncated_name(&profile.name, 22),
         egui::FontId::new(12.5, egui::FontFamily::Proportional),
         with_alpha(name_text_color, scaled(u8::MAX, fade)),
     );
@@ -181,7 +169,7 @@ fn nametag(ui: &mut egui::Ui, public: &PlayerPublic, fade: f32, speaking: bool) 
         egui::pos2(rect.left() + 8.0, rect.bottom() - 10.0),
         egui::pos2(rect.right() - 8.0, rect.bottom() - 10.0 + HEALTH_BAR_HEIGHT),
     );
-    let fraction = (public.health / MAX_HEALTH).clamp(0.0, 1.0);
+    let fraction = (health / MAX_HEALTH).clamp(0.0, 1.0);
     let fill_rect = egui::Rect::from_min_max(
         bar_rect.min,
         egui::pos2(
@@ -336,13 +324,19 @@ fn health_fill_color(fraction: f32) -> egui::Color32 {
 
 /// Collects the head world positions of each remote player into entries the
 /// overlay UI can project. The lookup is keyed by `client_id` so we can pair
-/// each `NetworkPlayer` visual entity with the matching replicated
-/// `PlayerPublic`, without that pairing, the overlay would have no
+/// each `NetworkPlayer` visual entity with the matching replicated profile,
+/// health, and chat bubble, without that pairing, the overlay would have no
 /// name/health/bubble to display.
 pub(crate) fn collect_peer_overlay_entries<'a>(
     network_players: impl IntoIterator<Item = (&'a NetworkPlayer, &'a GlobalTransform)>,
     replicated_players: impl IntoIterator<
-        Item = (&'a Player, &'a PlayerPublic, Option<&'a PlayerLifecycle>),
+        Item = (
+            &'a Player,
+            &'a PlayerProfile,
+            &'a PlayerHealth,
+            &'a PlayerChatBubble,
+            Option<&'a PlayerLifecycle>,
+        ),
     >,
     local_client_id: Option<ClientId>,
     voice: &VoiceState,
@@ -350,24 +344,29 @@ pub(crate) fn collect_peer_overlay_entries<'a>(
     // Dead peers get their nameplate suppressed entirely, a tag
     // floating over a tilted-and-fading corpse reads as a UI bug,
     // and a name on a hidden invisible-corpse entity even more so.
-    let mut public_by_id: HashMap<ClientId, &PlayerPublic> = replicated_players
-        .into_iter()
-        .filter(|(player, _, _)| Some(player.client_id) != local_client_id)
-        .filter(|(_, _, lifecycle)| !matches!(lifecycle, Some(PlayerLifecycle::Dead { .. })))
-        .map(|(player, public, _)| (player.client_id, public))
-        .collect();
+    let mut state_by_id: HashMap<ClientId, (&PlayerProfile, f32, Option<&str>)> =
+        replicated_players
+            .into_iter()
+            .filter(|(player, ..)| Some(player.client_id) != local_client_id)
+            .filter(|(.., lifecycle)| !matches!(lifecycle, Some(PlayerLifecycle::Dead { .. })))
+            .map(|(player, profile, health, bubble, _)| {
+                (player.client_id, (profile, health.0, bubble.0.as_deref()))
+            })
+            .collect();
 
     network_players
         .into_iter()
         .filter_map(|(player, transform)| {
-            let public = public_by_id.remove(&player.client_id)?;
+            let (profile, health, chat_bubble) = state_by_id.remove(&player.client_id)?;
             let translation = transform.translation();
             let head_world =
                 translation + Vec3::Y * (PLAYER_HEAD_TOP_LOCAL_Y + NAMETAG_HEAD_CLEARANCE_M);
             Some(PeerOverlayEntry {
                 head_world,
                 client_id: player.client_id,
-                public,
+                profile,
+                health,
+                chat_bubble,
                 speaking: voice.is_peer_talking(player.client_id),
             })
         })
@@ -385,7 +384,9 @@ pub(crate) struct PeerOverlayParams<'w, 's> {
         's,
         (
             &'static Player,
-            &'static PlayerPublic,
+            &'static PlayerProfile,
+            &'static PlayerHealth,
+            &'static PlayerChatBubble,
             Option<&'static PlayerLifecycle>,
         ),
     >,
@@ -394,7 +395,6 @@ pub(crate) struct PeerOverlayParams<'w, 's> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::Vec3Net;
 
     fn raw_input() -> egui::RawInput {
         egui::RawInput {
@@ -406,17 +406,10 @@ mod tests {
         }
     }
 
-    fn public(name: &str, health: f32, is_admin: bool, bubble: Option<&str>) -> PlayerPublic {
-        PlayerPublic {
+    fn profile(name: &str, is_admin: bool) -> PlayerProfile {
+        PlayerProfile {
             name: name.to_owned(),
-            position: Vec3Net::ZERO,
-            velocity: Vec3Net::ZERO,
-            yaw: 0.0,
-            pitch: 0.0,
-            health,
-            grounded: true,
             is_admin,
-            chat_bubble: bubble.map(str::to_owned),
         }
     }
 
@@ -502,17 +495,17 @@ mod tests {
         // Admins get a gold name. The draw path runs both branches without
         // panicking and emits shapes for the frame + bars + text.
         let ctx = egui::Context::default();
-        let regular = public("Mortal", MAX_HEALTH, false, None);
-        let admin = public("Overlord", MAX_HEALTH, true, None);
+        let regular = profile("Mortal", false);
+        let admin = profile("Overlord", true);
 
         let regular_out = ctx.run(raw_input(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                nametag(ui, &regular, 1.0, false);
+                nametag(ui, &regular, MAX_HEALTH, 1.0, false);
             });
         });
         let admin_out = ctx.run(raw_input(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                nametag(ui, &admin, 1.0, false);
+                nametag(ui, &admin, MAX_HEALTH, 1.0, false);
             });
         });
         assert!(!regular_out.shapes.is_empty());
@@ -523,19 +516,19 @@ mod tests {
     fn nametag_speaking_adds_voice_indicator_shapes() {
         // The speaking dot + halo are two extra circle shapes versus the
         // silent nameplate, so the speaking variant draws strictly more.
-        let person = public("Speaker", MAX_HEALTH, false, None);
+        let person = profile("Speaker", false);
 
         let ctx_quiet = egui::Context::default();
         let quiet = ctx_quiet.run(raw_input(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                nametag(ui, &person, 1.0, false);
+                nametag(ui, &person, MAX_HEALTH, 1.0, false);
             });
         });
 
         let ctx_loud = egui::Context::default();
         let loud = ctx_loud.run(raw_input(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                nametag(ui, &person, 1.0, true);
+                nametag(ui, &person, MAX_HEALTH, 1.0, true);
             });
         });
 
@@ -585,16 +578,20 @@ mod tests {
             client_id: 3,
             account_id: 300,
         };
-        let remote_public = public("Remote", MAX_HEALTH, false, None);
-        let local_public = public("Me", MAX_HEALTH, false, None);
-        let dead_public = public("Corpse", MAX_HEALTH, false, None);
+        let remote_profile = profile("Remote", false);
+        let local_profile = profile("Me", false);
+        let dead_profile = profile("Corpse", false);
+        let full_health = PlayerHealth(MAX_HEALTH);
+        let no_bubble = PlayerChatBubble(None);
 
         let replicated = vec![
-            (&remote, &remote_public, None),
-            (&local, &local_public, None),
+            (&remote, &remote_profile, &full_health, &no_bubble, None),
+            (&local, &local_profile, &full_health, &no_bubble, None),
             (
                 &dead,
-                &dead_public,
+                &dead_profile,
+                &full_health,
+                &no_bubble,
                 Some(&PlayerLifecycle::Dead {
                     since_tick: 0,
                     killer: None,

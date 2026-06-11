@@ -50,6 +50,10 @@ impl GameServer {
         self.clients
             .values()
             .filter(|client| client.client_id != speaker)
+            // Sleeping bodies keep their `clients` entry but have no
+            // connection; building an envelope for them is allocation
+            // the router immediately drops.
+            .filter(|client| client.online)
             .filter(|client| {
                 within_range_sq(speaker_position, client.controller.position, range_sq)
             })
@@ -66,7 +70,7 @@ impl GameServer {
     }
 }
 
-fn within_range_sq(a: Vec3Net, b: Vec3Net, range_sq: f32) -> bool {
+pub(super) fn within_range_sq(a: Vec3Net, b: Vec3Net, range_sq: f32) -> bool {
     let dx = a.x - b.x;
     let dy = a.y - b.y;
     let dz = a.z - b.z;

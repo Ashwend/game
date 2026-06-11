@@ -4,8 +4,8 @@ use crate::{
     items::{
         BASIC_HATCHET_ID, BASIC_PICKAXE_ID, BUILDING_PLAN_ID, COAL_ID, CRUDE_FURNACE_ID, FIBER_ID,
         HAMMER_ID, HEWN_LOG_DOOR_ID, HEWN_LOG_ID, IRON_BAR_ID, IRON_HATCHET_ID, IRON_ORE_ID,
-        IRON_PICKAXE_ID, PLANT_TWINE_ID, SLEEPING_BAG_ID, STICKS_ID, STONE_ID, SULFUR_ORE_ID,
-        WOOD_ID, WORKBENCH_T1_ID, item_definition,
+        IRON_PICKAXE_ID, PLANT_TWINE_ID, SLEEPING_BAG_ID, STONE_ID, SULFUR_ORE_ID, WOOD_ID,
+        WORKBENCH_T1_ID, item_definition,
     },
     protocol::{ClientId, ItemStack},
 };
@@ -47,9 +47,10 @@ impl GameServer {
             HEWN_LOG_DOOR_ID,
             SLEEPING_BAG_ID,
         ];
-        // Sticks appear twice on purpose: a starter base (foundation +
+        // Wood appears twice on purpose: a starter base (foundation +
         // four wall pieces) costs more than one 100-stack.
         const RESOURCES: &[&str] = &[
+            WOOD_ID,
             WOOD_ID,
             STONE_ID,
             COAL_ID,
@@ -59,8 +60,6 @@ impl GameServer {
             PLANT_TWINE_ID,
             IRON_BAR_ID,
             HEWN_LOG_ID,
-            STICKS_ID,
-            STICKS_ID,
         ];
         const RESOURCE_QUANTITY: u16 = 100;
 
@@ -131,7 +130,6 @@ impl GameServer {
         const ALL_RESOURCES: &[&str] = &[
             WOOD_ID,
             STONE_ID,
-            STICKS_ID,
             COAL_ID,
             IRON_ORE_ID,
             SULFUR_ORE_ID,

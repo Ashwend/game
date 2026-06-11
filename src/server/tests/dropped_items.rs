@@ -49,6 +49,9 @@ fn dropped_items_spawn_near_head_and_inherit_player_velocity() {
 #[test]
 fn nearby_dropped_items_merge_on_server_interval() {
     let mut server = server();
+    // The merge cue is range-gated; a connected client near the pile is
+    // needed for the envelope assertion below.
+    let _listener = connect_host(&mut server);
     server.spawn_dropped_item(
         ItemStack::new(COAL_ID, 12),
         Vec3Net::new(0.0, DROPPED_ITEM_RADIUS, -2.0),

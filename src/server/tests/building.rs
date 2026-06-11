@@ -6,10 +6,10 @@ use super::*;
 use crate::{
     building::{BuildingPiece, BuildingTier, FOUNDATION_HEIGHT_M},
     game_balance::{
-        BUILDING_DEMOLISH_WINDOW_TICKS, BUILDING_STICKS_COST_FOUNDATION, BUILDING_STICKS_COST_WALL,
-        BUILDING_WOOD_COST_WALL,
+        BUILDING_DEMOLISH_WINDOW_TICKS, BUILDING_HEWN_WOOD_COST_WALL,
+        BUILDING_STICKS_COST_FOUNDATION, BUILDING_STICKS_COST_WALL,
     },
-    items::{DeployableKind, HAMMER_ID, IRON_PICKAXE_ID, STICKS_ID},
+    items::{DeployableKind, HAMMER_ID, IRON_PICKAXE_ID, WOOD_ID},
     protocol::{BuildingCommand, DamageDeployableCommand, DeployedEntityId, PlaceBuildingCommand},
 };
 
@@ -84,7 +84,7 @@ fn building_ids(server: &GameServer, piece: BuildingPiece) -> Vec<DeployedEntity
 fn foundation_placement_consumes_sticks_and_spawns_at_sticks_tier() {
     let mut server = server();
     let client_id = connect_host(&mut server);
-    give(&mut server, client_id, STICKS_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
 
     place(
         &mut server,
@@ -105,10 +105,8 @@ fn foundation_placement_consumes_sticks_and_spawns_at_sticks_tier() {
         }
     );
     assert_eq!(entity.yaw, 0.0, "yaw snaps to the quarter-turn grid");
-    let remaining = crate::inventory::count_items_in_inventory(
-        &server.clients[&client_id].inventory,
-        STICKS_ID,
-    );
+    let remaining =
+        crate::inventory::count_items_in_inventory(&server.clients[&client_id].inventory, WOOD_ID);
     assert_eq!(remaining, 200 - u32::from(BUILDING_STICKS_COST_FOUNDATION));
 }
 
@@ -166,7 +164,7 @@ fn melee_damage_reaches_a_wide_piece_whose_centre_is_out_of_range() {
 
     let mut server = server();
     let client_id = connect_host(&mut server);
-    give(&mut server, client_id, STICKS_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
     // Foundation centre 4 m out: past the 3 m melee radius, but its
     // near edge is 2.5 m away, well within a real swing. The old
     // centre-distance check silently dropped this hit.
@@ -255,7 +253,7 @@ fn free_deployables_stand_on_platforms_and_fall_with_them() {
 
     let mut server = server();
     let client_id = connect_host(&mut server);
-    give(&mut server, client_id, STICKS_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
     place(
         &mut server,
         client_id,
@@ -336,7 +334,7 @@ fn free_deployables_stand_on_platforms_and_fall_with_them() {
 fn raised_foundations_place_inside_the_band_and_extensions_inherit_height() {
     let mut server = server();
     let client_id = connect_host(&mut server);
-    give(&mut server, client_id, STICKS_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
 
     // Above the raise band: refused.
     place(
@@ -398,7 +396,7 @@ fn raised_foundations_place_inside_the_band_and_extensions_inherit_height() {
 fn foundation_placement_fails_without_materials_and_consumes_nothing() {
     let mut server = server();
     let client_id = connect_host(&mut server);
-    give(&mut server, client_id, STICKS_ID, 5);
+    give(&mut server, client_id, WOOD_ID, 5);
 
     place(
         &mut server,
@@ -409,10 +407,8 @@ fn foundation_placement_fails_without_materials_and_consumes_nothing() {
     );
 
     assert!(building_ids(&server, BuildingPiece::Foundation).is_empty());
-    let remaining = crate::inventory::count_items_in_inventory(
-        &server.clients[&client_id].inventory,
-        STICKS_ID,
-    );
+    let remaining =
+        crate::inventory::count_items_in_inventory(&server.clients[&client_id].inventory, WOOD_ID);
     assert_eq!(remaining, 5, "a failed placement must not eat materials");
 }
 
@@ -420,7 +416,7 @@ fn foundation_placement_fails_without_materials_and_consumes_nothing() {
 fn walls_snap_to_foundation_sockets_and_reject_free_placement() {
     let mut server = server();
     let client_id = connect_host(&mut server);
-    give(&mut server, client_id, STICKS_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
 
     // No foundation yet: a wall request goes nowhere.
     place(
@@ -472,7 +468,7 @@ fn walls_snap_to_foundation_sockets_and_reject_free_placement() {
 fn adjacent_foundations_snap_onto_the_grid() {
     let mut server = server();
     let client_id = connect_host(&mut server);
-    give(&mut server, client_id, STICKS_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
 
     place(
         &mut server,
@@ -500,8 +496,8 @@ fn adjacent_foundations_snap_onto_the_grid() {
 fn upgrade_walks_tiers_refills_health_and_requires_owner() {
     let mut server = server();
     let client_id = connect_host(&mut server);
-    give(&mut server, client_id, STICKS_ID, 200);
-    give(&mut server, client_id, crate::items::WOOD_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
+    give(&mut server, client_id, crate::items::HEWN_LOG_ID, 200);
     equip(&mut server, client_id, HAMMER_ID);
 
     place(
@@ -534,15 +530,18 @@ fn upgrade_walks_tiers_refills_health_and_requires_owner() {
         wall.kind,
         DeployableKind::Building {
             piece: BuildingPiece::Wall,
-            tier: BuildingTier::Wood,
+            tier: BuildingTier::HewnWood,
         }
     );
     assert_eq!(wall.health, wall.max_health, "upgrade refills health");
-    let wood_left = crate::inventory::count_items_in_inventory(
+    let hewn_logs_left = crate::inventory::count_items_in_inventory(
         &server.clients[&client_id].inventory,
-        crate::items::WOOD_ID,
+        crate::items::HEWN_LOG_ID,
     );
-    assert_eq!(wood_left, 200 - u32::from(BUILDING_WOOD_COST_WALL));
+    assert_eq!(
+        hewn_logs_left,
+        200 - u32::from(BUILDING_HEWN_WOOD_COST_WALL)
+    );
 
     // A different player can't upgrade someone else's wall.
     let intruder = connect_other(&mut server, 2, "Intruder");
@@ -557,7 +556,7 @@ fn upgrade_walks_tiers_refills_health_and_requires_owner() {
         matches!(
             wall.kind,
             DeployableKind::Building {
-                tier: BuildingTier::Wood,
+                tier: BuildingTier::HewnWood,
                 ..
             }
         ),
@@ -569,7 +568,7 @@ fn upgrade_walks_tiers_refills_health_and_requires_owner() {
 fn repair_restores_health_and_consumes_tier_materials() {
     let mut server = server();
     let client_id = connect_host(&mut server);
-    give(&mut server, client_id, STICKS_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
     equip(&mut server, client_id, HAMMER_ID);
 
     place(
@@ -583,10 +582,8 @@ fn repair_restores_health_and_consumes_tier_materials() {
     if let Some(entity) = server.deployed_entity_mut(id) {
         entity.health = 1;
     }
-    let sticks_before = crate::inventory::count_items_in_inventory(
-        &server.clients[&client_id].inventory,
-        STICKS_ID,
-    );
+    let wood_before =
+        crate::inventory::count_items_in_inventory(&server.clients[&client_id].inventory, WOOD_ID);
 
     server.receive(
         client_id,
@@ -595,11 +592,9 @@ fn repair_restores_health_and_consumes_tier_materials() {
 
     let entity = &server.deployed_entities[&id];
     assert!(entity.health > 1, "repair should restore health");
-    let sticks_after = crate::inventory::count_items_in_inventory(
-        &server.clients[&client_id].inventory,
-        STICKS_ID,
-    );
-    assert!(sticks_after < sticks_before, "repair costs materials");
+    let wood_after =
+        crate::inventory::count_items_in_inventory(&server.clients[&client_id].inventory, WOOD_ID);
+    assert!(wood_after < wood_before, "repair costs materials");
 }
 
 #[test]
@@ -608,7 +603,7 @@ fn demolish_window_closes_after_fifteen_minutes() {
     // A regular (non-admin) builder: the host is an admin and admins
     // bypass the demolish window for moderation.
     let client_id = connect_other(&mut server, 2, "Builder");
-    give(&mut server, client_id, STICKS_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
     equip(&mut server, client_id, HAMMER_ID);
 
     place(
@@ -654,7 +649,7 @@ fn demolish_window_closes_after_fifteen_minutes() {
 fn raid_balance_anyone_damages_buildings_but_stone_is_tool_immune() {
     let mut server = server();
     let owner = connect_host(&mut server);
-    give(&mut server, owner, STICKS_ID, 200);
+    give(&mut server, owner, WOOD_ID, 200);
     place(
         &mut server,
         owner,
@@ -703,7 +698,7 @@ fn raid_balance_anyone_damages_buildings_but_stone_is_tool_immune() {
 fn ceilings_need_wall_support_and_stack_storeys() {
     let mut server = server();
     let client_id = connect_host(&mut server);
-    give(&mut server, client_id, STICKS_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
 
     place(
         &mut server,
@@ -790,7 +785,7 @@ fn ceilings_need_wall_support_and_stack_storeys() {
 fn stairs_need_a_platform_and_a_clear_cell() {
     let mut server = server();
     let client_id = connect_host(&mut server);
-    give(&mut server, client_id, STICKS_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
 
     // No platform under the aim: rejected.
     place(
@@ -859,8 +854,8 @@ fn stairs_need_a_platform_and_a_clear_cell() {
 fn destroying_a_foundation_collapses_the_structure_above() {
     let mut server = server();
     let client_id = connect_host(&mut server);
-    give(&mut server, client_id, STICKS_ID, 200);
-    give(&mut server, client_id, STICKS_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
     give(&mut server, client_id, crate::items::HEWN_LOG_DOOR_ID, 1);
 
     // Foundation A: wall (+Z), doorway (-Z) carrying a door, ceiling,
@@ -967,7 +962,7 @@ fn move_player(server: &mut GameServer, client_id: ClientId, x: f32, z: f32) {
 fn walls_stack_on_walls_and_stability_decays_per_storey() {
     let mut server = server();
     let client_id = connect_host(&mut server);
-    give(&mut server, client_id, STICKS_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
 
     place(
         &mut server,
@@ -1014,8 +1009,8 @@ fn walls_stack_on_walls_and_stability_decays_per_storey() {
 fn ceiling_ledges_decay_and_reject_past_the_minimum() {
     let mut server = server();
     let client_id = connect_host(&mut server);
-    give(&mut server, client_id, STICKS_ID, 200);
-    give(&mut server, client_id, STICKS_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
 
     place(
         &mut server,
@@ -1089,7 +1084,7 @@ fn ceiling_ledges_decay_and_reject_past_the_minimum() {
 fn losing_the_supporting_wall_drops_the_ledge() {
     let mut server = server();
     let client_id = connect_host(&mut server);
-    give(&mut server, client_id, STICKS_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
 
     place(
         &mut server,
@@ -1132,7 +1127,7 @@ fn stored_stability_matches_the_placement_prediction() {
     // walk. The two must agree or the ghost lies.
     let mut server = server();
     let client_id = connect_host(&mut server);
-    give(&mut server, client_id, STICKS_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
 
     place(
         &mut server,
@@ -1183,7 +1178,7 @@ fn placement_costs_match_the_balance_table() {
 fn extending_one_grid_cannot_overlap_an_offset_foundation() {
     let mut server = server();
     let client_id = connect_host(&mut server);
-    give(&mut server, client_id, STICKS_ID, 200);
+    give(&mut server, client_id, WOOD_ID, 200);
 
     // Free foundation A near the player, free foundation B on an
     // offset grid (its requested spot is outside A's snap tolerance so

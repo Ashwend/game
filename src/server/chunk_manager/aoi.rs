@@ -69,6 +69,18 @@ impl ChunkManager {
             .collect()
     }
 
+    /// Count of nodes visible to a player without materialising the id
+    /// set. `nodes_visible_to` collects ~1800 ids into a fresh `HashSet`
+    /// at AoI scale; the per-client perf-stats broadcast only needs the
+    /// number. Each node is anchored to exactly one chunk, so summing
+    /// per-chunk counts equals the deduplicated set size.
+    pub fn visible_node_count(&self, player_pos: Vec3Net, tier: ViewRadiusTier) -> usize {
+        self.visible_chunks(player_pos, tier)
+            .into_iter()
+            .map(|coord| self.nodes_in(coord).count())
+            .sum()
+    }
+
     /// Dropped item ids visible to a player at `player_pos` under the
     /// given view tier.
     pub fn dropped_items_visible_to(

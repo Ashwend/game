@@ -9,23 +9,24 @@ fn make_player(
     x: f32,
     z: f32,
     alive: bool,
-) -> (Player, PlayerPublic) {
+) -> (Player, Vec3Net, f32) {
     let player = Player {
         client_id: id,
         account_id: 0,
     };
-    let public = PlayerPublic {
-        name: "tester".into(),
-        position: Vec3Net::new(x, 0.0, z),
-        velocity: Vec3Net::ZERO,
-        yaw: 0.0,
-        pitch: 0.0,
-        health: if alive { MAX_HEALTH } else { 0.0 },
-        grounded: true,
-        is_admin: false,
-        chat_bubble: None,
-    };
-    (player, public)
+    let position = Vec3Net::new(x, 0.0, z);
+    let health = if alive { MAX_HEALTH } else { 0.0 };
+    (player, position, health)
+}
+
+fn candidate(target: &(Player, Vec3Net, f32), sleeping: bool) -> PlayerTargetCandidate<'_> {
+    PlayerTargetCandidate {
+        player: &target.0,
+        name: "tester",
+        position: target.1,
+        health: target.2,
+        sleeping,
+    }
 }
 
 #[test]
@@ -39,11 +40,11 @@ fn player_in_view_within_range_resolves_as_target() {
         0.0,
         0.0,
         Some(1),
-        [(&target.0, &target.1, false)].into_iter(),
+        [candidate(&target, false)].into_iter(),
     )
     .expect("player should be in front and in range");
-    assert_eq!(hit.0.client_id, 7);
-    assert!(hit.3 < ATTACK_RANGE_M);
+    assert_eq!(hit.0.player.client_id, 7);
+    assert!(hit.1 < ATTACK_RANGE_M);
 }
 
 #[test]
@@ -56,7 +57,7 @@ fn local_player_is_skipped() {
         0.0,
         0.0,
         Some(1),
-        [(&target.0, &target.1, false)].into_iter(),
+        [candidate(&target, false)].into_iter(),
     );
     assert!(hit.is_none(), "local client must not target itself");
 }
@@ -72,7 +73,7 @@ fn player_out_of_range_is_skipped() {
         0.0,
         0.0,
         Some(1),
-        [(&target.0, &target.1, false)].into_iter(),
+        [candidate(&target, false)].into_iter(),
     );
     assert!(hit.is_none(), "player past attack range must not target");
 }
@@ -87,7 +88,7 @@ fn dead_player_is_skipped() {
         0.0,
         0.0,
         Some(1),
-        [(&target.0, &target.1, false)].into_iter(),
+        [candidate(&target, false)].into_iter(),
     );
     assert!(hit.is_none(), "dead targets are not attackable");
 }
@@ -104,11 +105,11 @@ fn sleeping_body_resolves_as_a_low_target() {
         0.0,
         -0.8,
         Some(1),
-        [(&target.0, &target.1, true)].into_iter(),
+        [candidate(&target, true)].into_iter(),
     )
     .expect("a sleeper looked down at should resolve");
-    assert_eq!(hit.0.client_id, 7);
-    assert!(hit.2, "the resolved target is flagged sleeping");
+    assert_eq!(hit.0.player.client_id, 7);
+    assert!(hit.0.sleeping, "the resolved target is flagged sleeping");
 }
 
 #[test]
@@ -122,7 +123,7 @@ fn player_behind_is_skipped() {
         0.0,
         0.0,
         Some(1),
-        [(&target.0, &target.1, false)].into_iter(),
+        [candidate(&target, false)].into_iter(),
     );
     assert!(hit.is_none(), "behind-camera targets must not register");
 }

@@ -47,12 +47,17 @@ impl GameServer {
         let mut envelopes = self.tick_crafting();
         envelopes.extend(self.disconnect_stale_clients());
         if self.tick.is_multiple_of(DROPPED_ITEM_MERGE_INTERVAL_TICKS) {
-            envelopes.extend(self.merge_nearby_dropped_items().into_iter().map(
-                |(item_id, quantity)| ServerEnvelope {
-                    target: DeliveryTarget::Broadcast,
-                    message: ServerMessage::ItemMerged { item_id, quantity },
-                },
-            ));
+            // The merge cue is a quiet UI blip; deliver it only to
+            // clients near the merged pile instead of broadcasting
+            // every merge on the map to every connected client.
+            for (item_id, quantity, position) in self.merge_nearby_dropped_items() {
+                envelopes.extend(self.envelopes_within_range(
+                    position,
+                    crate::game_balance::ITEM_MERGE_CUE_RANGE_M,
+                    None,
+                    ServerMessage::ItemMerged { item_id, quantity },
+                ));
+            }
         }
         if self
             .tick
@@ -167,10 +172,7 @@ impl GameServer {
                 crate::world::ChunkClassification::Mixed => PerfClassificationId::Mixed,
             })
             .unwrap_or(PerfClassificationId::None);
-        let aoi_visible_nodes = self
-            .chunk_manager
-            .nodes_visible_to(position, view_tier)
-            .len() as u32;
+        let aoi_visible_nodes = self.chunk_manager.visible_node_count(position, view_tier) as u32;
         PerfStatsSnapshot {
             loaded_chunks: self.chunk_manager.loaded_chunk_count() as u32,
             live_nodes: self.chunk_manager.live_node_count() as u32,

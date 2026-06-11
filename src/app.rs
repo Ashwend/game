@@ -63,9 +63,9 @@ use self::{
     },
     systems::{
         AutoConnectRequest, CameraImpactKick, CameraMotionEffects, ClientSystemSet,
-        CraftCompletionWatch, DroppedItemEntities, LastTrackedScreen, LootBagEntities,
-        PendingSessionEndReason, RemotePlayerEntities, ResourceNodeEntities, SessionTracker,
-        animate_door_panels_system, animate_furnace_fire_system, app_quit_system,
+        CraftCompletionWatch, DeployedEntityVisuals, DroppedItemEntities, LastTrackedScreen,
+        LootBagEntities, PendingSessionEndReason, RemotePlayerEntities, ResourceNodeEntities,
+        SessionTracker, animate_door_panels_system, animate_furnace_fire_system, app_quit_system,
         apply_deployed_entities_system, apply_display_settings_system, apply_dropped_items_system,
         apply_graphics_settings_system, apply_held_item_visual_system, apply_loot_bags_system,
         apply_resource_node_stage_system, apply_resource_nodes_system, apply_snapshot_system,
@@ -73,19 +73,19 @@ use self::{
         auto_connect_start_system, camera_follow_system, center_cursor_on_focus_system,
         chat_shortcut_system, chunk_overlay_system, client_input_system,
         close_furnace_on_escape_system, close_loot_bag_on_escape_system, craft_complete_cue_system,
-        door_swing_audio_system, drive_auth_flow_system, error_relay_system,
-        flush_settings_on_exit_system, gameplay_inventory_shortcuts_system,
-        maintain_world_grid_system, menu_backdrop_camera_system, mouse_look_system,
-        multiplayer_test_owns_window, network_tick_system, placement_input_system,
-        reposition_test_window_system, save_client_settings_system, screen_viewed_system,
-        session_ended_system, session_shutdown_poll_system, session_started_system,
-        spawn_impact_effects_system, surface_client_error_toasts_system,
-        sync_furnace_open_flag_system, sync_loot_bag_open_flag_system, sync_view_radius_system,
-        tick_combat_feedback_system, tick_felling_trees_system, tick_furnace_particles_system,
-        tick_impact_chips_system, tick_resource_node_pop_in_system, toggle_crafting_system,
-        toggle_inventory_system, toggle_pause_system, toggle_perf_stats_system,
-        update_cursor_system, update_link_ping_system, update_pickup_target_system,
-        update_placement_ghost_system, update_tool_swap_state_system, wheel_menu_system,
+        drive_auth_flow_system, error_relay_system, flush_settings_on_exit_system,
+        gameplay_inventory_shortcuts_system, maintain_world_grid_system,
+        menu_backdrop_camera_system, mouse_look_system, multiplayer_test_owns_window,
+        network_tick_system, placement_input_system, reposition_test_window_system,
+        save_client_settings_system, screen_viewed_system, session_ended_system,
+        session_shutdown_poll_system, session_started_system, spawn_impact_effects_system,
+        surface_client_error_toasts_system, sync_furnace_open_flag_system,
+        sync_loot_bag_open_flag_system, sync_view_radius_system, tick_combat_feedback_system,
+        tick_felling_trees_system, tick_furnace_particles_system, tick_impact_chips_system,
+        tick_resource_node_pop_in_system, toggle_crafting_system, toggle_inventory_system,
+        toggle_pause_system, toggle_perf_stats_system, update_cursor_system,
+        update_link_ping_system, update_pickup_target_system, update_placement_ghost_system,
+        update_tool_swap_state_system, wheel_menu_system,
     },
     ui::{
         ButtonSoundRequests, InventorySoundRequests, apply_ui_scale_system, button_sound_system,
@@ -332,6 +332,7 @@ fn insert_client_resources(
         .insert_resource(CameraImpactKick::default())
         .insert_resource(CameraMotionEffects::default())
         .insert_resource(CombatFeedbackState::default())
+        .insert_resource(DeployedEntityVisuals::default())
         .insert_resource(DroppedItemEntities::default())
         .insert_resource(LootBagEntities::default())
         .insert_resource(ResourceNodeEntities::default())
@@ -819,11 +820,10 @@ fn add_scene_systems(app: &mut App) {
         .add_systems(
             Update,
             // Door panels ease open/closed after the deployable visuals
-            // reconcile, so a door spawning open this frame starts its
-            // swing immediately. The swing sound watches the same
-            // replicated flag by value.
-            (animate_door_panels_system, door_swing_audio_system)
-                .after(ClientSystemSet::DeployedEntities),
+            // reconcile, so a flip applied this frame (the reconciler
+            // writes `DoorPanel::open` and plays the swing sound on the
+            // same edge) starts its swing immediately.
+            animate_door_panels_system.after(ClientSystemSet::DeployedEntities),
         )
         // Camera follow runs only in PostUpdate, before transform propagation.
         // Running in both Update and PostUpdate would advance the impact-kick

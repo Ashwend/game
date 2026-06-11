@@ -1,19 +1,23 @@
 //! Client-side mirror of the local player's replicated components.
 //!
 //! UI and input systems need to read the local player's inventory,
-//! crafting queue, and open-furnace state. Those live on the
-//! Lightyear-replicated `PlayerPublic` / `PlayerPrivate` components on
-//! the local player's entity. A single per-frame system scans the
-//! `Player` query to find whichever entity matches
-//! `ClientRuntime::client_id` and caches a clone of the components so
-//! UI helpers (which don't own a query themselves) can read the data
-//! via a plain `Res<LocalPlayerState>`.
+//! crafting queue, and open-furnace state. Those arrive as separate
+//! Lightyear-replicated components (`PlayerInventory`, `PlayerCrafting`,
+//! `PlayerOpenContainers`, `PlayerInputAck`, split per cadence so the
+//! wire diffs stay small). A single per-frame system scans the `Player`
+//! query to find whichever entity matches `ClientRuntime::client_id`
+//! and reassembles the pieces into one [`PlayerPrivate`] view so UI
+//! helpers (which don't own a query themselves) can read the data via a
+//! plain `Res<LocalPlayerState>`.
 //!
 //! Clones are cheap for one entity per frame.
 
 use bevy::prelude::*;
 
-use crate::server::{Player, PlayerLifecycle, PlayerPrivate, PlayerPublic};
+use crate::server::{
+    Player, PlayerCrafting, PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerOpenContainers,
+    PlayerPrivate,
+};
 
 use super::{ClientRuntime, MenuState, PredictionState};
 
@@ -23,7 +27,6 @@ use super::{ClientRuntime, MenuState, PredictionState};
 #[derive(Resource, Default, Debug)]
 pub(crate) struct LocalPlayerState {
     pub(crate) entity: Option<Entity>,
-    pub(crate) public: Option<PlayerPublic>,
     pub(crate) private: Option<PlayerPrivate>,
     pub(crate) lifecycle: Option<PlayerLifecycle>,
 }
@@ -36,25 +39,40 @@ pub(crate) fn update_local_player_state_system(
     players: Query<(
         Entity,
         &Player,
-        &PlayerPublic,
-        Option<&PlayerPrivate>,
+        Option<&PlayerInventory>,
+        Option<&PlayerCrafting>,
+        Option<&PlayerOpenContainers>,
+        Option<&PlayerInputAck>,
         Option<&PlayerLifecycle>,
     )>,
 ) {
     let Some(client_id) = runtime.client_id else {
         state.entity = None;
-        state.public = None;
         state.private = None;
         state.lifecycle = None;
         return;
     };
 
-    for (entity, player, public, private, lifecycle) in &players {
+    for (entity, player, inventory, crafting, containers, input_ack, lifecycle) in &players {
         if player.client_id == client_id {
             let prior = state.lifecycle;
             state.entity = Some(entity);
-            state.public = Some(public.clone());
-            state.private = private.cloned();
+            // All four owner-only components ship in the entity's
+            // initial replication action, so they appear together;
+            // requiring all of them keeps the assembled view atomic.
+            state.private = match (inventory, crafting, containers, input_ack) {
+                (Some(inventory), Some(crafting), Some(containers), Some(input_ack)) => {
+                    Some(PlayerPrivate {
+                        inventory: inventory.0.clone(),
+                        crafting: crafting.0.clone(),
+                        open_furnace: containers.open_furnace.clone(),
+                        open_loot_bag: containers.open_loot_bag.clone(),
+                        last_processed_input: input_ack.last_processed_input,
+                        applied_action_seq: input_ack.applied_action_seq,
+                    })
+                }
+                _ => None,
+            };
             state.lifecycle = lifecycle.copied();
             // Auto-clear the death splash when the replicated
             // lifecycle transitions Dead → Alive (i.e. server-side
@@ -74,7 +92,6 @@ pub(crate) fn update_local_player_state_system(
     }
 
     state.entity = None;
-    state.public = None;
     state.private = None;
     state.lifecycle = None;
 }
@@ -91,8 +108,8 @@ pub(crate) fn update_local_player_state_system(
 /// action.
 ///
 /// See [`PredictionState`] for the reconciliation invariant. The raw
-/// replicated inventory still lives on the `PlayerPrivate` ECS component; this
-/// only overwrites the per-frame cache clone.
+/// replicated inventory still lives on the `PlayerInventory` ECS component;
+/// this only overwrites the per-frame cache clone.
 pub(crate) fn apply_prediction_overlay_system(
     runtime: Res<ClientRuntime>,
     mut prediction: ResMut<PredictionState>,

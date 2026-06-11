@@ -251,7 +251,7 @@ fn held_quantity(local_player: &LocalPlayerState, item_id: &str) -> u32 {
         .unwrap_or(0)
 }
 
-/// `"30 Sticks"` cost line plus whether the player can afford it.
+/// `"30 Wood"` cost line plus whether the player can afford it.
 fn cost_detail(local_player: &LocalPlayerState, cost: (&'static str, u16)) -> (String, bool) {
     let (cost_item, cost_quantity) = cost;
     let material = item_definition(cost_item)

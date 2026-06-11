@@ -310,9 +310,11 @@ pub enum ServerMessage {
         position: Vec3Net,
         frame: Vec<u8>,
     },
-    /// Server-side perf stats payload, broadcast on a slow tick (~1 Hz)
-    /// when the perf HUD is being shown. The client uses this for the
-    /// overlay panel; it doesn't affect gameplay.
+    /// Server-side perf stats payload, sent to every client on a slow
+    /// tick (~1 Hz) regardless of whether the perf HUD is open (the
+    /// payload is ~30 B; an opt-in handshake isn't worth the wire
+    /// shape). The client uses this for the F2 overlay panel; it
+    /// doesn't affect gameplay.
     PerfStats(PerfStatsSnapshot),
     /// Echo of a client [`ClientMessage::Ping`]'s timestamp, letting the client
     /// compute its round-trip latency.

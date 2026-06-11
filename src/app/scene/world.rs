@@ -1,4 +1,4 @@
-use bevy::{mesh::VertexAttributeValues, prelude::*};
+use bevy::{light::NotShadowCaster, mesh::VertexAttributeValues, prelude::*};
 
 use crate::{
     app::{
@@ -150,6 +150,11 @@ fn spawn_world_geometry(
             cull_mode: None,
             ..default()
         })),
+        // A flat plane at the bottom of the world can never cast a
+        // visible shadow, but without this marker its ~33k triangles
+        // rasterise into every directional-light cascade each frame.
+        // Receiving shadows is unaffected.
+        NotShadowCaster,
     ));
 
     let block_materials = [

@@ -222,7 +222,6 @@ mod tests {
     fn local_player(open_loot_bag: Option<OpenLootBagView>) -> LocalPlayerState {
         LocalPlayerState {
             entity: None,
-            public: None,
             private: Some(PlayerPrivate {
                 inventory: PlayerInventoryState::empty(),
                 crafting: Default::default(),

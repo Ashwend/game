@@ -256,6 +256,23 @@ mod tests {
     }
 
     #[test]
+    fn legacy_sticks_stacks_deserialize_as_wood() {
+        // `sticks` was folded into `wood` (2026-06). Saves use postcard
+        // like the wire, so a stack persisted before the fold must come
+        // back as wood instead of an unknown item id.
+        let legacy = ItemStack {
+            item_id: intern_item_id("sticks"),
+            quantity: 25,
+            durability: None,
+        };
+        let encoded = postcard::to_allocvec(&legacy).expect("encode legacy stack");
+        let decoded: ItemStack = postcard::from_bytes(&encoded).expect("decode legacy stack");
+
+        assert_eq!(decoded.item_id.as_ref(), crate::items::WOOD_ID);
+        assert_eq!(decoded.quantity, 25);
+    }
+
+    #[test]
     fn crafting_job_recipe_id_round_trips_and_reuses_the_interned_arc() {
         use crate::crafting::{STONE_HATCHET_RECIPE_ID, intern_recipe_id};
 

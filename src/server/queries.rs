@@ -3,11 +3,40 @@ use crate::protocol::{
 };
 
 use super::{
-    GameServer, PlayerArmor, deployable_ecs, deployables::DeployedEntity,
-    dropped_items::DroppedItemBody, player_ecs,
+    DeliveryTarget, GameServer, PlayerArmor, ServerEnvelope, deployable_ecs,
+    deployables::DeployedEntity, dropped_items::DroppedItemBody, player_ecs,
+    voice::within_range_sq,
 };
 
 impl GameServer {
+    /// Per-client envelopes for a cosmetic, world-anchored event that
+    /// only nearby players can perceive (impact bursts, merge cues).
+    /// `DeliveryTarget::Broadcast*` would ship the message to every
+    /// client on the server, including players the full map away; this
+    /// filters to online clients within `range` metres of `position`,
+    /// skipping the optional `except` client (typically the actor whose
+    /// own client already produced the effect via prediction). Same
+    /// shape as the voice fan-out in `voice.rs`.
+    pub(super) fn envelopes_within_range(
+        &self,
+        position: Vec3Net,
+        range: f32,
+        except: Option<ClientId>,
+        message: super::ServerMessage,
+    ) -> Vec<ServerEnvelope> {
+        let range_sq = range * range;
+        self.clients
+            .values()
+            .filter(|client| client.online)
+            .filter(|client| Some(client.client_id) != except)
+            .filter(|client| within_range_sq(position, client.controller.position, range_sq))
+            .map(|client| ServerEnvelope {
+                target: DeliveryTarget::Client(client.client_id),
+                message: message.clone(),
+            })
+            .collect()
+    }
+
     /// Read-only view of a connected player's anchor position and AoI tier.
     /// Used by the chunk-room subscription system in `net/host` to recompute
     /// which rooms a client should be in each tick.
@@ -292,31 +321,37 @@ impl GameServer {
         )
     }
 
-    /// Iterate connected players as wire-shape views (public + private
-    /// split) for the player mirror.
+    /// Iterate connected players as wire-shape views (one field per
+    /// replicated component) for the player mirror.
     pub fn players_iter(&self) -> impl Iterator<Item = player_ecs::PlayerView> + '_ {
         self.clients.values().map(|client| player_ecs::PlayerView {
             client_id: client.client_id,
             account_id: client.account_id,
-            public: player_ecs::PlayerPublic {
+            profile: player_ecs::PlayerProfile {
                 name: client.name.clone(),
+                is_admin: client.is_admin,
+            },
+            pose: player_ecs::PlayerPose {
                 position: client.controller.position,
                 velocity: client.controller.velocity,
                 yaw: client.controller.yaw,
                 pitch: client.controller.pitch,
-                health: client.controller.health,
                 grounded: client.controller.grounded,
-                is_admin: client.is_admin,
-                chat_bubble: client
+            },
+            health: player_ecs::PlayerHealth(client.controller.health),
+            chat_bubble: player_ecs::PlayerChatBubble(
+                client
                     .chat_bubble
                     .as_ref()
                     .map(|bubble| bubble.text.clone()),
-            },
-            private: player_ecs::PlayerPrivate {
-                inventory: client.inventory.clone(),
-                crafting: client.crafting.clone(),
+            ),
+            inventory: player_ecs::PlayerInventory(client.inventory.clone()),
+            crafting: player_ecs::PlayerCrafting(client.crafting.clone()),
+            containers: player_ecs::PlayerOpenContainers {
                 open_furnace: self.open_furnace_view_for(client.client_id),
                 open_loot_bag: self.open_loot_bag_view_for(client.client_id),
+            },
+            input_ack: player_ecs::PlayerInputAck {
                 last_processed_input: client.controller.last_processed_input,
                 applied_action_seq: client.applied_action_seq,
             },

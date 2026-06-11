@@ -3,14 +3,17 @@
 //! Companion to [`crate::server::resource_node_ecs`]. Player state lives
 //! in `GameServer::clients: HashMap<ClientId, ServerClient>`; the
 //! `sync_player_entities` system in `net/host.rs` reconciles that map
-//! into ECS entities so Phase 4/5 chunk-room replication can attach
-//! `Replicate` per entity.
+//! into ECS entities so chunk-room replication can attach `Replicate`
+//! per entity.
 //!
-//! Split into [`PlayerPublic`] (replicated to every client in the same
-//! room) and [`PlayerPrivate`] (replicated only to the owning client).
-//! This is the shape we want for Phase 5, putting it on the components
-//! now means the replication wiring later just needs `Replicate` markers
-//! with the right `NetworkTarget`, no further refactor.
+//! Following the project rule of one component per mutable field group
+//! (Lightyear ships whole-component values, not field diffs), the
+//! peer-visible state is split into [`PlayerProfile`] / [`PlayerPose`] /
+//! [`PlayerHealth`] / [`PlayerChatBubble`], and the owner-only state
+//! into [`PlayerInventory`] / [`PlayerCrafting`] /
+//! [`PlayerOpenContainers`] / [`PlayerInputAck`]. The previous
+//! mega-components re-shipped the full inventory at 20 Hz because the
+//! input ack ticking every tick made the bundled value compare unequal.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -32,50 +35,93 @@ pub struct Player {
     pub account_id: AccountId,
 }
 
-/// Player state that every peer in the same chunk room can see. Phase 5
-/// marks this with `Replicate::to_clients(NetworkTarget::All)` and lets
-/// the room machinery + `NetworkVisibility` gate per-client.
+/// Peer-visible profile: display name + admin badge. Practically
+/// immutable (set at connect, admin grants are rare), split from the
+/// 20 Hz pose so the name string doesn't re-ship with every movement
+/// diff.
 #[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PlayerPublic {
+pub struct PlayerProfile {
     pub name: String,
+    pub is_admin: bool,
+}
+
+/// Peer-visible movement state, the only player component that changes
+/// every tick while moving. Kept lean so the per-tick wire diff stays
+/// minimal.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PlayerPose {
     pub position: Vec3Net,
     pub velocity: Vec3Net,
     pub yaw: f32,
     pub pitch: f32,
-    pub health: f32,
     pub grounded: bool,
-    pub is_admin: bool,
-    /// Most recent chat bubble text, or `None` if the bubble window has
-    /// expired. Only the text is public, the expiry tick is server-only
-    /// bookkeeping.
-    pub chat_bubble: Option<String>,
 }
 
-/// Player state that only the owning client should ever see. Phase 5
-/// pairs the entity-level `Replicate` (broadcast to all clients in the
-/// chunk room) with a per-component `ComponentReplicationOverrides<PlayerPrivate>`
-/// that disables this component for every sender except the owning
-/// client's link entity. Peers therefore never receive the wire bytes.
+/// Peer-visible health. Changes on damage and heal only.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PlayerHealth(pub f32);
+
+/// Most recent chat bubble text, or `None` once the bubble window has
+/// expired. Only the text is public, the expiry tick is server-only
+/// bookkeeping. Split out so a live bubble's text doesn't ride along
+/// in every movement diff for its whole 6 s lifetime.
+#[derive(Component, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlayerChatBubble(pub Option<String>);
+
+/// Owner-only inventory state. Replication is gated to the owning
+/// client's sender via `ComponentReplicationOverrides` (see
+/// `net/host/rooms.rs`); peers never receive the wire bytes. Changes on
+/// inventory mutation only.
 #[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PlayerPrivate {
-    pub inventory: PlayerInventoryState,
-    pub crafting: PlayerCraftingState,
+pub struct PlayerInventory(pub PlayerInventoryState);
+
+/// Owner-only crafting queue. Changes while jobs are queued (progress
+/// ticks each server tick during an active job).
+#[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlayerCrafting(pub PlayerCraftingState);
+
+/// Owner-only views of whatever container UI the player has open.
+/// `None`/`None` (the common case) is a few bytes; while a furnace is
+/// open and burning, the progress fractions tick per server tick, which
+/// is why this lives apart from the inventory.
+#[derive(Component, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlayerOpenContainers {
     /// Full per-client view of the currently-opened furnace, if any.
     /// Carrying the full [`OpenFurnaceView`] (slots + progress) rather
     /// than just the id keeps the furnace UI reachable from the
-    /// replicated component alone, Phase 6.1 retargets the consumer
-    /// here and the snapshot's `open_furnace` field goes away.
+    /// replicated component alone.
     pub open_furnace: Option<OpenFurnaceView>,
     /// Full per-client view of the currently-opened loot bag, if any.
-    /// Mirrors `open_furnace` for the bag UI, the slot grid is
-    /// shipped here so the bag panel doesn't need a separate
-    /// network round-trip to render.
+    /// Mirrors `open_furnace` for the bag UI.
     pub open_loot_bag: Option<OpenLootBagView>,
+}
+
+/// Owner-only input/action acknowledgement. Ticks at 20 Hz while the
+/// player moves, which is exactly why it is its own tiny component: when
+/// it was bundled with the inventory, every ack diff re-shipped the full
+/// inventory bytes.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlayerInputAck {
     pub last_processed_input: u64,
     /// Highest optimistic-prediction action sequence the server has processed
     /// for this client (accepted *or* rejected). The client prunes pending
     /// overlay ops with `seq <= applied_action_seq`; see
     /// `src/app/state/prediction.rs`.
+    pub applied_action_seq: u32,
+}
+
+/// Client-side assembled view of the owner-only player state. **Not a
+/// wire shape**: the server replicates [`PlayerInventory`],
+/// [`PlayerCrafting`], [`PlayerOpenContainers`], and [`PlayerInputAck`]
+/// as separate components; `update_local_player_state_system`
+/// reassembles them into this struct so UI consumers keep one handle.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlayerPrivate {
+    pub inventory: PlayerInventoryState,
+    pub crafting: PlayerCraftingState,
+    pub open_furnace: Option<OpenFurnaceView>,
+    pub open_loot_bag: Option<OpenLootBagView>,
+    pub last_processed_input: u64,
     pub applied_action_seq: u32,
 }
 
@@ -139,12 +185,19 @@ crate::server::entity_index::entity_index! {
 
 /// Wire-shape view used by the mirror to spawn or refresh a player
 /// entity. Mirrors `ServerClient` without taking a copy of its internal
-/// shape.
+/// shape; one field per replicated component so the mirror sync can
+/// compare-and-write each at its own cadence.
 pub struct PlayerView {
     pub client_id: ClientId,
     pub account_id: AccountId,
-    pub public: PlayerPublic,
-    pub private: PlayerPrivate,
+    pub profile: PlayerProfile,
+    pub pose: PlayerPose,
+    pub health: PlayerHealth,
+    pub chat_bubble: PlayerChatBubble,
+    pub inventory: PlayerInventory,
+    pub crafting: PlayerCrafting,
+    pub containers: PlayerOpenContainers,
+    pub input_ack: PlayerInputAck,
     pub armor: PlayerArmor,
     pub lifecycle: PlayerLifecycle,
     pub sleeping: PlayerSleeping,
@@ -158,8 +211,14 @@ pub fn spawn_player_entity(world: &mut World, view: PlayerView, chunk: ChunkCoor
                 client_id: view.client_id,
                 account_id: view.account_id,
             },
-            view.public,
-            view.private,
+            view.profile,
+            view.pose,
+            view.health,
+            view.chat_bubble,
+            view.inventory,
+            view.crafting,
+            view.containers,
+            view.input_ack,
             view.armor,
             view.lifecycle,
             view.sleeping,
@@ -184,25 +243,23 @@ mod tests {
         PlayerView {
             client_id,
             account_id: 42,
-            public: PlayerPublic {
+            profile: PlayerProfile {
                 name: "Alice".to_owned(),
+                is_admin: false,
+            },
+            pose: PlayerPose {
                 position: Vec3Net::ZERO,
                 velocity: Vec3Net::ZERO,
                 yaw: 0.0,
                 pitch: 0.0,
-                health: 100.0,
                 grounded: true,
-                is_admin: false,
-                chat_bubble: None,
             },
-            private: PlayerPrivate {
-                inventory: PlayerInventoryState::empty(),
-                crafting: PlayerCraftingState::default(),
-                open_furnace: None,
-                open_loot_bag: None,
-                last_processed_input: 0,
-                applied_action_seq: 0,
-            },
+            health: PlayerHealth(100.0),
+            chat_bubble: PlayerChatBubble::default(),
+            inventory: PlayerInventory(PlayerInventoryState::empty()),
+            crafting: PlayerCrafting(PlayerCraftingState::default()),
+            containers: PlayerOpenContainers::default(),
+            input_ack: PlayerInputAck::default(),
             armor: PlayerArmor::default(),
             lifecycle: PlayerLifecycle::default(),
             sleeping: PlayerSleeping::default(),
@@ -215,10 +272,10 @@ mod tests {
         let entity = spawn_player_entity(&mut world, sample_view(1), ChunkCoord::new(0, 0));
         assert_eq!(world.resource::<PlayerIndex>().get(1), Some(entity));
 
-        let public = world.get::<PlayerPublic>(entity).expect("public");
-        assert_eq!(public.name, "Alice");
-        let private = world.get::<PlayerPrivate>(entity).expect("private");
-        assert_eq!(private.last_processed_input, 0);
+        let profile = world.get::<PlayerProfile>(entity).expect("profile");
+        assert_eq!(profile.name, "Alice");
+        let ack = world.get::<PlayerInputAck>(entity).expect("input ack");
+        assert_eq!(ack.last_processed_input, 0);
         let armor = world.get::<PlayerArmor>(entity).expect("armor");
         assert_eq!(armor.0, 0);
 

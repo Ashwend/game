@@ -31,9 +31,13 @@
 //!
 //! Perf: the combined buffer is extracted ([`extract_grass`]) and uploaded
 //! ([`prepare_instance_buffers`]) **only when it changes** (tiles stream in/out),
-//! not every frame. The field entity carries `SyncToRenderWorld` (added at spawn)
-//! so it has a `RenderEntity` for the change-gated extract to target, the
-//! material-less entity would not sync otherwise.
+//! not every frame, and the GPU buffer is a persistent grow-only allocation
+//! written with `queue.write_buffer` (walking changes the tile set nearly
+//! continuously; allocating a fresh multi-MB buffer for each change was
+//! measurable render-thread churn). The field entity carries
+//! `SyncToRenderWorld` (added at spawn) so it has a `RenderEntity` for the
+//! change-gated extract to target, the material-less entity would not sync
+//! otherwise.
 
 use bevy::{
     core_pipeline::core_3d::Transparent3d,
@@ -53,7 +57,7 @@ use bevy::{
             RenderCommandResult, SetItemPipeline, TrackedRenderPass, ViewSortedRenderPhases,
         },
         render_resource::*,
-        renderer::RenderDevice,
+        renderer::{RenderDevice, RenderQueue},
         sync_world::{MainEntity, RenderEntity},
         view::ExtractedView,
     },
@@ -191,24 +195,62 @@ struct InstanceBuffer {
     length: usize,
 }
 
+/// Headroom factor for a fresh allocation: capacity for the current
+/// blade count plus 25%. While the player walks, tiles stream in and
+/// out nearly continuously and the total count wobbles by a few tiles'
+/// worth; the slack means steady movement re-uses one allocation
+/// instead of creating a new multi-MB buffer several times a second.
+fn grown_capacity_bytes(len_bytes: usize) -> u64 {
+    (len_bytes + len_bytes / 4 + size_of::<InstanceData>()) as u64
+}
+
 fn prepare_instance_buffers(
     mut commands: Commands,
-    // Only (re)build the GPU buffer when the extracted data changed; the retained
+    // Only touch the GPU buffer when the extracted data changed; the retained
     // render world keeps the old `InstanceBuffer` otherwise. `extract_grass` only
     // re-inserts on change, so this fires only when the field actually changed.
-    query: Query<(Entity, &InstanceMaterialData), Changed<InstanceMaterialData>>,
+    mut query: Query<
+        (Entity, &InstanceMaterialData, Option<&mut InstanceBuffer>),
+        Changed<InstanceMaterialData>,
+    >,
     render_device: Res<RenderDevice>,
+    render_queue: Res<RenderQueue>,
 ) {
-    for (entity, instance_data) in &query {
-        let buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
-            label: Some("grass instance data buffer"),
-            contents: bytemuck::cast_slice(instance_data.as_slice()),
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-        });
-        commands.entity(entity).insert(InstanceBuffer {
-            buffer,
-            length: instance_data.len(),
-        });
+    for (entity, instance_data, existing) in &mut query {
+        let bytes: &[u8] = bytemuck::cast_slice(instance_data.as_slice());
+        // Reuse the existing allocation whenever it still fits: a tile
+        // streaming in/out changes the byte length by a fraction of a
+        // percent, and `write_buffer` is a staged copy while
+        // `create_buffer_with_data` is a fresh allocation + upload of
+        // the full multi-MB field every time. The draw limits itself to
+        // `length` instances, so trailing stale bytes are never read.
+        match existing {
+            Some(mut instance_buffer) if instance_buffer.buffer.size() >= bytes.len() as u64 => {
+                if !bytes.is_empty() {
+                    render_queue.write_buffer(&instance_buffer.buffer, 0, bytes);
+                }
+                instance_buffer.length = instance_data.len();
+            }
+            _ => {
+                if bytes.is_empty() {
+                    // No blades and no (or too-small) buffer: nothing to
+                    // draw; `DrawGrassInstanced` skips entities without an
+                    // `InstanceBuffer`.
+                    continue;
+                }
+                let buffer = render_device.create_buffer(&BufferDescriptor {
+                    label: Some("grass instance data buffer"),
+                    size: grown_capacity_bytes(bytes.len()),
+                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                render_queue.write_buffer(&buffer, 0, bytes);
+                commands.entity(entity).insert(InstanceBuffer {
+                    buffer,
+                    length: instance_data.len(),
+                });
+            }
+        }
     }
 }
 

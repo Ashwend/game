@@ -358,12 +358,36 @@ pub(super) fn sync_deployable_entities(world: &mut World) {
     }
 }
 
+/// Compare-and-write one replicated player component. Writes only when
+/// the freshly built view value differs from the live component, so
+/// Lightyear sees a change tick (and ships a diff) only for fields that
+/// actually moved. Each component carries one cadence: the pose ticks
+/// at 20 Hz while moving, the input ack with every accepted input, the
+/// inventory only on real mutations, so splitting the writes is what
+/// keeps the heavyweight components off the per-tick wire.
+macro_rules! refresh_player_component {
+    ($world:expr, $entity:expr, $client_id:expr, $label:literal, $ty:ty, $value:expr) => {
+        if let Some(mut current) = $world.get_mut::<$ty>($entity)
+            && *current != $value
+        {
+            #[cfg(feature = "replication-trace")]
+            info!(
+                target: "replication_trace",
+                concat!("server: ", $label, " MUTATE client={} entity={:?}"),
+                $client_id, $entity
+            );
+            *current = $value;
+        }
+    };
+}
+
 /// Reconciles `GameServer::clients` into ECS entities. Spawns one entity
-/// per connected client and keeps its public + private components in
-/// sync with the authoritative `ServerClient`. The public/private split
-/// is what Phase 5 uses to ship per-component `Replicate::to_clients`
-/// targets, `NetworkTarget::All` for public, `Single(client_id)` for
-/// private.
+/// per connected client and keeps each replicated component in sync
+/// with the authoritative `ServerClient`, one compare-and-write per
+/// component so every field group diffs at its own cadence. The
+/// owner-only components (inventory, crafting, containers, input ack)
+/// are gated to the owning sender via `ComponentReplicationOverrides`
+/// (see `attach_player_replication`).
 pub(super) fn sync_player_entities(world: &mut World) {
     let _span = info_span!("sync_player_entities").entered();
     let authoritative: Vec<crate::server::PlayerView> = {
@@ -399,35 +423,75 @@ pub(super) fn sync_player_entities(world: &mut World) {
                     .resource::<ServerConnections>()
                     .entity_for_client(view.client_id);
                 rebind_player_owner_if_changed(world, entity, current_sender);
-                // Refresh public, position/velocity tick every frame.
-                if let Some(mut public) = world.get_mut::<crate::server::PlayerPublic>(entity)
-                    && *public != view.public
-                {
-                    #[cfg(feature = "replication-trace")]
-                    {
-                        let before = public.position;
-                        info!(
-                            target: "replication_trace",
-                            "server: PlayerPublic       MUTATE client={} entity={entity:?} pos {before:?} -> {:?}",
-                            view.client_id, view.public.position
-                        );
-                    }
-                    *public = view.public;
-                }
-                // Refresh private, inventory/crafting change on user action.
-                if let Some(mut private) = world.get_mut::<crate::server::PlayerPrivate>(entity)
-                    && *private != view.private
-                {
-                    #[cfg(feature = "replication-trace")]
-                    {
-                        info!(
-                            target: "replication_trace",
-                            "server: PlayerPrivate      MUTATE client={} entity={entity:?} last_input={}",
-                            view.client_id, view.private.last_processed_input
-                        );
-                    }
-                    *private = view.private;
-                }
+                // Peer-visible components. The pose ticks every tick
+                // while moving; profile/health/bubble only on real
+                // changes.
+                refresh_player_component!(
+                    world,
+                    entity,
+                    view.client_id,
+                    "PlayerPose         ",
+                    crate::server::PlayerPose,
+                    view.pose
+                );
+                refresh_player_component!(
+                    world,
+                    entity,
+                    view.client_id,
+                    "PlayerProfile      ",
+                    crate::server::PlayerProfile,
+                    view.profile
+                );
+                refresh_player_component!(
+                    world,
+                    entity,
+                    view.client_id,
+                    "PlayerHealth       ",
+                    crate::server::PlayerHealth,
+                    view.health
+                );
+                refresh_player_component!(
+                    world,
+                    entity,
+                    view.client_id,
+                    "PlayerChatBubble   ",
+                    crate::server::PlayerChatBubble,
+                    view.chat_bubble
+                );
+                // Owner-only components, replicated to the owning
+                // sender only.
+                refresh_player_component!(
+                    world,
+                    entity,
+                    view.client_id,
+                    "PlayerInventory    ",
+                    crate::server::PlayerInventory,
+                    view.inventory
+                );
+                refresh_player_component!(
+                    world,
+                    entity,
+                    view.client_id,
+                    "PlayerCrafting     ",
+                    crate::server::PlayerCrafting,
+                    view.crafting
+                );
+                refresh_player_component!(
+                    world,
+                    entity,
+                    view.client_id,
+                    "PlayerOpenContainers",
+                    crate::server::PlayerOpenContainers,
+                    view.containers
+                );
+                refresh_player_component!(
+                    world,
+                    entity,
+                    view.client_id,
+                    "PlayerInputAck     ",
+                    crate::server::PlayerInputAck,
+                    view.input_ack
+                );
                 // Refresh armor. Today only mutated by future systems,
                 // change detection still tracks it so the wire diff is
                 // ready the moment armor items start landing.
@@ -506,8 +570,8 @@ pub(super) fn sync_player_entities(world: &mut World) {
                     .player_chunk(view.client_id)
                     .unwrap_or_else(|| {
                         crate::world::ChunkCoord::from_world(
-                            view.public.position.x,
-                            view.public.position.z,
+                            view.pose.position.x,
+                            view.pose.position.z,
                         )
                     });
                 let owner_sender = world

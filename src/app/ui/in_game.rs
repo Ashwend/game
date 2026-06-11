@@ -116,6 +116,7 @@ pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta
             floating_damage_ui(ctx, camera, resources.floating_damage.iter());
 
             let entries = collect_deployable_overlay_entries(
+                camera.map(|(_, transform)| transform.translation()),
                 resources.deployable_overlay.placed.iter(),
                 resources.deployable_overlay.replicated.iter(),
             );
@@ -125,22 +126,29 @@ pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta
         // Compute the tutorial step before the panel so the crafting
         // list can pin the focused recipes to the top (keeps their
         // outlines on-screen instead of below the scroll fold). The
-        // overlay itself is drawn after the panel.
-        let tutorial = tutorial_step(
-            resources
-                .local_player
-                .private
-                .as_ref()
-                .map(|p| &p.inventory),
-            resources.local_player.private.as_ref().map(|p| &p.crafting),
-            resources.menu.inventory_open,
-            resources.menu.crafting_open,
-        );
+        // overlay itself is drawn after the panel. Gate the step
+        // computation on `tutorial_active`: the deficit scan builds
+        // per-frame maps and clones, and once onboarding is complete
+        // the result is never looked at again.
         let tutorial_active = !resources.settings.onboarding.completed
             && show_hud
             && world_ready_for_play(resources)
             && !resources.menu.pause_open
             && resources.menu.death_splash.is_none();
+        let tutorial = if tutorial_active {
+            tutorial_step(
+                resources
+                    .local_player
+                    .private
+                    .as_ref()
+                    .map(|p| &p.inventory),
+                resources.local_player.private.as_ref().map(|p| &p.crafting),
+                resources.menu.inventory_open,
+                resources.menu.crafting_open,
+            )
+        } else {
+            TutorialStep::Done
+        };
         ctx.memory_mut(|mem| {
             mem.data.insert_temp(
                 tutorial::pin_recipes_key(),

@@ -178,7 +178,7 @@ impl DeployableVisualAssets {
         };
         let tier_index = match tier {
             BuildingTier::Sticks => 0,
-            BuildingTier::Wood => 1,
+            BuildingTier::HewnWood => 1,
             BuildingTier::Stone => 2,
         };
         self.building_meshes[piece_index][tier_index].clone()
@@ -466,7 +466,7 @@ pub(crate) fn setup_scene(
     .map(|piece| {
         [
             crate::building::BuildingTier::Sticks,
-            crate::building::BuildingTier::Wood,
+            crate::building::BuildingTier::HewnWood,
             crate::building::BuildingTier::Stone,
         ]
         .map(|tier| meshes.add(building_piece_mesh(piece, tier)))
@@ -536,7 +536,10 @@ pub(crate) fn setup_scene(
         // A small round puff. The fire is built from a dense stream of these
         // rising and fading; additive blending fuses the overlap into a soft
         // glowing flame body, so no single particle reads as a hard shape.
-        flame_mesh: meshes.add(Sphere::new(0.07)),
+        // One ico subdivision (80 tris) instead of Bevy's 720-tri default:
+        // ~50 puffs are alive per lit furnace, all in the transparent phase,
+        // and a featureless additive glow blob can't show the difference.
+        flame_mesh: meshes.add(Sphere::new(0.07).mesh().ico(1).expect("valid subdivisions")),
         flame_material: materials.add(StandardMaterial {
             // Additive + unlit so each puff paints pure glow over whatever's
             // behind it; the HDR (>1) emissive drives the bloom that gives the

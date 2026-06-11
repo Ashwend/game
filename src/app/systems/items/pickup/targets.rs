@@ -25,7 +25,7 @@ use crate::{
     resources::resource_node_anchor_for,
     server::{
         Deployable, DeployableStability, DeployableTransform, DroppedItem, DroppedItemTransform,
-        LootBagEntity, LootBagTransform, Player, PlayerPublic, ResourceNode, ResourceNodeStorage,
+        LootBagEntity, LootBagTransform, Player, ResourceNode, ResourceNodeStorage,
     },
 };
 
@@ -59,6 +59,14 @@ const SLEEPING_BODY_CENTRE_Y: f32 = 0.35;
 /// bags sit at roughly the same eye-level cone an aimed E would
 /// expect to hit.
 const LOOT_BAG_INTERACT_CONE_COS: f32 = 0.92;
+/// Conservative bound on how far any collider box of a deployable can
+/// reach from the entity origin. The largest pieces (foundation 3 m
+/// footprint, wall/stairs 3 m tall) anchor at one edge, so the far
+/// corner sits at most ~5.2 m from the origin; 6 m adds slack. Used as
+/// a cheap squared-distance reject in [`best_deployable_target`] so
+/// the 30 Hz scan doesn't build collider boxes for every structure in
+/// the AoI when only pieces within interact range can ever win.
+const DEPLOYABLE_COLLIDER_REACH_M: f32 = 6.0;
 
 /// Closest loot bag inside the player's interact cone. Score is the
 /// straight-line distance from eye → bag origin, used directly
@@ -117,6 +125,19 @@ pub(super) fn set_loot_bag_pickup_target(
     pickup_target.screen_position = viewport_position(camera, anchor);
 }
 
+/// Everything the player-target scan needs about one remote player.
+/// Assembled by the caller from the split replicated components
+/// (`PlayerPose` + `PlayerHealth` + `PlayerProfile` + `PlayerSleeping`)
+/// so this module stays decoupled from the wire shapes.
+pub(super) struct PlayerTargetCandidate<'a> {
+    pub(super) player: &'a Player,
+    /// Display name, used only for the sleeping-body tooltip.
+    pub(super) name: &'a str,
+    pub(super) position: Vec3Net,
+    pub(super) health: f32,
+    pub(super) sleeping: bool,
+}
+
 /// Find the closest remote player whose body AABB is hit by the look
 /// ray within [`ATTACK_RANGE_M`]. Score is the ray-AABB entry distance
 /// so it slots into the same min-score pick as the other target
@@ -126,26 +147,26 @@ pub(super) fn best_player_target<'a>(
     yaw: f32,
     pitch: f32,
     local_client_id: Option<crate::protocol::ClientId>,
-    players: impl Iterator<Item = (&'a Player, &'a PlayerPublic, bool)>,
-) -> Option<(&'a Player, &'a PlayerPublic, bool, f32)> {
+    players: impl Iterator<Item = PlayerTargetCandidate<'a>>,
+) -> Option<(PlayerTargetCandidate<'a>, f32)> {
     let forward = look_forward(yaw, pitch);
     if forward.length_squared() <= f32::EPSILON {
         return None;
     }
-    let mut best: Option<(&Player, &PlayerPublic, bool, f32)> = None;
-    for (player, public, sleeping) in players {
-        if Some(player.client_id) == local_client_id {
+    let mut best: Option<(PlayerTargetCandidate<'a>, f32)> = None;
+    for candidate in players {
+        if Some(candidate.player.client_id) == local_client_id {
             continue;
         }
         // Dead targets don't count; the swing should fall through to
         // whatever is behind them (a killed sleeper's loot is its dropped
         // bag, not the corpse). Health at zero is the "dead" marker.
-        if public.health <= 0.0 {
+        if candidate.health <= 0.0 {
             continue;
         }
         // A laid-out sleeper uses a low, wide hit box; a standing player uses
         // the upright column.
-        let (centre_y, half_width, half_height) = if sleeping {
+        let (centre_y, half_width, half_height) = if candidate.sleeping {
             (
                 SLEEPING_BODY_CENTRE_Y,
                 SLEEPING_BODY_HALF_WIDTH,
@@ -159,9 +180,9 @@ pub(super) fn best_player_target<'a>(
             )
         };
         let centre = Vec3Net::new(
-            public.position.x,
-            public.position.y + centre_y,
-            public.position.z,
+            candidate.position.x,
+            candidate.position.y + centre_y,
+            candidate.position.z,
         );
         let Some(distance) = ray_aabb_entry_distance(eye, forward, centre, half_width, half_height)
         else {
@@ -170,12 +191,8 @@ pub(super) fn best_player_target<'a>(
         if distance > ATTACK_RANGE_M {
             continue;
         }
-        if best
-            .as_ref()
-            .map(|(_, _, _, s)| distance < *s)
-            .unwrap_or(true)
-        {
-            best = Some((player, public, sleeping, distance));
+        if best.as_ref().map(|(_, s)| distance < *s).unwrap_or(true) {
+            best = Some((candidate, distance));
         }
     }
     best
@@ -239,26 +256,24 @@ pub(super) fn ray_aabb_entry_distance(
 
 pub(super) fn set_player_pickup_target(
     pickup_target: &mut PickupTargetState,
-    meta: &Player,
-    public: &PlayerPublic,
-    sleeping: bool,
+    candidate: &PlayerTargetCandidate<'_>,
     camera: &Query<(&Camera, &Transform), With<MainCamera>>,
 ) {
     pickup_target.clear();
-    pickup_target.player_id = Some(meta.client_id);
+    pickup_target.player_id = Some(candidate.player.client_id);
     // A sleeper also carries name + health so the tooltip can identify the
     // logged-out body and anchors low (over the laid-out mesh). A live player
     // is purely a swing target with no tooltip.
-    let centre_y = if sleeping {
-        pickup_target.sleeping_player = Some((public.name.clone(), public.health));
+    let centre_y = if candidate.sleeping {
+        pickup_target.sleeping_player = Some((candidate.name.to_owned(), candidate.health));
         SLEEPING_BODY_CENTRE_Y
     } else {
         PLAYER_BODY_CENTRE_Y
     };
     let anchor = Vec3Net::new(
-        public.position.x,
-        public.position.y + centre_y,
-        public.position.z,
+        candidate.position.x,
+        candidate.position.y + centre_y,
+        candidate.position.z,
     );
     pickup_target.world_position = Some(anchor);
     pickup_target.screen_position = viewport_position(camera, anchor);
@@ -294,8 +309,18 @@ pub(super) fn best_deployable_target<'a>(
     if forward.length_squared() <= f32::EPSILON {
         return None;
     }
+    let max_reach = DEPLOYABLE_INTERACT_RANGE_M + DEPLOYABLE_COLLIDER_REACH_M;
+    let max_reach_sq = max_reach * max_reach;
     let mut best: Option<(&Deployable, &DeployableTransform, u8, f32, Vec3Net)> = None;
     for (meta, transform, stability) in deployables {
+        // Cheap distance reject before the collider build: a structure
+        // whose origin is beyond interact range plus the worst-case
+        // collider reach can never be hit, and `deployable_colliders`
+        // heap-allocates a box Vec per call, which adds up at 30 Hz
+        // over a whole base.
+        if transform.position.minus(eye).length_squared() > max_reach_sq {
+            continue;
+        }
         // Doors are targeted through their closed-panel volume even
         // while open (`active = false` below): the swung panel leaves
         // the opening, but E must still be able to close the door, so

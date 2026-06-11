@@ -106,8 +106,10 @@ pub use loot_bag_ecs::{
     LootBagView, despawn_loot_bag_entity, spawn_loot_bag_entity,
 };
 pub use player_ecs::{
-    Player, PlayerArmor, PlayerChunk, PlayerIndex, PlayerLifecycle, PlayerPrivate, PlayerPublic,
-    PlayerSleeping, PlayerView, despawn_player_entity, spawn_player_entity,
+    Player, PlayerArmor, PlayerChatBubble, PlayerChunk, PlayerCrafting, PlayerHealth, PlayerIndex,
+    PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerOpenContainers, PlayerPose,
+    PlayerPrivate, PlayerProfile, PlayerSleeping, PlayerView, despawn_player_entity,
+    spawn_player_entity,
 };
 pub use resource_node_ecs::{
     ResourceNode, ResourceNodeChunk, ResourceNodeIndex, ResourceNodeStorage,

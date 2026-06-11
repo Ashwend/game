@@ -18,7 +18,7 @@ There is a secondary wire-skew fallback in `handle_unauthenticated_message`: a g
 Consequence: `ClientMessage::Auth`, `ServerMessage::AuthRejected`, and `ServerMessage::VersionMismatch` are the **stable handshake surface**, keep their wire shapes (and enum positions) stable so a future server can always tell an older client why it was turned away. Bump `PROTOCOL_VERSION` on any breaking wire change (mismatched builds are then rejected cleanly at `Auth`); bump `LIGHTYEAR_PROTOCOL_ID` only on a genuinely incompatible *transport* change.
 - Each `ClientMessage`/`ServerMessage` declares its delivery preference via `PacketDelivery::Reliable`, `Unreliable`, or `UnreliableUnordered`; the protocol module maps that to the right Lightyear channel.
 - `GameServer` owns the authoritative domain state for auth, players, movement state acceptance, inventory, dropped items, resource nodes, deployables, chat, voice routing, and save tick state. The ECS mirror entities (one per live id) carry the replicated components Lightyear ships to clients; the `HashMap`s on `GameServer` stay authoritative.
-- Movement is client-authoritative by design. Clients send predicted `PlayerMovement` state; the server rejects stale or non-finite movement and writes the accepted pose onto the player's mirror entity so Lightyear replicates `PlayerPublic` to peers in the same chunk room. This keeps first-person movement responsive at the cost of stronger cheat resistance.
+- Movement is client-authoritative by design. Clients run prediction every render frame but pace the wire sends to ~1.5x the server tick rate (with a 1 Hz idle keep-alive when nothing changed, see `MOVEMENT_SEND_RATE_HZ` in `src/app/systems/input/movement.rs`); the server rejects stale or non-finite movement and writes the accepted pose onto the player's mirror entity so Lightyear replicates `PlayerPose` to peers in the same chunk room. This keeps first-person movement responsive at the cost of stronger cheat resistance.
 
 Channels (registered in `src/net/channels.rs`):
 - `ReliableChannel` (`OrderedReliable`, priority 10): auth, chat, inventory, gather, kick, disconnect, depletion events, reliable side-channel state patches, anything where dropping or reordering would corrupt domain state.
@@ -35,7 +35,7 @@ This is how every networked entity reaches the client. Read this before adding a
 Every replicated entity type (resource nodes, dropped items, deployables, players) lives in two places on the server:
 
 1. **`HashMap` on `GameServer`**, the authoritative state. Gather, pickup, damage, movement, etc. all mutate the HashMap directly. This is the source of truth and the shape persisted to `WorldSave`.
-2. **ECS mirror entity** in the host App's `World`. Carries the replicated components Lightyear ships (`ResourceNode` + `ResourceNodeStorage`, `Player` + `PlayerPublic` + `PlayerPrivate`, etc.) and a `*Chunk` anchor component pointing at its containing chunk.
+2. **ECS mirror entity** in the host App's `World`. Carries the replicated components Lightyear ships (`ResourceNode` + `ResourceNodeStorage`, `Player` + `PlayerPose` + `PlayerInventory` + …, etc.) and a `*Chunk` anchor component pointing at its containing chunk.
 
 An exclusive sync system per type (`sync_resource_node_entities`, `sync_player_entities`, …) in [src/net/host.rs](../src/net/host.rs) reconciles `HashMap → ECS` every Update: spawn entities for new ids, despawn entities for dropped ids, refresh the replicated components when the underlying value changed. Equality guards prevent spurious `Changed<T>` ticks so Lightyear only ships a diff when something actually moved.
 
@@ -51,12 +51,25 @@ The `replication-trace` Cargo feature (default off) adds `server: <Component> MU
 
 ### Player public / private split
 
-A player's entity carries two payload components:
+A player's entity carries one component per field group, split by mutation cadence (Lightyear ships whole-component values, so bundling fields that change at different rates re-ships the slow fields at the fast field's cadence; the old `PlayerPublic`/`PlayerPrivate` mega-components re-shipped the full inventory at 20 Hz because the input ack rode in the same struct):
 
-- **`PlayerPublic`**, name, pose, health, chat-bubble, admin flag. Visible to every client in the same chunk room (peers see your avatar and nameplate).
-- **`PlayerPrivate`**, inventory, crafting queue, open-furnace view, last-input ack. Visible only to the owning client.
+Peer-visible (every client in the same chunk room):
 
-The split uses `ComponentReplicationOverrides<PlayerPrivate>` on the entity, configured `.disable_all().enable_for(owner_sender)`. The owner sender is captured at spawn (see `attach_player_replication` in `host.rs`); on a reconnect the mirror despawns and respawns, which recaptures the new sender.
+- **`PlayerProfile`**, name + admin flag. Practically immutable.
+- **`PlayerPose`**, position/velocity/yaw/pitch/grounded. The 20 Hz component.
+- **`PlayerHealth`**, changes on damage/heal.
+- **`PlayerChatBubble`**, the live bubble text, `None` once expired.
+
+Owner-only (gated per component to the owning client's sender):
+
+- **`PlayerInventory`**, changes on inventory mutation.
+- **`PlayerCrafting`**, ticks while jobs run.
+- **`PlayerOpenContainers`**, open furnace/loot-bag views; ticks while an open furnace burns.
+- **`PlayerInputAck`**, last processed input + applied action seq. Tiny, ticks at 20 Hz while moving.
+
+The owner-only gating uses one `ComponentReplicationOverrides<T>` per private component, configured `.disable_all().enable_for(owner_sender)` (see `owner_only_overrides` in `rooms.rs`). The owner sender is captured at spawn (`attach_player_replication`); a reconnect that wakes a sleeping body keeps the mirror entity, so `rebind_player_owner_if_changed` re-points all four overrides at the new sender. The client reassembles the four private components into one `PlayerPrivate` view struct in `update_local_player_state_system` so UI consumers keep a single handle.
+
+`LootBagContents` is registered for registry parity but **disabled for replication in release builds** (a `disable_all` override at the bag spawn site in `sync_loot_bag_entities`): nothing client-side consumes it, the bag UI rides `PlayerOpenContainers::open_loot_bag`. The `replication-trace` build re-enables it for MUTATE/RECV coverage.
 
 Two more small per-field components ride alongside: **`PlayerLifecycle`** (Alive / Dead, drives the corpse animation + death splash) and **`PlayerSleeping(bool)`**. A player who logs out is not removed; `GameServer::disconnect` flips their `ServerClient.online` to `false` and the body stays in `clients` as a frozen, lootable, killable "sleeping" body (Rust-style). The mirror reflects that as `PlayerSleeping(true)`, peers render the body lying down (`SleepingPlayer` + `lying_transform` in `src/app/systems/players.rs`) and keep it off the online roster. A reconnect from the same account `wake_sleeper`s the body in place (reuses its client id and current looted/killed state). Sleepers also survive restarts: world load rebuilds every persisted player as an offline body (`sleeping_body_from_persisted` in `src/server.rs`, called from `GameServer::new` in `src/server/lifecycle.rs`), so a server reboot leaves the same bodies standing in the world and seeds `account_to_client` so returning players still route through the wake path.
 

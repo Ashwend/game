@@ -181,7 +181,15 @@ pub(crate) fn setup_sky(
         Transform::from_xyz(0.0, 1.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
-    let moon_visual_mesh = meshes.add(Sphere::new(MOON_DISC_RADIUS));
+    // Three ico subdivisions (320 tris) instead of Bevy's 720-tri default:
+    // the silhouette stays round under bloom and the disc is a single
+    // unlit emissive blob, so the extra subdivision levels buy nothing.
+    let moon_visual_mesh = meshes.add(
+        Sphere::new(MOON_DISC_RADIUS)
+            .mesh()
+            .ico(3)
+            .expect("valid subdivisions"),
+    );
     let moon_visual_material = materials.add(StandardMaterial {
         // A faint warm tint on the surface lit colour reads as moon regolith
         // without needing a texture. The emissive is bright enough that the disc

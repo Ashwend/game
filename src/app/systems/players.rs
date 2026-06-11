@@ -5,7 +5,7 @@ use bevy::{ecs::change_detection::Ref, prelude::*};
 use crate::{
     app::PLAYER_VISUAL_CENTER_Y,
     protocol::ClientId,
-    server::{Player, PlayerLifecycle, PlayerPublic, PlayerSleeping},
+    server::{Player, PlayerLifecycle, PlayerPose, PlayerSleeping},
 };
 
 use super::super::{
@@ -124,7 +124,7 @@ fn lying_transform(upright: Transform) -> Transform {
 pub(crate) struct RemotePlayerEntities(pub(crate) std::collections::HashMap<ClientId, Entity>);
 
 /// Reconciles the set of visual `NetworkPlayer` entities against the
-/// Lightyear-replicated `(Player, PlayerPublic)` entities. Spawn,
+/// Lightyear-replicated `(Player, PlayerPose)` entities. Spawn,
 /// despawn, and interpolation re-target all flow off the replicated
 /// query, one visual entity per replicated entity.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -146,7 +146,7 @@ pub(crate) fn apply_snapshot_system(
     >,
     replicated: Query<(
         &Player,
-        Ref<PlayerPublic>,
+        Ref<PlayerPose>,
         Option<&PlayerLifecycle>,
         Option<&PlayerSleeping>,
     )>,
@@ -161,12 +161,12 @@ pub(crate) fn apply_snapshot_system(
     };
 
     // `last_changed().get()` advances every time the replicated
-    // `PlayerPublic` is mutated, so the interpolator only re-targets
+    // `PlayerPose` is mutated, so the interpolator only re-targets
     // when there's a real update (Phase 5's tick-as-change-tick trick).
     let mut visible_ids = HashSet::new();
     let entities = &mut *entities;
 
-    for (player, public, lifecycle, sleeping) in &replicated {
+    for (player, pose, lifecycle, sleeping) in &replicated {
         if player.client_id == local_client_id {
             continue;
         }
@@ -176,10 +176,10 @@ pub(crate) fn apply_snapshot_system(
         // animation can finish playing. The tick system below
         // despawns the visual once the fade completes.
         visible_ids.insert(player.client_id);
-        let tick = public.last_changed().get() as u64;
-        let feet = Vec3::from(public.position);
+        let tick = pose.last_changed().get() as u64;
+        let feet = Vec3::from(pose.position);
         let target = Transform::from_translation(player_visual_position(feet))
-            .with_rotation(Quat::from_rotation_y(public.yaw));
+            .with_rotation(Quat::from_rotation_y(pose.yaw));
         if let Some(entity) = entities.0.get(&player.client_id).copied() {
             if let Ok((current, mut interpolation, dying, asleep)) = players.get_mut(entity) {
                 if is_dead && dying.is_none() {

@@ -515,7 +515,7 @@ fn gather_ring(
     }
 
     // Point at the nearest node that yields a material the player is still
-    // short on (so it never rings a rock when you need sticks). Only if no such
+    // short on (so it never rings a rock when you need wood). Only if no such
     // node is in range do we fall back to the nearest pickup of any kind.
     let nearest_dist = |slice: &[(Vec3, &'static str)]| {
         slice

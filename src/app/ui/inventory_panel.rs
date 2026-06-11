@@ -334,7 +334,6 @@ mod tests {
     fn local_player(inventory: Option<PlayerInventoryState>) -> LocalPlayerState {
         LocalPlayerState {
             entity: None,
-            public: None,
             private: inventory.map(|inventory| PlayerPrivate {
                 inventory,
                 crafting: Default::default(),

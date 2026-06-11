@@ -69,11 +69,13 @@ impl BuildingPiece {
 }
 
 /// Material tier of a placed building block. Pieces are always placed at
-/// `Sticks` and upgraded in place with the hammer.
+/// `Sticks` (the twig-lattice first draft, built from raw wood) and
+/// upgraded in place with the hammer. Variant order is load-bearing:
+/// postcard encodes the variant index into saves and the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum BuildingTier {
     Sticks,
-    Wood,
+    HewnWood,
     Stone,
 }
 
@@ -81,15 +83,15 @@ impl BuildingTier {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Sticks => "Sticks",
-            Self::Wood => "Wood",
+            Self::HewnWood => "Hewn Wood",
             Self::Stone => "Stone",
         }
     }
 
     pub const fn next(self) -> Option<Self> {
         match self {
-            Self::Sticks => Some(Self::Wood),
-            Self::Wood => Some(Self::Stone),
+            Self::Sticks => Some(Self::HewnWood),
+            Self::HewnWood => Some(Self::Stone),
             Self::Stone => None,
         }
     }
@@ -604,11 +606,13 @@ pub fn candidate_stability_pct(
 /// `(item id, quantity)` cost pair used by placement/upgrade/repair tables.
 pub type MaterialCost = (&'static str, u16);
 
-/// The material a tier is built from, for cost lookups.
+/// The material a tier is built from, for cost lookups. The sticks-look
+/// first draft is built from raw wood; the upgrade ladder then moves to
+/// workbench-refined hewn logs, then stone.
 pub const fn tier_material(tier: BuildingTier) -> &'static str {
     match tier {
-        BuildingTier::Sticks => crate::items::STICKS_ID,
-        BuildingTier::Wood => crate::items::WOOD_ID,
+        BuildingTier::Sticks => crate::items::WOOD_ID,
+        BuildingTier::HewnWood => crate::items::HEWN_LOG_ID,
         BuildingTier::Stone => crate::items::STONE_ID,
     }
 }
@@ -620,16 +624,17 @@ const fn costs_like_foundation(piece: BuildingPiece) -> bool {
     matches!(piece, BuildingPiece::Foundation | BuildingPiece::Stairs)
 }
 
-/// Cost to place a fresh piece (always at the Sticks tier).
+/// Cost to place a fresh piece (always at the Sticks tier, paid in raw
+/// wood).
 pub const fn placement_cost(piece: BuildingPiece) -> MaterialCost {
     if costs_like_foundation(piece) {
         (
-            crate::items::STICKS_ID,
+            crate::items::WOOD_ID,
             crate::game_balance::BUILDING_STICKS_COST_FOUNDATION,
         )
     } else {
         (
-            crate::items::STICKS_ID,
+            crate::items::WOOD_ID,
             crate::game_balance::BUILDING_STICKS_COST_WALL,
         )
     }
@@ -642,12 +647,12 @@ pub const fn upgrade_cost(piece: BuildingPiece, target: BuildingTier) -> Materia
         // Placement covers the sticks tier; upgrading "to sticks" never
         // happens but keep the table total.
         BuildingTier::Sticks => placement_cost(piece),
-        BuildingTier::Wood => (
-            crate::items::WOOD_ID,
+        BuildingTier::HewnWood => (
+            crate::items::HEWN_LOG_ID,
             if foundation {
-                crate::game_balance::BUILDING_WOOD_COST_FOUNDATION
+                crate::game_balance::BUILDING_HEWN_WOOD_COST_FOUNDATION
             } else {
-                crate::game_balance::BUILDING_WOOD_COST_WALL
+                crate::game_balance::BUILDING_HEWN_WOOD_COST_WALL
             },
         ),
         BuildingTier::Stone => (
@@ -665,7 +670,7 @@ pub const fn upgrade_cost(piece: BuildingPiece, target: BuildingTier) -> Materia
 pub const fn repair_cost(tier: BuildingTier) -> MaterialCost {
     let quantity = match tier {
         BuildingTier::Sticks => crate::game_balance::BUILDING_REPAIR_COST_STICKS,
-        BuildingTier::Wood => crate::game_balance::BUILDING_REPAIR_COST_WOOD,
+        BuildingTier::HewnWood => crate::game_balance::BUILDING_REPAIR_COST_HEWN_WOOD,
         BuildingTier::Stone => crate::game_balance::BUILDING_REPAIR_COST_STONE,
     };
     (tier_material(tier), quantity)
@@ -676,7 +681,7 @@ pub const fn repair_cost(tier: BuildingTier) -> MaterialCost {
 pub const fn building_max_health(piece: BuildingPiece, tier: BuildingTier) -> u32 {
     let wall = match tier {
         BuildingTier::Sticks => crate::game_balance::BUILDING_STICKS_WALL_HP,
-        BuildingTier::Wood => crate::game_balance::BUILDING_WOOD_WALL_HP,
+        BuildingTier::HewnWood => crate::game_balance::BUILDING_HEWN_WOOD_WALL_HP,
         BuildingTier::Stone => crate::game_balance::BUILDING_STONE_WALL_HP,
     };
     if matches!(piece, BuildingPiece::Foundation) {
@@ -794,9 +799,9 @@ mod tests {
     }
 
     #[test]
-    fn upgrade_path_walks_sticks_wood_stone() {
-        assert_eq!(BuildingTier::Sticks.next(), Some(BuildingTier::Wood));
-        assert_eq!(BuildingTier::Wood.next(), Some(BuildingTier::Stone));
+    fn upgrade_path_walks_sticks_hewn_wood_stone() {
+        assert_eq!(BuildingTier::Sticks.next(), Some(BuildingTier::HewnWood));
+        assert_eq!(BuildingTier::HewnWood.next(), Some(BuildingTier::Stone));
         assert_eq!(BuildingTier::Stone.next(), None);
     }
 

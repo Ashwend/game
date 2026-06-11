@@ -7,9 +7,6 @@ use crate::protocol::{DroppedWorldItem, ItemStack, Vec3Net};
 
 pub const WOOD_ID: &str = "wood";
 pub const STONE_ID: &str = "stone";
-/// Dry branches snapped to length. Gathered from branch piles; the
-/// material of the sticks building tier.
-pub const STICKS_ID: &str = "sticks";
 pub const COAL_ID: &str = "coal";
 pub const IRON_ORE_ID: &str = "iron_ore";
 pub const IRON_BAR_ID: &str = "iron_bar";
@@ -262,7 +259,7 @@ impl DeployableKind {
             Self::Furnace { .. } => DestructibleMaterial::Stone,
             Self::Building { tier, .. } => match tier {
                 crate::building::BuildingTier::Sticks => DestructibleMaterial::Sticks,
-                crate::building::BuildingTier::Wood => DestructibleMaterial::WoodBuilding,
+                crate::building::BuildingTier::HewnWood => DestructibleMaterial::WoodBuilding,
                 crate::building::BuildingTier::Stone => DestructibleMaterial::StoneBuilding,
             },
             Self::Door => DestructibleMaterial::WoodBuilding,
@@ -613,19 +610,6 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
             collider_half_height: 0.60,
             station_radius: 5.0,
         }),
-    },
-    ItemDefinition {
-        id: STICKS_ID,
-        name: "Sticks",
-        description: "Dry branches snapped to length. The makings of the \
-                      flimsiest walls a base can have.",
-        stack_size: 200,
-        equipable: false,
-        model: ItemModel::Bag,
-        held_mesh: HeldMesh::Bag,
-        tint: ItemTint::new(151, 116, 72),
-        tool: None,
-        deployable: None,
     },
     ItemDefinition {
         id: BUILDING_PLAN_ID,

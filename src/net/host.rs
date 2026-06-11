@@ -442,15 +442,24 @@ fn drain_host_commands(
 }
 
 /// Reconciles `GameServer::loot_bags` into ECS entities. Sync per
-/// tick covers two diffable fields:
-///   - `LootBagContents`: changes when a player drags items in/out.
+/// tick covers:
 ///   - `LootBagTransform`: changes while the spawn-time gravity
 ///     settle is still in flight (the bag falls from chest height
 ///     to the ground over ~0.4 s). Without refreshing the
 ///     replicated transform the client would see the bag frozen at
 ///     its spawn position.
+///   - `LootBagContents`: **trace builds only.** Nothing in release
+///     builds consumes the replicated contents (the bag UI rides the
+///     owner-only `PlayerOpenContainers::open_loot_bag` view), so the
+///     release path neither clones the slot list per tick nor ships it
+///     to peers; see the component's doc in `loot_bag_ecs.rs`.
 fn sync_loot_bag_entities(world: &mut World) {
     let _span = info_span!("sync_loot_bag_entities").entered();
+    let known: std::collections::HashSet<crate::protocol::LootBagId> = world
+        .resource::<crate::server::LootBagIndex>()
+        .iter()
+        .map(|(id, _)| id)
+        .collect();
     let authoritative: Vec<crate::server::LootBagView> = {
         let server = world.resource::<AuthoritativeServer>();
         server
@@ -460,20 +469,23 @@ fn sync_loot_bag_entities(world: &mut World) {
                 id,
                 position: bag.position,
                 yaw: bag.yaw,
-                slots: bag.slots.clone(),
+                // Slot clones are only needed where the contents
+                // component is actually written: at spawn, and per tick
+                // in trace builds. The release steady state skips the
+                // per-bag Vec clone entirely.
+                slots: (cfg!(feature = "replication-trace") || !known.contains(&id))
+                    .then(|| bag.slots.clone()),
             })
             .collect()
     };
     let live_ids: std::collections::HashSet<crate::protocol::LootBagId> =
         authoritative.iter().map(|view| view.id).collect();
 
-    let stale: Vec<crate::protocol::LootBagId> = {
-        let index = world.resource::<crate::server::LootBagIndex>();
-        index
-            .iter()
-            .filter_map(|(id, _)| (!live_ids.contains(&id)).then_some(id))
-            .collect()
-    };
+    let stale: Vec<crate::protocol::LootBagId> = known
+        .iter()
+        .copied()
+        .filter(|id| !live_ids.contains(id))
+        .collect();
     for id in stale {
         crate::server::despawn_loot_bag_entity(world, id);
     }
@@ -482,20 +494,22 @@ fn sync_loot_bag_entities(world: &mut World) {
         let existing = world.resource::<crate::server::LootBagIndex>().get(view.id);
         match existing {
             Some(entity) => {
-                if let Some(mut contents) = world.get_mut::<crate::server::LootBagContents>(entity)
-                    && contents.0 != view.slots
+                #[cfg(feature = "replication-trace")]
+                if let Some(slots) = view.slots.clone()
+                    && let Some(mut contents) =
+                        world.get_mut::<crate::server::LootBagContents>(entity)
+                    && contents.0 != slots
                 {
-                    #[cfg(feature = "replication-trace")]
                     {
                         let before: usize = contents.0.iter().filter(|s| s.is_some()).count();
-                        let after: usize = view.slots.iter().filter(|s| s.is_some()).count();
+                        let after: usize = slots.iter().filter(|s| s.is_some()).count();
                         info!(
                             target: "replication_trace",
                             "server: LootBagContents    MUTATE id={} entity={entity:?} occupied {before} -> {after}",
                             view.id
                         );
                     }
-                    contents.0 = view.slots;
+                    contents.0 = slots;
                 }
                 // Refresh transform while the bag is still settling.
                 // Change detection suppresses no-op writes, so once
@@ -528,6 +542,20 @@ fn sync_loot_bag_entities(world: &mut World) {
                     });
                 let entity = crate::server::spawn_loot_bag_entity(world, view, chunk);
                 attach_room_gated_replication(world, entity, chunk);
+                // Release builds keep the contents off the wire: no
+                // client-side consumer exists and replicating every
+                // bag's full slot list to every peer in the room is
+                // both bandwidth waste and an information leak. Trace
+                // builds leave it enabled for MUTATE/RECV coverage.
+                #[cfg(not(feature = "replication-trace"))]
+                if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+                    entity_mut.insert(
+                        lightyear::prelude::ComponentReplicationOverrides::<
+                            crate::server::LootBagContents,
+                        >::default()
+                        .disable_all(),
+                    );
+                }
             }
         }
     }

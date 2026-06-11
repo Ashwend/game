@@ -14,8 +14,9 @@ use crate::{
     server::{
         Deployable, DeployableActive, DeployableHealth, DeployableLabel, DeployableStability,
         DeployableTransform, DroppedItem, DroppedItemTransform, LootBagContents, LootBagEntity,
-        LootBagTransform, Player, PlayerArmor, PlayerLifecycle, PlayerPrivate, PlayerPublic,
-        PlayerSleeping, ResourceNode, ResourceNodeStorage,
+        LootBagTransform, Player, PlayerArmor, PlayerChatBubble, PlayerCrafting, PlayerHealth,
+        PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerOpenContainers, PlayerPose,
+        PlayerProfile, PlayerSleeping, ResourceNode, ResourceNodeStorage,
     },
 };
 
@@ -93,8 +94,19 @@ impl Plugin for LightyearProtocolPlugin {
         app.register_component::<DeployableLabel>();
         app.register_component::<DeployableStability>();
         app.register_component::<Player>();
-        app.register_component::<PlayerPublic>();
-        app.register_component::<PlayerPrivate>();
+        // Peer-visible player state, one component per cadence: the
+        // pose ticks at 20 Hz while moving, the rest only on real
+        // changes (see `src/server/player_ecs.rs`).
+        app.register_component::<PlayerProfile>();
+        app.register_component::<PlayerPose>();
+        app.register_component::<PlayerHealth>();
+        app.register_component::<PlayerChatBubble>();
+        // Owner-only player state, gated per component to the owning
+        // sender in `attach_player_replication`.
+        app.register_component::<PlayerInventory>();
+        app.register_component::<PlayerCrafting>();
+        app.register_component::<PlayerOpenContainers>();
+        app.register_component::<PlayerInputAck>();
         app.register_component::<PlayerArmor>();
         app.register_component::<PlayerLifecycle>();
         app.register_component::<PlayerSleeping>();

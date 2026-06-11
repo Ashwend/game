@@ -161,7 +161,6 @@ fn player_holding(item_id: &str) -> crate::app::state::LocalPlayerState {
     inventory.actionbar_slots[0] = Some(ItemStack::new(item_id, 1));
     LocalPlayerState {
         entity: None,
-        public: None,
         private: Some(PlayerPrivate {
             inventory,
             crafting: Default::default(),

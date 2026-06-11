@@ -381,7 +381,6 @@ mod tests {
     fn local_player_with_jobs(jobs: Vec<CraftingJob>) -> LocalPlayerState {
         LocalPlayerState {
             entity: None,
-            public: None,
             private: Some(PlayerPrivate {
                 inventory: crate::protocol::PlayerInventoryState::empty(),
                 crafting: PlayerCraftingState { jobs },

@@ -103,7 +103,16 @@ pub(crate) fn apply_dropped_items_system(
                 } else {
                     interpolation.advance(time.delta_secs())
                 };
-                commands.entity(entity).insert(visual_transform);
+                // Only write when the pose actually moved. Once a drop
+                // settles, `advance` returns the same clamped-at-target
+                // transform every frame; an unconditional insert would
+                // trip change detection (GlobalTransform propagation +
+                // render-world re-extract) for every at-rest item, the
+                // spurious change-detection pattern docs/profiling.md
+                // warns about.
+                if *current != visual_transform {
+                    commands.entity(entity).insert(visual_transform);
+                }
             }
         } else {
             if spawn_budget == 0 {

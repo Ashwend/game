@@ -252,28 +252,53 @@ fn health_fill_color(fraction: f32) -> egui::Color32 {
     }
 }
 
+/// Slack added to the draw distance for the collection cull. The UI's
+/// range test measures eye → body centre while the cull below measures
+/// eye → entity origin (foot of the piece); a 3 m wall's centre sits
+/// 1.5 m above its origin, so 2 m of slack guarantees no entry that
+/// would have drawn is culled early.
+const OVERLAY_COLLECT_SLACK_M: f32 = 2.0;
+
 /// Pair each placed-entity visual transform with the matching
 /// replicated `(Deployable, DeployableHealth)` for the nameplate.
 /// Heights come from the structure's own collider profile so the
 /// nameplate sits just above the visible top (workbench vs furnace
 /// differ in height) and the look-cone target sits at the vertical
 /// centre of the body.
+///
+/// `deployable_overlay_ui` discards everything beyond
+/// [`DEPLOYABLE_DRAW_DISTANCE_M`] (~4 m), so the collector culls by
+/// camera distance *first*: it only allocates entries for the handful
+/// of structures the label could actually appear on, instead of
+/// building a map over every deployable in the AoI each frame.
 pub(crate) fn collect_deployable_overlay_entries<'a>(
+    camera_position: Option<Vec3>,
     placed_entities: impl IntoIterator<Item = (&'a NetworkDeployedEntity, &'a GlobalTransform)>,
     replicated: impl IntoIterator<Item = (&'a Deployable, &'a DeployableHealth)>,
 ) -> Vec<DeployableOverlayEntry> {
-    let mut state_by_id: std::collections::HashMap<u64, (&Deployable, &DeployableHealth)> =
-        replicated
-            .into_iter()
-            .map(|(meta, health)| (meta.id, (meta, health)))
-            .collect();
+    // No camera means the UI draws nothing anyway.
+    let Some(camera_position) = camera_position else {
+        return Vec::new();
+    };
+    let cull_radius = DEPLOYABLE_DRAW_DISTANCE_M + OVERLAY_COLLECT_SLACK_M;
+    let cull_sq = cull_radius * cull_radius;
 
-    placed_entities
+    let mut near_by_id: std::collections::HashMap<u64, Vec3> = std::collections::HashMap::new();
+    for (entity, transform) in placed_entities {
+        let translation = transform.translation();
+        if translation.distance_squared(camera_position) <= cull_sq {
+            near_by_id.insert(entity.id, translation);
+        }
+    }
+    if near_by_id.is_empty() {
+        return Vec::new();
+    }
+
+    replicated
         .into_iter()
-        .filter_map(|(entity, transform)| {
-            let (meta, health) = state_by_id.remove(&entity.id)?;
+        .filter_map(|(meta, health)| {
+            let translation = near_by_id.remove(&meta.id)?;
             let profile = item_definition(&meta.item_id).and_then(|def| def.deployable)?;
-            let translation = transform.translation();
             let full_height = profile.collider_half_height * 2.0;
             let look_target_world = translation + Vec3::Y * profile.collider_half_height;
             let anchor_world = translation + Vec3::Y * (full_height + NAMEPLATE_TOP_CLEARANCE_M);
@@ -419,19 +444,10 @@ mod tests {
 
     #[test]
     fn collect_entries_pairs_placed_with_replicated_state() {
-        let placed_wb = NetworkDeployedEntity {
-            id: 10,
-            kind: DeployableKind::Workbench { tier: 1 },
-        };
-        let placed_furnace = NetworkDeployedEntity {
-            id: 11,
-            kind: DeployableKind::Furnace { tier: 1 },
-        };
+        let placed_wb = NetworkDeployedEntity { id: 10 };
+        let placed_furnace = NetworkDeployedEntity { id: 11 };
         // No replicated state for this id: it should be filtered out.
-        let placed_orphan = NetworkDeployedEntity {
-            id: 99,
-            kind: DeployableKind::Workbench { tier: 1 },
-        };
+        let placed_orphan = NetworkDeployedEntity { id: 99 };
 
         let tf = GlobalTransform::from_translation(Vec3::new(2.0, 0.0, -3.0));
 
@@ -459,7 +475,7 @@ mod tests {
         ];
         let replicated = vec![(&dep_wb, &hp_wb), (&dep_furnace, &hp_furnace)];
 
-        let mut entries = collect_deployable_overlay_entries(placed, replicated);
+        let mut entries = collect_deployable_overlay_entries(Some(Vec3::ZERO), placed, replicated);
         entries.sort_by_key(|e| e.id);
 
         assert_eq!(entries.len(), 2);
@@ -473,5 +489,38 @@ mod tests {
         assert!(entries[1].anchor_world.y > entries[0].anchor_world.y);
         // Look target is below the anchor (body centre, not floating label).
         assert!(entries[0].look_target_world.y < entries[0].anchor_world.y);
+    }
+
+    #[test]
+    fn collect_entries_culls_beyond_draw_distance() {
+        let placed_far = NetworkDeployedEntity { id: 10 };
+        let tf_far = GlobalTransform::from_translation(Vec3::new(
+            DEPLOYABLE_DRAW_DISTANCE_M + OVERLAY_COLLECT_SLACK_M + 1.0,
+            0.0,
+            0.0,
+        ));
+        let dep = Deployable {
+            id: 10,
+            item_id: intern_item_id(WORKBENCH_T1_ID),
+            kind: DeployableKind::Workbench { tier: 1 },
+            max_health: 500,
+            owner: None,
+        };
+        let hp = DeployableHealth(250);
+
+        let entries = collect_deployable_overlay_entries(
+            Some(Vec3::ZERO),
+            vec![(&placed_far, &tf_far)],
+            vec![(&dep, &hp)],
+        );
+        assert!(entries.is_empty());
+
+        // Without a camera nothing can be drawn, so nothing is collected.
+        let entries = collect_deployable_overlay_entries(
+            None,
+            vec![(&placed_far, &tf_far)],
+            vec![(&dep, &hp)],
+        );
+        assert!(entries.is_empty());
     }
 }

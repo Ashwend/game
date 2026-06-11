@@ -271,7 +271,6 @@ mod tests {
     fn local_player(open_furnace: Option<OpenFurnaceView>) -> LocalPlayerState {
         LocalPlayerState {
             entity: None,
-            public: None,
             private: Some(PlayerPrivate {
                 inventory: PlayerInventoryState::empty(),
                 crafting: Default::default(),

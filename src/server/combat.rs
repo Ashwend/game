@@ -206,11 +206,14 @@ impl GameServer {
             },
         });
 
-        // Peers see the impact; the attacker already produced their
-        // own feedback via prediction.
-        envelopes.push(ServerEnvelope {
-            target: DeliveryTarget::BroadcastExcept(attacker_id),
-            message: ServerMessage::PlayerImpact {
+        // Peers within perception range see the impact; the attacker
+        // already produced their own feedback via prediction, and
+        // distant clients can neither hear nor see it.
+        envelopes.extend(self.envelopes_within_range(
+            target_chest,
+            crate::game_balance::IMPACT_MESSAGE_RANGE_M,
+            Some(attacker_id),
+            ServerMessage::PlayerImpact {
                 attacker: attacker_id,
                 target: target_id,
                 position: target_chest,
@@ -218,7 +221,7 @@ impl GameServer {
                 tool: tool_profile.kind,
                 damage_dealt,
             },
-        });
+        ));
 
         // Phase 5 hooks in: if HP just hit zero, this is also a kill.
         if new_health <= 0.0 {

@@ -1,16 +1,19 @@
 //! Client-side deployable systems.
 //!
-//! - `apply_deployed_entities_system`, diffs the replicated deployable
-//!   entities against the world: spawns new ones, despawns missing ones,
-//!   updates kind/health if needed.
+//! - `apply_deployed_entities_system`, reconciles the replicated
+//!   deployable entities into local visuals. **Event-driven**: it reacts
+//!   to `Added<Deployable>` / `RemovedComponents<Deployable>` plus
+//!   value-compared `DeployableActive` changes instead of scanning the
+//!   full replicated set every frame; with base building the deployable
+//!   count is open-ended, so the full-scan version was the next
+//!   "iterate N entities to discover nothing changed" bug shape
+//!   (docs/profiling.md). The resource-node reconciler is the canonical
+//!   pattern this follows.
 //! - `maintain_world_grid_system`, rebuilds the client collision grid
 //!   from the replicated resource-node and deployable sets when they
 //!   change.
 //!
-//! Diffing follows the same pattern as `apply_resource_nodes_system` /
-//! `apply_dropped_items_system` so the lifecycle reads consistently
-//! across all networked entities. Placement-ghost and input handling
-//! live in [`placement`].
+//! Placement-ghost and input handling live in [`placement`].
 
 mod placement;
 
@@ -18,7 +21,7 @@ pub(crate) use placement::{placement_input_system, update_placement_ghost_system
 
 use crate::building::{DOOR_OPEN_ANGLE_RAD, DOOR_PANEL_WIDTH_M};
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, VecDeque};
 
 use bevy::prelude::*;
 
@@ -31,124 +34,315 @@ use crate::{
     items::{DeployableKind, item_definition},
     protocol::{DeployedEntityId, Vec3Net},
     resources::resource_node_collider_at,
-    server::{Deployable, DeployableActive, DeployableHealth, DeployableTransform, ResourceNode},
+    server::{Deployable, DeployableActive, DeployableTransform, ResourceNode},
     world::WorldBlock,
 };
 
+/// Per-frame cap on fresh deployable visual spawns. Walking into a
+/// large base (or the initial join burst) can pull hundreds of pieces
+/// into the AoI in one tick; spawning every visual the same frame
+/// stalls the command-buffer flush. Anything past the budget stays in
+/// the pending queue and drains over the following frames. Updates to
+/// existing visuals and despawns are uncapped.
+const MAX_DEPLOYABLE_SPAWNS_PER_FRAME: usize = 16;
+
+/// A spawned deployable visual tracked by [`DeployedEntityVisuals`].
+struct DeployableVisualEntry {
+    /// Root visual entity. Owns the mesh (or, for doors, the animated
+    /// panel child) and any furnace fire rig as children, so a single
+    /// recursive despawn tears the whole thing down.
+    entity: Entity,
+    /// Kind at spawn / last upgrade. A fresh `Added` with the same id
+    /// but a different kind is a hammer tier upgrade.
+    kind: DeployableKind,
+    /// Last applied `DeployableActive` value. Replicated change ticks
+    /// fire even when the value is identical (see CLAUDE.md
+    /// "Replicated state"), so flips are detected by comparing against
+    /// this, never by `Changed` alone.
+    active: bool,
+    /// The replicated mirror entity currently backing this id. A tier
+    /// upgrade respawns the mirror server-side (remove + add with the
+    /// same id); tracking the backing entity lets the removal pass
+    /// recognise the stale half of that pair and leave the visual
+    /// alone.
+    replicated: Entity,
+    /// World position, kept as the anchor for flip sounds.
+    position: Vec3,
+}
+
+/// Spawn data captured from `Added<Deployable>` and held until the
+/// per-frame spawn budget admits it, same shape as the resource-node
+/// reconciler's pending queue.
+struct PendingDeployableSpawn {
+    id: DeployedEntityId,
+    replicated: Entity,
+    kind: DeployableKind,
+    position: Vec3Net,
+    yaw: f32,
+    active: bool,
+}
+
+/// Persistent client-side index of deployable visuals. Mirrors the
+/// live replicated set so reconciliation reacts to events instead of
+/// rebuilding maps from a `Query` every frame.
+#[derive(Resource, Default)]
+pub(crate) struct DeployedEntityVisuals {
+    entries: HashMap<DeployedEntityId, DeployableVisualEntry>,
+    /// Reverse lookup `Lightyear-replicated entity → id`. Populated on
+    /// `Added`, consumed on `RemovedComponents`.
+    replicated_to_id: HashMap<Entity, DeployedEntityId>,
+    /// FIFO of arrivals waiting on [`MAX_DEPLOYABLE_SPAWNS_PER_FRAME`].
+    pending_spawns: VecDeque<PendingDeployableSpawn>,
+    /// `true` once a reconciliation pass has run while connected. Gates
+    /// the first-run catch-up scan: the `Added` filter compares against
+    /// the system's `last_run` tick and misses entities that arrived
+    /// during early-returning frames (menu, connecting).
+    applied_first_snapshot: bool,
+}
+
 /// Reconcile the local `NetworkDeployedEntity` visuals against the
 /// Lightyear-replicated `(Deployable, DeployableTransform,
-/// DeployableActive)` entities. Spawn missing ones, refresh transforms,
-/// despawn any that left the AoI ring. Toggles the furnace mouth light
-/// to match `active`.
+/// DeployableActive)` entities. Spawns arrivals (budgeted), despawns
+/// departures, swaps meshes in place on tier upgrades, and applies
+/// `active` flips (furnace fire rig, door panel swing + audio).
+/// Steady-state frames (no arrivals, departures, flips, or queued
+/// spawns) do essentially no work.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_deployed_entities_system(
     mut commands: Commands,
     runtime: Res<ClientRuntime>,
     assets: Option<Res<DeployableVisualAssets>>,
-    existing: Query<(Entity, &NetworkDeployedEntity, &Transform)>,
+    mut visuals: ResMut<DeployedEntityVisuals>,
     existing_fires: Query<(Entity, &ChildOf), With<FurnaceFire>>,
-    replicated: Query<(
-        &Deployable,
-        &DeployableTransform,
-        &DeployableHealth,
-        &DeployableActive,
-    )>,
+    mut panels: Query<(&mut DoorPanel, &ChildOf)>,
+    all_deployables: Query<(Entity, &Deployable, &DeployableTransform, &DeployableActive)>,
+    added: Query<(Entity, &Deployable, &DeployableTransform, &DeployableActive), Added<Deployable>>,
+    changed_active: Query<(Entity, &Deployable, &DeployableActive), Changed<DeployableActive>>,
+    mut removed: RemovedComponents<Deployable>,
     mut play_sound: MessageWriter<crate::app::audio::PlaySound>,
     mut remote_impacts: MessageWriter<crate::app::state::RemoteImpactEvent>,
 ) {
     let Some(assets) = assets else {
         return;
     };
+    let visuals = &mut *visuals;
     if runtime.client_id.is_none() {
         // Not connected, tear down any visuals from a prior session.
-        for (entity, _, _) in &existing {
-            commands.entity(entity).despawn();
+        // Despawning the root also removes panel/fire children.
+        for (_, entry) in visuals.entries.drain() {
+            commands.entity(entry.entity).despawn();
         }
+        visuals.replicated_to_id.clear();
+        visuals.pending_spawns.clear();
+        visuals.applied_first_snapshot = false;
+        // Drain stale removal events so a reconnect doesn't replay them.
+        removed.read().count();
         return;
     }
 
-    let mut existing_by_id: HashMap<DeployedEntityId, (Entity, Transform, DeployableKind)> =
-        existing
-            .iter()
-            .map(|(entity, marker, transform)| (marker.id, (entity, *transform, marker.kind)))
-            .collect();
-    let mut visible_ids: HashSet<DeployedEntityId> = HashSet::new();
-
-    // Map parent-entity → child-fire-rig-entity for the furnace fires
-    // currently in the world. We compare per-furnace-entity below and either
-    // spawn (active && missing) or despawn (inactive && present) the rig.
-    let mut fires_by_parent: HashMap<Entity, Entity> = HashMap::new();
-    for (fire_entity, child_of) in &existing_fires {
-        fires_by_parent.insert(child_of.parent(), fire_entity);
+    // First-run catch-up: seed the reverse map and the spawn queue from
+    // the full query once. See the resource-node reconciler for why
+    // `Added` can't cover entities that arrived while this system was
+    // early-returning.
+    if !visuals.applied_first_snapshot {
+        for (replicated_entity, meta, transform, active) in &all_deployables {
+            visuals.replicated_to_id.insert(replicated_entity, meta.id);
+            if visuals.entries.contains_key(&meta.id) {
+                continue;
+            }
+            visuals.pending_spawns.push_back(PendingDeployableSpawn {
+                id: meta.id,
+                replicated: replicated_entity,
+                kind: meta.kind,
+                position: transform.position,
+                yaw: transform.yaw,
+                active: active.0,
+            });
+        }
+        visuals.applied_first_snapshot = true;
     }
 
-    for (meta, transform, _health, active) in &replicated {
-        visible_ids.insert(meta.id);
-        let visual_transform = deployable_transform(transform.position.into(), transform.yaw);
-        let parent_entity = if let Some((entity, current, current_kind)) =
-            existing_by_id.remove(&meta.id)
-        {
-            // Only write the Transform when it actually moved. The replicated
-            // transform stops changing once a deployable is placed, so an
-            // unconditional insert would trip change detection (and the
-            // renderer) every frame for a static structure, the spurious
-            // change-detection pattern docs/profiling.md warns about.
-            if current != visual_transform {
-                commands.entity(entity).insert(visual_transform);
+    // 1. Arrivals, processed *before* departures so a tier upgrade's
+    //    remove + add pair (same id, fresh mirror entity, see the
+    //    server's `sync_deployable_entities`) resolves as an in-place
+    //    mesh swap regardless of intra-frame event ordering.
+    for (replicated_entity, meta, transform, active) in &added {
+        if visuals.replicated_to_id.contains_key(&replicated_entity) {
+            // Catch-up above already seeded this entity.
+            continue;
+        }
+        visuals.replicated_to_id.insert(replicated_entity, meta.id);
+
+        if let Some(mut entry) = visuals.entries.remove(&meta.id) {
+            // Same id, new mirror entity: a hammer tier upgrade. Doors
+            // can't be mesh-swapped (their visual is a panel child),
+            // so a door<->non-door transition falls back to respawn;
+            // it can't happen through the upgrade path today, this is
+            // purely defensive.
+            let door_transition = matches!(entry.kind, DeployableKind::Door)
+                != matches!(meta.kind, DeployableKind::Door);
+            if door_transition {
+                commands.entity(entry.entity).despawn();
+                visuals.pending_spawns.push_back(PendingDeployableSpawn {
+                    id: meta.id,
+                    replicated: replicated_entity,
+                    kind: meta.kind,
+                    position: transform.position,
+                    yaw: transform.yaw,
+                    active: active.0,
+                });
+                continue;
             }
-            // A kind change is a hammer tier upgrade: the server respawns
-            // the mirror entity but the same id maps onto this visual, so
-            // swap the mesh in place and celebrate with a material burst
-            // (chips/shards + the matching impact audio ride the same
-            // remote-impact pipeline as gather hits).
-            if current_kind != meta.kind {
+            entry.replicated = replicated_entity;
+            if entry.kind != meta.kind {
+                // Swap the mesh in place and celebrate with a material
+                // burst (chips/shards + impact audio ride the same
+                // remote-impact pipeline as gather hits).
                 let (mesh, material) = deployable_visual(&assets, meta.kind);
-                commands.entity(entity).insert((
-                    NetworkDeployedEntity {
-                        id: meta.id,
-                        kind: meta.kind,
-                    },
+                commands.entity(entry.entity).insert((
+                    NetworkDeployedEntity { id: meta.id },
                     Mesh3d(mesh),
                     MeshMaterial3d(material),
                 ));
-                emit_upgrade_burst(&mut remote_impacts, meta.kind, visual_transform.translation);
+                emit_upgrade_burst(&mut remote_impacts, meta.kind, entry.position);
+                entry.kind = meta.kind;
             }
-            entity
-        } else if matches!(meta.kind, DeployableKind::Door) {
-            // Doors spawn an animated panel child instead of a root mesh:
-            // the root sits at the doorway centre (replicated transform);
-            // the panel hangs off the hinge and swings via
-            // `animate_door_panels_system` when `DeployableActive` flips.
+            if entry.active != active.0 {
+                entry.active = active.0;
+                apply_active_flip(
+                    &mut commands,
+                    &entry,
+                    &existing_fires,
+                    &mut panels,
+                    &mut play_sound,
+                );
+            }
+            visuals.entries.insert(meta.id, entry);
+        } else if let Some(pending) = visuals
+            .pending_spawns
+            .iter_mut()
+            .find(|spawn| spawn.id == meta.id)
+        {
+            // Removed and re-added while still queued (an upgrade
+            // before the budget admitted the spawn): refresh in place.
+            pending.replicated = replicated_entity;
+            pending.kind = meta.kind;
+            pending.position = transform.position;
+            pending.yaw = transform.yaw;
+            pending.active = active.0;
+        } else {
+            visuals.pending_spawns.push_back(PendingDeployableSpawn {
+                id: meta.id,
+                replicated: replicated_entity,
+                kind: meta.kind,
+                position: transform.position,
+                yaw: transform.yaw,
+                active: active.0,
+            });
+        }
+    }
+
+    // 2. Departures. AoI leave, destruction, or the stale half of an
+    //    upgrade respawn (which arrivals above already retargeted).
+    for replicated_entity in removed.read() {
+        let Some(id) = visuals.replicated_to_id.remove(&replicated_entity) else {
+            continue;
+        };
+        if let Some(entry) = visuals.entries.get(&id) {
+            if entry.replicated != replicated_entity {
+                // Upgrade respawn: the visual is already backed by the
+                // new mirror entity.
+                continue;
+            }
+            commands.entity(entry.entity).despawn();
+            visuals.entries.remove(&id);
+        } else {
+            // Never spawned: drop the queued spawn if it is still
+            // backed by the removed entity (an entry refreshed by the
+            // arrivals pass survives).
+            visuals
+                .pending_spawns
+                .retain(|spawn| spawn.replicated != replicated_entity);
+        }
+    }
+
+    // 3. Active flips (furnace lit/cold, door open/close). `Changed`
+    //    fires on every replication touch even when the value is
+    //    identical, so the stored value is the actual edge detector.
+    for (replicated_entity, meta, active) in &changed_active {
+        if let Some(entry) = visuals.entries.get_mut(&meta.id) {
+            if entry.replicated != replicated_entity || entry.active == active.0 {
+                continue;
+            }
+            entry.active = active.0;
+            apply_active_flip(
+                &mut commands,
+                entry,
+                &existing_fires,
+                &mut panels,
+                &mut play_sound,
+            );
+        } else if let Some(pending) = visuals
+            .pending_spawns
+            .iter_mut()
+            .find(|spawn| spawn.replicated == replicated_entity)
+        {
+            // Still queued: record the new state silently, the spawn
+            // applies it directly.
+            pending.active = active.0;
+        }
+    }
+
+    // 4. Drain the spawn queue up to the per-frame budget. Usually
+    //    empty in steady state, so this loop is zero iterations.
+    let mut spawn_budget = MAX_DEPLOYABLE_SPAWNS_PER_FRAME;
+    while spawn_budget > 0 {
+        let Some(spawn) = visuals.pending_spawns.pop_front() else {
+            break;
+        };
+        spawn_budget -= 1;
+        let position = Vec3::from(spawn.position);
+        let visual_transform = deployable_transform(position, spawn.yaw);
+        let parent = if matches!(spawn.kind, DeployableKind::Door) {
+            // Doors spawn an animated panel child instead of a root
+            // mesh: the root sits at the doorway centre (replicated
+            // transform); the panel hangs off the hinge and swings via
+            // `animate_door_panels_system`. The panel spawns at its
+            // resolved pose so a base streaming in doesn't open with a
+            // chorus of swinging doors.
             let parent = commands
                 .spawn((
-                    Name::new(format!("Deployable {}", meta.id)),
-                    NetworkDeployedEntity {
-                        id: meta.id,
-                        kind: meta.kind,
-                    },
+                    Name::new(format!("Deployable {}", spawn.id)),
+                    NetworkDeployedEntity { id: spawn.id },
                     visual_transform,
                     Visibility::Visible,
                 ))
                 .id();
+            let initial_angle = if spawn.active {
+                -DOOR_OPEN_ANGLE_RAD
+            } else {
+                0.0
+            };
             commands.spawn((
                 Name::new("Door Panel"),
-                DoorPanel { angle: 0.0 },
+                DoorPanel {
+                    angle: initial_angle,
+                    open: spawn.active,
+                },
                 Mesh3d(assets.door_panel_mesh.clone()),
                 MeshMaterial3d(assets.material.clone()),
-                Transform::from_translation(Vec3::new(-(DOOR_PANEL_WIDTH_M / 2.0), 0.0, 0.0)),
+                Transform::from_translation(Vec3::new(-(DOOR_PANEL_WIDTH_M / 2.0), 0.0, 0.0))
+                    .with_rotation(Quat::from_rotation_y(initial_angle)),
                 Visibility::Visible,
                 ChildOf(parent),
             ));
             parent
         } else {
-            let (mesh, material) = deployable_visual(&assets, meta.kind);
+            let (mesh, material) = deployable_visual(&assets, spawn.kind);
             commands
                 .spawn((
-                    Name::new(format!("Deployable {}", meta.id)),
-                    NetworkDeployedEntity {
-                        id: meta.id,
-                        kind: meta.kind,
-                    },
+                    Name::new(format!("Deployable {}", spawn.id)),
+                    NetworkDeployedEntity { id: spawn.id },
                     Mesh3d(mesh),
                     MeshMaterial3d(material),
                     visual_transform,
@@ -156,29 +350,78 @@ pub(crate) fn apply_deployed_entities_system(
                 ))
                 .id()
         };
-
-        sync_furnace_fire(
-            &mut commands,
-            parent_entity,
-            meta.kind,
-            active.0,
-            fires_by_parent.remove(&parent_entity),
-            visual_transform.translation,
-            &mut play_sound,
+        if spawn.active {
+            // A lit furnace streaming into the AoI gets its fire rig
+            // immediately. `sync_furnace_fire` only plays audio on the
+            // lit→cold edge, so the join burst stays silent.
+            sync_furnace_fire(
+                &mut commands,
+                parent,
+                spawn.kind,
+                true,
+                None,
+                position,
+                &mut play_sound,
+            );
+        }
+        visuals.entries.insert(
+            spawn.id,
+            DeployableVisualEntry {
+                entity: parent,
+                kind: spawn.kind,
+                active: spawn.active,
+                replicated: spawn.replicated,
+                position,
+            },
         );
     }
+}
 
-    for (id, (entity, _, _)) in existing_by_id {
-        if !visible_ids.contains(&id) {
-            commands.entity(entity).despawn();
+/// React to a real `DeployableActive` flip on a spawned visual:
+/// furnaces toggle their fire rig, doors retarget their panel swing and
+/// play the open/close cue. First sight of an entity never lands here
+/// (spawns apply the initial state directly), so a base streaming in
+/// stays silent, the behaviour the old per-frame scan guaranteed via
+/// its seed-silently `Local` map.
+fn apply_active_flip(
+    commands: &mut Commands,
+    entry: &DeployableVisualEntry,
+    fires: &Query<(Entity, &ChildOf), With<FurnaceFire>>,
+    panels: &mut Query<(&mut DoorPanel, &ChildOf)>,
+    play_sound: &mut MessageWriter<crate::app::audio::PlaySound>,
+) {
+    match entry.kind {
+        DeployableKind::Furnace { .. } => {
+            // The fire-rig lookup walks only live rigs (lit furnaces in
+            // the AoI, a handful at most) and only on flips.
+            let existing_fire = fires
+                .iter()
+                .find(|(_, child_of)| child_of.parent() == entry.entity)
+                .map(|(fire_entity, _)| fire_entity);
+            sync_furnace_fire(
+                commands,
+                entry.entity,
+                entry.kind,
+                entry.active,
+                existing_fire,
+                entry.position,
+                play_sound,
+            );
         }
-    }
-    // Any fire rig whose parent disappeared (out of AoI / destroyed)
-    // would normally despawn alongside its parent via Bevy's hierarchy
-    // cleanup, but a despawn-recursive isn't guaranteed everywhere,
-    // sweep here just in case.
-    for (_, fire_entity) in fires_by_parent {
-        commands.entity(fire_entity).despawn();
+        DeployableKind::Door => {
+            for (mut panel, child_of) in panels.iter_mut() {
+                if child_of.parent() == entry.entity {
+                    panel.open = entry.active;
+                }
+            }
+            let id = if entry.active {
+                crate::app::audio::SoundId::DoorOpen
+            } else {
+                crate::app::audio::SoundId::DoorClose
+            };
+            play_sound.write(crate::app::audio::PlaySound::at(id, entry.position));
+        }
+        _ => {}
     }
 }
 
@@ -407,87 +650,42 @@ pub(super) fn deployable_transform(position: Vec3, yaw: f32) -> Transform {
 }
 
 /// Swinging panel child of a door visual. `angle` is the panel's current
-/// hinge rotation in radians (0 = closed); the animation system eases it
-/// toward the replicated open state every frame.
+/// hinge rotation in radians (0 = closed); `open` is the replicated
+/// target state, written by the reconciler on real `DeployableActive`
+/// flips so the animation never has to read the replicated set. The
+/// door swing audio rides the same flip edge in [`apply_active_flip`].
 #[derive(Component)]
 pub(crate) struct DoorPanel {
     pub(crate) angle: f32,
+    pub(crate) open: bool,
 }
 
 /// How fast the door panel sweeps, in rad/s. ~0.35 s for the full swing,
 /// quick enough to feel responsive, slow enough to read as a real door.
 const DOOR_SWING_SPEED_RAD_PER_SEC: f32 = 5.0;
 
-/// Ease each door panel toward its replicated open/closed pose. Doors are
-/// rare (a handful per base), so iterating the panel set per frame is
-/// negligible; the early-out below keeps the no-door case free.
+/// Ease each door panel toward its target pose. Iterates only the panel
+/// entities themselves (a handful per base); settled panels skip the
+/// transform write, so an idle frame costs a float compare per door.
 pub(crate) fn animate_door_panels_system(
     time: Res<Time>,
-    replicated: Query<(&Deployable, &DeployableActive)>,
-    parents: Query<&NetworkDeployedEntity>,
-    mut panels: Query<(&mut Transform, &mut DoorPanel, &ChildOf)>,
+    mut panels: Query<(&mut Transform, &mut DoorPanel)>,
 ) {
-    if panels.is_empty() {
-        return;
-    }
-    // id → open, doors only. Built per frame; the door count is tiny.
-    let open_by_id: HashMap<DeployedEntityId, bool> = replicated
-        .iter()
-        .filter(|(meta, _)| matches!(meta.kind, DeployableKind::Door))
-        .map(|(meta, active)| (meta.id, active.0))
-        .collect();
-
     let step = DOOR_SWING_SPEED_RAD_PER_SEC * time.delta_secs();
-    for (mut transform, mut panel, child_of) in panels.iter_mut() {
-        let Ok(marker) = parents.get(child_of.parent()) else {
-            continue;
-        };
-        let open = open_by_id.get(&marker.id).copied().unwrap_or(false);
+    for (mut transform, mut panel) in panels.iter_mut() {
         // Negative yaw swings the +X panel toward local +Z, matching the
         // swing-arc indicator baked into the placement ghost.
-        let target = if open { -DOOR_OPEN_ANGLE_RAD } else { 0.0 };
+        let target = if panel.open {
+            -DOOR_OPEN_ANGLE_RAD
+        } else {
+            0.0
+        };
         let delta = target - panel.angle;
         if delta.abs() < 1e-3 {
             continue;
         }
         panel.angle += delta.clamp(-step, step);
         transform.rotation = Quat::from_rotation_y(panel.angle);
-    }
-}
-
-/// Play the door swing sound when a door's replicated open state actually
-/// flips. Tracks last-seen values in a `Local` instead of using a
-/// `Changed<DeployableActive>` filter: Lightyear's receive path bumps the
-/// change tick on every replication tick even when the value is identical
-/// (see CLAUDE.md "Replicated state"), so a filter would fire constantly.
-/// First sight of a door (join, AoI entry) seeds silently, no chorus of
-/// clicks when a base streams in.
-pub(crate) fn door_swing_audio_system(
-    replicated: Query<(&Deployable, &DeployableTransform, &DeployableActive)>,
-    mut last_open: Local<HashMap<DeployedEntityId, bool>>,
-    mut play_sound: MessageWriter<crate::app::audio::PlaySound>,
-) {
-    for (meta, transform, active) in replicated.iter() {
-        if !matches!(meta.kind, DeployableKind::Door) {
-            continue;
-        }
-        match last_open.insert(meta.id, active.0) {
-            None => {}
-            Some(previous) if previous == active.0 => {}
-            Some(_) => {
-                let id = if active.0 {
-                    crate::app::audio::SoundId::DoorOpen
-                } else {
-                    crate::app::audio::SoundId::DoorClose
-                };
-                let at = Vec3::new(
-                    transform.position.x,
-                    transform.position.y,
-                    transform.position.z,
-                );
-                play_sound.write(crate::app::audio::PlaySound::at(id, at));
-            }
-        }
     }
 }
 

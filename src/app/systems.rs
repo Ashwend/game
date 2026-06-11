@@ -53,7 +53,7 @@ pub(crate) use combat_feedback::tick_combat_feedback_system;
 pub(crate) use control_socket::{ClientControlSocket, drain_control_socket};
 pub(crate) use crafting_feedback::{CraftCompletionWatch, craft_complete_cue_system};
 pub(crate) use deployables::{
-    animate_door_panels_system, apply_deployed_entities_system, door_swing_audio_system,
+    DeployedEntityVisuals, animate_door_panels_system, apply_deployed_entities_system,
     maintain_world_grid_system, placement_input_system, update_placement_ghost_system,
 };
 pub(crate) use display::apply_display_settings_system;

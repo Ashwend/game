@@ -21,8 +21,8 @@
 //! Coverage:
 //!   - `ResourceNodeStorage`
 //!   - `DeployableHealth`, `DeployableActive`, `DeployableLabel`, `DeployableStability`
-//!   - `PlayerPublic`, `PlayerPrivate`, `PlayerArmor`, `PlayerLifecycle`,
-//!     `PlayerSleeping`
+//!   - `PlayerPose`, `PlayerHealth`, `PlayerInventory`, `PlayerInputAck`,
+//!     `PlayerArmor`, `PlayerLifecycle`, `PlayerSleeping`
 //!   - `LootBagContents`, `LootBagTransform`
 //!   - `DroppedItemTransform`, `DroppedItem` (stack-merge)
 //!
@@ -34,8 +34,8 @@ use bevy::{ecs::change_detection::Ref, prelude::*};
 use crate::server::{
     Deployable, DeployableActive, DeployableHealth, DeployableLabel, DeployableStability,
     DroppedItem, DroppedItemTransform, LootBagContents, LootBagEntity, LootBagTransform, Player,
-    PlayerArmor, PlayerLifecycle, PlayerPrivate, PlayerPublic, PlayerSleeping, ResourceNode,
-    ResourceNodeStorage,
+    PlayerArmor, PlayerHealth, PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerPose,
+    PlayerSleeping, ResourceNode, ResourceNodeStorage,
 };
 
 /// Tracks the last-seen value per id so we can log a clean
@@ -65,8 +65,10 @@ pub(crate) fn log_replicated_storage_changes_system(
         Ref<DeployableLabel>,
         Ref<DeployableStability>,
     )>,
-    players_public: Query<(Entity, &Player, Ref<PlayerPublic>)>,
-    players_private: Query<(Entity, &Player, Ref<PlayerPrivate>)>,
+    players_pose: Query<(Entity, &Player, Ref<PlayerPose>)>,
+    players_health: Query<(Entity, &Player, Ref<PlayerHealth>)>,
+    players_inventory: Query<(Entity, &Player, Ref<PlayerInventory>)>,
+    players_input_ack: Query<(Entity, &Player, Ref<PlayerInputAck>)>,
     players_armor: Query<(Entity, &Player, Ref<PlayerArmor>)>,
     players_lifecycle: Query<(Entity, &Player, Ref<PlayerLifecycle>)>,
     players_sleeping: Query<(Entity, &Player, Ref<PlayerSleeping>)>,
@@ -182,34 +184,73 @@ pub(crate) fn log_replicated_storage_changes_system(
         }
     }
 
-    for (entity, player, public) in &players_public {
-        if public.is_added() {
+    for (entity, player, pose) in &players_pose {
+        if pose.is_added() {
             info!(
                 target: "replication_trace",
-                "client: PlayerPublic       SPAWN  client={} entity={entity:?} pos={:?}",
-                player.client_id, public.position
+                "client: PlayerPose         SPAWN  client={} entity={entity:?} pos={:?}",
+                player.client_id, pose.position
             );
-        } else if public.is_changed() {
+        } else if pose.is_changed() {
             info!(
                 target: "replication_trace",
-                "client: PlayerPublic       RECV   client={} entity={entity:?} pos={:?}",
-                player.client_id, public.position
+                "client: PlayerPose         RECV   client={} entity={entity:?} pos={:?}",
+                player.client_id, pose.position
             );
         }
     }
 
-    for (entity, player, private) in &players_private {
-        if private.is_added() {
+    for (entity, player, health) in &players_health {
+        if health.is_added() {
             info!(
                 target: "replication_trace",
-                "client: PlayerPrivate      SPAWN  client={} entity={entity:?} last_input={}",
-                player.client_id, private.last_processed_input
+                "client: PlayerHealth       SPAWN  client={} entity={entity:?} hp={}",
+                player.client_id, health.0
             );
-        } else if private.is_changed() {
+        } else if health.is_changed() {
             info!(
                 target: "replication_trace",
-                "client: PlayerPrivate      RECV   client={} entity={entity:?} last_input={}",
-                player.client_id, private.last_processed_input
+                "client: PlayerHealth       RECV   client={} entity={entity:?} hp={}",
+                player.client_id, health.0
+            );
+        }
+    }
+
+    for (entity, player, inventory) in &players_inventory {
+        let occupied = inventory
+            .0
+            .inventory_slots
+            .iter()
+            .chain(inventory.0.actionbar_slots.iter())
+            .filter(|slot| slot.is_some())
+            .count();
+        if inventory.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: PlayerInventory    SPAWN  client={} entity={entity:?} occupied={occupied}",
+                player.client_id
+            );
+        } else if inventory.is_changed() {
+            info!(
+                target: "replication_trace",
+                "client: PlayerInventory    RECV   client={} entity={entity:?} occupied={occupied}",
+                player.client_id
+            );
+        }
+    }
+
+    for (entity, player, input_ack) in &players_input_ack {
+        if input_ack.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: PlayerInputAck     SPAWN  client={} entity={entity:?} last_input={}",
+                player.client_id, input_ack.last_processed_input
+            );
+        } else if input_ack.is_changed() {
+            info!(
+                target: "replication_trace",
+                "client: PlayerInputAck     RECV   client={} entity={entity:?} last_input={}",
+                player.client_id, input_ack.last_processed_input
             );
         }
     }

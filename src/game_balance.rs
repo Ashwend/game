@@ -95,6 +95,19 @@ pub const IRON_PICKAXE_PVP_DAMAGE: u32 = 22;
 pub const HATCHET_KNOCKBACK_SPEED: f32 = 1.8;
 pub const PICKAXE_KNOCKBACK_SPEED: f32 = 4.0;
 
+/// Maximum distance at which the cosmetic impact messages
+/// (`ResourceImpact`, `PlayerImpact`) are delivered. Spatial audio
+/// attenuates to silence and chip bursts are sub-pixel well inside this
+/// radius, so clients farther away can neither hear nor see the effect;
+/// without the gate every swing on the server was broadcast to every
+/// connected client (N x M messages per second while gathering).
+pub const IMPACT_MESSAGE_RANGE_M: f32 = 80.0;
+
+/// Delivery range for the dropped-item merge cue (`ItemMerged`). The cue
+/// is a quiet UI blip acknowledging that two nearby drops fused; players
+/// elsewhere on the map have no use for it.
+pub const ITEM_MERGE_CUE_RANGE_M: f32 = 25.0;
+
 // =====================================================================
 // Deployables (workbenches, furnaces, walls, …)
 // =====================================================================
@@ -132,7 +145,7 @@ pub const DEPLOYABLE_PLACEMENT_REACH_M: f32 = 5.0;
 /// `tool_effectiveness_pct` building arms so that:
 /// - Sticks fall in a few swings of any proper tool (a stone hatchet at
 ///   300% does 90/hit, three hits and the wall is kindling).
-/// - Wood is raidable with tools but slow: an iron hatchet at 15% does
+/// - Hewn wood is raidable with tools but slow: an iron hatchet at 15% does
 ///   9/hit, so a wall costs ~400 swings (~5 minutes of continuous
 ///   swinging) and most of the tool's 600 durability. Possible, loud,
 ///   and expensive, exactly the "soft side" feel.
@@ -140,19 +153,22 @@ pub const DEPLOYABLE_PLACEMENT_REACH_M: f32 = 5.0;
 ///   a stone base is impossible by construction. The HP still matters
 ///   for future siege equipment.
 pub const BUILDING_STICKS_WALL_HP: u32 = 250;
-pub const BUILDING_WOOD_WALL_HP: u32 = 3_600;
+pub const BUILDING_HEWN_WOOD_WALL_HP: u32 = 3_600;
 pub const BUILDING_STONE_WALL_HP: u32 = 6_000;
 
-/// Placement costs (always at the Sticks tier; upgrades pay the
-/// difference-tier costs below). Branch piles yield a handful of sticks
-/// each, so a starter 1x1 (foundation + 3 walls + doorway) is a short
+/// Placement costs (always at the Sticks tier, paid in raw wood;
+/// upgrades pay the tier costs below). A hatchet swing on a tree yields
+/// 6 wood, so a starter 1x1 (foundation + 3 walls + doorway) is a short
 /// gathering loop, not an afternoon.
 pub const BUILDING_STICKS_COST_FOUNDATION: u16 = 30;
 pub const BUILDING_STICKS_COST_WALL: u16 = 25;
 
-/// Upgrade costs to the wood tier.
-pub const BUILDING_WOOD_COST_FOUNDATION: u16 = 120;
-pub const BUILDING_WOOD_COST_WALL: u16 = 100;
+/// Upgrade costs to the hewn-wood tier, paid in workbench-refined hewn
+/// logs (10 raw wood each), so a wall upgrade is ~100 wood-equivalent
+/// plus the bench time, matching the old raw-wood cost while making the
+/// tier gate the workbench.
+pub const BUILDING_HEWN_WOOD_COST_FOUNDATION: u16 = 12;
+pub const BUILDING_HEWN_WOOD_COST_WALL: u16 = 10;
 
 /// Upgrade costs to the stone tier.
 pub const BUILDING_STONE_COST_FOUNDATION: u16 = 150;
@@ -161,7 +177,7 @@ pub const BUILDING_STONE_COST_WALL: u16 = 125;
 /// Materials consumed by one hammer repair hit, in the piece's own tier
 /// material. Each hit restores `BUILDING_REPAIR_FRACTION_PCT` of max HP.
 pub const BUILDING_REPAIR_COST_STICKS: u16 = 5;
-pub const BUILDING_REPAIR_COST_WOOD: u16 = 15;
+pub const BUILDING_REPAIR_COST_HEWN_WOOD: u16 = 2;
 pub const BUILDING_REPAIR_COST_STONE: u16 = 20;
 
 /// Percentage of max HP restored per hammer repair hit.
