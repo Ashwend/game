@@ -3,7 +3,10 @@ import { ROADMAP } from '#/data/content'
 
 export function Status() {
   return (
-    <section className="scroll-mt-16 border-t border-white/5 bg-ink-950/40">
+    <section
+      id="roadmap"
+      className="scroll-mt-16 border-t border-white/5 bg-ink-950/40"
+    >
       <div className="mx-auto grid max-w-6xl gap-12 px-5 py-24 sm:px-8 sm:py-28 lg:grid-cols-2 lg:gap-16">
         <div>
           <p className="text-xs font-medium uppercase tracking-[0.22em] text-ember-300">

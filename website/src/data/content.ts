@@ -70,36 +70,38 @@ export const META = {
 } as const
 
 export const HERO_META: ReadonlyArray<string> = [
-  'Procedurally generated worlds',
+  'Multiplayer',
   'Open-world',
   'PvP',
   'First-person',
 ]
 
+// Ordered so the first row mixes light levels: the dark night shots read as
+// near-black rectangles at thumbnail size, so they don't get to lead.
 export const GALLERY: ReadonlyArray<Shot> = [
+  {
+    src: '/img/dusk.jpg',
+    alt: 'Golden dusk settling over the misty plains',
+  },
   {
     src: '/img/furnace-lit.jpg',
     alt: 'A lit furnace glowing beside a workbench under a night sky',
   },
   {
-    src: '/img/furnace-ui.jpg',
-    alt: 'Smelting ore down into ingots in the furnace interface',
+    src: '/img/sun-vista.jpg',
+    alt: 'Clear midday light across the green plains, a base in the distance',
   },
   {
     src: '/img/deploy.jpg',
     alt: 'Placing a workbench, previewed as a green build outline',
   },
   {
+    src: '/img/furnace-ui.jpg',
+    alt: 'Smelting ore down into ingots in the furnace interface',
+  },
+  {
     src: '/img/workbench.jpg',
     alt: 'A stone hatchet in hand beside a fire-lit camp at night',
-  },
-  {
-    src: '/img/dusk.jpg',
-    alt: 'Golden dusk settling over the misty plains',
-  },
-  {
-    src: '/img/sun-vista.jpg',
-    alt: 'Clear midday light across the green plains, a base in the distance',
   },
 ]
 

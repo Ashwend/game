@@ -61,24 +61,28 @@ export function Hero() {
         </div>
 
         <ul className="mt-10 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-muted">
+          {/* Separator trails each item (except the last) so a wrapped line
+              ends with a dot instead of starting with one. */}
           {HERO_META.map((item, i) => (
             <li key={item} className="flex items-center gap-3">
-              {i > 0 && (
+              {item}
+              {i < HERO_META.length - 1 && (
                 <span
                   className="size-1 rounded-full bg-ember-500/60"
                   aria-hidden="true"
                 />
               )}
-              {item}
             </li>
           ))}
         </ul>
       </div>
 
+      {/* Hidden on phones: the hero content alone overflows 100svh there, so
+          the cue would sit below the fold. */}
       <a
         href="#playtest"
         aria-label="Scroll to the playtest sign-up"
-        className="absolute inset-x-0 bottom-6 mx-auto flex w-fit animate-bounce text-muted/70 transition-colors hover:text-fg"
+        className="absolute inset-x-0 bottom-6 mx-auto hidden w-fit animate-bounce text-muted/70 transition-colors hover:text-fg sm:flex"
       >
         <ChevronDown className="size-6" />
       </a>

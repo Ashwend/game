@@ -46,6 +46,10 @@ export const Route = createRootRoute({
       { property: 'og:image', content: ogImage },
       { property: 'og:image:width', content: '1200' },
       { property: 'og:image:height', content: '630' },
+      {
+        property: 'og:image:alt',
+        content: 'A low sun behind misty pines on the plains of Ashwend',
+      },
       // Twitter
       { name: 'twitter:card', content: 'summary_large_image' },
       { name: 'twitter:title', content: META.title },

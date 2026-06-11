@@ -3,8 +3,10 @@ import { buttonClasses } from './ui'
 import { DiscordIcon } from './icons'
 
 export function Header() {
+  // Fixed, not sticky: sticky would occupy 64px of flow above the 100svh
+  // hero and push its bottom edge (and the scroll cue) below the fold.
   return (
-    <header className="sticky top-0 z-50 border-b border-white/5 bg-ink-900/70 backdrop-blur-md">
+    <header className="fixed inset-x-0 top-0 z-50 border-b border-white/5 bg-ink-900/70 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5 sm:px-8">
         <a
           href="#top"
@@ -20,6 +22,12 @@ export function Header() {
             className="hidden text-sm text-muted transition-colors hover:text-fg sm:block"
           >
             Screens
+          </a>
+          <a
+            href="#roadmap"
+            className="hidden text-sm text-muted transition-colors hover:text-fg sm:block"
+          >
+            Roadmap
           </a>
           <a
             href={siteConfig.discordInviteUrl}

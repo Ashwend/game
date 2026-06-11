@@ -74,11 +74,6 @@ function DownloadCallout() {
         <span className="text-muted/85">Also on</span>
         {others.map((build, i) => (
           <span key={build.asset} className="flex items-center gap-2">
-            {i > 0 && (
-              <span aria-hidden="true" className="text-muted/40">
-                &middot;
-              </span>
-            )}
             <a
               href={latestDownloadUrl(build.asset)}
               target="_blank"
@@ -87,6 +82,11 @@ function DownloadCallout() {
             >
               {build.short}
             </a>
+            {i < others.length - 1 && (
+              <span aria-hidden="true" className="text-muted/40">
+                &middot;
+              </span>
+            )}
           </span>
         ))}
       </div>

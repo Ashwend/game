@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { GALLERY } from '#/data/content'
+import type { Shot } from '#/data/content'
 import { Picture } from './Picture'
 
 export function Gallery() {
@@ -79,10 +80,23 @@ interface LightboxProps {
 function Lightbox({ index, onClose, onPrev, onNext }: LightboxProps) {
   // `shown` drives the enter/exit transition; closing animates out first.
   const [shown, setShown] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const closeRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => setShown(true))
     return () => cancelAnimationFrame(raf)
+  }, [])
+
+  // The dialog is aria-modal, so keyboard focus has to follow: move it onto
+  // the close button while open, hand it back to the opener (the clicked
+  // thumbnail) when the lightbox unmounts.
+  useEffect(() => {
+    const opener = document.activeElement
+    closeRef.current?.focus()
+    return () => {
+      if (opener instanceof HTMLElement) opener.focus()
+    }
   }, [])
 
   const requestClose = useCallback(() => {
@@ -95,6 +109,7 @@ function Lightbox({ index, onClose, onPrev, onNext }: LightboxProps) {
       if (event.key === 'Escape') requestClose()
       else if (event.key === 'ArrowLeft') onPrev()
       else if (event.key === 'ArrowRight') onNext()
+      else if (event.key === 'Tab') trapTab(event, rootRef.current)
     }
     window.addEventListener('keydown', onKey)
     // Lock scroll, padding the root to replace the removed scrollbar so the
@@ -115,11 +130,19 @@ function Lightbox({ index, onClose, onPrev, onNext }: LightboxProps) {
   const shot = GALLERY[index]
   if (shot === undefined) return null
 
+  // The shots either side of the current one, fetched hidden below so
+  // arrow-stepping swaps instantly instead of flashing while a load runs.
+  const neighbours = [
+    GALLERY[(index - 1 + GALLERY.length) % GALLERY.length],
+    GALLERY[(index + 1) % GALLERY.length],
+  ].filter((s): s is Shot => s !== undefined && s !== shot)
+
   const navButton =
     'pointer-events-auto flex size-11 items-center justify-center rounded-full bg-white/5 text-fg/80 ring-1 ring-white/10 backdrop-blur transition hover:bg-white/10 hover:text-fg'
 
   return (
     <div
+      ref={rootRef}
       role="dialog"
       aria-modal="true"
       aria-label={shot.alt}
@@ -129,6 +152,7 @@ function Lightbox({ index, onClose, onPrev, onNext }: LightboxProps) {
       }`}
     >
       <button
+        ref={closeRef}
         type="button"
         onClick={requestClose}
         aria-label="Close"
@@ -143,6 +167,10 @@ function Lightbox({ index, onClose, onPrev, onNext }: LightboxProps) {
           shown ? 'scale-100' : 'scale-95'
         }`}
       >
+        {/* The original full-quality JPEG, on purpose: the AVIF/WebP variants
+            are compressed for thumbnail duty and fall apart at this size. It
+            only loads once the lightbox is opened, so page load is unaffected.
+            Keyed so the swap animation replays on prev/next. */}
         <img
           key={shot.src}
           src={shot.src}
@@ -185,6 +213,35 @@ function Lightbox({ index, onClose, onPrev, onNext }: LightboxProps) {
           <ChevronRight className="size-6" />
         </button>
       </div>
+
+      {/* Hidden eager copies of the adjacent shots; eager images load even
+          inside display:none, which warms the cache for prev/next. */}
+      <div className="hidden" aria-hidden="true">
+        {neighbours.map((s) => (
+          <img key={s.src} src={s.src} alt="" />
+        ))}
+      </div>
     </div>
   )
+}
+
+/** Keep Tab cycling through the lightbox's own buttons while it's open. */
+function trapTab(event: KeyboardEvent, root: HTMLElement | null) {
+  const focusable = root?.querySelectorAll<HTMLElement>('button')
+  if (!focusable || focusable.length === 0) return
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (first === undefined || last === undefined) return
+
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  } else if (root !== null && !root.contains(document.activeElement)) {
+    // Focus drifted out (e.g. a backdrop click blurred it); pull it back in.
+    event.preventDefault()
+    first.focus()
+  }
 }
