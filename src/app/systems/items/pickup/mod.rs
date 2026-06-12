@@ -26,9 +26,9 @@ use crate::{
     items::pickup_score_at_position,
     resources::resource_node_score_at,
     server::{
-        Deployable, DeployableStability, DeployableTransform, DroppedItem, DroppedItemTransform,
-        LootBagEntity, LootBagTransform, Player, PlayerHealth, PlayerPose, PlayerProfile,
-        PlayerSleeping, ResourceNode, ResourceNodeStorage,
+        Deployable, DeployableActive, DeployableStability, DeployableTransform, DroppedItem,
+        DroppedItemTransform, LootBagEntity, LootBagTransform, Player, PlayerHealth, PlayerPose,
+        PlayerProfile, PlayerSleeping, ResourceNode, ResourceNodeStorage,
     },
 };
 
@@ -44,7 +44,12 @@ pub(crate) fn update_pickup_target_system(
     dropped_entities: Query<(&NetworkDroppedItem, &Transform)>,
     dropped_replicated: Query<(&DroppedItem, &DroppedItemTransform)>,
     resource_nodes: Query<(&ResourceNode, &ResourceNodeStorage)>,
-    deployables: Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
+    deployables: Query<(
+        &Deployable,
+        &DeployableTransform,
+        &DeployableStability,
+        &DeployableActive,
+    )>,
     remote_players: Query<(
         &Player,
         &PlayerProfile,

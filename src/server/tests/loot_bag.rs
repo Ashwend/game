@@ -405,6 +405,71 @@ fn tick_loot_bags_drops_freshly_spawned_bag_until_resting() {
 }
 
 #[test]
+fn loot_bag_rests_on_a_building_floor() {
+    let mut server = server();
+    let foundation_top = crate::building::FOUNDATION_HEIGHT_M;
+    crate::server::test_support::place_foundation(&mut server, Vec3Net::new(0.0, 0.0, -6.0));
+
+    // Death on the foundation: the bag spawns at chest height above the
+    // slab and must come to rest on its walkable top, not the ground.
+    let bag_id = server.spawn_loot_bag(
+        Vec3Net::new(0.0, foundation_top, -6.0),
+        0.0,
+        vec![ItemStack::new(WOOD_ID, 1)],
+    );
+    for _ in 0..200 {
+        server.tick_loot_bags(0.05);
+        if server.loot_bags[&bag_id].resting {
+            break;
+        }
+    }
+
+    let bag = &server.loot_bags[&bag_id];
+    assert!(bag.resting, "bag should settle in finite steps");
+    assert!(
+        bag.position.y >= foundation_top && bag.position.y < foundation_top + 0.1,
+        "bag must rest on the foundation top, got y {}",
+        bag.position.y
+    );
+}
+
+#[test]
+fn destroying_the_floor_under_a_resting_bag_drops_it() {
+    let mut server = server();
+    let foundation_top = crate::building::FOUNDATION_HEIGHT_M;
+    let foundation_id =
+        crate::server::test_support::place_foundation(&mut server, Vec3Net::new(0.0, 0.0, -6.0));
+    let bag_id = server.spawn_loot_bag(
+        Vec3Net::new(0.0, foundation_top, -6.0),
+        0.0,
+        vec![ItemStack::new(WOOD_ID, 1)],
+    );
+    for _ in 0..200 {
+        server.tick_loot_bags(0.05);
+        if server.loot_bags[&bag_id].resting {
+            break;
+        }
+    }
+    assert!(server.loot_bags[&bag_id].position.y >= foundation_top);
+
+    server.destroy_deployed_entity(foundation_id);
+    for _ in 0..200 {
+        server.tick_loot_bags(0.05);
+        if server.loot_bags[&bag_id].resting {
+            break;
+        }
+    }
+
+    let bag = &server.loot_bags[&bag_id];
+    assert!(bag.resting, "bag should settle again after the collapse");
+    assert!(
+        bag.position.y < 0.1,
+        "bag must fall to the ground once its floor is destroyed, got y {}",
+        bag.position.y
+    );
+}
+
+#[test]
 fn tick_loot_bags_skips_at_rest_bags() {
     let mut server = server();
     let bag_id = server.spawn_loot_bag(

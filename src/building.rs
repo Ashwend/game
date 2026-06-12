@@ -396,21 +396,59 @@ pub fn building_collider_blocks(
         .collect()
 }
 
-/// Collider for a closed door panel seated in a doorway at
-/// `position`/`yaw`. Open doors contribute no collider (the panel swings
-/// clear of the opening; a rotated thin box can't be represented in the
-/// AABB grid and blocking the doorway while open would be worse).
+/// Collider for a door panel seated in a doorway at `position`/`yaw`.
+/// The box follows the hinge state so collision, interact targeting, and
+/// hit detection all happen where the panel visibly is: closed, it fills
+/// the opening plane; open, it is the AABB around the panel swung
+/// [`DOOR_OPEN_ANGLE_RAD`] about the hinge (the local -X edge of the
+/// opening, the same pivot and angle the client's panel mesh animates
+/// with). The swung panel isn't axis-aligned, so its AABB is slightly
+/// larger than the panel itself, close enough for the AABB-only
+/// collision pipeline while leaving the opening genuinely passable.
 pub fn door_collider_blocks(position: Vec3Net, yaw: f32, open: bool) -> Vec<WorldBlock> {
-    if open {
-        return Vec::new();
-    }
-    let half_w = DOORWAY_OPENING_WIDTH_M / 2.0;
     let half_h = DOOR_PANEL_HEIGHT_M / 2.0;
-    let (hx, hz) = rotate_half_extents(yaw, half_w, DOOR_PANEL_THICKNESS_M / 2.0);
+    let ((cx_local, cz_local), (hx_local, hz_local)) = if open {
+        open_door_panel_local_box()
+    } else {
+        (
+            (0.0, 0.0),
+            (DOORWAY_OPENING_WIDTH_M / 2.0, DOOR_PANEL_THICKNESS_M / 2.0),
+        )
+    };
+    let (cx, cz) = rotate_offset(yaw, cx_local, cz_local);
+    let (hx, hz) = rotate_half_extents(yaw, hx_local, hz_local);
     vec![WorldBlock::new(
-        Vec3Net::new(position.x, position.y + half_h, position.z),
+        Vec3Net::new(position.x + cx, position.y + half_h, position.z + cz),
         Vec3Net::new(hx, half_h, hz),
     )]
+}
+
+/// XZ centre and half-extents (door-local space) of the AABB around the
+/// open panel: the `DOOR_PANEL_WIDTH_M` x `DOOR_PANEL_THICKNESS_M`
+/// rectangle rotated `-DOOR_OPEN_ANGLE_RAD` about the hinge at local
+/// `(-DOOR_PANEL_WIDTH_M / 2, 0)`, matching `animate_door_panels_system`.
+fn open_door_panel_local_box() -> ((f32, f32), (f32, f32)) {
+    let hinge_x = -DOOR_PANEL_WIDTH_M / 2.0;
+    let angle = -DOOR_OPEN_ANGLE_RAD;
+    // Local +X (the panel span) and +Z (the panel thickness) after the
+    // hinge rotation about Y.
+    let span = (angle.cos(), -angle.sin());
+    let thickness = (angle.sin(), angle.cos());
+    let half_t = DOOR_PANEL_THICKNESS_M / 2.0;
+    let mut min = (f32::INFINITY, f32::INFINITY);
+    let mut max = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for reach in [0.0, DOOR_PANEL_WIDTH_M] {
+        for side in [-half_t, half_t] {
+            let x = hinge_x + span.0 * reach + thickness.0 * side;
+            let z = span.1 * reach + thickness.1 * side;
+            min = (min.0.min(x), min.1.min(z));
+            max = (max.0.max(x), max.1.max(z));
+        }
+    }
+    (
+        ((min.0 + max.0) / 2.0, (min.1 + max.1) / 2.0),
+        ((max.0 - min.0) / 2.0, (max.1 - min.1) / 2.0),
+    )
 }
 
 /// Half-extents swap between X and Z on quarter turns.
@@ -872,8 +910,32 @@ mod tests {
     }
 
     #[test]
-    fn open_doors_have_no_collider() {
-        assert!(door_collider_blocks(Vec3Net::ZERO, 0.0, true).is_empty());
-        assert_eq!(door_collider_blocks(Vec3Net::ZERO, 0.0, false).len(), 1);
+    fn open_door_collider_follows_the_swung_panel() {
+        let closed = door_collider_blocks(Vec3Net::ZERO, 0.0, false);
+        assert_eq!(closed.len(), 1);
+        assert!(
+            closed[0].center.z.abs() < 1e-6,
+            "closed panel sits in the opening plane"
+        );
+
+        let open = door_collider_blocks(Vec3Net::ZERO, 0.0, true);
+        assert_eq!(open.len(), 1);
+        let panel = open[0];
+        // The panel swings toward local +Z about the hinge on the -X
+        // side: its box must clear the opening and sit on the swing side.
+        assert!(
+            panel.max().x < -0.4,
+            "open panel must leave the opening passable, max x {}",
+            panel.max().x
+        );
+        assert!(panel.center.z > 0.3, "open panel sits on the swing side");
+        assert!((panel.max().y - DOOR_PANEL_HEIGHT_M).abs() < 1e-5);
+        assert!(panel.min().y.abs() < 1e-5);
+
+        // A quarter-turned door swings its panel along the rotated axes:
+        // rotate_offset maps local (x, z) to (z, -x) at 90 degrees.
+        let turned = door_collider_blocks(Vec3Net::ZERO, std::f32::consts::FRAC_PI_2, true);
+        assert!(turned[0].center.x > 0.3);
+        assert!(turned[0].center.z > 0.3);
     }
 }

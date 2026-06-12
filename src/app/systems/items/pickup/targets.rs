@@ -24,8 +24,9 @@ use crate::{
     protocol::Vec3Net,
     resources::resource_node_anchor_for,
     server::{
-        Deployable, DeployableStability, DeployableTransform, DroppedItem, DroppedItemTransform,
-        LootBagEntity, LootBagTransform, Player, ResourceNode, ResourceNodeStorage,
+        Deployable, DeployableActive, DeployableStability, DeployableTransform, DroppedItem,
+        DroppedItemTransform, LootBagEntity, LootBagTransform, Player, ResourceNode,
+        ResourceNodeStorage,
     },
 };
 
@@ -302,6 +303,7 @@ pub(super) fn best_deployable_target<'a>(
             &'a Deployable,
             &'a DeployableTransform,
             &'a DeployableStability,
+            &'a DeployableActive,
         ),
     >,
 ) -> Option<(&'a Deployable, &'a DeployableTransform, u8, f32, Vec3Net)> {
@@ -312,7 +314,7 @@ pub(super) fn best_deployable_target<'a>(
     let max_reach = DEPLOYABLE_INTERACT_RANGE_M + DEPLOYABLE_COLLIDER_REACH_M;
     let max_reach_sq = max_reach * max_reach;
     let mut best: Option<(&Deployable, &DeployableTransform, u8, f32, Vec3Net)> = None;
-    for (meta, transform, stability) in deployables {
+    for (meta, transform, stability, active) in deployables {
         // Cheap distance reject before the collider build: a structure
         // whose origin is beyond interact range plus the worst-case
         // collider reach can never be hit, and `deployable_colliders`
@@ -321,12 +323,13 @@ pub(super) fn best_deployable_target<'a>(
         if transform.position.minus(eye).length_squared() > max_reach_sq {
             continue;
         }
-        // Doors are targeted through their closed-panel volume even
-        // while open (`active = false` below): the swung panel leaves
-        // the opening, but E must still be able to close the door, so
-        // the doorway plane stays the interaction volume.
+        // Doors are targeted through their actual panel volume: closed,
+        // the plane seated in the opening; open, the panel swung clear
+        // on its hinge. E (close), repair taps, and damage swings all
+        // land where the mesh visibly is.
         let mut hit: Option<(f32, Vec3Net)> = None;
-        for block in crate::app::systems::deployables::deployable_colliders(meta, transform, false)
+        for block in
+            crate::app::systems::deployables::deployable_colliders(meta, transform, active.0)
         {
             let Some(distance) = ray_block_entry_distance(eye, forward, &block) else {
                 continue;

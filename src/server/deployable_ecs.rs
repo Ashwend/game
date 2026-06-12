@@ -61,8 +61,9 @@ pub struct DeployableHealth(pub u32);
 
 /// Public "is it doing work?" flag, drives furnace glow/smoke on the
 /// client, and doubles as the open/closed flag for doors (open = true,
-/// drives the swing animation + drops the door's collider). Always
-/// `false` for kinds that have no active state (workbench).
+/// drives the swing animation + moves the door's collider to the swung
+/// panel's pose). Always `false` for kinds that have no active state
+/// (workbench).
 #[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct DeployableActive(pub bool);
 

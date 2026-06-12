@@ -74,8 +74,8 @@ impl DeployedEntity {
     /// client's movement grid. Single square-footprint box for classic
     /// deployables; the building module's box layouts (with real openings
     /// and yaw-aware extents) for building blocks and doors, the same
-    /// boxes the client builds, so the two stay aligned. Open doors
-    /// contribute nothing.
+    /// boxes the client builds, so the two stay aligned. A door's box
+    /// follows its hinge state (closed plane vs swung-open panel).
     pub(super) fn collider_blocks(&self, profile: DeployableProfile) -> Vec<WorldBlock> {
         match self.kind {
             DeployableKind::Building { piece, .. } => {
@@ -402,6 +402,9 @@ impl GameServer {
     ) -> Option<DeployedEntity> {
         let removed = self.remove_deployed_entity(id)?;
         self.chunk_manager.untrack_deployed_entity(id);
+        // Loot bags resting on the removed piece fall to the next support
+        // instead of floating where the floor used to be.
+        self.unsettle_loot_bags_on(&removed);
         // Clear any client's open-furnace / open-storage-box pointer at
         // this id so they don't keep operating a destroyed entity.
         for client in self.clients.values_mut() {
@@ -550,7 +553,11 @@ fn place_toast(client_id: ClientId, kind: ToastKind, text: String) -> Vec<Server
 /// point on any of `blocks`. Range checks against placed structures
 /// measure to the surface, not the centre, so wide pieces (a 3 m
 /// foundation slab) are hittable from any side the player can reach.
-fn within_horizontal_range_of_blocks(position: Vec3Net, blocks: &[WorldBlock], range: f32) -> bool {
+pub(super) fn within_horizontal_range_of_blocks(
+    position: Vec3Net,
+    blocks: &[WorldBlock],
+    range: f32,
+) -> bool {
     blocks.iter().any(|block| {
         let min = block.min();
         let max = block.max();

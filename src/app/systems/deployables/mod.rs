@@ -449,11 +449,12 @@ pub(crate) fn maintain_world_grid_system(
     deployables: Query<(&Deployable, &DeployableTransform, &DeployableActive)>,
     added_nodes: Query<(), Added<ResourceNode>>,
     added_deps: Query<(), Added<Deployable>>,
-    // Doors drop their collider while open, so an `active` flip must
-    // retrigger the rebuild. Lightyear's receive path can mark this
-    // changed without a real value change (see CLAUDE.md), which only
-    // costs a fingerprint compare, the open-door bits folded into the
-    // fingerprint below stop a spurious rebuild.
+    // A door's collider moves between the closed plane and the swung
+    // pose, so an `active` flip must retrigger the rebuild. Lightyear's
+    // receive path can mark this changed without a real value change
+    // (see CLAUDE.md), which only costs a fingerprint compare, the
+    // open-door bits folded into the fingerprint below stop a spurious
+    // rebuild.
     changed_active: Query<(), (Changed<DeployableActive>, With<Deployable>)>,
     mut removed_nodes: RemovedComponents<ResourceNode>,
     mut removed_deps: RemovedComponents<Deployable>,
@@ -530,8 +531,8 @@ fn deployable_set_fingerprint<'a>(
         // numeric value when the two fingerprints are tupled together.
         hash ^= meta.id ^ 0xD9E3_F1A7_5B6C_8024;
         // Open doors contribute a different bit pattern than closed ones
-        // so an open/close flip changes the fingerprint (its collider
-        // set genuinely changed) without a kind lookup.
+        // so an open/close flip changes the fingerprint (the panel's
+        // collider genuinely moved) without a kind lookup.
         if matches!(meta.kind, DeployableKind::Door) && active.0 {
             hash ^= meta.id.rotate_left(17) ^ 0x5A5A_5A5A_5A5A_5A5A;
         }
@@ -543,10 +544,10 @@ fn deployable_set_fingerprint<'a>(
 /// Build the solid AABBs for a placed structure from its replicated
 /// components. Classic deployables resolve a single square-footprint box
 /// from their item profile; building blocks and doors use the building
-/// module's box layouts (openings stay passable, open doors contribute
-/// nothing). Empty if the item id no longer resolves (e.g. a server
-/// using a newer item table than this client knows about, skip the
-/// collider rather than crash, the renderer will still draw it).
+/// module's box layouts (openings stay passable, a door's box follows
+/// its open/closed pose). Empty if the item id no longer resolves (e.g.
+/// a server using a newer item table than this client knows about, skip
+/// the collider rather than crash, the renderer will still draw it).
 pub(crate) fn deployable_colliders(
     meta: &Deployable,
     transform: &DeployableTransform,

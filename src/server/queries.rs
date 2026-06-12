@@ -268,8 +268,11 @@ impl GameServer {
 
     /// Insert (or replace) a deployable and record it for the next mirror
     /// sync. The single entry point for adding placed structures, keeps
-    /// `deployable_sync_dirty` accurate.
+    /// `deployable_sync_dirty` accurate and mirrors the structure's solid
+    /// boxes into the dropped-item physics world so items land on it.
     pub(super) fn insert_deployed_entity(&mut self, id: DeployedEntityId, entity: DeployedEntity) {
+        self.dropped_item_physics
+            .sync_deployable_colliders(id, &entity.resolved_collider_blocks());
         self.deployed_entities.insert(id, entity);
         self.deployable_sync_dirty.insert(id);
         self.deployable_sync_removed.remove(&id);
@@ -277,17 +280,35 @@ impl GameServer {
 
     /// Remove a deployable and record it for the next mirror sync (which
     /// despawns the replicated entity). Returns the removed state, mirroring
-    /// `HashMap`.
+    /// `HashMap`. Also drops the structure's dropped-item physics colliders,
+    /// waking items that rested on them.
     pub(super) fn remove_deployed_entity(
         &mut self,
         id: DeployedEntityId,
     ) -> Option<DeployedEntity> {
         let removed = self.deployed_entities.remove(&id);
         if removed.is_some() {
+            self.dropped_item_physics.remove_deployable_colliders(id);
             self.deployable_sync_removed.insert(id);
             self.deployable_sync_dirty.remove(&id);
         }
         removed
+    }
+
+    /// Re-mirror one deployable's solid boxes into the dropped-item
+    /// physics world after an in-place mutation that changed them (today:
+    /// the door open/close toggle, which moves the panel's box between
+    /// the closed plane and the swung pose).
+    pub(super) fn refresh_deployable_physics_colliders(&mut self, id: DeployedEntityId) {
+        let Some(blocks) = self
+            .deployed_entities
+            .get(&id)
+            .map(DeployedEntity::resolved_collider_blocks)
+        else {
+            return;
+        };
+        self.dropped_item_physics
+            .sync_deployable_colliders(id, &blocks);
     }
 
     /// Mutable access to a deployable, conservatively flagging it dirty for

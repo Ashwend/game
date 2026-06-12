@@ -1,15 +1,17 @@
 use std::collections::{HashMap, HashSet};
 
 use rapier3d::prelude::{
-    BroadPhaseBvh, CCDSolver, ColliderBuilder, ColliderSet, ImpulseJointSet, IntegrationParameters,
-    IslandManager, MultibodyJointSet, NarrowPhase, PhysicsPipeline, RigidBodyBuilder,
-    RigidBodyHandle, RigidBodySet, Vector,
+    BroadPhaseBvh, CCDSolver, ColliderBuilder, ColliderHandle, ColliderSet, ImpulseJointSet,
+    IntegrationParameters, IslandManager, MultibodyJointSet, NarrowPhase, PhysicsPipeline,
+    RigidBodyBuilder, RigidBodyHandle, RigidBodySet, Vector,
 };
 
 use crate::{
     items::{ItemId, stack_limit},
-    protocol::{DroppedItemId, DroppedWorldItem, QuatNet, SERVER_TICK_RATE_HZ, Vec3Net},
-    world::WorldData,
+    protocol::{
+        DeployedEntityId, DroppedItemId, DroppedWorldItem, QuatNet, SERVER_TICK_RATE_HZ, Vec3Net,
+    },
+    world::{WorldBlock, WorldData},
 };
 
 use super::GameServer;
@@ -67,6 +69,12 @@ pub(super) struct DroppedItemPhysics {
     impulse_joints: ImpulseJointSet,
     multibody_joints: MultibodyJointSet,
     ccd_solver: CCDSolver,
+    /// Static colliders mirroring each placed structure's solid boxes
+    /// (`DeployedEntity::resolved_collider_blocks`), so dropped items rest
+    /// on building floors and bump into deployables instead of falling
+    /// through them. Kept in sync by `insert_deployed_entity` /
+    /// `remove_deployed_entity` / the door open-close toggle.
+    deployable_colliders: HashMap<DeployedEntityId, Vec<ColliderHandle>>,
 }
 
 impl std::fmt::Debug for DroppedItemPhysics {
@@ -92,6 +100,7 @@ impl DroppedItemPhysics {
             impulse_joints: ImpulseJointSet::new(),
             multibody_joints: MultibodyJointSet::new(),
             ccd_solver: CCDSolver::new(),
+            deployable_colliders: HashMap::new(),
         };
         physics.spawn_static_world(world);
         physics
@@ -175,6 +184,99 @@ impl DroppedItemPhysics {
             &mut self.multibody_joints,
             true,
         );
+    }
+
+    /// Replace the static colliders mirroring one placed structure with
+    /// `blocks` (empty removes them outright). Items near the old and new
+    /// boxes are woken so a stack resting on a destroyed floor falls, and
+    /// one sitting where a door swings open gets pushed into motion.
+    pub(super) fn sync_deployable_colliders(
+        &mut self,
+        id: DeployedEntityId,
+        blocks: &[WorldBlock],
+    ) {
+        self.remove_deployable_colliders(id);
+        if blocks.is_empty() {
+            return;
+        }
+        let handles = blocks
+            .iter()
+            .map(|block| {
+                self.colliders.insert(
+                    ColliderBuilder::cuboid(
+                        block.half_extents.x,
+                        block.half_extents.y,
+                        block.half_extents.z,
+                    )
+                    .translation(to_rapier_vector(block.center))
+                    .friction(DROPPED_ITEM_FRICTION)
+                    .restitution(DROPPED_ITEM_RESTITUTION),
+                )
+            })
+            .collect();
+        self.deployable_colliders.insert(id, handles);
+        self.wake_bodies_near(blocks);
+    }
+
+    /// Drop a removed structure's static colliders and wake any items
+    /// that were resting on or against them.
+    pub(super) fn remove_deployable_colliders(&mut self, id: DeployedEntityId) {
+        let Some(handles) = self.deployable_colliders.remove(&id) else {
+            return;
+        };
+        let blocks: Vec<WorldBlock> = handles
+            .iter()
+            .filter_map(|&handle| {
+                let collider = self.colliders.get(handle)?;
+                let cuboid = collider.shape().as_cuboid()?;
+                let translation = collider.translation();
+                Some(WorldBlock::new(
+                    Vec3Net::new(translation.x, translation.y, translation.z),
+                    Vec3Net::new(
+                        cuboid.half_extents.x,
+                        cuboid.half_extents.y,
+                        cuboid.half_extents.z,
+                    ),
+                ))
+            })
+            .collect();
+        for handle in handles {
+            self.colliders
+                .remove(handle, &mut self.islands, &mut self.bodies, true);
+        }
+        self.wake_bodies_near(&blocks);
+    }
+
+    /// Wake every dynamic body whose centre sits within `WAKE_MARGIN_M`
+    /// of any of `blocks`. Rapier doesn't wake sleeping bodies when a
+    /// static collider they rest on disappears (or appears inside them),
+    /// so collider edits do it explicitly. Body count is small (live
+    /// dropped items only) and collider edits are event-driven, so the
+    /// full scan is cheap.
+    fn wake_bodies_near(&mut self, blocks: &[WorldBlock]) {
+        const WAKE_MARGIN_M: f32 = 0.5;
+        if blocks.is_empty() {
+            return;
+        }
+        for (_, body) in self.bodies.iter_mut() {
+            if !body.is_dynamic() {
+                continue;
+            }
+            let translation = body.translation();
+            let near = blocks.iter().any(|block| {
+                let min = block.min();
+                let max = block.max();
+                translation.x > min.x - WAKE_MARGIN_M
+                    && translation.x < max.x + WAKE_MARGIN_M
+                    && translation.y > min.y - WAKE_MARGIN_M
+                    && translation.y < max.y + WAKE_MARGIN_M
+                    && translation.z > min.z - WAKE_MARGIN_M
+                    && translation.z < max.z + WAKE_MARGIN_M
+            });
+            if near {
+                body.wake_up(true);
+            }
+        }
     }
 
     /// Step the simulation and write the resulting poses back onto the

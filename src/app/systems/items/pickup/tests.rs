@@ -169,15 +169,14 @@ fn ray_aabb_entry_distance_inside_box_returns_zero() {
     assert_eq!(distance, 0.0);
 }
 
-fn workbench(
-    id: crate::protocol::DeployedEntityId,
-    x: f32,
-    z: f32,
-) -> (
+type DeployableFixture = (
     Deployable,
     DeployableTransform,
     crate::server::DeployableStability,
-) {
+    crate::server::DeployableActive,
+);
+
+fn workbench(id: crate::protocol::DeployedEntityId, x: f32, z: f32) -> DeployableFixture {
     (
         Deployable {
             id,
@@ -191,18 +190,11 @@ fn workbench(
             yaw: 0.0,
         },
         crate::server::DeployableStability(100),
+        crate::server::DeployableActive(false),
     )
 }
 
-fn building_wall(
-    id: crate::protocol::DeployedEntityId,
-    x: f32,
-    z: f32,
-) -> (
-    Deployable,
-    DeployableTransform,
-    crate::server::DeployableStability,
-) {
+fn building_wall(id: crate::protocol::DeployedEntityId, x: f32, z: f32) -> DeployableFixture {
     (
         Deployable {
             id,
@@ -220,7 +212,37 @@ fn building_wall(
             yaw: 0.0,
         },
         crate::server::DeployableStability(100),
+        crate::server::DeployableActive(false),
     )
+}
+
+fn door(id: crate::protocol::DeployedEntityId, z: f32, open: bool) -> DeployableFixture {
+    (
+        Deployable {
+            id,
+            item_id: crate::items::intern_item_id(crate::items::HEWN_LOG_DOOR_ID),
+            kind: crate::items::DeployableKind::Door,
+            max_health: 400,
+            owner: None,
+        },
+        DeployableTransform {
+            position: Vec3Net::new(0.0, 0.5, z),
+            yaw: 0.0,
+        },
+        crate::server::DeployableStability(100),
+        crate::server::DeployableActive(open),
+    )
+}
+
+fn fixture_refs(
+    fixture: &DeployableFixture,
+) -> (
+    &Deployable,
+    &DeployableTransform,
+    &crate::server::DeployableStability,
+    &crate::server::DeployableActive,
+) {
+    (&fixture.0, &fixture.1, &fixture.2, &fixture.3)
 }
 
 #[test]
@@ -235,7 +257,7 @@ fn best_deployable_target_picks_the_closest_ray_hit() {
         eye,
         0.0,
         pitch,
-        [(&near.0, &near.1, &near.2), (&far.0, &far.1, &far.2)].into_iter(),
+        [fixture_refs(&near), fixture_refs(&far)].into_iter(),
     )
     .expect("a deployable in front should be targeted");
     assert_eq!(hit.0.id, 1);
@@ -247,15 +269,11 @@ fn best_deployable_target_skips_out_of_range_and_missed() {
     let eye = Vec3Net::new(0.0, EYE_HEIGHT, 0.0);
     // Far beyond the interact range.
     let far = workbench(1, 0.0, -50.0);
-    assert!(
-        best_deployable_target(eye, 0.0, -0.05, [(&far.0, &far.1, &far.2)].into_iter()).is_none()
-    );
+    assert!(best_deployable_target(eye, 0.0, -0.05, [fixture_refs(&far)].into_iter()).is_none());
 
     // In range but off to the side, the ray never enters its box.
     let side = workbench(2, 5.0, 0.0);
-    assert!(
-        best_deployable_target(eye, 0.0, 0.0, [(&side.0, &side.1, &side.2)].into_iter()).is_none()
-    );
+    assert!(best_deployable_target(eye, 0.0, 0.0, [fixture_refs(&side)].into_iter()).is_none());
 }
 
 #[test]
@@ -272,11 +290,7 @@ fn point_blank_wall_wins_over_the_wall_behind_it() {
         eye,
         0.0,
         0.0,
-        [
-            (&near.0, &near.1, &near.2),
-            (&behind.0, &behind.1, &behind.2),
-        ]
-        .into_iter(),
+        [fixture_refs(&near), fixture_refs(&behind)].into_iter(),
     )
     .expect("the near wall must be targetable at point-blank range");
     assert_eq!(
@@ -310,6 +324,7 @@ fn ray_through_a_doorway_opening_hits_the_piece_behind() {
             yaw: 0.0,
         },
         crate::server::DeployableStability(100),
+        crate::server::DeployableActive(false),
     );
     let wall_behind = building_wall(2, 0.0, -2.5);
     // Eye at standing height aiming straight through the opening centre.
@@ -318,14 +333,35 @@ fn ray_through_a_doorway_opening_hits_the_piece_behind() {
         eye,
         0.0,
         0.0,
-        [
-            (&doorway.0, &doorway.1, &doorway.2),
-            (&wall_behind.0, &wall_behind.1, &wall_behind.2),
-        ]
-        .into_iter(),
+        [fixture_refs(&doorway), fixture_refs(&wall_behind)].into_iter(),
     )
     .expect("the wall behind the opening should be hit");
     assert_eq!(hit.0.id, 2);
+}
+
+#[test]
+fn door_targeting_follows_the_swung_panel() {
+    // A closed door (base at y = 0.5, yaw 0) is targeted through the
+    // opening plane; once open, the panel swings toward +Z around the
+    // hinge on the -X side and the target volume moves with it.
+    let closed = door(1, -2.0, false);
+    let centre_eye = Vec3Net::new(0.0, 1.7, 0.0);
+    assert!(
+        best_deployable_target(centre_eye, 0.0, 0.0, [fixture_refs(&closed)].into_iter()).is_some(),
+        "a closed panel fills the opening plane"
+    );
+
+    let open = door(1, -2.0, true);
+    assert!(
+        best_deployable_target(centre_eye, 0.0, 0.0, [fixture_refs(&open)].into_iter()).is_none(),
+        "an open door leaves the opening clear, the ray must pass through"
+    );
+    // Aim down the swung panel's resting position: hinge side (-X),
+    // sticking out toward +Z from the doorway at z = -2.
+    let panel_eye = Vec3Net::new(-0.6, 1.7, 0.0);
+    let hit = best_deployable_target(panel_eye, 0.0, 0.0, [fixture_refs(&open)].into_iter())
+        .expect("the swung panel must be targetable where the mesh is");
+    assert_eq!(hit.0.id, 1);
 }
 
 #[test]
