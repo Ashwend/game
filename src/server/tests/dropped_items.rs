@@ -370,3 +370,62 @@ fn dropped_item_physics_settles_on_the_floor() {
     assert!(item.position.y >= DROPPED_ITEM_RADIUS - 0.03);
     assert!(item.position.y <= DROPPED_ITEM_RADIUS + 0.12);
 }
+
+#[test]
+fn dropped_item_settles_on_a_building_floor() {
+    let mut server = server();
+    let foundation_top = crate::building::FOUNDATION_HEIGHT_M;
+    crate::server::test_support::place_foundation(&mut server, Vec3Net::new(0.0, 0.0, -6.0));
+
+    server.spawn_dropped_item(
+        ItemStack::new(COAL_ID, 1),
+        Vec3Net::new(0.0, 3.0, -6.0),
+        Vec3Net::ZERO,
+        0.0,
+    );
+    for _ in 0..80 {
+        server.tick(1.0 / SERVER_TICK_RATE_HZ);
+    }
+
+    // The foundation's collider is mirrored into the dropped-item
+    // physics world, so the item rests on the slab's top instead of
+    // falling through to the ground.
+    let item = first_dropped_item(&server);
+    assert!(
+        item.position.y >= foundation_top + DROPPED_ITEM_RADIUS - 0.03,
+        "item must rest on the foundation top, got y {}",
+        item.position.y
+    );
+    assert!(item.position.y <= foundation_top + DROPPED_ITEM_RADIUS + 0.12);
+}
+
+#[test]
+fn destroying_the_floor_under_an_item_drops_it_to_the_ground() {
+    let mut server = server();
+    let foundation_id =
+        crate::server::test_support::place_foundation(&mut server, Vec3Net::new(0.0, 0.0, -6.0));
+    server.spawn_dropped_item(
+        ItemStack::new(COAL_ID, 1),
+        Vec3Net::new(0.0, 3.0, -6.0),
+        Vec3Net::ZERO,
+        0.0,
+    );
+    for _ in 0..80 {
+        server.tick(1.0 / SERVER_TICK_RATE_HZ);
+    }
+    let settled = first_dropped_item(&server);
+    assert!(settled.position.y >= crate::building::FOUNDATION_HEIGHT_M - 0.03);
+
+    // Removing the slab also removes its physics colliders and wakes
+    // the (sleeping) item resting on it, so it falls to the ground.
+    server.destroy_deployed_entity(foundation_id);
+    for _ in 0..80 {
+        server.tick(1.0 / SERVER_TICK_RATE_HZ);
+    }
+    let item = first_dropped_item(&server);
+    assert!(
+        item.position.y <= DROPPED_ITEM_RADIUS + 0.12,
+        "item must fall once its floor is destroyed, got y {}",
+        item.position.y
+    );
+}

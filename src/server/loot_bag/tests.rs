@@ -75,6 +75,7 @@ fn loot_bag_is_empty_reflects_slot_contents() {
         spawn_tick: 0,
         velocity_y: 0.0,
         resting: true,
+        rest_y: 0.05,
     };
     assert!(bag.is_empty());
     bag.slots[2] = Some(ItemStack::new(WOOD_ID, 1));

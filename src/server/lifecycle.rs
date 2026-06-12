@@ -119,6 +119,11 @@ impl GameServer {
         let deployed_entities = Self::restore_deployed_entities(persisted_deployables);
         for entity in deployed_entities.values() {
             chunk_manager.track_deployed_entity(entity.id, entity.position);
+            // Mirror the structure's solid boxes into the dropped-item
+            // physics world, same as a live placement does, so reloaded
+            // drops keep resting on building floors.
+            dropped_item_physics
+                .sync_deployable_colliders(entity.id, &entity.resolved_collider_blocks());
         }
         let next_deployed_entity_id = save.state.next_deployed_entity_id.max(
             deployed_entities

@@ -83,3 +83,37 @@ pub(crate) fn equip_basic_tools(server: &mut GameServer, client_id: ClientId) {
     client.inventory.actionbar_slots[0] = Some(ItemStack::new(BASIC_HATCHET_ID, 1));
     client.inventory.actionbar_slots[1] = Some(ItemStack::new(BASIC_PICKAXE_ID, 1));
 }
+
+/// Insert a sticks-tier foundation directly into the authoritative map,
+/// bypassing the placement command (which needs materials and snapping).
+/// Goes through `insert_deployed_entity` so the mirror-sync and physics
+/// collider bookkeeping run exactly as in production. Returns the id.
+pub(crate) fn place_foundation(
+    server: &mut GameServer,
+    position: Vec3Net,
+) -> crate::protocol::DeployedEntityId {
+    let piece = crate::building::BuildingPiece::Foundation;
+    let tier = crate::building::BuildingTier::Sticks;
+    let max_health = crate::building::building_max_health(piece, tier);
+    let id = server.next_deployed_entity_id;
+    server.next_deployed_entity_id += 1;
+    let entity = super::deployables::DeployedEntity {
+        id,
+        item_id: crate::items::intern_item_id(crate::building::building_item_id(piece)),
+        kind: crate::items::DeployableKind::Building { piece, tier },
+        position,
+        yaw: 0.0,
+        health: max_health,
+        max_health,
+        owner: Some(1),
+        furnace: None,
+        placed_at_tick: 0,
+        door: None,
+        label: None,
+        stability: 100,
+        storage: None,
+    };
+    server.insert_deployed_entity(id, entity);
+    server.chunk_manager.track_deployed_entity(id, position);
+    id
+}

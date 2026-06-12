@@ -113,7 +113,7 @@ fn deployable_collider_uses_profile_extents_and_lifts_center() {
 }
 
 #[test]
-fn door_colliders_drop_while_open_and_doorways_stay_passable() {
+fn door_colliders_follow_the_swing_and_doorways_stay_passable() {
     use crate::items::{HEWN_LOG_DOOR_ID, intern_item_id};
     let door = Deployable {
         id: 3,
@@ -126,8 +126,21 @@ fn door_colliders_drop_while_open_and_doorways_stay_passable() {
         position: Vec3Net::new(0.0, 0.5, 0.0),
         yaw: 0.0,
     };
-    assert_eq!(deployable_colliders(&door, &transform, false).len(), 1);
-    assert!(deployable_colliders(&door, &transform, true).is_empty());
+    let closed = deployable_colliders(&door, &transform, false);
+    assert_eq!(closed.len(), 1);
+    assert!(
+        closed[0].center.z.abs() < 1e-6,
+        "closed panel fills the opening plane"
+    );
+    // An open door keeps a collider, moved to the swung panel's pose:
+    // clear of the opening (the -X hinge side) and out along +Z.
+    let open = deployable_colliders(&door, &transform, true);
+    assert_eq!(open.len(), 1);
+    assert!(
+        open[0].max().x < -0.4,
+        "open panel leaves the opening passable"
+    );
+    assert!(open[0].center.z > 0.3, "open panel sits on the swing side");
 
     let doorway = Deployable {
         id: 4,

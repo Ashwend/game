@@ -58,8 +58,9 @@ const BAG_SPAWN_VERTICAL_VELOCITY: f32 = -0.4;
 /// Gravity applied to settling bags. Matches the controller's gravity
 /// so the visible fall matches the player's frame of reference.
 const BAG_GRAVITY: f32 = 18.0;
-/// Resting Y position for a bag once it lands. Slightly above zero so
-/// the visual mesh's lower face doesn't z-fight with the floor.
+/// Height of a resting bag above its support surface (the world floor
+/// or a building platform's top). Slightly above the surface so the
+/// visual mesh's lower face doesn't z-fight with it.
 const BAG_RESTING_Y: f32 = 0.05;
 
 /// Authoritative record of a loot bag in the world. Stored in
@@ -82,11 +83,16 @@ pub struct LootBag {
     /// still falling from chest height. Horizontal velocity isn't
     /// tracked, bags fall straight down.
     pub(crate) velocity_y: f32,
-    /// True once the bag has touched the ground. Skips the
+    /// True once the bag has touched its support. Skips the
     /// per-tick integration in [`GameServer::tick_loot_bags`] for
     /// resting bags so the cost stays at O(spawned-this-tick) instead
     /// of O(every-bag-ever-spawned).
     pub(crate) resting: bool,
+    /// Y the bag settles at: the highest support surface under its XZ
+    /// (world floor or a building/deployable top) plus [`BAG_RESTING_Y`].
+    /// Computed at spawn; recomputed when the supporting piece is
+    /// destroyed (see [`GameServer::unsettle_loot_bags_on`]).
+    pub(crate) rest_y: f32,
 }
 
 impl LootBag {
@@ -124,7 +130,9 @@ impl GameServer {
         }
         // Spawn at chest height so the bag visibly falls off the
         // corpse instead of materialising on the ground. Gravity
-        // ticks below pull it down to `BAG_RESTING_Y`.
+        // ticks below pull it down to the support under it (a death
+        // on an upper floor rests the bag on that floor, not the
+        // ground storeys below).
         let spawn_position = Vec3Net::new(position.x, position.y + BAG_SPAWN_HEIGHT_M, position.z);
         let bag = LootBag {
             id,
@@ -134,6 +142,7 @@ impl GameServer {
             spawn_tick: self.tick,
             velocity_y: BAG_SPAWN_VERTICAL_VELOCITY,
             resting: false,
+            rest_y: self.loot_bag_rest_y(spawn_position),
         };
         self.loot_bags.insert(id, bag);
         self.chunk_manager.track_loot_bag(id, spawn_position);
@@ -154,10 +163,74 @@ impl GameServer {
             }
             bag.velocity_y -= BAG_GRAVITY * dt;
             bag.position.y += bag.velocity_y * dt;
-            if bag.position.y <= BAG_RESTING_Y {
-                bag.position.y = BAG_RESTING_Y;
+            if bag.position.y <= bag.rest_y {
+                bag.position.y = bag.rest_y;
                 bag.velocity_y = 0.0;
                 bag.resting = true;
+            }
+        }
+    }
+
+    /// Y a loot bag at `position`'s XZ comes to rest at: the highest
+    /// solid top surface at or below it, from the world's static blocks
+    /// and every placed structure, with the world floor as the fallback.
+    /// Runs on death/destruction events only, so the linear scan over
+    /// deployables is fine.
+    fn loot_bag_rest_y(&self, position: Vec3Net) -> f32 {
+        let mut rest = BAG_RESTING_Y;
+        let mut consider = |block: &crate::world::WorldBlock| {
+            let min = block.min();
+            let max = block.max();
+            if position.x < min.x || position.x > max.x || position.z < min.z || position.z > max.z
+            {
+                return;
+            }
+            if max.y <= position.y + 0.01 {
+                rest = rest.max(max.y + BAG_RESTING_Y);
+            }
+        };
+        for block in &self.world.blocks {
+            consider(block);
+        }
+        for entity in self.deployed_entities.values() {
+            for block in entity.resolved_collider_blocks() {
+                consider(&block);
+            }
+        }
+        rest
+    }
+
+    /// Re-float every bag that was resting on `removed`'s solid boxes so
+    /// it falls to the next support below (the piece under it was just
+    /// destroyed). Called from the deployable removal path.
+    pub(super) fn unsettle_loot_bags_on(&mut self, removed: &super::deployables::DeployedEntity) {
+        let blocks = removed.resolved_collider_blocks();
+        if blocks.is_empty() {
+            return;
+        }
+        let falling: Vec<(crate::protocol::LootBagId, Vec3Net)> = self
+            .loot_bags
+            .values()
+            .filter(|bag| bag.resting)
+            .filter(|bag| {
+                blocks.iter().any(|block| {
+                    let min = block.min();
+                    let max = block.max();
+                    bag.position.x >= min.x
+                        && bag.position.x <= max.x
+                        && bag.position.z >= min.z
+                        && bag.position.z <= max.z
+                        && (bag.position.y - (max.y + BAG_RESTING_Y)).abs() <= 0.05
+                })
+            })
+            .map(|bag| (bag.id, bag.position))
+            .collect();
+        for (id, position) in falling {
+            let rest_y = self.loot_bag_rest_y(position);
+            if let Some(bag) = self.loot_bags.get_mut(&id) {
+                bag.rest_y = rest_y;
+                bag.resting = false;
+                bag.velocity_y = 0.0;
             }
         }
     }

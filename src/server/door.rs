@@ -205,7 +205,10 @@ impl GameServer {
         if door.authorized.contains(&account) {
             door.open = !door.open;
             // Open state replicates via `DeployableActive`; no toast, the
-            // door swinging is its own feedback.
+            // door swinging is its own feedback. The panel's solid box
+            // moved (closed plane <-> swung pose), so the dropped-item
+            // physics world re-syncs this entity's colliders.
+            self.refresh_deployable_physics_colliders(id);
             Vec::new()
         } else {
             vec![ServerEnvelope {
@@ -287,19 +290,22 @@ impl GameServer {
         door_toast(client_id, ToastKind::Success, "Code changed".to_owned())
     }
 
-    /// Range + existence gate shared by every door interaction. Returns
-    /// the actor's account id.
+    /// Range + existence gate shared by every door interaction. Measured
+    /// to the panel collider's surface, which follows the open/closed
+    /// pose, so an E aimed at a swung-open panel validates from the same
+    /// place the player sees the mesh. Returns the actor's account id.
     fn door_actor_in_range(&self, client_id: ClientId, id: DeployedEntityId) -> Option<AccountId> {
         let client = self.clients.get(&client_id)?;
         let entity = self.deployed_entities.get(&id)?;
         if !matches!(entity.kind, DeployableKind::Door) {
             return None;
         }
-        client
-            .controller
-            .position
-            .within_horizontal_range(entity.position, INTERACT_RANGE_M)
-            .then_some(client.account_id)
+        super::deployables::within_horizontal_range_of_blocks(
+            client.controller.position,
+            &entity.resolved_collider_blocks(),
+            INTERACT_RANGE_M,
+        )
+        .then_some(client.account_id)
     }
 }
 
