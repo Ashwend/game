@@ -14,9 +14,10 @@ use crate::{
     server::{
         Deployable, DeployableActive, DeployableHealth, DeployableLabel, DeployableStability,
         DeployableTransform, DroppedItem, DroppedItemTransform, LootBagContents, LootBagEntity,
-        LootBagTransform, Player, PlayerArmor, PlayerChatBubble, PlayerCrafting, PlayerHealth,
-        PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerOpenContainers, PlayerPose,
-        PlayerProfile, PlayerSleeping, ResourceNode, ResourceNodeStorage,
+        LootBagTransform, Player, PlayerAction, PlayerArmor, PlayerChatBubble, PlayerCrafting,
+        PlayerHealth, PlayerHeldItem, PlayerInputAck, PlayerInventory, PlayerLifecycle,
+        PlayerOpenContainers, PlayerPose, PlayerProfile, PlayerSleeping, ResourceNode,
+        ResourceNodeStorage,
     },
 };
 
@@ -101,6 +102,12 @@ impl Plugin for LightyearProtocolPlugin {
         app.register_component::<PlayerPose>();
         app.register_component::<PlayerHealth>();
         app.register_component::<PlayerChatBubble>();
+        // Peer-visible cosmetic state for the rigged remote body: what the
+        // player holds, and their current swing. Both change far less often
+        // than the pose, so they sit apart from it (one diff per tool swap /
+        // per swing, not per movement tick).
+        app.register_component::<PlayerHeldItem>();
+        app.register_component::<PlayerAction>();
         // Owner-only player state, gated per component to the owning
         // sender in `attach_player_replication`.
         app.register_component::<PlayerInventory>();

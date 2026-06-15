@@ -71,13 +71,19 @@ impl InventoryCommand {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResourceGatherCommand {
     pub resource_node_id: ResourceNodeId,
     /// Optimistic-prediction sequence number. The client tags each predicted
     /// gather so the server can echo it back via `PlayerPrivate.applied_action_seq`,
     /// letting the client prune the matching pending inventory overlay op.
     pub seq: u32,
+    /// World-space point where the swinger's look ray hit the node (where they
+    /// spawned their own impact burst). The server rebroadcasts this as the
+    /// `ResourceImpact` position so other clients spawn the particles at the same
+    /// spot, instead of at the node's base. Cosmetic only; the server clamps it
+    /// near the node and ignores it for gather logic.
+    pub hit_point: Vec3Net,
 }
 
 /// Client → server placement intent for a deployable structure. The
@@ -115,6 +121,21 @@ pub struct DamageDeployableCommand {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AttackPlayerCommand {
     pub target_player_id: ClientId,
+}
+
+/// Client → server "I just started a swing" intent, sent the instant a
+/// local swing begins (not at the impact frame, and independently of
+/// whether it will hit anything, so whiffs animate too). Purely cosmetic:
+/// the server stamps the swinger's peer-visible [`crate::server::PlayerAction`]
+/// from it so other players' clients can play the matching third-person
+/// swing on the rigged body. `seq` is the client's per-swing counter (its
+/// local `swing_seed`) so the server, and peers, can dedupe back-to-back
+/// swings; `tool` selects the swing curve/cadence. The server reads the
+/// authoritative tool too, so a lie here only mis-picks an animation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SwingStartCommand {
+    pub seq: u32,
+    pub tool: crate::items::ToolKind,
 }
 
 /// Client → server intent to place a building block from the building

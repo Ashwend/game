@@ -86,7 +86,10 @@ pub(crate) use network::{
     update_link_ping_system,
 };
 pub(crate) use node_death::tick_felling_trees_system;
-pub(crate) use players::{RemotePlayerEntities, apply_snapshot_system, tick_dying_players_system};
+pub(crate) use players::{
+    RemotePlayerEntities, animate_remote_players_system, apply_remote_player_appearance_system,
+    apply_snapshot_system, reconcile_player_rigs_system, tick_dying_players_system,
+};
 pub(crate) use quit::app_quit_system;
 pub(crate) use settings::{
     flush_settings_on_exit_system, save_client_settings_system, sync_view_radius_system,

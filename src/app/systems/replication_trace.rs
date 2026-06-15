@@ -22,7 +22,8 @@
 //!   - `ResourceNodeStorage`
 //!   - `DeployableHealth`, `DeployableActive`, `DeployableLabel`, `DeployableStability`
 //!   - `PlayerPose`, `PlayerHealth`, `PlayerInventory`, `PlayerInputAck`,
-//!     `PlayerArmor`, `PlayerLifecycle`, `PlayerSleeping`
+//!     `PlayerArmor`, `PlayerLifecycle`, `PlayerSleeping`, `PlayerHeldItem`,
+//!     `PlayerAction`
 //!   - `LootBagContents`, `LootBagTransform`
 //!   - `DroppedItemTransform`, `DroppedItem` (stack-merge)
 //!
@@ -34,8 +35,8 @@ use bevy::{ecs::change_detection::Ref, prelude::*};
 use crate::server::{
     Deployable, DeployableActive, DeployableHealth, DeployableLabel, DeployableStability,
     DroppedItem, DroppedItemTransform, LootBagContents, LootBagEntity, LootBagTransform, Player,
-    PlayerArmor, PlayerHealth, PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerPose,
-    PlayerSleeping, ResourceNode, ResourceNodeStorage,
+    PlayerAction, PlayerArmor, PlayerHealth, PlayerHeldItem, PlayerInputAck, PlayerInventory,
+    PlayerLifecycle, PlayerPose, PlayerSleeping, ResourceNode, ResourceNodeStorage,
 };
 
 /// Tracks the last-seen value per id so we can log a clean
@@ -50,6 +51,8 @@ pub(crate) struct ReplicationTraceState {
     player_armor: std::collections::HashMap<u64, u8>,
     player_lifecycle: std::collections::HashMap<u64, PlayerLifecycle>,
     player_sleeping: std::collections::HashMap<u64, bool>,
+    player_held: std::collections::HashMap<u64, Option<crate::items::HeldMesh>>,
+    player_action_seq: std::collections::HashMap<u64, u32>,
     loot_bag_occupied: std::collections::HashMap<u64, usize>,
     dropped_item_qty: std::collections::HashMap<u64, u16>,
 }
@@ -72,6 +75,8 @@ pub(crate) fn log_replicated_storage_changes_system(
     players_armor: Query<(Entity, &Player, Ref<PlayerArmor>)>,
     players_lifecycle: Query<(Entity, &Player, Ref<PlayerLifecycle>)>,
     players_sleeping: Query<(Entity, &Player, Ref<PlayerSleeping>)>,
+    players_held: Query<(Entity, &Player, Ref<PlayerHeldItem>)>,
+    players_action: Query<(Entity, &Player, Ref<PlayerAction>)>,
     loot_bags: Query<(Entity, &LootBagEntity, Ref<LootBagContents>)>,
     loot_bag_transforms: Query<(Entity, &LootBagEntity, Ref<LootBagTransform>)>,
     dropped_items: Query<(Entity, Ref<DroppedItem>, Ref<DroppedItemTransform>)>,
@@ -321,6 +326,57 @@ pub(crate) fn log_replicated_storage_changes_system(
                 player.client_id, sleeping.0
             );
             state.player_sleeping.insert(player.client_id, sleeping.0);
+        }
+    }
+
+    // Held mesh ships on a tool swap. `Ref::is_changed()` fires every
+    // replication tick for Lightyear-touched components, so gate on a real
+    // value delta (see the CLAUDE.md replication notes).
+    for (entity, player, held) in &players_held {
+        if held.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: PlayerHeldItem     SPAWN  client={} entity={entity:?} held={:?}",
+                player.client_id, held.0
+            );
+            state.player_held.insert(player.client_id, held.0);
+        } else if held.is_changed() {
+            let before = state.player_held.get(&player.client_id).copied().flatten();
+            if before != held.0 {
+                info!(
+                    target: "replication_trace",
+                    "client: PlayerHeldItem     RECV   client={} entity={entity:?} {before:?} -> {:?}",
+                    player.client_id, held.0
+                );
+                state.player_held.insert(player.client_id, held.0);
+            }
+        }
+    }
+
+    // Swing action ships once per swing (seq increments). Value-delta gated on
+    // the seq for the same is_changed() reason.
+    for (entity, player, action) in &players_action {
+        if action.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: PlayerAction       SPAWN  client={} entity={entity:?} seq={} tool={:?}",
+                player.client_id, action.seq, action.tool
+            );
+            state.player_action_seq.insert(player.client_id, action.seq);
+        } else if action.is_changed() {
+            let before = state
+                .player_action_seq
+                .get(&player.client_id)
+                .copied()
+                .unwrap_or(0);
+            if before != action.seq {
+                info!(
+                    target: "replication_trace",
+                    "client: PlayerAction       RECV   client={} entity={entity:?} seq {before} -> {} tool={:?}",
+                    player.client_id, action.seq, action.tool
+                );
+                state.player_action_seq.insert(player.client_id, action.seq);
+            }
         }
     }
 

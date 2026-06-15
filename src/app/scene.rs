@@ -32,7 +32,7 @@ pub(crate) use components::{
 pub(crate) use grass::{
     GrassInstancingPlugin, GrassMaterial, GrassMaterialHandle, GrassState, stream_grass_system,
 };
-pub(crate) use mesh::PLAYER_HEAD_TOP_LOCAL_Y;
+pub(crate) use mesh::{PLAYER_HEAD_TOP_LOCAL_Y, PlayerPart, rig_layout};
 pub(crate) use sky::{SunLight, update_sky_system};
 pub(crate) use terrain::{TerrainMaterial, TerrainTextureAssets};
 pub(crate) use world::{WorldSceneState, apply_world_scene_system};

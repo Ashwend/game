@@ -130,6 +130,9 @@ fn dispatch_resource_swing(
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: node_id,
             seq,
+            // Where our look ray hit the node (the same point we spawned our
+            // local burst at), so peers spawn their burst there too.
+            hit_point: crate::protocol::Vec3Net::new(anchor.x, anchor.y, anchor.z),
         }),
         "gather command",
     );
@@ -213,9 +216,9 @@ fn dispatch_deployable_swing(
 
 /// PvP swing dispatch, mirrors `dispatch_deployable_swing` but the
 /// network payload is `AttackPlayer` (no inventory payout) and the
-/// impact visual uses the dedicated `FleshHit` palette (Phase 4 will
-/// flip the placeholder kind to `FleshHit`; today it uses the generic
-/// stone-shard fallback so the swing still produces feedback).
+/// impact visual uses the dedicated `FleshHit` palette: a red blood spray
+/// (see `ImpactEffectAssets::blood_material` + the `FleshHit` arm in
+/// `app::systems::effects`).
 fn dispatch_player_swing(
     params: &mut GameplayInventoryShortcutsParams,
     impact: SwingImpact,

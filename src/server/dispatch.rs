@@ -93,6 +93,13 @@ impl GameServer {
             ClientMessage::AttackPlayer(command) => {
                 self.apply_attack_player_command(client_id, command)
             }
+            ClientMessage::SwingStart(command) => {
+                // Advance the prediction high-water mark like the other
+                // predicted actions, then stamp the cosmetic peer-visible
+                // swing. `command.seq` is the client's per-swing counter.
+                self.note_action_seq(client_id, command.seq);
+                self.apply_swing_start(client_id, command)
+            }
             ClientMessage::Respawn => self.apply_respawn_command(client_id),
             ClientMessage::RespawnAtBag { id } => self.apply_respawn_at_bag_command(client_id, id),
             ClientMessage::PlaceBuilding(command) => {

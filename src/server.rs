@@ -82,6 +82,7 @@ mod resource_nodes;
 mod sleeping_bag;
 mod stability;
 mod storage_box;
+mod swing;
 #[cfg(test)]
 mod test_support;
 mod tick;
@@ -108,10 +109,10 @@ pub use loot_bag_ecs::{
     LootBagView, despawn_loot_bag_entity, spawn_loot_bag_entity,
 };
 pub use player_ecs::{
-    Player, PlayerArmor, PlayerChatBubble, PlayerChunk, PlayerCrafting, PlayerHealth, PlayerIndex,
-    PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerOpenContainers, PlayerPose,
-    PlayerPrivate, PlayerProfile, PlayerSleeping, PlayerView, despawn_player_entity,
-    spawn_player_entity,
+    Player, PlayerAction, PlayerArmor, PlayerChatBubble, PlayerChunk, PlayerCrafting, PlayerHealth,
+    PlayerHeldItem, PlayerIndex, PlayerInputAck, PlayerInventory, PlayerLifecycle,
+    PlayerOpenContainers, PlayerPose, PlayerPrivate, PlayerProfile, PlayerSleeping, PlayerView,
+    despawn_player_entity, spawn_player_entity,
 };
 pub use resource_node_ecs::{
     ResourceNode, ResourceNodeChunk, ResourceNodeIndex, ResourceNodeStorage,
@@ -320,6 +321,13 @@ pub(super) struct ServerClient {
     /// every client in the roster broadcast so the pause-screen player list can
     /// show each player's ping.
     pub(super) ping_ms: u16,
+    /// Peer-visible swing animation state, stamped from the cosmetic
+    /// `ClientMessage::SwingStart`. `swing_seq` increments once per accepted
+    /// swing-start (mirroring the client's local `swing_seed`); peers
+    /// edge-detect a change to play the third-person swing. `swing_tool`
+    /// selects the swing curve. Mirrored into the [`PlayerAction`] component.
+    pub(super) swing_seq: u32,
+    pub(super) swing_tool: crate::items::ToolKind,
 }
 
 #[derive(Debug, Clone)]
@@ -398,6 +406,8 @@ pub(super) fn sleeping_body_from_persisted(
         open_container: None,
         applied_action_seq: 0,
         ping_ms: 0,
+        swing_seq: 0,
+        swing_tool: crate::items::ToolKind::Hands,
     }
 }
 

@@ -128,6 +128,7 @@ fn pickaxe_depletes_node_and_removes_it_from_the_world() {
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
             seq: 0,
+            hit_point: Vec3Net::ZERO,
         }),
     );
 
@@ -166,6 +167,7 @@ fn applied_action_seq_advances_on_accepted_and_rejected_gather() {
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
             seq: 5,
+            hit_point: Vec3Net::ZERO,
         }),
     );
     assert_eq!(
@@ -186,6 +188,7 @@ fn applied_action_seq_advances_on_accepted_and_rejected_gather() {
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
             seq: 9,
+            hit_point: Vec3Net::ZERO,
         }),
     );
     let client = server.clients.get(&client_id).unwrap();
@@ -204,6 +207,7 @@ fn applied_action_seq_advances_on_accepted_and_rejected_gather() {
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
             seq: 4,
+            hit_point: Vec3Net::ZERO,
         }),
     );
     assert_eq!(
@@ -232,6 +236,7 @@ fn second_gather_on_removed_node_is_silently_dropped() {
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
             seq: 0,
+            hit_point: Vec3Net::ZERO,
         }),
     );
     assert!(!server.resource_nodes.contains_key(&99));
@@ -247,6 +252,7 @@ fn second_gather_on_removed_node_is_silently_dropped() {
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
             seq: 0,
+            hit_point: Vec3Net::ZERO,
         }),
     );
     assert!(
@@ -279,6 +285,7 @@ fn successful_gather_emits_success_toast_to_requesting_client() {
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
             seq: 0,
+            hit_point: Vec3Net::ZERO,
         }),
     );
 
@@ -336,6 +343,7 @@ fn gather_into_full_inventory_emits_warning_toast_and_locks_cooldown() {
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
             seq: 0,
+            hit_point: Vec3Net::ZERO,
         }),
     );
 
@@ -377,6 +385,7 @@ fn failed_gather_emits_no_toast() {
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
             seq: 0,
+            hit_point: Vec3Net::ZERO,
         }),
     );
 
@@ -425,11 +434,15 @@ fn successful_gather_broadcasts_impact_to_peers_only() {
         ClientMessage::Inventory(InventoryCommand::SelectActionbarSlot { slot: 1 }),
     );
 
+    // The swinger reports where its look ray hit the node (partway up), so
+    // peers spawn the burst there rather than at the node's base.
+    let hit_point = Vec3Net::new(0.1, 1.6, -2.2);
     let envelopes = server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
             seq: 0,
+            hit_point,
         }),
     );
 
@@ -450,7 +463,73 @@ fn successful_gather_broadcasts_impact_to_peers_only() {
          goes to nearby peers only",
     );
     assert_eq!(kind, ResourceImpactKind::CoalOre);
-    assert_eq!(position, Vec3Net::new(0.0, 0.0, -2.2));
+    // The broadcast carries the swinger's hit point (near the node), so peers
+    // spawn the burst at the same spot the swinger did, not the node base.
+    assert_eq!(position, hit_point);
+}
+
+#[test]
+fn gather_impact_clamps_a_bogus_hit_point_to_the_node() {
+    use crate::protocol::{ResourceImpactKind, ServerMessage};
+
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    // A nearby peer so the range-gated impact echo has a recipient.
+    let _peer = {
+        let id = server
+            .connect(
+                crate::protocol::PROTOCOL_VERSION,
+                Some(crate::protocol::GAME_VERSION.to_owned()),
+                2,
+                "Peer".to_owned(),
+                String::new(),
+            )
+            .expect("peer connects")
+            .0;
+        server
+            .clients
+            .get_mut(&id)
+            .expect("connected client should exist")
+            .controller
+            .position = Vec3Net::ZERO;
+        id
+    };
+    equip_basic_tools(&mut server, client_id);
+    server.resource_nodes.clear();
+    server.resource_nodes.insert(99, coal_node(99, 5));
+    look_at_test_node(&mut server, client_id);
+    server.receive(
+        client_id,
+        ClientMessage::Inventory(InventoryCommand::SelectActionbarSlot { slot: 1 }),
+    );
+
+    // A forged hit point far from the node must not spray particles across the
+    // map; the server clamps it back to the node centre.
+    let envelopes = server.receive(
+        client_id,
+        ClientMessage::Gather(ResourceGatherCommand {
+            resource_node_id: 99,
+            seq: 0,
+            hit_point: Vec3Net::new(500.0, 9000.0, -500.0),
+        }),
+    );
+
+    let position = envelopes
+        .iter()
+        .find_map(|envelope| match &envelope.message {
+            ServerMessage::ResourceImpact { position, kind } => {
+                assert_eq!(*kind, ResourceImpactKind::CoalOre);
+                Some(*position)
+            }
+            _ => None,
+        })
+        .expect("server should emit a ResourceImpact envelope on successful gather");
+
+    assert_eq!(
+        position,
+        Vec3Net::new(0.0, 0.0, -2.2),
+        "clamped to node base"
+    );
 }
 
 #[test]
@@ -470,6 +549,7 @@ fn failed_gather_emits_no_impact_broadcast() {
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
             seq: 0,
+            hit_point: Vec3Net::ZERO,
         }),
     );
 
@@ -495,6 +575,7 @@ fn resource_gathering_requires_matching_tool_and_server_cooldown() {
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
             seq: 0,
+            hit_point: Vec3Net::ZERO,
         }),
     );
     assert_eq!(
@@ -515,6 +596,7 @@ fn resource_gathering_requires_matching_tool_and_server_cooldown() {
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
             seq: 0,
+            hit_point: Vec3Net::ZERO,
         }),
     );
     assert_eq!(
@@ -531,6 +613,7 @@ fn resource_gathering_requires_matching_tool_and_server_cooldown() {
         ClientMessage::Gather(ResourceGatherCommand {
             resource_node_id: 99,
             seq: 0,
+            hit_point: Vec3Net::ZERO,
         }),
     );
     assert_eq!(

@@ -59,6 +59,8 @@ Peer-visible (every client in the same chunk room):
 - **`PlayerPose`**, position/velocity/yaw/pitch/grounded. The 20 Hz component.
 - **`PlayerHealth`**, changes on damage/heal.
 - **`PlayerChatBubble`**, the live bubble text, `None` once expired.
+- **`PlayerHeldItem(Option<HeldMesh>)`**, the equipped actionbar item's first-person mesh selector, derived server-side in `players_iter` (no client input). Changes only on a tool/slot swap. Lets peers render what a player is holding in the rigged hand. Ships the 1-byte `HeldMesh` enum, **not** the `Arc<str>` item id.
+- **`PlayerAction { seq, tool }`**, the current swing. `seq` increments once per accepted swing-start; peers edge-detect a change in `seq` (against a stored last-seen value, never `Ref::is_changed`) and play the tool's third-person swing curve from the moment they observe it (no shared clock, so no `start_tick`). Fed by a cosmetic `ClientMessage::SwingStart` the swinger sends the instant a swing begins (the gather/attack/damage messages fire at the impact frame and never on whiffs, so they can't drive the animation); the server stamps it in `apply_swing_start` (`src/server/swing.rs`). The remote body rig (part-hierarchy reconciler + locomotion/swing animators) lives in `src/app/systems/players.rs`; the part meshes (the "Wayfinder" look) are in `src/app/scene/mesh/player.rs` and the third-person swing pose curves in `src/app/systems/items/remote_swing_pose.rs`.
 
 Owner-only (gated per component to the owning client's sender):
 

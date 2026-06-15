@@ -257,6 +257,7 @@ fn client_message_kind(message: &ClientMessage) -> &'static str {
         ClientMessage::Furnace(_) => "Furnace",
         ClientMessage::DamageDeployable(_) => "DamageDeployable",
         ClientMessage::AttackPlayer(_) => "AttackPlayer",
+        ClientMessage::SwingStart(_) => "SwingStart",
         ClientMessage::Respawn => "Respawn",
         ClientMessage::RespawnAtBag { .. } => "RespawnAtBag",
         ClientMessage::PlaceBuilding(_) => "PlaceBuilding",

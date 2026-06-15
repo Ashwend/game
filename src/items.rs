@@ -111,7 +111,12 @@ pub enum ItemModel {
 /// deployables-in-hand fall back to the generic bag silhouette. Adding a
 /// new tool material is a new variant here plus one mesh handle, no pose or
 /// gameplay code changes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Serde-derived because the peer-visible [`crate::server::PlayerHeldItem`]
+/// component replicates this 1-byte selector (not the `Arc<str>` item id) so
+/// remote players can render what another player is holding without shipping a
+/// string every diff or re-resolving the registry on the peer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum HeldMesh {
     Bag,
     StoneHatchet,
@@ -126,13 +131,16 @@ pub enum HeldMesh {
     BuildingPlan,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ToolKind {
     /// No tool equipped. Synthesized via [`HANDS_TOOL`] when the active
     /// actionbar slot has no tool. Crude pickup nodes carry a
     /// `ToolRequirement` of `Hands` to mark themselves as
     /// E-pickup-only, no tool (including bare hands) can gather them
     /// by swinging. See [`crate::resources::ToolRequirement::allows`].
+    /// Also the [`Default`], so a freshly-spawned peer swing action reads
+    /// as "empty-handed punch" until the first real swing arrives.
+    #[default]
     Hands,
     Axe,
     Pickaxe,
@@ -1054,6 +1062,63 @@ mod tests {
             tool_effectiveness_pct(ToolKind::Pickaxe, DestructibleMaterial::Wood),
             50
         );
+    }
+
+    #[test]
+    fn equipable_items_map_to_the_expected_held_mesh_and_tool() {
+        // The peer-visible held-item replication ships `HeldMesh`, and the
+        // third-person swing reads the tool kind, both derived from these
+        // definitions. Pin the mapping so a registry edit can't silently put
+        // the wrong thing in a remote player's hand.
+        let cases: &[(&str, ItemModel, HeldMesh, Option<ToolKind>)] = &[
+            (
+                BASIC_HATCHET_ID,
+                ItemModel::Hatchet,
+                HeldMesh::StoneHatchet,
+                Some(ToolKind::Axe),
+            ),
+            (
+                IRON_HATCHET_ID,
+                ItemModel::Hatchet,
+                HeldMesh::IronHatchet,
+                Some(ToolKind::Axe),
+            ),
+            (
+                BASIC_PICKAXE_ID,
+                ItemModel::Pickaxe,
+                HeldMesh::StonePickaxe,
+                Some(ToolKind::Pickaxe),
+            ),
+            (
+                IRON_PICKAXE_ID,
+                ItemModel::Pickaxe,
+                HeldMesh::IronPickaxe,
+                Some(ToolKind::Pickaxe),
+            ),
+            (
+                HAMMER_ID,
+                ItemModel::Hatchet,
+                HeldMesh::Hammer,
+                Some(ToolKind::Hammer),
+            ),
+            (
+                BUILDING_PLAN_ID,
+                ItemModel::Bag,
+                HeldMesh::BuildingPlan,
+                None,
+            ),
+            (TORCH_ID, ItemModel::Deployable, HeldMesh::Bag, None),
+        ];
+        for (id, model, held_mesh, tool) in cases {
+            let definition = item_definition(id).expect("registered item");
+            assert!(definition.equipable, "{id} should be equipable");
+            assert_eq!(definition.model, *model, "{id} model");
+            assert_eq!(definition.held_mesh, *held_mesh, "{id} held mesh");
+            assert_eq!(definition.tool.map(|t| t.kind), *tool, "{id} tool kind");
+        }
+
+        // Raw materials are not equipable, so they never reach a hand.
+        assert!(!item_definition(WOOD_ID).unwrap().equipable);
     }
 
     #[test]

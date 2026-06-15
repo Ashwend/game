@@ -66,9 +66,10 @@ use self::{
         CraftCompletionWatch, DeployedEntityVisuals, DroppedItemEntities, LastTrackedScreen,
         LootBagEntities, PendingSessionEndReason, RemotePlayerEntities, ResourceNodeEntities,
         SessionTracker, animate_door_panels_system, animate_furnace_fire_system,
-        animate_torch_fire_system, app_quit_system, apply_deployed_entities_system,
-        apply_display_settings_system, apply_dropped_items_system, apply_graphics_settings_system,
-        apply_held_item_visual_system, apply_loot_bags_system, apply_resource_node_stage_system,
+        animate_remote_players_system, animate_torch_fire_system, app_quit_system,
+        apply_deployed_entities_system, apply_display_settings_system, apply_dropped_items_system,
+        apply_graphics_settings_system, apply_held_item_visual_system, apply_loot_bags_system,
+        apply_remote_player_appearance_system, apply_resource_node_stage_system,
         apply_resource_nodes_system, apply_snapshot_system, apply_test_mode_overrides_system,
         apply_update_system, auto_connect_poll_system, auto_connect_start_system,
         camera_follow_system, center_cursor_on_focus_system, chat_shortcut_system,
@@ -77,16 +78,17 @@ use self::{
         error_relay_system, flush_settings_on_exit_system, gameplay_inventory_shortcuts_system,
         generate_world_map_texture_system, maintain_world_grid_system, menu_backdrop_camera_system,
         mouse_look_system, multiplayer_test_owns_window, network_tick_system,
-        placement_input_system, reposition_test_window_system, save_client_settings_system,
-        screen_viewed_system, session_ended_system, session_shutdown_poll_system,
-        session_started_system, spawn_impact_effects_system, surface_client_error_toasts_system,
-        sync_furnace_open_flag_system, sync_loot_bag_open_flag_system, sync_view_radius_system,
-        tick_combat_feedback_system, tick_felling_trees_system, tick_furnace_particles_system,
-        tick_impact_chips_system, tick_resource_node_pop_in_system, tick_torch_particles_system,
-        toggle_crafting_system, toggle_inventory_system, toggle_pause_system,
-        toggle_perf_stats_system, update_cursor_system, update_link_ping_system,
-        update_pickup_target_system, update_placement_ghost_system, update_tool_swap_state_system,
-        wheel_menu_system, world_map_input_system,
+        placement_input_system, reconcile_player_rigs_system, reposition_test_window_system,
+        save_client_settings_system, screen_viewed_system, session_ended_system,
+        session_shutdown_poll_system, session_started_system, spawn_impact_effects_system,
+        surface_client_error_toasts_system, sync_furnace_open_flag_system,
+        sync_loot_bag_open_flag_system, sync_view_radius_system, tick_combat_feedback_system,
+        tick_felling_trees_system, tick_furnace_particles_system, tick_impact_chips_system,
+        tick_resource_node_pop_in_system, tick_torch_particles_system, toggle_crafting_system,
+        toggle_inventory_system, toggle_pause_system, toggle_perf_stats_system,
+        update_cursor_system, update_link_ping_system, update_pickup_target_system,
+        update_placement_ghost_system, update_tool_swap_state_system, wheel_menu_system,
+        world_map_input_system,
     },
     ui::{
         ButtonSoundRequests, InventorySoundRequests, apply_ui_scale_system, button_sound_system,
@@ -784,6 +786,23 @@ fn add_scene_systems(app: &mut App) {
         .add_systems(
             Update,
             crate::app::systems::tick_dying_players_system.after(ClientSystemSet::Players),
+        )
+        // Rigged remote bodies: build the part hierarchy off the
+        // `Added<NetworkPlayer>` edge, swap the held tool / corpse material,
+        // then animate locomotion + swing. All ride after the reconcile in
+        // `ClientSystemSet::Players` (so the visual root exists), and like the
+        // death tick they order against the *set*, not the function, to avoid
+        // the transitive-cycle panic. No `run_if` gate: gameplay never pauses,
+        // remotes keep walking/swinging while a local overlay is open.
+        .add_systems(
+            Update,
+            (
+                reconcile_player_rigs_system,
+                apply_remote_player_appearance_system,
+                animate_remote_players_system,
+            )
+                .chain()
+                .after(ClientSystemSet::Players),
         )
         .add_systems(
             Update,

@@ -12,6 +12,7 @@ use crate::{
     },
     protocol::{
         ACTIONBAR_SLOT_COUNT, ClientMessage, InventoryCommand, ItemContainerSlot, LootBagCommand,
+        SwingStartCommand,
     },
 };
 
@@ -340,6 +341,18 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
     );
     if let Some(impact) = impact {
         dispatch_swing_impact(&mut params, impact);
+    }
+    // Tell the server a swing began (cosmetic): it stamps the swinger's
+    // peer-visible PlayerAction so other players see the matching third-person
+    // swing on the rigged body. Fires on whiffs too; the impact dispatch above
+    // only handles swings that connect.
+    if let Some((seq, tool)) = params.gather_input.take_swing_start() {
+        send_gameplay_message(
+            &mut params.runtime,
+            &mut params.error_toasts,
+            ClientMessage::SwingStart(SwingStartCommand { seq, tool }),
+            "swing start",
+        );
     }
 }
 

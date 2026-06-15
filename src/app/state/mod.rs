@@ -36,7 +36,7 @@ pub(crate) use dialogs::{
 pub(crate) use gather::{
     GatherInputState, ImpactEffectKind, PICKUP_TARGET_SCAN_INTERVAL_SECS, PendingAudioCue,
     PendingImpactEffect, PickupTargetState, RemoteImpactEvent, SwingImpact, SwingTarget,
-    ToolSwapState,
+    ToolSwapState, swing_duration_seconds,
 };
 pub(crate) use wheel::{
     ActiveWheel, BuildingPlanState, PICKUP_HOLD_WHEEL_SECS, PickupHold, WHEEL_DEADZONE_PX,

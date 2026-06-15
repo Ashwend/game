@@ -52,6 +52,12 @@ pub enum ClientMessage {
     /// blocks; on success it applies armor-reduced damage and sends
     /// `PlayerImpact` + `Knockback`. See `docs/pvp.md`.
     AttackPlayer(AttackPlayerCommand),
+    /// Cosmetic "I started a swing" signal, sent at the moment a local
+    /// swing begins (the gather/attack/damage messages above fire at the
+    /// impact frame and never on whiffs, so they can't drive a remote
+    /// swing animation). The server stamps the swinger's peer-visible
+    /// `PlayerAction` from it; peers play the matching third-person swing.
+    SwingStart(SwingStartCommand),
     /// Respawn the calling client after death. Rejected unless the
     /// client is currently dead, the server is the authority on the
     /// lifecycle state.
@@ -163,6 +169,13 @@ impl ClientMessage {
             | Self::Furnace(_)
             | Self::DamageDeployable(_)
             | Self::AttackPlayer(_)
+            // Reliable: a swing-start is tiny (~5 bytes) and infrequent, and
+            // both unreliable modes are wrong here. Sequenced-unreliable would
+            // let a back-to-back auto-repeat swing clobber its predecessor (a
+            // dropped animation), and unordered-unreliable could silently drop
+            // the start outright (no swing shown). Reliable guarantees every
+            // swing animates on peers.
+            | Self::SwingStart(_)
             | Self::Respawn
             | Self::RespawnAtBag { .. }
             | Self::PlaceBuilding(_)

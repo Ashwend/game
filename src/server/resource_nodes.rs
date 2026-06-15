@@ -1,6 +1,6 @@
 use crate::{
     items::{HANDS_TOOL, ToolProfile, item_definition},
-    protocol::{ClientId, ResourceGatherCommand, ResourceImpactKind, ServerMessage},
+    protocol::{ClientId, ResourceGatherCommand, ResourceImpactKind, ServerMessage, Vec3Net},
     resources::{
         ResourceNodeModel, can_gather_resource_node, next_resource_payout,
         remove_resource_from_storage, resource_node_definition, resource_storage_is_empty,
@@ -117,16 +117,38 @@ impl GameServer {
         // local prediction (a second copy would double-trigger the sound
         // and chip burst), and only deliver to clients close enough to
         // perceive the effect at all.
+        // Spawn the peers' burst where the swinger's look ray actually hit the
+        // node (e.g. partway up a tree), not at its base. The range gate still
+        // keys off the node centre; only the broadcast position carries the
+        // hit point (clamped near the node).
+        let impact_position = sanitize_impact_point(command.hit_point, node.position);
         envelopes.extend(self.envelopes_within_range(
             node.position,
             crate::game_balance::IMPACT_MESSAGE_RANGE_M,
             Some(client_id),
             ServerMessage::ResourceImpact {
-                position: node.position,
+                position: impact_position,
                 kind: resource_impact_kind(node_definition.model),
             },
         ));
         envelopes
+    }
+}
+
+/// Clamp a client-supplied impact point to something sane near the node: finite
+/// and within a generous radius (tall trees reach ~9 m). Cosmetic anti-abuse so
+/// a forged gather can't spray particles across the map; falls back to the node
+/// centre on anything out of bounds.
+fn sanitize_impact_point(hit: Vec3Net, node: Vec3Net) -> Vec3Net {
+    const MAX_OFFSET_M: f32 = 12.0;
+    if hit.x.is_finite()
+        && hit.y.is_finite()
+        && hit.z.is_finite()
+        && hit.minus(node).length_squared() <= MAX_OFFSET_M * MAX_OFFSET_M
+    {
+        hit
+    } else {
+        node
     }
 }
 

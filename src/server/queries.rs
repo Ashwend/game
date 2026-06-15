@@ -396,6 +396,22 @@ impl GameServer {
             armor: PlayerArmor(client.armor),
             lifecycle: client.lifecycle,
             sleeping: player_ecs::PlayerSleeping(!client.online),
+            // Peer-visible held mesh: derived straight from the authoritative
+            // actionbar, gated to equipable items so it matches the local
+            // first-person viewmodel's filter (only equipable things appear in
+            // hand). No client input needed.
+            held: player_ecs::PlayerHeldItem(
+                client
+                    .inventory
+                    .active_actionbar_stack()
+                    .and_then(|stack| crate::items::item_definition(&stack.item_id))
+                    .filter(|definition| definition.equipable)
+                    .map(|definition| definition.held_mesh),
+            ),
+            action: player_ecs::PlayerAction {
+                seq: client.swing_seq,
+                tool: client.swing_tool,
+            },
         })
     }
 

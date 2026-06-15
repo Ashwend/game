@@ -21,6 +21,7 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU32, Ordering},
     time::Duration,
 };
 
@@ -35,8 +36,10 @@ use super::HeadlessCapture;
 use crate::{
     app::state::{ClientRuntime, LocalPlayerState, LookState, MenuState, Screen, WorldMapUiState},
     controller::MAX_LOOK_PITCH,
-    items::intern_item_id,
-    protocol::{ClientMessage, InventoryCommand, PlaceDeployableCommand, Vec3Net},
+    items::{ToolKind, intern_item_id, item_definition},
+    protocol::{
+        ClientMessage, InventoryCommand, PlaceDeployableCommand, SwingStartCommand, Vec3Net,
+    },
 };
 
 /// Owner+group only, matching the server admin socket. The socket grants full
@@ -150,6 +153,18 @@ pub(crate) enum ControlRequest {
         center_x: f32,
         center_z: f32,
     },
+    /// Teleport the local player to an absolute world (x, z), keeping the
+    /// current height (the server lets gravity settle it). Movement is
+    /// client-authoritative, so this just sets the predicted position and the
+    /// movement send carries it to peers. Lets an agent stage two players a
+    /// fixed distance apart to screenshot one from the other's view.
+    Warp { x: f32, z: f32 },
+    /// Fire one swing of the currently-held tool (cosmetic): sends a
+    /// `SwingStart` so peers play the matching third-person swing on this
+    /// player's rigged body. The tool is read from the active actionbar; an
+    /// empty hand swings bare-handed. Lets an agent capture the remote swing
+    /// animation headless (the normal LMB path is focus-gated).
+    Swing,
     /// Return a JSON snapshot of key client state for assertions.
     DumpState,
 }
@@ -606,6 +621,41 @@ fn handle_request(
             Ok(format!(
                 "world map view: zoom {zoom:.2}, centre [{center_x:.1}, {center_z:.1}]"
             ))
+        }
+        ControlRequest::Warp { x, z } => {
+            if !x.is_finite() || !z.is_finite() {
+                bail!("x/z must be finite");
+            }
+            let predicted = runtime
+                .predicted_local
+                .as_mut()
+                .context("no local player (not in a world)")?;
+            // Keep the current height; the controller + server gravity settle
+            // it. Zero momentum so the avatar doesn't keep sliding from the warp.
+            predicted.position = Vec3Net::new(x, predicted.position.y, z);
+            predicted.velocity = Vec3Net::ZERO;
+            Ok(format!("warped to [{x:.2}, {z:.2}]"))
+        }
+        ControlRequest::Swing => {
+            let tool = local_player
+                .private
+                .as_ref()
+                .and_then(|private| private.inventory.active_actionbar_stack())
+                .and_then(|stack| item_definition(&stack.item_id))
+                .and_then(|definition| definition.tool)
+                .map(|profile| profile.kind)
+                .unwrap_or(ToolKind::Hands);
+            // Monotonic per-process seq so the server never rejects it as stale
+            // (it keeps the max). One source for all clients in this process is
+            // fine: the server dedupes per client_id.
+            static SWING_SEQ: AtomicU32 = AtomicU32::new(0);
+            let seq = SWING_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+            let session = runtime
+                .session
+                .as_mut()
+                .context("no active session (not in a world)")?;
+            session.send(ClientMessage::SwingStart(SwingStartCommand { seq, tool }))?;
+            Ok(format!("swing {tool:?} (seq {seq}) sent"))
         }
         ControlRequest::DumpState => {
             let dump = build_dump(runtime, menu, local_player, deployables);

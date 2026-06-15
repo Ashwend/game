@@ -304,6 +304,12 @@ pub(crate) struct GatherInputState {
     pending_audio_cue: Option<PendingAudioCue>,
     pending_miss_audio: bool,
     swing_seed: u32,
+    /// `(seq, tool)` of a swing that began since the last drain, queued for the
+    /// swing driver to ship as [`crate::protocol::ClientMessage::SwingStart`]
+    /// so peers can play the matching third-person swing. Set at the moment a
+    /// swing starts (so it fires on whiffs too, before any impact resolves) and
+    /// drained once per frame.
+    pending_swing_start: Option<(u32, ToolKind)>,
     /// Seconds of swing lockout left after a whiff. A missed swing sets
     /// this to [`COMBAT_MISS_RECOVERY_SECONDS`] once it finishes; while
     /// it ticks down no new swing can start, so spraying at empty air
@@ -445,6 +451,9 @@ impl GatherInputState {
         self.pending_impact = None;
         self.pending_audio_cue = None;
         self.pending_miss_audio = false;
+        // A tool swap / death cancels any un-sent swing-start so the peer
+        // animation isn't kicked off for a swing that never really happened.
+        self.pending_swing_start = None;
         // A tool swap or death clears the swing entirely, including any
         // pending miss penalty, the next tool shouldn't inherit a stun.
         self.recovery_remaining = 0.0;
@@ -463,6 +472,16 @@ impl GatherInputState {
             seed: self.swing_seed,
             missed: false,
         });
+        // Queue a swing-start signal for the network driver. Stamped here (not
+        // at impact) so peers see the wind-up, and so a whiff still animates.
+        self.pending_swing_start = Some((self.swing_seed, tool));
+    }
+
+    /// Drain the `(seq, tool)` of a swing that began since the last call. The
+    /// swing driver sends one [`crate::protocol::ClientMessage::SwingStart`]
+    /// per drained value so every swing, hit or miss, animates on peers.
+    pub(crate) fn take_swing_start(&mut self) -> Option<(u32, ToolKind)> {
+        self.pending_swing_start.take()
     }
 
     pub(crate) fn swing_fraction(&self) -> f32 {

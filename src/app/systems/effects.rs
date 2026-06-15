@@ -48,6 +48,9 @@ pub(crate) fn spawn_impact_effects_system(
             impact.seed,
             1.0,
         );
+        if impact.kind == ImpactEffectKind::FleshHit {
+            spawn_blood_splatter(&mut commands, &assets, impact.anchor, impact.seed);
+        }
     }
     for event in remote_impacts.read() {
         // Remote impacts have no view of which way the swinger was facing.
@@ -62,6 +65,63 @@ pub(crate) fn spawn_impact_effects_system(
             event.seed,
             1.0,
         );
+        if event.effect_kind == ImpactEffectKind::FleshHit {
+            spawn_blood_splatter(&mut commands, &assets, event.anchor, event.seed);
+        }
+    }
+}
+
+/// A lingering blood pool on the ground beneath a PvP hit. A couple of flat
+/// discs scattered around the impact point, laid on the floor, that sit for a
+/// few seconds and then shrink out. Reuses [`ImpactChip`] with zero
+/// velocity/gravity/spin and a long lifetime so it stays put and self-despawns.
+fn spawn_blood_splatter(
+    commands: &mut Commands,
+    assets: &ImpactEffectAssets,
+    anchor: Vec3,
+    seed: u32,
+) {
+    const SPLAT_LIFETIME: f32 = 6.0;
+    const SPLAT_COUNT: u32 = 3;
+    // Drop straight down to the (flat) world floor beneath the hit. A small lift
+    // off the ground avoids z-fighting with the terrain.
+    let ground_y = CHIP_GROUND_Y + 0.005;
+
+    for index in 0..SPLAT_COUNT {
+        let seed = seed
+            .wrapping_mul(2654435761)
+            .wrapping_add(index.wrapping_mul(0x9E37_79B1));
+        let r1 = hashed_unit(seed);
+        let r2 = hashed_unit(seed.wrapping_add(0xABCD));
+        let r3 = hashed_unit(seed.wrapping_add(0x1234));
+
+        let offset = Vec3::new((r1 * 2.0 - 1.0) * 0.20, 0.0, (r2 * 2.0 - 1.0) * 0.20);
+        let radius = 0.14 + r3 * 0.12;
+        // Circle mesh faces +Z; lay it flat (face +Y) and spin it in-plane for
+        // variety so the blobs aren't identical.
+        let rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)
+            * Quat::from_rotation_z(r1 * std::f32::consts::TAU);
+        let position = Vec3::new(anchor.x, ground_y, anchor.z) + offset;
+
+        commands.spawn((
+            Name::new("Blood Splatter"),
+            ImpactChip {
+                velocity: Vec3::ZERO,
+                spin_axis: Vec3::Y,
+                spin_speed: 0.0,
+                lifetime: SPLAT_LIFETIME,
+                age: 0.0,
+                initial_scale: radius,
+                gravity_scale: 0.0,
+            },
+            Mesh3d(assets.blood_splatter_mesh.clone()),
+            MeshMaterial3d(assets.blood_material.clone()),
+            Transform::from_translation(position)
+                .with_rotation(rotation)
+                .with_scale(Vec3::splat(radius)),
+            Visibility::Visible,
+            NotShadowCaster,
+        ));
     }
 }
 
@@ -212,20 +272,19 @@ pub(crate) fn spawn_impact_burst(
                 0.45,
                 1.4,
             ),
-            // Player-hit chip palette. Smaller particle count and a
-            // faster lifetime than `StoneShards` so the burst reads
-            // as a quick spray rather than a wall of chips. Re-uses
-            // the stone-shard mesh + material so a dedicated reddish
-            // dust ramp isn't required to ship Phase 2/3 feedback;
-            // Phase 4 can swap in a bespoke material here.
+            // PvP blood spray: small round red droplets flung out fast and
+            // short-lived, with heavy gravity so they arc down like spatter
+            // rather than hang like dust. A lingering ground pool is spawned
+            // separately (see `spawn_blood_splatter`). The droplet mesh keeps it
+            // from reading as red rock chips.
             ImpactEffectKind::FleshHit => (
-                assets.stone_shard_mesh.clone(),
-                assets.stone_shard_material.clone(),
-                4.0,
-                2.2,
-                0.35,
+                assets.blood_droplet_mesh.clone(),
+                assets.blood_material.clone(),
+                8.0,
+                2.8,
                 0.45,
-                1.8,
+                0.5,
+                2.8,
             ),
         };
 

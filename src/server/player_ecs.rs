@@ -171,6 +171,32 @@ impl PlayerLifecycle {
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlayerSleeping(pub bool);
 
+/// Peer-visible selector for the first-person mesh of the player's currently
+/// equipped (equipable) actionbar item, or `None` for an empty hand. Lets a
+/// remote client render what another player is holding in their rigged hand.
+///
+/// Carries the 1-byte [`HeldMesh`] selector, not the `Arc<str>` item id: the
+/// renderer only needs to pick a mesh, and shipping a string per diff (plus a
+/// registry re-resolve on the peer) would be wasteful. Derived purely from the
+/// authoritative inventory in `players_iter`, so it needs no client input.
+/// Changes only on a tool/slot swap, so it sits apart from the 20 Hz pose.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlayerHeldItem(pub Option<crate::items::HeldMesh>);
+
+/// Peer-visible swing action. `seq` increments once per accepted swing-start;
+/// the remote consumer edge-detects a change in `seq` against a stored
+/// last-seen value (NOT `Ref::is_changed`, which lies for Lightyear-touched
+/// components) and plays `tool`'s swing curve from elapsed 0 at the moment of
+/// observation. No tick is carried: movement is client-authoritative, so there
+/// is no trusted shared clock to compare a `start_tick` against (the pose
+/// reconciler fabricates its tick from `last_changed()` for the same reason).
+/// `seq == 0` is the spawn default (no swing yet).
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlayerAction {
+    pub seq: u32,
+    pub tool: crate::items::ToolKind,
+}
+
 /// Anchor chunk for room subscription. Updated when the player crosses
 /// a chunk boundary (mirror reads `ChunkManager::player_chunk`).
 #[derive(Component, Debug, Clone, Copy)]
@@ -201,6 +227,8 @@ pub struct PlayerView {
     pub armor: PlayerArmor,
     pub lifecycle: PlayerLifecycle,
     pub sleeping: PlayerSleeping,
+    pub held: PlayerHeldItem,
+    pub action: PlayerAction,
 }
 
 pub fn spawn_player_entity(world: &mut World, view: PlayerView, chunk: ChunkCoord) -> Entity {
@@ -222,6 +250,8 @@ pub fn spawn_player_entity(world: &mut World, view: PlayerView, chunk: ChunkCoor
             view.armor,
             view.lifecycle,
             view.sleeping,
+            view.held,
+            view.action,
             PlayerChunk(chunk),
         ))
         .id();
@@ -263,6 +293,8 @@ mod tests {
             armor: PlayerArmor::default(),
             lifecycle: PlayerLifecycle::default(),
             sleeping: PlayerSleeping::default(),
+            held: PlayerHeldItem::default(),
+            action: PlayerAction::default(),
         }
     }
 
@@ -278,6 +310,13 @@ mod tests {
         assert_eq!(ack.last_processed_input, 0);
         let armor = world.get::<PlayerArmor>(entity).expect("armor");
         assert_eq!(armor.0, 0);
+        // The two cosmetic peer-visible components ship on the initial bundle
+        // so an AoI cross-in mid-session sees current state, defaulting to an
+        // empty hand and no swing.
+        let held = world.get::<PlayerHeldItem>(entity).expect("held item");
+        assert_eq!(held.0, None);
+        let action = world.get::<PlayerAction>(entity).expect("action");
+        assert_eq!(action.seq, 0);
 
         let despawned = despawn_player_entity(&mut world, 1);
         assert_eq!(despawned, Some(entity));

@@ -76,6 +76,7 @@ fn gather(server: &mut GameServer, client_id: ClientId, node_id: u64) -> Vec<Ser
         ResourceGatherCommand {
             resource_node_id: node_id,
             seq: 0,
+            hit_point: Vec3Net::ZERO,
         },
     )
 }

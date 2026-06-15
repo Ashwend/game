@@ -1,16 +1,24 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use bevy::{ecs::change_detection::Ref, prelude::*};
+use bevy::{ecs::change_detection::Ref, light::NotShadowCaster, prelude::*};
 
 use crate::{
     app::PLAYER_VISUAL_CENTER_Y,
+    items::{HeldMesh, ToolKind},
     protocol::ClientId,
-    server::{Player, PlayerLifecycle, PlayerPose, PlayerSleeping},
+    server::{Player, PlayerAction, PlayerHeldItem, PlayerLifecycle, PlayerPose, PlayerSleeping},
 };
 
 use super::super::{
-    scene::{NetworkPlayer, PlayerVisualAssets, player_visual_position},
-    state::ClientRuntime,
+    scene::{
+        ItemVisualAssets, NetworkPlayer, PlayerPart, PlayerVisualAssets, player_visual_position,
+        rig_layout,
+    },
+    state::{ClientRuntime, swing_duration_seconds},
+};
+use super::items::{
+    carry_forearm_rotation, carry_upper_arm_rotation, held_item_hand_transform, held_item_layers,
+    remote_swing_arm_pose,
 };
 
 const REMOTE_PLAYER_INTERPOLATION_SECONDS: f32 = 0.1;
@@ -139,6 +147,9 @@ pub(crate) fn apply_snapshot_system(
         (
             &Transform,
             &mut NetworkPlayerInterpolation,
+            &mut RemoteLocomotion,
+            &mut RemoteHeld,
+            &mut RemoteAction,
             Option<&DyingPlayer>,
             Option<&SleepingPlayer>,
         ),
@@ -149,6 +160,8 @@ pub(crate) fn apply_snapshot_system(
         Ref<PlayerPose>,
         Option<&PlayerLifecycle>,
         Option<&PlayerSleeping>,
+        Option<&PlayerHeldItem>,
+        Option<&PlayerAction>,
     )>,
 ) {
     let Some(local_client_id) = runtime.client_id else {
@@ -166,12 +179,20 @@ pub(crate) fn apply_snapshot_system(
     let mut visible_ids = HashSet::new();
     let entities = &mut *entities;
 
-    for (player, pose, lifecycle, sleeping) in &replicated {
+    for (player, pose, lifecycle, sleeping, held, action) in &replicated {
         if player.client_id == local_client_id {
             continue;
         }
         let is_dead = matches!(lifecycle, Some(PlayerLifecycle::Dead { .. }));
         let is_sleeping = matches!(sleeping, Some(PlayerSleeping(true)));
+        // Cosmetic peer state for the rig animators: held mesh, current swing,
+        // and horizontal speed / grounded derived from the replicated pose.
+        let held_mesh = held.and_then(|held| held.0);
+        let (action_seq, action_tool) = action
+            .map(|action| (action.seq, action.tool))
+            .unwrap_or((0, ToolKind::Hands));
+        let velocity = Vec3::from(pose.velocity);
+        let horizontal_speed = velocity.with_y(0.0).length();
         // Keep the entity around even while dead so the tilt-and-fade
         // animation can finish playing. The tick system below
         // despawns the visual once the fade completes.
@@ -181,7 +202,16 @@ pub(crate) fn apply_snapshot_system(
         let target = Transform::from_translation(player_visual_position(feet))
             .with_rotation(Quat::from_rotation_y(pose.yaw));
         if let Some(entity) = entities.0.get(&player.client_id).copied() {
-            if let Ok((current, mut interpolation, dying, asleep)) = players.get_mut(entity) {
+            if let Ok((
+                current,
+                mut interpolation,
+                mut loco,
+                mut held_comp,
+                mut action_comp,
+                dying,
+                asleep,
+            )) = players.get_mut(entity)
+            {
                 if is_dead && dying.is_none() {
                     // Just-died this frame, stamp the dying state so
                     // the tick system below takes over the transform.
@@ -200,21 +230,22 @@ pub(crate) fn apply_snapshot_system(
                         alpha_mode: AlphaMode::Blend,
                         ..source
                     });
-                    commands.entity(entity).insert((
-                        DyingPlayer {
-                            elapsed: 0.0,
-                            finished: false,
-                            // A sleeper killed in place is already on the
-                            // ground; skip the collapse and just fade.
-                            from_sleep: is_sleeping,
-                            fall_axis,
-                            roll_axis,
-                            roll_magnitude,
-                            rest: *current,
-                            material: cloned_material.clone(),
-                        },
-                        MeshMaterial3d(cloned_material),
-                    ));
+                    // The root carries no mesh (the rig parts do); the
+                    // corpse-material repoint onto the parts happens in
+                    // `apply_remote_player_appearance_system`, which reads this
+                    // cloned handle off `DyingPlayer`.
+                    commands.entity(entity).insert(DyingPlayer {
+                        elapsed: 0.0,
+                        finished: false,
+                        // A sleeper killed in place is already on the
+                        // ground; skip the collapse and just fade.
+                        from_sleep: is_sleeping,
+                        fall_axis,
+                        roll_axis,
+                        roll_magnitude,
+                        rest: *current,
+                        material: cloned_material,
+                    });
                 }
                 // Dead -> Alive this frame: the player respawned. True
                 // whether the death animation was still playing or had
@@ -222,12 +253,13 @@ pub(crate) fn apply_snapshot_system(
                 // now precisely so this transition is always detectable).
                 let just_respawned = !is_dead && dying.is_some();
                 if just_respawned {
-                    // Drop the dying state, restore the shared remote
-                    // material and full visibility.
-                    commands.entity(entity).remove::<DyingPlayer>().insert((
-                        MeshMaterial3d(assets.remote_material.clone()),
-                        Visibility::Visible,
-                    ));
+                    // Drop the dying state and restore full visibility. The
+                    // appearance system repoints the rig parts back to the
+                    // shared (opaque) material once `DyingPlayer` is gone.
+                    commands
+                        .entity(entity)
+                        .remove::<DyingPlayer>()
+                        .insert(Visibility::Visible);
                 }
                 // Live players follow the interpolator. Dying
                 // players' transforms are owned by the death-tick
@@ -235,6 +267,14 @@ pub(crate) fn apply_snapshot_system(
                 // pose so a stray late-arriving movement update
                 // can't slide a corpse.
                 if !is_dead {
+                    // Feed the rig animators (read off the visual entity so they
+                    // don't need to re-join the replicated entity). Cheap small
+                    // writes; the animators read these by value each frame.
+                    loco.speed = horizontal_speed;
+                    loco.grounded = pose.grounded;
+                    held_comp.0 = held_mesh;
+                    action_comp.seq = action_seq;
+                    action_comp.tool = action_tool;
                     // Track the sleep<->awake transition so the marker, the
                     // pose, and the interpolation stay in sync.
                     let woke = asleep.is_some() && !is_sleeping;
@@ -283,6 +323,11 @@ pub(crate) fn apply_snapshot_system(
             } else {
                 target
             };
+            // The root is a transform-only node: the visible body is the rig of
+            // child part entities built by `reconcile_player_rigs_system` from
+            // the `Added<NetworkPlayer>` edge. The cosmetic mirror components
+            // seed the animators with current state so an AoI cross-in shows
+            // the right held item / locomotion immediately.
             let entity = commands
                 .spawn((
                     Name::new(format!("Player {}", player.client_id)),
@@ -290,8 +335,15 @@ pub(crate) fn apply_snapshot_system(
                         client_id: player.client_id,
                     },
                     NetworkPlayerInterpolation::new(tick, target),
-                    Mesh3d(assets.mesh.clone()),
-                    MeshMaterial3d(assets.remote_material.clone()),
+                    RemoteLocomotion {
+                        speed: horizontal_speed,
+                        grounded: pose.grounded,
+                    },
+                    RemoteHeld(held_mesh),
+                    RemoteAction {
+                        seq: action_seq,
+                        tool: action_tool,
+                    },
                     spawn_transform,
                     Visibility::Visible,
                 ))
@@ -514,6 +566,407 @@ impl NetworkPlayerInterpolation {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Rigged remote body: a hierarchy of part child entities under the root,
+// animated procedurally from the replicated pose + held item + swing action.
+// The root stays the interpolation target; only the part LOCAL rotations are
+// animated here, so they compose with the interpolated/collapsing root.
+// ---------------------------------------------------------------------------
+
+/// Horizontal speed (m/s) below which a remote body reads as idle.
+const LOCOMOTION_MOVE_THRESHOLD: f32 = 0.5;
+/// Speed at which the walk cycle reaches full walk amplitude.
+const LOCOMOTION_WALK_SPEED: f32 = 3.0;
+/// Speed at which the run cycle reaches full amplitude.
+const LOCOMOTION_RUN_SPEED: f32 = 6.0;
+/// Thigh swing (radians) at a full walk / full run.
+const LEG_SWING_WALK: f32 = 0.42;
+const LEG_SWING_RUN: f32 = 0.85;
+/// Arms counter-swing the legs at this fraction of the leg amplitude.
+const ARM_SWING_FRACTION: f32 = 0.7;
+/// Knee bend amplitude (radians).
+const KNEE_BEND: f32 = 0.5;
+/// Stride cadence (radians/sec) = base + scale * speed.
+const STRIDE_CADENCE_BASE: f32 = 3.4;
+const STRIDE_CADENCE_SCALE: f32 = 1.5;
+/// Constant slight elbow bend so arms aren't ramrod-straight at rest.
+const ELBOW_REST_BEND: f32 = 0.15;
+
+/// Local mirror of the replicated pose's movement, written onto the visual
+/// NetworkPlayer by `apply_snapshot_system` so the locomotion animator never
+/// re-joins the replicated entity.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub(crate) struct RemoteLocomotion {
+    pub(crate) speed: f32,
+    pub(crate) grounded: bool,
+}
+
+/// Local mirror of the replicated `PlayerHeldItem`.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub(crate) struct RemoteHeld(pub(crate) Option<HeldMesh>);
+
+/// Local mirror of the replicated `PlayerAction` (current swing).
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub(crate) struct RemoteAction {
+    pub(crate) seq: u32,
+    pub(crate) tool: ToolKind,
+}
+
+/// An in-progress third-person swing on a remote body.
+#[derive(Debug, Clone, Copy)]
+struct RemoteSwing {
+    tool: ToolKind,
+    elapsed: f32,
+    duration: f32,
+}
+
+/// Handles to a remote player's rig part entities plus its animation state.
+/// Lives on the root NetworkPlayer entity, attached by
+/// `reconcile_player_rigs_system`.
+#[derive(Component)]
+pub(crate) struct PlayerRig {
+    body: Entity,
+    upper_arm_l: Entity,
+    upper_arm_r: Entity,
+    forearm_l: Entity,
+    forearm_r: Entity,
+    hand_anchor: Entity,
+    thigh_l: Entity,
+    thigh_r: Entity,
+    shin_l: Entity,
+    shin_r: Entity,
+    /// Held-tool layer entities parented to the hand anchor (despawned + rebuilt
+    /// on a held-item change).
+    held_layers: Vec<Entity>,
+    /// Last-seen replicated held mesh, for change detection (NOT `is_changed`,
+    /// which lies for Lightyear-touched components).
+    last_held: Option<HeldMesh>,
+    /// Last-seen swing seq, for edge detection.
+    last_swing_seq: u32,
+    swing: Option<RemoteSwing>,
+    /// Accumulated walk-cycle phase.
+    stride_phase: f32,
+    /// True once the rig parts have been repointed to the per-corpse fade
+    /// material (so the repoint runs once per death, not every frame).
+    corpse_faded: bool,
+}
+
+impl PlayerRig {
+    /// Mesh-bearing parts (everything but the empty hand anchor), for the
+    /// corpse-material repoint.
+    fn mesh_parts(&self) -> [Entity; 9] {
+        [
+            self.body,
+            self.upper_arm_l,
+            self.upper_arm_r,
+            self.forearm_l,
+            self.forearm_r,
+            self.thigh_l,
+            self.thigh_r,
+            self.shin_l,
+            self.shin_r,
+        ]
+    }
+}
+
+/// Builds the part hierarchy for a freshly-spawned remote player off the
+/// `Added<NetworkPlayer>` edge: the root carries no mesh, so this hangs the
+/// body/limbs off it and records the part entities in `PlayerRig`. Despawn is
+/// automatic, removing the root recursively removes the parts.
+pub(crate) fn reconcile_player_rigs_system(
+    mut commands: Commands,
+    assets: Res<PlayerVisualAssets>,
+    new_players: Query<Entity, Added<NetworkPlayer>>,
+) {
+    for root in &new_players {
+        let mut parts: HashMap<PlayerPart, Entity> = HashMap::new();
+        for spec in rig_layout() {
+            let parent = match spec.parent {
+                Some(part) => parts[&part],
+                None => root,
+            };
+            let mut entity =
+                commands.spawn((spec.part, spec.rest, Visibility::Inherited, ChildOf(parent)));
+            if let Some(kind) = spec.mesh {
+                entity.insert((
+                    Mesh3d(assets.rig.handle(kind)),
+                    MeshMaterial3d(assets.remote_material.clone()),
+                ));
+            }
+            parts.insert(spec.part, entity.id());
+        }
+        commands.entity(root).insert(PlayerRig {
+            body: parts[&PlayerPart::Body],
+            upper_arm_l: parts[&PlayerPart::UpperArmL],
+            upper_arm_r: parts[&PlayerPart::UpperArmR],
+            forearm_l: parts[&PlayerPart::ForearmL],
+            forearm_r: parts[&PlayerPart::ForearmR],
+            hand_anchor: parts[&PlayerPart::HandAnchor],
+            thigh_l: parts[&PlayerPart::ThighL],
+            thigh_r: parts[&PlayerPart::ThighR],
+            shin_l: parts[&PlayerPart::ShinL],
+            shin_r: parts[&PlayerPart::ShinR],
+            held_layers: Vec::new(),
+            last_held: None,
+            last_swing_seq: 0,
+            swing: None,
+            stride_phase: 0.0,
+            corpse_faded: false,
+        });
+    }
+}
+
+/// Structural appearance updates: swap the hand-held tool when the replicated
+/// held item changes, and repoint the rig parts to the per-corpse fade material
+/// on death (and back on respawn). Runs only on real changes, so the steady
+/// state costs nothing.
+pub(crate) fn apply_remote_player_appearance_system(
+    mut commands: Commands,
+    item_assets: Res<ItemVisualAssets>,
+    player_assets: Res<PlayerVisualAssets>,
+    mut rigs: Query<(&mut PlayerRig, &RemoteHeld, Option<&DyingPlayer>)>,
+) {
+    for (mut rig, held, dying) in &mut rigs {
+        // Held-item swap.
+        if held.0 != rig.last_held {
+            rig.last_held = held.0;
+            for entity in std::mem::take(&mut rig.held_layers) {
+                commands.entity(entity).despawn();
+            }
+            if let Some(mesh) = held.0 {
+                let grip = held_item_hand_transform(mesh);
+                let anchor = rig.hand_anchor;
+                for (layer_mesh, layer_material) in held_item_layers(&item_assets, mesh) {
+                    let layer = commands
+                        .spawn((
+                            Name::new("Held Item (remote)"),
+                            Mesh3d(layer_mesh),
+                            MeshMaterial3d(layer_material),
+                            grip,
+                            Visibility::Inherited,
+                            // Shadow would be noise at this scale; it rides the
+                            // swinging arm anyway.
+                            NotShadowCaster,
+                            ChildOf(anchor),
+                        ))
+                        .id();
+                    rig.held_layers.push(layer);
+                }
+            }
+        }
+
+        // Corpse fade material: the parts share the live opaque material, so a
+        // death fade needs them repointed onto the per-corpse Blend clone, then
+        // back to the shared one on respawn.
+        match (dying, rig.corpse_faded) {
+            (Some(dying), false) => {
+                let material = dying.material.clone();
+                for part in rig.mesh_parts() {
+                    commands
+                        .entity(part)
+                        .insert(MeshMaterial3d(material.clone()));
+                }
+                rig.corpse_faded = true;
+            }
+            (None, true) => {
+                for part in rig.mesh_parts() {
+                    commands
+                        .entity(part)
+                        .insert(MeshMaterial3d(player_assets.remote_material.clone()));
+                }
+                rig.corpse_faded = false;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Procedural locomotion + swing animation for remote bodies. Reads the mirror
+/// components written by `apply_snapshot_system` and writes each part's local
+/// rotation. Dying bodies freeze (the death tick owns their root transform);
+/// sleeping bodies relax to a straight pose.
+#[allow(clippy::type_complexity)]
+pub(crate) fn animate_remote_players_system(
+    time: Res<Time>,
+    mut rigs: Query<(
+        &mut PlayerRig,
+        &RemoteLocomotion,
+        &RemoteAction,
+        &RemoteHeld,
+        Option<&DyingPlayer>,
+        Option<&SleepingPlayer>,
+    )>,
+    mut parts: Query<&mut Transform, With<PlayerPart>>,
+) {
+    use std::f32::consts::PI;
+    let dt = time.delta_secs().max(0.0);
+    for (mut rig, loco, action, held, dying, sleeping) in &mut rigs {
+        // A collapsing corpse keeps the pose it died in (the death tick owns the
+        // root transform); don't keep walking it.
+        if dying.is_some() {
+            continue;
+        }
+        let holding = held.0.is_some();
+
+        // Copy the part handles out so we never hold a `Mut<PlayerRig>` borrow
+        // across the part-Transform writes.
+        let body = rig.body;
+        let upper_arm_l = rig.upper_arm_l;
+        let upper_arm_r = rig.upper_arm_r;
+        let forearm_l = rig.forearm_l;
+        let forearm_r = rig.forearm_r;
+        let thigh_l = rig.thigh_l;
+        let thigh_r = rig.thigh_r;
+        let shin_l = rig.shin_l;
+        let shin_r = rig.shin_r;
+
+        // A logged-out sleeper lies straight; relax every joint and drop any
+        // in-progress swing.
+        if sleeping.is_some() {
+            rig.swing = None;
+            for part in [
+                body,
+                upper_arm_l,
+                upper_arm_r,
+                forearm_l,
+                forearm_r,
+                thigh_l,
+                thigh_r,
+                shin_l,
+                shin_r,
+            ] {
+                set_rot(&mut parts, part, Quat::IDENTITY);
+            }
+            continue;
+        }
+
+        // Swing edge detection (seq, never `is_changed`).
+        let mut swing = rig.swing;
+        if action.seq > rig.last_swing_seq {
+            rig.last_swing_seq = action.seq;
+            swing = Some(RemoteSwing {
+                tool: action.tool,
+                elapsed: 0.0,
+                duration: swing_duration_seconds(action.tool).max(0.05),
+            });
+        }
+
+        // Locomotion: walk/run amplitude ramps with speed; cadence too.
+        let speed = loco.speed;
+        let walk_blend = smooth01((speed / LOCOMOTION_WALK_SPEED).clamp(0.0, 1.0));
+        let leg_amp = locomotion_leg_amplitude(speed);
+        let arm_amp = leg_amp * ARM_SWING_FRACTION;
+        rig.stride_phase += dt * (STRIDE_CADENCE_BASE + speed * STRIDE_CADENCE_SCALE);
+        let phase = rig.stride_phase;
+
+        // Legs swing in anti-phase; knees bend on the lift.
+        let leg_l = phase.sin() * leg_amp;
+        let leg_r = (phase + PI).sin() * leg_amp;
+        let knee_l = -(0.5 - 0.5 * (phase - 0.7).cos()) * KNEE_BEND * walk_blend;
+        let knee_r = -(0.5 - 0.5 * (phase + PI - 0.7).cos()) * KNEE_BEND * walk_blend;
+        set_rot(&mut parts, thigh_l, Quat::from_rotation_x(leg_l));
+        set_rot(&mut parts, thigh_r, Quat::from_rotation_x(leg_r));
+        set_rot(&mut parts, shin_l, Quat::from_rotation_x(knee_l));
+        set_rot(&mut parts, shin_r, Quat::from_rotation_x(knee_r));
+
+        // Arms counter-swing the legs (left arm with right leg), with a faint
+        // idle breathing sway so a standing body isn't dead-still.
+        let idle = (phase * 0.35).sin() * 0.05 * (1.0 - walk_blend);
+        let arm_l = (phase + PI).sin() * arm_amp + idle;
+        let arm_r = phase.sin() * arm_amp + idle;
+        set_rot(&mut parts, upper_arm_l, Quat::from_rotation_x(arm_l));
+        set_rot(
+            &mut parts,
+            forearm_l,
+            Quat::from_rotation_x(-ELBOW_REST_BEND - arm_l.max(0.0) * 0.3),
+        );
+
+        // Right arm rest pose: when a tool is held it adopts the bent CARRY pose
+        // (the tool seats in this hand, so the held mesh's grip is derived from
+        // the same carry rotation in `held_item_hand_transform`); otherwise it
+        // does the normal empty-handed counter-swing. A small bob keeps the
+        // carry alive while walking. A swing overrides this for its duration.
+        let mut torso_twist = 0.0;
+        let (rest_right_arm, rest_right_elbow) = if holding {
+            let bob = (phase * 0.5).sin() * 0.04 * walk_blend;
+            (
+                carry_upper_arm_rotation() * Quat::from_rotation_x(bob),
+                carry_forearm_rotation(),
+            )
+        } else {
+            (
+                Quat::from_rotation_x(arm_r),
+                Quat::from_rotation_x(-ELBOW_REST_BEND - arm_r.max(0.0) * 0.3),
+            )
+        };
+        let next_swing = match swing {
+            Some(mut active) => {
+                active.elapsed += dt;
+                if active.elapsed >= active.duration {
+                    set_rot(&mut parts, upper_arm_r, rest_right_arm);
+                    set_rot(&mut parts, forearm_r, rest_right_elbow);
+                    None
+                } else {
+                    let phase01 = (active.elapsed / active.duration).clamp(0.0, 1.0);
+                    let pose = remote_swing_arm_pose(active.tool, phase01);
+                    torso_twist = pose.torso_twist;
+                    // The pose is a DELTA on the rest pose (the bent carry pose
+                    // when holding a tool, the straight pose otherwise): the
+                    // shoulder delta in the body frame (pre-multiplied) raises /
+                    // drives the whole arm, the elbow delta in the forearm's
+                    // local frame (post-multiplied) flexes it. So the chop winds
+                    // up and strikes from the carry and settles back into it.
+                    let shoulder_delta = Quat::from_rotation_x(pose.shoulder_pitch)
+                        * Quat::from_rotation_y(pose.shoulder_yaw)
+                        * Quat::from_rotation_z(pose.shoulder_roll);
+                    set_rot(&mut parts, upper_arm_r, shoulder_delta * rest_right_arm);
+                    set_rot(
+                        &mut parts,
+                        forearm_r,
+                        rest_right_elbow * Quat::from_rotation_x(pose.forearm_pitch),
+                    );
+                    Some(active)
+                }
+            }
+            None => {
+                set_rot(&mut parts, upper_arm_r, rest_right_arm);
+                set_rot(&mut parts, forearm_r, rest_right_elbow);
+                None
+            }
+        };
+        rig.swing = next_swing;
+
+        // Upper body twists into a swing.
+        set_rot(&mut parts, body, Quat::from_rotation_y(torso_twist));
+    }
+}
+
+/// Smoothstep on a 0..1 value.
+fn smooth01(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Thigh swing amplitude (radians) for a given horizontal speed: zero below the
+/// idle threshold, ramping to `LEG_SWING_WALK` at walk speed and on toward
+/// `LEG_SWING_RUN` at run speed.
+fn locomotion_leg_amplitude(speed: f32) -> f32 {
+    if speed <= LOCOMOTION_MOVE_THRESHOLD {
+        return 0.0;
+    }
+    let walk_blend = smooth01((speed / LOCOMOTION_WALK_SPEED).clamp(0.0, 1.0));
+    let run_t = ((speed - LOCOMOTION_WALK_SPEED) / (LOCOMOTION_RUN_SPEED - LOCOMOTION_WALK_SPEED))
+        .clamp(0.0, 1.0);
+    LEG_SWING_WALK * walk_blend + (LEG_SWING_RUN - LEG_SWING_WALK) * run_t
+}
+
+/// Write a part's local rotation, tolerating a missing entity (e.g. mid-despawn).
+fn set_rot(parts: &mut Query<&mut Transform, With<PlayerPart>>, entity: Entity, rotation: Quat) {
+    if let Ok(mut transform) = parts.get_mut(entity) {
+        transform.rotation = rotation;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -578,6 +1031,27 @@ mod tests {
         interpolation.retarget(5, &current, target);
         let after = interpolation.advance(REMOTE_PLAYER_INTERPOLATION_SECONDS);
         assert_eq!(after.translation, current.translation);
+    }
+
+    #[test]
+    fn locomotion_amplitude_is_zero_when_idle_and_ramps_with_speed() {
+        // Idle and sub-threshold creep produce no leg swing.
+        assert_eq!(locomotion_leg_amplitude(0.0), 0.0);
+        assert_eq!(locomotion_leg_amplitude(LOCOMOTION_MOVE_THRESHOLD), 0.0);
+
+        // A walk reaches roughly the walk amplitude; a run exceeds it.
+        let walk = locomotion_leg_amplitude(LOCOMOTION_WALK_SPEED);
+        let run = locomotion_leg_amplitude(LOCOMOTION_RUN_SPEED);
+        assert!((walk - LEG_SWING_WALK).abs() < 1e-3);
+        assert!((run - LEG_SWING_RUN).abs() < 1e-3);
+
+        // Monotonic non-decreasing across the range.
+        let mut last = -1.0;
+        for step in 0..=20 {
+            let amp = locomotion_leg_amplitude(step as f32 * 0.4);
+            assert!(amp + 1e-4 >= last, "amplitude should not decrease");
+            last = amp;
+        }
     }
 
     #[test]

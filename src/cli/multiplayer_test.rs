@@ -336,6 +336,12 @@ fn spawn_client(
     account_id: u64,
     layout: TestClientLayout,
 ) -> Result<Child> {
+    // Opt-in headless capture mode (`GAME_TEST_HEADLESS=1 ./cli multiplayer-test`):
+    // both clients render off-screen and bind a per-client control socket so an
+    // agent can drive + screenshot them (e.g. to verify the third-person rig: one
+    // player swinging as seen from the other). The normal GUI dev flow is
+    // untouched. See docs/multiplayer-testing.md.
+    let headless = std::env::var_os("GAME_TEST_HEADLESS").is_some();
     let mut command = Command::new(exe);
     command
         .arg("client")
@@ -343,21 +349,15 @@ fn spawn_client(
         .arg(server_addr.to_string())
         .env("GAME_PLAYER_NAME", name)
         .env("GAME_ACCOUNT_ID", account_id.to_string())
-        // Mirror the `GAME_TEST_*` keys the client reads in
-        // `state::test_mode::TestModeConfig::from_env`. Centralising them
-        // there means a future field only needs to be wired in once and
-        // here.
-        .env("GAME_TEST_WINDOW_WIDTH", TEST_WINDOW_WIDTH.to_string())
-        .env("GAME_TEST_WINDOW_HEIGHT", TEST_WINDOW_HEIGHT.to_string())
-        .env("GAME_TEST_WINDOW_INDEX", layout.window_index.to_string())
-        .env("GAME_TEST_WINDOW_COUNT", "2")
-        .env("GAME_TEST_WINDOW_GAP", TEST_WINDOW_GAP.to_string())
+        // Spawn-placement keys so the two characters land facing each other.
         .env(
             "GAME_TEST_SPAWN_OFFSET_X",
             layout.spawn_offset_x.to_string(),
         )
         .env("GAME_TEST_SPAWN_YAW", layout.spawn_yaw.to_string())
-        .env("GAME_TEST_INVENTORY_OPEN", "1")
+        // Inventory stays closed in headless capture so it never covers the
+        // other player in a screenshot; the GUI flow keeps it open.
+        .env("GAME_TEST_INVENTORY_OPEN", if headless { "0" } else { "1" })
         // Auto-issue `/test-kit` on join so both windows boot with the
         // full early-game kit. Pairs with the admin account IDs that
         // multiplayer-test seeds into the save before spawning the
@@ -366,6 +366,24 @@ fn spawn_client(
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
+    if headless {
+        // Off-screen render + per-client control socket. Deliberately omit the
+        // `GAME_TEST_WINDOW_*` geometry keys: those drive the on-screen
+        // window-reposition path, which fights the hidden capture window.
+        command.env("GAME_HEADLESS_CAPTURE", "1280x960").env(
+            "GAME_CONTROL_SOCKET",
+            format!("/tmp/ashwend-mptest-{}.sock", layout.window_index),
+        );
+    } else {
+        // On-screen test windows, sized + indexed so the client can place them
+        // side-by-side once it can query the real monitor.
+        command
+            .env("GAME_TEST_WINDOW_WIDTH", TEST_WINDOW_WIDTH.to_string())
+            .env("GAME_TEST_WINDOW_HEIGHT", TEST_WINDOW_HEIGHT.to_string())
+            .env("GAME_TEST_WINDOW_INDEX", layout.window_index.to_string())
+            .env("GAME_TEST_WINDOW_COUNT", "2")
+            .env("GAME_TEST_WINDOW_GAP", TEST_WINDOW_GAP.to_string());
+    }
     command
         .spawn()
         .with_context(|| format!("could not spawn client binary {}", exe.display()))

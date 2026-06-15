@@ -513,6 +513,25 @@ pub(super) fn sync_player_entities(world: &mut World) {
                     crate::server::PlayerChatBubble,
                     view.chat_bubble
                 );
+                // Peer-visible cosmetic state for the rigged body. NOT
+                // owner-gated (every peer in the room renders these): the held
+                // mesh changes on a tool swap, the action seq on every swing.
+                refresh_player_component!(
+                    world,
+                    entity,
+                    view.client_id,
+                    "PlayerHeldItem     ",
+                    crate::server::PlayerHeldItem,
+                    view.held
+                );
+                refresh_player_component!(
+                    world,
+                    entity,
+                    view.client_id,
+                    "PlayerAction       ",
+                    crate::server::PlayerAction,
+                    view.action
+                );
                 // Owner-only components, replicated to the owning
                 // sender only.
                 refresh_player_component!(

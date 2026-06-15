@@ -20,7 +20,9 @@ pub(crate) use ore::{
     COAL_ORE, IRON_ORE, ORE_NODE_STAGE_COUNT, STONE_VEIN, SULFUR_ORE,
     low_poly_ore_node_stage_meshes,
 };
-pub(crate) use player::{PLAYER_HEAD_TOP_LOCAL_Y, low_poly_player_mesh};
+pub(crate) use player::{
+    PLAYER_HEAD_TOP_LOCAL_Y, PlayerPart, PlayerRigMeshes, build_player_rig_meshes, rig_layout,
+};
 pub(crate) use trees::{
     low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_large_mesh,
     low_poly_birch_tree_medium_lod_mesh, low_poly_birch_tree_medium_mesh,

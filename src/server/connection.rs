@@ -183,6 +183,8 @@ impl GameServer {
             open_container: None,
             applied_action_seq: 0,
             ping_ms: 0,
+            swing_seq: 0,
+            swing_tool: crate::items::ToolKind::Hands,
         };
 
         let initial_position = client.controller.position;

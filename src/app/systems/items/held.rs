@@ -119,7 +119,10 @@ pub(crate) fn apply_held_item_visual_system(
 /// and iron), whose matte haft body and worked head need different materials
 /// (Bevy binds one material per mesh). Layers share the mesh-local frame so they
 /// overlay exactly under the same swing transform.
-fn held_item_layers(
+///
+/// Shared with the third-person rig (`app::systems::players`), which attaches
+/// the same layers to a remote player's hand anchor so peers see what's held.
+pub(crate) fn held_item_layers(
     assets: &ItemVisualAssets,
     held_mesh: HeldMesh,
 ) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>)> {
@@ -183,6 +186,62 @@ fn held_item_layers(
             assets.held_vertex_material.clone(),
         )],
     }
+}
+
+/// Local transform that seats a held tool in a remote player's hand anchor
+/// (third-person). The hand anchor shares the forearm's frame (it hangs -Y from
+/// the elbow, -Z forward), so the tool is rotated to run the haft forward out of
+/// the fist with the head leading. Scale stays at the authored real-world size.
+/// Tuned to read in the hand; the swing arc comes from rotating the arm, not the
+/// tool, so this stays a fixed grip.
+/// Right upper-arm rotation for the tool-carry pose (relative to the torso),
+/// shared with the rig animator so the grip below stays in sync with the arm.
+/// Brings the upper arm forward and slightly tucked toward the body.
+pub(crate) fn carry_upper_arm_rotation() -> Quat {
+    Quat::from_rotation_x(0.6) * Quat::from_rotation_z(-0.12)
+}
+
+/// Right forearm rotation for the carry pose (relative to the upper arm): a bent
+/// elbow that brings the hand forward to about waist height in front of the body.
+pub(crate) fn carry_forearm_rotation() -> Quat {
+    Quat::from_rotation_x(1.0)
+}
+
+/// Accumulated rotation of the hand anchor (upper arm × forearm) in the carry
+/// pose. The grip is derived from its inverse so the held tool ends at a chosen
+/// orientation *relative to the player* no matter how the carry joints are split.
+fn carry_anchor_rotation() -> Quat {
+    carry_upper_arm_rotation() * carry_forearm_rotation()
+}
+
+pub(crate) fn held_item_hand_transform(held_mesh: HeldMesh) -> Transform {
+    // The tool glbs (and the procedural hammer) are authored with the haft along
+    // +Y, the butt near y = -0.51, and the *origin up near the head* (~65% up
+    // the handle). With the posed carry arm, the hand is bent up in front of the
+    // body, so we DERIVE the grip from the carry pose: pick the tool's desired
+    // orientation in the player's frame (`desired`), then `grip = carry_anchor⁻¹
+    // · desired` cancels the arm rotation so the tool lands exactly at `desired`
+    // however the carry joints are tuned. `grip_y` is where down the handle the
+    // hand grips (negative = toward the butt); we then translate that point onto
+    // the hand anchor so the tool isn't held by its head.
+    //
+    // `desired`: haft tilted ~23° forward of vertical (head up-forward), with the
+    // bladed tools' heads (authored spanning X) yawed to face forward (-Z).
+    let tilt = Quat::from_rotation_x(-0.4);
+    let yaw = Quat::from_rotation_y(PI * 0.5);
+    let (desired, grip_y) = match held_mesh {
+        // Hammer head strikes along its local Z, so no yaw, just the tilt.
+        HeldMesh::Hammer => (tilt, -0.15),
+        HeldMesh::StoneHatchet | HeldMesh::IronHatchet => (tilt * yaw, -0.16),
+        HeldMesh::StonePickaxe | HeldMesh::IronPickaxe => (tilt * yaw, -0.16),
+        // Bag / building-plan silhouettes have no handle; just sit upright.
+        HeldMesh::Bag | HeldMesh::BuildingPlan => (Quat::IDENTITY, 0.0),
+    };
+    let rotation = carry_anchor_rotation().inverse() * desired;
+    // Place the grip point at the hand anchor, plus a small seat into the palm.
+    let grip = rotation * Vec3::new(0.0, grip_y, 0.0);
+    let translation = -grip + Vec3::new(0.0, -0.01, -0.02);
+    Transform::from_translation(translation).with_rotation(rotation)
 }
 
 /// Very subtle passive sway layered on top of the rest/swing pose so the

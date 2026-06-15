@@ -13,17 +13,17 @@ use super::{
     components::MainCamera,
     grass::{GrassMaterial, GrassMaterialHandle, grass_material},
     mesh::{
-        COAL_ORE, IRON_ORE, ORE_NODE_STAGE_COUNT, STONE_VEIN, SULFUR_ORE, building_piece_mesh,
-        door_ghost_mesh, door_panel_mesh, held_building_plan_mesh, held_hammer_mesh,
-        impact_stone_shard_mesh, impact_wood_chip_mesh, low_poly_bag_mesh,
-        low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_large_mesh,
+        COAL_ORE, IRON_ORE, ORE_NODE_STAGE_COUNT, PlayerRigMeshes, STONE_VEIN, SULFUR_ORE,
+        build_player_rig_meshes, building_piece_mesh, door_ghost_mesh, door_panel_mesh,
+        held_building_plan_mesh, held_hammer_mesh, impact_stone_shard_mesh, impact_wood_chip_mesh,
+        low_poly_bag_mesh, low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_large_mesh,
         low_poly_birch_tree_medium_lod_mesh, low_poly_birch_tree_medium_mesh,
         low_poly_birch_tree_small_lod_mesh, low_poly_birch_tree_small_mesh,
         low_poly_branch_pile_mesh, low_poly_dead_tree_large_mesh, low_poly_dead_tree_medium_mesh,
         low_poly_dead_tree_small_mesh, low_poly_hay_grass_mesh, low_poly_ore_node_stage_meshes,
         low_poly_pine_tree_large_lod_mesh, low_poly_pine_tree_large_mesh,
         low_poly_pine_tree_medium_lod_mesh, low_poly_pine_tree_medium_mesh,
-        low_poly_pine_tree_small_lod_mesh, low_poly_pine_tree_small_mesh, low_poly_player_mesh,
+        low_poly_pine_tree_small_lod_mesh, low_poly_pine_tree_small_mesh,
         low_poly_surface_stone_mesh, sleeping_bag_mesh,
     },
     sky::{initial_distance_fog, setup_sky},
@@ -54,7 +54,13 @@ pub(crate) const VERTEX_MATERIAL_COLOR: Color = Color::WHITE;
 
 #[derive(Resource, Clone)]
 pub(crate) struct PlayerVisualAssets {
-    pub(crate) mesh: Handle<Mesh>,
+    /// Per-part meshes for the rigged remote body. The reconciler in
+    /// `app::systems::players` spawns one child entity per part and clones the
+    /// matching handle.
+    pub(crate) rig: PlayerRigMeshes,
+    /// Shared base-white material; the per-part vertex colours do the look.
+    /// Cloned per corpse on death so a fade doesn't drag every live player
+    /// along (see `tick_dying_players_system`).
     pub(crate) remote_material: Handle<StandardMaterial>,
 }
 
@@ -233,6 +239,11 @@ pub(crate) struct TorchFireAssets {
 pub(crate) struct ImpactEffectAssets {
     pub(crate) wood_chip_mesh: Handle<Mesh>,
     pub(crate) stone_shard_mesh: Handle<Mesh>,
+    /// Small round droplet for the PvP blood spray (a low-poly sphere, so it
+    /// reads as a blob rather than the angular rock-shard mesh).
+    pub(crate) blood_droplet_mesh: Handle<Mesh>,
+    /// Flat unit disc laid on the ground for the lingering blood pool.
+    pub(crate) blood_splatter_mesh: Handle<Mesh>,
     pub(crate) wood_chip_material: Handle<StandardMaterial>,
     pub(crate) stone_shard_material: Handle<StandardMaterial>,
     /// Green-tinted material used for the `GrassBlades` particle burst.
@@ -240,6 +251,10 @@ pub(crate) struct ImpactEffectAssets {
     /// second tiny mesh, the base-colour shift is enough to read as
     /// grass debris.
     pub(crate) grass_blade_material: Handle<StandardMaterial>,
+    /// Deep-red material for the `FleshHit` (PvP) blood spray. Reuses the stone
+    /// shard mesh like the grass burst; the red base colour multiplies through
+    /// the shard's vertex colours so the chips read as blood droplets.
+    pub(crate) blood_material: Handle<StandardMaterial>,
 }
 
 pub(crate) fn setup_scene(
@@ -356,7 +371,7 @@ pub(crate) fn setup_scene(
 
     commands.insert_resource(super::world::WorldSceneState::default());
     commands.insert_resource(PlayerVisualAssets {
-        mesh: meshes.add(low_poly_player_mesh()),
+        rig: build_player_rig_meshes(&mut meshes),
         remote_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.92,
@@ -550,6 +565,10 @@ pub(crate) fn setup_scene(
     commands.insert_resource(ImpactEffectAssets {
         wood_chip_mesh: meshes.add(impact_wood_chip_mesh()),
         stone_shard_mesh: meshes.add(impact_stone_shard_mesh()),
+        // A tiny round droplet (the particle scale shrinks it to ~a few cm).
+        blood_droplet_mesh: meshes.add(Sphere::new(0.06).mesh().ico(1).expect("valid ico")),
+        // Unit disc, laid flat + scaled to a small pool at spawn.
+        blood_splatter_mesh: meshes.add(Circle::new(1.0)),
         wood_chip_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.95,
@@ -569,6 +588,15 @@ pub(crate) fn setup_scene(
             base_color: Color::srgb(0.42, 0.62, 0.22),
             perceptual_roughness: 0.92,
             reflectance: 0.12,
+            ..default()
+        }),
+        blood_material: materials.add(StandardMaterial {
+            // Rich, slightly wet-looking crimson for PvP hit spray. The red
+            // multiplies through the shard mesh's vertex colours; a touch of
+            // reflectance reads as a wet sheen, not glowing.
+            base_color: Color::srgb(0.55, 0.03, 0.02),
+            perceptual_roughness: 0.7,
+            reflectance: 0.2,
             ..default()
         }),
     });
