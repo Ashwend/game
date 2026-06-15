@@ -16,15 +16,19 @@ use super::{
     noise::{fbm, splitmix64},
 };
 
-/// Number of noise octaves for classification fields. Four is enough to
-/// produce visible cluster structure on the 64 m chunk scale without
-/// burning generation time.
-const CLASSIFICATION_FBM_OCTAVES: u32 = 4;
+/// Number of noise octaves for the classification fields. Kept low (2) on
+/// purpose: extra octaves pile sub-chunk detail onto the channels, and since
+/// the classification is an argmax of four channels, that detail makes the
+/// winner flip on a tiny scale, which reads as confetti-speckle rather than
+/// coherent biomes. Two octaves keeps an organic edge without the speckle.
+const CLASSIFICATION_FBM_OCTAVES: u32 = 2;
 
 /// Base feature scale for the classification channels. Smaller frequency =
-/// larger features. At `1/220`, channels span ~3–4 chunks on average so the
-/// map reads as recognizable regions instead of single-chunk noise.
-const CLASSIFICATION_BASE_FREQUENCY: f32 = 1.0 / 220.0;
+/// larger features. At `1/600` the channels span ~9-10 chunks (~600 m), so a
+/// biome reads as a sizable region you walk *through* rather than a cluster of
+/// tiny single-chunk patches. (Was `1/220`, which fragmented the map into
+/// confetti once you saw more than a few chunks of it.)
+const CLASSIFICATION_BASE_FREQUENCY: f32 = 1.0 / 600.0;
 
 /// Floor a channel must clear to count toward the classification.
 /// Channels below this contribute very little, they may still seed a few
@@ -88,32 +92,41 @@ impl ClassificationChannels {
     pub fn sample(world_seed: u64, coord: ChunkCoord) -> Self {
         let centre_x = coord.x as f32 * CHUNK_SIZE_M + CHUNK_SIZE_M * 0.5;
         let centre_z = coord.z as f32 * CHUNK_SIZE_M + CHUNK_SIZE_M * 0.5;
+        Self::sample_at(world_seed, centre_x, centre_z)
+    }
+
+    /// Sample all four channels at an arbitrary world point (not just a
+    /// chunk centre). The world-map raster uses this to read smooth biome
+    /// gradients at texel resolution; [`Self::sample`] is the per-chunk
+    /// special case. Keeping the per-channel seed offsets here means the
+    /// map and the live generation always agree on where each biome sits.
+    pub fn sample_at(world_seed: u64, x: f32, z: f32) -> Self {
         Self {
             forest: fbm(
                 splitmix64(world_seed ^ 0xF01A_BE57_u64),
-                centre_x,
-                centre_z,
+                x,
+                z,
                 CLASSIFICATION_BASE_FREQUENCY,
                 CLASSIFICATION_FBM_OCTAVES,
             ),
             stone: fbm(
                 splitmix64(world_seed ^ 0x5703_A6E5_u64),
-                centre_x,
-                centre_z,
+                x,
+                z,
                 CLASSIFICATION_BASE_FREQUENCY,
                 CLASSIFICATION_FBM_OCTAVES,
             ),
             ore: fbm(
                 splitmix64(world_seed ^ 0x0A5E_4D11_u64),
-                centre_x,
-                centre_z,
+                x,
+                z,
                 CLASSIFICATION_BASE_FREQUENCY,
                 CLASSIFICATION_FBM_OCTAVES,
             ),
             hay: fbm(
                 splitmix64(world_seed ^ 0xA44C_7321_u64),
-                centre_x,
-                centre_z,
+                x,
+                z,
                 CLASSIFICATION_BASE_FREQUENCY,
                 CLASSIFICATION_FBM_OCTAVES,
             ),
@@ -244,18 +257,18 @@ mod tests {
     #[test]
     fn classification_varies_across_chunk() {
         let mut seen = std::collections::HashSet::new();
-        for x in -3..=3 {
-            for z in -3..=3 {
+        // Sample a wide window (~1.3 km). Biome features now span ~600 m, so a
+        // handful of chunks can sit inside a single region; a wider sweep is
+        // what verifies the noise produces variety rather than collapsing.
+        for x in -10..=10 {
+            for z in -10..=10 {
                 let c = ClassificationChannels::sample(42, ChunkCoord::new(x, z)).classify();
                 seen.insert(c);
             }
         }
-        // Across 49 chunks we should see at least three different
-        // classifications, otherwise the noise is too smooth or all
-        // channels collapse to similar values.
         assert!(
             seen.len() >= 3,
-            "expected >=3 classifications, saw: {seen:?}"
+            "expected >=3 classifications across the window, saw: {seen:?}"
         );
     }
 

@@ -111,6 +111,43 @@ fn foundation_placement_consumes_sticks_and_spawns_at_sticks_tier() {
 }
 
 #[test]
+fn placement_success_toast_reports_the_resource_spend() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    give(&mut server, client_id, WOOD_ID, 200);
+
+    let out = server.apply_place_building_command(
+        client_id,
+        PlaceBuildingCommand {
+            piece: BuildingPiece::Foundation,
+            position: Vec3Net::new(2.0, 0.0, 0.0),
+            yaw: 0.0,
+        },
+    );
+
+    let material = crate::items::item_definition(WOOD_ID)
+        .map(|definition| definition.name)
+        .expect("wood is a known item");
+    let toast = out
+        .iter()
+        .find_map(|envelope| match &envelope.message {
+            crate::protocol::ServerMessage::Toast(toast) => Some(toast),
+            _ => None,
+        })
+        .expect("placement emits a toast");
+    // The feedback is the spend ("-{cost} {material}"), not the piece name; the
+    // placed structure is visible, the resource subtraction isn't.
+    assert_eq!(
+        toast.text,
+        format!("-{BUILDING_STICKS_COST_FOUNDATION} {material}")
+    );
+    assert!(
+        !toast.text.contains("Placed"),
+        "the placed piece name is no longer announced"
+    );
+}
+
+#[test]
 fn destroying_a_furnace_spills_fuel_and_smelt_slots_as_a_loot_bag() {
     use crate::items::{CRUDE_FURNACE_ID, IRON_ORE_ID, WOOD_ID, intern_item_id};
     use crate::protocol::{ItemStack, PlaceDeployableCommand};
@@ -124,6 +161,7 @@ fn destroying_a_furnace_spills_fuel_and_smelt_slots_as_a_loot_bag() {
             item_id: intern_item_id(CRUDE_FURNACE_ID),
             position: Vec3Net::new(0.0, 0.0, 2.0),
             yaw: 0.0,
+            wall_mounted: false,
         }),
     );
     let id = *server
@@ -203,6 +241,7 @@ fn hammer_repairs_crafted_deployables_with_the_primary_material() {
             item_id: intern_item_id(CRUDE_FURNACE_ID),
             position: Vec3Net::new(0.0, 0.0, 2.0),
             yaw: 0.0,
+            wall_mounted: false,
         }),
     );
     let id = *server
@@ -270,6 +309,7 @@ fn free_deployables_stand_on_platforms_and_fall_with_them() {
             item_id: intern_item_id(CRUDE_FURNACE_ID),
             position: Vec3Net::new(0.0, 0.5, 2.0),
             yaw: 0.0,
+            wall_mounted: false,
         }),
     );
     let furnaces = |server: &GameServer| {
@@ -289,6 +329,7 @@ fn free_deployables_stand_on_platforms_and_fall_with_them() {
             item_id: intern_item_id(CRUDE_FURNACE_ID),
             position: Vec3Net::new(0.0, 1.4, 2.0),
             yaw: 0.0,
+            wall_mounted: false,
         }),
     );
     assert_eq!(furnaces(&server), 1, "mid-air placement must be refused");
@@ -302,6 +343,7 @@ fn free_deployables_stand_on_platforms_and_fall_with_them() {
             item_id: intern_item_id(STORAGE_BOX_SMALL_ID),
             position: Vec3Net::new(1.0, 0.5, 3.0),
             yaw: 0.0,
+            wall_mounted: false,
         }),
     );
     let box_id = server

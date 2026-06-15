@@ -2,10 +2,11 @@
 
 Conventions for Bevy `StandardMaterial` setup in this project. Consult before adding a new material or tweaking an existing one, Bevy's defaults are tuned for plastic, and getting the PBR triplet (reflectance, perceptual_roughness, metallic) wrong is what makes scenes read as "early UE4 demo."
 
-Material setup lives in two places:
+Material setup lives in three places:
 
 - `src/app/scene/assets.rs`, shared material handles for players, items, resource nodes, and impact effects (used everywhere via `Res<...VisualAssets>`).
 - `src/app/scene/world.rs`, ground plane and stone perimeter walls (spawned inline as part of `WorldGeometry`).
+- `src/app/scene/terrain.rs`, the `TerrainMaterial` that textures the ground floor by biome (see "Terrain ground material" below).
 
 ## The defaults are wrong for almost everything
 
@@ -17,7 +18,7 @@ Rule of thumb: **if it's not actually shiny in the real world, set `reflectance`
 
 | Surface | `perceptual_roughness` | `reflectance` | `metallic` | Notes |
 |---|---|---|---|---|
-| Ground (grass/dirt plane) | `1.0` | `0.0` | `0.0` | Plus per-vertex normal jitter, see "Flat surfaces" below. |
+| Ground (live-world terrain floor) | `1.0` | `0.0` | `0.0` | Now the biome-blended `TerrainMaterial` (see "Terrain ground material"). Same matte triplet, just per-biome textured. Menu backdrop + tests keep the flat `StandardMaterial` at these values. Plus per-vertex normal jitter, see "Flat surfaces" below. |
 | Stone wall / large rock face | `0.95` | `0.1` | `0.0` | Hint of mineral sheen, no Fresnel pop. |
 | Coal, stone vein, generic vertex-coloured natural mesh (trees, surface stones, branch piles, hay grass) | `0.95–0.98` | `0.12` | `0.0` | Porous mineral / dry organic. |
 | Sulfur | `0.88` | `0.12` | `0.0` | Brittle chalky yellow, never glossy. |
@@ -61,6 +62,21 @@ The ground plane in `src/app/scene/world.rs` solves this with `build_ground_mesh
 
 Apply the same recipe to any future large flat ground/water/floor surface. For curved or faceted low-poly meshes (trees, ore chunks, bags), the geometry already breaks up the highlight and no normal jitter is needed.
 
+## Terrain ground material (biome splat blend)
+
+The live-world floor is textured by biome so it reads like the world map: forest floor, dry plains grass, rocky ground, and ore-vein dirt, cross-fading at biome borders. It's the project's second custom material (after grass), in [`src/app/scene/terrain.rs`](../src/app/scene/terrain.rs) with the shader at [`assets/shaders/terrain.wgsl`](../assets/shaders/terrain.wgsl). Only **live** worlds use it; the menu backdrop and asset-less unit tests fall back to the flat `StandardMaterial` (the `GroundMaterial` enum in `world.rs`).
+
+How it works:
+
+- **Four shared tileable biome textures** (`assets/textures/terrain/{forest,rocky,ore,plains}.png`, generated with the `lowpoly-game-assets` skill; **PNG** because the game build only enables Bevy's `png` image feature, not `jpeg`) are decoded once into `TerrainTextureAssets` (`Image::from_buffer` on the embedded bytes) with a **CPU-built mip chain** (`build_mip_chain`, since Bevy 0.18 generates no mips for loaded images) and repeat-sampled with **anisotropic filtering** in world space (`TERRAIN_TILE_SIZE_M` metres per repeat). Neighbouring biomes share one continuous grain with no per-tile seams, and the floor stays crisp into the distance instead of aliasing into shimmer.
+- **A per-world biome-weight raster** is baked on the CPU from the seed by `crate::world::render_terrain_weight_rgba` (in `src/world/terrain_texture.rs`), using the *same* `ClassificationChannels` noise the map and live generation use, so the ground, the map, and the actual resource layout all agree. It stores soft weights (`R=forest, G=rocky, B=ore, A=plains`) with crisp biome interiors and a ~30-40 m cross-fade band; `Rgba8Unorm` (linear, it's data) with a clamp+linear sampler, **no** mips (it's a low-frequency LUT; mipping it would bleed biome borders). The shader blends the four textures by these weights.
+- **Matte, like the rest of the ground**: `perceptual_roughness 1.0`, `reflectance 0.0`, so the flat floor never shows the Fresnel "wet glass" band. Lit by the same sun + atmosphere IBL as everything else.
+- **Distance + anti-tiling** (so the tiled grain doesn't read as a repeat, and the far field doesn't shimmer): the shader (a) domain-warps the detail UV by a small bounded fbm **offset** (never a rotation of the global coordinate, which amplifies with distance from the origin and smears the texture into radial streaks, the bug that bit the first attempt), (b) lays a low-frequency macro brightness wash over the blended albedo (the grass shader's `hash12`/`value_noise`/`fbm2`), and (c) **distance-fades the tiled detail toward the flat biome map palette** (`params.z`/`params.w` window) so far terrain resolves to the same flat colours the map shows. Mips + anisotropy own the mid-range; the fade owns the far. The fade target is the map palette in **linear** space (the `PAL_*` consts), because `textureSample` of an `Rgba8UnormSrgb` texture already returns linear.
+
+Why a **standalone `Material`** and not an `ExtendedMaterial<StandardMaterial, _>` like grass: a standalone material owns the material bind group outright, so its texture bindings survive on Metal. The grass extension is binding-free precisely because Bevy 0.18's bindless-`StandardMaterial` bind-group merge drops extension bindings on Metal (see the grass notes above), which would break texture sampling here. The cost is the shader rebuilds the `PbrInput` by hand (mirroring `pbr_input_from_standard_material`'s vertex-output half) instead of calling that helper; importantly it reads `mesh[in.instance_index].flags` so the floor keeps the shadow-receiver bit and still takes tree/building shadows. It does **not** import `bevy_pbr::pbr_fragment`, which would pull in `pbr_bindings`' own material-group layout and collide. **Declare the material's bindings with `@group(#{MATERIAL_BIND_GROUP})`, not a literal `@group(2)`**: in Bevy 0.18 the per-object mesh array lives at the literal `@group(2)` (`mesh_bindings`) and the material bind group is group **3** via that shaderdef, so hardcoding `2` collides with the mesh binding (a runtime "Bindings conflict" naga error).
+
+Heightmap note: displacement is intentionally not implemented yet. When it lands it attaches to the already-128-subdivided ground mesh (`build_ground_mesh`) and would feed slope into the blend; nothing in this material needs a redesign for it.
+
 ## Environment lighting (IBL)
 
 The camera carries a procedural `Atmosphere` plus `AtmosphereEnvironmentMapLight` (set up in [`assets.rs`](../src/app/scene/assets.rs)). The atmosphere renders the sky **and** generates an environment map from it each frame, which feeds every material's ambient diffuse and specular reflections, the "free IBL" that makes the scene read as genuinely lit. This replaced the old hand-authored `ClearColor` sky and the all-ambient-term lighting model.
@@ -77,7 +93,7 @@ Brightness knobs: `ATMOSPHERE_AMBIENT_INTENSITY` (in `assets.rs`) for daytime am
 
 ## Detail grass (GPU-instanced, the one custom render pipeline)
 
-The procedural detail grass ([`src/app/scene/grass/`](../src/app/scene/grass/)) is drawn by the project's **only** custom render pipeline ([`instancing.rs`](../src/app/scene/grass/instancing.rs) + [`assets/shaders/grass_instanced.wgsl`](../assets/shaders/grass_instanced.wgsl)), following Bevy 0.18's `examples/shader_advanced/custom_shader_instancing.rs`. One shared cubic-Bézier blade mesh is drawn thousands of times from a per-blade instance buffer, so the field can be dense (150 blades/m² at Medium) for almost no per-blade cost. Each blade instance carries `[world_x, world_z, base_y, height_scale]` + `[yaw, shade, warm, dither]`.
+The procedural detail grass ([`src/app/scene/grass/`](../src/app/scene/grass/)) is drawn by the project's **only** custom render pipeline ([`instancing.rs`](../src/app/scene/grass/instancing.rs) + [`assets/shaders/grass_instanced.wgsl`](../assets/shaders/grass_instanced.wgsl)), following Bevy 0.18's `examples/shader_advanced/custom_shader_instancing.rs`. One shared cubic-Bézier blade mesh is drawn thousands of times from a per-blade instance buffer, so the field can be dense (150 blades/m² at Medium) for almost no per-blade cost. Each blade instance carries `[world_x, world_z, base_y, height_scale]` + `[yaw, shade, warm, dither]` (vertex `@location` 3/4). Grass **colour is uniform** across biomes (one slightly warm/dry green set on the blade mesh via `DETAIL_GRASS_DRY`, so it sits on both the green forest floor and tan plains); a per-biome colour tint was tried and removed (too subtle to read at eye level). What *does* vary by biome is **density**: `tile_world_instances` samples `biome_blend_weights` per blade and thins the field on bare rock/ore (`biome_grass_barrenness` × `GRASS_BIOME_MAX_THIN`). Seedless fields (menu backdrop) keep full density.
 
 It is **lit by the same sun + atmosphere IBL as everything else** without a material bind group: the pipeline specialises off `MeshPipeline` (so it inherits the mesh-view bind groups, lights/shadows/globals/atmosphere), and the fragment hand-builds a `PbrInput` and calls `apply_pbr_lighting` + `main_pass_post_lighting_processing`. On top of PBR it adds vertex wind sway (weighted by vertex-colour alpha, 0 base → 1 tip), a fragment radial dither (whole-blade discard keyed on the per-instance `dither`, thinning the field into smooth rings), and a world-space fBm colour-patch tint.
 

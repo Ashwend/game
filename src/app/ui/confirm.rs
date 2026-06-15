@@ -96,6 +96,11 @@ fn apply_confirmation_action(
         // session; the dialog just gates it behind a confirm.
         ConfirmationAction::SignOut => menu.sign_out_requested = true,
         ConfirmationAction::ResetSettings => *settings = ClientSettings::default(),
+        // Arm the delete; `world_map_input_system` (which has session access)
+        // drains this and sends the server the remove command.
+        ConfirmationAction::DeleteWorldMapMarker { id } => {
+            menu.world_map_delete_pending = Some(id);
+        }
     }
 }
 

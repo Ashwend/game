@@ -37,6 +37,7 @@ fn coal_node(id: u64, quantity: u16) -> ResourceNodeState {
         position: Vec3Net::new(0.0, 0.0, -2.2),
         yaw: 0.0,
         storage: vec![ItemStack::new(COAL_ID, quantity)],
+        dead: false,
     }
 }
 
@@ -243,6 +244,7 @@ fn deployable_hit_consumes_durability() {
             item_id: crate::items::intern_item_id(crate::items::WORKBENCH_T1_ID),
             position: Vec3Net::new(0.0, 0.0, -2.0),
             yaw: 0.0,
+            wall_mounted: false,
         },
     );
     let deployed_id = *server

@@ -114,6 +114,16 @@ pub enum ClientMessage {
     OpenStorageBox {
         id: DeployedEntityId,
     },
+    /// Ask the server for the caller's own map markers (e.g. on map open, to
+    /// load markers placed in a previous session). Answered with
+    /// [`ServerMessage::WorldMapMarkers`]. The terrain image is generated
+    /// client-side from the seed, so it isn't part of this. The client
+    /// throttles these (cached ~1 min), so this is cheap and rare.
+    RequestWorldMap,
+    /// Add / rename / remove one of the caller's own map markers. The server
+    /// is the authority on the id space, the per-player cap, and persistence;
+    /// it answers with [`ServerMessage::WorldMapMarkers`].
+    WorldMapMarker(WorldMapMarkerCommand),
 }
 
 /// Player-controlled view radius for chunk AoI streaming. Resolved to a
@@ -162,6 +172,8 @@ impl ClientMessage {
             | Self::LootBag(_)
             | Self::LootSleeper { .. }
             | Self::OpenStorageBox { .. }
+            | Self::RequestWorldMap
+            | Self::WorldMapMarker(_)
             | Self::SetViewRadius { .. }
             // Heartbeat is the server's liveness signal: it drives the
             // stale-client sweep. Sending it reliably means a single dropped
@@ -334,6 +346,14 @@ pub enum ServerMessage {
     DoorCodeResult {
         accepted: bool,
     },
+    /// The caller's own map markers. Sent both as the reply to
+    /// [`ClientMessage::RequestWorldMap`] (on map open) and as a push after a
+    /// [`ClientMessage::WorldMapMarker`] mutation. The terrain image is NOT
+    /// here, the client generates it locally from the seed; only the
+    /// per-account markers need a round trip.
+    WorldMapMarkers {
+        markers: Vec<WorldMapMarker>,
+    },
 }
 
 impl ServerMessage {
@@ -351,6 +371,9 @@ impl ServerMessage {
             | Self::PlayerKilled { .. }
             | Self::DoorCodePrompt { .. }
             | Self::DoorCodeResult { .. }
+            // Marker edits are rare and must not be dropped (a lost delete
+            // would resurrect a pin), so they ride the reliable channel.
+            | Self::WorldMapMarkers { .. }
             | Self::Toast(_) => PacketDelivery::Reliable,
             // Voice rides an unordered unreliable channel so every delivered
             // frame is played even if it arrives out of order. See the

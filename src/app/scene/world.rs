@@ -10,7 +10,12 @@ use crate::{
     world::{BlockKind, WorldData},
 };
 
-use super::{assets::WORLD_COLOR, components::WorldGeometry, grass::spawn_menu_grass};
+use super::{
+    assets::WORLD_COLOR,
+    components::WorldGeometry,
+    grass::spawn_menu_grass,
+    terrain::{TerrainMaterial, TerrainTextureAssets, build_terrain_material},
+};
 
 pub(super) const STONE_WALL_COLOR: Color = Color::srgb(0.52, 0.53, 0.55);
 
@@ -47,6 +52,14 @@ impl WorldSceneState {
     }
 }
 
+/// The ground plane's material. Live worlds get the biome-blended
+/// [`TerrainMaterial`]; the menu backdrop and asset-less test apps fall back to
+/// the original flat `StandardMaterial`.
+enum GroundMaterial {
+    Terrain(Handle<TerrainMaterial>),
+    Flat(Handle<StandardMaterial>),
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_world_scene_system(
     mut commands: Commands,
@@ -56,6 +69,9 @@ pub(crate) fn apply_world_scene_system(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     resource_assets: Option<Res<ResourceVisualAssets>>,
+    terrain_assets: Option<Res<TerrainTextureAssets>>,
+    mut images: Option<ResMut<Assets<Image>>>,
+    mut terrain_materials: Option<ResMut<Assets<TerrainMaterial>>>,
     geometry: Query<Entity, With<WorldGeometry>>,
 ) {
     let desired = scene_selection(&runtime, menu.screen);
@@ -71,7 +87,16 @@ pub(crate) fn apply_world_scene_system(
         WorldSceneSelection::None => {}
         WorldSceneSelection::MenuBackdrop => {
             let backdrop = WorldData::menu_backdrop_world();
-            spawn_world_geometry(&mut commands, &mut meshes, &mut materials, &backdrop);
+            // The menu floor is mostly hidden by props, grass, and the splash
+            // depth-of-field blur, so it stays on the cheap flat material.
+            let ground = GroundMaterial::Flat(flat_ground_material(&mut materials));
+            spawn_world_geometry(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                &backdrop,
+                ground,
+            );
             // The session path renders resource nodes from snapshots, but
             // the menu has no session, spawn them directly so the splash
             // camera has something interesting to look at.
@@ -85,11 +110,56 @@ pub(crate) fn apply_world_scene_system(
         }
         WorldSceneSelection::Live { .. } => {
             if let Some(world) = runtime.world.as_ref() {
-                spawn_world_geometry(&mut commands, &mut meshes, &mut materials, world);
+                let ground = live_ground_material(
+                    runtime.world_map_seed_dims.map(|(seed, _)| seed),
+                    world.floor_size,
+                    terrain_assets.as_deref(),
+                    images.as_deref_mut(),
+                    terrain_materials.as_deref_mut(),
+                    &mut materials,
+                );
+                spawn_world_geometry(&mut commands, &mut meshes, &mut materials, world, ground);
             }
         }
     }
     scene_state.applied = desired;
+}
+
+/// The flat dark-green ground material (the look before biome texturing). Used
+/// for the menu backdrop and as the fallback when the terrain assets aren't
+/// available (e.g. scene unit tests with no render app).
+fn flat_ground_material(materials: &mut Assets<StandardMaterial>) -> Handle<StandardMaterial> {
+    materials.add(StandardMaterial {
+        base_color: WORLD_COLOR,
+        perceptual_roughness: 1.0,
+        reflectance: 0.0,
+        cull_mode: None,
+        ..default()
+    })
+}
+
+/// Pick the live-world ground material: the biome-blended terrain when the seed
+/// and the terrain render assets are all present, otherwise the flat fallback.
+fn live_ground_material(
+    world_seed: Option<u64>,
+    floor_size: f32,
+    terrain_assets: Option<&TerrainTextureAssets>,
+    images: Option<&mut Assets<Image>>,
+    terrain_materials: Option<&mut Assets<TerrainMaterial>>,
+    std_materials: &mut Assets<StandardMaterial>,
+) -> GroundMaterial {
+    match (world_seed, terrain_assets, images, terrain_materials) {
+        (Some(seed), Some(textures), Some(images), Some(terrain_materials)) => {
+            GroundMaterial::Terrain(build_terrain_material(
+                seed,
+                floor_size,
+                textures,
+                images,
+                terrain_materials,
+            ))
+        }
+        _ => GroundMaterial::Flat(flat_ground_material(std_materials)),
+    }
 }
 
 /// Spawn static resource-node visuals as `WorldGeometry` so they live
@@ -102,7 +172,8 @@ fn spawn_menu_resource_nodes(
     world: &WorldData,
 ) {
     for spawn in &world.resource_nodes {
-        let Some(node) = spawn_resource_node(spawn) else {
+        // Menu backdrop: no world seed, so its trees stay lush (dead is seed-derived).
+        let Some(node) = spawn_resource_node(spawn, None) else {
             continue;
         };
         let Some(definition) = resource_node_definition(&node.definition_id) else {
@@ -138,24 +209,24 @@ fn spawn_world_geometry(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     world: &WorldData,
+    ground: GroundMaterial,
 ) {
-    commands.spawn((
+    // A flat plane at the bottom of the world can never cast a visible shadow,
+    // but without `NotShadowCaster` its ~33k triangles rasterise into every
+    // directional-light cascade each frame. Receiving shadows is unaffected, so
+    // the textured floor still takes tree/building shadows.
+    let mut ground_entity = commands.spawn((
         Name::new("Authoritative Plane"),
         WorldGeometry,
         Mesh3d(meshes.add(build_ground_mesh(world.floor_size))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: WORLD_COLOR,
-            perceptual_roughness: 1.0,
-            reflectance: 0.0,
-            cull_mode: None,
-            ..default()
-        })),
-        // A flat plane at the bottom of the world can never cast a
-        // visible shadow, but without this marker its ~33k triangles
-        // rasterise into every directional-light cascade each frame.
-        // Receiving shadows is unaffected.
         NotShadowCaster,
     ));
+    // The biome-blended terrain material and the flat fallback are different
+    // component types, so attach whichever this world resolved to.
+    match ground {
+        GroundMaterial::Terrain(handle) => ground_entity.insert(MeshMaterial3d(handle)),
+        GroundMaterial::Flat(handle) => ground_entity.insert(MeshMaterial3d(handle)),
+    };
 
     let block_materials = [
         materials.add(Color::srgb(0.46, 0.50, 0.48)),

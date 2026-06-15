@@ -27,9 +27,10 @@ use bevy::prelude::*;
 
 use crate::{
     app::{
-        scene::{DeployableVisualAssets, NetworkDeployedEntity},
+        scene::{DeployableVisualAssets, NetworkDeployedEntity, TorchFireAssets},
         state::ClientRuntime,
         systems::furnace_fire::{FurnaceFire, sync_furnace_fire},
+        systems::torch_fire::{TorchFire, sync_torch_fire},
     },
     items::{DeployableKind, item_definition},
     protocol::{DeployedEntityId, Vec3Net},
@@ -112,8 +113,10 @@ pub(crate) fn apply_deployed_entities_system(
     mut commands: Commands,
     runtime: Res<ClientRuntime>,
     assets: Option<Res<DeployableVisualAssets>>,
+    torch_assets: Option<Res<TorchFireAssets>>,
     mut visuals: ResMut<DeployedEntityVisuals>,
     existing_fires: Query<(Entity, &ChildOf), With<FurnaceFire>>,
+    existing_torch_fires: Query<(Entity, &ChildOf), With<TorchFire>>,
     mut panels: Query<(&mut DoorPanel, &ChildOf)>,
     all_deployables: Query<(Entity, &Deployable, &DeployableTransform, &DeployableActive)>,
     added: Query<(Entity, &Deployable, &DeployableTransform, &DeployableActive), Added<Deployable>>,
@@ -125,6 +128,7 @@ pub(crate) fn apply_deployed_entities_system(
     let Some(assets) = assets else {
         return;
     };
+    let torch_assets = torch_assets.as_deref();
     let visuals = &mut *visuals;
     if runtime.client_id.is_none() {
         // Not connected, tear down any visuals from a prior session.
@@ -213,6 +217,8 @@ pub(crate) fn apply_deployed_entities_system(
                     &mut commands,
                     &entry,
                     &existing_fires,
+                    &existing_torch_fires,
+                    torch_assets,
                     &mut panels,
                     &mut play_sound,
                 );
@@ -279,6 +285,8 @@ pub(crate) fn apply_deployed_entities_system(
                 &mut commands,
                 entry,
                 &existing_fires,
+                &existing_torch_fires,
+                torch_assets,
                 &mut panels,
                 &mut play_sound,
             );
@@ -302,7 +310,7 @@ pub(crate) fn apply_deployed_entities_system(
         };
         spawn_budget -= 1;
         let position = Vec3::from(spawn.position);
-        let visual_transform = deployable_transform(position, spawn.yaw);
+        let visual_transform = deployable_visual_transform(position, spawn.yaw, spawn.kind);
         let parent = if matches!(spawn.kind, DeployableKind::Door) {
             // Doors spawn an animated panel child instead of a root
             // mesh: the root sits at the doorway centre (replicated
@@ -363,6 +371,10 @@ pub(crate) fn apply_deployed_entities_system(
                 position,
                 &mut play_sound,
             );
+            // Same for a lit torch streaming in: attach its flame + light rig.
+            if let Some(torch_assets) = torch_assets {
+                sync_torch_fire(&mut commands, parent, spawn.kind, true, None, torch_assets);
+            }
         }
         visuals.entries.insert(
             spawn.id,
@@ -387,6 +399,8 @@ fn apply_active_flip(
     commands: &mut Commands,
     entry: &DeployableVisualEntry,
     fires: &Query<(Entity, &ChildOf), With<FurnaceFire>>,
+    torch_fires: &Query<(Entity, &ChildOf), With<TorchFire>>,
+    torch_assets: Option<&TorchFireAssets>,
     panels: &mut Query<(&mut DoorPanel, &ChildOf)>,
     play_sound: &mut MessageWriter<crate::app::audio::PlaySound>,
 ) {
@@ -407,6 +421,24 @@ fn apply_active_flip(
                 entry.position,
                 play_sound,
             );
+        }
+        DeployableKind::Torch { .. } => {
+            // A torch burning out (active → false) tears its rig down; a
+            // relit one (future) rebuilds it. Same cheap per-flip lookup.
+            if let Some(torch_assets) = torch_assets {
+                let existing_fire = torch_fires
+                    .iter()
+                    .find(|(_, child_of)| child_of.parent() == entry.entity)
+                    .map(|(fire_entity, _)| fire_entity);
+                sync_torch_fire(
+                    commands,
+                    entry.entity,
+                    entry.kind,
+                    entry.active,
+                    existing_fire,
+                    torch_assets,
+                );
+            }
         }
         DeployableKind::Door => {
             for (mut panel, child_of) in panels.iter_mut() {
@@ -642,12 +674,36 @@ fn deployable_visual(
         DeployableKind::Door => assets.door_panel_mesh.clone(),
         DeployableKind::SleepingBag => assets.sleeping_bag_mesh.clone(),
         DeployableKind::StorageBox { tier } => assets.storage_box_mesh(tier),
+        DeployableKind::Torch { .. } => assets.torch_mesh.clone(),
     };
     (mesh, assets.material.clone())
 }
 
 pub(super) fn deployable_transform(position: Vec3, yaw: f32) -> Transform {
     Transform::from_translation(position).with_rotation(Quat::from_rotation_y(yaw))
+}
+
+/// How far a wall-mounted torch leans out from the wall, in radians (~36°). The
+/// haft rocks up and away so the flame clears the masonry.
+pub(super) const TORCH_WALL_TILT_RAD: f32 = 0.62;
+
+/// Transform for a placed deployable, honouring the torch wall-mount tilt: a
+/// wall torch leans up and out from the wall about its base along the stored
+/// yaw (the outward direction); everything else stands upright. Shared by the
+/// placed-entity spawn and the placement ghost so the preview matches.
+pub(super) fn deployable_visual_transform(
+    position: Vec3,
+    yaw: f32,
+    kind: DeployableKind,
+) -> Transform {
+    if matches!(kind, DeployableKind::Torch { wall: true }) {
+        // yaw points away from the wall; the X-tilt rocks the torch's local
+        // +Y (its shaft) toward that outward (+Z) direction.
+        Transform::from_translation(position)
+            .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_x(TORCH_WALL_TILT_RAD))
+    } else {
+        deployable_transform(position, yaw)
+    }
 }
 
 /// Swinging panel child of a door visual. `angle` is the panel's current

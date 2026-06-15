@@ -25,6 +25,7 @@ fn placing_a_workbench_consumes_one_item_and_tracks_chunk() {
             item_id: intern_item_id(WORKBENCH_T1_ID),
             position: Vec3Net::new(1.5, 0.0, 0.0),
             yaw: 0.0,
+            wall_mounted: false,
         },
     );
     assert!(
@@ -48,6 +49,7 @@ fn placement_out_of_reach_is_rejected() {
             item_id: intern_item_id(WORKBENCH_T1_ID),
             position: Vec3Net::new(50.0, 0.0, 0.0),
             yaw: 0.0,
+            wall_mounted: false,
         },
     );
     assert!(
@@ -83,6 +85,7 @@ fn overlapping_placement_is_rejected() {
             item_id: intern_item_id(WORKBENCH_T1_ID),
             position: Vec3Net::new(1.2, 0.0, 0.0),
             yaw: 0.0,
+            wall_mounted: false,
         },
     );
     let envelopes = server.apply_place_deployable_command(
@@ -91,6 +94,7 @@ fn overlapping_placement_is_rejected() {
             item_id: intern_item_id(CRUDE_FURNACE_ID),
             position: Vec3Net::new(1.2, 0.0, 0.0),
             yaw: 0.0,
+            wall_mounted: false,
         },
     );
     assert!(envelopes.iter().any(
@@ -110,6 +114,7 @@ fn place_workbench(server: &mut GameServer, client_id: ClientId) -> DeployedEnti
             item_id: intern_item_id(WORKBENCH_T1_ID),
             position: Vec3Net::new(1.5, 0.0, 0.0),
             yaw: 0.0,
+            wall_mounted: false,
         },
     );
     *server
@@ -152,6 +157,7 @@ fn place_furnace(server: &mut GameServer, client_id: ClientId) -> DeployedEntity
             item_id: intern_item_id(CRUDE_FURNACE_ID),
             position: Vec3Net::new(1.5, 0.0, 0.0),
             yaw: 0.0,
+            wall_mounted: false,
         },
     );
     *server
@@ -341,6 +347,7 @@ fn station_in_range_matches_only_close_workbench() {
             item_id: intern_item_id(WORKBENCH_T1_ID),
             position: Vec3Net::new(1.5, 0.0, 0.0),
             yaw: 0.0,
+            wall_mounted: false,
         },
     );
     assert!(server.station_in_range(client_id, RecipeStation::Workbench { min_tier: 1 }));

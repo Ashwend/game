@@ -30,7 +30,9 @@ mod quit;
 pub(crate) mod replication_trace;
 mod settings;
 mod test_mode;
+pub(crate) mod torch_fire;
 mod update;
+mod world_map;
 
 use bevy::prelude::SystemSet;
 
@@ -92,7 +94,9 @@ pub(crate) use settings::{
 pub(crate) use test_mode::{
     apply_test_mode_overrides_system, multiplayer_test_owns_window, reposition_test_window_system,
 };
+pub(crate) use torch_fire::{animate_torch_fire_system, tick_torch_particles_system};
 pub(crate) use update::apply_update_system;
+pub(crate) use world_map::{generate_world_map_texture_system, world_map_input_system};
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ClientSystemSet {

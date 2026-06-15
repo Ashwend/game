@@ -14,7 +14,7 @@ use crate::{
         ServerMessage, Vec3Net,
     },
     save::WorldStore,
-    world::{WorldBlock, WorldData},
+    world::{ChunkDims, WorldBlock, WorldData},
     world_time::{WorldTime, WorldTimeSnapshot},
 };
 
@@ -65,6 +65,10 @@ pub(crate) struct ClientRuntime {
     pub(crate) client_id: Option<ClientId>,
     pub(crate) is_admin: bool,
     pub(crate) world: Option<WorldData>,
+    /// World seed + chunk dims from `Welcome`'s `MapType`. The client renders
+    /// the world-map terrain image locally from these (it's a pure function of
+    /// the seed), so the server never ships the raster. `None` until `Welcome`.
+    pub(crate) world_map_seed_dims: Option<(u64, ChunkDims)>,
     /// Spatial index over `world.blocks`. Rebuilt whenever a new world is
     /// installed (i.e. on `Welcome`). Lets prediction's substep loop query
     /// nearby blocks without scanning the full list.
@@ -240,6 +244,7 @@ impl ClientRuntime {
         self.active_world_id = None;
         self.client_id = None;
         self.world = None;
+        self.world_map_seed_dims = None;
         self.world_grid = None;
         self.world_version = self.world_version.wrapping_add(1);
         self.predicted_local = None;
@@ -287,6 +292,7 @@ impl ClientRuntime {
         match message {
             ServerMessage::Welcome {
                 client_id,
+                map,
                 world,
                 is_admin,
                 local_seed,
@@ -295,6 +301,9 @@ impl ClientRuntime {
             } => {
                 self.client_id = Some(client_id);
                 self.is_admin = is_admin;
+                // Stash the seed + dims so the client can render the world-map
+                // terrain locally (it's a pure function of these).
+                self.world_map_seed_dims = Some((map.world_seed(), map.chunk_dims()));
                 self.world = Some(world);
                 self.world_version = self.world_version.wrapping_add(1);
                 self.seed_local_prediction(&local_seed);
@@ -403,6 +412,10 @@ impl ClientRuntime {
             }
             ServerMessage::PlayerList(entries) => {
                 self.players = entries;
+            }
+            ServerMessage::WorldMapMarkers { .. } => {
+                // Routed to `WorldMapState` by the network tick system. No
+                // runtime history.
             }
             ServerMessage::Heartbeat => {}
         }

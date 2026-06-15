@@ -112,6 +112,7 @@ pub(crate) fn place_foundation(
         label: None,
         stability: 100,
         storage: None,
+        torch: None,
     };
     server.insert_deployed_entity(id, entity);
     server.chunk_manager.track_deployed_entity(id, position);

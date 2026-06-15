@@ -24,6 +24,19 @@ pub(crate) fn drive_auth_flow_system(
         return;
     }
 
+    // A join gave up because the stored session couldn't be renewed. Same
+    // teardown as an explicit sign-out, but the login splash carries the reason
+    // so the player knows their session lapsed rather than being bounced for no
+    // visible cause.
+    if let Some(reason) = menu.force_sign_out.take() {
+        crate::auth::workos::logout();
+        commands.remove_resource::<CurrentUser>();
+        *auth = AuthFlow::LoggedOut {
+            error: Some(reason),
+        };
+        return;
+    }
+
     // The player escaped the sign-in wait (closed the browser, changed their
     // mind, or relaunched the app). Tell the worker to stop holding the
     // loopback listener, then drop back to the login splash with no error so

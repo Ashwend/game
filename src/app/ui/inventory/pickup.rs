@@ -56,12 +56,10 @@ fn pickup_tooltip_text(
             .map(|definition: &ItemDefinition| definition.name)
             .unwrap_or(stack.item_id.as_ref())
             .to_owned();
-        let body = if stack.quantity > 1 {
-            format!("Press E to pick up\nQuantity: {}", stack.quantity)
-        } else {
-            "Press E to pick up".to_owned()
-        };
-        return Some((title, body));
+        // The dropped stack's quantity is deliberately left off: it's clutter on
+        // a "press E" affordance, and the count is shown again in the inventory
+        // once the item is picked up.
+        return Some((title, "Press E to pick up".to_owned()));
     }
 
     // A logged-out sleeping body identifies itself: who it is and how much
@@ -111,24 +109,14 @@ fn pickup_tooltip_text(
 
     let definition_id = pickup_target.resource_definition_id.as_ref()?;
     let definition = resource_node_definition(definition_id)?;
-    let contents = if pickup_target.resource_storage.is_empty() {
-        "Empty".to_owned()
-    } else {
-        pickup_target
-            .resource_storage
-            .iter()
-            .map(|stack| {
-                let name = item_definition(&stack.item_id)
-                    .map(|definition| definition.name)
-                    .unwrap_or(stack.item_id.as_ref());
-                format!("{name}: {}", stack.quantity)
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    // Crude nodes (branches, surface stones, grass tufts) are quick-grab
-    // only, swinging at them does nothing, so the tooltip only mentions E.
-    let action_line = if definition.required_tool.kind == ToolKind::Hands {
+    // No remaining-yield readout. How much a node (tree, ore vein, crude pickup)
+    // has left is communicated by its visual depletion state, so the tooltip
+    // stays a "what is this / how do I gather it" hint and the node running dry
+    // stays a surprise.
+    //
+    // Crude nodes (branches, surface stones, grass tufts) are quick-grab only,
+    // swinging at them does nothing, so the tooltip only mentions E.
+    let body = if definition.required_tool.kind == ToolKind::Hands {
         "Press E to pick up".to_owned()
     } else {
         format!(
@@ -136,7 +124,6 @@ fn pickup_tooltip_text(
             definition.required_tool.label()
         )
     };
-    let body = format!("{action_line}\nContents:\n{contents}");
     Some((definition.name.to_owned(), body))
 }
 
@@ -172,6 +159,10 @@ fn deployable_tooltip_text(kind: DeployableKind, stability: Option<u8>) -> (Stri
         DeployableKind::StorageBox { .. } => {
             (kind.label().to_owned(), "Press E to open".to_owned())
         }
+        DeployableKind::Torch { .. } => (
+            "Torch".to_owned(),
+            "Burns for hours to light the area.".to_owned(),
+        ),
     }
 }
 
@@ -279,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn resource_tooltip_lists_requirement_and_contents() {
+    fn resource_tooltip_shows_requirement_but_not_remaining_yield() {
         let pickup_target = PickupTargetState {
             resource_node_id: Some(1),
             resource_definition_id: Some(COAL_NODE_ID.to_owned()),
@@ -295,6 +286,9 @@ mod tests {
         // doesn't exist for the player.
         assert!(body.contains("Requires: Pickaxe"));
         assert!(!body.contains("tier"));
-        assert!(body.contains("Coal: 6"));
+        // How much the node has left is conveyed by its visual depletion, never
+        // the tooltip, so the remaining yield must not leak here.
+        assert!(!body.contains("Contents"));
+        assert!(!body.contains("Coal"));
     }
 }

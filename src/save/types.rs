@@ -88,6 +88,12 @@ pub struct WorldStateSave {
     /// Monotonic counter for placed-entity ids.
     #[serde(default = "default_next_id")]
     pub next_deployed_entity_id: DeployedEntityId,
+    /// Per-player world-map markers. Owned per account, only ever shown to
+    /// the owner, so each entry is scoped to one account id. The marker id
+    /// counter is re-derived on load from the highest stored id, so it isn't
+    /// persisted separately.
+    #[serde(default)]
+    pub world_map_markers: Vec<PersistedAccountMarkers>,
 }
 
 impl Default for WorldStateSave {
@@ -105,8 +111,17 @@ impl Default for WorldStateSave {
             world_time_multiplier: default_world_time_multiplier(),
             deployed_entities: Vec::new(),
             next_deployed_entity_id: default_next_id(),
+            world_map_markers: Vec::new(),
         }
     }
+}
+
+/// One account's persisted world-map markers. Kept as a flat per-account list
+/// so a save round-trips the same shape the server holds in memory.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PersistedAccountMarkers {
+    pub account_id: AccountId,
+    pub markers: Vec<crate::protocol::WorldMapMarker>,
 }
 
 /// On-disk shape of a placed structure. We persist the item id (so the
@@ -142,6 +157,10 @@ pub struct PersistedDeployedEntity {
     /// Storage-box-only contents, same pattern as `furnace`.
     #[serde(default)]
     pub storage: Option<PersistedStorageBoxState>,
+    /// Torch-only burn state, same pattern as `furnace`. `None` for every
+    /// other kind.
+    #[serde(default)]
+    pub torch: Option<PersistedTorchState>,
 }
 
 /// Persisted door state: the lock code, the accounts that have entered
@@ -170,6 +189,14 @@ pub struct PersistedFurnaceState {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PersistedStorageBoxState {
     pub slots: Vec<Option<ItemStack>>,
+}
+
+/// Persisted torch state: the lit flag plus the remaining burn in ticks, so
+/// a torch picks up its countdown where it left off across a reload.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PersistedTorchState {
+    pub active: bool,
+    pub burn_ticks_left: u32,
 }
 
 impl WorldStateSave {

@@ -250,9 +250,29 @@ pub const DOOR_CODE_MAX_LEN: usize = 6;
 /// Longest sleeping bag name the server accepts after trimming.
 pub const SLEEPING_BAG_NAME_MAX_LEN: usize = 24;
 
+/// Longest world-map marker label the server accepts after trimming.
+pub const WORLD_MAP_MARKER_NAME_MAX_LEN: usize = 24;
+
+/// Cap on how many markers a single player can keep on their map. Generous
+/// enough to flag every point of interest on a large world, low enough that a
+/// client can't bloat the save with an unbounded list.
+pub const WORLD_MAP_MARKER_MAX_PER_PLAYER: usize = 100;
+
 /// Hammer durability: same budget as an iron tool, repairs and upgrades
 /// are frequent but cheap taps.
 pub const HAMMER_DURABILITY: u32 = 600;
+
+// =====================================================================
+// Torch
+// =====================================================================
+
+/// Torch HP. Wood and resin, light and flammable, easily knocked out.
+pub const TORCH_MAX_HP: u32 = 60;
+
+/// How long a placed torch burns before going dark, in ticks (~8 hours of
+/// real time). When it burns out the torch stays placed but unlit; it can
+/// still be destroyed like any deployable.
+pub const TORCH_BURN_TICKS: u32 = (8.0 * 3600.0 * SERVER_TICK_RATE_HZ) as u32;
 
 // =====================================================================
 // Furnace

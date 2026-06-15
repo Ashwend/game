@@ -15,26 +15,48 @@ pub(super) fn gameplay_simulation_allowed(menu: &MenuState) -> bool {
     menu.screen == Screen::InGame
 }
 
-/// True if the local player should accept movement/look/swing controls.
-/// Stricter than `gameplay_simulation_allowed`, the window must be focused
-/// and no modal UI (pause menu, inventory, chat, loot bag, death splash)
-/// can be in the way.
-pub(super) fn gameplay_accepts_controls(menu: &MenuState, window_focused: bool) -> bool {
-    window_focused
-        && gameplay_simulation_allowed(menu)
-        && !menu.pause_open
+/// True when no modal UI other than the world map is in the way. The shared
+/// core of the two gates below: every overlay that should freeze input EXCEPT
+/// the navigable world map (which only freezes look/swing, not movement).
+fn no_blocking_modal(menu: &MenuState) -> bool {
+    !menu.pause_open
         && !menu.inventory_open
         && !menu.crafting_open
         && !menu.furnace_open
         && !menu.loot_bag_open
         && !menu.chat_open
-        // Single-field text dialogs (door codes, bag rename) capture the
-        // keyboard; gameplay controls stay frozen while one is up.
-        && menu.text_prompt.is_none()
+        // Single-field text dialogs (door codes, bag rename, marker name),
+        // confirm modals (e.g. marker delete), and notices all own the screen;
+        // gameplay controls stay frozen so a keystroke or click meant for the
+        // dialog doesn't also drive the player behind it.
+        && !menu.dialog_modal_open()
         // Dead players can move the cursor over the respawn button,
-        // gameplay controls (WASD, mouse-look, swing) stay frozen
-        // until the respawn lands.
+        // gameplay controls stay frozen until the respawn lands.
         && menu.death_splash.is_none()
+}
+
+/// True if the local player should accept look/swing/cursor-capture controls.
+/// Stricter than `gameplay_simulation_allowed`, the window must be focused
+/// and no modal UI (pause menu, inventory, chat, loot bag, death splash, or
+/// the world map) can be in the way. The world map frees the cursor so the
+/// player can click its markers, so look/swing stay gated while it's open.
+pub(super) fn gameplay_accepts_controls(menu: &MenuState, window_focused: bool) -> bool {
+    window_focused
+        && gameplay_simulation_allowed(menu)
+        // The world map is a navigable overlay: it frees the cursor (for
+        // marker interaction) and freezes look/swing, but NOT movement, see
+        // `gameplay_accepts_movement`.
+        && !menu.world_map_open
+        && no_blocking_modal(menu)
+}
+
+/// True if the local player should accept WASD movement input. Identical to
+/// `gameplay_accepts_controls` except the world map does not block it: the map
+/// is a navigable overlay, so the player can keep running (to check their
+/// coordinates against the map) while it's open. Look, swing, and the cursor
+/// grab stay gated through `gameplay_accepts_controls`.
+pub(super) fn gameplay_accepts_movement(menu: &MenuState, window_focused: bool) -> bool {
+    window_focused && gameplay_simulation_allowed(menu) && no_blocking_modal(menu)
 }
 
 pub(super) fn primary_window_focused(primary_window: &Query<&Window, With<PrimaryWindow>>) -> bool {
@@ -99,6 +121,61 @@ mod tests {
 
         assert!(gameplay_simulation_allowed(&menu));
         assert!(!gameplay_accepts_controls(&menu, true));
+    }
+
+    #[test]
+    fn world_map_blocks_look_but_not_movement_or_simulation() {
+        // The map is a navigable overlay: it freezes look/swing (cursor is
+        // freed for marker interaction) but keeps WASD live so the player can
+        // run while checking their coordinates, and, like every overlay, must
+        // never halt the authoritative simulation underneath.
+        let menu = MenuState {
+            screen: Screen::InGame,
+            world_map_open: true,
+            ..Default::default()
+        };
+
+        assert!(gameplay_simulation_allowed(&menu));
+        assert!(!gameplay_accepts_controls(&menu, true));
+        assert!(gameplay_accepts_movement(&menu, true));
+        // An unfocused window still freezes everything, even movement.
+        assert!(!gameplay_accepts_movement(&menu, false));
+    }
+
+    #[test]
+    fn a_real_modal_over_the_map_freezes_movement_too() {
+        // If a text prompt (e.g. naming a marker) opens on top of the map,
+        // movement must freeze: the keyboard belongs to the text field.
+        let menu = MenuState {
+            screen: Screen::InGame,
+            world_map_open: true,
+            text_prompt: Some(crate::app::state::TextPrompt::new(
+                crate::app::state::TextPromptKind::NameWorldMapMarker { id: 1 },
+            )),
+            ..Default::default()
+        };
+
+        assert!(gameplay_simulation_allowed(&menu));
+        assert!(!gameplay_accepts_movement(&menu, true));
+    }
+
+    #[test]
+    fn an_in_game_confirm_dialog_freezes_controls_and_movement() {
+        // A confirm modal (e.g. the marker-delete confirm) owns the keyboard +
+        // pointer; gameplay controls AND movement must freeze so a keystroke or
+        // click meant for the dialog doesn't also drive the player behind it.
+        // Simulation, as always, keeps running.
+        let menu = MenuState {
+            screen: Screen::InGame,
+            confirmation: Some(
+                crate::app::state::ConfirmationDialog::delete_world_map_marker(1, "base"),
+            ),
+            ..Default::default()
+        };
+
+        assert!(gameplay_simulation_allowed(&menu));
+        assert!(!gameplay_accepts_controls(&menu, true));
+        assert!(!gameplay_accepts_movement(&menu, true));
     }
 
     #[test]

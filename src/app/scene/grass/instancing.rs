@@ -75,7 +75,9 @@ use crate::app::embedded_asset_path;
 /// `world_x/world_z` are already world space (tile centre + cardinal rotation +
 /// local blade offset, baked CPU-side); `yaw` is the blade's absolute spin about
 /// +Y; `shade`/`warm` tint the baked green; `dither` is the stable per-blade key
-/// for the fragment radial fade.
+/// for the fragment radial fade. Grass colour is uniform across biomes (set on the
+/// blade mesh); biome only varies the *density* (bare rock/ore are thinned in
+/// `super::tile_world_instances`), so there's no per-blade colour here.
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub(super) struct InstanceData {
@@ -283,8 +285,8 @@ impl SpecializedMeshPipeline for GrassInstancePipeline {
 
         descriptor.vertex.shader = self.shader.clone();
         // Instance-step buffer appended after the mesh's vertex buffers.
-        // Locations 0-2 are the blade mesh Position/Normal/UV; the mesh's COLOR
-        // sits at its usual location from the base layout.
+        // Locations 0-2 are the blade mesh Position/Normal/UV and 5 its COLOR (from
+        // the base layout); the instance `vec4`s take the free locations 3 and 4.
         descriptor.vertex.buffers.push(VertexBufferLayout {
             array_stride: size_of::<InstanceData>() as u64,
             step_mode: VertexStepMode::Instance,

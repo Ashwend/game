@@ -15,7 +15,8 @@ use std::process::Command;
 
 pub use config::WorkosConfig;
 pub use login::{
-    LoginHandle, LoginOutcome, ScreenHint, begin_login, begin_restore, has_stored_session, logout,
+    LoginHandle, LoginOutcome, ScreenHint, TokenFreshness, begin_login, begin_restore,
+    ensure_fresh_token, has_stored_session, logout,
 };
 // `Session` is only referenced by name from tests (the login system consumes a
 // boxed `Session` without naming the type), so the re-export is test-only to

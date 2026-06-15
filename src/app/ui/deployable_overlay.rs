@@ -218,9 +218,10 @@ fn kind_label(kind: DeployableKind) -> String {
         DeployableKind::Building { piece, tier } => {
             format!("{} ({})", piece.label(), tier.label())
         }
-        DeployableKind::Door | DeployableKind::SleepingBag | DeployableKind::StorageBox { .. } => {
-            kind.label().to_owned()
-        }
+        DeployableKind::Door
+        | DeployableKind::SleepingBag
+        | DeployableKind::StorageBox { .. }
+        | DeployableKind::Torch { .. } => kind.label().to_owned(),
     }
 }
 

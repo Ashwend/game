@@ -32,6 +32,7 @@ fn place_box(server: &mut GameServer, client_id: ClientId, position: Vec3Net) ->
             item_id: intern_item_id(STORAGE_BOX_SMALL_ID),
             position,
             yaw: 0.0,
+            wall_mounted: false,
         }),
     );
     server

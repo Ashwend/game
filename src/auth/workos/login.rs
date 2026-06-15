@@ -33,12 +33,19 @@ use super::{
     config::{AUTHORIZE_URL, WorkosConfig},
     pkce::{code_challenge, percent_decode, percent_encode, random_token},
     token_store::{clear_refresh_token, load_refresh_token, store_refresh_token},
-    tokens::{post_authenticate, session_from},
+    tokens::{access_token_expiry, post_authenticate, session_from},
 };
 
 /// How long the loopback listener waits for the browser to come back before
 /// giving up, so a cancelled/abandoned login doesn't leak a thread forever.
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+/// Refresh the access token when it has less than this long left before it
+/// expires. The server allows 30s of clock-skew leeway when it verifies the
+/// `exp` claim (see [`crate::auth::WorkosVerifier`]); this sits comfortably
+/// above that so a token that passes the client check still validates after the
+/// connection handshake and any modest clock drift between client and server.
+const REFRESH_LEEWAY: Duration = Duration::from_secs(90);
 
 /// Which AuthKit screen to land the browser on.
 #[derive(Debug, Clone, Copy)]
@@ -246,6 +253,45 @@ pub fn refresh(config: &WorkosConfig, refresh_token: &str) -> Result<Session, St
     let session = session_from(response);
     store_refresh_token(&session.refresh_token);
     Ok(session)
+}
+
+/// Outcome of [`ensure_fresh_token`]: a pre-flight check the client runs before
+/// presenting its access token to a WorkOS-auth server.
+pub enum TokenFreshness {
+    /// The current token is valid for long enough; use it as-is.
+    Fresh,
+    /// The token was expired/near-expiry and has been renewed. The caller should
+    /// connect with [`Session::access_token`] and may reinstall the session.
+    Refreshed(Box<Session>),
+    /// The token needs renewing but no refresh token is stored, so there's
+    /// nothing to renew from. The user must sign in again.
+    SignInRequired,
+    /// A refresh token existed but renewing it failed (network/provider error).
+    /// The caller can let the user retry. Carries the underlying error.
+    RenewFailed(String),
+}
+
+/// Make sure the in-memory access token is good before connecting to a
+/// WorkOS-auth server. Decodes the token's own `exp` (no verification, that's
+/// the server's job) and, if it's expired or inside [`REFRESH_LEEWAY`], renews
+/// it from the stored refresh token. This is what stops a token that quietly
+/// expired during a long or backgrounded session (e.g. a detour into
+/// singleplayer) from being rejected at the handshake with a confusing error.
+pub fn ensure_fresh_token(config: &WorkosConfig, access_token: &str) -> TokenFreshness {
+    if let Some(expires_at) = access_token_expiry(access_token)
+        && expires_at > SystemTime::now() + REFRESH_LEEWAY
+    {
+        return TokenFreshness::Fresh;
+    }
+    // Expired, inside the refresh window, or unparseable: renew it. A token we
+    // can't decode is treated as needing renewal rather than trusted blindly.
+    let Some(refresh_token) = load_refresh_token() else {
+        return TokenFreshness::SignInRequired;
+    };
+    match refresh(config, &refresh_token) {
+        Ok(session) => TokenFreshness::Refreshed(Box::new(session)),
+        Err(error) => TokenFreshness::RenewFailed(error),
+    }
 }
 
 /// Drop the persisted session so the next launch starts logged out. The caller

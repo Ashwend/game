@@ -3,8 +3,8 @@ use crate::{
         COAL_ID, FIBER_ID, IRON_ORE_ID, STONE_ID, SULFUR_ORE_ID, ToolKind, ToolProfile, WOOD_ID,
         look_forward,
     },
-    protocol::{ItemStack, ResourceNodeState, Vec3Net},
-    world::{WorldBlock, WorldResourceNodeSpawn},
+    protocol::{ItemStack, ResourceNodeId, ResourceNodeState, Vec3Net},
+    world::{ClassificationChannels, WorldBlock, WorldResourceNodeSpawn, splitmix64},
 };
 
 pub const COAL_NODE_ID: &str = "coal_node";
@@ -308,15 +308,53 @@ pub fn resource_node_definition(definition_id: &str) -> Option<&'static Resource
         .copied()
 }
 
-pub fn spawn_resource_node(spawn: &WorldResourceNodeSpawn) -> Option<ResourceNodeState> {
+pub fn spawn_resource_node(
+    spawn: &WorldResourceNodeSpawn,
+    world_seed: Option<u64>,
+) -> Option<ResourceNodeState> {
     let definition = resource_node_definition(&spawn.definition_id)?;
+    // A tree in a poor-growth (non-forest) biome is a bare dead snag. Decided
+    // here, authoritatively, from the seed + position so it's frozen on the node
+    // (replicated + saved) rather than re-derived per client. `None` (e.g. the
+    // client menu backdrop, which doesn't replicate or save) leaves trees alive.
+    let dead = definition.model.is_tree()
+        && world_seed.is_some_and(|seed| tree_is_dead(seed, spawn.id, spawn.position));
     Some(ResourceNodeState {
         id: spawn.id,
         definition_id: definition.id.to_owned(),
         position: spawn.position,
         yaw: spawn.yaw,
         storage: definition_storage_stacks(definition),
+        dead,
     })
+}
+
+/// Forest-growth channel band over which trees transition from all-alive (at/above
+/// `HIGH`) to all-dead bare snags (at/below `LOW`). Straddles the chunk classifier's
+/// 0.42 Forest threshold: forest interiors stay lush, the open is bare, the edge
+/// thins into a mix.
+const DEAD_TREE_FOREST_LOW: f32 = 0.40;
+const DEAD_TREE_FOREST_HIGH: f32 = 0.60;
+
+/// Whether a tree at `position` should be a bare dead snag. Trees thrive in forest
+/// and struggle elsewhere, so the chance of being ALIVE rises smoothly with the
+/// forest-growth noise channel (lush core, all-dead open, thinning edge), with a
+/// deterministic per-node hash so a given tree is stable.
+fn tree_is_dead(world_seed: u64, id: ResourceNodeId, position: Vec3Net) -> bool {
+    let forest = ClassificationChannels::sample_at(world_seed, position.x, position.z).forest;
+    tree_is_dead_for_vitality(forest, id)
+}
+
+/// The pure decision behind [`tree_is_dead`], split out so it's testable without
+/// the noise field.
+fn tree_is_dead_for_vitality(forest_channel: f32, id: ResourceNodeId) -> bool {
+    let t = ((forest_channel - DEAD_TREE_FOREST_LOW)
+        / (DEAD_TREE_FOREST_HIGH - DEAD_TREE_FOREST_LOW))
+        .clamp(0.0, 1.0);
+    let alive_chance = t * t * (3.0 - 2.0 * t); // smoothstep
+    // Deterministic per-node random in [0, 1): high 24 bits of a mixed id.
+    let r = (splitmix64(id) >> 40) as f32 / (1u64 << 24) as f32;
+    r >= alive_chance
 }
 
 /// Build the freshly-spawned storage payload for a resource definition.
@@ -584,6 +622,7 @@ mod tests {
             position: Vec3Net::ZERO,
             yaw: 0.0,
             storage: vec![ItemStack::new(COAL_ID, 5)],
+            dead: false,
         };
         let tool = ToolProfile {
             kind: ToolKind::Pickaxe,
@@ -645,6 +684,7 @@ mod tests {
                 position: Vec3Net::ZERO,
                 yaw: 0.0,
                 storage: storage.clone(),
+                dead: false,
             };
             for tool in tools {
                 assert_eq!(
@@ -665,6 +705,7 @@ mod tests {
                 position: Vec3Net::new(5.0, 0.0, -3.0),
                 yaw: 0.0,
                 storage: Vec::new(),
+                dead: false,
             };
             let collider = resource_node_collider(&node)
                 .unwrap_or_else(|| panic!("expected collider for {ore_id}"));
@@ -693,6 +734,7 @@ mod tests {
             position: Vec3Net::new(0.0, 0.0, 0.0),
             yaw: 0.0,
             storage: Vec::new(),
+            dead: false,
         };
         let collider = resource_node_collider(&node).expect("tree should have a collider");
         let size = collider.size();
@@ -709,6 +751,7 @@ mod tests {
             position: Vec3Net::new(0.0, 0.0, -2.2),
             yaw: 0.0,
             storage: vec![ItemStack::new(COAL_ID, 1)],
+            dead: false,
         };
         let eye = Vec3Net::new(0.0, 1.62, 0.0);
 
@@ -731,6 +774,7 @@ mod tests {
             position: pos,
             yaw: 0.0,
             storage: vec![ItemStack::new(FIBER_ID, 1)],
+            dead: false,
         };
 
         // Looking away fails the strict gather test but the server's
@@ -763,10 +807,39 @@ mod tests {
             position: pos,
             yaw: 0.0,
             storage: vec![ItemStack::new(FIBER_ID, 1)],
+            dead: false,
         };
         assert!(
             can_gather_resource_node(eye, 0.0, pitch, &node),
             "aiming at the visible tuft should focus the hay grass"
         );
+    }
+
+    #[test]
+    fn tree_vitality_dead_in_open_alive_in_forest() {
+        // Forest core (high channel) -> always alive; open ground (low) -> always dead.
+        for id in 0..64u64 {
+            assert!(
+                !tree_is_dead_for_vitality(0.9, id),
+                "id {id} alive in forest"
+            );
+            assert!(
+                tree_is_dead_for_vitality(0.2, id),
+                "id {id} dead in the open"
+            );
+        }
+        // The forest edge mixes, and the per-node decision is deterministic.
+        let mid = (DEAD_TREE_FOREST_LOW + DEAD_TREE_FOREST_HIGH) * 0.5;
+        let dead: Vec<bool> = (0..256u64)
+            .map(|id| tree_is_dead_for_vitality(mid, id))
+            .collect();
+        let n_dead = dead.iter().filter(|&&d| d).count();
+        assert!(
+            (20..236).contains(&n_dead),
+            "edge should mix live/dead: {n_dead}/256"
+        );
+        for id in 0..256u64 {
+            assert_eq!(dead[id as usize], tree_is_dead_for_vitality(mid, id));
+        }
     }
 }

@@ -7,7 +7,7 @@ use crate::{
         audio::surface::SurfaceMaterial,
         state::{
             ClientErrorToast, ClientRuntime, MenuState, NoticeDialog, RemoteImpactEvent, SaveStore,
-            Screen, SessionShutdownTasks, ToastState,
+            Screen, SessionShutdownTasks, ToastState, WorldMapState,
         },
         systems::PendingSessionEndReason,
         ui::{
@@ -57,6 +57,7 @@ pub(crate) fn network_tick_system(
     mut pending_session_end: ResMut<PendingSessionEndReason>,
     store: Res<SaveStore>,
     mut shutdown_tasks: ResMut<SessionShutdownTasks>,
+    mut world_map: ResMut<WorldMapState>,
     mut ping_accumulator: Local<f32>,
 ) {
     toasts.tick(time.delta_secs());
@@ -106,8 +107,21 @@ pub(crate) fn network_tick_system(
         runtime.tick_connection_silence(time.delta_secs());
     }
 
+    // An `AuthRejected` and a `VersionMismatch` can arrive in the same receive
+    // batch: after the server refuses our (expired) auth it doesn't tear the
+    // transport down, so a gameplay message we had already queued reaches it
+    // next and, being unauthenticated, draws a "version/wire skew" reply. The
+    // auth rejection is the real reason, so it must win, otherwise the player
+    // sees a misleading "wrong game version" modal for what is actually an
+    // expired login. `session_ended` also guards against a second teardown if
+    // two session-ending messages land together.
+    let auth_rejected_in_batch = batch_has_auth_rejected(&messages);
+    let mut session_ended = false;
     for message in messages {
         if let ServerMessage::Kicked { reason } = &message {
+            if session_ended {
+                continue;
+            }
             let reason = reason.clone();
             pending_session_end.0 = Some(SessionEndReason::Kick);
             runtime.apply_message(message);
@@ -118,10 +132,14 @@ pub(crate) fn network_tick_system(
             // notice is delivered via the modal dialog above, so no
             // replacement toast is needed.
             toasts.clear();
+            session_ended = true;
             let _ = reason;
             continue;
         }
         if let ServerMessage::AuthRejected { reason } = &message {
+            if session_ended {
+                continue;
+            }
             let reason = reason.clone();
             // The server refused us at the handshake (bad/expired auth
             // ticket, protocol or version mismatch), or the transport dropped
@@ -143,6 +161,7 @@ pub(crate) fn network_tick_system(
             // In-flight gather toasts aren't relevant back at the menu; the
             // notice modal carries the message.
             toasts.clear();
+            session_ended = true;
             continue;
         }
         if let ServerMessage::VersionMismatch {
@@ -165,6 +184,16 @@ pub(crate) fn network_tick_system(
                 );
                 continue;
             }
+            // A real auth rejection in the same batch is the true reason (see
+            // the note above the loop); don't let the follow-on mismatch shadow
+            // it with a wrong-version modal.
+            if session_ended || auth_rejected_in_batch {
+                warn!(
+                    "ignoring VersionMismatch (server {server_version}, protocol \
+                     {server_protocol}) shadowed by an auth rejection in the same batch"
+                );
+                continue;
+            }
             let server_version = server_version.clone();
             warn!(
                 "version mismatch joining server: server {server_version} (protocol \
@@ -178,6 +207,7 @@ pub(crate) fn network_tick_system(
             runtime.shutdown_in_background(store.0.clone(), &mut shutdown_tasks);
             show_version_mismatch_notice(&mut menu, server_version);
             toasts.clear();
+            session_ended = true;
             continue;
         }
         if matches!(message, ServerMessage::ItemMerged { .. }) {
@@ -185,6 +215,11 @@ pub(crate) fn network_tick_system(
         }
         if let ServerMessage::Toast(payload) = &message {
             toasts.push_message(payload.clone());
+        }
+        // Markers landed (reply to a request on open, or a push after an edit).
+        // The terrain image is generated locally, so only the pins come here.
+        if let ServerMessage::WorldMapMarkers { markers } = &message {
+            world_map.apply_markers(markers.clone(), time.elapsed_secs());
         }
         if let ServerMessage::ResourceImpact { position, kind } = &message {
             writers
@@ -460,6 +495,17 @@ fn network_tick_allowed(menu: &MenuState) -> bool {
     menu.screen == Screen::InGame
 }
 
+/// Whether a receive batch carries an `AuthRejected`. When it does, a
+/// `VersionMismatch` in the same batch is suppressed: it's the server's reply to
+/// a gameplay message we sent before it rejected our (expired) auth, not a real
+/// build mismatch, and showing it would mask the true "your login expired"
+/// reason behind a misleading "wrong game version" modal.
+fn batch_has_auth_rejected(messages: &[ServerMessage]) -> bool {
+    messages
+        .iter()
+        .any(|message| matches!(message, ServerMessage::AuthRejected { .. }))
+}
+
 pub(crate) fn session_shutdown_poll_system(
     mut menu: ResMut<MenuState>,
     mut shutdown_tasks: ResMut<SessionShutdownTasks>,
@@ -625,6 +671,30 @@ mod tests {
         assert_eq!(position_seed(a), position_seed(b));
         // Different position -> (almost certainly) different seed.
         assert_ne!(position_seed(a), position_seed(c));
+    }
+
+    #[test]
+    fn auth_rejection_shadows_a_same_batch_version_mismatch() {
+        // The expired-token case: the server replies AuthRejected to our Auth
+        // and VersionMismatch to the gameplay message that trailed it. The
+        // batch helper must flag the auth rejection so the mismatch is dropped.
+        let batch = vec![
+            ServerMessage::AuthRejected {
+                reason: "access token rejected: ExpiredSignature".to_owned(),
+            },
+            ServerMessage::VersionMismatch {
+                server_version: "0.17.0".to_owned(),
+                server_protocol: PROTOCOL_VERSION,
+            },
+        ];
+        assert!(batch_has_auth_rejected(&batch));
+
+        // A genuine version mismatch arrives on its own, so nothing shadows it.
+        let mismatch_only = vec![ServerMessage::VersionMismatch {
+            server_version: "9.9.9".to_owned(),
+            server_protocol: PROTOCOL_VERSION,
+        }];
+        assert!(!batch_has_auth_rejected(&mismatch_only));
     }
 
     #[test]

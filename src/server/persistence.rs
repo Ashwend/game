@@ -39,6 +39,7 @@ impl GameServer {
             world_time_multiplier: self.world_time.multiplier,
             deployed_entities: self.persisted_deployed_entities(),
             next_deployed_entity_id: self.next_deployed_entity_id,
+            world_map_markers: self.world_map_markers.to_persisted(),
         };
         save
     }

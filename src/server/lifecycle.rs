@@ -133,6 +133,11 @@ impl GameServer {
                 .unwrap_or(0)
                 .saturating_add(1),
         );
+        // Per-player map markers: rebuild the store from the save (floors the
+        // id counter above the highest survivor internally).
+        let world_map_markers = super::world_map::WorldMapMarkerStore::from_persisted(
+            std::mem::take(&mut save.state.world_map_markers),
+        );
         let world_time = save.state.world_time();
         let tick = save.state.last_authoritative_tick;
 
@@ -177,6 +182,7 @@ impl GameServer {
             auto_save_interval_ticks: 0,
             last_auto_save_tick: tick,
             auto_save_pending: false,
+            world_map_markers,
         };
         // Stability is not persisted: recompute it from the restored
         // pieces (which also culls anything a legacy save left without a

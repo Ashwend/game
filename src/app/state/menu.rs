@@ -74,10 +74,23 @@ pub(crate) struct MenuState {
     /// without reaching into the replicated state from every
     /// helper.
     pub(crate) loot_bag_open: bool,
+    /// True while the world-map overlay is toggled open. A translucent overlay
+    /// (server-rastered terrain + the player's own markers + a grid and facing
+    /// arrow) is shown; the cursor is freed for marker interaction and
+    /// look/swing freeze, but movement stays live and, per the "gameplay never
+    /// pauses" invariant, simulation keeps ticking. The map key (or Escape)
+    /// closes it. Managed by `world_map_input_system`.
+    pub(crate) world_map_open: bool,
     pub(crate) chat_open: bool,
     pub(crate) chat_focus_pending: bool,
     pub(crate) chat_input: String,
     pub(crate) confirmation: Option<ConfirmationDialog>,
+    /// Set by a confirmed `DeleteWorldMapMarker` confirmation; drained by
+    /// `world_map_input_system`, which sends the server the delete command (the
+    /// generic confirmation handler has no network access). Lives here, not on
+    /// `WorldMapUiState`, so it survives even if the map is closed before the
+    /// next in-game frame drains it.
+    pub(crate) world_map_delete_pending: Option<u32>,
     pub(crate) notice: Option<NoticeDialog>,
     /// In-game single-field text dialog (door codes, sleeping-bag
     /// rename). One slot: opening a new prompt replaces any current one.
@@ -98,6 +111,12 @@ pub(crate) struct MenuState {
     /// which tells the worker to stop waiting on the browser and drops back to
     /// the login splash with no error.
     pub(crate) cancel_auth_requested: bool,
+    /// Set when a join is abandoned because the stored session can't be renewed
+    /// (no refresh token, or it's no longer valid). Consumed by
+    /// `drive_auth_flow_system`, which clears `CurrentUser` and drops back to
+    /// the login splash showing this reason, so the player understands why they
+    /// were signed out instead of just being bounced.
+    pub(crate) force_sign_out: Option<String>,
 }
 
 /// Snapshot of "I just died" UI state. Stored on `MenuState` because
@@ -177,6 +196,8 @@ pub(crate) enum TextPromptKind {
     RenameBag {
         bag_id: crate::protocol::DeployedEntityId,
     },
+    /// Name (or rename) one of the player's own world-map markers.
+    NameWorldMapMarker { id: u32 },
 }
 
 /// One single-field in-game dialog. Numeric for door codes, free text
@@ -223,21 +244,34 @@ impl Default for MenuState {
             crafting_open: false,
             furnace_open: false,
             loot_bag_open: false,
+            world_map_open: false,
             chat_open: false,
             chat_focus_pending: false,
             chat_input: String::new(),
             confirmation: None,
+            world_map_delete_pending: None,
             notice: None,
             text_prompt: None,
             death_splash: None,
             quit_requested: false,
             sign_out_requested: false,
             cancel_auth_requested: false,
+            force_sign_out: None,
         }
     }
 }
 
 impl MenuState {
+    /// True while a blocking dialog (single-field text prompt, confirmation, or
+    /// notice) owns the screen. Gameplay hotkeys, toggle inventory/crafting,
+    /// open chat, must stay inert while one is up so a keystroke meant for the
+    /// dialog (typing a marker name, pressing Enter to confirm) doesn't also
+    /// fire a shortcut behind it. Centralised so the keybind and UI open-paths
+    /// can't drift out of sync.
+    pub(crate) fn dialog_modal_open(&self) -> bool {
+        self.text_prompt.is_some() || self.confirmation.is_some() || self.notice.is_some()
+    }
+
     /// Hand off to the in-game screen after a successful singleplayer or
     /// multiplayer session start. Resets the modal/chat overlay state. Both
     /// session-start paths (loopback singleplayer and direct multiplayer)

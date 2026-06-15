@@ -57,7 +57,7 @@ pub(super) fn session_from(response: AuthResponse) -> Session {
 
 /// Read `exp` out of the access-token JWT (no verification, the client only
 /// needs to know when to refresh; the server does the real verification).
-fn access_token_expiry(token: &str) -> Option<SystemTime> {
+pub(super) fn access_token_expiry(token: &str) -> Option<SystemTime> {
     #[derive(Deserialize)]
     struct Claims {
         exp: u64,

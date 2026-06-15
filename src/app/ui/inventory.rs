@@ -147,6 +147,7 @@ pub(super) fn draw_actionbar(
     inventory_ui: &mut InventoryUiState,
     inventory_open: bool,
     furnace_open: bool,
+    world_map_open: bool,
 ) {
     let Some(inventory) = local_player.private.as_ref().map(|p| &p.inventory) else {
         return;
@@ -157,6 +158,9 @@ pub(super) fn draw_actionbar(
         .interactable(inventory_open)
         .anchor(Align2::CENTER_BOTTOM, [0.0, -18.0])
         .show(ctx, |ui| {
+            // Fade the hotbar out while the world map is open so it doesn't
+            // collide with the map's footer text; fade back in on close.
+            ui.set_opacity(super::world_map_overlay_fade(ui.ctx(), world_map_open));
             actionbar_frame(inventory_open).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = SLOT_GAP;
@@ -243,7 +247,7 @@ mod tests {
     fn actionbar_records_rect_when_inventory_present() {
         let local = local_player(Some(PlayerInventoryState::empty()));
         let mut inv_ui = InventoryUiState::default();
-        run_ui(|ctx| draw_actionbar(ctx, &local, &mut inv_ui, true, false));
+        run_ui(|ctx| draw_actionbar(ctx, &local, &mut inv_ui, true, false, false));
         assert!(inv_ui.actionbar_rect.is_some());
     }
 
@@ -253,7 +257,7 @@ mod tests {
         // early-returns and records no rect.
         let local = local_player(None);
         let mut inv_ui = InventoryUiState::default();
-        run_ui(|ctx| draw_actionbar(ctx, &local, &mut inv_ui, true, false));
+        run_ui(|ctx| draw_actionbar(ctx, &local, &mut inv_ui, true, false, false));
         assert!(inv_ui.actionbar_rect.is_none());
     }
 

@@ -49,8 +49,8 @@ use self::{
         play_sounds_system, play_transition_stingers_system, tick_audio_faders_system,
     },
     scene::{
-        GrassInstancingPlugin, GrassMaterial, GrassState, apply_world_scene_system, setup_scene,
-        stream_grass_system, update_sky_system,
+        GrassInstancingPlugin, GrassMaterial, GrassState, TerrainMaterial,
+        apply_world_scene_system, setup_scene, stream_grass_system, update_sky_system,
     },
     state::{
         AuthFlow, BuildingPlanState, ClientErrorToast, ClientRuntime, ClientSettings,
@@ -58,34 +58,35 @@ use self::{
         DeployablePlacementState, GatherInputState, InventoryUiState, LocalPlayerState, LookState,
         MenuBackdropVisibility, MenuState, OptionsUiState, PickupTargetState, PredictionState,
         RemoteImpactEvent, SaveStore, SessionShutdownTasks, TestModeConfig, ToastState,
-        ToolSwapState, WheelMenuState, WorkosAuth, apply_prediction_overlay_system,
-        update_local_player_state_system,
+        ToolSwapState, WheelMenuState, WorkosAuth, WorldMapState, WorldMapUiState,
+        apply_prediction_overlay_system, update_local_player_state_system,
     },
     systems::{
         AutoConnectRequest, CameraImpactKick, CameraMotionEffects, ClientSystemSet,
         CraftCompletionWatch, DeployedEntityVisuals, DroppedItemEntities, LastTrackedScreen,
         LootBagEntities, PendingSessionEndReason, RemotePlayerEntities, ResourceNodeEntities,
-        SessionTracker, animate_door_panels_system, animate_furnace_fire_system, app_quit_system,
-        apply_deployed_entities_system, apply_display_settings_system, apply_dropped_items_system,
-        apply_graphics_settings_system, apply_held_item_visual_system, apply_loot_bags_system,
-        apply_resource_node_stage_system, apply_resource_nodes_system, apply_snapshot_system,
-        apply_test_mode_overrides_system, apply_update_system, auto_connect_poll_system,
-        auto_connect_start_system, camera_follow_system, center_cursor_on_focus_system,
-        chat_shortcut_system, chunk_overlay_system, client_input_system,
-        close_furnace_on_escape_system, close_loot_bag_on_escape_system, craft_complete_cue_system,
-        drive_auth_flow_system, error_relay_system, flush_settings_on_exit_system,
-        gameplay_inventory_shortcuts_system, maintain_world_grid_system,
-        menu_backdrop_camera_system, mouse_look_system, multiplayer_test_owns_window,
-        network_tick_system, placement_input_system, reposition_test_window_system,
-        save_client_settings_system, screen_viewed_system, session_ended_system,
-        session_shutdown_poll_system, session_started_system, spawn_impact_effects_system,
-        surface_client_error_toasts_system, sync_furnace_open_flag_system,
-        sync_loot_bag_open_flag_system, sync_view_radius_system, tick_combat_feedback_system,
-        tick_felling_trees_system, tick_furnace_particles_system, tick_impact_chips_system,
-        tick_resource_node_pop_in_system, toggle_crafting_system, toggle_inventory_system,
-        toggle_pause_system, toggle_perf_stats_system, update_cursor_system,
-        update_link_ping_system, update_pickup_target_system, update_placement_ghost_system,
-        update_tool_swap_state_system, wheel_menu_system,
+        SessionTracker, animate_door_panels_system, animate_furnace_fire_system,
+        animate_torch_fire_system, app_quit_system, apply_deployed_entities_system,
+        apply_display_settings_system, apply_dropped_items_system, apply_graphics_settings_system,
+        apply_held_item_visual_system, apply_loot_bags_system, apply_resource_node_stage_system,
+        apply_resource_nodes_system, apply_snapshot_system, apply_test_mode_overrides_system,
+        apply_update_system, auto_connect_poll_system, auto_connect_start_system,
+        camera_follow_system, center_cursor_on_focus_system, chat_shortcut_system,
+        chunk_overlay_system, client_input_system, close_furnace_on_escape_system,
+        close_loot_bag_on_escape_system, craft_complete_cue_system, drive_auth_flow_system,
+        error_relay_system, flush_settings_on_exit_system, gameplay_inventory_shortcuts_system,
+        generate_world_map_texture_system, maintain_world_grid_system, menu_backdrop_camera_system,
+        mouse_look_system, multiplayer_test_owns_window, network_tick_system,
+        placement_input_system, reposition_test_window_system, save_client_settings_system,
+        screen_viewed_system, session_ended_system, session_shutdown_poll_system,
+        session_started_system, spawn_impact_effects_system, surface_client_error_toasts_system,
+        sync_furnace_open_flag_system, sync_loot_bag_open_flag_system, sync_view_radius_system,
+        tick_combat_feedback_system, tick_felling_trees_system, tick_furnace_particles_system,
+        tick_impact_chips_system, tick_resource_node_pop_in_system, tick_torch_particles_system,
+        toggle_crafting_system, toggle_inventory_system, toggle_pause_system,
+        toggle_perf_stats_system, update_cursor_system, update_link_ping_system,
+        update_pickup_target_system, update_placement_ghost_system, update_tool_swap_state_system,
+        wheel_menu_system, world_map_input_system,
     },
     ui::{
         ButtonSoundRequests, InventorySoundRequests, apply_ui_scale_system, button_sound_system,
@@ -325,6 +326,8 @@ fn insert_client_resources(
         .insert_resource(CraftCompletionWatch::default())
         .insert_resource(DeployablePlacementState::default())
         .insert_resource(WheelMenuState::default())
+        .init_resource::<WorldMapState>()
+        .init_resource::<WorldMapUiState>()
         .insert_resource(BuildingPlanState::default())
         .insert_resource(PickupTargetState::default())
         .insert_resource(GatherInputState::default())
@@ -486,6 +489,11 @@ fn add_third_party_plugins(app: &mut App, settings: &ClientSettings) {
         // render app); after EmbeddedAssetsPlugin so `shaders/grass.wgsl`
         // resolves when hay grass first spawns.
         .add_plugins(MaterialPlugin::<GrassMaterial>::default())
+        // Terrain ground material: a standalone splat-blend PBR material that
+        // textures the floor by biome to match the world map. Client-only; after
+        // EmbeddedAssetsPlugin so `shaders/terrain.wgsl` and the biome textures
+        // resolve when the first world's ground spawns.
+        .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
         // GPU-instanced detail grass: the project's one custom render pipeline.
         // Draws one shared blade mesh thousands of times per tile from a per-blade
         // instance buffer, so the field can be far denser than baking every blade
@@ -709,7 +717,16 @@ fn add_network_systems(app: &mut App) {
         .add_systems(Update, app_quit_system.in_set(ClientSystemSet::Quit))
         // Applies a staged self-update: saves any open world, then launches the
         // updater and quits. Reacts to `UpdateState::Applying` set by the modal.
-        .add_systems(Update, apply_update_system);
+        .add_systems(Update, apply_update_system)
+        // Hold-to-view world map: the input toggle (which fires the throttled
+        // fetch through the session) and the texture upload of a received map.
+        // The texture is generated locally from the seed the network tick
+        // stored on `Welcome`, so run after it to have the seed available.
+        .add_systems(Update, world_map_input_system)
+        .add_systems(
+            Update,
+            generate_world_map_texture_system.after(network_tick_system),
+        );
 }
 
 /// Display/graphics/settings application plus the always-on view-radius and
@@ -901,6 +918,12 @@ fn add_audio_systems(app: &mut App) {
         Update,
         tick_furnace_particles_system.in_set(ClientSystemSet::FurnaceParticleTick),
     )
+    // Torch fire: light flicker + near/far LOD (particles vs billboard) and the
+    // particle integrator. Both self-gate (no assets / dt == 0), so plain
+    // Update is fine; ordering vs each other doesn't matter (a puff spawned
+    // this frame integrates next).
+    .add_systems(Update, animate_torch_fire_system)
+    .add_systems(Update, tick_torch_particles_system)
     .add_systems(
         Update,
         tick_felling_trees_system.in_set(ClientSystemSet::NodeDeathTick),

@@ -95,7 +95,7 @@ impl GameServer {
             position,
             rng.next_f32() * std::f32::consts::TAU,
         );
-        let Some(node) = spawn_resource_node(&spawn) else {
+        let Some(node) = spawn_resource_node(&spawn, Some(self.chunk_manager.world_seed())) else {
             return reply_warning(client_id, "could not build node: unknown kind");
         };
         // `parse_node_token` only returns registry ids, so the kind lookup

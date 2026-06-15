@@ -12,7 +12,7 @@ use crate::{
 };
 
 use super::gating::{
-    gameplay_accepts_controls, gameplay_simulation_allowed, primary_window_focused,
+    gameplay_accepts_movement, gameplay_simulation_allowed, primary_window_focused,
 };
 
 /// Outgoing movement messages per second while the player's state is
@@ -87,7 +87,7 @@ pub(crate) fn client_input_system(
     }
 
     let accepts_movement_input =
-        gameplay_accepts_controls(&params.menu, primary_window_focused(&params.primary_window));
+        gameplay_accepts_movement(&params.menu, primary_window_focused(&params.primary_window));
     let direction = movement_direction_from_keys(
         &params.keys,
         &params.settings.keybindings,

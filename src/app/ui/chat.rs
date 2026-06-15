@@ -41,12 +41,16 @@ pub(super) fn chat_ui(
     let active = menu.chat_open && !menu.pause_open;
     let allow_pointer_interaction = active || inventory_open;
     let width = effective_chat_width(actionbar_rect);
+    let world_map_open = menu.world_map_open;
 
     egui::Area::new("chat".into())
         .order(egui::Order::Foreground)
         .interactable(allow_pointer_interaction)
         .anchor(egui::Align2::LEFT_BOTTOM, [CHAT_LEFT_ANCHOR, -18.0])
         .show(ctx, |ui| {
+            // Fade chat out while the world map is open (it overlaps the map's
+            // lower-left); fade back in on close. Shared id with the hotbar.
+            ui.set_opacity(super::world_map_overlay_fade(ui.ctx(), world_map_open));
             chat_frame(active).show(ui, |ui| {
                 ui.set_width(width);
                 draw_messages(
@@ -85,8 +89,15 @@ fn handle_chat_shortcuts(ctx: &egui::Context, menu: &mut MenuState) -> bool {
     // Mirror `chat_shortcut_system`'s modal gating. Without
     // `crafting_open` here, typing `T` into the crafting search would
     // open the chat *from the UI side* even after the Bevy keybind
-    // bailed, chat has two open-paths and they must agree.
-    if menu.pause_open || menu.chat_open || menu.crafting_open || menu.inventory_open {
+    // bailed, chat has two open-paths and they must agree. `dialog_modal_open`
+    // covers the text prompt (marker/bag name), confirm, and notice, so typing
+    // into one of those can't open chat behind it.
+    if menu.pause_open
+        || menu.chat_open
+        || menu.crafting_open
+        || menu.inventory_open
+        || menu.dialog_modal_open()
+    {
         return false;
     }
 

@@ -1,8 +1,9 @@
 use bevy::prelude::*;
 
 use super::builder::{
-    BARK_DARK, BARK_MID, BIRCH_BARK, BIRCH_BARK_BAND, LEAF_BIRCH, LEAF_BIRCH_DARK,
-    LEAF_BIRCH_LIGHT, LEAF_PINE, LEAF_PINE_DARK, LEAF_PINE_LIGHT, LowPolyMeshBuilder, MeshColor,
+    BARK_DARK, BARK_MID, BIRCH_BARK, BIRCH_BARK_BAND, DEAD_WOOD, DEAD_WOOD_DARK, LEAF_BIRCH,
+    LEAF_BIRCH_DARK, LEAF_BIRCH_LIGHT, LEAF_PINE, LEAF_PINE_DARK, LEAF_PINE_LIGHT,
+    LowPolyMeshBuilder, MeshColor,
 };
 
 // Each pine variant has a clear bare trunk before foliage starts; this lets
@@ -325,4 +326,155 @@ pub(crate) fn low_poly_birch_tree_large_lod_mesh() -> Mesh {
     builder.add_octa_rock([0.0, 4.95, 0.0], [2.05, 1.35, 1.90], LEAF_BIRCH);
     builder.add_octa_rock([0.0, 5.95, 0.0], [0.90, 0.75, 0.85], LEAF_BIRCH_LIGHT);
     builder.build()
+}
+
+// ---------------------------------------------------------------------------
+// Dead trees
+//
+// Bare, leafless snags scattered where growth is poor (the non-forest biomes,
+// chosen client-side from the seed at spawn, see `resource_nodes::spawn`). No
+// canopy, so they're authored by SIZE only (a dead pine and a dead birch of the
+// same size are the same snag). Single low-poly mesh per size, used at all
+// distances (they're cheap, no separate LOD). Trunk base sits at y = 0 like the
+// live trees, so the same `resource_node_transform_at` placement applies.
+// ---------------------------------------------------------------------------
+
+/// A single bare dead branch: a thin oriented box reaching up and out from the
+/// trunk. `trunk` is the attach point on the trunk axis; the branch centre is
+/// pushed out half its length along the (yaw, pitch) reach so the inner end meets
+/// the trunk and the rest reaches away. The reach matches `add_box_oriented`'s
+/// rotation (pitch about Z, then yaw about Y): `+X` ends at
+/// `(cos_yaw·cos_pitch, sin_pitch, -sin_yaw·cos_pitch)`.
+fn dead_branch(
+    builder: &mut LowPolyMeshBuilder,
+    trunk: [f32; 3],
+    half_len: f32,
+    thick: f32,
+    yaw: f32,
+    pitch: f32,
+    color: MeshColor,
+) {
+    let (sin_yaw, cos_yaw) = yaw.sin_cos();
+    let (sin_pitch, cos_pitch) = pitch.sin_cos();
+    let reach = [cos_yaw * cos_pitch, sin_pitch, -sin_yaw * cos_pitch];
+    let center = [
+        trunk[0] + reach[0] * half_len,
+        trunk[1] + reach[1] * half_len,
+        trunk[2] + reach[2] * half_len,
+    ];
+    builder.add_box_oriented(center, [half_len, thick, thick], yaw, pitch, color);
+}
+
+pub(crate) fn low_poly_dead_tree_small_mesh() -> Mesh {
+    let mut b = LowPolyMeshBuilder::default();
+    // Bare, slightly leaning trunk to ~1.85 m.
+    b.add_box([0.0, 0.11, 0.0], [0.16, 0.11, 0.16], DEAD_WOOD_DARK);
+    b.add_box([0.015, 0.42, -0.01], [0.13, 0.22, 0.13], DEAD_WOOD);
+    b.add_box([0.03, 0.86, 0.0], [0.11, 0.26, 0.11], DEAD_WOOD_DARK);
+    b.add_box([0.02, 1.30, 0.02], [0.09, 0.26, 0.09], DEAD_WOOD);
+    b.add_box([0.0, 1.66, 0.01], [0.07, 0.18, 0.07], DEAD_WOOD_DARK);
+    // Bare branches reaching up and out at spread yaws.
+    dead_branch(&mut b, [0.02, 1.08, 0.0], 0.30, 0.045, 0.4, 0.75, DEAD_WOOD);
+    dead_branch(
+        &mut b,
+        [0.0, 1.34, 0.02],
+        0.27,
+        0.04,
+        2.6,
+        0.82,
+        DEAD_WOOD_DARK,
+    );
+    dead_branch(&mut b, [0.0, 0.92, 0.0], 0.24, 0.042, 4.3, 0.6, DEAD_WOOD);
+    dead_branch(&mut b, [0.0, 1.6, 0.0], 0.2, 0.035, 1.4, 1.05, DEAD_WOOD);
+    b.build()
+}
+
+pub(crate) fn low_poly_dead_tree_medium_mesh() -> Mesh {
+    let mut b = LowPolyMeshBuilder::default();
+    // Taller bare trunk to ~2.8 m, gentle lean.
+    b.add_box([0.0, 0.13, 0.0], [0.21, 0.13, 0.21], DEAD_WOOD_DARK);
+    b.add_box([0.02, 0.50, -0.01], [0.17, 0.26, 0.17], DEAD_WOOD);
+    b.add_box([0.04, 1.05, 0.01], [0.15, 0.31, 0.15], DEAD_WOOD_DARK);
+    b.add_box([0.05, 1.60, 0.02], [0.13, 0.27, 0.13], DEAD_WOOD);
+    b.add_box([0.03, 2.10, 0.02], [0.11, 0.25, 0.11], DEAD_WOOD_DARK);
+    b.add_box([0.0, 2.52, 0.01], [0.085, 0.2, 0.085], DEAD_WOOD);
+    // Six bare branches, a couple forking, reaching up and out.
+    dead_branch(&mut b, [0.04, 1.70, 0.0], 0.42, 0.06, 0.5, 0.7, DEAD_WOOD);
+    dead_branch(
+        &mut b,
+        [0.03, 2.05, 0.03],
+        0.38,
+        0.05,
+        2.7,
+        0.78,
+        DEAD_WOOD_DARK,
+    );
+    dead_branch(&mut b, [0.02, 1.35, 0.0], 0.34, 0.055, 4.4, 0.55, DEAD_WOOD);
+    dead_branch(&mut b, [0.0, 2.45, 0.0], 0.3, 0.045, 1.6, 0.95, DEAD_WOOD);
+    dead_branch(
+        &mut b,
+        [0.04, 1.95, -0.02],
+        0.26,
+        0.04,
+        5.6,
+        0.85,
+        DEAD_WOOD_DARK,
+    );
+    // A secondary fork high on the trunk.
+    dead_branch(&mut b, [0.0, 2.66, 0.0], 0.22, 0.035, 3.4, 1.1, DEAD_WOOD);
+    b.build()
+}
+
+pub(crate) fn low_poly_dead_tree_large_mesh() -> Mesh {
+    let mut b = LowPolyMeshBuilder::default();
+    // Old craggy snag: thick flared base, bare trunk to ~4.0 m.
+    b.add_box([0.0, 0.16, 0.0], [0.29, 0.16, 0.29], DEAD_WOOD_DARK);
+    b.add_box([0.02, 0.6, -0.01], [0.24, 0.32, 0.24], DEAD_WOOD);
+    b.add_box([0.05, 1.25, 0.01], [0.21, 0.35, 0.21], DEAD_WOOD_DARK);
+    b.add_box([0.07, 1.95, 0.03], [0.19, 0.37, 0.19], DEAD_WOOD);
+    b.add_box([0.06, 2.6, 0.03], [0.16, 0.32, 0.16], DEAD_WOOD_DARK);
+    b.add_box([0.04, 3.2, 0.02], [0.13, 0.3, 0.13], DEAD_WOOD);
+    b.add_box([0.0, 3.7, 0.01], [0.1, 0.24, 0.1], DEAD_WOOD_DARK);
+    // Bigger limb structure: long lower limbs, a forked crown.
+    dead_branch(&mut b, [0.06, 2.15, 0.0], 0.6, 0.08, 0.5, 0.6, DEAD_WOOD);
+    dead_branch(
+        &mut b,
+        [0.05, 2.7, 0.04],
+        0.55,
+        0.07,
+        2.6,
+        0.68,
+        DEAD_WOOD_DARK,
+    );
+    dead_branch(&mut b, [0.03, 1.6, 0.0], 0.5, 0.075, 4.3, 0.5, DEAD_WOOD);
+    dead_branch(
+        &mut b,
+        [0.05, 3.25, 0.02],
+        0.45,
+        0.055,
+        1.5,
+        0.85,
+        DEAD_WOOD,
+    );
+    dead_branch(
+        &mut b,
+        [0.06, 2.4, -0.03],
+        0.4,
+        0.05,
+        5.6,
+        0.72,
+        DEAD_WOOD_DARK,
+    );
+    dead_branch(&mut b, [0.0, 3.78, 0.0], 0.36, 0.045, 3.3, 1.0, DEAD_WOOD);
+    // A secondary fork off the crown.
+    dead_branch(
+        &mut b,
+        [0.0, 3.9, 0.0],
+        0.28,
+        0.04,
+        0.2,
+        1.05,
+        DEAD_WOOD_DARK,
+    );
+    b.build()
 }

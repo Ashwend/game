@@ -41,6 +41,7 @@ impl GameServer {
             self.insert_resource_node(node.id, node);
         }
         self.tick_furnaces();
+        self.tick_torches();
         self.tick_loot_bags(delta_seconds);
         self.expire_chat_bubbles();
 

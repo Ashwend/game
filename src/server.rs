@@ -87,7 +87,9 @@ mod test_support;
 mod tick;
 mod toasts;
 mod tool_wear;
+mod torch;
 mod voice;
+mod world_map;
 mod world_time;
 
 pub use chunk_manager::{ChunkManager, ChunkManagerSave, view_tier_radius};
@@ -247,6 +249,10 @@ pub struct GameServer {
     /// Raised by `tick` when an auto-save comes due; the host drains it via
     /// [`GameServer::take_auto_save_pending`], writes the world, then announces.
     auto_save_pending: bool,
+    /// Per-player hand-placed map markers. Owned per account, private to the
+    /// owner, and persisted in the world save. See `world_map`. (The biome
+    /// terrain image isn't here, the client generates it from the seed.)
+    world_map_markers: world_map::WorldMapMarkerStore,
 }
 
 #[derive(Debug)]

@@ -24,23 +24,26 @@ use crate::{
     app::{
         scene::{DeployablePlacementGhost, DeployableVisualAssets, MainCamera},
         state::{
-            BuildingPlanState, ClientErrorToast, ClientRuntime, DeployablePlacementState,
-            LocalPlayerState, MenuState, Screen, TextPrompt, TextPromptKind, WheelMenuState,
+            BuildingCostReadout, BuildingPlanState, ClientErrorToast, ClientRuntime,
+            DeployablePlacementState, LocalPlayerState, MenuState, Screen, TextPrompt,
+            TextPromptKind, WheelMenuState,
         },
         systems::input::send_place_deployable_command,
     },
     building::{
         BuildingPiece, BuildingTier, StabilitySupport, candidate_stability_pct,
-        cell_neighbor_sockets, platform_wall_sockets, positions_match, snap_yaw_quarter_turn,
-        stairs_socket_on, wall_ceiling_sockets, wall_slot_blocked, wall_top_socket,
+        cell_neighbor_sockets, placement_cost, platform_wall_sockets, positions_match,
+        snap_yaw_quarter_turn, stairs_socket_on, wall_ceiling_sockets, wall_slot_blocked,
+        wall_top_socket,
     },
     game_balance::{BUILDING_MIN_PLACEMENT_STABILITY_PCT, FOUNDATION_RAISE_MAX_M},
+    inventory::count_items_in_inventory,
     items::{BUILDING_PLAN_ID, DeployableKind, DeployableProfile, ItemId, item_definition},
     protocol::{DeployedEntityId, PlaceBuildingCommand, PlaceDeployableCommand, Vec3Net},
     server::{Deployable, DeployableStability, DeployableTransform},
 };
 
-use super::deployable_transform;
+use super::deployable_visual_transform;
 
 /// Maximum distance, in metres, between the player's feet and the
 /// ghost. Matches `PLACEMENT_REACH_M` on the server so client preview
@@ -72,6 +75,9 @@ pub(super) enum GhostIntent {
     Building(BuildingPiece),
     /// The hewn log door, snapping to doorways.
     Door,
+    /// A torch: free-view placement that mounts on the ground or the side of
+    /// a wall (no socket snapping).
+    Torch(ItemId, DeployableProfile),
 }
 
 /// Update the placement state from the active actionbar item + camera
@@ -113,11 +119,13 @@ pub(crate) fn update_placement_ghost_system(
         placement.world_position = None;
         placement.valid = false;
         placement.door_target = None;
+        placement.building_cost = None;
         despawn_ghost(&mut commands, &ghosts);
         return;
     };
 
-    let Ok((_camera, camera_transform)) = camera.single() else {
+    let Ok((camera_component, camera_transform)) = camera.single() else {
+        placement.building_cost = None;
         despawn_ghost(&mut commands, &ghosts);
         return;
     };
@@ -133,6 +141,9 @@ pub(crate) fn update_placement_ghost_system(
                 player_feet,
                 &replicated,
             );
+            // Deployables consume the held item itself, not raw materials, so
+            // they carry no separate cost readout.
+            placement.building_cost = None;
             profile.kind
         }
         GhostIntent::Building(piece) => {
@@ -143,6 +154,13 @@ pub(crate) fn update_placement_ghost_system(
                 player_feet,
                 &replicated,
             );
+            placement.building_cost = building_cost_readout(
+                piece,
+                placement.world_position,
+                &local_player,
+                camera_component,
+                camera_transform,
+            );
             DeployableKind::Building {
                 piece,
                 tier: BuildingTier::Sticks,
@@ -150,7 +168,16 @@ pub(crate) fn update_placement_ghost_system(
         }
         GhostIntent::Door => {
             update_door_placement(&mut placement, camera_transform, player_feet, &replicated);
+            placement.building_cost = None;
             DeployableKind::Door
+        }
+        GhostIntent::Torch(_, _) => {
+            update_torch_placement(&mut placement, camera_transform, player_feet, &replicated);
+            placement.building_cost = None;
+            // Fold the mount into the kind so the ghost tilts on a wall.
+            DeployableKind::Torch {
+                wall: placement.wall_mounted,
+            }
         }
     };
 
@@ -331,6 +358,38 @@ fn update_building_placement(
     placement.valid = socketed_valid && in_reach && stable;
 }
 
+/// Build the cost readout for a building-piece ghost: the placement material,
+/// how much it costs, how much the player currently holds, and the screen
+/// anchor (the projected base of the ghost) the in-game overlay pins the label
+/// to. `None` when the ghost has no world position or its base projects
+/// off-screen. The affordability check is the same `count` vs `placement_cost`
+/// the server runs, so the green/red the player sees matches what it accepts.
+fn building_cost_readout(
+    piece: BuildingPiece,
+    world_position: Option<Vec3>,
+    local_player: &LocalPlayerState,
+    camera: &Camera,
+    camera_transform: &GlobalTransform,
+) -> Option<BuildingCostReadout> {
+    let world = world_position?;
+    let (cost_item, required) = placement_cost(piece);
+    let have = local_player
+        .private
+        .as_ref()
+        .map(|private| count_items_in_inventory(&private.inventory, cost_item))
+        .unwrap_or(0);
+    let material = item_definition(cost_item)
+        .map(|definition| definition.name)
+        .unwrap_or("materials");
+    let anchor = camera.world_to_viewport(camera_transform, world).ok()?;
+    Some(BuildingCostReadout {
+        material,
+        required,
+        have,
+        anchor,
+    })
+}
+
 /// Door ghost: latch onto the nearest free doorway around the aim point.
 /// The flip toggle is a half-turn, mirroring hinge + swing together,
 /// which the arc indicator baked into the ghost mesh makes visible.
@@ -370,6 +429,142 @@ fn update_door_placement(
             placement.door_target = None;
         }
     }
+}
+
+/// Torch ghost: free-view placement with no socket snapping. The look ray is
+/// tested against wall-like building pieces and the ground/platform; whichever
+/// is nearer wins. A wall hit mounts the torch (tilted out along the wall's
+/// outward normal); otherwise it stands upright on the surface.
+fn update_torch_placement(
+    placement: &mut DeployablePlacementState,
+    camera_transform: &GlobalTransform,
+    player_feet: Option<Vec3>,
+    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
+) {
+    let origin = camera_transform.translation();
+    let forward = camera_transform.forward().as_vec3();
+    placement.door_target = None;
+
+    let wall = nearest_wall_hit(origin, forward, replicated);
+    let ground = surface_under_aim(camera_transform, replicated)
+        .map(|point| ((point - origin).dot(forward), point));
+
+    let pick_wall = match (&wall, &ground) {
+        (Some((wall_t, _, _)), Some((ground_t, _))) => wall_t < ground_t,
+        (Some(_), None) => true,
+        _ => false,
+    };
+
+    if pick_wall {
+        let (_, point, normal) = wall.expect("pick_wall implies a wall hit");
+        // Nudge the base a hair off the wall so it doesn't z-fight the masonry.
+        let position = point + normal * 0.04;
+        placement.world_position = Some(position);
+        // yaw points away from the wall (the outward normal's heading).
+        placement.yaw = normal.x.atan2(normal.z);
+        placement.wall_mounted = true;
+        placement.valid = torch_in_reach(position, player_feet);
+        return;
+    }
+
+    if let Some((_, point)) = ground {
+        placement.world_position = Some(point);
+        placement.wall_mounted = false;
+        // A torch shaft is radially symmetric, so just face the player for a
+        // tidy default; the exact floor yaw doesn't matter.
+        if let Some(feet) = player_feet
+            && let Some(yaw) = yaw_facing_player(point, feet)
+        {
+            placement.yaw = yaw;
+        }
+        placement.valid = torch_in_reach(point, player_feet);
+        return;
+    }
+
+    placement.world_position = None;
+    placement.valid = false;
+    placement.wall_mounted = false;
+}
+
+fn torch_in_reach(position: Vec3, player_feet: Option<Vec3>) -> bool {
+    player_feet.is_some_and(|feet| {
+        let dx = position.x - feet.x;
+        let dz = position.z - feet.z;
+        (dx * dx + dz * dz).sqrt() <= PLACEMENT_REACH_M
+    })
+}
+
+/// Nearest wall-like building piece the look ray hits, as `(t, point, outward
+/// normal)`. Only near-vertical faces count, a torch mounts on a wall, not a
+/// floor. Player-built walls only; the distant perimeter masonry is ignored.
+fn nearest_wall_hit(
+    origin: Vec3,
+    forward: Vec3,
+    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
+) -> Option<(f32, Vec3, Vec3)> {
+    let mut best: Option<(f32, Vec3, Vec3)> = None;
+    for (meta, transform, _) in replicated.iter() {
+        let DeployableKind::Building { piece, .. } = meta.kind else {
+            continue;
+        };
+        if !piece.is_wall_like() {
+            continue;
+        }
+        for block in
+            crate::building::building_collider_blocks(piece, transform.position, transform.yaw)
+        {
+            let min = Vec3::new(block.min().x, block.min().y, block.min().z);
+            let max = Vec3::new(block.max().x, block.max().y, block.max().z);
+            let Some((t, normal)) = ray_aabb(origin, forward, min, max) else {
+                continue;
+            };
+            // Skip the wall's top/bottom faces: a torch mounts on the side.
+            if normal.y.abs() > 0.5 || t > 50.0 {
+                continue;
+            }
+            if best.as_ref().is_none_or(|(best_t, _, _)| t < *best_t) {
+                best = Some((t, origin + forward * t, normal));
+            }
+        }
+    }
+    best
+}
+
+/// Slab-method ray vs AABB, returning the entry distance and the entry face
+/// normal (pointing back toward the ray origin). `None` when the ray misses or
+/// only meets the box behind the origin.
+fn ray_aabb(origin: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<(f32, Vec3)> {
+    let inv = dir.recip();
+    let mut tmin = f32::NEG_INFINITY;
+    let mut tmax = f32::INFINITY;
+    let mut axis = 0usize;
+    let mut sign = 0.0f32;
+    for i in 0..3 {
+        let lo = (min[i] - origin[i]) * inv[i];
+        let hi = (max[i] - origin[i]) * inv[i];
+        let (near, far, face_sign) = if lo <= hi {
+            (lo, hi, -1.0)
+        } else {
+            (hi, lo, 1.0)
+        };
+        if near > tmin {
+            tmin = near;
+            axis = i;
+            sign = face_sign;
+        }
+        if far < tmax {
+            tmax = far;
+        }
+        if tmax < tmin {
+            return None;
+        }
+    }
+    if tmin < 0.0 {
+        return None;
+    }
+    let mut normal = Vec3::ZERO;
+    normal[axis] = sign;
+    Some((tmin, normal))
 }
 
 /// React to placement input: left-click commits, held right-mouse
@@ -431,6 +626,9 @@ pub(crate) fn placement_input_system(
                 placement.door_flip = !placement.door_flip;
             }
         }
+        // The torch pose is fully driven by the aim (wall normal or ground),
+        // and the haft is radially symmetric, so there's nothing to rotate.
+        GhostIntent::Torch(_, _) => {}
     }
 
     if !mouse.just_pressed(MouseButton::Left) {
@@ -453,6 +651,7 @@ pub(crate) fn placement_input_system(
                     item_id,
                     position: Vec3Net::from(position),
                     yaw: placement.yaw,
+                    wall_mounted: false,
                 },
             );
             placement.manual_yaw = false;
@@ -484,6 +683,21 @@ pub(crate) fn placement_input_system(
                 doorway_id,
                 flip: placement.door_flip,
             }));
+        }
+        GhostIntent::Torch(item_id, _) => {
+            send_place_deployable_command(
+                &mut runtime,
+                &mut error_toasts,
+                PlaceDeployableCommand {
+                    item_id,
+                    position: Vec3Net::from(position),
+                    yaw: placement.yaw,
+                    wall_mounted: placement.wall_mounted,
+                },
+            );
+            analytics.track(Event::DeployablePlaced {
+                kind: "torch".to_owned(),
+            });
         }
     }
 }
@@ -519,6 +733,7 @@ pub(super) fn deployable_kind_label(item_id: &ItemId) -> Option<String> {
                 "storage_box_small".to_owned()
             }
         }
+        DeployableKind::Torch { .. } => "torch".to_owned(),
     })
 }
 
@@ -559,6 +774,9 @@ pub(super) fn current_ghost_intent(
     let profile = definition.deployable?;
     if matches!(profile.kind, DeployableKind::Door) {
         return Some(GhostIntent::Door);
+    }
+    if matches!(profile.kind, DeployableKind::Torch { .. }) {
+        return Some(GhostIntent::Torch(stack.item_id.clone(), profile));
     }
     // Hidden building items can't be held, but keep the gate total: only
     // free-placeable kinds ride the classic flow.
@@ -1002,13 +1220,14 @@ fn refresh_ghost_entity(
         DeployableKind::Door => assets.door_ghost_mesh.clone(),
         DeployableKind::SleepingBag => assets.sleeping_bag_mesh.clone(),
         DeployableKind::StorageBox { tier } => assets.storage_box_mesh(tier),
+        DeployableKind::Torch { .. } => assets.torch_mesh.clone(),
     };
     let material = if placement.valid {
         assets.ghost_valid_material.clone()
     } else {
         assets.ghost_invalid_material.clone()
     };
-    let transform = deployable_transform(position, placement.yaw);
+    let transform = deployable_visual_transform(position, placement.yaw, kind);
 
     if let Some((entity, _)) = ghosts.iter().next() {
         commands.entity(entity).insert((

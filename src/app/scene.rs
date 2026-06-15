@@ -15,12 +15,13 @@ mod components;
 mod grass;
 mod mesh;
 mod sky;
+mod terrain;
 mod world;
 
 pub(crate) use assets::{
     DeployableVisualAssets, FurnaceFireAssets, ImpactEffectAssets, ItemVisualAssets,
-    PlayerVisualAssets, ResourceVisualAssets, menu_backdrop_depth_of_field, player_visual_position,
-    setup_scene,
+    PlayerVisualAssets, ResourceVisualAssets, TorchFireAssets, menu_backdrop_depth_of_field,
+    player_visual_position, setup_scene,
 };
 #[cfg(test)]
 pub(crate) use components::WorldGeometry;
@@ -33,6 +34,7 @@ pub(crate) use grass::{
 };
 pub(crate) use mesh::PLAYER_HEAD_TOP_LOCAL_Y;
 pub(crate) use sky::{SunLight, update_sky_system};
+pub(crate) use terrain::{TerrainMaterial, TerrainTextureAssets};
 pub(crate) use world::{WorldSceneState, apply_world_scene_system};
 
 #[cfg(test)]
@@ -74,6 +76,10 @@ mod tests {
         // type was never registered.
         app.init_asset::<Mesh>();
         app.init_asset::<StandardMaterial>();
+        // `setup_scene` loads the four biome ground textures into `Assets<Image>`
+        // for the terrain material, and `asset_server.load::<Image>` panics if the
+        // type was never registered.
+        app.init_asset::<Image>();
         // `setup_scene` adds an earthlike `Atmosphere` to the camera, which
         // pulls a `ScatteringMedium` handle out of this asset collection.
         app.init_resource::<Assets<ScatteringMedium>>();

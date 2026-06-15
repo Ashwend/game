@@ -24,6 +24,7 @@ pub(super) fn spawn_resource_node_entity(
     id: ResourceNodeId,
     position: Vec3Net,
     model: ResourceNodeModel,
+    dead: bool,
     stage: u8,
     target_transform: Transform,
     should_pop_in: bool,
@@ -33,7 +34,17 @@ pub(super) fn spawn_resource_node_entity(
     // worked, or persisted partial storage from a save) spawn straight at
     // their depletion-stage mesh instead of briefly flashing full.
     let mesh = ore_stage_mesh(assets, model, stage).unwrap_or(mesh);
-    let lod_mesh = tree_lod_mesh(assets, model);
+    // A tree standing where growth is poor renders as a bare dead snag instead of a
+    // lush tree. `dead` is the server-authoritative, replicated flag (decided at
+    // generation, see `resources::spawn_resource_node`); this is a pure visual swap,
+    // the node is otherwise a normal tree. Dead snags are already low-poly, so they
+    // skip the tree LOD entirely.
+    let dead_tree = model.is_tree() && dead;
+    let (mesh, lod_mesh) = if dead_tree {
+        (dead_tree_mesh(assets, model), None)
+    } else {
+        (mesh, tree_lod_mesh(assets, model))
+    };
     let mut spawn_command = commands.spawn((
         Name::new(format!("Resource Node {id}")),
         NetworkResourceNode { id, model },
@@ -122,6 +133,21 @@ fn tree_lod_mesh(assets: &ResourceVisualAssets, model: ResourceNodeModel) -> Opt
         ResourceNodeModel::BirchTreeLarge => assets.birch_tree_large_lod_mesh.clone(),
         _ => return None,
     })
+}
+
+/// The bare dead-snag mesh for a tree model, by size, species no longer matters
+/// once the canopy is gone. Non-tree models never reach here (guarded by
+/// `is_tree` at the call site); they fall through to the small snag.
+fn dead_tree_mesh(assets: &ResourceVisualAssets, model: ResourceNodeModel) -> Handle<Mesh> {
+    match model {
+        ResourceNodeModel::PineTreeLarge | ResourceNodeModel::BirchTreeLarge => {
+            assets.dead_tree_large_mesh.clone()
+        }
+        ResourceNodeModel::PineTreeMedium | ResourceNodeModel::BirchTreeMedium => {
+            assets.dead_tree_medium_mesh.clone()
+        }
+        _ => assets.dead_tree_small_mesh.clone(),
+    }
 }
 
 /// `VisibilityRange` for the full-detail mesh: visible up close, hard cutoff at
@@ -250,3 +276,6 @@ pub(crate) fn resource_node_visual(
         ),
     }
 }
+
+// Dead-tree vitality is decided server-side now (see `resources::spawn_resource_node`
+// + its tests); this module only renders the replicated `dead` flag.

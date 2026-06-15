@@ -24,6 +24,9 @@ Usage:
   ashwend-control.py <socket> set-look <yaw> <pitch>     # absolute radians; pitch clamped like mouse look
   ashwend-control.py <socket> set-screen <name>          # main_menu|worlds|multiplayer|options|in_game
   ashwend-control.py <socket> set-inventory-open <true|false>
+  ashwend-control.py <socket> set-world-map-open <true|false>  # open/close the map overlay (bypasses focus gate); opening pulls terrain + markers
+  ashwend-control.py <socket> add-world-map-marker <x> <z>     # drop a map marker at world (x, z), as if right-clicking the map
+  ashwend-control.py <socket> set-world-map-view <zoom> <cx> <cz>  # set map pan/zoom (zoom 1 = whole world; centre at world cx,cz)
   ashwend-control.py <socket> wait-in-world [timeout_s]   # poll dump-state until in_world
 
 Exit code is non-zero when the request fails (ok == false) or times out.
@@ -126,6 +129,21 @@ def main(argv):
         "set-inventory-open": lambda: {
             "command": "set_inventory_open",
             "open": rest[0].lower() in ("1", "true", "yes", "on"),
+        },
+        "set-world-map-open": lambda: {
+            "command": "set_world_map_open",
+            "open": rest[0].lower() in ("1", "true", "yes", "on"),
+        },
+        "add-world-map-marker": lambda: {
+            "command": "add_world_map_marker",
+            "x": float(rest[0]),
+            "z": float(rest[1]),
+        },
+        "set-world-map-view": lambda: {
+            "command": "set_world_map_view",
+            "zoom": float(rest[0]),
+            "center_x": float(rest[1]),
+            "center_z": float(rest[2]),
         },
     }.get(action)
     if request is None:

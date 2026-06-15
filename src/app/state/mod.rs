@@ -19,6 +19,7 @@ mod test_mode;
 mod tests;
 mod toasts;
 mod wheel;
+mod world_map;
 
 pub(crate) use auth::{AuthFlow, WorkosAuth};
 pub(crate) use backdrop::MenuBackdropVisibility;
@@ -26,11 +27,11 @@ pub(crate) use combat_feedback::CombatFeedbackState;
 #[cfg(test)]
 pub(crate) use connection::CONNECTION_LAG_WARNING_SECONDS;
 pub(crate) use crafting::{CraftingHudState, CraftingUiState, ProgressBaseline};
-pub(crate) use deployable::DeployablePlacementState;
+pub(crate) use deployable::{BuildingCostReadout, DeployablePlacementState};
 pub(crate) use dialogs::{
     ConfirmationAction, ConfirmationDialog, CreateWorldDialog, DirectConnectAttempt,
-    DirectConnectDialog, DirectConnectResult, EditWorldDialog, LoadingSplash, LoadingSplashKind,
-    NoticeDialog, WorldStartAttempt, WorldStartResult,
+    DirectConnectDialog, DirectConnectResult, EditWorldDialog, JoinError, LoadingSplash,
+    LoadingSplashKind, NoticeDialog, WorldStartAttempt, WorldStartResult,
 };
 pub(crate) use gather::{
     GatherInputState, ImpactEffectKind, PICKUP_TARGET_SCAN_INTERVAL_SECS, PendingAudioCue,
@@ -65,3 +66,4 @@ pub(crate) use settings::{
 };
 pub(crate) use test_mode::TestModeConfig;
 pub(crate) use toasts::{TOAST_FADE_SECONDS, TOAST_VISIBLE_SECONDS, Toast, ToastState};
+pub(crate) use world_map::{WorldMapState, WorldMapUiState};

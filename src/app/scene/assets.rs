@@ -19,7 +19,8 @@ use super::{
         low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_large_mesh,
         low_poly_birch_tree_medium_lod_mesh, low_poly_birch_tree_medium_mesh,
         low_poly_birch_tree_small_lod_mesh, low_poly_birch_tree_small_mesh,
-        low_poly_branch_pile_mesh, low_poly_hay_grass_mesh, low_poly_ore_node_stage_meshes,
+        low_poly_branch_pile_mesh, low_poly_dead_tree_large_mesh, low_poly_dead_tree_medium_mesh,
+        low_poly_dead_tree_small_mesh, low_poly_hay_grass_mesh, low_poly_ore_node_stage_meshes,
         low_poly_pine_tree_large_lod_mesh, low_poly_pine_tree_large_mesh,
         low_poly_pine_tree_medium_lod_mesh, low_poly_pine_tree_medium_mesh,
         low_poly_pine_tree_small_lod_mesh, low_poly_pine_tree_small_mesh, low_poly_player_mesh,
@@ -120,6 +121,13 @@ pub(crate) struct ResourceVisualAssets {
     pub(crate) birch_tree_small_lod_mesh: Handle<Mesh>,
     pub(crate) birch_tree_medium_lod_mesh: Handle<Mesh>,
     pub(crate) birch_tree_large_lod_mesh: Handle<Mesh>,
+    /// Bare dead-tree snags by size, scattered in non-forest biomes (chosen
+    /// client-side from the seed at spawn). No canopy, so they're size-only (a
+    /// dead pine and dead birch of the same size share a mesh) and carry no
+    /// separate LOD, they're already low-poly.
+    pub(crate) dead_tree_small_mesh: Handle<Mesh>,
+    pub(crate) dead_tree_medium_mesh: Handle<Mesh>,
+    pub(crate) dead_tree_large_mesh: Handle<Mesh>,
     pub(crate) surface_stone_mesh: Handle<Mesh>,
     pub(crate) branch_pile_mesh: Handle<Mesh>,
     pub(crate) hay_grass_mesh: Handle<Mesh>,
@@ -148,6 +156,9 @@ pub(crate) struct DeployableVisualAssets {
     /// the workbench/furnace).
     pub(crate) storage_box_small_mesh: Handle<Mesh>,
     pub(crate) storage_box_large_mesh: Handle<Mesh>,
+    /// Procedural torch haft + head (origin at the base so it mounts on the
+    /// ground or tilts off a wall about its foot).
+    pub(crate) torch_mesh: Handle<Mesh>,
     /// Shared material used for placed structures. Vertex colours from
     /// the mesh do the heavy lifting; the material just supplies PBR
     /// reflectance + roughness so the wood/stone reads correctly under
@@ -205,6 +216,19 @@ pub(crate) struct FurnaceFireAssets {
     pub(crate) spark_material: Handle<StandardMaterial>,
 }
 
+/// Mesh + material handles for the torch fire visuals. Built once in
+/// `setup_scene`; consumed by the torch-fire systems in
+/// `app::systems::torch_fire`. The flame is a sparse particle puff up close;
+/// the billboard is a single camera-facing emissive quad shown in its place
+/// at distance (the cheap LOD that replaces the particles far away).
+#[derive(Resource, Clone)]
+pub(crate) struct TorchFireAssets {
+    pub(crate) flame_mesh: Handle<Mesh>,
+    pub(crate) flame_material: Handle<StandardMaterial>,
+    pub(crate) billboard_mesh: Handle<Mesh>,
+    pub(crate) billboard_material: Handle<StandardMaterial>,
+}
+
 #[derive(Resource, Clone)]
 pub(crate) struct ImpactEffectAssets {
     pub(crate) wood_chip_mesh: Handle<Mesh>,
@@ -223,6 +247,7 @@ pub(crate) fn setup_scene(
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     mut scattering_media: ResMut<Assets<ScatteringMedium>>,
     mut grass_materials: ResMut<Assets<GrassMaterial>>,
 ) {
@@ -230,6 +255,10 @@ pub(crate) fn setup_scene(
     // eagerly so both the streamed detail grass and the harvestable hay-grass
     // node reference the same instance and sway in unison.
     commands.insert_resource(GrassMaterialHandle(grass_materials.add(grass_material())));
+    // The four shared per-biome ground textures for the textured terrain floor.
+    // Decoded + mip-chained once here; each world bakes only its own small
+    // biome-weight raster when its ground spawns (see `super::world::spawn_world_geometry`).
+    commands.insert_resource(super::TerrainTextureAssets::load(&mut images));
     // Ambient and clear color are now driven by the day/night cycle in
     // `sky::update_sky_system`. We still insert defaults here so the
     // very first frame (before the system runs) has sensible values
@@ -295,13 +324,19 @@ pub(crate) fn setup_scene(
         },
         Projection::from(PerspectiveProjection {
             fov: 65.0_f32.to_radians(),
-            // Tight near/far. The far plane sits just past the daylight
-            // fog horizon (~140 m peak) so the perimeter walls of a Large
-            // 9×9 chunk world (288 m from centre) never poke through the
-            // fog wall. Keeping it tight also improves depth precision
-            // and keeps z-fighting away from on-screen geometry.
+            // The far plane sits *well past* the distance at which the squared
+            // distance fog goes fully opaque (~190 m for the 140 m daytime
+            // visibility, tighter at dusk/night), so the ground plane and any
+            // far geometry dissolve completely into the fog before the far
+            // plane would clip them. The old 160 m far plane sat *inside* that
+            // fade band: it hard-cut a still-faintly-visible ring of floor,
+            // which flickered as the camera rotated and let the un-fogged
+            // atmosphere sky (and the setting sun) show through the cut. The
+            // perimeter walls (>=480 m even on a Small map) stay beyond the far
+            // plane and are fully fogged, so they still never draw. Reverse-Z
+            // keeps depth precision fine at this range.
             near: 0.05,
-            far: 160.0,
+            far: 300.0,
             ..default()
         }),
         Msaa::Off,
@@ -410,6 +445,9 @@ pub(crate) fn setup_scene(
         birch_tree_small_lod_mesh: meshes.add(low_poly_birch_tree_small_lod_mesh()),
         birch_tree_medium_lod_mesh: meshes.add(low_poly_birch_tree_medium_lod_mesh()),
         birch_tree_large_lod_mesh: meshes.add(low_poly_birch_tree_large_lod_mesh()),
+        dead_tree_small_mesh: meshes.add(low_poly_dead_tree_small_mesh()),
+        dead_tree_medium_mesh: meshes.add(low_poly_dead_tree_medium_mesh()),
+        dead_tree_large_mesh: meshes.add(low_poly_dead_tree_large_mesh()),
         surface_stone_mesh: meshes.add(low_poly_surface_stone_mesh()),
         branch_pile_mesh: meshes.add(low_poly_branch_pile_mesh()),
         hay_grass_mesh: meshes.add(low_poly_hay_grass_mesh()),
@@ -455,6 +493,7 @@ pub(crate) fn setup_scene(
     let furnace_glb = embedded_asset_path("items/crude_furnace/model.glb");
     let storage_box_small_glb = embedded_asset_path("items/storage_box_small/model.glb");
     let storage_box_large_glb = embedded_asset_path("items/storage_box_large/model.glb");
+    let torch_glb = embedded_asset_path("items/torch/model.glb");
     let building_meshes = [
         crate::building::BuildingPiece::Foundation,
         crate::building::BuildingPiece::Wall,
@@ -480,6 +519,7 @@ pub(crate) fn setup_scene(
         sleeping_bag_mesh: meshes.add(sleeping_bag_mesh()),
         storage_box_small_mesh: prim_mesh(&storage_box_small_glb, 0),
         storage_box_large_mesh: prim_mesh(&storage_box_large_glb, 0),
+        torch_mesh: prim_mesh(&torch_glb, 0),
         material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.92,
@@ -557,6 +597,33 @@ pub(crate) fn setup_scene(
             emissive: LinearRgba::rgb(9.0, 4.2, 0.8),
             alpha_mode: AlphaMode::Add,
             unlit: true,
+            ..default()
+        }),
+    });
+    commands.insert_resource(TorchFireAssets {
+        // A small additive puff, lighter than the furnace's (the torch flame
+        // is a thin tongue, not a forge bed): one ico subdivision, only a
+        // handful alive per torch at any time.
+        flame_mesh: meshes.add(Sphere::new(0.05).mesh().ico(1).expect("valid subdivisions")),
+        flame_material: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.55, 0.20, 0.04),
+            emissive: LinearRgba::rgb(3.4, 1.2, 0.22),
+            alpha_mode: AlphaMode::Add,
+            unlit: true,
+            ..default()
+        }),
+        // The distance LOD: a single upright quad (in its local XY plane,
+        // facing +Z) that the torch-fire system yaws toward the camera. Read
+        // as the "bright rectangle" that stands in for the flame far away.
+        billboard_mesh: meshes.add(Rectangle::new(0.16, 0.30)),
+        billboard_material: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.6, 0.24, 0.05),
+            emissive: LinearRgba::rgb(4.6, 1.7, 0.30),
+            alpha_mode: AlphaMode::Add,
+            unlit: true,
+            // The quad is double-sided so the billboard reads from either
+            // face without the yaw needing to pick a winding.
+            cull_mode: None,
             ..default()
         }),
     });

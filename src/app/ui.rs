@@ -26,6 +26,7 @@ mod toast;
 mod tutorial;
 mod update;
 mod wheel;
+mod world_map;
 mod worlds;
 
 use bevy::input::ButtonInput;
@@ -58,9 +59,9 @@ pub(crate) use item_icons::setup_item_icons;
 use super::scene::WorldSceneState;
 use super::state::{
     AuthFlow, ClientErrorToast, ClientRuntime, ClientSettings, CraftingHudState, CraftingUiState,
-    CurrentUser, InventorySoundEvent, LocalPlayerState, MAX_UI_SCALE, MIN_UI_SCALE,
-    MenuBackdropVisibility, MenuState, OptionsUiState, PredictionState, SaveStore, Screen,
-    SessionShutdownTasks, ToastState, WorkosAuth,
+    CurrentUser, DeployablePlacementState, InventorySoundEvent, LocalPlayerState, MAX_UI_SCALE,
+    MIN_UI_SCALE, MenuBackdropVisibility, MenuState, OptionsUiState, PredictionState, SaveStore,
+    Screen, SessionShutdownTasks, ToastState, WorkosAuth, WorldMapState, WorldMapUiState,
 };
 use super::systems::PendingSessionEndReason;
 use super::voice::VoiceState;
@@ -104,6 +105,13 @@ pub(crate) struct UiResources<'w, 's> {
     analytics: Res<'w, Analytics>,
     pending_session_end: ResMut<'w, PendingSessionEndReason>,
     client_network: Res<'w, ClientNetwork>,
+    /// Building-placement ghost state, read by the in-game cost overlay to
+    /// draw the material cost + affordability under the ghost.
+    placement: Res<'w, DeployablePlacementState>,
+    /// World-map texture + markers, drawn by the toggle-to-view overlay.
+    world_map: Res<'w, WorldMapState>,
+    /// Transient world-map interaction state (which marker popup is open).
+    world_map_ui: ResMut<'w, WorldMapUiState>,
     local_player: Res<'w, LocalPlayerState>,
     prediction: ResMut<'w, PredictionState>,
     scene_state: Res<'w, WorldSceneState>,
@@ -263,6 +271,7 @@ pub(crate) fn ui_system(
             &mut resources.runtime,
             user,
             &resources.client_network,
+            resources.workos.as_deref(),
             &resources.analytics,
         ),
         Screen::InGame => in_game_ui(ctx, &mut resources, delta_seconds),
@@ -348,6 +357,20 @@ pub(crate) fn ui_system(
     }
 
     Ok(())
+}
+
+/// Animated fade-in factor (0..1) for always-on HUD chrome (the hotbar and
+/// chat) that should fade *out* while the world-map overlay is open, so it
+/// doesn't collide with the map's footer text, and back *in* when it closes.
+/// Returns 1.0 when the map is closed, easing toward 0.0 while it's open.
+/// Shared by both so they fade in lockstep off one animation id.
+pub(super) fn world_map_overlay_fade(ctx: &egui::Context, world_map_open: bool) -> f32 {
+    const HUD_MAP_FADE_SECS: f32 = 0.18;
+    1.0 - ctx.animate_bool_with_time(
+        egui::Id::new("hud_world_map_fade"),
+        world_map_open,
+        HUD_MAP_FADE_SECS,
+    )
 }
 
 fn menu_button(ui: &mut egui::Ui, text: &str) -> egui::Response {

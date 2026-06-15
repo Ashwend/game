@@ -12,8 +12,9 @@
 //!   so the player can still navigate after dark (intentionally not a user
 //!   setting, night visibility is a gameplay-fair constant),
 //! - and keeping a [`DistanceFog`] curtain that hides the far perimeter walls
-//!   before the camera's far plane clips them (the atmosphere's own aerial
-//!   perspective is negligible over our ~160 m view distance).
+//!   and dissolves the ground into the horizon before the camera's far plane
+//!   (300 m) clips them (the atmosphere's own aerial perspective is negligible
+//!   over our few-hundred-metre view distance).
 //!
 //! The math driver is [`ClientRuntime::world_time`]. The server owns it and the
 //! client integrates between snapshots, by the time these systems run the
@@ -40,7 +41,8 @@ use crate::{
 use super::components::MainCamera;
 
 /// Apparent radius of the sky dome the moon visual rides on. The camera's far
-/// plane is 160 m, so we stay comfortably inside it.
+/// plane is 300 m, so the moon stays comfortably inside it. The moon material
+/// disables fog, so this distance only sets its apparent size, not its haze.
 const SKY_DISTANCE: f32 = 140.0;
 
 /// Visible radius of the moon disc. The sun is drawn by the atmosphere's
@@ -346,7 +348,9 @@ fn compute_lighting(time: &WorldTime) -> LightingFrame {
 
     // Fog curtain: matches a desaturated horizon tone, tightening at night so
     // the player can't see across the world in the dark. Sized so distant
-    // chunks fade into the sky well before the 160 m far plane clips them.
+    // chunks fade fully into the sky (squared fog is opaque by ~190 m by day,
+    // sooner at dusk/night) well before the 300 m far plane clips them, so no
+    // half-faded geometry is ever hard-cut at the frustum edge.
     let day_fog = Vec3::new(0.55, 0.65, 0.78);
     let night_fog = Vec3::new(0.05, 0.07, 0.13);
     let fog_color = lerp_vec3(night_fog, day_fog, day_strength);

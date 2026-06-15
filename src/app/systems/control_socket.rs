@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use super::HeadlessCapture;
 use crate::{
-    app::state::{ClientRuntime, LocalPlayerState, LookState, MenuState, Screen},
+    app::state::{ClientRuntime, LocalPlayerState, LookState, MenuState, Screen, WorldMapUiState},
     controller::MAX_LOOK_PITCH,
     items::intern_item_id,
     protocol::{ClientMessage, InventoryCommand, PlaceDeployableCommand, Vec3Net},
@@ -133,6 +133,23 @@ pub(crate) enum ControlRequest {
     SetScreen { screen: String },
     /// Open or close the inventory panel.
     SetInventoryOpen { open: bool },
+    /// Open or close the world-map overlay, bypassing the focus + toggle-key
+    /// gate the normal input path uses (the headless window is unfocused, so a
+    /// key press can't open it). Opening also fires a `RequestWorldMap` so the
+    /// terrain + markers stream in for a screenshot.
+    SetWorldMapOpen { open: bool },
+    /// Drop a world-map marker at a world (x, z), as if the player had
+    /// right-clicked the map there. Lets an agent populate the map to verify
+    /// pin rendering headlessly. The server assigns the id and persists it.
+    AddWorldMapMarker { x: f32, z: f32 },
+    /// Set the world-map pan/zoom viewport directly, standing in for the
+    /// wheel-zoom + drag-pan a headless agent can't drive. `zoom` 1.0 fits the
+    /// whole world; `center` is the world (x, z) shown at the map centre.
+    SetWorldMapView {
+        zoom: f32,
+        center_x: f32,
+        center_z: f32,
+    },
     /// Return a JSON snapshot of key client state for assertions.
     DumpState,
 }
@@ -246,6 +263,7 @@ pub(crate) fn drain_control_socket(
     mut runtime: ResMut<ClientRuntime>,
     mut menu: ResMut<MenuState>,
     mut look: ResMut<LookState>,
+    mut world_map_ui: ResMut<WorldMapUiState>,
     local_player: Res<LocalPlayerState>,
     capture: Option<Res<HeadlessCapture>>,
     replicated_deployables: Query<(
@@ -294,6 +312,7 @@ pub(crate) fn drain_control_socket(
             &mut runtime,
             &mut menu,
             &mut look,
+            &mut world_map_ui,
             &local_player,
             capture,
             &deployables,
@@ -308,6 +327,7 @@ fn handle_stream(
     runtime: &mut ClientRuntime,
     menu: &mut MenuState,
     look: &mut LookState,
+    world_map_ui: &mut WorldMapUiState,
     local_player: &LocalPlayerState,
     capture: Option<&HeadlessCapture>,
     deployables: &[DeployableDump],
@@ -322,6 +342,7 @@ fn handle_stream(
             runtime,
             menu,
             look,
+            world_map_ui,
             local_player,
             capture,
             deployables,
@@ -342,6 +363,7 @@ fn handle_request(
     runtime: &mut ClientRuntime,
     menu: &mut MenuState,
     look: &mut LookState,
+    world_map_ui: &mut WorldMapUiState,
     local_player: &LocalPlayerState,
     capture: Option<&HeadlessCapture>,
     deployables: &[DeployableDump],
@@ -409,6 +431,7 @@ fn handle_request(
                 item_id: intern_item_id(&item_id),
                 position,
                 yaw: view.yaw,
+                wall_mounted: false,
             }))?;
             Ok(format!(
                 "place {item_id} queued at [{:.2}, 0.00, {:.2}]",
@@ -550,6 +573,39 @@ fn handle_request(
         ControlRequest::SetInventoryOpen { open } => {
             menu.inventory_open = open;
             Ok(format!("inventory_open = {open}"))
+        }
+        ControlRequest::SetWorldMapOpen { open } => {
+            menu.world_map_open = open;
+            if open && let Some(session) = runtime.session.as_mut() {
+                // Pull the terrain + markers so the overlay isn't stuck on
+                // "Loading map..." in the screenshot.
+                session.send(ClientMessage::RequestWorldMap)?;
+            }
+            Ok(format!("world_map_open = {open}"))
+        }
+        ControlRequest::AddWorldMapMarker { x, z } => {
+            let session = runtime
+                .session
+                .as_mut()
+                .context("no active session (not in a world)")?;
+            session.send(ClientMessage::WorldMapMarker(
+                crate::protocol::WorldMapMarkerCommand::Add { x, z },
+            ))?;
+            Ok(format!("add marker queued at [{x:.1}, {z:.1}]"))
+        }
+        ControlRequest::SetWorldMapView {
+            zoom,
+            center_x,
+            center_z,
+        } => {
+            if !zoom.is_finite() || !center_x.is_finite() || !center_z.is_finite() {
+                bail!("zoom/center must be finite");
+            }
+            world_map_ui.zoom = zoom;
+            world_map_ui.center = Some((center_x, center_z));
+            Ok(format!(
+                "world map view: zoom {zoom:.2}, centre [{center_x:.1}, {center_z:.1}]"
+            ))
         }
         ControlRequest::DumpState => {
             let dump = build_dump(runtime, menu, local_player, deployables);

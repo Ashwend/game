@@ -109,7 +109,7 @@ impl ChunkManager {
                 spawn.spawn.position,
                 spawn.spawn.yaw,
             );
-            let Some(state) = spawn_resource_node(&world_spawn) else {
+            let Some(state) = spawn_resource_node(&world_spawn, Some(self.world_seed)) else {
                 continue;
             };
             if let Some(grid) = self.grids.get_mut(&coord) {

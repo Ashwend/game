@@ -246,10 +246,16 @@ impl GameServer {
     /// Read a single deployable as the wire-shape view the mirror needs.
     pub fn deployable_view(&self, id: DeployedEntityId) -> Option<deployable_ecs::DeployableView> {
         self.deployed_entities.get(&id).map(|entity| {
-            // `active` doubles as the door's open flag; furnaces use it
-            // for the burn state. A kind has at most one of the two.
+            // `active` doubles as the door's open flag, the furnace's burn
+            // state, and the torch's lit flag. A kind has at most one of the
+            // three, so OR-ing them is unambiguous.
             let active = entity.furnace.as_ref().map(|f| f.active).unwrap_or(false)
-                || entity.door.as_ref().map(|door| door.open).unwrap_or(false);
+                || entity.door.as_ref().map(|door| door.open).unwrap_or(false)
+                || entity
+                    .torch
+                    .as_ref()
+                    .map(|torch| torch.active)
+                    .unwrap_or(false);
             deployable_ecs::DeployableView {
                 id: entity.id,
                 item_id: entity.item_id.clone(),

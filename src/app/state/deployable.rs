@@ -41,6 +41,36 @@ pub(crate) struct DeployablePlacementState {
     /// Door placement: the doorway building block the ghost is snapped
     /// to. `None` while no free doorway is near the aim point.
     pub(crate) door_target: Option<crate::protocol::DeployedEntityId>,
+    /// Material cost readout for a building-piece ghost, already projected
+    /// to the screen so the in-game overlay can pin it under the ghost.
+    /// `None` for deployables and doors (they consume the held item itself,
+    /// not raw materials) and whenever no building ghost is shown. Filled
+    /// each frame by `update_placement_ghost_system`.
+    pub(crate) building_cost: Option<BuildingCostReadout>,
+    /// Torch placement: `true` when the aim is on the side of a wall (the
+    /// torch mounts and tilts out), `false` for an upright floor/ground
+    /// mount. Shipped in `PlaceDeployableCommand.wall_mounted` and folded
+    /// into the ghost's kind so the preview tilts. Ignored for other kinds.
+    pub(crate) wall_mounted: bool,
+}
+
+/// What the building ghost's cost label shows: the material, how much the
+/// piece needs, how much the player currently has, and where on screen to
+/// anchor the label (the projected base of the ghost). The UI colours it by
+/// [`Self::affordable`] so the player can see at a glance whether they can pay.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BuildingCostReadout {
+    pub(crate) material: &'static str,
+    pub(crate) required: u16,
+    pub(crate) have: u32,
+    pub(crate) anchor: Vec2,
+}
+
+impl BuildingCostReadout {
+    /// Whether the player holds enough of the material to place the piece.
+    pub(crate) fn affordable(&self) -> bool {
+        self.have >= u32::from(self.required)
+    }
 }
 
 impl DeployablePlacementState {

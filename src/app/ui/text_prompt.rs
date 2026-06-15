@@ -7,8 +7,11 @@ use bevy_egui::egui;
 
 use crate::{
     app::state::{ClientRuntime, ErrorToastSink, MenuState, TextPrompt, TextPromptKind},
-    game_balance::{DOOR_CODE_MAX_LEN, DOOR_CODE_MIN_LEN, SLEEPING_BAG_NAME_MAX_LEN},
-    protocol::{ClientMessage, DoorCommand, SleepingBagCommand},
+    game_balance::{
+        DOOR_CODE_MAX_LEN, DOOR_CODE_MIN_LEN, SLEEPING_BAG_NAME_MAX_LEN,
+        WORLD_MAP_MARKER_NAME_MAX_LEN,
+    },
+    protocol::{ClientMessage, DoorCommand, SleepingBagCommand, WorldMapMarkerCommand},
 };
 
 use super::{
@@ -59,12 +62,21 @@ fn spec(kind: &TextPromptKind) -> PromptSpec {
             numeric: false,
             char_limit: SLEEPING_BAG_NAME_MAX_LEN,
         },
+        TextPromptKind::NameWorldMapMarker { .. } => PromptSpec {
+            title: "Name Marker",
+            body: "Label this map marker so you can tell your points of \
+                   interest apart. Leave it empty to clear the name.",
+            confirm_label: "Save",
+            numeric: false,
+            char_limit: WORLD_MAP_MARKER_NAME_MAX_LEN,
+        },
     }
 }
 
 fn input_is_valid(prompt: &TextPrompt) -> bool {
     match prompt.kind {
-        TextPromptKind::RenameBag { .. } => true,
+        // Free-text names: any value is valid, empty just clears the label.
+        TextPromptKind::RenameBag { .. } | TextPromptKind::NameWorldMapMarker { .. } => true,
         _ => {
             (DOOR_CODE_MIN_LEN..=DOOR_CODE_MAX_LEN).contains(&prompt.input.len())
                 && prompt.input.bytes().all(|byte| byte.is_ascii_digit())
@@ -186,6 +198,12 @@ pub(super) fn text_prompt_ui(
         TextPromptKind::RenameBag { bag_id } => {
             ClientMessage::SleepingBag(SleepingBagCommand::Rename {
                 id: bag_id,
+                name: prompt.input,
+            })
+        }
+        TextPromptKind::NameWorldMapMarker { id } => {
+            ClientMessage::WorldMapMarker(WorldMapMarkerCommand::Rename {
+                id,
                 name: prompt.input,
             })
         }

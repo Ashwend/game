@@ -68,7 +68,23 @@ pub(super) const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 /// (`PersistedStorageBoxState`: the slot grid of a placed storage box)
 /// and the `DeployableKind::StorageBox` variant. Positional postcard
 /// layout drift again, so old v11 saves are rejected.
-pub(super) const SAVE_FORMAT_VERSION: u32 = 12;
+///
+/// `13` added `PersistedDeployedEntity::torch` (`PersistedTorchState`: the
+/// lit flag + burn countdown of a placed torch) and the
+/// `DeployableKind::Torch { wall }` variant. The new enum variant shifts
+/// the positional postcard layout of every `DeployableKind`, so old v12
+/// saves are rejected at load.
+///
+/// `14` added `WorldStateSave::world_map_markers` (per-account
+/// `PersistedAccountMarkers`: the player-placed map pins). Appending a field
+/// shifts the positional postcard layout, so old v13 saves are rejected.
+///
+/// `15` added `ResourceNodeState::dead`, the authoritative bare-dead-tree flag
+/// (decided at generation from the seed + position and frozen on the node so it
+/// replicates + persists rather than being re-derived per client). Every
+/// persisted resource node embeds `ResourceNodeState`, and postcard is positional,
+/// so old v14 saves would deserialise wrong; rejected at load.
+pub(super) const SAVE_FORMAT_VERSION: u32 = 15;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
 /// at >100MB/s compression and ~1GB/s decompression.
 const ZSTD_LEVEL: i32 = 5;
@@ -311,6 +327,7 @@ mod tests {
                 fuel_burn_ticks_left: 50,
                 smelt_progress_ticks: 25,
             }),
+            torch: None,
         });
 
         let bytes = encode_world_save(&save).expect("encode");

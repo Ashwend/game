@@ -49,6 +49,24 @@ impl ConfirmationDialog {
         }
     }
 
+    /// Guard a world-map marker deletion behind the shared confirm modal.
+    pub(crate) fn delete_world_map_marker(id: u32, name: &str) -> Self {
+        let body = if name.is_empty() {
+            "Delete this map marker?".to_owned()
+        } else {
+            format!("Delete the marker \"{name}\"?")
+        };
+        Self {
+            title: "Delete Marker".to_owned(),
+            body,
+            confirm_label: "Delete".to_owned(),
+            cancel_label: "Cancel".to_owned(),
+            action: ConfirmationAction::DeleteWorldMapMarker { id },
+            closing: false,
+            confirmed: false,
+        }
+    }
+
     /// Guard the options Reset button: it wipes every tab, including
     /// keybindings, so confirm before discarding the player's setup.
     pub(crate) fn reset_settings() -> Self {
@@ -66,7 +84,16 @@ impl ConfirmationDialog {
 
 #[derive(Debug, Clone)]
 pub(crate) enum ConfirmationAction {
-    DeleteWorld { world_id: Uuid },
+    DeleteWorld {
+        world_id: Uuid,
+    },
+    /// Delete one of the player's own world-map markers (server-side). The
+    /// confirm handler can't reach the network, so it arms
+    /// `MenuState::world_map_delete_pending` and `world_map_input_system`
+    /// sends the command.
+    DeleteWorldMapMarker {
+        id: u32,
+    },
     SignOut,
     ResetSettings,
 }
@@ -126,10 +153,22 @@ impl NoticeDialog {
     /// actionable, but it's framed so an empty reason still reads cleanly.
     pub(crate) fn auth_rejected(reason: impl Into<String>) -> Self {
         let reason = reason.into();
-        let body = if reason.trim().is_empty() {
-            "The server refused the connection. Your login couldn't be verified.".to_owned()
+        // An expired/invalid signature is the common case (the access token
+        // lapsed during a long session) and has a clear remedy, so it gets its
+        // own headline instead of a generic "couldn't verify" line. The raw
+        // reason still rides along as a detail for bug reports.
+        let lower = reason.to_ascii_lowercase();
+        let expired = lower.contains("expired") || lower.contains("signature");
+        let headline = if expired {
+            "Your sign-in session expired and couldn't be verified. Sign out and back in, then \
+             rejoin."
         } else {
-            format!("The server refused the connection:\n{reason}")
+            "The server refused the connection. Your login couldn't be verified."
+        };
+        let body = if reason.trim().is_empty() {
+            headline.to_owned()
+        } else {
+            format!("{headline}\n\nDetails: {reason}")
         };
         Self {
             title: "Couldn't join server".to_owned(),
@@ -177,7 +216,23 @@ fn leading_number(segment: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
-pub(crate) type DirectConnectResult = std::result::Result<(SocketAddr, ClientSession), String>;
+/// Why a multiplayer join attempt failed, beyond a plain error string. The
+/// connect worker classifies the failure so the UI can route it correctly: a
+/// session that can't be renewed logs the player out, a renewal that failed
+/// lets them retry, and everything else is a normal connection error.
+pub(crate) enum JoinError {
+    /// Resolve / handshake / transport failure. The raw text is classified and
+    /// surfaced the same way connection errors always have been.
+    Connection(String),
+    /// The access token was expired/absent and no refresh token is stored to
+    /// renew it from. The player has to sign in again.
+    SignInRequired,
+    /// A refresh token existed but renewing it failed (network/provider error).
+    /// The player can retry the join; the underlying error rides along.
+    RenewFailed(String),
+}
+
+pub(crate) type DirectConnectResult = std::result::Result<(SocketAddr, ClientSession), JoinError>;
 
 pub(crate) struct DirectConnectAttempt {
     pub(crate) receiver: Mutex<Receiver<DirectConnectResult>>,

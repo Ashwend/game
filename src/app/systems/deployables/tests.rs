@@ -316,12 +316,14 @@ fn resource_node_set_fingerprint_skips_colliderless_clutter() {
         definition_id: crate::resources::HAY_GRASS_NODE_ID.to_owned(),
         position: Vec3Net::new(0.0, 0.0, 0.0),
         yaw: 0.0,
+        dead: false,
     };
     let tree = ResourceNode {
         id: 2,
         definition_id: crate::resources::PINE_TREE_NODE_ID.to_owned(),
         position: Vec3Net::new(0.0, 0.0, 0.0),
         yaw: 0.0,
+        dead: false,
     };
 
     let empty = resource_node_set_fingerprint(std::iter::empty());

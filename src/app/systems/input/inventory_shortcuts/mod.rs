@@ -254,9 +254,9 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
                         "storage box open",
                     );
                 }
-                // Building blocks have no E interaction; the hammer is
-                // their interface.
-                Some(DeployableKind::Building { .. }) | None => {}
+                // Building blocks and torches have no E interaction; the
+                // hammer is the building interface, a torch is just a light.
+                Some(DeployableKind::Building { .. } | DeployableKind::Torch { .. }) | None => {}
             }
         } else if let Some(id) = params.pickup_target.loot_bag_id {
             // Open the death loot bag. Server validates range +

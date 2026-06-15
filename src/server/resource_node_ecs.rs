@@ -31,6 +31,10 @@ pub struct ResourceNode {
     pub definition_id: String,
     pub position: Vec3Net,
     pub yaw: f32,
+    /// Tree-only bare-dead-snag flag (see [`ResourceNodeState::dead`]). Immutable
+    /// post-spawn like the rest of this component, so it replicates with the
+    /// initial spawn diff and the client renders the right mesh from it.
+    pub dead: bool,
 }
 
 /// Per-node mutable inventory. The active storage list, gather decrements
@@ -68,6 +72,7 @@ pub fn spawn_resource_node_entity(
         definition_id: state.definition_id,
         position: state.position,
         yaw: state.yaw,
+        dead: state.dead,
     };
     let entity = world
         .spawn((
@@ -92,6 +97,7 @@ mod tests {
             position: Vec3Net::new(1.0, 0.0, 2.0),
             yaw: 0.5,
             storage: vec![ItemStack::new(crate::items::COAL_ID, quantity)],
+            dead: false,
         }
     }
 

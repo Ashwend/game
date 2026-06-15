@@ -17,7 +17,7 @@ pub use format::{load_world_file, save_world_file};
 pub use listing::{CorruptedWorld, WorldListing, WorldSummary};
 pub use store::WorldStore;
 pub use types::{
-    PersistedDeployedEntity, PersistedDoorState, PersistedFurnaceState, PersistedPlayer,
-    PersistedStorageBoxState, WorldSave, WorldStateSave,
+    PersistedAccountMarkers, PersistedDeployedEntity, PersistedDoorState, PersistedFurnaceState,
+    PersistedPlayer, PersistedStorageBoxState, PersistedTorchState, WorldSave, WorldStateSave,
 };
 pub use validate::{MAX_WORLD_NAME_LEN, validate_world_name};

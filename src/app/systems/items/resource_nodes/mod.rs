@@ -80,6 +80,9 @@ struct PendingSpawn {
     definition_id: String,
     position: Vec3Net,
     yaw: f32,
+    /// Replicated bare-dead-tree flag (server-authoritative, see
+    /// `ResourceNode::dead`); the spawn renders a snag mesh when set.
+    dead: bool,
     /// Visual depletion stage at enqueue time (always 0 for anything but
     /// a part-mined ore/vein). If the storage changes while the spawn is
     /// still queued, the stage system refreshes this in place.
@@ -198,6 +201,7 @@ pub(crate) fn apply_resource_nodes_system(
                 definition_id: node.definition_id.clone(),
                 position: node.position,
                 yaw: node.yaw,
+                dead: node.dead,
                 stage: initial_node_stage(&node.definition_id, storage),
             });
         }
@@ -307,6 +311,7 @@ pub(crate) fn apply_resource_nodes_system(
             definition_id: node.definition_id.clone(),
             position: node.position,
             yaw: node.yaw,
+            dead: node.dead,
             stage: initial_node_stage(&node.definition_id, storage),
         });
     }
@@ -336,6 +341,7 @@ pub(crate) fn apply_resource_nodes_system(
             spawn.id,
             spawn.position,
             definition.model,
+            spawn.dead,
             spawn.stage,
             target_transform,
             pop_in_enabled,

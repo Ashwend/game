@@ -147,6 +147,7 @@ pub(super) fn inventory_panel_ui(
             inventory_ui,
             inventory_tab,
             menu.furnace_open,
+            menu.world_map_open,
         );
         // Building-block tooltips are the hammer's readout
         // (stability/repair); they only show while the hammer is the

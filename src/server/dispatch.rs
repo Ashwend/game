@@ -108,6 +108,10 @@ impl GameServer {
                 client_id: target_id,
             } => self.apply_loot_sleeper(client_id, target_id),
             ClientMessage::OpenStorageBox { id } => self.apply_open_storage_box(client_id, id),
+            ClientMessage::RequestWorldMap => self.apply_world_map_request(client_id),
+            ClientMessage::WorldMapMarker(command) => {
+                self.apply_world_map_marker_command(client_id, command)
+            }
             ClientMessage::SetViewRadius { tier } => {
                 if let Some(client) = self.clients.get_mut(&client_id) {
                     client.view_tier = tier;

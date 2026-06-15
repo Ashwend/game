@@ -131,6 +131,8 @@ fn vertex(v: Vertex) -> VsOut {
 
     // Per-instance shade/warm jitter on the baked base->tip gradient (mirrors the
     // CPU `grass_blade_colors`: darken-only shade + warm pushes red up, blue down).
+    // The blade's base colour is already slightly dried (see `build_instanced_blade_mesh`)
+    // so one uniform green sits on both forest and plains ground.
     var rgb = v.color.rgb * shade
         + vec3<f32>(warm * 0.05, warm * 0.01, warm * -0.03);
     rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));

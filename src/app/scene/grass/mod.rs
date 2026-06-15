@@ -57,7 +57,7 @@ use super::components::WorldGeometry;
 use super::mesh::builder::{GrassBlade, GrassBladeMesh, grass_blade_colors};
 use crate::{
     app::state::{ClientRuntime, ClientSettings, GrassDensity},
-    world::{WorldBlock, WorldData, fbm, splitmix64},
+    world::{ClassificationChannels, WorldBlock, WorldData, biome_blend_weights, fbm, splitmix64},
 };
 
 /// Height (m) the shared instanced blade mesh is baked at. Per-blade
@@ -207,6 +207,8 @@ pub(crate) fn stream_grass_system(
         return;
     };
     let (px, pz) = (view.position.x, view.position.z);
+    // The world seed lets each placed blade pick a biome tint matching the ground.
+    let world_seed = runtime.world_map_seed_dims.map(|(seed, _)| seed);
 
     let blade_mesh = state
         .blade_mesh
@@ -269,7 +271,13 @@ pub(crate) fn stream_grass_system(
             // so the shader needs no per-entity model matrix.
             tiles.insert(
                 (tx, tz),
-                Some(tile_world_instances(&layouts[layout], cx, cz, yaw)),
+                Some(tile_world_instances(
+                    &layouts[layout],
+                    cx,
+                    cz,
+                    yaw,
+                    world_seed,
+                )),
             );
             *dirty = true;
         }
@@ -364,7 +372,8 @@ pub(crate) fn spawn_menu_grass(commands: &mut Commands, meshes: &mut Assets<Mesh
             let seed = tile_seed(tx, tz);
             let layout = (seed % GRASS_LAYOUT_COUNT as u64) as usize;
             let yaw = ((seed >> 8) % 4) as f32 * std::f32::consts::FRAC_PI_2;
-            combined.extend(tile_world_instances(&layouts[layout], cx, cz, yaw));
+            // No world seed for the menu backdrop, so grass stays neutral lush green.
+            combined.extend(tile_world_instances(&layouts[layout], cx, cz, yaw, None));
         }
     }
     if combined.is_empty() {
@@ -462,7 +471,16 @@ fn next_unit(state: &mut u64) -> f32 {
 /// geometry. The blade leans along +Z (perpendicular to its width axis) so the
 /// arch bows over its face; the instance yaw then spins the whole thing.
 fn build_instanced_blade_mesh() -> Mesh {
-    let (base_color, tip_color) = grass_blade_colors(1.0, 0.0);
+    let (mut base_color, mut tip_color) = grass_blade_colors(1.0, 0.0);
+    // One uniform colour across every biome, nudged slightly warm/dry (less blue)
+    // so the green sits on both the green forest floor and the tan plains ground
+    // without the teal clash, biome variety is carried by density alone now, not
+    // colour. Alpha (the sway weight) is left untouched.
+    const DETAIL_GRASS_DRY: [f32; 3] = [1.14, 1.0, 0.75];
+    for ch in 0..3 {
+        base_color[ch] *= DETAIL_GRASS_DRY[ch];
+        tip_color[ch] *= DETAIL_GRASS_DRY[ch];
+    }
     let mut builder = GrassBladeMesh::default();
     builder.push_blade(&GrassBlade {
         base: Vec2::ZERO,
@@ -551,32 +569,63 @@ fn generate_layout_instances(layout: usize, patches_per_m2: f32) -> Vec<Instance
     out
 }
 
+/// Fraction of blades thinned out on pure bare rock / ore (where grass barely
+/// grows). Scaled by the local rocky+ore biome weight, so a forest/plains tile
+/// keeps its full density and rock thins toward sparse tufts.
+const GRASS_BIOME_MAX_THIN: f32 = 0.72;
+
+/// How much to thin the grass field at a world point: bare rock and ore carry
+/// little grass, so the local rocky+ore biome weight (the same `biome_blend_weights`
+/// the ground uses) becomes a thinning factor. Grass *colour* is uniform across
+/// biomes now; only its density varies.
+fn biome_grass_barrenness(world_seed: u64, x: f32, z: f32) -> f32 {
+    barrenness_from_weights(biome_blend_weights(ClassificationChannels::sample_at(
+        world_seed, x, z,
+    )))
+}
+
+/// The pure part of [`biome_grass_barrenness`], split out so it's testable without
+/// the noise field. `w` is `[forest, rocky, ore, plains]` (sums to 1).
+fn barrenness_from_weights(w: [f32; 4]) -> f32 {
+    (w[1] + w[2]).clamp(0.0, 1.0)
+}
+
 /// Transform a layout's tile-local instances into world space for a tile at
 /// `(cx, cz)` rotated by `tile_yaw` (one of the four cardinal angles). Rotating
 /// the local XZ + folding `tile_yaw` into each blade's spin reproduces the old
 /// per-tile `Transform` rotation, but baked into the instance buffer so the
 /// shader needs no model matrix.
+///
+/// With a `world_seed`, bare rock/ore tiles are thinned (grass barely grows
+/// there); the colour is the same everywhere. Without a seed (e.g. the menu
+/// backdrop) the field keeps full density.
 fn tile_world_instances(
     local: &[InstanceData],
     cx: f32,
     cz: f32,
     tile_yaw: f32,
+    world_seed: Option<u64>,
 ) -> Vec<InstanceData> {
     let (ts, tc) = tile_yaw.sin_cos();
     local
         .iter()
-        .map(|inst| {
+        .filter_map(|inst| {
             let lx = inst.a[0];
             let lz = inst.a[1];
-            InstanceData {
-                a: [
-                    cx + tc * lx + ts * lz,
-                    cz - ts * lx + tc * lz,
-                    inst.a[2],
-                    inst.a[3],
-                ],
-                b: [inst.b[0] + tile_yaw, inst.b[1], inst.b[2], inst.b[3]],
+            let wx = cx + tc * lx + ts * lz;
+            let wz = cz - ts * lx + tc * lz;
+            // Thin the field on bare rock/ore: drop the blade if its stable
+            // per-blade key (`dither`) falls under the barrenness-scaled cut.
+            if let Some(seed) = world_seed {
+                let barrenness = biome_grass_barrenness(seed, wx, wz);
+                if inst.b[3] < barrenness * GRASS_BIOME_MAX_THIN {
+                    return None;
+                }
             }
+            Some(InstanceData {
+                a: [wx, wz, inst.a[2], inst.a[3]],
+                b: [inst.b[0] + tile_yaw, inst.b[1], inst.b[2], inst.b[3]],
+            })
         })
         .collect()
 }
@@ -647,11 +696,23 @@ mod tests {
     #[test]
     fn tile_world_instances_translate_and_spin() {
         let local = generate_layout_instances(1, 11.0);
-        let world = tile_world_instances(&local, 100.0, -50.0, std::f32::consts::FRAC_PI_2);
+        let world = tile_world_instances(&local, 100.0, -50.0, std::f32::consts::FRAC_PI_2, None);
         assert_eq!(local.len(), world.len());
         // Local origin-ish blade maps near the tile centre, and the tile yaw is
         // folded into each blade's spin.
         assert!((world[0].b[0] - (local[0].b[0] + std::f32::consts::FRAC_PI_2)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn barrenness_thins_rock_and_ore_not_forest_or_plains() {
+        // Forest and plains carry grass (no thinning); bare rock and ore are barren.
+        assert_eq!(barrenness_from_weights([1.0, 0.0, 0.0, 0.0]), 0.0);
+        assert_eq!(barrenness_from_weights([0.0, 0.0, 0.0, 1.0]), 0.0);
+        assert_eq!(barrenness_from_weights([0.0, 1.0, 0.0, 0.0]), 1.0);
+        assert_eq!(barrenness_from_weights([0.0, 0.0, 1.0, 0.0]), 1.0);
+        // A rock+ore mix is fully barren; half-plains/half-rock is partial.
+        assert_eq!(barrenness_from_weights([0.0, 0.5, 0.5, 0.0]), 1.0);
+        assert!((barrenness_from_weights([0.0, 0.5, 0.0, 0.5]) - 0.5).abs() < 1e-6);
     }
 
     #[test]

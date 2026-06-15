@@ -12,7 +12,11 @@ pub(crate) fn toggle_perf_stats_system(
     mut settings: ResMut<ClientSettings>,
     menu: Res<MenuState>,
 ) {
-    if menu.screen != Screen::InGame || menu.pause_open || menu.chat_open {
+    if menu.screen != Screen::InGame
+        || menu.pause_open
+        || menu.chat_open
+        || menu.dialog_modal_open()
+    {
         return;
     }
     if keys.just_pressed(KeyCode::F2) {
@@ -54,9 +58,9 @@ pub(crate) fn chat_shortcut_system(
         || menu.chat_open
         || menu.crafting_open
         || menu.inventory_open
-        || menu.text_prompt.is_some()
-        || menu.confirmation.is_some()
-        || menu.notice.is_some()
+        // text_prompt / confirmation / notice all capture the keyboard (Enter
+        // is the secondary chat key, and free-text fields swallow `t`).
+        || menu.dialog_modal_open()
         // The full-screen splash is the only modal on screen; once the
         // player Escape-minimizes it into the respawn pill, chat works
         // again so they can talk while waiting to respawn.
@@ -127,6 +131,21 @@ fn handle_pause_escape(menu: &mut MenuState) {
     // mirrors it back). Bailing here means ESC stops at "close the
     // bag" instead of falling through to open the pause menu.
     if menu.furnace_open || menu.loot_bag_open {
+        return;
+    }
+
+    // A single-field dialog (door code, bag rename, marker name) owns Escape
+    // through its own handler; don't also toggle the pause menu or close the
+    // map underneath it. Without this, Escape on the marker-name prompt would
+    // cancel the prompt AND close the map behind it in the same frame.
+    if menu.text_prompt.is_some() {
+        return;
+    }
+
+    // The world map is a navigable overlay; Escape closes it before it would
+    // reach the pause menu (the toggle key also closes it).
+    if menu.world_map_open {
+        menu.world_map_open = false;
         return;
     }
 
@@ -251,6 +270,9 @@ pub(crate) fn toggle_inventory_system(
         || menu.pause_options_open
         || menu.chat_open
         || menu.death_splash.is_some()
+        // A text prompt / confirm / notice owns the keyboard; don't let Tab
+        // (or a Tab typed into a focused field) open the inventory behind it.
+        || menu.dialog_modal_open()
     {
         return;
     }
@@ -328,6 +350,9 @@ pub(crate) fn toggle_crafting_system(
         || menu.pause_options_open
         || menu.chat_open
         || menu.death_splash.is_some()
+        // A text prompt / confirm / notice owns the keyboard; don't let C (or a
+        // C typed into a focused field) open crafting behind it.
+        || menu.dialog_modal_open()
     {
         return;
     }

@@ -62,6 +62,9 @@ pub(crate) struct DeployedEntity {
     /// Storage-box-only contents. `None` for every other kind; the
     /// place handler initialises an empty grid for placed boxes.
     pub(super) storage: Option<super::storage_box::StorageBoxState>,
+    /// Torch-only burn state (lit flag + countdown). `None` for every
+    /// other kind; the place handler initialises a full burn for torches.
+    pub(super) torch: Option<super::torch::TorchState>,
     /// Structural stability percentage (0-100). Building pieces and
     /// doors get theirs from the support graph (see
     /// [`super::stability`]); free-standing deployables sit on the
@@ -141,6 +144,11 @@ impl GameServer {
                 "That can't be placed freely".to_owned(),
             );
         }
+        // Torches take their own path: they can mount on the side of a wall
+        // (no floor-surface requirement) and carry a burn timer.
+        if matches!(profile.kind, DeployableKind::Torch { .. }) {
+            return self.place_torch(client_id, command, definition, profile);
+        }
 
         let Some(client) = self.clients.get(&client_id) else {
             return Vec::new();
@@ -190,6 +198,7 @@ impl GameServer {
             label: None,
             stability: 100,
             storage: None,
+            torch: None,
         };
         let candidate_blocks = candidate.collider_blocks(profile);
         if self.any_deployable_overlaps(&candidate_blocks, None) {
@@ -232,6 +241,89 @@ impl GameServer {
         if let DeployableKind::StorageBox { tier } = entity.kind {
             entity.storage = Some(super::storage_box::StorageBoxState::new(tier));
         }
+        let position = entity.position;
+        self.insert_deployed_entity(id, entity);
+        self.chunk_manager.track_deployed_entity(id, position);
+
+        place_toast(
+            client_id,
+            ToastKind::Success,
+            format!("Placed {}", definition.name),
+        )
+    }
+
+    /// Place a torch. Unlike the other free deployables, a torch can mount on
+    /// the side of a wall (the client's free-view raycast found it), so the
+    /// floor-surface and overlap checks are relaxed: a floor torch must still
+    /// stand on a real surface, a wall torch trusts the client raycast
+    /// (placement is reach-gated, and a stray floating torch is only
+    /// cosmetic). The mount is baked into the kind so it replicates for free
+    /// via the immutable `Deployable` component.
+    fn place_torch(
+        &mut self,
+        client_id: ClientId,
+        command: PlaceDeployableCommand,
+        definition: &crate::items::ItemDefinition,
+        profile: DeployableProfile,
+    ) -> Vec<ServerEnvelope> {
+        let Some(client) = self.clients.get(&client_id) else {
+            return Vec::new();
+        };
+        let feet = client.controller.position;
+        if !feet.within_horizontal_range(command.position, PLACEMENT_REACH_M) {
+            return place_toast(client_id, ToastKind::Warning, "Too far away".to_owned());
+        }
+        if !command.position.x.is_finite()
+            || !command.position.y.is_finite()
+            || !command.position.z.is_finite()
+            || !command.yaw.is_finite()
+        {
+            return place_toast(client_id, ToastKind::Error, "Invalid placement".to_owned());
+        }
+        // Floor torches still need a real surface under them; wall torches
+        // sit against a wall the client already found.
+        if !command.wall_mounted && !self.valid_deployable_surface(command.position) {
+            return place_toast(
+                client_id,
+                ToastKind::Warning,
+                "Place on the ground, a floor, or a wall".to_owned(),
+            );
+        }
+
+        let owner_account_id = client.account_id;
+        let Some(client) = self.clients.get_mut(&client_id) else {
+            return Vec::new();
+        };
+        let removed = take_items_from_inventory(&mut client.inventory, definition.id, 1);
+        if removed != 1 {
+            return place_toast(
+                client_id,
+                ToastKind::Warning,
+                format!("You don't have a {}", definition.name),
+            );
+        }
+
+        let id = self.next_deployed_entity_id;
+        self.next_deployed_entity_id = self.next_deployed_entity_id.saturating_add(1);
+        let entity = DeployedEntity {
+            id,
+            item_id: command.item_id.clone(),
+            kind: DeployableKind::Torch {
+                wall: command.wall_mounted,
+            },
+            position: command.position,
+            yaw: command.yaw,
+            health: profile.max_health,
+            max_health: profile.max_health,
+            owner: Some(owner_account_id),
+            furnace: None,
+            placed_at_tick: self.tick,
+            door: None,
+            label: None,
+            stability: 100,
+            storage: None,
+            torch: Some(super::torch::TorchState::new()),
+        };
         let position = entity.position;
         self.insert_deployed_entity(id, entity);
         self.chunk_manager.track_deployed_entity(id, position);
@@ -482,6 +574,7 @@ impl GameServer {
                 let item_id = crate::items::intern_item_id(&p.item_id);
                 item_definition(&item_id)?;
                 let furnace = p.furnace.map(super::furnace::FurnaceState::from_persisted);
+                let torch = p.torch.map(super::torch::TorchState::from_persisted);
                 let door = p.door.map(super::door::DoorState::from_persisted);
                 let storage = match p.kind {
                     DeployableKind::StorageBox { tier } => Some(
@@ -509,6 +602,7 @@ impl GameServer {
                         // Recomputed by the post-load stability refresh.
                         stability: 100,
                         storage,
+                        torch,
                     },
                 ))
             })
@@ -535,6 +629,7 @@ impl GameServer {
                 door: entity.door.as_ref().map(|door| door.to_persisted()),
                 label: entity.label.clone(),
                 storage: entity.storage.as_ref().map(|s| s.to_persisted()),
+                torch: entity.torch.as_ref().map(|t| t.to_persisted()),
             })
             .collect();
         entries.sort_by_key(|entry| entry.id);

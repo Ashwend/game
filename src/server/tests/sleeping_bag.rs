@@ -47,6 +47,7 @@ fn place_bag(server: &mut GameServer, client_id: ClientId, position: Vec3Net) ->
             item_id: crate::items::intern_item_id(SLEEPING_BAG_ID),
             position,
             yaw: 0.0,
+            wall_mounted: false,
         }),
     );
     server

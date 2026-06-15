@@ -37,6 +37,9 @@ pub const SLEEPING_BAG_ID: &str = "sleeping_bag";
 /// workbench.
 pub const STORAGE_BOX_SMALL_ID: &str = "storage_box_small";
 pub const STORAGE_BOX_LARGE_ID: &str = "storage_box_large";
+/// Placeable light source crafted from wood + coal. Burns ~8 hours, then
+/// goes dark. Mounts on the ground or the side of a wall.
+pub const TORCH_ID: &str = "torch";
 
 /// Identifier shared between `ItemStack`, `ItemMerged`, and item definitions.
 /// Backed by `Arc<str>` so clones are a refcount bump instead of a heap copy.
@@ -227,6 +230,14 @@ pub enum DeployableKind {
     StorageBox {
         tier: u8,
     },
+    /// Light source. `wall` records how it was placed (and is immutable
+    /// after): `false` stands upright on a surface, `true` mounts on the
+    /// side of a wall (the client tilts it out from the wall along the
+    /// stored yaw). Carrying the mount in the kind keeps the orientation
+    /// replicated for free via the immutable `Deployable` component.
+    Torch {
+        wall: bool,
+    },
 }
 
 impl DeployableKind {
@@ -244,6 +255,7 @@ impl DeployableKind {
                     "Storage Box"
                 }
             }
+            Self::Torch { .. } => "Torch",
         }
     }
 
@@ -265,6 +277,7 @@ impl DeployableKind {
             Self::Door => DestructibleMaterial::WoodBuilding,
             Self::SleepingBag => DestructibleMaterial::Cloth,
             Self::StorageBox { .. } => DestructibleMaterial::Wood,
+            Self::Torch { .. } => DestructibleMaterial::Wood,
         }
     }
 
@@ -374,7 +387,11 @@ pub struct ItemDefinition {
 
 impl ItemDefinition {
     pub fn effective_stack_size(self) -> u16 {
-        if self.equipable {
+        // Tools carry per-item durability, so two of them can never share a
+        // slot, they're always a stack of one regardless of `stack_size`.
+        // Everything else (raw materials, and placeable deployables like the
+        // torch) stacks up to its declared `stack_size`.
+        if self.tool.is_some() {
             1
         } else {
             self.stack_size.max(1)
@@ -685,6 +702,27 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         }),
     },
     ItemDefinition {
+        id: TORCH_ID,
+        name: "Torch",
+        description: "Pitch-soaked wood that burns for hours. Place it on \
+                      the ground or mount it on a wall to light the dark.",
+        stack_size: 10,
+        equipable: true,
+        model: ItemModel::Deployable,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(178, 116, 58),
+        tool: None,
+        deployable: Some(DeployableProfile {
+            // `wall` is the placement default; the server overwrites it from
+            // the placement command (floor vs wall mount).
+            kind: DeployableKind::Torch { wall: false },
+            max_health: crate::game_balance::TORCH_MAX_HP,
+            collider_half_width: 0.1,
+            collider_half_height: 0.3,
+            station_radius: 0.0,
+        }),
+    },
+    ItemDefinition {
         id: STORAGE_BOX_SMALL_ID,
         name: "Storage Box",
         description: "A small wooden chest. Place it down and press E to \
@@ -981,13 +1019,18 @@ mod tests {
     use crate::protocol::{DroppedWorldItem, ItemStack, QuatNet};
 
     #[test]
-    fn equipable_items_force_stack_size_one() {
+    fn tools_force_stack_one_but_deployables_stack() {
+        // Tools carry per-item durability, so they never share a slot.
         assert_eq!(stack_limit(BASIC_HATCHET_ID), Some(1));
-        assert_eq!(stack_limit(COAL_ID), Some(200));
         assert_eq!(
             normalize_stack(&ItemStack::new(BASIC_HATCHET_ID, 40)),
             Some(ItemStack::new(BASIC_HATCHET_ID, 1))
         );
+        // Raw materials stack high.
+        assert_eq!(stack_limit(COAL_ID), Some(200));
+        // The torch is an equipable deployable but not a tool, so it stacks up
+        // to its declared limit rather than being forced to one.
+        assert_eq!(stack_limit(TORCH_ID), Some(10));
     }
 
     #[test]

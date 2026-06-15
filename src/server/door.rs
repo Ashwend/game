@@ -177,6 +177,7 @@ impl GameServer {
             label: None,
             stability: 100,
             storage: None,
+            torch: None,
         };
         self.insert_deployed_entity(id, entity);
         self.chunk_manager.track_deployed_entity(id, position);

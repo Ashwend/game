@@ -271,6 +271,8 @@ fn client_message_kind(message: &ClientMessage) -> &'static str {
         ClientMessage::Ping { .. } => "Ping",
         ClientMessage::Disconnect => "Disconnect",
         ClientMessage::OpenStorageBox { .. } => "OpenStorageBox",
+        ClientMessage::RequestWorldMap => "RequestWorldMap",
+        ClientMessage::WorldMapMarker(_) => "WorldMapMarker",
     }
 }
 

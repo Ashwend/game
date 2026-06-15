@@ -17,12 +17,14 @@ mod items;
 mod math;
 mod messages;
 mod world;
+mod world_map;
 
 pub use commands::*;
 pub use items::*;
 pub use math::*;
 pub use messages::*;
 pub use world::*;
+pub use world_map::*;
 
 use serde::{Deserialize, Serialize};
 
@@ -36,7 +38,7 @@ pub type AccountId = u64;
 /// ([`crate::net::channels::LIGHTYEAR_PROTOCOL_ID`]) is fixed and no longer
 /// tracks it, bump it on any breaking wire change so mismatched builds are
 /// cleanly rejected at the `Auth` handshake.
-pub const PROTOCOL_VERSION: u32 = 33;
+pub const PROTOCOL_VERSION: u32 = 37;
 pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_CHAT_LEN: usize = 240;

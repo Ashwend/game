@@ -252,7 +252,7 @@ impl ChunkManager {
         let mut live_states: Vec<ResourceNodeState> = Vec::with_capacity(spawns.len());
 
         for chunk_spawn in spawns {
-            let Some(node) = spawn_resource_node(&chunk_spawn.spawn) else {
+            let Some(node) = spawn_resource_node(&chunk_spawn.spawn, Some(world_seed)) else {
                 continue;
             };
             next_node_id = next_node_id.max(chunk_spawn.spawn.id + 1);

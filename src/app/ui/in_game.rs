@@ -21,6 +21,7 @@ use super::text_prompt::text_prompt_ui;
 use super::toast::toast_ui;
 use super::tutorial::{self, TutorialStep, tutorial_step, tutorial_ui};
 use super::wheel::wheel_ui;
+use super::world_map::world_map_ui;
 use super::{UiResources, world_ready_for_play};
 
 /// Scans the player's in-AoI resource nodes for crude (hand-pickup) nodes,
@@ -47,6 +48,58 @@ fn nearby_crude_nodes(
             ))
         })
         .collect()
+}
+
+/// Cost label pinned under the building-placement ghost: the material and
+/// amount the piece costs, coloured green when the player can pay and red (with
+/// how much they currently hold) when they can't. The anchor is the ghost's
+/// projected base, set by `update_placement_ghost_system`; the readout is
+/// absent for deployables and doors, so this is a no-op then.
+fn building_cost_overlay(
+    ctx: &egui::Context,
+    placement: &crate::app::state::DeployablePlacementState,
+) {
+    let Some(readout) = placement.building_cost else {
+        return;
+    };
+    let (color, label) = if readout.affordable() {
+        (
+            egui::Color32::from_rgb(120, 230, 130),
+            format!("{} {}", readout.required, readout.material),
+        )
+    } else {
+        (
+            egui::Color32::from_rgb(240, 110, 110),
+            format!(
+                "{} {} (have {})",
+                readout.required, readout.material, readout.have
+            ),
+        )
+    };
+    egui::Area::new(egui::Id::new("building_cost_overlay"))
+        .order(egui::Order::Foreground)
+        .interactable(false)
+        // Pin under the ghost's base and centre the label there.
+        .fixed_pos(egui::pos2(readout.anchor.x, readout.anchor.y + 14.0))
+        .pivot(egui::Align2::CENTER_TOP)
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(egui::Color32::from_rgba_unmultiplied(4, 6, 12, 220))
+                .stroke(egui::Stroke::new(
+                    1.0,
+                    egui::Color32::from_rgba_unmultiplied(90, 108, 128, 120),
+                ))
+                .corner_radius(5)
+                .inner_margin(egui::Margin::symmetric(8, 4))
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(label).size(14.0).strong().color(color),
+                        )
+                        .selectable(false),
+                    );
+                });
+        });
 }
 
 /// Renders the whole in-game UI stack for the `Screen::InGame` arm: HUD, peer
@@ -91,7 +144,10 @@ pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta
         let world_overlays_visible = !resources.menu.inventory_open
             && !resources.menu.crafting_open
             && !resources.menu.furnace_open
-            && !resources.menu.loot_bag_open;
+            && !resources.menu.loot_bag_open
+            // The world map covers the scene, so suppress nameplates, floating
+            // damage, and structure labels under it.
+            && !resources.menu.world_map_open;
         let camera = resources
             .peer_overlay
             .camera
@@ -121,6 +177,28 @@ pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta
                 resources.deployable_overlay.replicated.iter(),
             );
             deployable_overlay_ui(ctx, DeployableOverlay { camera, entries });
+
+            // Cost label pinned under the building-placement ghost, so the
+            // player sees what a piece costs and whether they can pay before
+            // committing. Filled (and projected) by the placement ghost system.
+            building_cost_overlay(ctx, &resources.placement);
+        }
+
+        // Toggle-to-view world map. Drawn over the scene (translucent
+        // backdrop) with a grid, axis labels, the player's own markers, and a
+        // facing arrow. Interactive: right-click adds a marker, clicking one
+        // opens a name/delete popup. The texture + markers are fetched/uploaded
+        // by the world-map systems; mutations go out from here.
+        if resources.menu.world_map_open && show_hud {
+            world_map_ui(
+                ctx,
+                &resources.world_map,
+                &mut resources.world_map_ui,
+                &mut resources.menu,
+                &mut resources.runtime,
+                &mut resources.error_toasts,
+                camera.map(|(_, transform)| transform),
+            );
         }
 
         // Compute the tutorial step before the panel so the crafting

@@ -90,6 +90,13 @@ pub struct PlaceDeployableCommand {
     pub item_id: crate::items::ItemId,
     pub position: Vec3Net,
     pub yaw: f32,
+    /// Torch-only: `true` when the client aimed at a wall and the torch
+    /// should mount on its side (the server bakes this into
+    /// `DeployableKind::Torch { wall }`). Ignored for every other
+    /// deployable, which always stand upright on a surface. Defaults to
+    /// `false` so a pre-field save/replay still parses as a floor mount.
+    #[serde(default)]
+    pub wall_mounted: bool,
 }
 
 /// Client → server damage intent for a placed structure. Server picks

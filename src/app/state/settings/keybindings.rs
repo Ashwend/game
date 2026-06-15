@@ -33,6 +33,7 @@ pub(crate) enum KeyAction {
     OpenChat,
     OpenInventory,
     OpenCrafting,
+    WorldMap,
     DropItem,
     PickUp,
     PushToTalk,
@@ -79,6 +80,7 @@ impl KeyAction {
         Self::DropItem,
         Self::OpenInventory,
         Self::OpenCrafting,
+        Self::WorldMap,
         Self::OpenChat,
         Self::PushToTalk,
         Self::ActionbarSlot1,
@@ -103,6 +105,7 @@ impl KeyAction {
             Self::OpenChat => "Open Chat",
             Self::OpenInventory => "Toggle Inventory",
             Self::OpenCrafting => "Toggle Crafting",
+            Self::WorldMap => "World Map (toggle)",
             Self::DropItem => "Drop Held Item",
             Self::PickUp => "Pick Up Item",
             Self::PushToTalk => "Push To Talk",
@@ -124,9 +127,11 @@ impl KeyAction {
                 KeyBindingCategory::Movement
             }
             Self::Jump | Self::Run => KeyBindingCategory::Movement,
-            Self::PickUp | Self::DropItem | Self::OpenInventory | Self::OpenCrafting => {
-                KeyBindingCategory::Inventory
-            }
+            Self::PickUp
+            | Self::DropItem
+            | Self::OpenInventory
+            | Self::OpenCrafting
+            | Self::WorldMap => KeyBindingCategory::Inventory,
             Self::OpenChat | Self::PushToTalk => KeyBindingCategory::Communication,
             Self::ActionbarSlot1
             | Self::ActionbarSlot2
@@ -151,6 +156,7 @@ impl KeyAction {
             Self::OpenChat => (KeyCode::KeyT, Some(KeyCode::Enter)),
             Self::OpenInventory => (KeyCode::Tab, None),
             Self::OpenCrafting => (KeyCode::KeyC, None),
+            Self::WorldMap => (KeyCode::KeyM, None),
             Self::DropItem => (KeyCode::KeyQ, None),
             Self::PickUp => (KeyCode::KeyE, None),
             Self::PushToTalk => (KeyCode::KeyV, None),
@@ -280,7 +286,7 @@ impl KeyBindings {
     }
 }
 
-const _: () = assert!(KeyAction::ALL.len() == 12 + ACTIONBAR_SLOT_COUNT);
+const _: () = assert!(KeyAction::ALL.len() == 13 + ACTIONBAR_SLOT_COUNT);
 
 fn any_key(
     keys: &ButtonInput<KeyCode>,

@@ -36,6 +36,11 @@ pub(crate) const BIRCH_BARK: MeshColor = [0.500, 0.480, 0.420, 1.0];
 pub(crate) const BIRCH_BARK_BAND: MeshColor = [0.030, 0.026, 0.022, 1.0];
 pub(crate) const BARK_DARK: MeshColor = [0.040, 0.022, 0.010, 1.0];
 pub(crate) const BARK_MID: MeshColor = [0.085, 0.042, 0.018, 1.0];
+// Weathered grey-brown dead wood, for the bare snags that stand where growth is
+// poor (non-forest biomes). Lighter and greyer than live bark so a leafless tree
+// reads as "dead", not just "in shadow"; sits in the rock-ish linear range.
+pub(crate) const DEAD_WOOD: MeshColor = [0.120, 0.104, 0.082, 1.0];
+pub(crate) const DEAD_WOOD_DARK: MeshColor = [0.072, 0.061, 0.047, 1.0];
 
 /// Scale a colour's RGB by `factor`, leaving alpha untouched. Used to bake
 /// cheap ambient-occlusion-ish darkening (undersides, ground-contact bands)

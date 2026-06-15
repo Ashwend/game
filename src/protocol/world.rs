@@ -57,6 +57,11 @@ pub struct ResourceNodeState {
     pub position: Vec3Net,
     pub yaw: f32,
     pub storage: Vec<ItemStack>,
+    /// Tree-only: this tree is a bare dead snag (poor-growth biome), decided
+    /// authoritatively at generation from the seed + position and frozen here, so
+    /// every client renders it identically and it survives a save round-trip
+    /// without re-derivation. Always `false` for non-tree nodes.
+    pub dead: bool,
 }
 
 /// Per-frame intent emitted by the client controller. Never serialized, the

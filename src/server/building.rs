@@ -108,6 +108,7 @@ impl GameServer {
             // minimum).
             stability: 100,
             storage: None,
+            torch: None,
         };
         let blocks = candidate.resolved_collider_blocks();
         let obstruction = self.deployed_entities.values().any(|existing| {
@@ -184,10 +185,13 @@ impl GameServer {
         // placed before it); recompute.
         self.refresh_structural_stability();
 
+        // Report the spend, not the piece: the placed structure is right there
+        // in front of the player, but the resource subtraction is the feedback
+        // they can't otherwise see.
         building_toast(
             client_id,
             ToastKind::Success,
-            format!("Placed {}", piece.label()),
+            format!("-{cost_quantity} {}", material_name(cost_item)),
         )
     }
 

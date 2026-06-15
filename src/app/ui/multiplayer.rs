@@ -4,7 +4,7 @@ use crate::{
     analytics::{Analytics, ConnectFailReason, Event, events::mask_host},
     app::state::{
         ClientRuntime, CurrentUser, DirectConnectDialog, LoadingSplash, LoadingSplashKind,
-        MenuState, Screen,
+        MenuState, Screen, WorkosAuth,
     },
     net::ClientNetwork,
 };
@@ -33,6 +33,7 @@ pub(super) fn multiplayer_ui(
     runtime: &mut ClientRuntime,
     user: &CurrentUser,
     network: &ClientNetwork,
+    workos: Option<&WorkosAuth>,
     analytics: &Analytics,
 ) {
     if let Some(result) = menu
@@ -54,7 +55,9 @@ pub(super) fn multiplayer_ui(
     handle_multiplayer_escape(ctx, menu);
 
     match draw_join_prompt(ctx, menu, connecting) {
-        Some(JoinChoice::Join) if !connecting => start_join(ctx, menu, user, network, analytics),
+        Some(JoinChoice::Join) if !connecting => {
+            start_join(ctx, menu, user, network, workos, analytics);
+        }
         Some(JoinChoice::Cancel) if !connecting => leave_multiplayer(menu),
         _ => {}
     }
@@ -123,6 +126,7 @@ fn start_join(
     menu: &mut MenuState,
     user: &CurrentUser,
     network: &ClientNetwork,
+    workos: Option<&WorkosAuth>,
     analytics: &Analytics,
 ) {
     let mut dialog = DirectConnectDialog::new(&menu.multiplayer_addr);
@@ -131,7 +135,7 @@ fn start_join(
         target_host_masked: mask_host(&display_target),
     });
 
-    match connect::start_attempt(ctx, &mut dialog, user, network) {
+    match connect::start_attempt(ctx, &mut dialog, user, network, workos) {
         Ok(()) => {
             menu.loading_splash = Some(LoadingSplash::new(
                 LoadingSplashKind::JoiningServer,
