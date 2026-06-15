@@ -114,6 +114,41 @@ fn attack_in_range_with_axe_applies_damage_and_emits_player_impact() {
 }
 
 #[test]
+fn point_blank_attack_lands_with_level_aim() {
+    // Regression: when the target is very close, the attacker's eye (1.62 m)
+    // sits well above the target's chest, so the old eye->chest view-cone test
+    // judged the look direction as pointing too far down and rejected the hit,
+    // even with the crosshair dead on the body. The attacker still saw their
+    // predicted impact + damage text while the victim took no damage. The aim
+    // test now matches the client (look ray vs body box), so a level-aim swing
+    // at point-blank range must register.
+    let mut server = server();
+    let attacker = connect_named(&mut server, 1, "Attacker");
+    let target = connect_named(&mut server, 2, "Target");
+    // Half a metre apart, attacker facing -Z with level pitch (place_player
+    // sets pitch = 0).
+    place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
+    place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -0.5), 0.0);
+    equip_axe(&mut server, attacker);
+
+    let start_hp = target_health(&server, target);
+    let envelopes = attack(&mut server, attacker, target);
+    let new_hp = target_health(&server, target);
+
+    assert_eq!(
+        start_hp - new_hp,
+        STONE_HATCHET_PVP_DAMAGE as f32,
+        "a point-blank level-aim swing must deal damage, not silently miss",
+    );
+    assert!(
+        envelopes
+            .iter()
+            .any(|e| matches!(&e.message, ServerMessage::PlayerImpact { .. })),
+        "the victim's peers must get a PlayerImpact for a point-blank hit"
+    );
+}
+
+#[test]
 fn non_fatal_hit_sends_the_victim_a_health_correction() {
     // The victim renders their HP bar from local prediction, which only moves
     // when the server sends a `Correction`. A landed hit must therefore push

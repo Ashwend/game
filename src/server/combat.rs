@@ -15,7 +15,9 @@
 //! 3. Target alive, no chain damage on a corpse.
 //! 4. Real tool, bare hands and non-tool items can't deal PvP damage.
 //! 5. Range, feet-to-feet distance must be within [`ATTACK_RANGE_M`].
-//! 6. View cone, target must sit inside the attacker's look cone.
+//! 6. Aim (live targets only), the look ray must pass through the target's
+//!    body box (the same `crate::combat::player_body_ray_entry` test the
+//!    client targets with); waived for a helpless sleeping body.
 //! 7. Line-of-sight, no solid block between eye and chest.
 //!
 //! On success the post-armor damage is subtracted from the target's
@@ -34,8 +36,7 @@ use crate::{
 };
 
 use crate::game_balance::{
-    COMBAT_ATTACK_CONE_COS as ATTACK_CONE_COS, COMBAT_ATTACK_RANGE_M as ATTACK_RANGE_M,
-    COMBAT_ATTACKER_EYE_HEIGHT as ATTACKER_EYE_HEIGHT,
+    COMBAT_ATTACK_RANGE_M as ATTACK_RANGE_M, COMBAT_ATTACKER_EYE_HEIGHT as ATTACKER_EYE_HEIGHT,
     COMBAT_KNOCKBACK_VERTICAL_FRACTION as KNOCKBACK_VERTICAL_FRACTION,
     COMBAT_TARGET_CHEST_HEIGHT as TARGET_CHEST_HEIGHT,
 };
@@ -103,11 +104,10 @@ impl GameServer {
             return Vec::new();
         }
         // A logged-out body lies flat on the ground, so its hittable point is
-        // near the floor, not at standing chest height, and a standing
-        // attacker is looking steeply down at it. Aim the hit point low and
-        // waive the view cone for a helpless sleeper (range + line-of-sight
-        // still gate the swing); otherwise the upright chest point plus the
-        // tight cone make a lying body almost impossible to land on.
+        // near the floor, not at standing chest height. We drop the LOS/impact
+        // anchor to floor level so a standing attacker looking down has a clear
+        // line to it, and (below) waive the aim test entirely for a helpless
+        // sleeper, range + line-of-sight still gate the swing.
         let target_sleeping = !target.online;
         let target_pos = target.controller.position;
         let target_armor = target.armor;
@@ -133,15 +133,21 @@ impl GameServer {
             return Vec::new();
         }
 
-        // View cone, direction from eye to target chest must sit
-        // inside the attacker's forward cone (skipped for sleepers).
+        // Aim (live targets only): the look ray from the attacker's eye must
+        // actually pass through the target's body box, the SAME volume + ray
+        // test the client predicts the hit with (`crate::combat::
+        // player_body_ray_entry`), so "my crosshair was on them" == "the server
+        // accepted it". This replaces an eye->chest cone test that rejected
+        // point-blank hits: at close range the eye sits well above the chest,
+        // tilting the eye->chest vector below the cone, so the server dropped
+        // the hit even though the attacker already produced predicted impact +
+        // damage-text feedback. Sleepers waive this (helpless body, hittable
+        // without precise aim); they're gated by range + LOS only.
         let forward = crate::items::look_forward(attacker_yaw, attacker_pitch);
-        let to_target = target_chest.minus(attacker_eye);
-        let to_target_len = to_target.length_squared().sqrt();
-        if to_target_len <= f32::EPSILON {
-            return Vec::new();
-        }
-        if !target_sleeping && to_target.dot(forward) / to_target_len < ATTACK_CONE_COS {
+        if !target_sleeping
+            && crate::combat::player_body_ray_entry(attacker_eye, forward, target_pos, false)
+                .is_none()
+        {
             return Vec::new();
         }
 

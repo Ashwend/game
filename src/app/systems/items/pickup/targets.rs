@@ -18,6 +18,8 @@ use crate::{
     // disagree with what the server will accept, no "tooltip says reachable,
     // server says no" pops, and there is a single tuning knob per range.
     game_balance::{
+        COMBAT_PLAYER_BODY_CENTRE_Y as PLAYER_BODY_CENTRE_Y,
+        COMBAT_SLEEPING_BODY_CENTRE_Y as SLEEPING_BODY_CENTRE_Y,
         DEPLOYABLE_DAMAGE_RANGE_M as DEPLOYABLE_INTERACT_RANGE_M, LOOT_BAG_INTERACT_RANGE_M,
     },
     items::{look_forward, pickup_anchor_from_position},
@@ -37,25 +39,6 @@ use super::viewport_position;
 /// we need them well inside arm's reach before "swing at player" wins
 /// over "swing at the deployable behind them".
 pub(super) const ATTACK_RANGE_M: f32 = 3.0;
-/// Player body AABB half-extents used for the look-ray test. Roughly
-/// matches the controller's `(PLAYER_RADIUS, PLAYER_HEIGHT/2,
-/// PLAYER_RADIUS)` so "looking at the avatar" ≈ "swing hits".
-/// Slightly larger than the collider so the hit volume is forgiving
-/// at typical move/strafe speeds.
-const PLAYER_BODY_HALF_WIDTH: f32 = 0.40;
-const PLAYER_BODY_HALF_HEIGHT: f32 = 0.95;
-/// Vertical offset from the player's feet to the AABB centre. Matches
-/// `PLAYER_VISUAL_CENTER_Y` so the look-ray hits the same volume the
-/// remote avatar visually occupies.
-const PLAYER_BODY_CENTRE_Y: f32 = 0.95;
-/// Hit volume for a logged-out sleeping body. The avatar is laid flat on the
-/// ground (see `lying_transform`), so the standing column above the feet would
-/// miss most of it. A low, wide box centred just above the floor covers the
-/// ~1 m sprawl in any lie direction, so looking at the body anywhere lands the
-/// swing / loot prompt.
-const SLEEPING_BODY_HALF_WIDTH: f32 = 0.9;
-const SLEEPING_BODY_HALF_HEIGHT: f32 = 0.4;
-const SLEEPING_BODY_CENTRE_Y: f32 = 0.35;
 /// Cone cosine for loot bag interaction, same as deployables since
 /// bags sit at roughly the same eye-level cone an aimed E would
 /// expect to hit.
@@ -165,28 +148,15 @@ pub(super) fn best_player_target<'a>(
         if candidate.health <= 0.0 {
             continue;
         }
-        // A laid-out sleeper uses a low, wide hit box; a standing player uses
-        // the upright column.
-        let (centre_y, half_width, half_height) = if candidate.sleeping {
-            (
-                SLEEPING_BODY_CENTRE_Y,
-                SLEEPING_BODY_HALF_WIDTH,
-                SLEEPING_BODY_HALF_HEIGHT,
-            )
-        } else {
-            (
-                PLAYER_BODY_CENTRE_Y,
-                PLAYER_BODY_HALF_WIDTH,
-                PLAYER_BODY_HALF_HEIGHT,
-            )
-        };
-        let centre = Vec3Net::new(
-            candidate.position.x,
-            candidate.position.y + centre_y,
-            candidate.position.z,
-        );
-        let Some(distance) = ray_aabb_entry_distance(eye, forward, centre, half_width, half_height)
-        else {
+        // Shared with the server's hit validation so targeting and acceptance
+        // can't disagree: a standing player uses the upright column box, a
+        // laid-out sleeper the low, wide box.
+        let Some(distance) = crate::combat::player_body_ray_entry(
+            eye,
+            forward,
+            candidate.position,
+            candidate.sleeping,
+        ) else {
             continue;
         };
         if distance > ATTACK_RANGE_M {
@@ -197,62 +167,6 @@ pub(super) fn best_player_target<'a>(
         }
     }
     best
-}
-
-/// Slab-method ray-AABB intersection. Returns the entry distance along
-/// `direction` if the ray (with finite length cap) enters the box from
-/// outside; `None` when there's no hit or the box is behind the eye.
-/// `direction` is assumed normalised.
-pub(super) fn ray_aabb_entry_distance(
-    origin: Vec3Net,
-    direction: Vec3Net,
-    centre: Vec3Net,
-    half_width: f32,
-    half_height: f32,
-) -> Option<f32> {
-    let min = Vec3Net::new(
-        centre.x - half_width,
-        centre.y - half_height,
-        centre.z - half_width,
-    );
-    let max = Vec3Net::new(
-        centre.x + half_width,
-        centre.y + half_height,
-        centre.z + half_width,
-    );
-
-    let mut t_near: f32 = f32::NEG_INFINITY;
-    let mut t_far: f32 = f32::INFINITY;
-    for axis in 0..3 {
-        let (o, d, mn, mx) = match axis {
-            0 => (origin.x, direction.x, min.x, max.x),
-            1 => (origin.y, direction.y, min.y, max.y),
-            _ => (origin.z, direction.z, min.z, max.z),
-        };
-        if d.abs() < 1e-6 {
-            if o < mn || o > mx {
-                return None;
-            }
-            continue;
-        }
-        let inv_d = d.recip();
-        let mut t1 = (mn - o) * inv_d;
-        let mut t2 = (mx - o) * inv_d;
-        if t1 > t2 {
-            std::mem::swap(&mut t1, &mut t2);
-        }
-        t_near = t_near.max(t1);
-        t_far = t_far.min(t2);
-        if t_near > t_far {
-            return None;
-        }
-    }
-    if t_far < 0.0 {
-        return None;
-    }
-    // Inside the box: return 0 so the cosmetic "you're poking the
-    // target" case still resolves as a valid hit at point-blank.
-    Some(t_near.max(0.0))
 }
 
 pub(super) fn set_player_pickup_target(
@@ -356,8 +270,8 @@ pub(super) fn best_deployable_target<'a>(
 }
 
 /// Slab-method ray entry distance against an arbitrary [`WorldBlock`]
-/// (per-axis half-extents, unlike [`ray_aabb_entry_distance`]'s square
-/// footprint). Returns 0 when the eye is inside the box.
+/// (per-axis half-extents, unlike the player body box's square footprint).
+/// Returns 0 when the eye is inside the box.
 fn ray_block_entry_distance(
     origin: Vec3Net,
     direction: Vec3Net,

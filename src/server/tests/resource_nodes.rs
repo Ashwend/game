@@ -67,6 +67,35 @@ fn mirror_sync_deltas_track_insert_mutate_and_remove() {
 }
 
 #[test]
+fn requeue_resource_node_sync_redirties_for_next_pass() {
+    let mut server = server();
+    // Start from a clean delta slate (constructor seeds all nodes dirty).
+    let _ = server.drain_resource_node_sync();
+    let (dirty, _) = server.drain_resource_node_sync();
+    assert!(dirty.is_empty());
+
+    // Simulate the mirror sync deferring a batch of fresh spawns past its
+    // per-tick budget: requeue puts them back on the dirty set so the next
+    // pass drains them again.
+    server.requeue_resource_node_sync([10_001, 10_002, 10_003]);
+    let (mut dirty, removed) = server.drain_resource_node_sync();
+    dirty.sort_unstable();
+    assert_eq!(dirty, vec![10_001, 10_002, 10_003]);
+    assert!(removed.is_empty());
+
+    // Drained, so a follow-up pass with nothing requeued is empty.
+    let (dirty, _) = server.drain_resource_node_sync();
+    assert!(dirty.is_empty());
+
+    // Requeue dedups against an existing dirty mark (it's a set): a node
+    // freshly inserted and also requeued appears once.
+    server.insert_resource_node(20_001, coal_node(20_001, 5));
+    server.requeue_resource_node_sync([20_001]);
+    let (dirty, _) = server.drain_resource_node_sync();
+    assert_eq!(dirty, vec![20_001]);
+}
+
+#[test]
 fn test_world_spawns_authoritative_resource_nodes() {
     let mut server = server();
     connect_host(&mut server);

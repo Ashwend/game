@@ -23,11 +23,12 @@ use bevy::{
     prelude::*,
     render::render_resource::{AsBindGroup, Extent3d, TextureDimension, TextureFormat},
     shader::ShaderRef,
+    tasks::ComputeTaskPool,
 };
 
 use crate::{
     app::embedded_assets::embedded_bytes,
-    world::{TERRAIN_WEIGHT_TEXELS, render_terrain_weight_rgba},
+    world::{TERRAIN_WEIGHT_TEXELS, fill_terrain_weight_rows},
 };
 
 /// Embedded path of the terrain shader (a `&'static str` because [`ShaderRef`]
@@ -155,7 +156,7 @@ pub(crate) fn build_terrain_material(
 /// The CPU-baked biome-weight raster as a clamp-sampled **linear** image
 /// (`Rgba8Unorm`, not sRGB, the channels are weights, not colour).
 fn terrain_weight_image(world_seed: u64, floor_size: f32) -> Image {
-    let rgba = render_terrain_weight_rgba(world_seed, floor_size);
+    let rgba = bake_terrain_weight_parallel(world_seed, floor_size);
     let mut image = Image::new(
         Extent3d {
             width: TERRAIN_WEIGHT_TEXELS,
@@ -169,6 +170,49 @@ fn terrain_weight_image(world_seed: u64, floor_size: f32) -> Image {
     );
     image.sampler = ImageSampler::Descriptor(clamp_linear_sampler());
     image
+}
+
+/// Bake the `TERRAIN_WEIGHT_TEXELS²` biome-weight raster across the compute task
+/// pool instead of on the single calling frame.
+///
+/// The raster is a pure function of `(world_seed, floor_size)` and its rows are
+/// independent, so we split it into horizontal bands and fill each into a
+/// disjoint slice in parallel. The byte output is identical to a serial
+/// [`render_terrain_weight_rgba`](crate::world::render_terrain_weight_rgba) bake
+/// (locked by `banded_fill_matches_serial_render`). The whole bake is ~2.1M
+/// value-noise evaluations that runs once on world load; serial it was a ~250ms
+/// stall on the world-entry frame, fanning it out cuts that by roughly the core
+/// count. This is pure client-side rendering derived from the world seed, so it
+/// is identical for singleplayer loopback and remote multiplayer sessions.
+fn bake_terrain_weight_parallel(world_seed: u64, floor_size: f32) -> Vec<u8> {
+    let texels = TERRAIN_WEIGHT_TEXELS;
+    let mut rgba = vec![0u8; (texels * texels * 4) as usize];
+    let row_bytes = (texels * 4) as usize;
+
+    // The pool is initialised by Bevy's `TaskPoolPlugin`; `get_or_init` keeps
+    // the bake working in any headless/test context that calls this directly.
+    let pool = ComputeTaskPool::get_or_init(Default::default);
+    let threads = pool.thread_num().max(1);
+    // A few bands per worker so uneven per-row noise cost still load-balances.
+    let bands = (threads * 4).clamp(1, texels as usize);
+    let rows_per_band = texels.div_ceil(bands as u32);
+
+    pool.scope(|scope| {
+        let mut remaining = rgba.as_mut_slice();
+        let mut row_start = 0u32;
+        while row_start < texels {
+            let row_end = (row_start + rows_per_band).min(texels);
+            let band_len = (row_end - row_start) as usize * row_bytes;
+            let (band, rest) = remaining.split_at_mut(band_len);
+            remaining = rest;
+            scope.spawn(async move {
+                fill_terrain_weight_rows(world_seed, floor_size, row_start, row_end, band);
+            });
+            row_start = row_end;
+        }
+    });
+
+    rgba
 }
 
 fn repeat_linear_sampler() -> ImageSamplerDescriptor {

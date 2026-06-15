@@ -164,6 +164,15 @@ pub(crate) struct GrassState {
     dirty: bool,
     bound_world_version: u64,
     bound_density: Option<GrassDensity>,
+    /// Camera tile the last full streaming scan ran for. While the camera stays
+    /// in this tile (and no budgeted fill is still draining) the loaded set can't
+    /// change, so the per-frame retain + radius rescan are skipped. Reset to
+    /// `None` by [`clear_field`] (world / density change) to force a rescan.
+    last_cam_tile: Option<(i32, i32)>,
+    /// True when the last scan hit its per-frame spawn budget and tiles still
+    /// need loading at the current camera tile, so the next frame keeps scanning
+    /// even though the camera hasn't crossed a tile boundary.
+    fill_pending: bool,
 }
 
 /// Stream detail-grass tiles around the camera. The shader handles the distance
@@ -207,6 +216,21 @@ pub(crate) fn stream_grass_system(
         return;
     };
     let (px, pz) = (view.position.x, view.position.z);
+
+    // Throttle: the loaded tile set is a function of the camera tile, so while
+    // the camera stays within one GRASS_TILE_M cell (and no budgeted fill is
+    // still draining) nothing can change. Skip the retain + radius rescan
+    // entirely on those frames, which is the overwhelming majority (standing,
+    // looking around, slow movement). clear_field resets last_cam_tile so a
+    // world / density change still forces a fresh scan.
+    let cam_tile = (
+        (px / GRASS_TILE_M).floor() as i32,
+        (pz / GRASS_TILE_M).floor() as i32,
+    );
+    if state.last_cam_tile == Some(cam_tile) && !state.fill_pending {
+        return;
+    }
+
     // The world seed lets each placed blade pick a biome tint matching the ground.
     let world_seed = runtime.world_map_seed_dims.map(|(seed, _)| seed);
 
@@ -241,13 +265,16 @@ pub(crate) fn stream_grass_system(
     // 2. Load newly in-range tiles (budgeted) into the per-tile map.
     let floor_half = (world.floor_size * 0.5 - GRASS_EDGE_MARGIN_M).max(0.0);
     let radius_tiles = (radius / GRASS_TILE_M).ceil() as i32 + 1;
-    let cam_tx = (px / GRASS_TILE_M).floor() as i32;
-    let cam_tz = (pz / GRASS_TILE_M).floor() as i32;
+    let (cam_tx, cam_tz) = cam_tile;
 
     let mut budget = MAX_GRASS_TILE_SPAWNS_PER_FRAME;
+    // True if the budget cut the fill short, so tiles still need loading at this
+    // camera tile and the next frame must keep scanning (see `fill_pending`).
+    let mut hit_budget = false;
     'fill: for tx in (cam_tx - radius_tiles)..=(cam_tx + radius_tiles) {
         for tz in (cam_tz - radius_tiles)..=(cam_tz + radius_tiles) {
             if budget == 0 {
+                hit_budget = true;
                 break 'fill;
             }
             if tiles.contains_key(&(tx, tz)) {
@@ -293,6 +320,11 @@ pub(crate) fn stream_grass_system(
             .collect();
         update_grass_field(&mut commands, field_entity, &blade_mesh, combined, px, pz);
     }
+
+    // Record what this scan covered so the throttle can skip future frames until
+    // the camera crosses a tile (or a budgeted fill still owes tiles here).
+    state.last_cam_tile = Some(cam_tile);
+    state.fill_pending = hit_budget;
 }
 
 /// Spawn or refresh the single grass-field entity with the combined instance
@@ -399,6 +431,9 @@ fn clear_field(commands: &mut Commands, state: &mut GrassState) {
     }
     state.tiles.clear();
     state.dirty = false;
+    // Force the next scan to run regardless of camera tile (the field is empty).
+    state.last_cam_tile = None;
+    state.fill_pending = false;
 }
 
 pub(crate) fn grass_material() -> GrassMaterial {

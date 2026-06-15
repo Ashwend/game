@@ -43,6 +43,24 @@ pub const COMBAT_ATTACKER_EYE_HEIGHT: f32 = 1.62;
 /// LOS ray's destination.
 pub const COMBAT_TARGET_CHEST_HEIGHT: f32 = 0.95;
 
+/// Player body hit box used by BOTH the client's swing targeting and the
+/// server's hit validation (`crate::combat::player_body_ray_entry`), so "my
+/// crosshair was on the avatar" and "the server accepted the hit" test the
+/// exact same volume, no client/server drift. Half-extents roughly match the
+/// controller capsule `(PLAYER_RADIUS, PLAYER_HEIGHT/2, PLAYER_RADIUS)`, a touch
+/// larger so the hit volume is forgiving at strafe speed. `CENTRE_Y` is the
+/// box centre above the feet (matches the avatar's visual centre).
+pub const COMBAT_PLAYER_BODY_HALF_WIDTH: f32 = 0.40;
+pub const COMBAT_PLAYER_BODY_HALF_HEIGHT: f32 = 0.95;
+pub const COMBAT_PLAYER_BODY_CENTRE_Y: f32 = 0.95;
+
+/// Hit box for a logged-out sleeping body: low and wide because the avatar is
+/// laid flat on the ground, so looking at the sprawl anywhere lands the swing /
+/// loot prompt. Same shared use as the standing box above.
+pub const COMBAT_SLEEPING_BODY_HALF_WIDTH: f32 = 0.9;
+pub const COMBAT_SLEEPING_BODY_HALF_HEIGHT: f32 = 0.4;
+pub const COMBAT_SLEEPING_BODY_CENTRE_Y: f32 = 0.35;
+
 /// Fraction of the horizontal knockback magnitude applied as a
 /// vertical pop. Small upward component so the target slides away
 /// instead of grinding into the floor on the first contact substep.

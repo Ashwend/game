@@ -67,21 +67,50 @@ pub fn biome_blend_weights(channels: ClassificationChannels) -> [f32; 4] {
 /// increasing rows run south, the same convention as [`super::map_texture`].
 pub fn render_terrain_weight_rgba(world_seed: u64, floor_size: f32) -> Vec<u8> {
     let texels = TERRAIN_WEIGHT_TEXELS;
-    let half = floor_size * 0.5;
+    let mut rgba = vec![0u8; (texels * texels * 4) as usize];
+    fill_terrain_weight_rows(world_seed, floor_size, 0, texels, &mut rgba);
+    rgba
+}
 
-    let mut rgba = Vec::with_capacity((texels * texels * 4) as usize);
-    for py in 0..texels {
+/// Bake the biome-weight texels for rows `row_start..row_end` into `out`.
+///
+/// `out` must be exactly `(row_end - row_start) * TERRAIN_WEIGHT_TEXELS * 4`
+/// bytes, the contiguous RGBA slice for that horizontal band (row-major, row 0
+/// north). Because rows are independent and depend only on `(world_seed,
+/// floor_size)`, a caller can split the raster into disjoint bands and bake them
+/// in parallel; the concatenated result is byte-identical to a single serial
+/// [`render_terrain_weight_rgba`] pass. The whole 512² bake is ~2.1M value-noise
+/// evaluations and runs once on world load, so the bevy-side scene builder fans
+/// it across the compute task pool rather than stalling one frame on it. Stays a
+/// pure function (no bevy) to keep this domain module engine-free.
+pub fn fill_terrain_weight_rows(
+    world_seed: u64,
+    floor_size: f32,
+    row_start: u32,
+    row_end: u32,
+    out: &mut [u8],
+) {
+    let texels = TERRAIN_WEIGHT_TEXELS;
+    let half = floor_size * 0.5;
+    debug_assert_eq!(
+        out.len(),
+        ((row_end - row_start) * texels * 4) as usize,
+        "out slice must cover exactly rows {row_start}..{row_end}"
+    );
+
+    let mut i = 0usize;
+    for py in row_start..row_end {
         let wz = -half + (py as f32 + 0.5) / texels as f32 * floor_size;
         for px in 0..texels {
             let wx = -half + (px as f32 + 0.5) / texels as f32 * floor_size;
             let w = biome_blend_weights(ClassificationChannels::sample_at(world_seed, wx, wz));
-            rgba.push((w[0] * 255.0).round().clamp(0.0, 255.0) as u8);
-            rgba.push((w[1] * 255.0).round().clamp(0.0, 255.0) as u8);
-            rgba.push((w[2] * 255.0).round().clamp(0.0, 255.0) as u8);
-            rgba.push((w[3] * 255.0).round().clamp(0.0, 255.0) as u8);
+            out[i] = (w[0] * 255.0).round().clamp(0.0, 255.0) as u8;
+            out[i + 1] = (w[1] * 255.0).round().clamp(0.0, 255.0) as u8;
+            out[i + 2] = (w[2] * 255.0).round().clamp(0.0, 255.0) as u8;
+            out[i + 3] = (w[3] * 255.0).round().clamp(0.0, 255.0) as u8;
+            i += 4;
         }
     }
-    rgba
 }
 
 #[cfg(test)]
@@ -163,5 +192,31 @@ mod tests {
         let a = render_terrain_weight_rgba(1, 960.0);
         let b = render_terrain_weight_rgba(2, 960.0);
         assert_ne!(a, b, "different seeds must differ");
+    }
+
+    #[test]
+    fn banded_fill_matches_serial_render() {
+        // The parallel bake splits the raster into row bands and fills each into
+        // a disjoint slice. Concatenating bands (in row order) must reproduce the
+        // single-pass serial output exactly, otherwise the parallel path would
+        // produce a different ground than the deterministic reference.
+        let seed = 0xABCDEF;
+        let floor = 1536.0;
+        let serial = render_terrain_weight_rgba(seed, floor);
+
+        let texels = TERRAIN_WEIGHT_TEXELS;
+        let row_bytes = (texels * 4) as usize;
+        let mut banded = vec![0u8; serial.len()];
+        // Deliberately uneven, non-divisor band size to exercise the tail band.
+        let band_rows = 37u32;
+        let mut row_start = 0u32;
+        while row_start < texels {
+            let row_end = (row_start + band_rows).min(texels);
+            let off = row_start as usize * row_bytes;
+            let end = row_end as usize * row_bytes;
+            fill_terrain_weight_rows(seed, floor, row_start, row_end, &mut banded[off..end]);
+            row_start = row_end;
+        }
+        assert_eq!(banded, serial, "banded fill must equal the serial raster");
     }
 }

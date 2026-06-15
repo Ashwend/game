@@ -54,10 +54,17 @@ pub(crate) fn apply_display_settings_system(
         window.present_mode = settings.display.present_mode();
     }
 
-    // Software-side frame cap follows the vsync toggle. `Limiter::Auto`
-    // queries the active monitor's refresh rate; `Limiter::Off` runs
-    // uncapped. Cheap comparison every frame, no allocation.
-    let target_limiter = settings.display.frame_limiter();
+    // Software-side frame cap follows the vsync toggle. We resolve it to a
+    // fixed `Limiter::Manual` derived from the monitor refresh rate rather than
+    // `Limiter::Auto`: under `Auto`, `bevy_framepace`'s `get_display_refresh_rate`
+    // runs a winit `current_monitor().refresh_rate_millihertz()` query on the
+    // main thread *every frame* (~37us/frame in profiling), whereas `Manual`
+    // takes a zero-cost early branch. See `target_limiter`. Cheap comparison
+    // every frame, no allocation.
+    let target_limiter = target_limiter(
+        settings.display.vsync,
+        primary_monitor.and_then(|monitor| monitor.refresh_rate_millihertz),
+    );
     if !limiters_eq(&framepace.limiter, &target_limiter) {
         framepace.limiter = target_limiter;
     }
@@ -114,21 +121,90 @@ fn windowed_physical_target(
     )
 }
 
-/// `Limiter` doesn't derive `PartialEq` in `bevy_framepace`. We only
-/// ever swap between `Auto` and `Off`, `Manual` isn't used, so a
-/// match on the variant pair is enough to skip the change-detection
-/// trigger on frames where the user didn't touch vsync.
+/// The `bevy_framepace` limiter for the current vsync setting.
+///
+/// `vsync: false` runs uncapped (`Off`). `vsync: true` caps to the display
+/// refresh, but as a fixed `Manual(frametime)` computed from the primary
+/// monitor's refresh rate rather than `Auto`. The two cap identically, but
+/// `Auto` makes `bevy_framepace` re-query winit for the refresh rate on the
+/// main thread every single frame; `Manual` is a constant the limiter reads
+/// for free. We fall back to `Auto` only while the monitor (or its refresh
+/// rate) is not yet known, on the first frames after launch; the next frame
+/// re-runs with the monitor present and upgrades to `Manual`.
+fn target_limiter(vsync: bool, refresh_millihertz: Option<u32>) -> Limiter {
+    if !vsync {
+        return Limiter::Off;
+    }
+    match refresh_millihertz {
+        Some(millihertz) if millihertz > 0 => {
+            // Mirror `bevy_framepace`'s own rounding guard: winit reports an
+            // integer refresh rate, so round the framerate down by 0.5 Hz to
+            // avoid pacing a hair *above* the true refresh.
+            let framerate = (f64::from(millihertz) / 1000.0 - 0.5).max(1.0);
+            Limiter::from_framerate(framerate)
+        }
+        _ => Limiter::Auto,
+    }
+}
+
+/// `Limiter` doesn't derive `PartialEq` in `bevy_framepace`. We swap between
+/// `Off`, `Auto` (only before the monitor is known), and `Manual(frametime)`,
+/// so compare the variant pair and, for `Manual`, the frametime. Lets us skip
+/// the change-detection trigger on frames where the resolved cap is unchanged.
 fn limiters_eq(a: &Limiter, b: &Limiter) -> bool {
-    matches!(
-        (a, b),
-        (Limiter::Auto, Limiter::Auto) | (Limiter::Off, Limiter::Off)
-    )
+    match (a, b) {
+        (Limiter::Auto, Limiter::Auto) | (Limiter::Off, Limiter::Off) => true,
+        (Limiter::Manual(x), Limiter::Manual(y)) => x == y,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use bevy::window::{PresentMode, WindowMode, WindowResolution};
+
+    #[test]
+    fn target_limiter_off_when_vsync_disabled() {
+        // vsync off ignores the monitor entirely and runs uncapped.
+        assert!(matches!(target_limiter(false, Some(60_000)), Limiter::Off));
+        assert!(matches!(target_limiter(false, None), Limiter::Off));
+    }
+
+    #[test]
+    fn target_limiter_manual_from_monitor_refresh() {
+        // vsync on with a known refresh rate resolves to a fixed Manual cap so
+        // bevy_framepace stops querying winit every frame. 60.000 Hz rounds
+        // down 0.5 Hz to 59.5 fps (matching framepace's own guard).
+        let limiter = target_limiter(true, Some(60_000));
+        let Limiter::Manual(frametime) = limiter else {
+            panic!("expected Manual, got {limiter:?}");
+        };
+        assert!((frametime.as_secs_f64() - 1.0 / 59.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn target_limiter_falls_back_to_auto_until_refresh_known() {
+        // vsync on but the monitor (or its refresh rate) isn't known yet:
+        // keep Auto for the first frames, the next frame upgrades to Manual.
+        assert!(matches!(target_limiter(true, None), Limiter::Auto));
+        assert!(matches!(target_limiter(true, Some(0)), Limiter::Auto));
+    }
+
+    #[test]
+    fn limiters_eq_distinguishes_manual_frametimes() {
+        assert!(limiters_eq(&Limiter::Off, &Limiter::Off));
+        assert!(limiters_eq(&Limiter::Auto, &Limiter::Auto));
+        assert!(limiters_eq(
+            &Limiter::from_framerate(59.5),
+            &Limiter::from_framerate(59.5)
+        ));
+        assert!(!limiters_eq(
+            &Limiter::from_framerate(59.5),
+            &Limiter::from_framerate(143.5)
+        ));
+        assert!(!limiters_eq(&Limiter::Auto, &Limiter::from_framerate(59.5)));
+    }
 
     #[test]
     fn windowed_floor_raises_tiny_logical_size_on_hidpi() {

@@ -8,7 +8,10 @@ pub use chunk::{
     generate_chunk_spawns, generate_world_spawns, kind_target, splitmix64, value_noise_2d,
 };
 pub use map_texture::{WORLD_MAP_TEXELS, render_world_map_rgba, world_map_bounds};
-pub use terrain_texture::{TERRAIN_WEIGHT_TEXELS, biome_blend_weights, render_terrain_weight_rgba};
+pub use terrain_texture::{
+    TERRAIN_WEIGHT_TEXELS, biome_blend_weights, fill_terrain_weight_rows,
+    render_terrain_weight_rgba,
+};
 
 use serde::{Deserialize, Serialize};
 

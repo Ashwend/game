@@ -1,6 +1,6 @@
 use super::*;
 
-use super::targets::{ATTACK_RANGE_M, ray_aabb_entry_distance};
+use super::targets::ATTACK_RANGE_M;
 
 use crate::protocol::{MAX_HEALTH, Vec3Net};
 
@@ -126,47 +126,6 @@ fn player_behind_is_skipped() {
         [candidate(&target, false)].into_iter(),
     );
     assert!(hit.is_none(), "behind-camera targets must not register");
-}
-
-#[test]
-fn ray_aabb_entry_distance_hits_a_box_in_front() {
-    // Ray from origin pointing -Z; box centred 5 units ahead.
-    let origin = Vec3Net::new(0.0, 0.0, 0.0);
-    let direction = Vec3Net::new(0.0, 0.0, -1.0);
-    let centre = Vec3Net::new(0.0, 0.0, -5.0);
-    let distance = ray_aabb_entry_distance(origin, direction, centre, 0.4, 0.95)
-        .expect("ray should enter the box");
-    // Enters at the near face: 5 - half_width(0.4) = 4.6.
-    assert!((distance - 4.6).abs() < 1e-3);
-}
-
-#[test]
-fn ray_aabb_entry_distance_misses_offset_box() {
-    // Box well to the side of a forward ray -> no hit.
-    let origin = Vec3Net::new(0.0, 0.0, 0.0);
-    let direction = Vec3Net::new(0.0, 0.0, -1.0);
-    let centre = Vec3Net::new(10.0, 0.0, -5.0);
-    assert!(ray_aabb_entry_distance(origin, direction, centre, 0.4, 0.95).is_none());
-}
-
-#[test]
-fn ray_aabb_entry_distance_rejects_box_behind_origin() {
-    // Box behind the eye (positive Z while forward is -Z).
-    let origin = Vec3Net::new(0.0, 0.0, 0.0);
-    let direction = Vec3Net::new(0.0, 0.0, -1.0);
-    let centre = Vec3Net::new(0.0, 0.0, 5.0);
-    assert!(ray_aabb_entry_distance(origin, direction, centre, 0.4, 0.95).is_none());
-}
-
-#[test]
-fn ray_aabb_entry_distance_inside_box_returns_zero() {
-    // Origin inside the box -> point-blank, entry distance 0.
-    let origin = Vec3Net::new(0.0, 0.0, 0.0);
-    let direction = Vec3Net::new(0.0, 0.0, -1.0);
-    let centre = Vec3Net::new(0.0, 0.0, 0.0);
-    let distance = ray_aabb_entry_distance(origin, direction, centre, 1.0, 1.0)
-        .expect("inside the box still counts as a hit");
-    assert_eq!(distance, 0.0);
 }
 
 type DeployableFixture = (

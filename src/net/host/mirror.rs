@@ -17,6 +17,17 @@ use super::rooms::{
 };
 use super::routing::ServerConnections;
 
+/// Max number of *fresh* resource-node mirror entities to spawn in a single
+/// sync pass. World-load-on-connect seeds every node id dirty at once (~1800
+/// entities); spawning them all in one tick is a ~200ms `&mut World` stall
+/// (two archetype moves + a room observer each). Capping new spawns per tick
+/// and requeueing the overflow spreads the initial fill over a handful of
+/// ~20Hz ticks (~700ms for 1800 nodes) instead. Only the fresh-spawn arm is
+/// budgeted; refreshes and despawns stay uncapped so live gather diffs are
+/// never delayed. Far nodes are AoI-room-gated, so a just-connected player
+/// never notices the ones still streaming in beyond their chunk ring.
+const MAX_RESOURCE_NODE_SPAWNS_PER_SYNC: usize = 128;
+
 /// Reconciles the live `GameServer::resource_nodes` map into ECS entities
 /// once per Update. New ids spawn fresh entities; missing ids despawn the
 /// tracked entity; surviving ids get their `ResourceNodeStorage` refreshed
@@ -27,34 +38,17 @@ use super::routing::ServerConnections;
 /// is unchanged); the storage refresh writes are change-detected by Bevy
 /// so they only emit `Changed` ticks when the inner Vec actually differs.
 pub(super) fn sync_resource_node_entities(world: &mut World) {
+    use crate::protocol::ResourceNodeId;
+
     let _span = info_span!("sync_resource_node_entities").entered();
-    // Incremental sync: the authoritative map records which node ids changed
-    // (`dirty`) or were removed since the last pass, so we only touch the delta
-    // instead of walking all live nodes every tick. We snapshot the (small) set
-    // of changed states + anchor chunks up front so the `Res` borrow is
-    // released before the spawn/despawn calls need `&mut World`.
-    #[allow(clippy::type_complexity)]
-    let (dirty_states, removed): (
-        Vec<(
-            crate::protocol::ResourceNodeId,
-            crate::protocol::ResourceNodeState,
-            Option<ChunkCoord>,
-        )>,
-        Vec<crate::protocol::ResourceNodeId>,
-    ) = {
-        let mut server = world.resource_mut::<AuthoritativeServer>();
-        let (dirty_ids, removed_ids) = server.0.drain_resource_node_sync();
-        let dirty_states = dirty_ids
-            .into_iter()
-            .filter_map(|id| {
-                server
-                    .0
-                    .resource_node_state(id)
-                    .map(|state| (id, state.clone(), server.0.resource_node_chunk(id)))
-            })
-            .collect();
-        (dirty_states, removed_ids)
-    };
+
+    // Drain the delta as *ids only* (no state clone yet). The authoritative map
+    // records which node ids changed (`dirty`) or were removed since the last
+    // pass, so we only touch the delta instead of walking every live node.
+    let (dirty_ids, removed): (Vec<ResourceNodeId>, Vec<ResourceNodeId>) = world
+        .resource_mut::<AuthoritativeServer>()
+        .0
+        .drain_resource_node_sync();
 
     // 1. Despawn the mirror entities for removed ids (no-op if one was added
     //    and removed within the same sync window, it never got an entity).
@@ -62,43 +56,104 @@ pub(super) fn sync_resource_node_entities(world: &mut World) {
         crate::server::despawn_resource_node_entity(world, id);
     }
 
-    // 2. Spawn fresh entities for new ids; refresh storage for changed ones.
-    for (id, state, chunk) in dirty_states {
-        let existing = world.resource::<crate::server::ResourceNodeIndex>().get(id);
-        match existing {
-            Some(entity) => {
-                // Refresh storage in place. Change detection will only
-                // mark it changed when the Vec actually differs, that's
-                // what triggers Lightyear's per-component diff ship.
-                if let Some(mut storage) =
-                    world.get_mut::<crate::server::ResourceNodeStorage>(entity)
-                    && storage.0 != state.storage
-                {
-                    #[cfg(feature = "replication-trace")]
-                    {
-                        let before: u16 = storage.0.iter().map(|s| s.quantity).sum();
-                        let after: u16 = state.storage.iter().map(|s| s.quantity).sum();
-                        info!(
-                            target: "replication_trace",
-                            "server: ResourceNodeStorage MUTATE id={id} entity={entity:?} {before} -> {after}"
-                        );
-                    }
-                    storage.0 = state.storage;
-                }
-            }
-            None => {
-                // Find the chunk this node anchors to. If chunk_manager
-                // hasn't tracked it yet (admin spawn arrived after the
-                // resource_nodes insert but before track_resource_node),
-                // fall back to the position's chunk so the entity still
-                // has a coord; the next tick will resync the membership.
-                let chunk = chunk.unwrap_or_else(|| {
-                    crate::world::ChunkCoord::from_world(state.position.x, state.position.z)
-                });
-                let entity = crate::server::spawn_resource_node_entity(world, state, chunk);
-                attach_room_gated_replication(world, entity, chunk);
+    // 2. Classify dirty ids into already-mirrored (refresh in place, uncapped)
+    //    vs new (spawn, budgeted) using only the cheap index lookup. Doing this
+    //    BEFORE cloning any state bounds the expensive per-tick work (state
+    //    clones + archetype-moving spawns) to the budget, not the whole backlog:
+    //    world-load seeds *every* node id dirty and the budget requeues the
+    //    overflow, so a naive `drain -> clone all -> spawn budget` re-clones the
+    //    entire requeued backlog every tick (O(n²) allocations). Here only the
+    //    entities actually touched this tick are cloned. (The requeued tail is
+    //    still re-classified each tick, but that's an allocation-free index
+    //    lookup, ~cheap; a fully O(n) drain would need a persistent pending
+    //    queue, not worth the extra state at current node counts.)
+    let mut existing: Vec<(ResourceNodeId, Entity)> = Vec::new();
+    let mut new_ids: Vec<ResourceNodeId> = Vec::new();
+    {
+        let index = world.resource::<crate::server::ResourceNodeIndex>();
+        for id in dirty_ids {
+            match index.get(id) {
+                Some(entity) => existing.push((id, entity)),
+                None => new_ids.push(id),
             }
         }
+    }
+
+    // Budget fresh spawns; the overflow ids are requeued (cheap, no clone) and
+    // drained next tick. Refreshes are never capped so live gather / regrow
+    // diffs ship without delay even while the initial fill is still draining.
+    let spawn_now = new_ids.len().min(MAX_RESOURCE_NODE_SPAWNS_PER_SYNC);
+    let requeue = new_ids.split_off(spawn_now);
+
+    // 3. Snapshot authoritative state for *only* the refreshes + budgeted spawns,
+    //    releasing the server borrow before the spawn / despawn calls need
+    //    `&mut World`.
+    #[allow(clippy::type_complexity)]
+    let (refreshes, spawns): (
+        Vec<(Entity, ResourceNodeId, crate::protocol::ResourceNodeState)>,
+        Vec<(crate::protocol::ResourceNodeState, Option<ChunkCoord>)>,
+    ) = {
+        let server = world.resource::<AuthoritativeServer>();
+        let refreshes = existing
+            .iter()
+            .filter_map(|&(id, entity)| {
+                server
+                    .0
+                    .resource_node_state(id)
+                    .map(|state| (entity, id, state.clone()))
+            })
+            .collect();
+        let spawns = new_ids
+            .iter()
+            .filter_map(|&id| {
+                server
+                    .0
+                    .resource_node_state(id)
+                    .map(|state| (state.clone(), server.0.resource_node_chunk(id)))
+            })
+            .collect();
+        (refreshes, spawns)
+    };
+
+    // 4. Refresh storage in place. Change detection will only mark it changed
+    //    when the Vec actually differs, that's what triggers Lightyear's
+    //    per-component diff ship.
+    for (entity, _id, state) in refreshes {
+        if let Some(mut storage) = world.get_mut::<crate::server::ResourceNodeStorage>(entity)
+            && storage.0 != state.storage
+        {
+            #[cfg(feature = "replication-trace")]
+            {
+                let before: u16 = storage.0.iter().map(|s| s.quantity).sum();
+                let after: u16 = state.storage.iter().map(|s| s.quantity).sum();
+                info!(
+                    target: "replication_trace",
+                    "server: ResourceNodeStorage MUTATE id={_id} entity={entity:?} {before} -> {after}"
+                );
+            }
+            storage.0 = state.storage;
+        }
+    }
+
+    // 5. Spawn the budgeted fresh entities.
+    for (state, chunk) in spawns {
+        // Find the chunk this node anchors to. If chunk_manager hasn't tracked
+        // it yet (admin spawn arrived after the resource_nodes insert but before
+        // track_resource_node), fall back to the position's chunk so the entity
+        // still has a coord; the next tick resyncs the membership.
+        let chunk = chunk.unwrap_or_else(|| {
+            crate::world::ChunkCoord::from_world(state.position.x, state.position.z)
+        });
+        let entity = crate::server::spawn_resource_node_entity(world, state, chunk);
+        attach_room_gated_replication(world, entity, chunk);
+    }
+
+    // 6. Requeue the overflow new ids so the next pass drains the next batch.
+    if !requeue.is_empty() {
+        world
+            .resource_mut::<AuthoritativeServer>()
+            .0
+            .requeue_resource_node_sync(requeue);
     }
 }
 

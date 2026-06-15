@@ -167,6 +167,17 @@ impl GameServer {
         )
     }
 
+    /// Re-mark resource-node ids dirty so the next sync pass reprocesses them.
+    /// Used by `sync_resource_node_entities` to spread an oversized initial
+    /// spawn batch (world-load-on-connect seeds *every* node id dirty at once,
+    /// ~1800 entities) across multiple ticks via a per-tick spawn budget
+    /// instead of stalling a single tick. Re-inserting is idempotent (the set
+    /// dedups); ids whose node has since been removed are dropped harmlessly by
+    /// the sync's `resource_node_state` filter.
+    pub fn requeue_resource_node_sync(&mut self, ids: impl IntoIterator<Item = ResourceNodeId>) {
+        self.node_sync_dirty.extend(ids);
+    }
+
     /// Read-only iteration over live dropped items (id + wire-shape view).
     /// The mirror sync reads per-id deltas via [`Self::dropped_item_state`];
     /// this stays for tests and diagnostics.
