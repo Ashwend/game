@@ -19,7 +19,7 @@ use crate::{
 };
 
 use super::{
-    capture::{VoiceCapture, drain_frames},
+    capture::{CaptureStatus, VoiceCapture, drain_frames},
     playback::VoicePlayback,
 };
 
@@ -58,6 +58,11 @@ pub(crate) struct VoiceState {
     /// or libopus refused to initialise, so the UI can show a discreet
     /// "voice unavailable" hint without crashing.
     pub(crate) available: bool,
+    /// Set once the capture worker reports a terminal failure for the current
+    /// session so we don't respawn a doomed thread every frame (and re-raise
+    /// the permission prompt). Cleared whenever voice capture is no longer
+    /// wanted, so toggling voice off/on or rejoining retries from scratch.
+    capture_failed: bool,
     /// Per-peer "is talking right now" envelope. Re-set to 1.0 every time a
     /// voice frame from that speaker is decoded; decays toward 0 in
     /// [`PEER_TALK_DECAY_PER_SECOND`] between packets so the nameplate
@@ -122,6 +127,7 @@ pub(crate) fn setup_voice_system(mut commands: Commands, disabled: Option<Res<Vo
         transmitting: false,
         indicator_envelope: 0.0,
         available: false,
+        capture_failed: false,
         peer_talk_envelope: HashMap::new(),
     });
 }
@@ -149,31 +155,57 @@ pub(crate) fn manage_voice_capture_system(
         && menu.screen == Screen::InGame
         && runtime.is_multiplayer_session();
 
-    match (want_capture, voice.capture.is_some()) {
-        (true, false) => match VoiceCapture::spawn() {
-            Ok(capture) => {
-                info!("voice capture started for multiplayer session");
-                capture.set_input_gain(settings.voice.input_volume);
-                voice.capture = Some(capture);
-                voice.available = voice.playback.is_some();
-            }
-            Err(error) => {
-                warn!("voice capture failed to start: {error:#}");
-                voice.available = false;
-            }
-        },
-        (false, true) => {
-            // Drop the capture handle, `VoiceCapture::Drop` joins the
-            // worker thread and closes the cpal stream so the OS releases
-            // the microphone (and the Bluetooth profile switches back).
+    if !want_capture {
+        if voice.capture.is_some() {
+            // Drop the capture handle, `VoiceCapture::Drop` releases the
+            // cpal stream so the OS releases the microphone (and the
+            // Bluetooth profile switches back from HSP/HFP to A2DP).
             info!("voice capture stopped; releasing microphone");
             voice.capture = None;
-            voice.available = false;
             voice.transmitting = false;
             // Indicator decays naturally in `transmit_voice_system`; no
             // need to slam it to 0 here.
         }
-        _ => {}
+        voice.available = false;
+        // A fresh attempt is allowed next time voice is wanted (e.g. the
+        // player toggles voice back on or rejoins a server).
+        voice.capture_failed = false;
+        return;
+    }
+
+    // Kick off capture once if we don't have a handle yet and haven't already
+    // given up after a failure this session. `spawn` returns immediately, the
+    // cpal stream (and the OS permission prompt it raises on macOS) is opened
+    // on the worker thread so the network handshake keeps ticking meanwhile.
+    if voice.capture.is_none() && !voice.capture_failed {
+        match VoiceCapture::spawn() {
+            Ok(capture) => {
+                capture.set_input_gain(settings.voice.input_volume);
+                voice.capture = Some(capture);
+            }
+            Err(error) => {
+                warn!("voice capture failed to start: {error:#}");
+                voice.capture_failed = true;
+                voice.available = false;
+            }
+        }
+    }
+
+    // Poll the worker's async readiness. `poll_status` only reports the
+    // terminal transition once, so this logs and flips `available` a single
+    // time rather than every frame.
+    match voice.capture.as_mut().and_then(VoiceCapture::poll_status) {
+        Some(CaptureStatus::Ready) => {
+            info!("voice capture ready for multiplayer session");
+            voice.available = voice.playback.is_some();
+        }
+        Some(CaptureStatus::Failed) => {
+            warn!("voice capture unavailable (no device or microphone access denied)");
+            voice.capture = None;
+            voice.capture_failed = true;
+            voice.available = false;
+        }
+        None => {}
     }
 }
 
@@ -187,17 +219,18 @@ pub(crate) fn transmit_voice_system(
     mut error_toasts: MessageWriter<ClientErrorToast>,
 ) {
     // The capture stream is opened lazily by `manage_voice_capture_system`,
-    // so `voice.capture.is_some()` is the single source of truth for "the
-    // mic is hot right now". Indicator follows `key_held && mic_open` so
-    // the chip doesn't tease the player with "transmitting" in
-    // singleplayer or before the cpal stream has finished warming up.
+    // and its worker initialises off-thread, so `is_ready()` (not merely
+    // "handle present") is the source of truth for "the mic is hot right
+    // now". Indicator follows `key_held && mic_open` so the chip doesn't
+    // tease the player with "transmitting" in singleplayer or while the cpal
+    // stream is still warming up behind the permission prompt.
     let in_gameplay = menu.screen == Screen::InGame
         && !menu.chat_open
         && !menu.pause_open
         && !menu.pause_options_open
         && !menu.inventory_open;
     let key_held = in_gameplay && settings.keybindings.pressed(KeyAction::PushToTalk, &keys);
-    let mic_open = voice.capture.is_some();
+    let mic_open = voice.capture.as_ref().is_some_and(VoiceCapture::is_ready);
     let transmitting = key_held && mic_open && settings.voice.enabled;
 
     voice.transmitting = transmitting;

@@ -16,7 +16,7 @@ use cpal::{
     SampleFormat, StreamConfig,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
 
 use crate::protocol::{VOICE_FRAME_SAMPLES, VOICE_SAMPLE_RATE_HZ};
 
@@ -26,16 +26,32 @@ enum CaptureCmd {
     Shutdown,
 }
 
+/// Terminal outcome of the worker thread's mic initialisation, surfaced to the
+/// main thread by [`VoiceCapture::poll_status`] without ever blocking it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CaptureStatus {
+    /// The cpal input stream is open and shipping frames.
+    Ready,
+    /// No device matched, cpal refused, or the OS denied microphone access.
+    Failed,
+}
+
 /// Owns the cpal mic stream and ships encoded Opus frames out via
 /// `frames_rx`. Spawned once when the voice subsystem starts and torn down
 /// only when the app exits.
 pub(crate) struct VoiceCapture {
     pub(crate) frames_rx: Receiver<Vec<u8>>,
+    /// One-shot readiness signal from the worker: `Ok` once the stream is
+    /// live, `Err` if init failed. Polled non-blocking by [`Self::poll_status`].
+    ready_rx: Receiver<Result<(), String>>,
     cmd_tx: Sender<CaptureCmd>,
     /// Mic gain as a fixed-point f32 (input_gain * 1_000_000). Atomic so the
     /// audio thread can read it on every callback without a lock.
     gain_micro: Arc<AtomicU32>,
     worker: Option<JoinHandle<()>>,
+    /// Cached terminal status. `None` while the worker is still initialising
+    /// (which on macOS includes the time the OS mic-permission dialog is up).
+    status: Option<CaptureStatus>,
 }
 
 impl VoiceCapture {
@@ -55,33 +71,70 @@ impl VoiceCapture {
             })
             .context("failed to spawn voice capture thread")?;
 
-        // Wait for the worker to either open the stream or report a failure.
-        // Without this `voice.available` would optimistically be true even
-        // when no device matched and the thread had silently parked.
-        match ready_rx.recv() {
-            Ok(Ok(())) => Ok(Self {
-                frames_rx,
-                cmd_tx,
-                gain_micro,
-                worker: Some(worker),
-            }),
-            Ok(Err(error)) => Err(anyhow!("{error}")),
-            Err(_) => Err(anyhow!(
-                "voice capture thread exited before reporting status"
-            )),
-        }
+        // Deliberately do NOT block on the worker's readiness here. Opening the
+        // cpal input stream raises the OS microphone-permission prompt on
+        // macOS, and the player can take several seconds to answer it. Blocking
+        // the main thread that long stalls the whole Bevy schedule, including
+        // the Lightyear network tick, so a connection that just completed its
+        // handshake gets dropped on a missed keepalive. We hand the handle back
+        // immediately and let `poll_status` observe the outcome over the next
+        // frames; `voice.available` only flips on once the stream is actually
+        // live.
+        Ok(Self {
+            frames_rx,
+            ready_rx,
+            cmd_tx,
+            gain_micro,
+            worker: Some(worker),
+            status: None,
+        })
     }
 
     pub(crate) fn set_input_gain(&self, gain: f32) {
         self.gain_micro
             .store(linear_to_micro(gain.clamp(0.0, 1.0)), Ordering::Relaxed);
     }
+
+    /// Non-blocking. Returns the worker's terminal status exactly once, on the
+    /// frame it resolves; `None` both before resolution ("still initialising")
+    /// and on every call after ("no change", act on the prior status). The
+    /// detailed failure reason is already logged by the worker, so the `Err`
+    /// payload is consumed silently here.
+    pub(crate) fn poll_status(&mut self) -> Option<CaptureStatus> {
+        if self.status.is_some() {
+            return None;
+        }
+        let resolved = match self.ready_rx.try_recv() {
+            Ok(Ok(())) => CaptureStatus::Ready,
+            Ok(Err(_)) | Err(TryRecvError::Disconnected) => CaptureStatus::Failed,
+            Err(TryRecvError::Empty) => return None,
+        };
+        self.status = Some(resolved);
+        Some(resolved)
+    }
+
+    /// `true` once the cpal input stream is open and shipping frames. False
+    /// while the permission prompt is up or if init failed, so the PTT
+    /// indicator doesn't claim "transmitting" before the mic is actually hot.
+    pub(crate) fn is_ready(&self) -> bool {
+        self.status == Some(CaptureStatus::Ready)
+    }
 }
 
 impl Drop for VoiceCapture {
     fn drop(&mut self) {
         let _ = self.cmd_tx.send(CaptureCmd::Shutdown);
-        if let Some(handle) = self.worker.take() {
+        let Some(handle) = self.worker.take() else {
+            return;
+        };
+        // Only join once the worker has resolved. If it's still initialising it
+        // may be parked inside the OS permission dialog; joining there would
+        // re-stall the main thread for as long as the dialog stays up, the very
+        // hang we moved off the main thread to begin with. We've signalled
+        // shutdown (and dropping `cmd_tx` also wakes the worker), so it tears
+        // its own stream down once the prompt resolves and then exits. The cpal
+        // stream is owned entirely by that thread, so detaching is safe.
+        if self.status.is_some() {
             let _ = handle.join();
         }
     }

@@ -95,6 +95,16 @@ mismatch:
   the network send is gated on PTT, matching Discord/CS2/Apex behaviour
   and avoiding the ~100 ms clip-off you'd get from starting the OS audio
   graph on every press.
+- **Non-blocking capture init**: `VoiceCapture::spawn` returns immediately
+  and opens the cpal input stream on the worker thread. On macOS that open
+  raises the OS microphone-permission prompt, which can sit on screen for
+  several seconds; the main thread must not wait on it, or the Bevy schedule
+  (and with it the Lightyear network tick) stalls long enough to drop a
+  connection that just finished its handshake, the original "joining is too
+  slow times out" bug. `manage_voice_capture_system` polls
+  `VoiceCapture::poll_status` over subsequent frames and only flips
+  `available` / `is_ready` true once the stream is actually live. Do not
+  reintroduce a blocking `ready_rx.recv()` in `spawn`.
 - HUD indicator: a pulsing dot + "Voice On" chip anchored top-center while
   PTT is held. Painted with `painter.circle_filled` rather than a Unicode
   glyph so it renders identically regardless of font fallback. Lives in
