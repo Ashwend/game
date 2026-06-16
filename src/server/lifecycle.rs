@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::{
     controller::BlockGrid,
@@ -10,8 +10,20 @@ use crate::{
 
 use super::{
     ChunkManager, DeliveryTarget, GameServer, ServerEnvelope, ServerSettings,
+    dirty_tracked_map::DirtyTrackedMap,
     dropped_items::{DroppedItemBody, DroppedItemPhysics},
 };
+
+/// Floor a persisted monotonic id counter on load so the next issued id can
+/// never collide with a live entity. Returns at least 1, at least the saved
+/// value, and at least one past the highest live id. The three persisted
+/// entity counters (dropped items, resource nodes, deployables) all need this;
+/// keeping it in one helper stops them from drifting (the dropped-item counter
+/// previously only floored at 1, ignoring the live ids).
+pub(super) fn next_id_floor(saved: u64, live_ids: impl IntoIterator<Item = u64>) -> u64 {
+    let highest_live = live_ids.into_iter().max().unwrap_or(0);
+    saved.max(highest_live.saturating_add(1)).max(1)
+}
 
 impl GameServer {
     pub fn new(mut save: WorldSave, settings: ServerSettings) -> Self {
@@ -75,7 +87,10 @@ impl GameServer {
             );
         }
 
-        let next_dropped_item_id = save.state.next_dropped_item_id.max(1);
+        let next_dropped_item_id = next_id_floor(
+            save.state.next_dropped_item_id,
+            dropped_items.keys().copied(),
+        );
         let mut next_client_id = save.state.next_client_id.max(1);
 
         // Rebuild every persisted player as a logged-out sleeping body so
@@ -104,11 +119,12 @@ impl GameServer {
         let persisted_players = HashMap::new();
         // Floor at the chunk-generator's high-water mark so admin-spawned
         // ids can't collide with chunk-issued node ids, regardless of how
-        // many nodes the world generator produced.
-        let next_resource_node_id = save.state.next_resource_node_id.max(
-            chunk_manager
-                .next_node_id()
-                .max(resource_nodes.keys().copied().max().unwrap_or(0) + 1),
+        // many nodes the world generator produced, and above every live node.
+        let next_resource_node_id = next_id_floor(
+            save.state
+                .next_resource_node_id
+                .max(chunk_manager.next_node_id()),
+            resource_nodes.keys().copied(),
         );
         // Deployables: restore from save and re-anchor to their chunks
         // so the next mirror sync spawns the replicated entity and any
@@ -125,13 +141,9 @@ impl GameServer {
             dropped_item_physics
                 .sync_deployable_colliders(entity.id, &entity.resolved_collider_blocks());
         }
-        let next_deployed_entity_id = save.state.next_deployed_entity_id.max(
-            deployed_entities
-                .keys()
-                .copied()
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1),
+        let next_deployed_entity_id = next_id_floor(
+            save.state.next_deployed_entity_id,
+            deployed_entities.keys().copied(),
         );
         // Per-player map markers: rebuild the store from the save (floors the
         // id counter above the highest survivor internally).
@@ -141,14 +153,15 @@ impl GameServer {
         let world_time = save.state.world_time();
         let tick = save.state.last_authoritative_tick;
 
-        // Seed the mirror-sync dirty sets with every initial entry so the
-        // first sync pass spawns all mirror entities once; after that only
-        // mutated ids are reprocessed.
-        let node_sync_dirty: HashSet<ResourceNodeId> = resource_nodes.keys().copied().collect();
-        let dropped_item_sync_dirty: HashSet<crate::protocol::DroppedItemId> =
-            dropped_items.keys().copied().collect();
-        let deployable_sync_dirty: HashSet<crate::protocol::DeployedEntityId> =
-            deployed_entities.keys().copied().collect();
+        // Wrap the authoritative maps in dirty-tracked stores and seed every
+        // initial entry dirty so the first mirror sync spawns all mirror
+        // entities once; after that only mutated ids are reprocessed.
+        let mut dropped_items = DirtyTrackedMap::from_map(dropped_items);
+        dropped_items.seed_all_dirty();
+        let mut resource_nodes = DirtyTrackedMap::from_map(resource_nodes);
+        resource_nodes.seed_all_dirty();
+        let mut deployed_entities = DirtyTrackedMap::from_map(deployed_entities);
+        deployed_entities.seed_all_dirty();
 
         let mut server = Self {
             tick,
@@ -161,16 +174,10 @@ impl GameServer {
             account_to_client,
             persisted_players,
             dropped_items,
-            dropped_item_sync_dirty,
-            dropped_item_sync_removed: HashSet::new(),
             dropped_item_physics,
             resource_nodes,
-            node_sync_dirty,
-            node_sync_removed: HashSet::new(),
             chunk_manager,
             deployed_entities,
-            deployable_sync_dirty,
-            deployable_sync_removed: HashSet::new(),
             loot_bags: HashMap::new(),
             next_dropped_item_id,
             next_client_id,
@@ -229,5 +236,24 @@ impl GameServer {
             })
             .into_iter()
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_id_floor;
+
+    #[test]
+    fn next_id_floor_never_collides_with_a_live_id() {
+        // Empty world: at least 1.
+        assert_eq!(next_id_floor(0, std::iter::empty()), 1);
+        assert_eq!(next_id_floor(5, std::iter::empty()), 5);
+        // Saved counter ahead of the live ids wins.
+        assert_eq!(next_id_floor(20, [3, 7, 11]), 20);
+        // Under-floored saved counter (the historical dropped-item bug): the
+        // helper lifts it above the highest live id so a fresh id cannot reuse
+        // a live one.
+        assert_eq!(next_id_floor(4, [3, 7, 11]), 12);
+        assert_eq!(next_id_floor(0, [9]), 10);
     }
 }

@@ -9,22 +9,17 @@
 
 use std::{
     fs,
-    io::Write,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
-use directories::ProjectDirs;
 use uuid::Uuid;
 
-const QUALIFIER: &str = "com";
-const ORGANIZATION: &str = "Ashwend";
-const APPLICATION: &str = "Ashwend";
 const FILE_NAME: &str = "analytics_id";
 
 /// Resolve the platform-default location for the anonymous id file.
 pub(crate) fn platform_default_path() -> Result<PathBuf> {
-    let dirs = ProjectDirs::from(QUALIFIER, ORGANIZATION, APPLICATION)
+    let dirs = crate::util::platform::project_dirs()
         .context("could not resolve the platform data directory")?;
     Ok(dirs.data_dir().join(FILE_NAME))
 }
@@ -46,23 +41,8 @@ fn read_existing(path: &Path) -> Option<Uuid> {
 }
 
 fn write_atomic(path: &Path, id: &Uuid) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "could not create analytics state directory {}",
-                parent.display()
-            )
-        })?;
-    }
-    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
-    {
-        let mut file = fs::File::create(&tmp)
-            .with_context(|| format!("could not create {}", tmp.display()))?;
-        file.write_all(id.as_hyphenated().to_string().as_bytes())
-            .with_context(|| format!("could not write {}", tmp.display()))?;
-        file.sync_all().ok();
-    }
-    fs::rename(&tmp, path).with_context(|| format!("could not finalize {}", path.display()))
+    crate::util::fs::write_atomic(path, id.as_hyphenated().to_string().as_bytes())
+        .with_context(|| format!("could not persist analytics id to {}", path.display()))
 }
 
 #[cfg(test)]

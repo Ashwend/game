@@ -2,7 +2,9 @@
 //! in here should be reachable from `protocol`, `controller`, `server`, and
 //! the client tree without pulling in heavy crates.
 
+pub mod fs;
 pub mod hash;
+pub mod platform;
 pub mod variation;
 
 /// Open `url` in the system browser. Best-effort; returns the spawn error so a

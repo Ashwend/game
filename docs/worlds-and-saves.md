@@ -9,9 +9,9 @@
 - `resource_nodes: Option<Vec<ResourceNodeState>>`, `None` for a freshly created world (initial nodes are seeded from the world definition); `Some(_)` once the world has been hosted, so harvested nodes don't respawn
 - `next_dropped_item_id`, `next_client_id`
 
-Bump `SAVE_FORMAT_VERSION` in `src/save.rs` on any breaking schema change. There is no migration, older saves are rejected.
+Bump `SAVE_FORMAT_VERSION` in `src/save/format.rs` on any breaking schema change. There is no migration, older saves are rejected.
 
-`MapType::Procedural { seed, size }` builds a chunk-generated world sized by `ProceduralMapSize::{Small, Medium, Large}` (3×3 / 5×5 / 9×9 chunks at `CHUNK_SIZE_M = 64` m per side, so 192 / 320 / 576 m playable squares). `WorldData::test_world()` is a convenience helper used by tests and the menu backdrop fallback, it returns the default procedural world.
+`MapType::Procedural { seed, size }` builds a chunk-generated world sized by `ProceduralMapSize::{Small, Medium, Large}` (15 / 31 / 63 chunks per side at `CHUNK_SIZE_M = 64` m, so 960 / 1984 / 4032 m playable squares; each is forced to an odd cell count so a single center chunk sits over the origin). `WorldData::test_world()` is a convenience helper used by tests and the menu backdrop fallback, it returns the default procedural world.
 
 ## Chunk pipeline
 
@@ -21,7 +21,7 @@ Pure generation (no I/O, deterministic from the seed) lives under `src/world/chu
 - `generator.rs` Poisson-disk-samples node spawn positions inside each chunk, scaled by the local channel intensity and the classification's base capacity. Edge margin keeps spawns at least 0.5 m away from the chunk boundary so the client's collider grid doesn't pop when crossing.
 - `noise.rs` owns `value_noise_2d`, `fbm`, `splitmix64`, and the per-chunk `ChunkRng` both passes share.
 
-The server side is `src/server/chunk_manager.rs`:
+The server side is the `src/server/chunk_manager/` module (`mod.rs` plus `membership.rs`, `aoi.rs`, `regrow.rs`, `save.rs`):
 
 - **Membership**, every networked entity (resource node ids, dropped item ids, eventually building ids) is registered against the chunk that contains its position; the entity itself stays in its owning collection (`GameServer::resource_nodes`, `dropped_items`, `clients`).
 - **AoI streaming**, given a player position and `ViewRadiusTier`, the manager returns the Chebyshev ring of chunk coords the player should see (rings of 1 / 2 / 3 cells for Low / Medium / High, plus a `LOAD_BUFFER_RINGS = 1` outer ring used purely as a collider-stability buffer to avoid jitter when crossing boundaries). The room-subscription system in `src/net/host.rs` diffs that set against the client's last-known subscriptions and emits `AddSender`/`RemoveSender` events on the per-chunk Lightyear `Room` entities; Lightyear then auto-ships entity spawns/despawns for everything anchored to those chunks. There is no parallel per-entity AoI path.

@@ -14,19 +14,19 @@ impl GameServer {
         self.tick += 1;
         self.save.state.last_authoritative_tick = self.tick;
         self.world_time.advance(delta_seconds);
-        self.dropped_item_physics.step(
-            delta_seconds,
-            &mut self.dropped_items,
-            &mut self.dropped_item_sync_dirty,
-        );
-        // Re-anchor the items the physics step actually moved; they're
-        // exactly the ones in the sync-dirty set (spawns and stack edits
-        // ride along as cheap "already in this chunk" no-ops). At-rest
-        // items skip both the dirty mark and this walk entirely.
-        for id in &self.dropped_item_sync_dirty {
-            if let Some(body) = self.dropped_items.get(id) {
-                self.chunk_manager
-                    .update_dropped_item_chunk(*id, body.item.position);
+        self.dropped_item_physics
+            .step(delta_seconds, &mut self.dropped_items);
+        // Re-anchor the items the physics step actually moved; they're exactly
+        // the ones now flagged dirty (spawns and stack edits ride along as
+        // cheap "already in this chunk" no-ops). At-rest items skip both the
+        // dirty mark and this walk entirely. Collect first so the chunk_manager
+        // mutation doesn't overlap the dropped_items borrow.
+        let moved: Vec<crate::protocol::DroppedItemId> =
+            self.dropped_items.dirty_ids().copied().collect();
+        for id in moved {
+            if let Some(body) = self.dropped_items.get(&id) {
+                let position = body.item.position;
+                self.chunk_manager.update_dropped_item_chunk(id, position);
             }
         }
         // Chunk manager owns regrows now, fresh-position spawns 5-15 min

@@ -20,13 +20,13 @@ use crate::{
         tool_effectiveness_pct,
     },
     protocol::{
-        ClientId, DamageDeployableCommand, DeployedEntityId, PlaceDeployableCommand, ServerMessage,
-        ToastKind, ToastMessage, Vec3Net,
+        ClientId, DamageDeployableCommand, DeployedEntityId, PlaceDeployableCommand, ToastKind,
+        Vec3Net,
     },
     world::WorldBlock,
 };
 
-use super::{DeliveryTarget, GameServer, ServerEnvelope, inventory::take_items_from_inventory};
+use super::{GameServer, ServerEnvelope, inventory::take_items_from_inventory};
 
 use crate::game_balance::{
     DEPLOYABLE_DAMAGE_PER_GATHER_POINT as DAMAGE_PER_GATHER_POINT,
@@ -113,6 +113,42 @@ impl DeployedEntity {
         };
         self.collider_blocks(profile)
     }
+
+    /// Build a freshly-placed deployable with the common scaffold filled in:
+    /// `id = 0` (the caller assigns the real id at insert), full health from
+    /// `max_health`, stability 100 (the post-insert stability refresh computes
+    /// the real value for building pieces and doors), and no kind-specific
+    /// sub-state. Callers that need a furnace/door/storage/torch sub-state set
+    /// it via struct-update: `DeployedEntity { door: Some(..), ..new(..) }`.
+    /// The save-restore path builds the struct explicitly and does NOT use this
+    /// (it maps every persisted field, including the recovered sub-states).
+    pub(super) fn new(
+        item_id: ItemId,
+        kind: DeployableKind,
+        position: Vec3Net,
+        yaw: f32,
+        max_health: u32,
+        owner: Option<crate::protocol::AccountId>,
+        placed_at_tick: u64,
+    ) -> Self {
+        Self {
+            id: 0,
+            item_id,
+            kind,
+            position,
+            yaw,
+            health: max_health,
+            max_health,
+            owner,
+            furnace: None,
+            placed_at_tick,
+            door: None,
+            label: None,
+            storage: None,
+            torch: None,
+            stability: 100,
+        }
+    }
 }
 
 impl GameServer {
@@ -183,23 +219,15 @@ impl GameServer {
         // resource nodes already enforce their own collision so the
         // player can't hammer a workbench inside a tree.
         let owner_account_id = client.account_id;
-        let candidate = DeployedEntity {
-            id: 0,
-            item_id: command.item_id.clone(),
-            kind: profile.kind,
-            position: command.position,
-            yaw: command.yaw,
-            health: profile.max_health,
-            max_health: profile.max_health,
-            owner: Some(owner_account_id),
-            furnace: None,
-            placed_at_tick: self.tick,
-            door: None,
-            label: None,
-            stability: 100,
-            storage: None,
-            torch: None,
-        };
+        let candidate = DeployedEntity::new(
+            command.item_id.clone(),
+            profile.kind,
+            command.position,
+            command.yaw,
+            profile.max_health,
+            Some(owner_account_id),
+            self.tick,
+        );
         let candidate_blocks = candidate.collider_blocks(profile);
         if self.any_deployable_overlaps(&candidate_blocks, None) {
             return place_toast(
@@ -307,22 +335,18 @@ impl GameServer {
         self.next_deployed_entity_id = self.next_deployed_entity_id.saturating_add(1);
         let entity = DeployedEntity {
             id,
-            item_id: command.item_id.clone(),
-            kind: DeployableKind::Torch {
-                wall: command.wall_mounted,
-            },
-            position: command.position,
-            yaw: command.yaw,
-            health: profile.max_health,
-            max_health: profile.max_health,
-            owner: Some(owner_account_id),
-            furnace: None,
-            placed_at_tick: self.tick,
-            door: None,
-            label: None,
-            stability: 100,
-            storage: None,
             torch: Some(super::torch::TorchState::new()),
+            ..DeployedEntity::new(
+                command.item_id.clone(),
+                DeployableKind::Torch {
+                    wall: command.wall_mounted,
+                },
+                command.position,
+                command.yaw,
+                profile.max_health,
+                Some(owner_account_id),
+                self.tick,
+            )
         };
         let position = entity.position;
         self.insert_deployed_entity(id, entity);
@@ -638,10 +662,7 @@ impl GameServer {
 }
 
 fn place_toast(client_id: ClientId, kind: ToastKind, text: String) -> Vec<ServerEnvelope> {
-    vec![ServerEnvelope {
-        target: DeliveryTarget::Client(client_id),
-        message: ServerMessage::Toast(ToastMessage::new(kind, text)),
-    }]
+    super::toasts::toast(client_id, kind, text)
 }
 
 /// True when `position` is within `range` (horizontally) of the nearest

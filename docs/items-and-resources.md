@@ -26,7 +26,7 @@ Authoring frame for all four tools: handle along Blender +Z (the +Y-up export ma
 - `tool`: `Option<ToolProfile>`, present only for tools. Carries `kind` (`Axe`, `Pickaxe`, `Hands`), `gather_amount`, `cooldown_ticks`, `tier`, `max_durability`, and `player_damage`. Tier is how progression scales: an iron tool is the same `kind` at `tier: 2` with a bigger `gather_amount`, so it satisfies every tier-1 node automatically and yields more per swing without any per-item branch. `max_durability` is the tool's impact budget: each swing that connects costs one point (the single wear path is `consume_active_tool_durability` in [`src/server/tool_wear.rs`](../src/server/tool_wear.rs)), the remaining count rides on `ItemStack::durability`, and at zero the tool breaks. `player_damage` is the per-swing PvP damage so combat strength tracks tier the same way gathering does. Both pull their values from [`src/game_balance.rs`](../src/game_balance.rs).
 - `deployable`: `Option<DeployableProfile>`, present only for placeable structures (workbench, furnace). Carries `kind`, collider half-extents, max health, station radius (for crafting gating), and material classification.
 
-The active registry is constructed once via `item_definitions_by_id()` (a `LazyLock<HashMap<&str, &'static ItemDefinition>>`) and queried via:
+The active registry is constructed once via `item_definitions_by_id()` (a build-once `OnceLock<HashMap<&'static str, &'static ItemDefinition>>` over the `REGISTERED_ITEMS` slice) and queried via:
 
 - `item_definition(id) -> Option<&'static ItemDefinition>`, full lookup.
 - `stack_limit(id) -> Option<u16>`, convenience for inventory math.

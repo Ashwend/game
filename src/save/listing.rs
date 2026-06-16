@@ -115,7 +115,7 @@ fn decode_world_name_best_effort(bytes: &[u8]) -> Option<String> {
         return None;
     }
     let compressed = &bytes[SAVE_MAGIC.len() + 4..];
-    let payload = zstd::stream::decode_all(compressed).ok()?;
+    let payload = super::format::zstd_decompress_bounded(compressed).ok()?;
     let (prefix, _rest) = postcard::take_from_bytes::<WorldSaveNamePrefix>(&payload).ok()?;
     let name = prefix.name.trim();
     if name.is_empty() || name.chars().any(char::is_control) {

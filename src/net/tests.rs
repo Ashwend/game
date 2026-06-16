@@ -205,6 +205,54 @@ fn direct_multiplayer_connects_to_shared_lightyear_server_host() {
     spawned.handle.shutdown().expect("server should stop");
 }
 
+/// Per-entity replication smoke test: a connected client must actually receive
+/// replicated world entities in its ECS world, not just `ServerMessage` chat /
+/// welcome. The world generator seeds resource nodes around the origin, so once
+/// the AoI room subscription lands they replicate into the client world via the
+/// per-entity `ReplicationGroup` machinery. This is the cheapest guard that the
+/// `ReplicationGroup::new_from_entity()` wiring (upstream bug #740) is delivering
+/// entities at all; a regression that breaks the spawn path turns this red
+/// instead of only showing up as missing nodes in a live session. (Post-spawn
+/// diff delivery is still best verified with `--features replication-trace`; see
+/// the Replication section of docs/networking.md.)
+#[test]
+fn replicated_world_entities_reach_the_client_world() {
+    let user = user();
+    let mut spawned = super::host::spawn_loopback_server(
+        WorldSave::new("Replicated", Some(user.account_id)),
+        ServerSettings {
+            auth_mode: AuthMode::NoAuth,
+            singleplayer_host: None,
+        },
+    )
+    .expect("Lightyear server should start");
+
+    let mut rig = TestRig::direct(spawned.addr);
+
+    let mut replicated_nodes = 0usize;
+    for _ in 0..400 {
+        let _ = rig.poll();
+        let world = rig.app.world_mut();
+        let mut query = world.query::<&crate::server::ResourceNode>();
+        replicated_nodes = query.iter(world).count();
+        if replicated_nodes > 0 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    assert!(
+        replicated_nodes > 0,
+        "expected replicated ResourceNode entities to reach the client world via the \
+         per-entity ReplicationGroup path, found none"
+    );
+
+    rig.session
+        .send(ClientMessage::Disconnect)
+        .expect("disconnect should send");
+    spawned.handle.shutdown().expect("server should stop");
+}
+
 #[test]
 fn singleplayer_shutdown_persists_world_from_network_server() {
     let store = temp_store();

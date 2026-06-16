@@ -11,7 +11,11 @@ mod pkce;
 mod token_store;
 mod tokens;
 
-use std::process::Command;
+// Browser launch is identical to the menu Discord link and the updater's
+// download-page fallback, so the per-OS command lives once in
+// `crate::util::open_url`. Re-exported here so the login flow keeps calling
+// `super::open_url`.
+use crate::util::open_url;
 
 pub use config::WorkosConfig;
 pub use login::{
@@ -23,27 +27,3 @@ pub use login::{
 // avoid an unused-import warning in the lib build.
 #[cfg(test)]
 pub(crate) use login::Session;
-
-/// Open `url` in the system browser. Best-effort; the login flow surfaces any
-/// error to the user.
-fn open_url(url: &str) -> std::io::Result<()> {
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg(url);
-        command
-    };
-    #[cfg(target_os = "linux")]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(url);
-        command
-    };
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("cmd");
-        command.args(["/C", "start", "", url]);
-        command
-    };
-    command.spawn().map(|_| ())
-}

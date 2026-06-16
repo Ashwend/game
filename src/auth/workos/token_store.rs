@@ -15,20 +15,14 @@
 
 use std::{fs, path::PathBuf};
 
-use directories::ProjectDirs;
-
 use crate::local_crypto;
 
-/// Config-dir coordinates. Must match `ClientSettingsStore` so the token sits
-/// next to `settings.dat` in the same platform config directory.
-const QUALIFIER: &str = "com";
-const ORGANIZATION: &str = "Ashwend";
-const APPLICATION: &str = "Ashwend";
+/// Config-file name. Sits next to `settings.dat` in the same platform config
+/// directory (both resolve through `crate::util::platform::project_dirs`).
 const TOKEN_FILE: &str = "session.bin";
 
 fn token_path() -> Option<PathBuf> {
-    ProjectDirs::from(QUALIFIER, ORGANIZATION, APPLICATION)
-        .map(|dirs| dirs.config_dir().join(TOKEN_FILE))
+    crate::util::platform::project_dirs().map(|dirs| dirs.config_dir().join(TOKEN_FILE))
 }
 
 pub(super) fn store_refresh_token(token: &str) {

@@ -88,6 +88,38 @@ pub(super) const SAVE_FORMAT_VERSION: u32 = 15;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
 /// at >100MB/s compression and ~1GB/s decompression.
 const ZSTD_LEVEL: i32 = 5;
+/// Hard ceiling on the decompressed payload size. Save files are local (a
+/// singleplayer file the player owns, or an operator-controlled dedicated
+/// world), never attacker-delivered over the wire, so this is defense in depth
+/// rather than a live threat: it stops a hand-crafted or corrupted blob from
+/// driving an unbounded allocation (a zstd decompression bomb). Sized far above
+/// any real world (1 GiB); raise it if a legitimate save ever approaches it.
+pub(super) const MAX_DECOMPRESSED_SAVE_BYTES: u64 = 1 << 30;
+
+/// zstd-decompress `compressed`, refusing to allocate past
+/// [`MAX_DECOMPRESSED_SAVE_BYTES`]. Shared by the full loader and the
+/// best-effort name recovery so both call sites are bounded.
+pub(super) fn zstd_decompress_bounded(compressed: &[u8]) -> Result<Vec<u8>> {
+    zstd_decompress_capped(compressed, MAX_DECOMPRESSED_SAVE_BYTES)
+}
+
+fn zstd_decompress_capped(compressed: &[u8], cap: u64) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let mut decoder = zstd::stream::read::Decoder::new(compressed)
+        .context("could not start zstd decode of world save")?;
+    let mut out = Vec::new();
+    // Read one byte past the cap so an exactly-at-cap payload still succeeds
+    // while anything larger is detectable and rejected.
+    decoder
+        .by_ref()
+        .take(cap + 1)
+        .read_to_end(&mut out)
+        .context("could not zstd-decompress world save")?;
+    if out.len() as u64 > cap {
+        bail!("world save decompresses beyond the {cap}-byte cap");
+    }
+    Ok(out)
+}
 
 pub fn save_world_file(path: &Path, save: &WorldSave) -> Result<()> {
     if let Some(parent) = path.parent() {
@@ -133,8 +165,7 @@ pub(super) fn decode_world_save(bytes: &[u8]) -> Result<WorldSave> {
     }
 
     let compressed = &bytes[SAVE_MAGIC.len() + 4..];
-    let payload =
-        zstd::stream::decode_all(compressed).context("could not zstd-decompress world save")?;
+    let payload = zstd_decompress_bounded(compressed)?;
     postcard::from_bytes(&payload).context("could not postcard-decode world save")
 }
 
@@ -239,6 +270,76 @@ mod tests {
         bytes.extend_from_slice(&999u32.to_le_bytes());
         let err = decode_world_save(&bytes).unwrap_err();
         assert!(err.to_string().contains("version 999"));
+    }
+
+    /// Golden-layout guard. postcard is a non-self-describing positional
+    /// format, so reordering or retyping a field in `WorldSave` (or any nested
+    /// save struct) silently changes the on-disk byte layout WITHOUT changing
+    /// `SAVE_FORMAT_VERSION`, which would make every shipped `.save` fail to
+    /// load with no test going red. This pins the SHA-256 of the uncompressed
+    /// postcard payload of a fixed save. When it trips, the author must either
+    /// revert the layout change or deliberately bump `SAVE_FORMAT_VERSION` and
+    /// regenerate the hash below, turning silent corruption into an explicit
+    /// decision. Hashing the postcard payload (not the zstd output) keeps a
+    /// zstd version/level change from false-failing.
+    #[test]
+    fn world_save_postcard_layout_is_stable() {
+        use super::super::types::WorldStateSave;
+        use crate::protocol::{DroppedWorldItem, ItemStack, QuatNet, Vec3Net};
+        use crate::world::{MapType, ProceduralMapSize};
+        use sha2::{Digest, Sha256};
+
+        let state = WorldStateSave {
+            last_authoritative_tick: 123,
+            dropped_items: vec![DroppedWorldItem {
+                id: 5,
+                stack: ItemStack::new("wood", 9),
+                position: Vec3Net::new(1.0, 2.0, 3.0),
+                yaw: 0.5,
+                rotation: QuatNet::IDENTITY,
+            }],
+            resource_nodes: Some(Vec::new()),
+            next_dropped_item_id: 6,
+            next_client_id: 2,
+            next_resource_node_id: 1000,
+            world_time_seconds_of_day: 42.0,
+            world_time_multiplier: 1.0,
+            next_deployed_entity_id: 1,
+            ..Default::default()
+        };
+        let save = WorldSave {
+            id: uuid::Uuid::from_u128(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef),
+            name: "Golden World".to_owned(),
+            map: MapType::Procedural {
+                seed: 42,
+                size: ProceduralMapSize::Small,
+            },
+            created_at_unix: 1_700_000_000,
+            admins: vec![7],
+            state,
+        };
+
+        let payload = postcard::to_allocvec(&save).expect("postcard encode");
+        let digest = Sha256::digest(&payload);
+        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex, "8ae0b93968b625f9ada046d06399c0439aa53369ce28134ed3002ef88c1f5795",
+            "WorldSave postcard layout changed. If intentional, bump \
+             SAVE_FORMAT_VERSION and update this golden hash to {hex}."
+        );
+    }
+
+    #[test]
+    fn bounded_decompress_rejects_over_cap_payloads() {
+        // A payload that decompresses past the cap must error out instead of
+        // allocating the whole thing. Use a tiny cap so the test stays cheap.
+        let payload = vec![0u8; 4096];
+        let compressed = zstd::stream::encode_all(payload.as_slice(), ZSTD_LEVEL).expect("encode");
+        let err = zstd_decompress_capped(&compressed, 64).unwrap_err();
+        assert!(err.to_string().contains("cap"), "got: {err}");
+        // The same blob is fine under a generous cap.
+        let ok = zstd_decompress_capped(&compressed, 1 << 20).expect("under cap");
+        assert_eq!(ok.len(), payload.len());
     }
 
     #[test]

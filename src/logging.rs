@@ -44,22 +44,15 @@ use bevy::{
         },
     },
 };
-use directories::ProjectDirs;
-
-// Same identity triple as the rest of our platform-dir users (settings,
-// saves, analytics id) so every Ashwend file lands under one data directory.
-const QUALIFIER: &str = "com";
-const ORGANIZATION: &str = "Ashwend";
-const APPLICATION: &str = "Ashwend";
-
 const CLIENT_LOG_FILE_NAME: &str = "ashwend.log";
 const CLIENT_PREV_LOG_FILE_NAME: &str = "ashwend.prev.log";
 const SERVER_LOG_FILE_NAME: &str = "ashwend-server.log";
 const SERVER_PREV_LOG_FILE_NAME: &str = "ashwend-server.prev.log";
 
-/// Default server log filter when `RUST_LOG` is unset. `info` everywhere, with
-/// the usual render-crate spam muted (harmless on a headless server, but keeps
-/// the filter identical should a future tool pull those crates in).
+/// Per-crate noise suppression shared by the client (`app.rs` `LogPlugin`) and
+/// the dedicated server. Mutes the usual render-crate spam (harmless on a
+/// headless server, but keeps the filter identical should a future tool pull
+/// those crates in).
 ///
 /// `lightyear_replication::send::components` is muted because its sender
 /// resolution iterates the server's whole link collection on every
@@ -68,8 +61,12 @@ const SERVER_PREV_LOG_FILE_NAME: &str = "ashwend-server.prev.log";
 /// per connect. Upstream logs the identical condition at `debug` in a
 /// sibling path, so this is noise, not signal; setting `RUST_LOG`
 /// explicitly (the replication-debug workflow) re-enables the module.
-const DEFAULT_SERVER_FILTER: &str =
-    "info,wgpu=error,naga=warn,lightyear_replication::send::components=off";
+///
+/// The server prepends `info,` to this (it builds its own subscriber, so it
+/// sets the base level itself); the client's Bevy `LogPlugin` already supplies
+/// the base level separately, so it uses this tail verbatim.
+pub(crate) const NOISY_CRATE_LOG_FILTER: &str =
+    "wgpu=error,naga=warn,lightyear_replication::send::components=off";
 
 /// The single shared handle the `tracing` layer and [`write_raw`] both write
 /// through. Behind a `Mutex` so the normal log path and a synchronous crash
@@ -102,8 +99,8 @@ pub fn init_dedicated_server_logging() {
         SERVER_PREV_LOG_FILE_NAME,
         "dedicated server",
     );
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_SERVER_FILTER));
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(format!("info,{NOISY_CRATE_LOG_FILTER}")));
     let stderr_layer = tracing_subscriber::fmt::layer().with_writer(io::stderr);
 
     let result = match sink {
@@ -199,7 +196,7 @@ fn write_line(sink: &Arc<Mutex<File>>, text: &str) {
 }
 
 fn log_path(file_name: &str) -> anyhow::Result<PathBuf> {
-    let dirs = ProjectDirs::from(QUALIFIER, ORGANIZATION, APPLICATION)
+    let dirs = crate::util::platform::project_dirs()
         .ok_or_else(|| anyhow::anyhow!("could not resolve the platform data directory"))?;
     Ok(dirs.data_dir().join("logs").join(file_name))
 }

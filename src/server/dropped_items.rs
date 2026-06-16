@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use rapier3d::prelude::{
     BroadPhaseBvh, CCDSolver, ColliderBuilder, ColliderHandle, ColliderSet, ImpulseJointSet,
@@ -15,6 +15,7 @@ use crate::{
 };
 
 use super::GameServer;
+use super::dirty_tracked_map::DirtyTrackedMap;
 
 pub(super) const DROPPED_ITEM_RADIUS: f32 = 0.1;
 const DROPPED_ITEM_SPIN_RADIUS: f32 = 0.18;
@@ -286,8 +287,7 @@ impl DroppedItemPhysics {
     pub(super) fn step(
         &mut self,
         delta_seconds: f32,
-        dropped_items: &mut HashMap<DroppedItemId, DroppedItemBody>,
-        sync_dirty: &mut HashSet<DroppedItemId>,
+        dropped_items: &mut DirtyTrackedMap<DroppedItemId, DroppedItemBody>,
     ) {
         let mut remaining = if delta_seconds.is_finite() {
             delta_seconds.clamp(0.0, DROPPED_ITEM_MAX_SIMULATION_DELTA)
@@ -315,9 +315,11 @@ impl DroppedItemPhysics {
             remaining -= step;
         }
 
-        for (id, body) in dropped_items.iter_mut() {
+        // Mark dirty only the bodies whose transform actually changed this
+        // step; at-rest items must stay out of the replication delta.
+        dropped_items.for_each_mut_then_mark(|_id, body| {
             let Some(rigid_body) = self.bodies.get(body.body_handle) else {
-                continue;
+                return false;
             };
             let translation = rigid_body.translation();
             let rotation = rigid_body.rotation();
@@ -336,10 +338,8 @@ impl DroppedItemPhysics {
                 body.item.yaw = new_yaw;
             }
 
-            if changed {
-                sync_dirty.insert(*id);
-            }
-        }
+            changed
+        });
     }
 }
 

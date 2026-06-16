@@ -321,10 +321,7 @@ impl GameServer {
 }
 
 fn craft_toast(client_id: ClientId, kind: ToastKind, text: String) -> Vec<ServerEnvelope> {
-    vec![ServerEnvelope {
-        target: DeliveryTarget::Client(client_id),
-        message: ServerMessage::Toast(ToastMessage::new(kind, text)),
-    }]
+    super::toasts::toast(client_id, kind, text)
 }
 
 /// Does the client's inventory currently hold every input the recipe needs

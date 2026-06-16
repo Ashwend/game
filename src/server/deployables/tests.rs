@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     items::{CRUDE_FURNACE_ID, WORKBENCH_T1_ID, intern_item_id},
-    protocol::{GAME_VERSION, ItemStack, PROTOCOL_VERSION},
+    protocol::{GAME_VERSION, ItemStack, PROTOCOL_VERSION, ServerMessage},
     server::{
         inventory::add_stack_to_inventory,
         test_support::{connect_named, server},

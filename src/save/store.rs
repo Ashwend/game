@@ -4,7 +4,6 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use directories::ProjectDirs;
 use uuid::Uuid;
 
 use crate::{protocol::AccountId, world::MapType};
@@ -17,10 +16,6 @@ use super::listing::{
 use super::types::WorldSave;
 use super::validate::normalize_world_name;
 
-const QUALIFIER: &str = "com";
-const ORGANIZATION: &str = "Ashwend";
-const APPLICATION: &str = "Ashwend";
-
 #[derive(Debug, Clone)]
 pub struct WorldStore {
     root: PathBuf,
@@ -28,7 +23,7 @@ pub struct WorldStore {
 
 impl WorldStore {
     pub fn platform_default() -> Result<Self> {
-        let project_dirs = ProjectDirs::from(QUALIFIER, ORGANIZATION, APPLICATION)
+        let project_dirs = crate::util::platform::project_dirs()
             .context("could not resolve the platform data directory")?;
         Ok(Self::new(project_dirs.data_dir().join("worlds")))
     }

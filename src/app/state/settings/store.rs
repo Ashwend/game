@@ -2,14 +2,10 @@ use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result};
 use bevy::prelude::*;
-use directories::ProjectDirs;
 
 use super::data::ClientSettings;
 use crate::local_crypto;
 
-const QUALIFIER: &str = "com";
-const ORGANIZATION: &str = "Ashwend";
-const APPLICATION: &str = "Ashwend";
 // Encrypted-at-rest config (see `save`). The `.dat` extension reflects the
 // sealed binary contents; a pre-encryption `settings.json` is a different path
 // and is simply ignored (the player starts from defaults).
@@ -22,7 +18,7 @@ pub(crate) struct ClientSettingsStore {
 
 impl ClientSettingsStore {
     pub(crate) fn platform_default() -> Result<Self> {
-        let project_dirs = ProjectDirs::from(QUALIFIER, ORGANIZATION, APPLICATION)
+        let project_dirs = crate::util::platform::project_dirs()
             .context("could not resolve the platform config directory")?;
         Ok(Self::new(project_dirs.config_dir().join(SETTINGS_FILE)))
     }

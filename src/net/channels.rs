@@ -5,8 +5,8 @@ use std::{
 
 use bevy::prelude::*;
 use lightyear::prelude::{
-    AppChannelExt, AppComponentExt, AppMessageExt, ChannelMode, ChannelSettings, MessageSender,
-    NetworkDirection, ReliableSettings,
+    AppChannelExt, AppComponentExt, AppMessageExt, ChannelMode, ChannelSettings, Message,
+    MessageSender, NetworkDirection, ReliableSettings,
 };
 
 use crate::{
@@ -127,26 +127,48 @@ pub(crate) struct ReliableChannel;
 pub(crate) struct UnreliableChannel;
 pub(crate) struct VoiceChannel;
 
-pub(crate) fn send_client_message(
-    sender: &mut MessageSender<ClientMessage>,
-    message: ClientMessage,
-) {
-    match message.delivery() {
+/// Wire message that knows which delivery guarantee (and therefore which
+/// channel) it wants. Lets [`send_over_channel`] own the single
+/// `PacketDelivery -> channel` table for both message directions.
+trait HasDelivery {
+    fn packet_delivery(&self) -> PacketDelivery;
+}
+
+impl HasDelivery for ClientMessage {
+    fn packet_delivery(&self) -> PacketDelivery {
+        self.delivery()
+    }
+}
+
+impl HasDelivery for ServerMessage {
+    fn packet_delivery(&self) -> PacketDelivery {
+        self.delivery()
+    }
+}
+
+/// Route `message` onto the channel matching its requested delivery. The
+/// delivery-to-channel mapping lives here exactly once; both directions share
+/// it.
+fn send_over_channel<M: Message + HasDelivery>(sender: &mut MessageSender<M>, message: M) {
+    match message.packet_delivery() {
         PacketDelivery::Reliable => sender.send::<ReliableChannel>(message),
         PacketDelivery::Unreliable => sender.send::<UnreliableChannel>(message),
         PacketDelivery::UnreliableUnordered => sender.send::<VoiceChannel>(message),
     }
 }
 
+pub(crate) fn send_client_message(
+    sender: &mut MessageSender<ClientMessage>,
+    message: ClientMessage,
+) {
+    send_over_channel(sender, message);
+}
+
 pub(crate) fn send_server_message(
     sender: &mut MessageSender<ServerMessage>,
     message: ServerMessage,
 ) {
-    match message.delivery() {
-        PacketDelivery::Reliable => sender.send::<ReliableChannel>(message),
-        PacketDelivery::Unreliable => sender.send::<UnreliableChannel>(message),
-        PacketDelivery::UnreliableUnordered => sender.send::<VoiceChannel>(message),
-    }
+    send_over_channel(sender, message);
 }
 
 /// Context the caller can pass so the warning only fires when it matters.

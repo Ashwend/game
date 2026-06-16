@@ -45,10 +45,21 @@ use crate::{
 
 use super::deployable_visual_transform;
 
-/// Maximum distance, in metres, between the player's feet and the
-/// ghost. Matches `PLACEMENT_REACH_M` on the server so client preview
-/// and server validation agree on what the player can reach.
-const PLACEMENT_REACH_M: f32 = 5.0;
+/// Maximum distance, in metres, between the player's feet and the ghost. Reads
+/// the one balance constant the server also validates against so client preview
+/// and server authority cannot drift.
+const PLACEMENT_REACH_M: f32 = crate::game_balance::DEPLOYABLE_PLACEMENT_REACH_M;
+
+/// True when the XZ distance from the player's `feet` to `point` is within
+/// [`PLACEMENT_REACH_M`]. The horizontal-only reach gate used by every
+/// placement preview (building, door, torch, foundation aim, free placement).
+/// Accepts both `Vec3` and the replicated `Vec3Net` via `Into`.
+fn within_reach(point: impl Into<Vec3>, feet: Vec3) -> bool {
+    let point = point.into();
+    let dx = point.x - feet.x;
+    let dz = point.z - feet.z;
+    (dx * dx + dz * dz).sqrt() <= PLACEMENT_REACH_M
+}
 /// Radians of ghost yaw per pixel of horizontal mouse motion while
 /// right-mouse is held. ~157 px sweeps a quarter turn, slow enough to
 /// land precisely on the angle the player wants while fine-tuning.
@@ -329,11 +340,7 @@ fn update_building_placement(
         return;
     };
 
-    let in_reach = player_feet.is_some_and(|feet| {
-        let dx = position.x - feet.x;
-        let dz = position.z - feet.z;
-        (dx * dx + dz * dz).sqrt() <= PLACEMENT_REACH_M
-    });
+    let in_reach = player_feet.is_some_and(|feet| within_reach(position, feet));
     // Mirror of the server's stability gate, predicted from replicated
     // per-piece stabilities, so the ghost goes red where the server
     // would refuse ("too far up / too far out").
@@ -413,11 +420,7 @@ fn update_door_placement(
                         0.0
                     },
             );
-            let in_reach = player_feet.is_some_and(|feet| {
-                let dx = position.x - feet.x;
-                let dz = position.z - feet.z;
-                (dx * dx + dz * dz).sqrt() <= PLACEMENT_REACH_M
-            });
+            let in_reach = player_feet.is_some_and(|feet| within_reach(position, feet));
             placement.world_position = Some(Vec3::new(position.x, position.y, position.z));
             placement.yaw = yaw;
             placement.valid = in_reach;
@@ -487,11 +490,7 @@ fn update_torch_placement(
 }
 
 fn torch_in_reach(position: Vec3, player_feet: Option<Vec3>) -> bool {
-    player_feet.is_some_and(|feet| {
-        let dx = position.x - feet.x;
-        let dz = position.z - feet.z;
-        (dx * dx + dz * dz).sqrt() <= PLACEMENT_REACH_M
-    })
+    player_feet.is_some_and(|feet| within_reach(position, feet))
 }
 
 /// Nearest wall-like building piece the look ray hits, as `(t, point, outward
@@ -800,9 +799,7 @@ fn foundation_aim(camera_transform: &GlobalTransform, player_feet: Option<Vec3>)
         let t = -origin.y / forward.y;
         if t > 0.0 && t <= 60.0 {
             let hit = origin + forward * t;
-            let dx = hit.x - feet.x;
-            let dz = hit.z - feet.z;
-            if (dx * dx + dz * dz).sqrt() <= PLACEMENT_REACH_M {
+            if within_reach(hit, feet) {
                 return Some(Vec3::new(hit.x, 0.0, hit.z));
             }
         }
@@ -905,9 +902,7 @@ fn is_free_placement_valid(
     let Some(player_feet) = player_feet else {
         return false;
     };
-    let dx = target.x - player_feet.x;
-    let dz = target.z - player_feet.z;
-    if (dx * dx + dz * dz).sqrt() > PLACEMENT_REACH_M {
+    if !within_reach(target, player_feet) {
         return false;
     }
     // Real 3D box check against every replicated deployable, buildings

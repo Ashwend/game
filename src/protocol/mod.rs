@@ -150,12 +150,24 @@ where
 }
 
 pub fn sanitize_chat(text: &str) -> Option<String> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
+    // Strip control characters (newlines, tabs, NUL, ANSI/C1 escapes, ...)
+    // before the length cap. Chat is a single-line plain string rendered into
+    // every nearby peer's overlay, so a control char is never wanted and would
+    // otherwise be a peer-to-peer UI-corruption vector. Re-trim afterwards in
+    // case removing a control char exposed surrounding whitespace, then reject
+    // anything that is now empty (e.g. a control-only message).
+    let cleaned: String = text
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_CHAT_LEN)
+        .collect();
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
         return None;
     }
 
-    Some(trimmed.chars().take(MAX_CHAT_LEN).collect())
+    Some(cleaned.to_owned())
 }
 
 #[cfg(test)]
@@ -180,6 +192,20 @@ mod tests {
         let sanitized = sanitize_chat(&long).expect("chat should be valid");
         assert_eq!(sanitized.len(), MAX_CHAT_LEN);
         assert!(sanitize_chat("   ").is_none());
+    }
+
+    #[test]
+    fn chat_strips_control_characters() {
+        // Newlines, tabs, NUL, and escape sequences are removed, not preserved.
+        assert_eq!(
+            sanitize_chat("hi\nthere\tyou\u{0007}").as_deref(),
+            Some("hithereyou")
+        );
+        // A message that is nothing but control characters sanitizes to empty.
+        assert!(sanitize_chat("\n\t\u{0000}\u{001b}").is_none());
+        // Stripping an interior control char must not leave dangling whitespace
+        // at the ends.
+        assert_eq!(sanitize_chat("a \u{0007}").as_deref(), Some("a"));
     }
 
     #[test]

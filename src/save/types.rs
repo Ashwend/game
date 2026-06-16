@@ -49,6 +49,12 @@ impl WorldSave {
     }
 }
 
+// No `#[serde(default)]` on the fields below: the loader gates on an exact
+// `SAVE_FORMAT_VERSION` match (see `src/save/format.rs`), so a decode never
+// sees a missing field, every field is always present in a same-version save.
+// Field defaults would be dead code that misleadingly implies a forward-compat
+// path that does not exist (postcard is positional, so any field add/reorder is
+// a breaking change and bumps the version). Add fields freely; bump the version.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorldStateSave {
     pub last_authoritative_tick: u64,
@@ -60,39 +66,30 @@ pub struct WorldStateSave {
     /// Chunk manager state, per-chunk capacity tracking + pending fresh-position
     /// regrows. `None` for brand-new worlds (the server boots a fresh manager
     /// from the seed).
-    #[serde(default)]
     pub chunk_manager: Option<ChunkManagerSave>,
-    #[serde(default = "default_next_id")]
     pub next_dropped_item_id: DroppedItemId,
-    #[serde(default = "default_next_id")]
     pub next_client_id: ClientId,
     /// Monotonic counter for admin-spawned resource nodes. World-authored
     /// nodes use their own static IDs from `WorldData::resource_nodes`; this
     /// counter starts well above them so the two ID spaces don't collide.
-    #[serde(default = "default_next_resource_node_id")]
     pub next_resource_node_id: ResourceNodeId,
     /// Persisted day/night clock, wall-clock seconds within the in-game
     /// day. Reload picks up wherever the last session left off so the world
     /// doesn't jump back to morning every restart.
-    #[serde(default = "default_world_time_seconds")]
     pub world_time_seconds_of_day: f32,
     /// Persisted day/night multiplier. Admins can change it via the
     /// `/speed` command; the value survives a save round-trip.
-    #[serde(default = "default_world_time_multiplier")]
     pub world_time_multiplier: f32,
     /// Structures placed in the world (workbenches, furnaces, …). Each
     /// entry carries the position, kind, current health, and the item-id
     /// it was placed from so the client can pick the right mesh on load.
-    #[serde(default)]
     pub deployed_entities: Vec<PersistedDeployedEntity>,
     /// Monotonic counter for placed-entity ids.
-    #[serde(default = "default_next_id")]
     pub next_deployed_entity_id: DeployedEntityId,
     /// Per-player world-map markers. Owned per account, only ever shown to
     /// the owner, so each entry is scoped to one account id. The marker id
     /// counter is re-derived on load from the highest stored id, so it isn't
     /// persisted separately.
-    #[serde(default)]
     pub world_map_markers: Vec<PersistedAccountMarkers>,
 }
 
@@ -146,20 +143,15 @@ pub struct PersistedDeployedEntity {
     pub furnace: Option<PersistedFurnaceState>,
     /// Server tick this entity was placed or last upgraded. Drives the
     /// hammer's demolish window across reloads.
-    #[serde(default)]
     pub placed_at_tick: u64,
     /// Door-only code-lock sub-state, same pattern as `furnace`.
-    #[serde(default)]
     pub door: Option<PersistedDoorState>,
     /// Player-given display name (sleeping bags).
-    #[serde(default)]
     pub label: Option<String>,
     /// Storage-box-only contents, same pattern as `furnace`.
-    #[serde(default)]
     pub storage: Option<PersistedStorageBoxState>,
     /// Torch-only burn state, same pattern as `furnace`. `None` for every
     /// other kind.
-    #[serde(default)]
     pub torch: Option<PersistedTorchState>,
 }
 
@@ -205,8 +197,7 @@ impl WorldStateSave {
             seconds_of_day: self.world_time_seconds_of_day,
             multiplier: self.world_time_multiplier,
         };
-        // Re-clamp on load, a save edited by hand or produced by a future
-        // version we tolerate-via-default could carry a value outside
+        // Re-clamp on load, a save edited by hand could carry a value outside
         // the safe range. Cheaper to fix once on load than on every tick.
         time.set_seconds(time.seconds_of_day);
         time.set_multiplier(time.multiplier);

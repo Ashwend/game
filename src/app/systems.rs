@@ -101,6 +101,12 @@ pub(crate) use torch_fire::{animate_torch_fire_system, tick_torch_particles_syst
 pub(crate) use update::apply_update_system;
 pub(crate) use world_map::{generate_world_map_texture_system, world_map_input_system};
 
+/// Declaration order here is NOT schedule order. The runtime order is the flat
+/// `CLIENT_UPDATE_ORDER` / `CLIENT_MENU_ORDER` lists in `app.rs`; this enum is
+/// just the shared vocabulary. A test in `app.rs`
+/// (`every_system_set_is_ordered_exactly_once`) asserts every variant below is
+/// slotted into exactly one of those lists, so adding a variant here without
+/// ordering it fails the suite.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ClientSystemSet {
     /// Refresh `LocalPlayerState` from the replicated `Player` /
@@ -139,7 +145,6 @@ pub(crate) enum ClientSystemSet {
     DeployedEntities,
     PlacementGhost,
     PlacementInput,
-    Camera,
     HeldItem,
     Sky,
     PickupTarget,

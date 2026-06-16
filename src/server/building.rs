@@ -31,12 +31,11 @@ use crate::{
     inventory::{count_items_in_inventory, take_items_from_inventory},
     items::{DeployableKind, ToolKind, item_definition},
     protocol::{
-        BuildingCommand, ClientId, DeployedEntityId, PlaceBuildingCommand, ServerMessage,
-        ToastKind, ToastMessage, Vec3Net,
+        BuildingCommand, ClientId, DeployedEntityId, PlaceBuildingCommand, ToastKind, Vec3Net,
     },
 };
 
-use super::{DeliveryTarget, GameServer, ServerEnvelope, deployables::DeployedEntity};
+use super::{GameServer, ServerEnvelope, deployables::DeployedEntity};
 
 use crate::game_balance::DEPLOYABLE_PLACEMENT_REACH_M as PLACEMENT_REACH_M;
 
@@ -87,29 +86,21 @@ impl GameServer {
         // someone's furnace) and against other foundations when placing a
         // foundation. Wall-like-vs-building overlap is resolved by socket
         // occupancy above; see `any_deployable_overlaps` for why.
-        let candidate = DeployedEntity {
-            id: 0,
-            item_id: crate::items::intern_item_id(building_item_id(piece)),
-            kind: DeployableKind::Building {
+        // `new` seeds stability at 100 as a placeholder; the post-insert
+        // refresh computes the real value (and the gate below already proved
+        // it's above the minimum).
+        let candidate = DeployedEntity::new(
+            crate::items::intern_item_id(building_item_id(piece)),
+            DeployableKind::Building {
                 piece,
                 tier: BuildingTier::Sticks,
             },
             position,
             yaw,
-            health: building_max_health(piece, BuildingTier::Sticks),
-            max_health: building_max_health(piece, BuildingTier::Sticks),
-            owner: Some(owner),
-            furnace: None,
-            placed_at_tick: self.tick,
-            door: None,
-            label: None,
-            // Placeholder; the post-insert refresh computes the real
-            // value (and the gate below already proved it's above the
-            // minimum).
-            stability: 100,
-            storage: None,
-            torch: None,
-        };
+            building_max_health(piece, BuildingTier::Sticks),
+            Some(owner),
+            self.tick,
+        );
         let blocks = candidate.resolved_collider_blocks();
         let obstruction = self.deployed_entities.values().any(|existing| {
             let skip = match existing.kind {
@@ -629,10 +620,7 @@ fn material_name(item_id: &str) -> &'static str {
 }
 
 fn building_toast(client_id: ClientId, kind: ToastKind, text: String) -> Vec<ServerEnvelope> {
-    vec![ServerEnvelope {
-        target: DeliveryTarget::Client(client_id),
-        message: ServerMessage::Toast(ToastMessage::new(kind, text)),
-    }]
+    super::toasts::toast(client_id, kind, text)
 }
 
 /// Penetration below this doesn't count as overlap. Building pieces

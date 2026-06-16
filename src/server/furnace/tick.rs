@@ -18,22 +18,21 @@ impl GameServer {
     /// dirty only when `active` flips (auto-shutoff), idle furnaces and
     /// steady burns never enter the sync delta.
     pub(in crate::server) fn tick_furnaces(&mut self) {
-        let mut shut_off: Vec<crate::protocol::DeployedEntityId> = Vec::new();
-        for (id, entity) in self.deployed_entities.iter_mut() {
-            let Some(furnace) = entity.furnace.as_mut() else {
-                continue;
-            };
-            if !furnace.active {
-                continue;
-            }
-            tick_one_furnace(furnace);
-            if !furnace.active {
-                shut_off.push(*id);
-            }
-        }
-        for id in shut_off {
-            self.mark_deployable_dirty(id);
-        }
+        // Mark dirty only furnaces whose `active` flag flips off (auto-shutoff)
+        // this tick; fuel/progress are server-only (they reach the owner via
+        // the per-player `OpenFurnaceView`), so a steady burn must stay out of
+        // the replication delta.
+        self.deployed_entities
+            .for_each_mut_then_mark(|_id, entity| {
+                let Some(furnace) = entity.furnace.as_mut() else {
+                    return false;
+                };
+                if !furnace.active {
+                    return false;
+                }
+                tick_one_furnace(furnace);
+                !furnace.active
+            });
     }
 }
 

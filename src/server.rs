@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::{
     auth::AuthMode,
@@ -63,6 +63,7 @@ mod container_slots;
 mod crafting;
 pub mod deployable_ecs;
 mod deployables;
+mod dirty_tracked_map;
 mod dispatch;
 mod door;
 pub mod dropped_item_ecs;
@@ -120,6 +121,7 @@ pub use resource_node_ecs::{
 };
 pub use voice::VOICE_AUDIBLE_RANGE;
 
+use self::dirty_tracked_map::DirtyTrackedMap;
 use self::dropped_items::{DroppedItemBody, DroppedItemPhysics};
 // Re-exported into the module namespace only for the in-tree tests, which
 // reach these tick-cadence constants through `tests::*`'s `use super::*`.
@@ -179,15 +181,11 @@ pub struct GameServer {
     /// disconnect or shutdown writes back into this map so a returning player
     /// picks up their inventory, position, and admin status.
     persisted_players: HashMap<AccountId, PersistedPlayer>,
-    dropped_items: HashMap<DroppedItemId, DroppedItemBody>,
-    /// Mirror-sync deltas for `dropped_items`, same contract as
-    /// `node_sync_dirty`/`node_sync_removed` below: every mutation MUST go
-    /// through `insert_dropped_item` / `remove_dropped_item` /
-    /// `dropped_item_body_mut` (or the physics step, which marks only the
-    /// bodies whose transform actually changed) so the sync never misses a
-    /// diff and items at rest cost nothing.
-    dropped_item_sync_dirty: HashSet<DroppedItemId>,
-    dropped_item_sync_removed: HashSet<DroppedItemId>,
+    /// Authoritative live dropped items, keyed by id. A [`DirtyTrackedMap`] so
+    /// every mutation flags the affected id for the mirror sync; the physics
+    /// step marks only the bodies whose transform actually changed (so items at
+    /// rest cost nothing) via `for_each_mut_then_mark`.
+    dropped_items: DirtyTrackedMap<DroppedItemId, DroppedItemBody>,
     dropped_item_physics: DroppedItemPhysics,
     /// Authoritative live resource node state, keyed by id. A sync system
     /// (`sync_resource_node_entities`) mirrors this map into ECS entities
@@ -195,33 +193,26 @@ pub struct GameServer {
     /// can attach `Replicate` to them without flipping ownership in one
     /// big change. Future cleanup will fold this map into the entities
     /// themselves once Lightyear replication is proven.
-    resource_nodes: HashMap<ResourceNodeId, ResourceNodeState>,
-    /// Incremental mirror-sync bookkeeping. `sync_resource_node_entities`
-    /// (in `net::host`) used to walk *every* live node each tick to reconcile
-    /// the replicated ECS mirror, O(live nodes), which at tens of thousands
-    /// of nodes cost ~100ms/tick. Instead, mutations to `resource_nodes` record
-    /// the affected id here and the sync processes only the delta. `dirty` =
-    /// added or storage-changed (re-spawn or update the mirror entity);
-    /// `removed` = gone (despawn the mirror entity). Both are drained by the
-    /// sync each tick. All `resource_nodes` mutations MUST go through the
-    /// `insert_resource_node` / `remove_resource_node` / `resource_node_state_mut`
-    /// helpers so nothing is missed (stale replication otherwise).
-    node_sync_dirty: HashSet<ResourceNodeId>,
-    node_sync_removed: HashSet<ResourceNodeId>,
+    /// Authoritative live resource node state, keyed by id. A
+    /// [`DirtyTrackedMap`] so `sync_resource_node_entities` (in `net::host`)
+    /// processes only the per-tick delta instead of walking every node
+    /// (O(live nodes), ~100ms/tick at tens of thousands of nodes). The
+    /// `dirty`/`removed` sets live inside the map and every mutation flags them
+    /// automatically: `dirty` = added or changed (re-spawn / update the mirror
+    /// entity), `removed` = gone (despawn it).
+    resource_nodes: DirtyTrackedMap<ResourceNodeId, ResourceNodeState>,
     /// Server-authoritative chunk system. Owns per-chunk capacity, AoI
     /// visibility, and the fresh-position regrow scheduler.
     pub(crate) chunk_manager: ChunkManager,
     /// Placed structures (workbench, furnace, …) keyed by id. Anchor
     /// chunks are owned by `chunk_manager` so AoI filtering matches the
     /// same pipeline as resource nodes and dropped items.
-    pub(super) deployed_entities: HashMap<DeployedEntityId, deployables::DeployedEntity>,
-    /// Mirror-sync deltas for `deployed_entities`, same contract as
-    /// `node_sync_dirty`/`node_sync_removed`: every mutation MUST go through
-    /// `insert_deployed_entity` / `remove_deployed_entity` /
-    /// `deployed_entity_mut` (or `mark_deployable_dirty` for the furnace
-    /// tick, which only flags entities whose replicated state flipped).
-    deployable_sync_dirty: HashSet<DeployedEntityId>,
-    deployable_sync_removed: HashSet<DeployedEntityId>,
+    /// Placed structures (workbench, furnace, …) keyed by id, as a
+    /// [`DirtyTrackedMap`] so every mutation flags the mirror-sync delta. The
+    /// furnace/torch ticks mutate server-only fields every tick and mark only
+    /// the entities whose replicated `active` flag flips, via
+    /// `for_each_mut_then_mark`. Anchor chunks are owned by `chunk_manager`.
+    pub(super) deployed_entities: DirtyTrackedMap<DeployedEntityId, deployables::DeployedEntity>,
     /// Death-loot containers, keyed by id. Spawned by the PvP kill
     /// chain in `combat.rs`; despawned when emptied + closed by every
     /// looker. Anchor chunks tracked via `chunk_manager` so the

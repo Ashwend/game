@@ -25,7 +25,7 @@ Start here:
 - `src/net/dedicated/`: CLI-facing dedicated server entry point and admin request types.
 - `src/save/`: world persistence (`WorldStore`, `WorldSave`, atomic writes, format version).
 - `src/world/`: `MapType`, world block geometry, perimeter walls, and the chunk-based generation pipeline under `src/world/chunk/` (classification, value noise, Poisson-disk spawn generator).
-- `src/server/chunk_manager.rs`: server-side owner of the chunk grid, every networked entity (resource nodes, drops, eventually buildings) is anchored to a chunk; the room-subscription system in `src/net/host.rs` adds the client's sender to the matching chunk's Lightyear `Room` so replication is AoI-filtered. Also schedules 5–15 min node respawns and persists per-chunk live counts.
+- `src/server/chunk_manager/`: server-side owner of the chunk grid (module: `mod.rs`, `membership.rs`, `aoi.rs`, `regrow.rs`, `save.rs`), every networked entity (resource nodes, drops, eventually buildings) is anchored to a chunk; the room-subscription system in `src/net/host.rs` adds the client's sender to the matching chunk's Lightyear `Room` so replication is AoI-filtered. Also schedules 5–15 min node respawns and persists per-chunk live counts.
 - `src/app/scene/assets.rs` and `src/app/scene/world.rs`: shared `StandardMaterial` setup for players, items, resource nodes, ground, and stone walls. See [Materials](docs/materials.md) before adding or tuning a material. Held items whose look should match a painted icon (the four tools) are authored Blender glbs, not procedural meshes; see [Icon to 3D model](docs/icon-to-model.md) for that pipeline.
 
 Use `./cli check`, `./cli test`, and `./cli lint`.

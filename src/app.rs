@@ -155,13 +155,12 @@ const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::ResourceNodes,
     ClientSystemSet::Grass,
     ClientSystemSet::DeployedEntities,
-    // Placement preview / input rides after the snapshot has been
-    // applied (so the local-player position used for reach checks is
-    // current) but before the camera follow runs (so a fresh place
-    // command doesn't double-process the same click frame).
+    // Placement preview / input rides after the snapshot has been applied
+    // (so the local-player position used for reach checks is current). Camera
+    // follow itself runs in PostUpdate, so it is naturally after everything
+    // here; there is no Camera set in this Update-phase chain.
     ClientSystemSet::PlacementInput,
     ClientSystemSet::PlacementGhost,
-    ClientSystemSet::Camera,
     ClientSystemSet::HeldItem,
     ClientSystemSet::Sky,
     ClientSystemSet::PickupTarget,
@@ -199,10 +198,14 @@ const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
 ];
 
 /// Menu-only systems form their own short chain, independent of the main
-/// gameplay flow because they read menu state, not snapshots.
+/// gameplay flow because they read menu state, not snapshots. AutoConnect rides
+/// here too: it polls the optional `AutoConnectRequest` to skip the menu and
+/// dial a server on startup, so it belongs to the menu phase rather than the
+/// in-game flow.
 const CLIENT_MENU_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::MainMenuMusic,
     ClientSystemSet::MenuBackdropCamera,
+    ClientSystemSet::AutoConnect,
 ];
 
 fn configure_client_schedule(app: &mut App) {
@@ -381,15 +384,14 @@ fn add_window_and_default_plugins(
             // to inspect. See `crate::logging`.
             .set(bevy::log::LogPlugin {
                 custom_layer: crate::logging::install_file_layer,
-                // Mirrors the dedicated server's default filter: mute
-                // lightyear's spurious per-component ERROR spam while a
-                // connecting link is mid-handshake (it has no
-                // `ClientOf`/`ReplicationSender` yet; upstream logs the
-                // same condition at debug elsewhere). Matters here too
-                // because singleplayer runs the loopback host inside
+                // Shares the dedicated server's per-crate noise suppression
+                // (one source of truth in `crate::logging`): mute lightyear's
+                // spurious per-component ERROR spam while a connecting link is
+                // mid-handshake (it has no `ClientOf`/`ReplicationSender` yet;
+                // upstream logs the same condition at debug elsewhere). Matters
+                // here too because singleplayer runs the loopback host inside
                 // this process. `RUST_LOG` still overrides.
-                filter: "wgpu=error,naga=warn,lightyear_replication::send::components=off"
-                    .to_owned(),
+                filter: crate::logging::NOISY_CRATE_LOG_FILTER.to_owned(),
                 ..default()
             })
             .set(WindowPlugin {
@@ -1018,4 +1020,115 @@ fn add_test_and_analytics_systems(app: &mut App) {
             .chain()
             .in_set(ClientSystemSet::Analytics),
     );
+}
+
+#[cfg(test)]
+mod schedule_tests {
+    use super::{CLIENT_MENU_ORDER, CLIENT_UPDATE_ORDER};
+    use crate::app::systems::ClientSystemSet;
+
+    /// Every `ClientSystemSet` variant must be slotted into exactly one of the
+    /// two ordering arrays, otherwise it has no `after(prev)` edge and its
+    /// systems run at an undefined point in `Update`. `AutoConnect` silently
+    /// fell out of the chain once; this guard makes that fail loudly.
+    ///
+    /// The exhaustive `match` below is the compile-time tripwire: adding a new
+    /// variant without listing it here is a non-exhaustive-match error, which
+    /// forces whoever adds it to also place it in an ordering array (the
+    /// runtime count check). The two lists cannot silently drift.
+    #[test]
+    fn every_system_set_is_ordered_exactly_once() {
+        use ClientSystemSet::*;
+
+        // Compile-time exhaustiveness guard: keep this in sync with the enum.
+        fn _assert_exhaustive(set: ClientSystemSet) {
+            match set {
+                LocalPlayerSync | Focus | ChatShortcut | PauseToggle | InventoryToggle
+                | CraftingToggle | Cursor | Look | Input | ToolSwap | InventoryShortcuts
+                | Network | WorldGridRebuild | SessionShutdown | Quit | Display | SettingsSave
+                | WorldScene | Players | DroppedItems | ResourceNodes | Grass
+                | DeployedEntities | PlacementGhost | PlacementInput | HeldItem | Sky
+                | PickupTarget | Footsteps | ImpactEffectsSpawn | ImpactEffectsTick
+                | FurnaceFireAnimate | FurnaceParticleTick | ImpactSounds | TransitionStingers
+                | PlaySounds | AudioFaderTick | AmbientBeds | AmbientEmitters | NodeDeathTick
+                | MainMenuMusic | MenuBackdropCamera | AutoConnect | Analytics
+                | VoiceCaptureManage | VoiceTransmit | VoiceReceive | VoiceSettings
+                | TestModeApply | TestWindowReposition => {}
+            }
+        }
+        // Reference it so the compile-time guard is not dead code.
+        let _ = _assert_exhaustive;
+
+        // Mirror of the enum, used to count occurrences. Kept exhaustive by the
+        // match above (a new variant breaks compilation until it is added here
+        // and slotted into an ordering array).
+        const ALL: &[ClientSystemSet] = &[
+            LocalPlayerSync,
+            Focus,
+            ChatShortcut,
+            PauseToggle,
+            InventoryToggle,
+            CraftingToggle,
+            Cursor,
+            Look,
+            Input,
+            ToolSwap,
+            InventoryShortcuts,
+            Network,
+            WorldGridRebuild,
+            SessionShutdown,
+            Quit,
+            Display,
+            SettingsSave,
+            WorldScene,
+            Players,
+            DroppedItems,
+            ResourceNodes,
+            Grass,
+            DeployedEntities,
+            PlacementGhost,
+            PlacementInput,
+            HeldItem,
+            Sky,
+            PickupTarget,
+            Footsteps,
+            ImpactEffectsSpawn,
+            ImpactEffectsTick,
+            FurnaceFireAnimate,
+            FurnaceParticleTick,
+            ImpactSounds,
+            TransitionStingers,
+            PlaySounds,
+            AudioFaderTick,
+            AmbientBeds,
+            AmbientEmitters,
+            NodeDeathTick,
+            MainMenuMusic,
+            MenuBackdropCamera,
+            AutoConnect,
+            Analytics,
+            VoiceCaptureManage,
+            VoiceTransmit,
+            VoiceReceive,
+            VoiceSettings,
+            TestModeApply,
+            TestWindowReposition,
+        ];
+
+        for set in ALL {
+            let count = CLIENT_UPDATE_ORDER.iter().filter(|s| *s == set).count()
+                + CLIENT_MENU_ORDER.iter().filter(|s| *s == set).count();
+            assert_eq!(
+                count, 1,
+                "{set:?} must appear exactly once across the ordering arrays, found {count}"
+            );
+        }
+
+        // And nothing in the arrays is outside the known set (length parity).
+        assert_eq!(
+            CLIENT_UPDATE_ORDER.len() + CLIENT_MENU_ORDER.len(),
+            ALL.len(),
+            "ordering arrays contain a different number of sets than the enum"
+        );
+    }
 }

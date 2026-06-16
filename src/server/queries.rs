@@ -126,19 +126,12 @@ impl GameServer {
     /// single entry point for adding nodes, keeps `node_sync_dirty` accurate.
     pub(crate) fn insert_resource_node(&mut self, id: ResourceNodeId, node: ResourceNodeState) {
         self.resource_nodes.insert(id, node);
-        self.node_sync_dirty.insert(id);
-        self.node_sync_removed.remove(&id);
     }
 
     /// Remove a node and record it for the next mirror sync (which despawns the
     /// replicated entity). Returns the removed state, mirroring `HashMap`.
     pub(crate) fn remove_resource_node(&mut self, id: ResourceNodeId) -> Option<ResourceNodeState> {
-        let removed = self.resource_nodes.remove(&id);
-        if removed.is_some() {
-            self.node_sync_removed.insert(id);
-            self.node_sync_dirty.remove(&id);
-        }
-        removed
+        self.resource_nodes.remove(&id)
     }
 
     /// Mutable access to a node, conservatively flagging it dirty for the next
@@ -148,23 +141,13 @@ impl GameServer {
         &mut self,
         id: ResourceNodeId,
     ) -> Option<&mut ResourceNodeState> {
-        // Mark before borrowing the map mutably; the change-detection compare
-        // still happens on the actual value in the sync, so a spurious mark
-        // just costs one no-op delta entry.
-        if self.resource_nodes.contains_key(&id) {
-            self.node_sync_dirty.insert(id);
-            self.node_sync_removed.remove(&id);
-        }
         self.resource_nodes.get_mut(&id)
     }
 
     /// Drain the accumulated mirror-sync deltas: `(dirty ids, removed ids)`.
     /// Called once per tick by `sync_resource_node_entities`.
     pub fn drain_resource_node_sync(&mut self) -> (Vec<ResourceNodeId>, Vec<ResourceNodeId>) {
-        (
-            self.node_sync_dirty.drain().collect(),
-            self.node_sync_removed.drain().collect(),
-        )
+        self.resource_nodes.drain_sync()
     }
 
     /// Re-mark resource-node ids dirty so the next sync pass reprocesses them.
@@ -175,7 +158,7 @@ impl GameServer {
     /// dedups); ids whose node has since been removed are dropped harmlessly by
     /// the sync's `resource_node_state` filter.
     pub fn requeue_resource_node_sync(&mut self, ids: impl IntoIterator<Item = ResourceNodeId>) {
-        self.node_sync_dirty.extend(ids);
+        self.resource_nodes.requeue_dirty(ids);
     }
 
     /// Read-only iteration over live dropped items (id + wire-shape view).
@@ -204,24 +187,16 @@ impl GameServer {
     }
 
     /// Insert (or replace) a dropped item and record it for the next mirror
-    /// sync. The single entry point for adding drops, keeps
-    /// `dropped_item_sync_dirty` accurate.
+    /// sync. The single entry point for adding drops.
     pub(super) fn insert_dropped_item(&mut self, id: DroppedItemId, body: DroppedItemBody) {
         self.dropped_items.insert(id, body);
-        self.dropped_item_sync_dirty.insert(id);
-        self.dropped_item_sync_removed.remove(&id);
     }
 
     /// Remove a dropped item and record it for the next mirror sync (which
     /// despawns the replicated entity). Returns the removed body, mirroring
     /// `HashMap`.
     pub(super) fn remove_dropped_item(&mut self, id: DroppedItemId) -> Option<DroppedItemBody> {
-        let removed = self.dropped_items.remove(&id);
-        if removed.is_some() {
-            self.dropped_item_sync_removed.insert(id);
-            self.dropped_item_sync_dirty.remove(&id);
-        }
-        removed
+        self.dropped_items.remove(&id)
     }
 
     /// Mutable access to a dropped item's body, conservatively flagging it
@@ -233,20 +208,13 @@ impl GameServer {
         &mut self,
         id: DroppedItemId,
     ) -> Option<&mut DroppedItemBody> {
-        if self.dropped_items.contains_key(&id) {
-            self.dropped_item_sync_dirty.insert(id);
-            self.dropped_item_sync_removed.remove(&id);
-        }
         self.dropped_items.get_mut(&id)
     }
 
     /// Drain the accumulated mirror-sync deltas: `(dirty ids, removed ids)`.
     /// Called once per tick by `sync_dropped_item_entities`.
     pub fn drain_dropped_item_sync(&mut self) -> (Vec<DroppedItemId>, Vec<DroppedItemId>) {
-        (
-            self.dropped_item_sync_dirty.drain().collect(),
-            self.dropped_item_sync_removed.drain().collect(),
-        )
+        self.dropped_items.drain_sync()
     }
 
     /// Chunk a deployable is anchored to.
@@ -291,8 +259,6 @@ impl GameServer {
         self.dropped_item_physics
             .sync_deployable_colliders(id, &entity.resolved_collider_blocks());
         self.deployed_entities.insert(id, entity);
-        self.deployable_sync_dirty.insert(id);
-        self.deployable_sync_removed.remove(&id);
     }
 
     /// Remove a deployable and record it for the next mirror sync (which
@@ -306,8 +272,6 @@ impl GameServer {
         let removed = self.deployed_entities.remove(&id);
         if removed.is_some() {
             self.dropped_item_physics.remove_deployable_colliders(id);
-            self.deployable_sync_removed.insert(id);
-            self.deployable_sync_dirty.remove(&id);
         }
         removed
     }
@@ -335,28 +299,22 @@ impl GameServer {
         &mut self,
         id: DeployedEntityId,
     ) -> Option<&mut DeployedEntity> {
-        self.mark_deployable_dirty(id);
         self.deployed_entities.get_mut(&id)
     }
 
     /// Record a deployable as needing a mirror re-sync without handing out a
-    /// `&mut`. Used by the furnace tick, which iterates the map directly and
-    /// only flags the entities whose replicated `active` flag actually
-    /// flipped, so idle furnaces never enter the delta.
+    /// `&mut`. Used by the furnace/torch ticks, which iterate the map directly
+    /// (via `for_each_mut_then_mark`) and only flag the entities whose
+    /// replicated `active` flag actually flipped, so idle furnaces never enter
+    /// the delta.
     pub(super) fn mark_deployable_dirty(&mut self, id: DeployedEntityId) {
-        if self.deployed_entities.contains_key(&id) {
-            self.deployable_sync_dirty.insert(id);
-            self.deployable_sync_removed.remove(&id);
-        }
+        self.deployed_entities.mark_dirty(&id);
     }
 
     /// Drain the accumulated mirror-sync deltas: `(dirty ids, removed ids)`.
     /// Called once per tick by `sync_deployable_entities`.
     pub fn drain_deployable_sync(&mut self) -> (Vec<DeployedEntityId>, Vec<DeployedEntityId>) {
-        (
-            self.deployable_sync_dirty.drain().collect(),
-            self.deployable_sync_removed.drain().collect(),
-        )
+        self.deployed_entities.drain_sync()
     }
 
     /// Iterate connected players as wire-shape views (one field per

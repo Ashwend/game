@@ -407,6 +407,47 @@ impl ItemDefinition {
     }
 }
 
+/// Construct the hidden `ItemDefinition` for a placed building block. The six
+/// pieces differ only in id, display copy, the piece tag, and the collider
+/// half-height (which is live: it anchors the damage nameplate via the
+/// deployable overlay). Everything else is identical, so it lives here once.
+///
+/// `max_health` and `collider_half_width` are placeholders: the authoritative
+/// HP and colliders for placed structures come from `crate::building`, not from
+/// this registry entry. They are filled with representative values only so the
+/// shared `DeployableProfile` shape stays valid.
+const fn building_piece_item(
+    id: &'static str,
+    name: &'static str,
+    description: &'static str,
+    piece: crate::building::BuildingPiece,
+    collider_half_height: f32,
+) -> ItemDefinition {
+    ItemDefinition {
+        id,
+        name,
+        description,
+        stack_size: 1,
+        equipable: false,
+        model: ItemModel::Deployable,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(151, 116, 72),
+        tool: None,
+        deployable: Some(DeployableProfile {
+            kind: DeployableKind::Building {
+                piece,
+                tier: crate::building::BuildingTier::Sticks,
+            },
+            // Placeholder: real HP lives on the entity (crate::building).
+            max_health: crate::game_balance::BUILDING_STICKS_WALL_HP,
+            // Placeholder: real colliders come from crate::building.
+            collider_half_width: crate::building::FOUNDATION_SIZE_M / 2.0,
+            collider_half_height,
+            station_radius: 0.0,
+        }),
+    }
+}
+
 pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
     ItemDefinition {
         id: WOOD_ID,
@@ -773,134 +814,48 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
     // resolves through the registry (saves, mirror views, colliders).
     // Their profile kind carries the spawn tier; the live tier lives on
     // the entity and changes with hammer upgrades.
-    ItemDefinition {
-        id: crate::building::BUILDING_FOUNDATION_ITEM_ID,
-        name: "Foundation",
-        description: "A structural platform. The base of every building.",
-        stack_size: 1,
-        equipable: false,
-        model: ItemModel::Deployable,
-        held_mesh: HeldMesh::Bag,
-        tint: ItemTint::new(151, 116, 72),
-        tool: None,
-        deployable: Some(DeployableProfile {
-            kind: DeployableKind::Building {
-                piece: crate::building::BuildingPiece::Foundation,
-                tier: crate::building::BuildingTier::Sticks,
-            },
-            max_health: crate::game_balance::BUILDING_STICKS_WALL_HP,
-            collider_half_width: crate::building::FOUNDATION_SIZE_M / 2.0,
-            collider_half_height: crate::building::FOUNDATION_HEIGHT_M / 2.0,
-            station_radius: 0.0,
-        }),
-    },
-    ItemDefinition {
-        id: crate::building::BUILDING_WALL_ITEM_ID,
-        name: "Wall",
-        description: "A solid building wall.",
-        stack_size: 1,
-        equipable: false,
-        model: ItemModel::Deployable,
-        held_mesh: HeldMesh::Bag,
-        tint: ItemTint::new(151, 116, 72),
-        tool: None,
-        deployable: Some(DeployableProfile {
-            kind: DeployableKind::Building {
-                piece: crate::building::BuildingPiece::Wall,
-                tier: crate::building::BuildingTier::Sticks,
-            },
-            max_health: crate::game_balance::BUILDING_STICKS_WALL_HP,
-            collider_half_width: crate::building::FOUNDATION_SIZE_M / 2.0,
-            collider_half_height: crate::building::WALL_HEIGHT_M / 2.0,
-            station_radius: 0.0,
-        }),
-    },
-    ItemDefinition {
-        id: crate::building::BUILDING_WINDOW_WALL_ITEM_ID,
-        name: "Window Wall",
-        description: "A building wall with a window opening.",
-        stack_size: 1,
-        equipable: false,
-        model: ItemModel::Deployable,
-        held_mesh: HeldMesh::Bag,
-        tint: ItemTint::new(151, 116, 72),
-        tool: None,
-        deployable: Some(DeployableProfile {
-            kind: DeployableKind::Building {
-                piece: crate::building::BuildingPiece::WindowWall,
-                tier: crate::building::BuildingTier::Sticks,
-            },
-            max_health: crate::game_balance::BUILDING_STICKS_WALL_HP,
-            collider_half_width: crate::building::FOUNDATION_SIZE_M / 2.0,
-            collider_half_height: crate::building::WALL_HEIGHT_M / 2.0,
-            station_radius: 0.0,
-        }),
-    },
-    ItemDefinition {
-        id: crate::building::BUILDING_DOORWAY_ITEM_ID,
-        name: "Doorway",
-        description: "A building wall with a door-sized opening.",
-        stack_size: 1,
-        equipable: false,
-        model: ItemModel::Deployable,
-        held_mesh: HeldMesh::Bag,
-        tint: ItemTint::new(151, 116, 72),
-        tool: None,
-        deployable: Some(DeployableProfile {
-            kind: DeployableKind::Building {
-                piece: crate::building::BuildingPiece::Doorway,
-                tier: crate::building::BuildingTier::Sticks,
-            },
-            max_health: crate::game_balance::BUILDING_STICKS_WALL_HP,
-            collider_half_width: crate::building::FOUNDATION_SIZE_M / 2.0,
-            collider_half_height: crate::building::WALL_HEIGHT_M / 2.0,
-            station_radius: 0.0,
-        }),
-    },
-    ItemDefinition {
-        id: crate::building::BUILDING_CEILING_ITEM_ID,
-        name: "Ceiling",
-        description: "A structural slab roofing a walled storey; the floor \
-                      of the storey above.",
-        stack_size: 1,
-        equipable: false,
-        model: ItemModel::Deployable,
-        held_mesh: HeldMesh::Bag,
-        tint: ItemTint::new(151, 116, 72),
-        tool: None,
-        deployable: Some(DeployableProfile {
-            kind: DeployableKind::Building {
-                piece: crate::building::BuildingPiece::Ceiling,
-                tier: crate::building::BuildingTier::Sticks,
-            },
-            max_health: crate::game_balance::BUILDING_STICKS_WALL_HP,
-            collider_half_width: crate::building::FOUNDATION_SIZE_M / 2.0,
-            collider_half_height: crate::building::CEILING_THICKNESS_M / 2.0,
-            station_radius: 0.0,
-        }),
-    },
-    ItemDefinition {
-        id: crate::building::BUILDING_STAIRS_ITEM_ID,
-        name: "Stairs",
-        description: "A flight of stairs spanning one cell, rising a full \
-                      storey to the floor above.",
-        stack_size: 1,
-        equipable: false,
-        model: ItemModel::Deployable,
-        held_mesh: HeldMesh::Bag,
-        tint: ItemTint::new(151, 116, 72),
-        tool: None,
-        deployable: Some(DeployableProfile {
-            kind: DeployableKind::Building {
-                piece: crate::building::BuildingPiece::Stairs,
-                tier: crate::building::BuildingTier::Sticks,
-            },
-            max_health: crate::game_balance::BUILDING_STICKS_WALL_HP,
-            collider_half_width: crate::building::FOUNDATION_SIZE_M / 2.0,
-            collider_half_height: crate::building::STAIR_RISE_M / 2.0,
-            station_radius: 0.0,
-        }),
-    },
+    building_piece_item(
+        crate::building::BUILDING_FOUNDATION_ITEM_ID,
+        "Foundation",
+        "A structural platform. The base of every building.",
+        crate::building::BuildingPiece::Foundation,
+        crate::building::FOUNDATION_HEIGHT_M / 2.0,
+    ),
+    building_piece_item(
+        crate::building::BUILDING_WALL_ITEM_ID,
+        "Wall",
+        "A solid building wall.",
+        crate::building::BuildingPiece::Wall,
+        crate::building::WALL_HEIGHT_M / 2.0,
+    ),
+    building_piece_item(
+        crate::building::BUILDING_WINDOW_WALL_ITEM_ID,
+        "Window Wall",
+        "A building wall with a window opening.",
+        crate::building::BuildingPiece::WindowWall,
+        crate::building::WALL_HEIGHT_M / 2.0,
+    ),
+    building_piece_item(
+        crate::building::BUILDING_DOORWAY_ITEM_ID,
+        "Doorway",
+        "A building wall with a door-sized opening.",
+        crate::building::BuildingPiece::Doorway,
+        crate::building::WALL_HEIGHT_M / 2.0,
+    ),
+    building_piece_item(
+        crate::building::BUILDING_CEILING_ITEM_ID,
+        "Ceiling",
+        "A structural slab roofing a walled storey; the floor of the storey above.",
+        crate::building::BuildingPiece::Ceiling,
+        crate::building::CEILING_THICKNESS_M / 2.0,
+    ),
+    building_piece_item(
+        crate::building::BUILDING_STAIRS_ITEM_ID,
+        "Stairs",
+        "A flight of stairs spanning one cell, rising a full storey to the floor above.",
+        crate::building::BuildingPiece::Stairs,
+        crate::building::STAIR_RISE_M / 2.0,
+    ),
 ];
 
 /// Build-once `id → definition` lookup over [`REGISTERED_ITEMS`]. The slice
@@ -1131,6 +1086,50 @@ mod tests {
             DeployableKind::Furnace { tier: 1 }.material(),
             DestructibleMaterial::Stone
         );
+    }
+
+    #[test]
+    fn registered_item_ids_are_unique() {
+        // `item_definitions_by_id` builds its lookup with `.collect()` into a
+        // HashMap, so a duplicate id would silently overwrite the earlier
+        // entry instead of failing. Mirror the crafting registry's
+        // duplicate-id guard so that footgun is caught at test time.
+        let mut seen = std::collections::HashSet::new();
+        for definition in REGISTERED_ITEMS {
+            assert!(
+                seen.insert(definition.id),
+                "duplicate item id in REGISTERED_ITEMS: {}",
+                definition.id
+            );
+        }
+    }
+
+    #[test]
+    fn every_building_piece_has_a_matching_item_definition() {
+        // `building_item_id` and the hidden building-block `ItemDefinition`s
+        // are two hand-maintained tables that must agree: every piece must
+        // resolve to a definition whose deployable profile is a `Building`
+        // for that same piece. Without this, a new `BuildingPiece` variant
+        // (or a renamed id constant) compiles fine and only fails at runtime
+        // the first time a player places that piece.
+        use crate::building::{BuildingPiece, building_item_id};
+        for piece in BuildingPiece::ALL {
+            let id = building_item_id(piece);
+            let definition =
+                item_definition(id).unwrap_or_else(|| panic!("no ItemDefinition for {id}"));
+            let profile = definition
+                .deployable
+                .unwrap_or_else(|| panic!("{id} has no deployable profile"));
+            match profile.kind {
+                DeployableKind::Building {
+                    piece: resolved, ..
+                } => assert_eq!(
+                    resolved, piece,
+                    "{id} resolves to a Building profile for the wrong piece"
+                ),
+                other => panic!("{id} resolves to {other:?}, expected a Building piece"),
+            }
+        }
     }
 
     #[test]

@@ -11,7 +11,7 @@ use crate::{
     items::{DeployableKind, SLEEPING_BAG_ID},
     protocol::{
         ClientId, DeployedEntityId, ItemStack, MAX_HEALTH, PlayerState, RespawnBagOption,
-        ServerMessage, SleepingBagCommand, ToastKind, ToastMessage, Vec3Net,
+        ServerMessage, SleepingBagCommand, ToastKind, Vec3Net,
     },
     server::PlayerLifecycle,
 };
@@ -197,8 +197,5 @@ impl GameServer {
 }
 
 fn bag_toast(client_id: ClientId, kind: ToastKind, text: String) -> Vec<ServerEnvelope> {
-    vec![ServerEnvelope {
-        target: DeliveryTarget::Client(client_id),
-        message: ServerMessage::Toast(ToastMessage::new(kind, text)),
-    }]
+    super::toasts::toast(client_id, kind, text)
 }

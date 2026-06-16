@@ -72,15 +72,3 @@ impl BuildingCostReadout {
         self.have >= u32::from(self.required)
     }
 }
-
-impl DeployablePlacementState {
-    #[expect(dead_code, reason = "reset helper kept for the placement-cancel path")]
-    pub(crate) fn clear(&mut self) {
-        self.item_id = None;
-        self.world_position = None;
-        self.valid = false;
-        // Yaw is intentionally preserved across `clear` so a player
-        // who re-selects the same deployable doesn't lose the spin
-        // they dialled in. The select-changed path resets it explicitly.
-    }
-}

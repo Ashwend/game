@@ -10,9 +10,7 @@
 use crate::{
     game_balance::{DOOR_CODE_MAX_LEN, DOOR_CODE_MIN_LEN, DOOR_MAX_HP},
     items::{DeployableKind, HEWN_LOG_DOOR_ID, item_definition},
-    protocol::{
-        AccountId, ClientId, DeployedEntityId, DoorCommand, ServerMessage, ToastKind, ToastMessage,
-    },
+    protocol::{AccountId, ClientId, DeployedEntityId, DoorCommand, ServerMessage, ToastKind},
 };
 
 use super::{
@@ -159,25 +157,21 @@ impl GameServer {
         self.next_deployed_entity_id = self.next_deployed_entity_id.saturating_add(1);
         let entity = DeployedEntity {
             id,
-            item_id: crate::items::intern_item_id(HEWN_LOG_DOOR_ID),
-            kind: DeployableKind::Door,
-            position,
-            yaw,
-            health: DOOR_MAX_HP,
-            max_health: DOOR_MAX_HP,
-            owner: Some(owner),
-            furnace: None,
-            placed_at_tick: self.tick,
             door: Some(DoorState {
                 code,
                 authorized: Vec::new(),
                 open: false,
                 parent: doorway_id,
             }),
-            label: None,
-            stability: 100,
-            storage: None,
-            torch: None,
+            ..DeployedEntity::new(
+                crate::items::intern_item_id(HEWN_LOG_DOOR_ID),
+                DeployableKind::Door,
+                position,
+                yaw,
+                DOOR_MAX_HP,
+                Some(owner),
+                self.tick,
+            )
         };
         self.insert_deployed_entity(id, entity);
         self.chunk_manager.track_deployed_entity(id, position);
@@ -311,8 +305,5 @@ impl GameServer {
 }
 
 fn door_toast(client_id: ClientId, kind: ToastKind, text: String) -> Vec<ServerEnvelope> {
-    vec![ServerEnvelope {
-        target: DeliveryTarget::Client(client_id),
-        message: ServerMessage::Toast(ToastMessage::new(kind, text)),
-    }]
+    super::toasts::toast(client_id, kind, text)
 }

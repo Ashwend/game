@@ -10,20 +10,13 @@
 
 use std::{
     fs,
-    io::Write,
     path::{Path, PathBuf},
 };
 
-use directories::ProjectDirs;
-
-const QUALIFIER: &str = "com";
-const ORGANIZATION: &str = "Ashwend";
-const APPLICATION: &str = "Ashwend";
 const FILE_NAME: &str = "skipped_version";
 
 fn default_path() -> Option<PathBuf> {
-    ProjectDirs::from(QUALIFIER, ORGANIZATION, APPLICATION)
-        .map(|dirs| dirs.data_dir().join(FILE_NAME))
+    crate::util::platform::project_dirs().map(|dirs| dirs.data_dir().join(FILE_NAME))
 }
 
 /// The version the player last chose to skip, if any.
@@ -51,16 +44,7 @@ fn read_from(path: &Path) -> Option<String> {
 }
 
 fn write_atomic(path: &Path, version: &str) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
-    {
-        let mut file = fs::File::create(&tmp)?;
-        file.write_all(version.trim().as_bytes())?;
-        file.sync_all().ok();
-    }
-    fs::rename(&tmp, path)
+    crate::util::fs::write_atomic(path, version.trim().as_bytes())
 }
 
 #[cfg(test)]

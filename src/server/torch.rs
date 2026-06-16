@@ -7,7 +7,6 @@
 //! server-only (and persisted so a reload resumes the countdown).
 
 use crate::game_balance::TORCH_BURN_TICKS;
-use crate::protocol::DeployedEntityId;
 use crate::save::PersistedTorchState;
 
 use super::GameServer;
@@ -54,23 +53,25 @@ impl GameServer {
     /// (`DeployableActive`), so a torch that is simply still burning never
     /// enters the sync delta, the steady countdown is server-only.
     pub(in crate::server) fn tick_torches(&mut self) {
-        let mut extinguished: Vec<DeployedEntityId> = Vec::new();
-        for (id, entity) in self.deployed_entities.iter_mut() {
-            let Some(torch) = entity.torch.as_mut() else {
-                continue;
-            };
-            if !torch.active {
-                continue;
-            }
-            torch.burn_ticks_left = torch.burn_ticks_left.saturating_sub(1);
-            if torch.burn_ticks_left == 0 {
-                torch.active = false;
-                extinguished.push(*id);
-            }
-        }
-        for id in extinguished {
-            self.mark_deployable_dirty(id);
-        }
+        // Mark dirty only torches whose `active` flag flips off this tick; the
+        // steady countdown mutates a server-only field and must stay out of the
+        // replication delta.
+        self.deployed_entities
+            .for_each_mut_then_mark(|_id, entity| {
+                let Some(torch) = entity.torch.as_mut() else {
+                    return false;
+                };
+                if !torch.active {
+                    return false;
+                }
+                torch.burn_ticks_left = torch.burn_ticks_left.saturating_sub(1);
+                if torch.burn_ticks_left == 0 {
+                    torch.active = false;
+                    true
+                } else {
+                    false
+                }
+            });
     }
 }
 
@@ -79,7 +80,7 @@ mod tests {
     use super::*;
     use crate::{
         items::{DeployableKind, TORCH_ID, intern_item_id},
-        protocol::Vec3Net,
+        protocol::{DeployedEntityId, Vec3Net},
         server::deployables::DeployedEntity,
     };
 

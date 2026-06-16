@@ -47,6 +47,19 @@ pub(crate) enum OpenContainer {
 /// the corpse a step or two doesn't put the loot out of reach.
 pub(crate) use crate::game_balance::LOOT_BAG_INTERACT_RANGE_M;
 
+/// Whether a logged-out sleeping body is still lootable as a `Sleeper`
+/// container. The three terms are distinct and all required: the body must be
+/// offline (online players manage their own inventory), must not have flipped
+/// to the `Dead` lifecycle, and must still have positive health. The health
+/// term matters because a body killed mid-sleep can sit at 0 health for a tick
+/// before its lifecycle flips, during which it must not be lootable as a
+/// sleeper (it becomes a loot bag instead). Single-sourced so the range gate
+/// and the view resolver cannot drift, they did: the view path was missing the
+/// health term.
+fn sleeper_is_lootable(sleeper: &super::ServerClient) -> bool {
+    !sleeper.online && !sleeper.lifecycle.is_dead() && sleeper.controller.health > 0.0
+}
+
 /// Vertical offset above the dead player's feet where the bag
 /// spawns. Roughly waist-height so the bag falls naturally instead of
 /// materialising on the ground.
@@ -320,11 +333,7 @@ impl GameServer {
                 None => return false,
             },
             OpenContainer::Sleeper(sleeper_id) => match self.clients.get(&sleeper_id) {
-                Some(sleeper)
-                    if !sleeper.online
-                        && !sleeper.lifecycle.is_dead()
-                        && sleeper.controller.health > 0.0 =>
-                {
+                Some(sleeper) if sleeper_is_lootable(sleeper) => {
                     (sleeper.controller.position, LOOT_BAG_INTERACT_RANGE_M)
                 }
                 _ => return false,
@@ -347,9 +356,11 @@ impl GameServer {
             OpenContainer::LootBag(bag_id) => self.loot_bags.get(&bag_id).map(LootBag::to_view),
             OpenContainer::Sleeper(sleeper_id) => {
                 let sleeper = self.clients.get(&sleeper_id)?;
-                // A body that woke, died, or left is no longer lootable; drop the
-                // view so the looter's UI closes.
-                if sleeper.online || sleeper.lifecycle.is_dead() {
+                // A body that woke, died, left, or was killed down to 0 health is
+                // no longer lootable; drop the view so the looter's UI closes.
+                // (Same predicate as the range gate, which the old two-term check
+                // here was missing the health term of.)
+                if !sleeper_is_lootable(sleeper) {
                     return None;
                 }
                 Some(sleeper_inventory_view(sleeper_id, &sleeper.inventory))
