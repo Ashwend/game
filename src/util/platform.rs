@@ -25,13 +25,15 @@ mod tests {
 
     #[test]
     fn project_dirs_uses_the_ashwend_identity() {
-        // On any host with a home dir, the data dir must sit under the
-        // Ashwend application folder. This pins the identity so an accidental
-        // edit cannot relocate user files.
+        // On any host with a home dir, the data dir must sit under the Ashwend
+        // application folder. This pins the identity so an accidental edit
+        // cannot relocate user files. Case-insensitive because the `directories`
+        // crate lowercases the application name for Linux XDG paths
+        // (`~/.local/share/ashwend`) while macOS keeps it as `Ashwend`.
         if let Some(dirs) = project_dirs() {
-            let data = dirs.data_dir().to_string_lossy().to_string();
+            let data = dirs.data_dir().to_string_lossy().to_lowercase();
             assert!(
-                data.contains("Ashwend"),
+                data.contains("ashwend"),
                 "data dir should live under the Ashwend identity, got {data}"
             );
         }
