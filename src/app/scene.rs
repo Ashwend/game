@@ -29,9 +29,7 @@ pub(crate) use components::{
     DeployablePlacementGhost, HeldItemVisual, MainCamera, NetworkDeployedEntity,
     NetworkDroppedItem, NetworkLootBag, NetworkPlayer, NetworkResourceNode, tree_mesh_height,
 };
-pub(crate) use grass::{
-    GrassInstancingPlugin, GrassMaterial, GrassMaterialHandle, GrassState, stream_grass_system,
-};
+pub(crate) use grass::{GrassInstancingPlugin, GrassState, stream_grass_system};
 pub(crate) use mesh::{PLAYER_HEAD_TOP_LOCAL_Y, PlayerPart, rig_layout};
 pub(crate) use sky::{SunLight, update_sky_system};
 pub(crate) use terrain::{TerrainMaterial, TerrainTextureAssets};
@@ -83,9 +81,6 @@ mod tests {
         // `setup_scene` adds an earthlike `Atmosphere` to the camera, which
         // pulls a `ScatteringMedium` handle out of this asset collection.
         app.init_resource::<Assets<ScatteringMedium>>();
-        // `setup_scene` also builds the shared grass material into this
-        // collection (normally created by `MaterialPlugin::<GrassMaterial>`).
-        app.init_resource::<Assets<GrassMaterial>>();
         app
     }
 

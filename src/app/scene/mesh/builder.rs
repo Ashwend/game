@@ -344,209 +344,120 @@ impl LowPolyMeshBuilder {
 // shader's distance fade; harmless for nodes that don't read it).
 // ---------------------------------------------------------------------------
 
-/// Base (lower) and tip (upper) green for a blade, before the per-blade shade /
-/// warmth tweaks.
+/// Build the shared grass-CARD mesh: `quads` quads crossing at the origin (evenly
+/// spaced over a half-turn, e.g. 0/60/120 degrees for 3), each spanning
+/// `±half_width` horizontally and `0..height` vertically and UV-mapped to the
+/// full grass-tuft texture. The blade detail lives in that texture (mipmapped, so
+/// far cards fuse into a soft mass instead of aliasing), not in geometry, so one
+/// card replaces a whole tuft of per-blade meshes, the perf + soft-look win.
 ///
-/// These are **linear** values (vertex colours are linear, unlike `Color::srgb`).
-/// The ground is `Color::srgb(0.18, 0.34, 0.22)`, which is linear
-/// `(0.027, 0.095, 0.040)`, so to read as *subtle terrain* rather than bright
-/// spots, the grass must sit at that linear tone: base at/just below the ground,
-/// tip only slightly above so the tips gently catch the eye. (Eyeballing these as
-/// if they were sRGB made the grass ~5x brighter than the ground.)
-pub(crate) const GRASS_BLADE_BASE: [f32; 3] = [0.022, 0.085, 0.040];
-pub(crate) const GRASS_BLADE_TIP: [f32; 3] = [0.040, 0.130, 0.058];
+/// Normals point straight up (+Y) so cards light softly like foliage rather than
+/// as dark vertical walls (the Ghost-of-Tsushima / Kelemen trick). Vertex-colour
+/// rgb is white (colour comes from the texture × per-blade biome tint) and alpha
+/// is the height fraction (0 base, 1 top), which doubles as the wind sway weight.
+/// Drawn double-sided (the pipeline sets `cull_mode = None`).
+pub(crate) fn build_grass_card_mesh(height: f32, half_width: f32, quads: u32) -> Mesh {
+    use std::f32::consts::PI;
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut normals: Vec<[f32; 3]> = Vec::new();
+    let mut uvs: Vec<[f32; 2]> = Vec::new();
+    let mut colors: Vec<[f32; 4]> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
 
-/// One grass blade, shaped as a cubic-Bézier arch (root → leaned-over tip).
-/// `base_color`/`tip_color` already include the shade/warmth (their alpha is the
-/// sway weight, 0 base, 1 tip). `dither` is written to every vertex's `uv.x` as a
-/// stable per-blade key.
-pub(crate) struct GrassBlade {
-    /// Root position in the mesh's local XZ plane.
-    pub(crate) base: Vec2,
-    /// Orientation of the blade's width axis (radians). Independent of `lean` so
-    /// a blade can face any way regardless of which way it bows.
-    pub(crate) yaw: f32,
-    /// Blade length along its arc (m).
-    pub(crate) height: f32,
-    /// Half blade width at the root (m); tapers to a point at the tip.
-    pub(crate) half_width: f32,
-    /// Horizontal offset of the tip from the root (m): the direction and amount
-    /// the blade leans over. Its magnitude must stay below `height`.
-    pub(crate) lean: Vec2,
-    /// Mid-blade arch as a fraction of `height`: how far the Bézier control
-    /// points bow off the straight root→tip chord, giving the curl. 0 = straight.
-    pub(crate) flex: f32,
-    pub(crate) base_color: [f32; 4],
-    pub(crate) tip_color: [f32; 4],
-    pub(crate) dither: f32,
-}
-
-/// Base/tip blade colours for a darken-only `shade` (≤ 1.0, never glows brighter
-/// than the ground) and a `warm` hue jitter in `[-1, 1]` (positive = warmer /
-/// yellower). Alpha carries the sway weight (base 0, tip 1).
-pub(crate) fn grass_blade_colors(shade: f32, warm: f32) -> ([f32; 4], [f32; 4]) {
-    let tint = |rgb: [f32; 3], sway: f32| {
-        [
-            (rgb[0] * shade + warm * 0.05).clamp(0.0, 1.0),
-            (rgb[1] * shade + warm * 0.01).clamp(0.0, 1.0),
-            (rgb[2] * shade - warm * 0.03).clamp(0.0, 1.0),
-            sway,
-        ]
-    };
-    (tint(GRASS_BLADE_BASE, 0.0), tint(GRASS_BLADE_TIP, 1.0))
-}
-
-/// Length-wise segments per blade. Each ring is one quad along the Bézier arc, so
-/// a blade has `2 * (BLADE_SEGMENTS + 1)` verts and `2 * BLADE_SEGMENTS` tris.
-/// Enough to read as a smooth curl without bloating the baked tile meshes.
-const BLADE_SEGMENTS: usize = 5;
-
-/// Cross-blade normal fan, radians. The two edge verts of each ring tilt their
-/// normals out by `±` this around the blade's tangent, so a flat ribbon lights
-/// like a rounded blade (the "rounded normal" trick from the Ghost-of-Tsushima /
-/// Acerola grass talks). 0 = flat.
-const BLADE_NORMAL_CURVE: f32 = 0.5;
-
-/// How far each baked normal is pulled back toward straight-up (+Y), 0..1. A
-/// vertical ribbon's true face normal is horizontal, which reads as a dark wall
-/// under a top-down sun; biasing toward up keeps blades lit-from-above (bright)
-/// while the fan + arch still give a soft rounded gradient. 0 = true face
-/// normals (dark walls), 1 = pure up (flat, the pre-Bézier look).
-const BLADE_NORMAL_UP_BIAS: f32 = 0.82;
-
-/// Component-wise lerp of two RGBA colours (used to graduate colour + sway
-/// weight up a multi-segment blade). Exact at the endpoints (`t == 0`/`1`).
-fn lerp4(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
-    [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-        a[3] + (b[3] - a[3]) * t,
-    ]
-}
-
-/// Normalize, falling back to `fallback` for a degenerate (near-zero) vector.
-fn norm_or(v: Vec3, fallback: Vec3) -> Vec3 {
-    v.try_normalize().unwrap_or(fallback)
-}
-
-fn cubic_bezier(t: f32, p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3) -> Vec3 {
-    let u = 1.0 - t;
-    u * u * u * p0 + 3.0 * u * u * t * p1 + 3.0 * u * t * t * p2 + t * t * t * p3
-}
-
-fn cubic_bezier_tangent(t: f32, p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3) -> Vec3 {
-    let u = 1.0 - t;
-    3.0 * u * u * (p1 - p0) + 6.0 * u * t * (p2 - p1) + 3.0 * t * t * (p3 - p2)
-}
-
-/// Rodrigues rotation of `v` about unit axis `k` by `angle` radians.
-fn rotate_about_axis(v: Vec3, k: Vec3, angle: f32) -> Vec3 {
-    let (s, c) = angle.sin_cos();
-    v * c + k.cross(v) * s + k * k.dot(v) * (1.0 - c)
-}
-
-/// Bias a normal back toward +Y (see [`BLADE_NORMAL_UP_BIAS`]) and emit it.
-fn bias_up(n: Vec3) -> [f32; 3] {
-    norm_or(n.lerp(Vec3::Y, BLADE_NORMAL_UP_BIAS), Vec3::Y).to_array()
-}
-
-/// Indexed mesh builder for grass-blade clumps. Keeps the upward-normal /
-/// gradient / dither convention out of `LowPolyMeshBuilder` (which is flat-normal
-/// and per-face colour).
-#[derive(Default)]
-pub(crate) struct GrassBladeMesh {
-    positions: Vec<[f32; 3]>,
-    normals: Vec<[f32; 3]>,
-    colors: Vec<[f32; 4]>,
-    uvs: Vec<[f32; 2]>,
-    indices: Vec<u32>,
-}
-
-impl GrassBladeMesh {
-    /// Append one cubic-Bézier blade: [`BLADE_SEGMENTS`] stacked quads sampled
-    /// along the arc from a full-width root ring to a point tip. The blade leans
-    /// over by `lean` and bows by `flex`; per-vertex normals are the ribbon's
-    /// face normal, fanned across the width ([`BLADE_NORMAL_CURVE`]) for a rounded
-    /// look and biased toward +Y ([`BLADE_NORMAL_UP_BIAS`]) so it stays lit from
-    /// above. Colour and sway weight (vertex-colour alpha) graduate up the blade;
-    /// the dither key is identical on every vert (whole-blade discard).
-    pub(crate) fn push_blade(&mut self, blade: &GrassBlade) {
-        let (s, c) = blade.yaw.sin_cos();
-        // Width axis in the local XZ plane (the ribbon spans `±width_axis`).
-        let width_axis = Vec3::new(c, 0.0, s);
-
-        // Bézier control points in blade-local space (root at origin, +Y up).
-        let p0 = Vec3::ZERO;
-        let lean = Vec3::new(blade.lean.x, 0.0, blade.lean.y);
-        // Tip height so the straight-line root→tip length stays ~`height`.
-        let tip_y = (blade.height * blade.height - lean.length_squared())
-            .max(1.0e-4)
-            .sqrt();
-        let p3 = Vec3::new(lean.x, tip_y, lean.y);
-        // Arch axis: up-ish and perpendicular to the lean, so the blade curls
-        // over its lean direction rather than twisting sideways.
-        let lean_side = if blade.lean.length_squared() > 1.0e-6 {
-            norm_or(Vec3::new(-blade.lean.y, 0.0, blade.lean.x), width_axis)
-        } else {
-            width_axis
-        };
-        let arch =
-            norm_or(norm_or(p3, Vec3::Y).cross(lean_side), Vec3::Y) * (blade.height * blade.flex);
-        let p1 = p0.lerp(p3, 0.33) + arch;
-        let p2 = p0.lerp(p3, 0.66) + arch * 0.8;
-
-        let base_index = self.positions.len() as u32;
-        for ring in 0..=BLADE_SEGMENTS {
-            let t = ring as f32 / BLADE_SEGMENTS as f32;
-            let center = cubic_bezier(t, p0, p1, p2, p3);
-            let tangent = norm_or(cubic_bezier_tangent(t, p0, p1, p2, p3), Vec3::Y);
-            let half_width = blade.half_width * (1.0 - t * t);
-
-            let left = center - width_axis * half_width;
-            let right = center + width_axis * half_width;
-            self.positions.extend_from_slice(&[
-                [blade.base.x + left.x, left.y, blade.base.y + left.z],
-                [blade.base.x + right.x, right.y, blade.base.y + right.z],
-            ]);
-
-            // Ribbon face normal, kept pointing up-ish, then fanned per edge.
-            let mut face = norm_or(tangent.cross(width_axis), Vec3::Y);
-            if face.y < 0.0 {
-                face = -face;
-            }
-            self.normals.extend_from_slice(&[
-                bias_up(rotate_about_axis(face, tangent, BLADE_NORMAL_CURVE)),
-                bias_up(rotate_about_axis(face, tangent, -BLADE_NORMAL_CURVE)),
-            ]);
-
-            let color = lerp4(blade.base_color, blade.tip_color, t);
-            self.colors.extend_from_slice(&[color, color]);
-            // uv.x = stable per-blade dither key; uv.y = height fraction (unused
-            // by the shader today, handy for debugging the gradient).
-            self.uvs.extend_from_slice(&[[blade.dither, t]; 2]);
-        }
-
-        for seg in 0..BLADE_SEGMENTS as u32 {
-            // Ring `seg` verts are (b, b+1) = (left, right); ring `seg + 1` are
-            // (b+2, b+3). Two triangles span the quad: (lb, rb, rt), (lb, rt, lt).
-            let b = base_index + seg * 2;
-            self.indices
-                .extend_from_slice(&[b, b + 1, b + 3, b, b + 3, b + 2]);
-        }
+    for q in 0..quads.max(1) {
+        let ang = q as f32 / quads.max(1) as f32 * PI;
+        let (s, c) = ang.sin_cos();
+        let (wx, wz) = (c * half_width, s * half_width);
+        let base = positions.len() as u32;
+        // bottom-left, bottom-right, top-right, top-left
+        positions.extend_from_slice(&[
+            [-wx, 0.0, -wz],
+            [wx, 0.0, wz],
+            [wx, height, wz],
+            [-wx, height, -wz],
+        ]);
+        normals.extend_from_slice(&[[0.0, 1.0, 0.0]; 4]);
+        // v = 1 at the base (texture bottom = blade roots), v = 0 at the top (tips).
+        uvs.extend_from_slice(&[[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]);
+        // rgb white; alpha = height fraction (0 base, 1 top) = sway weight.
+        colors.extend_from_slice(&[
+            [1.0, 1.0, 1.0, 0.0],
+            [1.0, 1.0, 1.0, 0.0],
+            [1.0, 1.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0, 1.0],
+        ]);
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
 
-    pub(crate) fn build(self) -> Mesh {
-        Mesh::new(
-            PrimitiveTopology::TriangleList,
-            RenderAssetUsages::default(),
-        )
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.colors)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs)
-        .with_inserted_indices(Indices::U32(self.indices))
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+    .with_inserted_indices(Indices::U32(indices))
+}
+
+/// A harvestable hay-grass tuft as crossed textured quads, the **same grass-tuft
+/// texture** as the cosmetic detail grass but bigger and rendered by a plain
+/// `StandardMaterial` (warm-tinted, alpha-masked), so it reads as a distinct
+/// pickable plant while matching the art style.
+///
+/// Vertex colour carries a **root→tip brightness gradient in rgb, alpha pinned to
+/// 1.0**. `StandardMaterial` multiplies vertex colour into the albedo, so the rgb
+/// ramp reproduces the shaded detail grass's root-AO → tip-lift gradient (base
+/// darker, tips brighter) that a flat tint otherwise washes out. Alpha stays
+/// `1.0` on every vertex on purpose: unlike [`build_grass_card_mesh`] (whose
+/// colour alpha is the wind sway weight) the cutout here must come purely from the
+/// texture's alpha, so feeding a 0-at-the-base alpha into the mask would chew the
+/// bottom of the tuft away. The wind sway is applied per-node on the CPU instead
+/// (see `sway_hay_grass_system`), since a `StandardMaterial` can't bend in a shader.
+pub(crate) fn build_hay_tuft_mesh(height: f32, half_width: f32, quads: u32) -> Mesh {
+    use std::f32::consts::PI;
+    // Albedo multiplier at the blade root; tips stay at 1.0. Mimics the detail
+    // grass shader's root ambient occlusion so the tuft reads with depth.
+    const ROOT_SHADE: f32 = 0.6;
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut normals: Vec<[f32; 3]> = Vec::new();
+    let mut uvs: Vec<[f32; 2]> = Vec::new();
+    let mut colors: Vec<[f32; 4]> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+
+    for q in 0..quads.max(1) {
+        let ang = q as f32 / quads.max(1) as f32 * PI;
+        let (s, c) = ang.sin_cos();
+        let (wx, wz) = (c * half_width, s * half_width);
+        let base = positions.len() as u32;
+        positions.extend_from_slice(&[
+            [-wx, 0.0, -wz],
+            [wx, 0.0, wz],
+            [wx, height, wz],
+            [-wx, height, -wz],
+        ]);
+        normals.extend_from_slice(&[[0.0, 1.0, 0.0]; 4]);
+        // v = 1 at the base (texture bottom = roots), v = 0 at the top (tips).
+        uvs.extend_from_slice(&[[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]);
+        // rgb root→tip gradient (root darker); alpha = 1 so the cutout is texture-only.
+        colors.extend_from_slice(&[
+            [ROOT_SHADE, ROOT_SHADE, ROOT_SHADE, 1.0],
+            [ROOT_SHADE, ROOT_SHADE, ROOT_SHADE, 1.0],
+            [1.0, 1.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0, 1.0],
+        ]);
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
+
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+    .with_inserted_indices(Indices::U32(indices))
 }
 
 #[cfg(test)]
@@ -554,47 +465,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn grass_blade_bakes_sway_gradient_and_dither() {
-        let (base_color, tip_color) = grass_blade_colors(0.9, 0.0);
-        let mut b = GrassBladeMesh::default();
-        b.push_blade(&GrassBlade {
-            base: Vec2::new(1.0, 1.0),
-            yaw: 0.3,
-            height: 0.3,
-            half_width: 0.03,
-            lean: Vec2::ZERO,
-            flex: 0.0,
-            base_color,
-            tip_color,
-            dither: 0.42,
-        });
-        // Sway weight in colour alpha: base ring 0, tip ring 1.
-        assert_eq!(b.colors[0][3], 0.0);
-        assert_eq!(b.colors.last().unwrap()[3], 1.0);
-        // Dither key in uv.x, identical on every vert (whole-blade decision).
-        assert!(b.uvs.iter().all(|uv| uv[0] == 0.42));
-        // Tip ring sits above the base ring.
-        let tip_y = b.positions.last().unwrap()[1];
-        assert!(tip_y > b.positions[0][1], "tip above base");
-        // Normals are unit length and biased upward (lit-from-above, no dark
-        // walls), not the old hard-coded pure +Y.
-        assert!(
-            b.normals.iter().all(|n| {
-                let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-                (len - 1.0).abs() < 1.0e-3 && n[1] > 0.0
-            }),
-            "unit, upward-biased normals"
-        );
-    }
-
-    #[test]
-    fn grass_blade_colors_darken_only_and_warm_shifts_hue() {
-        // Shade ≤ 1 never brightens past the base tip green.
-        let (_, tip) = grass_blade_colors(1.0, 0.0);
-        assert!(tip[1] <= GRASS_BLADE_TIP[1] + 1e-6);
-        // Positive warmth pushes red up and blue down.
-        let (_, warm_tip) = grass_blade_colors(1.0, 1.0);
-        assert!(warm_tip[0] > tip[0]);
-        assert!(warm_tip[2] < tip[2]);
+    fn grass_card_mesh_has_quads_with_up_normals_and_sway_alpha() {
+        let mesh = build_grass_card_mesh(0.6, 0.2, 3);
+        // 3 quads x 4 verts.
+        let verts = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+            Some(bevy::mesh::VertexAttributeValues::Float32x3(p)) => p.len(),
+            _ => 0,
+        };
+        assert_eq!(verts, 12);
+        // Normals all point straight up (+Y) for soft foliage lighting.
+        if let Some(bevy::mesh::VertexAttributeValues::Float32x3(normals)) =
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+        {
+            assert!(normals.iter().all(|n| n[1] > 0.99));
+        } else {
+            panic!("card mesh has normals");
+        }
+        // Vertex-colour alpha = height frac: base verts 0, top verts 1 (sway weight).
+        if let Some(bevy::mesh::VertexAttributeValues::Float32x4(colors)) =
+            mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        {
+            assert!(colors.iter().any(|c| c[3] == 0.0));
+            assert!(colors.iter().any(|c| c[3] == 1.0));
+        } else {
+            panic!("card mesh has colours");
+        }
     }
 }

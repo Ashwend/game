@@ -49,8 +49,8 @@ use self::{
         play_sounds_system, play_transition_stingers_system, tick_audio_faders_system,
     },
     scene::{
-        GrassInstancingPlugin, GrassMaterial, GrassState, TerrainMaterial,
-        apply_world_scene_system, setup_scene, stream_grass_system, update_sky_system,
+        GrassInstancingPlugin, GrassState, TerrainMaterial, apply_world_scene_system, setup_scene,
+        stream_grass_system, update_sky_system,
     },
     state::{
         AuthFlow, BuildingPlanState, ClientErrorToast, ClientRuntime, ClientSettings,
@@ -81,7 +81,7 @@ use self::{
         placement_input_system, reconcile_player_rigs_system, reposition_test_window_system,
         save_client_settings_system, screen_viewed_system, session_ended_system,
         session_shutdown_poll_system, session_started_system, spawn_impact_effects_system,
-        surface_client_error_toasts_system, sync_furnace_open_flag_system,
+        surface_client_error_toasts_system, sway_hay_grass_system, sync_furnace_open_flag_system,
         sync_loot_bag_open_flag_system, sync_view_radius_system, tick_combat_feedback_system,
         tick_felling_trees_system, tick_furnace_particles_system, tick_impact_chips_system,
         tick_resource_node_pop_in_system, tick_torch_particles_system, toggle_crafting_system,
@@ -486,13 +486,6 @@ fn add_third_party_plugins(app: &mut App, settings: &ClientSettings) {
         // sibling `assets/` folder. Must come after DefaultPlugins so
         // AssetPlugin (and therefore `EmbeddedAssetRegistry`) exists.
         .add_plugins(embedded_assets::EmbeddedAssetsPlugin)
-        // Grass wind material: the custom wind + distance-fade shader, an
-        // `ExtendedMaterial<StandardMaterial, GrassWindExtension>`. Now used only
-        // by the hay-grass resource node; the cosmetic detail grass moved to the
-        // GPU-instanced pipeline below. Client-only (the dedicated server has no
-        // render app); after EmbeddedAssetsPlugin so `shaders/grass.wgsl`
-        // resolves when hay grass first spawns.
-        .add_plugins(MaterialPlugin::<GrassMaterial>::default())
         // Terrain ground material: a standalone splat-blend PBR material that
         // textures the floor by biome to match the world map. Client-only; after
         // EmbeddedAssetsPlugin so `shaders/terrain.wgsl` and the biome textures
@@ -955,6 +948,15 @@ fn add_audio_systems(app: &mut App) {
         // post-snapshot scene update window and write to local
         // transforms that no other system reads after them.
         tick_resource_node_pop_in_system.in_set(ClientSystemSet::NodeDeathTick),
+    )
+    .add_systems(
+        Update,
+        // Hay-grass wind lean. After the pop-in tick (it skips tufts still
+        // popping in) and in the same scene-update phase, so its transform
+        // writes land alongside the other local node-transform updates.
+        sway_hay_grass_system
+            .in_set(ClientSystemSet::NodeDeathTick)
+            .after(tick_resource_node_pop_in_system),
     );
 }
 

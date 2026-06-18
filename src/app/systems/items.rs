@@ -32,6 +32,7 @@ pub(crate) use pickup::update_pickup_target_system;
 pub(crate) use remote_swing_pose::remote_swing_arm_pose;
 pub(crate) use resource_nodes::{
     ResourceNodeEntities, apply_resource_node_stage_system, apply_resource_nodes_system,
-    resource_node_transform_at, resource_node_visual, tick_resource_node_pop_in_system,
+    resource_node_transform_at, resource_node_visual, sway_hay_grass_system,
+    tick_resource_node_pop_in_system,
 };
 pub(crate) use tool_swap::update_tool_swap_state_system;

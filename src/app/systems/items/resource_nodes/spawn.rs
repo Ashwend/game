@@ -2,9 +2,7 @@ use bevy::{camera::visibility::VisibilityRange, light::NotShadowCaster, prelude:
 
 use crate::{
     app::{
-        scene::{
-            GrassMaterialHandle, ImpactEffectAssets, NetworkResourceNode, ResourceVisualAssets,
-        },
+        scene::{ImpactEffectAssets, NetworkResourceNode, ResourceVisualAssets},
         state::ImpactEffectKind,
         systems::effects::spawn_impact_burst,
     },
@@ -12,13 +10,12 @@ use crate::{
     resources::ResourceNodeModel,
 };
 
-use super::{ResourceNodeEntities, ResourceNodePopIn};
+use super::{ResourceNodeEntities, ResourceNodePopIn, hay_sway::HayGrass};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_resource_node_entity(
     commands: &mut Commands,
     assets: &ResourceVisualAssets,
-    grass_material: &GrassMaterialHandle,
     impact_assets: &ImpactEffectAssets,
     entities: &mut ResourceNodeEntities,
     id: ResourceNodeId,
@@ -49,25 +46,25 @@ pub(super) fn spawn_resource_node_entity(
         Name::new(format!("Resource Node {id}")),
         NetworkResourceNode { id, model },
         Mesh3d(mesh),
+        MeshMaterial3d(material.clone()),
         target_transform,
         Visibility::Visible,
     ));
-    // Hay grass renders with the swaying grass shader (the *same* material as
-    // the cosmetic detail grass, so they move in unison); every other node uses
-    // its matte `StandardMaterial`.
-    if model == ResourceNodeModel::HayGrass {
-        spawn_command.insert(MeshMaterial3d(grass_material.0.clone()));
-    } else {
-        spawn_command.insert(MeshMaterial3d(material.clone()));
-    }
-    // Crude clutter (branch piles, surface stones, hay grass) spawns
-    // densely, Plains chunks alone carry ~28 grass tufts plus stones
-    // and sticks, and each casts a negligible-size shadow under its
-    // own footprint. Skipping the shadow pass for these gets us a
-    // meaningful per-frame win in populated areas without losing
-    // readable silhouettes (trees and veins still cast).
+    // Crude clutter (branch piles, surface stones, hay grass) spawns densely and
+    // casts only a negligible-size shadow under its own footprint, so skip the
+    // shadow pass for it. Trees DO cast, but only the near full-detail mesh: the
+    // distant low-poly LOD child opts out below, so a forest keeps its readable
+    // near-tree shadows while distant trees stop flooding the outer cascades
+    // (re-rendering every tree into each cascade is the heaviest forest GPU cost).
+    // The player, buildings, and ore/stone veins still cast.
     if model.is_crude() {
         spawn_command.insert(NotShadowCaster);
+    }
+    // Hay grass leans in the wind on the CPU (it can't bend in a shader like the
+    // cosmetic field, see `sway_hay_grass_system`); capture its resting rotation
+    // so the per-frame lean is re-derived from a fixed base instead of drifting.
+    if matches!(model, ResourceNodeModel::HayGrass) {
+        spawn_command.insert(HayGrass::new(target_transform.rotation));
     }
     if should_pop_in {
         spawn_command.insert(ResourceNodePopIn {
@@ -98,6 +95,11 @@ pub(super) fn spawn_resource_node_entity(
                 tree_lod_low_range(),
                 Transform::default(),
                 Visibility::Visible,
+                // The full-detail parent casts shadows up close; this distant
+                // low-poly LOD does not, so trees past `TREE_LOD_DISTANCE` stop
+                // re-rendering into the shadow cascades while near trees keep
+                // their shadows.
+                NotShadowCaster,
             ));
         });
     }
@@ -272,7 +274,7 @@ pub(crate) fn resource_node_visual(
         ),
         ResourceNodeModel::HayGrass => (
             assets.hay_grass_mesh.clone(),
-            assets.vertex_material.clone(),
+            assets.hay_grass_material.clone(),
         ),
     }
 }

@@ -77,6 +77,14 @@ pub(crate) struct ClientRuntime {
     /// system uses this to detect "do I need to respawn world geometry?" in
     /// O(1) instead of deep-comparing the previous `WorldData`.
     pub(crate) world_version: u64,
+    /// Footprints of placed deployables + buildings (NOT resource nodes), so the
+    /// cosmetic detail grass can carve itself out of them, no grass poking through a
+    /// foundation floor, furnace, or sleeping bag. Populated by
+    /// `maintain_world_grid_system` (the deployable colliders it already computes).
+    pub(crate) grass_displacers: Vec<WorldBlock>,
+    /// Bumps whenever `grass_displacers` changes, so the grass streamer re-filters
+    /// its field without polling. See [`Self::set_grass_displacers`].
+    pub(crate) grass_displacer_version: u64,
     pub(crate) predicted_local: Option<PlayerController>,
     pub(crate) messages: VecDeque<ClientLogEntry>,
     pub(crate) input_sequence: u64,
@@ -283,6 +291,15 @@ impl ClientRuntime {
         let mut extras: Vec<WorldBlock> = resource_node_colliders.into_iter().collect();
         extras.extend(deployable_colliders);
         self.world_grid = Some(BlockGrid::build_with_extras(world, &extras));
+    }
+
+    /// Replace the grass-displacer footprints (placed deployables/buildings only, not
+    /// resource nodes) and bump the version so the detail-grass streamer re-filters its
+    /// field. Called from `maintain_world_grid_system`, which is fingerprint-gated, so
+    /// this only fires when the deployable set actually changes (never per-frame).
+    pub(crate) fn set_grass_displacers(&mut self, blocks: Vec<WorldBlock>) {
+        self.grass_displacers = blocks;
+        self.grass_displacer_version = self.grass_displacer_version.wrapping_add(1);
     }
 
     pub(crate) fn apply_message(&mut self, message: ServerMessage) {

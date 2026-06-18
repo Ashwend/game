@@ -12,6 +12,7 @@ Usage:
   ashwend-control.py <socket> screenshot <png-path>
   ashwend-control.py <socket> send-command <text>        # slash command, no leading '/'
   ashwend-control.py <socket> select-actionbar-slot <n>  # 0-based; puts that slot's item in hand
+  ashwend-control.py <socket> select-actionbar-item <item_id>  # select the actionbar slot holding item_id (raises its placement ghost)
   ashwend-control.py <socket> place-deployable <item_id> [distance] [height]  # drop a carried structure in front, facing you; height = platform top for on-floor placement
   ashwend-control.py <socket> place-building <piece> [distance] [height]  # foundation|wall|window_wall|doorway|ceiling|stairs, server snaps; height raises a free foundation
   ashwend-control.py <socket> place-door <code> [flip]   # hang a carried door in the nearest doorway
@@ -87,6 +88,10 @@ def main(argv):
             "command": "select_actionbar_slot",
             "slot": int(rest[0]),
         },
+        "select-actionbar-item": lambda: {
+            "command": "select_actionbar_item",
+            "item_id": rest[0],
+        },
         "place-deployable": lambda: {
             "command": "place_deployable",
             "item_id": rest[0],
@@ -125,6 +130,8 @@ def main(argv):
             "yaw": float(rest[0]),
             "pitch": float(rest[1]),
         },
+        "warp": lambda: {"command": "warp", "x": float(rest[0]), "z": float(rest[1])},
+        "swing": lambda: {"command": "swing"},
         "set-screen": lambda: {"command": "set_screen", "screen": rest[0]},
         "set-inventory-open": lambda: {
             "command": "set_inventory_open",

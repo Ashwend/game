@@ -39,6 +39,7 @@ use crate::{
 };
 
 use super::components::MainCamera;
+use super::grass::GrassDayNight;
 
 /// Apparent radius of the sky dome the moon visual rides on. The camera's far
 /// plane is 300 m, so the moon stays comfortably inside it. The moon material
@@ -227,7 +228,7 @@ pub(crate) fn initial_distance_fog() -> DistanceFog {
         // through the 0-40m gameplay range (plain exponential already mixed
         // ~30% fog into a prop at 17m, washing everything toward pastel) and
         // ramps up near the horizon where the haze belongs.
-        falloff: FogFalloff::from_visibility_squared(140.0),
+        falloff: FogFalloff::from_visibility_squared(190.0),
     }
 }
 
@@ -242,6 +243,7 @@ pub(crate) fn update_sky_system(
     runtime: Res<ClientRuntime>,
     mut shadow_throttle: Local<f32>,
     mut ambient: ResMut<GlobalAmbientLight>,
+    mut grass_day_night: ResMut<GrassDayNight>,
     camera: CameraTransformQuery,
     mut sun_light: SunLightQuery,
     mut moon_light: MoonLightQuery,
@@ -286,6 +288,11 @@ pub(crate) fn update_sky_system(
     ambient.color = vec3_to_color(lighting.ambient_color);
     ambient.brightness = lighting.ambient_brightness;
 
+    // Hand the grass shader the same day/night factor so its day and night looks
+    // crossfade over the whole dusk/dawn window (it can't read the world clock and the
+    // night moon light would mislead it). Extracted to the render world next frame.
+    grass_day_night.day_strength = lighting.day_strength;
+
     if let Ok(mut fog) = fog.single_mut() {
         fog.color = vec3_to_color(lighting.fog_color);
         // Squared falloff to keep the near field clear; see
@@ -317,6 +324,10 @@ struct LightingFrame {
     ambient_brightness: f32,
     fog_color: Vec3,
     fog_distance: f32,
+    /// Smooth day/night factor in `[0, 1]` (1 = full day). Exposed so the grass
+    /// shader can crossfade its day/night look over the exact dusk/dawn window
+    /// rather than inferring night from the ambient luminance.
+    day_strength: f32,
 }
 
 fn compute_lighting(time: &WorldTime) -> LightingFrame {
@@ -348,13 +359,16 @@ fn compute_lighting(time: &WorldTime) -> LightingFrame {
 
     // Fog curtain: matches a desaturated horizon tone, tightening at night so
     // the player can't see across the world in the dark. Sized so distant
-    // chunks fade fully into the sky (squared fog is opaque by ~190 m by day,
+    // chunks fade fully into the sky (squared fog is opaque by ~260 m by day,
     // sooner at dusk/night) well before the 300 m far plane clips them, so no
-    // half-faded geometry is ever hard-cut at the frustum edge.
+    // half-faded geometry is ever hard-cut at the frustum edge. NOTE: the day
+    // value is the practical view distance; pushing it much past the AoI
+    // streaming ring (View Distance tier, ~130-190 m on Medium) would reveal
+    // the streaming edge, and past ~260 m would need a larger far plane.
     let day_fog = Vec3::new(0.55, 0.65, 0.78);
     let night_fog = Vec3::new(0.05, 0.07, 0.13);
     let fog_color = lerp_vec3(night_fog, day_fog, day_strength);
-    let fog_distance = lerp(85.0, 140.0, day_strength);
+    let fog_distance = lerp(105.0, 190.0, day_strength);
 
     LightingFrame {
         sun_direction,
@@ -366,6 +380,7 @@ fn compute_lighting(time: &WorldTime) -> LightingFrame {
         ambient_brightness,
         fog_color,
         fog_distance,
+        day_strength,
     }
 }
 

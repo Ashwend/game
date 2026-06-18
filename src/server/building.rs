@@ -4,7 +4,7 @@
 //! client only previews.
 //!
 //! Placement rules (shared geometry in [`crate::building`]):
-//! - Foundations sit on the ground, yaw-snapped to quarter turns. Near an
+//! - Foundations sit on the ground at the requested (player-facing) yaw. Near an
 //!   existing foundation they snap onto its 3 m neighbour grid; the box
 //!   overlap test rejects everything that isn't exactly on-grid.
 //! - Wall-like pieces (wall, window wall, doorway) mount on a platform's
@@ -21,8 +21,8 @@
 use crate::{
     building::{
         BuildingPiece, BuildingTier, building_item_id, building_max_health, cell_neighbor_sockets,
-        placement_cost, platform_wall_sockets, positions_match, repair_cost, snap_yaw_quarter_turn,
-        stairs_socket_on, upgrade_cost, wall_ceiling_sockets, wall_slot_blocked, wall_top_socket,
+        placement_cost, platform_wall_sockets, positions_match, repair_cost, stairs_socket_on,
+        upgrade_cost, wall_ceiling_sockets, wall_slot_blocked, wall_top_socket,
     },
     game_balance::{
         BUILDING_DEMOLISH_WINDOW_TICKS, BUILDING_MIN_PLACEMENT_STABILITY_PCT,
@@ -186,8 +186,8 @@ impl GameServer {
         )
     }
 
-    /// Snap a foundation request: free placement on the quarter-turn grid
-    /// anywhere inside the raise band (ground level up to
+    /// Snap a foundation request: free placement at the requested (player-facing)
+    /// yaw anywhere inside the raise band (ground level up to
     /// `FOUNDATION_RAISE_MAX_M`, aim-driven on the client), or, when the
     /// player aims near an existing foundation, onto that foundation's
     /// 3 m neighbour grid (inheriting its yaw *and* height so bases stay
@@ -247,7 +247,11 @@ impl GameServer {
             // the raise band above); negative wobble clamps to ground so
             // a slightly sunk request doesn't bury the slab.
             Vec3Net::new(requested.x, requested.y.max(0.0), requested.z),
-            snap_yaw_quarter_turn(requested_yaw),
+            // Keep the requested yaw (NOT quarter-snapped): a free foundation faces the
+            // player, so it tracks the look smoothly instead of flipping at 45° steps.
+            // The grid for any extension orients to this first slab, so an arbitrary yaw
+            // still tiles; snapped pieces (walls/neighbours) own their own yaw below.
+            requested_yaw,
         ))
     }
 

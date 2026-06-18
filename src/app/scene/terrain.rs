@@ -241,7 +241,7 @@ fn repeat_linear_sampler() -> ImageSamplerDescriptor {
 /// (decode -> average -> re-encode); alpha is linear already. Levels are appended
 /// in order, which is exactly what wgpu's `create_texture_with_data` upload reads
 /// for a single-layer 2D image (default `LayerMajor` == mip-major here).
-fn build_mip_chain(image: &mut Image) {
+pub(crate) fn build_mip_chain(image: &mut Image) {
     let mut w = image.width();
     let mut h = image.height();
     let mut src = image.data.clone().expect("decoded image has pixel data");

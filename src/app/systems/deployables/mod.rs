@@ -525,6 +525,9 @@ pub(crate) fn maintain_world_grid_system(
         .iter()
         .flat_map(|(meta, transform, active)| deployable_colliders(meta, transform, active.0))
         .collect();
+    // Hand the placed-structure footprints to the detail-grass streamer so it carves
+    // grass out of them (only deployables/buildings, never the resource-node colliders).
+    runtime.set_grass_displacers(deployable_collider_blocks.clone());
     runtime.rebuild_world_grid(resource_colliders, deployable_collider_blocks);
     *last_fingerprint = Some(current);
 }

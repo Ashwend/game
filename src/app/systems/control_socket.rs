@@ -170,6 +170,13 @@ pub(crate) enum ControlRequest {
     /// empty hand swings bare-handed. Lets an agent capture the remote swing
     /// animation headless (the normal LMB path is focus-gated).
     Swing,
+    /// Select the actionbar slot that currently holds `item_id` (searches the
+    /// replicated actionbar), making it the active/held item. Unlike
+    /// [`Self::SelectActionbarSlot`] this doesn't depend on knowing the slot
+    /// index, which shifts with the player's loadout. Holding a deployable or the
+    /// building plan is what raises the placement ghost, so this lets an agent
+    /// start a placement preview headlessly (e.g. `crude_furnace`, `building_plan`).
+    SelectActionbarItem { item_id: String },
     /// Return a JSON snapshot of key client state for assertions.
     DumpState,
 }
@@ -422,6 +429,28 @@ fn handle_request(
                 InventoryCommand::SelectActionbarSlot { slot },
             ))?;
             Ok(format!("selected actionbar slot {slot}"))
+        }
+        ControlRequest::SelectActionbarItem { item_id } => {
+            let private = local_player
+                .private
+                .as_ref()
+                .context("not in a world (no inventory)")?;
+            let slot = private
+                .inventory
+                .actionbar_slots
+                .iter()
+                .position(|stack| {
+                    stack.as_ref().map(|s| s.item_id.as_ref()) == Some(item_id.as_str())
+                })
+                .with_context(|| format!("item '{item_id}' is not in the actionbar"))?;
+            let session = runtime
+                .session
+                .as_mut()
+                .context("no active session (not in a world)")?;
+            session.send(ClientMessage::Inventory(
+                InventoryCommand::SelectActionbarSlot { slot },
+            ))?;
+            Ok(format!("selected actionbar slot {slot} ({item_id})"))
         }
         ControlRequest::PlaceDeployable {
             item_id,

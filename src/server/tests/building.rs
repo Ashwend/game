@@ -91,7 +91,7 @@ fn foundation_placement_consumes_sticks_and_spawns_at_sticks_tier() {
         client_id,
         BuildingPiece::Foundation,
         Vec3Net::new(2.0, 0.0, 0.0),
-        0.3, // off-grid yaw, must snap to a quarter turn
+        0.3, // a free foundation keeps the requested (player-facing) yaw
     );
 
     let ids = building_ids(&server, BuildingPiece::Foundation);
@@ -104,7 +104,7 @@ fn foundation_placement_consumes_sticks_and_spawns_at_sticks_tier() {
             tier: BuildingTier::Sticks,
         }
     );
-    assert_eq!(entity.yaw, 0.0, "yaw snaps to the quarter-turn grid");
+    assert_eq!(entity.yaw, 0.3, "a free foundation keeps the requested yaw");
     let remaining =
         crate::inventory::count_items_in_inventory(&server.clients[&client_id].inventory, WOOD_ID);
     assert_eq!(remaining, 200 - u32::from(BUILDING_STICKS_COST_FOUNDATION));

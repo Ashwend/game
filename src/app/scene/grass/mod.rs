@@ -19,13 +19,15 @@
 //!   stable per-instance random), thinning the field into smooth rings (no hard
 //!   despawn edge, no square tile bands).
 //!
-//! All visible blades are kept in **one** entity's combined instance buffer; see
-//! [`GrassState`] and [`instancing`] for why one-entity-one-buffer (Bevy's
-//! auto-instancing clumps many entities that share a mesh).
+//! All visible blades are kept in **one** entity's combined instance buffer, drawn
+//! whole with `NoFrustumCulling`; see [`GrassState`] and [`instancing`] for why
+//! one-entity-one-buffer (Bevy's auto-instancing clumps many entities that share a
+//! mesh, and per-region frustum culling made the field flicker chunk-by-chunk as the
+//! camera moved, so we draw the whole loaded field as a single buffer).
 //!
-//! The harvestable **hay-grass** node still uses the older [`GrassMaterial`]
-//! (`grass.wgsl`) baked-clump path, it's one located, pickable plant per node,
-//! not a density problem.
+//! The harvestable **hay-grass** node is a normal `StandardMaterial` mesh (the
+//! taller, straw-tinted [`super::mesh::builder`] tuft), spawned by the resource-node
+//! system like any other crude clutter, not part of this cosmetic field.
 //!
 //! ## Two render traps this design avoids
 //!
@@ -41,20 +43,16 @@
 use std::collections::HashMap;
 
 use bevy::{
-    camera::visibility::NoFrustumCulling,
-    pbr::{ExtendedMaterial, MaterialExtension},
-    prelude::*,
-    render::{render_resource::AsBindGroup, sync_world::SyncToRenderWorld},
-    shader::ShaderRef,
+    camera::visibility::NoFrustumCulling, prelude::*, render::sync_world::SyncToRenderWorld,
 };
 
 mod instancing;
 
-pub(crate) use instancing::GrassInstancingPlugin;
+pub(crate) use instancing::{GrassDayNight, GrassInstancingPlugin};
 use instancing::{InstanceData, InstanceMaterialData};
 
 use super::components::WorldGeometry;
-use super::mesh::builder::{GrassBlade, GrassBladeMesh, grass_blade_colors};
+use super::mesh::builder::build_grass_card_mesh;
 use crate::{
     app::state::{ClientRuntime, ClientSettings, GrassDensity},
     world::{ClassificationChannels, WorldBlock, WorldData, biome_blend_weights, fbm, splitmix64},
@@ -62,12 +60,7 @@ use crate::{
 
 /// Height (m) the shared instanced blade mesh is baked at. Per-blade
 /// `height_scale` in the instance buffer scales relative to this.
-const BLADE_REF_HEIGHT: f32 = 0.4;
-
-/// Embedded path of the grass shader (see [`crate::app::embedded_asset_path`],
-/// the same `embedded://` scheme, but a `&'static str` because [`ShaderRef`]
-/// needs one).
-const GRASS_SHADER_PATH: &str = "embedded://shaders/grass.wgsl";
+pub(super) const BLADE_REF_HEIGHT: f32 = 0.6;
 
 /// Side length of a grass streaming tile / variant mesh, in metres.
 const GRASS_TILE_M: f32 = 8.0;
@@ -89,50 +82,39 @@ const GRASS_LAYOUT_COUNT: usize = 16;
 /// Fixed seeds, decoupled from any world seed (placement is seed-free).
 const GRASS_CLUMP_SEED: u64 = 0x6A09_E667_F3BC_C909;
 const GRASS_LAYOUT_SEED: u64 = 0xBB67_AE85_84CA_A73B;
+const GRASS_HEIGHT_SEED: u64 = 0x3C6E_F372_FE94_F82B;
+const GRASS_COLOR_SEED: u64 = 0xA54F_F53A_5F1D_36F1;
+const GRASS_LEAN_SEED: u64 = 0x510E_527F_ADE6_82D1;
 
-/// The grass material: StandardMaterial PBR + the wind/dither shader extension.
-pub(crate) type GrassMaterial = ExtendedMaterial<StandardMaterial, GrassWindExtension>;
-
-/// Shared handle to the single [`GrassMaterial`] instance. Created eagerly at
-/// scene setup and used by the harvestable hay-grass node (the cosmetic detail
-/// grass moved to the GPU-instanced [`instancing`] pipeline). The material is
-/// binding-free, so one instance suffices.
+/// The shared grass-card mesh ([`build_instanced_blade_mesh`]) for the cosmetic
+/// detail-grass field, built once at startup. Density-independent (density only
+/// scales the instance *count*), so one mesh serves every tier; the streamer clones
+/// this handle instead of rebuilding the mesh on density changes.
 #[derive(Resource, Clone)]
-pub(crate) struct GrassMaterialHandle(pub(crate) Handle<GrassMaterial>);
+pub(crate) struct GrassCardMesh(pub(crate) Handle<Mesh>);
 
-/// Shader extension that adds the wind + distance-fade behaviour. **Deliberately
-/// binding-free**: it carries no uniform/texture, only the shader override.
-/// `ExtendedMaterial`'s bind-group merge with the bindless `StandardMaterial`
-/// drops a `@binding(100)` extension uniform from the pipeline layout on Metal
-/// (crash: "binding 100 missing from pipeline layout"), so all shader tuning is
-/// compile-time constants in `grass.wgsl` instead, the trade-off being a fixed
-/// fade window / draw radius across density tiers (see [`GRASS_RADIUS_M`]).
-#[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
-pub(crate) struct GrassWindExtension {}
-
-impl MaterialExtension for GrassWindExtension {
-    fn vertex_shader() -> ShaderRef {
-        GRASS_SHADER_PATH.into()
-    }
-    fn fragment_shader() -> ShaderRef {
-        GRASS_SHADER_PATH.into()
-    }
+/// Build the shared [`GrassCardMesh`] at startup. Run from [`GrassInstancingPlugin`].
+pub(super) fn init_grass_card_mesh(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
+    commands.insert_resource(GrassCardMesh(meshes.add(build_instanced_blade_mesh())));
 }
 
-/// Camera-relative radius (m) within which grass tiles are kept loaded. A hair
-/// above the instanced shader's `FADE_END` (`grass_instanced.wgsl`, 46 m) so
-/// grass is fully faded before a tile drops out (no pop).
-const GRASS_RADIUS_M: f32 = 47.0;
+/// Camera-relative radius (m) within which grass tiles are kept loaded. Comfortably
+/// above the instanced shader's `FADE_END` (`grass_instanced.wgsl`, 50 m) so a tile
+/// is fully dithered out before it loads/drops, the cards just dissolve in/out with
+/// distance rather than popping (no visible "spawning" as you walk).
+const GRASS_RADIUS_M: f32 = 54.0;
 
-/// Per-tier patch density (grass *tufts* per square metre, before clumping). The
-/// cosmetic grass is scattered tufts, not a continuous carpet, so this counts
-/// patches; each patch fans [`PATCH_BLADES_MIN`]..+[`PATCH_BLADES_SPAN`] straws.
-fn patch_density_per_m2(density: GrassDensity) -> Option<f32> {
+/// Per-tier grass-CARD density (textured tuft cards per square metre, before the
+/// fBm biome thinning). Each card is a whole textured tuft of ~10 visual blades.
+/// Tuned down so even High is a comfortable ~100fps tier (the old "Low" looked
+/// fine and ran well, so it's roughly the new ceiling); the shader's distance
+/// dither does the far thin-out, so density is uniform (no CPU distance falloff).
+fn blade_density_per_m2(density: GrassDensity) -> Option<f32> {
     match density {
         GrassDensity::Off => None,
-        GrassDensity::Low => Some(0.22),
-        GrassDensity::Medium => Some(0.45),
-        GrassDensity::High => Some(0.8),
+        GrassDensity::Low => Some(1.5),
+        GrassDensity::Medium => Some(3.0),
+        GrassDensity::High => Some(5.0),
     }
 }
 
@@ -143,8 +125,8 @@ pub(crate) struct GrassTile;
 /// Streaming bookkeeping for the detail grass.
 ///
 /// All visible blades live in **one** entity's instance buffer (the custom
-/// instancing pipeline is built for one mesh + one instance buffer per draw;
-/// many entities sharing a mesh collide with Bevy's auto-instancing). The streamer
+/// instancing pipeline is built for one mesh + one instance buffer per draw; many
+/// entities sharing a mesh collide with Bevy's auto-instancing). The streamer
 /// maintains a per-tile map of world-space instances and rebuilds the single
 /// combined buffer whenever the loaded set changes.
 #[derive(Resource, Default)]
@@ -152,8 +134,6 @@ pub(crate) struct GrassState {
     /// Loaded tiles by `(tile_x, tile_z)`: `Some(world instances)` if planted,
     /// `None` if permanently bare (off the floor or covering a block).
     tiles: HashMap<(i32, i32), Option<Vec<InstanceData>>>,
-    /// The single shared blade mesh. Built once per density, never freed.
-    blade_mesh: Option<Handle<Mesh>>,
     /// Pre-computed per-layout **tile-local** instance lists (one per layout).
     /// Each tile clones the matching layout, transformed to world space (see
     /// [`tile_world_instances`]). Rebuilt only when density changes.
@@ -173,6 +153,10 @@ pub(crate) struct GrassState {
     /// need loading at the current camera tile, so the next frame keeps scanning
     /// even though the camera hasn't crossed a tile boundary.
     fill_pending: bool,
+    /// Last `ClientRuntime::grass_displacer_version` the combined buffer was filtered
+    /// against. When it differs, a deployable/building was placed or removed, so the
+    /// field is rebuilt to carve grass out of (or restore it under) the new footprints.
+    bound_displacer_version: u64,
 }
 
 /// Stream detail-grass tiles around the camera. The shader handles the distance
@@ -181,7 +165,7 @@ pub(crate) fn stream_grass_system(
     mut commands: Commands,
     settings: Res<ClientSettings>,
     runtime: Res<ClientRuntime>,
-    mut meshes: ResMut<Assets<Mesh>>,
+    card_mesh: Res<GrassCardMesh>,
     mut state: ResMut<GrassState>,
 ) {
     let density = settings.graphics.grass_density;
@@ -191,19 +175,19 @@ pub(crate) fn stream_grass_system(
         clear_field(&mut commands, &mut state);
         return;
     };
-    let Some(patches_per_m2) = patch_density_per_m2(density) else {
+    let Some(blades_per_m2) = blade_density_per_m2(density) else {
         clear_field(&mut commands, &mut state);
         state.bound_density = Some(density);
         return;
     };
 
-    // (Re)build the shared blade mesh + per-layout instance lists when density
-    // changes or on first use, the only place these are (re)allocated.
+    // (Re)build the per-layout instance lists when density changes or on first use,
+    // the only place these are (re)allocated. The card mesh itself is the shared
+    // density-independent [`GrassCardMesh`] resource built once at startup.
     let density_changed = state.bound_density != Some(density);
-    if density_changed || state.blade_mesh.is_none() {
-        state.blade_mesh = Some(meshes.add(build_instanced_blade_mesh()));
+    if density_changed || state.layouts.is_empty() {
         state.layouts = (0..GRASS_LAYOUT_COUNT)
-            .map(|layout| generate_layout_instances(layout, patches_per_m2))
+            .map(|layout| generate_layout_instances(layout, blades_per_m2))
             .collect();
     }
     if density_changed || state.bound_world_version != runtime.world_version {
@@ -227,17 +211,31 @@ pub(crate) fn stream_grass_system(
         (px / GRASS_TILE_M).floor() as i32,
         (pz / GRASS_TILE_M).floor() as i32,
     );
-    if state.last_cam_tile == Some(cam_tile) && !state.fill_pending {
+    // A deployable/building placed or removed bumps the displacer version; rebuild the
+    // field even when the camera hasn't crossed a tile, so grass re-carves around it.
+    let displacer_version = runtime.grass_displacer_version;
+    let displacers_changed = state.bound_displacer_version != displacer_version;
+    if state.last_cam_tile == Some(cam_tile) && !state.fill_pending && !displacers_changed {
         return;
     }
 
     // The world seed lets each placed blade pick a biome tint matching the ground.
     let world_seed = runtime.world_map_seed_dims.map(|(seed, _)| seed);
 
-    let blade_mesh = state
-        .blade_mesh
-        .clone()
-        .expect("blade mesh built above when density is on");
+    let blade_mesh = card_mesh.0.clone();
+
+    // Placed-structure footprints overlapping the field, so the combine can drop blades
+    // that would poke through a foundation floor, furnace, or sleeping bag. Pre-filtered
+    // to the field radius so the per-blade test only sees nearby structures (usually 0).
+    let near_displacers: Vec<WorldBlock> = runtime
+        .grass_displacers
+        .iter()
+        .filter(|b| {
+            (b.center.x - px).abs() <= GRASS_RADIUS_M + b.half_extents.x
+                && (b.center.z - pz).abs() <= GRASS_RADIUS_M + b.half_extents.z
+        })
+        .copied()
+        .collect();
 
     let GrassState {
         tiles,
@@ -246,6 +244,10 @@ pub(crate) fn stream_grass_system(
         dirty,
         ..
     } = &mut *state;
+    // Re-carve the field this frame if the structure footprints changed (place/remove).
+    if displacers_changed {
+        *dirty = true;
+    }
 
     let radius = GRASS_RADIUS_M;
     let radius_sq = radius * radius;
@@ -311,12 +313,22 @@ pub(crate) fn stream_grass_system(
     }
 
     // 3. Rebuild the single combined instance buffer when the loaded set changed.
+    //    The whole loaded field is one buffer drawn with `NoFrustumCulling`, no
+    //    per-region culling: the shader's distance dither thins the far edge, and a
+    //    single draw avoids the chunk-by-chunk flicker that per-viewport region
+    //    culling caused. At these densities the per-crossing re-upload is a small
+    //    memcpy.
     if *dirty {
         *dirty = false;
         let combined: Vec<InstanceData> = tiles
             .values()
             .filter_map(|slot| slot.as_ref())
-            .flat_map(|blades| blades.iter().copied())
+            .flat_map(|cards| cards.iter().copied())
+            // Carve grass out of placed deployables/buildings. `a = [world_x, world_z, ..]`.
+            .filter(|inst| {
+                near_displacers.is_empty()
+                    || !blade_in_displacer(inst.a[0], inst.a[1], &near_displacers)
+            })
             .collect();
         update_grass_field(&mut commands, field_entity, &blade_mesh, combined, px, pz);
     }
@@ -325,10 +337,14 @@ pub(crate) fn stream_grass_system(
     // the camera crosses a tile (or a budgeted fill still owes tiles here).
     state.last_cam_tile = Some(cam_tile);
     state.fill_pending = hit_budget;
+    state.bound_displacer_version = displacer_version;
 }
 
 /// Spawn or refresh the single grass-field entity with the combined instance
 /// buffer. Despawns it when the field is empty (a 0-length GPU buffer is invalid).
+/// `NoFrustumCulling`: blade positions span the whole field but the mesh Aabb is one
+/// blade at the origin, and we deliberately draw the whole loaded field (no per-view
+/// culling), so Bevy's frustum test must be skipped.
 fn update_grass_field(
     commands: &mut Commands,
     field_entity: &mut Option<Entity>,
@@ -358,12 +374,10 @@ fn update_grass_field(
                         GrassTile,
                         Mesh3d(blade_mesh.clone()),
                         InstanceMaterialData(combined),
-                        // Transform (≈ camera) only feeds transparent-sort
-                        // distance; blade positions are already world-space.
+                        // Transform (≈ camera) only feeds transparent-sort distance;
+                        // blade positions are already world-space.
                         Transform::from_xyz(px, 0.0, pz),
                         Visibility::Visible,
-                        // Blades span the whole field but the mesh Aabb is one
-                        // blade at the origin, so skip built-in frustum culling.
                         NoFrustumCulling,
                         // No `Material`, so opt into render-world sync explicitly
                         // (the instancing extract needs a `RenderEntity`).
@@ -375,10 +389,9 @@ fn update_grass_field(
     }
 }
 
-/// Tuft density (patches/m²) for the static menu backdrop. A touch denser than
-/// in-world Medium ([`patch_density_per_m2`]) since it's a curated close-up shot,
-/// but the same scattered-tuft aesthetic (not the old dense carpet).
-const MENU_GRASS_PATCHES_PER_M2: f32 = 0.7;
+/// Card density (cards/m²) for the static menu backdrop. A touch denser than
+/// in-world Medium ([`blade_density_per_m2`]) since it's a curated close-up shot.
+const MENU_GRASS_BLADES_PER_M2: f32 = 4.0;
 
 /// Spawn a fixed patch of detail grass for the main-menu backdrop, tagged
 /// [`WorldGeometry`] so it's torn down with the rest of the backdrop on scene
@@ -393,7 +406,7 @@ const MENU_GRASS_PATCHES_PER_M2: f32 = 0.7;
 pub(crate) fn spawn_menu_grass(commands: &mut Commands, meshes: &mut Assets<Mesh>) {
     let blade_mesh = meshes.add(build_instanced_blade_mesh());
     let layouts: Vec<Vec<InstanceData>> = (0..GRASS_LAYOUT_COUNT)
-        .map(|layout| generate_layout_instances(layout, MENU_GRASS_PATCHES_PER_M2))
+        .map(|layout| generate_layout_instances(layout, MENU_GRASS_BLADES_PER_M2))
         .collect();
 
     // One combined instance buffer over the visible ground band (8 m tiles).
@@ -424,7 +437,7 @@ pub(crate) fn spawn_menu_grass(commands: &mut Commands, meshes: &mut Assets<Mesh
 }
 
 /// Despawn the grass field entity and forget all loaded tiles. Keeps the cached
-/// blade mesh + layouts (the caller updates those).
+/// layouts (the caller updates those).
 fn clear_field(commands: &mut Commands, state: &mut GrassState) {
     if let Some(entity) = state.field_entity.take() {
         commands.entity(entity).despawn();
@@ -434,25 +447,6 @@ fn clear_field(commands: &mut Commands, state: &mut GrassState) {
     // Force the next scan to run regardless of camera tile (the field is empty).
     state.last_cam_tile = None;
     state.fill_pending = false;
-}
-
-pub(crate) fn grass_material() -> GrassMaterial {
-    ExtendedMaterial {
-        base: StandardMaterial {
-            // Vertex colours carry the green gradient; the base colour passes
-            // them through. Matte, near-zero reflectance, grass has no sheen.
-            base_color: Color::WHITE,
-            perceptual_roughness: 0.95,
-            reflectance: 0.04,
-            // Thin ribbons seen from any angle → render both faces. `double_sided`
-            // stays false so both faces keep the baked upward normal (lit-from-
-            // above, no orbit flicker).
-            cull_mode: None,
-            double_sided: false,
-            ..default()
-        },
-        extension: GrassWindExtension {},
-    }
 }
 
 /// Whether a tile should grow grass: fully inside the playable floor and not
@@ -469,6 +463,21 @@ fn tile_is_plantable(tx: i32, tz: i32, floor_half: f32, world: &WorldData) -> bo
         .blocks
         .iter()
         .any(|b| block_overlaps(b, min_x, max_x, min_z, max_z))
+}
+
+/// Extra clearance (m) around a placed structure's XZ footprint where grass is also
+/// removed, so blades don't lean into the edge of a foundation, furnace, or bag.
+const GRASS_DISPLACE_MARGIN_M: f32 = 0.2;
+
+/// True if a blade at world `(wx, wz)` sits inside (or within [`GRASS_DISPLACE_MARGIN_M`]
+/// of) any placed deployable/building footprint. XZ-only: the structure's height is
+/// irrelevant, we just keep grass out of its column so nothing pokes through the floor
+/// of a foundation, the centre of a furnace, or a sleeping bag.
+fn blade_in_displacer(wx: f32, wz: f32, displacers: &[WorldBlock]) -> bool {
+    displacers.iter().any(|b| {
+        (wx - b.center.x).abs() <= b.half_extents.x + GRASS_DISPLACE_MARGIN_M
+            && (wz - b.center.z).abs() <= b.half_extents.z + GRASS_DISPLACE_MARGIN_M
+    })
 }
 
 fn block_overlaps(block: &WorldBlock, min_x: f32, max_x: f32, min_z: f32, max_z: f32) -> bool {
@@ -494,133 +503,142 @@ fn tile_seed(tx: i32, tz: i32) -> u64 {
 }
 
 /// Pull the next pseudo-random `f32` in `[0, 1)` from a splitmix64 stream.
-fn next_unit(state: &mut u64) -> f32 {
+pub(super) fn next_unit(state: &mut u64) -> f32 {
     *state = splitmix64(*state);
     ((*state >> 40) as f32) / ((1u64 << 24) as f32)
 }
 
-/// The single blade mesh every tile instances: one cubic-Bézier arch at the
-/// origin, baked at [`BLADE_REF_HEIGHT`] with **neutral** colour (shade 1, warm
-/// 0). Per-instance `height_scale`, `yaw`, and `shade`/`warm` are applied in the
-/// shader, so all the per-blade variety lives in the instance buffer, not the
-/// geometry. The blade leans along +Z (perpendicular to its width axis) so the
-/// arch bows over its face; the instance yaw then spins the whole thing.
+/// Half-width of one grass card (metres at [`BLADE_REF_HEIGHT`]); per-instance
+/// `height_scale` scales the whole card. Cards are wide because each carries a
+/// whole textured tuft of blades, not one blade.
+pub(super) const CARD_HALF_WIDTH: f32 = 0.24;
+/// Quads per card, evenly spaced over a half-turn (2 -> 0/90 degrees, a cross) so
+/// the tuft shows a blade silhouette from any horizontal angle. Two (not three)
+/// keeps fragment/overdraw cost down; double-sided rendering covers the back.
+const CARD_QUADS: u32 = 2;
+
+/// The shared grass-card mesh every tile instances: crossed quads textured with
+/// the grass-tuft alpha texture (the blade detail lives in the texture, mipmapped,
+/// so far cards fuse into a soft mass instead of aliasing). Baked at
+/// [`BLADE_REF_HEIGHT`]; per-instance `height_scale`, `yaw`, and the colour tint
+/// are applied in the shader. One card replaces a whole tuft of per-blade geometry,
+/// the perf + soft-look win over the old cubic-Bézier blades.
 fn build_instanced_blade_mesh() -> Mesh {
-    let (mut base_color, mut tip_color) = grass_blade_colors(1.0, 0.0);
-    // One uniform colour across every biome, nudged slightly warm/dry (less blue)
-    // so the green sits on both the green forest floor and the tan plains ground
-    // without the teal clash, biome variety is carried by density alone now, not
-    // colour. Alpha (the sway weight) is left untouched.
-    const DETAIL_GRASS_DRY: [f32; 3] = [1.14, 1.0, 0.75];
-    for ch in 0..3 {
-        base_color[ch] *= DETAIL_GRASS_DRY[ch];
-        tip_color[ch] *= DETAIL_GRASS_DRY[ch];
-    }
-    let mut builder = GrassBladeMesh::default();
-    builder.push_blade(&GrassBlade {
-        base: Vec2::ZERO,
-        yaw: 0.0,
-        height: BLADE_REF_HEIGHT,
-        half_width: 0.016,
-        // Lean + a gentle arch, both aimed away from the tuft centre by the
-        // instance `yaw`, so each straw curves outward into the rosette. `flex` is
-        // a moderate bow (well below the old 0.22 that read as "massively curvy").
-        lean: Vec2::new(0.0, BLADE_REF_HEIGHT * 0.5),
-        flex: 0.14,
-        base_color,
-        tip_color,
-        // Unused for instanced grass (the dither key is per-instance).
-        dither: 0.0,
-    });
-    builder.build()
+    build_grass_card_mesh(BLADE_REF_HEIGHT, CARD_HALF_WIDTH, CARD_QUADS)
 }
 
-/// Straws per tuft (minimum + random span on top): a fuller 7-10 straw rosette.
-const PATCH_BLADES_MIN: u32 = 7;
-const PATCH_BLADES_SPAN: u32 = 4;
-/// Base footprint radius of a tuft (m): kept tight so straws share a centre and
-/// the outward lean fans the *tips* into a clear rosette.
-const PATCH_RADIUS_M: f32 = 0.08;
-
-/// Deterministically scatter one layout's **tufts** into tile-local instance data,
-/// centred on the origin spanning `[-GRASS_TILE_M/2, GRASS_TILE_M/2]` so a cardinal
-/// rotation about the tile centre maps the square onto itself (no seams). Each tuft
-/// is a few straws fanning outward from its centre (instance `yaw` = the radial
-/// direction, so the baked lean points away from centre). fBm clumping gathers
-/// tufts into loose meadow clusters with bare ground between.
-fn generate_layout_instances(layout: usize, patches_per_m2: f32) -> Vec<InstanceData> {
+/// Deterministically scatter one layout's blades evenly into tile-local instance
+/// data, centred on the origin spanning `[-GRASS_TILE_M/2, GRASS_TILE_M/2]` so a
+/// cardinal rotation about the tile centre maps the square onto itself (no seams).
+///
+/// Phase 2 carpet model: blades are scattered roughly **uniformly** across the
+/// tile (each with a random yaw + height), not gathered into radial rosettes, so
+/// a dense field reads as a continuous carpet instead of scattered tuft "stars".
+/// A low-frequency fBm only thins the sparsest dips so the carpet still breathes
+/// with gentle bald patches rather than being a perfectly even lawn.
+fn generate_layout_instances(layout: usize, blades_per_m2: f32) -> Vec<InstanceData> {
     let half = GRASS_TILE_M * 0.5;
-    let patch_candidates = (patches_per_m2 * GRASS_TILE_M * GRASS_TILE_M).round() as u32;
+    let candidates = (blades_per_m2 * GRASS_TILE_M * GRASS_TILE_M).round() as u32;
     let mut rng = splitmix64(GRASS_LAYOUT_SEED ^ (layout as u64).wrapping_mul(0x100_0001));
 
-    let mut out = Vec::new();
-    for _ in 0..patch_candidates {
-        let cx = next_unit(&mut rng) * GRASS_TILE_M - half;
-        let cz = next_unit(&mut rng) * GRASS_TILE_M - half;
+    let mut out = Vec::with_capacity(candidates as usize);
+    for _ in 0..candidates {
+        let bx = next_unit(&mut rng) * GRASS_TILE_M - half;
+        let bz = next_unit(&mut rng) * GRASS_TILE_M - half;
 
-        // Clumping: keep tufts where the noise is high → loose meadow clusters.
+        // Density variation: thin only the sparsest noise dips (floor 0.6, so most
+        // candidates survive) so coverage stays near-continuous but not uniform.
         let clump = fbm(
             GRASS_CLUMP_SEED ^ layout as u64,
-            (cx + half) * 0.18,
-            (cz + half) * 0.18,
+            (bx + half) * 0.12,
+            (bz + half) * 0.12,
             1.0,
             3,
         );
-        if next_unit(&mut rng) > 0.35 + 0.65 * clump {
+        if next_unit(&mut rng) > 0.6 + 0.4 * clump {
             continue;
         }
 
-        // One tuft. Whole-patch shade/warm so the straws read as one plant.
-        let blades = PATCH_BLADES_MIN + (next_unit(&mut rng) * PATCH_BLADES_SPAN as f32) as u32;
-        let patch_shade = 0.9 + next_unit(&mut rng) * 0.1;
-        // Mild hue jitter, kept small so the now-dim (ground-matched) colours
-        // don't tip warm/yellow and stand out.
-        let patch_warm = next_unit(&mut rng) * 0.3 - 0.16;
-        let start = next_unit(&mut rng) * std::f32::consts::TAU;
-        for i in 0..blades {
-            // Even fan around the centre with a little jitter.
-            let az = start
-                + (i as f32 / blades as f32) * std::f32::consts::TAU
-                + (next_unit(&mut rng) - 0.5) * 0.5;
-            let r = PATCH_RADIUS_M * next_unit(&mut rng).sqrt();
-            let bx = cx + az.cos() * r;
-            let bz = cz + az.sin() * r;
-            // Aim the blade's baked +Z lean/arch radially *outward* from the tuft
-            // centre. The shader maps local +Z to world `(sin yaw, cos yaw)` and
-            // the radial direction is `(cos az, sin az)`, so `yaw = π/2 - az`.
-            // (Using `az` directly leans tangentially, a pinwheel, which read as
-            // straws curving inward/sideways.)
-            let yaw = std::f32::consts::FRAC_PI_2 - az + (next_unit(&mut rng) - 0.5) * 0.35;
-            let height = 0.26 + next_unit(&mut rng) * 0.22;
-            let height_scale = height / BLADE_REF_HEIGHT;
-            let shade = patch_shade * (0.92 + next_unit(&mut rng) * 0.08);
-            let dither = next_unit(&mut rng);
-            out.push(InstanceData {
-                a: [bx, bz, 0.0, height_scale],
-                b: [yaw, shade, patch_warm, dither],
-            });
-        }
+        // Lean grain: neighbours share a low-frequency lean direction so the field
+        // has an organic combed grain instead of every blade pointing randomly,
+        // with a wide per-blade jitter so it never reads as a comb.
+        let grain = fbm(
+            GRASS_LEAN_SEED ^ layout as u64,
+            (bx + half) * 0.04,
+            (bz + half) * 0.04,
+            1.0,
+            2,
+        );
+        let yaw = grain * std::f32::consts::TAU + (next_unit(&mut rng) - 0.5) * 2.4;
+
+        // Organic height: a low-frequency field makes broad tall/short patches so
+        // the field undulates like real grass instead of a uniform-height carpet
+        // (the single biggest "not a video-game lawn" cue). Per-blade jitter on
+        // top. Net ~0.3-1.1 m; the player looks INTO the mass, hiding the ground.
+        let hclump = fbm(
+            GRASS_HEIGHT_SEED ^ layout as u64,
+            (bx + half) * 0.06,
+            (bz + half) * 0.06,
+            1.0,
+            3,
+        );
+        // Low ground-hugging turf (~0.11-0.48 m after the clump multiplier).
+        let height = (0.30 + next_unit(&mut rng) * 0.24) * (0.7 + 0.8 * hclump);
+        let height_scale = height / BLADE_REF_HEIGHT;
+
+        // Tonal patches: neighbours share a colour tone (a low-frequency field) so
+        // the field mottles into brighter/yellower and darker/cooler patches like a
+        // painterly mass, rather than one flat uniform green. Per-blade jitter on top.
+        let tone = fbm(
+            GRASS_COLOR_SEED ^ layout as u64,
+            (bx + half) * 0.10,
+            (bz + half) * 0.10,
+            1.0,
+            3,
+        );
+        let shade = (0.82 + tone * 0.20) * (0.96 + next_unit(&mut rng) * 0.04);
+        // Subtle per-blade hue tint (warm/cool, clump-correlated) baked into the
+        // colour tint; the biome grade in `tile_world_instances` multiplies onto it.
+        let warm = (tone - 0.45) * 0.55 + (next_unit(&mut rng) - 0.5) * 0.12;
+        let tint = [1.0 + warm * 0.10, 1.0 + tone * 0.03, 1.0 - warm * 0.08];
+        // Stable per-blade key for biome barrenness thinning (not read by the shader).
+        let thin_key = next_unit(&mut rng);
+        out.push(InstanceData {
+            a: [bx, bz, 0.0, height_scale],
+            b: [yaw, shade, 0.0, thin_key],
+            c: [tint[0], tint[1], tint[2], 0.0],
+        });
     }
     out
 }
 
 /// Fraction of blades thinned out on pure bare rock / ore (where grass barely
 /// grows). Scaled by the local rocky+ore biome weight, so a forest/plains tile
-/// keeps its full density and rock thins toward sparse tufts.
-const GRASS_BIOME_MAX_THIN: f32 = 0.72;
+/// keeps its full density and rock/ore thin to sparse scrub. High so the rocky
+/// and iron (ore) biomes read as nearly bare, only a few scrubby blades.
+const GRASS_BIOME_MAX_THIN: f32 = 0.92;
 
-/// How much to thin the grass field at a world point: bare rock and ore carry
-/// little grass, so the local rocky+ore biome weight (the same `biome_blend_weights`
-/// the ground uses) becomes a thinning factor. Grass *colour* is uniform across
-/// biomes now; only its density varies.
-fn biome_grass_barrenness(world_seed: u64, x: f32, z: f32) -> f32 {
-    barrenness_from_weights(biome_blend_weights(ClassificationChannels::sample_at(
-        world_seed, x, z,
-    )))
+/// Per-biome grass colour tint, multiplied onto the neutral green so grass
+/// harmonises with each biome's ground tone (the flat palette in
+/// `world::map_texture`): forest stays lush green, plains dries to yellow-green,
+/// rocky desaturates toward grey, ore dulls toward brown. `w` is
+/// `[forest, rocky, ore, plains]` (renormalised here in case it doesn't sum to 1).
+fn biome_grass_tint(w: [f32; 4]) -> [f32; 3] {
+    const FOREST: [f32; 3] = [1.00, 1.00, 1.00];
+    const ROCKY: [f32; 3] = [0.95, 0.92, 0.85];
+    const ORE: [f32; 3] = [1.06, 0.85, 0.62];
+    const PLAINS: [f32; 3] = [1.20, 1.04, 0.60];
+    let sum = (w[0] + w[1] + w[2] + w[3]).max(1.0e-4);
+    let mut out = [0.0f32; 3];
+    for ch in 0..3 {
+        out[ch] = (w[0] * FOREST[ch] + w[1] * ROCKY[ch] + w[2] * ORE[ch] + w[3] * PLAINS[ch]) / sum;
+    }
+    out
 }
 
-/// The pure part of [`biome_grass_barrenness`], split out so it's testable without
-/// the noise field. `w` is `[forest, rocky, ore, plains]` (sums to 1).
+/// Barrenness from biome weights: bare rock and ore carry little grass, so the
+/// local rocky+ore weight becomes the thinning factor. `w` is
+/// `[forest, rocky, ore, plains]`. Split out so it's testable without the noise field.
 fn barrenness_from_weights(w: [f32; 4]) -> f32 {
     (w[1] + w[2]).clamp(0.0, 1.0)
 }
@@ -631,9 +649,9 @@ fn barrenness_from_weights(w: [f32; 4]) -> f32 {
 /// per-tile `Transform` rotation, but baked into the instance buffer so the
 /// shader needs no model matrix.
 ///
-/// With a `world_seed`, bare rock/ore tiles are thinned (grass barely grows
-/// there); the colour is the same everywhere. Without a seed (e.g. the menu
-/// backdrop) the field keeps full density.
+/// With a `world_seed`, bare rock/ore tiles are thinned (grass barely grows there)
+/// and each kept blade is graded toward the local biome colour. Without a seed
+/// (e.g. the menu backdrop) the field keeps full density and its neutral green.
 fn tile_world_instances(
     local: &[InstanceData],
     cx: f32,
@@ -642,6 +660,22 @@ fn tile_world_instances(
     world_seed: Option<u64>,
 ) -> Vec<InstanceData> {
     let (ts, tc) = tile_yaw.sin_cos();
+
+    // Biome varies on a ~600 m scale (`CLASSIFICATION_BASE_FREQUENCY`), so across one
+    // 8 m tile the blend weights are effectively constant. Sample the biome ONCE at
+    // the tile centre and reuse the thinning cutoff + colour grade for every blade,
+    // instead of running four multi-octave fBm channels per blade. The per-blade
+    // sample was the dominant cost of the tile-cross rebuild (a ~16 ms spike while
+    // walking into fresh terrain, ~2.7k blades × 4 fBm channels per frame); per-tile
+    // is ~230× fewer noise samples for a visually identical result. The per-blade
+    // stable key still decides each blade individually against the cutoff, so the
+    // thinning stays a smooth random scatter rather than a hard per-tile on/off.
+    let biome = world_seed.map(|seed| {
+        let weights = biome_blend_weights(ClassificationChannels::sample_at(seed, cx, cz));
+        let cut = barrenness_from_weights(weights) * GRASS_BIOME_MAX_THIN;
+        (cut, biome_grass_tint(weights))
+    });
+
     local
         .iter()
         .filter_map(|inst| {
@@ -649,17 +683,19 @@ fn tile_world_instances(
             let lz = inst.a[1];
             let wx = cx + tc * lx + ts * lz;
             let wz = cz - ts * lx + tc * lz;
-            // Thin the field on bare rock/ore: drop the blade if its stable
-            // per-blade key (`dither`) falls under the barrenness-scaled cut.
-            if let Some(seed) = world_seed {
-                let barrenness = biome_grass_barrenness(seed, wx, wz);
-                if inst.b[3] < barrenness * GRASS_BIOME_MAX_THIN {
-                    return None;
-                }
+            let a = [wx, wz, inst.a[2], inst.a[3]];
+            let b = [inst.b[0] + tile_yaw, inst.b[1], inst.b[2], inst.b[3]];
+            let Some((cut, t)) = biome else {
+                return Some(InstanceData { a, b, c: inst.c });
+            };
+            // Drop the blade if its stable key falls under the tile's barren cut.
+            if inst.b[3] < cut {
+                return None;
             }
             Some(InstanceData {
-                a: [wx, wz, inst.a[2], inst.a[3]],
-                b: [inst.b[0] + tile_yaw, inst.b[1], inst.b[2], inst.b[3]],
+                a,
+                b,
+                c: [inst.c[0] * t[0], inst.c[1] * t[1], inst.c[2] * t[2], 0.0],
             })
         })
         .collect()
@@ -689,8 +725,8 @@ mod tests {
 
     #[test]
     fn off_density_has_no_grass() {
-        assert!(patch_density_per_m2(GrassDensity::Off).is_none());
-        assert!(patch_density_per_m2(GrassDensity::Low).is_some());
+        assert!(blade_density_per_m2(GrassDensity::Off).is_none());
+        assert!(blade_density_per_m2(GrassDensity::Low).is_some());
     }
 
     #[test]

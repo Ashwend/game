@@ -37,11 +37,15 @@ pub(crate) fn apply_graphics_settings_system(
         return;
     };
 
-    // Bloom is a fixed-strength on/off, the `Bloom::NATURAL` preset is the
-    // intensity. No exposed slider.
+    // Bloom is a fixed-strength on/off. Slightly above the `Bloom::NATURAL`
+    // preset (0.15 -> 0.20) so the grass's HDR tip glow and the sun haze read as
+    // a soft dreamy bloom closer to the stylized reference. No exposed slider.
     if settings.graphics.bloom_enabled {
         if bloom.is_none() {
-            commands.entity(entity).insert(Bloom::NATURAL);
+            commands.entity(entity).insert(Bloom {
+                intensity: 0.20,
+                ..Bloom::NATURAL
+            });
         }
     } else if bloom.is_some() {
         // `Bloom` requires `Hdr`, but removing `Bloom` leaves `Hdr` in place
@@ -99,7 +103,7 @@ mod tests {
             .query_filtered::<&Bloom, With<MainCamera>>()
             .single(app.world())
             .expect("default graphics settings enable bloom");
-        assert_eq!(bloom.intensity, 0.15);
+        assert_eq!(bloom.intensity, 0.20);
     }
 
     #[test]

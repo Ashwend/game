@@ -5,9 +5,7 @@ use bevy::prelude::*;
 use crate::{
     app::{
         audio::PlaySound,
-        scene::{
-            GrassMaterialHandle, ImpactEffectAssets, NetworkResourceNode, ResourceVisualAssets,
-        },
+        scene::{ImpactEffectAssets, NetworkResourceNode, ResourceVisualAssets},
         state::{ClientRuntime, PredictionState},
     },
     protocol::{ResourceNodeId, Vec3Net},
@@ -15,6 +13,7 @@ use crate::{
     server::{ResourceNode, ResourceNodeStorage},
 };
 
+mod hay_sway;
 mod pop_in;
 mod spawn;
 mod stages;
@@ -22,6 +21,7 @@ mod stages;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use hay_sway::sway_hay_grass_system;
 pub(crate) use pop_in::{resource_node_transform_at, tick_resource_node_pop_in_system};
 pub(crate) use spawn::resource_node_visual;
 pub(crate) use stages::apply_resource_node_stage_system;
@@ -134,10 +134,9 @@ type ResourceEntityQuery<'w, 's> = Query<
     (
         &'static NetworkResourceNode,
         &'static Mesh3d,
-        // Optional: the hay-grass node uses `GrassMaterial` (the wind shader),
-        // not `StandardMaterial`, so it has no entry here. Only the tree-felling
-        // death effect actually reads the material; crude pickups (incl. hay
-        // grass) ignore it, so `None` is fine for them.
+        // Every node carries a `StandardMaterial`; `Option` only so the query stays
+        // robust if a future node type omits one. Only the tree-felling death effect
+        // reads it; crude pickups ignore it.
         Option<&'static MeshMaterial3d<StandardMaterial>>,
         &'static Transform,
     ),
@@ -162,7 +161,6 @@ pub(crate) fn apply_resource_nodes_system(
     mut commands: Commands,
     mut runtime: ResMut<ClientRuntime>,
     assets: Res<ResourceVisualAssets>,
-    grass_material: Res<GrassMaterialHandle>,
     impact_assets: Res<ImpactEffectAssets>,
     mut play: MessageWriter<PlaySound>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -335,7 +333,6 @@ pub(crate) fn apply_resource_nodes_system(
         spawn_resource_node_entity(
             &mut commands,
             &assets,
-            &grass_material,
             &impact_assets,
             entities,
             spawn.id,

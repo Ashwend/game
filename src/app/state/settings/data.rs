@@ -312,11 +312,13 @@ impl ShadowQuality {
     }
 }
 
-/// In-game anti-aliasing mode. FXAA is the default because MSAA leaves dark,
-/// shimmering fringes where geometry meets the procedural atmosphere sky (the
-/// fullscreen sky pass doesn't resolve cleanly under multisampling, Bevy's own
-/// atmosphere example uses FXAA for the same reason). MSAA is still offered for
-/// players who prefer its sharper interior edges and don't mind the fringing.
+/// In-game anti-aliasing mode. FXAA is the default: the grass is textured cards
+/// (mipmapped tuft alpha), not sub-pixel blade geometry, so it resolves cleanly
+/// under cheap FXAA with no MSAA needed. MSAA leaves dark shimmering fringes where
+/// geometry meets the procedural atmosphere sky (Bevy's own atmosphere example
+/// uses FXAA for the same reason), so it stays opt-in; the grass pipeline still
+/// enables alpha-to-coverage, which just refines the card edges further if a
+/// player does pick MSAA.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AntiAliasing {

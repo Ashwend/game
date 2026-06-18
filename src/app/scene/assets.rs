@@ -9,9 +9,9 @@ use bevy::{
     render::view::{Hdr, NoIndirectDrawing},
 };
 
+use super::mesh::builder::build_hay_tuft_mesh;
 use super::{
     components::MainCamera,
-    grass::{GrassMaterial, GrassMaterialHandle, grass_material},
     mesh::{
         COAL_ORE, IRON_ORE, ORE_NODE_STAGE_COUNT, PlayerRigMeshes, STONE_VEIN, SULFUR_ORE,
         build_player_rig_meshes, building_piece_mesh, door_ghost_mesh, door_panel_mesh,
@@ -20,7 +20,7 @@ use super::{
         low_poly_birch_tree_medium_lod_mesh, low_poly_birch_tree_medium_mesh,
         low_poly_birch_tree_small_lod_mesh, low_poly_birch_tree_small_mesh,
         low_poly_branch_pile_mesh, low_poly_dead_tree_large_mesh, low_poly_dead_tree_medium_mesh,
-        low_poly_dead_tree_small_mesh, low_poly_hay_grass_mesh, low_poly_ore_node_stage_meshes,
+        low_poly_dead_tree_small_mesh, low_poly_ore_node_stage_meshes,
         low_poly_pine_tree_large_lod_mesh, low_poly_pine_tree_large_mesh,
         low_poly_pine_tree_medium_lod_mesh, low_poly_pine_tree_medium_mesh,
         low_poly_pine_tree_small_lod_mesh, low_poly_pine_tree_small_mesh,
@@ -142,6 +142,10 @@ pub(crate) struct ResourceVisualAssets {
     pub(crate) sulfur_material: Handle<StandardMaterial>,
     pub(crate) stone_vein_material: Handle<StandardMaterial>,
     pub(crate) vertex_material: Handle<StandardMaterial>,
+    /// Warm, alpha-masked material for the harvestable hay tuft: the shared
+    /// grass-tuft texture tinted toward straw so it reads distinct from the
+    /// cosmetic detail grass (see [`build_hay_tuft_mesh`]).
+    pub(crate) hay_grass_material: Handle<StandardMaterial>,
 }
 
 #[derive(Resource, Clone)]
@@ -264,12 +268,7 @@ pub(crate) fn setup_scene(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut scattering_media: ResMut<Assets<ScatteringMedium>>,
-    mut grass_materials: ResMut<Assets<GrassMaterial>>,
 ) {
-    // The one shared grass material (wind + distance-fade shader), created
-    // eagerly so both the streamed detail grass and the harvestable hay-grass
-    // node reference the same instance and sway in unison.
-    commands.insert_resource(GrassMaterialHandle(grass_materials.add(grass_material())));
     // The four shared per-biome ground textures for the textured terrain floor.
     // Decoded + mip-chained once here; each world bakes only its own small
     // biome-weight raster when its ground spawns (see `super::world::spawn_world_geometry`).
@@ -304,7 +303,10 @@ pub(crate) fn setup_scene(
         // visible meshes the CPU draw-submission cost is negligible, and macOS
         // Metal has limited multi-draw-indirect support anyway.
         NoIndirectDrawing,
-        Tonemapping::TonyMcMapface,
+        // AgX: a flatter, more desaturated/pastel filmic curve than TonyMcMapface,
+        // which reads softer and more painterly (closer to the stylized-grass
+        // reference). Scene-wide; verified against the daytime/dusk scene.
+        Tonemapping::AgX,
         // Procedural physically-based sky. `earthlike` uses the default
         // earthlike scattering medium; `AtmosphereSettings` is auto-required
         // with sensible defaults (scene units are already metres). The
@@ -340,7 +342,7 @@ pub(crate) fn setup_scene(
         Projection::from(PerspectiveProjection {
             fov: 65.0_f32.to_radians(),
             // The far plane sits *well past* the distance at which the squared
-            // distance fog goes fully opaque (~190 m for the 140 m daytime
+            // distance fog goes fully opaque (~260 m for the 190 m daytime
             // visibility, tighter at dusk/night), so the ground plane and any
             // far geometry dissolve completely into the fog before the far
             // plane would clip them. The old 160 m far plane sat *inside* that
@@ -465,7 +467,10 @@ pub(crate) fn setup_scene(
         dead_tree_large_mesh: meshes.add(low_poly_dead_tree_large_mesh()),
         surface_stone_mesh: meshes.add(low_poly_surface_stone_mesh()),
         branch_pile_mesh: meshes.add(low_poly_branch_pile_mesh()),
-        hay_grass_mesh: meshes.add(low_poly_hay_grass_mesh()),
+        // Bigger crossed tuft of the shared grass-card texture: clearly taller and
+        // wider than a detail-grass card (~0.2-0.8 m) so the harvestable plant is easy
+        // to spot for pickup in any biome.
+        hay_grass_mesh: meshes.add(build_hay_tuft_mesh(1.0, 0.42, 3)),
         coal_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.98,
@@ -494,6 +499,34 @@ pub(crate) fn setup_scene(
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.98,
             reflectance: 0.12,
+            ..default()
+        }),
+        hay_grass_material: materials.add(StandardMaterial {
+            // Same grass-tuft texture as the detail grass, alpha-masked for the blade
+            // silhouette, but a richer/deeper green than the field plus a faint pop so
+            // the harvestable tuft is locatable. (Hay spawns on the hay channel =
+            // plains, where the detail grass is biome-tinted yellow, so a green tuft
+            // reads clearly there; the bigger size, see `build_hay_tuft_mesh` above,
+            // distinguishes it in greener biomes. A fixed colour can't beat the field
+            // in *every* biome since the field's colour varies, so size carries the
+            // rest.) Thin ribbons: both faces, matte, near-zero reflectance.
+            // A lush, saturated deep green (deliberately NOT yellow-green: a high
+            // red channel reads washed/sickly against the field). Green dominates
+            // with red and blue held well below it for saturation; the overall
+            // luminance matches the previous tint so the tuft stays just as easy
+            // to spot. This is the tip brightness, the mesh's root→tip vertex
+            // gradient (see `build_hay_tuft_mesh`) multiplies the base darker.
+            base_color: Color::srgb(0.36, 0.70, 0.30),
+            base_color_texture: Some(
+                asset_server.load(embedded_asset_path("textures/grass_tuft.png")),
+            ),
+            // Faint green self-lift (not yellow) so the tuft reads with a little
+            // life under dim dusk/night light without glowing.
+            emissive: LinearRgba::rgb(0.008, 0.020, 0.006),
+            alpha_mode: AlphaMode::Mask(0.4),
+            cull_mode: None,
+            perceptual_roughness: 0.95,
+            reflectance: 0.04,
             ..default()
         }),
     });

@@ -295,7 +295,10 @@ fn update_building_placement(
                     {
                         placement.yaw = facing;
                     }
-                    let yaw = snap_yaw_quarter_turn(placement.yaw);
+                    // No quarter-turn snap: keep one fixed side of the foundation flat to
+                    // the player so it tracks the look smoothly instead of flipping every
+                    // 45°. The server keeps this yaw too (see `snap_foundation`).
+                    let yaw = placement.yaw;
                     let blocks = crate::building::building_collider_blocks(piece, aim_net, yaw);
                     let clear = !any_replicated_overlap(&blocks, replicated, false);
                     (Some((aim_net, yaw)), clear)
