@@ -25,14 +25,17 @@ use bevy::{
 
 use crate::{
     app::state::{
-        ActiveWheel, BuildingPlanState, ClientErrorToast, ClientRuntime, CurrentUser,
-        DeployablePlacementState, KeyAction, LocalPlayerState, MenuState, PICKUP_HOLD_WHEEL_SECS,
-        PickupHold, PickupTargetState, TextPrompt, TextPromptKind, WHEEL_POINTER_MAX_PX,
-        WheelAction, WheelMenuState, WheelOption, WheelTrigger,
+        ActiveWheel, BuildingPlanState, ClientErrorToast, ClientRuntime, CupboardAuthState,
+        CurrentUser, DeployablePlacementState, KeyAction, LocalPlayerState, MenuState,
+        PICKUP_HOLD_WHEEL_SECS, PickupHold, PickupHoldKind, PickupTargetState, TextPrompt,
+        TextPromptKind, WHEEL_POINTER_MAX_PX, WheelAction, WheelMenuState, WheelOption,
+        WheelTrigger,
     },
-    building::{BuildingPiece, BuildingTier, placement_cost, upgrade_cost},
+    building::{BuildingPiece, placement_cost, upgrade_cost},
     items::{BUILDING_PLAN_ID, DeployableKind, HAMMER_ID, item_definition},
-    protocol::{BuildingCommand, ClientMessage, DeployedEntityId, SleepingBagCommand},
+    protocol::{
+        BuildingCommand, ClaimCommand, ClientMessage, DeployedEntityId, SleepingBagCommand,
+    },
     server::{Deployable, DeployableLabel},
 };
 
@@ -134,40 +137,33 @@ pub(crate) fn wheel_menu_system(
     //    opens the rename wheel.
     if let Some(hold) = wheel.pickup_hold {
         if !settings.keybindings.pressed(KeyAction::PickUp, &keys) {
+            // Quick release: run the kind's tap action.
             wheel.pickup_hold = None;
-            send_gameplay_message(
-                &mut runtime,
-                &mut error_toasts,
-                ClientMessage::SleepingBag(SleepingBagCommand::PickUp { id: hold.bag_id }),
-                "sleeping bag pickup",
-            );
+            match hold.kind {
+                PickupHoldKind::SleepingBag => send_gameplay_message(
+                    &mut runtime,
+                    &mut error_toasts,
+                    ClientMessage::SleepingBag(SleepingBagCommand::PickUp { id: hold.id }),
+                    "sleeping bag pickup",
+                ),
+                PickupHoldKind::ToolCupboard => {
+                    if let Some(command) = cupboard_tap_command(hold.id, &pickup_target) {
+                        send_gameplay_message(
+                            &mut runtime,
+                            &mut error_toasts,
+                            ClientMessage::Claim(command),
+                            "cupboard auth",
+                        );
+                    }
+                }
+            }
         } else {
             let elapsed = hold.elapsed + time.delta_secs();
             if elapsed >= PICKUP_HOLD_WHEEL_SECS {
                 wheel.pickup_hold = None;
-                wheel.active = Some(ActiveWheel {
-                    title: "Sleeping Bag".to_owned(),
-                    trigger: WheelTrigger::PickupKey,
-                    options: vec![
-                        WheelOption {
-                            label: "Rename".to_owned(),
-                            detail: None,
-                            detail_ok: true,
-                            enabled: true,
-                            marked: false,
-                            action: WheelAction::RenameBag(hold.bag_id),
-                        },
-                        WheelOption {
-                            label: "Pick Up".to_owned(),
-                            detail: None,
-                            detail_ok: true,
-                            enabled: true,
-                            marked: false,
-                            action: WheelAction::PickUpBag(hold.bag_id),
-                        },
-                    ],
-                    pointer: Vec2::ZERO,
-                    commit_on_release: false,
+                wheel.active = Some(match hold.kind {
+                    PickupHoldKind::SleepingBag => sleeping_bag_wheel(hold.id),
+                    PickupHoldKind::ToolCupboard => cupboard_wheel(hold.id, &pickup_target),
                 });
             } else {
                 wheel.pickup_hold = Some(PickupHold { elapsed, ..hold });
@@ -175,20 +171,37 @@ pub(crate) fn wheel_menu_system(
         }
         return;
     }
-    if settings.keybindings.just_pressed(KeyAction::PickUp, &keys)
-        && matches!(
+    if settings.keybindings.just_pressed(KeyAction::PickUp, &keys) {
+        // Sleeping bag: only the owner's tap (pick up) / hold (wheel)
+        // does anything.
+        if matches!(
             pickup_target.deployable_kind,
             Some(DeployableKind::SleepingBag)
-        )
-        && let Some(bag_id) = pickup_target.deployable_id
-        && my_account.is_some()
-        && owner_of(bag_id) == my_account
-    {
-        wheel.pickup_hold = Some(PickupHold {
-            bag_id,
-            elapsed: 0.0,
-        });
-        return;
+        ) && let Some(bag_id) = pickup_target.deployable_id
+            && my_account.is_some()
+            && owner_of(bag_id) == my_account
+        {
+            wheel.pickup_hold = Some(PickupHold {
+                id: bag_id,
+                kind: PickupHoldKind::SleepingBag,
+                elapsed: 0.0,
+            });
+            return;
+        }
+        // Tool Cupboard: anyone in reach may tap to toggle their own
+        // authorization, or hold for the clear / authorize wheel.
+        if matches!(
+            pickup_target.deployable_kind,
+            Some(DeployableKind::ToolCupboard)
+        ) && let Some(id) = pickup_target.deployable_id
+        {
+            wheel.pickup_hold = Some(PickupHold {
+                id,
+                kind: PickupHoldKind::ToolCupboard,
+                elapsed: 0.0,
+            });
+            return;
+        }
     }
 
     // 3. Right-mouse wheels. The deployable-ghost rotate/flip path owns
@@ -212,11 +225,16 @@ pub(crate) fn wheel_menu_system(
         let target = pickup_target
             .deployable_id
             .zip(pickup_target.deployable_kind);
-        if let Some((id, kind)) = target {
-            let owned = my_account.is_some() && owner_of(id) == my_account;
-            if let Some(wheel_menu) = hammer_wheel(id, kind, owned, &local_player) {
-                wheel.active = Some(wheel_menu);
-            }
+        if let Some((id, kind)) = target
+            && let Some(wheel_menu) = hammer_wheel(
+                id,
+                kind,
+                pickup_target.deployable_can_modify,
+                pickup_target.deployable_demolishable,
+                &local_player,
+            )
+        {
+            wheel.active = Some(wheel_menu);
         }
         return;
     }
@@ -293,72 +311,53 @@ fn building_piece_wheel(selected: BuildingPiece, local_player: &LocalPlayerState
     }
 }
 
-/// Hammer wheel for a targeted building block or door. `None` when the
-/// target kind has no hammer actions (workbench, furnace, bag).
-/// Ineligible options (not yours, can't afford) stay selectable, the
-/// server toasts the reason, but their detail line flags it up front.
+/// Hammer wheel for a targeted building block or door. Only options the
+/// player can actually perform are shown: upgrade (while a higher tier
+/// exists) and demolish (while still within the demolish window), and both
+/// only when the player is authorized to modify the piece. Returns `None`
+/// when nothing is offered, so the wheel never opens with a dead option
+/// (and an unauthorized player's right-click does nothing).
 fn hammer_wheel(
     id: DeployedEntityId,
     kind: DeployableKind,
-    owned: bool,
+    can_modify: bool,
+    demolishable: bool,
     local_player: &LocalPlayerState,
 ) -> Option<ActiveWheel> {
-    let upgrade = match kind {
-        DeployableKind::Building { piece, tier } => tier.next().map(|next| {
-            let (detail, affordable) = cost_detail(local_player, upgrade_cost(piece, next));
-            let (detail, detail_ok) = if owned {
-                (detail, affordable)
-            } else {
-                ("Builder only".to_owned(), false)
-            };
-            WheelOption {
-                label: format!("Upgrade to {}", next.label()),
-                detail: Some(detail),
-                detail_ok,
-                enabled: true,
-                marked: false,
-                action: WheelAction::UpgradeBuilding(id),
-            }
-        }),
-        DeployableKind::Door => None,
-        _ => return None,
-    };
-    let demolishable = matches!(kind, DeployableKind::Building { .. } | DeployableKind::Door);
-    if !demolishable {
+    if !can_modify {
         return None;
     }
     let mut options = Vec::new();
-    if let Some(upgrade) = upgrade {
-        options.push(upgrade);
-    } else if matches!(
-        kind,
-        DeployableKind::Building {
-            tier: BuildingTier::Stone,
-            ..
-        }
-    ) {
+    // Upgrade: only while a higher tier exists. The cost line still flags
+    // affordability, but an unaffordable upgrade stays selectable (go
+    // gather; the server re-checks).
+    if let DeployableKind::Building { piece, tier } = kind
+        && let Some(next) = tier.next()
+    {
+        let (detail, affordable) = cost_detail(local_player, upgrade_cost(piece, next));
         options.push(WheelOption {
-            label: "Top tier".to_owned(),
-            detail: None,
-            detail_ok: true,
-            enabled: false,
+            label: format!("Upgrade to {}", next.label()),
+            detail: Some(detail),
+            detail_ok: affordable,
+            enabled: true,
             marked: false,
             action: WheelAction::UpgradeBuilding(id),
         });
     }
-    let (demolish_detail, demolish_ok) = if owned {
-        ("Within 15 min of placing".to_owned(), true)
-    } else {
-        ("Builder only".to_owned(), false)
-    };
-    options.push(WheelOption {
-        label: "Demolish".to_owned(),
-        detail: Some(demolish_detail),
-        detail_ok: demolish_ok,
-        enabled: true,
-        marked: false,
-        action: WheelAction::DemolishBuilding(id),
-    });
+    // Demolish: only while the piece is still within its demolish window.
+    if demolishable && matches!(kind, DeployableKind::Building { .. } | DeployableKind::Door) {
+        options.push(WheelOption {
+            label: "Demolish".to_owned(),
+            detail: None,
+            detail_ok: true,
+            enabled: true,
+            marked: false,
+            action: WheelAction::DemolishBuilding(id),
+        });
+    }
+    if options.is_empty() {
+        return None;
+    }
     Some(ActiveWheel {
         title: "Hammer".to_owned(),
         trigger: WheelTrigger::RightMouse,
@@ -367,6 +366,96 @@ fn hammer_wheel(
         // Demolish/upgrade are real writes: keep the explicit click.
         commit_on_release: false,
     })
+}
+
+/// The sleeping bag's hold-E wheel (rename / pick up).
+fn sleeping_bag_wheel(bag_id: DeployedEntityId) -> ActiveWheel {
+    ActiveWheel {
+        title: "Sleeping Bag".to_owned(),
+        trigger: WheelTrigger::PickupKey,
+        options: vec![
+            WheelOption {
+                label: "Rename".to_owned(),
+                detail: None,
+                detail_ok: true,
+                enabled: true,
+                marked: false,
+                action: WheelAction::RenameBag(bag_id),
+            },
+            WheelOption {
+                label: "Pick Up".to_owned(),
+                detail: None,
+                detail_ok: true,
+                enabled: true,
+                marked: false,
+                action: WheelAction::PickUpBag(bag_id),
+            },
+        ],
+        pointer: Vec2::ZERO,
+        commit_on_release: false,
+    }
+}
+
+/// The Tool Cupboard's hold-E wheel. Options depend on the local
+/// player's authorization: an unauthorized player gets "Authorize Me", an
+/// authorized player gets "Remove Myself" + "Clear List".
+fn cupboard_wheel(id: DeployedEntityId, pickup_target: &PickupTargetState) -> ActiveWheel {
+    let auth = (pickup_target.deployable_id == Some(id))
+        .then_some(pickup_target.deployable_cupboard_auth)
+        .flatten();
+    let option = |label: &str, detail: Option<&str>, action: WheelAction| WheelOption {
+        label: label.to_owned(),
+        detail: detail.map(str::to_owned),
+        detail_ok: true,
+        enabled: true,
+        marked: false,
+        action,
+    };
+    let mut options = Vec::new();
+    match auth {
+        Some(CupboardAuthState::Authorized) => {
+            options.push(option(
+                "Remove Myself",
+                None,
+                WheelAction::DeauthorizeCupboard(id),
+            ));
+            options.push(option(
+                "Clear List",
+                Some("Deauthorize everyone else"),
+                WheelAction::ClearCupboard(id),
+            ));
+        }
+        Some(CupboardAuthState::Unauthorized) | None => {
+            options.push(option(
+                "Authorize Me",
+                None,
+                WheelAction::AuthorizeCupboard(id),
+            ));
+        }
+    }
+    ActiveWheel {
+        title: "Tool Cupboard".to_owned(),
+        trigger: WheelTrigger::PickupKey,
+        options,
+        pointer: Vec2::ZERO,
+        commit_on_release: false,
+    }
+}
+
+/// The claim command a quick tap-E should send, given the cupboard's
+/// current auth state. `None` for the owner (always authorized) or when
+/// the player is no longer looking at this cupboard.
+fn cupboard_tap_command(
+    id: DeployedEntityId,
+    pickup_target: &PickupTargetState,
+) -> Option<ClaimCommand> {
+    if pickup_target.deployable_id != Some(id) {
+        return None;
+    }
+    match pickup_target.deployable_cupboard_auth {
+        Some(CupboardAuthState::Authorized) => Some(ClaimCommand::DeauthorizeSelf { id }),
+        Some(CupboardAuthState::Unauthorized) | None => Some(ClaimCommand::AuthorizeSelf { id }),
+    }
 }
 
 fn perform_wheel_action(
@@ -412,6 +501,24 @@ fn perform_wheel_action(
             error_toasts,
             ClientMessage::SleepingBag(SleepingBagCommand::PickUp { id }),
             "sleeping bag pickup",
+        ),
+        WheelAction::AuthorizeCupboard(id) => send_gameplay_message(
+            runtime,
+            error_toasts,
+            ClientMessage::Claim(ClaimCommand::AuthorizeSelf { id }),
+            "cupboard authorize",
+        ),
+        WheelAction::DeauthorizeCupboard(id) => send_gameplay_message(
+            runtime,
+            error_toasts,
+            ClientMessage::Claim(ClaimCommand::DeauthorizeSelf { id }),
+            "cupboard deauthorize",
+        ),
+        WheelAction::ClearCupboard(id) => send_gameplay_message(
+            runtime,
+            error_toasts,
+            ClientMessage::Claim(ClaimCommand::ClearList { id }),
+            "cupboard clear",
         ),
     }
 }

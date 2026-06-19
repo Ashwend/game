@@ -179,6 +179,7 @@ impl GameServer {
             chunk_manager,
             deployed_entities,
             loot_bags: HashMap::new(),
+            claim_footprints: HashMap::new(),
             next_dropped_item_id,
             next_client_id,
             next_resource_node_id,

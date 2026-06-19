@@ -238,6 +238,18 @@ impl ToolSwapState {
     }
 }
 
+/// Whether the local player may build at the Tool Cupboard they're
+/// looking at. Precomputed at pickup-target time so the tooltip, the
+/// tap-E toggle, and the hold-E wheel all read one value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CupboardAuthState {
+    /// You're on the authorized list (the placer starts here too, and can
+    /// toggle themselves off like anyone else).
+    Authorized,
+    /// You must authorize yourself before you can build here.
+    Unauthorized,
+}
+
 #[derive(Resource, Debug, Clone, Default)]
 pub(crate) struct PickupTargetState {
     pub(crate) dropped_item_id: Option<DroppedItemId>,
@@ -255,6 +267,17 @@ pub(crate) struct PickupTargetState {
     /// Replicated structural stability of the targeted building piece,
     /// for the tooltip readout. `None` for non-structural targets.
     pub(crate) deployable_stability: Option<u8>,
+    /// For a targeted Tool Cupboard, whether the local player is the
+    /// owner / authorized / not yet. `None` for every non-cupboard target.
+    pub(crate) deployable_cupboard_auth: Option<CupboardAuthState>,
+    /// Whether the local player may upgrade/demolish the targeted building
+    /// piece (authorized at the covering claim, or the builder of an
+    /// unclaimed piece). Drives whether the hammer wheel offers anything.
+    pub(crate) deployable_can_modify: bool,
+    /// Whether the targeted building piece is still within its demolish
+    /// window, predicted from the replicated `placed_at_tick`. Hides the
+    /// demolish option once the piece has set.
+    pub(crate) deployable_demolishable: bool,
     /// Remote player the swing would land on. Set when the look ray
     /// intersects a remote player's body AABB within attack range. The
     /// swing dispatch routes through `dispatch_player_swing` when this
@@ -291,6 +314,9 @@ impl PickupTargetState {
         self.deployable_id = None;
         self.deployable_kind = None;
         self.deployable_stability = None;
+        self.deployable_cupboard_auth = None;
+        self.deployable_can_modify = false;
+        self.deployable_demolishable = false;
         self.player_id = None;
         self.loot_bag_id = None;
         self.sleeping_player = None;

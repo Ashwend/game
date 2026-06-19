@@ -96,6 +96,11 @@ pub(crate) struct ClientRuntime {
     /// the periodic `WorldTime` server broadcast plus per-frame local
     /// integration so the sun/moon position stays smooth between snapshots.
     pub(crate) world_time: WorldTime,
+    /// Estimated authoritative server tick. Seeded from each `WorldTime`
+    /// broadcast's `server_tick` and advanced locally per frame, so the
+    /// client can predict tick-based gates (e.g. the building demolish
+    /// window) without a dedicated per-tick sync.
+    pub(crate) server_tick_estimate: f64,
     /// Latest `ServerMessage::PerfStats` payload. Rendered by the perf
     /// HUD overlay when the user enables it in settings. `None` until the
     /// first broadcast arrives.
@@ -234,6 +239,7 @@ impl ClientRuntime {
         self.depleted_node_ids.clear();
         self.connection.reset();
         self.world_time = WorldTime::default();
+        self.server_tick_estimate = 0.0;
     }
 
     pub(crate) fn shutdown_in_background(
@@ -439,6 +445,7 @@ impl ClientRuntime {
     }
 
     fn apply_world_time_snapshot(&mut self, snapshot: WorldTimeSnapshot) {
+        self.server_tick_estimate = snapshot.server_tick as f64;
         self.world_time.seconds_of_day = snapshot.seconds_of_day;
         self.world_time.multiplier = snapshot.multiplier;
         // Re-clamp on the read side: a future server might broadcast a
@@ -453,6 +460,15 @@ impl ClientRuntime {
     /// keep moving smoothly between the server's ~minute snapshots.
     pub(crate) fn tick_world_time(&mut self, delta_seconds: f32) {
         self.world_time.advance(delta_seconds);
+        self.server_tick_estimate +=
+            f64::from(delta_seconds.max(0.0)) * f64::from(crate::protocol::SERVER_TICK_RATE_HZ);
+    }
+
+    /// Best estimate of the current authoritative server tick, advanced
+    /// locally between the periodic `WorldTime` syncs. Used by client-side
+    /// predictions of tick-based gates (the building demolish window).
+    pub(crate) fn server_tick(&self) -> u64 {
+        self.server_tick_estimate.max(0.0) as u64
     }
 
     pub(crate) fn push_system_message(&mut self, text: impl Into<String>) {

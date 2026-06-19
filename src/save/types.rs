@@ -153,6 +153,9 @@ pub struct PersistedDeployedEntity {
     /// Torch-only burn state, same pattern as `furnace`. `None` for every
     /// other kind.
     pub torch: Option<PersistedTorchState>,
+    /// Tool-Cupboard-only authorized-account list, same pattern as
+    /// `furnace`. `None` for every other kind.
+    pub cupboard: Option<PersistedCupboardState>,
 }
 
 /// Persisted door state: the lock code, the accounts that have entered
@@ -163,6 +166,15 @@ pub struct PersistedDoorState {
     pub authorized: Vec<AccountId>,
     pub open: bool,
     pub parent: DeployedEntityId,
+}
+
+/// Persisted Tool Cupboard state: the accounts authorized to build inside
+/// the claim. The owner lives on [`PersistedDeployedEntity::owner`], so
+/// it's never duplicated here, and clearing this list can't lock the
+/// owner out.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PersistedCupboardState {
+    pub authorized: Vec<AccountId>,
 }
 
 /// Persisted furnace state, fuel slot + item slots + active flag +

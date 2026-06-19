@@ -264,6 +264,7 @@ fn client_message_kind(message: &ClientMessage) -> &'static str {
         ClientMessage::Building(_) => "Building",
         ClientMessage::Door(_) => "Door",
         ClientMessage::SleepingBag(_) => "SleepingBag",
+        ClientMessage::Claim(_) => "Claim",
         ClientMessage::LootBag(_) => "LootBag",
         ClientMessage::LootSleeper { .. } => "LootSleeper",
         ClientMessage::SetViewRadius { .. } => "SetViewRadius",

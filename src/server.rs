@@ -65,6 +65,7 @@ const AUTO_SAVE_WARNING_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 30;
 
 mod building;
 pub mod chunk_manager;
+mod claim;
 mod combat;
 mod commands;
 mod connection;
@@ -106,8 +107,8 @@ mod world_time;
 pub use chunk_manager::{ChunkManager, ChunkManagerSave, view_tier_radius};
 pub use connection::VersionMismatchRejection;
 pub use deployable_ecs::{
-    Deployable, DeployableActive, DeployableChunk, DeployableHealth, DeployableIndex,
-    DeployableLabel, DeployableStability, DeployableTransform, DeployableView,
+    Deployable, DeployableActive, DeployableAuth, DeployableChunk, DeployableHealth,
+    DeployableIndex, DeployableLabel, DeployableStability, DeployableTransform, DeployableView,
     despawn_deployable_entity, spawn_deployable_entity,
 };
 pub use dropped_item_ecs::{
@@ -227,6 +228,12 @@ pub struct GameServer {
     /// looker. Anchor chunks tracked via `chunk_manager` so the
     /// existing AoI/replication pipeline picks them up.
     pub(super) loot_bags: HashMap<crate::protocol::LootBagId, loot_bag::LootBag>,
+    /// Per-cupboard claimed footprint cache: cupboard id -> the real XZ
+    /// cell centres its building privilege covers (connected base
+    /// footprint + margin ring). Server-only and derived, never persisted
+    /// or replicated; rebuilt by [`GameServer::recompute_claim_footprints`]
+    /// on every structural change and on cupboard placement.
+    claim_footprints: HashMap<DeployedEntityId, Vec<(f32, f32)>>,
     next_dropped_item_id: DroppedItemId,
     next_client_id: ClientId,
     next_resource_node_id: ResourceNodeId,

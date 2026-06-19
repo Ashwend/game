@@ -1,7 +1,7 @@
 use bevy_egui::egui::{self, pos2};
 
 use crate::{
-    app::state::{MenuState, PickupTargetState},
+    app::state::{CupboardAuthState, MenuState, PickupTargetState},
     items::{DeployableKind, ItemDefinition, ToolKind, item_definition},
     resources::resource_node_definition,
 };
@@ -92,6 +92,7 @@ fn pickup_tooltip_text(
         return Some(deployable_tooltip_text(
             kind,
             pickup_target.deployable_stability,
+            pickup_target.deployable_cupboard_auth,
         ));
     }
 
@@ -127,7 +128,11 @@ fn pickup_tooltip_text(
     Some((definition.name.to_owned(), body))
 }
 
-fn deployable_tooltip_text(kind: DeployableKind, stability: Option<u8>) -> (String, String) {
+fn deployable_tooltip_text(
+    kind: DeployableKind,
+    stability: Option<u8>,
+    cupboard_auth: Option<CupboardAuthState>,
+) -> (String, String) {
     match kind {
         DeployableKind::Furnace { tier } => (
             format!("Furnace T{tier}"),
@@ -163,6 +168,17 @@ fn deployable_tooltip_text(kind: DeployableKind, stability: Option<u8>) -> (Stri
             "Torch".to_owned(),
             "Burns for hours to light the area.".to_owned(),
         ),
+        DeployableKind::ToolCupboard => {
+            let body = match cupboard_auth {
+                Some(CupboardAuthState::Authorized) => {
+                    "You are authorized here\nPress E to remove yourself\nHold E for options"
+                }
+                Some(CupboardAuthState::Unauthorized) | None => {
+                    "You are not authorized here\nPress E to authorize yourself\nHold E for options"
+                }
+            };
+            ("Tool Cupboard".to_owned(), body.to_owned())
+        }
     }
 }
 

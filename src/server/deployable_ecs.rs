@@ -34,6 +34,11 @@ pub struct Deployable {
     pub kind: DeployableKind,
     pub max_health: u32,
     pub owner: Option<AccountId>,
+    /// Server tick the piece was placed (or last upgraded). Replicated so
+    /// the client can predict the demolish window (hide the hammer's
+    /// demolish option once it has set). Re-sent on upgrade because a tier
+    /// change respawns the mirror entity.
+    pub placed_at_tick: u64,
 }
 
 fn deserialize_interned_item_id<'de, D>(deserializer: D) -> Result<ItemId, D::Error>
@@ -81,6 +86,16 @@ pub struct DeployableLabel(pub Option<String>);
 #[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct DeployableStability(pub u8);
 
+/// Tool-Cupboard authorized-account list, replicated so clients can show
+/// the authorize/deauthorize tooltip and drive the tap-E toggle without a
+/// round trip. Empty for every non-cupboard deployable (and for a
+/// freshly placed cupboard nobody has authorized yet). The owner is on
+/// [`Deployable`], so "am I authorized" is
+/// `owner == me || authorized.contains(me)`. Mutable post-spawn (the
+/// list changes), so it's its own component and its own replication diff.
+#[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeployableAuth(pub Vec<AccountId>);
+
 /// Anchor chunk for room subscription.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct DeployableChunk(pub ChunkCoord);
@@ -105,7 +120,10 @@ pub struct DeployableView {
     pub active: bool,
     pub owner: Option<AccountId>,
     pub label: Option<String>,
+    /// Tool Cupboard authorized accounts (empty for non-cupboards).
+    pub authorized: Vec<AccountId>,
     pub stability: u8,
+    pub placed_at_tick: u64,
 }
 
 pub fn spawn_deployable_entity(
@@ -122,6 +140,7 @@ pub fn spawn_deployable_entity(
                 kind: view.kind,
                 max_health: view.max_health,
                 owner: view.owner,
+                placed_at_tick: view.placed_at_tick,
             },
             DeployableTransform {
                 position: view.position,
@@ -131,6 +150,7 @@ pub fn spawn_deployable_entity(
             DeployableActive(view.active),
             DeployableLabel(view.label),
             DeployableStability(view.stability),
+            DeployableAuth(view.authorized),
             DeployableChunk(chunk),
         ))
         .id();
@@ -161,7 +181,9 @@ mod tests {
             active: false,
             owner: None,
             label: None,
+            authorized: Vec::new(),
             stability: 100,
+            placed_at_tick: 0,
         }
     }
 

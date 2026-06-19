@@ -41,6 +41,9 @@ pub const STORAGE_BOX_LARGE_ID: &str = "storage_box_large";
 /// goes dark. Mounts on the ground or the side of a wall.
 pub const TORCH_ID: &str = "torch";
 
+/// The base-claim Tool Cupboard deployable.
+pub const TOOL_CUPBOARD_ID: &str = "tool_cupboard";
+
 /// Identifier shared between `ItemStack`, `ItemMerged`, and item definitions.
 /// Backed by `Arc<str>` so clones are a refcount bump instead of a heap copy.
 /// Known IDs are interned to a single allocation at startup; deserialized IDs
@@ -246,6 +249,13 @@ pub enum DeployableKind {
     Torch {
         wall: bool,
     },
+    /// Base-ownership claim object (a "Tool Cupboard"). Placed on a
+    /// building platform; while it stands it projects building privilege
+    /// over the connected base + a margin ring, so only authorized
+    /// players can build there. Carries no fields: the owner lives on the
+    /// entity and the authorized list lives in the server-side
+    /// [`crate::server`] cupboard sub-state.
+    ToolCupboard,
 }
 
 impl DeployableKind {
@@ -264,6 +274,7 @@ impl DeployableKind {
                 }
             }
             Self::Torch { .. } => "Torch",
+            Self::ToolCupboard => "Tool Cupboard",
         }
     }
 
@@ -286,6 +297,9 @@ impl DeployableKind {
             Self::SleepingBag => DestructibleMaterial::Cloth,
             Self::StorageBox { .. } => DestructibleMaterial::Wood,
             Self::Torch { .. } => DestructibleMaterial::Wood,
+            // Raidable soft-wood band: destroying it lifts the base's
+            // building privilege, so it has to be a reachable raid goal.
+            Self::ToolCupboard => DestructibleMaterial::WoodBuilding,
         }
     }
 
@@ -295,7 +309,10 @@ impl DeployableKind {
     /// stations (workbench, furnace) keep the owner-only damage gate so
     /// griefers can't idly chew through someone's crafting corner.
     pub const fn raidable(self) -> bool {
-        matches!(self, Self::Building { .. } | Self::Door | Self::SleepingBag)
+        matches!(
+            self,
+            Self::Building { .. } | Self::Door | Self::SleepingBag | Self::ToolCupboard
+        )
     }
 }
 
@@ -806,6 +823,27 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
             max_health: crate::game_balance::STORAGE_BOX_LARGE_HP,
             collider_half_width: 0.75,
             collider_half_height: 0.42,
+            station_radius: 0.0,
+        }),
+    },
+    ItemDefinition {
+        id: TOOL_CUPBOARD_ID,
+        name: "Tool Cupboard",
+        description: "A locked cabinet that claims the base it sits on. \
+                      While it stands, only authorized players can build \
+                      nearby. Press E to authorize yourself; hold E for \
+                      options.",
+        stack_size: 1,
+        equipable: true,
+        model: ItemModel::Deployable,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(120, 84, 48),
+        tool: None,
+        deployable: Some(DeployableProfile {
+            kind: DeployableKind::ToolCupboard,
+            max_health: crate::game_balance::TOOL_CUPBOARD_MAX_HP,
+            collider_half_width: 0.46,
+            collider_half_height: 0.9,
             station_radius: 0.0,
         }),
     },

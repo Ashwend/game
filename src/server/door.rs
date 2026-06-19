@@ -139,6 +139,16 @@ impl GameServer {
             doorway.yaw + if flip { std::f32::consts::PI } else { 0.0 },
         );
 
+        // Building privilege: a non-authorized player can't hang a door in
+        // a doorway that sits inside someone else's claim.
+        if self.claim_blocks_placement(position, owner) {
+            return door_toast(
+                client_id,
+                ToastKind::Warning,
+                "This area is claimed by someone else".to_owned(),
+            );
+        }
+
         let Some(definition) = item_definition(HEWN_LOG_DOOR_ID) else {
             return Vec::new();
         };

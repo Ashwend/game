@@ -121,6 +121,10 @@ impl GameServer {
                 self.spill_container_contents(removed);
             }
         }
+
+        // Cupboard claim footprints are projected from the structure
+        // graph that just changed; rebuild the cache.
+        self.recompute_claim_footprints();
     }
 }
 

@@ -26,9 +26,9 @@ use crate::{
     items::pickup_score_at_position,
     resources::resource_node_score_at,
     server::{
-        Deployable, DeployableActive, DeployableStability, DeployableTransform, DroppedItem,
-        DroppedItemTransform, LootBagEntity, LootBagTransform, Player, PlayerHealth, PlayerPose,
-        PlayerProfile, PlayerSleeping, ResourceNode, ResourceNodeStorage,
+        Deployable, DeployableActive, DeployableAuth, DeployableStability, DeployableTransform,
+        DroppedItem, DroppedItemTransform, LootBagEntity, LootBagTransform, Player, PlayerHealth,
+        PlayerPose, PlayerProfile, PlayerSleeping, ResourceNode, ResourceNodeStorage,
     },
 };
 
@@ -49,6 +49,7 @@ pub(crate) fn update_pickup_target_system(
         &DeployableTransform,
         &DeployableStability,
         &DeployableActive,
+        &DeployableAuth,
     )>,
     remote_players: Query<(
         &Player,
@@ -58,6 +59,7 @@ pub(crate) fn update_pickup_target_system(
         Option<&PlayerSleeping>,
     )>,
     loot_bags: Query<(&LootBagEntity, &LootBagTransform)>,
+    user: Option<Res<crate::app::state::CurrentUser>>,
     mut pickup_target: ResMut<PickupTargetState>,
 ) {
     if menu.screen != Screen::InGame || menu.pause_open || menu.inventory_open || menu.chat_open {
@@ -113,7 +115,12 @@ pub(crate) fn update_pickup_target_system(
             .map(|score| (node, storage, score))
         })
         .min_by(|(_, _, a), (_, _, b)| a.total_cmp(b));
-    let deployable_target = best_deployable_target(eye, look.yaw, look.pitch, deployables.iter());
+    let deployable_target = best_deployable_target(
+        eye,
+        look.yaw,
+        look.pitch,
+        deployables.iter().map(|(a, b, c, d, _)| (a, b, c, d)),
+    );
     let local_client_id = runtime.client_id;
     let player_target = best_player_target(
         eye,
@@ -180,8 +187,97 @@ pub(crate) fn update_pickup_target_system(
         if let Some((meta, transform, _)) = loot_bag_target {
             set_loot_bag_pickup_target(&mut pickup_target, meta, transform, &camera);
         }
-    } else if let Some((meta, _, stability, _, anchor)) = deployable_target {
-        set_deployable_pickup_target(&mut pickup_target, meta, stability, anchor, &camera);
+    } else if let Some((meta, transform, stability, _, anchor)) = deployable_target {
+        let my_account = user.as_ref().map(|user| user.0.account_id);
+        let authorized = deployables
+            .iter()
+            .find(|(deployable, ..)| deployable.id == meta.id)
+            .map(|(_, _, _, _, auth)| auth.0.as_slice())
+            .unwrap_or(&[]);
+        set_deployable_pickup_target(
+            &mut pickup_target,
+            meta,
+            stability,
+            anchor,
+            authorized,
+            my_account,
+            &camera,
+        );
+        // Claim-aware modify rights + demolish-window prediction, so the
+        // hammer wheel only ever offers actions the server will accept.
+        pickup_target.deployable_can_modify = client_building_modify_allowed(
+            transform.position,
+            meta.owner,
+            my_account,
+            &deployables,
+        );
+        pickup_target.deployable_demolishable =
+            runtime.server_tick().saturating_sub(meta.placed_at_tick)
+                <= crate::game_balance::BUILDING_DEMOLISH_WINDOW_TICKS;
+    }
+}
+
+/// Client mirror of the server's `building_modify_allowed`: whether
+/// `account` may upgrade/demolish the building piece at `position`. Inside
+/// a Tool Cupboard claim, authorization governs; outside any claim, only
+/// the original builder. Uses the same shared footprint geometry so the
+/// hammer wheel matches the server's verdict.
+fn client_building_modify_allowed(
+    position: crate::protocol::Vec3Net,
+    owner: Option<crate::protocol::AccountId>,
+    account: Option<crate::protocol::AccountId>,
+    deployables: &Query<(
+        &Deployable,
+        &DeployableTransform,
+        &DeployableStability,
+        &DeployableActive,
+        &DeployableAuth,
+    )>,
+) -> bool {
+    use crate::building::{
+        ClaimPlatform, claim_cells_cover, claim_footprint_cells, platform_top_offset,
+    };
+    use crate::game_balance::BUILDING_PRIVILEGE_MARGIN_CELLS;
+    use crate::items::DeployableKind;
+
+    let Some(account) = account else {
+        return false;
+    };
+    let platforms: Vec<ClaimPlatform> = deployables
+        .iter()
+        .filter_map(|(meta, transform, _, _, _)| {
+            let DeployableKind::Building { piece, .. } = meta.kind else {
+                return None;
+            };
+            let top = platform_top_offset(piece)?;
+            Some(ClaimPlatform {
+                position: transform.position,
+                top: transform.position.y + top,
+            })
+        })
+        .collect();
+    let mut covered = false;
+    for (meta, transform, _, _, auth) in deployables {
+        if !matches!(meta.kind, DeployableKind::ToolCupboard) {
+            continue;
+        }
+        let cells = claim_footprint_cells(
+            &platforms,
+            transform.position,
+            BUILDING_PRIVILEGE_MARGIN_CELLS,
+        );
+        if !claim_cells_cover(&cells, position) {
+            continue;
+        }
+        covered = true;
+        if auth.0.contains(&account) {
+            return true;
+        }
+    }
+    if covered {
+        false
+    } else {
+        owner == Some(account)
     }
 }
 

@@ -86,9 +86,9 @@ use self::{
         tick_felling_trees_system, tick_furnace_particles_system, tick_impact_chips_system,
         tick_resource_node_pop_in_system, tick_torch_particles_system, toggle_crafting_system,
         toggle_inventory_system, toggle_pause_system, toggle_perf_stats_system,
-        update_cursor_system, update_link_ping_system, update_pickup_target_system,
-        update_placement_ghost_system, update_tool_swap_state_system, wheel_menu_system,
-        world_map_input_system,
+        update_claim_boundary_system, update_cursor_system, update_link_ping_system,
+        update_pickup_target_system, update_placement_ghost_system, update_tool_swap_state_system,
+        wheel_menu_system, world_map_input_system,
     },
     ui::{
         ButtonSoundRequests, InventorySoundRequests, apply_ui_scale_system, button_sound_system,
@@ -846,7 +846,8 @@ fn add_scene_systems(app: &mut App) {
         )
         .add_systems(
             Update,
-            update_placement_ghost_system.in_set(ClientSystemSet::PlacementGhost),
+            (update_placement_ghost_system, update_claim_boundary_system)
+                .in_set(ClientSystemSet::PlacementGhost),
         )
         .add_systems(
             Update,

@@ -21,8 +21,8 @@ use crate::items::{
     BASIC_HATCHET_ID, BASIC_PICKAXE_ID, BUILDING_PLAN_ID, COAL_ID, CRUDE_FURNACE_ID,
     DeployableKind, FIBER_ID, HAMMER_ID, HEWN_LOG_DOOR_ID, HEWN_LOG_ID, IRON_BAR_ID,
     IRON_HATCHET_ID, IRON_PICKAXE_ID, PLANT_TWINE_ID, SLEEPING_BAG_ID, STONE_ID,
-    STORAGE_BOX_LARGE_ID, STORAGE_BOX_SMALL_ID, TORCH_ID, WOOD_ID, WORKBENCH_T1_ID,
-    item_definition,
+    STORAGE_BOX_LARGE_ID, STORAGE_BOX_SMALL_ID, TOOL_CUPBOARD_ID, TORCH_ID, WOOD_ID,
+    WORKBENCH_T1_ID, item_definition,
 };
 
 pub const PLANT_TWINE_RECIPE_ID: &str = "plant_twine";
@@ -40,6 +40,7 @@ pub const SLEEPING_BAG_RECIPE_ID: &str = "sleeping_bag";
 pub const STORAGE_BOX_SMALL_RECIPE_ID: &str = "storage_box_small";
 pub const STORAGE_BOX_LARGE_RECIPE_ID: &str = "storage_box_large";
 pub const TORCH_RECIPE_ID: &str = "torch";
+pub const TOOL_CUPBOARD_RECIPE_ID: &str = "tool_cupboard";
 
 /// Crafting station a recipe needs to be in range of. Cheap value type so
 /// it lives next to the recipe definition without a registry lookup. The
@@ -387,6 +388,25 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         output_quantity: 1,
         craft_seconds: 14.0,
         tier: 1,
+        station: RecipeStation::Workbench { min_tier: 1 },
+    },
+    RecipeDefinition {
+        id: TOOL_CUPBOARD_RECIPE_ID,
+        name: "Tool Cupboard",
+        description: "A locked cabinet that claims the base it sits on. \
+                      While it stands, only players you authorize can \
+                      build nearby. Place it on a foundation.",
+        category: RecipeCategory::Building,
+        inputs: &[
+            CraftingInput::new(WOOD_ID, 100),
+            CraftingInput::new(HEWN_LOG_ID, 10),
+            CraftingInput::new(STONE_ID, 50),
+            CraftingInput::new(PLANT_TWINE_ID, 4),
+        ],
+        output_item: TOOL_CUPBOARD_ID,
+        output_quantity: 1,
+        craft_seconds: 20.0,
+        tier: 2,
         station: RecipeStation::Workbench { min_tier: 1 },
     },
 ];

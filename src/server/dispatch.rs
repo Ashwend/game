@@ -110,6 +110,7 @@ impl GameServer {
             ClientMessage::SleepingBag(command) => {
                 self.apply_sleeping_bag_command(client_id, command)
             }
+            ClientMessage::Claim(command) => self.apply_claim_command(client_id, command),
             ClientMessage::LootBag(command) => self.apply_loot_bag_command(client_id, command),
             ClientMessage::LootSleeper {
                 client_id: target_id,

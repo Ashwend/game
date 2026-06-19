@@ -398,6 +398,19 @@ pub(super) fn sync_deployable_entities(world: &mut World) {
                     }
                     stability.0 = view.stability;
                 }
+                if let Some(mut auth) = world.get_mut::<crate::server::DeployableAuth>(entity)
+                    && auth.0 != view.authorized
+                {
+                    #[cfg(feature = "replication-trace")]
+                    {
+                        info!(
+                            target: "replication_trace",
+                            "server: DeployableAuth      MUTATE id={} entity={entity:?} {:?} -> {:?}",
+                            view.id, auth.0, view.authorized
+                        );
+                    }
+                    auth.0 = view.authorized.clone();
+                }
             }
             None => {
                 // If chunk_manager hasn't tracked the placement yet, fall

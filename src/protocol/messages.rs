@@ -79,6 +79,9 @@ pub enum ClientMessage {
     Door(DoorCommand),
     /// Sleeping-bag rename + pickup.
     SleepingBag(SleepingBagCommand),
+    /// Tool Cupboard authorize / deauthorize / clear-list (tap-E toggle
+    /// and the hold-E wheel). See [`ClaimCommand`].
+    Claim(ClaimCommand),
     /// Open / close / move-items in a loot bag (the container spawned
     /// at a dead player's feet). Server keeps the authoritative slots
     /// and gates the move on the player having the bag open.
@@ -182,6 +185,7 @@ impl ClientMessage {
             | Self::Building(_)
             | Self::Door(_)
             | Self::SleepingBag(_)
+            | Self::Claim(_)
             | Self::LootBag(_)
             | Self::LootSleeper { .. }
             | Self::OpenStorageBox { .. }

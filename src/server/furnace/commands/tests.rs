@@ -32,6 +32,7 @@ fn fixture() -> (GameServer, ClientId, DeployedEntityId) {
         stability: 100,
         storage: None,
         torch: None,
+        cupboard: None,
     };
     server.deployed_entities.insert(id, entity);
     (server, client_id, id)

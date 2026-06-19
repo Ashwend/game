@@ -255,6 +255,11 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
                         "storage box open",
                     );
                 }
+                // Tool Cupboard E (tap = authorize/deauthorize yourself,
+                // hold = options wheel) lives in the hold-aware
+                // `super::super::wheel` path, like the sleeping bag;
+                // nothing fires on plain press here.
+                Some(DeployableKind::ToolCupboard) => {}
                 // Building blocks and torches have no E interaction; the
                 // hammer is the building interface, a torch is just a light.
                 Some(DeployableKind::Building { .. } | DeployableKind::Torch { .. }) | None => {}

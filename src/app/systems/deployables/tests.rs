@@ -88,6 +88,7 @@ fn deployable_collider_uses_profile_extents_and_lifts_center() {
         kind: DeployableKind::Workbench { tier: 1 },
         max_health: 500,
         owner: None,
+        placed_at_tick: 0,
     };
     let transform = DeployableTransform {
         position: Vec3Net::new(2.0, 0.0, -3.0),
@@ -108,6 +109,7 @@ fn deployable_collider_uses_profile_extents_and_lifts_center() {
         kind: DeployableKind::Workbench { tier: 1 },
         max_health: 1,
         owner: None,
+        placed_at_tick: 0,
     };
     assert!(deployable_colliders(&unknown, &transform, false).is_empty());
 }
@@ -121,6 +123,7 @@ fn door_colliders_follow_the_swing_and_doorways_stay_passable() {
         kind: DeployableKind::Door,
         max_health: 1,
         owner: Some(1),
+        placed_at_tick: 0,
     };
     let transform = DeployableTransform {
         position: Vec3Net::new(0.0, 0.5, 0.0),
@@ -151,6 +154,7 @@ fn door_colliders_follow_the_swing_and_doorways_stay_passable() {
         },
         max_health: 1,
         owner: Some(1),
+        placed_at_tick: 0,
     };
     // Two jambs + header, the opening itself stays clear.
     assert_eq!(deployable_colliders(&doorway, &transform, false).len(), 3);
@@ -262,6 +266,7 @@ fn deployable_set_fingerprint_distinguishes_membership() {
                 kind: DeployableKind::Workbench { tier: 1 },
                 max_health: 1,
                 owner: None,
+                placed_at_tick: 0,
             },
             DeployableTransform {
                 position: Vec3Net::new(0.0, 0.0, 0.0),
@@ -295,6 +300,7 @@ fn deployable_set_fingerprint_tracks_door_open_state() {
         kind: DeployableKind::Door,
         max_health: 1,
         owner: None,
+        placed_at_tick: 0,
     };
     let transform = DeployableTransform {
         position: Vec3Net::new(0.0, 0.0, 0.0),

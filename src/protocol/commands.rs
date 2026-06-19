@@ -199,6 +199,25 @@ pub enum SleepingBagCommand {
     PickUp { id: DeployedEntityId },
 }
 
+/// Tool Cupboard authorization commands. Tap-E sends `AuthorizeSelf` /
+/// `DeauthorizeSelf` (the client picks the variant from the sender's
+/// current state); the hold-E wheel additionally offers `ClearList`. The
+/// server validates range + existence and re-derives every effect, so the
+/// client can't lie about who it is. Anyone within reach may authorize
+/// themselves (the Rust Tool Cupboard model): the protection comes from
+/// keeping the cupboard behind locked doors, not from the auth list.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ClaimCommand {
+    /// Add the sender's account to the cupboard's authorized list.
+    AuthorizeSelf { id: DeployedEntityId },
+    /// Remove the sender's account from the authorized list.
+    DeauthorizeSelf { id: DeployedEntityId },
+    /// Clear every authorized account. The owner is implicitly always
+    /// authorized and never appears in the list, so clearing can never
+    /// lock the owner out.
+    ClearList { id: DeployedEntityId },
+}
+
 /// One sleeping-bag respawn option, carried by
 /// [`super::ServerMessage::PlayerKilled`] so the death screen can offer
 /// "spawn at <bag>" buttons without an extra round trip.

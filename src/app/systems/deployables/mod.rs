@@ -17,7 +17,9 @@
 
 mod placement;
 
-pub(crate) use placement::{placement_input_system, update_placement_ghost_system};
+pub(crate) use placement::{
+    placement_input_system, update_claim_boundary_system, update_placement_ghost_system,
+};
 
 use crate::building::{DOOR_OPEN_ANGLE_RAD, DOOR_PANEL_WIDTH_M};
 
@@ -678,6 +680,7 @@ fn deployable_visual(
         DeployableKind::SleepingBag => assets.sleeping_bag_mesh.clone(),
         DeployableKind::StorageBox { tier } => assets.storage_box_mesh(tier),
         DeployableKind::Torch { .. } => assets.torch_mesh.clone(),
+        DeployableKind::ToolCupboard => assets.tool_cupboard_mesh.clone(),
     };
     (mesh, assets.material.clone())
 }

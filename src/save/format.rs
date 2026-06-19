@@ -84,7 +84,11 @@ pub(super) const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 /// replicates + persists rather than being re-derived per client). Every
 /// persisted resource node embeds `ResourceNodeState`, and postcard is positional,
 /// so old v14 saves would deserialise wrong; rejected at load.
-pub(super) const SAVE_FORMAT_VERSION: u32 = 15;
+///
+/// `16` added `PersistedDeployedEntity::cupboard` (the Tool Cupboard
+/// authorized-account list). Postcard is positional, so the new trailing
+/// field shifts every later byte; old v15 saves are rejected at load.
+pub(super) const SAVE_FORMAT_VERSION: u32 = 16;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
 /// at >100MB/s compression and ~1GB/s decompression.
 const ZSTD_LEVEL: i32 = 5;
@@ -421,6 +425,7 @@ mod tests {
             door: None,
             label: None,
             storage: None,
+            cupboard: None,
             furnace: Some(PersistedFurnaceState {
                 fuel: Some(ItemStack::new(WOOD_ID, 3)),
                 items: vec![Some(ItemStack::new(IRON_ORE_ID, 2)), None, None],

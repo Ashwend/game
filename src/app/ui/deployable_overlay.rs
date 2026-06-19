@@ -221,7 +221,8 @@ fn kind_label(kind: DeployableKind) -> String {
         DeployableKind::Door
         | DeployableKind::SleepingBag
         | DeployableKind::StorageBox { .. }
-        | DeployableKind::Torch { .. } => kind.label().to_owned(),
+        | DeployableKind::Torch { .. }
+        | DeployableKind::ToolCupboard => kind.label().to_owned(),
     }
 }
 
@@ -458,6 +459,7 @@ mod tests {
             kind: DeployableKind::Workbench { tier: 1 },
             max_health: 500,
             owner: None,
+            placed_at_tick: 0,
         };
         let dep_furnace = Deployable {
             id: 11,
@@ -465,6 +467,7 @@ mod tests {
             kind: DeployableKind::Furnace { tier: 1 },
             max_health: 800,
             owner: None,
+            placed_at_tick: 0,
         };
         let hp_wb = DeployableHealth(250);
         let hp_furnace = DeployableHealth(800);
@@ -506,6 +509,7 @@ mod tests {
             kind: DeployableKind::Workbench { tier: 1 },
             max_health: 500,
             owner: None,
+            placed_at_tick: 0,
         };
         let hp = DeployableHealth(250);
 

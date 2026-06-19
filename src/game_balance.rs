@@ -249,6 +249,22 @@ pub const SLEEPING_BAG_MAX_HP: u32 = 100;
 pub const STORAGE_BOX_SMALL_HP: u32 = 400;
 pub const STORAGE_BOX_LARGE_HP: u32 = 700;
 
+/// Tool Cupboard HP. WoodBuilding-band durability so destroying it (which
+/// lifts the base's building privilege) is a real raid objective: an iron
+/// hatchet chews through over a couple of minutes, but it shrugs off
+/// casual griefing. Not stone-immune by design, the claim should fall to
+/// a committed raid.
+pub const TOOL_CUPBOARD_MAX_HP: u32 = 1_000;
+
+/// Building-privilege margin, in 3 m grid cells, that a Tool Cupboard's
+/// claim projects outward from its base's connected footprint. Non-
+/// authorized players can't place construction within this ring of a
+/// claimed base, so a griefer can't wall someone in from just outside
+/// their walls (the boundary-dead-zone problem a bare radius has). At 5
+/// cells (~15 m) the buffer keeps raid bases a real distance off, not
+/// butted against the wall.
+pub const BUILDING_PRIVILEGE_MARGIN_CELLS: i32 = 5;
+
 /// Slot counts for the two storage box sizes. Small is a starter stash
 /// (most of an inventory row); large holds a serious stockpile but still
 /// less than the player's own pack, so banking always costs trips.

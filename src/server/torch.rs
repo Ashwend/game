@@ -108,6 +108,7 @@ mod tests {
                     active: true,
                     burn_ticks_left,
                 }),
+                cupboard: None,
             },
         );
         id

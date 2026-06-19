@@ -34,13 +34,14 @@ pub(crate) use dialogs::{
     LoadingSplashKind, NoticeDialog, WorldStartAttempt, WorldStartResult,
 };
 pub(crate) use gather::{
-    GatherInputState, ImpactEffectKind, PICKUP_TARGET_SCAN_INTERVAL_SECS, PendingAudioCue,
-    PendingImpactEffect, PickupTargetState, RemoteImpactEvent, SwingImpact, SwingTarget,
-    ToolSwapState, swing_duration_seconds,
+    CupboardAuthState, GatherInputState, ImpactEffectKind, PICKUP_TARGET_SCAN_INTERVAL_SECS,
+    PendingAudioCue, PendingImpactEffect, PickupTargetState, RemoteImpactEvent, SwingImpact,
+    SwingTarget, ToolSwapState, swing_duration_seconds,
 };
 pub(crate) use wheel::{
-    ActiveWheel, BuildingPlanState, PICKUP_HOLD_WHEEL_SECS, PickupHold, WHEEL_DEADZONE_PX,
-    WHEEL_POINTER_MAX_PX, WheelAction, WheelMenuState, WheelOption, WheelTrigger,
+    ActiveWheel, BuildingPlanState, PICKUP_HOLD_WHEEL_SECS, PickupHold, PickupHoldKind,
+    WHEEL_DEADZONE_PX, WHEEL_POINTER_MAX_PX, WheelAction, WheelMenuState, WheelOption,
+    WheelTrigger,
 };
 
 pub(crate) use inventory::{

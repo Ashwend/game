@@ -65,6 +65,10 @@ pub(crate) struct DeployedEntity {
     /// Torch-only burn state (lit flag + countdown). `None` for every
     /// other kind; the place handler initialises a full burn for torches.
     pub(super) torch: Option<super::torch::TorchState>,
+    /// Tool-Cupboard-only authorized-account list. `None` for every
+    /// other kind; the place handler initialises an empty list for placed
+    /// cupboards. The owner lives on `owner`, not in here.
+    pub(super) cupboard: Option<super::claim::CupboardState>,
     /// Structural stability percentage (0-100). Building pieces and
     /// doors get theirs from the support graph (see
     /// [`super::stability`]); free-standing deployables sit on the
@@ -146,6 +150,7 @@ impl DeployedEntity {
             label: None,
             storage: None,
             torch: None,
+            cupboard: None,
             stability: 100,
         }
     }
@@ -237,6 +242,32 @@ impl GameServer {
             );
         }
 
+        // Tool Cupboards anchor a base claim, so they must sit on a
+        // building platform (not bare ground) for the privilege to have a
+        // footprint to project from.
+        if matches!(profile.kind, DeployableKind::ToolCupboard)
+            && !self.on_building_platform(command.position)
+        {
+            return place_toast(
+                client_id,
+                ToastKind::Warning,
+                "Place the Tool Cupboard on a foundation".to_owned(),
+            );
+        }
+        // Building privilege: a deployable can't go inside someone else's
+        // claim. A cupboard on an unclaimed base isn't covered, so the
+        // first cupboard always goes down; placing on your own or an
+        // ally's claim is allowed (owner/authorized bypass). Footprint-aware
+        // so a wide box can't be slid halfway into the claim by aiming its
+        // centre just outside.
+        if self.claim_blocks_footprint(&candidate_blocks, owner_account_id) {
+            return place_toast(
+                client_id,
+                ToastKind::Warning,
+                "This area is claimed by someone else".to_owned(),
+            );
+        }
+
         // Recipe-station-style gating *of placement itself* is intentionally
         // not enforced here, gating happens at crafting time. A player who
         // somehow has a furnace in inventory (admin spawn, future trade)
@@ -269,9 +300,22 @@ impl GameServer {
         if let DeployableKind::StorageBox { tier } = entity.kind {
             entity.storage = Some(super::storage_box::StorageBoxState::new(tier));
         }
+        if matches!(entity.kind, DeployableKind::ToolCupboard) {
+            // The placer starts authorized (an ordinary list member they
+            // can toggle off later), so their own base isn't claimed
+            // against them the moment they place the cupboard.
+            entity.cupboard = Some(super::claim::CupboardState {
+                authorized: vec![owner_account_id],
+            });
+        }
         let position = entity.position;
         self.insert_deployed_entity(id, entity);
         self.chunk_manager.track_deployed_entity(id, position);
+        // A placed Tool Cupboard claims its base; rebuild the footprint
+        // cache (skipped for other deployables, which don't claim).
+        if matches!(profile.kind, DeployableKind::ToolCupboard) {
+            self.recompute_claim_footprints();
+        }
 
         place_toast(
             client_id,
@@ -315,6 +359,15 @@ impl GameServer {
                 client_id,
                 ToastKind::Warning,
                 "Place on the ground, a floor, or a wall".to_owned(),
+            );
+        }
+        // Building privilege gate (torches are construction too): can't
+        // mount one inside someone else's claim.
+        if self.claim_blocks_placement(command.position, client.account_id) {
+            return place_toast(
+                client_id,
+                ToastKind::Warning,
+                "This area is claimed by someone else".to_owned(),
             );
         }
 
@@ -600,6 +653,7 @@ impl GameServer {
                 let furnace = p.furnace.map(super::furnace::FurnaceState::from_persisted);
                 let torch = p.torch.map(super::torch::TorchState::from_persisted);
                 let door = p.door.map(super::door::DoorState::from_persisted);
+                let cupboard = p.cupboard.map(super::claim::CupboardState::from_persisted);
                 let storage = match p.kind {
                     DeployableKind::StorageBox { tier } => Some(
                         p.storage
@@ -627,6 +681,7 @@ impl GameServer {
                         stability: 100,
                         storage,
                         torch,
+                        cupboard,
                     },
                 ))
             })
@@ -654,6 +709,7 @@ impl GameServer {
                 label: entity.label.clone(),
                 storage: entity.storage.as_ref().map(|s| s.to_persisted()),
                 torch: entity.torch.as_ref().map(|t| t.to_persisted()),
+                cupboard: entity.cupboard.as_ref().map(|c| c.to_persisted()),
             })
             .collect();
         entries.sort_by_key(|entry| entry.id);

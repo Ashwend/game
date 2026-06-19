@@ -143,6 +143,7 @@ fn workbench(id: crate::protocol::DeployedEntityId, x: f32, z: f32) -> Deployabl
             kind: crate::items::DeployableKind::Workbench { tier: 1 },
             max_health: 500,
             owner: None,
+            placed_at_tick: 0,
         },
         DeployableTransform {
             position: Vec3Net::new(x, 0.0, z),
@@ -164,6 +165,7 @@ fn building_wall(id: crate::protocol::DeployedEntityId, x: f32, z: f32) -> Deplo
             },
             max_health: 250,
             owner: None,
+            placed_at_tick: 0,
         },
         DeployableTransform {
             // Walls sit on a foundation top (base at y = 0.5).
@@ -183,6 +185,7 @@ fn door(id: crate::protocol::DeployedEntityId, z: f32, open: bool) -> Deployable
             kind: crate::items::DeployableKind::Door,
             max_health: 400,
             owner: None,
+            placed_at_tick: 0,
         },
         DeployableTransform {
             position: Vec3Net::new(0.0, 0.5, z),
@@ -277,6 +280,7 @@ fn ray_through_a_doorway_opening_hits_the_piece_behind() {
             },
             max_health: 250,
             owner: None,
+            placed_at_tick: 0,
         },
         DeployableTransform {
             position: Vec3Net::new(0.0, 0.0, -1.0),

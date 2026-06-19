@@ -47,6 +47,11 @@ pub(crate) enum WheelAction {
     ChangeDoorCode(DeployedEntityId),
     RenameBag(DeployedEntityId),
     PickUpBag(DeployedEntityId),
+    /// Tool Cupboard hold-E wheel: authorize / deauthorize the local
+    /// player, or clear the whole authorized list.
+    AuthorizeCupboard(DeployedEntityId),
+    DeauthorizeCupboard(DeployedEntityId),
+    ClearCupboard(DeployedEntityId),
 }
 
 #[derive(Debug, Clone)]
@@ -112,11 +117,23 @@ impl ActiveWheel {
     }
 }
 
-/// In-flight pickup-key hold on a sleeping bag: a quick release picks the
-/// bag up, holding past [`PICKUP_HOLD_WHEEL_SECS`] opens the bag wheel.
+/// What kind of deployable a hold-the-pickup-key gesture targets. Both
+/// share the "quick tap = direct action, hold = options wheel" timer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PickupHoldKind {
+    /// Tap picks the bag up, hold opens the rename/pick-up wheel.
+    SleepingBag,
+    /// Tap toggles your own authorization, hold opens the clear/auth wheel.
+    ToolCupboard,
+}
+
+/// In-flight pickup-key hold on a deployable: a quick release does the
+/// kind's tap action, holding past [`PICKUP_HOLD_WHEEL_SECS`] opens its
+/// wheel.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PickupHold {
-    pub(crate) bag_id: DeployedEntityId,
+    pub(crate) id: DeployedEntityId,
+    pub(crate) kind: PickupHoldKind,
     pub(crate) elapsed: f32,
 }
 

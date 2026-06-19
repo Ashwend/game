@@ -246,7 +246,13 @@ impl GameServer {
                 active,
                 owner: entity.owner,
                 label: entity.label.clone(),
+                authorized: entity
+                    .cupboard
+                    .as_ref()
+                    .map(|cupboard| cupboard.authorized.clone())
+                    .unwrap_or_default(),
                 stability: entity.stability,
+                placed_at_tick: entity.placed_at_tick,
             }
         })
     }

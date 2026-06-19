@@ -21,6 +21,7 @@ use crate::{
 pub(super) use crate::server::test_support::{connect_host, equip_basic_tools, movement, server};
 
 mod building;
+mod claim;
 mod combat;
 mod commands;
 mod connection;

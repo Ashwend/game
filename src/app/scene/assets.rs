@@ -196,6 +196,9 @@ pub(crate) struct DeployableVisualAssets {
     /// Procedural torch haft + head (origin at the base so it mounts on the
     /// ground or tilts off a wall about its foot).
     pub(crate) torch_mesh: Handle<Mesh>,
+    /// Authored Tool Cupboard model (Blender glb, vertex-coloured like the
+    /// workbench/furnace; origin at the base so it sits on a foundation).
+    pub(crate) tool_cupboard_mesh: Handle<Mesh>,
     /// Shared material used for placed structures. Vertex colours from
     /// the mesh do the heavy lifting; the material just supplies PBR
     /// reflectance + roughness so the wood/stone reads correctly under
@@ -690,6 +693,7 @@ pub(crate) fn setup_scene(
     let storage_box_small_glb = embedded_asset_path("items/storage_box_small/model.glb");
     let storage_box_large_glb = embedded_asset_path("items/storage_box_large/model.glb");
     let torch_glb = embedded_asset_path("items/torch/model.glb");
+    let tool_cupboard_glb = embedded_asset_path("items/tool_cupboard/model.glb");
     let building_meshes = [
         crate::building::BuildingPiece::Foundation,
         crate::building::BuildingPiece::Wall,
@@ -716,6 +720,7 @@ pub(crate) fn setup_scene(
         storage_box_small_mesh: prim_mesh(&storage_box_small_glb, 0),
         storage_box_large_mesh: prim_mesh(&storage_box_large_glb, 0),
         torch_mesh: prim_mesh(&torch_glb, 0),
+        tool_cupboard_mesh: prim_mesh(&tool_cupboard_glb, 0),
         material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.92,

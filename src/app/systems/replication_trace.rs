@@ -33,10 +33,11 @@
 use bevy::{ecs::change_detection::Ref, prelude::*};
 
 use crate::server::{
-    Deployable, DeployableActive, DeployableHealth, DeployableLabel, DeployableStability,
-    DroppedItem, DroppedItemTransform, LootBagContents, LootBagEntity, LootBagTransform, Player,
-    PlayerAction, PlayerArmor, PlayerHealth, PlayerHeldItem, PlayerInputAck, PlayerInventory,
-    PlayerLifecycle, PlayerPose, PlayerSleeping, ResourceNode, ResourceNodeStorage,
+    Deployable, DeployableActive, DeployableAuth, DeployableHealth, DeployableLabel,
+    DeployableStability, DroppedItem, DroppedItemTransform, LootBagContents, LootBagEntity,
+    LootBagTransform, Player, PlayerAction, PlayerArmor, PlayerHealth, PlayerHeldItem,
+    PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerPose, PlayerSleeping, ResourceNode,
+    ResourceNodeStorage,
 };
 
 /// Tracks the last-seen value per id so we can log a clean
@@ -48,6 +49,7 @@ pub(crate) struct ReplicationTraceState {
     deployable_active: std::collections::HashMap<u64, bool>,
     deployable_label: std::collections::HashMap<u64, Option<String>>,
     deployable_stability: std::collections::HashMap<u64, u8>,
+    deployable_auth: std::collections::HashMap<u64, Vec<crate::protocol::AccountId>>,
     player_armor: std::collections::HashMap<u64, u8>,
     player_lifecycle: std::collections::HashMap<u64, PlayerLifecycle>,
     player_sleeping: std::collections::HashMap<u64, bool>,
@@ -67,6 +69,7 @@ pub(crate) fn log_replicated_storage_changes_system(
         Ref<DeployableActive>,
         Ref<DeployableLabel>,
         Ref<DeployableStability>,
+        Ref<DeployableAuth>,
     )>,
     players_pose: Query<(Entity, &Player, Ref<PlayerPose>)>,
     players_health: Query<(Entity, &Player, Ref<PlayerHealth>)>,
@@ -102,7 +105,7 @@ pub(crate) fn log_replicated_storage_changes_system(
         }
     }
 
-    for (entity, meta, health, active, label, stability) in &deployables {
+    for (entity, meta, health, active, label, stability, auth) in &deployables {
         if health.is_added() {
             info!(
                 target: "replication_trace",
@@ -185,6 +188,32 @@ pub(crate) fn log_replicated_storage_changes_system(
                     meta.id, stability.0
                 );
                 state.deployable_stability.insert(meta.id, stability.0);
+            }
+        }
+
+        // Tool Cupboard authorize-list updates. Value-delta gated like the
+        // label/stability logs (Lightyear bumps the change tick on every
+        // replication tick regardless of the value).
+        if auth.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: DeployableAuth      SPAWN  id={} entity={entity:?} n={}",
+                meta.id, auth.0.len()
+            );
+            state.deployable_auth.insert(meta.id, auth.0.clone());
+        } else if auth.is_changed() {
+            let before = state
+                .deployable_auth
+                .get(&meta.id)
+                .cloned()
+                .unwrap_or_default();
+            if before != auth.0 {
+                info!(
+                    target: "replication_trace",
+                    "client: DeployableAuth      RECV   id={} entity={entity:?} {:?} -> {:?}",
+                    meta.id, before, auth.0
+                );
+                state.deployable_auth.insert(meta.id, auth.0.clone());
             }
         }
     }

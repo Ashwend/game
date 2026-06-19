@@ -12,12 +12,12 @@ use lightyear::prelude::{
 use crate::{
     protocol::{ClientMessage, PacketDelivery, ServerMessage},
     server::{
-        Deployable, DeployableActive, DeployableHealth, DeployableLabel, DeployableStability,
-        DeployableTransform, DroppedItem, DroppedItemTransform, LootBagContents, LootBagEntity,
-        LootBagTransform, Player, PlayerAction, PlayerArmor, PlayerChatBubble, PlayerCrafting,
-        PlayerHealth, PlayerHeldItem, PlayerInputAck, PlayerInventory, PlayerLifecycle,
-        PlayerOpenContainers, PlayerPose, PlayerProfile, PlayerSleeping, ResourceNode,
-        ResourceNodeStorage,
+        Deployable, DeployableActive, DeployableAuth, DeployableHealth, DeployableLabel,
+        DeployableStability, DeployableTransform, DroppedItem, DroppedItemTransform,
+        LootBagContents, LootBagEntity, LootBagTransform, Player, PlayerAction, PlayerArmor,
+        PlayerChatBubble, PlayerCrafting, PlayerHealth, PlayerHeldItem, PlayerInputAck,
+        PlayerInventory, PlayerLifecycle, PlayerOpenContainers, PlayerPose, PlayerProfile,
+        PlayerSleeping, ResourceNode, ResourceNodeStorage,
     },
 };
 
@@ -94,6 +94,7 @@ impl Plugin for LightyearProtocolPlugin {
         app.register_component::<DeployableActive>();
         app.register_component::<DeployableLabel>();
         app.register_component::<DeployableStability>();
+        app.register_component::<DeployableAuth>();
         app.register_component::<Player>();
         // Peer-visible player state, one component per cadence: the
         // pose ticks at 20 Hz while moving, the rest only on real

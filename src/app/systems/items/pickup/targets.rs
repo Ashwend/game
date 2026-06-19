@@ -316,18 +316,31 @@ fn ray_block_entry_distance(
 /// (off to the side and at foot height), while the hit box centre is on
 /// the piece the player is actually looking at, and it stays put between
 /// rescans so the tooltip tracks smoothly.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn set_deployable_pickup_target(
     pickup_target: &mut PickupTargetState,
     meta: &Deployable,
     stability: u8,
     anchor: Vec3Net,
+    authorized: &[crate::protocol::AccountId],
+    my_account: Option<crate::protocol::AccountId>,
     camera: &Query<(&Camera, &Transform), With<MainCamera>>,
 ) {
+    use crate::app::state::CupboardAuthState;
+    use crate::items::DeployableKind;
     pickup_target.clear();
     pickup_target.deployable_id = Some(meta.id);
     pickup_target.deployable_kind = Some(meta.kind);
     pickup_target.deployable_stability =
-        matches!(meta.kind, crate::items::DeployableKind::Building { .. }).then_some(stability);
+        matches!(meta.kind, DeployableKind::Building { .. }).then_some(stability);
+    pickup_target.deployable_cupboard_auth = matches!(meta.kind, DeployableKind::ToolCupboard)
+        .then(|| {
+            if my_account.is_some_and(|account| authorized.contains(&account)) {
+                CupboardAuthState::Authorized
+            } else {
+                CupboardAuthState::Unauthorized
+            }
+        });
     pickup_target.world_position = Some(anchor);
     pickup_target.screen_position = viewport_position(camera, anchor);
 }

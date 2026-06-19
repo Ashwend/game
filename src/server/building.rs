@@ -82,6 +82,22 @@ impl GameServer {
             Err(reason) => return building_toast(client_id, ToastKind::Warning, reason.to_owned()),
         };
 
+        // Building privilege: a Tool Cupboard projects a claim over its
+        // base + a margin ring. Non-authorized players can't build anything
+        // inside it, every piece including the first (twig) tier is
+        // refused, so a claimed base fully locks outsiders out. The test is
+        // footprint-aware: the whole piece (slab, wall span, stair flight)
+        // must clear the claim, not just its snap centre, so a wall can't be
+        // butted up against the boundary to poke into protected ground.
+        let footprint = crate::building::building_collider_blocks(piece, position, yaw);
+        if self.claim_blocks_footprint(&footprint, owner) {
+            return building_toast(
+                client_id,
+                ToastKind::Warning,
+                "This area is claimed by someone else".to_owned(),
+            );
+        }
+
         // Box-overlap test against non-building deployables (don't bisect
         // someone's furnace) and against other foundations when placing a
         // foundation. Wall-like-vs-building overlap is resolved by socket
@@ -464,7 +480,8 @@ impl GameServer {
         self.consume_active_tool_durability(client_id)
     }
 
-    /// Upgrade a building block to the next tier: owner-only, costs the
+    /// Upgrade a building block to the next tier: authorized-only (builder
+    /// or anyone on the covering Tool Cupboard), costs the
     /// target tier's materials, refills HP, and restarts the demolish
     /// window (fresh construction, fresh grace period).
     fn upgrade_building(
@@ -479,15 +496,14 @@ impl GameServer {
             return Vec::new();
         };
         let account = client.account_id;
-        let is_admin = client.is_admin;
         let Some(entity) = self.deployed_entities.get(&id) else {
             return Vec::new();
         };
-        if !is_admin && entity.owner != Some(account) {
+        if !self.building_modify_allowed(entity.position, account, entity.owner == Some(account)) {
             return building_toast(
                 client_id,
                 ToastKind::Warning,
-                "Only the builder can upgrade this".to_owned(),
+                "Only authorized players can upgrade this".to_owned(),
             );
         }
         let DeployableKind::Building { piece, tier } = entity.kind else {
@@ -528,8 +544,9 @@ impl GameServer {
         )
     }
 
-    /// Demolish a building block or door: owner-only (admins exempt), and
-    /// only while the demolish window since placement/upgrade is open.
+    /// Demolish a building block or door: only an authorized player (the
+    /// builder, or anyone on the covering Tool Cupboard), and only while
+    /// the demolish window since placement/upgrade is open.
     fn demolish_building(
         &mut self,
         client_id: ClientId,
@@ -542,7 +559,6 @@ impl GameServer {
             return Vec::new();
         };
         let account = client.account_id;
-        let is_admin = client.is_admin;
         let Some(entity) = self.deployed_entities.get(&id) else {
             return Vec::new();
         };
@@ -552,16 +568,14 @@ impl GameServer {
         ) {
             return Vec::new();
         }
-        if !is_admin && entity.owner != Some(account) {
+        if !self.building_modify_allowed(entity.position, account, entity.owner == Some(account)) {
             return building_toast(
                 client_id,
                 ToastKind::Warning,
-                "Only the builder can demolish this".to_owned(),
+                "Only authorized players can demolish this".to_owned(),
             );
         }
-        if !is_admin
-            && self.tick.saturating_sub(entity.placed_at_tick) > BUILDING_DEMOLISH_WINDOW_TICKS
-        {
+        if self.tick.saturating_sub(entity.placed_at_tick) > BUILDING_DEMOLISH_WINDOW_TICKS {
             return building_toast(
                 client_id,
                 ToastKind::Warning,
