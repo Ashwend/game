@@ -42,6 +42,11 @@ semicolon_if_nothing_returned = "warn"
 manual_let_else = "warn"
 cloned_instead_of_copied = "warn"
 unnested_or_patterns = "warn"
+# Catch debug scaffolding and unfinished markers before they reach a release
+# build. Cheap, high-signal, and zero false positives; CI's `-D warnings`
+# promotes these to a hard gate like the rest.
+dbg_macro = "warn"
+todo = "warn"
 
 [dependencies]
 anyhow = "1.0.102"

@@ -189,6 +189,7 @@ impl GameServer {
             auto_save_interval_ticks: 0,
             last_auto_save_tick: tick,
             auto_save_pending: false,
+            auto_save_announce: true,
             world_map_markers,
         };
         // Stability is not persisted: recompute it from the restored
@@ -216,6 +217,26 @@ impl GameServer {
         self.auto_save_interval_ticks = interval_ticks;
         self.last_auto_save_tick = self.tick;
         self
+    }
+
+    /// Like [`GameServer::with_auto_save`] but suppresses the routine save
+    /// announcements (the heads-up, "Auto-saving the world…", and "World
+    /// saved." chat lines). Used by the singleplayer loopback host, where a
+    /// lone player has nothing to coordinate around the brief write hitch and
+    /// the tighter cadence would otherwise spam chat. Save *failures* are still
+    /// announced so a player whose disk is full learns their saves are failing.
+    pub fn with_auto_save_silent(mut self, interval_ticks: u64) -> Self {
+        self.auto_save_interval_ticks = interval_ticks;
+        self.last_auto_save_tick = self.tick;
+        self.auto_save_announce = false;
+        self
+    }
+
+    /// Whether routine auto-saves announce themselves (dedicated) or run
+    /// silently (singleplayer). The host reads this to decide whether to emit
+    /// the "World saved." line after a successful write.
+    pub fn auto_save_announces(&self) -> bool {
+        self.auto_save_announce
     }
 
     /// Drain the "auto-save is due" flag. The host calls this after `tick`,

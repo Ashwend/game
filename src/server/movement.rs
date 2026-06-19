@@ -85,10 +85,22 @@ fn normalize_yaw(yaw: f32) -> f32 {
 }
 
 pub(super) fn clean_player_name(name: &str, fallback_id: ClientId) -> String {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
+    // Strip control characters before the length cap, matching `sanitize_chat`
+    // and `sanitize_marker_name`. The resolved name is broadcast to every peer
+    // and rendered in nametags and the roster, so a control char is never
+    // wanted and would otherwise be a peer-to-peer UI-corruption vector. Re-trim
+    // afterwards in case removing one exposed surrounding whitespace, then fall
+    // back to a numbered name if nothing legible remains.
+    let cleaned: String = name
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(32)
+        .collect();
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
         format!("Player {fallback_id}")
     } else {
-        trimmed.chars().take(32).collect()
+        cleaned.to_owned()
     }
 }

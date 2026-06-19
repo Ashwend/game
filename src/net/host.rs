@@ -155,9 +155,21 @@ pub(crate) type AutoSaveWriter = Box<dyn Fn(&WorldSave) -> Result<()> + Send + S
 #[derive(Resource)]
 pub(crate) struct AutoSaveSink(pub(crate) AutoSaveWriter);
 
+/// Full auto-save configuration handed to [`run_host`]: where to write
+/// ([`AutoSaveSink`]), how often, and whether each routine save announces
+/// itself. Dedicated hosts use a long interval that announces; the
+/// singleplayer loopback host uses a short, silent interval. `None` disables
+/// auto-save entirely (the world then persists only on a clean shutdown).
+pub(crate) struct AutoSave {
+    sink: AutoSaveSink,
+    interval_ticks: u64,
+    quiet: bool,
+}
+
 pub(super) fn spawn_loopback_server(
     save: WorldSave,
     settings: ServerSettings,
+    auto_save: Option<AutoSaveSink>,
 ) -> Result<SpawnedGameServer> {
     let reserved_addr = reserve_udp_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
         .context("could not reserve loopback Lightyear server address")?;
@@ -167,6 +179,14 @@ pub(super) fn spawn_loopback_server(
     let thread = thread::Builder::new()
         .name("lightyear-game-server".to_owned())
         .spawn(move || {
+            // The singleplayer loopback host auto-saves silently on a short
+            // cadence so a crash loses at most one interval instead of the whole
+            // session; the dedicated path uses the longer announced cadence.
+            let auto_save = auto_save.map(|sink| AutoSave {
+                sink,
+                interval_ticks: crate::server::SINGLEPLAYER_AUTO_SAVE_INTERVAL_TICKS,
+                quiet: true,
+            });
             if let Err(error) = run_host(
                 reserved_addr,
                 save,
@@ -177,7 +197,7 @@ pub(super) fn spawn_loopback_server(
                 false,
                 Some(startup_tx.clone()),
                 PrivateKeyContext::Loopback,
-                None,
+                auto_save,
             ) {
                 let _ = startup_tx.send(Err(format!("{error:#}")));
                 eprintln!("Lightyear game server stopped: {error:#}");
@@ -223,6 +243,13 @@ pub(super) fn run_game_server(
     let bind_addr = reserved_addr.addr();
     let (_command_tx, command_rx) = mpsc::channel();
     println!("Lightyear game server listening on {bind_addr} ({auth_mode:?})");
+    // Dedicated hosts auto-save on the long, announced cadence so every
+    // connected player can brace for the brief write hitch.
+    let auto_save = auto_save.map(|sink| AutoSave {
+        sink,
+        interval_ticks: crate::server::AUTO_SAVE_INTERVAL_TICKS,
+        quiet: false,
+    });
     run_host(
         reserved_addr,
         save,
@@ -281,7 +308,7 @@ fn run_host(
     install_terminal_shutdown: bool,
     mut startup_tx: Option<mpsc::Sender<std::result::Result<(), String>>>,
     key_context: PrivateKeyContext,
-    auto_save: Option<AutoSaveSink>,
+    auto_save: Option<AutoSave>,
 ) -> Result<WorldSave> {
     let bind_addr = reserved_addr.addr();
     let mut app = App::new();
@@ -319,15 +346,19 @@ fn run_host(
         .id();
 
     app.insert_resource(HostCommandInbox(Mutex::new(command_rx)));
-    // Enable the auto-save schedule only when a write sink is present (dedicated
-    // hosts). Loopback passes `None`, so its `GameServer` keeps the interval at
-    // 0 and never schedules/announces a save, it persists on exit instead.
+    // Enable the auto-save schedule only when a write sink is present. The
+    // caller picks the cadence and whether saves announce themselves: dedicated
+    // hosts announce on a long interval, the singleplayer loopback host saves
+    // silently on a short one. With no sink the `GameServer` keeps the interval
+    // at 0 and never schedules a save (it persists on exit instead).
     let mut game_server = GameServer::new(save, settings).with_workos(workos);
-    if auto_save.is_some() {
-        game_server = game_server.with_auto_save(crate::server::AUTO_SAVE_INTERVAL_TICKS);
-    }
-    if let Some(sink) = auto_save {
-        app.insert_resource(sink);
+    if let Some(auto_save) = auto_save {
+        game_server = if auto_save.quiet {
+            game_server.with_auto_save_silent(auto_save.interval_ticks)
+        } else {
+            game_server.with_auto_save(auto_save.interval_ticks)
+        };
+        app.insert_resource(auto_save.sink);
     }
     app.insert_resource(AuthoritativeServer(game_server));
     app.insert_resource(ServerConnections::default());
@@ -487,7 +518,12 @@ fn run_auto_save(
     };
     let save = server.world_save();
     match (sink.0)(&save) {
-        Ok(()) => server.announce("World saved."),
+        // A successful save only announces on hosts that opted into chatter
+        // (dedicated); the silent singleplayer host stays quiet on success.
+        Ok(()) if server.auto_save_announces() => server.announce("World saved."),
+        Ok(()) => Vec::new(),
+        // A failure is always surfaced, even in silent mode, so a player whose
+        // disk is full learns their world is no longer being saved.
         Err(error) => {
             eprintln!("auto-save failed: {error:#}");
             server.announce("Auto-save failed, see server logs.")

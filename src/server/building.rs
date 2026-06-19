@@ -127,11 +127,10 @@ impl GameServer {
                 _ => false,
             };
             !skip
-                && existing.resolved_collider_blocks().iter().any(|block| {
-                    blocks
-                        .iter()
-                        .any(|candidate| boxes_overlap(*candidate, *block))
-                })
+                && existing
+                    .resolved_collider_blocks()
+                    .iter()
+                    .any(|block| blocks.iter().any(|candidate| candidate.overlaps(*block)))
         });
         if obstruction {
             return building_toast(
@@ -625,23 +624,4 @@ fn material_name(item_id: &str) -> &'static str {
 
 fn building_toast(client_id: ClientId, kind: ToastKind, text: String) -> Vec<ServerEnvelope> {
     super::toasts::toast(client_id, kind, text)
-}
-
-/// Penetration below this doesn't count as overlap. Building pieces
-/// legitimately touch face-to-face everywhere (stairs on a foundation
-/// top, ceilings on wall tops), and f32 centre/half-extent arithmetic
-/// can land a touching face a few ULPs inside its neighbour.
-const OVERLAP_EPSILON_M: f32 = 0.001;
-
-fn boxes_overlap(a: crate::world::WorldBlock, b: crate::world::WorldBlock) -> bool {
-    let a_min = a.min();
-    let a_max = a.max();
-    let b_min = b.min();
-    let b_max = b.max();
-    a_min.x + OVERLAP_EPSILON_M < b_max.x
-        && a_max.x > b_min.x + OVERLAP_EPSILON_M
-        && a_min.y + OVERLAP_EPSILON_M < b_max.y
-        && a_max.y > b_min.y + OVERLAP_EPSILON_M
-        && a_min.z + OVERLAP_EPSILON_M < b_max.z
-        && a_max.z > b_min.z + OVERLAP_EPSILON_M
 }

@@ -502,6 +502,30 @@ impl WorldBlock {
     pub fn size(self) -> Vec3Net {
         self.half_extents.scale(2.0)
     }
+
+    /// Penetration below this doesn't count as overlap. Building pieces and
+    /// deployables legitimately touch face-to-face everywhere (stairs on a
+    /// foundation top, a deployable standing on a foundation, ceilings on wall
+    /// tops), and f32 centre/half-extent arithmetic can land a touching face a
+    /// few ULPs inside its neighbour.
+    pub const OVERLAP_EPSILON_M: f32 = 0.001;
+
+    /// True when two axis-aligned blocks interpenetrate by more than
+    /// [`WorldBlock::OVERLAP_EPSILON_M`] on every axis. Shared by the
+    /// server-side placement-overlap (deployables) and building-overlap checks
+    /// so the two rules cannot silently drift apart.
+    pub fn overlaps(self, other: WorldBlock) -> bool {
+        let a_min = self.min();
+        let a_max = self.max();
+        let b_min = other.min();
+        let b_max = other.max();
+        a_min.x + Self::OVERLAP_EPSILON_M < b_max.x
+            && a_max.x > b_min.x + Self::OVERLAP_EPSILON_M
+            && a_min.y + Self::OVERLAP_EPSILON_M < b_max.y
+            && a_max.y > b_min.y + Self::OVERLAP_EPSILON_M
+            && a_min.z + Self::OVERLAP_EPSILON_M < b_max.z
+            && a_max.z > b_min.z + Self::OVERLAP_EPSILON_M
+    }
 }
 
 #[cfg(test)]

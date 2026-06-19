@@ -551,7 +551,7 @@ impl GameServer {
             }
             for existing_block in existing.resolved_collider_blocks() {
                 for candidate in blocks {
-                    if blocks_overlap(*candidate, existing_block) {
+                    if candidate.overlaps(existing_block) {
                         return true;
                     }
                 }
@@ -681,24 +681,6 @@ pub(super) fn within_horizontal_range_of_blocks(
         let dz = position.z - position.z.clamp(min.z, max.z);
         (dx * dx + dz * dz).sqrt() <= range
     })
-}
-
-/// Penetration below this doesn't count as overlap; touching faces (a
-/// deployable standing exactly on a foundation top) plus f32 rounding
-/// must not read as collision.
-const OVERLAP_EPSILON_M: f32 = 0.001;
-
-fn blocks_overlap(a: WorldBlock, b: WorldBlock) -> bool {
-    let a_min = a.min();
-    let a_max = a.max();
-    let b_min = b.min();
-    let b_max = b.max();
-    a_min.x + OVERLAP_EPSILON_M < b_max.x
-        && a_max.x > b_min.x + OVERLAP_EPSILON_M
-        && a_min.y + OVERLAP_EPSILON_M < b_max.y
-        && a_max.y > b_min.y + OVERLAP_EPSILON_M
-        && a_min.z + OVERLAP_EPSILON_M < b_max.z
-        && a_max.z > b_min.z + OVERLAP_EPSILON_M
 }
 
 #[cfg(test)]

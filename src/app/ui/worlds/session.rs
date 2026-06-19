@@ -52,7 +52,9 @@ pub(super) fn start_singleplayer(
         .0
         .load_world(world_id)
         .context("could not load selected world")
-        .and_then(|save| ClientSession::start_singleplayer(save, &user.0, network.clone()));
+        .and_then(|save| {
+            ClientSession::start_singleplayer(save, &store.0, &user.0, network.clone())
+        });
 
     match result {
         Ok(session) => {
@@ -134,7 +136,7 @@ fn start_singleplayer_session(
     store
         .load_world(world_id)
         .context("could not load selected world")
-        .and_then(|save| ClientSession::start_singleplayer(save, &user, network))
+        .and_then(|save| ClientSession::start_singleplayer(save, &store, &user, network))
 }
 
 fn take_finished_singleplayer_start(menu: &mut MenuState) -> Option<(Uuid, WorldStartResult)> {

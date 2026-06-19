@@ -50,6 +50,15 @@ const PLAYER_LIST_BROADCAST_INTERVAL_TICKS: u64 = SERVER_TICK_RATE_HZ as u64;
 /// to [`GameServer::with_auto_save`].
 pub(crate) const AUTO_SAVE_INTERVAL_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 60 * 30;
 
+/// Cadence of the routine auto-save for the singleplayer loopback host. Far
+/// tighter than the dedicated 30-minute cadence because a singleplayer crash
+/// otherwise loses the entire session since the last world load (the loopback
+/// host used to persist only on a clean exit). Five minutes bounds worst-case
+/// loss while staying cheap given the atomic, compressed writes, and the save
+/// runs silently in singleplayer (see [`GameServer::with_auto_save_silent`]) so
+/// the tighter cadence costs the lone player no chat spam.
+pub(crate) const SINGLEPLAYER_AUTO_SAVE_INTERVAL_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 60 * 5;
+
 /// How far ahead of an auto-save the "saving soon" heads-up is announced, so
 /// players can brace for the brief hitch the synchronous write causes.
 const AUTO_SAVE_WARNING_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 30;
@@ -241,6 +250,12 @@ pub struct GameServer {
     /// Raised by `tick` when an auto-save comes due; the host drains it via
     /// [`GameServer::take_auto_save_pending`], writes the world, then announces.
     auto_save_pending: bool,
+    /// Whether routine auto-saves announce themselves over chat (the 30-second
+    /// heads-up, "Auto-saving the world…", and "World saved."). Dedicated hosts
+    /// announce so every player can brace for the shared write hitch;
+    /// singleplayer saves silently (one local player, nothing to coordinate).
+    /// An auto-save *failure* is always surfaced regardless of this flag.
+    auto_save_announce: bool,
     /// Per-player hand-placed map markers. Owned per account, private to the
     /// owner, and persisted in the world save. See `world_map`. (The biome
     /// terrain image isn't here, the client generates it from the seed.)

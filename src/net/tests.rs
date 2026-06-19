@@ -40,6 +40,7 @@ impl TestRig {
         let network = app.world().resource::<ClientNetwork>().clone();
         let session = ClientSession::start_singleplayer(
             WorldSave::new("Local", Some(user.account_id)),
+            &temp_store(),
             &user,
             network,
         )
@@ -161,6 +162,7 @@ fn direct_multiplayer_connects_to_shared_lightyear_server_host() {
             auth_mode: AuthMode::NoAuth,
             singleplayer_host: None,
         },
+        None,
     )
     .expect("Lightyear server should start");
 
@@ -213,7 +215,8 @@ fn direct_multiplayer_connects_to_shared_lightyear_server_host() {
 /// `ReplicationGroup::new_from_entity()` wiring (upstream bug #740) is delivering
 /// entities at all; a regression that breaks the spawn path turns this red
 /// instead of only showing up as missing nodes in a live session. (Post-spawn
-/// diff delivery is still best verified with `--features replication-trace`; see
+/// *diff* delivery, a different failure mode, is covered by its companion
+/// `replicated_component_post_spawn_diff_reaches_the_client_world` below; see
 /// the Replication section of docs/networking.md.)
 #[test]
 fn replicated_world_entities_reach_the_client_world() {
@@ -224,6 +227,7 @@ fn replicated_world_entities_reach_the_client_world() {
             auth_mode: AuthMode::NoAuth,
             singleplayer_host: None,
         },
+        None,
     )
     .expect("Lightyear server should start");
 
@@ -253,6 +257,93 @@ fn replicated_world_entities_reach_the_client_world() {
     spawned.handle.shutdown().expect("server should stop");
 }
 
+/// Post-spawn replication-diff guard. The single most-documented failure mode
+/// in CLAUDE.md is a server-side component mutation that ships its initial
+/// spawn but never delivers the *later* diff (the Lightyear 0.26.4 group-ack
+/// dropout that `ReplicationGroup::new_from_entity()` exists to fix). The
+/// companion test above proves entities *arrive*; this proves a field that
+/// changes *after* spawn actually reaches the client world.
+///
+/// We mutate a replicated component through normal gameplay: a chat line sets
+/// the speaker's `PlayerChatBubble`, which the mirror sync writes onto the
+/// player entity and Lightyear must ship as a post-spawn diff. We first wait
+/// for the player entity to replicate in with its initial empty bubble (so what
+/// follows is provably a diff, not the spawn snapshot), then assert the mutated
+/// value lands client-side. Without this, a regression that breaks post-spawn
+/// diffing for furnace burn state, door open/closed, deployable health, etc.
+/// would pass CI green and surface only as stale state in a live session. The
+/// test harness adds no client-side apply systems, so the value observed here
+/// is exactly what Lightyear delivered, not a locally-reconstructed view.
+#[test]
+fn replicated_component_post_spawn_diff_reaches_the_client_world() {
+    let user = user();
+    let mut spawned = super::host::spawn_loopback_server(
+        WorldSave::new("DiffWorld", Some(user.account_id)),
+        ServerSettings {
+            auth_mode: AuthMode::NoAuth,
+            singleplayer_host: None,
+        },
+        None,
+    )
+    .expect("Lightyear server should start");
+
+    let mut rig = TestRig::direct(spawned.addr);
+
+    // Wait until the player mirror entity replicates in carrying its initial
+    // (empty) chat bubble. Observing the `None` first is what makes the later
+    // assertion a genuine post-spawn diff rather than the spawn snapshot.
+    let mut empty_bubble_replicated = false;
+    for _ in 0..400 {
+        let _ = rig.poll();
+        let world = rig.app.world_mut();
+        let mut query = world.query::<&crate::server::PlayerChatBubble>();
+        if query.iter(world).any(|bubble| bubble.0.is_none()) {
+            empty_bubble_replicated = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        empty_bubble_replicated,
+        "expected the player mirror entity (with an empty PlayerChatBubble) to \
+         replicate into the client world before mutating it"
+    );
+
+    // Mutate the replicated field server-side via normal gameplay.
+    rig.session
+        .send(ClientMessage::Chat {
+            text: "diff me".to_owned(),
+        })
+        .expect("chat should send");
+
+    let mut diff_reached_client = false;
+    for _ in 0..400 {
+        let _ = rig.poll();
+        let world = rig.app.world_mut();
+        let mut query = world.query::<&crate::server::PlayerChatBubble>();
+        if query
+            .iter(world)
+            .any(|bubble| bubble.0.as_deref() == Some("diff me"))
+        {
+            diff_reached_client = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    assert!(
+        diff_reached_client,
+        "expected the post-spawn PlayerChatBubble mutation to reach the client \
+         world; a server-side mutate with no client receive is the Lightyear \
+         0.26.4 group-ack dropout that ReplicationGroup::new_from_entity guards"
+    );
+
+    rig.session
+        .send(ClientMessage::Disconnect)
+        .expect("disconnect should send");
+    spawned.handle.shutdown().expect("server should stop");
+}
+
 #[test]
 fn singleplayer_shutdown_persists_world_from_network_server() {
     let store = temp_store();
@@ -263,7 +354,7 @@ fn singleplayer_shutdown_persists_world_from_network_server() {
     let world_id = save.id;
     let mut app = build_test_app();
     let network = app.world().resource::<ClientNetwork>().clone();
-    let mut session = ClientSession::start_singleplayer(save, &user, network)
+    let mut session = ClientSession::start_singleplayer(save, &store, &user, network)
         .expect("network session should start");
 
     // Drive the app until Welcome arrives so the loopback server's world

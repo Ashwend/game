@@ -76,17 +76,20 @@ impl GameServer {
         // save finished, so disk I/O stays out of this game-state module.
         if self.auto_save_interval_ticks > 0 {
             let since_save = self.tick.saturating_sub(self.last_auto_save_tick);
-            if since_save
-                == self
-                    .auto_save_interval_ticks
-                    .saturating_sub(AUTO_SAVE_WARNING_TICKS)
+            if self.auto_save_announce
+                && since_save
+                    == self
+                        .auto_save_interval_ticks
+                        .saturating_sub(AUTO_SAVE_WARNING_TICKS)
             {
                 envelopes.extend(self.announce(
                     "Heads up: the world auto-saves in 30 seconds, expect a brief hitch.",
                 ));
             }
             if since_save >= self.auto_save_interval_ticks {
-                envelopes.extend(self.announce("Auto-saving the world…"));
+                if self.auto_save_announce {
+                    envelopes.extend(self.announce("Auto-saving the world…"));
+                }
                 self.auto_save_pending = true;
                 self.last_auto_save_tick = self.tick;
             }

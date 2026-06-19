@@ -20,7 +20,7 @@ use crate::{
     auth::{AuthMode, AuthenticatedUser},
     net::{
         channels::{LIGHTYEAR_PROTOCOL_ID, PrivateKeyContext, private_key, send_client_message},
-        host::{GameServerHandle, spawn_loopback_server},
+        host::{AutoSaveSink, GameServerHandle, spawn_loopback_server},
     },
     protocol::{ClientMessage, GAME_VERSION, PROTOCOL_VERSION, SERVER_TICK_RATE_HZ, ServerMessage},
     save::{WorldSave, WorldStore},
@@ -164,6 +164,7 @@ impl std::fmt::Debug for ClientSession {
 impl ClientSession {
     pub(crate) fn start_singleplayer(
         save: WorldSave,
+        store: &WorldStore,
         user: &AuthenticatedUser,
         network: ClientNetwork,
     ) -> Result<Self> {
@@ -171,12 +172,21 @@ impl ClientSession {
         // so the signed-in user's identity (and WorkOS access token) rides
         // through unchanged, the token is ignored locally, and the real
         // account id keeps the player's save continuity.
+        //
+        // Hand the host a sink onto the same `WorldStore` shutdown persists to,
+        // so the loopback world auto-saves periodically instead of only on a
+        // clean exit; a crash now loses at most one interval, not the session.
+        let autosave_store = store.clone();
+        let auto_save = AutoSaveSink(Box::new(move |world: &WorldSave| {
+            autosave_store.save_world(world)
+        }));
         let spawned = spawn_loopback_server(
             save,
             ServerSettings {
                 auth_mode: AuthMode::NoAuth,
                 singleplayer_host: Some(user.account_id),
             },
+            Some(auto_save),
         )?;
         Self::connect_inner(spawned.addr, user, Some(spawned.handle), network)
     }
