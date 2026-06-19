@@ -26,21 +26,18 @@ pub(crate) const WOOD_MID: MeshColor = [0.160, 0.065, 0.020, 1.0];
 // colours, so the constants moved into the models.
 pub(crate) const STONE_DARK: MeshColor = [0.080, 0.090, 0.085, 1.0];
 pub(crate) const STONE_EDGE: MeshColor = [0.380, 0.400, 0.360, 1.0];
+// Foliage greens for the procedural LOD stand-ins (the full-detail trees are now
+// textured glbs). Retuned toward the muted needle/leaf texture midtones so the
+// 80 m `VisibilityRange` switch from textured glb to flat LOD doesn't flip the
+// canopy brightness. `*_DARK` (lower layers) through `*_LIGHT` (crown) keeps the
+// shaded depth the textures carry.
 pub(crate) const LEAF_PINE: MeshColor = [0.030, 0.110, 0.042, 1.0];
 pub(crate) const LEAF_PINE_DARK: MeshColor = [0.016, 0.062, 0.026, 1.0];
 pub(crate) const LEAF_PINE_LIGHT: MeshColor = [0.055, 0.160, 0.060, 1.0];
 pub(crate) const LEAF_BIRCH: MeshColor = [0.110, 0.215, 0.050, 1.0];
-pub(crate) const LEAF_BIRCH_DARK: MeshColor = [0.058, 0.135, 0.030, 1.0];
 pub(crate) const LEAF_BIRCH_LIGHT: MeshColor = [0.210, 0.350, 0.082, 1.0];
 pub(crate) const BIRCH_BARK: MeshColor = [0.500, 0.480, 0.420, 1.0];
-pub(crate) const BIRCH_BARK_BAND: MeshColor = [0.030, 0.026, 0.022, 1.0];
 pub(crate) const BARK_DARK: MeshColor = [0.040, 0.022, 0.010, 1.0];
-pub(crate) const BARK_MID: MeshColor = [0.085, 0.042, 0.018, 1.0];
-// Weathered grey-brown dead wood, for the bare snags that stand where growth is
-// poor (non-forest biomes). Lighter and greyer than live bark so a leafless tree
-// reads as "dead", not just "in shadow"; sits in the rock-ish linear range.
-pub(crate) const DEAD_WOOD: MeshColor = [0.120, 0.104, 0.082, 1.0];
-pub(crate) const DEAD_WOOD_DARK: MeshColor = [0.072, 0.061, 0.047, 1.0];
 
 /// Scale a colour's RGB by `factor`, leaving alpha untouched. Used to bake
 /// cheap ambient-occlusion-ish darkening (undersides, ground-contact bands)

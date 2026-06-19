@@ -26,37 +26,42 @@ pub(super) fn spawn_resource_node_entity(
     target_transform: Transform,
     should_pop_in: bool,
 ) {
-    let (mesh, material) = resource_node_visual(assets, model);
-    // Ore/vein nodes that arrive already part-mined (a vein someone else
-    // worked, or persisted partial storage from a save) spawn straight at
-    // their depletion-stage mesh instead of briefly flashing full.
-    let mesh = ore_stage_mesh(assets, model, stage).unwrap_or(mesh);
     // A tree standing where growth is poor renders as a bare dead snag instead of a
     // lush tree. `dead` is the server-authoritative, replicated flag (decided at
     // generation, see `resources::spawn_resource_node`); this is a pure visual swap,
-    // the node is otherwise a normal tree. Dead snags are already low-poly, so they
-    // skip the tree LOD entirely.
+    // the node is otherwise a normal tree. Snags are a single weathered vertex-
+    // coloured mesh, no canopy and no LOD (they're already low-poly).
     let dead_tree = model.is_tree() && dead;
-    let (mesh, lod_mesh) = if dead_tree {
-        (dead_tree_mesh(assets, model), None)
+    let live_tree = model.is_tree() && !dead;
+
+    let (mesh, material) = if dead_tree {
+        (
+            dead_tree_mesh(assets, model),
+            assets.dead_bark_material.clone(),
+        )
     } else {
-        (mesh, tree_lod_mesh(assets, model))
+        let (mesh, material) = resource_node_visual(assets, model);
+        // Ore/vein nodes that arrive already part-mined (a vein someone else worked,
+        // or persisted partial storage from a save) spawn straight at their
+        // depletion-stage mesh instead of briefly flashing full. (Trees: this is the
+        // bark trunk; the alpha-masked canopy is a child spawned below.)
+        let mesh = ore_stage_mesh(assets, model, stage).unwrap_or(mesh);
+        (mesh, material)
     };
     let mut spawn_command = commands.spawn((
         Name::new(format!("Resource Node {id}")),
-        NetworkResourceNode { id, model },
+        NetworkResourceNode { id, model, dead },
         Mesh3d(mesh),
-        MeshMaterial3d(material.clone()),
+        MeshMaterial3d(material),
         target_transform,
         Visibility::Visible,
     ));
     // Crude clutter (branch piles, surface stones, hay grass) spawns densely and
     // casts only a negligible-size shadow under its own footprint, so skip the
-    // shadow pass for it. Trees DO cast, but only the near full-detail mesh: the
-    // distant low-poly LOD child opts out below, so a forest keeps its readable
-    // near-tree shadows while distant trees stop flooding the outer cascades
-    // (re-rendering every tree into each cascade is the heaviest forest GPU cost).
-    // The player, buildings, and ore/stone veins still cast.
+    // shadow pass for it. Trees DO cast (trunk + the near canopy child below): a
+    // forest keeps its readable near-tree shade, while the distant low-poly LOD
+    // child opts out so distant trees stop flooding the outer cascades. The
+    // player, buildings, and ore/stone veins still cast.
     if model.is_crude() {
         spawn_command.insert(NotShadowCaster);
     }
@@ -72,35 +77,49 @@ pub(super) fn spawn_resource_node_entity(
             base_transform: target_transform,
         });
     }
-    // Trees get a distance LOD: this (full-detail) mesh switches off past
-    // `TREE_LOD_DISTANCE`; a child carrying the low-poly mesh switches on at the
-    // same distance. Bevy's `VisibilityRange` does this GPU-side off the
-    // existing visibility pass, no per-frame CPU cost. It's a hard step, not a
-    // dither crossfade (see `TREE_LOD_DISTANCE` for why). Cuts main-pass vertex
-    // throughput across a forest of distant trees (shadow distance is bounded
-    // separately by the Shadows graphics setting).
-    if lod_mesh.is_some() {
+    // Live trees get a distance LOD: this (full-detail) trunk + its canopy child
+    // switch off past `TREE_LOD_DISTANCE`; a low-poly LOD child switches on at the
+    // same distance. Bevy's `VisibilityRange` does this GPU-side off the existing
+    // visibility pass, no per-frame CPU cost. Hard step, not a dither crossfade
+    // (see `TREE_LOD_DISTANCE` for why).
+    if live_tree {
         spawn_command.insert(tree_lod_high_range());
     }
     let entity = spawn_command.id();
     entities.entities.insert(id, entity);
     entities.stages.insert(id, stage);
 
-    if let Some(lod_mesh) = lod_mesh {
+    if live_tree {
+        let foliage = tree_foliage_visual(assets, model);
+        let lod_mesh = tree_lod_mesh(assets, model);
         commands.entity(entity).with_children(|parent| {
-            parent.spawn((
-                Name::new(format!("Resource Node {id} LOD")),
-                Mesh3d(lod_mesh),
-                MeshMaterial3d(material),
-                tree_lod_low_range(),
-                Transform::default(),
-                Visibility::Visible,
-                // The full-detail parent casts shadows up close; this distant
-                // low-poly LOD does not, so trees past `TREE_LOD_DISTANCE` stop
-                // re-rendering into the shadow cascades while near trees keep
-                // their shadows.
-                NotShadowCaster,
-            ));
+            // Alpha-masked needle/leaf canopy, drawn near (hidden with the trunk
+            // past the LOD distance). Casts shadows like the trunk so a forest
+            // floor stays shaded up close.
+            if let Some((foliage_mesh, foliage_material)) = foliage {
+                parent.spawn((
+                    Name::new(format!("Resource Node {id} Canopy")),
+                    Mesh3d(foliage_mesh),
+                    MeshMaterial3d(foliage_material),
+                    tree_lod_high_range(),
+                    Transform::default(),
+                    Visibility::Visible,
+                ));
+            }
+            // Distant low-poly stand-in: one cheap vertex-coloured mesh that
+            // switches in at `TREE_LOD_DISTANCE` and does not cast, so trees past
+            // it stop re-rendering into the shadow cascades.
+            if let Some(lod_mesh) = lod_mesh {
+                parent.spawn((
+                    Name::new(format!("Resource Node {id} LOD")),
+                    Mesh3d(lod_mesh),
+                    MeshMaterial3d(assets.vertex_material.clone()),
+                    tree_lod_low_range(),
+                    Transform::default(),
+                    Visibility::Visible,
+                    NotShadowCaster,
+                ));
+            }
         });
     }
 
@@ -240,29 +259,31 @@ pub(crate) fn resource_node_visual(
             assets.stone_vein_meshes[0].clone(),
             assets.stone_vein_material.clone(),
         ),
+        // Trees: the bark trunk mesh + shared bark material. The alpha-masked
+        // canopy is a separate child (see `tree_foliage_visual` + the spawn path).
         ResourceNodeModel::PineTreeSmall => (
-            assets.pine_tree_small_mesh.clone(),
-            assets.vertex_material.clone(),
+            assets.pine_tree_small_trunk_mesh.clone(),
+            assets.pine_bark_material.clone(),
         ),
         ResourceNodeModel::PineTreeMedium => (
-            assets.pine_tree_medium_mesh.clone(),
-            assets.vertex_material.clone(),
+            assets.pine_tree_medium_trunk_mesh.clone(),
+            assets.pine_bark_material.clone(),
         ),
         ResourceNodeModel::PineTreeLarge => (
-            assets.pine_tree_large_mesh.clone(),
-            assets.vertex_material.clone(),
+            assets.pine_tree_large_trunk_mesh.clone(),
+            assets.pine_bark_material.clone(),
         ),
         ResourceNodeModel::BirchTreeSmall => (
-            assets.birch_tree_small_mesh.clone(),
-            assets.vertex_material.clone(),
+            assets.birch_tree_small_trunk_mesh.clone(),
+            assets.birch_bark_material.clone(),
         ),
         ResourceNodeModel::BirchTreeMedium => (
-            assets.birch_tree_medium_mesh.clone(),
-            assets.vertex_material.clone(),
+            assets.birch_tree_medium_trunk_mesh.clone(),
+            assets.birch_bark_material.clone(),
         ),
         ResourceNodeModel::BirchTreeLarge => (
-            assets.birch_tree_large_mesh.clone(),
-            assets.vertex_material.clone(),
+            assets.birch_tree_large_trunk_mesh.clone(),
+            assets.birch_bark_material.clone(),
         ),
         ResourceNodeModel::SurfaceStone => (
             assets.surface_stone_mesh.clone(),
@@ -277,6 +298,43 @@ pub(crate) fn resource_node_visual(
             assets.hay_grass_material.clone(),
         ),
     }
+}
+
+/// The alpha-masked canopy (needle/leaf) mesh + shared foliage material for a live
+/// tree model, spawned as a child of the bark trunk. `None` for non-tree models
+/// (and dead snags, which have no canopy). Pine and birch each share one canopy
+/// material across all sizes so the forest batches by mesh+material.
+pub(crate) fn tree_foliage_visual(
+    assets: &ResourceVisualAssets,
+    model: ResourceNodeModel,
+) -> Option<(Handle<Mesh>, Handle<StandardMaterial>)> {
+    Some(match model {
+        ResourceNodeModel::PineTreeSmall => (
+            assets.pine_tree_small_foliage_mesh.clone(),
+            assets.pine_foliage_material.clone(),
+        ),
+        ResourceNodeModel::PineTreeMedium => (
+            assets.pine_tree_medium_foliage_mesh.clone(),
+            assets.pine_foliage_material.clone(),
+        ),
+        ResourceNodeModel::PineTreeLarge => (
+            assets.pine_tree_large_foliage_mesh.clone(),
+            assets.pine_foliage_material.clone(),
+        ),
+        ResourceNodeModel::BirchTreeSmall => (
+            assets.birch_tree_small_foliage_mesh.clone(),
+            assets.birch_foliage_material.clone(),
+        ),
+        ResourceNodeModel::BirchTreeMedium => (
+            assets.birch_tree_medium_foliage_mesh.clone(),
+            assets.birch_foliage_material.clone(),
+        ),
+        ResourceNodeModel::BirchTreeLarge => (
+            assets.birch_tree_large_foliage_mesh.clone(),
+            assets.birch_foliage_material.clone(),
+        ),
+        _ => return None,
+    })
 }
 
 // Dead-tree vitality is decided server-side now (see `resources::spawn_resource_node`

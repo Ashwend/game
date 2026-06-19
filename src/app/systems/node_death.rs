@@ -46,6 +46,10 @@ pub(crate) struct FellingTree {
     initial_rotation: Quat,
     initial_scale: Vec3,
     material: Handle<StandardMaterial>,
+    /// Cloned canopy (needle/leaf) material, present for live trees so the
+    /// alpha-masked foliage child fades out together with the trunk. `None` for
+    /// dead snags (single mesh, no canopy).
+    canopy_material: Option<Handle<StandardMaterial>>,
     landed_age: Option<f32>,
     landing_kick_fired: bool,
     landing_chips_fired: bool,
@@ -63,6 +67,7 @@ pub(crate) fn spawn_node_death(
     transform: Transform,
     mesh: Handle<Mesh>,
     material: Handle<StandardMaterial>,
+    canopy: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
     player_position: Option<Vec3>,
 ) {
     if model.is_tree() {
@@ -75,13 +80,14 @@ pub(crate) fn spawn_node_death(
             transform,
             mesh,
             material,
+            canopy,
             player_position,
         );
     } else if model.is_crude() {
-        let _ = (mesh, material);
+        let _ = (mesh, material, canopy);
         spawn_crude_pickup_burst(commands, impact_assets, node_id, model, transform);
     } else {
-        let _ = (mesh, material);
+        let _ = (mesh, material, canopy);
         spawn_ore_shatter(
             commands,
             impact_assets,
@@ -132,6 +138,7 @@ fn spawn_tree_felling(
     transform: Transform,
     mesh: Handle<Mesh>,
     source_material: Handle<StandardMaterial>,
+    canopy: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
     player_position: Option<Vec3>,
 ) {
     let Some(base_height) = tree_mesh_height(model) else {
@@ -163,7 +170,18 @@ fn spawn_tree_felling(
         None => source_material,
     };
 
-    commands.spawn((
+    // Clone the canopy material too, so the falling tree fades its own foliage
+    // without dragging every other tree's shared canopy material along.
+    let canopy = canopy.map(|(canopy_mesh, canopy_source)| {
+        let canopy_material = match materials.get(&canopy_source) {
+            Some(source) => materials.add(source.clone()),
+            None => canopy_source,
+        };
+        (canopy_mesh, canopy_material)
+    });
+    let canopy_material = canopy.as_ref().map(|(_, m)| m.clone());
+
+    let mut felling = commands.spawn((
         Name::new(format!("Felling Tree {node_id}")),
         FellingTree {
             age: 0.0,
@@ -175,6 +193,7 @@ fn spawn_tree_felling(
             initial_rotation: transform.rotation,
             initial_scale: transform.scale,
             material: fade_material.clone(),
+            canopy_material,
             landed_age: None,
             landing_kick_fired: false,
             landing_chips_fired: false,
@@ -184,6 +203,20 @@ fn spawn_tree_felling(
         transform,
         Visibility::Visible,
     ));
+    // The canopy rides as a child at local identity so it falls + fades with the
+    // trunk (the parent's animated transform rotates it about the same base pivot).
+    // It casts shadows like the standing tree's canopy, so the tree's shadow stays
+    // consistent through the fall instead of snapping to a thin trunk-only shadow.
+    if let Some((canopy_mesh, canopy_material)) = canopy {
+        felling.with_children(|parent| {
+            parent.spawn((
+                Mesh3d(canopy_mesh),
+                MeshMaterial3d(canopy_material),
+                Transform::default(),
+                Visibility::Visible,
+            ));
+        });
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -361,6 +394,15 @@ fn apply_fade_out(
         material.alpha_mode = AlphaMode::Blend;
         material.base_color.set_alpha(alpha);
     }
+    // Dissolve the canopy alongside the trunk. It was alpha-masked (Mask) so the
+    // needles/leaves cut crisply during the fall; switch to Blend now so the whole
+    // leafy mass fades smoothly to nothing rather than popping at the cutoff.
+    if let Some(canopy_material) = tree.canopy_material.as_ref()
+        && let Some(material) = materials.get_mut(canopy_material)
+    {
+        material.alpha_mode = AlphaMode::Blend;
+        material.base_color.set_alpha(alpha);
+    }
     if fade_t >= 1.0 {
         commands.entity(entity).despawn();
     }
@@ -478,6 +520,7 @@ mod tests {
             initial_rotation: Quat::IDENTITY,
             initial_scale: Vec3::ONE,
             material: Handle::default(),
+            canopy_material: None,
             landed_age: None,
             landing_kick_fired: false,
             landing_chips_fired: false,
@@ -507,6 +550,7 @@ mod tests {
             initial_rotation: Quat::IDENTITY,
             initial_scale: Vec3::ONE,
             material: Handle::default(),
+            canopy_material: None,
             landed_age: None,
             landing_kick_fired: false,
             landing_chips_fired: false,

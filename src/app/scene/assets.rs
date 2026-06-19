@@ -1,7 +1,12 @@
 use bevy::{
+    asset::RenderAssetUsages,
     audio::SpatialListener,
     core_pipeline::tonemapping::Tonemapping,
     gltf::GltfAssetLabel,
+    image::{
+        CompressedImageFormats, ImageAddressMode, ImageFilterMode, ImageSampler,
+        ImageSamplerDescriptor, ImageType,
+    },
     light::AtmosphereEnvironmentMapLight,
     pbr::{Atmosphere, AtmosphereSettings, ScatteringMedium},
     post_process::dof::{DepthOfField, DepthOfFieldMode},
@@ -10,24 +15,22 @@ use bevy::{
 };
 
 use super::mesh::builder::build_hay_tuft_mesh;
+use super::terrain::build_mip_chain;
 use super::{
     components::MainCamera,
     mesh::{
         COAL_ORE, IRON_ORE, ORE_NODE_STAGE_COUNT, PlayerRigMeshes, STONE_VEIN, SULFUR_ORE,
         build_player_rig_meshes, building_piece_mesh, door_ghost_mesh, door_panel_mesh,
         held_building_plan_mesh, held_hammer_mesh, impact_stone_shard_mesh, impact_wood_chip_mesh,
-        low_poly_bag_mesh, low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_large_mesh,
-        low_poly_birch_tree_medium_lod_mesh, low_poly_birch_tree_medium_mesh,
-        low_poly_birch_tree_small_lod_mesh, low_poly_birch_tree_small_mesh,
-        low_poly_branch_pile_mesh, low_poly_dead_tree_large_mesh, low_poly_dead_tree_medium_mesh,
-        low_poly_dead_tree_small_mesh, low_poly_ore_node_stage_meshes,
-        low_poly_pine_tree_large_lod_mesh, low_poly_pine_tree_large_mesh,
-        low_poly_pine_tree_medium_lod_mesh, low_poly_pine_tree_medium_mesh,
-        low_poly_pine_tree_small_lod_mesh, low_poly_pine_tree_small_mesh,
+        low_poly_bag_mesh, low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_medium_lod_mesh,
+        low_poly_birch_tree_small_lod_mesh, low_poly_branch_pile_mesh,
+        low_poly_ore_node_stage_meshes, low_poly_pine_tree_large_lod_mesh,
+        low_poly_pine_tree_medium_lod_mesh, low_poly_pine_tree_small_lod_mesh,
         low_poly_surface_stone_mesh, sleeping_bag_mesh,
     },
     sky::{initial_distance_fog, setup_sky},
 };
+use crate::app::embedded_assets::embedded_bytes;
 
 use crate::app::{EYE_HEIGHT, PLAYER_VISUAL_CENTER_Y, embedded_asset_path};
 
@@ -113,12 +116,23 @@ pub(crate) struct ResourceVisualAssets {
     pub(crate) iron_node_meshes: [Handle<Mesh>; ORE_NODE_STAGE_COUNT],
     pub(crate) sulfur_node_meshes: [Handle<Mesh>; ORE_NODE_STAGE_COUNT],
     pub(crate) stone_vein_meshes: [Handle<Mesh>; ORE_NODE_STAGE_COUNT],
-    pub(crate) pine_tree_small_mesh: Handle<Mesh>,
-    pub(crate) pine_tree_medium_mesh: Handle<Mesh>,
-    pub(crate) pine_tree_large_mesh: Handle<Mesh>,
-    pub(crate) birch_tree_small_mesh: Handle<Mesh>,
-    pub(crate) birch_tree_medium_mesh: Handle<Mesh>,
-    pub(crate) birch_tree_large_mesh: Handle<Mesh>,
+    /// Full-detail live trees, authored as Blender glbs (`art/trees/*`): each
+    /// loads two primitives, a textured bark TRUNK (opaque, `*_bark_material`)
+    /// and an alpha-masked needle/leaf CANOPY (`*_foliage_material`), spawned as
+    /// trunk parent + foliage child (see `resource_nodes::spawn`). Switched out
+    /// for the cheap `*_lod_mesh` past the LOD distance.
+    pub(crate) pine_tree_small_trunk_mesh: Handle<Mesh>,
+    pub(crate) pine_tree_small_foliage_mesh: Handle<Mesh>,
+    pub(crate) pine_tree_medium_trunk_mesh: Handle<Mesh>,
+    pub(crate) pine_tree_medium_foliage_mesh: Handle<Mesh>,
+    pub(crate) pine_tree_large_trunk_mesh: Handle<Mesh>,
+    pub(crate) pine_tree_large_foliage_mesh: Handle<Mesh>,
+    pub(crate) birch_tree_small_trunk_mesh: Handle<Mesh>,
+    pub(crate) birch_tree_small_foliage_mesh: Handle<Mesh>,
+    pub(crate) birch_tree_medium_trunk_mesh: Handle<Mesh>,
+    pub(crate) birch_tree_medium_foliage_mesh: Handle<Mesh>,
+    pub(crate) birch_tree_large_trunk_mesh: Handle<Mesh>,
+    pub(crate) birch_tree_large_foliage_mesh: Handle<Mesh>,
     /// Low-poly distance LOD variants of the trees, swapped in past the LOD
     /// distance via `VisibilityRange` hard switch (see the resource-node spawn).
     pub(crate) pine_tree_small_lod_mesh: Handle<Mesh>,
@@ -146,6 +160,19 @@ pub(crate) struct ResourceVisualAssets {
     /// grass-tuft texture tinted toward straw so it reads distinct from the
     /// cosmetic detail grass (see [`build_hay_tuft_mesh`]).
     pub(crate) hay_grass_material: Handle<StandardMaterial>,
+    /// Tree bark (opaque, repeat-tiled, mipped) and canopy foliage (alpha-mask
+    /// needle/leaf, double-sided, mipped) materials shared by every instance of
+    /// a species so the forest batches by mesh+material. Built from the embedded
+    /// `textures/trees/*.png` (see `load_tree_texture`). The glb's COLOR_0
+    /// vertex colours tint these base-white materials per canopy layer.
+    pub(crate) pine_bark_material: Handle<StandardMaterial>,
+    pub(crate) pine_foliage_material: Handle<StandardMaterial>,
+    pub(crate) birch_bark_material: Handle<StandardMaterial>,
+    pub(crate) birch_foliage_material: Handle<StandardMaterial>,
+    /// Weathered grey-brown bark for the dead-snag trunks: the pine bark texture
+    /// multiplied by a desaturated cool-grey tint so a leafless tree reads as
+    /// "dead", not just a live trunk without leaves.
+    pub(crate) dead_bark_material: Handle<StandardMaterial>,
 }
 
 #[derive(Resource, Clone)]
@@ -259,6 +286,24 @@ pub(crate) struct ImpactEffectAssets {
     /// shard mesh like the grass burst; the red base colour multiplies through
     /// the shard's vertex colours so the chips read as blood droplets.
     pub(crate) blood_material: Handle<StandardMaterial>,
+}
+
+/// Repeat + anisotropic trilinear sampler for the tree bark/canopy textures, so
+/// bark tiles up the trunk and the needle/leaf texture tiles across the canopy
+/// shells without a visible seam, and stays crisp (not shimmery) at distance.
+/// Mirrors the terrain ground sampler; only meaningful with a mip chain
+/// (`build_mip_chain`), which the tree-texture loader builds.
+fn tree_texture_sampler() -> ImageSamplerDescriptor {
+    ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::Repeat,
+        address_mode_v: ImageAddressMode::Repeat,
+        address_mode_w: ImageAddressMode::Repeat,
+        mag_filter: ImageFilterMode::Linear,
+        min_filter: ImageFilterMode::Linear,
+        mipmap_filter: ImageFilterMode::Linear,
+        anisotropy_clamp: 8,
+        ..default()
+    }
 }
 
 pub(crate) fn setup_scene(
@@ -445,26 +490,78 @@ pub(crate) fn setup_scene(
             ..default()
         }),
     });
+    // Tree textures: bark (opaque, tiles up the trunk) + canopy needle/leaf
+    // (alpha-mask). Decoded synchronously with a CPU mip chain (Bevy 0.18 builds
+    // none for loaded PNGs; without mips the masked canopy aliases into sparkle at
+    // range) and a repeat + anisotropic sampler so bark tiles vertically and the
+    // needles/leaves tile across the cones/blobs. Loaded sRGB so the sampler hands
+    // the shader linear colour; the glb COLOR_0 vertex colours (linear) tint each
+    // canopy layer / the trunk on top. Mirrors `TerrainTextureAssets::load`.
+    let mut load_tree_texture = |name: &str| -> Handle<Image> {
+        let rel = format!("textures/trees/{name}.png");
+        let bytes =
+            embedded_bytes(&rel).unwrap_or_else(|| panic!("embedded tree texture missing: {rel}"));
+        let mut image = Image::from_buffer(
+            bytes,
+            ImageType::Extension("png"),
+            CompressedImageFormats::NONE,
+            true,
+            ImageSampler::Descriptor(tree_texture_sampler()),
+            RenderAssetUsages::RENDER_WORLD,
+        )
+        .unwrap_or_else(|err| panic!("decode tree texture {rel}: {err:?}"));
+        build_mip_chain(&mut image);
+        images.add(image)
+    };
+    let pine_bark_tex = load_tree_texture("bark_pine");
+    let pine_needle_tex = load_tree_texture("needles");
+    let birch_bark_tex = load_tree_texture("bark_birch");
+    let birch_leaf_tex = load_tree_texture("leaves");
+
+    // Each live tree is an authored Blender glb with two meshes: mesh 0 = the
+    // bark trunk, mesh 1 = the canopy. Geometry + UVs + COLOR_0 come from the
+    // model; the materials above carry the textures. Sources: `art/trees/*`.
+    let pine_small_glb = embedded_asset_path("trees/pine_small/model.glb");
+    let pine_medium_glb = embedded_asset_path("trees/pine_medium/model.glb");
+    let pine_large_glb = embedded_asset_path("trees/pine_large/model.glb");
+    let birch_small_glb = embedded_asset_path("trees/birch_small/model.glb");
+    let birch_medium_glb = embedded_asset_path("trees/birch_medium/model.glb");
+    let birch_large_glb = embedded_asset_path("trees/birch_large/model.glb");
+    // Dead snags: a single bark-trunk + bare-branches mesh per size, no canopy.
+    // Tinted weathered grey by `dead_bark_material` below.
+    let dead_small_glb = embedded_asset_path("trees/dead_small/model.glb");
+    let dead_medium_glb = embedded_asset_path("trees/dead_medium/model.glb");
+    let dead_large_glb = embedded_asset_path("trees/dead_large/model.glb");
+    let tree_prim = |glb: &str, mesh: usize| -> Handle<Mesh> {
+        asset_server
+            .load(GltfAssetLabel::Primitive { mesh, primitive: 0 }.from_asset(glb.to_owned()))
+    };
     commands.insert_resource(ResourceVisualAssets {
         coal_node_meshes: low_poly_ore_node_stage_meshes(COAL_ORE).map(|mesh| meshes.add(mesh)),
         iron_node_meshes: low_poly_ore_node_stage_meshes(IRON_ORE).map(|mesh| meshes.add(mesh)),
         sulfur_node_meshes: low_poly_ore_node_stage_meshes(SULFUR_ORE).map(|mesh| meshes.add(mesh)),
         stone_vein_meshes: low_poly_ore_node_stage_meshes(STONE_VEIN).map(|mesh| meshes.add(mesh)),
-        pine_tree_small_mesh: meshes.add(low_poly_pine_tree_small_mesh()),
-        pine_tree_medium_mesh: meshes.add(low_poly_pine_tree_medium_mesh()),
-        pine_tree_large_mesh: meshes.add(low_poly_pine_tree_large_mesh()),
-        birch_tree_small_mesh: meshes.add(low_poly_birch_tree_small_mesh()),
-        birch_tree_medium_mesh: meshes.add(low_poly_birch_tree_medium_mesh()),
-        birch_tree_large_mesh: meshes.add(low_poly_birch_tree_large_mesh()),
+        pine_tree_small_trunk_mesh: tree_prim(&pine_small_glb, 0),
+        pine_tree_small_foliage_mesh: tree_prim(&pine_small_glb, 1),
+        pine_tree_medium_trunk_mesh: tree_prim(&pine_medium_glb, 0),
+        pine_tree_medium_foliage_mesh: tree_prim(&pine_medium_glb, 1),
+        pine_tree_large_trunk_mesh: tree_prim(&pine_large_glb, 0),
+        pine_tree_large_foliage_mesh: tree_prim(&pine_large_glb, 1),
+        birch_tree_small_trunk_mesh: tree_prim(&birch_small_glb, 0),
+        birch_tree_small_foliage_mesh: tree_prim(&birch_small_glb, 1),
+        birch_tree_medium_trunk_mesh: tree_prim(&birch_medium_glb, 0),
+        birch_tree_medium_foliage_mesh: tree_prim(&birch_medium_glb, 1),
+        birch_tree_large_trunk_mesh: tree_prim(&birch_large_glb, 0),
+        birch_tree_large_foliage_mesh: tree_prim(&birch_large_glb, 1),
         pine_tree_small_lod_mesh: meshes.add(low_poly_pine_tree_small_lod_mesh()),
         pine_tree_medium_lod_mesh: meshes.add(low_poly_pine_tree_medium_lod_mesh()),
         pine_tree_large_lod_mesh: meshes.add(low_poly_pine_tree_large_lod_mesh()),
         birch_tree_small_lod_mesh: meshes.add(low_poly_birch_tree_small_lod_mesh()),
         birch_tree_medium_lod_mesh: meshes.add(low_poly_birch_tree_medium_lod_mesh()),
         birch_tree_large_lod_mesh: meshes.add(low_poly_birch_tree_large_lod_mesh()),
-        dead_tree_small_mesh: meshes.add(low_poly_dead_tree_small_mesh()),
-        dead_tree_medium_mesh: meshes.add(low_poly_dead_tree_medium_mesh()),
-        dead_tree_large_mesh: meshes.add(low_poly_dead_tree_large_mesh()),
+        dead_tree_small_mesh: tree_prim(&dead_small_glb, 0),
+        dead_tree_medium_mesh: tree_prim(&dead_medium_glb, 0),
+        dead_tree_large_mesh: tree_prim(&dead_large_glb, 0),
         surface_stone_mesh: meshes.add(low_poly_surface_stone_mesh()),
         branch_pile_mesh: meshes.add(low_poly_branch_pile_mesh()),
         // Bigger crossed tuft of the shared grass-card texture: clearly taller and
@@ -527,6 +624,57 @@ pub(crate) fn setup_scene(
             cull_mode: None,
             perceptual_roughness: 0.95,
             reflectance: 0.04,
+            ..default()
+        }),
+        // Bark: opaque, repeat-tiled mipped texture, matte dry-organic PBR
+        // (materials.md). Base white so the trunk's COLOR_0 (near-white, with a
+        // touch of ground-contact AO on the base ring) reads the bark texture.
+        pine_bark_material: materials.add(StandardMaterial {
+            base_color: VERTEX_MATERIAL_COLOR,
+            base_color_texture: Some(pine_bark_tex.clone()),
+            perceptual_roughness: 0.95,
+            reflectance: 0.12,
+            ..default()
+        }),
+        birch_bark_material: materials.add(StandardMaterial {
+            base_color: VERTEX_MATERIAL_COLOR,
+            base_color_texture: Some(birch_bark_tex),
+            perceptual_roughness: 0.95,
+            reflectance: 0.12,
+            ..default()
+        }),
+        // Canopy: alpha-masked (never blended, so it stays in the cheap opaque
+        // pass at forest scale), double-sided like the hay tuft so needles/leaves
+        // read from both faces, matte. Mask cutoff combines the texture alpha with
+        // the canopy's COLOR_0 alpha (low at the bottom rim) to feather the cone
+        // skirt instead of leaving a hard disc edge. Per-layer COLOR_0 rgb tints
+        // dark (lower) -> light (crown).
+        pine_foliage_material: materials.add(StandardMaterial {
+            base_color: VERTEX_MATERIAL_COLOR,
+            base_color_texture: Some(pine_needle_tex),
+            alpha_mode: AlphaMode::Mask(0.4),
+            cull_mode: None,
+            perceptual_roughness: 0.95,
+            reflectance: 0.12,
+            ..default()
+        }),
+        birch_foliage_material: materials.add(StandardMaterial {
+            base_color: VERTEX_MATERIAL_COLOR,
+            base_color_texture: Some(birch_leaf_tex),
+            alpha_mode: AlphaMode::Mask(0.4),
+            cull_mode: None,
+            perceptual_roughness: 0.95,
+            reflectance: 0.12,
+            ..default()
+        }),
+        // Weathered dead bark: the pine bark texture tinted by a desaturated
+        // cool-grey base colour (multiplied through) so a leafless snag reads grey
+        // and dead rather than like a live trunk. A bit rougher than live bark.
+        dead_bark_material: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.50, 0.49, 0.47),
+            base_color_texture: Some(pine_bark_tex),
+            perceptual_roughness: 0.97,
+            reflectance: 0.10,
             ..default()
         }),
     });

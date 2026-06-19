@@ -23,7 +23,7 @@ mod tests;
 
 pub(crate) use hay_sway::sway_hay_grass_system;
 pub(crate) use pop_in::{resource_node_transform_at, tick_resource_node_pop_in_system};
-pub(crate) use spawn::resource_node_visual;
+pub(crate) use spawn::{resource_node_visual, tree_foliage_visual};
 pub(crate) use stages::apply_resource_node_stage_system;
 
 use spawn::spawn_resource_node_entity;
@@ -255,6 +255,7 @@ pub(crate) fn apply_resource_nodes_system(
             // fires immediately. No grace window needed.
             despawn_with_death_effect(
                 &mut commands,
+                &assets,
                 &impact_assets,
                 &mut play,
                 &mut materials,
@@ -349,6 +350,7 @@ pub(crate) fn apply_resource_nodes_system(
     //    is empty the function returns immediately without iterating.
     let consumed = resolve_pending_depletions(
         &mut commands,
+        &assets,
         &impact_assets,
         &mut play,
         &mut materials,
@@ -366,6 +368,7 @@ pub(crate) fn apply_resource_nodes_system(
     //    full replicated node set.
     reconcile_predicted_pickups(
         &mut commands,
+        &assets,
         &impact_assets,
         &mut play,
         &mut materials,
@@ -404,6 +407,7 @@ fn clear_all_tracked_nodes(commands: &mut Commands, entities: &mut ResourceNodeE
 #[allow(clippy::too_many_arguments)]
 fn despawn_with_death_effect(
     commands: &mut Commands,
+    assets: &ResourceVisualAssets,
     impact_assets: &ImpactEffectAssets,
     play: &mut MessageWriter<PlaySound>,
     materials: &mut Assets<StandardMaterial>,
@@ -417,6 +421,7 @@ fn despawn_with_death_effect(
     };
     fire_node_death_effect(
         commands,
+        assets,
         impact_assets,
         play,
         materials,
@@ -436,6 +441,7 @@ fn despawn_with_death_effect(
 #[allow(clippy::too_many_arguments)]
 fn fire_node_death_effect(
     commands: &mut Commands,
+    assets: &ResourceVisualAssets,
     impact_assets: &ImpactEffectAssets,
     play: &mut MessageWriter<PlaySound>,
     materials: &mut Assets<StandardMaterial>,
@@ -449,6 +455,15 @@ fn fire_node_death_effect(
         // `StandardMaterial`); crude/ore deaths ignore it, so a default handle
         // is fine for the materialless hay-grass node.
         let material = material.map(|m| m.0.clone()).unwrap_or_default();
+        // The node entity carries the trunk mesh; the alpha-masked canopy lives on
+        // a child. Re-derive it from the model so the felling tree falls + fades
+        // with its foliage instead of dropping a bare trunk. `None` for non-trees
+        // and for dead snags (which are bare, so they fell as just the trunk).
+        let canopy = if resource.dead {
+            None
+        } else {
+            tree_foliage_visual(assets, resource.model)
+        };
         crate::app::systems::node_death::spawn_node_death(
             commands,
             impact_assets,
@@ -460,6 +475,7 @@ fn fire_node_death_effect(
             *transform,
             mesh.0.clone(),
             material,
+            canopy,
             player_position,
         );
     }
@@ -472,6 +488,7 @@ fn fire_node_death_effect(
 #[allow(clippy::too_many_arguments)]
 fn resolve_pending_depletions(
     commands: &mut Commands,
+    assets: &ResourceVisualAssets,
     impact_assets: &ImpactEffectAssets,
     play: &mut MessageWriter<PlaySound>,
     materials: &mut Assets<StandardMaterial>,
@@ -496,6 +513,7 @@ fn resolve_pending_depletions(
             consumed.push(id);
             despawn_with_death_effect(
                 commands,
+                assets,
                 impact_assets,
                 play,
                 materials,
@@ -544,6 +562,7 @@ fn resolve_pending_depletions(
 #[allow(clippy::too_many_arguments)]
 fn reconcile_predicted_pickups(
     commands: &mut Commands,
+    assets: &ResourceVisualAssets,
     impact_assets: &ImpactEffectAssets,
     play: &mut MessageWriter<PlaySound>,
     materials: &mut Assets<StandardMaterial>,
@@ -564,6 +583,7 @@ fn reconcile_predicted_pickups(
         };
         fire_node_death_effect(
             commands,
+            assets,
             impact_assets,
             play,
             materials,

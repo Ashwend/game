@@ -79,8 +79,8 @@ pub(crate) use items::{
     DroppedItemEntities, LootBagEntities, ResourceNodeEntities, apply_dropped_items_system,
     apply_held_item_visual_system, apply_loot_bags_system, apply_resource_node_stage_system,
     apply_resource_nodes_system, resource_node_transform_at, resource_node_visual,
-    sway_hay_grass_system, tick_resource_node_pop_in_system, update_pickup_target_system,
-    update_tool_swap_state_system,
+    sway_hay_grass_system, tick_resource_node_pop_in_system, tree_foliage_visual,
+    update_pickup_target_system, update_tool_swap_state_system,
 };
 pub(crate) use network::{
     network_tick_system, session_shutdown_poll_system, surface_client_error_toasts_system,

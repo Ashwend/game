@@ -22,6 +22,10 @@ pub(crate) struct NetworkDroppedItem {
 pub(crate) struct NetworkResourceNode {
     pub(crate) id: ResourceNodeId,
     pub(crate) model: ResourceNodeModel,
+    /// A tree standing where growth is poor renders as a bare dead snag (no
+    /// canopy). Tracked here so the felling effect drops a bare trunk for a dead
+    /// snag instead of sprouting the live canopy the model alone would imply.
+    pub(crate) dead: bool,
 }
 
 /// Marker for a placed structure entity (workbench, furnace, …). The
