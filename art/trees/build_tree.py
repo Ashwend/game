@@ -66,9 +66,23 @@ FOLIAGE_TEX = argv[5] if len(argv) > 5 else ""
 RADIAL = 8                # trunk radial segments
 FOLIAGE_TEXEL = 0.62      # metres per needle/leaf texture tile
 BARK_V_TILE = 2.0         # metres per bark vertical tile
-UP_BIAS = 0.72            # foliage normal lerp toward +Z (up)
+# Foliage normal lerp toward +Z (up). Lower than the old 0.72 so the canopy keeps
+# real light/shadow FORM (top brighter, flanks darker) instead of washing out flat;
+# still high enough that facets facing away from the sun don't go dark-walled.
+UP_BIAS = 0.5
 FEATHER_FZ = 0.16         # fraction of cone height that feathers at the base
 RIM_ALPHA = 0.0           # vertex alpha at the feathered base rim
+# Per-vertex radial jitter (fraction of radius) that breaks the smooth lathe
+# cone / octa blob into a lumpy, clustered foliage mass with a ragged silhouette,
+# so the canopy reads as needle/leaf clumps rather than a textured geometric solid.
+CONE_JITTER = 0.26
+BLOB_JITTER = 0.30
+
+
+def hash01(a, b):
+    """Deterministic pseudo-random in [0,1) from two numbers (no Math.random; the
+    build must be reproducible). Classic frac(sin·k) hash."""
+    return (math.sin(a * 12.9898 + b * 78.233) * 43758.5453) % 1.0
 # The trunk continues up through the canopy as a thin tapering spine to this
 # fraction of the canopy top, so a real conifer/birch reads with a continuous
 # trunk (visible through the foliage gaps) instead of a stub cut off where the
@@ -251,8 +265,16 @@ def add_cone(bm, uv, col, base_z, h, R, segs, tone, xoff, yoff, vnorm):
     base_ring, sh_ring = [], []
     for i in range(segs):
         a = i / segs * math.tau
-        base_ring.append(bm.verts.new((cx + math.cos(a) * R, cy + math.sin(a) * R, z_base)))
-        sh_ring.append(bm.verts.new((cx + math.cos(a) * r_sh, cy + math.sin(a) * r_sh, z_sh)))
+        # Per-segment radial + height jitter so the cone is a lumpy clustered
+        # needle mass with a ragged silhouette, not a smooth lathe surface. Seeded
+        # on (base_z, i) so it's stable. The base ring (silhouette) jitters most.
+        jb = 1.0 + CONE_JITTER * (hash01(base_z * 3.1, i) * 2.0 - 1.0)
+        js = 1.0 + CONE_JITTER * 0.6 * (hash01(base_z * 5.7, i * 1.3) * 2.0 - 1.0)
+        dz = (hash01(base_z * 2.3, i * 2.1) - 0.5) * h * 0.10
+        base_ring.append(bm.verts.new(
+            (cx + math.cos(a) * R * jb, cy + math.sin(a) * R * jb, z_base + dz)))
+        sh_ring.append(bm.verts.new(
+            (cx + math.cos(a) * r_sh * js, cy + math.sin(a) * r_sh * js, z_sh + dz * 0.5)))
     bm.verts.ensure_lookup_table()
     circ = math.tau * R / FOLIAGE_TEXEL
     t = TONE[tone]
@@ -308,13 +330,20 @@ def add_cone(bm, uv, col, base_z, h, R, segs, tone, xoff, yoff, vnorm):
 
 # ---- FOLIAGE: birch leaf blobs (octa, no underside) ---------------------------
 def add_blob(bm, uv, col, cx, cy, cz, sx, sy, sz, tone, jitter, vnorm):
-    top = bm.verts.new((cx, cy, cz + sz))
+    top = bm.verts.new((cx, cy, cz + sz * (1.0 + BLOB_JITTER * (hash01(cx * 9.1, cz) - 0.5))))
     bottom = bm.verts.new((cx, cy, cz - sz * 0.82))
     ring_def = [(0.95, 0.04, 0.0), (0.42, -0.05, 0.72), (-0.24, 0.12, 0.88),
                 (-0.90, -0.08, 0.14), (-0.46, 0.02, -0.78), (0.38, -0.10, -0.82)]
     ring = []
-    for (dx, dz, dy) in ring_def:
-        ring.append(bm.verts.new((cx + sx * dx, cy + sy * dy, cz + sz * dz)))
+    for ri, (dx, dz, dy) in enumerate(ring_def):
+        # Push each ring vertex in/out + up/down by a seeded amount so the crown is
+        # a lumpy cluster of leaf clumps with a ragged silhouette, not a smooth octa
+        # blob reading as a textured solid.
+        jx = 1.0 + BLOB_JITTER * (hash01(cx * 7.3 + ri, cz * 4.1) * 2.0 - 1.0)
+        jy = 1.0 + BLOB_JITTER * (hash01(cy * 6.7 + ri, cz * 3.3) * 2.0 - 1.0)
+        jz = BLOB_JITTER * 0.5 * (hash01(cz * 5.9 + ri, cx * 2.7) * 2.0 - 1.0)
+        ring.append(bm.verts.new(
+            (cx + sx * dx * jx, cy + sy * dy * jy, cz + sz * (dz + jz))))
     bm.verts.ensure_lookup_table()
     t = TONE[tone]
     tb = t * 0.82            # underside a touch darker for depth

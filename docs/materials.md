@@ -137,10 +137,17 @@ mesh + material pair and the forest batches. Conventions that matter:
 - **Bark = opaque**, default back-face cull. **Canopy = `AlphaMode::Mask(0.4)`**
   (never `Blend`, which would sort + overdraw at forest scale) and
   `cull_mode: None` so needles/leaves read from both faces, like the hay tuft.
-- **Up-biased canopy normals.** The glb bakes per-vertex normals lerped ~0.7
-  toward +Y so the canopy lights soft from the sky instead of going dark-walled
-  when a facet faces away from the sun, the single most important call for
-  foliage. Set in the Blender script, not in Rust.
+- **Up-biased canopy normals (`UP_BIAS = 0.5`).** The glb bakes per-vertex normals
+  lerped halfway toward +Y so the canopy lights soft from the sky without going
+  dark-walled, but still keeps real light/shadow FORM (top brighter, flanks
+  darker). An earlier 0.72 washed the form out flat; pure facet normals dark-wall.
+  Set in the Blender script, not in Rust.
+- **Clumped canopy surfaces (`CONE_JITTER` / `BLOB_JITTER`).** Each cone ring and
+  octa-blob vertex is pushed in/out + up/down by a seeded `hash01`, so the canopy
+  is a lumpy cluster of needle/leaf clumps with a ragged silhouette instead of a
+  smooth lathe surface reading as a textured geometric solid. Birch leaves also
+  run more transparent (~64% opaque, vs pine needles ~88%) so the deciduous crown
+  reads as see-through layered foliage rather than a flat "jpeg" blob.
 - **Vertex colours stay linear, textures load sRGB.** The materials are base-white;
   the glb COLOR_0 tints per canopy layer (dark lower → light crown) and adds the
   trunk's base-ring ground-contact AO. Don't double-correct.
@@ -154,8 +161,8 @@ mesh + material pair and the forest batches. Conventions that matter:
   up over ~16% of the cone height, so `Mask` cuts a soft ragged skirt, not a hard
   "party-hat" disc), and each cone has a **soft bottom cap** (opaque centre fading
   to the alpha-0 rim) so the canopy isn't a see-through hollow shell from below /
-  during felling. Birch blobs are full octahedra (kept underside, up-biased) so
-  the crown reads as a solid leafy volume.
+  during felling. Birch blobs are full octahedra (kept underside, up-biased,
+  jittered) so the crown reads as a leafy volume.
 - **Shadows:** the trunk and the canopy cast (a forest floor stays shaded up
   close, and the felling tree keeps its full shadow through the fall); only the
   distant low-poly LOD child is `NotShadowCaster`, so trees past `TREE_LOD_DISTANCE`
