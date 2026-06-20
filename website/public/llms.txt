@@ -1,0 +1,45 @@
+# Ashwend
+
+> Ashwend is a multiplayer open-world survival game. Drop into a procedurally generated world to gather, craft, build, and raid. It is in an early, free playtest for Windows, macOS, and Linux.
+
+Ashwend is a first-person multiplayer survival sandbox. You spawn into a procedurally generated world, gather resources, craft tools, smelt ore, raise and lock down a base, and contend with the other players sharing the map. Both singleplayer and multiplayer run the same authoritative game server (local or dedicated).
+
+There is no account flow on the website: players download a build and create their account inside the desktop game on first launch. The website only links out to the downloads (GitHub Releases), the source repository, and the Discord.
+
+The canonical site is https://www.ashwend.com.
+
+## The current build
+
+The game is early and openly described as such on the site. The core loop is genuinely playable: gather resources, craft a set of tools, smelt ore in a furnace, raise a base, and lock it down with a tool cupboard. It is still early, so a determined evening or two will reach the current content ceiling. The build is patched roughly weekly, and the playtest is how it improves. It is free to play while in playtest.
+
+## Download
+
+The downloads always point at the newest GitHub release, so they never need bumping per release.
+
+- [All releases and patch notes](https://github.com/Ashwend/game/releases): every build with its changelog.
+- [Windows (x86-64)](https://github.com/Ashwend/game/releases/latest/download/ashwend-x86_64-pc-windows-msvc.zip)
+- [macOS (Apple Silicon)](https://github.com/Ashwend/game/releases/latest/download/ashwend-aarch64-apple-darwin.zip)
+- [Linux (x86-64)](https://github.com/Ashwend/game/releases/latest/download/ashwend-x86_64-unknown-linux-gnu.tar.gz)
+- [Linux (ARM64)](https://github.com/Ashwend/game/releases/latest/download/ashwend-aarch64-unknown-linux-gnu.tar.gz)
+
+macOS one-line install (no Gatekeeper prompt, since the download is via curl rather than a browser):
+
+```
+curl -fsSL https://www.ashwend.com/install.sh | sh
+```
+
+## Community and source
+
+- [Discord](https://discord.gg/gVqTumNb8b): playtest community and patch announcements.
+- [Source on GitHub](https://github.com/Ashwend/game): source-available under PolyForm Strict 1.0.0. The name and logo are trademarks, not covered by the code license.
+
+## Screenshots
+
+In-engine captures from the current build:
+
+- Mining stone with a pickaxe, a timber base on the horizon.
+- Dawn mist burning off the open plains.
+- Lone pines standing in the morning fog.
+- A lit furnace smelting ore beside a workbench.
+- A torch-lit timber cabin holding back the night.
+- The inventory and crafting menu, mid-session.

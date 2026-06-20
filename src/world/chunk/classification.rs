@@ -361,7 +361,8 @@ mod tests {
             }
             worst_green = worst_green.min(100.0 * seed_green as f32 / seed_total as f32);
         }
-        let pct = |c: ChunkClassification| 100.0 * *counts.get(&c).unwrap_or(&0) as f32 / total as f32;
+        let pct =
+            |c: ChunkClassification| 100.0 * *counts.get(&c).unwrap_or(&0) as f32 / total as f32;
         let (forest, plains, mixed, rocky, ore) = (
             pct(ChunkClassification::Forest),
             pct(ChunkClassification::Plains),
@@ -374,9 +375,15 @@ mod tests {
         );
         let green = forest + plains + mixed;
         // Green leads clearly on average...
-        assert!(green > 60.0, "green biomes should dominate, got {green:.1}%");
+        assert!(
+            green > 60.0,
+            "green biomes should dominate, got {green:.1}%"
+        );
         // ...and even the unluckiest seed isn't a barren wasteland.
-        assert!(worst_green > 50.0, "worst seed should still be majority green, got {worst_green:.1}%");
+        assert!(
+            worst_green > 50.0,
+            "worst seed should still be majority green, got {worst_green:.1}%"
+        );
         // But rock and ore stay reachable for progression.
         assert!(ore > 8.0, "ore must stay reachable, got {ore:.1}%");
         assert!(rocky > 8.0, "rock must stay reachable, got {rocky:.1}%");

@@ -17,11 +17,15 @@ const structuredData = {
   genre: ['Survival', 'Open World', 'Multiplayer'],
   gamePlatform: ['PC'],
   operatingSystem: 'Windows, macOS, Linux',
-  applicationCategory: 'Game',
-  author: { '@type': 'Organization', name: 'Ashwend' },
+  applicationCategory: 'GameApplication',
+  sameAs: [siteConfig.discordInviteUrl, siteConfig.githubRepoUrl],
+  author: {
+    '@type': 'Organization',
+    name: 'Ashwend',
+    url: siteConfig.siteUrl,
+  },
   offers: {
     '@type': 'Offer',
-    category: 'Playtest',
     price: '0',
     priceCurrency: 'USD',
     availability: 'https://schema.org/LimitedAvailability',
@@ -58,6 +62,13 @@ export const Route = createRootRoute({
     ],
     links: [
       { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' },
+      {
+        rel: 'icon',
+        href: '/favicon.ico',
+        sizes: '32x32',
+        type: 'image/x-icon',
+      },
+      { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' },
       { rel: 'canonical', href: siteConfig.siteUrl },
       {
         rel: 'preload',

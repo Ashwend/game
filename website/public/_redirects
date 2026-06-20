@@ -1,3 +1,9 @@
-# Cloudflare Pages SPA fallback: serve the prerendered shell for any path so the
-# client router always resolves.
-/*  /index.html  200
+# Apex -> canonical www host. Also enforced at the Cloudflare DNS level; keeping
+# it here documents the intent and covers Pages preview domains.
+https://ashwend.com/*  https://www.ashwend.com/:splat  301
+
+# No SPA catch-all on purpose: the site is a single prerendered page, so an
+# unknown path should fall through to Cloudflare Pages' 404 handling (the
+# branded public/404.html) and return a real 404, not rewrite to the homepage
+# with a 200 (which turns every bad URL into a soft 404 that search engines
+# index as duplicate content).

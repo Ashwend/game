@@ -321,10 +321,14 @@ fn deployable_set_fingerprint_tracks_door_open_state() {
 #[test]
 fn only_ground_footprints_displace_grass() {
     use crate::building::{BuildingPiece, BuildingTier};
-    let building =
-        |piece| DeployableKind::Building { piece, tier: BuildingTier::Sticks };
+    let building = |piece| DeployableKind::Building {
+        piece,
+        tier: BuildingTier::Sticks,
+    };
     // The foundation slab rests in the grass.
-    assert!(deployable_displaces_grass(building(BuildingPiece::Foundation)));
+    assert!(deployable_displaces_grass(building(
+        BuildingPiece::Foundation
+    )));
     // Every other building piece is elevated or vertical: no grass carve.
     for piece in [
         BuildingPiece::Wall,

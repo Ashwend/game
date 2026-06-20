@@ -566,9 +566,9 @@ fn handle_request(
                 .session
                 .as_mut()
                 .context("no active session (not in a world)")?;
-            session.send(ClientMessage::Door(
-                crate::protocol::DoorCommand::PickUp { id: door },
-            ))?;
+            session.send(ClientMessage::Door(crate::protocol::DoorCommand::PickUp {
+                id: door,
+            }))?;
             Ok(format!("door pickup queued for {door}"))
         }
         ControlRequest::OpenStorageBox => {

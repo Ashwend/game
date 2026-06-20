@@ -1,7 +1,7 @@
 import { ChevronDown } from 'lucide-react'
 import { siteConfig } from '#/lib/config'
 import { HERO_META } from '#/data/content'
-import { buttonClasses } from './ui'
+import { buttonClasses, eyebrow } from './ui'
 import { DiscordIcon } from './icons'
 import { Picture } from './Picture'
 
@@ -26,11 +26,14 @@ export function Hero() {
       </div>
 
       <div className="relative mx-auto w-full max-w-6xl px-5 pt-24 pb-28 sm:px-8">
-        <p className="mb-5 text-xs font-medium uppercase tracking-[0.22em] text-ember-300">
+        <p className={`mb-5 ${eyebrow}`}>
           Survival sandbox · in active development
         </p>
 
-        <h1 className="wordmark bg-gradient-to-b from-[#f6eedd] to-ember-300 bg-clip-text text-[3.25rem] leading-none text-transparent drop-shadow-sm sm:text-7xl lg:text-[8.5rem]">
+        {/* Fluid display size: clamps from 3.25rem on phones up to 8.5rem on
+            wide desktops, scaling smoothly through the tablet range instead of
+            jumping at a single breakpoint. */}
+        <h1 className="wordmark bg-gradient-to-b from-[#f6eedd] to-ember-300 bg-clip-text text-[clamp(3.25rem,1rem+9vw,8.5rem)] leading-none text-transparent drop-shadow-sm">
           Ashwend
         </h1>
 
@@ -82,7 +85,7 @@ export function Hero() {
       <a
         href="#playtest"
         aria-label="Scroll to the playtest sign-up"
-        className="absolute inset-x-0 bottom-6 mx-auto hidden w-fit animate-bounce text-muted/70 transition-colors hover:text-fg sm:flex"
+        className="absolute inset-x-0 bottom-6 mx-auto hidden w-fit animate-bounce text-muted transition-colors hover:text-fg sm:flex"
       >
         <ChevronDown className="size-6" />
       </a>

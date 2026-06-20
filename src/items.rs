@@ -1235,7 +1235,12 @@ mod tests {
         // The whole point of the iron door: no tool can scratch metal, so a
         // stone base with iron doors is tool-proof and only explosives (a
         // future, separate damage path) breach it.
-        for tool in [ToolKind::Axe, ToolKind::Pickaxe, ToolKind::Hammer, ToolKind::Hands] {
+        for tool in [
+            ToolKind::Axe,
+            ToolKind::Pickaxe,
+            ToolKind::Hammer,
+            ToolKind::Hands,
+        ] {
             assert_eq!(
                 tool_effectiveness_pct(tool, DestructibleMaterial::MetalBuilding),
                 0,

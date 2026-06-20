@@ -217,8 +217,10 @@ pub(crate) fn wheel_menu_system(
         // pick-up wheel. Routed through the hold timer (not the plain-E
         // path in `inventory_shortcuts`) so a hold never also fires the
         // open toggle.
-        if matches!(pickup_target.deployable_kind, Some(DeployableKind::Door { .. }))
-            && let Some(id) = pickup_target.deployable_id
+        if matches!(
+            pickup_target.deployable_kind,
+            Some(DeployableKind::Door { .. })
+        ) && let Some(id) = pickup_target.deployable_id
         {
             wheel.pickup_hold = Some(PickupHold {
                 id,
@@ -264,7 +266,10 @@ pub(crate) fn wheel_menu_system(
         return;
     }
     if placement.item_id.is_none()
-        && matches!(pickup_target.deployable_kind, Some(DeployableKind::Door { .. }))
+        && matches!(
+            pickup_target.deployable_kind,
+            Some(DeployableKind::Door { .. })
+        )
         && let Some(door_id) = pickup_target.deployable_id
     {
         wheel.active = Some(ActiveWheel {
@@ -370,7 +375,12 @@ fn hammer_wheel(
         });
     }
     // Demolish: only while the piece is still within its demolish window.
-    if demolishable && matches!(kind, DeployableKind::Building { .. } | DeployableKind::Door { .. }) {
+    if demolishable
+        && matches!(
+            kind,
+            DeployableKind::Building { .. } | DeployableKind::Door { .. }
+        )
+    {
         options.push(WheelOption {
             label: "Demolish".to_owned(),
             detail: None,

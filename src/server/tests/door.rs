@@ -527,7 +527,10 @@ fn picking_up_a_door_without_the_code_is_rejected() {
     let id = door_id(&server).expect("door hangs");
     // No EnterCode: the placer hasn't proven the code, so pickup is denied.
     server.receive(client_id, ClientMessage::Door(DoorCommand::PickUp { id }));
-    assert!(door_id(&server).is_some(), "the door stays without the code");
+    assert!(
+        door_id(&server).is_some(),
+        "the door stays without the code"
+    );
     assert_eq!(count(&server, client_id, HEWN_LOG_DOOR_ID), 0);
 }
 
@@ -550,12 +553,8 @@ fn anyone_who_knows_the_code_can_pick_up_an_unclaimed_door() {
     let id = door_id(&server).expect("door hangs");
 
     let other = connect_other(&mut server, 2, "Other");
-    server
-        .clients
-        .get_mut(&other)
-        .unwrap()
-        .controller
-        .position = server.deployed_entities[&id].position;
+    server.clients.get_mut(&other).unwrap().controller.position =
+        server.deployed_entities[&id].position;
     server.receive(
         other,
         ClientMessage::Door(DoorCommand::EnterCode {

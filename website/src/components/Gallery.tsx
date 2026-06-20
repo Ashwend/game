@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { GALLERY } from '#/data/content'
 import type { Shot } from '#/data/content'
 import { Picture } from './Picture'
+import { eyebrow } from './ui'
 
 export function Gallery() {
   const [active, setActive] = useState<number | null>(null)
@@ -17,12 +18,10 @@ export function Gallery() {
   )
 
   return (
-    <section id="gallery" className="scroll-mt-16 border-t border-white/5">
+    <section id="gallery" className="scroll-mt-24 border-t border-white/5">
       <div className="mx-auto max-w-6xl px-5 py-24 sm:px-8 sm:py-28">
         <div className="max-w-2xl">
-          <p className="text-xs font-medium uppercase tracking-[0.22em] text-ember-300">
-            Screens
-          </p>
+          <p className={eyebrow}>Screens</p>
           <h2 className="mt-3 text-3xl font-semibold tracking-tight text-fg sm:text-4xl">
             From the build
           </h2>
@@ -39,7 +38,7 @@ export function Gallery() {
               type="button"
               onClick={() => setActive(i)}
               aria-label={`Open screenshot: ${shot.alt}`}
-              className="group relative block aspect-[16/9] cursor-zoom-in overflow-hidden rounded-2xl border border-white/8 bg-ink-850"
+              className="group relative block aspect-[16/9] cursor-zoom-in overflow-hidden rounded-2xl border border-white/10 bg-ink-850"
             >
               <Picture
                 src={shot.src}
@@ -145,7 +144,7 @@ function Lightbox({ index, onClose, onPrev, onNext }: LightboxProps) {
       ref={rootRef}
       role="dialog"
       aria-modal="true"
-      aria-label={shot.alt}
+      aria-label="Screenshot viewer"
       onClick={requestClose}
       className={`fixed inset-0 z-[100] flex items-center justify-center bg-ink-950/90 p-4 backdrop-blur-sm transition-opacity duration-200 ease-out sm:p-8 ${
         shown ? 'opacity-100' : 'opacity-0'
@@ -179,7 +178,7 @@ function Lightbox({ index, onClose, onPrev, onNext }: LightboxProps) {
         />
         <figcaption className="mt-3 text-center text-sm text-muted">
           {shot.alt}
-          <span className="text-muted/60">
+          <span className="text-muted/80">
             {' '}
             · {index + 1} / {GALLERY.length}
           </span>

@@ -3,7 +3,7 @@
 /* ─── Brand design tokens ──────────────────────────────────────────────────
    Palette is pulled from the in-game UI theme (cool ink panels + the #5ca2ff
    accent) and warmed with an ember ramp that ties to the name "Ashwend" and
-   the dusk hero. */
+   the hero image. */
 @theme {
   --font-display: 'Cinzel', ui-serif, Georgia, 'Times New Roman', serif;
   --font-sans:

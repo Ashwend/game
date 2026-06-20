@@ -3,6 +3,15 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   X-Frame-Options: DENY
+  Strict-Transport-Security: max-age=63072000; includeSubDomains
+  Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()
+  # Static, prerendered, no user input and no third-party resources: every
+  # script/style/font/image is same-origin. 'unsafe-inline' is required because
+  # TanStack Start emits an inline hydration bootstrap whose body changes every
+  # build (timestamps), and static hosting can't mint per-response nonces; the
+  # inline <style> in 404.html needs it too. Discord/GitHub are <a> navigations,
+  # not fetched resources, so they don't need an allow-list entry.
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; upgrade-insecure-requests
 
 /fonts/*
   Cache-Control: public, max-age=31536000, immutable

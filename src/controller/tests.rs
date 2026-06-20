@@ -61,13 +61,22 @@ fn speed_multiplier_scales_movement_and_defaults_to_normal() {
     let forward = Vec3Net::new(0.0, 0.0, 1.0);
     // The default 1.0 multiplier leaves the tuned run speed untouched.
     let normal = horizontal_length(desired_horizontal_velocity(forward, 0.0, true, 1.0));
-    assert!((normal - RUN_SPEED).abs() < 1e-3, "1.0 must equal RUN_SPEED, got {normal}");
+    assert!(
+        (normal - RUN_SPEED).abs() < 1e-3,
+        "1.0 must equal RUN_SPEED, got {normal}"
+    );
     // The admin `/speed` cheat scales it linearly: 2x is twice as fast.
     let doubled = horizontal_length(desired_horizontal_velocity(forward, 0.0, true, 2.0));
-    assert!((doubled - 2.0 * RUN_SPEED).abs() < 1e-3, "2.0 must double it, got {doubled}");
+    assert!(
+        (doubled - 2.0 * RUN_SPEED).abs() < 1e-3,
+        "2.0 must double it, got {doubled}"
+    );
     // A walk (no run) also scales.
     let walk = horizontal_length(desired_horizontal_velocity(forward, 0.0, false, 3.0));
-    assert!((walk - 3.0 * WALK_SPEED).abs() < 1e-3, "walk should scale too, got {walk}");
+    assert!(
+        (walk - 3.0 * WALK_SPEED).abs() < 1e-3,
+        "walk should scale too, got {walk}"
+    );
 }
 
 /// Rotate a horizontal vector by `radians` about the vertical axis. Test

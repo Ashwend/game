@@ -77,39 +77,32 @@ export const HERO_META: ReadonlyArray<string> = [
 ]
 
 // Ordered so the first row mixes light levels: the dark night shots read as
-// near-black rectangles at thumbnail size, so they don't get to lead.
+// near-black rectangles at thumbnail size, so they don't get to lead. The
+// brighter daylight and open-plains shots take the top row; the night cabin
+// and the dimmer UI capture sit in the second.
 export const GALLERY: ReadonlyArray<Shot> = [
   {
-    src: '/img/dusk.jpg',
-    alt: 'Golden dusk settling over the misty plains',
+    src: '/img/gathering.jpg',
+    alt: 'Mining stone with a pickaxe, a timber base on the horizon',
+  },
+  {
+    src: '/img/dawn-plains.jpg',
+    alt: 'Dawn mist burning off the open plains',
+  },
+  {
+    src: '/img/pine-mist.jpg',
+    alt: 'Lone pines standing in the morning fog',
   },
   {
     src: '/img/furnace-lit.jpg',
-    alt: 'A lit furnace glowing beside a workbench under a night sky',
+    alt: 'A lit furnace smelting ore beside a workbench',
   },
   {
-    src: '/img/sun-vista.jpg',
-    alt: 'Clear midday light across the green plains, a base in the distance',
+    src: '/img/cabin-night.jpg',
+    alt: 'A torch-lit timber cabin holding back the night',
   },
   {
-    src: '/img/deploy.jpg',
-    alt: 'Placing a workbench, previewed as a green build outline',
+    src: '/img/inventory.jpg',
+    alt: 'The inventory and crafting menu, mid-session',
   },
-  {
-    src: '/img/furnace-ui.jpg',
-    alt: 'Smelting ore down into ingots in the furnace interface',
-  },
-  {
-    src: '/img/workbench.jpg',
-    alt: 'A stone hatchet in hand beside a fire-lit camp at night',
-  },
-]
-
-export const ROADMAP: ReadonlyArray<string> = [
-  'Real terrain: elevation, no more flat world',
-  'Water and shorelines shaping an island map',
-  'Higher-tier tools and weapons',
-  'Proper base building and raiding',
-  'A tutorial for new players',
-  'A Steam release',
 ]

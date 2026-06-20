@@ -1,7 +1,7 @@
 #!/bin/sh
 # Ashwend macOS installer.
 #
-#   curl -fsSL https://ashwend.game/install.sh | sh
+#   curl -fsSL https://www.ashwend.com/install.sh | sh
 #
 # Downloads the latest macOS build and installs it to /Applications. Because the
 # download happens via curl (not a browser), macOS does NOT attach the

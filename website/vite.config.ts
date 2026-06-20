@@ -5,7 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
 
 // The site is fully static: every route is prerendered to HTML at build time
 // and served as plain files (Cloudflare Pages). No server runtime is needed at
-// request time; the deployable output lives in `.output/public`.
+// request time; the deployable output lives in `dist/client`.
 const config = defineConfig({
   resolve: { tsconfigPaths: true },
   plugins: [

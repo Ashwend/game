@@ -24,12 +24,6 @@ export function Header() {
             Screens
           </a>
           <a
-            href="#roadmap"
-            className="hidden text-sm text-muted transition-colors hover:text-fg sm:block"
-          >
-            Roadmap
-          </a>
-          <a
             href={siteConfig.discordInviteUrl}
             target="_blank"
             rel="noreferrer"

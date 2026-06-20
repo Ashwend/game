@@ -101,7 +101,10 @@ pub fn chunk_kind_target(
             _ => {}
         }
     }
-    kind_target(base_capacity(classification, kind), channels.channel_for(kind))
+    kind_target(
+        base_capacity(classification, kind),
+        channels.channel_for(kind),
+    )
 }
 
 /// One node placement decided by the generator. Carries the kind so the
@@ -351,7 +354,8 @@ mod tests {
                     match c {
                         ChunkClassification::Forest => {
                             forest += 1;
-                            forest_iron += u32::from(chunk_kind_target(c, ch, NodeKind::IronOre) > 0);
+                            forest_iron +=
+                                u32::from(chunk_kind_target(c, ch, NodeKind::IronOre) > 0);
                             forest_vein +=
                                 u32::from(chunk_kind_target(c, ch, NodeKind::StoneVein) > 0);
                         }
@@ -376,10 +380,19 @@ mod tests {
             "forest iron should be a lucky minority, got {iron_pct:.1}%"
         );
         // Stone veins turn up "now and again", a bit more often than iron.
-        assert!(vein_pct > iron_pct, "veins should beat iron: {vein_pct:.1} vs {iron_pct:.1}");
-        assert!(vein_pct < 55.0, "veins still a minority, got {vein_pct:.1}%");
+        assert!(
+            vein_pct > iron_pct,
+            "veins should beat iron: {vein_pct:.1} vs {iron_pct:.1}"
+        );
+        assert!(
+            vein_pct < 55.0,
+            "veins still a minority, got {vein_pct:.1}%"
+        );
         // The high-risk barren biomes keep the rich iron (much more than forest).
-        assert!(barren_iron_avg > 2.0, "barren must out-yield forest iron, got {barren_iron_avg:.2}");
+        assert!(
+            barren_iron_avg > 2.0,
+            "barren must out-yield forest iron, got {barren_iron_avg:.2}"
+        );
     }
 
     #[test]

@@ -16,7 +16,8 @@ use crate::{
 };
 
 use super::{
-    DeliveryTarget, GameServer, ServerEnvelope, deployables::DeployedEntity,
+    DeliveryTarget, GameServer, ServerEnvelope,
+    deployables::DeployedEntity,
     inventory::{add_stack_to_inventory, take_items_from_inventory},
 };
 

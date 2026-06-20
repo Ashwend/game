@@ -21,8 +21,8 @@ use super::{
     mesh::{
         COAL_ORE, IRON_ORE, ORE_NODE_STAGE_COUNT, PlayerRigMeshes, STONE_VEIN, SULFUR_ORE,
         build_player_rig_meshes, door_ghost_mesh, held_building_plan_mesh, held_hammer_mesh,
-        impact_stone_shard_mesh, impact_wood_chip_mesh,
-        low_poly_bag_mesh, low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_medium_lod_mesh,
+        impact_stone_shard_mesh, impact_wood_chip_mesh, low_poly_bag_mesh,
+        low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_medium_lod_mesh,
         low_poly_birch_tree_small_lod_mesh, low_poly_branch_pile_mesh,
         low_poly_ore_node_stage_meshes, low_poly_pine_tree_large_lod_mesh,
         low_poly_pine_tree_medium_lod_mesh, low_poly_pine_tree_small_lod_mesh,
@@ -777,8 +777,11 @@ pub(crate) fn setup_scene(
             crate::building::BuildingTier::Stone,
         ]
         .map(|tier| {
-            let glb =
-                embedded_asset_path(&format!("building/{}_{}.glb", piece_name(piece), tier_name(tier)));
+            let glb = embedded_asset_path(&format!(
+                "building/{}_{}.glb",
+                piece_name(piece),
+                tier_name(tier)
+            ));
             prim_mesh(&glb, 0)
         })
     });

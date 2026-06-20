@@ -32,3 +32,9 @@ export function buttonClasses(
 ): string {
   return `${BASE} ${VARIANTS[variant]} ${SIZES[size]}`
 }
+
+// Shared "eyebrow" kicker: the small uppercase ember label above each section
+// heading. Kept in one place so the sections (and the playtest pill, which adds
+// its own pill chrome) use one identical letter-spacing and ember shade.
+export const eyebrow =
+  'text-xs font-medium uppercase tracking-[0.22em] text-ember-300'

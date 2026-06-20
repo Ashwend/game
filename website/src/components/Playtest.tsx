@@ -17,11 +17,11 @@ export function Playtest() {
   return (
     <section
       id="playtest"
-      className="relative scroll-mt-16 overflow-hidden bg-ink-900"
+      className="relative scroll-mt-24 overflow-hidden bg-ink-900"
     >
       <div className="absolute inset-0 bg-[radial-gradient(60%_50%_at_50%_0%,rgba(224,132,51,0.14),transparent_70%)]" />
       <div className="relative mx-auto max-w-2xl px-5 py-24 text-center sm:px-8 sm:py-32">
-        <span className="inline-flex items-center gap-2 rounded-full border border-ember-500/30 bg-ember-500/10 px-3 py-1 text-xs font-medium uppercase tracking-wider text-ember-200">
+        <span className="inline-flex items-center gap-2 rounded-full border border-ember-500/30 bg-ember-500/10 px-3 py-1 text-xs font-medium uppercase tracking-[0.22em] text-ember-300">
           <span className="relative flex size-2">
             <span className="absolute inline-flex size-full animate-ping rounded-full bg-ember-400/70" />
             <span className="relative inline-flex size-2 rounded-full bg-ember-400" />

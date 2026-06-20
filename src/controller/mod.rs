@@ -267,8 +267,12 @@ impl PlayerController {
             self.velocity =
                 approach_horizontal(self.velocity, target_velocity, delta_seconds, accelerating);
         } else {
-            self.velocity =
-                accelerate_air(self.velocity, target_velocity, delta_seconds, self.speed_multiplier);
+            self.velocity = accelerate_air(
+                self.velocity,
+                target_velocity,
+                delta_seconds,
+                self.speed_multiplier,
+            );
         }
 
         let x_delta = self.velocity.x * delta_seconds;
