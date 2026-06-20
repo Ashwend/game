@@ -127,9 +127,19 @@ pub(super) fn text_prompt_ui(
             if prompt_spec.numeric {
                 input.retain(|c| c.is_ascii_digit());
             }
+            // Keep re-requesting focus until it actually lands, rather than
+            // once. The door set-code prompt opens on the placement
+            // LEFT-CLICK; that click's release arrives a frame later and,
+            // landing outside the field, egui defocuses the freshly-focused
+            // field, leaving it visible but "dead" to typing. Re-asserting
+            // focus until `has_focus()` sticks makes the digits-only field
+            // reliably typable. Key-opened prompts (chat) never hit this,
+            // which is why only the door prompt showed the bug.
             if autofocus {
                 response.request_focus();
-                autofocus = false;
+                if response.has_focus() {
+                    autofocus = false;
+                }
             }
             ui.add_space(12.0);
 
@@ -178,13 +188,16 @@ pub(super) fn text_prompt_ui(
         return;
     }
     let message = match prompt.kind {
-        TextPromptKind::DoorSetCode { doorway_id, flip } => {
-            ClientMessage::Door(DoorCommand::Place {
-                doorway_id,
-                flip,
-                code: prompt.input,
-            })
-        }
+        TextPromptKind::DoorSetCode {
+            doorway_id,
+            variant,
+            flip,
+        } => ClientMessage::Door(DoorCommand::Place {
+            doorway_id,
+            variant,
+            flip,
+            code: prompt.input,
+        }),
         TextPromptKind::DoorEnterCode { door_id } => ClientMessage::Door(DoorCommand::EnterCode {
             id: door_id,
             code: prompt.input,

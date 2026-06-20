@@ -105,8 +105,9 @@ enum AdminCommand {
     /// hour (`/admin time 18` for 6 pm).
     Time { time: String },
     /// Set the day/night cycle speed multiplier. `1.0` is the default
-    /// (one cycle per 30 real minutes). `0` pauses the cycle.
-    Speed { multiplier: f32 },
+    /// (one cycle per 30 real minutes). `0` pauses the cycle. (Renamed from
+    /// `speed`, which in-game now means the player run-speed cheat.)
+    TimeSpeed { multiplier: f32 },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -330,7 +331,7 @@ fn run_admin_command(socket: PathBuf, command: AdminCommand) -> Result<()> {
             };
             net::DedicatedAdminRequest::SetTime { seconds_of_day }
         }
-        AdminCommand::Speed { multiplier } => {
+        AdminCommand::TimeSpeed { multiplier } => {
             net::DedicatedAdminRequest::SetTimeMultiplier { multiplier }
         }
     };

@@ -218,7 +218,7 @@ fn kind_label(kind: DeployableKind) -> String {
         DeployableKind::Building { piece, tier } => {
             format!("{} ({})", piece.label(), tier.label())
         }
-        DeployableKind::Door
+        DeployableKind::Door { .. }
         | DeployableKind::SleepingBag
         | DeployableKind::StorageBox { .. }
         | DeployableKind::Torch { .. }

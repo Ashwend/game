@@ -91,7 +91,7 @@ fn foundation_placement_consumes_sticks_and_spawns_at_sticks_tier() {
         client_id,
         BuildingPiece::Foundation,
         Vec3Net::new(2.0, 0.0, 0.0),
-        0.3, // a free foundation keeps the requested (player-facing) yaw
+        0.3, // arbitrary player-facing yaw; the server snaps it to the grid
     );
 
     let ids = building_ids(&server, BuildingPiece::Foundation);
@@ -104,7 +104,14 @@ fn foundation_placement_consumes_sticks_and_spawns_at_sticks_tier() {
             tier: BuildingTier::Sticks,
         }
     );
-    assert_eq!(entity.yaw, 0.3, "a free foundation keeps the requested yaw");
+    // A free foundation snaps to the quarter-turn grid (here 0.3 rad -> 0.0)
+    // so its edge wall sockets, which are always quarter-snapped, align to the
+    // slab instead of leaving every wall rotated on top of it.
+    assert_eq!(
+        entity.yaw,
+        crate::building::snap_yaw_quarter_turn(0.3),
+        "a free foundation snaps to the quarter-turn building grid",
+    );
     let remaining =
         crate::inventory::count_items_in_inventory(&server.clients[&client_id].inventory, WOOD_ID);
     assert_eq!(remaining, 200 - u32::from(BUILDING_STICKS_COST_FOUNDATION));
@@ -928,6 +935,7 @@ fn destroying_a_foundation_collapses_the_structure_above() {
         client_id,
         ClientMessage::Door(crate::protocol::DoorCommand::Place {
             doorway_id,
+            variant: crate::items::DoorVariant::HewnLog,
             flip: false,
             code: "1234".to_owned(),
         }),
@@ -967,7 +975,7 @@ fn destroying_a_foundation_collapses_the_structure_above() {
         server
             .deployed_entities
             .values()
-            .filter(|entity| matches!(entity.kind, DeployableKind::Door))
+            .filter(|entity| matches!(entity.kind, DeployableKind::Door { .. }))
             .count()
     };
     assert_eq!(building_ids(&server, BuildingPiece::Wall).len(), 2);

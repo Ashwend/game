@@ -44,7 +44,7 @@ use crate::{
     resources::spawn_resource_node,
     world::{
         ChunkClassification, ChunkCoord, ChunkDims, ChunkSpawn, ClassificationChannels, NodeKind,
-        base_capacity, generate_world_spawns, kind_target, splitmix64,
+        chunk_kind_target, generate_world_spawns, splitmix64,
     },
 };
 
@@ -399,8 +399,9 @@ fn build_empty_grids(world_seed: u64, dims: ChunkDims) -> HashMap<ChunkCoord, Ac
         let classification = channels.classify();
         let mut capacity = HashMap::new();
         for kind in NodeKind::ALL {
-            let channel = channels.channel_for(kind);
-            let target = kind_target(base_capacity(classification, kind), channel);
+            // Same target (incl. the forest-fringe ore rule) the generator
+            // used to place nodes, so regrow refills to exactly that ceiling.
+            let target = chunk_kind_target(classification, channels, kind);
             if target > 0 {
                 capacity.insert(kind, target);
             }

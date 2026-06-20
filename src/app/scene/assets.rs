@@ -20,8 +20,8 @@ use super::{
     components::MainCamera,
     mesh::{
         COAL_ORE, IRON_ORE, ORE_NODE_STAGE_COUNT, PlayerRigMeshes, STONE_VEIN, SULFUR_ORE,
-        build_player_rig_meshes, building_piece_mesh, door_ghost_mesh, door_panel_mesh,
-        held_building_plan_mesh, held_hammer_mesh, impact_stone_shard_mesh, impact_wood_chip_mesh,
+        build_player_rig_meshes, door_ghost_mesh, held_building_plan_mesh, held_hammer_mesh,
+        impact_stone_shard_mesh, impact_wood_chip_mesh,
         low_poly_bag_mesh, low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_medium_lod_mesh,
         low_poly_birch_tree_small_lod_mesh, low_poly_branch_pile_mesh,
         low_poly_ore_node_stage_meshes, low_poly_pine_tree_large_lod_mesh,
@@ -180,13 +180,26 @@ pub(crate) struct DeployableVisualAssets {
     pub(crate) workbench_mesh: Handle<Mesh>,
     pub(crate) furnace_mesh: Handle<Mesh>,
     /// Building piece meshes indexed `[piece][tier]` via
-    /// [`Self::building_mesh`]. Procedural composites built from the same
-    /// boxes as the collision grid, so visuals and collision agree.
+    /// [`Self::building_mesh`]. Authored Blender glbs built from the same box
+    /// layout as the collision grid, so the silhouette agrees with what
+    /// blocks movement. Source: `art/building/build_pieces.py`.
     pub(crate) building_meshes: [[Handle<Mesh>; 3]; 6],
-    /// Door panel (hinge at origin, spans +X), spawned as an animated
-    /// child of the door root entity.
-    pub(crate) door_panel_mesh: Handle<Mesh>,
-    /// Door placement ghost: closed panel + swing-arc indicator.
+    /// Textured tier materials (twig / hewn timber / coursed stone) indexed by
+    /// [`crate::building::BuildingTier`], applied to every building piece of
+    /// that tier (the glb COLOR_0 multiplies them).
+    pub(crate) building_materials: [Handle<StandardMaterial>; 3],
+    /// Authored door panel glbs per variant (hinge at origin, spans +X),
+    /// spawned as an animated child of the door root entity. UV-unwrapped +
+    /// COLOR_0, paired with the textured `*_door_material` below. Sources:
+    /// `art/building/build_door.py`.
+    pub(crate) hewn_door_panel_mesh: Handle<Mesh>,
+    pub(crate) iron_door_panel_mesh: Handle<Mesh>,
+    /// Textured door materials (base-white + plank/plate texture, COLOR_0
+    /// tints the frame/braces/straps), one per variant.
+    pub(crate) hewn_door_material: Handle<StandardMaterial>,
+    pub(crate) iron_door_material: Handle<StandardMaterial>,
+    /// Door placement ghost: closed panel + swing-arc indicator (procedural,
+    /// shared by both variants; the ghost is a translucent preview).
     pub(crate) door_ghost_mesh: Handle<Mesh>,
     pub(crate) sleeping_bag_mesh: Handle<Mesh>,
     /// Authored storage box models (Blender glbs, vertex-coloured like
@@ -235,12 +248,45 @@ impl DeployableVisualAssets {
         self.building_meshes[piece_index][tier_index].clone()
     }
 
+    /// Textured material for a building tier.
+    pub(crate) fn building_material(
+        &self,
+        tier: crate::building::BuildingTier,
+    ) -> Handle<StandardMaterial> {
+        use crate::building::BuildingTier;
+        let index = match tier {
+            BuildingTier::Sticks => 0,
+            BuildingTier::HewnWood => 1,
+            BuildingTier::Stone => 2,
+        };
+        self.building_materials[index].clone()
+    }
+
     /// Storage box mesh for a tier (1 = small, 2+ = large).
     pub(crate) fn storage_box_mesh(&self, tier: u8) -> Handle<Mesh> {
         if tier >= 2 {
             self.storage_box_large_mesh.clone()
         } else {
             self.storage_box_small_mesh.clone()
+        }
+    }
+
+    /// Authored panel mesh for a door variant.
+    pub(crate) fn door_panel_mesh(&self, variant: crate::items::DoorVariant) -> Handle<Mesh> {
+        match variant {
+            crate::items::DoorVariant::HewnLog => self.hewn_door_panel_mesh.clone(),
+            crate::items::DoorVariant::Iron => self.iron_door_panel_mesh.clone(),
+        }
+    }
+
+    /// Textured material for a door variant.
+    pub(crate) fn door_material(
+        &self,
+        variant: crate::items::DoorVariant,
+    ) -> Handle<StandardMaterial> {
+        match variant {
+            crate::items::DoorVariant::HewnLog => self.hewn_door_material.clone(),
+            crate::items::DoorVariant::Iron => self.iron_door_material.clone(),
         }
     }
 }
@@ -694,6 +740,28 @@ pub(crate) fn setup_scene(
     let storage_box_large_glb = embedded_asset_path("items/storage_box_large/model.glb");
     let torch_glb = embedded_asset_path("items/torch/model.glb");
     let tool_cupboard_glb = embedded_asset_path("items/tool_cupboard/model.glb");
+    // Authored door panels (wood + iron, a matched family). Source:
+    // `art/building/build_door.py`.
+    let hewn_door_glb = embedded_asset_path("items/hewn_log_door/model.glb");
+    let iron_door_glb = embedded_asset_path("items/iron_door/model.glb");
+    // Building pieces are authored Blender glbs (UV-unwrapped + COLOR_0), one
+    // per (piece, tier), matching the same box layout as the collider so the
+    // visual silhouette agrees with what blocks movement. Source:
+    // `art/building/build_pieces.py`. The tier texture is supplied by the
+    // shared `building_materials` below. Filenames are `<piece>_<tier>.glb`.
+    let piece_name = |piece| match piece {
+        crate::building::BuildingPiece::Foundation => "foundation",
+        crate::building::BuildingPiece::Wall => "wall",
+        crate::building::BuildingPiece::WindowWall => "window_wall",
+        crate::building::BuildingPiece::Doorway => "doorway",
+        crate::building::BuildingPiece::Ceiling => "ceiling",
+        crate::building::BuildingPiece::Stairs => "stairs",
+    };
+    let tier_name = |tier| match tier {
+        crate::building::BuildingTier::Sticks => "sticks",
+        crate::building::BuildingTier::HewnWood => "wood",
+        crate::building::BuildingTier::Stone => "stone",
+    };
     let building_meshes = [
         crate::building::BuildingPiece::Foundation,
         crate::building::BuildingPiece::Wall,
@@ -708,13 +776,81 @@ pub(crate) fn setup_scene(
             crate::building::BuildingTier::HewnWood,
             crate::building::BuildingTier::Stone,
         ]
-        .map(|tier| meshes.add(building_piece_mesh(piece, tier)))
+        .map(|tier| {
+            let glb =
+                embedded_asset_path(&format!("building/{}_{}.glb", piece_name(piece), tier_name(tier)));
+            prim_mesh(&glb, 0)
+        })
     });
+    // Door surface textures (plank / forged plate), decoded with a CPU mip
+    // chain + repeat/aniso sampler like the tree bark so the grain tiles and
+    // stays crisp; the glb COLOR_0 multiplies on top to tint frame/braces.
+    let mut load_building_texture = |name: &str| -> Handle<Image> {
+        let rel = format!("textures/building/{name}.png");
+        let bytes = embedded_bytes(&rel)
+            .unwrap_or_else(|| panic!("embedded building texture missing: {rel}"));
+        let mut image = Image::from_buffer(
+            bytes,
+            ImageType::Extension("png"),
+            CompressedImageFormats::NONE,
+            true,
+            ImageSampler::Descriptor(tree_texture_sampler()),
+            RenderAssetUsages::RENDER_WORLD,
+        )
+        .unwrap_or_else(|err| panic!("decode building texture {rel}: {err:?}"));
+        build_mip_chain(&mut image);
+        images.add(image)
+    };
+    let door_wood_tex = load_building_texture("door_wood");
+    let door_iron_tex = load_building_texture("door_iron");
+    // Building tier surface textures (twig lattice / hewn timber / coursed
+    // stone), indexed by `BuildingTier` (sticks, hewn wood, stone).
+    let sticks_tex = load_building_texture("sticks");
+    let wood_tex = load_building_texture("wood");
+    let stone_tex = load_building_texture("stone");
+    // `uv_scale` < 1 enlarges the texture (fewer repeats across a 3 m piece),
+    // tuned per tier so the stone coursing reads as big blocks (one repeat per
+    // wall, not a busy tiled grid) while the wood/bark grain stays fine.
+    let mut building_material =
+        |tex: Handle<Image>, roughness: f32, reflectance: f32, uv_scale: f32| {
+            materials.add(StandardMaterial {
+                base_color: VERTEX_MATERIAL_COLOR,
+                base_color_texture: Some(tex),
+                perceptual_roughness: roughness,
+                reflectance,
+                uv_transform: bevy::math::Affine2::from_scale(Vec2::splat(uv_scale)),
+                ..default()
+            })
+        };
+    let building_materials = [
+        building_material(sticks_tex, 0.95, 0.12, 1.0),
+        building_material(wood_tex, 0.92, 0.13, 1.0),
+        building_material(stone_tex, 0.95, 0.1, 0.5),
+    ];
     commands.insert_resource(DeployableVisualAssets {
         workbench_mesh: prim_mesh(&workbench_glb, 0),
         furnace_mesh: prim_mesh(&furnace_glb, 0),
         building_meshes,
-        door_panel_mesh: meshes.add(door_panel_mesh()),
+        building_materials,
+        hewn_door_panel_mesh: prim_mesh(&hewn_door_glb, 0),
+        iron_door_panel_mesh: prim_mesh(&iron_door_glb, 0),
+        // Wood door: matte plank surface. Iron door: rough forged metal, a
+        // touch metallic so it picks up the sky IBL and reads as steel rather
+        // than flat-dark; the dark plate texture drives the F0 tint.
+        hewn_door_material: materials.add(StandardMaterial {
+            base_color: VERTEX_MATERIAL_COLOR,
+            base_color_texture: Some(door_wood_tex),
+            perceptual_roughness: 0.9,
+            reflectance: 0.13,
+            ..default()
+        }),
+        iron_door_material: materials.add(StandardMaterial {
+            base_color: VERTEX_MATERIAL_COLOR,
+            base_color_texture: Some(door_iron_tex),
+            perceptual_roughness: 0.55,
+            metallic: 0.8,
+            ..default()
+        }),
         door_ghost_mesh: meshes.add(door_ghost_mesh()),
         sleeping_bag_mesh: meshes.add(sleeping_bag_mesh()),
         storage_box_small_mesh: prim_mesh(&storage_box_small_glb, 0),

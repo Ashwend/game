@@ -20,7 +20,8 @@ use crate::{
 };
 
 use super::{
-    ChunkCoord, ChunkDims, ClassificationChannels, NodeKind, base_capacity, kind_stream,
+    ChunkClassification, ChunkCoord, ChunkDims, ClassificationChannels, NodeKind, base_capacity,
+    kind_stream,
     noise::{ChunkRng, fbm, splitmix64},
 };
 
@@ -57,6 +58,50 @@ const CROSS_KIND_MIN_SPACING_M: f32 = 0.7;
 /// regrow ceilings disagree and the world either over- or under-fills.
 pub fn kind_target(base_capacity: u16, channel: f32) -> u16 {
     (base_capacity as f32 * (0.55 + channel * 0.7) * DENSITY_MULTIPLIER).round() as u16
+}
+
+/// Ore channel a forest chunk must clear before it seeds a lone iron node:
+/// high, so most of the forest stays clear and the strike feels lucky. Because
+/// a chunk only stays forest when the ore channel is below the forest channel
+/// (post-bias), the qualifying chunks cluster on the fringe of the barren
+/// biomes, exactly where a player would expect a stray vein.
+const FOREST_IRON_ORE_CHANNEL: f32 = 0.64;
+/// Stone channel for a forest chunk's occasional stone vein, a touch lower
+/// than iron so veins turn up "now and again" rather than rarely.
+const FOREST_STONE_VEIN_CHANNEL: f32 = 0.56;
+
+/// Per-chunk node target for one kind, the single source of truth shared by
+/// world generation and the regrow capacity grid (they MUST agree or the world
+/// over/under-fills). Wraps `base_capacity` + channel scaling, plus the
+/// forest-fringe rule: a forest's interior has no veins (the rich deposits stay
+/// in the high-risk rocky/ore biomes), but where the ore/stone channel runs
+/// high, the edge of a nearby barren biome, a forest can hold a lone iron node
+/// and a little more often a stone vein, so a forest newcomer can still strike
+/// it lucky without diluting the barren yields.
+pub fn chunk_kind_target(
+    classification: ChunkClassification,
+    channels: ClassificationChannels,
+    kind: NodeKind,
+) -> u16 {
+    if classification == ChunkClassification::Forest {
+        match kind {
+            // A single lucky iron node where the ore channel is high.
+            NodeKind::IronOre => return u16::from(channels.ore >= FOREST_IRON_ORE_CHANNEL),
+            // An occasional small stone vein, channel-scaled like everywhere
+            // else so it's a vein, not a lone rock.
+            NodeKind::StoneVein => {
+                return if channels.stone >= FOREST_STONE_VEIN_CHANNEL {
+                    kind_target(1, channels.stone)
+                } else {
+                    0
+                };
+            }
+            // Forest never holds coal or sulfur, those stay barren-only.
+            NodeKind::CoalOre | NodeKind::SulfurOre => return 0,
+            _ => {}
+        }
+    }
+    kind_target(base_capacity(classification, kind), channels.channel_for(kind))
 }
 
 /// One node placement decided by the generator. Carries the kind so the
@@ -151,11 +196,11 @@ pub fn generate_chunk_spawns(
     let mut tree_variant_counter: u64 = splitmix64(world_seed ^ 0xBADCAFE);
 
     for kind in NodeKind::ALL {
-        // Scale the classification's base capacity by the channel value.
-        // A channel just above the classification threshold (~0.42) still
-        // delivers ~0.7× capacity; a fully-saturated channel hits ~1.05×.
-        let channel = channels.channel_for(kind);
-        let target = kind_target(base_capacity(classification, kind), channel);
+        // Scale the classification's base capacity by the channel value
+        // (a channel just above the ~0.42 threshold still delivers ~0.7×
+        // capacity, a saturated channel ~1.05×), with the forest-fringe ore
+        // rule folded in. Shared verbatim with the regrow capacity grid.
+        let target = chunk_kind_target(classification, channels, kind);
         if target == 0 {
             continue;
         }
@@ -293,6 +338,49 @@ fn sq_dist(ax: f32, az: f32, bx: f32, bz: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forest_holds_lucky_iron_and_occasional_veins_while_barren_stays_rich() {
+        let (mut forest, mut forest_iron, mut forest_vein) = (0u32, 0u32, 0u32);
+        let (mut barren_chunks, mut barren_iron) = (0u32, 0u32);
+        for seed in 0..50u64 {
+            for x in -25..25 {
+                for z in -25..25 {
+                    let ch = ClassificationChannels::sample(seed, ChunkCoord::new(x, z));
+                    let c = ch.classify();
+                    match c {
+                        ChunkClassification::Forest => {
+                            forest += 1;
+                            forest_iron += u32::from(chunk_kind_target(c, ch, NodeKind::IronOre) > 0);
+                            forest_vein +=
+                                u32::from(chunk_kind_target(c, ch, NodeKind::StoneVein) > 0);
+                        }
+                        ChunkClassification::OreVein | ChunkClassification::RockyOutcrop => {
+                            barren_chunks += 1;
+                            barren_iron += u32::from(chunk_kind_target(c, ch, NodeKind::IronOre));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let iron_pct = 100.0 * forest_iron as f32 / forest as f32;
+        let vein_pct = 100.0 * forest_vein as f32 / forest as f32;
+        let barren_iron_avg = barren_iron as f32 / barren_chunks.max(1) as f32;
+        println!(
+            "forest chunks {forest}: iron {iron_pct:.1}%  stone-vein {vein_pct:.1}%  | barren iron/chunk {barren_iron_avg:.2}"
+        );
+        // Iron in the forest is a lucky strike, not a blanket.
+        assert!(
+            (5.0..30.0).contains(&iron_pct),
+            "forest iron should be a lucky minority, got {iron_pct:.1}%"
+        );
+        // Stone veins turn up "now and again", a bit more often than iron.
+        assert!(vein_pct > iron_pct, "veins should beat iron: {vein_pct:.1} vs {iron_pct:.1}");
+        assert!(vein_pct < 55.0, "veins still a minority, got {vein_pct:.1}%");
+        // The high-risk barren biomes keep the rich iron (much more than forest).
+        assert!(barren_iron_avg > 2.0, "barren must out-yield forest iron, got {barren_iron_avg:.2}");
+    }
 
     #[test]
     fn generate_world_spawns_is_deterministic() {

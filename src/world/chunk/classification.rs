@@ -35,6 +35,34 @@ const CLASSIFICATION_BASE_FREQUENCY: f32 = 1.0 / 600.0;
 /// scatter nodes but won't push the classification toward their kind.
 const CLASSIFICATION_THRESHOLD: f32 = 0.42;
 
+/// Per-channel weights applied when deciding a chunk's **biome label** and
+/// its **ground texture** (see [`ClassificationChannels::biased`]), so a
+/// world leans toward forest and meadow with rock + ore as the minority.
+/// Without this the four channels are i.i.d. noise, an even ~25%-each split
+/// that on an unlucky seed leaves large stretches classified rocky/ore, i.e.
+/// barren. The forest/plains channels are weighted up and the rocky/ore
+/// channels down so the green biomes claim more of the map.
+///
+/// Crucially this biases only the *label* (which `base_capacity` row a chunk
+/// uses) and the ground splat, NOT the per-kind density: `channel_for` still
+/// reads the raw, unweighted channels, so a forest chunk keeps its tuned tree
+/// count and an ore vein its tuned ore count, there are simply more forest /
+/// plains chunks and fewer rocky / ore ones.
+///
+/// Classification is recomputed from the seed on every load (it isn't saved),
+/// so this re-labels *existing* worlds too. New worlds are fully consistent
+/// (generation and load both classify the same way). For a world generated
+/// before this bias existed, a chunk that flips away from ore/rocky loses that
+/// kind's capacity, so already-placed ore there stops respawning once mined,
+/// start a fresh world for the clean result. (Persisting the per-chunk
+/// classification in the save would make any future tuning forward-safe.)
+const BIOME_BIAS: ClassificationChannels = ClassificationChannels {
+    forest: 1.19,
+    stone: 0.92,
+    ore: 0.89,
+    hay: 1.08,
+};
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChunkClassification {
@@ -133,14 +161,27 @@ impl ClassificationChannels {
         }
     }
 
-    /// Pick the classification whose channel is largest. If no channel
-    /// clears the threshold, the chunk is `Mixed`.
+    /// Channels scaled by [`BIOME_BIAS`]. Used for the biome-label
+    /// ([`Self::classify`]) and ground-texture decisions so the map leans
+    /// green; capacity scaling deliberately keeps using the raw channels.
+    pub fn biased(self) -> Self {
+        Self {
+            forest: self.forest * BIOME_BIAS.forest,
+            stone: self.stone * BIOME_BIAS.stone,
+            ore: self.ore * BIOME_BIAS.ore,
+            hay: self.hay * BIOME_BIAS.hay,
+        }
+    }
+
+    /// Pick the classification whose (biased) channel is largest. If no
+    /// channel clears the threshold, the chunk is `Mixed`.
     pub fn classify(self) -> ChunkClassification {
+        let b = self.biased();
         let candidates = [
-            (self.forest, ChunkClassification::Forest),
-            (self.stone, ChunkClassification::RockyOutcrop),
-            (self.ore, ChunkClassification::OreVein),
-            (self.hay, ChunkClassification::Plains),
+            (b.forest, ChunkClassification::Forest),
+            (b.stone, ChunkClassification::RockyOutcrop),
+            (b.ore, ChunkClassification::OreVein),
+            (b.hay, ChunkClassification::Plains),
         ];
         let (peak, choice) = candidates.iter().copied().fold(
             (0.0_f32, ChunkClassification::Mixed),
@@ -286,6 +327,59 @@ mod tests {
         assert_eq!(channels.channel_for(NodeKind::HayGrass), 0.4);
         // Branches use max(forest, hay).
         assert_eq!(channels.channel_for(NodeKind::BranchPile), 0.4);
+    }
+
+    /// Sample a big multi-seed grid and report the biome split. Forest +
+    /// Plains + Mixed (the green/lively biomes) should be the clear majority,
+    /// while rock and ore stay present (a base still needs stone and ore).
+    #[test]
+    fn biome_bias_favours_green_but_keeps_rock_and_ore() {
+        use std::collections::HashMap;
+        let is_green = |c: ChunkClassification| {
+            matches!(
+                c,
+                ChunkClassification::Forest
+                    | ChunkClassification::Plains
+                    | ChunkClassification::Mixed
+            )
+        };
+        let mut counts: HashMap<ChunkClassification, u32> = HashMap::new();
+        let mut total = 0u32;
+        let mut worst_green = 100.0_f32;
+        for seed in 0..60u64 {
+            let (mut seed_green, mut seed_total) = (0u32, 0u32);
+            for x in -25..25 {
+                for z in -25..25 {
+                    let c = ClassificationChannels::sample(seed, ChunkCoord::new(x, z)).classify();
+                    *counts.entry(c).or_default() += 1;
+                    total += 1;
+                    seed_total += 1;
+                    if is_green(c) {
+                        seed_green += 1;
+                    }
+                }
+            }
+            worst_green = worst_green.min(100.0 * seed_green as f32 / seed_total as f32);
+        }
+        let pct = |c: ChunkClassification| 100.0 * *counts.get(&c).unwrap_or(&0) as f32 / total as f32;
+        let (forest, plains, mixed, rocky, ore) = (
+            pct(ChunkClassification::Forest),
+            pct(ChunkClassification::Plains),
+            pct(ChunkClassification::Mixed),
+            pct(ChunkClassification::RockyOutcrop),
+            pct(ChunkClassification::OreVein),
+        );
+        println!(
+            "biome split (avg): forest {forest:.1}%  plains {plains:.1}%  mixed {mixed:.1}%  rocky {rocky:.1}%  ore {ore:.1}%  | worst-seed green {worst_green:.1}%"
+        );
+        let green = forest + plains + mixed;
+        // Green leads clearly on average...
+        assert!(green > 60.0, "green biomes should dominate, got {green:.1}%");
+        // ...and even the unluckiest seed isn't a barren wasteland.
+        assert!(worst_green > 50.0, "worst seed should still be majority green, got {worst_green:.1}%");
+        // But rock and ore stay reachable for progression.
+        assert!(ore > 8.0, "ore must stay reachable, got {ore:.1}%");
+        assert!(rocky > 8.0, "rock must stay reachable, got {rocky:.1}%");
     }
 
     #[test]

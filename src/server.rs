@@ -289,6 +289,11 @@ pub(super) struct ServerClient {
     /// attached to the mirror entity.
     pub(super) armor: u8,
     pub(super) is_admin: bool,
+    /// Admin `/speed` movement-speed multiplier for this player. `1.0` is
+    /// normal; replicated to the owning client via [`PlayerInputAck`] and
+    /// applied in their local movement prediction. Session-scoped (resets to
+    /// `1.0` on a fresh connection), which suits a cheat command.
+    pub(super) run_speed_multiplier: f32,
     pub(super) last_seen_tick: u64,
     pub(super) next_gather_tick: u64,
     /// Separate cooldown for PvP swings so a melee combo can't piggyback
@@ -408,6 +413,7 @@ pub(super) fn sleeping_body_from_persisted(
         armor: 0,
         lifecycle,
         is_admin: player.is_admin,
+        run_speed_multiplier: 1.0,
         last_seen_tick: tick,
         next_gather_tick: tick,
         next_attack_tick: tick,

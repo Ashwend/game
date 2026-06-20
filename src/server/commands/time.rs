@@ -1,4 +1,5 @@
-//! `/time` and `/speed`, world-time admin commands.
+//! `/time` and `/time-speed`, world-time admin commands. (The `/speed`
+//! command is the player run-speed cheat and lives in [`super::player`].)
 
 use crate::{
     protocol::{ClientId, ServerMessage, ToastKind, ToastMessage},
@@ -68,7 +69,7 @@ impl GameServer {
         let Some(token) = args.first() else {
             return reply_warning(
                 client_id,
-                format!("usage: /speed <multiplier> (0 to {MAX_MULTIPLIER})"),
+                format!("usage: /time-speed <multiplier> (0 to {MAX_MULTIPLIER})"),
             );
         };
         let Ok(multiplier) = token.parse::<f32>() else {

@@ -172,7 +172,10 @@ fn dispatch_deployable_swing(
         ) => SurfaceMaterial::Wood,
         Some(
             crate::items::DestructibleMaterial::Stone
-            | crate::items::DestructibleMaterial::StoneBuilding,
+            | crate::items::DestructibleMaterial::StoneBuilding
+            // Iron doors read as a hard surface; the stone chip/clang is the
+            // closest cue we have until a dedicated metal impact exists.
+            | crate::items::DestructibleMaterial::MetalBuilding,
         )
         | None => SurfaceMaterial::Stone,
     };

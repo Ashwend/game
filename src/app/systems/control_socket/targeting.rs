@@ -148,9 +148,10 @@ pub(super) fn resolve_building_pose(
     }
 }
 
-/// Nearest replicated deployable whose `kind` debug string starts with
+/// Nearest replicated deployable whose `kind` debug string matches
 /// `kind_prefix` (e.g. "Doorway" matches `Building {{ piece: Doorway, … }}`
-/// via the contains check below; "Door" matches the door kind exactly).
+/// via the contains check below; "Door" matches the door kind, whose debug
+/// string is now `Door {{ variant: … }}` for either variant).
 pub(super) fn nearest_deployable_id(
     runtime: &ClientRuntime,
     deployables: &[DeployableDump],
@@ -161,7 +162,9 @@ pub(super) fn nearest_deployable_id(
         .iter()
         .filter(|dump| {
             if kind_prefix == "Door" {
-                dump.kind == "Door"
+                // Match a door of any variant ("Door { variant: ... }")
+                // without also matching "Building { piece: Doorway, ... }".
+                dump.kind.starts_with("Door {")
             } else {
                 dump.kind.contains(kind_prefix)
             }

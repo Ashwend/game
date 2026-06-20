@@ -23,8 +23,8 @@ mod noise;
 
 pub use classification::{ChunkClassification, ClassificationChannels, base_capacity};
 pub use generator::{
-    ChunkSpawn, PlayableBounds, build_world_blocks, generate_chunk_spawns, generate_world_spawns,
-    kind_target,
+    ChunkSpawn, PlayableBounds, build_world_blocks, chunk_kind_target, generate_chunk_spawns,
+    generate_world_spawns, kind_target,
 };
 pub use noise::{ChunkRng, fbm, splitmix64, value_noise_2d};
 

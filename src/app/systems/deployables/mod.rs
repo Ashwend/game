@@ -185,8 +185,8 @@ pub(crate) fn apply_deployed_entities_system(
             // so a door<->non-door transition falls back to respawn;
             // it can't happen through the upgrade path today, this is
             // purely defensive.
-            let door_transition = matches!(entry.kind, DeployableKind::Door)
-                != matches!(meta.kind, DeployableKind::Door);
+            let door_transition = matches!(entry.kind, DeployableKind::Door { .. })
+                != matches!(meta.kind, DeployableKind::Door { .. });
             if door_transition {
                 commands.entity(entry.entity).despawn();
                 visuals.pending_spawns.push_back(PendingDeployableSpawn {
@@ -313,7 +313,7 @@ pub(crate) fn apply_deployed_entities_system(
         spawn_budget -= 1;
         let position = Vec3::from(spawn.position);
         let visual_transform = deployable_visual_transform(position, spawn.yaw, spawn.kind);
-        let parent = if matches!(spawn.kind, DeployableKind::Door) {
+        let parent = if let DeployableKind::Door { variant } = spawn.kind {
             // Doors spawn an animated panel child instead of a root
             // mesh: the root sits at the doorway centre (replicated
             // transform); the panel hangs off the hinge and swings via
@@ -339,8 +339,8 @@ pub(crate) fn apply_deployed_entities_system(
                     angle: initial_angle,
                     open: spawn.active,
                 },
-                Mesh3d(assets.door_panel_mesh.clone()),
-                MeshMaterial3d(assets.material.clone()),
+                Mesh3d(assets.door_panel_mesh(variant)),
+                MeshMaterial3d(assets.door_material(variant)),
                 Transform::from_translation(Vec3::new(-(DOOR_PANEL_WIDTH_M / 2.0), 0.0, 0.0))
                     .with_rotation(Quat::from_rotation_y(initial_angle)),
                 Visibility::Visible,
@@ -442,7 +442,7 @@ fn apply_active_flip(
                 );
             }
         }
-        DeployableKind::Door => {
+        DeployableKind::Door { .. } => {
             for (mut panel, child_of) in panels.iter_mut() {
                 if child_of.parent() == entry.entity {
                     panel.open = entry.active;
@@ -494,6 +494,11 @@ pub(crate) fn maintain_world_grid_system(
     mut removed_deps: RemovedComponents<Deployable>,
     mut last_fingerprint: Local<Option<(u64, u64, u64)>>,
     mut last_world_version: Local<u64>,
+    // Separate fingerprint for the grass-displacer subset (ground-resting
+    // footprints only), so a door open/close or a wall/ceiling placement,
+    // which moves `last_fingerprint` but not the grass set, never re-pushes
+    // the displacer field or re-filters the detail grass.
+    mut last_grass_fingerprint: Local<Option<u64>>,
 ) {
     let world_version = runtime.world_version;
     // Cheap probe: skip the O(N) fingerprint scan when the entity sets
@@ -527,9 +532,25 @@ pub(crate) fn maintain_world_grid_system(
         .iter()
         .flat_map(|(meta, transform, active)| deployable_colliders(meta, transform, active.0))
         .collect();
-    // Hand the placed-structure footprints to the detail-grass streamer so it carves
-    // grass out of them (only deployables/buildings, never the resource-node colliders).
-    runtime.set_grass_displacers(deployable_collider_blocks.clone());
+    // Detail grass is carved only by ground-resting footprints (foundations
+    // + classic ground deployables); walls, ceilings, doorways, stairs, and
+    // doors sit on a platform's edges/cells (elevated or vertical), and a
+    // door's box even moves when it swings, so carving grass around them
+    // reads as the grass jumping. Re-push the displacer field only when
+    // that subset actually changes, so an open/close or a wall placement
+    // costs nothing on the grass side.
+    let grass_fingerprint = grass_displacer_fingerprint(deployables.iter());
+    if *last_grass_fingerprint != Some(grass_fingerprint) {
+        let grass_displacer_blocks: Vec<WorldBlock> = deployables
+            .iter()
+            .filter(|(meta, _, _)| deployable_displaces_grass(meta.kind))
+            .flat_map(|(meta, transform, active)| deployable_colliders(meta, transform, active.0))
+            .collect();
+        runtime.set_grass_displacers(grass_displacer_blocks);
+        *last_grass_fingerprint = Some(grass_fingerprint);
+    }
+    // The collision grid still gets every footprint (walls and doors block
+    // movement even though they don't touch grass).
     runtime.rebuild_world_grid(resource_colliders, deployable_collider_blocks);
     *last_fingerprint = Some(current);
 }
@@ -545,6 +566,47 @@ fn resource_node_set_fingerprint<'a>(iter: impl IntoIterator<Item = &'a Resource
             continue;
         }
         hash ^= node.id;
+        count += 1;
+    }
+    hash.wrapping_mul(FINGERPRINT_MIX).wrapping_add(count)
+}
+
+/// Whether a placed structure carves detail grass out from under it. Only
+/// ground-resting footprints qualify: a foundation slab sits in the grass,
+/// as do the classic deployables (furnace, workbench, bag, box, cupboard,
+/// torch). Walls, window walls, doorways, ceilings, and stairs mount on a
+/// foundation's edges/cells (elevated or vertical), and a door swings, so
+/// carving grass around them looks wrong.
+fn deployable_displaces_grass(kind: DeployableKind) -> bool {
+    match kind {
+        DeployableKind::Building { piece, .. } => {
+            matches!(piece, crate::building::BuildingPiece::Foundation)
+        }
+        DeployableKind::Door { .. } => false,
+        _ => true,
+    }
+}
+
+/// Fingerprint of only the grass-displacing deployables (see
+/// [`deployable_displaces_grass`]). Excludes the elevated/vertical building
+/// pieces, doors, and a door's open state, so the detail-grass field is
+/// re-carved only when a ground footprint is genuinely added or removed.
+fn grass_displacer_fingerprint<'a>(
+    iter: impl IntoIterator<
+        Item = (
+            &'a Deployable,
+            &'a DeployableTransform,
+            &'a DeployableActive,
+        ),
+    >,
+) -> u64 {
+    let mut hash: u64 = 0;
+    let mut count: u64 = 0;
+    for (meta, _, _) in iter {
+        if !deployable_displaces_grass(meta.kind) {
+            continue;
+        }
+        hash ^= meta.id ^ 0xD9E3_F1A7_5B6C_8024;
         count += 1;
     }
     hash.wrapping_mul(FINGERPRINT_MIX).wrapping_add(count)
@@ -570,7 +632,7 @@ fn deployable_set_fingerprint<'a>(
         // Open doors contribute a different bit pattern than closed ones
         // so an open/close flip changes the fingerprint (the panel's
         // collider genuinely moved) without a kind lookup.
-        if matches!(meta.kind, DeployableKind::Door) && active.0 {
+        if matches!(meta.kind, DeployableKind::Door { .. }) && active.0 {
             hash ^= meta.id.rotate_left(17) ^ 0x5A5A_5A5A_5A5A_5A5A;
         }
         count += 1;
@@ -594,7 +656,7 @@ pub(crate) fn deployable_colliders(
         DeployableKind::Building { piece, .. } => {
             crate::building::building_collider_blocks(piece, transform.position, transform.yaw)
         }
-        DeployableKind::Door => {
+        DeployableKind::Door { .. } => {
             crate::building::door_collider_blocks(transform.position, transform.yaw, active)
         }
         _ => {
@@ -676,13 +738,21 @@ fn deployable_visual(
         DeployableKind::Building { piece, tier } => assets.building_mesh(piece, tier),
         // Doors get an animated panel child instead (see the spawn site);
         // the root mesh handle is unused but keeps this function total.
-        DeployableKind::Door => assets.door_panel_mesh.clone(),
+        DeployableKind::Door { variant } => assets.door_panel_mesh(variant),
         DeployableKind::SleepingBag => assets.sleeping_bag_mesh.clone(),
         DeployableKind::StorageBox { tier } => assets.storage_box_mesh(tier),
         DeployableKind::Torch { .. } => assets.torch_mesh.clone(),
         DeployableKind::ToolCupboard => assets.tool_cupboard_mesh.clone(),
     };
-    (mesh, assets.material.clone())
+    // Building pieces carry their tier's textured material (twig / timber /
+    // stone); doors their variant material; everything else the shared
+    // base-white vertex-colour material.
+    let material = match kind {
+        DeployableKind::Building { tier, .. } => assets.building_material(tier),
+        DeployableKind::Door { variant } => assets.door_material(variant),
+        _ => assets.material.clone(),
+    };
+    (mesh, material)
 }
 
 pub(super) fn deployable_transform(position: Vec3, yaw: f32) -> Transform {

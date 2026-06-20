@@ -114,6 +114,7 @@ def main(argv):
             ),
         },
         "door-interact": lambda: {"command": "door_interact"},
+        "door-pickup": lambda: {"command": "door_pick_up"},
         "open-storage-box": lambda: {"command": "open_storage_box"},
         "close-container": lambda: {"command": "close_container"},
         "upgrade-building": lambda: {

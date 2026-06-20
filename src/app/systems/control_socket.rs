@@ -97,16 +97,23 @@ pub(crate) enum ControlRequest {
         #[serde(default)]
         height: Option<f32>,
     },
-    /// Hang a carried hewn log door in the nearest free doorway (within
-    /// reach), setting its lock code. `flip` mirrors hinge + swing.
+    /// Hang a carried door in the nearest free doorway (within reach),
+    /// setting its lock code. `flip` mirrors hinge + swing; `iron` hangs the
+    /// iron door variant instead of the default hewn log door (the carried
+    /// item must match).
     PlaceDoor {
         code: String,
         #[serde(default)]
         flip: bool,
+        #[serde(default)]
+        iron: bool,
     },
     /// E-press the nearest door (toggle, or get the code prompt when
     /// unauthorized).
     DoorInteract,
+    /// Pick the nearest door back into inventory (hold-E wheel "Pick Up").
+    /// Server enforces claim authorization and that the door is unlocked.
+    DoorPickUp,
     /// Open the nearest storage box's container UI (the shared loot-bag
     /// transfer panel), like an E-press on the placed box.
     OpenStorageBox,
@@ -520,15 +527,21 @@ fn handle_request(
                 position.x, position.y, position.z
             ))
         }
-        ControlRequest::PlaceDoor { code, flip } => {
+        ControlRequest::PlaceDoor { code, flip, iron } => {
             let doorway = nearest_deployable_id(runtime, deployables, "Doorway")
                 .context("no doorway building block in AoI")?;
+            let variant = if iron {
+                crate::items::DoorVariant::Iron
+            } else {
+                crate::items::DoorVariant::HewnLog
+            };
             let session = runtime
                 .session
                 .as_mut()
                 .context("no active session (not in a world)")?;
             session.send(ClientMessage::Door(crate::protocol::DoorCommand::Place {
                 doorway_id: doorway,
+                variant,
                 flip,
                 code,
             }))?;
@@ -545,6 +558,18 @@ fn handle_request(
                 crate::protocol::DoorCommand::Interact { id: door },
             ))?;
             Ok(format!("door interact queued for {door}"))
+        }
+        ControlRequest::DoorPickUp => {
+            let door =
+                nearest_deployable_id(runtime, deployables, "Door").context("no door in AoI")?;
+            let session = runtime
+                .session
+                .as_mut()
+                .context("no active session (not in a world)")?;
+            session.send(ClientMessage::Door(
+                crate::protocol::DoorCommand::PickUp { id: door },
+            ))?;
+            Ok(format!("door pickup queued for {door}"))
         }
         ControlRequest::OpenStorageBox => {
             let target = nearest_deployable_id(runtime, deployables, "StorageBox")

@@ -20,7 +20,7 @@ use std::{
 use crate::items::{
     BASIC_HATCHET_ID, BASIC_PICKAXE_ID, BUILDING_PLAN_ID, COAL_ID, CRUDE_FURNACE_ID,
     DeployableKind, FIBER_ID, HAMMER_ID, HEWN_LOG_DOOR_ID, HEWN_LOG_ID, IRON_BAR_ID,
-    IRON_HATCHET_ID, IRON_PICKAXE_ID, PLANT_TWINE_ID, SLEEPING_BAG_ID, STONE_ID,
+    IRON_DOOR_ID, IRON_HATCHET_ID, IRON_PICKAXE_ID, PLANT_TWINE_ID, SLEEPING_BAG_ID, STONE_ID,
     STORAGE_BOX_LARGE_ID, STORAGE_BOX_SMALL_ID, TOOL_CUPBOARD_ID, TORCH_ID, WOOD_ID,
     WORKBENCH_T1_ID, item_definition,
 };
@@ -36,6 +36,7 @@ pub const CRUDE_FURNACE_RECIPE_ID: &str = "crude_furnace";
 pub const BUILDING_PLAN_RECIPE_ID: &str = "building_plan";
 pub const HAMMER_RECIPE_ID: &str = "hammer";
 pub const HEWN_LOG_DOOR_RECIPE_ID: &str = "hewn_log_door";
+pub const IRON_DOOR_RECIPE_ID: &str = "iron_door";
 pub const SLEEPING_BAG_RECIPE_ID: &str = "sleeping_bag";
 pub const STORAGE_BOX_SMALL_RECIPE_ID: &str = "storage_box_small";
 pub const STORAGE_BOX_LARGE_RECIPE_ID: &str = "storage_box_large";
@@ -323,6 +324,24 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         output_quantity: 1,
         craft_seconds: 12.0,
         tier: 1,
+        station: RecipeStation::Workbench { min_tier: 1 },
+    },
+    RecipeDefinition {
+        id: IRON_DOOR_RECIPE_ID,
+        name: "Iron Door",
+        description: "A forged iron door on a banded frame. Tools can't \
+                      scratch it, only explosives breach it. Mounts in a \
+                      doorway; you set the code when you hang it.",
+        category: RecipeCategory::Building,
+        inputs: &[
+            CraftingInput::new(IRON_BAR_ID, 30),
+            CraftingInput::new(HEWN_LOG_ID, 4),
+            CraftingInput::new(PLANT_TWINE_ID, 2),
+        ],
+        output_item: IRON_DOOR_ID,
+        output_quantity: 1,
+        craft_seconds: 24.0,
+        tier: 2,
         station: RecipeStation::Workbench { min_tier: 1 },
     },
     RecipeDefinition {

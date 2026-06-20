@@ -34,7 +34,8 @@ use crate::{
     building::{BuildingPiece, placement_cost, upgrade_cost},
     items::{BUILDING_PLAN_ID, DeployableKind, HAMMER_ID, item_definition},
     protocol::{
-        BuildingCommand, ClaimCommand, ClientMessage, DeployedEntityId, SleepingBagCommand,
+        BuildingCommand, ClaimCommand, ClientMessage, DeployedEntityId, DoorCommand,
+        SleepingBagCommand,
     },
     server::{Deployable, DeployableLabel},
 };
@@ -156,6 +157,15 @@ pub(crate) fn wheel_menu_system(
                         );
                     }
                 }
+                // Quick tap on a door is the open/close interact (the
+                // server prompts for the code if the player isn't yet
+                // authorized), exactly the old plain-E behaviour.
+                PickupHoldKind::Door => send_gameplay_message(
+                    &mut runtime,
+                    &mut error_toasts,
+                    ClientMessage::Door(DoorCommand::Interact { id: hold.id }),
+                    "door interact",
+                ),
             }
         } else {
             let elapsed = hold.elapsed + time.delta_secs();
@@ -164,6 +174,7 @@ pub(crate) fn wheel_menu_system(
                 wheel.active = Some(match hold.kind {
                     PickupHoldKind::SleepingBag => sleeping_bag_wheel(hold.id),
                     PickupHoldKind::ToolCupboard => cupboard_wheel(hold.id, &pickup_target),
+                    PickupHoldKind::Door => door_pickup_wheel(hold.id),
                 });
             } else {
                 wheel.pickup_hold = Some(PickupHold { elapsed, ..hold });
@@ -198,6 +209,20 @@ pub(crate) fn wheel_menu_system(
             wheel.pickup_hold = Some(PickupHold {
                 id,
                 kind: PickupHoldKind::ToolCupboard,
+                elapsed: 0.0,
+            });
+            return;
+        }
+        // Door: tap toggles open / prompts for the code, hold opens the
+        // pick-up wheel. Routed through the hold timer (not the plain-E
+        // path in `inventory_shortcuts`) so a hold never also fires the
+        // open toggle.
+        if matches!(pickup_target.deployable_kind, Some(DeployableKind::Door { .. }))
+            && let Some(id) = pickup_target.deployable_id
+        {
+            wheel.pickup_hold = Some(PickupHold {
+                id,
+                kind: PickupHoldKind::Door,
                 elapsed: 0.0,
             });
             return;
@@ -239,7 +264,7 @@ pub(crate) fn wheel_menu_system(
         return;
     }
     if placement.item_id.is_none()
-        && matches!(pickup_target.deployable_kind, Some(DeployableKind::Door))
+        && matches!(pickup_target.deployable_kind, Some(DeployableKind::Door { .. }))
         && let Some(door_id) = pickup_target.deployable_id
     {
         wheel.active = Some(ActiveWheel {
@@ -345,7 +370,7 @@ fn hammer_wheel(
         });
     }
     // Demolish: only while the piece is still within its demolish window.
-    if demolishable && matches!(kind, DeployableKind::Building { .. } | DeployableKind::Door) {
+    if demolishable && matches!(kind, DeployableKind::Building { .. } | DeployableKind::Door { .. }) {
         options.push(WheelOption {
             label: "Demolish".to_owned(),
             detail: None,
@@ -392,6 +417,28 @@ fn sleeping_bag_wheel(bag_id: DeployedEntityId) -> ActiveWheel {
             },
         ],
         pointer: Vec2::ZERO,
+        commit_on_release: false,
+    }
+}
+
+/// The door's hold-E wheel: pick the door back into inventory. The option
+/// is always offered; the server re-checks claim authorization and that
+/// the player has unlocked the door (knows the code), answering any
+/// failure with a toast, so there's no client-side gate to keep in sync.
+fn door_pickup_wheel(door_id: DeployedEntityId) -> ActiveWheel {
+    ActiveWheel {
+        title: "Door".to_owned(),
+        trigger: WheelTrigger::PickupKey,
+        options: vec![WheelOption {
+            label: "Pick Up".to_owned(),
+            detail: Some("Back to inventory".to_owned()),
+            detail_ok: true,
+            enabled: true,
+            marked: false,
+            action: WheelAction::PickUpDoor(door_id),
+        }],
+        pointer: Vec2::ZERO,
+        // Picking up removes the door from the world: keep the explicit click.
         commit_on_release: false,
     }
 }
@@ -485,6 +532,12 @@ fn perform_wheel_action(
         WheelAction::ChangeDoorCode(door_id) => {
             menu.text_prompt = Some(TextPrompt::new(TextPromptKind::DoorChangeCode { door_id }));
         }
+        WheelAction::PickUpDoor(door_id) => send_gameplay_message(
+            runtime,
+            error_toasts,
+            ClientMessage::Door(DoorCommand::PickUp { id: door_id }),
+            "door pickup",
+        ),
         WheelAction::RenameBag(bag_id) => {
             let mut prompt = TextPrompt::new(TextPromptKind::RenameBag { bag_id });
             // Start from the bag's current name (replicated via

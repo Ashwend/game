@@ -24,6 +24,8 @@ Rule of thumb: **if it's not actually shiny in the real world, set `reflectance`
 | Dead-snag bark | `0.97` | `0.10` | `0.0` | Pine bark texture × a desaturated cool-grey `base_color` tint, so a leafless trunk reads grey/dead. Bark-trunk glb (`assets/trees/dead_*`). |
 | Tree bark (live pine/birch trunk) | `0.95` | `0.12` | `0.0` | Opaque, repeat-tiled `base_color_texture` (mipped), base-white so the glb COLOR_0 tints it. See "Trees" below. |
 | Tree canopy (needle/leaf) | `0.95` | `0.12` | `0.0` | `AlphaMode::Mask(0.4)` + `cull_mode: None` (double-sided), mipped `base_color_texture`. Up-biased glb normals so it lights soft, never as a dark wall. |
+| Building piece (sticks / hewn wood / stone) + wood door | `0.9–0.95` | `0.1–0.13` | `0.0` | Authored Blender glbs, base-white + repeat-tiled mipped `base_color_texture` per tier/variant (twig, timber, coursed stone; door plank), the glb COLOR_0 tints frame/braces on top. Built in `assets.rs` from `assets/textures/building/*.png`. Source: `art/building/build_pieces.py` + `build_door.py`. |
+| Iron door | `0.55` | _default 0.5_ | `0.8` | The one slightly-metallic structure surface, so the forged plate picks up the sky IBL and reads as steel rather than flat dark; the dark `door_iron` texture drives the F0 tint. |
 | Sulfur | `0.88` | `0.12` | `0.0` | Brittle chalky yellow, never glossy. |
 | Wood chip / stone shard impact debris | `0.88–0.95` | `0.12` | `0.0` | Matches its source material. |
 | Grass blade impact | `0.92` | `0.12` | `0.0` | Tinted via `base_color`; the vertex colour multiplies through. |
@@ -55,7 +57,9 @@ When picking new values:
 
 The mesh builder bakes cheap fake ambient occlusion in the same currency: cone bottom caps at 0.45x, octa-rock undersides at 0.58x, rock-lump ground-contact bands at 0.72x (`scale_rgb` in `mesh/builder.rs`). Per-instance size variety comes from a deterministic node-id-hashed uniform scale jitter in `resource_node_transform_at`, not from mesh duplicates.
 
-The held tools and placed structures (workbench, furnace) are authored Blender glbs with their own baked `COLOR_0` values; they got the matching correction pass (dielectric colours `v^2.2`; iron-head grays untouched since a metal's colour drives F0, not albedo; the furnace's AO-baked colours took a flat warm-biased scale instead, see [Icon to 3D model](icon-to-model.md#vertex-colour-albedos)).
+The held tools and the vertex-coloured placed structures (workbench, furnace, storage boxes, tool cupboard, torch) are authored Blender glbs with their own baked `COLOR_0` values; they got the matching correction pass (dielectric colours `v^2.2`; iron-head grays untouched since a metal's colour drives F0, not albedo; the furnace's AO-baked colours took a flat warm-biased scale instead, see [Icon to 3D model](icon-to-model.md#vertex-colour-albedos)).
+
+The **building pieces and door panels** are also authored glbs (`art/building/build_pieces.py` + `build_door.py`), but they follow the **tree pattern** instead: base-white **textured** materials (repeat-tiled mipped `base_color_texture`, one per building tier + per door variant) with the glb COLOR_0 only tinting the frame/braces/under-structure on top, not carrying the whole look. The geometry mirrors the same box layout as the collider (`crate::building::piece_local_boxes`), so the textured visual still agrees with what blocks movement, and the sticks tier keeps its open lashed-pole lattice so the three tiers stay distinct by silhouette as well as surface.
 
 ## Flat surfaces and the "wet glass" problem
 

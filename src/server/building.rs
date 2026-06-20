@@ -136,7 +136,7 @@ impl GameServer {
                         || (matches!(piece, BuildingPiece::Stairs | BuildingPiece::Ceiling)
                             && existing_piece.is_wall_like())
                 }
-                DeployableKind::Door => {
+                DeployableKind::Door { .. } => {
                     piece.is_wall_like()
                         || matches!(piece, BuildingPiece::Stairs | BuildingPiece::Ceiling)
                 }
@@ -262,11 +262,14 @@ impl GameServer {
             // the raise band above); negative wobble clamps to ground so
             // a slightly sunk request doesn't bury the slab.
             Vec3Net::new(requested.x, requested.y.max(0.0), requested.z),
-            // Keep the requested yaw (NOT quarter-snapped): a free foundation faces the
-            // player, so it tracks the look smoothly instead of flipping at 45° steps.
-            // The grid for any extension orients to this first slab, so an arbitrary yaw
-            // still tiles; snapped pieces (walls/neighbours) own their own yaw below.
-            requested_yaw,
+            // Snap the yaw to the quarter-turn grid. Building yaw is always
+            // cardinal (see the `building` module docs): edge wall sockets,
+            // colliders, and the block grid all assume it. A free foundation
+            // left at its arbitrary player-facing yaw renders rotated while its
+            // walls (whose sockets are quarter-snapped) align to the world axes,
+            // so every wall sits skewed on the slab. Snapping here keeps the slab
+            // and the walls it carries square.
+            crate::building::snap_yaw_quarter_turn(requested_yaw),
         ))
     }
 
@@ -437,8 +440,12 @@ impl GameServer {
         };
         let (cost_item, cost_quantity) = match entity.kind {
             DeployableKind::Building { tier, .. } => repair_cost(tier),
-            // Doors are wood-tier carpentry: hewn logs.
-            DeployableKind::Door => (crate::items::HEWN_LOG_ID, 1),
+            // Doors repair in their own material: hewn logs for the wood
+            // door, iron bars for the iron one.
+            DeployableKind::Door { variant } => match variant {
+                crate::items::DoorVariant::HewnLog => (crate::items::HEWN_LOG_ID, 1),
+                crate::items::DoorVariant::Iron => (crate::items::IRON_BAR_ID, 1),
+            },
             // Crafted deployables (furnace, workbench, bag, boxes)
             // repair with their recipe's primary material; see
             // `repair_material_for`.
@@ -564,7 +571,7 @@ impl GameServer {
         };
         if !matches!(
             entity.kind,
-            DeployableKind::Building { .. } | DeployableKind::Door
+            DeployableKind::Building { .. } | DeployableKind::Door { .. }
         ) {
             return Vec::new();
         }

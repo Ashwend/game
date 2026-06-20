@@ -182,7 +182,9 @@ fn door(id: crate::protocol::DeployedEntityId, z: f32, open: bool) -> Deployable
         Deployable {
             id,
             item_id: crate::items::intern_item_id(crate::items::HEWN_LOG_DOOR_ID),
-            kind: crate::items::DeployableKind::Door,
+            kind: crate::items::DeployableKind::Door {
+                variant: crate::items::DoorVariant::HewnLog,
+            },
             max_health: 400,
             owner: None,
             placed_at_tick: 0,

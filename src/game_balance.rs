@@ -240,6 +240,13 @@ pub const FOUNDATION_SINK_MAX_M: f32 = 0.25;
 /// spot of a stone base: an iron hatchet chews through in ~2.5 minutes.
 pub const DOOR_MAX_HP: u32 = 1_500;
 
+/// Iron door HP. Double the wood door, but the HP barely matters for
+/// raiding: the iron door uses the `MetalBuilding` material, which every
+/// tool does 0 damage to (see `tool_effectiveness_pct`), so it's
+/// tool-proof by construction and only future explosives will breach it.
+/// The HP is what those explosives will chew through.
+pub const IRON_DOOR_MAX_HP: u32 = 3_000;
+
 /// Sleeping bag HP. Cloth tears fast; bags are respawn anchors, not cover.
 pub const SLEEPING_BAG_MAX_HP: u32 = 100;
 

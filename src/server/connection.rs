@@ -172,6 +172,7 @@ impl GameServer {
             armor: 0,
             lifecycle: crate::server::PlayerLifecycle::Alive,
             is_admin,
+            run_speed_multiplier: 1.0,
             last_seen_tick: self.tick,
             next_gather_tick: self.tick,
             next_attack_tick: self.tick,

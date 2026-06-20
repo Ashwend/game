@@ -78,7 +78,7 @@ pub struct WorldStateSave {
     /// doesn't jump back to morning every restart.
     pub world_time_seconds_of_day: f32,
     /// Persisted day/night multiplier. Admins can change it via the
-    /// `/speed` command; the value survives a save round-trip.
+    /// `/time-speed` command; the value survives a save round-trip.
     pub world_time_multiplier: f32,
     /// Structures placed in the world (workbenches, furnaces, …). Each
     /// entry carries the position, kind, current health, and the item-id

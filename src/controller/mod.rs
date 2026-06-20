@@ -65,6 +65,13 @@ pub struct PlayerController {
     jump_buffer_timer: f32,
     coyote_timer: f32,
     step_view_offset_y: f32,
+    /// Admin `/speed` cheat: scales every movement speed (ground run/walk,
+    /// air control ceiling, leap takeoff). `1.0` is normal. The client sets
+    /// this from the replicated [`crate::server::PlayerInputAck`] before each
+    /// predicted step, so a server correction that rebuilds the controller is
+    /// harmless (the next frame re-applies it). The server never simulates
+    /// movement, so its copy stays `1.0`.
+    pub speed_multiplier: f32,
 }
 
 impl PlayerController {
@@ -88,6 +95,7 @@ impl PlayerController {
             jump_buffer_timer: 0.0,
             coyote_timer: COYOTE_TIME_SECONDS,
             step_view_offset_y: 0.0,
+            speed_multiplier: 1.0,
         }
     }
 
@@ -228,8 +236,12 @@ impl PlayerController {
         }
 
         let local_input = clamped_local_move_input(self.last_input.direction);
-        let target_velocity =
-            desired_horizontal_velocity(self.last_input.direction, self.yaw, self.last_input.run);
+        let target_velocity = desired_horizontal_velocity(
+            self.last_input.direction,
+            self.yaw,
+            self.last_input.run,
+            self.speed_multiplier,
+        );
 
         if self.jump_buffer_timer > 0.0 && self.coyote_timer > 0.0 {
             self.velocity.y = JUMP_SPEED;
@@ -255,7 +267,8 @@ impl PlayerController {
             self.velocity =
                 approach_horizontal(self.velocity, target_velocity, delta_seconds, accelerating);
         } else {
-            self.velocity = accelerate_air(self.velocity, target_velocity, delta_seconds);
+            self.velocity =
+                accelerate_air(self.velocity, target_velocity, delta_seconds, self.speed_multiplier);
         }
 
         let x_delta = self.velocity.x * delta_seconds;
@@ -391,17 +404,20 @@ impl PlayerController {
             return;
         }
 
+        // Scale the leap caps with the run-speed cheat so a boosted run that
+        // launches into a jump keeps (rather than gets clamped back from) its
+        // ground speed.
+        let leap_takeoff = LEAP_TAKEOFF_SPEED * self.speed_multiplier;
+        let leap_max = LEAP_MAX_HORIZONTAL_SPEED * self.speed_multiplier;
         let target_direction = target_velocity.scale(target_speed.recip());
         let current_speed = horizontal_dot(self.velocity, target_direction);
-        let takeoff_speed = LEAP_TAKEOFF_SPEED
-            .max(target_speed)
-            .min(LEAP_MAX_HORIZONTAL_SPEED);
+        let takeoff_speed = leap_takeoff.max(target_speed).min(leap_max);
         if current_speed < takeoff_speed {
             let impulse = takeoff_speed - current_speed;
             self.velocity.x += target_direction.x * impulse;
             self.velocity.z += target_direction.z * impulse;
         }
-        self.velocity = clamp_horizontal_speed(self.velocity, LEAP_MAX_HORIZONTAL_SPEED);
+        self.velocity = clamp_horizontal_speed(self.velocity, leap_max);
     }
 }
 

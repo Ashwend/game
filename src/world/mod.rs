@@ -4,8 +4,9 @@ pub mod terrain_texture;
 
 pub use chunk::{
     CHUNK_SIZE_M, ChunkClassification, ChunkCoord, ChunkDims, ChunkRng, ChunkSpawn,
-    ClassificationChannels, NodeKind, PlayableBounds, base_capacity, build_world_blocks, fbm,
-    generate_chunk_spawns, generate_world_spawns, kind_target, splitmix64, value_noise_2d,
+    ClassificationChannels, NodeKind, PlayableBounds, base_capacity, build_world_blocks,
+    chunk_kind_target, fbm, generate_chunk_spawns, generate_world_spawns, kind_target, splitmix64,
+    value_noise_2d,
 };
 pub use map_texture::{WORLD_MAP_TEXELS, render_world_map_rgba, world_map_bounds};
 pub use terrain_texture::{

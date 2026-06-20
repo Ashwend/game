@@ -31,6 +31,9 @@ pub const BUILDING_PLAN_ID: &str = "building_plan";
 pub const HAMMER_ID: &str = "hammer";
 /// Code-locked door deployable that mounts only in doorway openings.
 pub const HEWN_LOG_DOOR_ID: &str = "hewn_log_door";
+/// Iron door variant: same code lock + doorway mount as the hewn log door,
+/// but tool-immune (only future explosives breach it) and double the HP.
+pub const IRON_DOOR_ID: &str = "iron_door";
 /// Respawn-anchor deployable crafted from plant fiber.
 pub const SLEEPING_BAG_ID: &str = "sleeping_bag";
 /// Placeable item containers; small is hand-craftable, large needs a
@@ -209,6 +212,57 @@ impl ItemTint {
     }
 }
 
+/// Which door model a [`DeployableKind::Door`] is. The variant is immutable
+/// spawn identity: it travels on the replicated `Deployable` component and
+/// in the save, and is the single lookup for the door's item id, HP, raid
+/// material, and display name. Adding a new door is one arm here plus a
+/// recipe and a model, nothing in the damage/placement/persistence paths
+/// changes. All accessors are `const fn` because `DeployableKind::material`
+/// and `label` are const and defer to them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DoorVariant {
+    /// Squared-log wood door. The soft side of a base: raidable with tools
+    /// but slowly (`WoodBuilding` material).
+    HewnLog,
+    /// Forged iron door. Tools do nothing to it (`MetalBuilding` material);
+    /// it only falls to explosives, and carries double the wood door's HP.
+    Iron,
+}
+
+impl DoorVariant {
+    /// Inventory item id that places this door.
+    pub const fn item_id(self) -> &'static str {
+        match self {
+            Self::HewnLog => HEWN_LOG_DOOR_ID,
+            Self::Iron => IRON_DOOR_ID,
+        }
+    }
+
+    /// Spawn HP for a freshly hung door of this variant.
+    pub const fn max_hp(self) -> u32 {
+        match self {
+            Self::HewnLog => crate::game_balance::DOOR_MAX_HP,
+            Self::Iron => crate::game_balance::IRON_DOOR_MAX_HP,
+        }
+    }
+
+    /// Raid material, the lever the tool-vs-material table reads. Wood doors
+    /// chip under tools; iron doors are tool-immune.
+    pub const fn material(self) -> DestructibleMaterial {
+        match self {
+            Self::HewnLog => DestructibleMaterial::WoodBuilding,
+            Self::Iron => DestructibleMaterial::MetalBuilding,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::HewnLog => "Hewn Log Door",
+            Self::Iron => "Iron Door",
+        }
+    }
+}
+
 /// What kind of structure a deployable item places. The tier travels with
 /// the kind so a single `RecipeStation::Workbench { min_tier }` check can
 /// match any equal-or-higher workbench in range, same idea behind tool
@@ -230,9 +284,12 @@ pub enum DeployableKind {
     },
     /// Code-locked door mounted in a doorway opening. The hinge side and
     /// swing direction are fully captured by the entity's yaw (flipping a
-    /// door during placement rotates it half a turn), so the kind carries
-    /// no fields.
-    Door,
+    /// door during placement rotates it half a turn). `variant` selects the
+    /// material (wood vs iron), which drives the model, HP, and raid
+    /// resistance; it is immutable spawn identity.
+    Door {
+        variant: DoorVariant,
+    },
     /// Respawn-anchor sleeping bag.
     SleepingBag,
     /// Placeable item container. `tier` 1 is the small box, 2 the large
@@ -264,7 +321,7 @@ impl DeployableKind {
             Self::Workbench { .. } => "Workbench",
             Self::Furnace { .. } => "Furnace",
             Self::Building { piece, .. } => piece.label(),
-            Self::Door => "Hewn Log Door",
+            Self::Door { variant } => variant.label(),
             Self::SleepingBag => "Sleeping Bag",
             Self::StorageBox { tier } => {
                 if tier >= 2 {
@@ -293,7 +350,7 @@ impl DeployableKind {
                 crate::building::BuildingTier::HewnWood => DestructibleMaterial::WoodBuilding,
                 crate::building::BuildingTier::Stone => DestructibleMaterial::StoneBuilding,
             },
-            Self::Door => DestructibleMaterial::WoodBuilding,
+            Self::Door { variant } => variant.material(),
             Self::SleepingBag => DestructibleMaterial::Cloth,
             Self::StorageBox { .. } => DestructibleMaterial::Wood,
             Self::Torch { .. } => DestructibleMaterial::Wood,
@@ -311,7 +368,7 @@ impl DeployableKind {
     pub const fn raidable(self) -> bool {
         matches!(
             self,
-            Self::Building { .. } | Self::Door | Self::SleepingBag | Self::ToolCupboard
+            Self::Building { .. } | Self::Door { .. } | Self::SleepingBag | Self::ToolCupboard
         )
     }
 }
@@ -335,6 +392,10 @@ pub enum DestructibleMaterial {
     /// Stone-tier building blocks. Immune to every tool; raiding stone
     /// waits for future siege equipment.
     StoneBuilding,
+    /// Forged metal (iron doors, and future metal building). Immune to
+    /// every tool like stone, but kept a distinct material so explosives
+    /// can later balance metal independently of stone.
+    MetalBuilding,
     /// Sleeping bags. Tears in a couple of hits.
     Cloth,
 }
@@ -361,6 +422,9 @@ pub fn tool_effectiveness_pct(tool: ToolKind, material: DestructibleMaterial) ->
         (ToolKind::Axe, DestructibleMaterial::WoodBuilding) => 15,
         (ToolKind::Pickaxe, DestructibleMaterial::WoodBuilding) => 5,
         (_, DestructibleMaterial::StoneBuilding) => 0,
+        // Iron doors / metal: tool-proof by construction, like stone. Only
+        // explosives (a separate damage path) will breach metal.
+        (_, DestructibleMaterial::MetalBuilding) => 0,
         // Sleeping bags tear under anything with an edge.
         (ToolKind::Axe | ToolKind::Pickaxe, DestructibleMaterial::Cloth) => 300,
         // The hammer builds, it never breaks. Repair/upgrade/demolish all
@@ -741,8 +805,32 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         tint: ItemTint::new(112, 78, 46),
         tool: None,
         deployable: Some(DeployableProfile {
-            kind: DeployableKind::Door,
+            kind: DeployableKind::Door {
+                variant: DoorVariant::HewnLog,
+            },
             max_health: crate::game_balance::DOOR_MAX_HP,
+            collider_half_width: 0.55,
+            collider_half_height: 1.1,
+            station_radius: 0.0,
+        }),
+    },
+    ItemDefinition {
+        id: IRON_DOOR_ID,
+        name: "Iron Door",
+        description: "A forged iron door on a banded frame with a settable \
+                      code lock. Tools can't scratch it, only explosives \
+                      will breach it. Mounts only in a doorway opening.",
+        stack_size: 1,
+        equipable: true,
+        model: ItemModel::Deployable,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(170, 174, 182),
+        tool: None,
+        deployable: Some(DeployableProfile {
+            kind: DeployableKind::Door {
+                variant: DoorVariant::Iron,
+            },
+            max_health: crate::game_balance::IRON_DOOR_MAX_HP,
             collider_half_width: 0.55,
             collider_half_height: 1.1,
             station_radius: 0.0,
@@ -1123,6 +1211,56 @@ mod tests {
         assert_eq!(
             DeployableKind::Furnace { tier: 1 }.material(),
             DestructibleMaterial::Stone
+        );
+        // The wood door chips under tools (WoodBuilding); the iron door is
+        // metal, which every tool does 0 to.
+        assert_eq!(
+            DeployableKind::Door {
+                variant: DoorVariant::HewnLog
+            }
+            .material(),
+            DestructibleMaterial::WoodBuilding
+        );
+        assert_eq!(
+            DeployableKind::Door {
+                variant: DoorVariant::Iron
+            }
+            .material(),
+            DestructibleMaterial::MetalBuilding
+        );
+    }
+
+    #[test]
+    fn iron_door_is_immune_to_every_tool() {
+        // The whole point of the iron door: no tool can scratch metal, so a
+        // stone base with iron doors is tool-proof and only explosives (a
+        // future, separate damage path) breach it.
+        for tool in [ToolKind::Axe, ToolKind::Pickaxe, ToolKind::Hammer, ToolKind::Hands] {
+            assert_eq!(
+                tool_effectiveness_pct(tool, DestructibleMaterial::MetalBuilding),
+                0,
+                "{tool:?} should do nothing to metal"
+            );
+        }
+        // Regression: the wood door still takes a (slow) trickle from an axe.
+        assert!(tool_effectiveness_pct(ToolKind::Axe, DestructibleMaterial::WoodBuilding) > 0);
+    }
+
+    #[test]
+    fn door_variants_resolve_their_item_and_hp() {
+        assert_eq!(DoorVariant::HewnLog.item_id(), HEWN_LOG_DOOR_ID);
+        assert_eq!(DoorVariant::Iron.item_id(), IRON_DOOR_ID);
+        // The iron door carries double the wood door's HP.
+        assert_eq!(
+            DoorVariant::Iron.max_hp(),
+            DoorVariant::HewnLog.max_hp() * 2
+        );
+        // The registry item HP agrees with the variant.
+        assert_eq!(
+            item_definition(IRON_DOOR_ID)
+                .and_then(|d| d.deployable)
+                .map(|p| p.max_health),
+            Some(DoorVariant::Iron.max_hp())
         );
     }
 

@@ -34,6 +34,9 @@ const TERRAIN_BIOME_BLEND_BAND: f32 = 0.03;
 /// Returns an even blend for a degenerate all-zero sample so the result is always
 /// convex.
 pub fn biome_blend_weights(channels: ClassificationChannels) -> [f32; 4] {
+    // Bias to match the biome label (`ClassificationChannels::classify`), so
+    // the green-leaning biome distribution and the ground splat agree.
+    let channels = channels.biased();
     let c = [channels.forest, channels.stone, channels.ore, channels.hay];
     let cmax = c.iter().copied().fold(0.0_f32, f32::max);
     let floor = cmax - TERRAIN_BIOME_BLEND_BAND;
@@ -146,13 +149,15 @@ mod tests {
 
     #[test]
     fn near_tie_cross_fades_between_the_two() {
-        // Forest and plains within the blend band: both contribute, the others
-        // (far below) drop out entirely.
+        // Forest and plains within the blend band *after the green bias*: both
+        // contribute, the others (far below) drop out. Raw hay leads slightly
+        // because forest's larger bias weight (`BIOME_BIAS`) flips the order, so
+        // post-bias forest is the marginal leader and keeps the larger share.
         let channels = ClassificationChannels {
             forest: 0.80,
             stone: 0.50,
             ore: 0.40,
-            hay: 0.79,
+            hay: 0.86,
         };
         let w = biome_blend_weights(channels);
         assert!(w[0] > 0.0 && w[3] > 0.0, "both leaders contribute: {w:?}");

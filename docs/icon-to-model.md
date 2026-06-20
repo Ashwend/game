@@ -22,6 +22,17 @@ not have to be rediscovered each time.
   Draw Things + OpenCV, see the script header for the full recipe), loaded as two
   glb meshes with Rust-built shared materials (the structure pattern below). The
   cheap distance LODs and dead snags stay procedural `LowPolyMeshBuilder` meshes.
+  The **building pieces** (foundation / wall / window wall / doorway / ceiling /
+  stairs × sticks / hewn wood / stone) and the **door panels** (wood + iron) are
+  the same kind of parametric-script glbs
+  ([`art/building/build_pieces.py`](../art/building/build_pieces.py) +
+  [`build_door.py`](../art/building/build_door.py)): the geometry is generated
+  from the SAME box layout as the collider (`crate::building::piece_local_boxes`,
+  mirrored as constants in the script, the parity point), box-projected UVs are
+  added, and Rust applies a base-white repeat-tiled `base_color_texture` per tier
+  / variant (`assets/textures/building/*.png`). Reach for a parametric script (not
+  hand-modelling) whenever the shape is algorithmic and must stay in lockstep with
+  Rust-side constants.
 - **Procedural `LowPolyMeshBuilder`** (`src/app/scene/mesh/`): still the right
   tool for algorithmic or blocky shapes (ore nodes, debris, the tree LODs + dead
   snags). Do not author those in interactive Blender, and do not reshape a

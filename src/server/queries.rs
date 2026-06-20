@@ -356,6 +356,7 @@ impl GameServer {
             input_ack: player_ecs::PlayerInputAck {
                 last_processed_input: client.controller.last_processed_input,
                 applied_action_seq: client.applied_action_seq,
+                run_speed_multiplier: client.run_speed_multiplier,
             },
             armor: PlayerArmor(client.armor),
             lifecycle: client.lifecycle,

@@ -8,14 +8,16 @@
 //! Changing the code revokes every authorization except the changer's.
 
 use crate::{
-    game_balance::{DOOR_CODE_MAX_LEN, DOOR_CODE_MIN_LEN, DOOR_MAX_HP},
-    items::{DeployableKind, HEWN_LOG_DOOR_ID, item_definition},
-    protocol::{AccountId, ClientId, DeployedEntityId, DoorCommand, ServerMessage, ToastKind},
+    game_balance::{DOOR_CODE_MAX_LEN, DOOR_CODE_MIN_LEN},
+    items::{DeployableKind, DoorVariant, item_definition},
+    protocol::{
+        AccountId, ClientId, DeployedEntityId, DoorCommand, ItemStack, ServerMessage, ToastKind,
+    },
 };
 
 use super::{
     DeliveryTarget, GameServer, ServerEnvelope, deployables::DeployedEntity,
-    inventory::take_items_from_inventory,
+    inventory::{add_stack_to_inventory, take_items_from_inventory},
 };
 
 use crate::game_balance::{
@@ -72,19 +74,81 @@ impl GameServer {
         match command {
             DoorCommand::Place {
                 doorway_id,
+                variant,
                 flip,
                 code,
-            } => self.place_door(client_id, doorway_id, flip, code),
+            } => self.place_door(client_id, doorway_id, variant, flip, code),
             DoorCommand::Interact { id } => self.interact_door(client_id, id),
             DoorCommand::EnterCode { id, code } => self.enter_door_code(client_id, id, code),
             DoorCommand::ChangeCode { id, code } => self.change_door_code(client_id, id, code),
+            DoorCommand::PickUp { id } => self.pick_up_door(client_id, id),
         }
+    }
+
+    /// Pick a door back into inventory. Two gates, mirroring the wheel UX:
+    /// the area must not be claimed by someone else (unclaimed, or the
+    /// sender is authorized on the covering Tool Cupboard), and the sender
+    /// must have unlocked the door at least once (knows the code). The
+    /// door only leaves the world if its item actually fits in inventory.
+    fn pick_up_door(&mut self, client_id: ClientId, id: DeployedEntityId) -> Vec<ServerEnvelope> {
+        let Some(account) = self.door_actor_in_range(client_id, id) else {
+            return Vec::new();
+        };
+        // Snapshot the door's pose / variant / auth before taking any
+        // mutable borrows of the server.
+        let Some(entity) = self.deployed_entities.get(&id) else {
+            return Vec::new();
+        };
+        let DeployableKind::Door { variant } = entity.kind else {
+            return Vec::new();
+        };
+        let position = entity.position;
+        let unlocked = entity
+            .door
+            .as_ref()
+            .is_some_and(|door| door.authorized.contains(&account));
+        // Building privilege: unclaimed ground, or authorized on the
+        // covering claim. (Unlike demolish, an unclaimed door is pick-up-able
+        // by anyone who knows its code, not just the original placer: the
+        // code is the door's key.)
+        if self.claim_blocks_placement(position, account) {
+            return door_toast(
+                client_id,
+                ToastKind::Warning,
+                "This area is claimed by someone else".to_owned(),
+            );
+        }
+        if !unlocked {
+            return door_toast(
+                client_id,
+                ToastKind::Warning,
+                "Enter the code first to pick it up".to_owned(),
+            );
+        }
+        let door_item = variant.item_id();
+        let Some(definition) = item_definition(door_item) else {
+            return Vec::new();
+        };
+        let Some(client) = self.clients.get_mut(&client_id) else {
+            return Vec::new();
+        };
+        // Only remove the panel if the returned item actually fits.
+        if add_stack_to_inventory(&mut client.inventory, ItemStack::new(door_item, 1)).is_some() {
+            return door_toast(client_id, ToastKind::Warning, "Inventory full".to_owned());
+        }
+        self.destroy_deployed_entity(id);
+        door_toast(
+            client_id,
+            ToastKind::Success,
+            format!("Picked up {}", definition.name),
+        )
     }
 
     fn place_door(
         &mut self,
         client_id: ClientId,
         doorway_id: DeployedEntityId,
+        variant: DoorVariant,
         flip: bool,
         code: String,
     ) -> Vec<ServerEnvelope> {
@@ -149,13 +213,14 @@ impl GameServer {
             );
         }
 
-        let Some(definition) = item_definition(HEWN_LOG_DOOR_ID) else {
+        let door_item = variant.item_id();
+        let Some(definition) = item_definition(door_item) else {
             return Vec::new();
         };
         let Some(client) = self.clients.get_mut(&client_id) else {
             return Vec::new();
         };
-        if take_items_from_inventory(&mut client.inventory, HEWN_LOG_DOOR_ID, 1) != 1 {
+        if take_items_from_inventory(&mut client.inventory, door_item, 1) != 1 {
             return door_toast(
                 client_id,
                 ToastKind::Warning,
@@ -174,11 +239,11 @@ impl GameServer {
                 parent: doorway_id,
             }),
             ..DeployedEntity::new(
-                crate::items::intern_item_id(HEWN_LOG_DOOR_ID),
-                DeployableKind::Door,
+                crate::items::intern_item_id(door_item),
+                DeployableKind::Door { variant },
                 position,
                 yaw,
-                DOOR_MAX_HP,
+                variant.max_hp(),
                 Some(owner),
                 self.tick,
             )
@@ -302,7 +367,7 @@ impl GameServer {
     fn door_actor_in_range(&self, client_id: ClientId, id: DeployedEntityId) -> Option<AccountId> {
         let client = self.clients.get(&client_id)?;
         let entity = self.deployed_entities.get(&id)?;
-        if !matches!(entity.kind, DeployableKind::Door) {
+        if !matches!(entity.kind, DeployableKind::Door { .. }) {
             return None;
         }
         super::deployables::within_horizontal_range_of_blocks(

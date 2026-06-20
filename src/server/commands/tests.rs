@@ -133,21 +133,53 @@ fn set_time_rejected_for_non_admin() {
 }
 
 #[test]
-fn set_speed_applies_clamped_multiplier_and_rejects_garbage() {
+fn time_speed_applies_clamped_multiplier_and_rejects_garbage() {
     let (mut server, client) = server_with_host(Some(1));
-    let ok = server.apply_command(client, "/speed 4".to_owned());
+    // `/time-speed` now owns the day/night cycle speed (was `/speed`).
+    let ok = server.apply_command(client, "/time-speed 4".to_owned());
     assert!(has_toast(&ok, ToastKind::Success));
     assert_eq!(server.world_time.multiplier, 4.0);
 
     // Non-finite/non-number rejected without mutating.
-    let bad = server.apply_command(client, "/speed fast".to_owned());
+    let bad = server.apply_command(client, "/time-speed fast".to_owned());
     assert!(has_toast(&bad, ToastKind::Warning));
     assert_eq!(server.world_time.multiplier, 4.0);
 
     // Negative below MIN_MULTIPLIER rejected.
-    let neg = server.apply_command(client, "/speed -1".to_owned());
+    let neg = server.apply_command(client, "/time-speed -1".to_owned());
     assert!(has_toast(&neg, ToastKind::Warning));
     assert_eq!(server.world_time.multiplier, 4.0);
+}
+
+#[test]
+fn speed_sets_the_players_run_speed_multiplier() {
+    let (mut server, client) = server_with_host(Some(1));
+    // `/speed` is now the run-speed cheat for the issuing player.
+    let ok = server.apply_command(client, "/speed 2.5".to_owned());
+    assert!(has_toast(&ok, ToastKind::Success));
+    assert_eq!(server.clients[&client].run_speed_multiplier, 2.5);
+    // It does NOT touch the day/night cycle speed.
+    assert_eq!(server.world_time.multiplier, 1.0);
+
+    // Out-of-range clamps (no freeze, no absurd values).
+    server.apply_command(client, "/speed 0".to_owned());
+    assert!(server.clients[&client].run_speed_multiplier >= 0.1);
+    server.apply_command(client, "/speed 9999".to_owned());
+    assert!(server.clients[&client].run_speed_multiplier <= 20.0);
+
+    // Garbage rejected without mutating.
+    server.apply_command(client, "/speed 3".to_owned());
+    let bad = server.apply_command(client, "/speed zoom".to_owned());
+    assert!(has_toast(&bad, ToastKind::Warning));
+    assert_eq!(server.clients[&client].run_speed_multiplier, 3.0);
+}
+
+#[test]
+fn speed_is_admin_only() {
+    let (mut server, client) = server_with_host(None);
+    let denied = server.apply_command(client, "/speed 5".to_owned());
+    assert!(has_toast(&denied, ToastKind::Warning));
+    assert_eq!(server.clients[&client].run_speed_multiplier, 1.0);
 }
 
 #[test]

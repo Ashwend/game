@@ -88,7 +88,7 @@ impl DeployedEntity {
             DeployableKind::Building { piece, .. } => {
                 crate::building::building_collider_blocks(piece, self.position, self.yaw)
             }
-            DeployableKind::Door => {
+            DeployableKind::Door { .. } => {
                 let open = self.door.as_ref().is_some_and(|door| door.open);
                 crate::building::door_collider_blocks(self.position, self.yaw, open)
             }
@@ -177,7 +177,7 @@ impl GameServer {
         // plan. Neither rides the free-placement path.
         if matches!(
             profile.kind,
-            DeployableKind::Door | DeployableKind::Building { .. }
+            DeployableKind::Door { .. } | DeployableKind::Building { .. }
         ) {
             return place_toast(
                 client_id,

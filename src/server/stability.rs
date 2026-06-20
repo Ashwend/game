@@ -109,7 +109,7 @@ impl GameServer {
             .filter(|entity| {
                 !matches!(
                     entity.kind,
-                    DeployableKind::Building { .. } | DeployableKind::Door
+                    DeployableKind::Building { .. } | DeployableKind::Door { .. }
                 )
             })
             .filter(|entity| entity.position.y > 0.25)
@@ -184,7 +184,7 @@ fn compute_stabilities(
                     },
                 );
             }
-            DeployableKind::Door => {
+            DeployableKind::Door { .. } => {
                 stability.insert(entity.id, 0);
                 if let Some(door) = &entity.door {
                     doors_by_parent

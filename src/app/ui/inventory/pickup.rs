@@ -153,9 +153,10 @@ fn deployable_tooltip_text(
                 ),
             )
         }
-        DeployableKind::Door => (
-            "Hewn Log Door".to_owned(),
-            "Press E to open or close\nHold right click to change the code".to_owned(),
+        DeployableKind::Door { variant } => (
+            variant.label().to_owned(),
+            "Press E to open or close\nHold E to pick up\nHold right click to change the code"
+                .to_owned(),
         ),
         DeployableKind::SleepingBag => (
             "Sleeping Bag".to_owned(),

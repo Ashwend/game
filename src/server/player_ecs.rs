@@ -96,11 +96,14 @@ pub struct PlayerOpenContainers {
     pub open_loot_bag: Option<OpenLootBagView>,
 }
 
-/// Owner-only input/action acknowledgement. Ticks at 20 Hz while the
-/// player moves, which is exactly why it is its own tiny component: when
-/// it was bundled with the inventory, every ack diff re-shipped the full
-/// inventory bytes.
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+/// Owner-only per-player state the client's movement/prediction layer
+/// consumes. Ticks at 20 Hz while the player moves, which is exactly why it
+/// is its own tiny component: when it was bundled with the inventory, every
+/// ack diff re-shipped the full inventory bytes. The run-speed multiplier
+/// rides here (owner-only, prediction-relevant, a handful of bytes) rather
+/// than as its own component: re-asserting it every tick also makes the
+/// admin `/speed` cheat self-healing if a single diff is dropped.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PlayerInputAck {
     pub last_processed_input: u64,
     /// Highest optimistic-prediction action sequence the server has processed
@@ -108,6 +111,22 @@ pub struct PlayerInputAck {
     /// overlay ops with `seq <= applied_action_seq`; see
     /// `src/app/state/prediction.rs`.
     pub applied_action_seq: u32,
+    /// Admin `/speed` cheat: scales the local player's movement speeds in
+    /// client prediction (movement is client-authoritative, so this only
+    /// has to reach the owner). `1.0` is normal speed; the command clamps
+    /// the range. Defaults to `1.0`, never `0.0`, so a defaulted component
+    /// can't freeze a player.
+    pub run_speed_multiplier: f32,
+}
+
+impl Default for PlayerInputAck {
+    fn default() -> Self {
+        Self {
+            last_processed_input: 0,
+            applied_action_seq: 0,
+            run_speed_multiplier: 1.0,
+        }
+    }
 }
 
 /// Client-side assembled view of the owner-only player state. **Not a
@@ -123,6 +142,8 @@ pub struct PlayerPrivate {
     pub open_loot_bag: Option<OpenLootBagView>,
     pub last_processed_input: u64,
     pub applied_action_seq: u32,
+    /// Admin `/speed` run-speed multiplier (see [`PlayerInputAck`]).
+    pub run_speed_multiplier: f32,
 }
 
 /// Authoritative damage reduction (0–100, percent). Replicated to every

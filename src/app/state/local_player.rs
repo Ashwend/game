@@ -69,6 +69,7 @@ pub(crate) fn update_local_player_state_system(
                         open_loot_bag: containers.open_loot_bag.clone(),
                         last_processed_input: input_ack.last_processed_input,
                         applied_action_seq: input_ack.applied_action_seq,
+                        run_speed_multiplier: input_ack.run_speed_multiplier,
                     })
                 }
                 _ => None,

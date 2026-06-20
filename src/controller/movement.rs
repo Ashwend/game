@@ -35,24 +35,33 @@ pub fn first_person_move_direction(input: Vec3Net, yaw: f32) -> Vec3Net {
     rotate_local_horizontal(input, yaw).normalize_or_zero()
 }
 
-pub(super) fn desired_horizontal_velocity(input: Vec3Net, yaw: f32, run: bool) -> Vec3Net {
+pub(super) fn desired_horizontal_velocity(
+    input: Vec3Net,
+    yaw: f32,
+    run: bool,
+    speed_multiplier: f32,
+) -> Vec3Net {
     let input = clamped_local_move_input(input);
     if input.length_squared() == 0.0 {
         return Vec3Net::ZERO;
     }
 
-    let forward_speed = if input.z < 0.0 {
-        BACKPEDAL_SPEED
-    } else if run && input.z > 0.0 {
-        RUN_SPEED
-    } else {
-        WALK_SPEED
-    };
-    let side_speed = if run && input.z > 0.0 {
-        RUN_STRAFE_SPEED
-    } else {
-        SIDE_WALK_SPEED
-    };
+    // Admin `/speed` cheat: scale every gait. `1.0` (the default) leaves the
+    // tuned speeds untouched.
+    let forward_speed = speed_multiplier
+        * if input.z < 0.0 {
+            BACKPEDAL_SPEED
+        } else if run && input.z > 0.0 {
+            RUN_SPEED
+        } else {
+            WALK_SPEED
+        };
+    let side_speed = speed_multiplier
+        * if run && input.z > 0.0 {
+            RUN_STRAFE_SPEED
+        } else {
+            SIDE_WALK_SPEED
+        };
     // Forward and strafe use different per-axis speeds, so a raw diagonal
     // input combines them into a magnitude larger than either, e.g. running
     // diagonally was sqrt(5.3^2 + 7.0^2) ~= 8.8 m/s, noticeably faster than
@@ -119,6 +128,7 @@ pub(super) fn accelerate_air(
     mut velocity: Vec3Net,
     target_velocity: Vec3Net,
     delta_seconds: f32,
+    speed_multiplier: f32,
 ) -> Vec3Net {
     let target_speed = horizontal_length(target_velocity);
     if target_speed <= f32::EPSILON {
@@ -147,7 +157,10 @@ pub(super) fn accelerate_air(
     // input mid-air (diagonal air-strafe bunny-hopping) ratchets the speed up
     // every frame, the exploit this guards against. The `max(.., speed_before)`
     // keeps knockback/leap over-speed intact.
-    clamp_horizontal_speed(velocity, AIR_MAX_HORIZONTAL_SPEED.max(speed_before))
+    clamp_horizontal_speed(
+        velocity,
+        (AIR_MAX_HORIZONTAL_SPEED * speed_multiplier).max(speed_before),
+    )
 }
 
 pub(super) fn clamp_horizontal_speed(mut velocity: Vec3Net, max_speed: f32) -> Vec3Net {

@@ -10,6 +10,7 @@
 //! insert, broadcast snapshot pickup on the next tick, etc.).
 
 mod kit;
+mod player;
 mod time;
 mod world;
 
@@ -44,7 +45,10 @@ impl GameServer {
             "spawn" => self.command_spawn(client_id, &args),
             "drain" => self.command_drain(client_id, &args),
             "time" => self.command_set_time(client_id, &args),
-            "speed" | "timescale" => self.command_set_time_multiplier(client_id, &args),
+            "speed" => self.command_set_run_speed(client_id, &args),
+            "time-speed" | "timespeed" | "timescale" => {
+                self.command_set_time_multiplier(client_id, &args)
+            }
             "test-kit" | "testkit" => self.command_test_kit(client_id),
             "give" => self.command_give(client_id, &args),
             "tp" | "teleport" => self.command_teleport_all(client_id),
@@ -87,11 +91,17 @@ impl GameServer {
         };
         lines.push(time_line.to_owned());
         let speed_line = if is_admin {
-            "  /speed <multiplier>: set the day/night speed (0 to 240)"
+            "  /speed <multiplier>: set your run speed, a cheat (e.g. /speed 2, /speed 1 to reset)"
         } else {
             "  /speed <multiplier>: admin only"
         };
         lines.push(speed_line.to_owned());
+        let time_speed_line = if is_admin {
+            "  /time-speed <multiplier>: set the day/night cycle speed (0 to 240)"
+        } else {
+            "  /time-speed <multiplier>: admin only"
+        };
+        lines.push(time_speed_line.to_owned());
         let test_kit_line = if is_admin {
             "  /test-kit: grant every tool + 100 of each resource + 1 workbench + 1 furnace"
         } else {

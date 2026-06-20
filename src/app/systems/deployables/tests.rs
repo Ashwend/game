@@ -120,7 +120,9 @@ fn door_colliders_follow_the_swing_and_doorways_stay_passable() {
     let door = Deployable {
         id: 3,
         item_id: intern_item_id(HEWN_LOG_DOOR_ID),
-        kind: DeployableKind::Door,
+        kind: DeployableKind::Door {
+            variant: crate::items::DoorVariant::HewnLog,
+        },
         max_health: 1,
         owner: Some(1),
         placed_at_tick: 0,
@@ -185,6 +187,7 @@ fn player_holding(item_id: &str) -> crate::app::state::LocalPlayerState {
             open_loot_bag: None,
             last_processed_input: 0,
             applied_action_seq: 0,
+            run_speed_multiplier: 1.0,
         }),
         lifecycle: None,
     }
@@ -251,7 +254,7 @@ fn ghost_intent_routes_plan_and_door_to_their_flows() {
     );
     assert_eq!(
         current_ghost_intent(&player_holding(HEWN_LOG_DOOR_ID), &in_game, &plan),
-        Some(GhostIntent::Door)
+        Some(GhostIntent::Door(crate::items::DoorVariant::HewnLog))
     );
 }
 
@@ -297,7 +300,9 @@ fn deployable_set_fingerprint_tracks_door_open_state() {
     let door = Deployable {
         id: 9,
         item_id: intern_item_id(HEWN_LOG_DOOR_ID),
-        kind: DeployableKind::Door,
+        kind: DeployableKind::Door {
+            variant: crate::items::DoorVariant::HewnLog,
+        },
         max_health: 1,
         owner: None,
         placed_at_tick: 0,
@@ -311,6 +316,104 @@ fn deployable_set_fingerprint_tracks_door_open_state() {
     // Opening a door changes the collider set, so the fingerprint must
     // move or the grid rebuild would be skipped.
     assert_ne!(closed, open);
+}
+
+#[test]
+fn only_ground_footprints_displace_grass() {
+    use crate::building::{BuildingPiece, BuildingTier};
+    let building =
+        |piece| DeployableKind::Building { piece, tier: BuildingTier::Sticks };
+    // The foundation slab rests in the grass.
+    assert!(deployable_displaces_grass(building(BuildingPiece::Foundation)));
+    // Every other building piece is elevated or vertical: no grass carve.
+    for piece in [
+        BuildingPiece::Wall,
+        BuildingPiece::WindowWall,
+        BuildingPiece::Doorway,
+        BuildingPiece::Ceiling,
+        BuildingPiece::Stairs,
+    ] {
+        assert!(
+            !deployable_displaces_grass(building(piece)),
+            "{piece:?} must not carve grass"
+        );
+    }
+    // A door swings, so it never carves grass.
+    assert!(!deployable_displaces_grass(DeployableKind::Door {
+        variant: crate::items::DoorVariant::HewnLog,
+    }));
+    // Classic ground deployables do carve.
+    assert!(deployable_displaces_grass(DeployableKind::Workbench {
+        tier: 1
+    }));
+    assert!(deployable_displaces_grass(DeployableKind::SleepingBag));
+    assert!(deployable_displaces_grass(DeployableKind::ToolCupboard));
+    assert!(deployable_displaces_grass(DeployableKind::StorageBox {
+        tier: 1
+    }));
+}
+
+#[test]
+fn grass_displacer_fingerprint_ignores_doors_walls_and_swing() {
+    use crate::building::{BuildingPiece, BuildingTier};
+    use crate::items::{WORKBENCH_T1_ID, intern_item_id};
+    let tf = DeployableTransform {
+        position: Vec3Net::ZERO,
+        yaw: 0.0,
+    };
+    let dep = |id, kind| Deployable {
+        id,
+        item_id: intern_item_id(WORKBENCH_T1_ID),
+        kind,
+        max_health: 1,
+        owner: None,
+        placed_at_tick: 0,
+    };
+    let foundation = dep(
+        1,
+        DeployableKind::Building {
+            piece: BuildingPiece::Foundation,
+            tier: BuildingTier::Sticks,
+        },
+    );
+    let wall = dep(
+        2,
+        DeployableKind::Building {
+            piece: BuildingPiece::Wall,
+            tier: BuildingTier::Sticks,
+        },
+    );
+    let door = dep(
+        3,
+        DeployableKind::Door {
+            variant: crate::items::DoorVariant::HewnLog,
+        },
+    );
+    let closed = DeployableActive(false);
+    let open = DeployableActive(true);
+
+    let only_foundation = grass_displacer_fingerprint([(&foundation, &tf, &closed)]);
+    // A wall and a (closed) door contribute nothing to the grass set.
+    let with_wall_and_door = grass_displacer_fingerprint([
+        (&foundation, &tf, &closed),
+        (&wall, &tf, &closed),
+        (&door, &tf, &closed),
+    ]);
+    assert_eq!(
+        only_foundation, with_wall_and_door,
+        "walls and doors do not carve grass"
+    );
+    // Swinging the door open must NOT move the grass fingerprint (it would
+    // for the world-grid fingerprint), so the grass is never re-filtered.
+    let with_door_open = grass_displacer_fingerprint([
+        (&foundation, &tf, &closed),
+        (&wall, &tf, &closed),
+        (&door, &tf, &open),
+    ]);
+    assert_eq!(
+        with_wall_and_door, with_door_open,
+        "a door swing must not re-carve grass"
+    );
 }
 
 #[test]

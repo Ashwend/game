@@ -42,7 +42,9 @@ use crate::{
         FOUNDATION_RAISE_MAX_M,
     },
     inventory::count_items_in_inventory,
-    items::{BUILDING_PLAN_ID, DeployableKind, DeployableProfile, ItemId, item_definition},
+    items::{
+        BUILDING_PLAN_ID, DeployableKind, DeployableProfile, DoorVariant, ItemId, item_definition,
+    },
     protocol::{
         AccountId, DeployedEntityId, PlaceBuildingCommand, PlaceDeployableCommand, Vec3Net,
     },
@@ -91,8 +93,8 @@ pub(super) enum GhostIntent {
     Deployable(ItemId, DeployableProfile),
     /// A building-plan piece (always previewed at the sticks tier).
     Building(BuildingPiece),
-    /// The hewn log door, snapping to doorways.
-    Door,
+    /// A door (wood or iron) of the held variant, snapping to doorways.
+    Door(DoorVariant),
     /// A torch: free-view placement that mounts on the ground or the side of
     /// a wall (no socket snapping).
     Torch(ItemId, DeployableProfile),
@@ -186,10 +188,10 @@ pub(crate) fn update_placement_ghost_system(
                 tier: BuildingTier::Sticks,
             }
         }
-        GhostIntent::Door => {
+        GhostIntent::Door(variant) => {
             update_door_placement(&mut placement, camera_transform, player_feet, &replicated);
             placement.building_cost = None;
-            DeployableKind::Door
+            DeployableKind::Door { variant }
         }
         GhostIntent::Torch(_, _) => {
             update_torch_placement(&mut placement, camera_transform, player_feet, &replicated);
@@ -239,7 +241,7 @@ fn ghost_collider_blocks(
 ) -> Vec<WorldBlock> {
     match kind {
         DeployableKind::Building { piece, .. } => building_collider_blocks(piece, position, yaw),
-        DeployableKind::Door => door_collider_blocks(position, yaw, false),
+        DeployableKind::Door { .. } => door_collider_blocks(position, yaw, false),
         _ => {
             let Some(profile) = item_id
                 .and_then(|id| item_definition(id))
@@ -599,10 +601,15 @@ fn update_building_placement(
                     {
                         placement.yaw = facing;
                     }
-                    // No quarter-turn snap: keep one fixed side of the foundation flat to
-                    // the player so it tracks the look smoothly instead of flipping every
-                    // 45°. The server keeps this yaw too (see `snap_foundation`).
-                    let yaw = placement.yaw;
+                    // Snap to the quarter-turn grid like every other building
+                    // piece (module invariant). The facing above chooses which
+                    // cardinal side fronts the player; snapping then locks it to
+                    // 90°. Left un-snapped, the slab renders at an arbitrary
+                    // angle while its wall sockets (always quarter-snapped) align
+                    // to the world axes, so every wall lands rotated relative to
+                    // the foundation it sits on. The server snaps too
+                    // (`snap_foundation`); snapping here keeps the ghost honest.
+                    let yaw = snap_yaw_quarter_turn(placement.yaw);
                     let blocks = crate::building::building_collider_blocks(piece, aim_net, yaw);
                     let clear = !any_replicated_overlap(&blocks, replicated, false);
                     (Some((aim_net, yaw)), clear)
@@ -925,7 +932,7 @@ pub(crate) fn placement_input_system(
                 placement.manual_yaw = true;
             }
         }
-        GhostIntent::Door => {
+        GhostIntent::Door(_) => {
             // Right-click flips hinge + swing side (a half-turn of the
             // ghost; the swing-arc indicator shows the result).
             if mouse.just_pressed(MouseButton::Right) {
@@ -979,7 +986,7 @@ pub(crate) fn placement_input_system(
                 kind: piece.label().to_lowercase(),
             });
         }
-        GhostIntent::Door => {
+        GhostIntent::Door(variant) => {
             let Some(doorway_id) = placement.door_target else {
                 return;
             };
@@ -987,6 +994,7 @@ pub(crate) fn placement_input_system(
             // cancelling the prompt places nothing.
             menu.text_prompt = Some(TextPrompt::new(TextPromptKind::DoorSetCode {
                 doorway_id,
+                variant,
                 flip: placement.door_flip,
             }));
         }
@@ -1030,7 +1038,7 @@ pub(super) fn deployable_kind_label(item_id: &ItemId) -> Option<String> {
         DeployableKind::Workbench { .. } => "workbench".to_owned(),
         DeployableKind::Furnace { .. } => "furnace".to_owned(),
         DeployableKind::Building { piece, .. } => piece.label().to_lowercase(),
-        DeployableKind::Door => "door".to_owned(),
+        DeployableKind::Door { .. } => "door".to_owned(),
         DeployableKind::SleepingBag => "sleeping_bag".to_owned(),
         DeployableKind::StorageBox { tier } => {
             if tier >= 2 {
@@ -1079,8 +1087,8 @@ pub(super) fn current_ghost_intent(
     }
     let definition = item_definition(&stack.item_id)?;
     let profile = definition.deployable?;
-    if matches!(profile.kind, DeployableKind::Door) {
-        return Some(GhostIntent::Door);
+    if let DeployableKind::Door { variant } = profile.kind {
+        return Some(GhostIntent::Door(variant));
     }
     if matches!(profile.kind, DeployableKind::Torch { .. }) {
         return Some(GhostIntent::Torch(stack.item_id.clone(), profile));
@@ -1421,7 +1429,7 @@ fn any_replicated_overlap(
         // Stairs candidates legitimately clip walls/doors on their cell
         // edges; the caller opts out of those pairs.
         if skip_wall_plane {
-            let wall_plane = matches!(meta.kind, DeployableKind::Door)
+            let wall_plane = matches!(meta.kind, DeployableKind::Door { .. })
                 || matches!(meta.kind, DeployableKind::Building { piece, .. } if piece.is_wall_like());
             if wall_plane {
                 continue;
@@ -1475,7 +1483,7 @@ fn nearest_free_doorway(
             continue;
         }
         let occupied = replicated.iter().any(|(other, other_transform, _)| {
-            matches!(other.kind, DeployableKind::Door)
+            matches!(other.kind, DeployableKind::Door { .. })
                 && positions_match(other_transform.position, transform.position)
         });
         if occupied {
@@ -1520,7 +1528,7 @@ fn refresh_ghost_entity(
         DeployableKind::Workbench { .. } => assets.workbench_mesh.clone(),
         DeployableKind::Furnace { .. } => assets.furnace_mesh.clone(),
         DeployableKind::Building { piece, tier } => assets.building_mesh(piece, tier),
-        DeployableKind::Door => assets.door_ghost_mesh.clone(),
+        DeployableKind::Door { .. } => assets.door_ghost_mesh.clone(),
         DeployableKind::SleepingBag => assets.sleeping_bag_mesh.clone(),
         DeployableKind::StorageBox { tier } => assets.storage_box_mesh(tier),
         DeployableKind::Torch { .. } => assets.torch_mesh.clone(),

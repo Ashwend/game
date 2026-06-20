@@ -179,9 +179,11 @@ impl DeathSplash {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TextPromptKind {
     /// Choose the lock code while hanging a door. The placement command
-    /// only fires once this confirms, cancelling places nothing.
+    /// only fires once this confirms, cancelling places nothing. `variant`
+    /// is the door (wood vs iron) the player is hanging.
     DoorSetCode {
         doorway_id: crate::protocol::DeployedEntityId,
+        variant: crate::items::DoorVariant,
         flip: bool,
     },
     /// The server prompted for the code of door `door_id`.

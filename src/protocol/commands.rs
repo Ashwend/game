@@ -170,12 +170,14 @@ pub enum BuildingCommand {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DoorCommand {
     /// Hang a door (consumed from inventory) in the doorway opening of
-    /// building block `doorway_id`. `flip` mirrors the hinge side chosen
-    /// during ghost placement; `code` is the lock code the placer set.
-    /// Nobody, including the placer, is authorized until they enter the
-    /// code at the door once.
+    /// building block `doorway_id`. `variant` selects which door item to
+    /// consume and hang (wood vs iron); `flip` mirrors the hinge side
+    /// chosen during ghost placement; `code` is the lock code the placer
+    /// set. Nobody, including the placer, is authorized until they enter
+    /// the code at the door once.
     Place {
         doorway_id: DeployedEntityId,
+        variant: crate::items::DoorVariant,
         flip: bool,
         code: String,
     },
@@ -190,6 +192,11 @@ pub enum DoorCommand {
     /// change it; doing so revokes every other authorization so a stolen
     /// code can be rotated away.
     ChangeCode { id: DeployedEntityId, code: String },
+    /// Pick the door back up into inventory (hold-E wheel). Allowed when
+    /// the area is unclaimed or the sender is authorized on the covering
+    /// Tool Cupboard, and the sender has unlocked the door (knows the
+    /// code). Returns the door item, then removes the panel.
+    PickUp { id: DeployedEntityId },
 }
 
 /// Sleeping-bag commands: rename (hold-E wheel) and pick-up (tap E).

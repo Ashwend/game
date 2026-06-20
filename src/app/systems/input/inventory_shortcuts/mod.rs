@@ -227,17 +227,11 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
                         &mut params.error_toasts,
                     );
                 }
-                Some(DeployableKind::Door) => {
-                    // Toggle open/closed. If the sender isn't authorized
-                    // on the lock, the server answers with
-                    // `DoorCodePrompt` and the code dialog opens.
-                    send_gameplay_message(
-                        &mut params.runtime,
-                        &mut params.error_toasts,
-                        ClientMessage::Door(crate::protocol::DoorCommand::Interact { id }),
-                        "door interact",
-                    );
-                }
+                // Door E (tap = open / code prompt, hold = pick-up wheel)
+                // lives in the hold-aware `super::super::wheel` path, like
+                // the sleeping bag and cupboard; nothing fires on plain
+                // press so a hold can't also toggle the door open.
+                Some(DeployableKind::Door { .. }) => {}
                 // Sleeping bag E handling (tap = pick up, hold = rename
                 // wheel) lives in the hold-aware path in
                 // `super::super::wheel`; nothing fires on plain press.

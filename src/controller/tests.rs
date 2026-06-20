@@ -40,10 +40,10 @@ fn movement_direction_matches_bevy_camera_yaw() {
 
 #[test]
 fn running_is_forward_weighted_and_sidewalking_is_slower() {
-    let forward = desired_horizontal_velocity(Vec3Net::new(0.0, 0.0, 1.0), 0.0, true);
-    let side = desired_horizontal_velocity(Vec3Net::new(1.0, 0.0, 0.0), 0.0, true);
-    let back = desired_horizontal_velocity(Vec3Net::new(0.0, 0.0, -1.0), 0.0, true);
-    let diagonal = desired_horizontal_velocity(Vec3Net::new(1.0, 0.0, 1.0), 0.0, true);
+    let forward = desired_horizontal_velocity(Vec3Net::new(0.0, 0.0, 1.0), 0.0, true, 1.0);
+    let side = desired_horizontal_velocity(Vec3Net::new(1.0, 0.0, 0.0), 0.0, true, 1.0);
+    let back = desired_horizontal_velocity(Vec3Net::new(0.0, 0.0, -1.0), 0.0, true, 1.0);
+    let diagonal = desired_horizontal_velocity(Vec3Net::new(1.0, 0.0, 1.0), 0.0, true, 1.0);
 
     // Forward run should still be clearly faster than walking strafe.
     // The exact gap shrunk with the run-speed reduction (8.4 → 7.0); 2.0
@@ -54,6 +54,20 @@ fn running_is_forward_weighted_and_sidewalking_is_slower() {
     assert!(horizontal_length(diagonal) <= RUN_SPEED);
     assert!(diagonal.x > 0.0);
     assert!(diagonal.z < 0.0);
+}
+
+#[test]
+fn speed_multiplier_scales_movement_and_defaults_to_normal() {
+    let forward = Vec3Net::new(0.0, 0.0, 1.0);
+    // The default 1.0 multiplier leaves the tuned run speed untouched.
+    let normal = horizontal_length(desired_horizontal_velocity(forward, 0.0, true, 1.0));
+    assert!((normal - RUN_SPEED).abs() < 1e-3, "1.0 must equal RUN_SPEED, got {normal}");
+    // The admin `/speed` cheat scales it linearly: 2x is twice as fast.
+    let doubled = horizontal_length(desired_horizontal_velocity(forward, 0.0, true, 2.0));
+    assert!((doubled - 2.0 * RUN_SPEED).abs() < 1e-3, "2.0 must double it, got {doubled}");
+    // A walk (no run) also scales.
+    let walk = horizontal_length(desired_horizontal_velocity(forward, 0.0, false, 3.0));
+    assert!((walk - 3.0 * WALK_SPEED).abs() < 1e-3, "walk should scale too, got {walk}");
 }
 
 /// Rotate a horizontal vector by `radians` about the vertical axis. Test
@@ -80,7 +94,7 @@ fn air_strafing_cannot_ratchet_speed_past_the_air_cap() {
         // is always strafing into a turn, the worst case for speed gain.
         let wish_dir = rotate_horizontal(velocity, 0.6).normalize_or_zero();
         let target = wish_dir.scale(RUN_SPEED);
-        velocity = accelerate_air(velocity, target, delta);
+        velocity = accelerate_air(velocity, target, delta, 1.0);
         assert!(
             horizontal_length(velocity) <= AIR_MAX_HORIZONTAL_SPEED + 1e-3,
             "air speed exceeded the cap on frame {frame}: {}",
@@ -99,7 +113,7 @@ fn air_control_preserves_knockback_overspeed() {
     let target = Vec3Net::new(0.0, 0.0, -RUN_SPEED); // pressing forward, across the launch
     let delta = 1.0 / 64.0;
     for _ in 0..16 {
-        velocity = accelerate_air(velocity, target, delta);
+        velocity = accelerate_air(velocity, target, delta, 1.0);
     }
     assert!(
         horizontal_length(velocity) > AIR_MAX_HORIZONTAL_SPEED + 5.0,

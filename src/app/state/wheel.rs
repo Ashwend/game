@@ -45,6 +45,9 @@ pub(crate) enum WheelAction {
     UpgradeBuilding(DeployedEntityId),
     DemolishBuilding(DeployedEntityId),
     ChangeDoorCode(DeployedEntityId),
+    /// Door hold-E wheel: pick the door back into inventory (server gates
+    /// on claim authorization + knowing the code).
+    PickUpDoor(DeployedEntityId),
     RenameBag(DeployedEntityId),
     PickUpBag(DeployedEntityId),
     /// Tool Cupboard hold-E wheel: authorize / deauthorize the local
@@ -125,6 +128,9 @@ pub(crate) enum PickupHoldKind {
     SleepingBag,
     /// Tap toggles your own authorization, hold opens the clear/auth wheel.
     ToolCupboard,
+    /// Tap toggles the door open / prompts for the code, hold opens the
+    /// pick-up wheel.
+    Door,
 }
 
 /// In-flight pickup-key hold on a deployable: a quick release does the

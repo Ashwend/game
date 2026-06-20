@@ -71,6 +71,7 @@ pub(crate) struct ClientInputParams<'w, 's> {
     runtime: ResMut<'w, ClientRuntime>,
     menu: Res<'w, MenuState>,
     look: Res<'w, LookState>,
+    local_player: Res<'w, crate::app::state::LocalPlayerState>,
     error_toasts: MessageWriter<'w, ClientErrorToast>,
     primary_window: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
 }
@@ -114,6 +115,16 @@ pub(crate) fn client_input_system(
         pitch: params.look.pitch,
     };
 
+    // Admin `/speed` cheat: the replicated multiplier (1.0 normally) is
+    // re-applied every frame so a server correction that rebuilds the
+    // predicted controller can't strand it at the default.
+    let run_speed_multiplier = params
+        .local_player
+        .private
+        .as_ref()
+        .map(|private| private.run_speed_multiplier)
+        .unwrap_or(1.0);
+
     // Split-borrow: `world_grid` is read-only here while `predicted_local`
     // is mutated. Reborrowing through `&mut *runtime` lets the compiler see
     // the two fields as disjoint, avoiding a per-frame `BlockGrid` rebuild.
@@ -123,6 +134,7 @@ pub(crate) fn client_input_system(
         runtime.predicted_local.as_mut(),
         runtime.world_grid.as_ref(),
     ) {
+        predicted.speed_multiplier = run_speed_multiplier;
         predicted.apply_input(input);
         predicted.simulate_with_grid(delta_seconds, grid);
         movement = Some(PlayerMovement {

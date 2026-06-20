@@ -88,7 +88,13 @@ pub(super) const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 /// `16` added `PersistedDeployedEntity::cupboard` (the Tool Cupboard
 /// authorized-account list). Postcard is positional, so the new trailing
 /// field shifts every later byte; old v15 saves are rejected at load.
-pub(super) const SAVE_FORMAT_VERSION: u32 = 16;
+///
+/// `17` gave `DeployableKind::Door` a `variant: DoorVariant` field (wood
+/// vs the new tool-immune iron door). Adding a field to a previously
+/// fieldless variant changes that variant's positional postcard layout, so
+/// any save holding a door would deserialise wrong; old v16 saves are
+/// rejected at load.
+pub(super) const SAVE_FORMAT_VERSION: u32 = 17;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
 /// at >100MB/s compression and ~1GB/s decompression.
 const ZSTD_LEVEL: i32 = 5;
