@@ -23,6 +23,17 @@ fn main() {
     // The build script itself.
     println!("cargo::rerun-if-changed=build.rs");
 
+    // Windows: embed the application icon as a Win32 resource so Explorer, the
+    // taskbar, Alt-Tab, and installer shortcuts show the Ashwend logo. This
+    // links into both `ashwend.exe` and `ashwend-updater.exe` (shared build
+    // script). Host-gated via `#[cfg(windows)]` (the build script runs on the
+    // build host): CI builds the Windows target on a Windows runner, so host ==
+    // target. If we ever cross-compile Windows from another host, key this off
+    // `CARGO_CFG_WINDOWS` and make `winresource` an unconditional build-dep.
+    println!("cargo::rerun-if-changed=.github/assets/ashwend.ico");
+    #[cfg(windows)]
+    embed_windows_icon();
+
     // Assets are baked into the binary at compile time by `include_dir!` in
     // `src/app/embedded_assets.rs`. That's a proc macro, and on stable Rust it
     // can't report which files it read, so Cargo doesn't know to rebuild when an
@@ -74,6 +85,25 @@ fn main() {
         println!(
             "cargo::warning=GAME_WORKOS_CLIENT_ID is unset or empty for this release build; baking the default WorkOS client id from src/auth/workos/config.rs"
         );
+    }
+}
+
+/// Compile the multi-resolution `.github/assets/ashwend.ico` into the binary as
+/// a Win32 icon resource. A missing `rc.exe`/`llvm-rc` or a malformed icon must
+/// fail a release build rather than silently shipping an iconless `.exe`; for a
+/// local/dev host build it is only a warning so a dev without the Windows SDK
+/// isn't blocked.
+#[cfg(windows)]
+fn embed_windows_icon() {
+    let mut resource = winresource::WindowsResource::new();
+    resource.set_icon(".github/assets/ashwend.ico");
+    resource.set("ProductName", "Ashwend");
+    resource.set("FileDescription", "Ashwend");
+    if let Err(error) = resource.compile() {
+        if std::env::var("PROFILE").as_deref() == Ok("release") {
+            panic!("failed to embed the Windows application icon: {error}");
+        }
+        println!("cargo::warning=failed to embed the Windows application icon: {error}");
     }
 }
 

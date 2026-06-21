@@ -185,9 +185,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The `asset:` file names below must match ASSETS in
+        # The `asset:`/`dmg:`/`installer:` file names below must match ASSETS in
         # .github/scripts/release_assets.py, the source of truth for release
-        # asset names (its docstring lists every other hardcoded site).
+        # asset names (its docstring lists every other hardcoded site). `asset`
+        # is the bare archive the self-updater consumes; `dmg`/`installer` are
+        # the additional friendly first-install packages the website links to.
         include:
           - label: Linux Intel
             runner: ubuntu-24.04
@@ -201,10 +203,12 @@ jobs:
             runner: macos-15
             target: aarch64-apple-darwin
             asset: ashwend-aarch64-apple-darwin.zip
+            dmg: ashwend-aarch64-apple-darwin.dmg
           - label: Windows Intel
             runner: windows-2025-vs2026
             target: x86_64-pc-windows-msvc
             asset: ashwend-x86_64-pc-windows-msvc.zip
+            installer: ashwend-x86_64-pc-windows-msvc-setup.exe
     env:
       CARGO_INCREMENTAL: "0"
     steps:
@@ -266,6 +270,13 @@ jobs:
           echo "OPUS_LIB_DIR=${opus_root}" >> "$GITHUB_ENV"
           echo "OPUS_STATIC=1" >> "$GITHUB_ENV"
 
+      - name: Install Inno Setup (Windows installer)
+        if: matrix.installer != ''
+        # Compiles the per-user setup.exe in the packaging step below. The
+        # macOS dmg uses `appdmg`, fetched on demand via `npx --yes` (Node is
+        # preinstalled on the macOS runner), so it needs no install step.
+        run: choco install innosetup -y --no-progress
+
       - name: Install Rust toolchain
         run: rustup toolchain install --profile minimal --target "${{ matrix.target }}"
 
@@ -291,13 +302,39 @@ jobs:
         run: cargo build --locked --release --target "${{ matrix.target }}"
 
       - name: Package release binary
-        run: python .github/scripts/package-release.py --target "${{ matrix.target }}" --asset "${{ matrix.asset }}" --version "${{ needs.prepare.outputs.version }}"
+        # The trailing expressions add `--dmg-asset`/`--installer-asset` only on
+        # the platforms that define them (empty string, hence a no-op, elsewhere).
+        run: >
+          python .github/scripts/package-release.py
+          --target "${{ matrix.target }}"
+          --asset "${{ matrix.asset }}"
+          --version "${{ needs.prepare.outputs.version }}"
+          ${{ matrix.dmg && format('--dmg-asset {0}', matrix.dmg) || '' }}
+          ${{ matrix.installer && format('--installer-asset {0}', matrix.installer) || '' }}
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload macOS dmg artifact
+        if: matrix.dmg != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.dmg }}
+          path: ${{ matrix.dmg }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Windows installer artifact
+        if: matrix.installer != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.installer }}
+          path: ${{ matrix.installer }}
           if-no-files-found: error
           retention-days: 7
 

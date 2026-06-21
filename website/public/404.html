@@ -39,8 +39,8 @@
         padding: 2rem 1.25rem;
         background:
           radial-gradient(
-            120% 80% at 50% 120%,
-            rgba(224, 132, 51, 0.16),
+            110% 70% at 50% 118%,
+            rgba(224, 132, 51, 0.18),
             transparent 60%
           ),
           var(--ink-900);
@@ -58,10 +58,28 @@
         -webkit-font-smoothing: antialiased;
       }
       main {
-        max-width: 34rem;
+        width: 100%;
+        max-width: 40rem;
+      }
+      .logo {
+        display: inline-flex;
+        margin-bottom: 2.25rem;
+        border-radius: 14px;
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+        transition:
+          transform 0.2s ease,
+          box-shadow 0.2s ease;
+      }
+      .logo:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.16);
+      }
+      .logo svg {
+        display: block;
+        border-radius: 14px;
       }
       .eyebrow {
-        margin: 0 0 1.25rem;
+        margin: 0 0 1.1rem;
         font-size: 0.75rem;
         font-weight: 500;
         letter-spacing: 0.22em;
@@ -72,18 +90,20 @@
         margin: 0;
         font-family: 'Cinzel', ui-serif, Georgia, serif;
         font-weight: 700;
-        line-height: 1.05;
-        font-size: clamp(2.5rem, 1rem + 7vw, 4.5rem);
+        line-height: 1.08;
+        font-size: clamp(2.25rem, 1rem + 5vw, 3.5rem);
+        text-wrap: balance;
         background: linear-gradient(to bottom, #f6eedd, var(--ember-300));
         -webkit-background-clip: text;
         background-clip: text;
         color: transparent;
       }
-      p {
-        margin: 1.5rem auto 0;
-        max-width: 28rem;
+      .lead {
+        margin: 1.4rem auto 0;
+        max-width: 30rem;
         font-size: 1.125rem;
         line-height: 1.6;
+        text-wrap: balance;
         color: var(--muted);
       }
       .actions {
@@ -103,9 +123,9 @@
         font-size: 1rem;
         text-decoration: none;
         transition:
-          background-color 0.2s,
-          color 0.2s,
-          border-color 0.2s;
+          background-color 0.2s ease,
+          color 0.2s ease,
+          border-color 0.2s ease;
       }
       .btn-primary {
         background: var(--ember-500);
@@ -126,9 +146,30 @@
   </head>
   <body>
     <main>
+      <a class="logo" href="/" aria-label="Ashwend home">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 64 64"
+          width="58"
+          height="58"
+          aria-hidden="true"
+        >
+          <defs>
+            <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#f3b765" />
+              <stop offset="1" stop-color="#d8722f" />
+            </linearGradient>
+          </defs>
+          <rect width="64" height="64" rx="14" fill="#0c1117" />
+          <path
+            d="M32 13 L47 51 H39.2 L36.1 42.4 H27.9 L24.8 51 H17 Z M30.1 35.6 H33.9 L32 29.9 Z"
+            fill="url(#g)"
+          />
+        </svg>
+      </a>
       <p class="eyebrow">Error 404</p>
       <h1>Lost in the fog</h1>
-      <p>
+      <p class="lead">
         This page wandered off the map. The trail back to Ashwend is right here.
       </p>
       <div class="actions">

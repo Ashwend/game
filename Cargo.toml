@@ -103,6 +103,16 @@ include_dir = "0.7"
 # server only ever holds the public client id and the public signing keys.
 jsonwebtoken = "9.3"
 lightyear = { version = "0.26.4", default-features = false, features = ["client", "server", "netcode", "udp", "replication"] }
+# Opens a URL/file in the user's default handler: the menu's Discord link, the
+# WorkOS sign-in page, and the updater's download-page fallback all route
+# through `crate::util::open_url`. Replaces a hand-rolled per-OS launcher whose
+# Windows branch (`cmd /C start "" <url>`) truncated the URL at the first `&`
+# (cmd treats `&` as a statement separator and Rust does not quote it), which
+# broke WorkOS sign-in on Windows with a generic provider error. `open` uses
+# `ShellExecuteW` on Windows (single wide-string arg, no shell parsing), `open`
+# on macOS, and `xdg-open`/`gio` on Linux, and never flashes a console window.
+# Small, no heavy transitive deps.
+open = "5"
 # Opus codec bindings. The system libopus (`brew install opus` /
 # `apt install libopus-dev`) is required at build time. Picked over a pure-Rust
 # encoder because libopus is the only mature option that hits the
@@ -152,6 +162,16 @@ objc2-foundation = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# Embeds the application icon as a Win32 resource into `ashwend.exe` and
+# `ashwend-updater.exe` at link time, so Explorer, the taskbar, Alt-Tab, and the
+# installer's shortcut all show the Ashwend logo (see `build.rs`). Maintained
+# successor to the unmaintained `winres`. Host-gated: CI builds the Windows
+# target on a Windows runner, so the build host is Windows here too. If we ever
+# cross-compile Windows from another host, move this to an unconditional
+# `[build-dependencies]` and key the build.rs call off `CARGO_CFG_WINDOWS`.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 flate2 = "1"

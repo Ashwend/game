@@ -22,8 +22,14 @@ import shutil
 import stat
 import subprocess
 import tarfile
+import tempfile
 import zipfile
 from pathlib import Path
+
+# Installer specs live next to this script's parent (.github/installer/).
+INSTALLER_DIR = Path(__file__).resolve().parents[1] / "installer"
+DMG_SPEC = INSTALLER_DIR / "ashwend-dmg.json"
+INNO_SCRIPT = INSTALLER_DIR / "ashwend.iss"
 
 GAME_BASE = "ashwend"
 UPDATER_BASE = "ashwend-updater"
@@ -149,6 +155,103 @@ def zip_app_bundle(app: Path, output: Path) -> None:
     )
 
 
+def build_dmg(output: Path) -> None:
+    """Wrap the already-assembled, ad-hoc-signed `Ashwend.app` in a styled
+    drag-to-Applications `.dmg` for the website download. The self-updater keeps
+    consuming the `.zip` (it extracts with the `zip` crate and cannot read a
+    dmg), so this is an *additional* asset, not a replacement.
+
+    `appdmg` writes the volume's `.DS_Store` directly (no Finder/AppleScript), so
+    unlike `create-dmg` it runs reliably headless on a CI macOS runner. It
+    resolves the spec's relative paths (`../../Ashwend.app`, the background, the
+    icon) against the spec's own directory, so the bundle must already exist at
+    the repo root, which it does after `build_app_bundle`.
+    """
+    if not DMG_SPEC.exists():
+        raise SystemExit(f"appdmg spec not found: {DMG_SPEC}")
+    if output.exists():
+        output.unlink()
+    subprocess.run(["npx", "--yes", "appdmg", str(DMG_SPEC), str(output)], check=True)
+    verify_dmg_app_signature(output)
+
+
+def verify_dmg_app_signature(dmg: Path) -> None:
+    """Fail the build if the `.app` inside the dmg lost its ad-hoc seal. A
+    packaging tool that stripped extended attributes would silently break
+    Gatekeeper; mount read-only, verify, always detach."""
+    attached = subprocess.run(
+        ["hdiutil", "attach", str(dmg), "-nobrowse", "-readonly", "-plist"],
+        check=True,
+        capture_output=True,
+    )
+    plist = plistlib.loads(attached.stdout)
+    mount_point = next(
+        (
+            entity["mount-point"]
+            for entity in plist.get("system-entities", [])
+            if entity.get("mount-point")
+        ),
+        None,
+    )
+    if not mount_point:
+        raise SystemExit("could not determine the dmg mount point for signature verification")
+    try:
+        subprocess.run(
+            ["codesign", "--verify", "--deep", "--strict", str(Path(mount_point) / BUNDLE_NAME)],
+            check=True,
+        )
+    finally:
+        subprocess.run(["hdiutil", "detach", mount_point], check=False)
+
+
+def find_iscc() -> Path:
+    """Locate the Inno Setup compiler. `choco install innosetup` puts an `iscc`
+    shim on PATH; fall back to the default install location."""
+    found = shutil.which("iscc") or shutil.which("ISCC")
+    if found:
+        return Path(found)
+    default = Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe")
+    if default.exists():
+        return default
+    raise SystemExit("ISCC.exe (Inno Setup 6) not found on PATH or at its default location")
+
+
+def build_windows_installer(target: str, output: Path, version: str) -> None:
+    """Compile the per-user Inno Setup installer beside the existing `.zip`. The
+    zip stays the self-update transport (the updater extracts a bare `.exe`); the
+    installer is the nicer website first-install (Start Menu + optional desktop
+    shortcut + uninstaller, the embedded icon). See `.github/installer/ashwend.iss`
+    for why it installs per-user rather than to Program Files."""
+    if not INNO_SCRIPT.exists():
+        raise SystemExit(f"installer script not found: {INNO_SCRIPT}")
+    iscc = find_iscc()
+    game = release_binary(target, GAME_BASE)
+    updater = release_binary(target, UPDATER_BASE)
+    out = output.resolve()
+    base_name = out.name[:-4] if out.name.lower().endswith(".exe") else out.name
+    with tempfile.TemporaryDirectory() as staging:
+        staging_dir = Path(staging)
+        shutil.copy2(game, staging_dir / game.name)
+        shutil.copy2(updater, staging_dir / updater.name)
+        # ISCC resolves a relative OutputDir against the .iss directory, not the
+        # cwd, so pass /O explicitly to land the setup.exe where the upload step
+        # expects it. /F sets the output base name (the .iss adds `.exe`).
+        subprocess.run(
+            [
+                str(iscc),
+                "/Qp",
+                f"/O{out.parent}",
+                f"/F{base_name}",
+                f"/DAppVersion={version}",
+                f"/DStagingDir={staging_dir}",
+                str(INNO_SCRIPT),
+            ],
+            check=True,
+        )
+    if not out.exists():
+        raise SystemExit(f"installer compile did not produce {out}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", required=True)
@@ -157,6 +260,14 @@ def main() -> None:
         "--version",
         required=True,
         help="release version (MAJOR.MINOR.PATCH) for the macOS Info.plist",
+    )
+    parser.add_argument(
+        "--dmg-asset",
+        help="optional macOS .dmg output, built in addition to the .zip (macOS targets only)",
+    )
+    parser.add_argument(
+        "--installer-asset",
+        help="optional Windows installer .exe output, built in addition to the .zip (Windows targets only)",
     )
     args = parser.parse_args()
 
@@ -168,8 +279,14 @@ def main() -> None:
         app = build_app_bundle(game, updater, args.version)
         adhoc_sign(app)
         zip_app_bundle(app, output)
+        if args.dmg_asset:
+            build_dmg(Path(args.dmg_asset).resolve())
+            print(f"packaged {args.dmg_asset}")
     elif output.suffix == ".zip":
         create_zip([game, updater], output)
+        if args.installer_asset:
+            build_windows_installer(args.target, Path(args.installer_asset), args.version)
+            print(f"packaged {args.installer_asset}")
     else:
         create_tarball([game, updater], output)
 

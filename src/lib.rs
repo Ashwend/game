@@ -4,6 +4,7 @@ pub mod auth;
 pub mod building;
 pub mod cli;
 pub mod combat;
+pub mod console;
 pub mod controller;
 pub mod crafting;
 pub mod game_balance;

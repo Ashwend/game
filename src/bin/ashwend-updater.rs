@@ -14,6 +14,11 @@
 //! Usage (not user-facing):
 //!   ashwend-updater --staged <path> --target <path> --relaunch <path> [--wait-pid <pid>]
 
+// GUI-subsystem on Windows release builds so the swap-and-relaunch helper never
+// flashes a console window between the game quitting and relaunching. It prints
+// nothing user-facing, so it needs no console reattach. No effect elsewhere.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::{
     path::{Path, PathBuf},
     process::Command,

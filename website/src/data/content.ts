@@ -37,14 +37,20 @@ export const DOWNLOADS: ReadonlyArray<Download> = [
     os: 'Windows',
     arch: 'Intel / AMD · 64-bit',
     short: 'Windows',
-    asset: 'ashwend-x86_64-pc-windows-msvc.zip',
+    // Per-user Inno Setup installer (Start Menu + optional desktop shortcut +
+    // uninstaller). The bare `...-msvc.zip` is still published as the
+    // self-update transport, but the website hands first-time users the
+    // installer.
+    asset: 'ashwend-x86_64-pc-windows-msvc-setup.exe',
   },
   {
     platform: 'macos',
     os: 'macOS',
     arch: 'Apple Silicon',
     short: 'macOS',
-    asset: 'ashwend-aarch64-apple-darwin.zip',
+    // Drag-to-Applications .dmg. The `...darwin.zip` is still published for
+    // self-update and for the no-prompt `curl | sh install.sh` path.
+    asset: 'ashwend-aarch64-apple-darwin.dmg',
   },
   {
     platform: 'linux',

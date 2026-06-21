@@ -1,0 +1,13 @@
+{
+  "title": "Ashwend",
+  "icon": "../assets/AppIcon.icns",
+  "background": "../assets/dmg-background.png",
+  "icon-size": 120,
+  "window": {
+    "size": { "width": 600, "height": 400 }
+  },
+  "contents": [
+    { "x": 170, "y": 205, "type": "file", "path": "../../Ashwend.app" },
+    { "x": 430, "y": 205, "type": "link", "path": "/Applications" }
+  ]
+}

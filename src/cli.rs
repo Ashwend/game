@@ -151,6 +151,11 @@ impl From<AuthModeArg> for AuthMode {
 }
 
 pub fn run() -> Result<()> {
+    // Windows GUI-subsystem builds start with no console; reattach to the
+    // launching terminal (if any) before clap parses so `--help`/`--version`,
+    // parse errors, and `server`/`admin` output still reach it. No-op on a GUI
+    // double-click and on non-Windows. See `crate::console`.
+    crate::console::attach_parent_console();
     let args = Args::parse();
     match args.command.unwrap_or(Command::Client { connect: None }) {
         Command::Client { connect } => app::run_app(connect),
