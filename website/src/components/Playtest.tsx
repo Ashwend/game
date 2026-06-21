@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react'
-import { ArrowUpRight, Download as DownloadIcon } from 'lucide-react'
+import {
+  ArrowUpRight,
+  Download as DownloadIcon,
+  ShieldAlert,
+} from 'lucide-react'
 import { DOWNLOADS } from '#/data/content'
 import type { Platform } from '#/data/content'
 import { latestDownloadUrl, releasesUrl } from '#/lib/config'
@@ -100,6 +104,44 @@ function DownloadCallout() {
         Browse all releases
         <ArrowUpRight className="size-3.5" aria-hidden="true" />
       </a>
+
+      <UnsignedBuildNotice />
+    </div>
+  )
+}
+
+/**
+ * First-launch heads-up. The builds aren't code-signed yet, so both macOS and
+ * Windows flag them as coming from an unidentified developer. Shown visibly
+ * (not behind a disclosure) because a confused "unsafe app" prompt is the most
+ * likely reason a new player bounces before ever launching the game.
+ */
+function UnsignedBuildNotice() {
+  return (
+    <div className="mt-10 w-full max-w-md rounded-xl border border-ember-500/20 bg-ember-500/[0.04] p-4 text-left text-sm leading-relaxed text-muted">
+      <p className="flex items-center gap-2 font-medium text-fg/90">
+        <ShieldAlert
+          className="size-4 shrink-0 text-ember-300"
+          aria-hidden="true"
+        />
+        First launch: the build isn&rsquo;t signed yet
+      </p>
+      <p className="mt-2">
+        Ashwend isn&rsquo;t code-signed yet, so your system flags it as coming
+        from an unidentified developer the first time you open it. It&rsquo;s
+        safe to run; you just have to allow it once.
+      </p>
+      <p className="mt-2">
+        <span className="font-medium text-fg/90">macOS:</span> open the app and
+        dismiss the first warning, then go to System Settings &rarr; Privacy
+        &amp; Security, scroll to the bottom, and click Open Anyway. Confirm
+        once and it launches normally from then on.
+      </p>
+      <p className="mt-2">
+        <span className="font-medium text-fg/90">Windows:</span> if
+        &ldquo;Windows protected your PC&rdquo; appears, click More info, then
+        Run anyway.
+      </p>
     </div>
   )
 }
