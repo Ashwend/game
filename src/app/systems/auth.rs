@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::{
+    analytics::{Analytics, Event},
     app::state::{AuthFlow, CurrentUser, LoadingSplash, MenuState},
     auth::AuthenticatedUser,
     auth::workos::LoginOutcome,
@@ -12,12 +13,14 @@ use crate::{
 /// the error only for an explicit sign-in attempt, not a silent refresh).
 pub(crate) fn drive_auth_flow_system(
     mut commands: Commands,
+    analytics: Res<Analytics>,
     mut auth: ResMut<AuthFlow>,
     mut menu: ResMut<MenuState>,
 ) {
     // Title-screen account actions.
     if menu.sign_out_requested {
         menu.sign_out_requested = false;
+        analytics.track(Event::SignedOut);
         crate::auth::workos::logout();
         commands.remove_resource::<CurrentUser>();
         *auth = AuthFlow::LoggedOut { error: None };
@@ -106,6 +109,7 @@ mod tests {
     fn app_with(auth: AuthFlow) -> App {
         let mut app = App::new();
         app.insert_resource(auth);
+        app.insert_resource(Analytics::disabled());
         app.insert_resource(MenuState {
             loading_splash: None,
             ..Default::default()

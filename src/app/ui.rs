@@ -227,7 +227,13 @@ pub(crate) fn ui_system(
         // `workos` is only ever absent on the authenticated bypass path, so if
         // we're here it's present. Guard anyway rather than unwrap.
         if let Some(workos) = resources.workos.as_ref() {
-            login::login_overlay_ui(ctx, &mut resources.auth, workos, &mut resources.menu);
+            login::login_overlay_ui(
+                ctx,
+                &mut resources.auth,
+                workos,
+                &mut resources.menu,
+                &resources.analytics,
+            );
         }
         return Ok(());
     }

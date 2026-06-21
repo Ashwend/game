@@ -10,9 +10,12 @@
 use serde_json::{Map, Value, json};
 
 /// Mirror of [`crate::app::state::Screen`] so the analytics module does not
-/// pull in `bevy::Resource` or any UI dependency. Mapped at the hook site.
+/// pull in `bevy::Resource` or any UI dependency, plus `SignIn` for the
+/// pre-auth login splash, which is gated by `AuthFlow` (not a `Screen` variant)
+/// and so isn't covered by `map_screen`. Mapped at the hook site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ScreenKind {
+    SignIn,
     MainMenu,
     Options,
     Worlds,
@@ -23,11 +26,29 @@ pub(crate) enum ScreenKind {
 impl ScreenKind {
     fn as_str(self) -> &'static str {
         match self {
+            Self::SignIn => "sign_in",
             Self::MainMenu => "main_menu",
             Self::Options => "options",
             Self::Worlds => "worlds",
             Self::Multiplayer => "multiplayer",
             Self::InGame => "in_game",
+        }
+    }
+}
+
+/// Which login-screen button started a sign-in, so the funnel can tell
+/// returning sign-ins from new-account creation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuthMethod {
+    SignIn,
+    CreateAccount,
+}
+
+impl AuthMethod {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::SignIn => "sign_in",
+            Self::CreateAccount => "create_account",
         }
     }
 }
@@ -115,6 +136,14 @@ pub(crate) enum Event {
     ScreenViewed {
         screen: ScreenKind,
     },
+    /// The user clicked "Sign in" / "Create account" on the login splash,
+    /// kicking off the browser round-trip.
+    SignInStarted {
+        method: AuthMethod,
+    },
+    /// The user signed out from the title screen (the confirmed sign-out
+    /// action, not a session that lapsed on its own).
+    SignedOut,
     WorldCreated {
         map_type: String,
     },
@@ -159,6 +188,11 @@ impl Event {
                 "screen_viewed",
                 props(&[("screen", json!(screen.as_str()))]),
             ),
+            Self::SignInStarted { method } => (
+                "sign_in_started",
+                props(&[("method", json!(method.as_str()))]),
+            ),
+            Self::SignedOut => ("signed_out", Map::new()),
             Self::WorldCreated { map_type } => {
                 ("world_created", props(&[("map_type", json!(map_type))]))
             }
@@ -277,6 +311,36 @@ mod tests {
         let value = shape(Event::AppStarted);
         assert_eq!(value["event"], "app_started");
         assert_eq!(value["properties"], json!({}));
+    }
+
+    #[test]
+    fn sign_in_started_carries_method() {
+        let value = shape(Event::SignInStarted {
+            method: AuthMethod::CreateAccount,
+        });
+        assert_eq!(value["event"], "sign_in_started");
+        assert_eq!(value["properties"]["method"], "create_account");
+
+        let value = shape(Event::SignInStarted {
+            method: AuthMethod::SignIn,
+        });
+        assert_eq!(value["properties"]["method"], "sign_in");
+    }
+
+    #[test]
+    fn signed_out_serializes_with_empty_props() {
+        let value = shape(Event::SignedOut);
+        assert_eq!(value["event"], "signed_out");
+        assert_eq!(value["properties"], json!({}));
+    }
+
+    #[test]
+    fn sign_in_screen_maps_to_snake_case() {
+        let value = shape(Event::ScreenViewed {
+            screen: ScreenKind::SignIn,
+        });
+        assert_eq!(value["event"], "screen_viewed");
+        assert_eq!(value["properties"]["screen"], "sign_in");
     }
 
     #[test]

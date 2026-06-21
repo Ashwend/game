@@ -1,6 +1,7 @@
 use bevy_egui::egui;
 
 use crate::{
+    analytics::{Analytics, AuthMethod, Event},
     app::state::{AuthFlow, MenuState, WorkosAuth},
     auth::workos::{ScreenHint, begin_login},
 };
@@ -26,6 +27,7 @@ pub(super) fn login_overlay_ui(
     auth: &mut AuthFlow,
     workos: &WorkosAuth,
     menu: &mut MenuState,
+    analytics: &Analytics,
 ) {
     let view = match &*auth {
         AuthFlow::Authenticated => return,
@@ -100,6 +102,12 @@ pub(super) fn login_overlay_ui(
     }
 
     if let Some(hint) = start {
+        analytics.track(Event::SignInStarted {
+            method: match hint {
+                ScreenHint::SignIn => AuthMethod::SignIn,
+                ScreenHint::SignUp => AuthMethod::CreateAccount,
+            },
+        });
         *auth = AuthFlow::Authenticating(begin_login(&workos.0, hint));
     }
     if cancel {
@@ -148,7 +156,7 @@ mod tests {
         let mut menu = MenuState::default();
 
         let output = ctx.run(raw_input(), |ctx| {
-            login_overlay_ui(ctx, &mut auth, &workos, &mut menu);
+            login_overlay_ui(ctx, &mut auth, &workos, &mut menu, &Analytics::disabled());
         });
 
         assert!(output.shapes.len() > 1, "the login splash should draw");
@@ -167,7 +175,7 @@ mod tests {
         let mut menu = MenuState::default();
 
         let output = ctx.run(raw_input(), |ctx| {
-            login_overlay_ui(ctx, &mut auth, &workos, &mut menu);
+            login_overlay_ui(ctx, &mut auth, &workos, &mut menu, &Analytics::disabled());
         });
 
         assert!(output.shapes.len() > 1);
@@ -186,7 +194,7 @@ mod tests {
             let mut menu = MenuState::default();
 
             let output = ctx.run(raw_input(), |ctx| {
-                login_overlay_ui(ctx, &mut auth, &workos, &mut menu);
+                login_overlay_ui(ctx, &mut auth, &workos, &mut menu, &Analytics::disabled());
             });
 
             assert!(output.shapes.len() > 1, "the busy splash should draw");
@@ -201,7 +209,7 @@ mod tests {
         let mut menu = MenuState::default();
 
         let _ = ctx.run(raw_input(), |ctx| {
-            login_overlay_ui(ctx, &mut auth, &workos, &mut menu);
+            login_overlay_ui(ctx, &mut auth, &workos, &mut menu, &Analytics::disabled());
         });
 
         // Still authenticated and untouched, the overlay drew nothing.

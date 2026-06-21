@@ -3,8 +3,9 @@
 //! Holds the small observer systems that turn ambient state changes into
 //! discrete analytics events:
 //!
-//! - [`screen_viewed_system`], fires `screen_viewed` when [`MenuState::screen`]
-//!   transitions to a new value.
+//! - [`screen_viewed_system`], fires `screen_viewed` when the visible screen
+//!   changes: the login splash (`sign_in`) while logged out, otherwise the
+//!   [`MenuState::screen`] the user is on.
 //! - [`session_started_system`], fires `session_started` when
 //!   [`ClientRuntime::session`] flips from `None` to `Some`. Mode is derived
 //!   from `active_world_id` (present → singleplayer, absent → multiplayer).
@@ -23,13 +24,14 @@ use bevy::prelude::*;
 
 use crate::{
     analytics::{Analytics, ErrorCategory, Event, ScreenKind, SessionEndReason, SessionMode},
-    app::state::{ClientErrorToast, ClientRuntime, MenuState, Screen},
+    app::state::{AuthFlow, ClientErrorToast, ClientRuntime, MenuState, Screen},
 };
 
-/// Last [`Screen`] we emitted `screen_viewed` for. Initialised to `None` so
-/// the very first frame fires for the launch screen.
+/// Last [`ScreenKind`] we emitted `screen_viewed` for. Initialised to `None` so
+/// the very first frame fires for the launch screen (the login splash for a
+/// logged-out user, the main menu for a returning one).
 #[derive(Resource, Default)]
-pub(crate) struct LastTrackedScreen(pub(crate) Option<Screen>);
+pub(crate) struct LastTrackedScreen(pub(crate) Option<ScreenKind>);
 
 /// Per-session bookkeeping: when it started + the reason set by the caller
 /// (kick path, user quit). The reason is consumed once and reset to
@@ -50,16 +52,26 @@ pub(crate) struct PendingSessionEndReason(pub(crate) Option<SessionEndReason>);
 
 pub(crate) fn screen_viewed_system(
     analytics: Res<Analytics>,
+    auth: Res<AuthFlow>,
     menu: Res<MenuState>,
     mut last: ResMut<LastTrackedScreen>,
 ) {
-    if last.0 == Some(menu.screen) {
+    // The login splash is gated by `AuthFlow`, not `MenuState::screen` (which
+    // sits at `MainMenu` underneath it), so derive the screen from auth first:
+    // a logged-out user is looking at the sign-in screen, not the menu. The
+    // `Verifying`/`Authenticating` spinners are transient sub-states of the
+    // sign-in flow, emit nothing for them so a returning user's silent refresh
+    // doesn't log a spurious `sign_in` view before the menu loads.
+    let screen = match &*auth {
+        AuthFlow::Authenticated => map_screen(menu.screen),
+        AuthFlow::LoggedOut { .. } => ScreenKind::SignIn,
+        AuthFlow::Verifying(_) | AuthFlow::Authenticating(_) => return,
+    };
+    if last.0 == Some(screen) {
         return;
     }
-    last.0 = Some(menu.screen);
-    analytics.track(Event::ScreenViewed {
-        screen: map_screen(menu.screen),
-    });
+    last.0 = Some(screen);
+    analytics.track(Event::ScreenViewed { screen });
 }
 
 pub(crate) fn session_started_system(
@@ -141,6 +153,52 @@ fn classify_error(text: &str) -> ErrorCategory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::workos::LoginHandle;
+
+    /// A minimal app running just `screen_viewed_system`, so a test can assert
+    /// which screen it would record (mirrored in `LastTrackedScreen`) for a
+    /// given auth state + menu screen. Analytics is disabled (fire-and-forget
+    /// to a worker isn't observable in-process), so `LastTrackedScreen` is the
+    /// assertable surface.
+    fn screen_app(auth: AuthFlow, screen: Screen) -> App {
+        let mut app = App::new();
+        app.insert_resource(Analytics::disabled());
+        app.insert_resource(auth);
+        app.insert_resource(MenuState {
+            screen,
+            ..Default::default()
+        });
+        app.insert_resource(LastTrackedScreen::default());
+        app.add_systems(Update, screen_viewed_system);
+        app
+    }
+
+    fn tracked(app: &App) -> Option<ScreenKind> {
+        app.world().resource::<LastTrackedScreen>().0
+    }
+
+    #[test]
+    fn logged_out_records_the_sign_in_screen_not_the_menu_underneath() {
+        let mut app = screen_app(AuthFlow::LoggedOut { error: None }, Screen::MainMenu);
+        app.update();
+        assert_eq!(tracked(&app), Some(ScreenKind::SignIn));
+    }
+
+    #[test]
+    fn authenticated_records_the_menu_screen() {
+        let mut app = screen_app(AuthFlow::Authenticated, Screen::Worlds);
+        app.update();
+        assert_eq!(tracked(&app), Some(ScreenKind::Worlds));
+    }
+
+    #[test]
+    fn auth_spinner_records_nothing_so_silent_restore_skips_a_sign_in_view() {
+        let (handle, tx) = LoginHandle::pending();
+        let mut app = screen_app(AuthFlow::Verifying(handle), Screen::MainMenu);
+        app.update();
+        assert_eq!(tracked(&app), None);
+        drop(tx);
+    }
 
     #[test]
     fn classify_error_recognises_obvious_keywords() {
