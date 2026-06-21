@@ -15,18 +15,17 @@ use bevy::{
 };
 
 use super::mesh::builder::build_hay_tuft_mesh;
+use super::ore_toon::OreToonMaterial;
 use super::terrain::build_mip_chain;
 use super::{
     components::MainCamera,
     mesh::{
-        COAL_ORE, IRON_ORE, ORE_NODE_STAGE_COUNT, PlayerRigMeshes, STONE_VEIN, SULFUR_ORE,
-        build_player_rig_meshes, door_ghost_mesh, held_building_plan_mesh, held_hammer_mesh,
-        impact_stone_shard_mesh, impact_wood_chip_mesh, low_poly_bag_mesh,
-        low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_medium_lod_mesh,
+        ORE_NODE_STAGE_COUNT, PlayerRigMeshes, build_player_rig_meshes, door_ghost_mesh,
+        held_building_plan_mesh, held_hammer_mesh, impact_stone_shard_mesh, impact_wood_chip_mesh,
+        low_poly_bag_mesh, low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_medium_lod_mesh,
         low_poly_birch_tree_small_lod_mesh, low_poly_branch_pile_mesh,
-        low_poly_ore_node_stage_meshes, low_poly_pine_tree_large_lod_mesh,
-        low_poly_pine_tree_medium_lod_mesh, low_poly_pine_tree_small_lod_mesh,
-        low_poly_surface_stone_mesh, sleeping_bag_mesh,
+        low_poly_pine_tree_large_lod_mesh, low_poly_pine_tree_medium_lod_mesh,
+        low_poly_pine_tree_small_lod_mesh, low_poly_surface_stone_mesh, sleeping_bag_mesh,
     },
     sky::{initial_distance_fog, setup_sky},
 };
@@ -151,10 +150,10 @@ pub(crate) struct ResourceVisualAssets {
     pub(crate) surface_stone_mesh: Handle<Mesh>,
     pub(crate) branch_pile_mesh: Handle<Mesh>,
     pub(crate) hay_grass_mesh: Handle<Mesh>,
-    pub(crate) coal_material: Handle<StandardMaterial>,
-    pub(crate) iron_material: Handle<StandardMaterial>,
-    pub(crate) sulfur_material: Handle<StandardMaterial>,
-    pub(crate) stone_vein_material: Handle<StandardMaterial>,
+    /// One shared cel-shaded material for all four ore/vein nodes: the per-mineral
+    /// colour rides on the glb COLOR_0, so the rock texture + toon ramp are shared
+    /// (see [`OreToonMaterial`] and `art/ore/build_ore.py`).
+    pub(crate) ore_toon_material: Handle<OreToonMaterial>,
     pub(crate) vertex_material: Handle<StandardMaterial>,
     /// Warm, alpha-masked material for the harvestable hay tuft: the shared
     /// grass-tuft texture tinted toward straw so it reads distinct from the
@@ -360,6 +359,7 @@ pub(crate) fn setup_scene(
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut ore_toon_materials: ResMut<Assets<OreToonMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut scattering_media: ResMut<Assets<ScatteringMedium>>,
 ) {
@@ -567,6 +567,28 @@ pub(crate) fn setup_scene(
     let birch_bark_tex = load_tree_texture("bark_birch");
     let birch_leaf_tex = load_tree_texture("leaves");
 
+    // Shared ore/vein rock-surface texture: a neutral grey cracked-stone detail
+    // map (mean ~0.8) box-projected across every ore boulder + its chunks. Base
+    // white * COLOR_0 (per-mineral) * this texture, the same trick as the bark.
+    // Decoded sRGB with a CPU mip chain + repeat/aniso sampler. Source:
+    // `art/ore/rock_master.png` -> `assets/textures/ore/rock.png`.
+    let ore_rock_tex = {
+        let rel = "textures/ore/rock.png";
+        let bytes = embedded_bytes(rel)
+            .unwrap_or_else(|| panic!("embedded ore texture missing: {rel}"));
+        let mut image = Image::from_buffer(
+            bytes,
+            ImageType::Extension("png"),
+            CompressedImageFormats::NONE,
+            true,
+            ImageSampler::Descriptor(tree_texture_sampler()),
+            RenderAssetUsages::RENDER_WORLD,
+        )
+        .unwrap_or_else(|err| panic!("decode ore texture {rel}: {err:?}"));
+        build_mip_chain(&mut image);
+        images.add(image)
+    };
+
     // Each live tree is an authored Blender glb with two meshes: mesh 0 = the
     // bark trunk, mesh 1 = the canopy. Geometry + UVs + COLOR_0 come from the
     // model; the materials above carry the textures. Sources: `art/trees/*`.
@@ -585,11 +607,23 @@ pub(crate) fn setup_scene(
         asset_server
             .load(GltfAssetLabel::Primitive { mesh, primitive: 0 }.from_asset(glb.to_owned()))
     };
+    // Ore/vein nodes: one authored glb per (type, depletion stage), each a single
+    // mesh + single material slot with the per-mineral look on COLOR_0 (grey rock
+    // body vs bright mineral chunks). Stage index = mesh 0/1/2 glb. See
+    // `art/ore/build_ore.py`.
+    let ore_stage_meshes = |ty: &str| -> [Handle<Mesh>; ORE_NODE_STAGE_COUNT] {
+        std::array::from_fn(|stage| {
+            asset_server.load(
+                GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }
+                    .from_asset(embedded_asset_path(&format!("ore/{ty}/stage_{stage}.glb"))),
+            )
+        })
+    };
     commands.insert_resource(ResourceVisualAssets {
-        coal_node_meshes: low_poly_ore_node_stage_meshes(COAL_ORE).map(|mesh| meshes.add(mesh)),
-        iron_node_meshes: low_poly_ore_node_stage_meshes(IRON_ORE).map(|mesh| meshes.add(mesh)),
-        sulfur_node_meshes: low_poly_ore_node_stage_meshes(SULFUR_ORE).map(|mesh| meshes.add(mesh)),
-        stone_vein_meshes: low_poly_ore_node_stage_meshes(STONE_VEIN).map(|mesh| meshes.add(mesh)),
+        coal_node_meshes: ore_stage_meshes("coal"),
+        iron_node_meshes: ore_stage_meshes("iron"),
+        sulfur_node_meshes: ore_stage_meshes("sulfur"),
+        stone_vein_meshes: ore_stage_meshes("stone"),
         pine_tree_small_trunk_mesh: tree_prim(&pine_small_glb, 0),
         pine_tree_small_foliage_mesh: tree_prim(&pine_small_glb, 1),
         pine_tree_medium_trunk_mesh: tree_prim(&pine_medium_glb, 0),
@@ -617,29 +651,14 @@ pub(crate) fn setup_scene(
         // wider than a detail-grass card (~0.2-0.8 m) so the harvestable plant is easy
         // to spot for pickup in any biome.
         hay_grass_mesh: meshes.add(build_hay_tuft_mesh(1.0, 0.42, 3)),
-        coal_material: materials.add(StandardMaterial {
-            base_color: VERTEX_MATERIAL_COLOR,
-            perceptual_roughness: 0.98,
-            reflectance: 0.12,
-            ..default()
-        }),
-        iron_material: materials.add(StandardMaterial {
-            base_color: VERTEX_MATERIAL_COLOR,
-            perceptual_roughness: 0.78,
-            metallic: 0.18,
-            ..default()
-        }),
-        sulfur_material: materials.add(StandardMaterial {
-            base_color: VERTEX_MATERIAL_COLOR,
-            perceptual_roughness: 0.88,
-            reflectance: 0.12,
-            ..default()
-        }),
-        stone_vein_material: materials.add(StandardMaterial {
-            base_color: VERTEX_MATERIAL_COLOR,
-            perceptual_roughness: 0.95,
-            reflectance: 0.12,
-            ..default()
+        // One shared cel-shaded material for all four ores. The hand-painted rock
+        // texture is shared; the per-mineral colour is the glb COLOR_0. params =
+        // (cel band count, ambient floor, ink-edge strength, ink-edge width exp).
+        // Harder cartoon: 3 bands + a strong dark silhouette edge. Ambient floor
+        // lifted so the shadow bands read brighter (the stone was reading dark).
+        ore_toon_material: ore_toon_materials.add(OreToonMaterial {
+            rock: ore_rock_tex.clone(),
+            params: Vec4::new(3.0, 0.30, 0.8, 2.2),
         }),
         vertex_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,

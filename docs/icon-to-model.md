@@ -34,9 +34,12 @@ not have to be rediscovered each time.
   hand-modelling) whenever the shape is algorithmic and must stay in lockstep with
   Rust-side constants.
 - **Procedural `LowPolyMeshBuilder`** (`src/app/scene/mesh/`): still the right
-  tool for algorithmic or blocky shapes (ore nodes, debris, the tree LODs + dead
-  snags). Do not author those in interactive Blender, and do not reshape a
-  procedural mesh to chase an icon, author a glb instead.
+  tool for algorithmic or blocky shapes (impact debris, the tree LODs). Do not
+  author those in interactive Blender, and do not reshape a procedural mesh to
+  chase an icon, author a glb instead. (The ore/vein nodes moved the other way:
+  they were procedural `LowPolyMeshBuilder` mounds and are now parametric-script
+  glbs, `art/ore/build_ore.py`, a boulder studded with mineral chunks per
+  depletion stage.)
 
 ## Tools
 

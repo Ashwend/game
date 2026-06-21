@@ -4,7 +4,10 @@ use crate::{
     app::{
         scene::ResourceVisualAssets,
         state::{ClientRuntime, MenuState, Screen},
-        systems::{resource_node_transform_at, resource_node_visual, tree_foliage_visual},
+        systems::{
+            insert_resource_node_material, resource_node_transform_at, resource_node_visual,
+            tree_foliage_visual,
+        },
     },
     resources::{resource_node_definition, spawn_resource_node},
     world::{BlockKind, WorldData},
@@ -182,15 +185,16 @@ fn spawn_menu_resource_nodes(
         let (mesh, material) = resource_node_visual(assets, definition.model);
         let transform =
             resource_node_transform_at(node.id, node.position, node.yaw, definition.model);
-        let entity = commands
-            .spawn((
-                Name::new(format!("Menu Resource Node {}", node.id)),
-                WorldGeometry,
-                Mesh3d(mesh),
-                MeshMaterial3d(material),
-                transform,
-            ))
-            .id();
+        let mut node_command = commands.spawn((
+            Name::new(format!("Menu Resource Node {}", node.id)),
+            WorldGeometry,
+            Mesh3d(mesh),
+            transform,
+        ));
+        // Ore/vein nodes carry the cel-shaded `OreToonMaterial`; trees keep their
+        // `StandardMaterial` (distinct component types, attached after the spawn).
+        insert_resource_node_material(&mut node_command, material);
+        let entity = node_command.id();
         // Trees: attach the alpha-masked canopy as a child of the bark trunk, same
         // as the in-game spawn. The backdrop has no world seed so all trees are
         // live (never dead snags), and it's a close-up handful so no LOD is needed.

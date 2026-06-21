@@ -2,7 +2,7 @@ use bevy::{camera::visibility::VisibilityRange, light::NotShadowCaster, prelude:
 
 use crate::{
     app::{
-        scene::{ImpactEffectAssets, NetworkResourceNode, ResourceVisualAssets},
+        scene::{ImpactEffectAssets, NetworkResourceNode, OreToonMaterial, ResourceVisualAssets},
         state::ImpactEffectKind,
         systems::effects::spawn_impact_burst,
     },
@@ -37,7 +37,7 @@ pub(super) fn spawn_resource_node_entity(
     let (mesh, material) = if dead_tree {
         (
             dead_tree_mesh(assets, model),
-            assets.dead_bark_material.clone(),
+            ResourceNodeMaterial::Standard(assets.dead_bark_material.clone()),
         )
     } else {
         let (mesh, material) = resource_node_visual(assets, model);
@@ -52,10 +52,12 @@ pub(super) fn spawn_resource_node_entity(
         Name::new(format!("Resource Node {id}")),
         NetworkResourceNode { id, model, dead },
         Mesh3d(mesh),
-        MeshMaterial3d(material),
         target_transform,
         Visibility::Visible,
     ));
+    // Ore/vein nodes get the cel-shaded `OreToonMaterial`; everything else its
+    // `StandardMaterial` (distinct component types, so attached after the spawn).
+    insert_resource_node_material(&mut spawn_command, material);
     // Crude clutter (branch piles, surface stones, hay grass) spawns densely and
     // casts only a negligible-size shadow under its own footprint, so skip the
     // shadow pass for it. Trees DO cast (trunk + the near canopy child below): a
@@ -238,65 +240,82 @@ pub(crate) fn ore_stage_mesh(
     Some(meshes[index].clone())
 }
 
+/// Which material kind a resource-node visual carries. Ore/vein nodes are
+/// cel-shaded ([`OreToonMaterial`]); every other model (trees, crude clutter)
+/// stays on a `StandardMaterial`. The spawn sites attach whichever component
+/// type this names, since `MeshMaterial3d<A>` and `MeshMaterial3d<B>` are
+/// distinct components.
+pub(crate) enum ResourceNodeMaterial {
+    Standard(Handle<StandardMaterial>),
+    Toon(Handle<OreToonMaterial>),
+}
+
 pub(crate) fn resource_node_visual(
     assets: &ResourceVisualAssets,
     model: ResourceNodeModel,
-) -> (Handle<Mesh>, Handle<StandardMaterial>) {
+) -> (Handle<Mesh>, ResourceNodeMaterial) {
+    let toon = || ResourceNodeMaterial::Toon(assets.ore_toon_material.clone());
     match model {
-        ResourceNodeModel::CoalOre => (
-            assets.coal_node_meshes[0].clone(),
-            assets.coal_material.clone(),
-        ),
-        ResourceNodeModel::IronOre => (
-            assets.iron_node_meshes[0].clone(),
-            assets.iron_material.clone(),
-        ),
-        ResourceNodeModel::SulfurOre => (
-            assets.sulfur_node_meshes[0].clone(),
-            assets.sulfur_material.clone(),
-        ),
-        ResourceNodeModel::StoneVein => (
-            assets.stone_vein_meshes[0].clone(),
-            assets.stone_vein_material.clone(),
-        ),
+        ResourceNodeModel::CoalOre => (assets.coal_node_meshes[0].clone(), toon()),
+        ResourceNodeModel::IronOre => (assets.iron_node_meshes[0].clone(), toon()),
+        ResourceNodeModel::SulfurOre => (assets.sulfur_node_meshes[0].clone(), toon()),
+        ResourceNodeModel::StoneVein => (assets.stone_vein_meshes[0].clone(), toon()),
         // Trees: the bark trunk mesh + shared bark material. The alpha-masked
         // canopy is a separate child (see `tree_foliage_visual` + the spawn path).
         ResourceNodeModel::PineTreeSmall => (
             assets.pine_tree_small_trunk_mesh.clone(),
-            assets.pine_bark_material.clone(),
+            ResourceNodeMaterial::Standard(assets.pine_bark_material.clone()),
         ),
         ResourceNodeModel::PineTreeMedium => (
             assets.pine_tree_medium_trunk_mesh.clone(),
-            assets.pine_bark_material.clone(),
+            ResourceNodeMaterial::Standard(assets.pine_bark_material.clone()),
         ),
         ResourceNodeModel::PineTreeLarge => (
             assets.pine_tree_large_trunk_mesh.clone(),
-            assets.pine_bark_material.clone(),
+            ResourceNodeMaterial::Standard(assets.pine_bark_material.clone()),
         ),
         ResourceNodeModel::BirchTreeSmall => (
             assets.birch_tree_small_trunk_mesh.clone(),
-            assets.birch_bark_material.clone(),
+            ResourceNodeMaterial::Standard(assets.birch_bark_material.clone()),
         ),
         ResourceNodeModel::BirchTreeMedium => (
             assets.birch_tree_medium_trunk_mesh.clone(),
-            assets.birch_bark_material.clone(),
+            ResourceNodeMaterial::Standard(assets.birch_bark_material.clone()),
         ),
         ResourceNodeModel::BirchTreeLarge => (
             assets.birch_tree_large_trunk_mesh.clone(),
-            assets.birch_bark_material.clone(),
+            ResourceNodeMaterial::Standard(assets.birch_bark_material.clone()),
         ),
         ResourceNodeModel::SurfaceStone => (
             assets.surface_stone_mesh.clone(),
-            assets.vertex_material.clone(),
+            ResourceNodeMaterial::Standard(assets.vertex_material.clone()),
         ),
         ResourceNodeModel::BranchPile => (
             assets.branch_pile_mesh.clone(),
-            assets.vertex_material.clone(),
+            ResourceNodeMaterial::Standard(assets.vertex_material.clone()),
         ),
         ResourceNodeModel::HayGrass => (
             assets.hay_grass_mesh.clone(),
-            assets.hay_grass_material.clone(),
+            ResourceNodeMaterial::Standard(assets.hay_grass_material.clone()),
         ),
+    }
+}
+
+/// Attach the right material component for a resource-node visual: a
+/// `MeshMaterial3d<OreToonMaterial>` for ore/vein nodes, otherwise the
+/// `MeshMaterial3d<StandardMaterial>`. Centralises the enum match so both spawn
+/// sites (network spawn + menu backdrop) stay in sync.
+pub(crate) fn insert_resource_node_material(
+    entity: &mut EntityCommands,
+    material: ResourceNodeMaterial,
+) {
+    match material {
+        ResourceNodeMaterial::Standard(handle) => {
+            entity.insert(MeshMaterial3d(handle));
+        }
+        ResourceNodeMaterial::Toon(handle) => {
+            entity.insert(MeshMaterial3d(handle));
+        }
     }
 }
 

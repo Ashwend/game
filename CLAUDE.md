@@ -61,6 +61,7 @@ Open docs only when the task touches that area:
 - [UI and client flow](docs/ui-and-client.md)
 - [Multiplayer testing](docs/multiplayer-testing.md)
 - [Materials](docs/materials.md): PBR conventions for the scene (reflectance, roughness, metallic). Consult before adding a new `StandardMaterial` or tweaking an existing one.
+- [Toon / cel shading](docs/toon-shading.md): the anime/cel-shaded look (currently the ore nodes), how the `OreToonMaterial` cel shader works, and the roadmap + architecture for extending the toon style to other prop families. Consult before making a new prop cel-shaded or planning a wider anime art-direction shift.
 - [Icon to 3D model](docs/icon-to-model.md): the repeatable pipeline for turning a painted icon or concept into an authored Blender glb (Blender MCP, OpenCV silhouette measurement, the held-item reference frame, glb export, and the winding / vertex-colour / export gotchas). Consult before modelling a new held item or icon-matched prop. The four tools are the worked examples.
 - [Profiling](docs/profiling.md): Chrome-trace capture, Perfetto `trace_processor` SQL queries, and the diagnostic patterns that surfaced during the frame-pacing investigation. Consult before reaching for "rewrite to make it faster"; the canonical bugs (per-frame iteration over N replicated entities, spurious change-detection, `Ref::is_changed()` lying for Lightyear-touched components) all have cheap fixes documented here.
 

@@ -13,10 +13,7 @@ pub(crate) use building::{
 };
 pub(crate) use crude::{low_poly_branch_pile_mesh, low_poly_surface_stone_mesh};
 pub(crate) use impact::{impact_stone_shard_mesh, impact_wood_chip_mesh};
-pub(crate) use ore::{
-    COAL_ORE, IRON_ORE, ORE_NODE_STAGE_COUNT, STONE_VEIN, SULFUR_ORE,
-    low_poly_ore_node_stage_meshes,
-};
+pub(crate) use ore::ORE_NODE_STAGE_COUNT;
 pub(crate) use player::{
     PLAYER_HEAD_TOP_LOCAL_Y, PlayerPart, PlayerRigMeshes, build_player_rig_meshes, rig_layout,
 };

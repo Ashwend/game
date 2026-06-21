@@ -23,7 +23,9 @@ mod tests;
 
 pub(crate) use hay_sway::sway_hay_grass_system;
 pub(crate) use pop_in::{resource_node_transform_at, tick_resource_node_pop_in_system};
-pub(crate) use spawn::{resource_node_visual, tree_foliage_visual};
+pub(crate) use spawn::{
+    insert_resource_node_material, resource_node_visual, tree_foliage_visual,
+};
 pub(crate) use stages::apply_resource_node_stage_system;
 
 use spawn::spawn_resource_node_entity;
