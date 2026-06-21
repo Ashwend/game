@@ -34,8 +34,8 @@ use bevy::{
 };
 
 use crate::{
-    app::state::ClientRuntime,
-    world_time::{SECONDS_PER_DAY, WorldTime},
+    app::state::{ClientRuntime, MenuState},
+    world_time::{DEFAULT_START_SECONDS, SECONDS_PER_DAY, WorldTime},
 };
 
 use super::components::MainCamera;
@@ -91,6 +91,15 @@ const SHADOW_UPDATE_BASE_INTERVAL_SECS: f32 = 1.0 / 15.0;
 
 /// Lower bound on the shadow update interval (~60 Hz).
 const SHADOW_UPDATE_MIN_INTERVAL_SECS: f32 = 1.0 / 60.0;
+
+/// Time of day the menu backdrop's sky is pinned to. The gameplay day/night
+/// clock ([`ClientRuntime::world_time`]) only ticks in-game and keeps the
+/// server's last time after you leave a session, so reading it on the title
+/// screen makes the backdrop look as if time passed while you were away. The
+/// menu instead renders this fixed time, the same just-after-sunrise look the
+/// game launches with, so the title screen is identical on every visit. Pinned,
+/// not ticked: the menu never cycles.
+const MENU_BACKDROP_SECONDS: f32 = DEFAULT_START_SECONDS;
 
 #[derive(Component)]
 pub(crate) struct SunLight;
@@ -241,6 +250,7 @@ pub(crate) fn initial_distance_fog() -> DistanceFog {
 pub(crate) fn update_sky_system(
     time: Res<Time>,
     runtime: Res<ClientRuntime>,
+    menu: Res<MenuState>,
     mut shadow_throttle: Local<f32>,
     mut ambient: ResMut<GlobalAmbientLight>,
     mut grass_day_night: ResMut<GrassDayNight>,
@@ -250,7 +260,19 @@ pub(crate) fn update_sky_system(
     mut moon_visual: MoonVisualQuery,
     mut fog: FogQuery,
 ) {
-    let lighting = compute_lighting(&runtime.world_time);
+    // Only gameplay reads the live day/night clock. The menu backdrop renders a
+    // fixed time of day so its sky never drifts between launches or after
+    // returning from a session. See `MENU_BACKDROP_SECONDS`.
+    let world_time = if menu.screen.uses_menu_backdrop() {
+        WorldTime {
+            seconds_of_day: MENU_BACKDROP_SECONDS,
+            multiplier: 0.0,
+        }
+    } else {
+        runtime.world_time
+    };
+
+    let lighting = compute_lighting(&world_time);
 
     // Real-time throttle for the directional lights' *transform*. The shadow
     // projection is the part the eye reads as "shimmery" when updated every
@@ -258,7 +280,7 @@ pub(crate) fn update_sky_system(
     // interval scales with the world-time multiplier (see
     // `shadow_update_interval`) so each tick represents a roughly constant
     // angle. Colour and illuminance still update every frame.
-    let interval = shadow_update_interval(runtime.world_time.multiplier);
+    let interval = shadow_update_interval(world_time.multiplier);
     *shadow_throttle += time.delta_secs();
     let advance_shadows = *shadow_throttle >= interval;
     if advance_shadows {
@@ -538,6 +560,21 @@ mod tests {
         let day = compute_lighting(&time_at(12.0));
         let night = compute_lighting(&time_at(0.0));
         assert!(night.fog_distance < day.fog_distance);
+    }
+
+    #[test]
+    fn menu_backdrop_time_is_a_fixed_bright_morning() {
+        // The title screen pins the sky to this fixed time instead of the live
+        // gameplay clock. It must stay aligned with the world's default start
+        // (so the menu matches a fresh launch) and read as daylight, not an
+        // accidental midnight.
+        assert_eq!(MENU_BACKDROP_SECONDS, DEFAULT_START_SECONDS);
+        let lighting = compute_lighting(&WorldTime {
+            seconds_of_day: MENU_BACKDROP_SECONDS,
+            multiplier: 0.0,
+        });
+        assert!(lighting.day_strength > 0.5, "menu sky should be daylit");
+        assert!(lighting.sun_illuminance > 100.0, "menu sun should be up");
     }
 
     #[test]
