@@ -73,6 +73,39 @@ fn biome_rgb(classification: ChunkClassification, intensity: f32) -> [u8; 3] {
     base.map(|channel| (channel as f32 * scale).clamp(0.0, 255.0) as u8)
 }
 
+/// Legend for the world-map overlay: each biome's display label paired with the
+/// representative colour it shows as on the map. Colours come from [`biome_rgb`]
+/// at a mid intensity, so this is the single source of truth and the legend can
+/// never drift from the raster.
+pub fn biome_legend() -> [(&'static str, [u8; 3]); 5] {
+    const MID: f32 = 0.66;
+    // `Mixed` is the transition class: chunks where no single biome channel wins,
+    // so they carry a blend of grass / trees / stone / ore rather than one
+    // dominant kind. Spelled out here so the label isn't a cryptic "Mixed".
+    [
+        (
+            "Plains (grassland)",
+            biome_rgb(ChunkClassification::Plains, MID),
+        ),
+        (
+            "Forest (trees)",
+            biome_rgb(ChunkClassification::Forest, MID),
+        ),
+        (
+            "Rocky outcrop (stone)",
+            biome_rgb(ChunkClassification::RockyOutcrop, MID),
+        ),
+        (
+            "Ore vein (metal)",
+            biome_rgb(ChunkClassification::OreVein, MID),
+        ),
+        (
+            "Mixed (transition)",
+            biome_rgb(ChunkClassification::Mixed, MID),
+        ),
+    ]
+}
+
 /// Strength of the channel that won the classification, used only to modulate
 /// brightness. `Mixed` has no single winner, so average the four.
 fn dominant_intensity(

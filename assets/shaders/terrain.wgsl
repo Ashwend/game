@@ -44,14 +44,17 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(6) var plains_tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(7) var albedo_samp: sampler;
 
-// Flat per-biome palette in LINEAR space, matching the world-map colours (the map
-// uses the same sRGB bytes: forest #3c6c38, rocky #7e7c76, ore #7a6048, plains
-// #96ac60). The distance fade resolves the tiled detail toward this, so far
-// terrain reads as the flat map and its tiling/minification artefacts vanish.
-const PAL_FOREST = vec3<f32>(0.04516, 0.14989, 0.03956);
-const PAL_ROCKY = vec3<f32>(0.20856, 0.20156, 0.18117);
-const PAL_ORE = vec3<f32>(0.19462, 0.11696, 0.06479);
-const PAL_PLAINS = vec3<f32>(0.30505, 0.41269, 0.11696);
+// Flat per-biome palette in LINEAR space. The distance fade resolves the tiled
+// detail toward this, so far terrain reads as a flat patch and its tiling /
+// minification artefacts vanish. These are the LINEAR per-channel averages of
+// the four toony ground textures (anime art-direction pass) so the near detail
+// and the far flat colour are the same hue, no fade-to-a-different-colour seam.
+// (They no longer match the world-map palette in `map_texture.rs`, which keeps
+// its own stylised colours; sync that separately if the map should follow.)
+const PAL_FOREST = vec3<f32>(0.21848, 0.24216, 0.02709);
+const PAL_ROCKY = vec3<f32>(0.33174, 0.33013, 0.32509);
+const PAL_ORE = vec3<f32>(0.34648, 0.07922, 0.05518);
+const PAL_PLAINS = vec3<f32>(0.08530, 0.21169, 0.03082);
 
 // Anti-tiling tuning. A small, slowly-varying domain-warp OFFSET of the detail UV
 // breaks the global 7 m grid alignment; a broad low-frequency brightness wash
@@ -64,6 +67,12 @@ const WARP_TILES: f32 = 2.0; // peak UV displacement, in tile widths
 const MACRO_SCALE_M: f32 = 38.0; // metres per macro brightness patch
 const MACRO_MIN: f32 = 0.84; // patch tint range; mostly darken-only, like the grass shader
 const MACRO_MAX: f32 = 1.10;
+
+// Plains samples at a finer tile than the other three biomes. Its hand-painted
+// grass blades read as oversized straws at the shared 7 m tile, so its UV is
+// scaled denser (0.5 = repeats twice as often = blades ~half size) to read as
+// fine ground. The other biomes (coarse stone / soil) are fine at the base tile.
+const PLAINS_TILE_SCALE: f32 = 0.5;
 
 // --- Binding-free value noise (Dave Hoskins hash, no `sin` banding), copied from
 // the grass shader so the terrain shares the same stylised macro-variation. ---
@@ -130,7 +139,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let c_forest = textureSample(forest_tex, albedo_samp, tuv).rgb;
     let c_rocky = textureSample(rocky_tex, albedo_samp, tuv).rgb;
     let c_ore = textureSample(ore_tex, albedo_samp, tuv).rgb;
-    let c_plains = textureSample(plains_tex, albedo_samp, tuv).rgb;
+    // Plains tiles denser so its grass detail isn't oversized (see PLAINS_TILE_SCALE).
+    let plains_tuv = world_xz / (tile_size * PLAINS_TILE_SCALE) + warp * WARP_TILES;
+    let c_plains = textureSample(plains_tex, albedo_samp, plains_tuv).rgb;
     var albedo = c_forest * w.r + c_rocky * w.g + c_ore * w.b + c_plains * w.a;
 
     // Macro variation: a broad low-frequency brightness wash (with a faint

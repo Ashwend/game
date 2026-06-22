@@ -20,10 +20,11 @@
 //   * world-space fBm colour patches (the hand-painted "patchy lawn" look).
 
 #import bevy_pbr::{
-    mesh_view_bindings::{view, globals, lights},
+    mesh_view_bindings::{view, globals},
     view_transformations::position_world_to_clip,
-    pbr_types::{pbr_input_new, STANDARD_MATERIAL_FLAGS_FOG_ENABLED_BIT},
-    pbr_functions::main_pass_post_lighting_processing,
+    pbr_types::{PbrInput, pbr_input_new, STANDARD_MATERIAL_FLAGS_FOG_ENABLED_BIT},
+    pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing, calculate_view},
+    mesh_types::MESH_FLAGS_SHADOW_RECEIVER_BIT,
 }
 
 // Mesh attributes sit at their canonical locations (Position 0, Normal 1, UV 2,
@@ -61,20 +62,11 @@ fn ign(p: vec2<f32>) -> f32 {
 }
 
 // group(3): the grass-card tuft texture + sampler (the blade detail + silhouette).
+// Day/night no longer needs a uniform here: the fragment lights via real PBR
+// (apply_pbr_lighting), which dims by the scene's illuminance/exposure after dark
+// like every other surface, so the old hand-fed `grass_day` blend is gone.
 @group(3) @binding(0) var grass_tex: texture_2d<f32>;
 @group(3) @binding(1) var grass_samp: sampler;
-
-// group(3) @binding(2): the day/night blend, written every frame from sky.rs
-// `day_strength` (1 = full day, 0 = full night). The grass cannot derive this in
-// the shader: it has no world clock, and the directional key light is no help
-// because at night `directional_lights[0]` is the MOON (deliberately cheated bright
-// for navigation), so neither its elevation nor its brightness reads as night. The
-// old approach reverse-engineered it from the GlobalAmbientLight luminance, but that
-// signal saturates very early in the dusk ramp, so the field snapped to its night
-// look while the sky was still bright (read as a flip). Passing the sky's own
-// smoothstep'd sun-height factor makes the grass crossfade over the exact sunrise /
-// sunset window. `.x` is the factor; `.yzw` are padding (uniforms align to vec4).
-@group(3) @binding(2) var<uniform> grass_day: vec4<f32>;
 
 // Alpha cutoff for the card silhouette. A discard below this keeps the cards
 // readable under MSAA-off (FXAA); alpha-to-coverage refines the edge under MSAA.
@@ -135,34 +127,32 @@ const NOISE_SCALE: f32 = 14.0;
 const PATCH_MIN: f32 = 0.80;
 const PATCH_MAX: f32 = 1.18;
 
-// Painterly shading (Phase 2). Back-lit translucency lets the sun glow through
-// thin blades; root->tip AO darkens the base; a soft tip highlight lifts the
-// very tips. All sun-scaled / darken-only so nothing out-glows the ground under
-// the daylight-calibrated exposure (see docs/materials.md).
-const AO_ROOT: f32 = 0.75;       // brightness at the blade root (1 = no AO; gentle now)
+// Root->tip ambient occlusion baked into the blade albedo: a gentle contact
+// shade near the ground that lifts toward the tip. (The old painterly sun /
+// subsurface / tip-glow / night-fill terms are gone, the fragment now lights via
+// real PBR + a cel posterise; see the fragment shader.)
+const AO_ROOT: f32 = 0.75;       // brightness at the blade root (1 = no AO; gentle)
 const AO_POW: f32 = 1.3;         // how fast AO lifts toward the tip
-const SUN_DIFFUSE: f32 = 0.34;   // half-Lambert sun gain (~1/PI, matches the old PBR diffuse)
-const SKY_AMBIENT: f32 = 0.30;   // flat ambient floor, tied to sun colour (replaces the dropped IBL)
-const SSS_AMBIENT: f32 = 0.24;   // always-on subsurface fill so blades glow under sky light
-const TRANS_STRENGTH: f32 = 0.6; // back-light (toward-sun) transmission gain
-const TRANS_POW: f32 = 3.0;      // tightness of the back-light lobe (higher = tighter)
-const TIP_GLOW: f32 = 0.18;      // HDR additive tip glow, pushes tips >1 so Bloom haloes them
+// Quantise the PBR-lit luminance into this many hard cel steps so the field
+// reads toon-shaded (matches the ore/deployable ToonMaterial), not smoothly lit.
+const GRASS_CEL_BANDS: f32 = 3.0;
+// Cel posterise tuning (matches the ToonMaterial): the lighting STRENGTH (albedo
+// divided out) is banded then re-applied as `albedo * band` so each band keeps
+// the blade's own green. LIT_GAIN lifts the brightest band toward full albedo by
+// day. Below the lowest band the value follows the real shade * SHADOW_FILL
+// instead of a flat floor, so a daytime shadow side (ambient-lit, moderate shade)
+// stays dim-but-present while night (very low shade) goes dark, no near-black
+// cliff on a side-lit field.
+const GRASS_LIT_GAIN: f32 = 1.5;
+const GRASS_SHADOW_FILL: f32 = 0.6;
 
-// Fixed dim cool fill applied to the grass at night (scaled by night_amount). The
-// real GlobalAmbientLight floor measures ~1.0 in this scene (bright, for navigation);
-// multiplying the grass's high green albedo by it blooms the dense tufts white, so the
-// grass takes this small fixed cool value instead, dim enough to stay below bloom while
-// keeping the field faintly visible after dark. Kept a touch darker than the daylight
-// fill so night reads as genuinely dimmer (see `grass_day` for the day/night blend).
-const NIGHT_TINT: vec3<f32> = vec3<f32>(0.10, 0.13, 0.19);
-
-// Day/night crossfade band, in `day_strength` units (sky.rs `grass_day.x`). The day
-// glow is fully off at/below LO (the sun on the horizon, `day_strength == 0.5`, so the
-// below-horizon moon never reaches the grass) and fully on at/above HI. Crossfading
-// across this band tracks the sun's final descent, a smooth dusk fade rather than the
-// early snap the old ambient-luminance gate produced.
-const DAY_GLOW_LO: f32 = 0.5;
-const DAY_GLOW_HI: f32 = 0.92;
+// Tuft atlas layout (assets/textures/grass_atlas.png): a 3x2 grid of 6 toony
+// tuft variants. Each blade's instance carries a cell index (`i_b.z`, 0..5); the
+// vertex shader remaps the card's [0,1] UV into that cell so the field draws all
+// six tufts (~1/6 each) instead of one repeated card. Their differing heights
+// give the field free size variation.
+const ATLAS_COLS: f32 = 3.0;
+const ATLAS_ROWS: f32 = 2.0;
 
 // --- Procedural value noise (binding-free). Dave Hoskins hash + bilinear value
 // noise + 3-octave fBm. ---
@@ -282,7 +272,12 @@ fn vertex(v: Vertex) -> VsOut {
     out.world_position = world;
     out.world_normal = normalize(world_normal);
     out.color = vec4<f32>(rgb, v.color.a);
-    out.uv = v.uv;
+    // Atlas cell remap: i_b.z in 0..5 -> (col, row) of the 3x2 tuft atlas, then
+    // fit the card's [0,1] UV inside that cell so this blade draws its variant.
+    let cell = v.i_b.z;
+    let col = cell - floor(cell / ATLAS_COLS) * ATLAS_COLS;
+    let row = floor(cell / ATLAS_COLS);
+    out.uv = (v.uv + vec2<f32>(col, row)) / vec2<f32>(ATLAS_COLS, ATLAS_ROWS);
     out.thin_key = v.i_b.w; // stable per-card key for the distance dither
     return out;
 }
@@ -326,60 +321,44 @@ fn fragment(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = tex.rgb * in.color.rgb * tint * ao;
 
     // Flatten the normal toward +Y with distance so far cards catch a uniform soft
-    // top-light instead of shimmering as sub-pixel cards churn.
+    // top-light instead of shimmering as sub-pixel cards churn. Near cards keep
+    // their up-biased blade normal (set in the vertex stage).
     let n_flat = clamp((dist - 12.0) / 30.0, 0.0, 0.6);
     let n = normalize(mix(normalize(in.world_normal), vec3<f32>(0.0, 1.0, 0.0), n_flat));
 
-    // CHEAP stylized lighting: half-Lambert sun + ambient. Deliberately NO full PBR,
-    // NO GGX specular, NO IBL cubemap taps, NO shadow sample, NO clustered lights,
-    // those cost a shadow + two cube fetches per fragment and grass is matte foliage
-    // under heavy overdraw, so that was the dominant frame cost.
-    let sun = lights.directional_lights[0];
-    let wrap = dot(n, sun.direction_to_light) * 0.5 + 0.5; // half-Lambert, never fully dark
-
-    // Day/night factor from the CPU `day_strength` (`grass_day.x`: 1 day, 0 night),
-    // remapped so the stylized day lighting fades fully out by the time the sun reaches
-    // the horizon (`day_strength == DAY_GLOW_LO`). That edge is deliberate, not just
-    // taste: the night key light is the MOON cheated to ~1300 lux, and the moon only
-    // carries illuminance *below* the horizon (its elevation is `max(-sun_height, 0)`),
-    // exactly where `day_strength < 0.5`. Letting the day terms linger past the horizon
-    // multiplied that bright moon into the grass and bloomed the field mint-white during
-    // dusk. Folding the day glow to zero at the horizon keeps the moon out of the grass
-    // entirely while still crossfading smoothly over the sun's final descent (no snap).
-    // The complementary night fill (below) carries the field after the sun is down.
-    let day_factor = smoothstep(DAY_GLOW_LO, DAY_GLOW_HI, grass_day.x);
-    let night_amount = 1.0 - day_factor;
-
-    // Stylized daytime grass lighting (sun half-Lambert + a flat sky fill standing in
-    // for the atmosphere IBL the grass doesn't sample). Gated by day_factor: at night
-    // the bright moon's half-Lambert floor + flat fill were what lifted the grass above
-    // the (NdotL-lit) ground and bloomed it white, so they fall away after dark.
-    var rgb = albedo * sun.color.rgb * (wrap * SUN_DIFFUSE + SKY_AMBIENT) * day_factor;
-
-    // Subsurface fill: thin blades glow softly from within. Tip-weighted, day-gated.
-    rgb += albedo * SSS_AMBIENT * height_frac * day_factor;
-
-    // Back-lit transmission: warm glow looking toward the sun through a blade. Day-gated
-    // (at night it would pick up the bright moon).
-    let view_dir = normalize(view.world_position.xyz - in.world_position);
-    let back = clamp(dot(-view_dir, sun.direction_to_light), 0.0, 1.0);
-    rgb += albedo * sun.color.rgb * (pow(back, TRANS_POW) * height_frac * TRANS_STRENGTH) * day_factor;
-
-    // Luminous warm tip: pushes the top above 1.0 for Bloom. Day-gated so it stops
-    // blooming once the scene goes dark.
-    rgb += in.color.rgb * smoothstep(0.62, 1.0, height_frac) * TIP_GLOW * day_factor;
-
-    // Night fill: a small fixed cool tint (see NIGHT_TINT) faded in by night_amount, so
-    // the grass stays dimly visible after dark instead of going black, without the
-    // bloom the bright raw ambient floor would cause. ~0 by day (night_amount == 0), so
-    // the daytime look above is unchanged.
-    rgb += albedo * NIGHT_TINT * night_amount;
-
-    // Minimal PbrInput purely for distance fog (full PBR lighting is skipped above).
+    // Real PBR lighting (PBR-then-posterise, same as the ore/deployable
+    // ToonMaterial): light the blade with the engine's actual sun + atmosphere
+    // IBL + RECEIVED shadows + day/night exposure, then quantise. This replaces
+    // the old cheap half-Lambert + hand-rolled day/night fade (which read the sun
+    // colour but not its illuminance/exposure, so it had to be manually faded out
+    // at dusk to stop the navigation-bright moon blooming the field white). PBR
+    // dims the field correctly after dark for free, and the field now takes tree /
+    // building shadows. Matte so no glossy specular streak fights the cel bands.
     var pbr_input = pbr_input_new();
+    pbr_input.flags = MESH_FLAGS_SHADOW_RECEIVER_BIT;
+    pbr_input.is_orthographic = view.clip_from_view[3].w == 1.0;
+    pbr_input.V = calculate_view(vec4<f32>(in.world_position, 1.0), pbr_input.is_orthographic);
     pbr_input.frag_coord = in.clip_position;
     pbr_input.world_position = vec4<f32>(in.world_position, 1.0);
-    pbr_input.material.flags |= STANDARD_MATERIAL_FLAGS_FOG_ENABLED_BIT;
+    pbr_input.world_normal = n;
+    pbr_input.N = n;
+    pbr_input.material.base_color = vec4<f32>(albedo, 1.0);
+    pbr_input.material.perceptual_roughness = 1.0;
+    pbr_input.material.reflectance = vec3<f32>(0.0, 0.0, 0.0);
+    pbr_input.material.metallic = 0.0;
+    pbr_input.material.flags = STANDARD_MATERIAL_FLAGS_FOG_ENABLED_BIT;
+    let lit = apply_pbr_lighting(pbr_input);
+
+    // Cel posterise that preserves the blade's green (matches the ToonMaterial):
+    // divide the albedo out to get the lighting STRENGTH, band that, then re-apply
+    // albedo. NIGHT_FLOOR keeps the darkest band genuinely dim at night.
+    let lw = vec3<f32>(0.2126, 0.7152, 0.0722);
+    let albedo_lum = max(dot(albedo, lw), 1e-3);
+    let shade = clamp(dot(lit.rgb, lw) / albedo_lum, 0.0, 0.999);
+    let banded = clamp(floor(shade * GRASS_CEL_BANDS) / GRASS_CEL_BANDS * GRASS_LIT_GAIN, 0.0, 1.0);
+    let shade_q = max(banded, shade * GRASS_SHADOW_FILL);
+    let rgb = albedo * shade_q;
+
     let out_color = main_pass_post_lighting_processing(pbr_input, vec4<f32>(rgb, 1.0));
 
     // Alpha = the texture's soft silhouette only (distance is handled by the dither

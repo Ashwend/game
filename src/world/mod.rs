@@ -8,7 +8,7 @@ pub use chunk::{
     chunk_kind_target, fbm, generate_chunk_spawns, generate_world_spawns, kind_target, splitmix64,
     value_noise_2d,
 };
-pub use map_texture::{WORLD_MAP_TEXELS, render_world_map_rgba, world_map_bounds};
+pub use map_texture::{WORLD_MAP_TEXELS, biome_legend, render_world_map_rgba, world_map_bounds};
 pub use terrain_texture::{
     TERRAIN_WEIGHT_TEXELS, biome_blend_weights, fill_terrain_weight_rows,
     render_terrain_weight_rgba,

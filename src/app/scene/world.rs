@@ -182,7 +182,7 @@ fn spawn_menu_resource_nodes(
         let Some(definition) = resource_node_definition(&node.definition_id) else {
             continue;
         };
-        let (mesh, material) = resource_node_visual(assets, definition.model);
+        let (mesh, material) = resource_node_visual(assets, definition.model, node.id);
         let transform =
             resource_node_transform_at(node.id, node.position, node.yaw, definition.model);
         let mut node_command = commands.spawn((
@@ -191,7 +191,7 @@ fn spawn_menu_resource_nodes(
             Mesh3d(mesh),
             transform,
         ));
-        // Ore/vein nodes carry the cel-shaded `OreToonMaterial`; trees keep their
+        // Ore/vein nodes carry the cel-shaded `ToonMaterial`; trees keep their
         // `StandardMaterial` (distinct component types, attached after the spawn).
         insert_resource_node_material(&mut node_command, material);
         let entity = node_command.id();

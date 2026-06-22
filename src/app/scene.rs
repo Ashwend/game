@@ -14,9 +14,9 @@ mod assets;
 mod components;
 mod grass;
 mod mesh;
-mod ore_toon;
 mod sky;
 mod terrain;
+mod toon;
 mod world;
 
 pub(crate) use assets::{
@@ -32,9 +32,9 @@ pub(crate) use components::{
 };
 pub(crate) use grass::{GrassInstancingPlugin, GrassState, stream_grass_system};
 pub(crate) use mesh::{PLAYER_HEAD_TOP_LOCAL_Y, PlayerPart, rig_layout};
-pub(crate) use ore_toon::OreToonMaterial;
 pub(crate) use sky::{SunLight, update_sky_system};
 pub(crate) use terrain::{TerrainMaterial, TerrainTextureAssets};
+pub(crate) use toon::ToonMaterial;
 pub(crate) use world::{WorldSceneState, apply_world_scene_system};
 
 #[cfg(test)]
@@ -76,10 +76,10 @@ mod tests {
         // type was never registered.
         app.init_asset::<Mesh>();
         app.init_asset::<StandardMaterial>();
-        // `setup_scene` builds the shared `OreToonMaterial` for the ore nodes;
-        // `Assets<OreToonMaterial>` is normally registered by its `MaterialPlugin`,
+        // `setup_scene` builds the shared `ToonMaterial` for the ore nodes;
+        // `Assets<ToonMaterial>` is normally registered by its `MaterialPlugin`,
         // which the bare test app doesn't add, so register it directly.
-        app.init_asset::<OreToonMaterial>();
+        app.init_asset::<ToonMaterial>();
         // `setup_scene` loads the four biome ground textures into `Assets<Image>`
         // for the terrain material, and `asset_server.load::<Image>` panics if the
         // type was never registered.

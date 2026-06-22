@@ -65,7 +65,7 @@ use bevy::{
             RenderCommandResult, SetItemPipeline, TrackedRenderPass, ViewSortedRenderPhases,
         },
         render_resource::{
-            binding_types::{sampler, texture_2d, uniform_buffer},
+            binding_types::{sampler, texture_2d},
             *,
         },
         renderer::{RenderDevice, RenderQueue},
@@ -84,16 +84,16 @@ use crate::app::scene::terrain::build_mip_chain;
 /// as instance-step vertex attributes at `@location(3)` / `(4)` / `(6)`.
 ///
 /// - `a = [world_x, world_z, base_y, height_scale]`
-/// - `b = [yaw, shade, _, _]`
+/// - `b = [yaw, shade, atlas_cell, thin_key]`
 /// - `c = [tint_r, tint_g, tint_b, _]`
 ///
 /// `world_x/world_z` are already world space (tile centre + cardinal rotation +
 /// local blade offset, baked CPU-side); `yaw` is the blade's absolute spin about
-/// +Y; `shade` is a per-blade brightness jitter; `c` is the per-blade biome colour
-/// tint (the baked blade is one neutral green; `super::tile_world_instances` grades
-/// it toward the local biome in world space). `b.zw` are spare (the old per-blade
-/// `warm`/`dither` are gone: colour is the biome tint now and the distance fade is
-/// a smooth per-pixel coverage thin-out, not a per-blade dither).
+/// +Y; `shade` is a per-blade brightness jitter; `atlas_cell` (0..5) selects which
+/// tuft of the 3x2 card atlas this blade draws (the shader remaps the UV into that
+/// cell); `thin_key` is the stable per-card key the fragment uses for the distance
+/// dither dissolve; `c` is the per-blade biome colour tint (the baked blade is one
+/// neutral green; `super::tile_world_instances` grades it toward the local biome).
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub(super) struct InstanceData {
@@ -115,8 +115,9 @@ pub(super) struct InstanceMaterialData(pub(super) Vec<InstanceData>);
 
 /// Embedded path of the instanced-grass shader.
 const GRASS_INSTANCED_SHADER_PATH: &str = "shaders/grass_instanced.wgsl";
-/// Embedded path of the grass-card tuft texture (the blade detail lives here).
-const GRASS_CARD_TEXTURE_PATH: &str = "textures/grass_tuft.png";
+/// Embedded path of the grass-card tuft ATLAS (a 3x2 grid of 6 toony tuft
+/// variants; each blade draws a random cell via its instance `atlas_cell`).
+const GRASS_CARD_TEXTURE_PATH: &str = "textures/grass_atlas.png";
 
 /// The shared grass-card texture handle (decoded + mipped at startup). Extracted
 /// into the render world so [`prepare_grass_bind_group`] can build the group(3)
@@ -124,36 +125,10 @@ const GRASS_CARD_TEXTURE_PATH: &str = "textures/grass_tuft.png";
 #[derive(Resource, Clone, ExtractResource)]
 pub(crate) struct GrassCardTexture(pub(crate) Handle<Image>);
 
-/// The prepared group(3) bind group (texture + sampler + day/night uniform) for the
-/// grass cards. Built once in the render world; the draw skips until it exists.
+/// The prepared group(3) bind group (tuft texture + sampler) for the grass cards.
+/// Built once in the render world; the draw skips until it exists.
 #[derive(Resource)]
 struct GrassCardBindGroup(BindGroup);
-
-/// Day/night blend for the grass, `1.0` full day down to `0.0` full night. Written
-/// each frame by `update_sky_system` from the sky's own `day_strength` (the same
-/// smoothstep'd sun-height factor that drives the directional lights and fog), so the
-/// grass crossfades between its day and night looks over the exact sunrise/sunset
-/// window instead of inferring night from the ambient-light luminance (which saturated
-/// early in the dusk ramp and snapped the field's colour). Extracted to the render
-/// world and uploaded to a tiny uniform buffer for the shader (group(3) binding 2).
-#[derive(Resource, Clone, Copy, ExtractResource)]
-pub(crate) struct GrassDayNight {
-    pub(crate) day_strength: f32,
-}
-
-impl Default for GrassDayNight {
-    fn default() -> Self {
-        // Start in full daylight; `update_sky_system` overwrites this every frame.
-        Self { day_strength: 1.0 }
-    }
-}
-
-/// Render-world uniform buffer holding the current [`GrassDayNight::day_strength`] in
-/// its `.x` channel (the rest is std140 padding). Created once at `RenderStartup` and
-/// rewritten each frame by [`prepare_grass_day_night`]; the bind group references it,
-/// so the buffer handle stays stable and only its 16 bytes are restreamed.
-#[derive(Resource)]
-struct GrassDayNightBuffer(Buffer);
 
 pub(crate) struct GrassInstancingPlugin;
 
@@ -163,11 +138,7 @@ impl Plugin for GrassInstancingPlugin {
             Startup,
             (load_grass_card_texture, super::init_grass_card_mesh),
         )
-        .init_resource::<GrassDayNight>()
-        .add_plugins((
-            ExtractResourcePlugin::<GrassCardTexture>::default(),
-            ExtractResourcePlugin::<GrassDayNight>::default(),
-        ));
+        .add_plugins(ExtractResourcePlugin::<GrassCardTexture>::default());
         app.sub_app_mut(RenderApp)
             .add_render_command::<Transparent3d, DrawGrass>()
             .init_resource::<SpecializedMeshPipelines<GrassInstancePipeline>>()
@@ -178,7 +149,6 @@ impl Plugin for GrassInstancingPlugin {
                 (
                     queue_grass.in_set(RenderSystems::QueueMeshes),
                     prepare_instance_buffers.in_set(RenderSystems::PrepareResources),
-                    prepare_grass_day_night.in_set(RenderSystems::PrepareResources),
                     prepare_grass_bind_group.in_set(RenderSystems::PrepareBindGroups),
                 ),
             );
@@ -214,22 +184,18 @@ fn load_grass_card_texture(mut images: ResMut<Assets<Image>>, mut commands: Comm
         ImageSampler::Descriptor(grass_card_sampler()),
         RenderAssetUsages::RENDER_WORLD,
     )
-    .expect("decode grass_tuft.png");
+    .expect("decode grass_atlas.png");
     build_mip_chain(&mut image);
     commands.insert_resource(GrassCardTexture(images.add(image)));
 }
 
-/// Build the group(3) bind group (tuft texture + sampler + day/night uniform) once
-/// the GPU image is uploaded. Cheap guard: skips if already built or the image isn't
-/// ready yet. The uniform buffer is created at `RenderStartup`, so it always exists by
-/// the time the texture is ready; the bind group references it and stays valid as
-/// `prepare_grass_day_night` rewrites the buffer contents each frame.
+/// Build the group(3) bind group (tuft texture + sampler) once the GPU image is
+/// uploaded. Cheap guard: skips if already built or the image isn't ready yet.
 fn prepare_grass_bind_group(
     mut commands: Commands,
     pipeline: Res<GrassInstancePipeline>,
     images: Res<RenderAssets<GpuImage>>,
     texture: Option<Res<GrassCardTexture>>,
-    day_night_buffer: Res<GrassDayNightBuffer>,
     existing: Option<Res<GrassCardBindGroup>>,
     render_device: Res<RenderDevice>,
 ) {
@@ -245,25 +211,9 @@ fn prepare_grass_bind_group(
     let bind_group = render_device.create_bind_group(
         "grass_card_bind_group",
         &pipeline.texture_layout,
-        &BindGroupEntries::sequential((
-            &gpu.texture_view,
-            &gpu.sampler,
-            day_night_buffer.0.as_entire_binding(),
-        )),
+        &BindGroupEntries::sequential((&gpu.texture_view, &gpu.sampler)),
     );
     commands.insert_resource(GrassCardBindGroup(bind_group));
-}
-
-/// Upload the current day/night blend into the persistent uniform buffer. Runs every
-/// frame, but writes only 16 bytes; the extracted [`GrassDayNight`] is the sky's
-/// `day_strength` for this frame. Padding (`.yzw`) is zeroed.
-fn prepare_grass_day_night(
-    day_night: Res<GrassDayNight>,
-    buffer: Res<GrassDayNightBuffer>,
-    render_queue: Res<RenderQueue>,
-) {
-    let value: [f32; 4] = [day_night.day_strength, 0.0, 0.0, 0.0];
-    render_queue.write_buffer(&buffer.0, 0, bytemuck::cast_slice(&value));
 }
 
 /// Copy the field's instance list into the render world, but **only when it
@@ -415,21 +365,18 @@ fn prepare_instance_buffers(
     }
 }
 
-/// group(3) layout entries: the grass-card tuft texture + sampler, plus a small
-/// day/night uniform (binding 2). Built from one place so the concrete
-/// [`BindGroupLayout`] (for the bind group) and the [`BindGroupLayoutDescriptor`]
-/// pushed in `specialize` (for the pipeline) match. Safe to add to a hand-rolled
-/// MeshPipeline specialization on Metal (the @binding(100) crash is exclusive to
-/// ExtendedMaterial's bindless merge; TerrainMaterial ships the same standalone
-/// group-3 texture binding here).
+/// group(3) layout entries: the grass-card tuft texture + sampler. Built from one
+/// place so the concrete [`BindGroupLayout`] (for the bind group) and the
+/// [`BindGroupLayoutDescriptor`] pushed in `specialize` (for the pipeline) match.
+/// Safe to add to a hand-rolled MeshPipeline specialization on Metal (the
+/// @binding(100) crash is exclusive to ExtendedMaterial's bindless merge;
+/// TerrainMaterial ships the same standalone group-3 texture binding here).
 fn grass_texture_layout_entries() -> Vec<BindGroupLayoutEntry> {
     BindGroupLayoutEntries::sequential(
         ShaderStages::FRAGMENT,
         (
             texture_2d(TextureSampleType::Float { filterable: true }),
             sampler(SamplerBindingType::Filtering),
-            // The day/night blend (`grass_day` in the shader); a single vec4 worth.
-            uniform_buffer::<Vec4>(false),
         ),
     )
     .to_vec()
@@ -454,22 +401,11 @@ fn init_grass_pipeline(
     let texture_layout = render_device
         .create_bind_group_layout(GRASS_TEXTURE_LAYOUT_LABEL, &grass_texture_layout_entries());
 
-    // Persistent 16-byte day/night uniform; the value is rewritten every frame by
-    // `prepare_grass_day_night`, but the buffer handle stays stable so the bind group
-    // can be built once and reused. Initialised to full daylight.
-    let day_night_buffer = render_device.create_buffer(&BufferDescriptor {
-        label: Some("grass day/night uniform"),
-        size: size_of::<[f32; 4]>() as u64,
-        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-
     commands.insert_resource(GrassInstancePipeline {
         shader: asset_server.load(embedded_asset_path(GRASS_INSTANCED_SHADER_PATH)),
         mesh_pipeline: mesh_pipeline.clone(),
         texture_layout,
     });
-    commands.insert_resource(GrassDayNightBuffer(day_night_buffer));
 }
 
 impl SpecializedMeshPipeline for GrassInstancePipeline {

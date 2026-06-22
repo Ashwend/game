@@ -2,7 +2,7 @@ use bevy::{camera::visibility::VisibilityRange, light::NotShadowCaster, prelude:
 
 use crate::{
     app::{
-        scene::{ImpactEffectAssets, NetworkResourceNode, OreToonMaterial, ResourceVisualAssets},
+        scene::{ImpactEffectAssets, NetworkResourceNode, ResourceVisualAssets, ToonMaterial},
         state::ImpactEffectKind,
         systems::effects::spawn_impact_burst,
     },
@@ -40,7 +40,7 @@ pub(super) fn spawn_resource_node_entity(
             ResourceNodeMaterial::Standard(assets.dead_bark_material.clone()),
         )
     } else {
-        let (mesh, material) = resource_node_visual(assets, model);
+        let (mesh, material) = resource_node_visual(assets, model, id);
         // Ore/vein nodes that arrive already part-mined (a vein someone else worked,
         // or persisted partial storage from a save) spawn straight at their
         // depletion-stage mesh instead of briefly flashing full. (Trees: this is the
@@ -55,7 +55,7 @@ pub(super) fn spawn_resource_node_entity(
         target_transform,
         Visibility::Visible,
     ));
-    // Ore/vein nodes get the cel-shaded `OreToonMaterial`; everything else its
+    // Ore/vein nodes get the cel-shaded `ToonMaterial`; everything else its
     // `StandardMaterial` (distinct component types, so attached after the spawn).
     insert_resource_node_material(&mut spawn_command, material);
     // Crude clutter (branch piles, surface stones, hay grass) spawns densely and
@@ -241,18 +241,19 @@ pub(crate) fn ore_stage_mesh(
 }
 
 /// Which material kind a resource-node visual carries. Ore/vein nodes are
-/// cel-shaded ([`OreToonMaterial`]); every other model (trees, crude clutter)
+/// cel-shaded ([`ToonMaterial`]); every other model (trees, crude clutter)
 /// stays on a `StandardMaterial`. The spawn sites attach whichever component
 /// type this names, since `MeshMaterial3d<A>` and `MeshMaterial3d<B>` are
 /// distinct components.
 pub(crate) enum ResourceNodeMaterial {
     Standard(Handle<StandardMaterial>),
-    Toon(Handle<OreToonMaterial>),
+    Toon(Handle<ToonMaterial>),
 }
 
 pub(crate) fn resource_node_visual(
     assets: &ResourceVisualAssets,
     model: ResourceNodeModel,
+    id: ResourceNodeId,
 ) -> (Handle<Mesh>, ResourceNodeMaterial) {
     let toon = || ResourceNodeMaterial::Toon(assets.ore_toon_material.clone());
     match model {
@@ -294,15 +295,17 @@ pub(crate) fn resource_node_visual(
             assets.branch_pile_mesh.clone(),
             ResourceNodeMaterial::Standard(assets.vertex_material.clone()),
         ),
+        // Tall grass: pick one of the 3 toony seed-headed cards by `id % 3` so a
+        // patch of hay isn't one repeated tuft.
         ResourceNodeModel::HayGrass => (
             assets.hay_grass_mesh.clone(),
-            ResourceNodeMaterial::Standard(assets.hay_grass_material.clone()),
+            ResourceNodeMaterial::Standard(assets.hay_grass_materials[(id % 3) as usize].clone()),
         ),
     }
 }
 
 /// Attach the right material component for a resource-node visual: a
-/// `MeshMaterial3d<OreToonMaterial>` for ore/vein nodes, otherwise the
+/// `MeshMaterial3d<ToonMaterial>` for ore/vein nodes, otherwise the
 /// `MeshMaterial3d<StandardMaterial>`. Centralises the enum match so both spawn
 /// sites (network spawn + menu backdrop) stay in sync.
 pub(crate) fn insert_resource_node_material(

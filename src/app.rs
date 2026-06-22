@@ -49,8 +49,8 @@ use self::{
         play_sounds_system, play_transition_stingers_system, tick_audio_faders_system,
     },
     scene::{
-        GrassInstancingPlugin, GrassState, OreToonMaterial, TerrainMaterial,
-        apply_world_scene_system, setup_scene, stream_grass_system, update_sky_system,
+        GrassInstancingPlugin, GrassState, TerrainMaterial, ToonMaterial, apply_world_scene_system,
+        setup_scene, stream_grass_system, update_sky_system,
     },
     state::{
         AuthFlow, BuildingPlanState, ClientErrorToast, ClientRuntime, ClientSettings,
@@ -491,11 +491,11 @@ fn add_third_party_plugins(app: &mut App, settings: &ClientSettings) {
         // EmbeddedAssetsPlugin so `shaders/terrain.wgsl` and the biome textures
         // resolve when the first world's ground spawns.
         .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
-        // Cel-shaded ore/vein material: a standalone toon Material that replaces
-        // the four ore StandardMaterials so the hand-painted rock reads anime
+        // Shared cel-shaded (toon / anime) material: a standalone toon Material
+        // used by the ore nodes and the deployable props so they read anime
         // instead of smoothly PBR-lit. Client-only; after EmbeddedAssetsPlugin so
-        // `shaders/ore_toon.wgsl` resolves when the first world's ore nodes spawn.
-        .add_plugins(MaterialPlugin::<OreToonMaterial>::default())
+        // `shaders/toon.wgsl` resolves when the first world's props spawn.
+        .add_plugins(MaterialPlugin::<ToonMaterial>::default())
         // GPU-instanced detail grass: the project's one custom render pipeline.
         // Draws one shared blade mesh thousands of times per tile from a per-blade
         // instance buffer, so the field can be far denser than baking every blade

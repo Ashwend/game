@@ -48,7 +48,7 @@ use bevy::{
 
 mod instancing;
 
-pub(crate) use instancing::{GrassDayNight, GrassInstancingPlugin};
+pub(crate) use instancing::GrassInstancingPlugin;
 use instancing::{InstanceData, InstanceMaterialData};
 
 use super::components::WorldGeometry;
@@ -98,6 +98,11 @@ pub(super) fn init_grass_card_mesh(mut commands: Commands, mut meshes: ResMut<As
     commands.insert_resource(GrassCardMesh(meshes.add(build_instanced_blade_mesh())));
 }
 
+/// Number of tuft variants packed into the grass card atlas
+/// (`assets/textures/grass_atlas.png`, a 3x2 grid). Each blade picks one cell at
+/// random; the shader (`grass_instanced.wgsl`) remaps the card UV into it.
+const GRASS_ATLAS_CELLS: u32 = 6;
+
 /// Camera-relative radius (m) within which grass tiles are kept loaded. Comfortably
 /// above the instanced shader's `FADE_END` (`grass_instanced.wgsl`, 50 m) so a tile
 /// is fully dithered out before it loads/drops, the cards just dissolve in/out with
@@ -106,15 +111,16 @@ const GRASS_RADIUS_M: f32 = 54.0;
 
 /// Per-tier grass-CARD density (textured tuft cards per square metre, before the
 /// fBm biome thinning). Each card is a whole textured tuft of ~10 visual blades.
-/// Tuned down so even High is a comfortable ~100fps tier (the old "Low" looked
-/// fine and ran well, so it's roughly the new ceiling); the shader's distance
-/// dither does the far thin-out, so density is uniform (no CPU distance falloff).
+/// Tuned sparse for the stylised anime art direction: a dense carpet fights the
+/// clean toon ground + cel props, so the whole scale was pulled down (the old
+/// "Low" of 1.5 is now the ceiling/`High`). The shader's distance dither does the
+/// far thin-out, so density is uniform here (no CPU distance falloff).
 fn blade_density_per_m2(density: GrassDensity) -> Option<f32> {
     match density {
         GrassDensity::Off => None,
-        GrassDensity::Low => Some(1.5),
-        GrassDensity::Medium => Some(3.0),
-        GrassDensity::High => Some(5.0),
+        GrassDensity::Low => Some(0.6),
+        GrassDensity::Medium => Some(1.0),
+        GrassDensity::High => Some(1.5),
     }
 }
 
@@ -603,9 +609,16 @@ fn generate_layout_instances(layout: usize, blades_per_m2: f32) -> Vec<InstanceD
         let tint = [1.0 + warm * 0.10, 1.0 + tone * 0.03, 1.0 - warm * 0.08];
         // Stable per-blade key for biome barrenness thinning (not read by the shader).
         let thin_key = next_unit(&mut rng);
+        // Pick one of the tuft-atlas cells at random so the field mixes all six
+        // variants (~1/6 each) for natural variety, and the differing tuft
+        // heights give size variation for free (no per-blade mesh change). The
+        // shader remaps the card UV into this cell.
+        let atlas_cell = (next_unit(&mut rng) * GRASS_ATLAS_CELLS as f32)
+            .floor()
+            .min((GRASS_ATLAS_CELLS - 1) as f32);
         out.push(InstanceData {
             a: [bx, bz, 0.0, height_scale],
-            b: [yaw, shade, 0.0, thin_key],
+            b: [yaw, shade, atlas_cell, thin_key],
             c: [tint[0], tint[1], tint[2], 0.0],
         });
     }

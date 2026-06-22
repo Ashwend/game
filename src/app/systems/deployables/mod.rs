@@ -29,7 +29,7 @@ use bevy::prelude::*;
 
 use crate::{
     app::{
-        scene::{DeployableVisualAssets, NetworkDeployedEntity, TorchFireAssets},
+        scene::{DeployableVisualAssets, NetworkDeployedEntity, ToonMaterial, TorchFireAssets},
         state::ClientRuntime,
         systems::furnace_fire::{FurnaceFire, sync_furnace_fire},
         systems::torch_fire::{TorchFire, sync_torch_fire},
@@ -205,11 +205,9 @@ pub(crate) fn apply_deployed_entities_system(
                 // burst (chips/shards + impact audio ride the same
                 // remote-impact pipeline as gather hits).
                 let (mesh, material) = deployable_visual(&assets, meta.kind);
-                commands.entity(entry.entity).insert((
-                    NetworkDeployedEntity { id: meta.id },
-                    Mesh3d(mesh),
-                    MeshMaterial3d(material),
-                ));
+                let mut ec = commands.entity(entry.entity);
+                ec.insert((NetworkDeployedEntity { id: meta.id }, Mesh3d(mesh)));
+                insert_deployable_material(&mut ec, material);
                 emit_upgrade_burst(&mut remote_impacts, meta.kind, entry.position);
                 entry.kind = meta.kind;
             }
@@ -349,16 +347,15 @@ pub(crate) fn apply_deployed_entities_system(
             parent
         } else {
             let (mesh, material) = deployable_visual(&assets, spawn.kind);
-            commands
-                .spawn((
-                    Name::new(format!("Deployable {}", spawn.id)),
-                    NetworkDeployedEntity { id: spawn.id },
-                    Mesh3d(mesh),
-                    MeshMaterial3d(material),
-                    visual_transform,
-                    Visibility::Visible,
-                ))
-                .id()
+            let mut ec = commands.spawn((
+                Name::new(format!("Deployable {}", spawn.id)),
+                NetworkDeployedEntity { id: spawn.id },
+                Mesh3d(mesh),
+                visual_transform,
+                Visibility::Visible,
+            ));
+            insert_deployable_material(&mut ec, material);
+            ec.id()
         };
         if spawn.active {
             // A lit furnace streaming into the AoI gets its fire rig
@@ -728,10 +725,34 @@ fn emit_upgrade_burst(
     }
 }
 
+/// Which material kind a deployable visual carries. The vertex-colour props
+/// (workbench, furnace, storage, torch, tool cupboard, sleeping bag) are
+/// cel-shaded ([`ToonMaterial`]); building pieces + doors keep their textured
+/// `StandardMaterial` for now (see docs/toon-shading.md roadmap). The spawn sites
+/// attach whichever component type this names, since `MeshMaterial3d<A>` and
+/// `MeshMaterial3d<B>` are distinct components.
+enum DeployableMaterial {
+    Standard(Handle<StandardMaterial>),
+    Toon(Handle<ToonMaterial>),
+}
+
+/// Attach the right material component for a deployable visual. Centralised so
+/// the initial-spawn and tier-upgrade sites stay in sync.
+fn insert_deployable_material(entity: &mut EntityCommands, material: DeployableMaterial) {
+    match material {
+        DeployableMaterial::Standard(handle) => {
+            entity.insert(MeshMaterial3d(handle));
+        }
+        DeployableMaterial::Toon(handle) => {
+            entity.insert(MeshMaterial3d(handle));
+        }
+    }
+}
+
 fn deployable_visual(
     assets: &DeployableVisualAssets,
     kind: DeployableKind,
-) -> (Handle<Mesh>, Handle<StandardMaterial>) {
+) -> (Handle<Mesh>, DeployableMaterial) {
     let mesh = match kind {
         DeployableKind::Workbench { .. } => assets.workbench_mesh.clone(),
         DeployableKind::Furnace { .. } => assets.furnace_mesh.clone(),
@@ -744,13 +765,30 @@ fn deployable_visual(
         DeployableKind::Torch { .. } => assets.torch_mesh.clone(),
         DeployableKind::ToolCupboard => assets.tool_cupboard_mesh.clone(),
     };
-    // Building pieces carry their tier's textured material (twig / timber /
-    // stone); doors their variant material; everything else the shared
-    // base-white vertex-colour material.
+    // Building pieces carry their tier's textured `StandardMaterial` (twig /
+    // timber / stone) and doors their variant material, both still PBR for now.
+    // The free-standing deployables are cel-shaded: wood props share the toon wood
+    // material, the furnace the toon stone material, and the sleeping bag the
+    // toon fabric material.
     let material = match kind {
-        DeployableKind::Building { tier, .. } => assets.building_material(tier),
-        DeployableKind::Door { variant } => assets.door_material(variant),
-        _ => assets.material.clone(),
+        DeployableKind::Building { tier, .. } => {
+            DeployableMaterial::Standard(assets.building_material(tier))
+        }
+        DeployableKind::Door { variant } => {
+            DeployableMaterial::Standard(assets.door_material(variant))
+        }
+        DeployableKind::Furnace { .. } => {
+            DeployableMaterial::Toon(assets.toon_stone_material.clone())
+        }
+        DeployableKind::Workbench { .. }
+        | DeployableKind::StorageBox { .. }
+        | DeployableKind::ToolCupboard
+        | DeployableKind::Torch { .. } => {
+            DeployableMaterial::Toon(assets.toon_wood_material.clone())
+        }
+        DeployableKind::SleepingBag => {
+            DeployableMaterial::Toon(assets.toon_fabric_material.clone())
+        }
     };
     (mesh, material)
 }

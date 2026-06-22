@@ -106,10 +106,18 @@ pub(super) fn world_map_ui(
 ) {
     let screen = ctx.content_rect();
 
-    // Square map region, centred, with a margin on all sides.
+    // Square map region, centred, with a margin on all sides. A caption band is
+    // reserved under the map for the coords readout, the control hints, and the
+    // biome legend, so the map shrinks to leave them room (otherwise the legend
+    // falls off the bottom edge on a near-square window). The map is nudged up by
+    // half the caption so it stays visually centred in the space above the band.
     let margin = (screen.width().min(screen.height()) * 0.07).clamp(28.0, 110.0);
-    let side = screen.width().min(screen.height()) - margin * 2.0;
-    let map_rect = egui::Rect::from_center_size(screen.center(), egui::vec2(side, side));
+    let caption = 84.0;
+    let side = (screen.width().min(screen.height()) - margin * 2.0 - caption).max(160.0);
+    let map_rect = egui::Rect::from_center_size(
+        egui::pos2(screen.center().x, screen.center().y - caption * 0.5),
+        egui::vec2(side, side),
+    );
     let bounds = world_map.bounds();
 
     // Freeze the map's own pan/zoom/marker input while a modal sits on top of it
@@ -347,6 +355,48 @@ pub(super) fn world_map_ui(
                 egui::FontId::proportional(11.0),
                 egui::Color32::from_gray(120),
             );
+
+            // Biome legend: a colour swatch + label per biome, centred under the
+            // map, so the raster's colours read like a chart key. The colours come
+            // from `biome_legend` (the same `biome_rgb` the raster uses), so the
+            // key can never drift from what's drawn.
+            {
+                let legend = crate::world::biome_legend();
+                let font = egui::FontId::proportional(11.0);
+                let text_col = egui::Color32::from_gray(210);
+                let sw = 11.0;
+                let gap = 5.0;
+                let item_gap = 12.0;
+                let widths: Vec<f32> = legend
+                    .iter()
+                    .map(|(label, _)| {
+                        painter
+                            .layout_no_wrap((*label).to_owned(), font.clone(), text_col)
+                            .rect
+                            .width()
+                    })
+                    .collect();
+                let total: f32 =
+                    widths.iter().map(|w| sw + gap + w + item_gap).sum::<f32>() - item_gap;
+                let mut x = map_rect.center().x - total * 0.5;
+                let y = map_rect.bottom() + 58.0;
+                for ((label, rgb), w) in legend.iter().zip(&widths) {
+                    let col = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(sw, sw)),
+                        2.0,
+                        col,
+                    );
+                    painter.text(
+                        egui::pos2(x + sw + gap, y + sw * 0.5),
+                        egui::Align2::LEFT_CENTER,
+                        *label,
+                        font.clone(),
+                        text_col,
+                    );
+                    x += sw + gap + w + item_gap;
+                }
+            }
 
             hover_tip
         })

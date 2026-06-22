@@ -15,8 +15,8 @@ use bevy::{
 };
 
 use super::mesh::builder::build_hay_tuft_mesh;
-use super::ore_toon::OreToonMaterial;
 use super::terrain::build_mip_chain;
+use super::toon::ToonMaterial;
 use super::{
     components::MainCamera,
     mesh::{
@@ -25,7 +25,7 @@ use super::{
         low_poly_bag_mesh, low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_medium_lod_mesh,
         low_poly_birch_tree_small_lod_mesh, low_poly_branch_pile_mesh,
         low_poly_pine_tree_large_lod_mesh, low_poly_pine_tree_medium_lod_mesh,
-        low_poly_pine_tree_small_lod_mesh, low_poly_surface_stone_mesh, sleeping_bag_mesh,
+        low_poly_pine_tree_small_lod_mesh, low_poly_surface_stone_mesh,
     },
     sky::{initial_distance_fog, setup_sky},
 };
@@ -53,6 +53,23 @@ pub(crate) const WORLD_COLOR: Color = Color::srgb(0.18, 0.34, 0.22);
 pub(crate) const DROPPED_BAG_COLOR: Color = Color::srgb(0.42, 0.31, 0.18);
 pub(crate) const HELD_BAG_COLOR: Color = Color::srgb(0.50, 0.38, 0.24);
 pub(crate) const VERTEX_MATERIAL_COLOR: Color = Color::WHITE;
+
+/// Build one toony tall-grass (hay) material from a seed-headed tuft card. The
+/// near-white base lets the painted texture's bright green read; alpha-masked
+/// for the blade silhouette, double-sided thin ribbons, matte, with a faint
+/// green self-lift so the harvestable plant stays visible at dusk.
+fn hay_tall_grass_material(tex: Handle<Image>) -> StandardMaterial {
+    StandardMaterial {
+        base_color: Color::srgb(0.86, 0.97, 0.80),
+        base_color_texture: Some(tex),
+        emissive: LinearRgba::rgb(0.008, 0.020, 0.006),
+        alpha_mode: AlphaMode::Mask(0.4),
+        cull_mode: None,
+        perceptual_roughness: 0.95,
+        reflectance: 0.04,
+        ..default()
+    }
+}
 
 #[derive(Resource, Clone)]
 pub(crate) struct PlayerVisualAssets {
@@ -152,13 +169,15 @@ pub(crate) struct ResourceVisualAssets {
     pub(crate) hay_grass_mesh: Handle<Mesh>,
     /// One shared cel-shaded material for all four ore/vein nodes: the per-mineral
     /// colour rides on the glb COLOR_0, so the rock texture + toon ramp are shared
-    /// (see [`OreToonMaterial`] and `art/ore/build_ore.py`).
-    pub(crate) ore_toon_material: Handle<OreToonMaterial>,
+    /// (see [`ToonMaterial`] and `art/ore/build_ore.py`).
+    pub(crate) ore_toon_material: Handle<ToonMaterial>,
     pub(crate) vertex_material: Handle<StandardMaterial>,
     /// Warm, alpha-masked material for the harvestable hay tuft: the shared
     /// grass-tuft texture tinted toward straw so it reads distinct from the
     /// cosmetic detail grass (see [`build_hay_tuft_mesh`]).
-    pub(crate) hay_grass_material: Handle<StandardMaterial>,
+    /// Three toony tall-grass materials (each a different seed-headed tuft card);
+    /// a hay node picks one by `id % 3` so the harvestable plants vary.
+    pub(crate) hay_grass_materials: [Handle<StandardMaterial>; 3],
     /// Tree bark (opaque, repeat-tiled, mipped) and canopy foliage (alpha-mask
     /// needle/leaf, double-sided, mipped) materials shared by every instance of
     /// a species so the forest batches by mesh+material. Built from the embedded
@@ -211,11 +230,15 @@ pub(crate) struct DeployableVisualAssets {
     /// Authored Tool Cupboard model (Blender glb, vertex-coloured like the
     /// workbench/furnace; origin at the base so it sits on a foundation).
     pub(crate) tool_cupboard_mesh: Handle<Mesh>,
-    /// Shared material used for placed structures. Vertex colours from
-    /// the mesh do the heavy lifting; the material just supplies PBR
-    /// reflectance + roughness so the wood/stone reads correctly under
-    /// the day/night sun.
-    pub(crate) material: Handle<StandardMaterial>,
+    /// Cel-shaded wood material (hand-painted plank line-art, UV-mapped) for the
+    /// wooden deployables: workbench, storage boxes, tool cupboard, torch.
+    pub(crate) toon_wood_material: Handle<ToonMaterial>,
+    /// Cel-shaded stone material (hand-painted cobble line-art, UV-mapped) for the
+    /// crude furnace.
+    pub(crate) toon_stone_material: Handle<ToonMaterial>,
+    /// Cel-shaded fabric material (woven-quilt line-art, UV-mapped) for the
+    /// sleeping bag bedroll. See [Toon / cel shading](../../../docs/toon-shading.md).
+    pub(crate) toon_fabric_material: Handle<ToonMaterial>,
     /// Semi-transparent green tint used by the placement ghost when the
     /// slot is valid. Mirrors the convention from popular survival games
     ///, green means "click to place", we pair it with a slight pulse.
@@ -359,7 +382,7 @@ pub(crate) fn setup_scene(
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut ore_toon_materials: ResMut<Assets<OreToonMaterial>>,
+    mut toon_materials: ResMut<Assets<ToonMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut scattering_media: ResMut<Assets<ScatteringMedium>>,
 ) {
@@ -574,8 +597,8 @@ pub(crate) fn setup_scene(
     // `art/ore/rock_master.png` -> `assets/textures/ore/rock.png`.
     let ore_rock_tex = {
         let rel = "textures/ore/rock.png";
-        let bytes = embedded_bytes(rel)
-            .unwrap_or_else(|| panic!("embedded ore texture missing: {rel}"));
+        let bytes =
+            embedded_bytes(rel).unwrap_or_else(|| panic!("embedded ore texture missing: {rel}"));
         let mut image = Image::from_buffer(
             bytes,
             ImageType::Extension("png"),
@@ -588,6 +611,32 @@ pub(crate) fn setup_scene(
         build_mip_chain(&mut image);
         images.add(image)
     };
+
+    // Hand-painted toon detail textures for the deployables, mapped by the
+    // box-projected UVs baked into each model (`art/deployables/build_deployables.py`).
+    // Near-white line-art grain (plank seams / cobble coursing / quilt weave) so
+    // the prop's COLOR_0 sets the colour (wood brown / stone grey / fabric green),
+    // the same base-white * COLOR_0 * texture trick as the bark + ore. Decoded
+    // sRGB with a CPU mip chain + repeat/aniso sampler. Sources: `art/deployables/*`.
+    let mut load_toon_texture = |name: &str| -> Handle<Image> {
+        let rel = format!("textures/deployables/{name}.png");
+        let bytes = embedded_bytes(&rel)
+            .unwrap_or_else(|| panic!("embedded deployable texture missing: {rel}"));
+        let mut image = Image::from_buffer(
+            bytes,
+            ImageType::Extension("png"),
+            CompressedImageFormats::NONE,
+            true,
+            ImageSampler::Descriptor(tree_texture_sampler()),
+            RenderAssetUsages::RENDER_WORLD,
+        )
+        .unwrap_or_else(|err| panic!("decode deployable texture {rel}: {err:?}"));
+        build_mip_chain(&mut image);
+        images.add(image)
+    };
+    let deployable_wood_tex = load_toon_texture("wood");
+    let deployable_stone_tex = load_toon_texture("stone");
+    let deployable_fabric_tex = load_toon_texture("fabric");
 
     // Each live tree is an authored Blender glb with two meshes: mesh 0 = the
     // bark trunk, mesh 1 = the canopy. Geometry + UVs + COLOR_0 come from the
@@ -614,8 +663,11 @@ pub(crate) fn setup_scene(
     let ore_stage_meshes = |ty: &str| -> [Handle<Mesh>; ORE_NODE_STAGE_COUNT] {
         std::array::from_fn(|stage| {
             asset_server.load(
-                GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }
-                    .from_asset(embedded_asset_path(&format!("ore/{ty}/stage_{stage}.glb"))),
+                GltfAssetLabel::Primitive {
+                    mesh: 0,
+                    primitive: 0,
+                }
+                .from_asset(embedded_asset_path(&format!("ore/{ty}/stage_{stage}.glb"))),
             )
         })
     };
@@ -656,9 +708,10 @@ pub(crate) fn setup_scene(
         // (cel band count, ambient floor, ink-edge strength, ink-edge width exp).
         // Harder cartoon: 3 bands + a strong dark silhouette edge. Ambient floor
         // lifted so the shadow bands read brighter (the stone was reading dark).
-        ore_toon_material: ore_toon_materials.add(OreToonMaterial {
-            rock: ore_rock_tex.clone(),
-            params: Vec4::new(3.0, 0.30, 0.8, 2.2),
+        ore_toon_material: toon_materials.add(ToonMaterial {
+            detail: ore_rock_tex.clone(),
+            params: Vec4::new(3.0, 0.42, 0.8, 2.2),
+            tex_scale: 1.0, // ore glbs carry their own UVs; triplanar scale unused
         }),
         vertex_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
@@ -666,34 +719,21 @@ pub(crate) fn setup_scene(
             reflectance: 0.12,
             ..default()
         }),
-        hay_grass_material: materials.add(StandardMaterial {
-            // Same grass-tuft texture as the detail grass, alpha-masked for the blade
-            // silhouette, but a richer/deeper green than the field plus a faint pop so
-            // the harvestable tuft is locatable. (Hay spawns on the hay channel =
-            // plains, where the detail grass is biome-tinted yellow, so a green tuft
-            // reads clearly there; the bigger size, see `build_hay_tuft_mesh` above,
-            // distinguishes it in greener biomes. A fixed colour can't beat the field
-            // in *every* biome since the field's colour varies, so size carries the
-            // rest.) Thin ribbons: both faces, matte, near-zero reflectance.
-            // A lush, saturated deep green (deliberately NOT yellow-green: a high
-            // red channel reads washed/sickly against the field). Green dominates
-            // with red and blue held well below it for saturation; the overall
-            // luminance matches the previous tint so the tuft stays just as easy
-            // to spot. This is the tip brightness, the mesh's root→tip vertex
-            // gradient (see `build_hay_tuft_mesh`) multiplies the base darker.
-            base_color: Color::srgb(0.36, 0.70, 0.30),
-            base_color_texture: Some(
-                asset_server.load(embedded_asset_path("textures/grass_tuft.png")),
-            ),
-            // Faint green self-lift (not yellow) so the tuft reads with a little
-            // life under dim dusk/night light without glowing.
-            emissive: LinearRgba::rgb(0.008, 0.020, 0.006),
-            alpha_mode: AlphaMode::Mask(0.4),
-            cull_mode: None,
-            perceptual_roughness: 0.95,
-            reflectance: 0.04,
-            ..default()
-        }),
+        // Three toony tall-grass tuft cards (taller, seed-headed, loosely splayed);
+        // a hay node picks one by `id % 3` (see `resource_node_visual`) so the
+        // harvestable plants vary instead of being one repeated card. Sources:
+        // `art/textures/grass/tall_{1,2,3}.png` -> `textures/tall_grass_{1,2,3}.png`.
+        hay_grass_materials: [
+            materials.add(hay_tall_grass_material(
+                asset_server.load(embedded_asset_path("textures/tall_grass_1.png")),
+            )),
+            materials.add(hay_tall_grass_material(
+                asset_server.load(embedded_asset_path("textures/tall_grass_2.png")),
+            )),
+            materials.add(hay_tall_grass_material(
+                asset_server.load(embedded_asset_path("textures/tall_grass_3.png")),
+            )),
+        ],
         // Bark: opaque, repeat-tiled mipped texture, matte dry-organic PBR
         // (materials.md). Base white so the trunk's COLOR_0 (near-white, with a
         // touch of ground-contact AO on the base ring) reads the bark texture.
@@ -759,6 +799,7 @@ pub(crate) fn setup_scene(
     let storage_box_large_glb = embedded_asset_path("items/storage_box_large/model.glb");
     let torch_glb = embedded_asset_path("items/torch/model.glb");
     let tool_cupboard_glb = embedded_asset_path("items/tool_cupboard/model.glb");
+    let sleeping_bag_glb = embedded_asset_path("items/sleeping_bag/model.glb");
     // Authored door panels (wood + iron, a matched family). Source:
     // `art/building/build_door.py`.
     let hewn_door_glb = embedded_asset_path("items/hewn_log_door/model.glb");
@@ -874,16 +915,33 @@ pub(crate) fn setup_scene(
             ..default()
         }),
         door_ghost_mesh: meshes.add(door_ghost_mesh()),
-        sleeping_bag_mesh: meshes.add(sleeping_bag_mesh()),
+        sleeping_bag_mesh: prim_mesh(&sleeping_bag_glb, 0),
         storage_box_small_mesh: prim_mesh(&storage_box_small_glb, 0),
         storage_box_large_mesh: prim_mesh(&storage_box_large_glb, 0),
         torch_mesh: prim_mesh(&torch_glb, 0),
         tool_cupboard_mesh: prim_mesh(&tool_cupboard_glb, 0),
-        material: materials.add(StandardMaterial {
-            base_color: VERTEX_MATERIAL_COLOR,
-            perceptual_roughness: 0.92,
-            reflectance: 0.15,
-            ..default()
+        // Per-surface cel-shaded materials for the deployables: hand-painted
+        // wood / stone / fabric line-art mapped by the models' baked box-projected
+        // UVs (tex_scale is the dead triplanar fallback, unused now the props
+        // carry UVs). The deployables are mostly flat-faced boxes, so they run a
+        // PUNCHIER cel than the rounded ore nodes (lower ambient floor for harder
+        // plane-to-plane contrast, a full-strength + wider ink edge so every
+        // beveled corner reads as a drawn outline). See docs/toon-shading.md
+        // "flat-surface cel banding". Ore keeps its softer params.
+        toon_wood_material: toon_materials.add(ToonMaterial {
+            detail: deployable_wood_tex.clone(),
+            params: Vec4::new(3.0, 0.46, 1.0, 1.4),
+            tex_scale: 1.5,
+        }),
+        toon_stone_material: toon_materials.add(ToonMaterial {
+            detail: deployable_stone_tex.clone(),
+            params: Vec4::new(3.0, 0.46, 1.0, 1.4),
+            tex_scale: 1.5,
+        }),
+        toon_fabric_material: toon_materials.add(ToonMaterial {
+            detail: deployable_fabric_tex.clone(),
+            params: Vec4::new(3.0, 0.46, 1.0, 1.4),
+            tex_scale: 1.5,
         }),
         ghost_valid_material: materials.add(StandardMaterial {
             // Translucent green: visible against grass + stone without

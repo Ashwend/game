@@ -35,11 +35,10 @@ use bevy::{
 
 use crate::{
     app::state::{ClientRuntime, MenuState},
-    world_time::{DEFAULT_START_SECONDS, SECONDS_PER_DAY, WorldTime},
+    world_time::{SECONDS_PER_DAY, WorldTime},
 };
 
 use super::components::MainCamera;
-use super::grass::GrassDayNight;
 
 /// Apparent radius of the sky dome the moon visual rides on. The camera's far
 /// plane is 300 m, so the moon stays comfortably inside it. The moon material
@@ -96,10 +95,16 @@ const SHADOW_UPDATE_MIN_INTERVAL_SECS: f32 = 1.0 / 60.0;
 /// clock ([`ClientRuntime::world_time`]) only ticks in-game and keeps the
 /// server's last time after you leave a session, so reading it on the title
 /// screen makes the backdrop look as if time passed while you were away. The
-/// menu instead renders this fixed time, the same just-after-sunrise look the
-/// game launches with, so the title screen is identical on every visit. Pinned,
-/// not ticked: the menu never cycles.
-const MENU_BACKDROP_SECONDS: f32 = DEFAULT_START_SECONDS;
+/// menu renders this fixed time instead, so the title screen is identical on
+/// every visit. Pinned, not ticked: the menu never cycles.
+///
+/// Early morning, the look that suits the backdrop best. Nudged to 7:30 (just
+/// past the 7am [`DEFAULT_START_SECONDS`] the game launches with) so the sun is a
+/// touch higher than the very low 7am angle, easing the side-light across the
+/// field without losing the morning mood. The remaining directionality reads as a
+/// soft gradient, not a hard split, because the grass/prop cel shader floors deep
+/// shadow against the real shade rather than crushing it to near-black.
+const MENU_BACKDROP_SECONDS: f32 = 7.5 * 3600.0;
 
 #[derive(Component)]
 pub(crate) struct SunLight;
@@ -253,7 +258,6 @@ pub(crate) fn update_sky_system(
     menu: Res<MenuState>,
     mut shadow_throttle: Local<f32>,
     mut ambient: ResMut<GlobalAmbientLight>,
-    mut grass_day_night: ResMut<GrassDayNight>,
     camera: CameraTransformQuery,
     mut sun_light: SunLightQuery,
     mut moon_light: MoonLightQuery,
@@ -310,11 +314,6 @@ pub(crate) fn update_sky_system(
     ambient.color = vec3_to_color(lighting.ambient_color);
     ambient.brightness = lighting.ambient_brightness;
 
-    // Hand the grass shader the same day/night factor so its day and night looks
-    // crossfade over the whole dusk/dawn window (it can't read the world clock and the
-    // night moon light would mislead it). Extracted to the render world next frame.
-    grass_day_night.day_strength = lighting.day_strength;
-
     if let Ok(mut fog) = fog.single_mut() {
         fog.color = vec3_to_color(lighting.fog_color);
         // Squared falloff to keep the near field clear; see
@@ -346,10 +345,6 @@ struct LightingFrame {
     ambient_brightness: f32,
     fog_color: Vec3,
     fog_distance: f32,
-    /// Smooth day/night factor in `[0, 1]` (1 = full day). Exposed so the grass
-    /// shader can crossfade its day/night look over the exact dusk/dawn window
-    /// rather than inferring night from the ambient luminance.
-    day_strength: f32,
 }
 
 fn compute_lighting(time: &WorldTime) -> LightingFrame {
@@ -402,7 +397,6 @@ fn compute_lighting(time: &WorldTime) -> LightingFrame {
         ambient_brightness,
         fog_color,
         fog_distance,
-        day_strength,
     }
 }
 
@@ -563,17 +557,19 @@ mod tests {
     }
 
     #[test]
-    fn menu_backdrop_time_is_a_fixed_bright_morning() {
-        // The title screen pins the sky to this fixed time instead of the live
-        // gameplay clock. It must stay aligned with the world's default start
-        // (so the menu matches a fresh launch) and read as daylight, not an
-        // accidental midnight.
-        assert_eq!(MENU_BACKDROP_SECONDS, DEFAULT_START_SECONDS);
+    fn menu_backdrop_time_is_a_lit_morning() {
+        // The title screen pins the sky to this fixed early-morning time instead
+        // of the live gameplay clock. Guard that it reads as daylight (sun above
+        // the horizon), not an accidental midnight.
         let lighting = compute_lighting(&WorldTime {
             seconds_of_day: MENU_BACKDROP_SECONDS,
             multiplier: 0.0,
         });
-        assert!(lighting.day_strength > 0.5, "menu sky should be daylit");
+        assert!(
+            lighting.sun_direction.y > 0.1,
+            "menu sun should be above the horizon, got y={}",
+            lighting.sun_direction.y
+        );
         assert!(lighting.sun_illuminance > 100.0, "menu sun should be up");
     }
 

@@ -20,8 +20,6 @@ use super::builder::{LowPolyMeshBuilder, MeshColor, scale_rgb};
 // Palettes (linear albedo, see builder.rs for the calibration notes).
 const DOOR_LOG: MeshColor = [0.170, 0.082, 0.030, 1.0];
 const DOOR_BRACE: MeshColor = [0.080, 0.040, 0.016, 1.0];
-const BAG_FABRIC: MeshColor = [0.062, 0.105, 0.058, 1.0];
-const BAG_LINING: MeshColor = [0.240, 0.205, 0.140, 1.0];
 const HAFT_WOOD: MeshColor = [0.230, 0.105, 0.038, 1.0];
 const HAMMER_HEAD: MeshColor = [0.165, 0.090, 0.038, 1.0];
 const IRON_BAND: MeshColor = [0.300, 0.310, 0.330, 1.0];
@@ -59,32 +57,6 @@ pub(crate) fn door_ghost_mesh() -> Mesh {
         builder.push_triangle(hinge, p0, p1, DOOR_BRACE);
         builder.push_triangle(hinge, p1, p0, DOOR_BRACE);
     }
-    builder.build()
-}
-
-/// Sleeping bag: a low fabric roll with a folded-back lining and a small
-/// pillow bump. Base centred on the origin, spanning local X (head at +X).
-pub(crate) fn sleeping_bag_mesh() -> Mesh {
-    let mut builder = LowPolyMeshBuilder::default();
-    // Main roll, slightly tapered toward the foot via two overlapping
-    // boxes. The foot box's base floats a hair above the main roll's so
-    // their downward faces aren't coplanar.
-    builder.add_box([0.10, 0.10, 0.0], [0.85, 0.10, 0.40], BAG_FABRIC);
-    builder.add_box(
-        [-0.65, 0.089, 0.0],
-        [0.32, 0.085, 0.34],
-        scale_rgb(BAG_FABRIC, 0.85),
-    );
-    // Folded-back lining near the head end, proud of the roll's top
-    // face. Its old top sat exactly on the roll top (two coplanar
-    // same-facing quads), which z-fought as flicker around the pillow.
-    builder.add_box([0.62, 0.19, 0.0], [0.30, 0.035, 0.36], BAG_LINING);
-    // Pillow bump, seated into the lining and rising clear of it.
-    builder.add_box(
-        [0.78, 0.225, 0.0],
-        [0.18, 0.05, 0.22],
-        scale_rgb(BAG_LINING, 1.1),
-    );
     builder.build()
 }
 

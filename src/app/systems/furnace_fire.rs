@@ -232,12 +232,14 @@ fn spawn_flame(commands: &mut Commands, assets: &FurnaceFireAssets, anchor: Vec3
         angle.sin() * radius,
     );
     // Mostly straight up, with a slight outward lean so the column tapers as
-    // it climbs rather than rising as a straight tube.
+    // it climbs rather than rising as a straight tube. Rise + lifetime kept low
+    // so the flame column stays inside the furnace mouth instead of poking up
+    // through the top of the stone (it was clipping the roof).
     let outward = Vec3::new(angle.cos(), 0.0, angle.sin()) * (r1 * 0.12);
-    let rise = 0.55 + r3 * 0.7;
+    let rise = 0.30 + r3 * 0.32;
     let velocity = Vec3::Y * rise + outward;
     let initial_scale = 0.8 + r2 * 0.9;
-    let lifetime = 0.30 + r1 * 0.28;
+    let lifetime = 0.26 + r1 * 0.22;
 
     commands.spawn((
         Name::new("Furnace Flame"),
@@ -266,10 +268,12 @@ fn spawn_spark(commands: &mut Commands, assets: &FurnaceFireAssets, anchor: Vec3
 
     let offset = Vec3::new((r1 - 0.5) * 0.14, (r2 - 0.5) * 0.05, (r3 - 0.5) * 0.14);
     let drift = Vec3::new((r2 - 0.5) * 0.5, 0.0, (r1 - 0.5) * 0.5);
-    let rise = 1.0 + r3 * 1.1;
+    // Lower rise + shorter life so embers stay within the mouth rather than
+    // streaming up out of the furnace roof.
+    let rise = 0.5 + r3 * 0.5;
     let velocity = drift + Vec3::Y * rise;
     let initial_scale = 0.6 + r2 * 0.7;
-    let lifetime = 0.5 + r1 * 0.5;
+    let lifetime = 0.4 + r1 * 0.4;
 
     commands.spawn((
         Name::new("Furnace Spark"),
