@@ -14,7 +14,7 @@ use super::hud::hud_ui;
 use super::inventory::{draw_drag_preview, handle_drag_release};
 use super::inventory_panel::inventory_panel_ui;
 use super::loot_bag::loot_bag_ui;
-use super::options::{OptionsBackTarget, options_ui};
+use super::options::{OptionsBackTarget, VoiceTabIo, options_ui};
 use super::pause::pause_ui;
 use super::peer_overlay::{PeerOverlay, collect_peer_overlay_entries, peer_overlay_ui};
 use super::text_prompt::text_prompt_ui;
@@ -110,6 +110,12 @@ fn building_cost_overlay(
 pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta_seconds: f32) {
     if resources.menu.pause_options_open {
         let primary_monitor = resources.primary_monitor.single().ok();
+        let mut voice_io = VoiceTabIo {
+            devices: &resources.voice_devices,
+            control: &mut resources.voice_control,
+            input_level: resources.voice.mic_level(),
+            playback_available: resources.voice.playback_available,
+        };
         options_ui(
             ctx,
             &mut resources.menu,
@@ -118,6 +124,7 @@ pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta
             &resources.physical_keys,
             primary_monitor,
             OptionsBackTarget::PauseMenu,
+            &mut voice_io,
         );
     } else {
         // Screenshot toggles. `show_hud` is the master switch for all

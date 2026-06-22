@@ -12,9 +12,9 @@ mic → cpal callback → downmix → resample → Opus encode → channel
                                                             ↓
    server filter (3D range) ← Lightyear UnorderedUnreliable ← Bevy
                 ↓
-  Lightyear UnorderedUnreliable → Bevy event → Opus decode → jitter buffer
-                                                                  ↓
-                                                       cpal output mixer
+  Lightyear UnorderedUnreliable → Bevy event → Opus decode → resample → jitter buffer
+                                                                            ↓
+                                                                 cpal output mixer
 ```
 
 - **Codec**: libopus via the `opus` crate. 48 kHz mono, 24 kbps, VoIP application
@@ -26,10 +26,28 @@ mic → cpal callback → downmix → resample → Opus encode → channel
   is enabled; the network send is gated on PTT.
 - **Playback**: `cpal` output stream on its own worker thread. Per-speaker
   `SpeakerSlot` carries an Opus decoder, a mono PCM ring buffer, and the
-  current stereo gain pair.
+  current stereo gain pair. The decoder always emits 48 kHz; if the output
+  device runs at another rate, a per-speaker [`LinearResampler`](#resampling-on-both-ends)
+  converts each decoded frame to the device rate on the Bevy thread (the audio
+  callback stays allocation-free). **Output-device init failure is surfaced,
+  not swallowed**: `run_playback` only reports "ready" after the stream is
+  actually built *and* playing, and `VoiceState::playback_available` drives a
+  one-time "you won't hear other players" toast plus a Voice-tab warning.
 - **Network**: dedicated `VoiceChannel` with `ChannelMode::UnorderedUnreliable`
   so every delivered Opus packet reaches the decoder even when it arrives
   slightly out of order. See [Networking](networking.md) for the channel table.
+
+### Resampling on both ends
+
+The codec is fixed at 48 kHz, but real devices aren't. **Both** the input and
+output paths fall back to the device's native rate and bridge the gap with the
+shared [`LinearResampler`](../src/app/voice/resample.rs) (input: device → 48 kHz
+before encode; output: 48 kHz → device after decode). This symmetry is
+load-bearing: an earlier version resampled only on capture and hard-required an
+exact 48 kHz **output** config, so a listener whose default output advertised no
+48 kHz config (a 44.1 kHz DAC, or a >2-channel HDMI/AirPlay/aggregate device)
+had playback fail outright and silently heard *nobody* while their own mic still
+worked, the asymmetric one-way-audio bug. Keep both ends rate-tolerant.
 
 The whole subsystem lives under `src/app/voice/` (client) and `src/server/voice.rs`
 (server-side range filter).
@@ -111,9 +129,13 @@ mismatch:
   `src/app/ui/hud.rs::voice_indicator`.
 - Per-peer indicator: a small pulsing green dot immediately to the left of
   the talker's name on their nameplate. Tracked via `VoiceState::is_peer_talking`,
-  which is set to 1.0 on each decoded frame and decays at 5/sec, that
+  which is set to 1.0 on each **received** frame (in `receive_voice_system`,
+  before and independent of `submit_packet`) and decays at 5/sec, that
   ~200 ms carry-over masks normal between-packet gaps so the dot doesn't
-  flicker per Opus frame.
+  flicker per Opus frame. Deliberately driven by *receipt*, not playback: the
+  dot lights even when local playback is dead, so "I see them talking but hear
+  nothing" is the in-game tell for a broken **output** device (vs. a dark dot,
+  which means their packets aren't reaching you at all, a sender-side fault).
 
 ## Privacy posture
 
@@ -147,22 +169,60 @@ preferences:
 - `output_volume`: master gain applied to every incoming voice stream
   (multiplied by the per-speaker spatial gain in the mixer).
 - `input_volume`: pre-encode gain on the microphone.
+- `input_device` / `output_device`: preferred mic / output by cpal device
+  **name** (`Option<String>`, `None` = system default). Stored by name, not a
+  live handle, because settings persist across runs and a `cpal::Device` is
+  `!Send`. Resolution happens on the worker thread (`src/app/voice/devices.rs`),
+  re-enumerating and matching by name, falling back to the system default when
+  the saved device is gone, so an unplugged headset never wedges voice.
+  `VoiceSettings` is therefore no longer `Copy` (it holds `String`s); it's only
+  ever cloned/borrowed, never bulk-copied on a hot path.
 
 The audible range is intentionally *not* a setting, see above.
+
+### Device picker and mic test
+
+The Voice options tab (`src/app/ui/options/voice_tab.rs`) adds input/output
+device dropdowns (first entry "System Default" → `None`) and a "Test Microphone"
+control. Changing a device just writes the setting; the manage systems observe
+the change and restart the affected worker (`manage_voice_capture_system` for
+the mic, `manage_voice_playback_system` for the output). Device names are cached
+in `VoiceDeviceCache` and only re-enumerated on first use or the Refresh button,
+never per frame. The test shows a live level meter fed from a lock-free
+`AtomicU32` the capture callback writes each frame (mirroring the gain atomic),
+and an opt-in "Hear Myself" loopback that routes the tested mic back to the
+local output under a reserved speaker id (`u64::MAX`). Because the mic is
+normally only opened in-game, the test opens a short-lived **monitor** capture
+(`manage_voice_monitor_system`) while the Voice tab is visible and the toggle is
+on, dropped the moment the test ends so a Bluetooth headset isn't forced into
+call-quality HFP outside a session. The UI↔systems handshake rides a
+`VoiceUiControl` resource so the read-only UI borrow and the systems' mutable
+borrow don't collide.
 
 ## Module map
 
 - `src/app/voice/codec.rs`: thin Opus encoder/decoder wrappers. Centralises
   the codec config so both halves of the pipeline stay in lockstep.
+- `src/app/voice/resample.rs`: shared `LinearResampler` used by both capture
+  (device rate → 48 kHz) and playback (48 kHz → device rate). Keep one
+  persistent instance per stream so its cursor carries across callbacks (no
+  clicks at frame edges).
+- `src/app/voice/devices.rs`: cpal device enumeration + select-by-name with
+  system-default fallback, shared by the worker threads and the options picker.
 - `src/app/voice/capture.rs`: cpal mic stream + Opus encode worker thread.
   Owns the channel-down/resampler so the rest of the pipeline can assume
-  mono 48 kHz f32 input.
+  mono 48 kHz f32 input. Publishes a lock-free input-level atomic for the meter.
 - `src/app/voice/playback.rs`: cpal output stream + per-speaker mixer +
-  jitter buffer + PLC. Hand-clamps the final mix.
-- `src/app/voice/systems.rs`: Bevy resources/systems. `VoiceState`
-  resource, `transmit_voice_system`, `receive_voice_system`,
-  `apply_voice_settings_system`, `IncomingVoiceMessage` event, and the
-  `spatial_gain` listener-relative pan/falloff math.
+  jitter buffer + PLC + per-speaker output resampler. Falls back to the device
+  default rate (never an exact-48 kHz hard requirement) and reports init
+  failure instead of swallowing it. Hand-clamps the final mix.
+- `src/app/voice/systems.rs`: Bevy resources/systems. `VoiceState`,
+  `VoiceUiControl`, and `VoiceDeviceCache` resources; `transmit_voice_system`,
+  `receive_voice_system`, `manage_voice_capture_system`,
+  `manage_voice_playback_system`, `manage_voice_monitor_system`,
+  `refresh_voice_devices_system`, `apply_voice_settings_system`, the
+  `IncomingVoiceMessage` event, and the `spatial_gain` listener-relative
+  pan/falloff math.
 - `src/server/voice.rs`: server-side range filter + the
   `VOICE_AUDIBLE_RANGE` constant.
 - `src/net/channels.rs`: the dedicated `VoiceChannel` registration.

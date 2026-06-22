@@ -6,22 +6,40 @@
 //!   off to the playback mixer with a freshly computed spatial gain.
 //! - [`apply_voice_settings_system`] keeps the capture/playback gain in
 //!   sync with the user's options-panel sliders.
-//! - The plugin spawns the cpal threads on `Startup`.
+//! - [`manage_voice_playback_system`] restarts the output stream when the
+//!   selected output device changes and surfaces a dead-output warning so a
+//!   listener whose audio device failed to open is told, instead of silently
+//!   hearing nobody.
+//! - [`manage_voice_monitor_system`] powers the options "Test Microphone"
+//!   meter + optional self-loopback.
+//! - [`refresh_voice_devices_system`] enumerates input/output devices for the
+//!   options device pickers.
+//! - The plugin spawns the playback cpal thread on `Startup`.
 
 use std::collections::HashMap;
 
 use bevy::prelude::*;
 
 use crate::{
-    app::state::{ClientErrorToast, ClientRuntime, ClientSettings, KeyAction, MenuState, Screen},
+    app::state::{
+        ClientErrorToast, ClientRuntime, ClientSettings, KeyAction, MenuState, OptionsTab,
+        OptionsUiState, Screen,
+    },
     protocol::{ClientId, ClientMessage, Vec3Net, VoiceFrame},
     server::VOICE_AUDIBLE_RANGE,
 };
 
 use super::{
     capture::{CaptureStatus, VoiceCapture, drain_frames},
+    devices::{list_input_device_names, list_output_device_names},
     playback::VoicePlayback,
 };
+
+/// Reserved speaker id for the options mic-test self-loopback. `u64::MAX` will
+/// never collide with a server-assigned `ClientId` (those count up from 0), so
+/// the loopback stream rides the normal decode/mix path without a nameplate or
+/// the self-filter in [`receive_voice_system`] interfering.
+const VOICE_LOOPBACK_SPEAKER: ClientId = u64::MAX;
 
 /// Inbound voice packet event written by the network receive system and
 /// consumed by [`receive_voice_system`]. Decoupling the two with a Bevy
@@ -45,26 +63,46 @@ const STEREO_FRONT_BLEND: f32 = 0.4;
 pub(crate) struct VoiceState {
     capture: Option<VoiceCapture>,
     playback: Option<VoicePlayback>,
+    /// Short-lived capture opened only for the options "Test Microphone" meter
+    /// while no in-game capture is live. Dropped the moment the test ends so a
+    /// Bluetooth headset isn't forced into call-quality HFP outside an actual
+    /// session.
+    monitor: Option<VoiceCapture>,
     /// Monotonic packet counter for the local mic stream. The 16-bit wrap is
     /// fine, the receiver's cyclic comparison handles it.
     next_sequence: u16,
+    /// Monotonic packet counter for the self-loopback monitor stream.
+    monitor_sequence: u16,
     /// `true` while the player is actively transmitting (PTT held). Drives
     /// the HUD indicator's animation target.
     pub(crate) transmitting: bool,
     /// Smoothed 0..1 envelope for the on-screen indicator. Pulled up when
     /// transmitting, eased back down when released.
     pub(crate) indicator_envelope: f32,
+    /// Smoothed 0..~1 microphone level for the options meter, fed from whatever
+    /// capture is live (in-game capture or the test monitor).
+    pub(crate) mic_level: f32,
     /// `true` when the worker threads spawned successfully, false if cpal
     /// or libopus refused to initialise, so the UI can show a discreet
     /// "voice unavailable" hint without crashing.
     pub(crate) available: bool,
+    /// `true` while the output stream is actually open and playing. False means
+    /// the listener hears nobody; surfaced to the player rather than swallowed.
+    pub(crate) playback_available: bool,
+    /// Latches once we've toasted the player about a dead output, so the
+    /// warning fires once per failure rather than every frame.
+    playback_warned: bool,
+    /// The input device name currently open, to detect a settings change.
+    applied_input_device: Option<String>,
+    /// The output device name currently open, to detect a settings change.
+    applied_output_device: Option<String>,
     /// Set once the capture worker reports a terminal failure for the current
     /// session so we don't respawn a doomed thread every frame (and re-raise
     /// the permission prompt). Cleared whenever voice capture is no longer
     /// wanted, so toggling voice off/on or rejoining retries from scratch.
     capture_failed: bool,
     /// Per-peer "is talking right now" envelope. Re-set to 1.0 every time a
-    /// voice frame from that speaker is decoded; decays toward 0 in
+    /// voice frame from that speaker is received; decays toward 0 in
     /// [`PEER_TALK_DECAY_PER_SECOND`] between packets so the nameplate
     /// indicator follows speech rather than flickering with each frame.
     peer_talk_envelope: HashMap<ClientId, f32>,
@@ -78,6 +116,30 @@ pub(crate) struct VoiceState {
 #[derive(Resource, Default)]
 pub(crate) struct VoiceDisabled;
 
+/// UI -> systems control channel for the Voice options tab. The tab mutates
+/// these; [`manage_voice_monitor_system`] and [`refresh_voice_devices_system`]
+/// read them. Kept off `VoiceState` so the read-only UI borrow and the system's
+/// mutable borrow don't collide.
+#[derive(Resource, Default)]
+pub(crate) struct VoiceUiControl {
+    /// The "Test Microphone" toggle is on.
+    pub(crate) test_active: bool,
+    /// "Hear myself": route the tested mic back to the local output.
+    pub(crate) loopback: bool,
+    /// Set by the tab's Refresh button to re-enumerate devices.
+    pub(crate) refresh_requested: bool,
+}
+
+/// Cached cpal device names for the options device pickers. Enumeration touches
+/// the audio backend, so we do it once on first use and only again when the
+/// player asks (Refresh), never per frame.
+#[derive(Resource, Default)]
+pub(crate) struct VoiceDeviceCache {
+    pub(crate) inputs: Vec<String>,
+    pub(crate) outputs: Vec<String>,
+    initialized: bool,
+}
+
 /// How fast the per-peer talking envelope decays once packets stop arriving.
 /// 1/(decay_per_second) ≈ how long the indicator lingers after the last
 /// frame; 5/s ≈ 200 ms of carry-over, which masks Bevy/network jitter
@@ -89,17 +151,28 @@ const PEER_TALK_DECAY_PER_SECOND: f32 = 5.0;
 const PEER_TALK_VISIBLE_THRESHOLD: f32 = 0.15;
 
 impl VoiceState {
-    /// `true` when we've decoded a voice frame from this peer within roughly
+    /// `true` when we've received a voice frame from this peer within roughly
     /// the last 200 ms. Used by the nameplate overlay to render a mic icon
-    /// beside the speaker.
+    /// beside the speaker. Lights even when local playback is dead, so the
+    /// dot is the in-game tell for "their voice is arriving but I can't hear
+    /// it" (a broken output device).
     pub(crate) fn is_peer_talking(&self, client_id: ClientId) -> bool {
         self.peer_talk_envelope
             .get(&client_id)
             .is_some_and(|level| *level > PEER_TALK_VISIBLE_THRESHOLD)
     }
+
+    /// Smoothed microphone input level (0..~1) for the options meter.
+    pub(crate) fn mic_level(&self) -> f32 {
+        self.mic_level
+    }
 }
 
-pub(crate) fn setup_voice_system(mut commands: Commands, disabled: Option<Res<VoiceDisabled>>) {
+pub(crate) fn setup_voice_system(
+    mut commands: Commands,
+    settings: Res<ClientSettings>,
+    disabled: Option<Res<VoiceDisabled>>,
+) {
     // Agent-driven sessions disable voice entirely: don't even open the
     // output stream, and (via `manage_voice_capture_system`) never open the
     // mic. Leaves a default `VoiceState` so the other voice systems keep
@@ -113,22 +186,22 @@ pub(crate) fn setup_voice_system(mut commands: Commands, disabled: Option<Res<Vo
     // an open input stream does. Mic capture is started lazily by
     // `manage_voice_capture_system` only while the player is actually in
     // a multiplayer session with voice enabled.
-    let playback = match VoicePlayback::spawn() {
-        Ok(playback) => Some(playback),
+    let output_device = settings.voice.output_device.clone();
+    let (playback, playback_available) = match VoicePlayback::spawn(output_device.clone()) {
+        Ok(playback) => {
+            playback.set_output_gain(settings.voice.output_volume);
+            (Some(playback), true)
+        }
         Err(error) => {
             warn!("voice playback unavailable: {error:#}");
-            None
+            (None, false)
         }
     };
     commands.insert_resource(VoiceState {
-        capture: None,
         playback,
-        next_sequence: 0,
-        transmitting: false,
-        indicator_envelope: 0.0,
-        available: false,
-        capture_failed: false,
-        peer_talk_envelope: HashMap::new(),
+        playback_available,
+        applied_output_device: output_device,
+        ..Default::default()
     });
 }
 
@@ -162,6 +235,7 @@ pub(crate) fn manage_voice_capture_system(
             // Bluetooth profile switches back from HSP/HFP to A2DP).
             info!("voice capture stopped; releasing microphone");
             voice.capture = None;
+            voice.applied_input_device = None;
             voice.transmitting = false;
             // Indicator decays naturally in `transmit_voice_system`; no
             // need to slam it to 0 here.
@@ -173,14 +247,24 @@ pub(crate) fn manage_voice_capture_system(
         return;
     }
 
+    // If the player picked a different microphone, drop the current capture so
+    // it reopens below on the new device.
+    let wanted_device = settings.voice.input_device.clone();
+    if voice.capture.is_some() && voice.applied_input_device != wanted_device {
+        info!("voice input device changed; restarting capture");
+        voice.capture = None;
+        voice.capture_failed = false;
+    }
+
     // Kick off capture once if we don't have a handle yet and haven't already
     // given up after a failure this session. `spawn` returns immediately, the
     // cpal stream (and the OS permission prompt it raises on macOS) is opened
     // on the worker thread so the network handshake keeps ticking meanwhile.
     if voice.capture.is_none() && !voice.capture_failed {
-        match VoiceCapture::spawn() {
+        match VoiceCapture::spawn(wanted_device.clone()) {
             Ok(capture) => {
                 capture.set_input_gain(settings.voice.input_volume);
+                voice.applied_input_device = wanted_device;
                 voice.capture = Some(capture);
             }
             Err(error) => {
@@ -207,6 +291,147 @@ pub(crate) fn manage_voice_capture_system(
         }
         None => {}
     }
+}
+
+/// Restarts the output stream when the selected output device changes, and
+/// surfaces a one-time warning when the output path is dead. Without this a
+/// listener whose default output failed to open hears nobody with no signal,
+/// which is exactly the bug this whole change set fixes.
+pub(crate) fn manage_voice_playback_system(
+    settings: Res<ClientSettings>,
+    mut voice: ResMut<VoiceState>,
+    mut error_toasts: MessageWriter<ClientErrorToast>,
+    disabled: Option<Res<VoiceDisabled>>,
+) {
+    if disabled.is_some() {
+        return;
+    }
+
+    let wanted_device = settings.voice.output_device.clone();
+    if voice.applied_output_device != wanted_device {
+        info!("voice output device changed; restarting playback");
+        // Drop the old stream before opening the new one so we don't hold two
+        // output devices at once.
+        voice.playback = None;
+        match VoicePlayback::spawn(wanted_device.clone()) {
+            Ok(playback) => {
+                playback.set_output_gain(settings.voice.output_volume);
+                voice.playback = Some(playback);
+                voice.playback_available = true;
+                voice.playback_warned = false;
+            }
+            Err(error) => {
+                warn!("voice playback unavailable: {error:#}");
+                voice.playback_available = false;
+            }
+        }
+        voice.applied_output_device = wanted_device;
+    }
+
+    // One-time toast: if voice is on but the output stream never came up, the
+    // player would otherwise just silently hear no one. Make it visible.
+    if settings.voice.enabled && !voice.playback_available && !voice.playback_warned {
+        voice.playback_warned = true;
+        let text = "Voice output unavailable: your audio output device could not be opened. \
+             You will not hear other players. Pick a different output device in Options > Voice."
+            .to_owned();
+        error_toasts.write(ClientErrorToast::new(text));
+    }
+}
+
+/// Drives the options "Test Microphone" meter: smooths the live mic level, and
+/// while the test toggle is on and the Voice tab is visible (and no in-game
+/// capture is already open) opens a short-lived monitor mic. Optionally routes
+/// that monitor back to the local output ("hear myself").
+pub(crate) fn manage_voice_monitor_system(
+    time: Res<Time>,
+    settings: Res<ClientSettings>,
+    menu: Res<MenuState>,
+    options_ui: Res<OptionsUiState>,
+    control: Res<VoiceUiControl>,
+    mut voice: ResMut<VoiceState>,
+    disabled: Option<Res<VoiceDisabled>>,
+) {
+    // Smooth whatever capture is live (monitor first, else the in-game mic) so
+    // the meter reads even when the player is in a session and just inspecting
+    // their level from the pause menu.
+    let raw = voice
+        .monitor
+        .as_ref()
+        .map(VoiceCapture::input_level)
+        .or_else(|| voice.capture.as_ref().map(VoiceCapture::input_level))
+        .unwrap_or(0.0);
+    voice.mic_level = smooth_level(voice.mic_level, raw, time.delta_secs());
+
+    if disabled.is_some() {
+        return;
+    }
+
+    let tab_visible = voice_options_tab_visible(&menu, &options_ui);
+    let want_monitor = settings.voice.enabled
+        && control.test_active
+        && tab_visible
+        // No need for a separate mic if the in-game capture is already hot.
+        && voice.capture.is_none();
+
+    if want_monitor {
+        if voice.monitor.is_none() {
+            match VoiceCapture::spawn(settings.voice.input_device.clone()) {
+                Ok(monitor) => {
+                    monitor.set_input_gain(settings.voice.input_volume);
+                    voice.monitor = Some(monitor);
+                }
+                Err(error) => warn!("voice mic test failed to start: {error:#}"),
+            }
+        }
+    } else if voice.monitor.is_some() {
+        voice.monitor = None;
+    }
+
+    // Self-loopback so the user can hear themselves. Always drain the monitor
+    // (so frames don't backlog) but only route them to the output when the
+    // loopback toggle is on.
+    let loopback = control.test_active && control.loopback && voice.monitor.is_some();
+    let frames = match voice.monitor.as_ref() {
+        Some(monitor) => drain_frames(monitor),
+        None => Vec::new(),
+    };
+    if loopback {
+        // Pre-stamp sequence numbers before borrowing playback, so the
+        // `&mut monitor_sequence` and `&playback` borrows don't overlap.
+        let mut stamped = Vec::with_capacity(frames.len());
+        for frame in frames {
+            let sequence = voice.monitor_sequence;
+            voice.monitor_sequence = voice.monitor_sequence.wrapping_add(1);
+            stamped.push((sequence, frame));
+        }
+        if let Some(playback) = voice.playback.as_ref() {
+            for (sequence, frame) in stamped {
+                // Centered, half gain; the mixer's output_gain (output_volume)
+                // scales it further. Keeps "hear myself" from howling.
+                playback.submit_packet(VOICE_LOOPBACK_SPEAKER, sequence, &frame, 0.5, 0.5);
+            }
+        }
+    } else if let Some(playback) = voice.playback.as_ref() {
+        // Test/loopback off: drop any buffered self-audio at once.
+        playback.forget_speaker(VOICE_LOOPBACK_SPEAKER);
+    }
+}
+
+/// Enumerates input/output device names for the options pickers. Runs once on
+/// first use, then only when the player presses Refresh.
+pub(crate) fn refresh_voice_devices_system(
+    mut cache: ResMut<VoiceDeviceCache>,
+    mut control: ResMut<VoiceUiControl>,
+) {
+    if cache.initialized && !control.refresh_requested {
+        return;
+    }
+    control.refresh_requested = false;
+    cache.initialized = true;
+    let host = cpal::default_host();
+    cache.inputs = list_input_device_names(&host);
+    cache.outputs = list_output_device_names(&host);
 }
 
 pub(crate) fn transmit_voice_system(
@@ -281,11 +506,6 @@ pub(crate) fn receive_voice_system(
     mut voice: ResMut<VoiceState>,
     mut events: MessageReader<IncomingVoiceMessage>,
 ) {
-    let Some(playback) = voice.playback.as_ref() else {
-        events.clear();
-        return;
-    };
-
     // The master voice toggle gates *both* directions. The microphone is
     // released by `manage_voice_capture_system`; here we make sure flipping
     // voice off mid-session also stops us *hearing* other players. Without
@@ -296,7 +516,9 @@ pub(crate) fn receive_voice_system(
     // on its own once we stop feeding it here.
     if !settings.voice.enabled {
         events.clear();
-        playback.forget_all();
+        if let Some(playback) = voice.playback.as_ref() {
+            playback.forget_all();
+        }
         return;
     }
 
@@ -317,16 +539,24 @@ pub(crate) fn receive_voice_system(
             settings.voice.output_volume,
         );
         if gain_left <= 0.0001 && gain_right <= 0.0001 {
-            playback.forget_speaker(packet.speaker);
+            if let Some(playback) = voice.playback.as_ref() {
+                playback.forget_speaker(packet.speaker);
+            }
             continue;
         }
-        playback.submit_packet(
-            packet.speaker,
-            packet.sequence,
-            &packet.frame,
-            gain_left,
-            gain_right,
-        );
+        // Submit to the mixer when playback is alive. When it isn't, we still
+        // fall through to light the talk-dot below: a peer in range whose voice
+        // we can't hear is precisely the symptom we want made visible, not
+        // hidden behind a dead output stream.
+        if let Some(playback) = voice.playback.as_ref() {
+            playback.submit_packet(
+                packet.speaker,
+                packet.sequence,
+                &packet.frame,
+                gain_left,
+                gain_right,
+            );
+        }
         talkers.push(packet.speaker);
     }
 
@@ -342,9 +572,27 @@ pub(crate) fn apply_voice_settings_system(settings: Res<ClientSettings>, voice: 
     if let Some(capture) = voice.capture.as_ref() {
         capture.set_input_gain(settings.voice.input_volume);
     }
+    if let Some(monitor) = voice.monitor.as_ref() {
+        monitor.set_input_gain(settings.voice.input_volume);
+    }
     if let Some(playback) = voice.playback.as_ref() {
         playback.set_output_gain(settings.voice.output_volume);
     }
+}
+
+/// `true` while the Voice options tab is actually on screen, from either the
+/// main-menu options screen or the in-game pause options overlay.
+fn voice_options_tab_visible(menu: &MenuState, options_ui: &OptionsUiState) -> bool {
+    let options_open = menu.screen == Screen::Options || menu.pause_options_open;
+    options_open && options_ui.tab == OptionsTab::Voice
+}
+
+/// Ease the mic-test meter toward the latest raw level: fast attack so speech
+/// jumps the bar, slower release so it doesn't strobe between words.
+fn smooth_level(current: f32, target: f32, delta_seconds: f32) -> f32 {
+    let rate = if target > current { 30.0 } else { 8.0 };
+    let alpha = 1.0 - (-rate * delta_seconds.max(0.0)).exp();
+    (current + (target - current) * alpha.clamp(0.0, 1.0)).clamp(0.0, 4.0)
 }
 
 /// Compute a (left, right) gain pair for a sender at `source` relative to
@@ -506,6 +754,17 @@ mod tests {
         let next = ease_envelope(0.0, true, 0.05);
         assert!(next > 0.0);
         assert!(next < 1.0);
+    }
+
+    #[test]
+    fn smooth_level_attacks_up_and_releases_down() {
+        // Rising toward a loud target moves up but not instantly.
+        let up = smooth_level(0.0, 1.0, 0.016);
+        assert!(up > 0.0 && up < 1.0);
+        // Falling toward silence eases down, slower than the attack.
+        let down = smooth_level(1.0, 0.0, 0.016);
+        assert!(down < 1.0 && down > 0.0);
+        assert!((1.0 - down) < up, "release should be slower than attack");
     }
 
     #[test]

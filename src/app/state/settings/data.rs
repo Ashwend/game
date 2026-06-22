@@ -395,7 +395,9 @@ impl Default for AudioSettings {
 /// gameplay rule, how far your voice carries is part of the game design,
 /// not a personal preference, and lives as a constant on the server-side
 /// voice module so both halves of the system agree.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+// Not `Copy`: the device fields are `Option<String>`. Voice settings are only
+// ever cloned/borrowed, never bulk-copied on a hot path, so this is free.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct VoiceSettings {
     /// Whether voice transmit is allowed at all. Disabling here shuts off the
     /// microphone capture thread on the client.
@@ -409,6 +411,15 @@ pub(crate) struct VoiceSettings {
     /// Input gain applied to the microphone before encoding.
     #[serde(default = "default_volume")]
     pub(crate) input_volume: f32,
+    /// Preferred microphone, by cpal device name. `None` (the default) means
+    /// "system default". A saved name that no longer exists falls back to the
+    /// system default at open time, so an unplugged headset never wedges voice.
+    #[serde(default)]
+    pub(crate) input_device: Option<String>,
+    /// Preferred audio output device, by cpal device name. Same `None`-is-
+    /// default + missing-name-falls-back semantics as [`Self::input_device`].
+    #[serde(default)]
+    pub(crate) output_device: Option<String>,
 }
 
 impl Default for VoiceSettings {
@@ -417,6 +428,8 @@ impl Default for VoiceSettings {
             enabled: default_voice_enabled(),
             output_volume: default_volume(),
             input_volume: default_volume(),
+            input_device: None,
+            output_device: None,
         }
     }
 }
@@ -425,6 +438,8 @@ impl VoiceSettings {
     fn sanitized(mut self) -> Self {
         self.output_volume = self.output_volume.clamp(0.0, 1.0);
         self.input_volume = self.input_volume.clamp(0.0, 1.0);
+        // Device names are validated against the live device list when the
+        // stream opens (see `voice::devices`), so nothing to clamp here.
         self
     }
 }

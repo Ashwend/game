@@ -43,7 +43,7 @@ use self::{
     in_game::in_game_ui,
     menu::main_menu_ui,
     multiplayer::multiplayer_ui,
-    options::{OptionsBackTarget, options_ui},
+    options::{OptionsBackTarget, VoiceTabIo, options_ui},
     peer_overlay::PeerOverlayParams,
     splash::loading_splash_ui,
     theme::{ButtonKind, MENU_BUTTON_WIDTH, game_button},
@@ -64,7 +64,7 @@ use super::state::{
     Screen, SessionShutdownTasks, ToastState, WorkosAuth, WorldMapState, WorldMapUiState,
 };
 use super::systems::PendingSessionEndReason;
-use super::voice::VoiceState;
+use super::voice::{VoiceDeviceCache, VoiceState, VoiceUiControl};
 use crate::analytics::Analytics;
 use crate::net::ClientNetwork;
 use crate::update::UpdateState;
@@ -77,6 +77,10 @@ pub(crate) struct UiResources<'w, 's> {
     settings: ResMut<'w, ClientSettings>,
     options_ui: ResMut<'w, OptionsUiState>,
     voice: Res<'w, VoiceState>,
+    /// Cached input/output device names for the Voice tab device pickers.
+    voice_devices: Res<'w, VoiceDeviceCache>,
+    /// UI -> systems channel for the Voice tab mic test + device refresh.
+    voice_control: ResMut<'w, VoiceUiControl>,
     physical_keys: Res<'w, ButtonInput<KeyCode>>,
     inventory_ui: ResMut<'w, super::state::InventoryUiState>,
     crafting_ui: ResMut<'w, CraftingUiState>,
@@ -261,6 +265,12 @@ pub(crate) fn ui_system(
         ),
         Screen::Options => {
             let primary_monitor = resources.primary_monitor.single().ok();
+            let mut voice_io = VoiceTabIo {
+                devices: &resources.voice_devices,
+                control: &mut resources.voice_control,
+                input_level: resources.voice.mic_level(),
+                playback_available: resources.voice.playback_available,
+            };
             options_ui(
                 ctx,
                 &mut resources.menu,
@@ -269,6 +279,7 @@ pub(crate) fn ui_system(
                 &resources.physical_keys,
                 primary_monitor,
                 OptionsBackTarget::MainMenu,
+                &mut voice_io,
             );
         }
         Screen::Multiplayer => multiplayer_ui(

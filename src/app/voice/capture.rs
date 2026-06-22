@@ -14,13 +14,15 @@ use std::thread::{self, JoinHandle};
 use anyhow::{Context, Result, anyhow};
 use cpal::{
     SampleFormat, StreamConfig,
-    traits::{DeviceTrait, HostTrait, StreamTrait},
+    traits::{DeviceTrait, StreamTrait},
 };
 use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
 
 use crate::protocol::{VOICE_FRAME_SAMPLES, VOICE_SAMPLE_RATE_HZ};
 
 use super::codec::VoiceEncoder;
+use super::devices::resolve_input_device;
+use super::resample::LinearResampler;
 
 enum CaptureCmd {
     Shutdown,
@@ -48,6 +50,10 @@ pub(crate) struct VoiceCapture {
     /// Mic gain as a fixed-point f32 (input_gain * 1_000_000). Atomic so the
     /// audio thread can read it on every callback without a lock.
     gain_micro: Arc<AtomicU32>,
+    /// Most recent post-gain peak amplitude as a fixed-point f32, written by
+    /// the audio callback and read by the options mic-test meter. Atomic for
+    /// the same lock-free reason as `gain_micro`.
+    level_micro: Arc<AtomicU32>,
     worker: Option<JoinHandle<()>>,
     /// Cached terminal status. `None` while the worker is still initialising
     /// (which on macOS includes the time the OS mic-permission dialog is up).
@@ -55,17 +61,29 @@ pub(crate) struct VoiceCapture {
 }
 
 impl VoiceCapture {
-    pub(crate) fn spawn() -> Result<Self> {
+    /// Opens the microphone. `device_name` selects a specific input device by
+    /// its cpal name; `None` (or a name that no longer matches, e.g. an
+    /// unplugged headset) uses the system default.
+    pub(crate) fn spawn(device_name: Option<String>) -> Result<Self> {
         let (frames_tx, frames_rx) = unbounded::<Vec<u8>>();
         let (cmd_tx, cmd_rx) = unbounded::<CaptureCmd>();
         let (ready_tx, ready_rx) = unbounded::<Result<(), String>>();
         let gain_micro = Arc::new(AtomicU32::new(linear_to_micro(1.0)));
+        let level_micro = Arc::new(AtomicU32::new(0));
         let gain_for_thread = Arc::clone(&gain_micro);
+        let level_for_thread = Arc::clone(&level_micro);
 
         let worker = thread::Builder::new()
             .name("voice-capture".into())
             .spawn(move || {
-                if let Err(error) = run_capture(frames_tx, cmd_rx, ready_tx, gain_for_thread) {
+                if let Err(error) = run_capture(
+                    device_name,
+                    frames_tx,
+                    cmd_rx,
+                    ready_tx,
+                    gain_for_thread,
+                    level_for_thread,
+                ) {
                     bevy::log::warn!("voice capture stopped: {error:#}");
                 }
             })
@@ -85,6 +103,7 @@ impl VoiceCapture {
             ready_rx,
             cmd_tx,
             gain_micro,
+            level_micro,
             worker: Some(worker),
             status: None,
         })
@@ -93,6 +112,14 @@ impl VoiceCapture {
     pub(crate) fn set_input_gain(&self, gain: f32) {
         self.gain_micro
             .store(linear_to_micro(gain.clamp(0.0, 1.0)), Ordering::Relaxed);
+    }
+
+    /// Most recent post-gain peak amplitude (0..~1) seen by the audio
+    /// callback. Drives the options "Test Microphone" level meter; the UI
+    /// smooths it for display. Reads 0 before the first callback or if the
+    /// stream failed.
+    pub(crate) fn input_level(&self) -> f32 {
+        micro_to_linear(self.level_micro.load(Ordering::Relaxed))
     }
 
     /// Non-blocking. Returns the worker's terminal status exactly once, on the
@@ -141,14 +168,16 @@ impl Drop for VoiceCapture {
 }
 
 fn run_capture(
+    device_name: Option<String>,
     frames_tx: Sender<Vec<u8>>,
     cmd_rx: Receiver<CaptureCmd>,
     ready_tx: Sender<Result<(), String>>,
     gain_micro: Arc<AtomicU32>,
+    level_micro: Arc<AtomicU32>,
 ) -> Result<()> {
     let host = cpal::default_host();
-    let Some(device) = host.default_input_device() else {
-        let _ = ready_tx.send(Err("no default audio input device".to_owned()));
+    let Some(device) = resolve_input_device(&host, device_name.as_deref()) else {
+        let _ = ready_tx.send(Err("no audio input device".to_owned()));
         return Ok(());
     };
     let supported = match find_supported_config(&device) {
@@ -182,6 +211,10 @@ fn run_capture(
         move |interleaved: &[f32]| {
             let gain = micro_to_linear(gain_micro.load(Ordering::Relaxed));
             let mono = downmix_to_mono(interleaved, input_channels, gain);
+            // Publish the post-gain peak for the options mic-test meter. Cheap
+            // (one pass, no alloc) and lock-free; the UI smooths it.
+            let peak = mono.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+            level_micro.store(linear_to_micro(peak), Ordering::Relaxed);
             let resampled = resampler.feed(&mono);
             for sample in resampled {
                 accumulator.push(sample);
@@ -344,60 +377,6 @@ fn downmix_to_mono(interleaved: &[f32], channels: usize, gain: f32) -> Vec<f32> 
         out.push(acc * scale);
     }
     out
-}
-
-/// Naive linear-interpolation resampler. Voice quality is fine with this
-/// because the source rate is almost always already 48 kHz (so it's a
-/// no-op), and the failure mode if we ever land on 44.1 kHz is "speech
-/// sounds slightly less crisp", not "speech is unintelligible".
-struct LinearResampler {
-    in_rate: u32,
-    out_rate: u32,
-    /// Sub-sample position into the current source frame; fractional part
-    /// determines the next interpolation weight.
-    cursor: f64,
-    /// Most recent input sample carried across callback boundaries so the
-    /// first output sample of a callback can interpolate against it.
-    last_sample: f32,
-}
-
-impl LinearResampler {
-    fn new(in_rate: u32, out_rate: u32) -> Self {
-        Self {
-            in_rate,
-            out_rate,
-            cursor: 0.0,
-            last_sample: 0.0,
-        }
-    }
-
-    fn feed(&mut self, input: &[f32]) -> Vec<f32> {
-        if input.is_empty() {
-            return Vec::new();
-        }
-        if self.in_rate == self.out_rate {
-            self.last_sample = *input.last().unwrap_or(&0.0);
-            return input.to_vec();
-        }
-        let step = self.in_rate as f64 / self.out_rate as f64;
-        let mut out = Vec::with_capacity(((input.len() as f64) / step) as usize + 1);
-        let mut position = self.cursor;
-        while position < input.len() as f64 {
-            let idx = position.floor() as usize;
-            let frac = position - idx as f64;
-            let prev = if idx == 0 {
-                self.last_sample
-            } else {
-                input[idx - 1]
-            };
-            let next = input[idx];
-            out.push((prev as f64 * (1.0 - frac) + next as f64 * frac) as f32);
-            position += step;
-        }
-        self.cursor = position - input.len() as f64;
-        self.last_sample = *input.last().unwrap_or(&self.last_sample);
-        out
-    }
 }
 
 fn linear_to_micro(value: f32) -> u32 {

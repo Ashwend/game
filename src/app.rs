@@ -38,8 +38,10 @@ use crate::{
 };
 
 use self::voice::{
-    IncomingVoiceMessage, VoiceDisabled, apply_voice_settings_system, manage_voice_capture_system,
-    receive_voice_system, setup_voice_system, transmit_voice_system,
+    IncomingVoiceMessage, VoiceDeviceCache, VoiceDisabled, VoiceUiControl,
+    apply_voice_settings_system, manage_voice_capture_system, manage_voice_monitor_system,
+    manage_voice_playback_system, receive_voice_system, refresh_voice_devices_system,
+    setup_voice_system, transmit_voice_system,
 };
 
 use self::{
@@ -319,6 +321,8 @@ fn insert_client_resources(
         .insert_resource(settings.clone())
         .insert_resource(MenuState::default())
         .insert_resource(OptionsUiState::default())
+        .init_resource::<VoiceDeviceCache>()
+        .init_resource::<VoiceUiControl>()
         .insert_resource(test_mode.clone())
         .insert_resource(MenuBackdropVisibility::default())
         .insert_resource(ClientRuntime::default())
@@ -994,6 +998,14 @@ fn add_voice_systems(app: &mut App) {
     )
     .add_systems(
         Update,
+        manage_voice_playback_system.in_set(ClientSystemSet::VoiceCaptureManage),
+    )
+    .add_systems(
+        Update,
+        manage_voice_monitor_system.in_set(ClientSystemSet::VoiceCaptureManage),
+    )
+    .add_systems(
+        Update,
         transmit_voice_system.in_set(ClientSystemSet::VoiceTransmit),
     )
     .add_systems(
@@ -1003,6 +1015,10 @@ fn add_voice_systems(app: &mut App) {
     .add_systems(
         Update,
         apply_voice_settings_system.in_set(ClientSystemSet::VoiceSettings),
+    )
+    .add_systems(
+        Update,
+        refresh_voice_devices_system.in_set(ClientSystemSet::VoiceSettings),
     );
 }
 

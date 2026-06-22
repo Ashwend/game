@@ -1,10 +1,23 @@
 //! Decoded-voice playback + spatial mix.
 //!
 //! A dedicated worker thread owns the cpal output stream (cpal's `Stream` is
-//! `!Send` on macOS). The Bevy side decodes incoming Opus packets, pushes
-//! mono PCM into a per-speaker ring buffer, and writes the desired spatial
-//! gains. The audio callback reads everything through a `Mutex` and mixes
-//! into the output buffer.
+//! `!Send` on macOS). The Bevy side decodes incoming Opus packets, resamples
+//! the 48 kHz decoder output to whatever rate the output device runs at,
+//! pushes the result into a per-speaker ring buffer, and writes the desired
+//! spatial gains. The audio callback reads everything through a `Mutex` and
+//! mixes into the output buffer.
+//!
+//! Resampling happens here on the Bevy thread (in [`VoicePlayback::submit_packet`]),
+//! not in the audio callback, so the callback stays allocation-free and the
+//! per-speaker resampler keeps a single persistent cursor (no clicks at frame
+//! edges). The common case is a 48 kHz output device, where the resampler is a
+//! no-op passthrough.
+//!
+//! Tolerating a non-48 kHz output device is the load-bearing fix for the
+//! one-way-audio bug: a listener whose default output advertised no exact
+//! 48 kHz config (a 44.1 kHz DAC, a >2-channel HDMI/AirPlay/aggregate device)
+//! used to fail playback init outright and silently hear nobody while their
+//! own mic still worked.
 //!
 //! Mixing is intentionally simple, per-speaker stereo gains, no HRTF, no
 //! Doppler. It's the right baseline for prototype quality and bumps the CPU
@@ -17,28 +30,15 @@ use std::thread::{self, JoinHandle};
 use anyhow::{Context, Result, anyhow};
 use cpal::{
     SampleFormat, StreamConfig,
-    traits::{DeviceTrait, HostTrait, StreamTrait},
+    traits::{DeviceTrait, StreamTrait},
 };
 use crossbeam_channel::{Receiver, Sender, unbounded};
 
 use crate::protocol::{ClientId, VOICE_SAMPLE_RATE_HZ};
 
 use super::codec::VoiceDecoder;
-
-/// Max samples to buffer per speaker. Beyond this we drop the oldest tail
-/// rather than ballooning memory if a peer's voice arrives faster than we
-/// can play it back (rare, but easy to defend against).
-const MAX_BUFFERED_SAMPLES_PER_SPEAKER: usize = VOICE_SAMPLE_RATE_HZ as usize / 2; // 500 ms
-
-/// Warmup target: don't start playing a speaker until we've buffered at
-/// least this many samples (~100 ms = 5 Opus frames). The buffer drains
-/// at audio-callback rate but refills at Bevy-frame rate, so the startup
-/// cushion has to absorb (a) one full Bevy frame of jitter on the receive
-/// side (~16 ms at 60 Hz, more when the frame skips), (b) network jitter,
-/// and (c) the per-callback granularity. 100 ms is the sweet spot used by
-/// most game voice systems, large enough to ride out routine schedule
-/// hiccups, small enough to stay perceptually "immediate".
-const PLAYBACK_WARMUP_SAMPLES: usize = (VOICE_SAMPLE_RATE_HZ as usize * 100) / 1000;
+use super::devices::resolve_output_device;
+use super::resample::LinearResampler;
 
 /// Maximum frames we'll synthesise via Opus packet-loss concealment when
 /// a sequence gap is observed. Beyond this we assume the talker actually
@@ -55,6 +55,25 @@ const MAX_PLC_FRAMES: u16 = 5;
 /// came from re-arming on every brief dip.
 const PLAYBACK_RESET_AFTER_EMPTY_CALLBACKS: u32 = 60;
 
+/// Per-speaker buffer cap (~500 ms at the output rate). Beyond this we drop the
+/// oldest tail rather than ballooning memory if a peer's voice arrives faster
+/// than we can play it back.
+fn max_buffered_samples(output_rate: u32) -> usize {
+    output_rate as usize / 2
+}
+
+/// Warmup target (~100 ms = 5 Opus frames at the output rate): don't start
+/// playing a speaker until we've buffered at least this much. The buffer drains
+/// at audio-callback rate but refills at Bevy-frame rate, so the startup
+/// cushion has to absorb (a) one full Bevy frame of jitter on the receive side
+/// (~16 ms at 60 Hz, more when the frame skips), (b) network jitter, and (c)
+/// the per-callback granularity. 100 ms is the sweet spot used by most game
+/// voice systems, large enough to ride out routine schedule hiccups, small
+/// enough to stay perceptually "immediate".
+fn warmup_samples(output_rate: u32) -> usize {
+    (output_rate as usize * 100) / 1000
+}
+
 enum PlaybackCmd {
     Shutdown,
 }
@@ -62,18 +81,22 @@ enum PlaybackCmd {
 #[derive(Default)]
 pub(crate) struct SpeakerSlot {
     pub(crate) decoder: Option<VoiceDecoder>,
-    /// Decoded mono samples queued for playback.
+    /// Resampler converting the decoder's 48 kHz output to the output device
+    /// rate. `None` while the output runs at 48 kHz (passthrough) or before
+    /// the first frame; created lazily on first non-48 kHz push so its cursor
+    /// persists across frames and never clicks at a frame boundary.
+    pub(crate) out_resampler: Option<LinearResampler>,
+    /// Output-rate mono samples queued for playback.
     pub(crate) samples: VecDeque<f32>,
     pub(crate) gain_left: f32,
     pub(crate) gain_right: f32,
     /// Last sequence number we accepted from the wire. Used to drop
     /// reordered duplicates and to detect single-packet losses for FEC.
     pub(crate) last_sequence: Option<u16>,
-    /// Jitter-buffer state. `false` until we've accumulated
-    /// [`PLAYBACK_WARMUP_SAMPLES`] for the first time, the audio callback
-    /// plays silence for this slot until then. Sticky once true; only
-    /// resets if the buffer has been empty for
-    /// [`PLAYBACK_RESET_AFTER_EMPTY_CALLBACKS`] callbacks in a row.
+    /// Jitter-buffer state. `false` until we've accumulated the warmup target
+    /// for the first time, the audio callback plays silence for this slot
+    /// until then. Sticky once true; only resets if the buffer has been empty
+    /// for [`PLAYBACK_RESET_AFTER_EMPTY_CALLBACKS`] callbacks in a row.
     pub(crate) ready: bool,
     /// Running count of consecutive audio callbacks that found the buffer
     /// empty. Zeroes the moment any sample is consumed.
@@ -85,6 +108,10 @@ pub(crate) struct Mixer {
     pub(crate) speakers: HashMap<ClientId, SpeakerSlot>,
     /// Master output gain, settable via [`VoicePlayback::set_output_gain`].
     pub(crate) output_gain: f32,
+    /// The output device's sample rate, written once by the worker thread when
+    /// the stream opens. `submit_packet` resamples 48 kHz to this; the audio
+    /// callback consumes samples that are already at this rate.
+    pub(crate) output_rate: u32,
 }
 
 pub(crate) struct VoicePlayback {
@@ -94,27 +121,39 @@ pub(crate) struct VoicePlayback {
 }
 
 impl VoicePlayback {
-    pub(crate) fn spawn() -> Result<Self> {
+    /// Opens the output stream. `device_name` selects a specific output device
+    /// by its cpal name; `None` (or a name that no longer matches) uses the
+    /// system default. Returns `Err` if the device or stream could not be
+    /// opened, so the caller can surface "you won't hear other players" rather
+    /// than silently swallowing the failure.
+    pub(crate) fn spawn(device_name: Option<String>) -> Result<Self> {
         let mixer = Arc::new(Mutex::new(Mixer {
             speakers: HashMap::new(),
             output_gain: 1.0,
+            output_rate: VOICE_SAMPLE_RATE_HZ,
         }));
         let (cmd_tx, cmd_rx) = unbounded::<PlaybackCmd>();
-        let (ready_tx, ready_rx) = unbounded::<()>();
+        let (ready_tx, ready_rx) = unbounded::<Result<(), String>>();
         let mixer_clone = Arc::clone(&mixer);
 
         let worker = thread::Builder::new()
             .name("voice-playback".into())
             .spawn(move || {
-                if let Err(error) = run_playback(mixer_clone, cmd_rx, ready_tx) {
+                if let Err(error) = run_playback(device_name, mixer_clone, cmd_rx, ready_tx) {
                     bevy::log::warn!("voice playback stopped: {error:#}");
                 }
             })
             .context("failed to spawn voice playback thread")?;
 
-        ready_rx
-            .recv()
-            .context("voice playback thread failed to come up")?;
+        // Unlike capture, blocking here is fine: opening an output-only stream
+        // does not raise an OS permission prompt. Crucially we now wait for the
+        // *real* outcome (stream built AND playing), so a failed output device
+        // surfaces as `Err` instead of a silent dead worker.
+        match ready_rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(msg)) => return Err(anyhow!(msg)),
+            Err(_) => return Err(anyhow!("voice playback thread exited before reporting status")),
+        }
 
         Ok(Self {
             mixer,
@@ -130,8 +169,8 @@ impl VoicePlayback {
     }
 
     /// Pushes a decoded frame onto a speaker's queue with updated spatial
-    /// gains. Decoding is done up front so the audio callback only touches
-    /// the cheap PCM buffer.
+    /// gains. Decoding and resampling are done up front so the audio callback
+    /// only touches the cheap PCM buffer.
     pub(crate) fn submit_packet(
         &self,
         speaker: ClientId,
@@ -143,6 +182,9 @@ impl VoicePlayback {
         let Ok(mut guard) = self.mixer.lock() else {
             return;
         };
+        let output_rate = guard.output_rate;
+        let max_buffered = max_buffered_samples(output_rate);
+        let warmup = warmup_samples(output_rate);
         let slot = guard.speakers.entry(speaker).or_default();
         if slot.decoder.is_none() {
             slot.decoder = match VoiceDecoder::new() {
@@ -179,13 +221,25 @@ impl VoicePlayback {
                 // FEC reconstructs frame (prev + 1) from this packet's
                 // payload, the cheapest one-frame fill we can do.
                 if let Ok(samples) = decoder.decode(packet, true) {
-                    push_samples(&mut slot.samples, &samples);
+                    push_decoded(
+                        &mut slot.out_resampler,
+                        &mut slot.samples,
+                        &samples,
+                        output_rate,
+                        max_buffered,
+                    );
                 }
                 // Synthesise the remaining missing frames before this
                 // one is decoded fresh below.
                 for _ in 0..gap.saturating_sub(2) {
                     match decoder.decode_loss() {
-                        Ok(samples) => push_samples(&mut slot.samples, &samples),
+                        Ok(samples) => push_decoded(
+                            &mut slot.out_resampler,
+                            &mut slot.samples,
+                            &samples,
+                            output_rate,
+                            max_buffered,
+                        ),
                         Err(error) => {
                             bevy::log::trace!("voice PLC fill failed: {error:#}");
                             break;
@@ -197,7 +251,13 @@ impl VoicePlayback {
 
         if let Some(decoder) = slot.decoder.as_mut() {
             match decoder.decode(packet, false) {
-                Ok(samples) => push_samples(&mut slot.samples, &samples),
+                Ok(samples) => push_decoded(
+                    &mut slot.out_resampler,
+                    &mut slot.samples,
+                    &samples,
+                    output_rate,
+                    max_buffered,
+                ),
                 Err(error) => {
                     bevy::log::trace!("voice decode failed: {error:#}");
                 }
@@ -206,7 +266,7 @@ impl VoicePlayback {
         slot.gain_left = gain_left;
         slot.gain_right = gain_right;
         slot.last_sequence = Some(sequence);
-        if !slot.ready && slot.samples.len() >= PLAYBACK_WARMUP_SAMPLES {
+        if !slot.ready && slot.samples.len() >= warmup {
             slot.ready = true;
         }
     }
@@ -238,9 +298,30 @@ impl Drop for VoicePlayback {
     }
 }
 
-fn push_samples(buffer: &mut VecDeque<f32>, samples: &[f32]) {
+/// Resample a decoded 48 kHz frame to the output rate (a no-op passthrough at
+/// 48 kHz) and append it to the speaker buffer, trimming the oldest tail past
+/// the cap. Takes the slot's fields disjointly so it can be called while the
+/// slot's decoder is borrowed.
+fn push_decoded(
+    out_resampler: &mut Option<LinearResampler>,
+    buffer: &mut VecDeque<f32>,
+    decoded: &[f32],
+    output_rate: u32,
+    max_buffered: usize,
+) {
+    if output_rate == VOICE_SAMPLE_RATE_HZ {
+        push_samples(buffer, decoded, max_buffered);
+        return;
+    }
+    let resampler = out_resampler
+        .get_or_insert_with(|| LinearResampler::new(VOICE_SAMPLE_RATE_HZ, output_rate));
+    let resampled = resampler.feed(decoded);
+    push_samples(buffer, &resampled, max_buffered);
+}
+
+fn push_samples(buffer: &mut VecDeque<f32>, samples: &[f32], max_buffered: usize) {
     buffer.extend(samples.iter().copied());
-    while buffer.len() > MAX_BUFFERED_SAMPLES_PER_SPEAKER {
+    while buffer.len() > max_buffered {
         // Discard the oldest tail, preferring a tiny truncation to ever-
         // increasing latency. In practice this only fires if the OS audio
         // graph stalls for hundreds of ms.
@@ -257,22 +338,59 @@ fn short_seq_le(a: u16, b: u16) -> bool {
 }
 
 fn run_playback(
+    device_name: Option<String>,
     mixer: Arc<Mutex<Mixer>>,
     cmd_rx: Receiver<PlaybackCmd>,
-    ready_tx: Sender<()>,
+    ready_tx: Sender<Result<(), String>>,
 ) -> Result<()> {
     let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .ok_or_else(|| anyhow!("no default audio output device"))?;
-    let supported = pick_output_config(&device)?;
+    let Some(device) = resolve_output_device(&host, device_name.as_deref()) else {
+        let _ = ready_tx.send(Err("no audio output device".to_owned()));
+        return Ok(());
+    };
+    let supported = match pick_output_config(&device) {
+        Ok(config) => config,
+        Err(error) => {
+            let msg = format!("voice playback disabled: {error:#}");
+            bevy::log::warn!("{msg}");
+            let _ = ready_tx.send(Err(msg));
+            return Ok(());
+        }
+    };
     let sample_format = supported.sample_format();
     let config: StreamConfig = supported.into();
     let channels = config.channels;
-    let _ = ready_tx.send(());
+    let output_rate = config.sample_rate.0;
+    bevy::log::info!(
+        "voice playback: device={:?} format={:?} rate={} channels={}",
+        device.name().ok(),
+        sample_format,
+        output_rate,
+        channels
+    );
+    if let Ok(mut guard) = mixer.lock() {
+        guard.output_rate = output_rate;
+    }
 
-    let stream = build_stream(&device, sample_format, &config, mixer, channels as usize)?;
-    stream.play().context("starting voice output stream")?;
+    let stream = match build_stream(&device, sample_format, &config, mixer, channels as usize) {
+        Ok(stream) => stream,
+        Err(error) => {
+            let msg = format!("voice playback disabled: {error:#}");
+            bevy::log::warn!("{msg}");
+            let _ = ready_tx.send(Err(msg));
+            return Ok(());
+        }
+    };
+    if let Err(error) = stream.play() {
+        let msg = format!("voice playback disabled: starting output stream: {error:#}");
+        bevy::log::warn!("{msg}");
+        let _ = ready_tx.send(Err(msg));
+        return Ok(());
+    }
+    // Only now, with the stream actually built AND playing, do we report
+    // success. Reporting earlier (the old bug) let a build/play failure pass as
+    // a live playback, so a dead output silently dropped every decoded frame.
+    let _ = ready_tx.send(Ok(()));
 
     // Park until the controller asks us to stop (or drops its sender).
     let _ = cmd_rx.recv();
@@ -280,25 +398,34 @@ fn run_playback(
     Ok(())
 }
 
+/// Pick an output config. Prefers a config that natively covers 48 kHz (so the
+/// mixer skips resampling), preferring stereo for spatial panning. Falls back
+/// to the device's default config at its native rate, which the mixer then
+/// resamples to. The fallback is what keeps a 44.1 kHz-only / >2-channel
+/// default output from silently breaking playback.
 fn pick_output_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig> {
-    let configs = device
-        .supported_output_configs()
-        .context("listing output configs")?;
-    let mut best: Option<cpal::SupportedStreamConfigRange> = None;
-    for range in configs {
-        if range.channels() < 1 || range.channels() > 2 {
-            continue;
-        }
-        let format = range.sample_format();
-        if !matches!(
+    let acceptable_format = |format: SampleFormat| {
+        matches!(
             format,
             SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
-        ) {
+        )
+    };
+    let acceptable_channels = |ch: u16| (1..=2).contains(&ch);
+
+    let configs = device
+        .supported_output_configs()
+        .context("listing output configs")?
+        .collect::<Vec<_>>();
+
+    // Preferred: a range covering 48 kHz, preferring more channels (stereo).
+    let mut best: Option<&cpal::SupportedStreamConfigRange> = None;
+    for range in &configs {
+        if !acceptable_channels(range.channels()) || !acceptable_format(range.sample_format()) {
             continue;
         }
-        let supports_48k = range.min_sample_rate().0 <= VOICE_SAMPLE_RATE_HZ
-            && range.max_sample_rate().0 >= VOICE_SAMPLE_RATE_HZ;
-        if !supports_48k {
+        if range.min_sample_rate().0 > VOICE_SAMPLE_RATE_HZ
+            || range.max_sample_rate().0 < VOICE_SAMPLE_RATE_HZ
+        {
             continue;
         }
         best = Some(match best {
@@ -307,9 +434,32 @@ fn pick_output_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConf
             Some(current) => current,
         });
     }
-    let chosen =
-        best.ok_or_else(|| anyhow!("no output device supports 48 kHz mono/stereo playback"))?;
-    Ok(chosen.with_sample_rate(cpal::SampleRate(VOICE_SAMPLE_RATE_HZ)))
+    if let Some(range) = best {
+        return Ok((*range).with_sample_rate(cpal::SampleRate(VOICE_SAMPLE_RATE_HZ)));
+    }
+
+    // Fallback: the device's preferred default config at its native rate. The
+    // mixer resamples 48 kHz -> this rate per speaker.
+    match device.default_output_config() {
+        Ok(config)
+            if acceptable_channels(config.channels())
+                && acceptable_format(config.sample_format()) =>
+        {
+            bevy::log::warn!(
+                "voice playback: device default {} Hz; resampling {} -> {} Hz",
+                config.sample_rate().0,
+                VOICE_SAMPLE_RATE_HZ,
+                config.sample_rate().0
+            );
+            Ok(config)
+        }
+        Ok(config) => Err(anyhow!(
+            "output device default config is unusable (channels={}, format={:?})",
+            config.channels(),
+            config.sample_format()
+        )),
+        Err(error) => Err(anyhow!("default output config unavailable: {error}")),
+    }
 }
 
 fn build_stream(
@@ -442,10 +592,47 @@ mod tests {
 
     #[test]
     fn push_samples_trims_to_cap() {
+        let cap = max_buffered_samples(VOICE_SAMPLE_RATE_HZ);
         let mut buffer = VecDeque::new();
-        let chunk = vec![0.0f32; MAX_BUFFERED_SAMPLES_PER_SPEAKER];
-        push_samples(&mut buffer, &chunk);
-        push_samples(&mut buffer, &chunk);
-        assert_eq!(buffer.len(), MAX_BUFFERED_SAMPLES_PER_SPEAKER);
+        let chunk = vec![0.0f32; cap];
+        push_samples(&mut buffer, &chunk, cap);
+        push_samples(&mut buffer, &chunk, cap);
+        assert_eq!(buffer.len(), cap);
+    }
+
+    #[test]
+    fn push_decoded_passthrough_at_48k() {
+        let mut resampler = None;
+        let mut buffer = VecDeque::new();
+        let frame = vec![0.5f32; 960];
+        push_decoded(
+            &mut resampler,
+            &mut buffer,
+            &frame,
+            VOICE_SAMPLE_RATE_HZ,
+            max_buffered_samples(VOICE_SAMPLE_RATE_HZ),
+        );
+        // No resampler is created on the 48 kHz passthrough path.
+        assert!(resampler.is_none());
+        assert_eq!(buffer.len(), 960);
+    }
+
+    #[test]
+    fn push_decoded_resamples_to_44100() {
+        let out_rate = 44_100;
+        let mut resampler = None;
+        let mut buffer = VecDeque::new();
+        let frame = vec![0.25f32; 960];
+        push_decoded(
+            &mut resampler,
+            &mut buffer,
+            &frame,
+            out_rate,
+            max_buffered_samples(out_rate),
+        );
+        // A resampler is created and produces fewer samples (48k -> 44.1k).
+        assert!(resampler.is_some());
+        assert!(buffer.len() < 960 && !buffer.is_empty());
+        assert!(buffer.iter().all(|s| s.is_finite()));
     }
 }

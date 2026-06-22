@@ -22,8 +22,20 @@ use bevy_egui::egui;
 use crate::app::state::{
     ClientSettings, ConfirmationDialog, MenuState, OptionsTab, OptionsUiState, Screen,
 };
+use crate::app::voice::{VoiceDeviceCache, VoiceUiControl};
 
 use super::theme::{self, BOUNDED_PANEL_VERTICAL_PADDING, ButtonKind, COMPACT_ROW_HEIGHT};
+
+/// Read/write bridge the Voice tab needs beyond `ClientSettings`: the cached
+/// device lists (read), the mic-test/refresh control flags (write), and the
+/// live playback/mic status (read). Built by the UI dispatcher from Bevy
+/// resources and threaded down to [`voice_tab::render`].
+pub(in crate::app::ui) struct VoiceTabIo<'a> {
+    pub(in crate::app::ui) devices: &'a VoiceDeviceCache,
+    pub(in crate::app::ui) control: &'a mut VoiceUiControl,
+    pub(in crate::app::ui) input_level: f32,
+    pub(in crate::app::ui) playback_available: bool,
+}
 
 const OPTIONS_PANEL_WIDTH: f32 = 760.0;
 const OPTIONS_HEADER_HEIGHT: f32 = COMPACT_ROW_HEIGHT;
@@ -36,6 +48,7 @@ pub(in crate::app::ui) enum OptionsBackTarget {
     PauseMenu,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::app::ui) fn options_ui(
     ctx: &egui::Context,
     menu: &mut MenuState,
@@ -44,6 +57,7 @@ pub(in crate::app::ui) fn options_ui(
     physical_keys: &ButtonInput<KeyCode>,
     primary_monitor: Option<&Monitor>,
     back_target: OptionsBackTarget,
+    voice_io: &mut VoiceTabIo,
 ) {
     theme::screen_scrim(ctx, "options_scrim", 145);
     handle_options_escape(ctx, menu, options_ui_state, back_target);
@@ -86,6 +100,7 @@ pub(in crate::app::ui) fn options_ui(
                         options_ui_state,
                         physical_keys,
                         primary_monitor,
+                        voice_io,
                     );
                 });
         },
@@ -98,6 +113,7 @@ fn options_body_contents(
     options_ui_state: &mut OptionsUiState,
     physical_keys: &ButtonInput<KeyCode>,
     primary_monitor: Option<&Monitor>,
+    voice_io: &mut VoiceTabIo,
 ) {
     ui.set_width(ui.available_width());
     ui.add_space(OPTIONS_SCROLL_PADDING_Y);
@@ -106,7 +122,7 @@ fn options_body_contents(
         OptionsTab::Display => display_tab::render(ui, settings, primary_monitor),
         OptionsTab::Graphics => graphics_tab::render(ui, settings),
         OptionsTab::Audio => audio_tab::render(ui, settings),
-        OptionsTab::Voice => voice_tab::render(ui, settings),
+        OptionsTab::Voice => voice_tab::render(ui, settings, voice_io),
         OptionsTab::Controls => controls_tab::render(ui, settings),
         OptionsTab::Keybindings => {
             keybindings_tab::render(ui, settings, options_ui_state, physical_keys);
@@ -220,6 +236,32 @@ mod tests {
         }
     }
 
+    /// Run `options_ui` with a throwaway `VoiceTabIo` so each test doesn't have
+    /// to build the device cache / control plumbing the Voice tab needs.
+    fn run_options(
+        ctx: &egui::Context,
+        input: egui::RawInput,
+        menu: &mut MenuState,
+        settings: &mut ClientSettings,
+        state: &mut OptionsUiState,
+        keys: &ButtonInput<KeyCode>,
+        back_target: OptionsBackTarget,
+    ) -> egui::FullOutput {
+        let devices = VoiceDeviceCache::default();
+        let mut control = VoiceUiControl::default();
+        let mut voice_io = VoiceTabIo {
+            devices: &devices,
+            control: &mut control,
+            input_level: 0.0,
+            playback_available: true,
+        };
+        ctx.run(input, |ctx| {
+            options_ui(
+                ctx, menu, settings, state, keys, None, back_target, &mut voice_io,
+            );
+        })
+    }
+
     #[test]
     fn options_screen_renders_with_fallback_resolutions() {
         let ctx = egui::Context::default();
@@ -231,17 +273,15 @@ mod tests {
         let mut state = OptionsUiState::default();
         let keys = ButtonInput::default();
 
-        let output = ctx.run(raw_input(), |ctx| {
-            options_ui(
-                ctx,
-                &mut menu,
-                &mut settings,
-                &mut state,
-                &keys,
-                None,
-                OptionsBackTarget::MainMenu,
-            );
-        });
+        let output = run_options(
+            &ctx,
+            raw_input(),
+            &mut menu,
+            &mut settings,
+            &mut state,
+            &keys,
+            OptionsBackTarget::MainMenu,
+        );
 
         assert!(!output.shapes.is_empty());
         assert_eq!(menu.screen, Screen::Options);
@@ -258,31 +298,27 @@ mod tests {
         let mut state = OptionsUiState::default();
         let keys = ButtonInput::default();
 
-        let short = ctx.run(raw_input_with_size(560.0, 320.0), |ctx| {
-            options_ui(
-                ctx,
-                &mut menu,
-                &mut settings,
-                &mut state,
-                &keys,
-                None,
-                OptionsBackTarget::MainMenu,
-            );
-        });
+        let short = run_options(
+            &ctx,
+            raw_input_with_size(560.0, 320.0),
+            &mut menu,
+            &mut settings,
+            &mut state,
+            &keys,
+            OptionsBackTarget::MainMenu,
+        );
         assert!(!short.shapes.is_empty());
 
         let ctx = egui::Context::default();
-        let tall = ctx.run(raw_input_with_size(960.0, 1440.0), |ctx| {
-            options_ui(
-                ctx,
-                &mut menu,
-                &mut settings,
-                &mut state,
-                &keys,
-                None,
-                OptionsBackTarget::MainMenu,
-            );
-        });
+        let tall = run_options(
+            &ctx,
+            raw_input_with_size(960.0, 1440.0),
+            &mut menu,
+            &mut settings,
+            &mut state,
+            &keys,
+            OptionsBackTarget::MainMenu,
+        );
         assert!(!tall.shapes.is_empty());
     }
 
@@ -297,19 +333,14 @@ mod tests {
         let mut state = OptionsUiState::default();
         let keys = ButtonInput::default();
 
-        let _ = ctx.run(
+        let _ = run_options(
+            &ctx,
             raw_input_with_events(vec![key_press(egui::Key::Escape)]),
-            |ctx| {
-                options_ui(
-                    ctx,
-                    &mut menu,
-                    &mut settings,
-                    &mut state,
-                    &keys,
-                    None,
-                    OptionsBackTarget::MainMenu,
-                );
-            },
+            &mut menu,
+            &mut settings,
+            &mut state,
+            &keys,
+            OptionsBackTarget::MainMenu,
         );
 
         assert_eq!(menu.screen, Screen::MainMenu);
@@ -330,19 +361,14 @@ mod tests {
         let mut state = OptionsUiState::default();
         let keys = ButtonInput::default();
 
-        let _ = ctx.run(
+        let _ = run_options(
+            &ctx,
             raw_input_with_events(vec![key_press(egui::Key::Escape)]),
-            |ctx| {
-                options_ui(
-                    ctx,
-                    &mut menu,
-                    &mut settings,
-                    &mut state,
-                    &keys,
-                    None,
-                    OptionsBackTarget::PauseMenu,
-                );
-            },
+            &mut menu,
+            &mut settings,
+            &mut state,
+            &keys,
+            OptionsBackTarget::PauseMenu,
         );
 
         assert_eq!(menu.screen, Screen::InGame);
@@ -367,19 +393,14 @@ mod tests {
         };
         let keys = ButtonInput::default();
 
-        let _ = ctx.run(
+        let _ = run_options(
+            &ctx,
             raw_input_with_events(vec![key_press(egui::Key::Escape)]),
-            |ctx| {
-                options_ui(
-                    ctx,
-                    &mut menu,
-                    &mut settings,
-                    &mut state,
-                    &keys,
-                    None,
-                    OptionsBackTarget::MainMenu,
-                );
-            },
+            &mut menu,
+            &mut settings,
+            &mut state,
+            &keys,
+            OptionsBackTarget::MainMenu,
         );
 
         assert_eq!(menu.screen, Screen::Options);
