@@ -94,6 +94,10 @@ pub(crate) struct VoiceState {
     playback_warned: bool,
     /// The input device name currently open, to detect a settings change.
     applied_input_device: Option<String>,
+    /// The input device name the mic-test *monitor* is currently open on, so a
+    /// device change mid-test restarts the monitor (the live capture tracks its
+    /// own `applied_input_device`).
+    applied_monitor_device: Option<String>,
     /// The output device name currently open, to detect a settings change.
     applied_output_device: Option<String>,
     /// Set once the capture worker reports a terminal failure for the current
@@ -374,12 +378,22 @@ pub(crate) fn manage_voice_monitor_system(
         // No need for a separate mic if the in-game capture is already hot.
         && voice.capture.is_none();
 
+    let wanted_device = settings.voice.input_device.clone();
     if want_monitor {
+        // Picked a different mic mid-test: drop the monitor so it reopens on the
+        // new device (and clear any of the old mic's loopback audio).
+        if voice.monitor.is_some() && voice.applied_monitor_device != wanted_device {
+            voice.monitor = None;
+            if let Some(playback) = voice.playback.as_ref() {
+                playback.forget_speaker(VOICE_LOOPBACK_SPEAKER);
+            }
+        }
         if voice.monitor.is_none() {
-            match VoiceCapture::spawn(settings.voice.input_device.clone()) {
+            match VoiceCapture::spawn(wanted_device.clone()) {
                 Ok(monitor) => {
                     monitor.set_input_gain(settings.voice.input_volume);
                     voice.monitor = Some(monitor);
+                    voice.applied_monitor_device = wanted_device;
                 }
                 Err(error) => warn!("voice mic test failed to start: {error:#}"),
             }
