@@ -62,7 +62,7 @@ pub(crate) fn door_ghost_mesh() -> Mesh {
 
 /// Held construction hammer, built in the shared held-item reference
 /// frame the authored tools use (pommel at y ≈ -0.514, head at the top,
-/// vertical haft along Y; see docs/icon-to-model.md). The swing pose and
+/// vertical haft along Y; see docs/playbooks/art-pipeline.md). The swing pose and
 /// grip transform assume that frame, so matching it is what makes the
 /// hammer sit in the hand like the hatchet does, head up, striking face
 /// forward, instead of floating as a tiny crossbar.

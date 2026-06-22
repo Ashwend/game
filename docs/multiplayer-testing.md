@@ -1,304 +1,128 @@
-# Multiplayer Testing
+---
+title: Two-client multiplayer-test helper
+owns: The `./cli multiplayer-test` helper (server + admin-seeded temp save + two auto-connecting clients) and its GAME_TEST_* spawn/window contract.
+when_to_read: Before running or modifying the two-client multiplayer-test helper, or capturing one player as seen from another.
+sources:
+  - src/cli/multiplayer_test.rs - run_multiplayer_test, spawn_server, spawn_client, test_client_layouts
+  - src/app/state/test_mode.rs - TestModeConfig, TestWindowLayout, env::* keys
+  - src/app/systems/test_mode.rs - apply_test_mode_overrides_system, reposition_test_window_system, multiplayer_test_owns_window
+related:
+  - docs/headless-agent-testing.md - single-client control-socket primitives the headless mode reuses
+  - docs/voice.md - the voice pipeline these caveats are about
+  - docs/build-and-dev.md - the ./cli surface this subcommand lives on
+---
 
-`./cli multiplayer-test` is the primary "spin up two clients and a server
-end-to-end" iteration helper. It exists so you can verify interpolation,
-networking, voice chat, and shared-state correctness without manually
-launching three processes and arranging windows.
+# Two-client multiplayer-test helper
 
-## What it does
+> When to read this: before running or modifying `./cli multiplayer-test`, or when you need to capture one player as seen from another. Source of truth: `src/cli/multiplayer_test.rs`, `src/app/state/test_mode.rs`, `src/app/systems/test_mode.rs`. Canonical invariants live in CLAUDE.md.
 
-1. Spawns the dedicated server bound to `127.0.0.1:<ephemeral>` with a
-   throwaway world save under the OS temp dir.
-2. Waits for the `Lightyear game server listening on …` line on the
-   server's stdout, then sleeps one server tick for the netcode entity
-   to finish initialising.
-3. Launches **two client processes** in parallel, each with:
-   - Distinct Steam IDs (`76561197960287001`, `76561197960287002`) and
-     names (`player1`, `player2` by default; override via positional args).
-   - `--connect <server addr>` so they skip the menu and auto-join.
-   - A bundle of `GAME_TEST_*` environment variables that drive
-     window placement, spawn placement, and the "start with inventory open"
-     behaviour. See [Voice](voice.md) and below for the keys.
-4. Polls the two child processes until both exit, then shuts the server
-   down cleanly (its `Drop` flushes any save state).
+`./cli multiplayer-test` spins up a complete two-client session (one server, two auto-connecting clients) in one command, so you can eyeball interpolation, nameplates, chat bubbles, player rigs, and shared-state correctness without launching three processes and arranging windows by hand. It is a developer-iteration helper, not a test in the `./cli test` sense.
 
-## Test-mode behaviour the helper produces
+This doc owns the helper itself. For driving a **single** headless client through its control socket (slash commands, `dump_state`, screenshots, placement), see [headless-agent-testing.md](headless-agent-testing.md). The `GAME_TEST_HEADLESS=1` mode below reuses exactly those control-socket primitives, one socket per client.
 
-- **One client per monitor, with a single-monitor fallback.** Each
-  client receives `GAME_TEST_WINDOW_INDEX` (0 or 1) and resolves its
-  display *after* the monitors become queryable (see
-  `reposition_test_window_system` in `src/app/systems/test_mode.rs`).
-  Monitors are sorted left-to-right by `monitor.physical_position`, so:
-  - With **two or more monitors**, `player1` (index 0) goes
-    borderless-fullscreen on the leftmost screen and `player2` (index 1)
-    on the next one to the right. "Don't know which is which" degrades to
-    enumeration order.
-  - With a **single monitor**, it falls back to the old centered,
-    side-by-side, never-overlapping windowed tiling
-    (`GAME_TEST_WINDOW_WIDTH/HEIGHT/GAP`), Retina/HiDPI safe because the
-    math divides by `monitor.scale_factor`.
+## What it spawns
 
-  Because the test harness owns the window here, `apply_display_settings_system`
-  is gated off in test mode (`multiplayer_test_owns_window`) so the player's
-  saved display mode (now **Borderless Fullscreen** by default) can't reassert
-  itself and stack both clients on the primary monitor.
-- **Players spawn 2.5 m apart facing each other.** `GAME_TEST_SPAWN_OFFSET_X`
-  pushes each player ±1.25 m from the world spawn point along the
-  X axis; `GAME_TEST_SPAWN_YAW` sets each player's initial yaw so they
-  look at each other (player1 = +π/2 → faces +X, player2 = −π/2 → faces −X
-  on the controller's mouse-look convention). The override has to write
-  *both* `predicted.yaw` and `LookState.yaw` because `client_input_system`
-  echoes `LookState.yaw` back into the controller every input tick.
-  Movement is client-authoritative, so the server accepts the new pose
-  on the next outbound `Movement` packet.
-- **Inventory panel open on join.** `GAME_TEST_INVENTORY_OPEN=1` flips
-  `MenuState::inventory_open` the first frame the client reaches the
-  in-game screen.
-- **Both clients are admins with a full kit.** `multiplayer-test`
-  pre-seeds the temp world save with both test Steam IDs in
-  `WorldSave.admins`, and `GAME_TEST_AUTO_KIT=1` makes each client send
-  `/test-kit` once on the first in-game frame. Boots both windows with
-  the full early-game tool + resource + workbench + furnace set so PvP
-  / death / crafting paths are immediately exercisable. The admin flag
-  also unlocks `/tp` (teleport every other connected player to you) and
-  the rest of the admin-only slash commands.
+`run_multiplayer_test` (`src/cli/multiplayer_test.rs`) does, in order:
 
-All overrides run exactly once, gated by a `Local<bool>` in the
-test-mode systems. Production builds (no `GAME_TEST_*` vars set) see
-`TestModeConfig::default()` and the systems short-circuit immediately.
+1. **Seeds an ephemeral world save.** A throwaway `test.save` is written under the OS temp dir (`game-multiplayer-test-<pid>/test.save`), created with `WorldSave::new_with_map` at `MapType::Procedural { seed: 0, size: Small }` (`TEST_MAP_SIZE = ProceduralMapSize::Small`, the smallest procedural map so it boots fast and streams cheaply). Both test account IDs are pushed into `seeded.admins` before the save is written, so admin-gated slash commands work from the first frame.
+2. **Spawns the dedicated server.** `spawn_server` runs the current executable as `server --bind 127.0.0.1:<port> --world <temp>/test.save --auth no-auth --map-size small`. `--auth no-auth` bypasses WorkOS and admits each client by the account id + name it claims via the environment; `--map-size small` is derived from `TEST_MAP_SIZE` via `map_size_cli_token` so it can't drift from the seed save and trip the size guard. Server stdout is piped and prefixed `[server]`.
+3. **Waits for the server-ready handshake.** A reader thread scans server stdout for the line containing `listening on` and signals readiness. `wait_for_server_ready` blocks on that signal with `SERVER_READY_TIMEOUT = 45s`. On a warm rebuild this is a few hundred ms. The listening line fires when the UDP socket is reserved, which is a tick or two before the Lightyear netcode entity accepts sessions, so `wait_for_tcp_canary` then sleeps a fixed `150ms` (a UDP server can't be TCP-probed). Skipping that canary makes the first client occasionally hit "connection refused".
+4. **Launches two clients in parallel.** `spawn_client` runs the current executable as `client --connect 127.0.0.1:<port>` per layout (see below). `--connect` skips the menu and auto-joins.
+5. **Waits and tears down.** `wait_for_clients` polls both child processes until both exit (or Ctrl-C / closed stdin trips the exit flag), then `ServerProcess::shutdown` kills + reaps the server and the `TempDir` `Drop` removes the temp save directory.
 
-## Environment variable contract
+Port: `--port 0` (the default) reserves a free port by binding and dropping a TCP listener, then hands that port to the UDP server. Pass `--port <n>` to pin it.
 
-The producer side (`src/cli/multiplayer_test.rs`) and the consumer side
-(`src/app/state/test_mode.rs`) share key names through a single
-`mod env { … }` block in the consumer so the two halves can't drift.
+Names: defaults are `player1` (left) and `player2` (right), from `DEFAULT_NAMES`. Override with `--names`, one or two values, blank/whitespace values fall back to the default for that slot. (The `MultiplayerTest` clap doc-comment in `src/cli.rs` still says the defaults are `Alpha`/`Bravo`; that comment is stale, the real defaults are `player1`/`player2`.)
 
-| Variable | Type | Purpose |
-|---|---|---|
-| `GAME_PLAYER_NAME` | string | Display name. |
-| `GAME_STEAM_ID` | u64 | Stable identity per client. |
-| `GAME_TEST_WINDOW_WIDTH` | u32 | Window logical width (px), single-monitor fallback tiling only. |
-| `GAME_TEST_WINDOW_HEIGHT` | u32 | Window logical height (px), single-monitor fallback tiling only. |
-| `GAME_TEST_WINDOW_INDEX` | u32 | 0-based client index. Selects the monitor (0 = leftmost) on multi-monitor; the tile slot on single-monitor. |
-| `GAME_TEST_WINDOW_COUNT` | u32 | Total clients/tile slots (always 2 today). |
-| `GAME_TEST_WINDOW_GAP` | i32 | Pixel gap between sibling windows, single-monitor fallback tiling only. |
-| `GAME_TEST_SPAWN_OFFSET_X` | f32 | Meters added to spawn position along X. |
-| `GAME_TEST_SPAWN_OFFSET_Z` | f32 | Meters added to spawn position along Z. |
-| `GAME_TEST_SPAWN_YAW` | f32 | Initial yaw in radians (set after Welcome). |
-| `GAME_TEST_INVENTORY_OPEN` | u8 | `1` → open the inventory on first in-game frame. |
-| `GAME_TEST_AUTO_KIT` | u8 | `1` → fire `/test-kit` once after Welcome lands. Paired with admin steam IDs pre-seeded into the save. |
+Account IDs are fixed and distinct: `TEST_ACCOUNT_IDS = [76561197960287001, 76561197960287002]`. They differ from the default local-dev bypass id so a test run does not collide with a real local session, and they are the ids seeded into `save.admins`.
 
-## Tuning knobs
+## GAME_TEST_* spawn/window contract
 
-Defaults live as constants in `src/cli/multiplayer_test.rs`:
+The helper communicates per-client setup through `GAME_TEST_*` environment variables. The producer is `spawn_client`; the consumer is `TestModeConfig::from_env` (`src/app/state/test_mode.rs`), which reads them once into a `TestModeConfig` resource. The env-var name constants live in `test_mode::env` so the two sides can't drift. Production runs set none of these, so `TestModeConfig::default` is a no-op and both consumer systems short-circuit.
 
-- `TEST_WINDOW_WIDTH` / `TEST_WINDOW_HEIGHT`, single-monitor fallback
-  only: sized to fit two windows side-by-side on a 1920-wide display with
-  comfortable margins, and tall enough to show the inventory panel without
-  scrolling. Ignored on multi-monitor (each client is borderless-fullscreen).
-- `TEST_WINDOW_GAP`, single-monitor fallback gap between the two windows.
-- `TEST_PLAYER_OFFSET_X`, half the spawn separation between the two
-  players (so they end up `2 × TEST_PLAYER_OFFSET_X` apart). Tuned so
-  voice indicators / nameplates are clearly visible without making
-  interpolation jitter hard to spot.
-- The names array (`DEFAULT_NAMES = ["player1", "player2"]`) is the
-  positional default for `./cli multiplayer-test`; `player1` lands on the
-  left monitor and `player2` on the right. Pass `Tom Echo` to override.
+Always set by `spawn_client`:
 
-## Agent-driven control socket
+| Env var | Value | Effect |
+| --- | --- | --- |
+| `GAME_PLAYER_NAME` | the resolved name | display name / claimed identity |
+| `GAME_ACCOUNT_ID` | one of `TEST_ACCOUNT_IDS` | claimed account id (matches a seeded admin) |
+| `GAME_TEST_SPAWN_OFFSET_X` | ±1.25 | meters added to the predicted spawn x after Welcome |
+| `GAME_TEST_SPAWN_YAW` | ±π/2 | yaw (radians) forced on the predicted controller, makes the two face each other |
+| `GAME_TEST_INVENTORY_OPEN` | `1` GUI / `0` headless | force the inventory panel open on the first in-game frame |
+| `GAME_TEST_AUTO_KIT` | `1` | fire `/test-kit` once on the first in-game frame |
 
-For autonomous testing (an AI agent that launches the game, acts, screenshots,
-and asserts on the result), the client exposes a dev-only Unix control socket.
-It is bound only when `GAME_CONTROL_SOCKET` names a path, so a normal
-`./cli client` launch never opens it. The socket is a thin transport adapter
-(`src/app/systems/control_socket.rs`) that mirrors the server admin socket
-(`src/net/host/admin.rs`): it owns no gameplay rules, it only pokes existing
-client resources or forwards a `ClientMessage::Command`.
+`TestModeConfig` also reads `GAME_TEST_SPAWN_OFFSET_Z` (defaults to 0; the helper never sets it).
 
-**Dev builds only.** The control socket and the off-screen capture
-(`GAME_HEADLESS_CAPTURE`, below) are gated on `debug_assertions`, so they are
-compiled out of release builds entirely. A shipped game (`cargo build
---release`, as `./cli publish` produces) does not contain this code, setting
-`GAME_CONTROL_SOCKET` or `GAME_HEADLESS_CAPTURE` on a final build does nothing,
-so a bot can't drive it. Both are available in every dev/debug build
-(`cargo run`, `cargo build`, `./cli client`) with no extra flags. This does not
-affect the server-side admin socket (`./cli admin`), which is a production ops
-tool and stays available in release builds.
+### Spawn placement and facing
 
-### Launch recipe
+`apply_test_mode_overrides_system` (`src/app/systems/test_mode.rs`) applies the runtime overrides exactly once, the first frame the client is `Screen::InGame` with a predicted local controller. Movement is client-authoritative (see [movement.md](movement.md)), so it bumps the predicted controller's pose and lets the next outbound packet carry it. It adds `spawn_offset_x`/`spawn_offset_z` to `predicted.position`, and when `spawn_yaw` is set it writes that yaw to **both** `predicted.yaw` and `LookState.yaw`. Both are required: `client_input_system` reads `LookState.yaw` and writes it back through `apply_input`, so setting only the controller yaw would be clobbered the same tick.
 
-No real login is needed. A dedicated server in `no-auth` mode plus a client on
-the `--connect` bypass path (which injects an identity from `GAME_ACCOUNT_ID` /
-`GAME_PLAYER_NAME` and skips WorkOS, see `bypass_identity_from_env` in
-`src/auth/identity.rs`) lands straight in-world:
+The two layouts from `test_client_layouts` are equal-and-opposite:
 
-```bash
-# 1. Dedicated server, no auth, throwaway deterministic world (auto-created).
-#    `--admin <id>` grants admin to the agent's GAME_ACCOUNT_ID so admin-gated
-#    slash commands (test-kit, give, spawn, time, time-speed, speed) work over the socket.
-./cli server --bind 127.0.0.1:7777 --auth no-auth --world /tmp/agent.save \
-  --map-size small --admin 1
+- `player1`: `window_index 0`, `spawn_offset_x = -1.25`, `spawn_yaw = +π/2`.
+- `player2`: `window_index 1`, `spawn_offset_x = +1.25`, `spawn_yaw = -π/2`.
 
-# 2. Client: bypasses login, auto-connects, opens the control socket.
-#    (Run the binary directly; the ./cli wrapper's equivalent is `dev`,
-#    which also closes existing game windows and goes through cargo run.)
-GAME_CONTROL_SOCKET=/tmp/ashwend-control.sock \
-GAME_SKIP_UPDATE_CHECK=1 \
-GAME_ACCOUNT_ID=1 GAME_PLAYER_NAME=Agent \
-./target/debug/ashwend client --connect 127.0.0.1:7777
-```
+Yaw convention (matches the live mouse-look code, `look.yaw -= delta.x`):
 
-The `GAME_ACCOUNT_ID` passed to the client must match an id passed to the
-server's `--admin`; otherwise admin-gated commands reply `"admin only"` and the
-kit/spawns are silently skipped. Without `--admin` the agent still spawns,
-moves, and screenshots fine, it just can't issue admin commands.
+- yaw `0` looks toward `-Z`.
+- yaw `+π/2` looks toward `+X`.
+- yaw `-π/2` looks toward `-X`.
 
-`GAME_SKIP_UPDATE_CHECK` (dev builds only, like the rest of the harness)
-disables the boot-time GitHub release check. Set it for any screenshotting
-session: when a newer release exists, the "update available" modal otherwise
-opens a few seconds after boot and covers the scene.
+So `player1` sits at `-X` and faces `+X` (toward `player2`); `player2` mirrors it. They land roughly `2 × 1.25 = 2.5m` apart, close enough to read nameplates and voice indicators, far enough that interpolation is legible.
 
-### Requests
+If `GAME_TEST_AUTO_KIT=1`, the same system fires one `ClientMessage::Command { text: "test-kit" }` once in-game. `/test-kit` is admin-gated, which is why the helper seeds both account ids into `save.admins`; without that seeding the command would silently no-op. The send is fire-and-forget (the player can re-issue it from chat if it fails to land).
 
-Line-delimited JSON, one request per connection; the reply is
-`{"ok": bool, "message": string}`. `dump_state` returns its snapshot as JSON in
-`message`.
+### Monitor-aware window placement (GUI mode)
 
-| Request | Effect |
-|---|---|
-| `{"command":"dump_state"}` | JSON snapshot: `client_id`, `in_world`, `screen`, the `*_open` flags, player position/yaw/pitch/health, ping, roster, and `deployables` (every replicated placed structure in AoI with id/kind/position/health/active, the source for resolving door/doorway ids and asserting on placements). |
-| `{"command":"screenshot","path":"/tmp/shot.png"}` | Capture the primary window (3D scene + egui UI) to PNG. Async: the file lands a frame or two later, so poll for it. |
-| `{"command":"send_command","text":"test-kit"}` | Forward a slash command (no leading `/`) to the server. |
-| `{"command":"select_actionbar_slot","slot":3}` | Select a 0-based actionbar slot, putting that slot's item in hand (verifying a held viewmodel). After `test-kit` the iron pickaxe is in slot 3. |
-| `{"command":"place_deployable","item_id":"crude_furnace","distance":4.5,"height":0.5}` | Drop a carried structure `distance` m (default ~2.2) in front of the player, turned to face them, standing at `height` (a platform top such as a foundation's `y + 0.5`; defaults to the ground). Position is from the view yaw, not the look ray, so it works headless without aiming at the ground. Both extras are optional. After `test-kit` you carry one `workbench_t1` and one `crude_furnace`; place ~4.5 m out so the front face clears the bottom of the FOV. |
-| `{"command":"place_building","piece":"foundation","distance":3.0}` | Place a building block (`foundation` / `wall` / `window_wall` / `doorway` / `ceiling` / `stairs`) `distance` m (default 3.0) ahead along the view yaw; an optional `height` raises a free foundation off the ground (the server validates the `FOUNDATION_RAISE_MAX_M` band; snapped extensions inherit their neighbour's height instead). For everything except foundations the client resolves the nearest free socket to that aim point from the replicated building set (the server snap is 3D, so elevated pieces need the exact pose): with `set_look` yaw 0, a foundation at 3.0 puts its near/far wall sockets at 1.5/4.5 and its side sockets at yaw ±0.4636, distance 3.354; walls also stack on wall tops; a `ceiling` lands on the cells flanking a wall top or adjacent to another ceiling; `stairs` land on the platform top. Placement additionally needs ≥10% structural stability, server-toasted otherwise. Costs sticks (`test-kit` grants 200). |
-| `{"command":"place_door","code":"1234","flip":false,"iron":false}` | Hang a carried door in the nearest doorway in AoI with the given 4-6 digit lock code. `flip` mirrors hinge + swing; `iron` (default `false`) hangs the iron door instead of the hewn log door (consumes that variant's item). |
-| `{"command":"open_storage_box"}` | Open the nearest storage box's transfer UI (the shared loot-bag container panel); the box must be within 3 m. |
-| `{"command":"close_container"}` | Close whatever container panel (loot bag / sleeper / storage box) is open. |
-| `{"command":"door_interact"}` | E-press the nearest door: toggles for authorized accounts, otherwise the server answers `DoorCodePrompt` (the code dialog opens). |
-| `{"command":"door_enter_code","code":"1234"}` | Enter a code at the nearest door; a correct code *authorizes only* (the door stays shut until a `door_interact`), and both outcomes ship `DoorCodeResult` for the keypad sound. |
-| `{"command":"door_pick_up"}` | Pick the nearest door back into inventory (the hold-E wheel "Pick Up"). The server allows it only when the area is unclaimed or the sender is authorized on the covering Tool Cupboard, *and* the sender has unlocked the door (entered the code); the door item returns to inventory, then the panel is removed. |
-| `{"command":"upgrade_building","piece":"wall"}` | Hammer-upgrade the nearest building block to its next tier; the optional `piece` narrows the target to one piece kind. Select the hammer slot first; the server enforces hammer-in-hand, ownership, and the material cost. |
-| `{"command":"demolish_building","piece":"foundation"}` | Hammer-demolish the nearest building block (optional `piece` filter). Server enforces hammer, ownership, and the 15-minute demolish window; the structural-support cascade then collapses everything the piece held up. |
-| `{"command":"set_look","yaw":0.0,"pitch":-0.37}` | Point the camera: absolute radians, exactly as if the mouse had moved there (pitch clamped like mouse look). Use to aim at ground-level targets for screenshots, the pickup tooltip, and view-ray commands like `/drain`. For a node `d` m ahead, `pitch = -atan((1.62 - anchor_height) / d)`. |
-| `{"command":"set_screen","screen":"worlds"}` | Navigate menu screens. Does not start a session; connect via `--connect`. |
-| `{"command":"set_inventory_open","open":true}` | Open/close the inventory panel. |
+In GUI mode `spawn_client` also sets the window-geometry keys so the client can tile itself once the real monitors are queryable:
 
-### Driver
+| Env var | Value |
+| --- | --- |
+| `GAME_TEST_WINDOW_WIDTH` | `880` (`TEST_WINDOW_WIDTH`) |
+| `GAME_TEST_WINDOW_HEIGHT` | `620` (`TEST_WINDOW_HEIGHT`) |
+| `GAME_TEST_WINDOW_INDEX` | `0` or `1` |
+| `GAME_TEST_WINDOW_COUNT` | `2` |
+| `GAME_TEST_WINDOW_GAP` | `24` (`TEST_WINDOW_GAP`) |
 
-`scripts/ashwend-control.py` is a stdlib-only driver (no deps):
+`TestModeConfig::from_env` only builds a `TestWindowLayout` when all four of width/height/index/count parse, are nonzero, and `index < count`; otherwise `window` is `None`.
 
-```bash
-scripts/ashwend-control.py /tmp/ashwend-control.sock wait-in-world 30
-scripts/ashwend-control.py /tmp/ashwend-control.sock screenshot /tmp/spawn.png
-scripts/ashwend-control.py /tmp/ashwend-control.sock send-command test-kit
-scripts/ashwend-control.py /tmp/ashwend-control.sock set-inventory-open true
-scripts/ashwend-control.py /tmp/ashwend-control.sock dump-state
-```
+`reposition_test_window_system` (`src/app/systems/test_mode.rs`) runs once per session, retrying until `Query<&Monitor>` is non-empty (winit surfaces monitors a frame or two after the window opens). Monitors are sorted left-to-right by `monitor.physical_position` (x then y), so index 0 is the leftmost screen; ties keep a stable enumeration order.
 
-Prefer asserting on `dump_state` JSON over pixel-reading; use screenshots for
-human review and visual regression. Gate the agent on `in_world` (the script's
-`wait-in-world` polls it) rather than a fixed sleep.
+- **Two or more monitors:** each client takes its own screen `BorderlessFullscreen`, `player1` (index 0) on the leftmost monitor, `player2` (index 1) on the next one right. An out-of-range index clamps to the last monitor.
+- **Single monitor:** falls back to the centered, side-by-side windowed tiling via `TestWindowLayout::position_in_screen`. Bevy reports monitor size in physical pixels but `Window.position` is logical, so the math divides by `scale_factor` (Retina/HiDPI safe) and adds the monitor's `physical_position` offset.
 
-### Headless off-screen capture (recommended for agents)
+While `config.window.is_some()`, `multiplayer_test_owns_window` returns true and the normal `apply_display_settings_system` is gated off, so the player's saved display settings can't fight the reposition system.
 
-Set `GAME_HEADLESS_CAPTURE` to render the primary camera into an off-screen
-image instead of the window, and the window comes up hidden. The screenshot
-command then captures that image rather than the live window framebuffer, so
-capture no longer depends on the window being visible/foregrounded. Because
-`bevy_egui` attaches the primary egui context to the same camera, the captured
-frame includes the full UI (inventory, menus, hotbar), not just the 3D scene.
+## GAME_TEST_HEADLESS=1 mode
 
-```bash
-GAME_HEADLESS_CAPTURE=1280x720 \
-GAME_CONTROL_SOCKET=/tmp/ashwend-control.sock \
-GAME_SKIP_UPDATE_CHECK=1 \
-GAME_ACCOUNT_ID=1 GAME_PLAYER_NAME=Agent \
-./target/debug/ashwend client --connect 127.0.0.1:7777
-```
+`GAME_TEST_HEADLESS=1 ./cli multiplayer-test` is a real opt-in branch in `spawn_client` (it checks `GAME_TEST_HEADLESS` via `env::var_os`). It is the intended way to drive both clients programmatically and capture one player as seen from the other (for example, verifying the third-person swing rig: one player swinging, screenshotted from the other).
 
-`GAME_HEADLESS_CAPTURE` accepts `WIDTHxHEIGHT` or a bare `1` for the default
-1280x720. Implementation: `src/app/systems/headless_capture.rs` (target image +
-camera redirect) and the screenshot branch in `control_socket.rs`. With the
-window hidden, winit runs the schedule each cycle (its `all_invisible` path), so
-frames keep advancing and the image stays fresh without an on-screen surface.
+In this mode each client instead gets:
 
-### Background launch (no focus stealing)
+| Env var | Value |
+| --- | --- |
+| `GAME_HEADLESS_CAPTURE` | `1280x960` (off-screen render target) |
+| `GAME_CONTROL_SOCKET` | `/tmp/ashwend-mptest-0.sock` and `/tmp/ashwend-mptest-1.sock` |
+| `GAME_TEST_INVENTORY_OPEN` | `0` (inventory forced closed so it never covers the other player) |
 
-Agent-driven sessions, anything with `GAME_CONTROL_SOCKET` and/or
-`GAME_HEADLESS_CAPTURE` set, come up in the background and do not steal focus:
-the primary window is created unfocused (`Window::focused = false`), and on
-macOS the process drops to an accessory app on the first frame
-(`src/app/systems/agent_window.rs`) and resigns the active status winit grabs on
-launch, so focus returns to whatever you were doing. (The window flag alone is
-not enough on macOS, winit activates the app on launch regardless of it.) This
-is dev-only and macOS-only for the accessory part; a normal `./cli client` play
-session is untouched and focuses as usual.
+The `GAME_TEST_WINDOW_*` geometry keys are deliberately **omitted** in headless mode, the on-screen reposition path fights the hidden capture window, so `config.window` is `None` and `reposition_test_window_system` no-ops.
 
-Agent-driven sessions also **disable voice chat entirely** (`VoiceDisabled` in
-`src/app/voice/systems.rs`): neither the playback nor the microphone capture
-stream is opened, so an automated run never grabs the mic, which on macOS would
-otherwise force a Bluetooth headset out of A2DP into low-quality HFP. Voice
-isn't part of what the harness exercises. Normal play keeps voice as usual.
+`GAME_TEST_SPAWN_OFFSET_X`, `GAME_TEST_SPAWN_YAW`, and `GAME_TEST_AUTO_KIT` are still set, so the two players still spawn facing each other with the full kit. Drive each socket independently with `scripts/ashwend-control.py`, exactly as for a single headless client. The full control-command catalog, `dump_state` schema, the wait-in-world / async-screenshot timing contract, and the `GAME_ACCOUNT_ID` must-match `--admin` gotcha all live in [headless-agent-testing.md](headless-agent-testing.md). Here the admin gating is already satisfied: both account ids are seeded admins.
 
-They also **mute game audio**: `app.rs` inserts a zeroed `GlobalVolume` so a
-headless/automated run is silent (no one is listening). This mutes everything
-without tearing down the audio pipeline, so sinks still despawn normally. Normal
-play is unaffected. Both the voice and audio toggles key off the same
-`agent_driven` flag (control socket and/or `GAME_HEADLESS_CAPTURE` set).
+Headless capture is debug-only (compiled out of release builds), and an agent-driven session inserts `VoiceDisabled` and sets `GlobalVolume` to `Linear(0.0)` (`src/app.rs`), so a `GAME_TEST_HEADLESS=1` run never opens the mic or plays audio. That sidesteps the voice-echo caveats below entirely.
 
-### macOS windowing caveat (live-window path only)
+## Voice-echo caveats (GUI mode only)
 
-Without `GAME_HEADLESS_CAPTURE`, the screenshot renders the live window
-framebuffer, so the client window must actually be rendering. macOS throttles
-(and can eventually close) a fully occluded / background winit window even with
-`WinitSettings::continuous()`, so a client launched into the background may
-answer the socket slowly (the driver allows 20 s per request for this) or exit
-with `No windows are open`. For the live-window path, keep the client window
-foregrounded/visible while the agent drives it (the request/response round-trip
-itself works regardless; only the rendering throttles). Prefer the headless
-capture mode above to sidestep this entirely.
+In GUI mode both client processes run real audio and share the same default microphone and speakers, so testing voice on one machine has feedback hazards:
 
-## Voice testing caveats
+1. Both clients capture the same speech from your mic and send it. The server does **not** echo your own voice back, the receive filter skips packets whose `speaker` matches the listener's own `client_id` (`src/server/voice.rs`, `client.client_id != speaker`), so you don't hear yourself directly.
+2. Without headphones you still get a round-trip loop: client A's speaker output is captured by the mic and sent, client B plays it, B's output is captured again, and so on. There is no Discord-style echo suppression. For voice debugging on one machine, use headphones.
 
-Both client processes share the same default microphone and the same
-default output device, because cpal/CoreAudio multiplex inputs but
-outputs come straight from the OS mixer. Two practical consequences
-when testing voice with `./cli multiplayer-test`:
+Spatial attenuation uses `VOICE_AUDIBLE_RANGE = 50.0` meters (`src/server/voice.rs`); the two test players spawn ~2.5m apart, well inside range. See [voice.md](voice.md) for the rest of the pipeline.
 
-1. Both clients will pick up the same speech from your mic (each one
-   independently captures, encodes, and sends). The server forwards
-   each speaker to the other; the receive system skips packets whose
-   `speaker` matches its own `client_id`, so you don't hear yourself
-   echoed back through your own speakers.
-2. If you're testing without headphones, the *other* client's speaker
-   output gets captured by your mic on the *first* client and sent back.
-   The first client then plays the round-trip in its speakers and the
-   second client captures it again, and so on. Discord-style echo
-   suppression is not implemented; for voice debugging, use headphones
-   on at least one of the two windows.
+## Related docs
 
-See [Voice](voice.md) for the rest of the audio pipeline.
-
-## Module map
-
-- `src/cli/multiplayer_test.rs`: the helper itself, server spawn, client
-  spawn, `TestClientLayout` tile-index/spawn-offset computation, and the
-  unit tests for the symmetry of the layout.
-- `src/app/state/test_mode.rs`: `TestModeConfig`, `TestWindowLayout`,
-  `env::*` key constants, and the screen-coords math
-  (`TestWindowLayout::position_in_screen`).
-- `src/app/systems/test_mode.rs`: `apply_test_mode_overrides_system`
-  (spawn + yaw + inventory) and `reposition_test_window_system` (the
-  post-monitor window placement).
-
-## When *not* to use this
-
-For end-to-end tests of a single concern (auth, chat round-trip,
-gather, etc.), prefer the in-process tests under `src/net/tests.rs`
-and `src/server/tests/` that drive `ClientSession` against a
-`LightyearGameSession` without spawning child processes.
-`./cli multiplayer-test` is for the cases where you actually need to
-*see* two clients render the same world, voice chat, interpolation,
-animation, nameplate behaviour, UI synchronisation, or visual
-verification of replicated state on chunk crossings.
+- [docs/headless-agent-testing.md](headless-agent-testing.md): single-client control-socket primitives (commands, `dump_state`, screenshots, placement) that the headless mode reuses.
+- [docs/voice.md](voice.md): the voice subsystem these caveats are about.
+- [docs/movement.md](movement.md): the client-authoritative trust boundary the spawn-offset override relies on.
+- [docs/build-and-dev.md](build-and-dev.md): the full `./cli` surface this subcommand lives on.

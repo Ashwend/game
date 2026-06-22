@@ -28,7 +28,7 @@ pub(crate) use crate::game_balance::{HATCHET_KNOCKBACK_SPEED, PICKAXE_KNOCKBACK_
 /// Category of damage. Future kinds (Pierce, Fire, Bleed, …) plug in
 /// here without touching the wire protocol. Today only `Blunt` is used
 /// by melee tools; `Projectile` is reserved for the upcoming bow/gun
-/// pass mentioned in `docs/pvp.md` § Extensibility audit.
+/// pass mentioned in `docs/pvp-combat.md` § Extensibility audit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DamageKind {
     /// Tools, melee weapons, fists. Reduced by armor.

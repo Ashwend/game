@@ -79,7 +79,7 @@ pub const MAX_VOICE_FRAME_BYTES: usize = 512;
 pub type DroppedItemId = u64;
 pub type ResourceNodeId = u64;
 /// Identifier for a loot bag (the container spawned at a dead
-/// player's feet, see `docs/pvp.md`). Stable for the bag's
+/// player's feet, see `docs/pvp-combat.md`). Stable for the bag's
 /// lifetime; the server picks it from a monotonic counter and uses
 /// it to route `LootBagCommand` traffic.
 pub type LootBagId = u64;

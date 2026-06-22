@@ -50,7 +50,7 @@ pub enum ClientMessage {
     /// Swing the equipped tool at another player. Server re-validates
     /// tool, range, view cone, and line-of-sight against the world
     /// blocks; on success it applies armor-reduced damage and sends
-    /// `PlayerImpact` + `Knockback`. See `docs/pvp.md`.
+    /// `PlayerImpact` + `Knockback`. See `docs/pvp-combat.md`.
     AttackPlayer(AttackPlayerCommand),
     /// Cosmetic "I started a swing" signal, sent at the moment a local
     /// swing begins (the gather/attack/damage messages above fire at the

@@ -6,7 +6,7 @@
 //! [`TerrainTextureAssets`]; only the small biome-weight image differs per world
 //! (baked on the CPU from the seed by [`crate::world::render_terrain_weight_rgba`],
 //! the same noise the map uses). Shader: `assets/shaders/terrain.wgsl`. See
-//! [Materials](../../../docs/materials.md) for the PBR conventions and the
+//! [Rendering materials](../../../docs/rendering-materials.md) for the PBR conventions and the
 //! standalone-vs-ExtendedMaterial reasoning.
 //!
 //! Heightmap note: displacement is intentionally NOT done yet. When it lands it

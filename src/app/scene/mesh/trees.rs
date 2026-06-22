@@ -10,8 +10,8 @@ use super::builder::{
 // a textured bark trunk + (for live trees) an alpha-masked needle/leaf canopy.
 // Only the cheap distance LODs stay procedural here, because a flat vertex-coloured
 // stand-in is all that survives the 80 m `VisibilityRange` switch. See
-// [Icon to 3D model](../../../../docs/icon-to-model.md) for the tree glb pipeline
-// and [Materials](../../../../docs/materials.md) for the material conventions.
+// [Art pipeline](../../../../docs/playbooks/art-pipeline.md) for the tree glb pipeline
+// and [Rendering materials](../../../../docs/rendering-materials.md) for the material conventions.
 
 // ---------------------------------------------------------------------------
 // Distance LOD meshes

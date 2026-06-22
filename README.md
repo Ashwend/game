@@ -13,7 +13,7 @@ dedicated-server core, natively.[^stack]
 
 Ashwend isn't trying to reinvent the genre. It shares its core mechanics
 with the survival games already out there, and there's no secret ingredient
-in the brewing meant to set it apart. The goal is to do the familiar loop,
+in the brewing meant to set it apart. The goal is to take the familiar loop
 and do it well.
 
 ## Current state
@@ -22,7 +22,9 @@ The honest version: it's early and crude. The core game loop isn't finished
 yet. What's there is genuinely playable: gather resources, craft a set of
 tools, smelt ore in a furnace, raise a base, and lock it down with a tool
 cupboard. But you'll hit the content ceiling *fast*; a determined evening or
-two reaches the end of what's there today.
+two reaches the end of what's there today. There are no survival meters yet,
+no animals or other AI to fight, and no explosives, so a stone or metal base
+can't be raided by anyone but the wear of time.
 
 Ashwend is in **active development**, with no release date set yet. Expect
 patches to land roughly **weekly**, with new content and bug fixes.
@@ -37,9 +39,17 @@ The builds aren't code-signed with proper certificates yet, so your OS will
 flag Ashwend as coming from an unidentified developer the first time you open
 it. It's safe to run; you just have to allow it once.
 
-- **macOS**: open the app and dismiss the first warning, then open System
-  Settings, go to Privacy & Security, scroll to the bottom, and click "Open
-  Anyway". Confirm once and it launches normally from then on.
+- **macOS**: the no-prompt path is the one-line installer, which downloads the
+  latest build straight into `/Applications` and launches it:
+
+  ```sh
+  curl -fsSL https://www.ashwend.com/install.sh | sh
+  ```
+
+  If you'd rather download the app by hand, open it and dismiss the first
+  warning, then open System Settings, go to Privacy & Security, scroll to the
+  bottom, and click "Open Anyway". Confirm once and it launches normally from
+  then on.
 - **Windows**: if "Windows protected your PC" appears, click "More info", then
   "Run anyway".
 
@@ -57,7 +67,8 @@ reserved to the licensor.
 The name "Ashwend", together with any logos, is a trademark and is not covered
 by the code license.
 
-Want to get involved? See [CONTRIBUTING.md](CONTRIBUTING.md).
+Want to get involved? See [CONTRIBUTING.md](CONTRIBUTING.md), or come talk
+about the game on [Discord](https://discord.gg/gVqTumNb8b).
 
 [^stack]: Built with [Rust](https://www.rust-lang.org/) and the
     [Bevy](https://bevyengine.org/) engine, with

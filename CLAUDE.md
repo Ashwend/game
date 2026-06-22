@@ -1,81 +1,104 @@
 # CLAUDE.md
 
-AI context for this repo.
+Always-loaded agent root for the Ashwend repo. This file routes you to the right doc, states the cross-subsystem invariants once (this is their canonical home), and gives the corrected `src/` module map. It does not re-explain mechanics; follow the links.
 
-Ashwend is a Rust/Bevy first-person prototype. Singleplayer and multiplayer both use the Lightyear-backed `ClientSession::Network` path; singleplayer only adds loopback host startup, host admin assignment, and local save persistence. Worlds are compressed binary `.save` files (postcard + zstd, versioned `GAMESAVE` header).
+## Global rules (apply to every task)
 
-Start here:
-- `src/cli.rs`: `client`, `server`, and `admin` subcommands.
-- `src/app.rs`: Bevy app wiring and named `ClientSystemSet` schedule ordering.
-- `src/app/state/`: client resources and UI/runtime state.
-- `src/app/ui/modal.rs`: reusable animated modal shell plus confirmation modal.
-- `src/app/ui/worlds/`: singleplayer worlds screen, dialogs, table, and session actions.
-- `src/app/ui/inventory/`: inventory slot rendering, drag handling, and pickup tooltip helpers.
-- `src/app/ui/multiplayer/`: direct-connect dialog, address parsing, and connection attempt helpers.
-- `src/server.rs` and `src/server/`: shared authoritative game state for both singleplayer loopback and dedicated multiplayer; keep connection/auth, inventory, movement, dropped-item, resource-node, and deployable concerns split. The `HashMap`s on `GameServer` are authoritative; the `*_ecs.rs` modules define the matching ECS mirror components that Lightyear replicates to clients (see [Networking § Replication](docs/networking.md#replication)).
-- `src/protocol.rs`: `ClientMessage` / `ServerMessage` wire variants, channel delivery preferences, and a handful of server-internal shape types (`ResourceNodeState`, `DroppedWorldItem`, `DeployedEntityState`, `OpenFurnaceView`) kept here because the save layer serialises them.
-- `src/controller/`: movement simulation, movement tuning/math, collision, and the server-side block spatial grid.
-- `src/items.rs` and `src/resources.rs`: item registry, tool profiles, and resource-node definitions/gather rules. See [Items and Resources](docs/items-and-resources.md) for the walkthrough.
-- `src/building.rs`: shared base-building domain rules (piece/tier taxonomy, socket-snapping geometry, multi-box colliders, cost/HP tables). Server authority in `src/server/building.rs` + `src/server/door.rs` + `src/server/sleeping_bag.rs`; client preview/snapping in `src/app/systems/deployables/placement.rs`; the hold-to-open radial wheel in `src/app/systems/input/wheel.rs` + `src/app/ui/wheel.rs`. See [Crafting and Deployables § Base building](docs/crafting.md#base-building).
-- `src/game_balance.rs`: every gameplay tuning constant (combat ranges, deployable damage/placement, building HP/costs/raid balance, furnace timings, loot-bag interact range, respawn radius). New balance values live here, not inline in subsystem modules.
-- `src/server/furnace/` (split): `state.rs` (types + pure helpers), `tick.rs` (smelt loop), `commands.rs` (open/move/quick-transfer). Tests in `src/server/tests/furnace.rs`. See [Crafting and Deployables](docs/crafting.md).
-- `src/net/client.rs`: Lightyear client session wrapper used by singleplayer and direct multiplayer.
-- `src/net/host.rs` and `src/net/host/`: Lightyear host wrapper, handle/shutdown helpers, routing around `GameServer`, the room/AoI subscription system that drives per-component replication, and the optional Unix admin socket used by `./cli admin`. See [Networking § Replication](docs/networking.md#replication).
-- `src/net/channels.rs`: Lightyear channel registration plus the `app.register_component::<T>()` calls for every replicated component. Both server and client install the same `LightyearProtocolPlugin` so registries match.
-- `src/net/dedicated/`: CLI-facing dedicated server entry point and admin request types.
-- `src/save/`: world persistence (`WorldStore`, `WorldSave`, atomic writes, format version).
-- `src/world/`: `MapType`, world block geometry, perimeter walls, and the chunk-based generation pipeline under `src/world/chunk/` (classification, value noise, Poisson-disk spawn generator).
-- `src/server/chunk_manager/`: server-side owner of the chunk grid (module: `mod.rs`, `membership.rs`, `aoi.rs`, `regrow.rs`, `save.rs`), every networked entity (resource nodes, drops, eventually buildings) is anchored to a chunk; the room-subscription system in `src/net/host.rs` adds the client's sender to the matching chunk's Lightyear `Room` so replication is AoI-filtered. Also schedules 5–15 min node respawns and persists per-chunk live counts.
-- `src/app/scene/assets.rs` and `src/app/scene/world.rs`: shared `StandardMaterial` setup for players, items, resource nodes, ground, and stone walls. See [Materials](docs/materials.md) before adding or tuning a material. Held items whose look should match a painted icon (the four tools) are authored Blender glbs, not procedural meshes; see [Icon to 3D model](docs/icon-to-model.md) for that pipeline.
-
-Use `./cli check`, `./cli test`, and `./cli lint`.
-
-Singleplayer/multiplayer invariant:
-- Keep gameplay behavior in shared modules: `server`, `protocol`, `controller`, `items`, `world`, and shared app systems.
-- Do not add a separate singleplayer gameplay implementation, direct in-process transport bypass, or duplicate movement/inventory/chat rules for local play.
-- Singleplayer-specific code should stay limited to selecting/loading a save, starting a loopback host, marking the local host as admin, and saving the host world state on shutdown.
-- Multiplayer-specific code should stay limited to remote address/server discovery, auth mode, transport setup, and dedicated-host lifecycle.
-- When adding a feature, make it work through `ClientMessage`/`ServerMessage` and `GameServer` first, then let both loopback singleplayer and direct multiplayer consume that same path. If the feature introduces new per-entity authoritative state (something the client renders or queries), ship it through Lightyear's per-component replication, not a new `ServerMessage` snapshot variant. Read **⚠️ Replicated state** below before designing the wire shape.
-- Movement is intentionally client-authoritative for responsiveness. Clients send `PlayerMovement` state produced by local prediction; the server validates sequence/finite values and writes them onto the player's mirror entity so Lightyear replicates the result to peers. Do not convert to server-authoritative input simulation unless explicitly asked.
-- **Gameplay never pauses.** The game runs an authoritative server (loopback or dedicated) at all times, so simulation, local prediction, and network ticks keep ticking *as long as the local screen is in-game*, regardless of which UI overlay is up (pause menu, pause-options, inventory, chat, crafting, furnace, death splash, anything). Overlays only gate local **controls** (movement, look, swing). Knockback, replication diffs, death/respawn, world-time advancement, all of it must keep happening while a menu is open, otherwise effects pile up and fire en masse when the menu closes. If you add a new overlay, gate it through `gameplay_accepts_controls` in `src/app/systems/input/gating.rs`, never through `gameplay_simulation_allowed`.
-
-Clean-code rules:
-- No monolithic files. If a file mixes transport, domain rules, UI layout, persistence, and tests, split by concern before extending it.
-- Prefer small modules with clear ownership over broad helper files. Good splits already exist in `src/server/`, `src/controller/`, `src/app/systems/`, `src/app/state/`, and `src/app/ui/worlds/`.
-- Keep UI rendering, UI state, session actions, and authoritative game rules separate.
-- Put reusable modal/backdrop animation behavior in `src/app/ui/modal.rs`; individual screens should only provide form contents and choice mapping.
-- Keep networking transport adapters thin; they should translate to shared protocol messages and delegate gameplay to `GameServer`.
+- Never create markdown summary, report, or findings files unless the user explicitly asks. Return findings in chat.
+- No em dashes anywhere: UI copy, website text, docs, comments, commit messages. The long dash used as an aside or clause break is banned. Use a comma, period, semicolon, colon, parentheses, or reword. (The hyphen in `src/path.rs - symbol` citations is fine.)
+- No monolithic files. If a file mixes transport, domain rules, UI layout, persistence, and tests, split by concern before extending it. Keep module boundaries; prefer small modules with clear ownership.
 - Add tests near the module that owns the behavior, especially for protocol changes, server authority, persistence, and layout/state helpers.
-- Update the relevant existing doc when changing architecture. Do not create markdown summary files unless explicitly asked.
-- Never use em dashes anywhere (UI copy, website text, docs, comments, commit messages). The long dash that sits between words as an aside or a clause break is banned; write the sentence naturally with a comma, period, semicolon, colon, parentheses, or a reword instead.
+- Update the relevant existing doc when you change architecture. Do not invent new top-level docs casually; fit the existing map below.
 
-Open docs only when the task touches that area:
-- [Architecture](docs/architecture.md)
-- [Movement](docs/movement.md): includes the client-authoritative trust boundary.
-- [Networking](docs/networking.md): includes the **Replication** section that documents per-component replication, chunk-room AoI, the Lightyear 0.26.4 known-issue pattern, and the procedure for adding new replicated state.
-- [Items and resources](docs/items-and-resources.md): registries, tool profiles, resource-node spawn rules, and "how to add a new tool / ore / recipe".
-- [Crafting and deployables](docs/crafting.md): recipe queue, furnace state machine, loot bags, deployable damage + ownership.
-- [Voice](docs/voice.md)
-- [Worlds and saves](docs/worlds-and-saves.md)
-- [Updates and self-update](docs/updates.md): boot-time GitHub version check, the changelog modal, the separate `ashwend-updater` binary, and the macOS `.app` packaging. Consult before changing release-asset names (they're hardcoded in several scripts + the website) or the self-update flow.
-- [UI and client flow](docs/ui-and-client.md)
-- [Multiplayer testing](docs/multiplayer-testing.md)
-- [Materials](docs/materials.md): PBR conventions for the scene (reflectance, roughness, metallic). Consult before adding a new `StandardMaterial` or tweaking an existing one.
-- [Toon / cel shading](docs/toon-shading.md): the anime/cel-shaded look (currently the ore nodes), how the `OreToonMaterial` cel shader works, and the roadmap + architecture for extending the toon style to other prop families. Consult before making a new prop cel-shaded or planning a wider anime art-direction shift.
-- [Icon to 3D model](docs/icon-to-model.md): the repeatable pipeline for turning a painted icon or concept into an authored Blender glb (Blender MCP, OpenCV silhouette measurement, the held-item reference frame, glb export, and the winding / vertex-colour / export gotchas). Consult before modelling a new held item or icon-matched prop. The four tools are the worked examples.
-- [Profiling](docs/profiling.md): Chrome-trace capture, Perfetto `trace_processor` SQL queries, and the diagnostic patterns that surfaced during the frame-pacing investigation. Consult before reaching for "rewrite to make it faster"; the canonical bugs (per-frame iteration over N replicated entities, spurious change-detection, `Ref::is_changed()` lying for Lightyear-touched components) all have cheap fixes documented here.
+## What is Ashwend
 
-Keep changes small and preserve module boundaries.
+Ashwend is a first-person Rust/Bevy multiplayer survival prototype (gather, craft, build, raid, PvP). Singleplayer and multiplayer run the exact same authoritative-server code path: a Lightyear-backed `GameServer` reached through `src/net/client.rs - ClientSession`. Singleplayer differs only by starting an in-process loopback host, marking the local player admin, and persisting the save locally; multiplayer points the same client at a remote dedicated host. Worlds are compressed binary `.save` files (postcard + zstd, versioned `GAMESAVE` header). The art direction is mid-transition from PBR toward a cel/anime look (ore nodes, trees, deployables, and grass are cel-shaded; building pieces and doors are still PBR).
 
-## Replicated state, rules
+## Corrected `src/` module map
 
-Every networked entity ships through Lightyear's per-component replication, room-gated to the AoI chunk ring around each player. Full architecture in [Networking § Replication](docs/networking.md#replication). The constraints below are the ones it's easy to get wrong:
+Top-level modules declared in `src/lib.rs` (23 total). Some are a single `.rs` file, some are a `mod.rs`-style directory, and a few front a `.rs` file plus a sibling directory of submodules. The `(dir)` flag below means "open the directory, not just the file."
 
-1. **Per-entity authoritative state goes through Lightyear replication, not `ServerMessage`.** Resource nodes, dropped items, deployables, players, that's the established pattern. New networked entities follow the same shape: `HashMap` on `GameServer` for authoritative state + ECS mirror entity carrying the replicated components, kept in sync by an exclusive system in `src/net/host.rs`.
-2. **Every spawn must attach `ReplicationGroup::new_from_entity()`.** Both spawn helpers in `src/net/host.rs` (`attach_room_gated_replication` and `attach_player_replication`) already do this. **Don't bypass them with a bare `Replicate::to_clients(...)`**, without an explicit group, Lightyear puts the entity in `ReplicationGroupId(0)` along with every other group-less entity and the per-group ack tick can advance past a slowly-changing entity's local `Changed` mark, silently dropping the diff. This is upstream bug [#740](https://github.com/cBournhonesque/lightyear/issues/740); per-entity groups sidestep it.
-3. **Split each entity into one identity component (immutable post-spawn) and one component per mutable field that changes at a different cadence.** Lightyear ships per-component diffs, so this keeps wire traffic minimal.
-4. **Add `replication-trace` coverage for new replicated components** that mutate post-spawn. `server: <Component> MUTATE` log in the mirror sync + `client: <Component> RECV` log on the client. Run with `--features replication-trace` and `RUST_LOG=replication_trace=info` to confirm post-spawn diffs ship before merging.
-5. **Never re-introduce a periodic full-state broadcast.** The original `WorldSnapshot` wire was deleted during the migration; replacing it with a similar message because "replication is hard" is the wrong move, fix the replication path instead.
-6. **Client reconciliation systems are event-driven, not polling.** When writing a `apply_*` system that mirrors replicated entities into local-only visuals, react to `Added<T>` and `RemovedComponents<T>`, do not iterate the full replicated query every frame. Iteration at AoI scale (~1800 nodes) costs 1-4 ms per frame for the noop case alone. See [src/app/systems/items/resource_nodes.rs](src/app/systems/items/resource_nodes.rs) for the canonical pattern: pending-spawn `VecDeque` (preserves the per-frame spawn budget across frames), reverse `Entity → Id` map (lets `RemovedComponents` find the local mirror), and a one-time catch-up scan on the first run after connect (the `Added` filter's `last_run` tick misses entities that arrived during early-returning `client_id == None` frames). `Ref::is_changed()` will fire on every replication tick for Lightyear-touched components even when the value is identical (Lightyear's receive path uses `insert_by_ids` which always bumps the change tick), don't gate work behind it.
+| Module | Kind | Role |
+| --- | --- | --- |
+| `analytics` | dir | Client-only PostHog analytics plugin (one OS worker thread, no async runtime). Not loaded by the dedicated server or admin CLI. |
+| `app` | file + `app/` dir | Bevy client app: wiring, `ClientSystemSet` schedule ordering (`src/app/systems.rs - ClientSystemSet`), `run_app` entry. Subdirs `app/state/`, `app/systems/` (`camera/`, `control_socket/`, `deployables/`, `input/`, `items/`, ...), `app/ui/`, `app/scene/`, `app/audio/`, `app/voice/`. |
+| `auth` | dir | Player auth. `AuthMode::Workos` (real, verifies a WorkOS JWT offline against JWKS) vs `AuthMode::NoAuth` (loopback/localhost only, used by singleplayer and `multiplayer-test`). |
+| `building` | file | Shared base-building domain rules: piece/tier taxonomy, socket-snap geometry, multi-box colliders, cost/HP tables. Read by both client preview and server authority. |
+| `cli` | file + `cli/` dir | `clap` entry. Subcommands: `client`, `server`, `admin`, `multiplayer-test` (the last fronted by the sibling `cli/multiplayer_test.rs` submodule). |
+| `combat` | file | Damage primitives shared by every damage source (PvP melee today, projectiles/environment later). |
+| `console` | file | Windows-only dual-subsystem console reattachment (shipped builds are GUI-subsystem so no console flashes on launch). |
+| `controller` | dir | Movement simulation, movement tuning/math, collision, and the server-side block spatial grid (`BlockGrid`). |
+| `crafting` | file | Static server-authoritative crafting recipe registry, exposed by id (recipes never travel on the wire). |
+| `game_balance` | file | Every gameplay tuning constant lives here (combat ranges, gather windows, deployable damage/placement, building HP/costs/raid balance, furnace timings, loot-bag and interact ranges, respawn radius). New balance values go here, not inline. |
+| `inventory` | file | Pure inventory math shared by the server and the client-side optimistic prediction overlay. Operates on `PlayerInventoryState`. |
+| `items` | file | Item registry, item/deployable model enums (`ItemModel`, `DeployableKind`), and tool profiles (`ToolKind`/`ToolProfile`). Dropped-item shapes live in `protocol/world.rs` and `server/dropped_item_ecs.rs`. |
+| `local_crypto` | file | At-rest obfuscation for local client files (settings, WorkOS refresh token). Deliberately not a security boundary. |
+| `logging` | file | On-disk app log for client and dedicated server (Bevy's default `LogPlugin` only hits stderr, invisible in a packaged release). |
+| `net` | file + `net/` dir | Lightyear transport adapters. `net/client.rs` (`ClientSession`), `net/host.rs` + `net/host/` (loopback/dedicated host, mirror sync, room/AoI subscription, admin socket), `net/channels.rs` (channel + `register_component` registration), `net/dedicated/` (CLI dedicated entry + admin requests). |
+| `protocol` | dir | Wire protocol: `ClientMessage`/`ServerMessage` surface, channel delivery prefs, and shared shapes both sides serialise (`ResourceNodeState`, `DroppedWorldItem`, `DeployedEntityState`, `OpenFurnaceView`). Split by concern, re-exported flat. |
+| `resources` | file | Resource-node definitions (`ResourceNodeDefinition`/`ResourceNodeModel`, in `RESOURCE_NODE_DEFINITIONS`) and gather rules. (`NodeKind` is the world/chunk pipeline's enum, not this module's.) |
+| `save` | dir | World persistence: `WorldStore`, `WorldSave`, atomic writes, binary codec, listing/recovery, name validation, format version. |
+| `server` | file + `server/` dir | Shared authoritative game state (`GameServer`) for loopback and dedicated alike. `server/` splits connection/auth, inventory, movement, dropped-item, resource-node, deployable, door, sleeping-bag, furnace (`furnace/state.rs`+`tick.rs`+`commands.rs`), and `chunk_manager/`. The `HashMap`s on `GameServer` are authoritative; `*_ecs.rs` modules define the replicated mirror components. |
+| `update` | dir | Client-only in-game update checker + self-updater (boot-time GitHub version check on a background thread). |
+| `util` | file + `util/` dir | Tiny dependency-light cross-module helpers (`pub mod fs; pub mod hash; pub mod platform; pub mod variation;`, backed by `src/util/`). |
+| `world` | dir | `MapType`, world block geometry, perimeter walls, and the chunk-based generation pipeline under `world/chunk/` (classification, value noise, Poisson-disk spawn generator). |
+| `world_time` | file | Day/night clock shared by server and client. Server owns authoritative time and ships periodic `WorldTimeSnapshot`. |
 
-If you see stale replicated state in-game: build with `--features replication-trace`, reproduce, and check the log. `MUTATE` without a matching `RECV` means a replication failure (likely a missing `ReplicationGroup` at the spawn site, or a new Lightyear bug). `MUTATE` and `RECV` both firing but UI still stale means a consumer bug, look at the `Query<&Component>` reader.
+`ClientSession` (`src/net/client.rs - ClientSession`) is a plain struct holding a `ClientNetwork` handle and the optional loopback `GameServerHandle`. It exposes `start_singleplayer(...)` and `connect(...)`. There is no `ClientSession::Network` enum variant; both modes drive the same struct.
+
+## Invariants (canonical home, stated once)
+
+These are the load-bearing, cross-subsystem rules. Other docs link here instead of restating them.
+
+1. **Singleplayer == multiplayer.** Both consume the same `GameServer` through `ClientMessage`/`ServerMessage`. Do not add a separate singleplayer gameplay implementation, an in-process transport bypass, or duplicate movement/inventory/chat rules. Singleplayer-specific code stays limited to selecting/loading a save, starting the loopback host, marking the local host admin, and saving on shutdown. Multiplayer-specific code stays limited to remote address/discovery, auth mode, transport setup, and dedicated-host lifecycle. New features: make it work through `GameServer` first, then let both paths consume it.
+
+2. **Gameplay never pauses.** An authoritative server (loopback or dedicated) runs at all times, so simulation, local prediction, and network ticks keep advancing as long as the local screen is in-game, regardless of which overlay is up (pause, inventory, chat, crafting, furnace, death splash, map, anything). Overlays gate only local **controls** (movement, look, swing). Knockback, replication diffs, death/respawn, and world-time advancement must keep applying while a menu is open, otherwise effects pile up and fire en masse on close. Gate any new overlay through `gameplay_accepts_controls` in `src/app/systems/input/gating.rs`, never through `gameplay_simulation_allowed` (which only flips when you leave the in-game screen entirely). See [docs/gameplay-gating.md](docs/gameplay-gating.md).
+
+3. **Movement is client-authoritative by design.** Clients send `PlayerMovement` produced by local prediction; the server validates sequence/finite values and writes the result onto the player's mirror entity for replication. Do not convert to server-authoritative input simulation unless explicitly asked. See [docs/movement.md](docs/movement.md).
+
+4. **Balance constants live in `src/game_balance.rs`,** never inline in a subsystem.
+
+5. **Replicated state (six rules).** Every networked entity ships through Lightyear per-component replication, room-gated to the AoI chunk ring around each player. Authoritative `HashMap` on `GameServer` + ECS mirror entity, kept in sync by exclusive systems in `src/net/host/mirror.rs` (`sync_resource_node_entities`, `sync_dropped_item_entities`, `sync_deployable_entities`, `sync_player_entities`). The easy-to-break constraints:
+   - **Use `ServerMessage` for events, replication for per-entity state.** New networked entities (renderable or queryable per-entity state) go through replication, not a snapshot `ServerMessage` variant.
+   - **Every spawn attaches `ReplicationGroup::new_from_entity()`.** The two host spawn helpers (`attach_room_gated_replication`, `attach_player_replication`) already do. Do not bypass them with a bare `Replicate::to_clients(...)`: without an explicit group Lightyear lumps the entity into `ReplicationGroupId(0)` and the per-group ack tick can advance past a slow entity's local `Changed` mark, silently dropping the diff (upstream bug [#740](https://github.com/cBournhonesque/lightyear/issues/740)).
+   - **Split each entity into one identity component (immutable post-spawn) + one component per mutable field** that changes at a distinct cadence. Diffs are per-component, so this minimizes wire traffic.
+   - **Client reconcilers are event-driven, not polling.** React to `Added<T>` and `RemovedComponents<T>`; do not iterate the full replicated query every frame (1-4 ms/frame noop cost at AoI scale ~1800 nodes). Canonical pattern in `src/app/systems/items/resource_nodes/mod.rs` (pending-spawn `VecDeque`, reverse Entity->Id map, one-time catch-up scan after connect).
+   - **`Ref::is_changed()` lies for Lightyear-touched components:** it fires on every replication tick even when the value is identical (the receive path uses `insert_by_ids`, which always bumps the change tick). Never gate work behind it.
+   - **Never reintroduce a periodic full-state broadcast.** The old `WorldSnapshot` wire was deleted on purpose; fix the replication path, don't replace it.
+   - Add `replication-trace` coverage for any new post-spawn-mutating component (`MUTATE` log in mirror sync + `RECV` log on client; run `--features replication-trace` with `RUST_LOG=replication_trace=info`). `MUTATE` without `RECV` = replication failure (usually a missing group); both firing but UI stale = a consumer bug in the `Query<&Component>` reader. Full architecture in [docs/replication.md](docs/replication.md).
+
+## Task -> doc routing
+
+Find your intent, open the doc. Full index and reverse code-path map in [docs/README.md](docs/README.md).
+
+| I want to... | Read |
+| --- | --- |
+| Understand the whole architecture / Bevy app wiring | [docs/architecture.md](docs/architecture.md) |
+| Add a UI overlay, pause, or anything I want to "pause" | [docs/gameplay-gating.md](docs/gameplay-gating.md) |
+| Add a `ClientMessage`/`ServerMessage`, channel, handshake, or admin socket | [docs/networking.md](docs/networking.md) |
+| Add a replicated entity/component or debug stale replication | [docs/replication.md](docs/replication.md) + [docs/playbooks/add-replicated-entity.md](docs/playbooks/add-replicated-entity.md) |
+| Change server-side authoritative game rules or a tick subsystem | [docs/server-authority.md](docs/server-authority.md) |
+| Touch movement, feel, or the trust boundary; debug rubber-banding | [docs/movement.md](docs/movement.md) |
+| Add/edit a tool, ore, resource node, or gather rule | [docs/items-and-resources.md](docs/items-and-resources.md) |
+| Add a tool / ore / recipe / smeltable / deployable (step-by-step) | [docs/playbooks/add-content.md](docs/playbooks/add-content.md) |
+| Touch crafting, furnaces, deployable placement/damage, or loot bags | [docs/crafting-and-deployables.md](docs/crafting-and-deployables.md) |
+| Change building geometry/costs/HP/stability, doors, or Tool Cupboard claims | [docs/base-building-and-claims.md](docs/base-building-and-claims.md) |
+| Touch combat validation, weapon feel, knockback, death/respawn, loot bags | [docs/pvp-combat.md](docs/pvp-combat.md) |
+| Change world generation, biomes, a persisted struct, or save format | [docs/worlds-and-saves.md](docs/worlds-and-saves.md) |
+| Touch chunk membership, AoI ring math, node regrow, or room subscription | [docs/chunks-and-aoi.md](docs/chunks-and-aoi.md) |
+| Make a prop cel-shaded or plan an art-direction shift | [docs/art-direction.md](docs/art-direction.md) + [docs/toon-shading.md](docs/toon-shading.md) |
+| Add/tune a `StandardMaterial` or the PBR/atmosphere lighting | [docs/rendering-materials.md](docs/rendering-materials.md) |
+| Model a held item or icon-matched prop, or generate an icon/texture | [docs/playbooks/art-pipeline.md](docs/playbooks/art-pipeline.md) |
+| Touch voice (mic, Opus, voice channel, spatial mix, device UI) | [docs/voice.md](docs/voice.md) |
+| Add a screen, modal, or egui UI; find where a UI surface lives | [docs/ui-and-client.md](docs/ui-and-client.md) |
+| Profile a frame spike or add O(live-entities)-per-tick work | [docs/profiling.md](docs/profiling.md) |
+| Change release-asset names, self-update, changelog modals, or installers | [docs/updates-and-distribution.md](docs/updates-and-distribution.md) |
+| Launch, drive, screenshot, or assert on the running game | [docs/headless-agent-testing.md](docs/headless-agent-testing.md) |
+| Run or modify the two-client multiplayer-test helper | [docs/multiplayer-testing.md](docs/multiplayer-testing.md) |
+| Build, run, test, profile, or release (which `./cli` does what) | [docs/build-and-dev.md](docs/build-and-dev.md) |
+| Check a naming/structure convention before committing | [docs/code-style.md](docs/code-style.md) |
+| Understand intent, scope, the core loop, or what is deliberately absent | [docs/game-design.md](docs/game-design.md) |
+
+## Build, test, lint
+
+`./cli check` (cargo check), `./cli test`, `./cli lint` (fmt check + clippy), `./cli ci` (all three). Run the game with `./cli dev` (or `./cli dev-fast` for faster incremental rebuilds) and the two-client visual harness with `./cli multiplayer-test`. Fuller `./cli` surface and the rest of the doc index are in [docs/README.md](docs/README.md).
