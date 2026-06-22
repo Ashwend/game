@@ -100,11 +100,7 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
         }
     }
 
-    let wheel_delta = params
-        .mouse_wheel
-        .read()
-        .map(|event| event.y.signum() as i8)
-        .sum::<i8>();
+    let wheel_delta = wheel_step(params.mouse_wheel.read().map(|event| (event.x, event.y)));
     if wheel_delta != 0 {
         // Wheel scrolling always lands on a different slot (the offset
         // wraps), so it always ticks.
@@ -371,6 +367,32 @@ const ACTIONBAR_ACTIONS: [KeyAction; ACTIONBAR_SLOT_COUNT] = [
 ];
 
 const _: () = assert!(ACTIONBAR_ACTIONS.len() == ACTIONBAR_SLOT_COUNT);
+
+/// Collapse a frame's mouse-wheel deltas to a single hotbar step (`-1`, `0`, or
+/// `+1`).
+///
+/// Two macOS/winit subtleties make the naive `event.y.signum()` wrong:
+/// 1. Holding **Shift** makes the platform deliver the wheel as a *horizontal*
+///    scroll, so the magnitude lands on `event.x` and `event.y` becomes `0.0`.
+///    Reading only `y` would then see nothing meaningful from a Shift+scroll.
+/// 2. `f32::signum(0.0)` returns `+1.0` (it is a two-way sign, never `0`). So the
+///    old per-event `event.y.signum()` mapped every Shift+scroll event (with
+///    `y == 0.0`) to `+1`, the frame summed positive, and the hotbar locked to a
+///    single direction regardless of which way the user scrolled.
+///
+/// Fix: read whichever axis carries the gesture, accumulate the signed
+/// magnitude, and sign the *total* once. A genuinely empty frame sums to `0.0`
+/// and yields `0` (no step), exactly as before.
+fn wheel_step(deltas: impl Iterator<Item = (f32, f32)>) -> i8 {
+    let raw: f32 = deltas.map(|(x, y)| if y != 0.0 { y } else { x }).sum();
+    if raw > 0.0 {
+        1
+    } else if raw < 0.0 {
+        -1
+    } else {
+        0
+    }
+}
 
 fn actionbar_key_pressed(
     keys: &ButtonInput<KeyCode>,

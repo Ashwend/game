@@ -54,20 +54,22 @@ pub(crate) const DROPPED_BAG_COLOR: Color = Color::srgb(0.42, 0.31, 0.18);
 pub(crate) const HELD_BAG_COLOR: Color = Color::srgb(0.50, 0.38, 0.24);
 pub(crate) const VERTEX_MATERIAL_COLOR: Color = Color::WHITE;
 
-/// Build one toony tall-grass (hay) material from a seed-headed tuft card. The
-/// near-white base lets the painted texture's bright green read; alpha-masked
-/// for the blade silhouette, double-sided thin ribbons, matte, with a faint
-/// green self-lift so the harvestable plant stays visible at dusk.
-fn hay_tall_grass_material(tex: Handle<Image>) -> StandardMaterial {
-    StandardMaterial {
-        base_color: Color::srgb(0.86, 0.97, 0.80),
-        base_color_texture: Some(tex),
-        emissive: LinearRgba::rgb(0.008, 0.020, 0.006),
-        alpha_mode: AlphaMode::Mask(0.4),
-        cull_mode: None,
-        perceptual_roughness: 0.95,
-        reflectance: 0.04,
-        ..default()
+/// Build one toony tall-grass (hay) material from a seed-headed tuft card. It is
+/// the shared cel-shaded [`ToonMaterial`], so the harvestable plant is lit by the
+/// real PBR sun + atmosphere IBL + day/night exposure exactly like the cosmetic
+/// detail grass, the trees, and the ore nodes (the old plain `StandardMaterial`
+/// sat outside that PBR-then-posterise path and read flat against the cel world).
+/// `params`: `x = 3` cel bands (matches the detail grass), `y = 0.4` is the alpha
+/// cutoff that turns this into an alpha-masked, double-sided card (the blade
+/// silhouette lives in the texture's alpha), `z = 0` disables the ink-edge outline
+/// (grass blades want no drawn silhouette). The painted texture supplies the green;
+/// the mesh COLOR_0 root→tip ramp tints it (`detail * COLOR_0`).
+fn hay_tall_grass_material(tex: Handle<Image>) -> ToonMaterial {
+    ToonMaterial {
+        detail: tex,
+        params: Vec4::new(3.0, 0.4, 0.0, 2.0),
+        tex_scale: 1.0, // the hay card carries its own UVs; triplanar scale unused
+        fade: 1.0,
     }
 }
 
@@ -172,12 +174,12 @@ pub(crate) struct ResourceVisualAssets {
     /// (see [`ToonMaterial`] and `art/ore/build_ore.py`).
     pub(crate) ore_toon_material: Handle<ToonMaterial>,
     pub(crate) vertex_material: Handle<StandardMaterial>,
-    /// Warm, alpha-masked material for the harvestable hay tuft: the shared
-    /// grass-tuft texture tinted toward straw so it reads distinct from the
-    /// cosmetic detail grass (see [`build_hay_tuft_mesh`]).
-    /// Three toony tall-grass materials (each a different seed-headed tuft card);
-    /// a hay node picks one by `id % 3` so the harvestable plants vary.
-    pub(crate) hay_grass_materials: [Handle<StandardMaterial>; 3],
+    /// Cel-shaded ([`ToonMaterial`]) alpha-masked cards for the harvestable hay
+    /// tuft: the shared grass-tuft texture, lit by the same PBR-then-posterise path
+    /// as the detail grass and trees (see [`build_hay_tuft_mesh`]). Three variants
+    /// (each a different seed-headed tuft card); a hay node picks one by `id % 3`
+    /// so the harvestable plants vary.
+    pub(crate) hay_grass_materials: [Handle<ToonMaterial>; 3],
     /// Cel-shaded ([`ToonMaterial`]) tree bark + canopy foliage, one per species
     /// per surface, shared by every instance so the forest batches by
     /// mesh+material. Built from the embedded `textures/trees/*.png` painted
@@ -709,12 +711,12 @@ pub(crate) fn setup_scene(
         hay_grass_mesh: meshes.add(build_hay_tuft_mesh(1.0, 0.42, 3)),
         // One shared cel-shaded material for all four ores. The hand-painted rock
         // texture is shared; the per-mineral colour is the glb COLOR_0. params =
-        // (cel band count, ambient floor, ink-edge strength, ink-edge width exp).
-        // Harder cartoon: 3 bands + a strong dark silhouette edge. Ambient floor
-        // lifted so the shadow bands read brighter (the stone was reading dark).
+        // (cel band count, alpha cutoff, ink-edge strength, ink-edge width exp).
+        // Harder cartoon: 3 bands + a strong dark silhouette edge. Alpha cutoff 0
+        // keeps the solid boulder opaque (only the grass-card tufts mask).
         ore_toon_material: toon_materials.add(ToonMaterial {
             detail: ore_rock_tex.clone(),
-            params: Vec4::new(3.0, 0.42, 0.8, 2.2),
+            params: Vec4::new(3.0, 0.0, 0.8, 2.2),
             tex_scale: 1.0, // ore glbs carry their own UVs; triplanar scale unused
             fade: 1.0,
         }),
@@ -729,13 +731,13 @@ pub(crate) fn setup_scene(
         // harvestable plants vary instead of being one repeated card. Sources:
         // `art/textures/grass/tall_{1,2,3}.png` -> `textures/tall_grass_{1,2,3}.png`.
         hay_grass_materials: [
-            materials.add(hay_tall_grass_material(
+            toon_materials.add(hay_tall_grass_material(
                 asset_server.load(embedded_asset_path("textures/tall_grass_1.png")),
             )),
-            materials.add(hay_tall_grass_material(
+            toon_materials.add(hay_tall_grass_material(
                 asset_server.load(embedded_asset_path("textures/tall_grass_2.png")),
             )),
-            materials.add(hay_tall_grass_material(
+            toon_materials.add(hay_tall_grass_material(
                 asset_server.load(embedded_asset_path("textures/tall_grass_3.png")),
             )),
         ],
@@ -751,13 +753,13 @@ pub(crate) fn setup_scene(
         // docs/toon-shading.md.
         pine_bark_material: toon_materials.add(ToonMaterial {
             detail: pine_bark_tex.clone(),
-            params: Vec4::new(3.0, 1.0, 0.55, 2.6),
+            params: Vec4::new(3.0, 0.0, 0.55, 2.6),
             tex_scale: 1.0,
             fade: 1.0,
         }),
         birch_bark_material: toon_materials.add(ToonMaterial {
             detail: birch_bark_tex,
-            params: Vec4::new(3.0, 1.0, 0.55, 2.6),
+            params: Vec4::new(3.0, 0.0, 0.55, 2.6),
             tex_scale: 1.0,
             fade: 1.0,
         }),
@@ -767,13 +769,13 @@ pub(crate) fn setup_scene(
         // it dark (lower) -> light (crown).
         pine_foliage_material: toon_materials.add(ToonMaterial {
             detail: pine_foliage_tex,
-            params: Vec4::new(3.0, 1.0, 0.7, 2.0),
+            params: Vec4::new(3.0, 0.0, 0.7, 2.0),
             tex_scale: 1.0,
             fade: 1.0,
         }),
         birch_foliage_material: toon_materials.add(ToonMaterial {
             detail: birch_foliage_tex,
-            params: Vec4::new(3.0, 1.0, 0.7, 2.0),
+            params: Vec4::new(3.0, 0.0, 0.7, 2.0),
             tex_scale: 1.0,
             fade: 1.0,
         }),
@@ -783,7 +785,7 @@ pub(crate) fn setup_scene(
         // rest so a leafless snag still belongs to the family.
         dead_bark_material: toon_materials.add(ToonMaterial {
             detail: pine_bark_tex,
-            params: Vec4::new(3.0, 1.0, 0.5, 2.6),
+            params: Vec4::new(3.0, 0.0, 0.5, 2.6),
             tex_scale: 1.0,
             fade: 1.0,
         }),
@@ -926,25 +928,26 @@ pub(crate) fn setup_scene(
         // wood / stone / fabric line-art mapped by the models' baked box-projected
         // UVs (tex_scale is the dead triplanar fallback, unused now the props
         // carry UVs). The deployables are mostly flat-faced boxes, so they run a
-        // PUNCHIER cel than the rounded ore nodes (lower ambient floor for harder
-        // plane-to-plane contrast, a full-strength + wider ink edge so every
-        // beveled corner reads as a drawn outline). See docs/toon-shading.md
-        // "flat-surface cel banding". Ore keeps its softer params.
+        // PUNCHIER cel than the rounded ore nodes (more cel bands / a full-strength
+        // + wider ink edge so every beveled corner reads as a drawn outline). See
+        // docs/toon-shading.md "flat-surface cel banding". Ore keeps its softer
+        // params. Alpha cutoff (params.y) stays 0: these are opaque solids, only
+        // the grass-card tufts mask.
         toon_wood_material: toon_materials.add(ToonMaterial {
             detail: deployable_wood_tex.clone(),
-            params: Vec4::new(3.0, 0.46, 1.0, 1.4),
+            params: Vec4::new(3.0, 0.0, 1.0, 1.4),
             tex_scale: 1.5,
             fade: 1.0,
         }),
         toon_stone_material: toon_materials.add(ToonMaterial {
             detail: deployable_stone_tex.clone(),
-            params: Vec4::new(3.0, 0.46, 1.0, 1.4),
+            params: Vec4::new(3.0, 0.0, 1.0, 1.4),
             tex_scale: 1.5,
             fade: 1.0,
         }),
         toon_fabric_material: toon_materials.add(ToonMaterial {
             detail: deployable_fabric_tex.clone(),
-            params: Vec4::new(3.0, 0.46, 1.0, 1.4),
+            params: Vec4::new(3.0, 0.0, 1.0, 1.4),
             tex_scale: 1.5,
             fade: 1.0,
         }),

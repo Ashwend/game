@@ -30,7 +30,9 @@
 
 // Material bind group.
 //   params.x = cel band count (fewer = harder steps)
-//   params.y = unused (was the flat ambient floor; PBR now supplies ambient via IBL)
+//   params.y = alpha-mask cutoff (0 = opaque/off; >0 = discard texture alpha below
+//              it, for the double-sided grass-card tufts). Was the flat ambient
+//              floor; PBR now supplies ambient via IBL.
 //   params.z = ink-edge strength (dark silhouette outline; 0 = off)
 //   params.w = ink-edge width exponent (smaller = wider edge)
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var detail_tex: texture_2d<f32>;
@@ -66,7 +68,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // accessing `in.uv` on a mesh without TEXCOORD_0 fails to compile (the bug
     // that left the deployable bodies invisible while still casting a shadow).
 #ifdef VERTEX_UVS_A
-    let tex = textureSample(detail_tex, detail_samp, in.uv).rgb;
+    // UV'd meshes (ore glbs, grass cards) sample the detail texture directly. The
+    // grass-card tufts carry their blade silhouette in the texture ALPHA: when
+    // params.y (the mask cutoff) is set, discard the transparent gaps so the card
+    // reads as a cut-out tuft instead of an opaque rectangle. Opaque props leave
+    // params.y at 0 so nothing is discarded.
+    let tex_sample = textureSample(detail_tex, detail_samp, in.uv);
+    let tex = tex_sample.rgb;
+    if params.y > 0.0 && tex_sample.a < params.y {
+        discard;
+    }
 #else
     // No mesh UVs (deployable props): world-space triplanar projection so the
     // detail texture wraps every face without an unwrap. Blend the three axis
@@ -129,9 +140,20 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
     rgb = max(mix(vec3<f32>(luma, luma, luma), rgb, TOON_SATURATION), vec3<f32>(0.0));
 
+    // Output alpha: opaque props (and the felling dissolve) ride `lit.a * fade`.
+    // Alpha-masked grass cards instead pass the texture's silhouette alpha through
+    // so MSAA alpha-to-coverage can soften the cut-out edge (matches the detail
+    // grass shader); `fade` stays 1.0 for them.
+    var out_alpha = lit.a * fade;
+#ifdef VERTEX_UVS_A
+    if params.y > 0.0 {
+        out_alpha = tex_sample.a * fade;
+    }
+#endif
+
     var out: FragmentOutput;
     // `fade` is 1.0 for every static prop; the felling dissolve lowers it so the
     // banded trunk/canopy fade out (its material is in the Blend pass by then).
-    out.color = main_pass_post_lighting_processing(pbr_input, vec4<f32>(rgb, lit.a * fade));
+    out.color = main_pass_post_lighting_processing(pbr_input, vec4<f32>(rgb, out_alpha));
     return out;
 }

@@ -1,4 +1,8 @@
-use bevy::{camera::visibility::VisibilityRange, light::NotShadowCaster, prelude::*};
+use bevy::{
+    camera::visibility::VisibilityRange,
+    light::{NotShadowCaster, NotShadowReceiver},
+    prelude::*,
+};
 
 use crate::{
     app::{
@@ -95,9 +99,17 @@ pub(super) fn spawn_resource_node_entity(
         let foliage = tree_foliage_visual(assets, model);
         let lod_mesh = tree_lod_mesh(assets, model);
         commands.entity(entity).with_children(|parent| {
-            // Alpha-masked needle/leaf canopy, drawn near (hidden with the trunk
-            // past the LOD distance). Casts shadows like the trunk so a forest
-            // floor stays shaded up close.
+            // Solid faceted canopy, drawn near (hidden with the trunk past the LOD
+            // distance). Casts shadows like the trunk so a forest floor stays
+            // shaded up close, but does NOT receive them: the canopy is a solid
+            // opaque blob whose shading normals are biased up toward the sky (so it
+            // lights soft like a leaf mass), which mis-aims the shadow normal bias
+            // and lets self-shadow acne creep onto its own facets at a high midday
+            // sun. The cel posterise (`toon.wgsl`, 3 hard bands) then snaps that
+            // soft acne into a crisp, wrong-looking shadow band on the canopy. It
+            // is invisible on the smoothly-lit PBR ground but glaring once cel-
+            // quantised, so the canopy opts out of shadow *reception* (it still
+            // casts). See docs/toon-shading.md and the issue notes.
             if let Some((foliage_mesh, foliage_material)) = foliage {
                 parent.spawn((
                     Name::new(format!("Resource Node {id} Canopy")),
@@ -106,6 +118,7 @@ pub(super) fn spawn_resource_node_entity(
                     tree_lod_high_range(),
                     Transform::default(),
                     Visibility::Visible,
+                    NotShadowReceiver,
                 ));
             }
             // Distant low-poly stand-in: one cheap vertex-coloured mesh that
@@ -240,11 +253,11 @@ pub(crate) fn ore_stage_mesh(
     Some(meshes[index].clone())
 }
 
-/// Which material kind a resource-node visual carries. Ore/vein nodes are
-/// cel-shaded ([`ToonMaterial`]); every other model (trees, crude clutter)
-/// stays on a `StandardMaterial`. The spawn sites attach whichever component
-/// type this names, since `MeshMaterial3d<A>` and `MeshMaterial3d<B>` are
-/// distinct components.
+/// Which material kind a resource-node visual carries. Ore/vein nodes, trees, and
+/// the hay tuft are cel-shaded ([`ToonMaterial`]); the remaining crude clutter
+/// (surface stone, branch pile) stays on a `StandardMaterial`. The spawn sites
+/// attach whichever component type this names, since `MeshMaterial3d<A>` and
+/// `MeshMaterial3d<B>` are distinct components.
 pub(crate) enum ResourceNodeMaterial {
     Standard(Handle<StandardMaterial>),
     Toon(Handle<ToonMaterial>),
@@ -296,11 +309,13 @@ pub(crate) fn resource_node_visual(
             assets.branch_pile_mesh.clone(),
             ResourceNodeMaterial::Standard(assets.vertex_material.clone()),
         ),
-        // Tall grass: pick one of the 3 toony seed-headed cards by `id % 3` so a
-        // patch of hay isn't one repeated tuft.
+        // Tall grass: pick one of the 3 cel-shaded seed-headed cards by `id % 3` so
+        // a patch of hay isn't one repeated tuft. Cel-shaded (alpha-masked
+        // `ToonMaterial`) so the tuft is lit by the same PBR sun + day/night
+        // exposure as the detail grass and trees.
         ResourceNodeModel::HayGrass => (
             assets.hay_grass_mesh.clone(),
-            ResourceNodeMaterial::Standard(assets.hay_grass_materials[(id % 3) as usize].clone()),
+            ResourceNodeMaterial::Toon(assets.hay_grass_materials[(id % 3) as usize].clone()),
         ),
     }
 }

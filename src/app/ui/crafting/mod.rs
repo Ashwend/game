@@ -101,6 +101,38 @@ pub(super) fn crafting_body(
             }
         });
 
+    // Keep the wheel working when a recipe-row tooltip is showing. egui's
+    // ScrollArea only consumes the mouse wheel when the pointer's top-most
+    // interactable layer IS the scroll area's own layer (its
+    // `is_hovering_outer_rect` guard fails otherwise). A row's `.on_hover_text`
+    // tooltip is rendered as an interactable `Order::Tooltip` area, so once it
+    // pops up (after the ~0.5s hover delay) under the cursor it becomes that top
+    // layer and the list silently stops reacting to the wheel, the intermittent
+    // "scroll sometimes does nothing" (dragging the bar still works because that
+    // is a direct press, not a hover-routed wheel). When a tooltip is stealing
+    // the layer over the list, apply the wheel to the offset ourselves, mirroring
+    // egui's own `offset -= smooth_scroll_delta` convention. This fires only in
+    // the exact case egui skips, so the wheel is never applied twice.
+    let panel_layer = ui.layer_id();
+    if let Some(pointer) = ui.ctx().pointer_hover_pos()
+        && scroll_output.inner_rect.contains(pointer)
+        && ui.ctx().layer_id_at(pointer) != Some(panel_layer)
+    {
+        let wheel_y = ui.ctx().input(|input| input.smooth_scroll_delta.y);
+        if wheel_y != 0.0
+            && let Some(mut state) =
+                egui::containers::scroll_area::State::load(ui.ctx(), scroll_output.id)
+        {
+            let max_offset =
+                (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
+            state.offset.y = (state.offset.y - wheel_y).clamp(0.0, max_offset);
+            state.store(ui.ctx(), scroll_output.id);
+            // Consume it so no parent scroll area also uses the same delta.
+            ui.ctx()
+                .input_mut(|input| input.smooth_scroll_delta.y = 0.0);
+        }
+    }
+
     // Stash the scroll viewport so the tutorial overlay can clip its recipe
     // outlines to it (a row scrolled out of view must not paint below the panel).
     ui.ctx().memory_mut(|mem| {

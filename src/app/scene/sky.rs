@@ -361,8 +361,21 @@ fn compute_lighting(time: &WorldTime) -> LightingFrame {
 
     // Sun direct illuminance: 0 below the horizon, ramping to peak well above.
     // The pow keeps the sun gentle and shadows long in the first hour.
+    //
+    // `horizon_dim` additionally damps the illuminance while the sun's disc is
+    // still on/near the horizon. The procedural atmosphere in-scatter and the
+    // DistanceFog forward-scatter lobe are both fed by (and scale with) this
+    // illuminance, and both reach maximal optical depth along the grazing horizon
+    // view, so a sun that is still ~2000 lux at the horizon blew the horizon band
+    // to white at dawn/dusk (HDR + bloom then smeared it over the frame). Dimming
+    // the grazing sun cuts that spike at the source. `horizon_dim` reaches 1.0 by
+    // the time the sun clears the fade band (sun_height >= HORIZON_FADE_BAND), so
+    // full daytime brightness and the daylight calibration are unchanged; the
+    // exponent is nudged 0.55 -> 0.9 so the first-hour ramp is a touch steeper
+    // too, keeping the very low sun from over-lighting the scatter.
     let sun_elevation = sun_height.max(0.0).clamp(0.0, 1.0);
-    let sun_illuminance = SUN_PEAK_ILLUMINANCE * sun_elevation.powf(0.55);
+    let horizon_dim = smoothstep(0.0, HORIZON_FADE_BAND, sun_height);
+    let sun_illuminance = SUN_PEAK_ILLUMINANCE * sun_elevation.powf(0.9) * horizon_dim;
 
     // Moonlight only takes over once the sun has set.
     let moon_elevation = moon_height.max(0.0).clamp(0.0, 1.0);

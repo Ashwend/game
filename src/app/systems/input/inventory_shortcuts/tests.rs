@@ -284,3 +284,29 @@ fn dead_lifecycle_matches_dying_check_used_by_the_swing_gate() {
         Some(PlayerLifecycle::Dead { .. })
     ));
 }
+
+#[test]
+fn wheel_step_signs_vertical_scroll_both_ways() {
+    // Plain (no-shift) scroll lands on the Y axis with a real sign.
+    assert_eq!(wheel_step([(0.0, 1.0)].into_iter()), 1);
+    assert_eq!(wheel_step([(0.0, -1.0)].into_iter()), -1);
+    // Pixel-unit trackpad deltas accumulate; only the sign of the total matters.
+    assert_eq!(wheel_step([(0.0, 3.5), (0.0, 2.1)].into_iter()), 1);
+}
+
+#[test]
+fn wheel_step_reads_shift_scroll_off_the_x_axis_both_ways() {
+    // macOS delivers Shift+scroll as horizontal: magnitude on X, Y == 0.0.
+    // The old `event.y.signum()` mapped y==0.0 to +1 and locked the hotbar to
+    // one direction; reading the X axis restores both directions.
+    assert_eq!(wheel_step([(1.0, 0.0)].into_iter()), 1);
+    assert_eq!(wheel_step([(-1.0, 0.0)].into_iter()), -1);
+}
+
+#[test]
+fn wheel_step_is_zero_for_an_empty_or_null_frame() {
+    // No events, and an exactly-zero delta, both mean "no step" (the case the
+    // signum-of-zero bug used to mis-handle as +1).
+    assert_eq!(wheel_step(std::iter::empty()), 0);
+    assert_eq!(wheel_step([(0.0, 0.0)].into_iter()), 0);
+}

@@ -398,19 +398,27 @@ pub(crate) fn build_grass_card_mesh(height: f32, half_width: f32, quads: u32) ->
 }
 
 /// A harvestable hay-grass tuft as crossed textured quads, the **same grass-tuft
-/// texture** as the cosmetic detail grass but bigger and rendered by a plain
-/// `StandardMaterial` (warm-tinted, alpha-masked), so it reads as a distinct
-/// pickable plant while matching the art style.
+/// texture** as the cosmetic detail grass but bigger and cel-shaded by the shared
+/// [`super::super::toon::ToonMaterial`] (alpha-masked card), so it reads as a
+/// distinct pickable plant that is lit by the real PBR sun + day/night exposure
+/// like the rest of the cel world, instead of the old flat `StandardMaterial`.
+///
+/// Each quad is emitted with **both windings** so the card stays visible from
+/// every angle: `ToonMaterial` back-face-culls (ore/trees are closed solids that
+/// want it), so the tuft adds reversed-winding back triangles over the same four
+/// vertices rather than relying on a per-material `cull_mode = None`. The shared
+/// +Y vertex normals give every face the same lit-from-above foliage tone, so the
+/// back faces need no normal flip.
 ///
 /// Vertex colour carries a **root→tip brightness gradient in rgb, alpha pinned to
-/// 1.0**. `StandardMaterial` multiplies vertex colour into the albedo, so the rgb
-/// ramp reproduces the shaded detail grass's root-AO → tip-lift gradient (base
-/// darker, tips brighter) that a flat tint otherwise washes out. Alpha stays
-/// `1.0` on every vertex on purpose: unlike [`build_grass_card_mesh`] (whose
-/// colour alpha is the wind sway weight) the cutout here must come purely from the
-/// texture's alpha, so feeding a 0-at-the-base alpha into the mask would chew the
-/// bottom of the tuft away. The wind sway is applied per-node on the CPU instead
-/// (see `sway_hay_grass_system`), since a `StandardMaterial` can't bend in a shader.
+/// 1.0**. The shader multiplies vertex colour into the albedo, so the rgb ramp
+/// reproduces the shaded detail grass's root-AO → tip-lift gradient (base darker,
+/// tips brighter) that a flat tint otherwise washes out. Alpha stays `1.0` on
+/// every vertex on purpose: unlike [`build_grass_card_mesh`] (whose colour alpha
+/// is the wind sway weight) the cutout here must come purely from the texture's
+/// alpha, so feeding a 0-at-the-base alpha into the mask would chew the bottom of
+/// the tuft away. The wind sway is applied per-node on the CPU instead (see
+/// `sway_hay_grass_system`), since the material can't bend in a shader.
 pub(crate) fn build_hay_tuft_mesh(height: f32, half_width: f32, quads: u32) -> Mesh {
     use std::f32::consts::PI;
     // Albedo multiplier at the blade root; tips stay at 1.0. Mimics the detail
@@ -443,7 +451,22 @@ pub(crate) fn build_hay_tuft_mesh(height: f32, half_width: f32, quads: u32) -> M
             [1.0, 1.0, 1.0, 1.0],
             [1.0, 1.0, 1.0, 1.0],
         ]);
-        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        // Front winding, then the same quad wound in reverse so the card survives
+        // the toon material's back-face cull from the other side (double-sided).
+        indices.extend_from_slice(&[
+            base,
+            base + 1,
+            base + 2,
+            base,
+            base + 2,
+            base + 3,
+            base,
+            base + 2,
+            base + 1,
+            base,
+            base + 3,
+            base + 2,
+        ]);
     }
 
     Mesh::new(

@@ -13,7 +13,7 @@
 //! white `detail`, so the multiply reduces to pure `COLOR_0`, the same result the
 //! old base-white `StandardMaterial` gave. Shader: `assets/shaders/toon.wgsl`.
 //! See [Toon / cel shading](../../../docs/toon-shading.md) for the style + how to
-//! extend it, and [Materials](../../../docs/materials.md) for the
+//! extend it, and [Rendering materials](../../../docs/rendering-materials.md) for the
 //! standalone-Material / Metal bind-group reasoning shared with the terrain
 //! material.
 
@@ -34,8 +34,9 @@ pub(crate) struct ToonMaterial {
     #[sampler(1)]
     pub(crate) detail: Handle<Image>,
     /// Cel tuning, packed so it can be tweaked without a recompile.
-    /// `x = cel band count`, `y = unused` (was the flat ambient floor; PBR now
-    /// supplies ambient via IBL), `z = ink-edge strength`,
+    /// `x = cel band count`, `y = alpha-mask cutoff` (0 = opaque; >0 turns the
+    /// material into an alpha-masked, double-sided grass-card tuft, discarding
+    /// texture alpha below the cutoff), `z = ink-edge strength`,
     /// `w = ink-edge width exponent`.
     #[uniform(2)]
     pub(crate) params: Vec4,
@@ -63,8 +64,15 @@ impl Material for ToonMaterial {
     /// The felling dissolve lowers `fade` on its private clone, flipping that
     /// one material into the transparent pass for the fade-out (mirrors what the
     /// old `StandardMaterial` trunk did when it set `AlphaMode::Blend`).
+    ///
+    /// Grass-card tufts (`params.y > 0`) instead use [`AlphaMode::Mask`] with the
+    /// cutoff in `params.y`: the silhouette is a hard cut-out, so the card draws
+    /// in the opaque/alpha-mask pass (depth-correct, no sort) while the shader
+    /// discards the transparent gaps.
     fn alpha_mode(&self) -> AlphaMode {
-        if self.fade < 1.0 {
+        if self.params.y > 0.0 {
+            AlphaMode::Mask(self.params.y)
+        } else if self.fade < 1.0 {
             AlphaMode::Blend
         } else {
             AlphaMode::Opaque
