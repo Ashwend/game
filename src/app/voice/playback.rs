@@ -152,7 +152,11 @@ impl VoicePlayback {
         match ready_rx.recv() {
             Ok(Ok(())) => {}
             Ok(Err(msg)) => return Err(anyhow!(msg)),
-            Err(_) => return Err(anyhow!("voice playback thread exited before reporting status")),
+            Err(_) => {
+                return Err(anyhow!(
+                    "voice playback thread exited before reporting status"
+                ));
+            }
         }
 
         Ok(Self {

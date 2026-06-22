@@ -257,7 +257,14 @@ mod tests {
         };
         ctx.run(input, |ctx| {
             options_ui(
-                ctx, menu, settings, state, keys, None, back_target, &mut voice_io,
+                ctx,
+                menu,
+                settings,
+                state,
+                keys,
+                None,
+                back_target,
+                &mut voice_io,
             );
         })
     }
