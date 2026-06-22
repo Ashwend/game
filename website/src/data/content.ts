@@ -1,11 +1,6 @@
 // All marketing copy + asset references in one typed place, so the section
 // components stay layout-only.
 
-export interface Shot {
-  readonly src: string
-  readonly alt: string
-}
-
 /** The OS families we ship desktop builds for. Used to pick a sensible default
  *  download from the visitor's browser. */
 export type Platform = 'windows' | 'macos' | 'linux'
@@ -80,35 +75,4 @@ export const HERO_META: ReadonlyArray<string> = [
   'Open-world',
   'PvP',
   'First-person',
-]
-
-// Ordered so the first row mixes light levels: the dark night shots read as
-// near-black rectangles at thumbnail size, so they don't get to lead. The
-// brighter daylight and open-plains shots take the top row; the night cabin
-// and the dimmer UI capture sit in the second.
-export const GALLERY: ReadonlyArray<Shot> = [
-  {
-    src: '/img/gathering.jpg',
-    alt: 'Mining stone with a pickaxe, a timber base on the horizon',
-  },
-  {
-    src: '/img/dawn-plains.jpg',
-    alt: 'Dawn mist burning off the open plains',
-  },
-  {
-    src: '/img/pine-mist.jpg',
-    alt: 'Lone pines standing in the morning fog',
-  },
-  {
-    src: '/img/furnace-lit.jpg',
-    alt: 'A lit furnace smelting ore beside a workbench',
-  },
-  {
-    src: '/img/cabin-night.jpg',
-    alt: 'A torch-lit timber cabin holding back the night',
-  },
-  {
-    src: '/img/inventory.jpg',
-    alt: 'The inventory and crafting menu, mid-session',
-  },
 ]

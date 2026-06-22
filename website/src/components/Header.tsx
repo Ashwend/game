@@ -18,12 +18,6 @@ export function Header() {
 
         <nav className="flex items-center gap-2 sm:gap-6" aria-label="Primary">
           <a
-            href="#gallery"
-            className="hidden text-sm text-muted transition-colors hover:text-fg sm:block"
-          >
-            Screens
-          </a>
-          <a
             href={siteConfig.discordInviteUrl}
             target="_blank"
             rel="noreferrer"
