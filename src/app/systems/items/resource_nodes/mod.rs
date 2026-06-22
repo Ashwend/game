@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use crate::{
     app::{
         audio::PlaySound,
-        scene::{ImpactEffectAssets, NetworkResourceNode, ResourceVisualAssets},
+        scene::{ImpactEffectAssets, NetworkResourceNode, ResourceVisualAssets, ToonMaterial},
         state::{ClientRuntime, PredictionState},
     },
     protocol::{ResourceNodeId, Vec3Net},
@@ -134,10 +134,11 @@ type ResourceEntityQuery<'w, 's> = Query<
     (
         &'static NetworkResourceNode,
         &'static Mesh3d,
-        // Every node carries a `StandardMaterial`; `Option` only so the query stays
-        // robust if a future node type omits one. Only the tree-felling death effect
-        // reads it; crude pickups ignore it.
-        Option<&'static MeshMaterial3d<StandardMaterial>>,
+        // Trees + ore/vein nodes carry a cel-shaded `ToonMaterial`; crude nodes
+        // (branch piles, surface stones, hay) carry a `StandardMaterial` and so
+        // match `None` here. Only the tree-felling death effect reads it (to clone
+        // for the fade); ore/crude deaths ignore it, so `None` is harmless.
+        Option<&'static MeshMaterial3d<ToonMaterial>>,
         &'static Transform,
     ),
 >;
@@ -163,7 +164,7 @@ pub(crate) fn apply_resource_nodes_system(
     assets: Res<ResourceVisualAssets>,
     impact_assets: Res<ImpactEffectAssets>,
     mut play: MessageWriter<PlaySound>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<ToonMaterial>>,
     mut camera_kick: ResMut<crate::app::systems::CameraImpactKick>,
     mut entities: ResMut<ResourceNodeEntities>,
     prediction: Res<PredictionState>,
@@ -410,7 +411,7 @@ fn despawn_with_death_effect(
     assets: &ResourceVisualAssets,
     impact_assets: &ImpactEffectAssets,
     play: &mut MessageWriter<PlaySound>,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<ToonMaterial>,
     camera_kick: &mut crate::app::systems::CameraImpactKick,
     resource_entities: &ResourceEntityQuery,
     player_position: Option<Vec3>,
@@ -444,16 +445,16 @@ fn fire_node_death_effect(
     assets: &ResourceVisualAssets,
     impact_assets: &ImpactEffectAssets,
     play: &mut MessageWriter<PlaySound>,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<ToonMaterial>,
     camera_kick: &mut crate::app::systems::CameraImpactKick,
     resource_entities: &ResourceEntityQuery,
     player_position: Option<Vec3>,
     entity: Entity,
 ) {
     if let Ok((resource, mesh, material, transform)) = resource_entities.get(entity) {
-        // Only the tree-felling path uses the material (trees always carry a
-        // `StandardMaterial`); crude/ore deaths ignore it, so a default handle
-        // is fine for the materialless hay-grass node.
+        // Only the tree-felling path uses the material (trees carry a cel-shaded
+        // `ToonMaterial`); crude/ore deaths ignore it, so a default handle is fine
+        // for the crude nodes that match `None` (they carry a `StandardMaterial`).
         let material = material.map(|m| m.0.clone()).unwrap_or_default();
         // The node entity carries the trunk mesh; the alpha-masked canopy lives on
         // a child. Re-derive it from the model so the felling tree falls + fades
@@ -491,7 +492,7 @@ fn resolve_pending_depletions(
     assets: &ResourceVisualAssets,
     impact_assets: &ImpactEffectAssets,
     play: &mut MessageWriter<PlaySound>,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<ToonMaterial>,
     camera_kick: &mut crate::app::systems::CameraImpactKick,
     resource_entities: &ResourceEntityQuery,
     entities: &mut ResourceNodeEntities,
@@ -565,7 +566,7 @@ fn reconcile_predicted_pickups(
     assets: &ResourceVisualAssets,
     impact_assets: &ImpactEffectAssets,
     play: &mut MessageWriter<PlaySound>,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<ToonMaterial>,
     camera_kick: &mut crate::app::systems::CameraImpactKick,
     resource_entities: &ResourceEntityQuery,
     entities: &mut ResourceNodeEntities,

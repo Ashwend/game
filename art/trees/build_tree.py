@@ -1,54 +1,45 @@
 #!/usr/bin/env python3
-"""Build an Ashwend tree as a Blender glb: a textured bark TRUNK (round, tapered,
-UV-wrapped, real smooth normals) + a textured FOLIAGE canopy (capless cone stack
-for pine / leaf blobs for birch, tiled UV, UP-BIASED custom vertex normals so it
-lights soft like foliage, bottom rim feathered via vertex-colour alpha + Mask).
+"""Build an Ashwend tree as a cel-shaded (toon/anime) Blender glb: a textured bark
+TRUNK (round, tapered, UV-wrapped, smooth normals) + a SOLID faceted FOLIAGE
+canopy (lumpy cone stack for pine / octa leaf blobs for birch, tiled UV,
+UP-BIASED custom vertex normals so it lights soft like a leaf mass). The canopy
+is OPAQUE solid geometry, not alpha cards: trees now join the cel family (ore
+nodes + deployables), so the in-game `ToonMaterial` bands the real lighting +
+draws the ink silhouette and the painted detail texture only adds grain over the
+glb COLOR_0 (`texture * COLOR_0`, exactly the ore rock trick).
 
-Two separate objects -> glb mesh0 = trunk, mesh1 = foliage. Rust loads each mesh
-and assigns its own shared StandardMaterial (bark opaque / foliage Mask).
+Two separate objects -> glb mesh0 = trunk, mesh1 = foliage. `export_materials=
+'NONE'`, so Rust attaches the shared `ToonMaterial` (bark / foliage / dead-bark)
+at spawn (see src/app/scene/assets.rs + .../resource_nodes/spawn.rs). The canopy
+is single-sided in-game, so `build_foliage` runs `recalc_face_normals` to face
+every shell outward.
 
 Run headless:
-  Blender --background --python build_tree.py -- <species> <size> <out.glb> [preview.png] [bark.png needles.png]
-species: pine|birch   size: small|medium|large
-Geometry constants mirror src/app/scene/mesh/trees.rs exactly (silhouette parity).
+  Blender --background --python build_tree.py -- <species> <size> <out.glb> [preview.png] [bark.png foliage.png]
+species: pine|birch|dead   size: small|medium|large
+Geometry constants mirror src/app/scene/mesh/trees.rs + tree_mesh_height (heights
+pine 4.5/6.6/9.1, birch 3.6/5.3/7.15) for silhouette + LOD/collider parity.
 
 ------------------------------------------------------------------------------
-FULL PIPELINE (Draw Things -> OpenCV -> Blender), reproducible from scratch.
-GEN = ~/.claude/skills/lowpoly-game-assets/scripts/generate.py (FLUX schnell).
-FOL = art/textures/trees/make_foliage.py (OpenCV alpha/seamless/de-grey).
-Masters of the chosen raw gens are kept beside this file (*_master.png).
+FULL PIPELINE (ComfyUI Flux -> OpenCV -> Blender), reproducible from scratch:
 
-1. Bark (opaque, tiled): seamless texture gens, pick best, tone down, 512:
-   GEN texture --subject "pine conifer tree bark, deeply furrowed reddish-brown
-       plates, vertical ridges" --extra "rugged organic bark grooves, weathered,
-       naturalistic but stylized" --out pine_bark.png --size 512 --variants 3 --seed 7001
-   magick <chosen> -resize 512x512 -modulate 96,82,100 -brightness-contrast -4x4 \
-       assets/textures/trees/bark_pine.png
-   GEN texture --subject "birch tree bark" --extra "pale warm grey-white papery
-       bark, thin dark horizontal lenticel bands, smooth, no vertical furrows" \
-       --out birch_bark.png --size 512 --variants 3 --seed 8100
-   magick <chosen> -resize 512x512 -modulate 90,88,100 assets/textures/trees/bark_birch.png
+1. References + measurement (proportions, not eyeballed):
+   python3 art/comfy_gen.py "<anime cel tree prompt>, white background" \
+       art/trees/refs/<name>.png 768 1024        # ComfyUI Flux Schnell, ~18s
+   python3 art/trees/measure_tree.py art/trees/refs/<name>.png  # silhouette -> dims
+   (pine_c1 = tiered conifer + visible trunk, birch_c2 = oval blob crown.)
 
-2. Canopy (alpha-mask): raw foliage patch gens, then FOL keys greenness->alpha,
-   cleans, RGB-bleeds, de-greys, makes seamless, 512:
-   GEN texture --no-seamless --subject "dense evergreen pine needle sprigs" \
-       --extra "clustered conifer needle fronds, muted sage and forest green,
-       irregular gaps, plain pale grey background, no trunk, no sky" \
-       --out needles_raw.png --size 1024 --variants 4 --seed 4200
-   FOL --src needles_master.png --out assets/textures/trees/needles.png --thr 12 \
-       --lum-floor 18 --degrey 0.28 --degrey-color 60 92 50 --sat 0.95 --val 0.96 --size 512
-   GEN texture --no-seamless --subject "small rounded birch leaves" --extra
-       "clustered deciduous foliage, soft yellow-green and olive, irregular leaf
-       clumps with gaps, plain pale grey background, no trunk, no sky" \
-       --out leaves_raw.png --size 1024 --variants 4 --seed 5300
-   FOL --src leaves_master.png --out assets/textures/trees/leaves.png --thr 8 \
-       --lum-floor 38 --hue 16 --degrey 0.18 --degrey-color 70 110 55 --sat 0.8 --val 0.95 --size 512
+2. Textures (toony, seamless, opaque): generated + seam-healed + contrast-softened
+   straight into assets/textures/trees/ by:
+   python3 art/trees/make_tree_textures.py
+   -> bark_pine, bark_birch (cel bark) + foliage_pine, foliage_birch (needle/leaf
+   grain). Soft + low-contrast so they ride COLOR_0 under the cel bands.
 
-3. Models: for species in pine birch, size in small medium large:
+3. Models: for species in pine birch dead, size in small medium large:
    Blender --background --python art/trees/build_tree.py -- <species> <size> \
        assets/trees/<species>_<size>/model.glb "" \
-       assets/textures/trees/bark_<species>.png assets/textures/trees/<needles|leaves>.png
-   (export_materials='NONE' -> ~10 KB glbs; Rust builds the shared materials.)
+       assets/textures/trees/bark_<species>.png assets/textures/trees/foliage_<species>.png
+   (the `build_trees.sh` driver beside this file does all 9 at once.)
 
 4. cargo build re-embeds assets/; verify in-game with the headless harness.
 """
@@ -70,13 +61,15 @@ BARK_V_TILE = 2.0         # metres per bark vertical tile
 # real light/shadow FORM (top brighter, flanks darker) instead of washing out flat;
 # still high enough that facets facing away from the sun don't go dark-walled.
 UP_BIAS = 0.5
-FEATHER_FZ = 0.16         # fraction of cone height that feathers at the base
-RIM_ALPHA = 0.0           # vertex alpha at the feathered base rim
 # Per-vertex radial jitter (fraction of radius) that breaks the smooth lathe
 # cone / octa blob into a lumpy, clustered foliage mass with a ragged silhouette,
 # so the canopy reads as needle/leaf clumps rather than a textured geometric solid.
 CONE_JITTER = 0.26
 BLOB_JITTER = 0.30
+# Dead-snag trunk COLOR_0 (LINEAR): a cool, desaturated grey so the bark detail
+# texture * COLOR_0 reads as weathered dead wood through the cel material, instead
+# of the warm near-white the LIVE trunk uses to show full reddish/white bark.
+DEAD_GREY = (0.50, 0.49, 0.50)
 
 
 def hash01(a, b):
@@ -249,83 +242,60 @@ def build_trunk():
     return obj
 
 
-# ---- FOLIAGE: pine cones ------------------------------------------------------
+# ---- FOLIAGE: pine cones (SOLID, cel-shaded) ----------------------------------
 def add_cone(bm, uv, col, base_z, h, R, segs, tone, xoff, yoff, vnorm):
+    """A SOLID lumpy cone: jittered base ring -> apex, closed underneath with a
+    fan cap. Opaque (no alpha cards); the cel `ToonMaterial` bands the lit cone +
+    draws the ink silhouette, the foliage detail texture only adds needle grain
+    over the COLOR_0 tone. Up-biased vertex normals keep it lighting soft like a
+    leaf mass instead of facet-sparkling. `build_foliage` runs
+    `recalc_face_normals` afterwards so the single-sided cull sees outward faces."""
     cx, cy = xoff, yoff
-    fz = FEATHER_FZ
-    z_base = base_z
-    z_sh = base_z + fz * h
-    r_sh = R * (1 - fz)
     apex = bm.verts.new((cx, cy, base_z + h))
-    slant_full = math.hypot(h, R)
-    slant_sh = math.hypot(h * (1 - fz), r_sh - 0) * 0  # placeholder
-    # V measured as distance from apex along slant / texel
-    v_base = slant_full / FOLIAGE_TEXEL
-    v_sh = (slant_full * (1 - fz)) / FOLIAGE_TEXEL
-    base_ring, sh_ring = [], []
+    centre = bm.verts.new((cx, cy, base_z))       # bottom-cap hub (closes the cone)
+    base_ring = []
     for i in range(segs):
         a = i / segs * math.tau
-        # Per-segment radial + height jitter so the cone is a lumpy clustered
+        # Per-segment radial + height jitter so the cone reads as a lumpy clustered
         # needle mass with a ragged silhouette, not a smooth lathe surface. Seeded
-        # on (base_z, i) so it's stable. The base ring (silhouette) jitters most.
+        # on (base_z, i) so the build stays reproducible.
         jb = 1.0 + CONE_JITTER * (hash01(base_z * 3.1, i) * 2.0 - 1.0)
-        js = 1.0 + CONE_JITTER * 0.6 * (hash01(base_z * 5.7, i * 1.3) * 2.0 - 1.0)
         dz = (hash01(base_z * 2.3, i * 2.1) - 0.5) * h * 0.10
         base_ring.append(bm.verts.new(
-            (cx + math.cos(a) * R * jb, cy + math.sin(a) * R * jb, z_base + dz)))
-        sh_ring.append(bm.verts.new(
-            (cx + math.cos(a) * r_sh * js, cy + math.sin(a) * r_sh * js, z_sh + dz * 0.5)))
+            (cx + math.cos(a) * R * jb, cy + math.sin(a) * R * jb, base_z + dz)))
     bm.verts.ensure_lookup_table()
     circ = math.tau * R / FOLIAGE_TEXEL
+    v_slant = math.hypot(h, R) / FOLIAGE_TEXEL
     t = TONE[tone]
+    tb = t * 0.80                                  # underside a touch darker for depth
 
     def setnorm(v):
         d = Vector((v.co.x - cx, v.co.y - cy, 0.0))
         d = d.normalized() if d.length > 1e-5 else Vector((0, 0, 1))
         n = (d * (1 - UP_BIAS) + Vector((0, 0, 1)) * UP_BIAS).normalized()
         vnorm[v.index] = n
-    # feather band: base_ring -> sh_ring (quads), base alpha = RIM_ALPHA
+    # Cone sides: base_ring -> apex (tris), apex U = slice midpoint (no pinch).
     for i in range(segs):
         j = (i + 1) % segs
-        a, b, c, d = base_ring[i], base_ring[j], sh_ring[j], sh_ring[i]
-        f = bm.faces.new((a, b, c, d))
+        f = bm.faces.new((base_ring[i], base_ring[j], apex))
         u0 = i / segs * circ; u1 = (i + 1) / segs * circ
-        uvs = [(u0, v_base), (u1, v_base), (u1, v_sh), (u0, v_sh)]
-        alphas = [RIM_ALPHA, RIM_ALPHA, 1.0, 1.0]
-        for k, lp in enumerate(f.loops):
-            lp[uv].uv = uvs[k]
-            lp[col] = (t, t, t, alphas[k])
-        for v in (a, b, c, d): setnorm(v)
-    # upper: sh_ring -> apex (tris) with apex U = slice midpoint (no pinch)
-    for i in range(segs):
-        j = (i + 1) % segs
-        a, b = sh_ring[i], sh_ring[j]
-        f = bm.faces.new((a, b, apex))
-        u0 = i / segs * circ; u1 = (i + 1) / segs * circ
-        uvs = [(u0, v_sh), (u1, v_sh), ((u0 + u1) * 0.5, 0.0)]
+        uvs = [(u0, v_slant), (u1, v_slant), ((u0 + u1) * 0.5, 0.0)]
         for k, lp in enumerate(f.loops):
             lp[uv].uv = uvs[k]
             lp[col] = (t, t, t, 1.0)
-        setnorm(a); setnorm(b)
-    vnorm[apex.index] = Vector((0, 0, 1))
-    # Soft bottom cap: a fan from a centre vertex (opaque) to the base ring
-    # (alpha 0). Fills the hollow cone interior so the canopy doesn't read as a
-    # see-through shell from below / during felling, while the alpha fade to the
-    # rim keeps the silhouette soft (no hard disc edge). Centre normal up-biased
-    # so the underside still catches sky light (the foliage trick) instead of
-    # going dark. UV reuses the side mapping so needles read at the same scale.
-    cap_centre = bm.verts.new((cx, cy, z_base))
-    bm.verts.ensure_lookup_table()
+        setnorm(base_ring[i]); setnorm(base_ring[j])
+    # Bottom cap fan: closes the cone so the canopy is a solid volume (no
+    # see-through interior from below or during felling). Slightly darker tone.
     for i in range(segs):
         j = (i + 1) % segs
-        f = bm.faces.new((cap_centre, base_ring[j], base_ring[i]))
+        f = bm.faces.new((centre, base_ring[j], base_ring[i]))
         u0 = i / segs * circ; u1 = (i + 1) / segs * circ
-        uvs = [((u0 + u1) * 0.5, v_base * 0.5), (u1, v_base), (u0, v_base)]
-        alphas = [1.0, RIM_ALPHA, RIM_ALPHA]
+        uvs = [((u0 + u1) * 0.5, v_slant * 0.5), (u1, v_slant), (u0, v_slant)]
         for k, lp in enumerate(f.loops):
             lp[uv].uv = uvs[k]
-            lp[col] = (t, t, t, alphas[k])
-    vnorm[cap_centre.index] = Vector((0, 0, 1))
+            lp[col] = (tb, tb, tb, 1.0)
+    vnorm[apex.index] = Vector((0, 0, 1))
+    vnorm[centre.index] = Vector((0, 0, 1))
 
 
 # ---- FOLIAGE: birch leaf blobs (octa, no underside) ---------------------------
@@ -392,6 +362,12 @@ def build_foliage():
         for bi, (cx, cy, cz, sx, sy, sz, tone) in enumerate(cfg["blobs"]):
             add_blob(bm, uv, col, cx, cy, cz, sx, sy, sz, tone,
                      (bi * 0.31 % 1.0, bi * 0.19 % 1.0), vnorm)
+    # The canopy is now SOLID and single-sided (the cel `ToonMaterial` back-face
+    # culls, unlike the old double-sided alpha cards). Reorient every cone/blob
+    # shell so its winding faces outward, otherwise the cull hides the front and
+    # the canopy renders inside-out. Custom split normals (set below, keyed by the
+    # untouched vertex index) still drive the soft up-biased shading.
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
     me = bpy.data.meshes.new("foliage")
     bm.to_mesh(me); bm.free()
     # per-vertex up-biased normals
@@ -428,7 +404,7 @@ def add_dead_branch(bm, uv, col, z_attach, length, thick, yaw, pitch):
         f = bm.faces.new((rings[0][k], rings[0][m], rings[1][m], rings[1][k]))
         for lp in f.loops:
             lp[uv].uv = (0.5, 0.5)               # a fixed bark patch
-            lp[col] = (1.0, 0.97, 0.93, 1.0)
+            lp[col] = (DEAD_GREY[0], DEAD_GREY[1], DEAD_GREY[2], 1.0)
 
 
 def build_dead():
@@ -453,7 +429,8 @@ def build_dead():
             uvs = [(u0, v0), (u1, v0), (u1, v1), (u0, v1)]
             sh = [shade0, shade0, 1.0, 1.0]
             for k, lp in enumerate(f.loops):
-                lp[uv].uv = uvs[k]; s = sh[k]; lp[col] = (s, s * 0.97, s * 0.93, 1.0)
+                lp[uv].uv = uvs[k]; s = sh[k]
+                lp[col] = (s * DEAD_GREY[0], s * DEAD_GREY[1], s * DEAD_GREY[2], 1.0)
     cap_trunk_ends(bm, uv, col, vr, rings)
     for (za, length, thick, yaw, pitch) in cfg["branches"]:
         add_dead_branch(bm, uv, col, za, length, thick, yaw, pitch)
@@ -496,7 +473,7 @@ else:
     trunk = build_trunk()
     foliage = build_foliage()
     trunk.data.materials.append(make_mat("bark", BARK_TEX, False))
-    foliage.data.materials.append(make_mat("foliage", FOLIAGE_TEX, True))
+    foliage.data.materials.append(make_mat("foliage", FOLIAGE_TEX, False))
 
 # ---- preview render -----------------------------------------------------------
 if PREVIEW:

@@ -37,7 +37,7 @@ pub(super) fn spawn_resource_node_entity(
     let (mesh, material) = if dead_tree {
         (
             dead_tree_mesh(assets, model),
-            ResourceNodeMaterial::Standard(assets.dead_bark_material.clone()),
+            ResourceNodeMaterial::Toon(assets.dead_bark_material.clone()),
         )
     } else {
         let (mesh, material) = resource_node_visual(assets, model, id);
@@ -261,31 +261,32 @@ pub(crate) fn resource_node_visual(
         ResourceNodeModel::IronOre => (assets.iron_node_meshes[0].clone(), toon()),
         ResourceNodeModel::SulfurOre => (assets.sulfur_node_meshes[0].clone(), toon()),
         ResourceNodeModel::StoneVein => (assets.stone_vein_meshes[0].clone(), toon()),
-        // Trees: the bark trunk mesh + shared bark material. The alpha-masked
-        // canopy is a separate child (see `tree_foliage_visual` + the spawn path).
+        // Trees: the cel-shaded bark trunk mesh + shared bark `ToonMaterial`. The
+        // solid faceted canopy is a separate child (see `tree_foliage_visual` +
+        // the spawn path), also cel-shaded.
         ResourceNodeModel::PineTreeSmall => (
             assets.pine_tree_small_trunk_mesh.clone(),
-            ResourceNodeMaterial::Standard(assets.pine_bark_material.clone()),
+            ResourceNodeMaterial::Toon(assets.pine_bark_material.clone()),
         ),
         ResourceNodeModel::PineTreeMedium => (
             assets.pine_tree_medium_trunk_mesh.clone(),
-            ResourceNodeMaterial::Standard(assets.pine_bark_material.clone()),
+            ResourceNodeMaterial::Toon(assets.pine_bark_material.clone()),
         ),
         ResourceNodeModel::PineTreeLarge => (
             assets.pine_tree_large_trunk_mesh.clone(),
-            ResourceNodeMaterial::Standard(assets.pine_bark_material.clone()),
+            ResourceNodeMaterial::Toon(assets.pine_bark_material.clone()),
         ),
         ResourceNodeModel::BirchTreeSmall => (
             assets.birch_tree_small_trunk_mesh.clone(),
-            ResourceNodeMaterial::Standard(assets.birch_bark_material.clone()),
+            ResourceNodeMaterial::Toon(assets.birch_bark_material.clone()),
         ),
         ResourceNodeModel::BirchTreeMedium => (
             assets.birch_tree_medium_trunk_mesh.clone(),
-            ResourceNodeMaterial::Standard(assets.birch_bark_material.clone()),
+            ResourceNodeMaterial::Toon(assets.birch_bark_material.clone()),
         ),
         ResourceNodeModel::BirchTreeLarge => (
             assets.birch_tree_large_trunk_mesh.clone(),
-            ResourceNodeMaterial::Standard(assets.birch_bark_material.clone()),
+            ResourceNodeMaterial::Toon(assets.birch_bark_material.clone()),
         ),
         ResourceNodeModel::SurfaceStone => (
             assets.surface_stone_mesh.clone(),
@@ -322,14 +323,14 @@ pub(crate) fn insert_resource_node_material(
     }
 }
 
-/// The alpha-masked canopy (needle/leaf) mesh + shared foliage material for a live
+/// The solid cel-shaded canopy mesh + shared foliage `ToonMaterial` for a live
 /// tree model, spawned as a child of the bark trunk. `None` for non-tree models
 /// (and dead snags, which have no canopy). Pine and birch each share one canopy
 /// material across all sizes so the forest batches by mesh+material.
 pub(crate) fn tree_foliage_visual(
     assets: &ResourceVisualAssets,
     model: ResourceNodeModel,
-) -> Option<(Handle<Mesh>, Handle<StandardMaterial>)> {
+) -> Option<(Handle<Mesh>, Handle<ToonMaterial>)> {
     Some(match model {
         ResourceNodeModel::PineTreeSmall => (
             assets.pine_tree_small_foliage_mesh.clone(),

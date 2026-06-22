@@ -5,13 +5,23 @@ prop with the real engine PBR, then quantise the lit strength into a few hard
 bands. This doc explains the style, the shader that produces it, and how to extend
 it to the rest of the game.
 
-**Current coverage:** the shared `ToonMaterial` cel-shades the **ore/vein nodes**
-and **all free-standing deployables** (workbench, furnace, storage, torch, tool
-cupboard, sleeping bag); the **instanced grass** (`grass_instanced.wgsl`) uses the
-same PBR-then-posterize lighting. The biome **ground textures** were repainted in
-the toony style but the terrain itself is still smooth PBR (cel-banding the ground
-is the riskiest step, see [Roadmap](#roadmap)). Trees, buildings, players, items,
-and the doors remain PBR.
+**Current coverage:** the shared `ToonMaterial` cel-shades the **ore/vein nodes**,
+**all free-standing deployables** (workbench, furnace, storage, torch, tool
+cupboard, sleeping bag), and the **trees** (pine + birch trunks + canopies, and
+the dead snags); the **instanced grass** (`grass_instanced.wgsl`) uses the same
+PBR-then-posterize lighting. The biome **ground textures** were repainted in the
+toony style but the terrain itself is still smooth PBR (cel-banding the ground is
+the riskiest step, see [Roadmap](#roadmap)). Buildings, players, items, and the
+doors remain PBR.
+
+> Trees: rather than cel-shade the old alpha-masked needle/leaf cards (which would
+> have needed a `discard` + double-sided toon variant), the canopy was rebuilt as
+> **solid faceted geometry** (`art/trees/build_tree.py`), so it rides the existing
+> opaque `ToonMaterial` unchanged, the same `texture * COLOR_0` path as the ore.
+> The one piece the trees added is a per-instance `fade` uniform (binding 4) on
+> `ToonMaterial` so the felling dissolve can fade a cloned trunk/canopy to nothing
+> (it flips that one material to `AlphaMode::Blend`); every static prop leaves
+> `fade = 1.0` and stays opaque.
 
 > Historical note: the ore shader originally did its *own* cheap quantised
 > half-Lambert lighting (no `apply_pbr_lighting`), which ignored the sun's
@@ -171,8 +181,9 @@ scene never looks half-converted.
 | **Ore/vein nodes** | done | the reference implementation |
 | **Deployables** (workbench, furnace, boxes, tool cupboard, torch, doors) | low | opaque vertex-coloured glbs, exactly like ore; the furnace's ember glow should stay emissive (add an emissive term or keep that bit PBR) |
 | **Crude clutter + surface stone + branch piles + building pieces** | low | opaque, vertex-coloured or simple-textured; same path |
-| **Tree bark / dead snags** | medium | opaque trunks are easy; but trees are the most numerous prop, so check the cel cost at forest scale and that the LOD stand-ins match |
-| **Tree foliage / hay** | medium-high | alpha-masked + double-sided; needs the `discard` + `cull_mode = None` toon variant, and the up-biased foliage normals already in the glbs will read nicely under cel |
+| **Tree bark / dead snags** | done | opaque cel trunks; the dead-snag glb carries a cool-grey `COLOR_0` so the same bark detail reads weathered. Per-species bark + foliage `ToonMaterial` (params softer than the boxy deployables; see `assets.rs`) |
+| **Tree foliage** | done | sidestepped the alpha-card route entirely: the canopy was rebuilt as **solid faceted geometry** (`art/trees/build_tree.py`), so it uses the opaque `ToonMaterial` as-is. Single-sided now, so the builder runs `recalc_face_normals` for outward winding; the up-biased vertex normals still light it soft |
+| **Hay** | medium-high | still alpha-masked card; would need the `discard` + `cull_mode = None` toon variant (the only foliage family left on `StandardMaterial`) |
 | **Grass** | medium | already a custom stylized pipeline (`grass_instanced.wgsl`); add cel banding to its existing hand-built lighting rather than a new material |
 | **Players / held items** | medium | rigged + animated; the rig and the four tool glbs use `StandardMaterial`. Visual consistency with the world matters most here |
 | **Terrain ground** | high | huge surface, already a custom `TerrainMaterial`; cel-banding the ground is the biggest tonal change and the easiest to get wrong (banding artifacts on gradients, shadow reception matters here). Do this last and carefully |

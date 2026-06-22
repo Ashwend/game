@@ -178,19 +178,20 @@ pub(crate) struct ResourceVisualAssets {
     /// Three toony tall-grass materials (each a different seed-headed tuft card);
     /// a hay node picks one by `id % 3` so the harvestable plants vary.
     pub(crate) hay_grass_materials: [Handle<StandardMaterial>; 3],
-    /// Tree bark (opaque, repeat-tiled, mipped) and canopy foliage (alpha-mask
-    /// needle/leaf, double-sided, mipped) materials shared by every instance of
-    /// a species so the forest batches by mesh+material. Built from the embedded
-    /// `textures/trees/*.png` (see `load_tree_texture`). The glb's COLOR_0
-    /// vertex colours tint these base-white materials per canopy layer.
-    pub(crate) pine_bark_material: Handle<StandardMaterial>,
-    pub(crate) pine_foliage_material: Handle<StandardMaterial>,
-    pub(crate) birch_bark_material: Handle<StandardMaterial>,
-    pub(crate) birch_foliage_material: Handle<StandardMaterial>,
-    /// Weathered grey-brown bark for the dead-snag trunks: the pine bark texture
-    /// multiplied by a desaturated cool-grey tint so a leafless tree reads as
-    /// "dead", not just a live trunk without leaves.
-    pub(crate) dead_bark_material: Handle<StandardMaterial>,
+    /// Cel-shaded ([`ToonMaterial`]) tree bark + canopy foliage, one per species
+    /// per surface, shared by every instance so the forest batches by
+    /// mesh+material. Built from the embedded `textures/trees/*.png` painted
+    /// detail (see `load_tree_texture`); the glb COLOR_0 tints them per layer, the
+    /// same `texture * COLOR_0` cel path the ore nodes use. The canopy is solid
+    /// faceted geometry (not alpha cards), so these are all opaque.
+    pub(crate) pine_bark_material: Handle<ToonMaterial>,
+    pub(crate) pine_foliage_material: Handle<ToonMaterial>,
+    pub(crate) birch_bark_material: Handle<ToonMaterial>,
+    pub(crate) birch_foliage_material: Handle<ToonMaterial>,
+    /// Cel-shaded weathered bark for the dead-snag trunks: the pine bark detail
+    /// over the snag glb's cool-grey COLOR_0 so a leafless tree reads as "dead",
+    /// not just a live trunk without leaves.
+    pub(crate) dead_bark_material: Handle<ToonMaterial>,
 }
 
 #[derive(Resource, Clone)]
@@ -562,13 +563,16 @@ pub(crate) fn setup_scene(
             ..default()
         }),
     });
-    // Tree textures: bark (opaque, tiles up the trunk) + canopy needle/leaf
-    // (alpha-mask). Decoded synchronously with a CPU mip chain (Bevy 0.18 builds
-    // none for loaded PNGs; without mips the masked canopy aliases into sparkle at
-    // range) and a repeat + anisotropic sampler so bark tiles vertically and the
-    // needles/leaves tile across the cones/blobs. Loaded sRGB so the sampler hands
-    // the shader linear colour; the glb COLOR_0 vertex colours (linear) tint each
-    // canopy layer / the trunk on top. Mirrors `TerrainTextureAssets::load`.
+    // Tree textures: bark (tiles up the trunk) + canopy foliage detail. Both are
+    // now soft, low-contrast PAINTED cel detail (the canopy is solid faceted
+    // geometry, not alpha cards, so foliage is opaque too): the cel `ToonMaterial`
+    // supplies the hard bands + ink edge, the texture only adds needle/leaf grain
+    // that rides the glb COLOR_0, exactly like the ore rock detail. Decoded
+    // synchronously with a CPU mip chain (Bevy 0.18 builds none for loaded PNGs;
+    // without mips the grain aliases into sparkle at range) and a repeat +
+    // anisotropic sampler so bark tiles vertically and the foliage tiles across the
+    // cones/blobs. Loaded sRGB so the sampler hands the shader linear colour; the
+    // glb COLOR_0 (linear) tints each layer. Mirrors `TerrainTextureAssets::load`.
     let mut load_tree_texture = |name: &str| -> Handle<Image> {
         let rel = format!("textures/trees/{name}.png");
         let bytes =
@@ -586,9 +590,9 @@ pub(crate) fn setup_scene(
         images.add(image)
     };
     let pine_bark_tex = load_tree_texture("bark_pine");
-    let pine_needle_tex = load_tree_texture("needles");
+    let pine_foliage_tex = load_tree_texture("foliage_pine");
     let birch_bark_tex = load_tree_texture("bark_birch");
-    let birch_leaf_tex = load_tree_texture("leaves");
+    let birch_foliage_tex = load_tree_texture("foliage_birch");
 
     // Shared ore/vein rock-surface texture: a neutral grey cracked-stone detail
     // map (mean ~0.8) box-projected across every ore boulder + its chunks. Base
@@ -712,6 +716,7 @@ pub(crate) fn setup_scene(
             detail: ore_rock_tex.clone(),
             params: Vec4::new(3.0, 0.42, 0.8, 2.2),
             tex_scale: 1.0, // ore glbs carry their own UVs; triplanar scale unused
+            fade: 1.0,
         }),
         vertex_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
@@ -734,56 +739,53 @@ pub(crate) fn setup_scene(
                 asset_server.load(embedded_asset_path("textures/tall_grass_3.png")),
             )),
         ],
-        // Bark: opaque, repeat-tiled mipped texture, matte dry-organic PBR
-        // (materials.md). Base white so the trunk's COLOR_0 (near-white, with a
-        // touch of ground-contact AO on the base ring) reads the bark texture.
-        pine_bark_material: materials.add(StandardMaterial {
-            base_color: VERTEX_MATERIAL_COLOR,
-            base_color_texture: Some(pine_bark_tex.clone()),
-            perceptual_roughness: 0.95,
-            reflectance: 0.12,
-            ..default()
+        // Trees join the cel family: trunk + canopy are now cel-shaded
+        // `ToonMaterial`, matching the ore nodes + deployables. Each surface gets
+        // its own painted detail texture (bark grain / needle / leaf) and the glb
+        // COLOR_0 supplies the per-layer tone, exactly the `texture * COLOR_0`
+        // trick the ore rock uses. Foliage is a SOLID faceted canopy (not alpha
+        // cards), so it stays opaque and double-sided handling is moot. Trees are
+        // rounded/organic like the ore, so they run the SOFTER ore-style cel (a
+        // gentler ink edge than the boxy deployables). `fade` is 1.0; only the
+        // felling dissolve clones one and drives it down. See `art/trees/*` +
+        // docs/toon-shading.md.
+        pine_bark_material: toon_materials.add(ToonMaterial {
+            detail: pine_bark_tex.clone(),
+            params: Vec4::new(3.0, 1.0, 0.55, 2.6),
+            tex_scale: 1.0,
+            fade: 1.0,
         }),
-        birch_bark_material: materials.add(StandardMaterial {
-            base_color: VERTEX_MATERIAL_COLOR,
-            base_color_texture: Some(birch_bark_tex),
-            perceptual_roughness: 0.95,
-            reflectance: 0.12,
-            ..default()
+        birch_bark_material: toon_materials.add(ToonMaterial {
+            detail: birch_bark_tex,
+            params: Vec4::new(3.0, 1.0, 0.55, 2.6),
+            tex_scale: 1.0,
+            fade: 1.0,
         }),
-        // Canopy: alpha-masked (never blended, so it stays in the cheap opaque
-        // pass at forest scale), double-sided like the hay tuft so needles/leaves
-        // read from both faces, matte. Mask cutoff combines the texture alpha with
-        // the canopy's COLOR_0 alpha (low at the bottom rim) to feather the cone
-        // skirt instead of leaving a hard disc edge. Per-layer COLOR_0 rgb tints
-        // dark (lower) -> light (crown).
-        pine_foliage_material: materials.add(StandardMaterial {
-            base_color: VERTEX_MATERIAL_COLOR,
-            base_color_texture: Some(pine_needle_tex),
-            alpha_mode: AlphaMode::Mask(0.4),
-            cull_mode: None,
-            perceptual_roughness: 0.95,
-            reflectance: 0.12,
-            ..default()
+        // Canopy: clean cel bands + a slightly wider ink edge so the leafy mass
+        // reads with a drawn silhouette outline (the anime "sticker" look from the
+        // references). The green rides the foliage detail texture; COLOR_0 layers
+        // it dark (lower) -> light (crown).
+        pine_foliage_material: toon_materials.add(ToonMaterial {
+            detail: pine_foliage_tex,
+            params: Vec4::new(3.0, 1.0, 0.7, 2.0),
+            tex_scale: 1.0,
+            fade: 1.0,
         }),
-        birch_foliage_material: materials.add(StandardMaterial {
-            base_color: VERTEX_MATERIAL_COLOR,
-            base_color_texture: Some(birch_leaf_tex),
-            alpha_mode: AlphaMode::Mask(0.4),
-            cull_mode: None,
-            perceptual_roughness: 0.95,
-            reflectance: 0.12,
-            ..default()
+        birch_foliage_material: toon_materials.add(ToonMaterial {
+            detail: birch_foliage_tex,
+            params: Vec4::new(3.0, 1.0, 0.7, 2.0),
+            tex_scale: 1.0,
+            fade: 1.0,
         }),
-        // Weathered dead bark: the pine bark texture tinted by a desaturated
-        // cool-grey base colour (multiplied through) so a leafless snag reads grey
-        // and dead rather than like a live trunk. A bit rougher than live bark.
-        dead_bark_material: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.50, 0.49, 0.47),
-            base_color_texture: Some(pine_bark_tex),
-            perceptual_roughness: 0.97,
-            reflectance: 0.10,
-            ..default()
+        // Weathered dead bark: the same pine bark detail, but the dead-snag glb
+        // carries a cool-grey COLOR_0 (set in build_tree.py) so `texture * COLOR_0`
+        // reads grey and dead rather than like a live trunk. Cel-shaded like the
+        // rest so a leafless snag still belongs to the family.
+        dead_bark_material: toon_materials.add(ToonMaterial {
+            detail: pine_bark_tex,
+            params: Vec4::new(3.0, 1.0, 0.5, 2.6),
+            tex_scale: 1.0,
+            fade: 1.0,
         }),
     });
     // Placed structures are authored Blender glbs matching their inventory icons
@@ -932,16 +934,19 @@ pub(crate) fn setup_scene(
             detail: deployable_wood_tex.clone(),
             params: Vec4::new(3.0, 0.46, 1.0, 1.4),
             tex_scale: 1.5,
+            fade: 1.0,
         }),
         toon_stone_material: toon_materials.add(ToonMaterial {
             detail: deployable_stone_tex.clone(),
             params: Vec4::new(3.0, 0.46, 1.0, 1.4),
             tex_scale: 1.5,
+            fade: 1.0,
         }),
         toon_fabric_material: toon_materials.add(ToonMaterial {
             detail: deployable_fabric_tex.clone(),
             params: Vec4::new(3.0, 0.46, 1.0, 1.4),
             tex_scale: 1.5,
+            fade: 1.0,
         }),
         ghost_valid_material: materials.add(StandardMaterial {
             // Translucent green: visible against grass + stone without

@@ -4,7 +4,7 @@ use bevy::prelude::*;
 
 use crate::{
     app::audio::{PlaySound, SoundId},
-    app::scene::{ImpactEffectAssets, tree_mesh_height},
+    app::scene::{ImpactEffectAssets, ToonMaterial, tree_mesh_height},
     app::state::ImpactEffectKind,
     items::ToolKind,
     protocol::ResourceNodeId,
@@ -45,11 +45,11 @@ pub(crate) struct FellingTree {
     pivot: Vec3,
     initial_rotation: Quat,
     initial_scale: Vec3,
-    material: Handle<StandardMaterial>,
-    /// Cloned canopy (needle/leaf) material, present for live trees so the
-    /// alpha-masked foliage child fades out together with the trunk. `None` for
-    /// dead snags (single mesh, no canopy).
-    canopy_material: Option<Handle<StandardMaterial>>,
+    material: Handle<ToonMaterial>,
+    /// Cloned canopy material, present for live trees so the solid foliage child
+    /// fades out together with the trunk. `None` for dead snags (single mesh, no
+    /// canopy).
+    canopy_material: Option<Handle<ToonMaterial>>,
     landed_age: Option<f32>,
     landing_kick_fired: bool,
     landing_chips_fired: bool,
@@ -60,14 +60,14 @@ pub(crate) fn spawn_node_death(
     commands: &mut Commands,
     impact_assets: &ImpactEffectAssets,
     play: &mut MessageWriter<PlaySound>,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<ToonMaterial>,
     camera_kick: &mut CameraImpactKick,
     node_id: ResourceNodeId,
     model: ResourceNodeModel,
     transform: Transform,
     mesh: Handle<Mesh>,
-    material: Handle<StandardMaterial>,
-    canopy: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    material: Handle<ToonMaterial>,
+    canopy: Option<(Handle<Mesh>, Handle<ToonMaterial>)>,
     player_position: Option<Vec3>,
 ) {
     if model.is_tree() {
@@ -132,13 +132,13 @@ fn spawn_crude_pickup_burst(
 fn spawn_tree_felling(
     commands: &mut Commands,
     play: &mut MessageWriter<PlaySound>,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<ToonMaterial>,
     node_id: ResourceNodeId,
     model: ResourceNodeModel,
     transform: Transform,
     mesh: Handle<Mesh>,
-    source_material: Handle<StandardMaterial>,
-    canopy: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    source_material: Handle<ToonMaterial>,
+    canopy: Option<(Handle<Mesh>, Handle<ToonMaterial>)>,
     player_position: Option<Vec3>,
 ) {
     let Some(base_height) = tree_mesh_height(model) else {
@@ -157,12 +157,13 @@ fn spawn_tree_felling(
         compute_horizontal_fall_direction(player_position, transform.translation, node_id);
     let fall_axis = fall_axis_from_direction(fall_direction);
 
-    // Clone the source material so we can drive this falling tree's alpha
+    // Clone the source material so we can drive this falling tree's `fade`
     // without touching the shared material every other resource node uses.
-    // Keep the clone opaque for now: an opaque trunk draws in the opaque
-    // phase and correctly depth-occludes the detail grass (which renders in
-    // the transparent phase but still writes depth). Only the end-of-life
-    // fade flips this to `AlphaMode::Blend`, see `apply_fade_out`. Forcing
+    // Keep the clone at `fade == 1.0` (opaque) for now: an opaque trunk draws in
+    // the opaque phase and correctly depth-occludes the detail grass (which
+    // renders in the transparent phase but still writes depth). Only the
+    // end-of-life fade drops `fade` below 1.0, which flips the clone into the
+    // Blend pass (see `ToonMaterial::alpha_mode` + `apply_fade_out`). Forcing
     // Blend up front put the still-solid, upright trunk into the transparent
     // phase, so grass behind it punched through on the first frame of the fall.
     let fade_material = match materials.get(&source_material) {
@@ -171,7 +172,7 @@ fn spawn_tree_felling(
     };
 
     // Clone the canopy material too, so the falling tree fades its own foliage
-    // without dragging every other tree's shared canopy material along.
+    // without dragging every other tree's shared canopy `ToonMaterial` along.
     let canopy = canopy.map(|(canopy_mesh, canopy_source)| {
         let canopy_material = match materials.get(&canopy_source) {
             Some(source) => materials.add(source.clone()),
@@ -256,7 +257,7 @@ pub(crate) fn tick_felling_trees_system(
     mut commands: Commands,
     time: Res<Time>,
     impact_assets: Res<ImpactEffectAssets>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<ToonMaterial>>,
     mut camera_kick: ResMut<CameraImpactKick>,
     mut trees: Query<(Entity, &mut Transform, &mut FellingTree)>,
 ) {
@@ -375,7 +376,7 @@ fn fire_landing_feedback(
 /// crumpling into the ground. Despawns when fully transparent.
 fn apply_fade_out(
     commands: &mut Commands,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<ToonMaterial>,
     entity: Entity,
     tree: &FellingTree,
     since_land: f32,
@@ -385,23 +386,19 @@ fn apply_fade_out(
     }
     let fade_t = ((since_land - TREE_LANDED_HOLD) / TREE_FADE_DURATION).clamp(0.0, 1.0);
     let alpha = (1.0 - fade_t).clamp(0.0, 1.0);
+    // Lower `fade` on the cloned trunk material. Crossing below 1.0 flips it into
+    // the Blend pass (`ToonMaterial::alpha_mode`); up to this point it was opaque
+    // so it occluded the grass correctly, and by now it's lying flat on the
+    // ground dissolving, so the brief transparent-phase sorting is not visible.
     if let Some(material) = materials.get_mut(&tree.material) {
-        // Now that we're actually lowering alpha, switch to blended
-        // transparency. Up to this point the trunk was opaque so it occluded
-        // the grass correctly; by the time we get here it's lying flat on the
-        // ground and dissolving, so the brief transparent-phase sorting against
-        // grass is no longer visible.
-        material.alpha_mode = AlphaMode::Blend;
-        material.base_color.set_alpha(alpha);
+        material.fade = alpha;
     }
-    // Dissolve the canopy alongside the trunk. It was alpha-masked (Mask) so the
-    // needles/leaves cut crisply during the fall; switch to Blend now so the whole
-    // leafy mass fades smoothly to nothing rather than popping at the cutoff.
+    // Dissolve the solid canopy alongside the trunk: the same `fade` ramp fades
+    // the whole leafy mass smoothly to nothing.
     if let Some(canopy_material) = tree.canopy_material.as_ref()
         && let Some(material) = materials.get_mut(canopy_material)
     {
-        material.alpha_mode = AlphaMode::Blend;
-        material.base_color.set_alpha(alpha);
+        material.fade = alpha;
     }
     if fade_t >= 1.0 {
         commands.entity(entity).despawn();

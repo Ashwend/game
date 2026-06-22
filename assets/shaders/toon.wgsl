@@ -38,6 +38,9 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(2) var<uniform> params: vec4<f32>;
 // Triplanar tiles/metre for the no-UV (deployable) path; unused by UV'd meshes.
 @group(#{MATERIAL_BIND_GROUP}) @binding(3) var<uniform> tex_scale: f32;
+// Per-instance opacity; 1.0 for static props, driven below 1.0 only by the
+// tree-felling dissolve (the material's alpha_mode flips to Blend then).
+@group(#{MATERIAL_BIND_GROUP}) @binding(4) var<uniform> fade: f32;
 
 // Saturation lift applied after the cel posterise so the banded result keeps the
 // bright, high-chroma anime feel instead of reading muted. 1.0 = off.
@@ -127,6 +130,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     rgb = max(mix(vec3<f32>(luma, luma, luma), rgb, TOON_SATURATION), vec3<f32>(0.0));
 
     var out: FragmentOutput;
-    out.color = main_pass_post_lighting_processing(pbr_input, vec4<f32>(rgb, lit.a));
+    // `fade` is 1.0 for every static prop; the felling dissolve lowers it so the
+    // banded trunk/canopy fade out (its material is in the Blend pass by then).
+    out.color = main_pass_post_lighting_processing(pbr_input, vec4<f32>(rgb, lit.a * fade));
     return out;
 }

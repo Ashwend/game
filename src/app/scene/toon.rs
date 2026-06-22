@@ -44,10 +44,30 @@ pub(crate) struct ToonMaterial {
     /// (the ore glbs), which sample `detail` directly.
     #[uniform(3)]
     pub(crate) tex_scale: f32,
+    /// Per-instance opacity, `1.0` for every static prop. Only the tree-felling
+    /// dissolve drives it below `1.0` (on a *cloned* material) so the banded
+    /// trunk + canopy fade smoothly to nothing as the felled tree despawns; the
+    /// shader multiplies the output alpha by it. Sub-1.0 also flips
+    /// [`Self::alpha_mode`] to [`AlphaMode::Blend`] so the fade actually blends.
+    #[uniform(4)]
+    pub(crate) fade: f32,
 }
 
 impl Material for ToonMaterial {
     fn fragment_shader() -> ShaderRef {
         TOON_SHADER_PATH.into()
+    }
+
+    /// Opaque in normal use (`fade == 1.0`), so cel props draw in the cheap
+    /// opaque pass and depth-occlude the transparent detail grass correctly.
+    /// The felling dissolve lowers `fade` on its private clone, flipping that
+    /// one material into the transparent pass for the fade-out (mirrors what the
+    /// old `StandardMaterial` trunk did when it set `AlphaMode::Blend`).
+    fn alpha_mode(&self) -> AlphaMode {
+        if self.fade < 1.0 {
+            AlphaMode::Blend
+        } else {
+            AlphaMode::Opaque
+        }
     }
 }

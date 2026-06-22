@@ -18,10 +18,14 @@ not have to be rediscovered each time.
   *parametric script* ([`art/trees/build_tree.py`](../art/trees/build_tree.py)) run
   headless, not hand-modelled, because a tree is an algorithmic stack of cones /
   leaf blobs that should match the exact silhouette constants the LODs use. They
-  carry a textured bark trunk + an alpha-masked needle/leaf canopy (textures via
-  Draw Things + OpenCV, see the script header for the full recipe), loaded as two
-  glb meshes with Rust-built shared materials (the structure pattern below). The
-  cheap distance LODs and dead snags stay procedural `LowPolyMeshBuilder` meshes.
+  carry a textured bark trunk + a SOLID faceted canopy (no alpha cards), loaded as
+  two glb meshes that ride the shared cel [`ToonMaterial`](toon-shading.md), the
+  same family as the ore nodes. Textures + silhouette come from the ComfyUI-Flux →
+  OpenCV → Blender pipeline in the script header ([`art/comfy_gen.py`](../art/comfy_gen.py),
+  [`measure_tree.py`](../art/trees/measure_tree.py),
+  [`make_tree_textures.py`](../art/trees/make_tree_textures.py)). The dead snags
+  are glbs from the same script; only the cheap distance LODs stay procedural
+  `LowPolyMeshBuilder` meshes.
   The **building pieces** (foundation / wall / window wall / doorway / ceiling /
   stairs × sticks / hewn wood / stone) and the **door panels** (wood + iron) are
   the same kind of parametric-script glbs
