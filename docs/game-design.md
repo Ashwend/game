@@ -9,7 +9,7 @@ sources:
   - src/resources.rs - crude starter nodes, ToolRequirement::allows tier logic
   - src/game_balance.rs - every gameplay tuning constant
 related:
-  - CLAUDE.md - the singleplayer==multiplayer and gameplay-never-pauses invariants this doc treats as design choices
+  - CLAUDE.md - the singleplayer==multiplayer and gameplay-never-pauses invariants this doc builds on
   - docs/items-and-resources.md - the registries this loop is built on, and how to add a tool/ore/node
   - docs/crafting-and-deployables.md - the crafting queue, furnace, and deployables that gate the loop
   - docs/base-building-and-claims.md - building tiers, stability, doors, and the Tool Cupboard claim
@@ -27,7 +27,7 @@ This is direction, not mechanics. For how a subsystem works, follow the cross-li
 
 Ashwend does the familiar survival loop well; it does not reinvent the genre. From `README.md`: "Ashwend isn't trying to reinvent the genre. It shares its core mechanics with the survival games already out there... The goal is to take the familiar loop and do it well." When designing a feature, the test is "does this sharpen the known loop," not "is this novel." Novelty for its own sake is off-pillar.
 
-The second pillar is a player-facing choice, not just an engineering fact: solo and together run on the same core, natively. Singleplayer is a loopback host of the exact `GameServer` the dedicated server runs; both speak `ClientMessage` / `ServerMessage` and consume per-component replication. This is a design commitment (one game, two ways to enter it), enforced as the singleplayer==multiplayer invariant in CLAUDE.md. Do not build a feature that only works in one mode.
+The second pillar is an engineering invariant, not a player-facing mode: solo and together run on the exact same core. Singleplayer is a loopback host of the exact `GameServer` the dedicated server runs; both speak `ClientMessage` / `ServerMessage` and consume per-component replication, enforced as the singleplayer==multiplayer invariant in CLAUDE.md. Players reach the game through Multiplayer; the singleplayer menu entry is a dev/test convenience, gated out of release builds (`#[cfg(debug_assertions)]` on the main-menu button), not a shipped way to play. The pillar earns its keep precisely because that dev/test path runs the identical code, so a feature can never work in one mode and silently break the other. Do not build a feature that only works in one mode.
 
 ## The core loop (implemented, as ordered gates)
 

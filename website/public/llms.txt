@@ -2,7 +2,7 @@
 
 > Ashwend is a multiplayer open-world survival game. Drop into a procedurally generated world to gather, craft, build, and raid. It is in an early, free playtest for Windows, macOS, and Linux.
 
-Ashwend is a first-person multiplayer survival sandbox. You spawn into a procedurally generated world, gather resources, craft tools, smelt ore, raise and lock down a base, and contend with the other players sharing the map. Both singleplayer and multiplayer run the same authoritative game server (local or dedicated).
+Ashwend is a first-person multiplayer survival sandbox. You spawn into a procedurally generated world, gather resources, craft tools, smelt ore, raise and lock down a base, and contend with the other players sharing the map. Every session runs on an authoritative dedicated game server.
 
 There is no account flow on the website: players download a build and create their account inside the desktop game on first launch. The website only links out to the downloads (GitHub Releases), the source repository, and the Discord.
 

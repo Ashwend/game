@@ -16,6 +16,12 @@ pub(crate) const DEFAULT_MULTIPLAYER_ADDR: &str = "46.224.101.205:7777";
 pub(crate) enum Screen {
     MainMenu,
     Options,
+    // The singleplayer world picker. Its only constructor is the Singleplayer
+    // main-menu button, which is `#[cfg(debug_assertions)]`-gated (dev/test
+    // only; see `src/app/ui/menu.rs - main_menu_ui`), plus the dev-only headless
+    // control socket. In a shipped release nothing constructs it, so allow the
+    // resulting dead-code lint there; the variant and `worlds_ui` stay compiled.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     Worlds,
     Multiplayer,
     InGame,

@@ -10,13 +10,20 @@ use crate::{
 use super::{
     danger_menu_button, primary_menu_button,
     theme::{self, MENU_BUTTON_WIDTH, MENU_WIDTH},
-    worlds::refresh_worlds,
 };
+// The Singleplayer entry (and the world-list refresh it triggers) is gated to
+// dev/test builds; see `main_menu_ui`. Keep the import on the same gate so it is
+// not flagged unused in shipped release builds.
+#[cfg(debug_assertions)]
+use super::worlds::refresh_worlds;
 
 /// Community Discord invite. Same link the website uses (see
 /// `website/src/lib/config.ts`); keep them in sync if it ever rotates.
 const DISCORD_INVITE_URL: &str = "https://discord.gg/gVqTumNb8b";
 
+// `store` feeds only the dev/test Singleplayer entry below; in release builds
+// that entry is compiled out, leaving the parameter unused.
+#[cfg_attr(not(debug_assertions), allow(unused_variables))]
 pub(super) fn main_menu_ui(
     ctx: &egui::Context,
     menu: &mut MenuState,
@@ -42,6 +49,14 @@ pub(super) fn main_menu_ui(
                 panel.show(ui, |ui| {
                     ui.set_width(MENU_BUTTON_WIDTH);
                     ui.vertical_centered(|ui| {
+                        // Singleplayer runs an in-process loopback host: handy
+                        // for local iteration, but not a shipped way to play.
+                        // Gate the entry out of release builds (debug_assertions
+                        // is off only in the --release publish/CI path), leaving
+                        // players Multiplayer / Options / Quit. The worlds screen
+                        // it opens stays compiled and fully usable in any dev/test
+                        // build; only this entry point disappears from release.
+                        #[cfg(debug_assertions)]
                         if primary_menu_button(ui, "Singleplayer").clicked() {
                             refresh_worlds(menu, store);
                             menu.screen = Screen::Worlds;

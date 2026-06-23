@@ -8,8 +8,7 @@ Ashwend is a multiplayer, first-person open-world survival game. If you've
 played one before, you already know the shape of it: spawn into a
 procedurally generated world, gather wood and stone, knap your first crude
 tools, mine and smelt ore, raise a base, and fight other players for whatever
-they're carrying. Play it solo or together. Both run on the same
-dedicated-server core, natively.[^stack]
+they're carrying.[^stack]
 
 Ashwend isn't trying to reinvent the genre. It shares its core mechanics
 with the survival games already out there, and there's no secret ingredient

@@ -143,7 +143,7 @@ On load:
 Both host kinds snapshot via `GameServer::world_save()` and write atomically; the difference is only whether the routine save is announced:
 
 - **Dedicated** hosts use `GameServer::with_auto_save(interval_ticks)` (announced).
-- **Singleplayer loopback** uses `with_auto_save_silent(interval_ticks)` (no chat announcement), per the singleplayer==multiplayer invariant: same persistence path, only the operator-facing notice differs.
+- **Singleplayer loopback** uses `with_auto_save_silent(interval_ticks)` (no chat announcement), per the singleplayer==multiplayer invariant: same persistence path, only the operator-facing notice differs. (Singleplayer is a dev/test entry, gated out of release builds; the persistence path below is exercised in dev/test and is identical to the dedicated one.)
 
 On quit, singleplayer's pause menu drives `ClientRuntime::shutdown_in_background`, which pulls the final `WorldSave` from the host and writes it; disconnect also flushes each client's live state so the final save sees the latest pose/inventory/health. A dedicated server persists the final world on graceful shutdown.
 

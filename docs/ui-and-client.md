@@ -15,7 +15,7 @@ related:
   - docs/architecture.md - app.rs ClientSystemSet scheduling that runs ui_system
   - docs/networking.md - ClientMessage/ServerMessage the render fns push onto
   - docs/voice.md - the Voice options tab and device-picker bridge
-  - docs/worlds-and-saves.md - the singleplayer worlds screen and save loading
+  - docs/worlds-and-saves.md - the dev/test singleplayer worlds screen and save loading
   - docs/updates-and-distribution.md - the changelog/update modals overlaid by ui_system
 ---
 
@@ -42,6 +42,8 @@ enum Screen { MainMenu, Options, Worlds, Multiplayer, InGame }   // src/app/stat
 `MenuState` (`src/app/state/menu.rs - MenuState`) holds `screen: Screen` as one field among ~29. The rest are the per-frame UI flag bag: overlay bools (`pause_open`, `pause_options_open`, `inventory_open`, `crafting_open`, `furnace_open`, `loot_bag_open`, `world_map_open`, `chat_open`), dialog slots (`create_world`, `edit_world`, `direct_connect`, `world_start`, `confirmation`, `notice`, `text_prompt`, `loading_splash`, `death_splash`), and auth-flow request flags (`sign_out_requested`, `cancel_auth_requested`, `force_sign_out`). `inventory_open` and `crafting_open` are kept mutually exclusive by the toggle systems, not by the panel itself.
 
 `ui_system` dispatches on `resources.menu.screen` (`src/app/ui.rs - ui_system`): each arm calls one per-screen render fn (`main_menu_ui`, `worlds_ui`, `options_ui`, `multiplayer_ui`, `in_game_ui`).
+
+`Screen::Worlds` (the singleplayer world picker) is a dev/test-only destination. The Singleplayer main-menu button that routes to it is gated behind `#[cfg(debug_assertions)]` (`src/app/ui/menu.rs - main_menu_ui`), so a shipped release main menu offers only Multiplayer, Options, and Quit. The `Screen::Worlds` variant and `worlds_ui` stay compiled (still reached in dev/test, and by the headless control socket) and fully functional; they are simply unreachable from a release main menu. The singleplayer==multiplayer invariant still holds: the loopback session it starts runs the identical `GameServer` players hit over the network, which is exactly why the dev/test path is worth keeping.
 
 ## Hard rule: render fns push outward, never touch the bus directly
 
@@ -169,5 +171,5 @@ Input systems live in `src/app/systems/input/`: `gating.rs`, `cursor.rs`, `look.
 - [docs/architecture.md](architecture.md) - `app.rs` `ClientSystemSet` scheduling that runs `ui_system`.
 - [docs/networking.md](networking.md) - the `ClientMessage` / `ServerMessage` variants render fns push onto.
 - [docs/voice.md](voice.md) - the Voice options tab, mic test, and `VoiceTabIo` device bridge.
-- [docs/worlds-and-saves.md](worlds-and-saves.md) - the singleplayer worlds screen, save loading, and settings persistence.
+- [docs/worlds-and-saves.md](worlds-and-saves.md) - the dev/test singleplayer worlds screen, save loading, and settings persistence.
 - [docs/updates-and-distribution.md](updates-and-distribution.md) - the update pill and changelog modals `ui_system` overlays.
