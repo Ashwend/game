@@ -23,6 +23,13 @@ use bevy::{prelude::*, render::render_resource::AsBindGroup, shader::ShaderRef};
 /// needs one; same `embedded://` scheme as the terrain material).
 const TOON_SHADER_PATH: &str = "embedded://shaders/toon.wgsl";
 
+/// Embedded path of the toon **prepass** fragment shader. Required so the
+/// alpha-masked grass-card tufts discard their transparent texels in the
+/// depth/motion prepass that TAA adds; without it the stock prepass writes the
+/// full opaque quad and the cards render as black holes under TAA. See the
+/// shader's header for the full explanation.
+const TOON_PREPASS_SHADER_PATH: &str = "embedded://shaders/toon_prepass.wgsl";
+
 /// Standalone cel-shaded material. Bindings map 1:1 with
 /// `assets/shaders/toon.wgsl`.
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
@@ -57,6 +64,13 @@ pub(crate) struct ToonMaterial {
 impl Material for ToonMaterial {
     fn fragment_shader() -> ShaderRef {
         TOON_SHADER_PATH.into()
+    }
+
+    /// Custom prepass fragment so the alpha-masked grass cards discard their
+    /// transparent texels in the depth/motion prepass (added by TAA), matching
+    /// the main pass. Opaque toon props (params.y == 0) pass through unchanged.
+    fn prepass_fragment_shader() -> ShaderRef {
+        TOON_PREPASS_SHADER_PATH.into()
     }
 
     /// Opaque in normal use (`fade == 1.0`), so cel props draw in the cheap
