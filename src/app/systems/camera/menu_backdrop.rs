@@ -1,8 +1,9 @@
 use bevy::{
     anti_alias::{fxaa::Fxaa, taa::TemporalAntiAliasing},
+    core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass},
     post_process::{dof::DepthOfField, motion_blur::MotionBlur},
     prelude::*,
-    render::camera::TemporalJitter,
+    render::camera::{MipBias, TemporalJitter},
 };
 
 use crate::app::{
@@ -68,17 +69,31 @@ pub(crate) fn menu_backdrop_camera_system(
         } else if !aa.fxaa_enabled() && fxaa.is_some() {
             commands.entity(entity).remove::<Fxaa>();
         }
-        if depth_of_field.is_some()
-            || temporal_aa.is_some()
-            || temporal_jitter.is_some()
-            || motion_blur.is_some()
-        {
+        // TAA: inserting `TemporalAntiAliasing` auto-attaches its required jitter +
+        // depth/motion-vector prepass + mip bias (it mandates MSAA off, which
+        // `aa.msaa()` already returns for the Taa mode). Removing the component
+        // does NOT auto-remove those, so strip the whole set when leaving TAA, or
+        // the prepass keeps running and MipBias keeps skewing texture sampling.
+        if aa.taa_enabled() {
+            if temporal_aa.is_none() {
+                commands
+                    .entity(entity)
+                    .insert(TemporalAntiAliasing::default());
+            }
+        } else if temporal_aa.is_some() || temporal_jitter.is_some() {
             commands.entity(entity).remove::<(
-                DepthOfField,
                 TemporalAntiAliasing,
                 TemporalJitter,
-                MotionBlur,
+                MipBias,
+                DepthPrepass,
+                MotionVectorPrepass,
             )>();
+        }
+        // Depth-of-field + motion blur are menu-backdrop-only, never in-game.
+        if depth_of_field.is_some() || motion_blur.is_some() {
+            commands
+                .entity(entity)
+                .remove::<(DepthOfField, MotionBlur)>();
         }
         return;
     }
@@ -173,12 +188,17 @@ mod tests {
     }
 
     #[test]
-    fn gameplay_camera_removes_depth_of_field() {
+    fn gameplay_camera_strips_menu_effects_when_not_using_taa() {
         let menu = MenuState {
             screen: Screen::InGame,
             ..Default::default()
         };
         let mut app = app_with_camera(menu);
+        // Choose FXAA so the in-game branch strips the temporal stack (with the
+        // default TAA it would instead keep it). This exercises the leave-TAA path.
+        let mut settings = ClientSettings::default();
+        settings.graphics.anti_aliasing = AntiAliasing::Fxaa;
+        app.insert_resource(settings);
         app.update();
 
         let camera = app
@@ -213,23 +233,28 @@ mod tests {
     }
 
     #[test]
-    fn gameplay_camera_defaults_to_fxaa() {
+    fn gameplay_camera_defaults_to_taa() {
         let mut app = app_with_camera(MenuState::default());
         app.update();
 
         app.world_mut().resource_mut::<MenuState>().screen = Screen::InGame;
         app.update();
 
-        // FXAA is the default in-game AA (MSAA off), to avoid MSAA fringing
-        // against the atmosphere sky.
+        // TAA is the shipped default in-game AA (MSAA off, no FXAA).
         let mut msaa_query = app.world_mut().query_filtered::<&Msaa, With<MainCamera>>();
         assert_eq!(*msaa_query.single(app.world()).expect("camera"), Msaa::Off);
+        let has_taa = app
+            .world_mut()
+            .query_filtered::<&TemporalAntiAliasing, With<MainCamera>>()
+            .single(app.world())
+            .is_ok();
+        assert!(has_taa, "default in-game AA is TAA");
         let has_fxaa = app
             .world_mut()
             .query_filtered::<&Fxaa, With<MainCamera>>()
             .single(app.world())
             .is_ok();
-        assert!(has_fxaa, "default in-game AA is FXAA");
+        assert!(!has_fxaa, "TAA default leaves FXAA off");
     }
 
     #[test]
@@ -254,6 +279,36 @@ mod tests {
             .single(app.world())
             .is_ok();
         assert!(!has_fxaa, "MSAA mode disables FXAA");
+    }
+
+    #[test]
+    fn gameplay_camera_honors_taa_setting() {
+        let menu = MenuState {
+            screen: Screen::InGame,
+            ..Default::default()
+        };
+        let mut app = app_with_camera(menu);
+        let mut settings = ClientSettings::default();
+        settings.graphics.anti_aliasing = AntiAliasing::Taa;
+        app.insert_resource(settings);
+
+        app.update();
+
+        // TAA forces MSAA off, attaches the temporal component, and leaves FXAA off.
+        let mut msaa_query = app.world_mut().query_filtered::<&Msaa, With<MainCamera>>();
+        assert_eq!(*msaa_query.single(app.world()).expect("camera"), Msaa::Off);
+        let has_taa = app
+            .world_mut()
+            .query_filtered::<&TemporalAntiAliasing, With<MainCamera>>()
+            .single(app.world())
+            .is_ok();
+        assert!(has_taa, "TAA mode adds TemporalAntiAliasing");
+        let has_fxaa = app
+            .world_mut()
+            .query_filtered::<&Fxaa, With<MainCamera>>()
+            .single(app.world())
+            .is_ok();
+        assert!(!has_fxaa, "TAA mode disables FXAA");
     }
 
     #[test]

@@ -57,7 +57,11 @@ base64 = "0.22"
 # enable `mp3`, that feature drags in the whole `symphonia-bundle-mp3` decoder
 # stack for zero benefit since the game ships no `.mp3`. Re-add `"mp3"` here if
 # that ever changes.
-bevy = { version = "0.18.1", features = ["wav"] }
+# `experimental_pbr_pcss` enables percentage-closer soft shadows; the sun light
+# sets `soft_shadow_size` so long low-sun shadows get a distance-widening
+# penumbra (soft gradient edge) instead of a hard line. Experimental upstream
+# (bevyengine/bevy#16155); verify it renders cleanly on the Metal backend.
+bevy = { version = "0.18.1", features = ["wav", "experimental_pbr_pcss"] }
 bevy_egui = "0.39.1"
 # Software frame-pacer. Caps the frame rate to the display refresh by
 # sleeping on the CPU before each frame is presented. We rely on this

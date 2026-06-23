@@ -32,7 +32,7 @@ pub(crate) use components::{
 };
 pub(crate) use grass::{GrassInstancingPlugin, GrassState, stream_grass_system};
 pub(crate) use mesh::{PLAYER_HEAD_TOP_LOCAL_Y, PlayerPart, rig_layout};
-pub(crate) use sky::{SunLight, update_sky_system};
+pub(crate) use sky::{SUN_SOFT_SHADOW_SIZE, SunLight, update_sky_system};
 pub(crate) use terrain::{TerrainMaterial, TerrainTextureAssets};
 pub(crate) use toon::ToonMaterial;
 pub(crate) use world::{WorldSceneState, apply_world_scene_system};
@@ -130,7 +130,7 @@ mod tests {
     }
 
     #[test]
-    fn gameplay_camera_rendering_avoids_temporal_double_image_artifacts() {
+    fn gameplay_camera_uses_taa_antialiasing_by_default() {
         let mut app = app_with_scene_resources();
         app.insert_resource(MenuState {
             screen: Screen::InGame,
@@ -142,8 +142,8 @@ mod tests {
         app.update();
 
         let world = app.world_mut();
-        // Default in-game AA is FXAA (post-process), not MSAA and not TAA, so
-        // MSAA is off, FXAA is present, and there's no temporal double-image.
+        // The shipped default in-game AA is TAA (it forces MSAA off and replaces
+        // FXAA), with no menu-only depth-of-field.
         let msaa = world
             .query_filtered::<&Msaa, With<MainCamera>>()
             .single(world)
@@ -154,7 +154,7 @@ mod tests {
             .query_filtered::<&Fxaa, With<MainCamera>>()
             .iter(world)
             .count();
-        assert_eq!(fxaa_count, 1);
+        assert_eq!(fxaa_count, 0);
 
         let depth_of_field_count = world
             .query_filtered::<&DepthOfField, With<MainCamera>>()
@@ -166,7 +166,7 @@ mod tests {
             .query_filtered::<&TemporalAntiAliasing, With<MainCamera>>()
             .iter(world)
             .count();
-        assert_eq!(temporal_aa_count, 0);
+        assert_eq!(temporal_aa_count, 1);
     }
 
     #[test]

@@ -202,11 +202,11 @@ pub(crate) struct GraphicsSettings {
     /// preset; players just get a simple on/off like most games offer.
     #[serde(default = "default_bloom_enabled")]
     pub(crate) bloom_enabled: bool,
-    /// In-game anti-aliasing mode. Defaults to FXAA: MSAA composites badly with
-    /// the procedural atmosphere sky (dark, shimmering fringes where geometry
-    /// meets the fullscreen sky pass), so FXAA is the clean default with MSAA
-    /// left as an explicit choice. The menu backdrop ignores this (it leans on
-    /// depth-of-field instead).
+    /// In-game anti-aliasing mode. Defaults to TAA (cleanest edges + best for the
+    /// thin grass). MSAA is left as an explicit choice because it composites badly
+    /// with the procedural atmosphere sky (dark, shimmering fringes where geometry
+    /// meets the fullscreen sky pass); FXAA is the cheap fallback. The menu
+    /// backdrop ignores this (it leans on depth-of-field instead).
     #[serde(default)]
     pub(crate) anti_aliasing: AntiAliasing,
     /// Sun shadow quality. Re-rendering every tree into the shadow cascades is
@@ -218,6 +218,18 @@ pub(crate) struct GraphicsSettings {
     /// count and the draw radius (more GPU cost), `Off` removes it entirely.
     #[serde(default)]
     pub(crate) grass_density: GrassDensity,
+    /// Soft (PCSS) sun shadows: a distance-widening penumbra so long low-sun
+    /// shadows read as a soft gradient instead of a hard line. Costs extra GPU
+    /// (a per-fragment blocker search), and only does anything while `shadows`
+    /// is not `Off`.
+    #[serde(default = "default_soft_shadows")]
+    pub(crate) soft_shadows: bool,
+    /// Atmosphere / sky rendering quality: the procedural sky's scattering LUTs
+    /// and the image-based-lighting cubemap, both refiltered every frame (the
+    /// single biggest GPU cost). Defaults to `High`; `Performance` trims it to
+    /// claw back GPU.
+    #[serde(default)]
+    pub(crate) atmosphere: AtmosphereQuality,
 }
 
 impl Default for GraphicsSettings {
@@ -227,6 +239,8 @@ impl Default for GraphicsSettings {
             anti_aliasing: AntiAliasing::default(),
             shadows: ShadowQuality::default(),
             grass_density: GrassDensity::default(),
+            soft_shadows: default_soft_shadows(),
+            atmosphere: AtmosphereQuality::default(),
         }
     }
 }
@@ -240,8 +254,8 @@ impl Default for GraphicsSettings {
 pub(crate) enum GrassDensity {
     Off,
     Low,
-    #[default]
     Medium,
+    #[default]
     High,
 }
 
@@ -272,25 +286,30 @@ pub(crate) struct ShadowConfig {
 /// Sun shadow quality. Shadows over a dense forest re-render every tree into
 /// each cascade, which is one of the heaviest GPU costs, so this trades shadow
 /// distance / cascade count / map resolution against framerate. `Off` disables
-/// sun shadows entirely. `High` matches the engine defaults the scene shipped
-/// with.
+/// sun shadows entirely. Defaults to `Ultra` (the scene runs comfortably maxed
+/// on the target hardware); drop to `High`/`Low` to claw back GPU on weaker GPUs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ShadowQuality {
     Off,
     Low,
-    #[default]
     High,
+    /// Sharpest tier (default): a 4096 shadow map and a 4th cascade for more even
+    /// texel density across distance. Heaviest in dense forest (every tree
+    /// re-renders into the extra cascade at 4x the map texels).
+    #[default]
+    Ultra,
 }
 
 impl ShadowQuality {
-    pub(crate) const ALL: [Self; 3] = [Self::Off, Self::Low, Self::High];
+    pub(crate) const ALL: [Self; 4] = [Self::Off, Self::Low, Self::High, Self::Ultra];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Off => "Off",
             Self::Low => "Low",
             Self::High => "High",
+            Self::Ultra => "Ultra",
         }
     }
 
@@ -308,6 +327,11 @@ impl ShadowQuality {
                 num_cascades: 3,
                 map_size: 2048,
             }),
+            Self::Ultra => Some(ShadowConfig {
+                maximum_distance: 120.0,
+                num_cascades: 4,
+                map_size: 4096,
+            }),
         }
     }
 }
@@ -323,14 +347,19 @@ impl ShadowQuality {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AntiAliasing {
     Off,
-    #[default]
     Fxaa,
     Msaa2,
     Msaa4,
+    /// Temporal anti-aliasing (default): the cleanest edges and best for the thin
+    /// grass, and it avoids the MSAA-vs-atmosphere fringe (it forces MSAA off).
+    /// Costs a motion-vector prepass and can ghost/smear on fast motion, so a
+    /// player who dislikes that can drop to FXAA.
+    #[default]
+    Taa,
 }
 
 impl AntiAliasing {
-    pub(crate) const ALL: [Self; 4] = [Self::Off, Self::Fxaa, Self::Msaa2, Self::Msaa4];
+    pub(crate) const ALL: [Self; 5] = [Self::Off, Self::Fxaa, Self::Msaa2, Self::Msaa4, Self::Taa];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -338,21 +367,90 @@ impl AntiAliasing {
             Self::Fxaa => "FXAA",
             Self::Msaa2 => "MSAA 2x",
             Self::Msaa4 => "MSAA 4x",
+            Self::Taa => "TAA",
         }
     }
 
-    /// The Bevy MSAA sample count for this mode (`Off` for the FXAA/Off modes).
+    /// The Bevy MSAA sample count for this mode (`Off` for FXAA/TAA/Off; TAA
+    /// mandates MSAA off).
     pub(crate) fn msaa(self) -> Msaa {
         match self {
             Self::Msaa2 => Msaa::Sample2,
             Self::Msaa4 => Msaa::Sample4,
-            Self::Off | Self::Fxaa => Msaa::Off,
+            Self::Off | Self::Fxaa | Self::Taa => Msaa::Off,
         }
     }
 
     /// Whether the FXAA post-process pass should run on the camera.
     pub(crate) fn fxaa_enabled(self) -> bool {
         matches!(self, Self::Fxaa)
+    }
+
+    /// Whether temporal anti-aliasing should run on the camera.
+    pub(crate) fn taa_enabled(self) -> bool {
+        matches!(self, Self::Taa)
+    }
+}
+
+/// Atmosphere / sky rendering quality. The procedural sky's scattering LUTs and
+/// the IBL cubemap are refiltered EVERY frame (no skip-if-unchanged in Bevy
+/// 0.18), so their sample counts and the cubemap resolution are a direct
+/// per-frame GPU cost. Defaults to `High` (fuller scattering detail + a sharper
+/// sky gradient); `Performance` trims the LUT samples + cubemap below Bevy's
+/// stock values to claw back GPU. Our surfaces are mostly matte cel, so most of
+/// `High`'s gain shows in the visible sky, not reflections.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AtmosphereQuality {
+    Performance,
+    #[default]
+    High,
+}
+
+/// Resolved atmosphere LUT / cubemap parameters for an [`AtmosphereQuality`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct AtmosphereConfig {
+    /// Edge size of the IBL cubemap refiltered from the sky each frame.
+    pub(crate) env_map_size: u32,
+    pub(crate) transmittance_lut_samples: u32,
+    pub(crate) multiscattering_lut_samples: u32,
+    pub(crate) sky_view_lut_size: (u32, u32),
+    pub(crate) sky_view_lut_samples: u32,
+    pub(crate) aerial_view_lut_samples: u32,
+}
+
+impl AtmosphereQuality {
+    pub(crate) const ALL: [Self; 2] = [Self::Performance, Self::High];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Performance => "Performance",
+            Self::High => "High",
+        }
+    }
+
+    pub(crate) fn config(self) -> AtmosphereConfig {
+        match self {
+            // The scene's tuned values (mirror the consts in `scene::assets`).
+            Self::Performance => AtmosphereConfig {
+                env_map_size: 64,
+                transmittance_lut_samples: 24,
+                multiscattering_lut_samples: 12,
+                sky_view_lut_size: (256, 128),
+                sky_view_lut_samples: 12,
+                aerial_view_lut_samples: 6,
+            },
+            // Fuller detail. The env map stays at 128 (not Bevy's 512 default,
+            // which was the 500->70 fps cliff); the LUT samples/size are restored.
+            Self::High => AtmosphereConfig {
+                env_map_size: 128,
+                transmittance_lut_samples: 40,
+                multiscattering_lut_samples: 20,
+                sky_view_lut_size: (400, 200),
+                sky_view_lut_samples: 16,
+                aerial_view_lut_samples: 10,
+            },
+        }
     }
 }
 
@@ -528,6 +626,10 @@ fn default_true() -> bool {
 }
 
 fn default_bloom_enabled() -> bool {
+    true
+}
+
+fn default_soft_shadows() -> bool {
     true
 }
 

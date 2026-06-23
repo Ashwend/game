@@ -5,7 +5,7 @@
 use bevy_egui::egui;
 
 use crate::app::{
-    state::{AntiAliasing, ClientSettings, GrassDensity, ShadowQuality},
+    state::{AntiAliasing, AtmosphereQuality, ClientSettings, GrassDensity, ShadowQuality},
     ui::theme,
 };
 
@@ -27,7 +27,35 @@ pub(super) fn render(ui: &mut egui::Ui, settings: &mut ClientSettings) {
         ui.add_space(6.0);
         anti_aliasing_row(ui, settings);
         shadows_row(ui, settings);
+        soft_shadows_row(ui, settings);
+        sky_row(ui, settings);
         grass_row(ui, settings);
+    });
+}
+
+fn soft_shadows_row(ui: &mut egui::Ui, settings: &mut ClientSettings) {
+    setting_row(ui, "Soft shadows", |ui| {
+        checkbox_with_click_sound(ui, &mut settings.graphics.soft_shadows, "Enabled");
+    });
+}
+
+fn sky_row(ui: &mut egui::Ui, settings: &mut ClientSettings) {
+    setting_row(ui, "Sky", |ui| {
+        let response = egui::ComboBox::from_id_salt("options_atmosphere")
+            .selected_text(settings.graphics.atmosphere.label())
+            .width(230.0)
+            .show_ui(ui, |ui| {
+                for quality in AtmosphereQuality::ALL {
+                    let response = ui.selectable_value(
+                        &mut settings.graphics.atmosphere,
+                        quality,
+                        quality.label(),
+                    );
+                    theme::record_click_sound(ui, &response);
+                }
+            })
+            .response;
+        theme::record_click_sound(ui, &response);
     });
 }
 
@@ -117,8 +145,9 @@ mod tests {
         );
 
         assert!(!output.shapes.is_empty());
-        // Defaults survive a render with no interaction.
+        // Defaults survive a render with no interaction (shipped maxed out).
         assert!(settings.graphics.bloom_enabled);
-        assert_eq!(settings.graphics.anti_aliasing, AntiAliasing::Fxaa);
+        assert!(settings.graphics.soft_shadows);
+        assert_eq!(settings.graphics.anti_aliasing, AntiAliasing::Taa);
     }
 }

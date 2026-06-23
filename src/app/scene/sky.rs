@@ -63,6 +63,16 @@ const CELESTIAL_TILT_DEGREES: f32 = 18.0;
 /// night far better than raw sunlight (which really wants auto-exposure).
 const SUN_PEAK_ILLUMINANCE: f32 = 11_000.0;
 
+/// Apparent size of the sun for percentage-closer soft shadows (PCSS). Drives
+/// the penumbra width: PCSS blurs the shadow edge by roughly
+/// `(blocker_depth - receiver_depth) * SUN_SOFT_SHADOW_SIZE`, so the edge softens
+/// with distance from the caster. That is exactly what tames the long, hard-edged
+/// shadows trees throw across the field at a low sun (the "line"), turning them
+/// into a soft gradient. Larger = softer/wider penumbra. Needs the
+/// `experimental_pbr_pcss` Cargo feature (see Cargo.toml). Bevy's own pcss example
+/// uses 10.0 as a reference.
+pub(crate) const SUN_SOFT_SHADOW_SIZE: f32 = 10.0;
+
 /// Peak moonlight illuminance. Real moonlight is ~0.05 lux; we cheat up hugely
 /// so the player can navigate at night. Tuning knob for night brightness.
 const MOON_PEAK_ILLUMINANCE: f32 = 1_300.0;
@@ -164,6 +174,10 @@ pub(crate) fn setup_sky(
             illuminance: SUN_PEAK_ILLUMINANCE * 0.5,
             color: Color::WHITE,
             shadows_enabled: true,
+            // PCSS soft shadows: a distance-widening penumbra so the long low-sun
+            // tree shadows soften to a gradient instead of a hard line. See
+            // `SUN_SOFT_SHADOW_SIZE` + the `experimental_pbr_pcss` feature.
+            soft_shadow_size: Some(SUN_SOFT_SHADOW_SIZE),
             shadow_depth_bias: 0.10,
             shadow_normal_bias: 1.8,
             ..default()

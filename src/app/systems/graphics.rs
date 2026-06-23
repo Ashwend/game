@@ -3,37 +3,51 @@
 //! is change-gated on `ClientSettings` so it only does work on the frame a
 //! setting actually moves, and on the first frame after the resource exists.
 //!
-//! Ownership split: this system owns the camera's [`Bloom`] component and the
-//! sun's shadow config (`DirectionalLight::shadows_enabled` + the cascade
-//! config + the global shadow map resolution). MSAA is intentionally *not*
-//! touched here, the `menu_backdrop_camera_system` already owns the `Msaa`
-//! slot (it swaps it between the menu and in-game), so it reads the MSAA
-//! setting directly to keep a single writer of that component. The sky system
-//! writes the sun's colour/illuminance/transform but never `shadows_enabled`,
-//! so there's no contention on the shared `DirectionalLight`.
+//! Ownership split: this system owns the camera's [`Bloom`] component, the
+//! atmosphere/sky quality (`AtmosphereSettings` + `AtmosphereEnvironmentMapLight`),
+//! and the sun's shadow config (`DirectionalLight::shadows_enabled`,
+//! `soft_shadow_size` for PCSS, the cascade config, and the global shadow map
+//! resolution). MSAA / FXAA / TAA are intentionally *not* touched here, the
+//! `menu_backdrop_camera_system` already owns those camera AA components (it
+//! swaps `Msaa` between the menu and in-game) to keep a single writer. The sky
+//! system writes the sun's colour/illuminance/transform but never the shadow
+//! fields, so there's no contention on the shared `DirectionalLight`.
 
 use bevy::{
-    light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap},
+    light::{AtmosphereEnvironmentMapLight, CascadeShadowConfigBuilder, DirectionalLightShadowMap},
+    pbr::AtmosphereSettings,
     post_process::bloom::Bloom,
     prelude::*,
 };
 
 use crate::app::{
-    scene::{MainCamera, SunLight},
+    scene::{MainCamera, SUN_SOFT_SHADOW_SIZE, SunLight},
     state::ClientSettings,
 };
+
+type CameraQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        Option<&'static Bloom>,
+        Option<&'static mut AtmosphereSettings>,
+        Option<&'static mut AtmosphereEnvironmentMapLight>,
+    ),
+    With<MainCamera>,
+>;
 
 pub(crate) fn apply_graphics_settings_system(
     settings: Res<ClientSettings>,
     mut commands: Commands,
-    camera: Query<(Entity, Option<&Bloom>), With<MainCamera>>,
+    mut camera: CameraQuery,
     mut sun: Query<(Entity, &mut DirectionalLight), With<SunLight>>,
     shadow_map: Option<ResMut<DirectionalLightShadowMap>>,
 ) {
     if !settings.is_changed() {
         return;
     }
-    let Ok((entity, bloom)) = camera.single() else {
+    let Ok((entity, bloom, atmosphere, env_map)) = camera.single_mut() else {
         return;
     };
 
@@ -54,6 +68,27 @@ pub(crate) fn apply_graphics_settings_system(
         commands.entity(entity).remove::<Bloom>();
     }
 
+    // Atmosphere / sky quality. The scattering LUTs and the IBL cubemap are
+    // refiltered every frame in Bevy 0.18, so their sample counts and the cubemap
+    // size are a direct per-frame GPU cost. Both are live-mutable camera
+    // components (no respawn); writing them takes effect next frame. (Optional in
+    // the query so the unit-test camera, spawned without them, still matches.)
+    let atmo = settings.graphics.atmosphere.config();
+    if let Some(mut atmosphere) = atmosphere {
+        atmosphere.transmittance_lut_samples = atmo.transmittance_lut_samples;
+        atmosphere.multiscattering_lut_samples = atmo.multiscattering_lut_samples;
+        atmosphere.sky_view_lut_size =
+            UVec2::new(atmo.sky_view_lut_size.0, atmo.sky_view_lut_size.1);
+        atmosphere.sky_view_lut_samples = atmo.sky_view_lut_samples;
+        atmosphere.aerial_view_lut_samples = atmo.aerial_view_lut_samples;
+    }
+    if let Some(mut env_map) = env_map {
+        let size = UVec2::splat(atmo.env_map_size);
+        if env_map.size != size {
+            env_map.size = size;
+        }
+    }
+
     // Sun shadows: disabling them, or shrinking the cascade distance / count /
     // map resolution, is the biggest GPU lever in dense forest (every tree
     // re-renders into each cascade). `High` matches the engine defaults.
@@ -61,6 +96,17 @@ pub(crate) fn apply_graphics_settings_system(
         let config = settings.graphics.shadows.config();
         if light.shadows_enabled != config.is_some() {
             light.shadows_enabled = config.is_some();
+        }
+        // PCSS soft shadows: a distance-widening penumbra when both shadows and
+        // the soft-shadow toggle are on; `None` falls back to the hard PCF path.
+        // (Needs the `experimental_pbr_pcss` feature, already enabled in Cargo.)
+        let soft = if config.is_some() && settings.graphics.soft_shadows {
+            Some(SUN_SOFT_SHADOW_SIZE)
+        } else {
+            None
+        };
+        if light.soft_shadow_size != soft {
+            light.soft_shadow_size = soft;
         }
         if let Some(cfg) = config {
             commands.entity(sun_entity).insert(
@@ -145,18 +191,18 @@ mod tests {
             .id();
         app.add_systems(Update, apply_graphics_settings_system);
 
-        // Default (High) keeps sun shadows on at the 2048 map size.
+        // Default (Ultra) keeps sun shadows on at the 4096 map size.
         app.update();
         assert!(
             app.world()
                 .get::<DirectionalLight>(sun)
                 .unwrap()
                 .shadows_enabled,
-            "High keeps shadows on"
+            "Ultra keeps shadows on"
         );
         assert_eq!(
             app.world().resource::<DirectionalLightShadowMap>().size,
-            2048
+            4096
         );
 
         // Off disables the sun's shadows entirely.
@@ -188,6 +234,87 @@ mod tests {
         assert_eq!(
             app.world().resource::<DirectionalLightShadowMap>().size,
             1024
+        );
+    }
+
+    fn app_with_sun() -> (App, Entity) {
+        let mut app = App::new();
+        app.insert_resource(ClientSettings::default());
+        app.insert_resource(DirectionalLightShadowMap::default());
+        app.world_mut().spawn((MainCamera, Camera3d::default()));
+        let sun = app
+            .world_mut()
+            .spawn((
+                SunLight,
+                DirectionalLight {
+                    shadows_enabled: true,
+                    ..default()
+                },
+            ))
+            .id();
+        app.add_systems(Update, apply_graphics_settings_system);
+        (app, sun)
+    }
+
+    #[test]
+    fn soft_shadows_setting_toggles_pcss() {
+        use crate::app::state::ShadowQuality;
+        let (mut app, sun) = app_with_sun();
+
+        // Default: shadows High + soft_shadows on -> a PCSS penumbra is set.
+        app.update();
+        assert!(
+            app.world()
+                .get::<DirectionalLight>(sun)
+                .unwrap()
+                .soft_shadow_size
+                .is_some(),
+            "default soft shadows enable PCSS"
+        );
+
+        // Turning soft shadows off falls back to the hard PCF path.
+        app.world_mut()
+            .resource_mut::<ClientSettings>()
+            .graphics
+            .soft_shadows = false;
+        app.update();
+        assert!(
+            app.world()
+                .get::<DirectionalLight>(sun)
+                .unwrap()
+                .soft_shadow_size
+                .is_none(),
+            "disabling soft shadows clears PCSS"
+        );
+
+        // With shadows Off, PCSS is moot regardless of the toggle.
+        let mut settings = app.world_mut().resource_mut::<ClientSettings>();
+        settings.graphics.soft_shadows = true;
+        settings.graphics.shadows = ShadowQuality::Off;
+        app.update();
+        assert!(
+            app.world()
+                .get::<DirectionalLight>(sun)
+                .unwrap()
+                .soft_shadow_size
+                .is_none(),
+            "no PCSS when shadows are off"
+        );
+    }
+
+    #[test]
+    fn ultra_uses_a_4096_shadow_map() {
+        use crate::app::state::ShadowQuality;
+        let (mut app, _sun) = app_with_sun();
+
+        app.world_mut()
+            .resource_mut::<ClientSettings>()
+            .graphics
+            .shadows = ShadowQuality::Ultra;
+        app.update();
+        assert_eq!(
+            app.world().resource::<DirectionalLightShadowMap>().size,
+            4096
         );
     }
 }
