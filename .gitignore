@@ -13,3 +13,7 @@
 art/items/*/source/
 *.contact.png
 *.preview.png
+
+# Python bytecode + Blender backups (regenerable, never committed)
+__pycache__/
+*.blend1

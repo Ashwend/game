@@ -30,6 +30,11 @@ const TOON_SHADER_PATH: &str = "embedded://shaders/toon.wgsl";
 /// shader's header for the full explanation.
 const TOON_PREPASS_SHADER_PATH: &str = "embedded://shaders/toon_prepass.wgsl";
 
+/// Embedded path of the first-person held-tool ("viewmodel") cel shader. Same
+/// bind group as [`ToonMaterial`] but a camera-relative key light so the cel bands
+/// stay stable as the camera turns instead of swimming with the world sun.
+const TOON_VIEWMODEL_SHADER_PATH: &str = "embedded://shaders/toon_viewmodel.wgsl";
+
 /// Standalone cel-shaded material. Bindings map 1:1 with
 /// `assets/shaders/toon.wgsl`.
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
@@ -91,5 +96,45 @@ impl Material for ToonMaterial {
         } else {
             AlphaMode::Opaque
         }
+    }
+}
+
+/// Cel material for the FIRST-PERSON held tool (a camera-child viewmodel). Same
+/// bind group + fields as [`ToonMaterial`], but its shader lights the cel bands
+/// with a key light fixed in *view* space, so the bands stay put as the camera
+/// turns instead of swimming with the world sun (the standard "viewmodel light
+/// rig" trick). Day/night brightness still tracks the scene via an
+/// orientation-independent probe in the shader. Only the in-hand item uses this;
+/// the third-person tool on remote players stays on [`ToonMaterial`]. Shader:
+/// `assets/shaders/toon_viewmodel.wgsl`.
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+pub(crate) struct ToonViewmodelMaterial {
+    /// Surface detail texture; the shader does `detail * COLOR_0` like the world
+    /// toon material. The binding-1 sampler is taken from this image.
+    #[texture(0)]
+    #[sampler(1)]
+    pub(crate) detail: Handle<Image>,
+    /// Cel tuning: `x = band count`, `y = alpha-mask cutoff` (0 for the opaque
+    /// tools), `z = ink-edge strength`, `w = ink-edge width exponent`.
+    #[uniform(2)]
+    pub(crate) params: Vec4,
+    /// Triplanar tiles/metre; unused by the UV'd tool glbs (kept so the bind group
+    /// matches `ToonMaterial`'s layout).
+    #[uniform(3)]
+    pub(crate) tex_scale: f32,
+    /// Per-instance opacity; `1.0` for the tools (no felling dissolve here).
+    #[uniform(4)]
+    pub(crate) fade: f32,
+}
+
+impl Material for ToonViewmodelMaterial {
+    fn fragment_shader() -> ShaderRef {
+        TOON_VIEWMODEL_SHADER_PATH.into()
+    }
+
+    /// The held tools are always opaque (`fade == 1.0`, `params.y == 0`), so the
+    /// default opaque prepass is fine and no custom prepass shader is needed.
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Opaque
     }
 }

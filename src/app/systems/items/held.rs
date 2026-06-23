@@ -4,7 +4,9 @@ use bevy::{light::NotShadowCaster, prelude::*};
 
 use crate::{
     app::{
-        scene::{HeldItemVisual, ItemVisualAssets, MainCamera},
+        scene::{
+            HeldItemVisual, ItemVisualAssets, MainCamera, ToonMaterial, ToonViewmodelMaterial,
+        },
         state::{GatherInputState, LocalPlayerState, MenuState, Screen, ToolSwapState},
     },
     items::{HeldMesh, ItemModel, item_definition},
@@ -95,15 +97,14 @@ pub(crate) fn apply_held_item_visual_system(
     for entity in held_entities {
         commands.entity(entity).despawn();
     }
-    for (mesh, material) in held_item_layers(&assets, definition.held_mesh) {
-        commands.spawn((
+    for (mesh, material) in held_item_layers(&assets, definition.held_mesh, true) {
+        let mut layer = commands.spawn((
             Name::new("Held Item"),
             HeldItemVisual {
                 item_id: item_id.clone(),
             },
             ChildOf(camera_entity),
             Mesh3d(mesh),
-            MeshMaterial3d(material),
             transform,
             Visibility::Visible,
             // Held items sit right in front of the camera; their shadow would
@@ -111,6 +112,38 @@ pub(crate) fn apply_held_item_visual_system(
             // frame. Skip the shadow pass.
             NotShadowCaster,
         ));
+        insert_held_layer_material(&mut layer, material);
+    }
+}
+
+/// A held-item layer's material. Each is a different asset type, so
+/// `MeshMaterial3d<T>` is a different component: this enum lets `held_item_layers`
+/// mix them and `insert_held_layer_material` attaches the right one.
+/// - `Standard`: the bag / hammer / building-plan viewmodels.
+/// - `Toon`: world-lit cel tool, used for the THIRD-PERSON tool on a remote
+///   player's hand (lit by the scene like every other world prop).
+/// - `ToonViewmodel`: camera-relative cel tool, used for the FIRST-PERSON in-hand
+///   tool so its bands stay stable as the camera turns.
+pub(crate) enum HeldLayerMaterial {
+    Standard(Handle<StandardMaterial>),
+    Toon(Handle<ToonMaterial>),
+    ToonViewmodel(Handle<ToonViewmodelMaterial>),
+}
+
+/// Attach the correct `MeshMaterial3d<T>` component for a held-item layer. Shared
+/// by the first-person viewmodel and the third-person rig so both pick the same
+/// material kind per layer.
+pub(crate) fn insert_held_layer_material(layer: &mut EntityCommands, material: HeldLayerMaterial) {
+    match material {
+        HeldLayerMaterial::Standard(handle) => {
+            layer.insert(MeshMaterial3d(handle));
+        }
+        HeldLayerMaterial::Toon(handle) => {
+            layer.insert(MeshMaterial3d(handle));
+        }
+        HeldLayerMaterial::ToonViewmodel(handle) => {
+            layer.insert(MeshMaterial3d(handle));
+        }
     }
 }
 
@@ -122,69 +155,87 @@ pub(crate) fn apply_held_item_visual_system(
 ///
 /// Shared with the third-person rig (`app::systems::players`), which attaches
 /// the same layers to a remote player's hand anchor so peers see what's held.
+///
+/// `viewmodel` picks the tool material set: `true` for the FIRST-PERSON in-hand
+/// item (camera-relative `ToonViewmodelMaterial`, stable bands), `false` for the
+/// THIRD-PERSON tool on a remote player's hand (world-lit `ToonMaterial`). The
+/// non-tool layers (bag / hammer / plan) are unaffected by the flag.
 pub(crate) fn held_item_layers(
     assets: &ItemVisualAssets,
     held_mesh: HeldMesh,
-) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>)> {
+    viewmodel: bool,
+) -> Vec<(Handle<Mesh>, HeldLayerMaterial)> {
+    use HeldLayerMaterial::{Standard, Toon, ToonViewmodel};
+    // The four tools share three cel materials: the haft + twine ride the wood
+    // material, the head rides stone or iron. Per-tool colour is in the glb
+    // COLOR_0, so the tier difference is just which head material. First-person
+    // uses the camera-relative viewmodel variants so the bands don't swim.
+    let wood = || {
+        if viewmodel {
+            ToonViewmodel(assets.tool_wood_vm_material.clone())
+        } else {
+            Toon(assets.tool_wood_material.clone())
+        }
+    };
+    let stone_head = || {
+        if viewmodel {
+            ToonViewmodel(assets.tool_stone_vm_material.clone())
+        } else {
+            Toon(assets.tool_stone_material.clone())
+        }
+    };
+    let iron_head = || {
+        if viewmodel {
+            ToonViewmodel(assets.tool_iron_vm_material.clone())
+        } else {
+            Toon(assets.tool_iron_material.clone())
+        }
+    };
+    let parchment = || {
+        if viewmodel {
+            ToonViewmodel(assets.tool_parchment_vm_material.clone())
+        } else {
+            Toon(assets.tool_parchment_material.clone())
+        }
+    };
     match held_mesh {
         // The bag silhouette covers raw materials and deployables-in-hand,
         // the structure mesh is what gets dropped into the world on
         // placement, not what's held.
         HeldMesh::Bag => vec![(
             assets.held_bag_mesh.clone(),
-            assets.held_bag_material.clone(),
+            Standard(assets.held_bag_material.clone()),
         )],
-        // Every tool tier is an authored glb carrying its own two materials
-        // (matte haft + worked head), drawn as a body layer plus a head layer.
+        // Every tool tier is an authored glb with two primitives (haft body +
+        // worked head), drawn as a body layer plus a head layer, both cel-shaded.
         HeldMesh::StoneHatchet => vec![
-            (
-                assets.held_stone_hatchet_body_mesh.clone(),
-                assets.held_stone_hatchet_body_material.clone(),
-            ),
-            (
-                assets.held_stone_hatchet_head_mesh.clone(),
-                assets.held_stone_hatchet_head_material.clone(),
-            ),
+            (assets.held_stone_hatchet_body_mesh.clone(), wood()),
+            (assets.held_stone_hatchet_head_mesh.clone(), stone_head()),
         ],
         HeldMesh::StonePickaxe => vec![
-            (
-                assets.held_stone_pickaxe_body_mesh.clone(),
-                assets.held_stone_pickaxe_body_material.clone(),
-            ),
-            (
-                assets.held_stone_pickaxe_head_mesh.clone(),
-                assets.held_stone_pickaxe_head_material.clone(),
-            ),
+            (assets.held_stone_pickaxe_body_mesh.clone(), wood()),
+            (assets.held_stone_pickaxe_head_mesh.clone(), stone_head()),
         ],
         HeldMesh::IronHatchet => vec![
-            (
-                assets.held_iron_hatchet_body_mesh.clone(),
-                assets.held_iron_hatchet_body_material.clone(),
-            ),
-            (
-                assets.held_iron_hatchet_head_mesh.clone(),
-                assets.held_iron_hatchet_head_material.clone(),
-            ),
+            (assets.held_iron_hatchet_body_mesh.clone(), wood()),
+            (assets.held_iron_hatchet_head_mesh.clone(), iron_head()),
         ],
         HeldMesh::IronPickaxe => vec![
-            (
-                assets.held_iron_pickaxe_body_mesh.clone(),
-                assets.held_iron_pickaxe_body_material.clone(),
-            ),
-            (
-                assets.held_iron_pickaxe_head_mesh.clone(),
-                assets.held_iron_pickaxe_head_material.clone(),
-            ),
+            (assets.held_iron_pickaxe_body_mesh.clone(), wood()),
+            (assets.held_iron_pickaxe_head_mesh.clone(), iron_head()),
         ],
-        // Procedural vertex-coloured viewmodels; single layer each.
-        HeldMesh::Hammer => vec![(
-            assets.held_hammer_mesh.clone(),
-            assets.held_vertex_material.clone(),
-        )],
-        HeldMesh::BuildingPlan => vec![(
-            assets.held_building_plan_mesh.clone(),
-            assets.held_vertex_material.clone(),
-        )],
+        // The hammer is a cel-shaded wooden mallet glb: wood body (handle +
+        // mallet head) + iron band hoops, sharing the tool toon materials.
+        HeldMesh::Hammer => vec![
+            (assets.held_hammer_body_mesh.clone(), wood()),
+            (assets.held_hammer_bands_mesh.clone(), iron_head()),
+        ],
+        // Building plan: a cel-shaded rolled scroll glb. Parchment paper +
+        // twine ties (the ties reuse the wood material with a brown COLOR_0).
+        HeldMesh::BuildingPlan => vec![
+            (assets.held_plan_paper_mesh.clone(), parchment()),
+            (assets.held_plan_ties_mesh.clone(), wood()),
+        ],
     }
 }
 
@@ -230,8 +281,10 @@ pub(crate) fn held_item_hand_transform(held_mesh: HeldMesh) -> Transform {
     let tilt = Quat::from_rotation_x(-0.4);
     let yaw = Quat::from_rotation_y(PI * 0.5);
     let (desired, grip_y) = match held_mesh {
-        // Hammer head strikes along its local Z, so no yaw, just the tilt.
-        HeldMesh::Hammer => (tilt, -0.15),
+        // Hammer head strikes along its local Z, so no yaw, just the tilt. The
+        // mallet has a short one-handed grip below the head (handle ~0.01-0.19),
+        // so the hand grips around the middle of the haft.
+        HeldMesh::Hammer => (tilt, 0.10),
         HeldMesh::StoneHatchet | HeldMesh::IronHatchet => (tilt * yaw, -0.16),
         HeldMesh::StonePickaxe | HeldMesh::IronPickaxe => (tilt * yaw, -0.16),
         // Bag / building-plan silhouettes have no handle; just sit upright.
@@ -299,11 +352,22 @@ fn held_item_local_transform(
         model_rotation
     };
 
+    // The hammer is a short one-handed mallet, not a long two-handed tool, so it
+    // sits closer to the player: pull it back toward the camera (much less
+    // forward) and drop it a touch, reading as a relaxed one-arm carry rather
+    // than a weapon held out front.
+    let model_offset = if matches!(held_mesh, HeldMesh::Hammer) {
+        Vec3::new(0.0, -0.03, 0.20)
+    } else {
+        Vec3::ZERO
+    };
+
     let swing_translation = Vec3::NEG_Z * pose.forward + Vec3::X * pose.right + Vec3::Y * pose.up;
     let base_rotation = Quat::from_euler(EulerRot::XYZ, pose.pitch, pose.yaw, pose.roll);
     let base_translation = Vec3::NEG_Z * HELD_ITEM_FORWARD_OFFSET
         + Vec3::X * HELD_ITEM_RIGHT_OFFSET
         - Vec3::Y * model_down_offset
+        + model_offset
         + swing_translation;
     let base_quat = base_rotation * model_rotation;
 

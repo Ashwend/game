@@ -18,7 +18,7 @@ use super::super::{
 };
 use super::items::{
     carry_forearm_rotation, carry_upper_arm_rotation, held_item_hand_transform, held_item_layers,
-    remote_swing_arm_pose,
+    insert_held_layer_material, remote_swing_arm_pose,
 };
 
 const REMOTE_PLAYER_INTERPOLATION_SECONDS: f32 = 0.1;
@@ -736,21 +736,19 @@ pub(crate) fn apply_remote_player_appearance_system(
             if let Some(mesh) = held.0 {
                 let grip = held_item_hand_transform(mesh);
                 let anchor = rig.hand_anchor;
-                for (layer_mesh, layer_material) in held_item_layers(&item_assets, mesh) {
-                    let layer = commands
-                        .spawn((
-                            Name::new("Held Item (remote)"),
-                            Mesh3d(layer_mesh),
-                            MeshMaterial3d(layer_material),
-                            grip,
-                            Visibility::Inherited,
-                            // Shadow would be noise at this scale; it rides the
-                            // swinging arm anyway.
-                            NotShadowCaster,
-                            ChildOf(anchor),
-                        ))
-                        .id();
-                    rig.held_layers.push(layer);
+                for (layer_mesh, layer_material) in held_item_layers(&item_assets, mesh, false) {
+                    let mut layer = commands.spawn((
+                        Name::new("Held Item (remote)"),
+                        Mesh3d(layer_mesh),
+                        grip,
+                        Visibility::Inherited,
+                        // Shadow would be noise at this scale; it rides the
+                        // swinging arm anyway.
+                        NotShadowCaster,
+                        ChildOf(anchor),
+                    ));
+                    insert_held_layer_material(&mut layer, layer_material);
+                    rig.held_layers.push(layer.id());
                 }
             }
         }

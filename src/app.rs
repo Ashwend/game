@@ -51,8 +51,8 @@ use self::{
         play_sounds_system, play_transition_stingers_system, tick_audio_faders_system,
     },
     scene::{
-        GrassInstancingPlugin, GrassState, TerrainMaterial, ToonMaterial, apply_world_scene_system,
-        setup_scene, stream_grass_system, update_sky_system,
+        GrassInstancingPlugin, GrassState, TerrainMaterial, ToonMaterial, ToonViewmodelMaterial,
+        apply_world_scene_system, setup_scene, stream_grass_system, update_sky_system,
     },
     state::{
         AuthFlow, BuildingPlanState, ClientErrorToast, ClientRuntime, ClientSettings,
@@ -500,6 +500,10 @@ fn add_third_party_plugins(app: &mut App, settings: &ClientSettings) {
         // instead of smoothly PBR-lit. Client-only; after EmbeddedAssetsPlugin so
         // `shaders/toon.wgsl` resolves when the first world's props spawn.
         .add_plugins(MaterialPlugin::<ToonMaterial>::default())
+        // Camera-relative variant of the toon material for the first-person held
+        // tool, so its cel bands stay stable as the camera turns instead of
+        // swimming with the world sun (a viewmodel light rig). Same bind group.
+        .add_plugins(MaterialPlugin::<ToonViewmodelMaterial>::default())
         // GPU-instanced detail grass: the project's one custom render pipeline.
         // Draws one shared blade mesh thousands of times per tile from a per-blade
         // instance buffer, so the field can be far denser than baking every blade

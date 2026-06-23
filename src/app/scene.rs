@@ -34,7 +34,7 @@ pub(crate) use grass::{GrassInstancingPlugin, GrassState, stream_grass_system};
 pub(crate) use mesh::{PLAYER_HEAD_TOP_LOCAL_Y, PlayerPart, rig_layout};
 pub(crate) use sky::{SUN_SOFT_SHADOW_SIZE, SunLight, update_sky_system};
 pub(crate) use terrain::{TerrainMaterial, TerrainTextureAssets};
-pub(crate) use toon::ToonMaterial;
+pub(crate) use toon::{ToonMaterial, ToonViewmodelMaterial};
 pub(crate) use world::{WorldSceneState, apply_world_scene_system};
 
 #[cfg(test)]
@@ -80,6 +80,7 @@ mod tests {
         // `Assets<ToonMaterial>` is normally registered by its `MaterialPlugin`,
         // which the bare test app doesn't add, so register it directly.
         app.init_asset::<ToonMaterial>();
+        app.init_asset::<ToonViewmodelMaterial>();
         // `setup_scene` loads the four biome ground textures into `Assets<Image>`
         // for the terrain material, and `asset_server.load::<Image>` panics if the
         // type was never registered.

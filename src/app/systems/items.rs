@@ -25,7 +25,7 @@ mod tool_swap;
 pub(crate) use dropped::{DroppedItemEntities, apply_dropped_items_system};
 pub(crate) use held::{
     apply_held_item_visual_system, carry_forearm_rotation, carry_upper_arm_rotation,
-    held_item_hand_transform, held_item_layers,
+    held_item_hand_transform, held_item_layers, insert_held_layer_material,
 };
 pub(crate) use loot_bag::{LootBagEntities, apply_loot_bags_system};
 pub(crate) use pickup::update_pickup_target_system;

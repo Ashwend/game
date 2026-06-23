@@ -16,13 +16,13 @@ use bevy::{
 
 use super::mesh::builder::build_hay_tuft_mesh;
 use super::terrain::build_mip_chain;
-use super::toon::ToonMaterial;
+use super::toon::{ToonMaterial, ToonViewmodelMaterial};
 use super::{
     components::MainCamera,
     mesh::{
         ORE_NODE_STAGE_COUNT, PlayerRigMeshes, build_player_rig_meshes, door_ghost_mesh,
-        held_building_plan_mesh, held_hammer_mesh, impact_stone_shard_mesh, impact_wood_chip_mesh,
-        low_poly_bag_mesh, low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_medium_lod_mesh,
+        impact_stone_shard_mesh, impact_wood_chip_mesh, low_poly_bag_mesh,
+        low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_medium_lod_mesh,
         low_poly_birch_tree_small_lod_mesh, low_poly_branch_pile_mesh,
         low_poly_pine_tree_large_lod_mesh, low_poly_pine_tree_medium_lod_mesh,
         low_poly_pine_tree_small_lod_mesh, low_poly_surface_stone_mesh,
@@ -91,10 +91,10 @@ pub(crate) struct ItemVisualAssets {
     pub(crate) held_bag_mesh: Handle<Mesh>,
     /// Both tool tiers (stone and iron) are authored Blender glbs matching their
     /// inventory icons. Each renders as two overlaid layers sharing one swing
-    /// transform: a matte `*_body` (the wood haft plus its leather/twine
-    /// bindings) and a `*_head` (worked stone or forged iron, the latter shiny).
-    /// Both the geometry *and* the materials come from the glb's two primitives
-    /// (see `setup_scene`), so the whole look is owned by the model.
+    /// transform: a `*_body` (the wood haft plus its twine bindings) drawn from
+    /// the glb's primitive 0, and a `*_head` (worked stone or forged iron) from
+    /// primitive 1. The geometry + UVs + COLOR_0 come from the glb; the cel
+    /// `ToonMaterial`s below carry the textures (the tool tiers share three).
     pub(crate) held_stone_hatchet_body_mesh: Handle<Mesh>,
     pub(crate) held_stone_hatchet_head_mesh: Handle<Mesh>,
     pub(crate) held_stone_pickaxe_body_mesh: Handle<Mesh>,
@@ -103,25 +103,43 @@ pub(crate) struct ItemVisualAssets {
     pub(crate) held_iron_hatchet_head_mesh: Handle<Mesh>,
     pub(crate) held_iron_pickaxe_body_mesh: Handle<Mesh>,
     pub(crate) held_iron_pickaxe_head_mesh: Handle<Mesh>,
-    /// Per-tool materials carried by each glb (matte haft + stone/iron head),
-    /// tinted by the model's COLOR_0 vertex colours. Sources:
-    /// `art/items/{wood_stone,iron}_{hatchet,pickaxe}/*.blend`.
-    pub(crate) held_stone_hatchet_body_material: Handle<StandardMaterial>,
-    pub(crate) held_stone_hatchet_head_material: Handle<StandardMaterial>,
-    pub(crate) held_stone_pickaxe_body_material: Handle<StandardMaterial>,
-    pub(crate) held_stone_pickaxe_head_material: Handle<StandardMaterial>,
-    pub(crate) held_iron_hatchet_body_material: Handle<StandardMaterial>,
-    pub(crate) held_iron_hatchet_head_material: Handle<StandardMaterial>,
-    pub(crate) held_iron_pickaxe_body_material: Handle<StandardMaterial>,
-    pub(crate) held_iron_pickaxe_head_material: Handle<StandardMaterial>,
+    /// Shared cel [`ToonMaterial`]s for the tool layers: the tools joined the
+    /// cel/anime family, so each layer is lit by the same PBR-then-posterise path
+    /// as the ore + deployables instead of a flat per-glb `StandardMaterial`. The
+    /// wood haft plus its twine bindings ride `tool_wood_material`; the worked
+    /// head rides `tool_stone_material` (knapped stone) or `tool_iron_material`
+    /// (forged steel). Per-tool colour comes from the glb COLOR_0 (warm wood / tan
+    /// twine / grey stone / cool steel); the light neutral-grain textures only add
+    /// surface detail (`detail * COLOR_0`). Sources: `assets/textures/tools/*`.
+    pub(crate) tool_wood_material: Handle<ToonMaterial>,
+    pub(crate) tool_stone_material: Handle<ToonMaterial>,
+    pub(crate) tool_iron_material: Handle<ToonMaterial>,
+    /// Camera-relative variants of the three tool materials, used only for the
+    /// FIRST-PERSON held viewmodel (a camera-child). They light the cel bands from
+    /// a fixed view-space key light so the bands don't swim as the camera turns;
+    /// the world-space `*_material` above stays on the third-person tool, which is
+    /// in world space on a remote player's hand and should be lit like the scene.
+    pub(crate) tool_wood_vm_material: Handle<ToonViewmodelMaterial>,
+    pub(crate) tool_stone_vm_material: Handle<ToonViewmodelMaterial>,
+    pub(crate) tool_iron_vm_material: Handle<ToonViewmodelMaterial>,
+    /// Parchment material for the rolled building-plan scroll (world + viewmodel
+    /// variants, same as the tools). The scroll paper rides this; its twine ties
+    /// reuse the wood material with a brown COLOR_0.
+    pub(crate) tool_parchment_material: Handle<ToonMaterial>,
+    pub(crate) tool_parchment_vm_material: Handle<ToonViewmodelMaterial>,
     pub(crate) dropped_material: Handle<StandardMaterial>,
     pub(crate) held_bag_material: Handle<StandardMaterial>,
-    /// Procedural construction-hammer and building-plan viewmodels.
-    /// Vertex-coloured like the world props; candidates for the authored
-    /// glb pipeline later.
-    pub(crate) held_hammer_mesh: Handle<Mesh>,
-    pub(crate) held_building_plan_mesh: Handle<Mesh>,
-    pub(crate) held_vertex_material: Handle<StandardMaterial>,
+    /// Construction hammer (a wooden mallet): an authored glb like the tools,
+    /// two primitives = wood body (handle + mallet head) on `tool_wood*` and the
+    /// two iron band hoops on `tool_iron*`. Cel-shaded via the same tool toon
+    /// materials. Source: `art/items/hammer/hammer.blend`.
+    pub(crate) held_hammer_body_mesh: Handle<Mesh>,
+    pub(crate) held_hammer_bands_mesh: Handle<Mesh>,
+    /// Building-plan scroll: an authored glb, two primitives = parchment paper
+    /// (roll + flap) on `tool_parchment*` and the twine ties on `tool_wood*`
+    /// (brown COLOR_0). Source: `art/items/building_plan/building_plan.blend`.
+    pub(crate) held_plan_paper_mesh: Handle<Mesh>,
+    pub(crate) held_plan_ties_mesh: Handle<Mesh>,
 }
 
 #[derive(Resource, Clone)]
@@ -380,12 +398,14 @@ fn tree_texture_sampler() -> ImageSamplerDescriptor {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn setup_scene(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut toon_materials: ResMut<Assets<ToonMaterial>>,
+    mut toon_viewmodel_materials: ResMut<Assets<ToonViewmodelMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut scattering_media: ResMut<Assets<ScatteringMedium>>,
 ) {
@@ -502,29 +522,76 @@ pub(crate) fn setup_scene(
         }),
     });
     // Every tool ships as an authored Blender glb (matching its inventory icon).
-    // Both geometry *and* materials load straight from each model: two primitives
-    // -> the two layers every tool uses (primitive 0 = matte wooden haft, with the
-    // leather/twine bindings; primitive 1 = the worked stone or forged iron head),
-    // and two base-white materials tinted by the model's COLOR_0 vertex colours. So
-    // the whole look is owned by the asset. Sources:
-    // `art/items/{wood_stone,iron}_{pickaxe,hatchet}/*.blend`.
+    // Geometry loads straight from each model: two primitives -> the two layers
+    // every tool uses (primitive 0 = wooden haft with its twine bindings;
+    // primitive 1 = the worked stone or forged iron head). The glbs carry UVs +
+    // COLOR_0 now; the cel `ToonMaterial`s (built below) carry the textures, so
+    // the four tools joined the same cel/anime family as the ore + deployables.
+    // Sources: `art/items/{wood_stone,iron}_{pickaxe,hatchet}/*.blend`.
     let stone_pickaxe_glb = embedded_asset_path("items/wood_stone_pickaxe/model.glb");
     let stone_hatchet_glb = embedded_asset_path("items/wood_stone_hatchet/model.glb");
     let pickaxe_glb = embedded_asset_path("items/iron_pickaxe/model.glb");
     let hatchet_glb = embedded_asset_path("items/iron_hatchet/model.glb");
+    // The construction hammer (a wooden mallet) is now an authored glb too:
+    // primitive 0 = wood body (handle + mallet head), primitive 1 = iron bands.
+    let hammer_glb = embedded_asset_path("items/hammer/model.glb");
+    // The building-plan scroll glb: primitive 0 = parchment paper (roll + flap),
+    // primitive 1 = the twine ties.
+    let building_plan_glb = embedded_asset_path("items/building_plan/model.glb");
     let prim_mesh = |glb: &str, primitive: usize| -> Handle<Mesh> {
         asset_server
             .load(GltfAssetLabel::Primitive { mesh: 0, primitive }.from_asset(glb.to_owned()))
     };
-    let glb_material = |glb: &str, index: usize| -> Handle<StandardMaterial> {
-        asset_server.load(
-            GltfAssetLabel::Material {
-                index,
-                is_scale_inverted: false,
-            }
-            .from_asset(glb.to_owned()),
+    // Tool cel textures: light neutral-grain detail (wood grain / knapped stone /
+    // hammered steel) that the glb COLOR_0 tints, the same `detail * COLOR_0`
+    // trick as the ore + deployables. Decoded sRGB with a CPU mip chain +
+    // repeat/aniso sampler. Source: `art/tools/make_tool_textures.py`.
+    let mut load_tool_texture = |name: &str| -> Handle<Image> {
+        let rel = format!("textures/tools/{name}.png");
+        let bytes =
+            embedded_bytes(&rel).unwrap_or_else(|| panic!("embedded tool texture missing: {rel}"));
+        let mut image = Image::from_buffer(
+            bytes,
+            ImageType::Extension("png"),
+            CompressedImageFormats::NONE,
+            true,
+            ImageSampler::Descriptor(tree_texture_sampler()),
+            RenderAssetUsages::RENDER_WORLD,
         )
+        .unwrap_or_else(|err| panic!("decode tool texture {rel}: {err:?}"));
+        build_mip_chain(&mut image);
+        images.add(image)
     };
+    // Tool heads + haft are flat-faceted, so they run the punchy deployable cel
+    // params (3 bands, full-strength + slightly wider ink edge so every facet and
+    // bevel draws an outline). `tex_scale` is unused (the glbs carry real UVs).
+    let tool_params = Vec4::new(3.0, 0.0, 1.0, 1.4);
+    let tool_toon = |tex: Handle<Image>| ToonMaterial {
+        detail: tex,
+        params: tool_params,
+        tex_scale: 1.0,
+        fade: 1.0,
+    };
+    // Camera-relative variant for the first-person held viewmodel (same texture +
+    // params; only the shader's light frame differs, see `ToonViewmodelMaterial`).
+    let tool_vm = |tex: Handle<Image>| ToonViewmodelMaterial {
+        detail: tex,
+        params: tool_params,
+        tex_scale: 1.0,
+        fade: 1.0,
+    };
+    let wood_tex = load_tool_texture("wood");
+    let stone_tex = load_tool_texture("stone");
+    let iron_tex = load_tool_texture("iron");
+    let parchment_tex = load_tool_texture("parchment");
+    let tool_wood_material = toon_materials.add(tool_toon(wood_tex.clone()));
+    let tool_stone_material = toon_materials.add(tool_toon(stone_tex.clone()));
+    let tool_iron_material = toon_materials.add(tool_toon(iron_tex.clone()));
+    let tool_parchment_material = toon_materials.add(tool_toon(parchment_tex.clone()));
+    let tool_wood_vm_material = toon_viewmodel_materials.add(tool_vm(wood_tex));
+    let tool_stone_vm_material = toon_viewmodel_materials.add(tool_vm(stone_tex));
+    let tool_iron_vm_material = toon_viewmodel_materials.add(tool_vm(iron_tex));
+    let tool_parchment_vm_material = toon_viewmodel_materials.add(tool_vm(parchment_tex));
     commands.insert_resource(ItemVisualAssets {
         dropped_mesh: meshes.add(low_poly_bag_mesh()),
         held_bag_mesh: meshes.add(Cuboid::new(0.26, 0.22, 0.34)),
@@ -536,14 +603,14 @@ pub(crate) fn setup_scene(
         held_iron_hatchet_head_mesh: prim_mesh(&hatchet_glb, 1),
         held_iron_pickaxe_body_mesh: prim_mesh(&pickaxe_glb, 0),
         held_iron_pickaxe_head_mesh: prim_mesh(&pickaxe_glb, 1),
-        held_stone_hatchet_body_material: glb_material(&stone_hatchet_glb, 0),
-        held_stone_hatchet_head_material: glb_material(&stone_hatchet_glb, 1),
-        held_stone_pickaxe_body_material: glb_material(&stone_pickaxe_glb, 0),
-        held_stone_pickaxe_head_material: glb_material(&stone_pickaxe_glb, 1),
-        held_iron_hatchet_body_material: glb_material(&hatchet_glb, 0),
-        held_iron_hatchet_head_material: glb_material(&hatchet_glb, 1),
-        held_iron_pickaxe_body_material: glb_material(&pickaxe_glb, 0),
-        held_iron_pickaxe_head_material: glb_material(&pickaxe_glb, 1),
+        tool_wood_material,
+        tool_stone_material,
+        tool_iron_material,
+        tool_wood_vm_material,
+        tool_stone_vm_material,
+        tool_iron_vm_material,
+        tool_parchment_material,
+        tool_parchment_vm_material,
         dropped_material: materials.add(StandardMaterial {
             base_color: DROPPED_BAG_COLOR,
             perceptual_roughness: 0.95,
@@ -556,14 +623,10 @@ pub(crate) fn setup_scene(
             reflectance: 0.15,
             ..default()
         }),
-        held_hammer_mesh: meshes.add(held_hammer_mesh()),
-        held_building_plan_mesh: meshes.add(held_building_plan_mesh()),
-        held_vertex_material: materials.add(StandardMaterial {
-            base_color: VERTEX_MATERIAL_COLOR,
-            perceptual_roughness: 0.90,
-            reflectance: 0.15,
-            ..default()
-        }),
+        held_hammer_body_mesh: prim_mesh(&hammer_glb, 0),
+        held_hammer_bands_mesh: prim_mesh(&hammer_glb, 1),
+        held_plan_paper_mesh: prim_mesh(&building_plan_glb, 0),
+        held_plan_ties_mesh: prim_mesh(&building_plan_glb, 1),
     });
     // Tree textures: bark (tiles up the trunk) + canopy foliage detail. Both are
     // now soft, low-contrast PAINTED cel detail (the canopy is solid faceted
