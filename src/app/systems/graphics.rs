@@ -21,7 +21,7 @@ use bevy::{
 };
 
 use crate::app::{
-    scene::{ATMOSPHERE_AMBIENT_INTENSITY, MainCamera, SUN_SOFT_SHADOW_SIZE, SunLight},
+    scene::{MainCamera, SUN_SOFT_SHADOW_SIZE, SunLight},
     state::ClientSettings,
 };
 
@@ -88,11 +88,12 @@ pub(crate) fn apply_graphics_settings_system(
         if env_map.size != size {
             env_map.size = size;
         }
-        // Dev override: kill the sky's image-based ambient/reflection fill entirely
-        // (vs the spawn value) so you can see the scene lit by the sun + ambient
-        // floor alone. Defaults to the normal intensity in shipped builds.
+        // Dev: the `Atmosphere ambient` toggle kills the sky's image-based
+        // ambient/reflection fill entirely (so you can see the scene lit by the sun
+        // + ambient floor alone); when on, the live `DevLighting` slider sets the
+        // intensity. Both default to the shipped `ATMOSPHERE_AMBIENT_INTENSITY`.
         let intensity = if settings.dev.atmosphere_ibl {
-            ATMOSPHERE_AMBIENT_INTENSITY
+            settings.dev.lighting.atmosphere_ibl_intensity
         } else {
             0.0
         };

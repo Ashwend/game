@@ -75,6 +75,29 @@ pub(super) fn percent_slider_row(ui: &mut egui::Ui, label: &str, value: &mut f32
     });
 }
 
+/// A labelled `f32` slider row showing the live numeric value, for free-range dev
+/// tuning (unlike [`percent_slider_row`], the value is the raw number, not 0-100%).
+/// `step` of `0.0` lets the slider move continuously.
+pub(super) fn value_slider_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    step: f64,
+    decimals: usize,
+) {
+    setting_row(ui, label, |ui| {
+        let control_width = ui.available_width();
+        ui.add_sized(
+            [control_width, SETTING_ROW_HEIGHT],
+            egui::Slider::new(value, range)
+                .step_by(step)
+                .max_decimals(decimals)
+                .show_value(true),
+        );
+    });
+}
+
 pub(super) fn checkbox_with_click_sound(ui: &mut egui::Ui, value: &mut bool, label: &str) {
     let response = ui
         .checkbox(value, label)

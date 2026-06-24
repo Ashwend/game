@@ -61,7 +61,7 @@ pub(crate) use runtime::{
     SessionShutdownTasks,
 };
 pub(crate) use settings::{
-    AntiAliasing, AtmosphereQuality, ClientSettings, ClientSettingsStore, DisplayMode,
+    AntiAliasing, AtmosphereQuality, ClientSettings, ClientSettingsStore, DevLighting, DisplayMode,
     DisplayResolution, GrassDensity, KeyAction, KeyBindingCategory, KeyBindingSlot, KeyBindings,
     MAX_FOV_DEG, MAX_UI_SCALE, MIN_FOV_DEG, MIN_UI_SCALE, ShadowQuality, display_resolutions,
 };

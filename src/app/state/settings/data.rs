@@ -255,7 +255,7 @@ impl Default for GraphicsSettings {
 /// shader-internal ones flip a `dev_flags` uniform (no pipeline recompile), the
 /// rest force a camera/light component off. Serialised so the panel state sticks
 /// across a session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DevSettings {
     // Toon material (props, ore, trees, deployables, held tools).
     #[serde(default = "default_true")]
@@ -282,6 +282,9 @@ pub(crate) struct DevSettings {
     pub(crate) atmosphere_ibl: bool,
     #[serde(default = "default_true")]
     pub(crate) fog: bool,
+    // Live lighting tuning sliders (sun illuminance, midday cap, droop, IBL).
+    #[serde(default)]
+    pub(crate) lighting: DevLighting,
 }
 
 impl Default for DevSettings {
@@ -298,8 +301,71 @@ impl Default for DevSettings {
             soft_shadows: true,
             atmosphere_ibl: true,
             fog: true,
+            lighting: DevLighting::default(),
         }
     }
+}
+
+/// Live lighting tuning, exposed as sliders in the debug-only `Dev` options tab so
+/// values can be swept in-game and reported back. Each field overrides a production
+/// lighting value at runtime: the sun knobs are read every frame by
+/// `compute_lighting` (`scene/sky.rs`), the IBL intensity by
+/// `apply_graphics_settings_system` (`systems/graphics.rs`). Defaults ARE the
+/// shipped values, so a release build (Dev tab hidden) renders identically.
+/// Serialised, so a tuned value sticks across a session while you iterate.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub(crate) struct DevLighting {
+    /// Daytime peak sun illuminance (lux) once the sun clears the morning ramp.
+    ///
+    /// Bevy's lux scale (`light_consts::lux`): `AMBIENT_DAYLIGHT` 10_000,
+    /// `DIRECT_SUNLIGHT` 100_000. Those assume `Exposure::SUNLIGHT` (ev100 15); this
+    /// project keeps Bevy's DEFAULT exposure (`BLENDER`, ev100 9.7, ~40x more
+    /// sensitive) and never sets `Exposure`, so a physically "calibrated" clear day
+    /// would land near `DIRECT_SUNLIGHT / 40 ~= 2.5k..5k` lux. The shipped default
+    /// is deliberately brighter than that (a punchy, sunny look); the midday cap
+    /// (see `midday_cap_elevation`) keeps even a high value from doming up into a
+    /// noon flashbang.
+    #[serde(default = "default_sun_peak_illuminance")]
+    pub(crate) sun_peak_illuminance: f32,
+    /// Sun elevation (`sin` of its angle above the horizon) above which the felt
+    /// midday brightness is held flat, so noon does not dome up past the level the
+    /// day already has at ~09:00 / ~15:00. Lower caps harder.
+    #[serde(default = "default_midday_cap_elevation")]
+    pub(crate) midday_cap_elevation: f32,
+    /// Above-plateau illuminance droop exponent: higher dims the high sun more (a
+    /// stylised cancel of the N·L cosine that over-brightens flat ground toward
+    /// noon). `0` = no droop.
+    #[serde(default = "default_overhead_exponent")]
+    pub(crate) overhead_exponent: f32,
+    /// Atmosphere environment-map (IBL) ambient intensity: the daytime sky-bounce
+    /// fill on every lit surface. Forced to `0` when the `Atmosphere ambient`
+    /// toggle is off, regardless of this value.
+    #[serde(default = "default_atmosphere_ibl_intensity")]
+    pub(crate) atmosphere_ibl_intensity: f32,
+}
+
+impl Default for DevLighting {
+    fn default() -> Self {
+        Self {
+            sun_peak_illuminance: default_sun_peak_illuminance(),
+            midday_cap_elevation: default_midday_cap_elevation(),
+            overhead_exponent: default_overhead_exponent(),
+            atmosphere_ibl_intensity: default_atmosphere_ibl_intensity(),
+        }
+    }
+}
+
+fn default_sun_peak_illuminance() -> f32 {
+    10_000.0
+}
+fn default_midday_cap_elevation() -> f32 {
+    0.673
+}
+fn default_overhead_exponent() -> f32 {
+    0.35
+}
+fn default_atmosphere_ibl_intensity() -> f32 {
+    0.70
 }
 
 /// `dev_flags` uniform bits read by `toon.wgsl` / `toon_viewmodel.wgsl`. A SET bit

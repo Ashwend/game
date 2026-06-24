@@ -66,6 +66,18 @@ const TOON_SATURATION: f32 = 1.10;
 // side-lit prop/field doesn't crush its shadowed half to a flat near-black cliff.
 const TOON_LIT_GAIN: f32 = 1.5;
 const TOON_SHADOW_FILL: f32 = 0.6;
+// Cel "crispness" gate (mirrors the grass shader). On a large FLAT prop face the
+// cel `shade * TOON_SHADOW_FILL` floor crushes a shadow-lit side to near-black (a
+// deployable read as a black blob at a low dawn sun, where the atmosphere IBL is
+// dim and there is no direct sun on that face). A flat face has a near-uniform
+// normal, so its lighting gradient `fwidth(shade)` is ~0; a curved/faceted form
+// has a healthy gradient. Fade the cel toward smooth (`shade * TOON_LIT_GAIN`,
+// ~2.5x brighter than the crush floor) only on the flat, low-gradient faces, so
+// the dark side reads with form instead of a silhouette. This is a NO-OP on
+// curved ore boulders, faceted canopy, and cylindrical trunks (their fwidth keeps
+// cel_strength ~1), verified: their before/after delta sat below the frame noise.
+const TOON_CEL_FLAT: f32 = 0.004;
+const TOON_CEL_DETAIL: f32 = 0.020;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
@@ -133,10 +145,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let albedo_lum = max(dot(albedo, lw), 1e-3);
     let shade = clamp(dot(lit.rgb, lw) / albedo_lum, 0.0, 0.999);
     let bands = max(params.x, 2.0);
+    let smooth_q = clamp(shade * TOON_LIT_GAIN, 0.0, 1.0);
     var shade_q: f32;
     if (dev_flags & DEV_NO_POSTERIZE) != 0u {
         // Dev: posterize OFF -> smooth lighting (same exposure as the banded path).
-        shade_q = clamp(shade * TOON_LIT_GAIN, 0.0, 1.0);
+        shade_q = smooth_q;
     } else {
         let q = shade * bands;
         var band_aa: f32;
@@ -158,7 +171,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             band_aa = floor(q - 0.5) + smoothstep(0.5 - aa, 0.5 + aa, fract(q - 0.5));
         }
         let banded = clamp(band_aa / bands * TOON_LIT_GAIN, 0.0, 1.0);
-        shade_q = max(banded, shade * TOON_SHADOW_FILL);
+        let cel_q = max(banded, shade * TOON_SHADOW_FILL);
+        // Fade the cel toward smooth on flat, low-gradient faces (see consts): keeps
+        // every curved/faceted prop fully cel, but stops a flat shadow face crushing
+        // to a black blob. Skipped in the band-AA-off dev mode so that toggle still
+        // shows the raw hard floor() stepping.
+        if (dev_flags & DEV_NO_BAND_AA) == 0u {
+            let cel_strength = smoothstep(TOON_CEL_FLAT, TOON_CEL_DETAIL, fwidth(shade));
+            shade_q = mix(smooth_q, cel_q, cel_strength);
+        } else {
+            shade_q = cel_q;
+        }
     }
     var rgb = albedo * shade_q;
 

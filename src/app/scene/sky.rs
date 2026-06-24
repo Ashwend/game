@@ -22,10 +22,12 @@
 //!
 //! ## Tuning knobs
 //!
-//! Night brightness and the day/night balance live in the `const`s at the top
-//! of this file (grouped so the look can be dialed in without touching logic).
-//! Daytime ambient strength is the `AtmosphereEnvironmentMapLight` intensity on
-//! the camera (`ATMOSPHERE_AMBIENT_INTENSITY` in `assets.rs`).
+//! Night brightness and the dawn/dusk balance live in the `const`s at the top of
+//! this file. The DAYTIME knobs (sun peak illuminance, the midday brightness cap,
+//! the above-plateau droop, and the atmosphere IBL intensity) live on `DevLighting`
+//! (`state/settings/data.rs`) and are exposed as LIVE sliders in the debug-only Dev
+//! options tab; `compute_lighting` reads them each frame, so they can be swept
+//! in-game. Their defaults are the shipped values.
 
 use bevy::{
     camera::visibility::RenderLayers,
@@ -35,7 +37,7 @@ use bevy::{
 };
 
 use crate::{
-    app::state::{ClientRuntime, ClientSettings, MenuState, ShadowQuality},
+    app::state::{ClientRuntime, ClientSettings, DevLighting, MenuState, ShadowQuality},
     world_time::{SECONDS_PER_DAY, WorldTime},
 };
 
@@ -55,20 +57,12 @@ const MOON_DISC_RADIUS: f32 = 4.2;
 /// sun an oblique, more cinematic track across the sky.
 const CELESTIAL_TILT_DEGREES: f32 = 18.0;
 
-/// Daytime sun illuminance (lux) once the sun has cleared the morning ramp.
-///
-/// Grounded in Bevy's physical lux scale (`bevy::light::light_consts::lux`):
-/// `AMBIENT_DAYLIGHT` 10_000, `FULL_DAYLIGHT` 20_000, `DIRECT_SUNLIGHT` 100_000,
-/// `RAW_SUNLIGHT` 130_000. Those assume you ALSO set `Exposure::SUNLIGHT` (ev100
-/// 15). This project deliberately keeps Bevy's DEFAULT exposure (`BLENDER`, ev100
-/// 9.7) and never adds a manual `Exposure` (a fixed gameplay-fair night suits a
-/// stylised game better than auto-exposure). ev100 9.7 is ~2^5.3 ≈ 40x more
-/// sensitive than ev100 15, so a "bright clear day" lands at roughly
-/// `DIRECT_SUNLIGHT / 40 ≈ 2.5k`..`5k` lux here, NOT 100_000. We sit near the top
-/// of that band for a sunny look. This is the FLAT daytime level (see
-/// [`DAYLIGHT_PLATEAU_ELEVATION`]): the old `elevation^0.9` curve climbed to ~96%
-/// of peak at noon (2x mid-morning) and blew the frame out; the plateau holds it.
-const SUN_PEAK_ILLUMINANCE: f32 = 4_500.0;
+// Daytime sun illuminance, the midday cap elevation, and the above-plateau droop
+// exponent now live on `DevLighting` (`state/settings/data.rs`) so the Dev tab can
+// tune them live; `compute_lighting` reads them per frame. Their DEFAULTS are the
+// production values (sun peak 4500 lux, cap elevation 0.673, droop 0.35). The
+// Bevy-lux / exposure reasoning behind 4500 is documented on
+// `DevLighting::sun_peak_illuminance`.
 
 /// Sun elevation (`sin` of its angle above the horizon, in `[0, 1]`) at which the
 /// daytime illuminance reaches its flat plateau. ~0.35 is roughly the mid-morning
@@ -184,7 +178,8 @@ pub(crate) fn setup_sky(
         Name::new("Sun"),
         SunLight,
         DirectionalLight {
-            illuminance: SUN_PEAK_ILLUMINANCE * 0.5,
+            // Seed only; `update_sky_system` overwrites it from `DevLighting` next frame.
+            illuminance: DevLighting::default().sun_peak_illuminance * 0.5,
             color: Color::WHITE,
             shadows_enabled: true,
             // PCSS soft shadows: a distance-widening penumbra so the long low-sun
@@ -312,7 +307,7 @@ pub(crate) fn update_sky_system(
         runtime.world_time
     };
 
-    let lighting = compute_lighting(&world_time);
+    let lighting = compute_lighting(&world_time, &settings.dev.lighting);
 
     // Real-time throttle for the directional lights' *transform*. The shadow
     // projection is the part the eye reads as "shimmery" when updated every
@@ -389,7 +384,7 @@ struct LightingFrame {
     fog_distance: f32,
 }
 
-fn compute_lighting(time: &WorldTime) -> LightingFrame {
+fn compute_lighting(time: &WorldTime, dev: &DevLighting) -> LightingFrame {
     let fraction = (time.seconds_of_day / SECONDS_PER_DAY).rem_euclid(1.0);
     let sun_direction = celestial_direction(fraction);
     let moon_direction = -sun_direction;
@@ -423,15 +418,28 @@ fn compute_lighting(time: &WorldTime) -> LightingFrame {
     // (the old `elevation^0.9` did, hence the blinding midday). `horizon_dim` still
     // damps the grazing-sun scatter spike at the very horizon.
     let daylight = smoothstep(0.0, DAYLIGHT_PLATEAU_ELEVATION, sun_elevation);
-    // Above the plateau, ease the illuminance back down as the sun climbs. A higher
-    // sun hits the flat ground more head-on (the N·L cosine term), which read much
-    // brighter at noon even at a flat illuminance. This stylised (non-physical) droop
-    // tames most of that so midday stays a touch above mid-morning rather than a
-    // flashbang. A gentler exponent than the original 0.5 leaves noon SLIGHTLY
-    // brighter (the desired "midday can be a bit brighter"). `1.0` at the plateau.
-    let overhead =
-        (DAYLIGHT_PLATEAU_ELEVATION / sun_elevation.max(DAYLIGHT_PLATEAU_ELEVATION)).powf(0.35);
-    let sun_illuminance = SUN_PEAK_ILLUMINANCE * daylight * overhead * horizon_dim;
+    // Above the plateau, ease the illuminance back down as the sun climbs: a higher
+    // sun hits flat ground more head-on (the N·L cosine), so the felt ground
+    // brightness (`illuminance * sun_elevation`) domes up toward noon even at a flat
+    // illuminance. The `dev.overhead_exponent` droop tames part of that; above
+    // `dev.midday_cap_elevation` we additionally HOLD `illuminance * sun_elevation`
+    // constant, pinning the bright midday window at the brightness the day already
+    // has at the cap elevation (~09:00 / ~15:00) instead of doming up to a noon
+    // flashbang. The two branches meet at the cap (continuous, no seam); below the
+    // cap the curve is unchanged. (All three knobs are `DevLighting` so the Dev tab
+    // can sweep them live.)
+    let cap = dev.midday_cap_elevation;
+    let overhead = if sun_elevation <= cap {
+        (DAYLIGHT_PLATEAU_ELEVATION / sun_elevation.max(DAYLIGHT_PLATEAU_ELEVATION))
+            .powf(dev.overhead_exponent)
+    } else {
+        // Hold `overhead * sun_elevation` at its cap-elevation value: at the cap the
+        // unclamped formula gives `(PLATEAU/cap)^exp`, so above it `overhead =
+        // (PLATEAU/cap)^exp * cap / sun_elevation` keeps `overhead * sun_elevation`
+        // flat (and thus the felt ground brightness pinned at the 15:00 level).
+        (DAYLIGHT_PLATEAU_ELEVATION / cap).powf(dev.overhead_exponent) * cap / sun_elevation
+    };
+    let sun_illuminance = dev.sun_peak_illuminance * daylight * overhead * horizon_dim;
 
     // Moonlight only takes over once the sun has set.
     let moon_elevation = moon_height.max(0.0).clamp(0.0, 1.0);
@@ -582,16 +590,16 @@ mod tests {
 
     #[test]
     fn sun_illuminance_is_dim_at_night_and_bright_at_noon() {
-        let day = compute_lighting(&time_at(12.0));
-        let night = compute_lighting(&time_at(0.0));
+        let day = compute_lighting(&time_at(12.0), &DevLighting::default());
+        let night = compute_lighting(&time_at(0.0), &DevLighting::default());
         assert!(night.sun_illuminance < 1.0);
         assert!(day.sun_illuminance > 100.0);
     }
 
     #[test]
     fn night_has_an_ambient_floor_and_day_relies_on_the_atmosphere() {
-        let day = compute_lighting(&time_at(12.0));
-        let night = compute_lighting(&time_at(0.0));
+        let day = compute_lighting(&time_at(12.0), &DevLighting::default());
+        let night = compute_lighting(&time_at(0.0), &DevLighting::default());
         // Daytime ambient comes from the atmosphere environment map, so the
         // GlobalAmbientLight floor fades to ~zero.
         assert!(day.ambient_brightness < 1.0);
@@ -601,9 +609,9 @@ mod tests {
 
     #[test]
     fn moon_provides_some_illumination_at_night() {
-        let night = compute_lighting(&time_at(0.0));
+        let night = compute_lighting(&time_at(0.0), &DevLighting::default());
         assert!(night.moon_illuminance > 10.0);
-        let noon = compute_lighting(&time_at(12.0));
+        let noon = compute_lighting(&time_at(12.0), &DevLighting::default());
         assert!(noon.moon_illuminance < 1.0);
     }
 
@@ -613,15 +621,15 @@ mod tests {
             seconds_of_day: SECONDS_PER_DAY + 1.0,
             multiplier: 1.0,
         };
-        let lighting = compute_lighting(&time);
+        let lighting = compute_lighting(&time, &DevLighting::default());
         // Just-after-midnight should look like midnight: sun very low.
         assert!(lighting.sun_illuminance < 10.0);
     }
 
     #[test]
     fn fog_tightens_at_night() {
-        let day = compute_lighting(&time_at(12.0));
-        let night = compute_lighting(&time_at(0.0));
+        let day = compute_lighting(&time_at(12.0), &DevLighting::default());
+        let night = compute_lighting(&time_at(0.0), &DevLighting::default());
         assert!(night.fog_distance < day.fog_distance);
     }
 
@@ -630,16 +638,65 @@ mod tests {
         // The title screen pins the sky to this fixed early-morning time instead
         // of the live gameplay clock. Guard that it reads as daylight (sun above
         // the horizon), not an accidental midnight.
-        let lighting = compute_lighting(&WorldTime {
-            seconds_of_day: MENU_BACKDROP_SECONDS,
-            multiplier: 0.0,
-        });
+        let lighting = compute_lighting(
+            &WorldTime {
+                seconds_of_day: MENU_BACKDROP_SECONDS,
+                multiplier: 0.0,
+            },
+            &DevLighting::default(),
+        );
         assert!(
             lighting.sun_direction.y > 0.1,
             "menu sun should be above the horizon, got y={}",
             lighting.sun_direction.y
         );
         assert!(lighting.sun_illuminance > 100.0, "menu sun should be up");
+    }
+
+    #[test]
+    fn dev_lighting_sliders_drive_the_daytime_curve() {
+        // The Dev tab sliders feed `compute_lighting` via `DevLighting`; prove the
+        // sun-peak knob scales illuminance and the midday cap changes the curve
+        // (guards against the values silently reverting to a baked const).
+        let noon = time_at(12.0);
+        let base = compute_lighting(&noon, &DevLighting::default());
+        // Explicit low/high peaks (independent of the shipped default) so the scale
+        // relationship holds regardless of what the default is set to.
+        let dim = compute_lighting(
+            &noon,
+            &DevLighting {
+                sun_peak_illuminance: 4_000.0,
+                ..DevLighting::default()
+            },
+        );
+        let bright = compute_lighting(
+            &noon,
+            &DevLighting {
+                sun_peak_illuminance: 8_000.0,
+                ..DevLighting::default()
+            },
+        );
+        assert!(
+            bright.sun_illuminance > dim.sun_illuminance * 1.5,
+            "doubling the sun-peak slider should roughly double noon illuminance: {} vs {}",
+            bright.sun_illuminance,
+            dim.sun_illuminance
+        );
+        // Default caps noon (elevation 0.95 > 0.673); raising the cap to 1.0 lets
+        // noon climb under the original droop instead.
+        let uncapped = compute_lighting(
+            &noon,
+            &DevLighting {
+                midday_cap_elevation: 1.0,
+                ..DevLighting::default()
+            },
+        );
+        assert!(
+            uncapped.sun_illuminance > base.sun_illuminance,
+            "raising the midday-cap slider should brighten noon: {} vs {}",
+            uncapped.sun_illuminance,
+            base.sun_illuminance
+        );
     }
 
     #[test]

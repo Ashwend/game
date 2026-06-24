@@ -156,6 +156,14 @@ const GRASS_CEL_BANDS: f32 = 3.0;
 // cliff on a side-lit field.
 const GRASS_LIT_GAIN: f32 = 1.5;
 const GRASS_SHADOW_FILL: f32 = 0.6;
+// Cel "crispness" gate (see the fragment): the per-pixel lighting gradient
+// `fwidth(shade)` below which the cel posterise fades to smooth shading, and
+// above which it is fully banded. Flat far field / uniform dim light sits below
+// FLAT (renders smooth, no posterisation split); the detailed, contrasty near
+// field sits above DETAIL (renders cel). Tuned so the dawn "field split" is gone
+// but near-field tufts still read toon in daylight.
+const GRASS_CEL_FLAT: f32 = 0.004;
+const GRASS_CEL_DETAIL: f32 = 0.020;
 
 // Tuft atlas layout (assets/textures/grass_atlas.png): a 3x2 grid of 6 toony
 // tuft variants. Each blade's instance carries a cell index (`i_b.z`, 0..5); the
@@ -377,16 +385,30 @@ fn fragment(in: VsOut) -> @location(0) vec4<f32> {
     // Anti-aliased cel step, same fwidth-softened boundary as toon.wgsl: keeps the
     // hard bands on clean gradients but dissolves the boundary where the received
     // shadow edge is noisy, so the field doesn't crawl along band edges.
+    let smooth_q = clamp(shade * GRASS_LIT_GAIN, 0.0, 1.0);
     var shade_q: f32;
     if (grass_dev.x & GRASS_DEV_NO_CEL) != 0u {
         // Dev: cel posterize off -> smooth lighting, same exposure.
-        shade_q = clamp(shade * GRASS_LIT_GAIN, 0.0, 1.0);
+        shade_q = smooth_q;
     } else {
         let gq = shade * GRASS_CEL_BANDS;
         let gaa = max(fwidth(gq) * 0.5, 0.02);
         let gband = floor(gq - 0.5) + smoothstep(0.5 - gaa, 0.5 + gaa, fract(gq - 0.5));
         let banded = clamp(gband / GRASS_CEL_BANDS * GRASS_LIT_GAIN, 0.0, 1.0);
-        shade_q = max(banded, shade * GRASS_SHADOW_FILL);
+        let cel_q = max(banded, shade * GRASS_SHADOW_FILL);
+        // Posterising a smooth, near-flat lighting gradient (the whole field under a
+        // low dawn sun) snaps it into two flat plateaus with a visible tonal "split"
+        // where the brightness crosses a band edge. The fwidth band-AA above only
+        // softens that boundary by a few pixels, which does nothing when the gradient
+        // is shallow (the plateaus on either side still read as two field halves). So
+        // fade the cel out toward smooth exactly where the lighting has no real
+        // per-pixel variation: `fwidth(shade)` is ~0 on the flat far field / uniform
+        // dim light and healthy on the contrasty, detailed near field, so the cel
+        // stays crisp where it reads as anime tufts and dissolves where it would read
+        // as a posterisation artifact. This is time-of-day robust (not a 07:00 hack):
+        // any flat, low-contrast lighting renders smooth, any varied lighting cels.
+        let cel_strength = smoothstep(GRASS_CEL_FLAT, GRASS_CEL_DETAIL, fwidth(shade));
+        shade_q = mix(smooth_q, cel_q, cel_strength);
     }
     let rgb = albedo * shade_q;
 

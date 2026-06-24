@@ -20,9 +20,9 @@ mod toon;
 mod world;
 
 pub(crate) use assets::{
-    ATMOSPHERE_AMBIENT_INTENSITY, DeployableVisualAssets, FurnaceFireAssets, ImpactEffectAssets,
-    ItemVisualAssets, PlayerVisualAssets, ResourceVisualAssets, TorchFireAssets,
-    menu_backdrop_depth_of_field, player_visual_position, setup_scene,
+    DeployableVisualAssets, FurnaceFireAssets, ImpactEffectAssets, ItemVisualAssets,
+    PlayerVisualAssets, ResourceVisualAssets, TorchFireAssets, menu_backdrop_depth_of_field,
+    player_visual_position, setup_scene,
 };
 #[cfg(test)]
 pub(crate) use components::WorldGeometry;
