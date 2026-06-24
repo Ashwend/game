@@ -5,6 +5,7 @@
 
 mod audio_tab;
 mod controls_tab;
+mod dev_tab;
 mod display_tab;
 mod general_tab;
 mod graphics_tab;
@@ -127,6 +128,7 @@ fn options_body_contents(
         OptionsTab::Keybindings => {
             keybindings_tab::render(ui, settings, options_ui_state, physical_keys);
         }
+        OptionsTab::Dev => dev_tab::render(ui, settings),
     }
     ui.add_space(OPTIONS_SCROLL_PADDING_Y);
 }

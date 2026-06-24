@@ -29,7 +29,8 @@
 //! whole. Many entities sharing one mesh collide with Bevy's automatic
 //! instancing/batching, and per-region frustum culling made the field flicker
 //! chunk-by-chunk as the camera moved, so the streamer keeps one combined buffer and
-//! [`queue_grass`] submits it to every view without culling (the shader's distance
+//! [`queue_grass`] submits it to every world view (those that can see render layer 0,
+//! so never the layer-1 viewmodel camera) without culling (the shader's distance
 //! dither thins the far edge).
 //!
 //! Perf: the combined buffer is extracted ([`extract_grass`]) and uploaded
@@ -43,6 +44,7 @@
 
 use bevy::{
     asset::RenderAssetUsages,
+    camera::visibility::RenderLayers,
     core_pipeline::core_3d::Transparent3d,
     ecs::system::{SystemParamItem, lifetimeless::*},
     image::{
@@ -65,7 +67,7 @@ use bevy::{
             RenderCommandResult, SetItemPipeline, TrackedRenderPass, ViewSortedRenderPhases,
         },
         render_resource::{
-            binding_types::{sampler, texture_2d},
+            binding_types::{sampler, texture_2d, uniform_buffer},
             *,
         },
         renderer::{RenderDevice, RenderQueue},
@@ -75,6 +77,7 @@ use bevy::{
     },
 };
 use bytemuck::{Pod, Zeroable};
+use std::sync::Arc;
 
 use crate::app::embedded_asset_path;
 use crate::app::embedded_assets::embedded_bytes;
@@ -106,12 +109,18 @@ pub(super) struct InstanceData {
 /// the render world by [`extract_grass`] (only when it changes) and uploaded to a
 /// GPU buffer by [`prepare_instance_buffers`].
 ///
+/// The blade list is held in an [`Arc`] so the change-gated [`extract_grass`]
+/// clones a 16-byte handle into the render world rather than re-copying the whole
+/// multi-MB `Vec` (the streamer already moved one copy out of the per-tile rebuild;
+/// extract would otherwise allocate + copy a second). Both worlds share the same
+/// immutable buffer; the GPU upload reads it once.
+///
 /// The field entity must also carry `SyncToRenderWorld` (added at spawn): it has
 /// no `Material`, so nothing else opts it into render-world sync, and without a
 /// `RenderEntity` the extract below finds nothing (grass would render to an
 /// off-screen capture but not the live window).
 #[derive(Component, Deref)]
-pub(super) struct InstanceMaterialData(pub(super) Vec<InstanceData>);
+pub(super) struct InstanceMaterialData(pub(super) Arc<Vec<InstanceData>>);
 
 /// Embedded path of the instanced-grass shader.
 const GRASS_INSTANCED_SHADER_PATH: &str = "shaders/grass_instanced.wgsl";
@@ -125,10 +134,48 @@ const GRASS_CARD_TEXTURE_PATH: &str = "textures/grass_atlas.png";
 #[derive(Resource, Clone, ExtractResource)]
 pub(crate) struct GrassCardTexture(pub(crate) Handle<Image>);
 
-/// The prepared group(3) bind group (tuft texture + sampler) for the grass cards.
-/// Built once in the render world; the draw skips until it exists.
+/// The prepared group(3) bind group (tuft texture + sampler + dev flags) for the
+/// grass cards. Built once in the render world; the draw skips until it exists.
 #[derive(Resource)]
 struct GrassCardBindGroup(BindGroup);
+
+/// Live grass debug toggles from the `Dev` options tab, packed into a bitfield
+/// (`state::grass_dev_bits`; a SET bit DISABLES that stage). `0` (the default
+/// everywhere, and the only value in shipped builds) renders normally. Extracted
+/// to the render world and uploaded to a small uniform the grass shader reads.
+#[derive(Resource, Clone, Copy, Default, ExtractResource)]
+pub(crate) struct GrassDevFlags(pub(crate) u32);
+
+/// Render-world uniform buffer holding [`GrassDevFlags`] (padded to a vec4 for
+/// alignment). Created once, rewritten each frame so toggles apply live.
+#[derive(Resource)]
+struct GrassDevFlagsBuffer(Buffer);
+
+/// (Re)write the grass dev-flags uniform each frame from the extracted resource.
+fn prepare_grass_dev_flags(
+    mut commands: Commands,
+    flags: Res<GrassDevFlags>,
+    existing: Option<Res<GrassDevFlagsBuffer>>,
+    render_device: Res<RenderDevice>,
+    render_queue: Res<RenderQueue>,
+) {
+    // Pad the u32 into a vec4<u32> (16 bytes) to satisfy uniform-buffer alignment.
+    let data: [u32; 4] = [flags.0, 0, 0, 0];
+    let bytes: &[u8] = bytemuck::cast_slice(&data);
+    match existing {
+        Some(buffer) => render_queue.write_buffer(&buffer.0, 0, bytes),
+        None => {
+            let buffer = render_device.create_buffer(&BufferDescriptor {
+                label: Some("grass_dev_flags"),
+                size: 16,
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            render_queue.write_buffer(&buffer, 0, bytes);
+            commands.insert_resource(GrassDevFlagsBuffer(buffer));
+        }
+    }
+}
 
 pub(crate) struct GrassInstancingPlugin;
 
@@ -138,7 +185,9 @@ impl Plugin for GrassInstancingPlugin {
             Startup,
             (load_grass_card_texture, super::init_grass_card_mesh),
         )
-        .add_plugins(ExtractResourcePlugin::<GrassCardTexture>::default());
+        .init_resource::<GrassDevFlags>()
+        .add_plugins(ExtractResourcePlugin::<GrassCardTexture>::default())
+        .add_plugins(ExtractResourcePlugin::<GrassDevFlags>::default());
         app.sub_app_mut(RenderApp)
             .add_render_command::<Transparent3d, DrawGrass>()
             .init_resource::<SpecializedMeshPipelines<GrassInstancePipeline>>()
@@ -149,6 +198,7 @@ impl Plugin for GrassInstancingPlugin {
                 (
                     queue_grass.in_set(RenderSystems::QueueMeshes),
                     prepare_instance_buffers.in_set(RenderSystems::PrepareResources),
+                    prepare_grass_dev_flags.in_set(RenderSystems::PrepareResources),
                     prepare_grass_bind_group.in_set(RenderSystems::PrepareBindGroups),
                 ),
             );
@@ -189,13 +239,16 @@ fn load_grass_card_texture(mut images: ResMut<Assets<Image>>, mut commands: Comm
     commands.insert_resource(GrassCardTexture(images.add(image)));
 }
 
-/// Build the group(3) bind group (tuft texture + sampler) once the GPU image is
-/// uploaded. Cheap guard: skips if already built or the image isn't ready yet.
+/// Build the group(3) bind group (tuft texture + sampler + dev flags) once the GPU
+/// image and the dev-flags buffer are ready. Cheap guard: skips if already built or
+/// an input isn't ready. The dev-flags buffer is rewritten in place each frame
+/// (see [`prepare_grass_dev_flags`]), so the cached bind group stays live.
 fn prepare_grass_bind_group(
     mut commands: Commands,
     pipeline: Res<GrassInstancePipeline>,
     images: Res<RenderAssets<GpuImage>>,
     texture: Option<Res<GrassCardTexture>>,
+    dev_flags: Option<Res<GrassDevFlagsBuffer>>,
     existing: Option<Res<GrassCardBindGroup>>,
     render_device: Res<RenderDevice>,
 ) {
@@ -205,13 +258,20 @@ fn prepare_grass_bind_group(
     let Some(texture) = texture else {
         return;
     };
+    let Some(dev_flags) = dev_flags else {
+        return;
+    };
     let Some(gpu) = images.get(&texture.0) else {
         return;
     };
     let bind_group = render_device.create_bind_group(
         "grass_card_bind_group",
         &pipeline.texture_layout,
-        &BindGroupEntries::sequential((&gpu.texture_view, &gpu.sampler)),
+        &BindGroupEntries::sequential((
+            &gpu.texture_view,
+            &gpu.sampler,
+            dev_flags.0.as_entire_binding(),
+        )),
     );
     commands.insert_resource(GrassCardBindGroup(bind_group));
 }
@@ -249,11 +309,23 @@ fn queue_grass(
     // `SetMeshViewBindGroup` will set. Re-deriving these bits by hand is fragile
     // (e.g. the camera's atmosphere IBL adds view bindings 29-31).
     view_key_cache: Res<ViewKeyCache>,
-    views: Query<&ExtractedView>,
+    // `Option<&RenderLayers>` is extracted onto the render-world view entity by
+    // `extract_cameras`. The grass field lives on the default layer (0); a view
+    // that can't see layer 0 (the layer-1 viewmodel camera) must be skipped, or
+    // this hand-rolled queue, which bypasses the per-view visibility filter, would
+    // draw the whole world field into the viewmodel pass on top of everything.
+    views: Query<(&ExtractedView, Option<&RenderLayers>)>,
 ) {
     let draw_grass = transparent_3d_draw_functions.read().id::<DrawGrass>();
+    let world_layers = RenderLayers::default();
 
-    for view in &views {
+    for (view, view_layers) in &views {
+        if !view_layers
+            .unwrap_or(&world_layers)
+            .intersects(&world_layers)
+        {
+            continue;
+        }
         let Some(transparent_phase) = transparent_render_phases.get_mut(&view.retained_view_entity)
         else {
             continue;
@@ -282,15 +354,13 @@ fn queue_grass(
                 entity: (entity, *main_entity),
                 pipeline,
                 draw_function: draw_grass,
-                // Draw the field FIRST among transparent items so other transparent
-                // objects (the placement ghost, particles) render on top of it. The
-                // Transparent3d phase sorts ASCENDING by `distance` and draws in that
-                // order (radsort, core_3d), so "first" means the SMALLEST distance:
-                // `f32::MIN`. (The field's mesh `center` sits at the camera, so its
-                // natural rangefinder distance is ~eye-height, which sorted it among the
-                // nearest and painted it over the ghost.) Paired with depth-write OFF
-                // above, the field no longer occludes the ghost by order or by depth; it
-                // still depth-tests against the opaque scene so terrain occludes it.
+                // Draw the field FIRST among transparent items. The cards write depth
+                // (see `specialize`), so drawing the effectively-opaque grass before the
+                // genuinely-translucent transparent objects lets those depth-test against
+                // it correctly (a particle behind a blade is occluded). The Transparent3d
+                // phase sorts ASCENDING by `distance` (radsort, core_3d), so "first" is
+                // the SMALLEST distance: `f32::MIN`. (The field's mesh `center` sits at
+                // the camera, so its natural rangefinder distance is ~eye-height.)
                 distance: f32::MIN,
                 batch_range: 0..1,
                 extra_index: PhaseItemExtraIndex::None,
@@ -372,11 +442,14 @@ fn prepare_instance_buffers(
 /// @binding(100) crash is exclusive to ExtendedMaterial's bindless merge;
 /// TerrainMaterial ships the same standalone group-3 texture binding here).
 fn grass_texture_layout_entries() -> Vec<BindGroupLayoutEntry> {
+    // VERTEX_FRAGMENT (not FRAGMENT): the dev-flags uniform at binding 2 is read in
+    // the vertex stage too (the wind toggle), so the whole group is visible to both.
     BindGroupLayoutEntries::sequential(
-        ShaderStages::FRAGMENT,
+        ShaderStages::VERTEX_FRAGMENT,
         (
             texture_2d(TextureSampleType::Float { filterable: true }),
             sampler(SamplerBindingType::Filtering),
+            uniform_buffer::<UVec4>(false),
         ),
     )
     .to_vec()
@@ -434,15 +507,16 @@ impl SpecializedMeshPipeline for GrassInstancePipeline {
         // from the view key.
         descriptor.multisample.alpha_to_coverage_enabled = true;
 
-        // Don't write depth. The field inherits the opaque MeshPipeline (BLEND_OPAQUE),
-        // which writes depth, so it was occluding the translucent placement ghost (and
-        // any other transparent object) through the depth buffer regardless of draw
-        // order. With depth-write off it still depth-TESTS against the opaque scene (so
-        // terrain/buildings occlude it correctly) but no longer punches the ghost out.
-        if let Some(depth) = descriptor.depth_stencil.as_mut() {
-            depth.depth_write_enabled = false;
-        }
-
+        // Keep the inherited opaque depth WRITE on. The cards are alpha-tested
+        // cutouts (hard `discard` below ALPHA_CUTOFF, alpha only feeds
+        // alpha-to-coverage), i.e. effectively opaque, so writing depth is the
+        // standard alpha-tested-foliage setup: a near blade then occludes the far
+        // blades behind it in the depth buffer, so the GPU early-Z-rejects their
+        // (expensive: shadow + atmosphere IBL) fragments instead of shading the
+        // whole overlapping field. Without it (the old "depth-write off" hack) no
+        // blade ever occluded another and the entire ring paid full overdraw every
+        // frame. Trade-off: grass now also occludes transparent objects behind it
+        // (the placement ghost, ground particles), which is physically correct.
         // Double-sided: a blade is a one-sided ribbon, so back-face culling makes
         // every blade whose random yaw points away from the camera vanish, leaving
         // bald patches across the field (you see "through" half the grass). Render

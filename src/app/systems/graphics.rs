@@ -14,14 +14,14 @@
 //! fields, so there's no contention on the shared `DirectionalLight`.
 
 use bevy::{
-    light::{AtmosphereEnvironmentMapLight, CascadeShadowConfigBuilder, DirectionalLightShadowMap},
+    light::{AtmosphereEnvironmentMapLight, DirectionalLightShadowMap},
     pbr::AtmosphereSettings,
     post_process::bloom::Bloom,
     prelude::*,
 };
 
 use crate::app::{
-    scene::{MainCamera, SUN_SOFT_SHADOW_SIZE, SunLight},
+    scene::{ATMOSPHERE_AMBIENT_INTENSITY, MainCamera, SUN_SOFT_SHADOW_SIZE, SunLight},
     state::ClientSettings,
 };
 
@@ -51,13 +51,14 @@ pub(crate) fn apply_graphics_settings_system(
         return;
     };
 
-    // Bloom is a fixed-strength on/off. Slightly above the `Bloom::NATURAL`
-    // preset (0.15 -> 0.20) so the grass's HDR tip glow and the sun haze read as
-    // a soft dreamy bloom closer to the stylized reference. No exposed slider.
-    if settings.graphics.bloom_enabled {
+    // Bloom is a fixed-strength on/off. Kept just below the `Bloom::NATURAL`
+    // preset (0.15 -> 0.11): enough that the sun disc and the grass's HDR tip
+    // glow still bloom softly, but not the heavy wash that made the whole frame
+    // read hazy/dreamy. No exposed slider.
+    if settings.graphics.bloom_enabled && settings.dev.bloom {
         if bloom.is_none() {
             commands.entity(entity).insert(Bloom {
-                intensity: 0.20,
+                intensity: 0.11,
                 ..Bloom::NATURAL
             });
         }
@@ -87,37 +88,47 @@ pub(crate) fn apply_graphics_settings_system(
         if env_map.size != size {
             env_map.size = size;
         }
+        // Dev override: kill the sky's image-based ambient/reflection fill entirely
+        // (vs the spawn value) so you can see the scene lit by the sun + ambient
+        // floor alone. Defaults to the normal intensity in shipped builds.
+        let intensity = if settings.dev.atmosphere_ibl {
+            ATMOSPHERE_AMBIENT_INTENSITY
+        } else {
+            0.0
+        };
+        if env_map.intensity != intensity {
+            env_map.intensity = intensity;
+        }
     }
 
     // Sun shadows: disabling them, or shrinking the cascade distance / count /
     // map resolution, is the biggest GPU lever in dense forest (every tree
     // re-renders into each cascade). `High` matches the engine defaults.
     if let Ok((sun_entity, mut light)) = sun.single_mut() {
-        let config = settings.graphics.shadows.config();
+        // Dev override: `sun_shadows` off forces the cascade config to `None`
+        // (shadows disabled) regardless of the Graphics quality tier.
+        let config = if settings.dev.sun_shadows {
+            settings.graphics.shadows.config()
+        } else {
+            None
+        };
         if light.shadows_enabled != config.is_some() {
             light.shadows_enabled = config.is_some();
         }
         // PCSS soft shadows: a distance-widening penumbra when both shadows and
         // the soft-shadow toggle are on; `None` falls back to the hard PCF path.
         // (Needs the `experimental_pbr_pcss` feature, already enabled in Cargo.)
-        let soft = if config.is_some() && settings.graphics.soft_shadows {
-            Some(SUN_SOFT_SHADOW_SIZE)
-        } else {
-            None
-        };
+        let soft =
+            if config.is_some() && settings.graphics.soft_shadows && settings.dev.soft_shadows {
+                Some(SUN_SOFT_SHADOW_SIZE)
+            } else {
+                None
+            };
         if light.soft_shadow_size != soft {
             light.soft_shadow_size = soft;
         }
         if let Some(cfg) = config {
-            commands.entity(sun_entity).insert(
-                CascadeShadowConfigBuilder {
-                    num_cascades: cfg.num_cascades,
-                    maximum_distance: cfg.maximum_distance,
-                    first_cascade_far_bound: 8.0,
-                    ..default()
-                }
-                .build(),
-            );
+            commands.entity(sun_entity).insert(cfg.cascade_config());
             if let Some(mut shadow_map) = shadow_map
                 && shadow_map.size != cfg.map_size
             {
@@ -149,7 +160,7 @@ mod tests {
             .query_filtered::<&Bloom, With<MainCamera>>()
             .single(app.world())
             .expect("default graphics settings enable bloom");
-        assert_eq!(bloom.intensity, 0.20);
+        assert_eq!(bloom.intensity, 0.11);
     }
 
     #[test]

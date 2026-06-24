@@ -45,10 +45,11 @@ use std::collections::HashMap;
 use bevy::{
     camera::visibility::NoFrustumCulling, prelude::*, render::sync_world::SyncToRenderWorld,
 };
+use std::sync::Arc;
 
 mod instancing;
 
-pub(crate) use instancing::GrassInstancingPlugin;
+pub(crate) use instancing::{GrassDevFlags, GrassInstancingPlugin};
 use instancing::{InstanceData, InstanceMaterialData};
 
 use super::components::WorldGeometry;
@@ -368,7 +369,7 @@ fn update_grass_field(
     match field_entity {
         Some(entity) => {
             commands.entity(*entity).insert((
-                InstanceMaterialData(combined),
+                InstanceMaterialData(Arc::new(combined)),
                 Transform::from_xyz(px, 0.0, pz),
             ));
         }
@@ -379,7 +380,7 @@ fn update_grass_field(
                         Name::new("Grass Field"),
                         GrassTile,
                         Mesh3d(blade_mesh.clone()),
-                        InstanceMaterialData(combined),
+                        InstanceMaterialData(Arc::new(combined)),
                         // Transform (≈ camera) only feeds transparent-sort distance;
                         // blade positions are already world-space.
                         Transform::from_xyz(px, 0.0, pz),
@@ -434,7 +435,7 @@ pub(crate) fn spawn_menu_grass(commands: &mut Commands, meshes: &mut Assets<Mesh
         Name::new("Menu Grass"),
         WorldGeometry,
         Mesh3d(blade_mesh),
-        InstanceMaterialData(combined),
+        InstanceMaterialData(Arc::new(combined)),
         Transform::default(),
         Visibility::Visible,
         NoFrustumCulling,

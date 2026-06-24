@@ -23,7 +23,9 @@ use bevy::{
     window::WindowPosition,
     winit::WinitSettings,
 };
-use bevy_egui::{EguiPlugin, EguiPostUpdateSet, EguiPreUpdateSet, EguiPrimaryContextPass};
+use bevy_egui::{
+    EguiGlobalSettings, EguiPlugin, EguiPostUpdateSet, EguiPreUpdateSet, EguiPrimaryContextPass,
+};
 use bevy_framepace::{FramepacePlugin, FramepaceSettings};
 
 use crate::{
@@ -516,6 +518,18 @@ fn add_third_party_plugins(app: &mut App, settings: &ClientSettings) {
         // resolve through the embedded source.
         .add_plugins(AudioPlugin)
         .add_plugins(EguiPlugin::default())
+        // Pin the single primary Egui context to the world `MainCamera` instead of
+        // letting bevy_egui auto-attach it to "the first camera it finds". With the
+        // first-person `ViewmodelCamera` now spawned in the same frame, that
+        // auto-pick is archetype-order nondeterministic and could land the primary
+        // context (which owns ALL egui UI input) on the viewmodel camera, breaking
+        // keyboard input, e.g. you could open chat but not type. `MainCamera` adds
+        // `PrimaryEguiContext` explicitly (see `scene::assets`), so the context is
+        // deterministic.
+        .insert_resource(EguiGlobalSettings {
+            auto_create_primary_context: false,
+            ..default()
+        })
         // Software frame pacing. With this plugin running we can leave
         // `PresentMode` at `Immediate` everywhere and rely on a CPU-side
         // sleep to cap the frame rate, `Fifo`/`AutoVsync` are not
@@ -761,14 +775,21 @@ fn add_display_systems(app: &mut App) {
     .add_systems(
         Update,
         save_client_settings_system.in_set(ClientSystemSet::SettingsSave),
-    )
-    .add_systems(Update, sync_view_radius_system)
-    // In `Last`, not `Update`: the debounced save never fires while the options
-    // panel is open (egui marks settings changed every frame), so quitting from
-    // the settings screen would drop the change. `Last` is also the only place
-    // that observes the window-close `AppExit`, see the analytics drain.
-    .add_systems(Last, flush_settings_on_exit_system)
-    .add_systems(Update, chunk_overlay_system);
+    );
+    // Dev-only: push the `Dev` options tab's shader toggles into the toon / grass
+    // `dev_flags` uniforms. Pipeline toggles ride the graphics/sky systems above.
+    #[cfg(debug_assertions)]
+    app.add_systems(
+        Update,
+        systems::dev_render::apply_dev_render_settings.in_set(ClientSystemSet::Display),
+    );
+    app.add_systems(Update, sync_view_radius_system)
+        // In `Last`, not `Update`: the debounced save never fires while the options
+        // panel is open (egui marks settings changed every frame), so quitting from
+        // the settings screen would drop the change. `Last` is also the only place
+        // that observes the window-close `AppExit`, see the analytics drain.
+        .add_systems(Last, flush_settings_on_exit_system)
+        .add_systems(Update, chunk_overlay_system);
 }
 
 /// Combat-feedback HUD, scene application from the freshest snapshot, world-grid

@@ -27,7 +27,7 @@ use bevy::{
     render::render_resource::TextureFormat,
 };
 
-use crate::app::scene::MainCamera;
+use crate::app::scene::{MainCamera, ViewmodelCamera};
 
 /// Off-screen render target the control socket screenshots when headless capture
 /// is enabled. The resource is only inserted in that mode; its absence is what
@@ -85,15 +85,24 @@ pub(crate) fn insert_capture_target(app: &mut App, width: u32, height: u32) {
     app.insert_resource(HeadlessCapture { image: handle });
 }
 
-/// Point the primary camera at the off-screen capture image. Runs once at
-/// startup after the scene (and therefore [`MainCamera`]) is spawned; a no-op
-/// when capture is disabled (the resource is absent). In Bevy 0.18 the render
-/// target is a `RenderTarget` component (defaulting to the primary window), so
-/// inserting one with the image variant overrides where the camera renders.
+/// Point the scene cameras at the off-screen capture image. Runs once at startup
+/// after the scene (and therefore the cameras) are spawned; a no-op when capture
+/// is disabled (the resource is absent). In Bevy 0.18 the render target is a
+/// `RenderTarget` component (defaulting to the primary window), so inserting one
+/// with the image variant overrides where the camera renders.
+///
+/// Both the world [`MainCamera`] and the first-person [`ViewmodelCamera`] are
+/// redirected: the viewmodel camera composites the held item over the scene
+/// (order 1, no colour clear), so it must share the same target or the in-hand
+/// tool would render to the hidden window and drop out of every screenshot.
+/// The scene cameras whose render target the capture redirect overrides: the
+/// world camera and the first-person viewmodel camera that composites over it.
+type SceneCameras<'w, 's> = Query<'w, 's, Entity, Or<(With<MainCamera>, With<ViewmodelCamera>)>>;
+
 pub(crate) fn redirect_camera_to_capture(
     mut commands: Commands,
     capture: Option<Res<HeadlessCapture>>,
-    cameras: Query<Entity, With<MainCamera>>,
+    cameras: SceneCameras,
 ) {
     let Some(capture) = capture else {
         return;

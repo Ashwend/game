@@ -43,10 +43,18 @@
 // Per-instance opacity; 1.0 for static props, driven below 1.0 only by the
 // tree-felling dissolve (the material's alpha_mode flips to Blend then).
 @group(#{MATERIAL_BIND_GROUP}) @binding(4) var<uniform> fade: f32;
+// Developer debug bitfield (dev-only `Dev` options tab; 0 in shipped builds).
+// Each set bit DISABLES a stage so a glitch can be isolated live. See
+// `state::toon_dev_bits`: 1=no posterize, 2=no band AA, 4=no ink, 8=no saturation.
+@group(#{MATERIAL_BIND_GROUP}) @binding(5) var<uniform> dev_flags: u32;
+const DEV_NO_POSTERIZE: u32 = 1u;
+const DEV_NO_BAND_AA: u32 = 2u;
+const DEV_NO_INK: u32 = 4u;
+const DEV_NO_SATURATION: u32 = 8u;
 
-// Saturation lift applied after the cel posterise so the banded result keeps the
-// bright, high-chroma anime feel instead of reading muted. 1.0 = off.
-const TOON_SATURATION: f32 = 1.25;
+// Saturation lift applied after the cel posterise so the banded result keeps a
+// gentle anime chroma without tipping into the oversaturated/candy look. 1.0 = off.
+const TOON_SATURATION: f32 = 1.10;
 // Cel posterise tuning. The lighting STRENGTH (albedo divided out) is quantised
 // into hard bands, then `albedo * band` rebuilds the colour so every band keeps
 // the prop's OWN hue (the old luminance-recolour kept the lit colour's hue, which
@@ -125,20 +133,49 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let albedo_lum = max(dot(albedo, lw), 1e-3);
     let shade = clamp(dot(lit.rgb, lw) / albedo_lum, 0.0, 0.999);
     let bands = max(params.x, 2.0);
-    let banded = clamp(floor(shade * bands) / bands * TOON_LIT_GAIN, 0.0, 1.0);
-    let shade_q = max(banded, shade * TOON_SHADOW_FILL);
+    var shade_q: f32;
+    if (dev_flags & DEV_NO_POSTERIZE) != 0u {
+        // Dev: posterize OFF -> smooth lighting (same exposure as the banded path).
+        shade_q = clamp(shade * TOON_LIT_GAIN, 0.0, 1.0);
+    } else {
+        let q = shade * bands;
+        var band_aa: f32;
+        if (dev_flags & DEV_NO_BAND_AA) != 0u {
+            // Dev: hard floor(), no edge AA (reproduces the old crawling-band look).
+            band_aa = floor(q);
+        } else {
+            // Anti-aliased cel step (replaces a bare floor()): quantise the lighting
+            // into hard bands, but soften each band BOUNDARY by the screen-space
+            // gradient of the lit value (fwidth). On a clean gradient the edge stays
+            // ~1px crisp, so the bands read exactly as before; where the RECEIVED
+            // shadow edge is noisy (PCSS penumbra + self-shadow acne) fwidth widens
+            // and the boundary dissolves instead of snapping a whole region between
+            // two bands frame-to-frame. That snap is the crawling shadow band on a
+            // tree trunk; this removes it without losing a band. The `q - 0.5` centres
+            // the smoothstep on each original floor() step, so band positions /
+            // brightness are unchanged away from the noisy edges.
+            let aa = max(fwidth(q) * 0.5, 0.02);
+            band_aa = floor(q - 0.5) + smoothstep(0.5 - aa, 0.5 + aa, fract(q - 0.5));
+        }
+        let banded = clamp(band_aa / bands * TOON_LIT_GAIN, 0.0, 1.0);
+        shade_q = max(banded, shade * TOON_SHADOW_FILL);
+    }
     var rgb = albedo * shade_q;
 
     // Dark ink-style silhouette edge: darken fragments whose normal turns away
     // from the camera, approximating a hand-drawn outline. params.z = strength,
-    // params.w = width exponent.
-    let edge = pow(1.0 - clamp(dot(pbr_input.N, pbr_input.V), 0.0, 1.0), max(params.w, 0.5));
-    rgb = mix(rgb, rgb * 0.10, clamp(edge * params.z, 0.0, 1.0));
+    // params.w = width exponent. (Dev-toggleable.)
+    if (dev_flags & DEV_NO_INK) == 0u {
+        let edge = pow(1.0 - clamp(dot(pbr_input.N, pbr_input.V), 0.0, 1.0), max(params.w, 0.5));
+        rgb = mix(rgb, rgb * 0.10, clamp(edge * params.z, 0.0, 1.0));
+    }
 
     // Saturation lift for the colourful anime feel (value is already correct from
     // the PBR pass, so no brightness gain, that would just blow the highlights).
-    let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-    rgb = max(mix(vec3<f32>(luma, luma, luma), rgb, TOON_SATURATION), vec3<f32>(0.0));
+    if (dev_flags & DEV_NO_SATURATION) == 0u {
+        let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+        rgb = max(mix(vec3<f32>(luma, luma, luma), rgb, TOON_SATURATION), vec3<f32>(0.0));
+    }
 
     // Output alpha: opaque props (and the felling dissolve) ride `lit.a * fade`.
     // Alpha-masked grass cards instead pass the texture's silhouette alpha through

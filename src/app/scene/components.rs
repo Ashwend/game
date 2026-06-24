@@ -63,6 +63,20 @@ pub(crate) struct HeldItemVisual {
 #[derive(Component)]
 pub(crate) struct MainCamera;
 
+/// Dedicated camera for the first-person held item. It renders only the
+/// viewmodel layer ([`VIEWMODEL_RENDER_LAYER`]) in its own pass with a fresh,
+/// cleared depth buffer, so the in-hand tool never depth-tests against the world
+/// and stops clipping into nearby walls / ore / peers. Spawned as a child of the
+/// [`MainCamera`] so it shares the eye transform automatically.
+#[derive(Component)]
+pub(crate) struct ViewmodelCamera;
+
+/// Render layer the first-person held item lives on. Only [`ViewmodelCamera`]
+/// draws it; the world [`MainCamera`] (layer 0) never does, and the custom grass
+/// queue skips layer-mismatched views so the field stays out of the viewmodel
+/// pass. The third-person tool on remote players stays on the world layer.
+pub(crate) const VIEWMODEL_RENDER_LAYER: usize = 1;
+
 #[derive(Component)]
 pub(crate) struct WorldGeometry;
 

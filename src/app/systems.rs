@@ -14,6 +14,8 @@ mod crafting_feedback;
 #[cfg(all(unix, debug_assertions))]
 mod control_socket;
 mod deployables;
+#[cfg(debug_assertions)]
+pub(crate) mod dev_render;
 mod display;
 pub(crate) mod effects;
 mod furnace_fire;

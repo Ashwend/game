@@ -17,9 +17,24 @@ pub(crate) enum OptionsTab {
     Voice,
     Controls,
     Keybindings,
+    /// Live shader / pipeline toggles for isolating visual glitches. Listed in the
+    /// tab bar only on debug builds (see [`Self::ALL`]); never shipped to players.
+    Dev,
 }
 
 impl OptionsTab {
+    #[cfg(debug_assertions)]
+    pub(crate) const ALL: [Self; 8] = [
+        Self::General,
+        Self::Display,
+        Self::Graphics,
+        Self::Audio,
+        Self::Voice,
+        Self::Controls,
+        Self::Keybindings,
+        Self::Dev,
+    ];
+    #[cfg(not(debug_assertions))]
     pub(crate) const ALL: [Self; 7] = [
         Self::General,
         Self::Display,
@@ -39,6 +54,7 @@ impl OptionsTab {
             Self::Voice => "Voice",
             Self::Controls => "Controls",
             Self::Keybindings => "Keybindings",
+            Self::Dev => "Dev",
         }
     }
 }

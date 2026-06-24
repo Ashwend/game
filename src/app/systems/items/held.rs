@@ -1,11 +1,12 @@
 use std::f32::consts::PI;
 
-use bevy::{light::NotShadowCaster, prelude::*};
+use bevy::{camera::visibility::RenderLayers, light::NotShadowCaster, prelude::*};
 
 use crate::{
     app::{
         scene::{
             HeldItemVisual, ItemVisualAssets, MainCamera, ToonMaterial, ToonViewmodelMaterial,
+            VIEWMODEL_RENDER_LAYER,
         },
         state::{GatherInputState, LocalPlayerState, MenuState, Screen, ToolSwapState},
     },
@@ -107,6 +108,12 @@ pub(crate) fn apply_held_item_visual_system(
             Mesh3d(mesh),
             transform,
             Visibility::Visible,
+            // Draw the in-hand item only through the dedicated `ViewmodelCamera`
+            // (this layer), never the world camera. That camera's separate cleared
+            // depth buffer is what stops the tool clipping into nearby geometry.
+            // The third-person tool on remote players is spawned elsewhere and
+            // stays on the world layer, so peers still see it lit by the scene.
+            RenderLayers::layer(VIEWMODEL_RENDER_LAYER),
             // Held items sit right in front of the camera; their shadow would
             // slash across the floor like a phantom player and dominate the
             // frame. Skip the shadow pass.

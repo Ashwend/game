@@ -20,17 +20,22 @@ mod toon;
 mod world;
 
 pub(crate) use assets::{
-    DeployableVisualAssets, FurnaceFireAssets, ImpactEffectAssets, ItemVisualAssets,
-    PlayerVisualAssets, ResourceVisualAssets, TorchFireAssets, menu_backdrop_depth_of_field,
-    player_visual_position, setup_scene,
+    ATMOSPHERE_AMBIENT_INTENSITY, DeployableVisualAssets, FurnaceFireAssets, ImpactEffectAssets,
+    ItemVisualAssets, PlayerVisualAssets, ResourceVisualAssets, TorchFireAssets,
+    menu_backdrop_depth_of_field, player_visual_position, setup_scene,
 };
 #[cfg(test)]
 pub(crate) use components::WorldGeometry;
 pub(crate) use components::{
     DeployablePlacementGhost, HeldItemVisual, MainCamera, NetworkDeployedEntity,
-    NetworkDroppedItem, NetworkLootBag, NetworkPlayer, NetworkResourceNode, tree_mesh_height,
+    NetworkDroppedItem, NetworkLootBag, NetworkPlayer, NetworkResourceNode, VIEWMODEL_RENDER_LAYER,
+    tree_mesh_height,
 };
-pub(crate) use grass::{GrassInstancingPlugin, GrassState, stream_grass_system};
+// `ViewmodelCamera` is consumed cross-module only by the debug-only headless
+// capture redirect; the in-scene spawn in `assets.rs` uses `components::` directly.
+#[cfg(debug_assertions)]
+pub(crate) use components::ViewmodelCamera;
+pub(crate) use grass::{GrassDevFlags, GrassInstancingPlugin, GrassState, stream_grass_system};
 pub(crate) use mesh::{PLAYER_HEAD_TOP_LOCAL_Y, PlayerPart, rig_layout};
 pub(crate) use sky::{SUN_SOFT_SHADOW_SIZE, SunLight, update_sky_system};
 pub(crate) use terrain::{TerrainMaterial, TerrainTextureAssets};

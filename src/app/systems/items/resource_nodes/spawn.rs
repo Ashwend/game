@@ -1,8 +1,4 @@
-use bevy::{
-    camera::visibility::VisibilityRange,
-    light::{NotShadowCaster, NotShadowReceiver},
-    prelude::*,
-};
+use bevy::{camera::visibility::VisibilityRange, light::NotShadowCaster, prelude::*};
 
 use crate::{
     app::{
@@ -100,16 +96,15 @@ pub(super) fn spawn_resource_node_entity(
         let lod_mesh = tree_lod_mesh(assets, model);
         commands.entity(entity).with_children(|parent| {
             // Solid faceted canopy, drawn near (hidden with the trunk past the LOD
-            // distance). Casts shadows like the trunk so a forest floor stays
-            // shaded up close, but does NOT receive them: the canopy is a solid
-            // opaque blob whose shading normals are biased up toward the sky (so it
-            // lights soft like a leaf mass), which mis-aims the shadow normal bias
-            // and lets self-shadow acne creep onto its own facets at a high midday
-            // sun. The cel posterise (`toon.wgsl`, 3 hard bands) then snaps that
-            // soft acne into a crisp, wrong-looking shadow band on the canopy. It
-            // is invisible on the smoothly-lit PBR ground but glaring once cel-
-            // quantised, so the canopy opts out of shadow *reception* (it still
-            // casts). See docs/toon-shading.md and the issue notes.
+            // distance). It both casts AND receives shadows, so a forest floor stays
+            // shaded up close and the canopy's own underside reads as a voluminous
+            // leaf mass. It used to opt OUT of shadow reception: the up-biased canopy
+            // normals mis-aim the shadow normal bias, and the cel posterise's bare
+            // floor() snapped that soft self-shadow acne into a crisp, wrong-looking
+            // band. Now that `toon.wgsl` anti-aliases the band edge by the lit
+            // value's screen-space gradient (fwidth), the soft acne dissolves at the
+            // boundary instead of snapping, so the canopy can receive shadows again.
+            // See docs/toon-shading.md.
             if let Some((foliage_mesh, foliage_material)) = foliage {
                 parent.spawn((
                     Name::new(format!("Resource Node {id} Canopy")),
@@ -118,7 +113,6 @@ pub(super) fn spawn_resource_node_entity(
                     tree_lod_high_range(),
                     Transform::default(),
                     Visibility::Visible,
-                    NotShadowReceiver,
                 ));
             }
             // Distant low-poly stand-in: one cheap vertex-coloured mesh that

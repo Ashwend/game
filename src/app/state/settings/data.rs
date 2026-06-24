@@ -1,4 +1,5 @@
 use bevy::{
+    light::{CascadeShadowConfig, CascadeShadowConfigBuilder},
     prelude::*,
     window::{Monitor, MonitorSelection, PresentMode, VideoModeSelection, WindowMode},
 };
@@ -25,6 +26,9 @@ pub(crate) struct ClientSettings {
     pub(crate) onboarding: OnboardingSettings,
     #[serde(default)]
     pub(crate) keybindings: KeyBindings,
+    /// Developer render toggles (debug-only `Dev` options tab). All default ON.
+    #[serde(default)]
+    pub(crate) dev: DevSettings,
 }
 
 impl ClientSettings {
@@ -245,6 +249,106 @@ impl Default for GraphicsSettings {
     }
 }
 
+/// Developer render toggles, surfaced by the debug-only `Dev` options tab so a
+/// visual glitch can be isolated to a single shader / pipeline stage at runtime.
+/// Every toggle defaults ON, so a normal launch renders exactly as before; the
+/// shader-internal ones flip a `dev_flags` uniform (no pipeline recompile), the
+/// rest force a camera/light component off. Serialised so the panel state sticks
+/// across a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct DevSettings {
+    // Toon material (props, ore, trees, deployables, held tools).
+    #[serde(default = "default_true")]
+    pub(crate) cel_posterize: bool,
+    #[serde(default = "default_true")]
+    pub(crate) cel_band_aa: bool,
+    #[serde(default = "default_true")]
+    pub(crate) ink_edge: bool,
+    #[serde(default = "default_true")]
+    pub(crate) saturation: bool,
+    // Instanced grass field.
+    #[serde(default = "default_true")]
+    pub(crate) grass_cel: bool,
+    #[serde(default = "default_true")]
+    pub(crate) grass_wind: bool,
+    // Lighting / atmosphere / post (mirrors the Graphics levers + fog/IBL).
+    #[serde(default = "default_true")]
+    pub(crate) bloom: bool,
+    #[serde(default = "default_true")]
+    pub(crate) sun_shadows: bool,
+    #[serde(default = "default_true")]
+    pub(crate) soft_shadows: bool,
+    #[serde(default = "default_true")]
+    pub(crate) atmosphere_ibl: bool,
+    #[serde(default = "default_true")]
+    pub(crate) fog: bool,
+}
+
+impl Default for DevSettings {
+    fn default() -> Self {
+        Self {
+            cel_posterize: true,
+            cel_band_aa: true,
+            ink_edge: true,
+            saturation: true,
+            grass_cel: true,
+            grass_wind: true,
+            bloom: true,
+            sun_shadows: true,
+            soft_shadows: true,
+            atmosphere_ibl: true,
+            fog: true,
+        }
+    }
+}
+
+/// `dev_flags` uniform bits read by `toon.wgsl` / `toon_viewmodel.wgsl`. A SET bit
+/// DISABLES that stage, so the default value (0) renders normally.
+pub(crate) mod toon_dev_bits {
+    pub(crate) const NO_POSTERIZE: u32 = 1 << 0;
+    pub(crate) const NO_BAND_AA: u32 = 1 << 1;
+    pub(crate) const NO_INK: u32 = 1 << 2;
+    pub(crate) const NO_SATURATION: u32 = 1 << 3;
+}
+
+/// `dev_flags` uniform bits read by `grass_instanced.wgsl` (set = disable).
+pub(crate) mod grass_dev_bits {
+    pub(crate) const NO_CEL: u32 = 1 << 0;
+    pub(crate) const NO_WIND: u32 = 1 << 1;
+}
+
+impl DevSettings {
+    /// Pack the toon-shader toggles into the `dev_flags` uniform bitfield.
+    pub(crate) fn toon_flags(&self) -> u32 {
+        let mut f = 0u32;
+        if !self.cel_posterize {
+            f |= toon_dev_bits::NO_POSTERIZE;
+        }
+        if !self.cel_band_aa {
+            f |= toon_dev_bits::NO_BAND_AA;
+        }
+        if !self.ink_edge {
+            f |= toon_dev_bits::NO_INK;
+        }
+        if !self.saturation {
+            f |= toon_dev_bits::NO_SATURATION;
+        }
+        f
+    }
+
+    /// Pack the grass toggles into the grass `dev_flags` uniform bitfield.
+    pub(crate) fn grass_flags(&self) -> u32 {
+        let mut f = 0u32;
+        if !self.grass_cel {
+            f |= grass_dev_bits::NO_CEL;
+        }
+        if !self.grass_wind {
+            f |= grass_dev_bits::NO_WIND;
+        }
+        f
+    }
+}
+
 /// Procedural detail-grass density. Cosmetic, client-side, seed-free, none of
 /// it touches gameplay, collision, or the server, so it's free to differ
 /// between players. `Off` despawns all grass; the other tiers map to a
@@ -281,6 +385,25 @@ pub(crate) struct ShadowConfig {
     pub(crate) num_cascades: usize,
     /// Per-cascade shadow map resolution (power of two).
     pub(crate) map_size: usize,
+    /// Far bound of the first (sharpest) cascade, in metres. Kept on the tier so
+    /// the cascade split has a single source of truth shared by `setup_sky`
+    /// (spawn) and `apply_graphics_settings_system` (live apply).
+    pub(crate) first_cascade_far_bound: f32,
+}
+
+impl ShadowConfig {
+    /// Resolve this tier's directional-light cascade component. The one place
+    /// the [`CascadeShadowConfigBuilder`] is built, so the spawn-time and
+    /// settings-apply paths can never disagree on the cascade split.
+    pub(crate) fn cascade_config(&self) -> CascadeShadowConfig {
+        CascadeShadowConfigBuilder {
+            num_cascades: self.num_cascades,
+            maximum_distance: self.maximum_distance,
+            first_cascade_far_bound: self.first_cascade_far_bound,
+            ..default()
+        }
+        .build()
+    }
 }
 
 /// Sun shadow quality. Shadows over a dense forest re-render every tree into
@@ -321,16 +444,19 @@ impl ShadowQuality {
                 maximum_distance: 45.0,
                 num_cascades: 2,
                 map_size: 1024,
+                first_cascade_far_bound: 8.0,
             }),
             Self::High => Some(ShadowConfig {
                 maximum_distance: 100.0,
                 num_cascades: 3,
                 map_size: 2048,
+                first_cascade_far_bound: 8.0,
             }),
             Self::Ultra => Some(ShadowConfig {
                 maximum_distance: 120.0,
                 num_cascades: 4,
                 map_size: 4096,
+                first_cascade_far_bound: 8.0,
             }),
         }
     }

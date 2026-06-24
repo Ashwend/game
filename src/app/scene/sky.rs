@@ -28,17 +28,18 @@
 //! the camera (`ATMOSPHERE_AMBIENT_INTENSITY` in `assets.rs`).
 
 use bevy::{
-    light::{CascadeShadowConfigBuilder, NotShadowCaster, SunDisk},
+    camera::visibility::RenderLayers,
+    light::{NotShadowCaster, SunDisk},
     pbr::{DistanceFog, FogFalloff},
     prelude::*,
 };
 
 use crate::{
-    app::state::{ClientRuntime, MenuState},
+    app::state::{ClientRuntime, ClientSettings, MenuState, ShadowQuality},
     world_time::{SECONDS_PER_DAY, WorldTime},
 };
 
-use super::components::MainCamera;
+use super::components::{MainCamera, VIEWMODEL_RENDER_LAYER};
 
 /// Apparent radius of the sky dome the moon visual rides on. The camera's far
 /// plane is 300 m, so the moon stays comfortably inside it. The moon material
@@ -54,14 +55,26 @@ const MOON_DISC_RADIUS: f32 = 4.2;
 /// sun an oblique, more cinematic track across the sky.
 const CELESTIAL_TILT_DEGREES: f32 = 18.0;
 
-/// Peak daylight illuminance (lux) for the sun directional light. Kept at a
-/// daylight-calibrated value (≈ `AMBIENT_DAYLIGHT`) rather than physical
-/// `RAW_SUNLIGHT` + a manual camera `Exposure`: the atmosphere still renders the
-/// sky and filters/tints the light toward the horizon, but this value keeps the
-/// scene at a consistent brightness across the whole day under the renderer's
-/// default exposure, which suits a stylised game with a fixed, gameplay-fair
-/// night far better than raw sunlight (which really wants auto-exposure).
-const SUN_PEAK_ILLUMINANCE: f32 = 11_000.0;
+/// Daytime sun illuminance (lux) once the sun has cleared the morning ramp.
+///
+/// Grounded in Bevy's physical lux scale (`bevy::light::light_consts::lux`):
+/// `AMBIENT_DAYLIGHT` 10_000, `FULL_DAYLIGHT` 20_000, `DIRECT_SUNLIGHT` 100_000,
+/// `RAW_SUNLIGHT` 130_000. Those assume you ALSO set `Exposure::SUNLIGHT` (ev100
+/// 15). This project deliberately keeps Bevy's DEFAULT exposure (`BLENDER`, ev100
+/// 9.7) and never adds a manual `Exposure` (a fixed gameplay-fair night suits a
+/// stylised game better than auto-exposure). ev100 9.7 is ~2^5.3 ≈ 40x more
+/// sensitive than ev100 15, so a "bright clear day" lands at roughly
+/// `DIRECT_SUNLIGHT / 40 ≈ 2.5k`..`5k` lux here, NOT 100_000. We sit near the top
+/// of that band for a sunny look. This is the FLAT daytime level (see
+/// [`DAYLIGHT_PLATEAU_ELEVATION`]): the old `elevation^0.9` curve climbed to ~96%
+/// of peak at noon (2x mid-morning) and blew the frame out; the plateau holds it.
+const SUN_PEAK_ILLUMINANCE: f32 = 4_500.0;
+
+/// Sun elevation (`sin` of its angle above the horizon, in `[0, 1]`) at which the
+/// daytime illuminance reaches its flat plateau. ~0.35 is roughly the mid-morning
+/// sun (~07:30 in the day cycle), the brightness the look is tuned around; below
+/// it the light ramps up from dawn, above it it stays put through to dusk.
+const DAYLIGHT_PLATEAU_ELEVATION: f32 = 0.35;
 
 /// Apparent size of the sun for percentage-closer soft shadows (PCSS). Drives
 /// the penumbra width: PCSS blurs the shadow edge by roughly
@@ -183,16 +196,21 @@ pub(crate) fn setup_sky(
             ..default()
         },
         SunDisk::EARTH,
-        // Default cascade config goes out to 150 m, sized for AAA open worlds.
-        // Our playspace is ~80 m across so trimming to 100 m gives every shadow
-        // texel ~33% more on-screen resolution with no visible difference.
-        CascadeShadowConfigBuilder {
-            num_cascades: 3,
-            maximum_distance: 100.0,
-            first_cascade_far_bound: 8.0,
-            ..default()
-        }
-        .build(),
+        // Cascade split comes from the default shadow tier's `ShadowConfig` so it
+        // matches what `apply_graphics_settings_system` re-applies on the first
+        // settings frame; no more hardcoded literals that drift from the active
+        // tier (the engine default reaches 150 m, sized for AAA open worlds, which
+        // wastes shadow-texel resolution on our ~80 m playspace).
+        ShadowQuality::default()
+            .config()
+            .map(|cfg| cfg.cascade_config())
+            .unwrap_or_default(),
+        // Light BOTH the world (layer 0) and the first-person viewmodel (layer 1).
+        // Lights are render-layer gated, and a light with no `RenderLayers` only
+        // reaches layer 0, so without this the in-hand tool renders as an unlit
+        // black silhouette by day (when the sky ambient floor has faded to ~0 and
+        // the viewmodel camera carries no atmosphere IBL of its own).
+        RenderLayers::default().with(VIEWMODEL_RENDER_LAYER),
         Transform::from_xyz(0.0, 1.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
@@ -209,6 +227,9 @@ pub(crate) fn setup_sky(
             shadows_enabled: false,
             ..default()
         },
+        // Also light the viewmodel layer so the in-hand tool dims with the moon at
+        // night like the rest of the scene (see the sun's note above).
+        RenderLayers::default().with(VIEWMODEL_RENDER_LAYER),
         Transform::from_xyz(0.0, 1.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
@@ -248,7 +269,7 @@ pub(crate) fn setup_sky(
 /// slot before the lighting system runs.
 pub(crate) fn initial_distance_fog() -> DistanceFog {
     DistanceFog {
-        color: Color::srgb(0.55, 0.65, 0.78),
+        color: Color::srgb(0.46, 0.54, 0.66),
         directional_light_color: Color::srgba(1.0, 0.92, 0.78, 0.5),
         directional_light_exponent: 30.0,
         // Squared falloff, not plain exponential: both hit 5% contrast at
@@ -269,6 +290,7 @@ pub(crate) fn initial_distance_fog() -> DistanceFog {
 pub(crate) fn update_sky_system(
     time: Res<Time>,
     runtime: Res<ClientRuntime>,
+    settings: Res<ClientSettings>,
     menu: Res<MenuState>,
     mut shadow_throttle: Local<f32>,
     mut ambient: ResMut<GlobalAmbientLight>,
@@ -330,9 +352,15 @@ pub(crate) fn update_sky_system(
 
     if let Ok(mut fog) = fog.single_mut() {
         fog.color = vec3_to_color(lighting.fog_color);
-        // Squared falloff to keep the near field clear; see
-        // `initial_distance_fog`.
-        fog.falloff = FogFalloff::from_visibility_squared(lighting.fog_distance);
+        // Squared falloff to keep the near field clear; see `initial_distance_fog`.
+        // Dev: push the visibility far past the view so fog is effectively off,
+        // letting you see the un-hazed scene + the streaming edge it normally hides.
+        let visibility = if settings.dev.fog {
+            lighting.fog_distance
+        } else {
+            100_000.0
+        };
+        fog.falloff = FogFalloff::from_visibility_squared(visibility);
     }
 
     // Moon visual follows the camera at a fixed dome radius so it feels
@@ -389,7 +417,21 @@ fn compute_lighting(time: &WorldTime) -> LightingFrame {
     // too, keeping the very low sun from over-lighting the scatter.
     let sun_elevation = sun_height.max(0.0).clamp(0.0, 1.0);
     let horizon_dim = smoothstep(0.0, HORIZON_FADE_BAND, sun_height);
-    let sun_illuminance = SUN_PEAK_ILLUMINANCE * sun_elevation.powf(0.9) * horizon_dim;
+    // Plateau, NOT a power curve: ramp up from dawn to the flat daytime level by
+    // `DAYLIGHT_PLATEAU_ELEVATION`, then hold it. `smoothstep` clamps to 1.0 above
+    // the plateau, so a higher noon sun no longer keeps pushing the illuminance up
+    // (the old `elevation^0.9` did, hence the blinding midday). `horizon_dim` still
+    // damps the grazing-sun scatter spike at the very horizon.
+    let daylight = smoothstep(0.0, DAYLIGHT_PLATEAU_ELEVATION, sun_elevation);
+    // Above the plateau, ease the illuminance back down as the sun climbs. A higher
+    // sun hits the flat ground more head-on (the N·L cosine term), which read much
+    // brighter at noon even at a flat illuminance. This stylised (non-physical) droop
+    // tames most of that so midday stays a touch above mid-morning rather than a
+    // flashbang. A gentler exponent than the original 0.5 leaves noon SLIGHTLY
+    // brighter (the desired "midday can be a bit brighter"). `1.0` at the plateau.
+    let overhead =
+        (DAYLIGHT_PLATEAU_ELEVATION / sun_elevation.max(DAYLIGHT_PLATEAU_ELEVATION)).powf(0.35);
+    let sun_illuminance = SUN_PEAK_ILLUMINANCE * daylight * overhead * horizon_dim;
 
     // Moonlight only takes over once the sun has set.
     let moon_elevation = moon_height.max(0.0).clamp(0.0, 1.0);
@@ -409,7 +451,7 @@ fn compute_lighting(time: &WorldTime) -> LightingFrame {
     // value is the practical view distance; pushing it much past the AoI
     // streaming ring (View Distance tier, ~130-190 m on Medium) would reveal
     // the streaming edge, and past ~260 m would need a larger far plane.
-    let day_fog = Vec3::new(0.55, 0.65, 0.78);
+    let day_fog = Vec3::new(0.46, 0.54, 0.66);
     let night_fog = Vec3::new(0.05, 0.07, 0.13);
     let fog_color = lerp_vec3(night_fog, day_fog, day_strength);
     let fog_distance = lerp(105.0, 190.0, day_strength);

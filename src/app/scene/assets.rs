@@ -1,6 +1,7 @@
 use bevy::{
     asset::RenderAssetUsages,
     audio::SpatialListener,
+    camera::{ClearColorConfig, visibility::RenderLayers},
     core_pipeline::tonemapping::Tonemapping,
     gltf::GltfAssetLabel,
     image::{
@@ -14,11 +15,13 @@ use bevy::{
     render::view::{Hdr, NoIndirectDrawing},
 };
 
+use bevy_egui::PrimaryEguiContext;
+
 use super::mesh::builder::build_hay_tuft_mesh;
 use super::terrain::build_mip_chain;
 use super::toon::{ToonMaterial, ToonViewmodelMaterial};
 use super::{
-    components::MainCamera,
+    components::{MainCamera, VIEWMODEL_RENDER_LAYER, ViewmodelCamera},
     mesh::{
         ORE_NODE_STAGE_COUNT, PlayerRigMeshes, build_player_rig_meshes, door_ghost_mesh,
         impact_stone_shard_mesh, impact_wood_chip_mesh, low_poly_bag_mesh,
@@ -35,10 +38,11 @@ use crate::app::{EYE_HEIGHT, PLAYER_VISUAL_CENTER_Y, embedded_asset_path};
 
 /// Strength of the image-based ambient/reflection light generated from the
 /// procedural sky. The sun is kept at a daylight-calibrated illuminance (see
-/// `SUN_PEAK_ILLUMINANCE` in `sky.rs`) with the renderer's default exposure, so
-/// the physical default of `1.0` reads well here and gives the scene consistent
-/// ambient across the whole day. Lower it for moodier, deeper shadows.
-pub(crate) const ATMOSPHERE_AMBIENT_INTENSITY: f32 = 1.0;
+/// `SUN_PEAK_ILLUMINANCE` in `sky.rs`) with the renderer's default exposure.
+/// Trimmed below the physical `1.0` so the sky doesn't flood every surface with
+/// fill light: that flat, shadowless fill was a big part of the washed-out,
+/// low-contrast "dreamy" read. Lower still for moodier, deeper shadows.
+pub(crate) const ATMOSPHERE_AMBIENT_INTENSITY: f32 = 0.70;
 
 /// Cubemap resolution (per face) of the atmosphere environment map used for
 /// IBL. Bevy's default is `512`, but that cubemap is **refiltered every frame**
@@ -70,6 +74,7 @@ fn hay_tall_grass_material(tex: Handle<Image>) -> ToonMaterial {
         params: Vec4::new(3.0, 0.4, 0.0, 2.0),
         tex_scale: 1.0, // the hay card carries its own UVs; triplanar scale unused
         fade: 1.0,
+        dev_flags: 0,
     }
 }
 
@@ -423,90 +428,143 @@ pub(crate) fn setup_scene(
         ..default()
     });
 
+    let main_camera = commands
+        .spawn((
+            Name::new("Camera"),
+            MainCamera,
+            // Own the single primary Egui context explicitly (auto-creation is
+            // disabled in `app.rs`). All UI runs in `EguiPrimaryContextPass`, so the
+            // context must live on the world camera, not the sibling viewmodel
+            // camera, or UI keyboard input breaks (open chat but can't type). Pulls
+            // in `EguiContext` + the multipass schedule via its required components.
+            PrimaryEguiContext,
+            Camera3d::default(),
+            // HDR is a permanent baseline: bloom needs it, and the procedural
+            // atmosphere sky (Phase 2) requires it. It only changes the
+            // intermediate render texture, not the swapchain. Tonemapping is set
+            // explicitly to the filmic TonyMcMapface curve, which desaturates the
+            // brightest values so bloom + a hot sun disc read as glow rather than
+            // a clipped white blob. Bloom itself is owned by
+            // `apply_graphics_settings_system` so it tracks the Graphics tab.
+            Hdr,
+            // Opt this camera out of GPU-driven indirect batching. With it on, the
+            // binned opaque phase intermittently dropped whole batches (regions of
+            // trees/ore vanishing until you moved) once a second pipeline, the
+            // custom grass material, and earlier `VisibilityRange` entities, shared
+            // the phase. Direct (non-indirect) drawing is stable here; with ~1k
+            // visible meshes the CPU draw-submission cost is negligible, and macOS
+            // Metal has limited multi-draw-indirect support anyway.
+            NoIndirectDrawing,
+            // AgX: a flatter, more desaturated/pastel filmic curve than TonyMcMapface,
+            // which reads softer and more painterly (closer to the stylized-grass
+            // reference). Scene-wide; verified against the daytime/dusk scene.
+            Tonemapping::AgX,
+            // Procedural physically-based sky. `earthlike` uses the default
+            // earthlike scattering medium; `AtmosphereSettings` is auto-required
+            // with sensible defaults (scene units are already metres). The
+            // atmosphere reads the sun `DirectionalLight` to place the sun disc and
+            // tint sunlight through the air, and renders the sky behind all
+            // geometry, so the old hand-authored `ClearColor` sky is retired.
+            // Grouped into a nested sub-bundle so the camera's component tuple
+            // stays under Bevy's 15-element bundle arity limit.
+            (
+                Atmosphere::earthlike(scattering_media.add(ScatteringMedium::default())),
+                // The atmosphere recomputes its LUTs every frame (no skip-if-unchanged
+                // gating in Bevy 0.18), so these are a per-frame GPU cost. We trim them
+                // for performance, favouring sample-count cuts (slightly noisier
+                // integration, ~imperceptible) over resolution cuts (which band). The
+                // transmittance/multiscattering *resolutions* stay at default to keep
+                // sky-colour fidelity. Defaults shown in comments for reference.
+                AtmosphereSettings {
+                    transmittance_lut_samples: 24,           // default 40
+                    multiscattering_lut_samples: 12,         // default 20
+                    sky_view_lut_size: UVec2::new(256, 128), // default 400×200
+                    sky_view_lut_samples: 12,                // default 16
+                    aerial_view_lut_samples: 6,              // default 10
+                    ..default()
+                },
+                // Image-based ambient + reflections generated from the atmosphere.
+                // This is the "free IBL" that lifts every PBR surface; it supplies the
+                // daytime ambient term (the sky's `GlobalAmbientLight` floor fades to
+                // zero by day, see `sky.rs`). Strength via `ATMOSPHERE_AMBIENT_INTENSITY`.
+                AtmosphereEnvironmentMapLight {
+                    intensity: ATMOSPHERE_AMBIENT_INTENSITY,
+                    // Small cubemap, refiltered every frame, so this is the main GPU
+                    // cost lever. See `ATMOSPHERE_ENV_MAP_SIZE`.
+                    size: UVec2::splat(ATMOSPHERE_ENV_MAP_SIZE),
+                    ..default()
+                },
+            ),
+            Projection::from(PerspectiveProjection {
+                fov: 65.0_f32.to_radians(),
+                // The far plane sits *well past* the distance at which the squared
+                // distance fog goes fully opaque (~260 m for the 190 m daytime
+                // visibility, tighter at dusk/night), so the ground plane and any
+                // far geometry dissolve completely into the fog before the far
+                // plane would clip them. The old 160 m far plane sat *inside* that
+                // fade band: it hard-cut a still-faintly-visible ring of floor,
+                // which flickered as the camera rotated and let the un-fogged
+                // atmosphere sky (and the setting sun) show through the cut. The
+                // perimeter walls (>=480 m even on a Small map) stay beyond the far
+                // plane and are fully fogged, so they still never draw. Reverse-Z
+                // keeps depth precision fine at this range.
+                near: 0.05,
+                far: 300.0,
+                ..default()
+            }),
+            Msaa::Off,
+            menu_backdrop_depth_of_field(),
+            // ~17cm between ears, keeps L/R panning natural for nearby spatial
+            // sound sources. Bevy's default (4.0) is tuned for huge open worlds
+            // and exaggerates panning at first-person ranges.
+            SpatialListener::new(0.17),
+            // Atmospheric haze: faded by the day/night system per-frame, but
+            // present from frame zero so far geometry never pops into a
+            // colourless void on the first render.
+            initial_distance_fog(),
+            Transform::from_xyz(0.0, EYE_HEIGHT, 3.0).looking_at(Vec3::ZERO, Vec3::Y),
+        ))
+        .id();
+
+    // Dedicated first-person viewmodel camera. It is a child of the world camera
+    // (so it shares the eye transform every frame for free) and renders ONLY the
+    // held-item layer over the finished scene, in its own pass with a fresh,
+    // cleared depth buffer. That depth isolation is the whole point: the in-hand
+    // tool no longer depth-tests against the world, so it stops being sliced by /
+    // clipping into a wall, ore boulder, or peer the player stands close to. Same
+    // FOV + HDR + AgX tonemap as the world camera so the tool's proportions and
+    // grading match; no Atmosphere/IBL of its own (that would double the per-frame
+    // sky-cubemap refilter, the scene's single biggest GPU cost) so the tool's
+    // brightness rides the `ToonViewmodelMaterial` probe's sun + ambient term,
+    // which is built to degrade gracefully without the sky IBL.
     commands.spawn((
-        Name::new("Camera"),
-        MainCamera,
+        Name::new("Viewmodel Camera"),
+        ViewmodelCamera,
+        ChildOf(main_camera),
         Camera3d::default(),
-        // HDR is a permanent baseline: bloom needs it, and the procedural
-        // atmosphere sky (Phase 2) requires it. It only changes the
-        // intermediate render texture, not the swapchain. Tonemapping is set
-        // explicitly to the filmic TonyMcMapface curve, which desaturates the
-        // brightest values so bloom + a hot sun disc read as glow rather than
-        // a clipped white blob. Bloom itself is owned by
-        // `apply_graphics_settings_system` so it tracks the Graphics tab.
+        Camera {
+            // Render after the world camera (order 0) and composite on top without
+            // clearing colour, so the tool draws over the finished frame.
+            order: 1,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
         Hdr,
-        // Opt this camera out of GPU-driven indirect batching. With it on, the
-        // binned opaque phase intermittently dropped whole batches (regions of
-        // trees/ore vanishing until you moved) once a second pipeline, the
-        // custom grass material, and earlier `VisibilityRange` entities, shared
-        // the phase. Direct (non-indirect) drawing is stable here; with ~1k
-        // visible meshes the CPU draw-submission cost is negligible, and macOS
-        // Metal has limited multi-draw-indirect support anyway.
-        NoIndirectDrawing,
-        // AgX: a flatter, more desaturated/pastel filmic curve than TonyMcMapface,
-        // which reads softer and more painterly (closer to the stylized-grass
-        // reference). Scene-wide; verified against the daytime/dusk scene.
         Tonemapping::AgX,
-        // Procedural physically-based sky. `earthlike` uses the default
-        // earthlike scattering medium; `AtmosphereSettings` is auto-required
-        // with sensible defaults (scene units are already metres). The
-        // atmosphere reads the sun `DirectionalLight` to place the sun disc and
-        // tint sunlight through the air, and renders the sky behind all
-        // geometry, so the old hand-authored `ClearColor` sky is retired.
-        Atmosphere::earthlike(scattering_media.add(ScatteringMedium::default())),
-        // The atmosphere recomputes its LUTs every frame (no skip-if-unchanged
-        // gating in Bevy 0.18), so these are a per-frame GPU cost. We trim them
-        // for performance, favouring sample-count cuts (slightly noisier
-        // integration, ~imperceptible) over resolution cuts (which band). The
-        // transmittance/multiscattering *resolutions* stay at default to keep
-        // sky-colour fidelity. Defaults shown in comments for reference.
-        AtmosphereSettings {
-            transmittance_lut_samples: 24,           // default 40
-            multiscattering_lut_samples: 12,         // default 20
-            sky_view_lut_size: UVec2::new(256, 128), // default 400×200
-            sky_view_lut_samples: 12,                // default 16
-            aerial_view_lut_samples: 6,              // default 10
-            ..default()
-        },
-        // Image-based ambient + reflections generated from the atmosphere.
-        // This is the "free IBL" that lifts every PBR surface; it supplies the
-        // daytime ambient term (the sky's `GlobalAmbientLight` floor fades to
-        // zero by day, see `sky.rs`). Strength via `ATMOSPHERE_AMBIENT_INTENSITY`.
-        AtmosphereEnvironmentMapLight {
-            intensity: ATMOSPHERE_AMBIENT_INTENSITY,
-            // Small cubemap, refiltered every frame, so this is the main GPU
-            // cost lever. See `ATMOSPHERE_ENV_MAP_SIZE`.
-            size: UVec2::splat(ATMOSPHERE_ENV_MAP_SIZE),
-            ..default()
-        },
+        NoIndirectDrawing,
         Projection::from(PerspectiveProjection {
             fov: 65.0_f32.to_radians(),
-            // The far plane sits *well past* the distance at which the squared
-            // distance fog goes fully opaque (~260 m for the 190 m daytime
-            // visibility, tighter at dusk/night), so the ground plane and any
-            // far geometry dissolve completely into the fog before the far
-            // plane would clip them. The old 160 m far plane sat *inside* that
-            // fade band: it hard-cut a still-faintly-visible ring of floor,
-            // which flickered as the camera rotated and let the un-fogged
-            // atmosphere sky (and the setting sun) show through the cut. The
-            // perimeter walls (>=480 m even on a Small map) stay beyond the far
-            // plane and are fully fogged, so they still never draw. Reverse-Z
-            // keeps depth precision fine at this range.
-            near: 0.05,
-            far: 300.0,
+            // A tight, fully self-contained depth range for the tool. The near
+            // plane sits right at the lens so the tool never near-clips even on a
+            // hard swing, and the short far plane keeps depth precision dense.
+            near: 0.01,
+            far: 5.0,
             ..default()
         }),
         Msaa::Off,
-        menu_backdrop_depth_of_field(),
-        // ~17cm between ears, keeps L/R panning natural for nearby spatial
-        // sound sources. Bevy's default (4.0) is tuned for huge open worlds
-        // and exaggerates panning at first-person ranges.
-        SpatialListener::new(0.17),
-        // Atmospheric haze: faded by the day/night system per-frame, but
-        // present from frame zero so far geometry never pops into a
-        // colourless void on the first render.
-        initial_distance_fog(),
-        Transform::from_xyz(0.0, EYE_HEIGHT, 3.0).looking_at(Vec3::ZERO, Vec3::Y),
+        // Sees ONLY the held-item layer; the world stays on the default layer 0.
+        RenderLayers::layer(VIEWMODEL_RENDER_LAYER),
+        Transform::IDENTITY,
     ));
 
     setup_sky(&mut commands, &mut meshes, &mut materials);
@@ -571,6 +629,7 @@ pub(crate) fn setup_scene(
         params: tool_params,
         tex_scale: 1.0,
         fade: 1.0,
+        dev_flags: 0,
     };
     // Camera-relative variant for the first-person held viewmodel (same texture +
     // params; only the shader's light frame differs, see `ToonViewmodelMaterial`).
@@ -579,6 +638,7 @@ pub(crate) fn setup_scene(
         params: tool_params,
         tex_scale: 1.0,
         fade: 1.0,
+        dev_flags: 0,
     };
     let wood_tex = load_tool_texture("wood");
     let stone_tex = load_tool_texture("stone");
@@ -782,6 +842,7 @@ pub(crate) fn setup_scene(
             params: Vec4::new(3.0, 0.0, 0.8, 2.2),
             tex_scale: 1.0, // ore glbs carry their own UVs; triplanar scale unused
             fade: 1.0,
+            dev_flags: 0,
         }),
         vertex_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
@@ -819,12 +880,14 @@ pub(crate) fn setup_scene(
             params: Vec4::new(3.0, 0.0, 0.55, 2.6),
             tex_scale: 1.0,
             fade: 1.0,
+            dev_flags: 0,
         }),
         birch_bark_material: toon_materials.add(ToonMaterial {
             detail: birch_bark_tex,
             params: Vec4::new(3.0, 0.0, 0.55, 2.6),
             tex_scale: 1.0,
             fade: 1.0,
+            dev_flags: 0,
         }),
         // Canopy: clean cel bands + a slightly wider ink edge so the leafy mass
         // reads with a drawn silhouette outline (the anime "sticker" look from the
@@ -835,12 +898,14 @@ pub(crate) fn setup_scene(
             params: Vec4::new(3.0, 0.0, 0.7, 2.0),
             tex_scale: 1.0,
             fade: 1.0,
+            dev_flags: 0,
         }),
         birch_foliage_material: toon_materials.add(ToonMaterial {
             detail: birch_foliage_tex,
             params: Vec4::new(3.0, 0.0, 0.7, 2.0),
             tex_scale: 1.0,
             fade: 1.0,
+            dev_flags: 0,
         }),
         // Weathered dead bark: the same pine bark detail, but the dead-snag glb
         // carries a cool-grey COLOR_0 (set in build_tree.py) so `texture * COLOR_0`
@@ -851,6 +916,7 @@ pub(crate) fn setup_scene(
             params: Vec4::new(3.0, 0.0, 0.5, 2.6),
             tex_scale: 1.0,
             fade: 1.0,
+            dev_flags: 0,
         }),
     });
     // Placed structures are authored Blender glbs matching their inventory icons
@@ -1001,18 +1067,21 @@ pub(crate) fn setup_scene(
             params: Vec4::new(3.0, 0.0, 1.0, 1.4),
             tex_scale: 1.5,
             fade: 1.0,
+            dev_flags: 0,
         }),
         toon_stone_material: toon_materials.add(ToonMaterial {
             detail: deployable_stone_tex.clone(),
             params: Vec4::new(3.0, 0.0, 1.0, 1.4),
             tex_scale: 1.5,
             fade: 1.0,
+            dev_flags: 0,
         }),
         toon_fabric_material: toon_materials.add(ToonMaterial {
             detail: deployable_fabric_tex.clone(),
             params: Vec4::new(3.0, 0.0, 1.0, 1.4),
             tex_scale: 1.5,
             fade: 1.0,
+            dev_flags: 0,
         }),
         ghost_valid_material: materials.add(StandardMaterial {
             // Translucent green: visible against grass + stone without

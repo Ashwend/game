@@ -64,6 +64,12 @@ pub(crate) struct ToonMaterial {
     /// [`Self::alpha_mode`] to [`AlphaMode::Blend`] so the fade actually blends.
     #[uniform(4)]
     pub(crate) fade: f32,
+    /// Developer debug bitfield (see `state::toon_dev_bits`). Each SET bit disables
+    /// a shader stage (posterize / band-AA / ink edge / saturation); `0` (the
+    /// default everywhere) renders normally. Driven live by the `Dev` options tab
+    /// via `apply_dev_render_settings`; a no-op uniform in shipped builds.
+    #[uniform(5)]
+    pub(crate) dev_flags: u32,
 }
 
 impl Material for ToonMaterial {
@@ -125,6 +131,10 @@ pub(crate) struct ToonViewmodelMaterial {
     /// Per-instance opacity; `1.0` for the tools (no felling dissolve here).
     #[uniform(4)]
     pub(crate) fade: f32,
+    /// Developer debug bitfield (see `state::toon_dev_bits`); `0` renders normally.
+    /// Shared with [`ToonMaterial`] so the `Dev` tab toggles the held tool too.
+    #[uniform(5)]
+    pub(crate) dev_flags: u32,
 }
 
 impl Material for ToonViewmodelMaterial {

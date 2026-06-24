@@ -136,6 +136,7 @@ mod tests {
             voice: Default::default(),
             onboarding: Default::default(),
             keybindings: Default::default(),
+            dev: Default::default(),
         }
         .sanitized();
 

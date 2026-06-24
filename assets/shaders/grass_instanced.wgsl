@@ -53,6 +53,12 @@ struct VsOut {
     @location(3) uv: vec2<f32>,
     // Stable per-card key (0..1) for the distance dither dissolve.
     @location(4) thin_key: f32,
+    // World-space patch brightness (0..1 fBm), evaluated once per blade in the
+    // vertex stage. It varies on a NOISE_SCALE (~14 m) cell, far coarser than a
+    // blade card, so a per-blade value is indistinguishable from the old
+    // per-fragment eval and saves a 3-octave fBm (~12 hash calls) per fragment.
+    // (Named `patch_tint`, not `patch`: `patch` is a reserved WGSL keyword.)
+    @location(5) patch_tint: f32,
 }
 
 // Interleaved gradient noise (Jimenez): a cheap, temporally-stable screen-space
@@ -67,6 +73,11 @@ fn ign(p: vec2<f32>) -> f32 {
 // like every other surface, so the old hand-fed `grass_day` blend is gone.
 @group(3) @binding(0) var grass_tex: texture_2d<f32>;
 @group(3) @binding(1) var grass_samp: sampler;
+// Developer debug bitfield (dev-only `Dev` options tab; 0 in shipped builds).
+// `.x` bits: 1 = disable cel posterize, 2 = disable wind. See `state::grass_dev_bits`.
+@group(3) @binding(2) var<uniform> grass_dev: vec4<u32>;
+const GRASS_DEV_NO_CEL: u32 = 1u;
+const GRASS_DEV_NO_WIND: u32 = 2u;
 
 // Alpha cutoff for the card silhouette. A discard below this keeps the cards
 // readable under MSAA-off (FXAA); alpha-to-coverage refines the edge under MSAA.
@@ -246,7 +257,10 @@ fn vertex(v: Vertex) -> VsOut {
     // Wind sway. `wind_offset` already weights the bend by the baked sway weight
     // (vertex-colour alpha) and concentrates it up the blade, so the blade curves
     // with a pinned root instead of sliding sideways.
-    let w = wind_offset(world.xz, globals.time, v.color.a);
+    var w = vec2<f32>(0.0, 0.0);
+    if (grass_dev.x & GRASS_DEV_NO_WIND) == 0u {
+        w = wind_offset(world.xz, globals.time, v.color.a);
+    }
     world.x += w.x;
     world.z += w.y;
     // A hard-bent blade shortens (tip drops) rather than stretching, so a strong
@@ -279,6 +293,11 @@ fn vertex(v: Vertex) -> VsOut {
     let row = floor(cell / ATLAS_COLS);
     out.uv = (v.uv + vec2<f32>(col, row)) / vec2<f32>(ATLAS_COLS, ATLAS_ROWS);
     out.thin_key = v.i_b.w; // stable per-card key for the distance dither
+    // Hueless world-space patch brightness, evaluated from the blade's ROOT world
+    // position (pre-wind, so the patch doesn't swim as the blade sways). Moved off
+    // the fragment path: it's a ~14 m-scale field, so per-blade is plenty.
+    let root_xz = vec2<f32>(v.i_a.x, v.i_a.y);
+    out.patch_tint = fbm2(root_xz / NOISE_SCALE);
     return out;
 }
 
@@ -306,9 +325,9 @@ fn fragment(in: VsOut) -> @location(0) vec4<f32> {
         discard;
     }
 
-    // Subtle, hueless world-space brightness variation.
-    let np = fbm2(in.world_position.xz / NOISE_SCALE);
-    let tint = vec3<f32>(mix(PATCH_MIN, PATCH_MAX, np));
+    // Subtle, hueless world-space brightness variation (the fBm patch field is
+    // evaluated once per blade in the vertex stage and interpolated in as `patch`).
+    let tint = vec3<f32>(mix(PATCH_MIN, PATCH_MAX, in.patch_tint));
 
     // Height fraction up the card (0 root, 1 top): the vertex-colour alpha doubles
     // as the height ramp for AO, tip glow, and translucency.
@@ -355,8 +374,20 @@ fn fragment(in: VsOut) -> @location(0) vec4<f32> {
     let lw = vec3<f32>(0.2126, 0.7152, 0.0722);
     let albedo_lum = max(dot(albedo, lw), 1e-3);
     let shade = clamp(dot(lit.rgb, lw) / albedo_lum, 0.0, 0.999);
-    let banded = clamp(floor(shade * GRASS_CEL_BANDS) / GRASS_CEL_BANDS * GRASS_LIT_GAIN, 0.0, 1.0);
-    let shade_q = max(banded, shade * GRASS_SHADOW_FILL);
+    // Anti-aliased cel step, same fwidth-softened boundary as toon.wgsl: keeps the
+    // hard bands on clean gradients but dissolves the boundary where the received
+    // shadow edge is noisy, so the field doesn't crawl along band edges.
+    var shade_q: f32;
+    if (grass_dev.x & GRASS_DEV_NO_CEL) != 0u {
+        // Dev: cel posterize off -> smooth lighting, same exposure.
+        shade_q = clamp(shade * GRASS_LIT_GAIN, 0.0, 1.0);
+    } else {
+        let gq = shade * GRASS_CEL_BANDS;
+        let gaa = max(fwidth(gq) * 0.5, 0.02);
+        let gband = floor(gq - 0.5) + smoothstep(0.5 - gaa, 0.5 + gaa, fract(gq - 0.5));
+        let banded = clamp(gband / GRASS_CEL_BANDS * GRASS_LIT_GAIN, 0.0, 1.0);
+        shade_q = max(banded, shade * GRASS_SHADOW_FILL);
+    }
     let rgb = albedo * shade_q;
 
     let out_color = main_pass_post_lighting_processing(pbr_input, vec4<f32>(rgb, 1.0));
