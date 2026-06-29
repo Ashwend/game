@@ -225,7 +225,34 @@ pub(crate) fn update_placement_ghost_system(
         }
     }
 
-    refresh_ghost_entity(&mut commands, &ghosts, &assets, &placement, ghost_kind);
+    // For a wall ghost, gather the platform set so the preview can flush its
+    // outer face against the foundation edge exactly like the placed piece.
+    let wall_platforms: Vec<ClaimPlatform> = if matches!(ghost_kind, DeployableKind::Building { piece, .. } if piece.is_wall_like())
+    {
+        replicated
+            .iter()
+            .filter_map(|(meta, transform, _)| {
+                let DeployableKind::Building { piece, .. } = meta.kind else {
+                    return None;
+                };
+                let top = platform_top_offset(piece)?;
+                Some(ClaimPlatform {
+                    position: transform.position,
+                    top: transform.position.y + top,
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    refresh_ghost_entity(
+        &mut commands,
+        &ghosts,
+        &assets,
+        &placement,
+        ghost_kind,
+        &wall_platforms,
+    );
 }
 
 /// The world-space collider boxes a ghost of `kind` would occupy at
@@ -1519,10 +1546,25 @@ fn refresh_ghost_entity(
     assets: &DeployableVisualAssets,
     placement: &DeployablePlacementState,
     kind: DeployableKind,
+    wall_platforms: &[ClaimPlatform],
 ) {
     let Some(position) = placement.world_position else {
         despawn_ghost(commands, ghosts);
         return;
+    };
+    // A perimeter wall renders nudged inward so its outer face is flush with
+    // the foundation edge (matching the placed piece); the collider/snap
+    // position stays on the edge.
+    let position = match kind {
+        DeployableKind::Building { piece, .. } if piece.is_wall_like() => {
+            let offset = crate::building::wall_face_inset_offset(
+                Vec3Net::new(position.x, position.y, position.z),
+                placement.yaw,
+                wall_platforms,
+            );
+            position + Vec3::new(offset.x, offset.y, offset.z)
+        }
+        _ => position,
     };
     let mesh = match kind {
         DeployableKind::Workbench { .. } => assets.workbench_mesh.clone(),

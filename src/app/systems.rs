@@ -58,8 +58,8 @@ pub(crate) use control_socket::{ClientControlSocket, drain_control_socket};
 pub(crate) use crafting_feedback::{CraftCompletionWatch, craft_complete_cue_system};
 pub(crate) use deployables::{
     DeployedEntityVisuals, animate_door_panels_system, apply_deployed_entities_system,
-    maintain_world_grid_system, placement_input_system, update_claim_boundary_system,
-    update_placement_ghost_system,
+    maintain_wall_visual_insets_system, maintain_world_grid_system, placement_input_system,
+    update_claim_boundary_system, update_placement_ghost_system,
 };
 pub(crate) use display::apply_display_settings_system;
 pub(crate) use effects::{spawn_impact_effects_system, tick_impact_chips_system};

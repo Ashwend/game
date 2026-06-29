@@ -80,19 +80,20 @@ use self::{
         chunk_overlay_system, client_input_system, close_furnace_on_escape_system,
         close_loot_bag_on_escape_system, craft_complete_cue_system, drive_auth_flow_system,
         error_relay_system, flush_settings_on_exit_system, gameplay_inventory_shortcuts_system,
-        generate_world_map_texture_system, maintain_world_grid_system, menu_backdrop_camera_system,
-        mouse_look_system, multiplayer_test_owns_window, network_tick_system,
-        placement_input_system, reconcile_player_rigs_system, reposition_test_window_system,
-        save_client_settings_system, screen_viewed_system, session_ended_system,
-        session_shutdown_poll_system, session_started_system, spawn_impact_effects_system,
-        surface_client_error_toasts_system, sway_hay_grass_system, sync_furnace_open_flag_system,
-        sync_loot_bag_open_flag_system, sync_view_radius_system, tick_combat_feedback_system,
-        tick_felling_trees_system, tick_furnace_particles_system, tick_impact_chips_system,
-        tick_resource_node_pop_in_system, tick_torch_particles_system, toggle_crafting_system,
-        toggle_inventory_system, toggle_pause_system, toggle_perf_stats_system,
-        update_claim_boundary_system, update_cursor_system, update_link_ping_system,
-        update_pickup_target_system, update_placement_ghost_system, update_tool_swap_state_system,
-        wheel_menu_system, world_map_input_system,
+        generate_world_map_texture_system, maintain_wall_visual_insets_system,
+        maintain_world_grid_system, menu_backdrop_camera_system, mouse_look_system,
+        multiplayer_test_owns_window, network_tick_system, placement_input_system,
+        reconcile_player_rigs_system, reposition_test_window_system, save_client_settings_system,
+        screen_viewed_system, session_ended_system, session_shutdown_poll_system,
+        session_started_system, spawn_impact_effects_system, surface_client_error_toasts_system,
+        sway_hay_grass_system, sync_furnace_open_flag_system, sync_loot_bag_open_flag_system,
+        sync_view_radius_system, tick_combat_feedback_system, tick_felling_trees_system,
+        tick_furnace_particles_system, tick_impact_chips_system, tick_resource_node_pop_in_system,
+        tick_torch_particles_system, toggle_crafting_system, toggle_inventory_system,
+        toggle_pause_system, toggle_perf_stats_system, update_claim_boundary_system,
+        update_cursor_system, update_link_ping_system, update_pickup_target_system,
+        update_placement_ghost_system, update_tool_swap_state_system, wheel_menu_system,
+        world_map_input_system,
     },
     ui::{
         ButtonSoundRequests, InventorySoundRequests, apply_ui_scale_system, button_sound_system,
@@ -865,7 +866,15 @@ fn add_scene_systems(app: &mut App) {
         .add_systems(Update, stream_grass_system.in_set(ClientSystemSet::Grass))
         .add_systems(
             Update,
-            apply_deployed_entities_system.in_set(ClientSystemSet::DeployedEntities),
+            // The inset pass runs after the reconciler so freshly spawned
+            // wall visuals already exist in the entry map; it re-flushes
+            // perimeter walls when the building set changes.
+            (
+                apply_deployed_entities_system,
+                maintain_wall_visual_insets_system,
+            )
+                .chain()
+                .in_set(ClientSystemSet::DeployedEntities),
         )
         .add_systems(
             Update,

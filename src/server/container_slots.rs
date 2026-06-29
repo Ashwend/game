@@ -97,7 +97,14 @@ pub(crate) fn take_from_slot(
         .unwrap_or(current.quantity)
         .clamp(1, current.quantity);
     let drained = amount == current.quantity;
-    let taken = ItemStack::new(current.item_id.as_ref(), amount);
+    // Carry durability along: a tool (stack limit 1) always moves whole, and
+    // rebuilding via `ItemStack::new` would hand back a factory-fresh tool
+    // (mirrors `merge_into_optional_slot` and `crate::inventory::remove_stack`).
+    let taken = ItemStack {
+        item_id: current.item_id.clone(),
+        quantity: amount,
+        durability: current.durability,
+    };
     current.quantity -= amount;
     if current.quantity == 0 {
         *slot = None;
@@ -208,4 +215,24 @@ pub(crate) fn reply_warning(client_id: ClientId, text: impl Into<String>) -> Vec
         target: DeliveryTarget::Client(client_id),
         message: ServerMessage::Toast(ToastMessage::new(ToastKind::Warning, text)),
     }]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::items::BASIC_PICKAXE_ID;
+
+    #[test]
+    fn take_from_slot_preserves_tool_durability() {
+        // Dragging a worn tool out of a loot bag / furnace slot must keep its
+        // wear instead of rebuilding a factory-fresh stack.
+        let mut pickaxe = ItemStack::new(BASIC_PICKAXE_ID, 1);
+        pickaxe.durability = Some(11);
+        let mut slot = Some(pickaxe);
+
+        let (taken, drained) = take_from_slot(&mut slot, None).expect("stack taken");
+        assert!(drained);
+        assert!(slot.is_none());
+        assert_eq!(taken.durability, Some(11));
+    }
 }

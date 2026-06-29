@@ -277,12 +277,28 @@ pub fn claim_footprint_cells(
 }
 
 /// Height of the foundation platform. Tall enough to read as a real floor,
-/// low enough that a jump clears it (the controller has no auto-step).
-pub const FOUNDATION_HEIGHT_M: f32 = 0.5;
+/// low enough to sit under the controller's auto-step (`STEP_HEIGHT`, 0.45 m)
+/// so a player walks straight up onto a ground-level foundation instead of
+/// having to hop the lip every time.
+pub const FOUNDATION_HEIGHT_M: f32 = 0.4;
 /// Height of wall-like pieces, measured from the foundation top.
 pub const WALL_HEIGHT_M: f32 = 3.0;
 /// Thickness of wall-like pieces.
 pub const WALL_THICKNESS_M: f32 = 0.2;
+/// How far a perimeter wall's rendered model is nudged inward (toward the
+/// supporting platform) so its outer face sits flush with the foundation
+/// edge instead of overhanging it by half the wall thickness. See
+/// [`wall_face_inset_offset`].
+pub const WALL_FACE_INSET_M: f32 = WALL_THICKNESS_M / 2.0;
+/// A few extra millimetres of inset past flush. At an outer corner two
+/// perpendicular perimeter walls both reach the shared corner; landing
+/// their outer faces *exactly* on the foundation edge makes the two corner
+/// columns coincident and they z-fight ("mesh congestion / flicker").
+/// Recessing each long face this far behind the edge lets the neighbouring
+/// wall's end face (which still meets the edge) cleanly occlude it, so the
+/// corner reads flush but nothing fights. Far too small to see (a 3 mm
+/// recess on a 3 m wall).
+pub const WALL_FACE_INSET_BIAS_M: f32 = 0.003;
 /// Slab thickness of a ceiling. The slab nests into the top of the wall
 /// band (base at `WALL_HEIGHT_M - CEILING_THICKNESS_M` above the floor),
 /// so its walkable upper surface sits exactly flush with the wall tops.
@@ -404,6 +420,55 @@ fn edge_wall_sockets(position: Vec3Net, top_offset: f32, yaw: f32) -> [WallSocke
             yaw: snap_yaw_quarter_turn(yaw + extra_yaw),
         }
     })
+}
+
+/// Inward XZ offset to nudge a wall-like piece's *rendered model* so its
+/// outer face is flush with the supporting platform edge rather than
+/// overhanging it by [`WALL_FACE_INSET_M`]. The wall's stored `position`
+/// stays on the edge midpoint (the canonical socket every other system
+/// snaps, stacks, and supports against, and the collider the server
+/// validates), so this is a visual-only nudge applied where the mesh is
+/// placed.
+///
+/// A wall sits on the edge between two cells. The offset points toward the
+/// cell that carries a platform at the wall's base height, and is `ZERO`
+/// for an *interior* wall (a platform on both sides, so neither face
+/// overhangs) or a wall with no platform to align to (a bare wall stack):
+/// those stay centred on the edge. `platforms` is every foundation/ceiling
+/// in range, each with its walkable `top`.
+pub fn wall_face_inset_offset(
+    wall_position: Vec3Net,
+    wall_yaw: f32,
+    platforms: &[ClaimPlatform],
+) -> Vec3Net {
+    let yaw = snap_yaw_quarter_turn(wall_yaw);
+    // The wall spans local X; its two faces look along local ±Z. The cells
+    // it sits between are half a foundation away along that world normal.
+    let (nx, nz) = rotate_offset(yaw, 0.0, 1.0);
+    let half = FOUNDATION_SIZE_M / 2.0;
+    let supported = |sign: f32| {
+        let cx = wall_position.x + sign * nx * half;
+        let cz = wall_position.z + sign * nz * half;
+        platforms.iter().any(|platform| {
+            (platform.top - wall_position.y).abs() < SOCKET_EPSILON_M
+                && (platform.position.x - cx).abs() < SOCKET_EPSILON_M
+                && (platform.position.z - cz).abs() < SOCKET_EPSILON_M
+        })
+    };
+    let plus = supported(1.0);
+    let minus = supported(-1.0);
+    // Inset a hair past flush so the outer face tucks just *behind* the
+    // foundation edge; this is what keeps perpendicular corner walls from
+    // z-fighting (see [`WALL_FACE_INSET_BIAS_M`]).
+    let inset = WALL_FACE_INSET_M + WALL_FACE_INSET_BIAS_M;
+    match (plus, minus) {
+        // Platform on the +normal side only: outer face is on -normal, so
+        // nudge toward +normal until the outer face meets the edge.
+        (true, false) => Vec3Net::new(nx * inset, 0.0, nz * inset),
+        (false, true) => Vec3Net::new(-nx * inset, 0.0, -nz * inset),
+        // Interior wall, or an unsupported stack: leave it centred.
+        _ => Vec3Net::ZERO,
+    }
 }
 
 /// The pose a ceiling takes when roofing the storey that stands on this
@@ -974,6 +1039,101 @@ mod tests {
             0.0,
         );
         assert!(claim_cells_overlap_blocks(&cells, &wall));
+    }
+
+    #[test]
+    fn perimeter_wall_insets_so_its_outer_face_meets_the_edge() {
+        // A lone foundation at the origin; a wall on its +Z edge has open
+        // air on the outside, so the model nudges in until the outer face
+        // sits flush with (just inside) the foundation edge instead of
+        // overhanging it.
+        let foundation_top = FOUNDATION_HEIGHT_M;
+        let half = FOUNDATION_SIZE_M / 2.0;
+        let platforms = [ClaimPlatform {
+            position: Vec3Net::ZERO,
+            top: foundation_top,
+        }];
+        let wall_pos = Vec3Net::new(0.0, foundation_top, half);
+
+        let offset = wall_face_inset_offset(wall_pos, 0.0, &platforms);
+
+        assert!(offset.x.abs() < 1e-6);
+        assert!((offset.z + (WALL_FACE_INSET_M + WALL_FACE_INSET_BIAS_M)).abs() < 1e-6);
+        // The outer face lands the corner bias just *inside* the edge: never
+        // past it (the user's "don't exceed the foundation surface"), and no
+        // more than the bias short of it.
+        let outer_face = wall_pos.z + offset.z + WALL_THICKNESS_M / 2.0;
+        assert!(outer_face <= half + 1e-6, "outer face overhangs the edge");
+        assert!(
+            (half - outer_face - WALL_FACE_INSET_BIAS_M).abs() < 1e-6,
+            "outer face should sit one bias inside the edge"
+        );
+    }
+
+    #[test]
+    fn interior_wall_between_two_foundations_stays_centered() {
+        // A wall on the shared edge of two foundations overhangs neither
+        // (floor on both sides), so it must not move.
+        let foundation_top = FOUNDATION_HEIGHT_M;
+        let half = FOUNDATION_SIZE_M / 2.0;
+        let platforms = [
+            ClaimPlatform {
+                position: Vec3Net::ZERO,
+                top: foundation_top,
+            },
+            ClaimPlatform {
+                position: Vec3Net::new(0.0, 0.0, FOUNDATION_SIZE_M),
+                top: foundation_top,
+            },
+        ];
+        let wall_pos = Vec3Net::new(0.0, foundation_top, half);
+
+        assert_eq!(
+            wall_face_inset_offset(wall_pos, 0.0, &platforms),
+            Vec3Net::ZERO
+        );
+    }
+
+    #[test]
+    fn quarter_turned_perimeter_wall_insets_along_its_normal() {
+        // The +X edge wall (yaw 90°) nudges along X, not Z.
+        let foundation_top = FOUNDATION_HEIGHT_M;
+        let half = FOUNDATION_SIZE_M / 2.0;
+        let platforms = [ClaimPlatform {
+            position: Vec3Net::ZERO,
+            top: foundation_top,
+        }];
+        let wall_pos = Vec3Net::new(half, foundation_top, 0.0);
+
+        let offset = wall_face_inset_offset(wall_pos, std::f32::consts::FRAC_PI_2, &platforms);
+
+        assert!(offset.z.abs() < 1e-6);
+        let outer_face = wall_pos.x + offset.x + WALL_THICKNESS_M / 2.0;
+        assert!(outer_face <= half + 1e-6, "outer face overhangs the edge");
+        assert!(
+            (half - outer_face - WALL_FACE_INSET_BIAS_M).abs() < 1e-6,
+            "outer face should sit one bias inside the edge"
+        );
+    }
+
+    #[test]
+    fn wall_with_no_platform_at_its_base_stays_centered() {
+        // A wall stacked above the floor band (no foundation/ceiling at its
+        // base height on either side) has nothing to align to.
+        let platforms = [ClaimPlatform {
+            position: Vec3Net::ZERO,
+            top: FOUNDATION_HEIGHT_M,
+        }];
+        let wall_pos = Vec3Net::new(
+            0.0,
+            FOUNDATION_HEIGHT_M + WALL_HEIGHT_M,
+            FOUNDATION_SIZE_M / 2.0,
+        );
+
+        assert_eq!(
+            wall_face_inset_offset(wall_pos, 0.0, &platforms),
+            Vec3Net::ZERO
+        );
     }
 
     #[test]

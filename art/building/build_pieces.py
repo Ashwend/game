@@ -28,7 +28,7 @@ import os
 # --- crate::building constants (keep in sync) ---------------------------------
 FOUNDATION_SIZE = 3.0
 FH = FOUNDATION_SIZE / 2.0           # foundation/cell half-width
-FOUNDATION_HEIGHT = 0.5
+FOUNDATION_HEIGHT = 0.4
 WALL_HEIGHT = 3.0
 TH = 0.1                             # wall half thickness (WALL_THICKNESS_M/2)
 CEILING_HH = 0.1                     # CEILING_THICKNESS_M/2

@@ -4,7 +4,9 @@
 
 use super::*;
 use crate::{
-    building::{BuildingPiece, BuildingTier, FOUNDATION_HEIGHT_M},
+    building::{
+        BuildingPiece, BuildingTier, CEILING_THICKNESS_M, FOUNDATION_HEIGHT_M, WALL_HEIGHT_M,
+    },
     game_balance::{
         BUILDING_DEMOLISH_WINDOW_TICKS, BUILDING_HEWN_WOOD_COST_WALL,
         BUILDING_STICKS_COST_FOUNDATION, BUILDING_STICKS_COST_WALL,
@@ -314,7 +316,7 @@ fn free_deployables_stand_on_platforms_and_fall_with_them() {
         client_id,
         ClientMessage::PlaceDeployable(PlaceDeployableCommand {
             item_id: intern_item_id(CRUDE_FURNACE_ID),
-            position: Vec3Net::new(0.0, 0.5, 2.0),
+            position: Vec3Net::new(0.0, FOUNDATION_HEIGHT_M, 2.0),
             yaw: 0.0,
             wall_mounted: false,
         }),
@@ -348,7 +350,7 @@ fn free_deployables_stand_on_platforms_and_fall_with_them() {
         client_id,
         ClientMessage::PlaceDeployable(PlaceDeployableCommand {
             item_id: intern_item_id(STORAGE_BOX_SMALL_ID),
-            position: Vec3Net::new(1.0, 0.5, 3.0),
+            position: Vec3Net::new(1.0, FOUNDATION_HEIGHT_M, 3.0),
             yaw: 0.0,
             wall_mounted: false,
         }),
@@ -785,7 +787,8 @@ fn ceilings_need_wall_support_and_stack_storeys() {
     let ceiling = &server.deployed_entities[&ceilings[0]];
     assert!((ceiling.position.x - 0.0).abs() < 1e-4);
     assert!(
-        (ceiling.position.y - 3.3).abs() < 1e-4,
+        (ceiling.position.y - (FOUNDATION_HEIGHT_M + WALL_HEIGHT_M - CEILING_THICKNESS_M)).abs()
+            < 1e-4,
         "ceiling nests into the wall band, top flush with the wall tops"
     );
     assert!((ceiling.position.z - 2.0).abs() < 1e-4);
@@ -825,7 +828,7 @@ fn ceilings_need_wall_support_and_stack_storeys() {
         })
         .expect("upper wall");
     assert!(
-        (upper.position.y - 3.5).abs() < 1e-4,
+        (upper.position.y - (FOUNDATION_HEIGHT_M + WALL_HEIGHT_M)).abs() < 1e-4,
         "storey-two walls start exactly one wall height up"
     );
 }

@@ -21,7 +21,7 @@ pub(crate) use placement::{
     placement_input_system, update_claim_boundary_system, update_placement_ghost_system,
 };
 
-use crate::building::{DOOR_OPEN_ANGLE_RAD, DOOR_PANEL_WIDTH_M};
+use crate::building::{ClaimPlatform, DOOR_OPEN_ANGLE_RAD, DOOR_PANEL_WIDTH_M};
 
 use std::collections::{HashMap, VecDeque};
 
@@ -303,6 +303,12 @@ pub(crate) fn apply_deployed_entities_system(
 
     // 4. Drain the spawn queue up to the per-frame budget. Usually
     //    empty in steady state, so this loop is zero iterations.
+    // Perimeter walls render nudged inward so their outer face is flush
+    // with the foundation edge; gather the platform set once (cheap, this
+    // only runs on the structural change that queued a spawn). `maintain_
+    // wall_visual_insets_system` keeps them correct as neighbours change.
+    let platforms = (!visuals.pending_spawns.is_empty())
+        .then(|| collect_building_platforms(all_deployables.iter().map(|(_, m, t, _)| (m, t))));
     let mut spawn_budget = MAX_DEPLOYABLE_SPAWNS_PER_FRAME;
     while spawn_budget > 0 {
         let Some(spawn) = visuals.pending_spawns.pop_front() else {
@@ -310,7 +316,9 @@ pub(crate) fn apply_deployed_entities_system(
         };
         spawn_budget -= 1;
         let position = Vec3::from(spawn.position);
-        let visual_transform = deployable_visual_transform(position, spawn.yaw, spawn.kind);
+        let visual_position =
+            wall_inset_visual_position(spawn.kind, spawn.position, spawn.yaw, platforms.as_deref());
+        let visual_transform = deployable_visual_transform(visual_position, spawn.yaw, spawn.kind);
         let parent = if let DeployableKind::Door { variant } = spawn.kind {
             // Doors spawn an animated panel child instead of a root
             // mesh: the root sits at the doorway centre (replicated
@@ -817,6 +825,99 @@ pub(super) fn deployable_visual_transform(
             .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_x(TORCH_WALL_TILT_RAD))
     } else {
         deployable_transform(position, yaw)
+    }
+}
+
+/// Collect every placed foundation/ceiling as a [`ClaimPlatform`] (cell
+/// centre + walkable top). Shared input for the perimeter-wall visual
+/// inset: a wall is flush-mounted toward whichever side carries a platform
+/// at its base height.
+fn collect_building_platforms<'a>(
+    deployables: impl Iterator<Item = (&'a Deployable, &'a DeployableTransform)>,
+) -> Vec<ClaimPlatform> {
+    deployables
+        .filter_map(|(meta, transform)| {
+            let DeployableKind::Building { piece, .. } = meta.kind else {
+                return None;
+            };
+            let top = crate::building::platform_top_offset(piece)?;
+            Some(ClaimPlatform {
+                position: transform.position,
+                top: transform.position.y + top,
+            })
+        })
+        .collect()
+}
+
+/// World position to *render* a building piece at: a perimeter wall is
+/// nudged inward by [`crate::building::wall_face_inset_offset`] so its
+/// outer face is flush with the foundation edge; every other piece (and an
+/// interior or unsupported wall) renders at its canonical collider
+/// position. `platforms` is `None` when no inset is needed this frame.
+fn wall_inset_visual_position(
+    kind: DeployableKind,
+    position: Vec3Net,
+    yaw: f32,
+    platforms: Option<&[ClaimPlatform]>,
+) -> Vec3 {
+    let base = Vec3::from(position);
+    let DeployableKind::Building { piece, .. } = kind else {
+        return base;
+    };
+    if !piece.is_wall_like() {
+        return base;
+    }
+    let Some(platforms) = platforms else {
+        return base;
+    };
+    base + Vec3::from(crate::building::wall_face_inset_offset(
+        position, yaw, platforms,
+    ))
+}
+
+/// Keep perimeter walls' rendered models flush with the foundation edge as
+/// neighbours change. The visual nudge depends on which sides carry a
+/// platform, so a wall placed on a lone foundation edge (perimeter, inset)
+/// can later turn interior (centred) when a floor is added on its open
+/// side, and a base streaming in may replicate a wall a frame before the
+/// foundation backing it. Recompute every wall's visual transform whenever
+/// the building set changes.
+///
+/// Event-gated (only does work on a structural change), per the
+/// client-reconciler rule in CLAUDE.md. The canonical collider position is
+/// never touched: this moves only the rendered model.
+pub(crate) fn maintain_wall_visual_insets_system(
+    visuals: Res<DeployedEntityVisuals>,
+    all_deployables: Query<(&Deployable, &DeployableTransform)>,
+    added: Query<(), Added<Deployable>>,
+    mut removed: RemovedComponents<Deployable>,
+    mut transforms: Query<&mut Transform, With<NetworkDeployedEntity>>,
+) {
+    let changed = !added.is_empty() | (removed.read().count() > 0);
+    if !changed {
+        return;
+    }
+    let platforms = collect_building_platforms(all_deployables.iter());
+    for (meta, transform) in &all_deployables {
+        let DeployableKind::Building { piece, .. } = meta.kind else {
+            continue;
+        };
+        if !piece.is_wall_like() {
+            continue;
+        }
+        let Some(entry) = visuals.entries.get(&meta.id) else {
+            continue;
+        };
+        let Ok(mut visual) = transforms.get_mut(entry.entity) else {
+            continue;
+        };
+        let visual_position = Vec3::from(transform.position)
+            + Vec3::from(crate::building::wall_face_inset_offset(
+                transform.position,
+                transform.yaw,
+                &platforms,
+            ));
+        *visual = deployable_visual_transform(visual_position, transform.yaw, meta.kind);
     }
 }
 

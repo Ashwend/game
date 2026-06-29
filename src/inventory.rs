@@ -50,11 +50,23 @@ fn remove_stack_for_move(
         .clamp(1, current.quantity);
     let removed_all = amount == current.quantity;
     let item_id = current.item_id.clone();
+    // Carry durability along rather than rebuilding via `ItemStack::new`,
+    // which would hand back a factory-fresh tool. Tools never stack (limit
+    // 1) so a move is always whole; splitting a stackable item (no
+    // durability) keeps the source's `None` either way.
+    let durability = current.durability;
     current.quantity -= amount;
     if current.quantity == 0 {
         *source = None;
     }
-    Some((ItemStack::new(item_id, amount), removed_all))
+    Some((
+        ItemStack {
+            item_id,
+            quantity: amount,
+            durability,
+        },
+        removed_all,
+    ))
 }
 
 pub fn remove_stack(
@@ -68,11 +80,18 @@ pub fn remove_stack(
         .unwrap_or(current.quantity)
         .clamp(1, current.quantity);
     let item_id = current.item_id.clone();
+    // Preserve durability so a dropped or relocated worn tool keeps its
+    // wear instead of coming back factory-fresh (see `remove_stack_for_move`).
+    let durability = current.durability;
     current.quantity -= amount;
     if current.quantity == 0 {
         *source = None;
     }
-    Some(ItemStack::new(item_id, amount))
+    Some(ItemStack {
+        item_id,
+        quantity: amount,
+        durability,
+    })
 }
 
 pub fn insert_stack_at(
@@ -443,6 +462,47 @@ mod tests {
     fn remove_stack_on_empty_slot_is_none() {
         let mut inventory = PlayerInventoryState::empty();
         assert!(remove_stack(&mut inventory, ItemContainerSlot::inventory(0), None).is_none());
+    }
+
+    #[test]
+    fn moving_a_worn_tool_keeps_its_durability() {
+        // A 50%-worn pickaxe dragged from the actionbar into the bag must
+        // arrive with the same wear, not reset to factory-fresh.
+        let mut inventory = PlayerInventoryState::empty();
+        let mut pickaxe = ItemStack::new(BASIC_PICKAXE_ID, 1);
+        let full = pickaxe.durability.expect("pickaxe wears");
+        let worn = full / 2;
+        pickaxe.durability = Some(worn);
+        inventory.actionbar_slots[0] = Some(pickaxe);
+
+        move_stack(
+            &mut inventory,
+            ItemContainerSlot::actionbar(0),
+            ItemContainerSlot::inventory(3),
+            None,
+        );
+
+        assert!(inventory.actionbar_slots[0].is_none());
+        assert_eq!(
+            inventory.inventory_slots[3]
+                .as_ref()
+                .and_then(|stack| stack.durability),
+            Some(worn)
+        );
+    }
+
+    #[test]
+    fn dropping_a_worn_tool_keeps_its_durability() {
+        // `remove_stack` is the drop path; the ejected stack must carry the
+        // tool's remaining wear so the world drop isn't factory-fresh.
+        let mut inventory = PlayerInventoryState::empty();
+        let mut pickaxe = ItemStack::new(BASIC_PICKAXE_ID, 1);
+        pickaxe.durability = Some(7);
+        inventory.inventory_slots[0] = Some(pickaxe);
+
+        let dropped = remove_stack(&mut inventory, ItemContainerSlot::inventory(0), None)
+            .expect("stack removed");
+        assert_eq!(dropped.durability, Some(7));
     }
 
     #[test]
