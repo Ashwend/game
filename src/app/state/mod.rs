@@ -22,7 +22,7 @@ mod wheel;
 mod world_map;
 
 pub(crate) use auth::{AuthFlow, WorkosAuth};
-pub(crate) use backdrop::MenuBackdropVisibility;
+pub(crate) use backdrop::{MenuBackdropTime, MenuBackdropVisibility};
 pub(crate) use combat_feedback::CombatFeedbackState;
 #[cfg(test)]
 pub(crate) use connection::CONNECTION_LAG_WARNING_SECONDS;

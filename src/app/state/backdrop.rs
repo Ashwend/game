@@ -51,3 +51,37 @@ impl MenuBackdropVisibility {
         self.active && self.elapsed_seconds >= MENU_BACKDROP_BLUR_WARMUP_SECONDS
     }
 }
+
+/// Time of day the menu backdrop's sky is pinned to. The gameplay day/night
+/// clock (`ClientRuntime::world_time`) only ticks in-game and keeps the
+/// server's last time after you leave a session, so reading it on the title
+/// screen makes the backdrop look as if time passed while you were away. The
+/// menu renders this fixed time instead, so the title screen is identical on
+/// every visit. Pinned, not ticked: the menu never cycles.
+///
+/// 07:00, early morning: the look chosen for the backdrop by sweeping the dev
+/// backdrop-time slider. A low morning sun rakes long soft light across the
+/// field, with enough directionality to read as a gradient rather than a hard
+/// split, because the grass/prop cel shader floors deep shadow against the real
+/// shade rather than crushing it to near-black.
+pub(crate) const MENU_BACKDROP_SECONDS: f32 = 7.0 * 3600.0;
+
+/// Live override for the menu-backdrop time of day, read by the sky system when
+/// a backdrop-using screen is up. Defaults to the shipped
+/// [`MENU_BACKDROP_SECONDS`]; the debug-only title-screen slider
+/// (`ui::menu`) mutates it so the backdrop sky can be scrubbed to pick the
+/// right pinned time. Release builds never expose the slider, so this stays at
+/// the default and the backdrop renders the shipped time.
+#[derive(Resource, Debug, Clone, Copy)]
+pub(crate) struct MenuBackdropTime {
+    /// Wall-clock seconds within the in-game day, in `[0, SECONDS_PER_DAY)`.
+    pub seconds_of_day: f32,
+}
+
+impl Default for MenuBackdropTime {
+    fn default() -> Self {
+        Self {
+            seconds_of_day: MENU_BACKDROP_SECONDS,
+        }
+    }
+}

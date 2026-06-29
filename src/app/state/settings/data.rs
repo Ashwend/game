@@ -282,6 +282,12 @@ pub(crate) struct DevSettings {
     pub(crate) atmosphere_ibl: bool,
     #[serde(default = "default_true")]
     pub(crate) fog: bool,
+    // Title-screen dev tools. Off by default (opt-in scrubbers, not stage
+    // isolators), so a fresh profile shows a clean title screen. Enables the
+    // backdrop-time slider on the menu (`ui::menu`) for re-tuning
+    // `MENU_BACKDROP_SECONDS`.
+    #[serde(default)]
+    pub(crate) backdrop_time_slider: bool,
     // Live lighting tuning sliders (sun illuminance, midday cap, droop, IBL).
     #[serde(default)]
     pub(crate) lighting: DevLighting,
@@ -301,6 +307,7 @@ impl Default for DevSettings {
             soft_shadows: true,
             atmosphere_ibl: true,
             fog: true,
+            backdrop_time_slider: false,
             lighting: DevLighting::default(),
         }
     }

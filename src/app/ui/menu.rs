@@ -1,7 +1,7 @@
 use bevy_egui::egui;
 
 use crate::{
-    app::state::{ConfirmationDialog, CurrentUser, MenuState, SaveStore, Screen},
+    app::state::{ConfirmationDialog, CurrentUser, MenuBackdropTime, MenuState, SaveStore, Screen},
     protocol::GAME_VERSION,
     update::UpdateState,
     util::open_url,
@@ -30,6 +30,10 @@ pub(super) fn main_menu_ui(
     store: &SaveStore,
     user: &CurrentUser,
     update: &mut UpdateState,
+    // Backdrop-time scrubber state + its Dev-tab visibility gate. Both feed only
+    // the debug-only slider below, so they are unused in release builds.
+    backdrop_time: &mut MenuBackdropTime,
+    show_backdrop_time_slider: bool,
 ) {
     theme::screen_scrim(ctx, "main_menu_scrim", 118);
     egui::Area::new("main_menu".into())
@@ -90,6 +94,54 @@ pub(super) fn main_menu_ui(
         });
     draw_version_indicator(ctx, update);
     draw_discord_link(ctx);
+    #[cfg(debug_assertions)]
+    if show_backdrop_time_slider {
+        draw_backdrop_time_slider(ctx, backdrop_time);
+    }
+}
+
+/// Scrubber for the menu backdrop's pinned time of day. Drag to sweep the
+/// title-screen sky live (it updates immediately via `MenuBackdropTime`, read by
+/// `scene::sky`), read off the `HH:MM`, then bake the value into
+/// `MENU_BACKDROP_SECONDS`. Gated behind the debug-only Dev options tab toggle
+/// (`settings.dev.backdrop_time_slider`, off by default) and compiled out of
+/// release builds, so shipped players never see it.
+#[cfg(debug_assertions)]
+fn draw_backdrop_time_slider(ctx: &egui::Context, backdrop_time: &mut MenuBackdropTime) {
+    use crate::world_time::WorldTime;
+
+    egui::Window::new("Backdrop time (dev)")
+        .order(egui::Order::Foreground)
+        .default_pos([18.0, 18.0])
+        .resizable(false)
+        .show(ctx, |ui| {
+            // Edit in whole minutes so the value lands on clean HH:MM
+            // boundaries instead of accumulating float noise.
+            let mut minutes = (backdrop_time.seconds_of_day / 60.0).round();
+            let response = ui.add(
+                egui::Slider::new(&mut minutes, 0.0..=1439.0)
+                    .step_by(1.0)
+                    .show_value(false),
+            );
+            if response.changed() {
+                backdrop_time.seconds_of_day = minutes * 60.0;
+            }
+
+            let time = WorldTime {
+                seconds_of_day: backdrop_time.seconds_of_day,
+                multiplier: 0.0,
+            };
+            let hours = backdrop_time.seconds_of_day / 3600.0;
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(time.format_hhmm())
+                    .color(theme::accent())
+                    .size(22.0),
+            );
+            ui.label(theme::muted(format!(
+                "MENU_BACKDROP_SECONDS = {hours:.4} * 3600.0"
+            )));
+        });
 }
 
 /// Persistent "Join our Discord" affordance in the bottom-left corner of the
@@ -170,9 +222,19 @@ mod tests {
         let store = store();
         let user = user();
         let mut update = UpdateState::idle_for_test();
+        let mut backdrop_time = MenuBackdropTime::default();
 
         let output = ctx.run(raw_input(), |ctx| {
-            main_menu_ui(ctx, &mut menu, &store, &user, &mut update);
+            main_menu_ui(
+                ctx,
+                &mut menu,
+                &store,
+                &user,
+                &mut update,
+                &mut backdrop_time,
+                // Exercise the backdrop-time slider render path in debug builds.
+                true,
+            );
         });
 
         assert!(output.shapes.len() > 1);

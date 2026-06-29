@@ -60,8 +60,9 @@ use super::scene::WorldSceneState;
 use super::state::{
     AuthFlow, ClientErrorToast, ClientRuntime, ClientSettings, CraftingHudState, CraftingUiState,
     CurrentUser, DeployablePlacementState, InventorySoundEvent, LocalPlayerState, MAX_UI_SCALE,
-    MIN_UI_SCALE, MenuBackdropVisibility, MenuState, OptionsUiState, PredictionState, SaveStore,
-    Screen, SessionShutdownTasks, ToastState, WorkosAuth, WorldMapState, WorldMapUiState,
+    MIN_UI_SCALE, MenuBackdropTime, MenuBackdropVisibility, MenuState, OptionsUiState,
+    PredictionState, SaveStore, Screen, SessionShutdownTasks, ToastState, WorkosAuth,
+    WorldMapState, WorldMapUiState,
 };
 use super::systems::PendingSessionEndReason;
 use super::voice::{VoiceDeviceCache, VoiceState, VoiceUiControl};
@@ -73,6 +74,9 @@ use crate::update::UpdateState;
 pub(crate) struct UiResources<'w, 's> {
     menu: ResMut<'w, MenuState>,
     backdrop_visibility: ResMut<'w, MenuBackdropVisibility>,
+    /// Pinned time of day for the menu backdrop sky. The debug-only title-screen
+    /// slider mutates it; the sky system reads it (`scene::sky`).
+    menu_backdrop_time: ResMut<'w, MenuBackdropTime>,
     runtime: ResMut<'w, ClientRuntime>,
     settings: ResMut<'w, ClientSettings>,
     options_ui: ResMut<'w, OptionsUiState>,
@@ -253,6 +257,8 @@ pub(crate) fn ui_system(
             &resources.store,
             user,
             &mut resources.update,
+            &mut resources.menu_backdrop_time,
+            resources.settings.dev.backdrop_time_slider,
         ),
         Screen::Worlds => worlds_ui(
             ctx,

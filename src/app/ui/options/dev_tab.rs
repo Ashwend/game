@@ -97,6 +97,21 @@ pub(super) fn render(ui: &mut egui::Ui, settings: &mut ClientSettings) {
     ui.add_space(10.0);
 
     theme::inset_frame().show(ui, |ui| {
+        ui.label(section_label("Title screen"));
+        ui.add_space(6.0);
+        setting_row(ui, "Backdrop time slider", |ui| {
+            checkbox_with_click_sound(ui, &mut settings.dev.backdrop_time_slider, "Shown");
+        });
+        ui.label(caption(
+            "Shows a time-of-day scrubber on the title screen for re-tuning the \
+             pinned backdrop time, then bake the value into MENU_BACKDROP_SECONDS. \
+             Off for a clean menu.",
+        ));
+    });
+
+    ui.add_space(10.0);
+
+    theme::inset_frame().show(ui, |ui| {
         ui.label(section_label("Lighting tuning (live)"));
         ui.add_space(2.0);
         ui.label(caption(

@@ -37,7 +37,9 @@ use bevy::{
 };
 
 use crate::{
-    app::state::{ClientRuntime, ClientSettings, DevLighting, MenuState, ShadowQuality},
+    app::state::{
+        ClientRuntime, ClientSettings, DevLighting, MenuBackdropTime, MenuState, ShadowQuality,
+    },
     world_time::{SECONDS_PER_DAY, WorldTime},
 };
 
@@ -108,20 +110,10 @@ const SHADOW_UPDATE_BASE_INTERVAL_SECS: f32 = 1.0 / 15.0;
 /// Lower bound on the shadow update interval (~60 Hz).
 const SHADOW_UPDATE_MIN_INTERVAL_SECS: f32 = 1.0 / 60.0;
 
-/// Time of day the menu backdrop's sky is pinned to. The gameplay day/night
-/// clock ([`ClientRuntime::world_time`]) only ticks in-game and keeps the
-/// server's last time after you leave a session, so reading it on the title
-/// screen makes the backdrop look as if time passed while you were away. The
-/// menu renders this fixed time instead, so the title screen is identical on
-/// every visit. Pinned, not ticked: the menu never cycles.
-///
-/// Early morning, the look that suits the backdrop best. Nudged to 7:30 (just
-/// past the 7am [`DEFAULT_START_SECONDS`] the game launches with) so the sun is a
-/// touch higher than the very low 7am angle, easing the side-light across the
-/// field without losing the morning mood. The remaining directionality reads as a
-/// soft gradient, not a hard split, because the grass/prop cel shader floors deep
-/// shadow against the real shade rather than crushing it to near-black.
-const MENU_BACKDROP_SECONDS: f32 = 7.5 * 3600.0;
+// The fixed time of day the menu backdrop's sky is pinned to lives on the
+// `MenuBackdropTime` resource (`state/backdrop.rs`), defaulting to
+// `MENU_BACKDROP_SECONDS`. `update_sky_system` reads it for backdrop screens so
+// the title screen never drifts; the debug-only title-screen slider mutates it.
 
 #[derive(Component)]
 pub(crate) struct SunLight;
@@ -287,6 +279,7 @@ pub(crate) fn update_sky_system(
     runtime: Res<ClientRuntime>,
     settings: Res<ClientSettings>,
     menu: Res<MenuState>,
+    backdrop_time: Res<MenuBackdropTime>,
     mut shadow_throttle: Local<f32>,
     mut ambient: ResMut<GlobalAmbientLight>,
     camera: CameraTransformQuery,
@@ -297,10 +290,11 @@ pub(crate) fn update_sky_system(
 ) {
     // Only gameplay reads the live day/night clock. The menu backdrop renders a
     // fixed time of day so its sky never drifts between launches or after
-    // returning from a session. See `MENU_BACKDROP_SECONDS`.
+    // returning from a session. The pinned time lives on `MenuBackdropTime`
+    // (defaults to `MENU_BACKDROP_SECONDS`); the dev title-screen slider scrubs it.
     let world_time = if menu.screen.uses_menu_backdrop() {
         WorldTime {
-            seconds_of_day: MENU_BACKDROP_SECONDS,
+            seconds_of_day: backdrop_time.seconds_of_day,
             multiplier: 0.0,
         }
     } else {
@@ -634,13 +628,13 @@ mod tests {
     }
 
     #[test]
-    fn menu_backdrop_time_is_a_lit_morning() {
-        // The title screen pins the sky to this fixed early-morning time instead
-        // of the live gameplay clock. Guard that it reads as daylight (sun above
-        // the horizon), not an accidental midnight.
+    fn menu_backdrop_time_is_lit_daylight() {
+        // The title screen pins the sky to this fixed time of day instead of the
+        // live gameplay clock. Guard that the shipped default reads as daylight
+        // (sun above the horizon), not an accidental midnight.
         let lighting = compute_lighting(
             &WorldTime {
-                seconds_of_day: MENU_BACKDROP_SECONDS,
+                seconds_of_day: MenuBackdropTime::default().seconds_of_day,
                 multiplier: 0.0,
             },
             &DevLighting::default(),

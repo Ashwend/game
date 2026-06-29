@@ -60,9 +60,9 @@ use self::{
         AuthFlow, BuildingPlanState, ClientErrorToast, ClientRuntime, ClientSettings,
         ClientSettingsStore, CombatFeedbackState, CraftingHudState, CraftingUiState, CurrentUser,
         DeployablePlacementState, GatherInputState, InventoryUiState, LocalPlayerState, LookState,
-        MenuBackdropVisibility, MenuState, OptionsUiState, PickupTargetState, PredictionState,
-        RemoteImpactEvent, SaveStore, SessionShutdownTasks, TestModeConfig, ToastState,
-        ToolSwapState, WheelMenuState, WorkosAuth, WorldMapState, WorldMapUiState,
+        MenuBackdropTime, MenuBackdropVisibility, MenuState, OptionsUiState, PickupTargetState,
+        PredictionState, RemoteImpactEvent, SaveStore, SessionShutdownTasks, TestModeConfig,
+        ToastState, ToolSwapState, WheelMenuState, WorkosAuth, WorldMapState, WorldMapUiState,
         apply_prediction_overlay_system, update_local_player_state_system,
     },
     systems::{
@@ -327,6 +327,7 @@ fn insert_client_resources(
         .init_resource::<VoiceUiControl>()
         .insert_resource(test_mode.clone())
         .insert_resource(MenuBackdropVisibility::default())
+        .init_resource::<MenuBackdropTime>()
         .insert_resource(ClientRuntime::default())
         .insert_resource(LocalPlayerState::default())
         .init_resource::<PredictionState>()
