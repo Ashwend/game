@@ -291,6 +291,9 @@ pub(crate) struct DevSettings {
     // Live lighting tuning sliders (sun illuminance, midday cap, droop, IBL).
     #[serde(default)]
     pub(crate) lighting: DevLighting,
+    // Live combat-feel tuning sliders (swing timing, camera kick, knockback).
+    #[serde(default)]
+    pub(crate) combat: DevCombat,
 }
 
 impl Default for DevSettings {
@@ -309,6 +312,7 @@ impl Default for DevSettings {
             fog: true,
             backdrop_time_slider: false,
             lighting: DevLighting::default(),
+            combat: DevCombat::default(),
         }
     }
 }
@@ -373,6 +377,77 @@ fn default_overhead_exponent() -> f32 {
 }
 fn default_atmosphere_ibl_intensity() -> f32 {
     0.70
+}
+
+/// Live combat-feel tuning, exposed as sliders in the debug-only `Dev` options tab
+/// so weapon feel can be swept in a running (ideally two-client) session and the
+/// good values graduated into `game_balance.rs` constants without a recompile.
+///
+/// Every field is a NEUTRAL multiplier / offset by default (scales `1.0`, the
+/// offset `0.0`), so a release build (where the Dev tab does not exist) and an
+/// untouched dev session both behave exactly as if this struct were not read at
+/// all. The client-side fields are read per frame at the swing / camera-kick call
+/// sites; the knockback field is client-remembered UI state only and is applied on
+/// the authoritative server via the `/knockback-scale` admin command (server
+/// state is never client-authoritative), so nudging the slider alone changes
+/// nothing until the command is run.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub(crate) struct DevCombat {
+    /// Multiplier on the local swing animation duration (wind-up + follow-through).
+    /// The impact cue rides the same clock, so this stretches or compresses the
+    /// whole swing without drifting the contact frame off the pose bottom.
+    #[serde(default = "default_combat_scale")]
+    pub(crate) swing_duration_scale: f32,
+    /// Additive offset on the swing's impact fraction (where in the swing the
+    /// contact cue fires, `0.0`..`1.0`). The consumer clamps the result to a sane
+    /// window so a slammed slider can never push contact to the very first or last
+    /// frame.
+    #[serde(default = "default_combat_offset")]
+    pub(crate) impact_fraction_offset: f32,
+    /// Multiplier on the camera impact-kick magnitude (both the pitch punch and the
+    /// downward drop). `0.0` disables the kick entirely.
+    #[serde(default = "default_combat_scale")]
+    pub(crate) kick_magnitude_scale: f32,
+    /// Multiplier on the camera impact-kick duration (how long the punch lingers).
+    #[serde(default = "default_combat_scale")]
+    pub(crate) kick_duration_scale: f32,
+    /// Multiplier on server-side PvP knockback speed. Client-remembered slider value
+    /// only: it is applied on the server via the `/knockback-scale` admin command,
+    /// never silently from the client (knockback is authoritative server state).
+    #[serde(default = "default_combat_scale")]
+    pub(crate) knockback_scale: f32,
+    /// Multiplier on the attacker-side hit-stop window: the brief viewmodel freeze
+    /// on a locally-predicted confirmed player hit. `1.0` is the shipped window
+    /// (see `HIT_STOP_SECONDS`); `0.0` disables hit-stop entirely; larger values
+    /// stretch the freeze for tuning. Read per-swing at the local hit dispatch,
+    /// client-side only (hit-stop is pure viewmodel feel).
+    #[serde(default = "default_combat_scale")]
+    pub(crate) hit_stop_scale: f32,
+}
+
+impl Default for DevCombat {
+    fn default() -> Self {
+        Self {
+            swing_duration_scale: default_combat_scale(),
+            impact_fraction_offset: default_combat_offset(),
+            kick_magnitude_scale: default_combat_scale(),
+            kick_duration_scale: default_combat_scale(),
+            knockback_scale: default_combat_scale(),
+            hit_stop_scale: default_combat_scale(),
+        }
+    }
+}
+
+/// Clamp window for the swing impact fraction after [`DevCombat::impact_fraction_offset`]
+/// is applied, keeping the contact cue off the very first / last frames of the swing.
+pub(crate) const DEV_COMBAT_IMPACT_FRACTION_MIN: f32 = 0.05;
+pub(crate) const DEV_COMBAT_IMPACT_FRACTION_MAX: f32 = 0.95;
+
+fn default_combat_scale() -> f32 {
+    1.0
+}
+fn default_combat_offset() -> f32 {
+    0.0
 }
 
 /// `dev_flags` uniform bits read by `toon.wgsl` / `toon_viewmodel.wgsl`. A SET bit
@@ -850,4 +925,38 @@ fn default_mouse_sensitivity() -> f32 {
 
 fn default_voice_enabled() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dev_combat_defaults_are_neutral() {
+        // Every combat-feel field must default to a neutral value (scales 1.0,
+        // the offset 0.0) so a release build (Dev tab hidden) and an untouched
+        // dev session behave exactly as if the panel did not exist.
+        let combat = DevCombat::default();
+        assert_eq!(combat.swing_duration_scale, 1.0);
+        assert_eq!(combat.impact_fraction_offset, 0.0);
+        assert_eq!(combat.kick_magnitude_scale, 1.0);
+        assert_eq!(combat.kick_duration_scale, 1.0);
+        assert_eq!(combat.knockback_scale, 1.0);
+    }
+
+    #[test]
+    fn dev_settings_default_carries_neutral_combat() {
+        // The parent DevSettings default must embed the neutral combat block, so
+        // `Default::default()` (used by the panel's Neutral / reset buttons)
+        // restores neutral feel.
+        assert_eq!(DevSettings::default().combat, DevCombat::default());
+    }
+
+    #[test]
+    fn dev_combat_missing_from_json_deserializes_neutral() {
+        // A settings file written before this field existed (no `combat` key)
+        // must load with the neutral default via serde, not fail or drift.
+        let dev: DevSettings = serde_json::from_str("{}").expect("empty dev settings deserialize");
+        assert_eq!(dev.combat, DevCombat::default());
+    }
 }

@@ -2,7 +2,7 @@ use bevy::{ecs::system::SystemParam, prelude::*};
 use lightyear::prelude::{Link, client};
 
 use crate::{
-    analytics::SessionEndReason,
+    analytics::{Analytics, DeathCause, Event, SessionEndReason},
     app::{
         audio::surface::SurfaceMaterial,
         state::{
@@ -16,7 +16,7 @@ use crate::{
         },
         voice::IncomingVoiceMessage,
     },
-    items::ToolKind,
+    items::ItemModel,
     protocol::{
         ClientMessage, GAME_VERSION, PROTOCOL_VERSION, ResourceImpactKind, ServerMessage,
         ToastKind, Vec3Net,
@@ -28,6 +28,10 @@ use crate::{
 /// than a second stale.
 const PING_INTERVAL_SECONDS: f32 = 1.0;
 
+/// Speed of sound, m/s, for the explosion far-rumble delay (flash-then-sound).
+/// Matches the meteor-impact rumble delay in `scene::meteor_shower`.
+const SPEED_OF_SOUND_M_PER_S: f32 = 340.0;
+
 /// Fan-out writers for messages the network tick produces, voice frames,
 /// remote impacts, error toasts. Grouped so the system signature stays
 /// readable.
@@ -37,12 +41,20 @@ pub(crate) struct NetworkTickWriters<'w> {
     pub(crate) error_toasts: MessageWriter<'w, ClientErrorToast>,
     pub(crate) voice_messages: MessageWriter<'w, IncomingVoiceMessage>,
     pub(crate) play_sound: MessageWriter<'w, crate::app::audio::PlaySound>,
+    /// Delayed one-shots: the explosion's far rumble is scheduled here with a
+    /// `distance / speed_of_sound` delay so it trails the flash (the meteor's
+    /// impact-rumble trick).
+    pub(crate) scheduled_sounds: ResMut<'w, crate::app::audio::ScheduledSounds>,
     /// PvP "I got hit" camera reaction. Fired when a `PlayerImpact`
-    /// arrives whose `target` matches the local client.
+    /// arrives whose `target` matches the local client. Also drives the
+    /// proximity explosion shake.
     pub(crate) camera_kick: ResMut<'w, crate::app::systems::CameraImpactKick>,
     /// Transient hit marker + damage-direction state. The target side of a
     /// `PlayerImpact` pushes a directional arrow toward the attacker here.
     pub(crate) combat_feedback: ResMut<'w, crate::app::state::CombatFeedbackState>,
+    /// Explosion feedback VFX trigger (flash + debris + smoke). Raised on the
+    /// `ServerMessage::Explosion` cue and consumed by `spawn_explosion_effects_system`.
+    pub(crate) explosions: MessageWriter<'w, crate::app::systems::ExplosionEvent>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -58,6 +70,7 @@ pub(crate) fn network_tick_system(
     store: Res<SaveStore>,
     mut shutdown_tasks: ResMut<SessionShutdownTasks>,
     mut world_map: ResMut<WorldMapState>,
+    analytics: Res<Analytics>,
     mut ping_accumulator: Local<f32>,
 ) {
     toasts.tick(time.delta_secs());
@@ -227,11 +240,21 @@ pub(crate) fn network_tick_system(
                 .write(remote_impact_event(*position, *kind));
         }
         if let ServerMessage::PlayerKilled {
+            killer,
             killer_name,
             respawn_bags,
-            ..
         } = &message
         {
+            // Coarse cause only: a named killer is a player, none is the
+            // environment (fall, meteor, or a self-triggered charge). The wire
+            // message carries no DamageKind, and adding one is a protocol change
+            // out of scope here.
+            let cause = if killer.is_some() {
+                DeathCause::Player
+            } else {
+                DeathCause::Environment
+            };
+            analytics.track(Event::PlayerDeath { cause });
             menu.death_splash = Some(crate::app::state::DeathSplash::new(
                 killer_name.clone(),
                 respawn_bags.clone(),
@@ -281,25 +304,52 @@ pub(crate) fn network_tick_system(
         {
             splash.begin_closing();
         }
+        // An admin /tp also lands as a Correction, one whose position is far
+        // from the local prediction. Distinguish it from the two look-alikes
+        // sharing this path: a respawn arrives while the player is dead (the
+        // death splash is up), and an ordinary desync snap-back moves at most
+        // a couple of metres. An alive player yanked a long way gets the
+        // teleport whoosh so the relocation reads as an event rather than a
+        // silent camera jump. Must run before `apply_message` stores the
+        // correction below, while the prediction still holds the pre-teleport
+        // position.
+        if let ServerMessage::Correction(state) = &message
+            && runtime.client_id == Some(state.client_id)
+            && menu.death_splash.is_none()
+            && runtime.local_view().is_some_and(|view| view.health > 0.0)
+            && let Some(before) = runtime.local_player_position()
+        {
+            // Well above any rubber-band correction (the snap threshold for
+            // those is 1 m) and well below the shortest useful /tp hop.
+            const TELEPORT_CUE_MIN_JUMP_M: f32 = 8.0;
+            let after = Vec3::new(state.position.x, state.position.y, state.position.z);
+            if before.distance(after) > TELEPORT_CUE_MIN_JUMP_M {
+                writers
+                    .play_sound
+                    .write(crate::app::audio::PlaySound::non_spatial(
+                        crate::app::audio::SoundId::TeleportWhoosh,
+                    ));
+            }
+        }
         if let ServerMessage::PlayerImpact {
             attacker,
             target,
             position,
             attacker_position,
-            tool,
+            model,
             damage_dealt,
         } = &message
         {
             // Reuse the `RemoteImpactEvent` channel as resource hits
             // so peers see a chip burst at the target's chest.
             // `is_player_hit = true` routes the audio dispatcher to
-            // the dedicated PvP impact pool; the `surface` field is
-            // still set for the visual fallback only.
+            // the per-weapon PvP impact pool via `model`; the `surface`
+            // field is still set for the visual fallback only.
             writers
                 .remote_impacts
                 .write(crate::app::state::RemoteImpactEvent {
                     anchor: Vec3::new(position.x, position.y, position.z),
-                    tool: *tool,
+                    model: *model,
                     surface: SurfaceMaterial::Wood,
                     effect_kind: crate::app::state::ImpactEffectKind::FleshHit,
                     seed: position_seed(*position),
@@ -317,7 +367,7 @@ pub(crate) fn network_tick_system(
             //     in `dispatch_player_swing`.
             let local = runtime.client_id;
             if local == Some(*target) {
-                writers.camera_kick.trigger_from_hit(*tool);
+                writers.camera_kick.trigger_from_hit(*model);
                 // Point a fading direction arrow at the attacker so the
                 // target can tell where the hit came from, even from
                 // off-screen or behind.
@@ -351,6 +401,115 @@ pub(crate) fn network_tick_system(
                 ));
             }
         }
+        if let ServerMessage::ProjectileImpact {
+            position,
+            model,
+            surface,
+            owner_confirmation,
+        } = &message
+        {
+            // A server-simulated arrow struck something. Reuse the remote-impact
+            // channel for the thunk/stick cue at the impact point. The full draw/
+            // release/reload feel and the dedicated arrow-impact effect land with
+            // P3b; here we route the coarse surface to an existing effect + cue so
+            // peers get audible/visible feedback that a shot landed.
+            let (effect_kind, surface_material, is_player_hit) = match surface {
+                crate::protocol::ProjectileSurface::Player => (
+                    crate::app::state::ImpactEffectKind::FleshHit,
+                    SurfaceMaterial::Wood,
+                    true,
+                ),
+                crate::protocol::ProjectileSurface::Deployable => (
+                    crate::app::state::ImpactEffectKind::WoodChips,
+                    SurfaceMaterial::Wood,
+                    false,
+                ),
+                crate::protocol::ProjectileSurface::World => (
+                    crate::app::state::ImpactEffectKind::WoodChips,
+                    SurfaceMaterial::Stone,
+                    false,
+                ),
+            };
+            writers
+                .remote_impacts
+                .write(crate::app::state::RemoteImpactEvent {
+                    anchor: Vec3::new(position.x, position.y, position.z),
+                    model: *model,
+                    surface: surface_material,
+                    effect_kind,
+                    seed: position_seed(*position),
+                    is_player_hit,
+                });
+            // Own-hit confirmation: the server sends the shooter an owner-tagged
+            // copy on a Player/Deployable hit (peers and World rests never carry
+            // the flag). Raise the crosshair hit marker, the same confirmation the
+            // melee attacker gets, tinted hot for a body hit and cool for a
+            // structure. The impact cue above already covers the audio/VFX, so
+            // this only adds the marker, no double-trigger.
+            if projectile_impact_raises_hit_marker(*owner_confirmation, *surface) {
+                let player_tint = matches!(surface, crate::protocol::ProjectileSurface::Player);
+                writers.combat_feedback.trigger_hit_marker(player_tint);
+            }
+        }
+        if let ServerMessage::Explosion { position, kind } = &message {
+            // A charge detonated nearby. The authoritative blast (player damage,
+            // structure destruction) already landed via the replicated mirrors;
+            // this cue drives the purely-cosmetic feedback stack: a debris + flash
+            // + smoke burst, a proximity-scaled camera shake, a low thump at the
+            // blast, and a distance-delayed far rumble (the flash-then-sound trick).
+            // The server only fans this cue to clients inside `EXPLOSION_CUE_RANGE_M`,
+            // so simply receiving it means the local player witnessed the blast.
+            analytics.track(Event::ExplosiveDetonated {
+                kind: kind.item_id().to_owned(),
+            });
+            let center = Vec3::new(position.x, position.y, position.z);
+            // (a) VFX burst (flash + debris shards + smoke), spawned by the
+            // dedicated system off this event.
+            writers
+                .explosions
+                .write(crate::app::systems::ExplosionEvent {
+                    position: center,
+                    kind: *kind,
+                    seed: position_seed(*position),
+                });
+            // (b) + (c) proximity shake and audio need the local player's distance
+            // to the blast (horizontal, matching the blast-falloff convention).
+            let distance = runtime
+                .local_view()
+                .map(|view| {
+                    let dx = view.position.x - center.x;
+                    let dz = view.position.z - center.z;
+                    (dx * dx + dz * dz).sqrt()
+                })
+                .unwrap_or(0.0);
+            // (b) Camera shake, scaled by proximity (strong close, nothing far).
+            writers.camera_kick.trigger_from_explosion(distance);
+            // (c) Audio: a low thump at the blast now, plus the far rumble delayed
+            // by the travel time so it trails the flash (like the meteor impact).
+            // The thump's gain scales with the charge: a hand bomb cracks, a
+            // satchel booms; one small offset on the shared pool.
+            let kind_gain_db = match kind {
+                crate::items::ExplosiveKind::PowderBomb => -5.0,
+                crate::items::ExplosiveKind::PowderKeg => 0.0,
+                crate::items::ExplosiveKind::SatchelCharge => 1.5,
+            };
+            writers.play_sound.write(
+                crate::app::audio::PlaySound::at(
+                    crate::app::audio::SoundId::ExplosionThump,
+                    center,
+                )
+                .with_gain_offset_db(kind_gain_db),
+            );
+            let rumble_delay = distance / SPEED_OF_SOUND_M_PER_S;
+            writers.scheduled_sounds.push(
+                rumble_delay,
+                crate::app::audio::PlaySound::at(
+                    crate::app::audio::SoundId::ExplosionRumble,
+                    center,
+                )
+                .with_gain_offset_db(kind_gain_db),
+            );
+        }
         if let ServerMessage::Voice {
             speaker,
             sequence,
@@ -364,6 +523,19 @@ pub(crate) fn network_tick_system(
                 position: *position,
                 frame: frame.clone(),
             });
+        }
+        // A brand-new meteor shower announce (not the resend a mid-event joiner
+        // gets, which repeats the same `impact_tick`) means a meteor event just
+        // went live. Compared before `apply_message` stores it below.
+        if let ServerMessage::MeteorShower { impact_tick, .. } = &message {
+            let is_new = runtime
+                .meteor_shower
+                .as_ref()
+                .map(|event| event.impact_tick != *impact_tick)
+                .unwrap_or(true);
+            if is_new {
+                analytics.track(Event::MeteorShowerAnnounced);
+            }
         }
         // `Pong` no longer feeds the ping readout, that comes from the
         // transport-measured RTT in `update_link_ping_system`. The app-level
@@ -414,10 +586,10 @@ pub(crate) fn surface_client_error_toasts_system(
 }
 
 fn remote_impact_event(position: Vec3Net, kind: ResourceImpactKind) -> RemoteImpactEvent {
-    let (tool, surface) = remote_impact_tool_and_surface(kind);
+    let (model, surface) = remote_impact_model_and_surface(kind);
     RemoteImpactEvent {
         anchor: Vec3::new(position.x, position.y, position.z),
-        tool,
+        model,
         surface,
         effect_kind: crate::app::state::ImpactEffectKind::for_resource_impact(kind),
         // Remote impacts have no client-side swing seed; pick something
@@ -428,19 +600,21 @@ fn remote_impact_event(position: Vec3Net, kind: ResourceImpactKind) -> RemoteImp
     }
 }
 
-fn remote_impact_tool_and_surface(kind: ResourceImpactKind) -> (ToolKind, SurfaceMaterial) {
+fn remote_impact_model_and_surface(kind: ResourceImpactKind) -> (ItemModel, SurfaceMaterial) {
     // The server enforces tool requirements (axe → trees, pickaxe → ores,
-    // hands → crude materials), so the kind uniquely determines the
-    // (tool, surface) pair the swinger must have used.
+    // hands → crude materials), so the kind uniquely determines the swing
+    // archetype the swinger must have used. Crude materials map to the bag
+    // archetype, which `impact_sound_for` treats as "no dedicated impact clip"
+    // (silent on the remote path), exactly as the old `Hands` mapping did.
     match kind {
-        ResourceImpactKind::Tree => (ToolKind::Axe, SurfaceMaterial::Wood),
-        ResourceImpactKind::CoalOre => (ToolKind::Pickaxe, SurfaceMaterial::Coal),
-        ResourceImpactKind::IronOre => (ToolKind::Pickaxe, SurfaceMaterial::Iron),
-        ResourceImpactKind::SulfurOre => (ToolKind::Pickaxe, SurfaceMaterial::Sulfur),
-        ResourceImpactKind::StoneVein => (ToolKind::Pickaxe, SurfaceMaterial::Stone),
-        ResourceImpactKind::Branches => (ToolKind::Hands, SurfaceMaterial::Wood),
-        ResourceImpactKind::SurfaceStone => (ToolKind::Hands, SurfaceMaterial::Stone),
-        ResourceImpactKind::HayGrass => (ToolKind::Hands, SurfaceMaterial::Dirt),
+        ResourceImpactKind::Tree => (ItemModel::Hatchet, SurfaceMaterial::Wood),
+        ResourceImpactKind::CoalOre => (ItemModel::Pickaxe, SurfaceMaterial::Coal),
+        ResourceImpactKind::IronOre => (ItemModel::Pickaxe, SurfaceMaterial::Iron),
+        ResourceImpactKind::SulfurOre => (ItemModel::Pickaxe, SurfaceMaterial::Sulfur),
+        ResourceImpactKind::StoneVein => (ItemModel::Pickaxe, SurfaceMaterial::Stone),
+        ResourceImpactKind::Branches => (ItemModel::Bag, SurfaceMaterial::Wood),
+        ResourceImpactKind::SurfaceStone => (ItemModel::Bag, SurfaceMaterial::Stone),
+        ResourceImpactKind::HayGrass => (ItemModel::Bag, SurfaceMaterial::Dirt),
     }
 }
 
@@ -451,6 +625,18 @@ fn position_seed(position: Vec3Net) -> u32 {
     x.wrapping_mul(0x9E3779B1)
         .wrapping_add(y.wrapping_mul(0x85EBCA77))
         .wrapping_add(z.wrapping_mul(0xC2B2AE3D))
+}
+
+/// Whether an incoming `ProjectileImpact` should raise the shooter's crosshair
+/// hit marker. Only the owner-tagged copy (which the server sends solely to the
+/// shooter on a Player or Deployable hit) qualifies; peer fan-out copies and any
+/// World rest carry `owner_confirmation = false`. A World surface is rejected
+/// even if the flag were set, so a stray world confirmation can never mark.
+fn projectile_impact_raises_hit_marker(
+    owner_confirmation: bool,
+    surface: crate::protocol::ProjectileSurface,
+) -> bool {
+    owner_confirmation && !matches!(surface, crate::protocol::ProjectileSurface::World)
 }
 
 fn show_kick_notice(menu: &mut MenuState, reason: String) {
@@ -613,41 +799,41 @@ mod tests {
     }
 
     #[test]
-    fn remote_impact_tool_and_surface_maps_each_kind() {
+    fn remote_impact_model_and_surface_maps_each_kind() {
         use crate::app::audio::surface::SurfaceMaterial;
-        // Trees -> axe/wood, ores -> pickaxe with their own surface, crude
-        // kinds -> hands.
+        // Trees -> hatchet/wood, ores -> pickaxe with their own surface, crude
+        // kinds -> the bag archetype (no dedicated impact clip => silent).
         assert_eq!(
-            remote_impact_tool_and_surface(ResourceImpactKind::Tree),
-            (ToolKind::Axe, SurfaceMaterial::Wood)
+            remote_impact_model_and_surface(ResourceImpactKind::Tree),
+            (ItemModel::Hatchet, SurfaceMaterial::Wood)
         );
         assert_eq!(
-            remote_impact_tool_and_surface(ResourceImpactKind::CoalOre),
-            (ToolKind::Pickaxe, SurfaceMaterial::Coal)
+            remote_impact_model_and_surface(ResourceImpactKind::CoalOre),
+            (ItemModel::Pickaxe, SurfaceMaterial::Coal)
         );
         assert_eq!(
-            remote_impact_tool_and_surface(ResourceImpactKind::IronOre),
-            (ToolKind::Pickaxe, SurfaceMaterial::Iron)
+            remote_impact_model_and_surface(ResourceImpactKind::IronOre),
+            (ItemModel::Pickaxe, SurfaceMaterial::Iron)
         );
         assert_eq!(
-            remote_impact_tool_and_surface(ResourceImpactKind::SulfurOre),
-            (ToolKind::Pickaxe, SurfaceMaterial::Sulfur)
+            remote_impact_model_and_surface(ResourceImpactKind::SulfurOre),
+            (ItemModel::Pickaxe, SurfaceMaterial::Sulfur)
         );
         assert_eq!(
-            remote_impact_tool_and_surface(ResourceImpactKind::StoneVein),
-            (ToolKind::Pickaxe, SurfaceMaterial::Stone)
+            remote_impact_model_and_surface(ResourceImpactKind::StoneVein),
+            (ItemModel::Pickaxe, SurfaceMaterial::Stone)
         );
         assert_eq!(
-            remote_impact_tool_and_surface(ResourceImpactKind::Branches),
-            (ToolKind::Hands, SurfaceMaterial::Wood)
+            remote_impact_model_and_surface(ResourceImpactKind::Branches),
+            (ItemModel::Bag, SurfaceMaterial::Wood)
         );
         assert_eq!(
-            remote_impact_tool_and_surface(ResourceImpactKind::SurfaceStone),
-            (ToolKind::Hands, SurfaceMaterial::Stone)
+            remote_impact_model_and_surface(ResourceImpactKind::SurfaceStone),
+            (ItemModel::Bag, SurfaceMaterial::Stone)
         );
         assert_eq!(
-            remote_impact_tool_and_surface(ResourceImpactKind::HayGrass),
-            (ToolKind::Hands, SurfaceMaterial::Dirt)
+            remote_impact_model_and_surface(ResourceImpactKind::HayGrass),
+            (ItemModel::Bag, SurfaceMaterial::Dirt)
         );
     }
 
@@ -656,7 +842,7 @@ mod tests {
         let position = Vec3Net::new(1.0, 2.0, 3.0);
         let event = remote_impact_event(position, ResourceImpactKind::Tree);
         assert_eq!(event.anchor, Vec3::new(1.0, 2.0, 3.0));
-        assert_eq!(event.tool, ToolKind::Axe);
+        assert_eq!(event.model, ItemModel::Hatchet);
         assert!(!event.is_player_hit);
         // The seed is derived from position and is stable.
         assert_eq!(event.seed, position_seed(position));
@@ -695,6 +881,40 @@ mod tests {
             server_protocol: PROTOCOL_VERSION,
         }];
         assert!(!batch_has_auth_rejected(&mismatch_only));
+    }
+
+    #[test]
+    fn projectile_impact_raises_hit_marker_only_for_owner_body_or_structure() {
+        use crate::protocol::ProjectileSurface;
+        // The owner-tagged copy on a Player or Deployable hit raises the marker.
+        assert!(projectile_impact_raises_hit_marker(
+            true,
+            ProjectileSurface::Player
+        ));
+        assert!(projectile_impact_raises_hit_marker(
+            true,
+            ProjectileSurface::Deployable
+        ));
+        // A peer fan-out copy (owner_confirmation = false) never marks, whatever
+        // it hit.
+        assert!(!projectile_impact_raises_hit_marker(
+            false,
+            ProjectileSurface::Player
+        ));
+        assert!(!projectile_impact_raises_hit_marker(
+            false,
+            ProjectileSurface::Deployable
+        ));
+        // A World surface never marks: the shooter's own moving -> stuck cue owns
+        // world rests, and the server never sends the owner copy for one anyway.
+        assert!(!projectile_impact_raises_hit_marker(
+            true,
+            ProjectileSurface::World
+        ));
+        assert!(!projectile_impact_raises_hit_marker(
+            false,
+            ProjectileSurface::World
+        ));
     }
 
     #[test]

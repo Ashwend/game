@@ -107,9 +107,16 @@ impl GameServer {
             .deployed_entities
             .values()
             .filter(|entity| {
+                // Ruin caches are exempt: they stand on static ruin masonry
+                // (WorldBlocks from the seed layout, not building deployables),
+                // which `valid_deployable_surface` cannot see, and their
+                // support can never collapse. Sweeping one would destroy a
+                // permanent world fixture at every stability refresh.
                 !matches!(
                     entity.kind,
-                    DeployableKind::Building { .. } | DeployableKind::Door { .. }
+                    DeployableKind::Building { .. }
+                        | DeployableKind::Door { .. }
+                        | DeployableKind::RuinCache
                 )
             })
             .filter(|entity| entity.position.y > 0.25)

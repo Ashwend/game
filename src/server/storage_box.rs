@@ -57,6 +57,21 @@ impl StorageBoxState {
         slots.resize(storage_box_slot_count(tier), None);
         Self { slots }
     }
+
+    /// A ruin cache stores its loot in the same slot grid as a storage box, so
+    /// it reuses this state, but with the ruin-cache slot count. Kept beside
+    /// the box constructors so the two container kinds share one code path.
+    pub(crate) fn new_ruin_cache() -> Self {
+        Self {
+            slots: vec![None; crate::game_balance::RUIN_CACHE_SLOT_COUNT],
+        }
+    }
+
+    pub(crate) fn from_ruin_cache_persisted(persisted: PersistedStorageBoxState) -> Self {
+        let mut slots = persisted.slots;
+        slots.resize(crate::game_balance::RUIN_CACHE_SLOT_COUNT, None);
+        Self { slots }
+    }
 }
 
 impl GameServer {
@@ -75,10 +90,15 @@ impl GameServer {
         let Some(entity) = self.deployed_entities.get(&id) else {
             return Vec::new();
         };
-        if !matches!(entity.kind, DeployableKind::StorageBox { .. }) {
-            return Vec::new();
-        }
-        if !player_pos.within_horizontal_range(entity.position, STORAGE_BOX_INTERACT_RANGE_M) {
+        // Storage boxes and ruin caches share the container view: both store
+        // their loot in the `storage` grid and open through this message. The
+        // ruin cache uses its own (wider) interact range.
+        let range = match entity.kind {
+            DeployableKind::StorageBox { .. } => STORAGE_BOX_INTERACT_RANGE_M,
+            DeployableKind::RuinCache => crate::game_balance::RUIN_CACHE_INTERACT_RANGE_M,
+            _ => return Vec::new(),
+        };
+        if !player_pos.within_horizontal_range(entity.position, range) {
             return Vec::new();
         }
         if let Some(client_mut) = self.clients.get_mut(&client_id) {

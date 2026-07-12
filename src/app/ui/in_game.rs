@@ -21,6 +21,7 @@ use super::text_prompt::text_prompt_ui;
 use super::toast::toast_ui;
 use super::tutorial::{self, TutorialStep, tutorial_step, tutorial_ui};
 use super::wheel::wheel_ui;
+use super::workbench::workbench_ui;
 use super::world_map::world_map_ui;
 use super::{UiResources, world_ready_for_play};
 
@@ -45,6 +46,34 @@ fn nearby_crude_nodes(
             Some((
                 Vec3::new(node.position.x, node.position.y, node.position.z),
                 yield_item,
+            ))
+        })
+        .collect()
+}
+
+/// Project the replicated deployable set down to the crafting stations the
+/// panel cares about: those with a non-zero `station_radius` (workbenches
+/// today). Keeping only real stations keeps the per-frame set small; the
+/// proximity math itself lives in `crafting::stations` and mirrors the
+/// server's `station_in_range`.
+fn collect_nearby_stations(
+    deployables: &Query<(
+        &'static crate::server::Deployable,
+        &'static crate::server::DeployableTransform,
+    )>,
+) -> Vec<super::crafting::NearbyStation> {
+    deployables
+        .iter()
+        .filter_map(|(meta, transform)| {
+            let definition = crate::items::item_definition(&meta.item_id)?;
+            let profile = definition.deployable?;
+            if profile.station_radius <= 0.0 {
+                return None;
+            }
+            Some(super::crafting::NearbyStation::new(
+                meta.kind,
+                definition.id,
+                transform.position,
             ))
         })
         .collect()
@@ -141,6 +170,14 @@ pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta
                 &resources.settings,
                 &resources.voice,
                 &resources.combat_feedback,
+                &resources.local_player,
+                &resources.ranged_input,
+                &resources.throw_charge,
+                // The actionbar rect is one frame stale (it is set while drawing
+                // the actionbar, later in this same in-game pass), which is fine
+                // for anchoring the ranged ammo count + reload bar off it, exactly
+                // as chat.rs / toast.rs already consume it.
+                resources.inventory_ui.actionbar_rect,
             );
         }
         // Suppress the peer overlay (nameplates, chat bubbles)
@@ -152,6 +189,7 @@ pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta
             && !resources.menu.crafting_open
             && !resources.menu.furnace_open
             && !resources.menu.loot_bag_open
+            && !resources.menu.workbench_open
             // The world map covers the scene, so suppress nameplates, floating
             // damage, and structure labels under it.
             && !resources.menu.world_map_open;
@@ -241,6 +279,16 @@ pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta
             );
         });
 
+        // Resolve which crafting stations the local player is standing near,
+        // once per frame, from the replicated deployable set. The crafting
+        // panel uses it to gate workbench-tier recipes exactly the way the
+        // server does (see `crafting::stations`), so the tier requirement is
+        // legible in the row and the Craft button reflects it.
+        let station_context = super::crafting::StationContext::new(
+            resources.runtime.local_player_position().map(Into::into),
+            collect_nearby_stations(&resources.crafting_stations),
+        );
+
         // Unified inventory + crafting panel: one fixed-size shell
         // with a tab bar. Replaces the two separate modals; the
         // toggle systems flip which tab is active.
@@ -251,6 +299,7 @@ pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta
             &resources.local_player,
             &mut resources.inventory_ui,
             &mut resources.crafting_ui,
+            &station_context,
             &resources.pickup_target,
             &mut resources.inventory_sound_requests,
             &mut resources.error_toasts,
@@ -303,6 +352,17 @@ pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta
             &mut resources.runtime,
             &resources.local_player,
             &mut resources.inventory_ui,
+            &mut resources.error_toasts,
+        );
+        // Drawn right after the furnace: same "press E on a station" family,
+        // and the ordering keeps its scrim/panel layered consistently with the
+        // furnace's. Gates controls only (via `workbench_open`), never
+        // simulation. See docs/gameplay-gating.md.
+        workbench_ui(
+            ctx,
+            &mut resources.menu,
+            &mut resources.runtime,
+            &resources.local_player,
             &mut resources.error_toasts,
         );
         loot_bag_ui(

@@ -24,6 +24,7 @@ fn no_blocking_modal(menu: &MenuState) -> bool {
         && !menu.crafting_open
         && !menu.furnace_open
         && !menu.loot_bag_open
+        && !menu.workbench_open
         && !menu.chat_open
         // Single-field text dialogs (door codes, bag rename, marker name),
         // confirm modals (e.g. marker delete), and notices all own the screen;
@@ -33,6 +34,12 @@ fn no_blocking_modal(menu: &MenuState) -> bool {
         // Dead players can move the cursor over the respawn button,
         // gameplay controls stay frozen until the respawn lands.
         && menu.death_splash.is_none()
+        // The world-entry loading splash owns the screen while the initial
+        // world streams in. The player is nominally in-game underneath it
+        // (simulation keeps ticking, per the invariant), but no look, swing,
+        // or movement input may leak through the opaque overlay: the player
+        // can't see what they'd be doing.
+        && !menu.world_entry_splash_active()
 }
 
 /// True if the local player should accept look/swing/cursor-capture controls.
@@ -170,6 +177,26 @@ mod tests {
             confirmation: Some(
                 crate::app::state::ConfirmationDialog::delete_world_map_marker(1, "base"),
             ),
+            ..Default::default()
+        };
+
+        assert!(gameplay_simulation_allowed(&menu));
+        assert!(!gameplay_accepts_controls(&menu, true));
+        assert!(!gameplay_accepts_movement(&menu, true));
+    }
+
+    #[test]
+    fn world_entry_loading_splash_blocks_controls_and_movement() {
+        // While the loading splash streams the world in, the screen is
+        // already InGame underneath it (so simulation runs), but no input
+        // may leak through the opaque overlay: the player can't see the
+        // world they'd be driving.
+        let menu = MenuState {
+            screen: Screen::InGame,
+            loading_splash: Some(crate::app::state::LoadingSplash::new(
+                crate::app::state::LoadingSplashKind::EnteringWorld,
+                "World",
+            )),
             ..Default::default()
         };
 

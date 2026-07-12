@@ -269,4 +269,18 @@ impl ChunkManager {
         }
         self.node_chunks.insert(node_id, (coord, kind));
     }
+
+    /// Stop tracking a resource node WITHOUT scheduling a regrow. Used when an
+    /// event-spawned node is force-despawned at cleanup (meteor shower crater shards
+    /// that timed out unmined): they are not world nodes and must not respawn,
+    /// unlike a harvested node which goes through `handle_node_depleted`. Removes
+    /// the node from its chunk's live set and the membership index and nothing
+    /// else.
+    pub fn untrack_resource_node(&mut self, node_id: ResourceNodeId) {
+        if let Some((coord, kind)) = self.node_chunks.remove(&node_id)
+            && let Some(grid) = self.grids.get_mut(&coord)
+        {
+            grid.remove_live(kind, node_id);
+        }
+    }
 }

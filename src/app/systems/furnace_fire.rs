@@ -67,6 +67,28 @@ pub(crate) struct FurnaceParticle {
     initial_scale: f32,
 }
 
+impl FurnaceParticle {
+    /// Construct a fresh particle (`age = 0`). Public within the crate so other
+    /// fire effects (the meteor shower impact-site fires) can shed particles that
+    /// ride the same [`tick_furnace_particles_system`] integrator.
+    pub(crate) fn new(
+        velocity: Vec3,
+        gravity: f32,
+        drag: f32,
+        lifetime: f32,
+        initial_scale: f32,
+    ) -> Self {
+        Self {
+            velocity,
+            gravity,
+            drag,
+            age: 0.0,
+            lifetime,
+            initial_scale,
+        }
+    }
+}
+
 /// Spawn or tear down a furnace's fire rig to match its replicated `active`
 /// flag. Called once per furnace from the deployable reconciler, which already
 /// holds the local visual parent and the replicated `DeployableActive` value.
@@ -208,8 +230,9 @@ pub(crate) fn tick_furnace_particles_system(
 }
 
 /// Sum a few detuned sine waves into a `[0, 1]` flicker that never reads as a
-/// clean pulse.
-fn furnace_flicker(t: f32, phase: f32) -> f32 {
+/// clean pulse. Crate-visible so other fire lights (the meteor shower site fires)
+/// flicker with the same character.
+pub(crate) fn furnace_flicker(t: f32, phase: f32) -> f32 {
     let a = (t * 11.0 + phase).sin();
     let b = (t * 19.0 + phase * 1.7).sin();
     let c = (t * 31.0 + phase * 2.3).sin();

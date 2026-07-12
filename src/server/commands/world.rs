@@ -7,7 +7,7 @@ use crate::{
     protocol::{ClientId, ItemStack, ServerMessage, ToastKind, ToastMessage, Vec3Net},
     resources::{
         BIRCH_TREE_LARGE_NODE_ID, BIRCH_TREE_NODE_ID, BIRCH_TREE_SMALL_NODE_ID,
-        BRANCH_PILE_NODE_ID, COAL_NODE_ID, HAY_GRASS_NODE_ID, IRON_NODE_ID,
+        BRANCH_PILE_NODE_ID, COAL_NODE_ID, HAY_GRASS_NODE_ID, IRON_NODE_ID, METEORITE_NODE_ID,
         PINE_TREE_LARGE_NODE_ID, PINE_TREE_NODE_ID, PINE_TREE_SMALL_NODE_ID,
         RESOURCE_NODE_DEFINITIONS, STONE_NODE_ID, SULFUR_NODE_ID, SURFACE_STONE_NODE_ID,
         best_resource_node_target, resource_node_definition, spawn_resource_node,
@@ -29,8 +29,7 @@ const DEFAULT_SPAWN_DISTANCE: f32 = 4.0;
 const MIN_SPAWN_DISTANCE: f32 = 1.75;
 
 /// Alias list echoed back on a bad `/spawn` argument.
-const SPAWN_KINDS_HELP: &str =
-    "coal, iron, sulfur, stone, pine[-small|-large], birch[-small|-large], rock, sticks, hay";
+const SPAWN_KINDS_HELP: &str = "coal, iron, sulfur, stone, meteor, pine[-small|-large], birch[-small|-large], rock, sticks, hay";
 
 impl GameServer {
     /// `/spawn <kind> [distance]`
@@ -322,6 +321,134 @@ impl GameServer {
         });
         envelopes
     }
+
+    /// `/ruins [tp]`
+    ///
+    /// Lists the nearest ruin sites to the issuer with distance and compass
+    /// bearing, so testers can find ruins without wandering. `/ruins tp`
+    /// additionally teleports the issuer to the nearest ruin. Admin-only.
+    pub(super) fn command_ruins(
+        &mut self,
+        client_id: ClientId,
+        args: &[&str],
+    ) -> Vec<ServerEnvelope> {
+        let Some(client) = self.clients.get(&client_id) else {
+            return Vec::new();
+        };
+        if !client.is_admin {
+            return reply_warning(client_id, "admin only");
+        }
+        let origin = client.controller.position;
+
+        // Ruin layout is a pure function of the seed, same as the server
+        // worldgen and the client map: recompute it here.
+        let seed = self.save.map.world_seed();
+        let dims = self.save.map.chunk_dims();
+        let mut sites: Vec<_> = crate::world::ruin_layout(seed, dims)
+            .into_iter()
+            .map(|site| {
+                let dx = site.x - origin.x;
+                let dz = site.z - origin.z;
+                let dist = (dx * dx + dz * dz).sqrt();
+                (site, dist)
+            })
+            .collect();
+        sites.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        if sites.is_empty() {
+            return reply_success(client_id, "no ruins on this world");
+        }
+
+        // `/ruins tp`: warp to the nearest ruin so a tester can inspect it.
+        if args.first().is_some_and(|a| a.eq_ignore_ascii_case("tp")) {
+            let (nearest, dist) = sites[0];
+            let target = Vec3Net::new(nearest.x, origin.y, nearest.z);
+            if let Some(client_mut) = self.clients.get_mut(&client_id) {
+                client_mut.controller.position = target;
+                client_mut.controller.velocity = Vec3Net::ZERO;
+            }
+            self.chunk_manager.update_player_chunk(client_id, target);
+            let (yaw, pitch, health, last_input) = self
+                .clients
+                .get(&client_id)
+                .map(|c| {
+                    (
+                        c.controller.yaw,
+                        c.controller.pitch,
+                        c.controller.health,
+                        c.controller.last_processed_input,
+                    )
+                })
+                .unwrap_or((0.0, 0.0, crate::protocol::MAX_HEALTH, 0));
+            return vec![
+                ServerEnvelope {
+                    target: DeliveryTarget::Client(client_id),
+                    message: ServerMessage::Correction(crate::protocol::PlayerState {
+                        client_id,
+                        position: target,
+                        velocity: Vec3Net::ZERO,
+                        yaw,
+                        pitch,
+                        health,
+                        grounded: true,
+                        last_processed_input: last_input,
+                    }),
+                },
+                ServerEnvelope {
+                    target: DeliveryTarget::Client(client_id),
+                    message: ServerMessage::Toast(ToastMessage::new(
+                        ToastKind::Success,
+                        format!(
+                            "warped to nearest ruin: {} ({:.0} m away)",
+                            nearest.prefab.label(),
+                            dist
+                        ),
+                    )),
+                },
+            ];
+        }
+
+        // Otherwise list the nearest few as chat lines (they linger, unlike a
+        // toast).
+        const LIST_LIMIT: usize = 6;
+        let mut lines: Vec<String> = vec![format!("{} ruins on this world:", sites.len())];
+        for (site, dist) in sites.iter().take(LIST_LIMIT) {
+            let bearing = compass_bearing(site.x - origin.x, site.z - origin.z);
+            lines.push(format!(
+                "  {} - {:.0} m {}",
+                site.prefab.label(),
+                dist,
+                bearing
+            ));
+        }
+        if sites.len() > LIST_LIMIT {
+            lines.push(format!("  ... and {} more", sites.len() - LIST_LIMIT));
+        }
+        lines.push("  use /ruins tp to warp to the nearest".to_owned());
+        lines
+            .into_iter()
+            .map(|text| ServerEnvelope {
+                target: DeliveryTarget::Client(client_id),
+                message: ServerMessage::Chat(crate::protocol::ChatMessage {
+                    from: "Server".to_owned(),
+                    text,
+                }),
+            })
+            .collect()
+    }
+}
+
+/// Eight-point compass bearing from a world-space delta (`+X` east, `+Z`
+/// south), for the `/ruins` readout.
+fn compass_bearing(dx: f32, dz: f32) -> &'static str {
+    // Angle measured clockwise from north (`-Z`).
+    let angle = dz.atan2(dx).to_degrees(); // -180..180, 0 = east, 90 = south
+    // Convert to a 0..360 clockwise-from-north bearing: north is -Z (angle
+    // -90), so bearing = angle + 90, wrapped.
+    let bearing = (angle + 90.0).rem_euclid(360.0);
+    const POINTS: [&str; 8] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+    let index = (((bearing + 22.5) / 45.0) as usize) % 8;
+    POINTS[index]
 }
 
 /// Resolve a `/spawn` kind token to a registry `definition_id`. Accepts
@@ -334,6 +461,7 @@ pub(super) fn parse_node_token(arg: &str) -> Option<&'static str> {
         "iron" => Some(IRON_NODE_ID),
         "sulfur" | "sulphur" => Some(SULFUR_NODE_ID),
         "stone" | "stone_vein" | "vein" => Some(STONE_NODE_ID),
+        "meteor" | "meteorite" => Some(METEORITE_NODE_ID),
         "pine_small" | "pine_sapling" => Some(PINE_TREE_SMALL_NODE_ID),
         "pine" => Some(PINE_TREE_NODE_ID),
         "pine_large" | "old_pine" => Some(PINE_TREE_LARGE_NODE_ID),
@@ -389,5 +517,33 @@ impl SmallRng {
     pub(super) fn next_f32(&mut self) -> f32 {
         // 24 bits of mantissa is plenty for picking world positions.
         (self.next_u32() >> 8) as f32 / (1u32 << 24) as f32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spawn_accepts_the_meteorite_aliases() {
+        // Testers can `/spawn meteor` or `/spawn meteorite`, and the raw id.
+        assert_eq!(parse_node_token("meteor"), Some(METEORITE_NODE_ID));
+        assert_eq!(parse_node_token("meteorite"), Some(METEORITE_NODE_ID));
+        assert_eq!(parse_node_token("Meteorite"), Some(METEORITE_NODE_ID));
+        assert_eq!(parse_node_token("meteorite_node"), Some(METEORITE_NODE_ID));
+        // And the help list advertises it.
+        assert!(SPAWN_KINDS_HELP.contains("meteor"));
+    }
+
+    #[test]
+    fn meteorite_spawn_maps_to_a_chunk_kind_for_tracking() {
+        // `command_spawn` requires `NodeKind::from_definition_id` to resolve, or
+        // the spawned node never enters the AoI membership index.
+        let id = parse_node_token("meteor").expect("alias resolves");
+        assert_eq!(
+            NodeKind::from_definition_id(id),
+            Some(NodeKind::Meteorite),
+            "an admin-spawned meteorite must map back to its chunk kind"
+        );
     }
 }

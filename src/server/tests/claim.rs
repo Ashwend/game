@@ -70,6 +70,8 @@ fn place_cupboard(
         cupboard: Some(CupboardState {
             authorized: vec![owner],
         }),
+        ruin_cache: None,
+        fuse: None,
     };
     server.insert_deployed_entity(id, entity);
     server.chunk_manager.track_deployed_entity(id, pos);

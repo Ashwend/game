@@ -15,22 +15,24 @@
 //!
 //! Placement-ghost and input handling live in [`placement`].
 
+pub(crate) mod charge_fuse;
 mod placement;
 
 pub(crate) use placement::{
-    placement_input_system, update_claim_boundary_system, update_placement_ghost_system,
+    ChargeGhostMeshes, placement_input_system, prepare_charge_ghost_meshes_system,
+    update_claim_boundary_system, update_placement_ghost_system,
 };
 
 use crate::building::{ClaimPlatform, DOOR_OPEN_ANGLE_RAD, DOOR_PANEL_WIDTH_M};
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 use bevy::prelude::*;
 
 use crate::{
     app::{
         scene::{DeployableVisualAssets, NetworkDeployedEntity, ToonMaterial, TorchFireAssets},
-        state::ClientRuntime,
+        state::{ClientRuntime, MenuState},
         systems::furnace_fire::{FurnaceFire, sync_furnace_fire},
         systems::torch_fire::{TorchFire, sync_torch_fire},
     },
@@ -48,6 +50,12 @@ use crate::{
 /// the pending queue and drains over the following frames. Updates to
 /// existing visuals and despawns are uncapped.
 const MAX_DEPLOYABLE_SPAWNS_PER_FRAME: usize = 16;
+
+/// The budget while the world-entry loading splash is up: the scene is hidden
+/// behind an opaque overlay, so spawn-burst frame hitches are invisible and a
+/// bigger budget just shortens the load. The smooth budget above takes over
+/// the moment the world is revealed.
+const MAX_DEPLOYABLE_SPAWNS_PER_FRAME_LOADING: usize = 64;
 
 /// A spawned deployable visual tracked by [`DeployedEntityVisuals`].
 struct DeployableVisualEntry {
@@ -94,13 +102,31 @@ pub(crate) struct DeployedEntityVisuals {
     /// Reverse lookup `Lightyear-replicated entity → id`. Populated on
     /// `Added`, consumed on `RemovedComponents`.
     replicated_to_id: HashMap<Entity, DeployedEntityId>,
-    /// FIFO of arrivals waiting on [`MAX_DEPLOYABLE_SPAWNS_PER_FRAME`].
-    pending_spawns: VecDeque<PendingDeployableSpawn>,
+    /// Arrivals waiting on [`MAX_DEPLOYABLE_SPAWNS_PER_FRAME`]. Drained
+    /// nearest-to-player first (see the drain step), so this is an
+    /// unordered bag: order within it carries no meaning.
+    pending_spawns: Vec<PendingDeployableSpawn>,
     /// `true` once a reconciliation pass has run while connected. Gates
     /// the first-run catch-up scan: the `Added` filter compares against
     /// the system's `last_run` tick and misses entities that arrived
     /// during early-returning frames (menu, connecting).
     applied_first_snapshot: bool,
+}
+
+impl DeployedEntityVisuals {
+    /// Replicated deployables still waiting on the per-frame spawn budget.
+    /// The loading splash surfaces this as world-entry progress.
+    pub(crate) fn pending_spawn_count(&self) -> usize {
+        self.pending_spawns.len()
+    }
+
+    /// True once at least one reconciliation pass has run this session and
+    /// the budgeted spawn queue is empty. Feeds the world-entry readiness
+    /// gate (`world_ready_for_play`), same contract as
+    /// `ResourceNodeEntities::is_caught_up`.
+    pub(crate) fn is_caught_up(&self) -> bool {
+        self.applied_first_snapshot && self.pending_spawns.is_empty()
+    }
 }
 
 /// Reconcile the local `NetworkDeployedEntity` visuals against the
@@ -117,6 +143,14 @@ pub(crate) fn apply_deployed_entities_system(
     assets: Option<Res<DeployableVisualAssets>>,
     torch_assets: Option<Res<TorchFireAssets>>,
     mut visuals: ResMut<DeployedEntityVisuals>,
+    // World-entry loading trio, bundled to stay under Bevy's 16-param
+    // system limit: the clock + arrival tracker feed the readiness gate's
+    // stream condition, the menu selects the loading spawn budget.
+    world_load: (
+        Res<Time>,
+        ResMut<crate::app::state::WorldStreamState>,
+        Res<MenuState>,
+    ),
     existing_fires: Query<(Entity, &ChildOf), With<FurnaceFire>>,
     existing_torch_fires: Query<(Entity, &ChildOf), With<TorchFire>>,
     mut panels: Query<(&mut DoorPanel, &ChildOf)>,
@@ -127,6 +161,7 @@ pub(crate) fn apply_deployed_entities_system(
     mut play_sound: MessageWriter<crate::app::audio::PlaySound>,
     mut remote_impacts: MessageWriter<crate::app::state::RemoteImpactEvent>,
 ) {
+    let (time, mut stream, menu) = world_load;
     let Some(assets) = assets else {
         return;
     };
@@ -141,10 +176,17 @@ pub(crate) fn apply_deployed_entities_system(
         visuals.replicated_to_id.clear();
         visuals.pending_spawns.clear();
         visuals.applied_first_snapshot = false;
+        stream.reset();
         // Drain stale removal events so a reconnect doesn't replay them.
         removed.read().count();
         return;
     }
+    stream.note_connected(time.elapsed_secs());
+
+    // Replicated arrivals this frame, reported to the world-entry stream
+    // tracker so the loading gate can wait for the server to finish the
+    // initial send.
+    let mut arrivals = 0usize;
 
     // First-run catch-up: seed the reverse map and the spawn queue from
     // the full query once. See the resource-node reconciler for why
@@ -152,11 +194,12 @@ pub(crate) fn apply_deployed_entities_system(
     // early-returning.
     if !visuals.applied_first_snapshot {
         for (replicated_entity, meta, transform, active) in &all_deployables {
+            arrivals += 1;
             visuals.replicated_to_id.insert(replicated_entity, meta.id);
             if visuals.entries.contains_key(&meta.id) {
                 continue;
             }
-            visuals.pending_spawns.push_back(PendingDeployableSpawn {
+            visuals.pending_spawns.push(PendingDeployableSpawn {
                 id: meta.id,
                 replicated: replicated_entity,
                 kind: meta.kind,
@@ -177,6 +220,7 @@ pub(crate) fn apply_deployed_entities_system(
             // Catch-up above already seeded this entity.
             continue;
         }
+        arrivals += 1;
         visuals.replicated_to_id.insert(replicated_entity, meta.id);
 
         if let Some(mut entry) = visuals.entries.remove(&meta.id) {
@@ -189,7 +233,7 @@ pub(crate) fn apply_deployed_entities_system(
                 != matches!(meta.kind, DeployableKind::Door { .. });
             if door_transition {
                 commands.entity(entry.entity).despawn();
-                visuals.pending_spawns.push_back(PendingDeployableSpawn {
+                visuals.pending_spawns.push(PendingDeployableSpawn {
                     id: meta.id,
                     replicated: replicated_entity,
                     kind: meta.kind,
@@ -237,7 +281,7 @@ pub(crate) fn apply_deployed_entities_system(
             pending.yaw = transform.yaw;
             pending.active = active.0;
         } else {
-            visuals.pending_spawns.push_back(PendingDeployableSpawn {
+            visuals.pending_spawns.push(PendingDeployableSpawn {
                 id: meta.id,
                 replicated: replicated_entity,
                 kind: meta.kind,
@@ -247,6 +291,8 @@ pub(crate) fn apply_deployed_entities_system(
             });
         }
     }
+
+    stream.note_arrivals(time.elapsed_secs(), arrivals);
 
     // 2. Departures. AoI leave, destruction, or the stale half of an
     //    upgrade respawn (which arrivals above already retargeted).
@@ -309,12 +355,34 @@ pub(crate) fn apply_deployed_entities_system(
     // wall_visual_insets_system` keeps them correct as neighbours change.
     let platforms = (!visuals.pending_spawns.is_empty())
         .then(|| collect_building_platforms(all_deployables.iter().map(|(_, m, t, _)| (m, t))));
-    let mut spawn_budget = MAX_DEPLOYABLE_SPAWNS_PER_FRAME;
-    while spawn_budget > 0 {
-        let Some(spawn) = visuals.pending_spawns.pop_front() else {
-            break;
-        };
-        spawn_budget -= 1;
+    // Drain nearest-to-player first so a base you spawn next to assembles
+    // from the pieces around you outward, instead of in Lightyear's arrival
+    // order (which leaves a hole in the wall right in front of you while a
+    // far corner streams in). `select_nth_unstable_by` partitions the
+    // nearest `budget` to the front in average O(n) with no allocation, and
+    // the whole block is skipped in steady state.
+    let player_position = runtime
+        .local_view()
+        .map(|view| Vec3::from(view.position) + Vec3::Y * crate::app::EYE_HEIGHT);
+    let budget = if menu.world_entry_splash_active() {
+        MAX_DEPLOYABLE_SPAWNS_PER_FRAME_LOADING
+    } else {
+        MAX_DEPLOYABLE_SPAWNS_PER_FRAME
+    };
+    let take = budget.min(visuals.pending_spawns.len());
+    if let Some(player) = player_position
+        && take > 0
+        && take < visuals.pending_spawns.len()
+    {
+        visuals
+            .pending_spawns
+            .select_nth_unstable_by(take - 1, |a, b| {
+                Vec3::from(a.position)
+                    .distance_squared(player)
+                    .total_cmp(&Vec3::from(b.position).distance_squared(player))
+            });
+    }
+    for spawn in visuals.pending_spawns.drain(..take).collect::<Vec<_>>() {
         let position = Vec3::from(spawn.position);
         let visual_position =
             wall_inset_visual_position(spawn.kind, spawn.position, spawn.yaw, platforms.as_deref());
@@ -382,6 +450,13 @@ pub(crate) fn apply_deployed_entities_system(
             if let Some(torch_assets) = torch_assets {
                 sync_torch_fire(&mut commands, parent, spawn.kind, true, None, torch_assets);
             }
+        }
+        // A placed charge is ALWAYS armed while it exists (fuse is server-only),
+        // so attach its fuse rig (sparks + hiss) unconditionally on spawn, not
+        // gated on `active`. The rig tears down with the charge when it fizzles
+        // or detonates (children despawn recursively with the root).
+        if let DeployableKind::Explosive { kind } = spawn.kind {
+            charge_fuse::spawn_charge_fuse_rig(&mut commands, parent, kind);
         }
         visuals.entries.insert(
             spawn.id,
@@ -695,12 +770,12 @@ fn emit_upgrade_burst(
     base: Vec3,
 ) {
     use crate::app::audio::surface::SurfaceMaterial;
-    let (tool, surface) = match kind {
+    let (model, surface) = match kind {
         DeployableKind::Building { tier, .. } => match tier {
             crate::building::BuildingTier::Stone => {
-                (crate::items::ToolKind::Pickaxe, SurfaceMaterial::Stone)
+                (crate::items::ItemModel::Pickaxe, SurfaceMaterial::Stone)
             }
-            _ => (crate::items::ToolKind::Axe, SurfaceMaterial::Wood),
+            _ => (crate::items::ItemModel::Hatchet, SurfaceMaterial::Wood),
         },
         _ => return,
     };
@@ -724,7 +799,7 @@ fn emit_upgrade_burst(
     for (index, height) in heights.into_iter().enumerate() {
         remote_impacts.write(crate::app::state::RemoteImpactEvent {
             anchor: base + Vec3::new(0.0, height, 0.0),
-            tool,
+            model,
             surface,
             effect_kind: crate::app::state::ImpactEffectKind::for_surface(surface),
             seed: (base.x.to_bits() ^ base.z.to_bits()).wrapping_add(index as u32 * 7919),
@@ -762,7 +837,7 @@ fn deployable_visual(
     kind: DeployableKind,
 ) -> (Handle<Mesh>, DeployableMaterial) {
     let mesh = match kind {
-        DeployableKind::Workbench { .. } => assets.workbench_mesh.clone(),
+        DeployableKind::Workbench { tier } => assets.workbench_mesh(tier),
         DeployableKind::Furnace { .. } => assets.furnace_mesh.clone(),
         DeployableKind::Building { piece, tier } => assets.building_mesh(piece, tier),
         // Doors get an animated panel child instead (see the spawn site);
@@ -772,6 +847,11 @@ fn deployable_visual(
         DeployableKind::StorageBox { tier } => assets.storage_box_mesh(tier),
         DeployableKind::Torch { .. } => assets.torch_mesh.clone(),
         DeployableKind::ToolCupboard => assets.tool_cupboard_mesh.clone(),
+        DeployableKind::RuinCache => assets.ruin_cache_mesh.clone(),
+        // Placed charge: the authored charge body glb (primitive 0). The ember
+        // charge additionally spawns its glowing crystal (primitive 1) as an
+        // emissive child at the spawn site (see the reconciler).
+        DeployableKind::Explosive { kind } => charge_body_mesh(assets, kind),
     };
     // Building pieces carry their tier's textured `StandardMaterial` (twig /
     // timber / stone) and doors their variant material, both still PBR for now.
@@ -785,7 +865,8 @@ fn deployable_visual(
         DeployableKind::Door { variant } => {
             DeployableMaterial::Standard(assets.door_material(variant))
         }
-        DeployableKind::Furnace { .. } => {
+        // The furnace and the ruin cache read as weathered stone.
+        DeployableKind::Furnace { .. } | DeployableKind::RuinCache => {
             DeployableMaterial::Toon(assets.toon_stone_material.clone())
         }
         DeployableKind::Workbench { .. }
@@ -794,11 +875,44 @@ fn deployable_visual(
         | DeployableKind::Torch { .. } => {
             DeployableMaterial::Toon(assets.toon_wood_material.clone())
         }
+        // A placed charge's body material by kind: the keg's staved barrel reads
+        // as wood, the cloth-bodied bomb + satchel as fabric.
+        DeployableKind::Explosive { kind } => {
+            DeployableMaterial::Toon(charge_body_material(assets, kind))
+        }
         DeployableKind::SleepingBag => {
             DeployableMaterial::Toon(assets.toon_fabric_material.clone())
         }
     };
     (mesh, material)
+}
+
+/// The body-primitive (primitive 0) mesh for a placed charge of `kind`. Shared
+/// with the placement ghost so the preview matches the placed prop.
+pub(super) fn charge_body_mesh(
+    assets: &DeployableVisualAssets,
+    kind: crate::items::ExplosiveKind,
+) -> Handle<Mesh> {
+    use crate::items::ExplosiveKind;
+    match kind {
+        ExplosiveKind::PowderKeg => assets.charge_keg_mesh.clone(),
+        ExplosiveKind::SatchelCharge => assets.charge_satchel_mesh.clone(),
+        ExplosiveKind::PowderBomb => assets.charge_bomb_mesh.clone(),
+    }
+}
+
+/// The body-primitive cel material for a placed charge of `kind`.
+fn charge_body_material(
+    assets: &DeployableVisualAssets,
+    kind: crate::items::ExplosiveKind,
+) -> Handle<ToonMaterial> {
+    use crate::items::ExplosiveKind;
+    match kind {
+        ExplosiveKind::PowderKeg => assets.toon_wood_material.clone(),
+        ExplosiveKind::PowderBomb | ExplosiveKind::SatchelCharge => {
+            assets.charge_cloth_material.clone()
+        }
+    }
 }
 
 pub(super) fn deployable_transform(position: Vec3, yaw: f32) -> Transform {

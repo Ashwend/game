@@ -34,7 +34,22 @@ const DROPPED_ITEM_INTERPOLATION_MAX_DISTANCE_M: f32 = 40.0;
 /// incrementally as items spawn and despawn so the snapshot-apply system
 /// doesn't have to rebuild a `HashMap` from a `Query` every frame.
 #[derive(Resource, Default)]
-pub(crate) struct DroppedItemEntities(pub(crate) HashMap<DroppedItemId, Entity>);
+pub(crate) struct DroppedItemEntities {
+    entities: HashMap<DroppedItemId, Entity>,
+    /// `true` when the last reconciliation pass (while connected) spawned a
+    /// visual for every replicated drop it saw without exhausting the
+    /// per-frame budget. Unlike the node/deployable reconcilers there is no
+    /// persistent pending queue here (the system re-scans the replicated set
+    /// each frame), so "caught up" is a per-pass verdict. Feeds the
+    /// world-entry readiness gate (`world_ready_for_play`).
+    caught_up: bool,
+}
+
+impl DroppedItemEntities {
+    pub(crate) fn is_caught_up(&self) -> bool {
+        self.caught_up
+    }
+}
 
 /// Reconcile the local `NetworkDroppedItem` visuals against the
 /// Lightyear-replicated `(DroppedItem, DroppedItemTransform)` entities.
@@ -50,6 +65,7 @@ pub(crate) fn apply_dropped_items_system(
     prediction: Res<PredictionState>,
     assets: Res<ItemVisualAssets>,
     mut entities: ResMut<DroppedItemEntities>,
+    mut stream: ResMut<crate::app::state::WorldStreamState>,
     mut dropped_entities: Query<
         (&Transform, &mut DroppedItemInterpolation),
         With<NetworkDroppedItem>,
@@ -58,13 +74,20 @@ pub(crate) fn apply_dropped_items_system(
 ) {
     if runtime.client_id.is_none() {
         // Not connected, tear down any visuals from a prior session.
-        for (_, entity) in entities.0.drain() {
+        for (_, entity) in entities.entities.drain() {
             commands.entity(entity).despawn();
         }
+        entities.caught_up = false;
+        stream.reset();
         return;
     }
 
     let entities = &mut *entities;
+    stream.note_connected(time.elapsed_secs());
+    // Replicated arrivals this frame (ids we have no visual for yet),
+    // reported to the world-entry stream tracker so the loading gate can
+    // wait for the server to finish the initial send.
+    let mut arrivals = 0usize;
     // Camera anchor for the per-item distance gate. Reuse the same eye
     // position the rest of the client uses (player position + EYE_HEIGHT)
     // so the gate's threshold is in metres along the line of sight.
@@ -88,7 +111,7 @@ pub(crate) fn apply_dropped_items_system(
         visible_ids.insert(drop.id);
         let tick = transform.last_changed().get() as u64;
         let target = dropped_item_transform_from(&transform);
-        if let Some(entity) = entities.0.get(&drop.id).copied() {
+        if let Some(entity) = entities.entities.get(&drop.id).copied() {
             if let Ok((current, mut interpolation)) = dropped_entities.get_mut(entity) {
                 interpolation.retarget(tick, current, target);
                 // Far items skip the per-frame blend, at horizon edge a
@@ -115,6 +138,7 @@ pub(crate) fn apply_dropped_items_system(
                 }
             }
         } else {
+            arrivals += 1;
             if spawn_budget == 0 {
                 // Defer to a later frame. The replicated entity still
                 // exists, so a subsequent invocation picks it up; the
@@ -140,11 +164,18 @@ pub(crate) fn apply_dropped_items_system(
                     NotShadowCaster,
                 ))
                 .id();
-            entities.0.insert(drop.id, entity);
+            entities.entities.insert(drop.id, entity);
         }
     }
+    // A pass that never exhausted the budget spawned everything it saw, so
+    // the visual set now mirrors the replicated set. `spawn_budget == 0`
+    // means the last admitted spawn MAY have left deferred siblings behind;
+    // treating it as not-caught-up errs on holding the world-entry gate one
+    // extra frame, never on releasing it early.
+    entities.caught_up = spawn_budget > 0;
+    stream.note_arrivals(time.elapsed_secs(), arrivals);
 
-    entities.0.retain(|id, entity| {
+    entities.entities.retain(|id, entity| {
         if visible_ids.contains(id) {
             true
         } else {
@@ -233,6 +264,17 @@ fn dropped_item_rotation(rotation: QuatNet, fallback_yaw: f32) -> Quat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn caught_up_defaults_false_until_a_connected_pass_reports_it() {
+        // The flag feeds the world-entry gate, so it must start false (no
+        // pass has mirrored the replicated set yet) and only flip when the
+        // reconciler says so.
+        let mut entities = DroppedItemEntities::default();
+        assert!(!entities.is_caught_up());
+        entities.caught_up = true;
+        assert!(entities.is_caught_up());
+    }
 
     #[test]
     fn dropped_item_interpolation_blends_between_snapshot_targets() {

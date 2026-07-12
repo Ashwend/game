@@ -29,7 +29,8 @@ use bevy::{app::AppExit, prelude::*};
 use uuid::Uuid;
 
 pub(crate) use events::{
-    AuthMethod, ConnectFailReason, ErrorCategory, Event, ScreenKind, SessionEndReason, SessionMode,
+    AuthMethod, ConnectFailReason, DeathCause, ErrorCategory, Event, ScreenKind, SessionEndReason,
+    SessionMode,
 };
 
 use self::{

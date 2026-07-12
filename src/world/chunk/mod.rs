@@ -23,8 +23,8 @@ mod noise;
 
 pub use classification::{ChunkClassification, ClassificationChannels, base_capacity};
 pub use generator::{
-    ChunkSpawn, PlayableBounds, build_world_blocks, chunk_kind_target, generate_chunk_spawns,
-    generate_world_spawns, kind_target,
+    ChunkSpawn, PlayableBounds, build_world_blocks, chunk_center_distance_fraction,
+    chunk_kind_target, generate_chunk_spawns, generate_world_spawns, kind_target,
 };
 pub use noise::{ChunkRng, fbm, splitmix64, value_noise_2d};
 
@@ -120,10 +120,14 @@ pub enum NodeKind {
     IronOre,
     SulfurOre,
     StoneVein,
+    /// Rare crystal node. Appended LAST so the postcard variant
+    /// index of every existing kind is unchanged (old `ChunkManagerSave`
+    /// files stay loadable, see docs/worlds-and-saves.md).
+    Meteorite,
 }
 
 impl NodeKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::TreeSmall,
         Self::TreeMedium,
         Self::TreeLarge,
@@ -134,12 +138,13 @@ impl NodeKind {
         Self::IronOre,
         Self::SulfurOre,
         Self::StoneVein,
+        Self::Meteorite,
     ];
 
     /// `definition_id` string used by the `resources` registry.
     pub fn definition_id(self) -> &'static str {
         use crate::resources::{
-            BRANCH_PILE_NODE_ID, COAL_NODE_ID, HAY_GRASS_NODE_ID, IRON_NODE_ID,
+            BRANCH_PILE_NODE_ID, COAL_NODE_ID, HAY_GRASS_NODE_ID, IRON_NODE_ID, METEORITE_NODE_ID,
             PINE_TREE_LARGE_NODE_ID, PINE_TREE_NODE_ID, PINE_TREE_SMALL_NODE_ID, STONE_NODE_ID,
             SULFUR_NODE_ID, SURFACE_STONE_NODE_ID,
         };
@@ -159,6 +164,7 @@ impl NodeKind {
             Self::IronOre => IRON_NODE_ID,
             Self::SulfurOre => SULFUR_NODE_ID,
             Self::StoneVein => STONE_NODE_ID,
+            Self::Meteorite => METEORITE_NODE_ID,
         }
     }
 
@@ -168,7 +174,7 @@ impl NodeKind {
     pub fn from_definition_id(definition_id: &str) -> Option<Self> {
         use crate::resources::{
             BIRCH_TREE_LARGE_NODE_ID, BIRCH_TREE_NODE_ID, BIRCH_TREE_SMALL_NODE_ID,
-            BRANCH_PILE_NODE_ID, COAL_NODE_ID, HAY_GRASS_NODE_ID, IRON_NODE_ID,
+            BRANCH_PILE_NODE_ID, COAL_NODE_ID, HAY_GRASS_NODE_ID, IRON_NODE_ID, METEORITE_NODE_ID,
             PINE_TREE_LARGE_NODE_ID, PINE_TREE_NODE_ID, PINE_TREE_SMALL_NODE_ID, STONE_NODE_ID,
             SULFUR_NODE_ID, SURFACE_STONE_NODE_ID,
         };
@@ -183,6 +189,7 @@ impl NodeKind {
             IRON_NODE_ID => Some(Self::IronOre),
             SULFUR_NODE_ID => Some(Self::SulfurOre),
             STONE_NODE_ID => Some(Self::StoneVein),
+            METEORITE_NODE_ID => Some(Self::Meteorite),
             _ => None,
         }
     }
@@ -217,6 +224,9 @@ impl NodeKind {
             Self::TreeSmall => 3.0,
             Self::SurfaceStone => 2.4,
             Self::CoalOre | Self::IronOre | Self::SulfurOre | Self::StoneVein => 3.0,
+            // Meteorite is nearly always alone in a chunk anyway (capacity 1),
+            // so the spacing only matters against the rare double; keep it wide.
+            Self::Meteorite => 4.0,
             Self::BranchPile => 1.6,
             Self::HayGrass => 0.8,
         }
@@ -237,6 +247,7 @@ pub fn kind_stream(kind: NodeKind) -> u32 {
         NodeKind::IronOre => 8,
         NodeKind::SulfurOre => 9,
         NodeKind::StoneVein => 10,
+        NodeKind::Meteorite => 11,
     }
 }
 

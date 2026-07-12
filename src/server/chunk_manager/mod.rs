@@ -44,7 +44,8 @@ use crate::{
     resources::spawn_resource_node,
     world::{
         ChunkClassification, ChunkCoord, ChunkDims, ChunkSpawn, ClassificationChannels, NodeKind,
-        chunk_kind_target, generate_world_spawns, splitmix64,
+        PlayableBounds, chunk_center_distance_fraction, chunk_kind_target, generate_world_spawns,
+        splitmix64,
     },
 };
 
@@ -232,6 +233,11 @@ pub struct ChunkManager {
     /// Stir-in counter for regrow RNG so identical re-scheduling on the
     /// same tick doesn't pick identical fresh positions.
     placement_counter: u64,
+    /// Ruin site footprints, recomputed from the world seed at construction
+    /// (a pure function of the seed, see [`crate::world::ruins`]). Held so the
+    /// regrow path can reject a fresh node that would land inside a ruin, the
+    /// same gate the initial generation applies.
+    ruin_footprints: Vec<crate::world::RuinFootprint>,
 }
 
 impl ChunkManager {
@@ -239,7 +245,12 @@ impl ChunkManager {
     /// manager along with the initial node spawn list; the server inserts
     /// those into its `resource_nodes` map as usual.
     pub fn new_for_world(world_seed: u64, dims: ChunkDims) -> (Self, Vec<ResourceNodeState>) {
-        let mut spawns = generate_world_spawns(world_seed, dims);
+        // Ruin layout is a pure function of the seed; compute the footprints
+        // once so both the initial generation and later regrows reject nodes
+        // that would land inside a ruin.
+        let ruin_footprints =
+            crate::world::ruin_footprints(&crate::world::ruin_layout(world_seed, dims));
+        let mut spawns = generate_world_spawns(world_seed, dims, &ruin_footprints);
         // Trim outer rings to the spawn-budget table, strips out a
         // deterministic suffix of spawns per (coord, kind) so the world's
         // outer rings sit at the budgeted density without us having to
@@ -276,6 +287,7 @@ impl ChunkManager {
                 regrow_queue: BinaryHeap::new(),
                 next_node_id,
                 placement_counter: splitmix64(world_seed ^ 0x00C0_FFEE_BABE),
+                ruin_footprints,
             },
             live_states,
         )
@@ -321,6 +333,12 @@ impl ChunkManager {
             placement_counter: splitmix64(
                 save.world_seed ^ now_tick.wrapping_mul(0x00C0_FFEE_BABE),
             ),
+            // Recomputed from the seed, not persisted (the ruin layout is a
+            // pure function of the seed, same as classification).
+            ruin_footprints: crate::world::ruin_footprints(&crate::world::ruin_layout(
+                save.world_seed,
+                dims,
+            )),
         }
     }
 
@@ -393,15 +411,21 @@ impl ChunkManager {
 /// loaded by code that scaled differently would silently over- or
 /// under-fill on the next regrow.
 fn build_empty_grids(world_seed: u64, dims: ChunkDims) -> HashMap<ChunkCoord, ActiveChunkState> {
+    let bounds = PlayableBounds::from_dims(dims);
     let mut grids: HashMap<ChunkCoord, ActiveChunkState> = HashMap::new();
     for coord in dims.coords() {
         let channels = ClassificationChannels::sample(world_seed, coord);
         let classification = channels.classify();
+        // Same centre-distance fraction the generator computes for this coord, so
+        // the meteorite ceiling here matches what generation placed (regrow can't
+        // refill meteorite past what worldgen would have seeded).
+        let center_dist_frac = chunk_center_distance_fraction(coord, bounds);
         let mut capacity = HashMap::new();
         for kind in NodeKind::ALL {
-            // Same target (incl. the forest-fringe ore rule) the generator
-            // used to place nodes, so regrow refills to exactly that ceiling.
-            let target = chunk_kind_target(classification, channels, kind);
+            // Same target (incl. the forest-fringe ore rule + meteorite gate) the
+            // generator used to place nodes, so regrow refills to exactly that
+            // ceiling.
+            let target = chunk_kind_target(classification, channels, kind, center_dist_frac);
             if target > 0 {
                 capacity.insert(kind, target);
             }

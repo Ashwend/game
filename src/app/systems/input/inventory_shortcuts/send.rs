@@ -68,6 +68,32 @@ pub(crate) fn send_loot_bag_command(
     );
 }
 
+pub(crate) fn send_ranged_command(
+    runtime: &mut ClientRuntime,
+    error_toasts: &mut dyn ErrorToastSink,
+    command: crate::protocol::RangedCommand,
+) {
+    send_gameplay_message(
+        runtime,
+        error_toasts,
+        ClientMessage::Ranged(command),
+        "ranged command",
+    );
+}
+
+pub(crate) fn send_workbench_command(
+    runtime: &mut ClientRuntime,
+    error_toasts: &mut dyn ErrorToastSink,
+    command: crate::protocol::WorkbenchCommand,
+) {
+    send_gameplay_message(
+        runtime,
+        error_toasts,
+        ClientMessage::Workbench(command),
+        "workbench command",
+    );
+}
+
 /// Wrapper used by the E-interact handler so the call site reads as
 /// "open this furnace" instead of a generic enum constructor. Inline-
 /// only convenience, feel free to inline it if the call site is the

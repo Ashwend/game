@@ -3,8 +3,10 @@ use super::*;
 use crate::{
     auth::AuthMode,
     items::{
-        BASIC_HATCHET_ID, BASIC_PICKAXE_ID, COAL_ID, CRUDE_FURNACE_ID, FIBER_ID, IRON_BAR_ID,
-        IRON_ORE_ID, PLANT_TWINE_ID, STONE_ID, SULFUR_ORE_ID, WOOD_ID, WORKBENCH_T1_ID,
+        ANCIENT_FITTINGS_ID, BASIC_HATCHET_ID, BASIC_PICKAXE_ID, CLOTH_ID, COAL_ID,
+        CRUDE_FURNACE_ID, FIBER_ID, GUNPOWDER_ID, IRON_BAR_ID, IRON_ORE_ID, METEORITE_ID,
+        PADDED_HOOD_ID, PADDED_LEGGINGS_ID, PADDED_TUNIC_ID, PADDED_WRAPS_ID, PLANT_TWINE_ID,
+        STONE_ID, SULFUR_ID, SULFUR_ORE_ID, WOOD_ID, WORKBENCH_T1_ID, stack_limit,
     },
     protocol::{GAME_VERSION, PROTOCOL_VERSION, Vec3Net},
     resources::{
@@ -180,6 +182,59 @@ fn speed_is_admin_only() {
     let denied = server.apply_command(client, "/speed 5".to_owned());
     assert!(has_toast(&denied, ToastKind::Warning));
     assert_eq!(server.clients[&client].run_speed_multiplier, 1.0);
+}
+
+#[test]
+fn knockback_scale_sets_the_global_factor_and_clamps() {
+    let (mut server, client) = server_with_host(Some(1));
+    // Fresh server is neutral.
+    assert_eq!(server.knockback_scale, 1.0);
+
+    // A valid factor is applied and acknowledged with a success toast.
+    let ok = server.apply_command(client, "/knockback-scale 1.5".to_owned());
+    assert!(has_toast(&ok, ToastKind::Success));
+    assert_eq!(server.knockback_scale, 1.5);
+
+    // Out-of-range clamps at both ends (0 is allowed as the floor).
+    server.apply_command(client, "/knockback-scale -3".to_owned());
+    assert_eq!(server.knockback_scale, 0.0);
+    server.apply_command(client, "/knockback-scale 9999".to_owned());
+    assert_eq!(server.knockback_scale, 5.0);
+
+    // Reset to neutral.
+    server.apply_command(client, "/knockback-scale 1".to_owned());
+    assert_eq!(server.knockback_scale, 1.0);
+}
+
+#[test]
+fn knockback_scale_rejects_garbage_without_mutating() {
+    let (mut server, client) = server_with_host(Some(1));
+    server.apply_command(client, "/knockback-scale 2".to_owned());
+    assert_eq!(server.knockback_scale, 2.0);
+
+    // Unparseable arg is rejected and leaves the factor untouched.
+    let bad = server.apply_command(client, "/knockback-scale wobble".to_owned());
+    assert!(has_toast(&bad, ToastKind::Warning));
+    assert_eq!(server.knockback_scale, 2.0);
+
+    // A non-finite value is rejected too.
+    let inf = server.apply_command(client, "/knockback-scale inf".to_owned());
+    assert!(has_toast(&inf, ToastKind::Warning));
+    assert_eq!(server.knockback_scale, 2.0);
+
+    // Missing arg warns with usage.
+    let missing = server.apply_command(client, "/knockback-scale".to_owned());
+    assert!(has_toast(&missing, ToastKind::Warning));
+    assert_eq!(server.knockback_scale, 2.0);
+}
+
+#[test]
+fn knockback_scale_is_admin_only() {
+    let (mut server, client) = server_with_host(None);
+    let denied = server.apply_command(client, "/knockback-scale 3".to_owned());
+    assert!(has_toast(&denied, ToastKind::Warning));
+    // Non-admin rejection leaves the global factor at its neutral default.
+    assert_eq!(server.knockback_scale, 1.0);
 }
 
 #[test]
@@ -428,38 +483,53 @@ fn test_kit_command_grants_full_kit_and_routes_equipables_to_actionbar() {
         .get(&client_id)
         .expect("client still connected");
 
-    // Tools + structures landed in the actionbar.
+    // The first equipables land in the actionbar (nine slots, filled in the
+    // EQUIPABLES order): the four tools come first, so they are always on the
+    // bar. With the four weapons added the actionbar now fills before
+    // the deployables, so later equipables (workbench, furnace, ...) fall back to
+    // the inventory grid, which the kit does on purpose.
     let actionbar_ids: Vec<_> = client
         .inventory
         .actionbar_slots
         .iter()
         .filter_map(|slot| slot.as_ref().map(|s| s.item_id.as_ref().to_owned()))
         .collect();
-    for required in [
-        BASIC_HATCHET_ID,
-        BASIC_PICKAXE_ID,
-        WORKBENCH_T1_ID,
-        CRUDE_FURNACE_ID,
-    ] {
+    for required in [BASIC_HATCHET_ID, BASIC_PICKAXE_ID] {
         assert!(
             actionbar_ids.iter().any(|id| id == required),
-            "actionbar should contain {required}, got {actionbar_ids:?}",
+            "actionbar should contain the tool {required}, got {actionbar_ids:?}",
+        );
+    }
+    // Every equipable is granted somewhere (actionbar first, inventory fallback),
+    // including the ones that overflow the nine actionbar slots.
+    for required in [WORKBENCH_T1_ID, CRUDE_FURNACE_ID] {
+        assert!(
+            crate::inventory::count_items_in_inventory(&client.inventory, required) >= 1,
+            "the kit should grant {required} to the actionbar or the inventory",
         );
     }
 
-    // Every resource type sits in the main inventory at the kit
-    // quantity. Iron bar is capped at 100, others at 200, so 100
-    // is always intact.
+    // Every resource type sits in the main inventory at a full stack
+    // capped to its registry limit: the kit targets 100 of each, so a
+    // 200-cap material lands at 100, a 50-cap material (cloth, fittings)
+    // at 50, and meteorite (20-cap) at 20. This also proves the Ember
+    // Age intermediates and rare exploration resources reach the bag.
     for resource in [
         WOOD_ID,
         STONE_ID,
         COAL_ID,
         IRON_ORE_ID,
         SULFUR_ORE_ID,
+        SULFUR_ID,
+        GUNPOWDER_ID,
         FIBER_ID,
+        CLOTH_ID,
         PLANT_TWINE_ID,
         IRON_BAR_ID,
+        METEORITE_ID,
+        ANCIENT_FITTINGS_ID,
     ] {
+        let expected = stack_limit(resource).expect("registered resource").min(100);
         let stack = client
             .inventory
             .inventory_slots
@@ -467,7 +537,34 @@ fn test_kit_command_grants_full_kit_and_routes_equipables_to_actionbar() {
             .filter_map(|slot| slot.as_ref())
             .find(|stack| stack.item_id.as_ref() == resource)
             .unwrap_or_else(|| panic!("inventory should contain {resource}"));
-        assert_eq!(stack.quantity, 100, "{resource} should be granted as 100");
+        assert_eq!(
+            stack.quantity, expected,
+            "{resource} should be granted as {expected} (capped to its stack limit)"
+        );
+        assert!(
+            stack.quantity <= stack_limit(resource).unwrap(),
+            "{resource} kit stack must not exceed its registry cap"
+        );
+    }
+
+    // The full padded armor set is granted too, one of each piece, so a
+    // tester can equip a set and see mitigation without crafting. Pieces
+    // land in the actionbar first and spill to the inventory, so search
+    // both containers.
+    for piece in [
+        PADDED_HOOD_ID,
+        PADDED_TUNIC_ID,
+        PADDED_LEGGINGS_ID,
+        PADDED_WRAPS_ID,
+    ] {
+        let found = client
+            .inventory
+            .actionbar_slots
+            .iter()
+            .chain(client.inventory.inventory_slots.iter())
+            .filter_map(|slot| slot.as_ref())
+            .any(|stack| stack.item_id.as_ref() == piece);
+        assert!(found, "kit should contain padded piece {piece}");
     }
 }
 

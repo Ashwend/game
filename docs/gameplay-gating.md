@@ -78,9 +78,10 @@ Sole consumer: `src/app/systems/input/movement.rs` - `client_input_system`, whic
   && !menu.chat_open
   && !menu.dialog_modal_open()   // text prompt OR confirmation OR notice
   && menu.death_splash.is_none()
+  && !menu.world_entry_splash_active()   // loading splash: world still streaming in
 ```
 
-`dialog_modal_open()` (`src/app/state/menu.rs` - `MenuState::dialog_modal_open`) is `text_prompt.is_some() || confirmation.is_some() || notice.is_some()`. It is centralized so the keybind and UI open-paths cannot drift. The single-slot text prompts cover door codes, sleeping-bag rename, and world-map marker naming; the death splash freezes controls so a stray click does not drive the player while they pick a respawn point.
+`dialog_modal_open()` (`src/app/state/menu.rs` - `MenuState::dialog_modal_open`) is `text_prompt.is_some() || confirmation.is_some() || notice.is_some()`. It is centralized so the keybind and UI open-paths cannot drift. The single-slot text prompts cover door codes, sleeping-bag rename, and world-map marker naming; the death splash freezes controls so a stray click does not drive the player while they pick a respawn point. `world_entry_splash_active()` (`src/app/state/menu.rs`) freezes controls while the world-entry loading splash streams the initial world in: the screen is already `InGame` underneath it (so simulation runs), but no look/swing/movement may leak through the opaque overlay; the held-item viewmodel is hidden for the same window (`src/app/systems/items/held.rs`), and the entity reconcilers switch to their aggressive `*_LOADING` spawn budgets while it is up (frame hitches behind the overlay are invisible).
 
 Note `world_map_open` is deliberately **absent** from `no_blocking_modal`. It is checked only in `gameplay_accepts_controls`, which is what lets the map block look/swing but not movement.
 

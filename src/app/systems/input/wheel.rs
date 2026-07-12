@@ -18,12 +18,14 @@
 //! keep selection as an explicit click.
 
 use bevy::{
+    ecs::system::SystemParam,
     input::mouse::AccumulatedMouseMotion,
     prelude::*,
     window::{PrimaryWindow, Window},
 };
 
 use crate::{
+    analytics::{Analytics, Event},
     app::state::{
         ActiveWheel, BuildingPlanState, ClientErrorToast, ClientRuntime, CupboardAuthState,
         CurrentUser, DeployablePlacementState, KeyAction, LocalPlayerState, MenuState,
@@ -35,7 +37,7 @@ use crate::{
     items::{BUILDING_PLAN_ID, DeployableKind, HAMMER_ID, item_definition},
     protocol::{
         BuildingCommand, ClaimCommand, ClientMessage, DeployedEntityId, DoorCommand,
-        SleepingBagCommand,
+        ExplosiveCommand, SleepingBagCommand,
     },
     server::{Deployable, DeployableLabel},
 };
@@ -44,6 +46,15 @@ use super::{
     gating::{gameplay_accepts_controls, primary_window_focused},
     inventory_shortcuts::send_gameplay_message,
 };
+
+/// Read-only context grouped into one [`SystemParam`] so `wheel_menu_system`
+/// stays under Bevy's per-system parameter limit: the current account (for the
+/// owner-authorized wheel options) and the analytics sink (for `explosive_defused`).
+#[derive(SystemParam)]
+pub(crate) struct WheelContext<'w> {
+    user: Option<Res<'w, CurrentUser>>,
+    analytics: Res<'w, Analytics>,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn wheel_menu_system(
@@ -61,7 +72,7 @@ pub(crate) fn wheel_menu_system(
     pickup_target: Res<PickupTargetState>,
     placement: Res<DeployablePlacementState>,
     deployables: Query<(&Deployable, Option<&DeployableLabel>)>,
-    user: Option<Res<CurrentUser>>,
+    context: WheelContext,
     primary_window: Query<&Window, With<PrimaryWindow>>,
 ) {
     // The close-frame click guard only ever lasts one frame.
@@ -92,6 +103,7 @@ pub(crate) fn wheel_menu_system(
                     &mut menu,
                     &mut runtime,
                     &mut error_toasts,
+                    &context.analytics,
                 );
             }
             return;
@@ -121,12 +133,13 @@ pub(crate) fn wheel_menu_system(
                 &mut menu,
                 &mut runtime,
                 &mut error_toasts,
+                &context.analytics,
             );
         }
         return;
     }
 
-    let my_account = user.map(|user| user.0.account_id);
+    let my_account = context.user.as_ref().map(|user| user.0.account_id);
     let owner_of = |id: DeployedEntityId| {
         deployables
             .iter()
@@ -166,6 +179,10 @@ pub(crate) fn wheel_menu_system(
                     ClientMessage::Door(DoorCommand::Interact { id: hold.id }),
                     "door interact",
                 ),
+                // A charge has no tap action: you either hold-E to defuse it or
+                // leave it. A quick release does nothing so a mistaken tap can
+                // never accidentally arm a defuse.
+                PickupHoldKind::Explosive => {}
             }
         } else {
             let elapsed = hold.elapsed + time.delta_secs();
@@ -175,6 +192,7 @@ pub(crate) fn wheel_menu_system(
                     PickupHoldKind::SleepingBag => sleeping_bag_wheel(hold.id),
                     PickupHoldKind::ToolCupboard => cupboard_wheel(hold.id, &pickup_target),
                     PickupHoldKind::Door => door_pickup_wheel(hold.id),
+                    PickupHoldKind::Explosive => charge_wheel(hold.id),
                 });
             } else {
                 wheel.pickup_hold = Some(PickupHold { elapsed, ..hold });
@@ -225,6 +243,23 @@ pub(crate) fn wheel_menu_system(
             wheel.pickup_hold = Some(PickupHold {
                 id,
                 kind: PickupHoldKind::Door,
+                elapsed: 0.0,
+            });
+            return;
+        }
+        // Placed charge: hold-E opens the defuse wheel (there is no tap action).
+        // The option is always offered; the server re-checks reach + claim
+        // authorization and answers any failure with a toast, so there is no
+        // client-side gate to keep in sync (the same pattern the door pickup
+        // wheel uses).
+        if matches!(
+            pickup_target.deployable_kind,
+            Some(DeployableKind::Explosive { .. })
+        ) && let Some(id) = pickup_target.deployable_id
+        {
+            wheel.pickup_hold = Some(PickupHold {
+                id,
+                kind: PickupHoldKind::Explosive,
                 elapsed: 0.0,
             });
             return;
@@ -453,6 +488,28 @@ fn door_pickup_wheel(door_id: DeployedEntityId) -> ActiveWheel {
     }
 }
 
+/// The placed charge's hold-E wheel: defuse the live charge. The option is
+/// always offered; the server re-checks reach + claim authorization and refunds
+/// half the materials on success, answering any failure with a toast, so (as
+/// with the door pickup wheel) there is no client-side gate to keep in sync.
+fn charge_wheel(charge_id: DeployedEntityId) -> ActiveWheel {
+    ActiveWheel {
+        title: "Charge".to_owned(),
+        trigger: WheelTrigger::PickupKey,
+        options: vec![WheelOption {
+            label: "Defuse".to_owned(),
+            detail: Some("Recover half the materials".to_owned()),
+            detail_ok: true,
+            enabled: true,
+            marked: false,
+            action: WheelAction::DefuseCharge(charge_id),
+        }],
+        pointer: Vec2::ZERO,
+        // Defusing removes the charge from the world: keep the explicit click.
+        commit_on_release: false,
+    }
+}
+
 /// The Tool Cupboard's hold-E wheel. Options depend on the local
 /// player's authorization: an unauthorized player gets "Authorize Me", an
 /// authorized player gets "Remove Myself" + "Clear List".
@@ -522,6 +579,7 @@ fn perform_wheel_action(
     menu: &mut MenuState,
     runtime: &mut ClientRuntime,
     error_toasts: &mut MessageWriter<ClientErrorToast>,
+    analytics: &Analytics,
 ) {
     match action {
         WheelAction::SelectPiece(piece) => {
@@ -583,5 +641,27 @@ fn perform_wheel_action(
             ClientMessage::Claim(ClaimCommand::ClearList { id }),
             "cupboard clear",
         ),
+        WheelAction::DefuseCharge(id) => {
+            // Resolve the charge kind from the replicated deployable so the event
+            // carries which charge was defused (the wheel action only holds the id).
+            if let Some(kind) = deployables.iter().find_map(|(meta, _)| {
+                (meta.id == id)
+                    .then_some(meta.kind)
+                    .and_then(|kind| match kind {
+                        DeployableKind::Explosive { kind } => Some(kind),
+                        _ => None,
+                    })
+            }) {
+                analytics.track(Event::ExplosiveDefused {
+                    kind: kind.item_id().to_owned(),
+                });
+            }
+            send_gameplay_message(
+                runtime,
+                error_toasts,
+                ClientMessage::Explosive(ExplosiveCommand::Defuse { id }),
+                "defuse charge",
+            );
+        }
     }
 }

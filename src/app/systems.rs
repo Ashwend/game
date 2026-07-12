@@ -18,6 +18,7 @@ mod deployables;
 pub(crate) mod dev_render;
 mod display;
 pub(crate) mod effects;
+pub(crate) mod explosion_vfx;
 mod furnace_fire;
 mod graphics;
 #[cfg(debug_assertions)]
@@ -26,6 +27,7 @@ pub(crate) mod input;
 mod items;
 mod network;
 pub(crate) mod node_death;
+mod paperdoll_preview;
 mod players;
 mod quit;
 #[cfg(feature = "replication-trace")]
@@ -41,48 +43,63 @@ use bevy::prelude::SystemSet;
 #[cfg(all(debug_assertions, target_os = "macos"))]
 pub(crate) use agent_window::relinquish_macos_focus_system;
 pub(crate) use analytics::{
-    LastTrackedScreen, PendingSessionEndReason, SessionTracker, error_relay_system,
-    screen_viewed_system, session_ended_system, session_started_system,
+    EquipmentWatch, LastTrackedScreen, MeteorShowerImpactWatch, PendingSessionEndReason,
+    SessionTracker, WorkbenchWatch, equipment_change_system, error_relay_system,
+    meteor_shower_impact_system, screen_viewed_system, session_ended_system,
+    session_started_system, workbench_upgrade_system,
 };
 pub(crate) use auth::drive_auth_flow_system;
 pub(crate) use auto_connect::{
     AutoConnectRequest, auto_connect_poll_system, auto_connect_start_system,
 };
 pub(crate) use camera::{
-    CameraImpactKick, CameraMotionEffects, camera_follow_system, menu_backdrop_camera_system,
+    CameraImpactKick, CameraMotionEffects, VIEWMODEL_BASE_FOV_DEG, camera_follow_system,
+    menu_backdrop_camera_system, sync_viewmodel_fov_system,
 };
 pub(crate) use chunk_overlay::chunk_overlay_system;
 pub(crate) use combat_feedback::tick_combat_feedback_system;
 #[cfg(all(unix, debug_assertions))]
 pub(crate) use control_socket::{ClientControlSocket, drain_control_socket};
 pub(crate) use crafting_feedback::{CraftCompletionWatch, craft_complete_cue_system};
+pub(crate) use deployables::charge_fuse::{
+    ChargeFuseAssets, animate_charge_fuse_system, tick_charge_spark_particles_system,
+};
 pub(crate) use deployables::{
-    DeployedEntityVisuals, animate_door_panels_system, apply_deployed_entities_system,
-    maintain_wall_visual_insets_system, maintain_world_grid_system, placement_input_system,
-    update_claim_boundary_system, update_placement_ghost_system,
+    ChargeGhostMeshes, DeployedEntityVisuals, animate_door_panels_system,
+    apply_deployed_entities_system, maintain_wall_visual_insets_system, maintain_world_grid_system,
+    placement_input_system, prepare_charge_ghost_meshes_system, update_claim_boundary_system,
+    update_placement_ghost_system,
 };
 pub(crate) use display::apply_display_settings_system;
 pub(crate) use effects::{spawn_impact_effects_system, tick_impact_chips_system};
-pub(crate) use furnace_fire::{animate_furnace_fire_system, tick_furnace_particles_system};
+pub(crate) use explosion_vfx::{
+    ExplosionEffectAssets, ExplosionEvent, spawn_explosion_effects_system,
+    tick_explosion_flash_system, tick_explosion_smoke_system,
+};
+pub(crate) use furnace_fire::{
+    FurnaceParticle, animate_furnace_fire_system, furnace_flicker, tick_furnace_particles_system,
+};
 pub(crate) use graphics::apply_graphics_settings_system;
 #[cfg(debug_assertions)]
 pub(crate) use headless_capture::{
     HeadlessCapture, insert_capture_target, redirect_camera_to_capture,
 };
 pub(crate) use input::{
-    center_cursor_on_focus_system, chat_shortcut_system, client_input_system,
-    close_furnace_on_escape_system, close_loot_bag_on_escape_system,
-    gameplay_inventory_shortcuts_system, mouse_look_system, send_crafting_command,
-    send_furnace_command, send_inventory_command, send_loot_bag_command,
-    sync_furnace_open_flag_system, sync_loot_bag_open_flag_system, toggle_crafting_system,
-    toggle_inventory_system, toggle_pause_system, toggle_perf_stats_system, update_cursor_system,
-    wheel_menu_system,
+    PredictedArrowEvent, RangedFireSampler, center_cursor_on_focus_system, chat_shortcut_system,
+    client_input_system, close_furnace_on_escape_system, close_loot_bag_on_escape_system,
+    close_workbench_on_escape_system, gameplay_inventory_shortcuts_system, mouse_look_system,
+    send_crafting_command, send_furnace_command, send_inventory_command, send_loot_bag_command,
+    send_workbench_command, sync_furnace_open_flag_system, sync_loot_bag_open_flag_system,
+    sync_workbench_open_flag_system, toggle_crafting_system, toggle_inventory_system,
+    toggle_pause_system, toggle_perf_stats_system, update_cursor_system, wheel_menu_system,
 };
 pub(crate) use items::{
-    DroppedItemEntities, LootBagEntities, ResourceNodeEntities, apply_dropped_items_system,
-    apply_held_item_visual_system, apply_loot_bags_system, apply_resource_node_stage_system,
-    apply_resource_nodes_system, insert_resource_node_material, resource_node_transform_at,
-    resource_node_visual, sway_hay_grass_system, tick_resource_node_pop_in_system,
+    ArmorMaterials, DroppedItemEntities, LootBagEntities, ProjectileVisuals, ResourceNodeEntities,
+    apply_dropped_items_system, apply_held_item_visual_system, apply_loot_bags_system,
+    apply_projectiles_system, apply_resource_node_stage_system, apply_resource_nodes_system,
+    build_armor_visuals, build_held_item_visuals, insert_resource_node_material,
+    resource_node_transform_at, resource_node_visual, spawn_predicted_arrows_system,
+    sway_hay_grass_system, sword_slash_trail_system, tick_resource_node_pop_in_system,
     tree_foliage_visual, update_pickup_target_system, update_tool_swap_state_system,
 };
 pub(crate) use network::{
@@ -90,6 +107,9 @@ pub(crate) use network::{
     update_link_ping_system,
 };
 pub(crate) use node_death::tick_felling_trees_system;
+pub(crate) use paperdoll_preview::{
+    paperdoll_preview_texture, setup_paperdoll_preview, sync_paperdoll_preview_system,
+};
 pub(crate) use players::{
     RemotePlayerEntities, animate_remote_players_system, apply_remote_player_appearance_system,
     apply_snapshot_system, reconcile_player_rigs_system, tick_dying_players_system,
@@ -142,6 +162,10 @@ pub(crate) enum ClientSystemSet {
     Players,
     DroppedItems,
     ResourceNodes,
+    /// Reconcile arrow visuals against the replicated projectile set and advance
+    /// predicted own-arrows. After `ResourceNodes` so it shares the post-snapshot
+    /// world view; purely cosmetic and client-only (the server owns the shot).
+    Projectiles,
     /// Stream procedural detail-grass tiles around the camera. After
     /// `ResourceNodes` so it shares the post-snapshot world view; purely
     /// cosmetic and client-only.

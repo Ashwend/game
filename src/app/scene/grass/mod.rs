@@ -166,6 +166,17 @@ pub(crate) struct GrassState {
     bound_displacer_version: u64,
 }
 
+impl GrassState {
+    /// True once a full streaming scan has completed for the current camera
+    /// tile with no budgeted fill still draining, i.e. the grass carpet around
+    /// the camera is fully planted. Feeds the world-entry readiness gate
+    /// (`world_ready_for_play`); callers must skip the check when the grass
+    /// density setting is `Off` (a cleared field never reports caught-up).
+    pub(crate) fn is_caught_up(&self) -> bool {
+        self.last_cam_tile.is_some() && !self.fill_pending
+    }
+}
+
 /// Stream detail-grass tiles around the camera. The shader handles the distance
 /// fade + wind, so the CPU side just spawns/despawns tile entities.
 pub(crate) fn stream_grass_system(
@@ -735,6 +746,19 @@ mod tests {
             blocks,
             resource_nodes: Vec::new(),
         }
+    }
+
+    #[test]
+    fn caught_up_needs_a_completed_scan_with_no_pending_fill() {
+        // Feeds the world-entry gate: a field that has never scanned (or was
+        // cleared by a world/density change) must not report caught-up, and a
+        // budgeted fill still draining holds the gate.
+        let mut state = GrassState::default();
+        assert!(!state.is_caught_up(), "no streaming scan has run yet");
+        state.last_cam_tile = Some((0, 0));
+        assert!(state.is_caught_up());
+        state.fill_pending = true;
+        assert!(!state.is_caught_up(), "budgeted fill still draining");
     }
 
     #[test]

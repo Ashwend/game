@@ -54,6 +54,72 @@ use crate::{
 
 use super::deployable_visual_transform;
 
+/// Ghost-ready variants of the placed-charge body meshes (keg / satchel /
+/// bomb), keyed by the source mesh's handle. The charge glbs follow the
+/// ember-glow COLOR_0 convention where vertex ALPHA is a glow mask (0 on a
+/// non-glowing body), which is fine for their cel material, but the ghost's
+/// translucent `StandardMaterial` multiplies vertex alpha into its own: alpha
+/// 0.38 * 0 = an invisible ghost. [`prepare_charge_ghost_meshes_system`]
+/// clones each charge mesh once loaded, saturates COLOR_0 alpha to 1, and the
+/// ghost binds the clone instead.
+#[derive(Resource, Default)]
+pub(crate) struct ChargeGhostMeshes {
+    by_source: std::collections::HashMap<AssetId<Mesh>, Handle<Mesh>>,
+}
+
+/// Build the alpha-saturated ghost clone for each charge body mesh once its
+/// glb finishes loading. Cheap steady-state: three map hits per frame once
+/// populated.
+pub(crate) fn prepare_charge_ghost_meshes_system(
+    assets: Option<Res<DeployableVisualAssets>>,
+    mut ghost_meshes: ResMut<ChargeGhostMeshes>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    let Some(assets) = assets else {
+        return;
+    };
+    for source in [
+        &assets.charge_keg_mesh,
+        &assets.charge_satchel_mesh,
+        &assets.charge_bomb_mesh,
+    ] {
+        if ghost_meshes.by_source.contains_key(&source.id()) {
+            continue;
+        }
+        let Some(mesh) = meshes.get(source) else {
+            continue;
+        };
+        let mut clone = mesh.clone();
+        saturate_vertex_color_alpha(&mut clone);
+        let handle = meshes.add(clone);
+        ghost_meshes.by_source.insert(source.id(), handle);
+    }
+}
+
+/// Force every COLOR_0 alpha to 1 so a translucent ghost material's own alpha
+/// is the only transparency source. No-op for meshes without vertex colors.
+fn saturate_vertex_color_alpha(mesh: &mut Mesh) {
+    use bevy::mesh::VertexAttributeValues;
+    match mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR) {
+        Some(VertexAttributeValues::Float32x4(colors)) => {
+            for color in colors {
+                color[3] = 1.0;
+            }
+        }
+        Some(VertexAttributeValues::Unorm8x4(colors)) => {
+            for color in colors {
+                color[3] = u8::MAX;
+            }
+        }
+        Some(VertexAttributeValues::Unorm16x4(colors)) => {
+            for color in colors {
+                color[3] = u16::MAX;
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Maximum distance, in metres, between the player's feet and the ghost. Reads
 /// the one balance constant the server also validates against so client preview
 /// and server authority cannot drift.
@@ -117,6 +183,7 @@ pub(crate) fn update_placement_ghost_system(
     replicated: Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
     claim_query: Query<(&Deployable, &DeployableTransform, &DeployableAuth)>,
     user: Option<Res<CurrentUser>>,
+    ghost_meshes: Res<ChargeGhostMeshes>,
 ) {
     let Some(assets) = assets else {
         return;
@@ -249,6 +316,7 @@ pub(crate) fn update_placement_ghost_system(
         &mut commands,
         &ghosts,
         &assets,
+        &ghost_meshes,
         &placement,
         ghost_kind,
         &wall_platforms,
@@ -1076,6 +1144,12 @@ pub(super) fn deployable_kind_label(item_id: &ItemId) -> Option<String> {
         }
         DeployableKind::Torch { .. } => "torch".to_owned(),
         DeployableKind::ToolCupboard => "tool_cupboard".to_owned(),
+        // Not player-placeable, but the match must stay total.
+        DeployableKind::RuinCache => "ruin_cache".to_owned(),
+        // Placed charges; the item id is the label so the ghost/model lookup
+        // keys off the specific charge. Full charge VFX/model lands with the
+        // explosive VFX package.
+        DeployableKind::Explosive { .. } => definition.id.to_owned(),
     })
 }
 
@@ -1544,6 +1618,7 @@ fn refresh_ghost_entity(
     commands: &mut Commands,
     ghosts: &Query<(Entity, &DeployablePlacementGhost)>,
     assets: &DeployableVisualAssets,
+    ghost_meshes: &ChargeGhostMeshes,
     placement: &DeployablePlacementState,
     kind: DeployableKind,
     wall_platforms: &[ClaimPlatform],
@@ -1567,7 +1642,7 @@ fn refresh_ghost_entity(
         _ => position,
     };
     let mesh = match kind {
-        DeployableKind::Workbench { .. } => assets.workbench_mesh.clone(),
+        DeployableKind::Workbench { tier } => assets.workbench_mesh(tier),
         DeployableKind::Furnace { .. } => assets.furnace_mesh.clone(),
         DeployableKind::Building { piece, tier } => assets.building_mesh(piece, tier),
         DeployableKind::Door { .. } => assets.door_ghost_mesh.clone(),
@@ -1575,11 +1650,32 @@ fn refresh_ghost_entity(
         DeployableKind::StorageBox { tier } => assets.storage_box_mesh(tier),
         DeployableKind::Torch { .. } => assets.torch_mesh.clone(),
         DeployableKind::ToolCupboard => assets.tool_cupboard_mesh.clone(),
+        // Never player-placeable, so no ghost is ever previewed for it; the
+        // arm exists only to keep the match total.
+        DeployableKind::RuinCache => assets.ruin_cache_mesh.clone(),
+        // A charge's placement ghost is its real body mesh (primitive 0), so the
+        // translucent preview matches the placed prop. It binds the
+        // alpha-saturated ghost CLONE: the charge glbs carry COLOR_0 alpha 0
+        // (the ember-glow mask convention), which would multiply the ghost
+        // material fully invisible. Falls back to the source mesh for the
+        // frame or two before the clone is built.
+        DeployableKind::Explosive { kind } => {
+            let source = super::charge_body_mesh(assets, kind);
+            ghost_meshes
+                .by_source
+                .get(&source.id())
+                .cloned()
+                .unwrap_or(source)
+        }
     };
-    let material = if placement.valid {
-        assets.ghost_valid_material.clone()
-    } else {
-        assets.ghost_invalid_material.clone()
+    // The small charges run the punchier ghost variant (higher alpha, hotter
+    // emissive) so a knee-high keg/satchel preview reads through grass; every
+    // bigger structure keeps the subtle shared tint.
+    let material = match (kind, placement.valid) {
+        (DeployableKind::Explosive { .. }, true) => assets.ghost_valid_charge_material.clone(),
+        (DeployableKind::Explosive { .. }, false) => assets.ghost_invalid_charge_material.clone(),
+        (_, true) => assets.ghost_valid_material.clone(),
+        (_, false) => assets.ghost_invalid_material.clone(),
     };
     let transform = deployable_visual_transform(position, placement.yaw, kind);
 

@@ -11,6 +11,7 @@ use crate::{
 };
 
 use super::recipes::has_all_inputs;
+use super::stations::StationContext;
 use super::{RecipeListEntry, theme};
 
 /// Apply the user's filter chips + search query, then sort the survivors
@@ -27,6 +28,7 @@ use super::{RecipeListEntry, theme};
 pub(super) fn collect_sorted_recipes<'a>(
     crafting_ui: &CraftingUiState,
     inventory: Option<&PlayerInventoryState>,
+    stations: &StationContext,
     pin_tutorial: bool,
 ) -> Vec<RecipeListEntry<'a>> {
     let needle = crafting_ui.search.trim().to_lowercase();
@@ -43,10 +45,19 @@ pub(super) fn collect_sorted_recipes<'a>(
             true
         })
         .map(|recipe| {
-            let craftable = inventory
+            let affordable = inventory
                 .map(|inv| has_all_inputs(inv, recipe))
                 .unwrap_or(false);
-            RecipeListEntry { recipe, craftable }
+            let station_met = stations.met(recipe.station);
+            // A recipe you can afford but have no station for is not
+            // craftable right now: it keeps the "Only craftable" filter and
+            // the sort honest (and the Craft button disabled), matching the
+            // server's own station gate.
+            RecipeListEntry {
+                recipe,
+                craftable: affordable && station_met,
+                station_met,
+            }
         })
         .filter(|entry| !crafting_ui.only_craftable || entry.craftable)
         .collect();
@@ -65,24 +76,32 @@ pub(super) fn collect_sorted_recipes<'a>(
 }
 
 pub(super) fn draw_filter_row(ui: &mut egui::Ui, crafting_ui: &mut CraftingUiState) {
-    //  Row 1: full-width search field (no label, the placeholder carries it).
-    //  Row 2: category chips on the left, "Only craftable" toggle on the right.
-    // Pinning the toggle into the chip row (both `COMPACT_ROW_HEIGHT` tall and
-    // vertically centered) keeps it aligned with the chips and balances the
-    // row, instead of floating alone far to the right of the search field.
-
-    // Pin the TextEdit id so `request_focus` / the C-hotkey focus guard can
-    // target it across frames. The field is *not* auto-focused on open:
-    // players mostly browse via the chips, and clicking still focuses it.
-    let _ = ui.add_sized(
-        [ui.available_width(), theme::COMPACT_ROW_HEIGHT],
-        theme::text_input(&mut crafting_ui.search)
-            .id(egui::Id::new("crafting_search_input"))
-            .hint_text("Search…"),
-    );
-    ui.add_space(6.0);
+    //  Row 1: search field with the "Only craftable" toggle pinned to its
+    //  right (the toggle used to share the chip row, where a growing category
+    //  list eventually overlapped it).
+    //  Row 2: category chips, sized to their labels and wrapped if the enum
+    //  ever outgrows the panel width.
     ui.horizontal(|ui| {
         ui.set_min_height(theme::COMPACT_ROW_HEIGHT);
+        let toggle_width = 130.0;
+        let search_width =
+            (ui.available_width() - toggle_width - ui.spacing().item_spacing.x).max(120.0);
+        // Pin the TextEdit id so `request_focus` / the C-hotkey focus guard
+        // can target it across frames. The field is *not* auto-focused on
+        // open: players mostly browse via the chips, and clicking still
+        // focuses it.
+        let _ = ui.add_sized(
+            [search_width, theme::COMPACT_ROW_HEIGHT],
+            theme::text_input(&mut crafting_ui.search)
+                .id(egui::Id::new("crafting_search_input"))
+                .hint_text("Search recipes…"),
+        );
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.checkbox(&mut crafting_ui.only_craftable, "Only craftable");
+        });
+    });
+    ui.add_space(6.0);
+    ui.horizontal_wrapped(|ui| {
         // Category chips behave like a radio group: clicking any chip
         // makes it the active filter, even if it was already selected.
         // "All" is the explicit way to clear the filter.
@@ -96,11 +115,6 @@ pub(super) fn draw_filter_row(ui: &mut egui::Ui, crafting_ui: &mut CraftingUiSta
                 crafting_ui.category_filter = Some(category);
             }
         }
-        // Toggle right-aligned on the same row, vertically centered against
-        // the chips.
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.checkbox(&mut crafting_ui.only_craftable, "Only craftable");
-        });
     });
 }
 
@@ -110,8 +124,10 @@ fn category_chip(ui: &mut egui::Ui, label: &str, selected: bool) -> bool {
     } else {
         theme::ButtonKind::Secondary
     };
-    let response = theme::compact_button(ui, label, kind, 90.0);
-    theme::record_click_sound(ui, &response);
+    // A small minimum keeps short labels ("All", "Misc") from shrinking to
+    // stamps while longer labels size to their text, so the whole set fits on
+    // one row (the old fixed 90px chips overflowed the panel).
+    let response = theme::compact_button(ui, label, kind, 52.0);
     response.clicked()
 }
 

@@ -38,7 +38,7 @@ pub type AccountId = u64;
 /// ([`crate::net::channels::LIGHTYEAR_PROTOCOL_ID`]) is fixed and no longer
 /// tracks it, bump it on any breaking wire change so mismatched builds are
 /// cleanly rejected at the `Auth` handshake.
-pub const PROTOCOL_VERSION: u32 = 37;
+pub const PROTOCOL_VERSION: u32 = 44;
 pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_CHAT_LEN: usize = 240;
@@ -55,6 +55,12 @@ pub const CHAT_BUBBLE_DURATION_SECONDS: f32 = 6.0;
 /// [`PlayerInventoryState::normalize_capacity`].
 pub const INVENTORY_SLOT_COUNT: usize = 60;
 pub const ACTIONBAR_SLOT_COUNT: usize = 9;
+/// Number of worn-armor slots on the paperdoll: head, chest, legs, feet
+/// (see [`EquipmentSlot`]). One per [`EquipmentSlot`] variant, so the two must
+/// stay in lockstep. Rendered as a small column in the inventory panel (the
+/// paperdoll UI lands in a later package); the slots persist on
+/// [`PlayerInventoryState`].
+pub const EQUIPMENT_SLOT_COUNT: usize = 4;
 /// Number of input/output slots in a furnace. Small enough to fit on
 /// one row of the furnace UI and to keep the auto-smelt loop fast (the
 /// server walks every slot each tick the head item completes), but
@@ -83,11 +89,12 @@ pub type ResourceNodeId = u64;
 /// lifetime; the server picks it from a monotonic counter and uses
 /// it to route `LootBagCommand` traffic.
 pub type LootBagId = u64;
-/// Slot count inside a loot bag, sized to hold the full inventory
-/// plus actionbar of one player, the worst case any death can produce.
-/// Bags spawned by death start with their slots filled from index 0;
+/// Slot count inside a loot bag, sized to hold the full inventory plus
+/// actionbar plus worn armor of one player, the worst case any death can
+/// produce. Bags spawned by death start with their slots filled from index 0;
 /// trailing slots stay empty.
-pub const LOOT_BAG_SLOT_COUNT: usize = INVENTORY_SLOT_COUNT + ACTIONBAR_SLOT_COUNT;
+pub const LOOT_BAG_SLOT_COUNT: usize =
+    INVENTORY_SLOT_COUNT + ACTIONBAR_SLOT_COUNT + EQUIPMENT_SLOT_COUNT;
 /// Identifier assigned by the server when a crafting job enters the queue.
 /// Stable for the job's lifetime so the client can target it with
 /// [`CraftingCommand::Cancel`] without worrying about queue reordering.
@@ -97,6 +104,12 @@ pub type CraftingJobId = u64;
 /// assigns it at place time and uses it to target health updates and
 /// future destroy commands.
 pub type DeployedEntityId = u64;
+/// Identifier for a live server-simulated projectile (an arrow in flight).
+/// Stable for the projectile's short lifetime; the server assigns it from a
+/// monotonic counter and uses it to route mirror-sync deltas and to seed the
+/// deterministic arrow-recovery roll on impact. Never persisted (projectiles are
+/// transient) and never reused across a save.
+pub type ProjectileId = u64;
 
 /// Hard cap on the per-job batch size accepted by `Enqueue`. Anything
 /// larger is clamped server-side. Chosen so the longest tier-1 recipe

@@ -1,14 +1,17 @@
 use super::predict::predict_resource_node_pickup;
 use super::send::send_gameplay_message;
 use super::swing::{
-    equipped_tool_can_harvest_target, equipped_tool_kind, equipped_tool_profile,
+    equipped_swing, equipped_tool_can_harvest_target, equipped_tool_profile,
     resource_target_anchor, resource_target_is_crude, resource_target_model,
     resource_target_surface, swing_spray_direction,
 };
 use super::*;
 use crate::app::state::LocalPlayerState;
 use crate::app::state::{ClientRuntime, ClientSettings, PickupTargetState, PredictionState};
-use crate::items::{BASIC_HATCHET_ID, BASIC_PICKAXE_ID, ToolKind, WOOD_ID};
+use crate::items::{
+    BASIC_HATCHET_ID, BASIC_PICKAXE_ID, IRON_MACE_ID, ItemModel, STONE_SPEAR_ID, ToolKind, WOOD_ID,
+    WOODEN_CLUB_ID,
+};
 use crate::protocol::{ClientMessage, InventoryCommand, ItemStack, PlayerInventoryState, Vec3Net};
 use crate::resources::{
     BRANCH_PILE_NODE_ID, COAL_NODE_ID, PINE_TREE_NODE_ID, SURFACE_STONE_NODE_ID,
@@ -29,6 +32,7 @@ fn local_player_holding(item_id: Option<&str>) -> LocalPlayerState {
             crafting: Default::default(),
             open_furnace: None,
             open_loot_bag: None,
+            open_workbench: None,
             last_processed_input: 0,
             applied_action_seq: 0,
             run_speed_multiplier: 1.0,
@@ -47,21 +51,70 @@ fn target_for_node(node_id: u64, definition_id: &str) -> PickupTargetState {
 }
 
 #[test]
-fn equipped_tool_kind_only_resolves_real_tools() {
-    // A hatchet resolves to its tool kind.
+fn equipped_swing_resolves_tools_and_weapons_but_not_bare_or_inert_items() {
+    // A tool resolves to its swing archetype (the same value the server derives
+    // and stamps as the peer-visible swing model).
     let with_axe = local_player_holding(Some(BASIC_HATCHET_ID));
-    assert_eq!(equipped_tool_kind(&with_axe), Some(ToolKind::Axe));
+    assert_eq!(equipped_swing(&with_axe), Some(ItemModel::Hatchet));
 
     let with_pick = local_player_holding(Some(BASIC_PICKAXE_ID));
-    assert_eq!(equipped_tool_kind(&with_pick), Some(ToolKind::Pickaxe));
+    assert_eq!(equipped_swing(&with_pick), Some(ItemModel::Pickaxe));
 
-    // Bare hands -> no tool.
+    // A weapon resolves to its own swing archetype, which is exactly its wire
+    // impact identity now that the wire carries `ItemModel`.
+    let with_club = local_player_holding(Some(WOODEN_CLUB_ID));
+    assert_eq!(equipped_swing(&with_club), Some(ItemModel::Club));
+    let with_spear = local_player_holding(Some(STONE_SPEAR_ID));
+    assert_eq!(equipped_swing(&with_spear), Some(ItemModel::Spear));
+    let with_mace = local_player_holding(Some(IRON_MACE_ID));
+    assert_eq!(equipped_swing(&with_mace), Some(ItemModel::Mace));
+
+    // Bare hands -> no swing.
     let empty = local_player_holding(None);
-    assert_eq!(equipped_tool_kind(&empty), None);
+    assert_eq!(equipped_swing(&empty), None);
 
-    // A non-tool item (wood) -> no tool.
+    // A non-tool, non-weapon item (wood) -> no swing.
     let with_wood = local_player_holding(Some(WOOD_ID));
-    assert_eq!(equipped_tool_kind(&with_wood), None);
+    assert_eq!(equipped_swing(&with_wood), None);
+}
+
+#[test]
+fn ranged_weapons_route_to_the_draw_loop_never_the_melee_swing() {
+    use super::ranged::held_ranged;
+    use crate::items::{ARROW_ID, CROSSBOW_ID, WOODEN_BOW_ID};
+
+    // A held bow / crossbow resolves through `held_ranged` (the draw loop's gate)
+    // and NOT through `equipped_swing` (a ranged weapon has no Tool/WeaponProfile),
+    // which is exactly the branch decision the input system makes each frame: the
+    // ranged path runs, the melee swing machine never starts.
+    for id in [WOODEN_BOW_ID, CROSSBOW_ID] {
+        let holding = local_player_holding(Some(id));
+        assert_eq!(
+            equipped_swing(&holding),
+            None,
+            "{id} must not start a melee swing"
+        );
+        let (weapon_id, profile, has_ammo) =
+            held_ranged(&holding).expect("resolves the ranged profile");
+        assert_eq!(
+            &*weapon_id, id,
+            "held_ranged carries the weapon id for analytics"
+        );
+        assert_eq!(profile.ammo_item, ARROW_ID);
+        assert!(!has_ammo, "no arrows in the bag yet");
+    }
+
+    // With arrows in the bag the ammo gate opens.
+    let mut with_ammo = local_player_holding(Some(WOODEN_BOW_ID));
+    if let Some(private) = with_ammo.private.as_mut() {
+        private.inventory.inventory_slots[0] = Some(ItemStack::new(ARROW_ID, 8));
+    }
+    let (_, _, has_ammo) = held_ranged(&with_ammo).expect("still holding the bow");
+    assert!(has_ammo);
+
+    // A melee weapon / tool resolves no ranged profile, so the melee path runs.
+    let with_club = local_player_holding(Some(WOODEN_CLUB_ID));
+    assert!(held_ranged(&with_club).is_none());
 }
 
 #[test]

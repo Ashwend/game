@@ -24,7 +24,8 @@ use bevy::prelude::*;
 
 use crate::{
     analytics::{Analytics, ErrorCategory, Event, ScreenKind, SessionEndReason, SessionMode},
-    app::state::{AuthFlow, ClientErrorToast, ClientRuntime, MenuState, Screen},
+    app::state::{AuthFlow, ClientErrorToast, ClientRuntime, LocalPlayerState, MenuState, Screen},
+    protocol::{EQUIPMENT_SLOT_COUNT, EquipmentSlot},
 };
 
 /// Last [`ScreenKind`] we emitted `screen_viewed` for. Initialised to `None` so
@@ -125,6 +126,143 @@ pub(crate) fn error_relay_system(
             category: classify_error(&event.text),
         });
     }
+}
+
+/// Last frame's worn item id per equipment slot (`None` when empty), so
+/// [`equipment_change_system`] can fire `item_equipped` on the rising edge of a
+/// slot filling or changing. The server derives the worn slots authoritatively;
+/// this only watches the replicated result, so it also catches an equip that
+/// happened via a path other than the paperdoll drag (a quick-equip shortcut).
+/// `seeded` gates the first populated frame of a session: the armor a save
+/// already had worn is recorded as the baseline without firing, so a session
+/// start does not read as a burst of fresh equips.
+#[derive(Resource, Default)]
+pub(crate) struct EquipmentWatch {
+    worn: [Option<String>; EQUIPMENT_SLOT_COUNT],
+    seeded: bool,
+}
+
+/// Fires `item_equipped` when a worn equipment slot gains or swaps an item
+/// during a session. Unequips (a slot going empty) are deliberately not tracked;
+/// the event is about what players choose to wear. Reads the replicated
+/// [`LocalPlayerState`], so it is authoritative-server-consistent and does not
+/// double-fire on an optimistic move that the server later rejects.
+pub(crate) fn equipment_change_system(
+    analytics: Res<Analytics>,
+    local_player: Res<LocalPlayerState>,
+    mut watch: ResMut<EquipmentWatch>,
+) {
+    let Some(private) = local_player.private.as_ref() else {
+        // Disconnected: forget the worn set (and the seed) so the next session's
+        // already-worn armor is re-baselined, not read as a fresh equip.
+        if watch.seeded || watch.worn.iter().any(Option::is_some) {
+            *watch = EquipmentWatch::default();
+        }
+        return;
+    };
+
+    let mut next: [Option<String>; EQUIPMENT_SLOT_COUNT] = Default::default();
+    for slot in EquipmentSlot::ALL {
+        let index = slot.index();
+        let current = private
+            .inventory
+            .equipment_slots
+            .get(index)
+            .and_then(|maybe| maybe.as_ref())
+            .map(|stack| stack.item_id.to_string());
+
+        // Fire only on a real in-session change, and only once the baseline is
+        // seeded (the first populated frame just records what was already worn).
+        if watch.seeded
+            && current != watch.worn[index]
+            && let Some(item_id) = current.clone()
+        {
+            analytics.track(Event::ItemEquipped {
+                item_id,
+                slot: slot.label().to_ascii_lowercase(),
+            });
+        }
+        next[index] = current;
+    }
+    watch.worn = next;
+    watch.seeded = true;
+}
+
+/// Last frame's tier of the workbench the local player has open (`None` when no
+/// bench is open), so [`workbench_upgrade_system`] can fire `workbench_upgraded`
+/// on the tier increasing while the same bench stays open. The upgrade respawns
+/// the bench entity under the same id, so the open pointer survives and the view
+/// tier updates in place, which is the signal watched here.
+#[derive(Resource, Default)]
+pub(crate) struct WorkbenchWatch {
+    open_tier: Option<u8>,
+}
+
+/// Fires `workbench_upgraded` when the open workbench's tier rises. Only an
+/// increase counts (opening a fresh tier-2 bench, or the pointer clearing, is
+/// not an upgrade), so the event tracks the deliberate in-UI upgrade action.
+pub(crate) fn workbench_upgrade_system(
+    analytics: Res<Analytics>,
+    local_player: Res<LocalPlayerState>,
+    mut watch: ResMut<WorkbenchWatch>,
+) {
+    let current = local_player
+        .private
+        .as_ref()
+        .and_then(|private| private.open_workbench)
+        .map(|view| view.tier);
+
+    if let (Some(previous), Some(now)) = (watch.open_tier, current)
+        && now > previous
+    {
+        analytics.track(Event::WorkbenchUpgraded { tier: now });
+    }
+    watch.open_tier = current;
+}
+
+/// The `impact_tick` of the last meteor shower the local player witnessed, so
+/// [`meteor_shower_impact_system`] fires `meteor_shower_impact_witnessed` exactly once
+/// per impact rather than every frame of the crater phase.
+#[derive(Resource, Default)]
+pub(crate) struct MeteorShowerImpactWatch {
+    witnessed_tick: Option<u64>,
+}
+
+/// Fires `meteor_shower_impact_witnessed` the first frame the authoritative clock
+/// crosses a meteor shower's impact tick while the local player is within the
+/// danger radius (they saw or were caught in the strike). Everything is derived
+/// client-side from the announce payload plus the player position, so no wire
+/// traffic and no server-side gate is needed.
+pub(crate) fn meteor_shower_impact_system(
+    analytics: Res<Analytics>,
+    runtime: Res<ClientRuntime>,
+    mut watch: ResMut<MeteorShowerImpactWatch>,
+) {
+    let Some(event) = runtime.meteor_shower else {
+        // No live event: clear so the next event can re-fire.
+        watch.witnessed_tick = None;
+        return;
+    };
+    let estimated_tick = runtime.server_tick();
+    if !event.has_impacted(estimated_tick) {
+        return;
+    }
+    if watch.witnessed_tick == Some(event.impact_tick) {
+        return;
+    }
+    // Only count it as witnessed when the player was near the impact (the same
+    // radius the escalating HUD evacuation warning uses). A player across the
+    // map neither sees nor feels the strike.
+    if let Some(view) = runtime.local_view() {
+        let dx = view.position.x - event.impact_position.x;
+        let dz = view.position.z - event.impact_position.z;
+        if (dx * dx + dz * dz).sqrt() <= crate::game_balance::METEOR_SHOWER_DANGER_RADIUS_M {
+            analytics.track(Event::MeteorShowerImpactWitnessed);
+        }
+    }
+    // Record it either way so a distant player does not re-check every crater
+    // frame; the next distinct event has a different impact tick.
+    watch.witnessed_tick = Some(event.impact_tick);
 }
 
 fn map_screen(screen: Screen) -> ScreenKind {

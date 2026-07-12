@@ -23,27 +23,38 @@ use crate::app::systems::send_inventory_command;
 use crate::protocol::InventoryCommand;
 
 use super::InventorySoundRequests;
-use super::crafting::crafting_body;
-use super::inventory::{draw_actionbar, draw_inventory_grid, pickup_tooltip};
+use super::admin_items::admin_items_body;
+use super::crafting::{StationContext, crafting_body};
+use super::inventory::{
+    PAPERDOLL_COLUMN_GAP, PAPERDOLL_COLUMN_WIDTH, draw_actionbar, draw_inventory_grid,
+    draw_paperdoll_column, pickup_tooltip,
+};
 use super::modal::backdrop_layer;
 use super::theme::{self, ButtonKind};
 
-/// Fixed outer width, sized so the 12-column inventory grid fills the inner
-/// content area exactly with the standard tight gaps:
-/// `12*56 + 11*6 + 48 (frame margins) = 786`. The crafting tab shares this
-/// width. If the grid columns change, recompute this.
-const PANEL_WIDTH: f32 = 786.0;
-/// Fixed inner height, sized so the inventory's 7 displayed rows (60 real
-/// slots + 2 rows of inert filler) plus the tab bar and spacing fill the panel
-/// with only a hair of breathing room. The extra rows exist mostly to give the
-/// crafting tab's recipe list this much vertical room. Both tabs reserve this
-/// so the panel never resizes when you flip between them.
+/// Fixed outer width. The inner content area holds the Inventory tab's
+/// paperdoll column (slot stack + character preview), a gap, then the
+/// 12-column bag grid, all with the standard tight gaps:
+/// `PAPERDOLL_COLUMN_WIDTH (216) + PAPERDOLL_COLUMN_GAP (16) + 12*56 + 11*6 +
+/// 48 (frame margins) = 1018`. The crafting tab shares this width (its detail
+/// card gets the extra room). If the grid columns or the paperdoll column
+/// change, recompute this; the width test below pins the arithmetic.
+const PANEL_WIDTH: f32 = 1018.0;
+/// Fixed inner height, sized so the inventory tab's header + 5-row bag grid +
+/// hint footer and the crafting tab's master/detail split both fill the panel
+/// comfortably. Both tabs reserve this so the panel never resizes when you
+/// flip between them.
 const PANEL_HEIGHT: f32 = 500.0;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Inventory,
     Crafting,
+    /// Admin-only item-grant grid (see [`super::admin_items`]). A pure VIEW of
+    /// the inventory-open panel: `MenuState::inventory_open` stays the open
+    /// source of truth (so every overlay/control gate is untouched) and
+    /// `InventoryUiState::admin_tab` selects this body instead of the grid.
+    Admin,
 }
 
 impl Tab {
@@ -51,15 +62,21 @@ impl Tab {
         match self {
             Tab::Inventory => "Inventory",
             Tab::Crafting => "Crafting",
+            Tab::Admin => "Admin",
         }
     }
 }
 
 /// Which tab the panel is showing, or `None` when it's closed. Derived from
-/// the two mutually-exclusive `MenuState` bools.
-fn active_tab(menu: &MenuState) -> Option<Tab> {
+/// the two mutually-exclusive `MenuState` bools; the admin flag picks the
+/// Admin view of the inventory-open state.
+fn active_tab(menu: &MenuState, inventory_ui: &InventoryUiState) -> Option<Tab> {
     if menu.inventory_open {
-        Some(Tab::Inventory)
+        Some(if inventory_ui.admin_tab {
+            Tab::Admin
+        } else {
+            Tab::Inventory
+        })
     } else if menu.crafting_open {
         Some(Tab::Crafting)
     } else {
@@ -77,6 +94,7 @@ pub(super) fn inventory_panel_ui(
     local_player: &LocalPlayerState,
     inventory_ui: &mut InventoryUiState,
     crafting_ui: &mut CraftingUiState,
+    stations: &StationContext,
     pickup_target: &PickupTargetState,
     inventory_sound_requests: &mut InventorySoundRequests,
     error_toasts: &mut dyn ErrorToastSink,
@@ -97,7 +115,12 @@ pub(super) fn inventory_panel_ui(
         None => inventory_ui.clear_inventory_tracking(),
     }
 
-    let tab = active_tab(menu);
+    // The admin view only exists for admins; losing admin (or never having
+    // it) snaps the panel back to the plain Inventory tab.
+    if !runtime.is_admin {
+        inventory_ui.admin_tab = false;
+    }
+    let tab = active_tab(menu, inventory_ui);
 
     // Closing the panel (or flipping off the Crafting tab) drops keyboard
     // focus so a focused recipe-search box stops eating keystrokes once the
@@ -109,6 +132,9 @@ pub(super) fn inventory_panel_ui(
     }
     if leaving_panel {
         inventory_ui.cancel_drag();
+        // A reopen always lands on the plain Inventory tab, never a stale
+        // admin view from last time.
+        inventory_ui.admin_tab = false;
     }
 
     if let Some(tab) = tab
@@ -122,6 +148,7 @@ pub(super) fn inventory_panel_ui(
             local_player,
             inventory_ui,
             crafting_ui,
+            stations,
             error_toasts,
         );
         // Only the Inventory tab exposes draggable slots, so only there does
@@ -179,6 +206,7 @@ fn draw_panel(
     local_player: &LocalPlayerState,
     inventory_ui: &mut InventoryUiState,
     crafting_ui: &mut CraftingUiState,
+    stations: &StationContext,
     error_toasts: &mut dyn ErrorToastSink,
 ) -> egui::Rect {
     // One shared scrim behind the panel. Clicking it closes the panel, but
@@ -208,14 +236,53 @@ fn draw_panel(
                 // for its scroll area.
                 ui.set_min_height(PANEL_HEIGHT);
                 ui.set_max_height(PANEL_HEIGHT);
-                tab_bar(ui, menu, crafting_ui, tab);
+                tab_bar(ui, menu, inventory_ui, crafting_ui, tab, runtime.is_admin);
                 ui.add_space(14.0);
                 match tab {
                     Tab::Inventory => {
-                        inventory_toolbar(ui, runtime, error_toasts);
-                        // The grid fills the panel width and centers itself
-                        // vertically in the fixed-height shell.
-                        draw_inventory_grid(ui, local_player, inventory_ui);
+                        // Paperdoll column on the left, then the header + bag
+                        // grid to its right. Both live inside one horizontal row
+                        // so a drag can cross from the bag onto a worn slot
+                        // without leaving the panel.
+                        ui.horizontal_top(|ui| {
+                            // Zero the inter-widget spacing so the only gap
+                            // between the paperdoll column and the bag grid is
+                            // the explicit one below; the default spacing would
+                            // widen the row past the fixed shell.
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            draw_paperdoll_column(ui, local_player, inventory_ui);
+                            ui.add_space(PAPERDOLL_COLUMN_GAP);
+                            ui.vertical(|ui| {
+                                ui.set_width(
+                                    PANEL_WIDTH
+                                        - 48.0
+                                        - PAPERDOLL_COLUMN_WIDTH
+                                        - PAPERDOLL_COLUMN_GAP,
+                                );
+                                inventory_header(ui, local_player, runtime, error_toasts);
+                                // The grid fills the remaining width and centers
+                                // itself vertically in the fixed-height shell.
+                                // Shift+click a bag armor piece to quick-equip
+                                // it; the drag-release pass resolves the intent.
+                                draw_inventory_grid(ui, local_player, inventory_ui, true);
+                                // Quiet controls-legend pinned to the panel's
+                                // bottom edge, in the slack the centered grid
+                                // leaves below itself.
+                                ui.with_layout(
+                                    egui::Layout::bottom_up(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Drag to move  ·  Right-drag to split  ·  \
+                                                 Shift-click to equip armor",
+                                            )
+                                            .size(11.5)
+                                            .color(theme::muted_text()),
+                                        );
+                                    },
+                                );
+                            });
+                        });
                     }
                     Tab::Crafting => {
                         let inventory = local_player.private.as_ref().map(|p| p.inventory.clone());
@@ -229,9 +296,13 @@ fn draw_panel(
                             crafting_ui,
                             inventory.as_ref(),
                             &crafting_state,
+                            stations,
                             runtime,
                             error_toasts,
                         );
+                    }
+                    Tab::Admin => {
+                        admin_items_body(ui, runtime, error_toasts);
                     }
                 }
             });
@@ -239,12 +310,14 @@ fn draw_panel(
     response.response.rect
 }
 
-/// Thin header above the bag grid on the Inventory tab. Right-aligned "Sort"
-/// button that asks the server to auto-stack and tidy the bag; the rest of the
-/// row is left for future per-tab controls. Lives only on the Inventory tab so
-/// the gesture has an obvious target (the grid right below it).
-fn inventory_toolbar(
+/// Thin header above the bag grid on the Inventory tab: a "Backpack" label
+/// with a live used/total slot count on the left, and the right-aligned
+/// "Sort" button that asks the server to auto-stack and tidy the bag. Lives
+/// only on the Inventory tab so the gesture has an obvious target (the grid
+/// right below it).
+fn inventory_header(
     ui: &mut egui::Ui,
+    local_player: &LocalPlayerState,
     runtime: &mut ClientRuntime,
     error_toasts: &mut dyn ErrorToastSink,
 ) {
@@ -253,14 +326,32 @@ fn inventory_toolbar(
     // pushing the grid to the bottom of the panel.
     ui.allocate_ui_with_layout(
         egui::vec2(ui.available_width(), 30.0),
-        egui::Layout::right_to_left(egui::Align::Center),
+        egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            let sort = theme::compact_button(ui, "Sort", ButtonKind::Secondary, 72.0)
-                .on_hover_text("Auto-stack and tidy your bag");
-            if sort.clicked() {
-                theme::record_click_sound(ui, &sort);
-                send_inventory_command(runtime, error_toasts, InventoryCommand::Sort);
+            ui.label(theme::field_label("Backpack"));
+            if let Some(inventory) = local_player.private.as_ref().map(|p| &p.inventory) {
+                let used = inventory
+                    .inventory_slots
+                    .iter()
+                    .filter(|slot| slot.is_some())
+                    .count();
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{used} / {} slots used",
+                        crate::protocol::INVENTORY_SLOT_COUNT
+                    ))
+                    .size(12.0)
+                    .color(theme::muted_text()),
+                );
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let sort = theme::compact_button(ui, "Sort", ButtonKind::Secondary, 72.0)
+                    .on_hover_text("Auto-stack and tidy your bag");
+                if sort.clicked() {
+                    send_inventory_command(runtime, error_toasts, InventoryCommand::Sort);
+                }
+            });
         },
     );
 }
@@ -268,20 +359,30 @@ fn inventory_toolbar(
 fn tab_bar(
     ui: &mut egui::Ui,
     menu: &mut MenuState,
+    inventory_ui: &mut InventoryUiState,
     crafting_ui: &mut CraftingUiState,
     active: Tab,
+    is_admin: bool,
 ) {
     let frame = egui::Frame::NONE
         .fill(theme::input_fill())
         .stroke(egui::Stroke::new(1.0, theme::panel_stroke()))
         .corner_radius(6)
         .inner_margin(egui::Margin::symmetric(6, 5));
+    // The Admin tab only exists for admins; everyone else keeps the two-tab
+    // bar (the server re-validates every grant anyway, this is pure UI).
+    let tabs: &[Tab] = if is_admin {
+        &[Tab::Inventory, Tab::Crafting, Tab::Admin]
+    } else {
+        &[Tab::Inventory, Tab::Crafting]
+    };
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             let spacing = ui.spacing().item_spacing.x;
-            let width = ((ui.available_width() - spacing) / 2.0).max(72.0);
-            for tab in [Tab::Inventory, Tab::Crafting] {
+            let count = tabs.len() as f32;
+            let width = ((ui.available_width() - spacing * (count - 1.0)) / count).max(72.0);
+            for &tab in tabs {
                 let kind = if tab == active {
                     ButtonKind::Primary
                 } else {
@@ -298,7 +399,7 @@ fn tab_bar(
                     });
                 }
                 if response.clicked() && tab != active {
-                    select_tab(menu, crafting_ui, tab);
+                    select_tab(menu, inventory_ui, crafting_ui, tab);
                 }
             }
         });
@@ -307,17 +408,30 @@ fn tab_bar(
 
 /// Flip the active tab in place (never closes the panel). Switching into the
 /// crafting tab resets its browser view for parity with the `C` hotkey path
-/// (see [`CraftingUiState::reset_browser`]).
-fn select_tab(menu: &mut MenuState, crafting_ui: &mut CraftingUiState, tab: Tab) {
+/// (see [`CraftingUiState::reset_browser`]); the Admin tab rides the
+/// inventory-open state with the view flag set.
+fn select_tab(
+    menu: &mut MenuState,
+    inventory_ui: &mut InventoryUiState,
+    crafting_ui: &mut CraftingUiState,
+    tab: Tab,
+) {
     match tab {
         Tab::Inventory => {
             menu.inventory_open = true;
             menu.crafting_open = false;
+            inventory_ui.admin_tab = false;
         }
         Tab::Crafting => {
             menu.crafting_open = true;
             menu.inventory_open = false;
+            inventory_ui.admin_tab = false;
             crafting_ui.reset_browser();
+        }
+        Tab::Admin => {
+            menu.inventory_open = true;
+            menu.crafting_open = false;
+            inventory_ui.admin_tab = true;
         }
     }
 }
@@ -340,6 +454,7 @@ mod tests {
                 crafting: Default::default(),
                 open_furnace: None,
                 open_loot_bag: None,
+                open_workbench: None,
                 last_processed_input: 0,
                 applied_action_seq: 0,
                 run_speed_multiplier: 1.0,
@@ -365,6 +480,7 @@ mod tests {
     fn render(menu: &mut MenuState, local: &LocalPlayerState, inv_ui: &mut InventoryUiState) {
         let mut runtime = ClientRuntime::default();
         let mut crafting_ui = CraftingUiState::default();
+        let stations = StationContext::default();
         let pickup = PickupTargetState::default();
         let mut sounds = InventorySoundRequests::default();
         let mut toasts: Vec<String> = Vec::new();
@@ -376,6 +492,7 @@ mod tests {
                 local,
                 inv_ui,
                 &mut crafting_ui,
+                &stations,
                 &pickup,
                 &mut sounds,
                 &mut toasts,
@@ -383,6 +500,70 @@ mod tests {
                 true,
             );
         });
+    }
+
+    #[test]
+    fn admin_tab_is_a_view_of_the_inventory_open_state() {
+        // The admin flag only changes which body the inventory-open panel
+        // shows; crafting and closed states ignore it.
+        let mut inv_ui = InventoryUiState::default();
+        inv_ui.admin_tab = true;
+        let menu = MenuState {
+            inventory_open: true,
+            ..Default::default()
+        };
+        assert_eq!(active_tab(&menu, &inv_ui), Some(Tab::Admin));
+        let menu = MenuState {
+            crafting_open: true,
+            ..Default::default()
+        };
+        assert_eq!(active_tab(&menu, &inv_ui), Some(Tab::Crafting));
+        assert_eq!(active_tab(&MenuState::default(), &inv_ui), None);
+    }
+
+    #[test]
+    fn non_admin_never_sees_the_admin_view() {
+        // A stale admin flag (e.g. admin revoked mid-session) is forced off by
+        // the panel, so the body falls back to the plain inventory grid.
+        let local = local_player(Some(PlayerInventoryState::empty()));
+        let mut menu = MenuState {
+            inventory_open: true,
+            ..Default::default()
+        };
+        let mut inv_ui = InventoryUiState::default();
+        inv_ui.admin_tab = true;
+        // `render` uses a default (non-admin) runtime.
+        render(&mut menu, &local, &mut inv_ui);
+        assert!(!inv_ui.admin_tab, "non-admin admin flag must reset");
+    }
+
+    #[test]
+    fn closing_the_panel_resets_the_admin_view() {
+        // Reopening the panel must land on Inventory, never a stale Admin tab.
+        let local = local_player(Some(PlayerInventoryState::empty()));
+        let mut inv_ui = InventoryUiState::default();
+        inv_ui.admin_tab = true;
+        inv_ui.was_open = true;
+        let mut menu = MenuState::default();
+        render(&mut menu, &local, &mut inv_ui);
+        assert!(!inv_ui.admin_tab);
+    }
+
+    #[test]
+    fn select_tab_keeps_menu_bools_and_admin_flag_consistent() {
+        let mut menu = MenuState::default();
+        let mut inv_ui = InventoryUiState::default();
+        let mut crafting_ui = CraftingUiState::default();
+
+        select_tab(&mut menu, &mut inv_ui, &mut crafting_ui, Tab::Admin);
+        assert!(menu.inventory_open && !menu.crafting_open && inv_ui.admin_tab);
+
+        select_tab(&mut menu, &mut inv_ui, &mut crafting_ui, Tab::Crafting);
+        assert!(!menu.inventory_open && menu.crafting_open && !inv_ui.admin_tab);
+
+        select_tab(&mut menu, &mut inv_ui, &mut crafting_ui, Tab::Admin);
+        select_tab(&mut menu, &mut inv_ui, &mut crafting_ui, Tab::Inventory);
+        assert!(menu.inventory_open && !menu.crafting_open && !inv_ui.admin_tab);
     }
 
     #[test]
@@ -403,6 +584,51 @@ mod tests {
         let mut inv_ui = InventoryUiState::default();
         render(&mut menu, &local, &mut inv_ui);
         assert!(inv_ui.inventory_rect.is_some());
+    }
+
+    #[test]
+    fn equipment_rects_registered_only_on_inventory_tab() {
+        let local = local_player(Some(PlayerInventoryState::empty()));
+
+        // Closed: the paperdoll never draws, so no equipment rects.
+        let mut menu = MenuState::default();
+        let mut inv_ui = InventoryUiState::default();
+        render(&mut menu, &local, &mut inv_ui);
+        assert!(inv_ui.equipment_rects.iter().all(Option::is_none));
+
+        // Inventory tab: the paperdoll column draws its four slots and each
+        // registers a rect for drop-target detection.
+        let mut menu = MenuState {
+            inventory_open: true,
+            ..Default::default()
+        };
+        let mut inv_ui = InventoryUiState::default();
+        render(&mut menu, &local, &mut inv_ui);
+        assert!(inv_ui.equipment_rects.iter().all(Option::is_some));
+
+        // Crafting tab: no paperdoll, so the rects reset back to None.
+        let mut menu = MenuState {
+            crafting_open: true,
+            ..Default::default()
+        };
+        let mut inv_ui = InventoryUiState::default();
+        render(&mut menu, &local, &mut inv_ui);
+        assert!(inv_ui.equipment_rects.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn panel_width_matches_the_paperdoll_plus_grid_layout() {
+        // The fixed width must equal the paperdoll column + gap + the 12-column
+        // bag grid + frame margins, or the grid overflows or leaves a gap. This
+        // pins the comment's arithmetic so a column change can't silently drift.
+        use crate::app::ui::inventory::{PAPERDOLL_COLUMN_GAP, PAPERDOLL_COLUMN_WIDTH};
+        const SLOT_SIZE: f32 = 56.0;
+        const SLOT_GAP: f32 = 6.0;
+        const COLUMNS: f32 = 12.0;
+        const FRAME_MARGINS: f32 = 48.0;
+        let grid = COLUMNS * SLOT_SIZE + (COLUMNS - 1.0) * SLOT_GAP;
+        let expected = PAPERDOLL_COLUMN_WIDTH + PAPERDOLL_COLUMN_GAP + grid + FRAME_MARGINS;
+        assert!((PANEL_WIDTH - expected).abs() < 0.5, "expected {expected}");
     }
 
     #[test]
@@ -465,6 +691,7 @@ mod tests {
             ..Default::default()
         };
         let mut inv_ui = InventoryUiState::default();
+        let stations = StationContext::default();
         let mut inventory_rect = egui::Rect::NOTHING;
         let mut toasts: Vec<String> = Vec::new();
         run_ui(|ctx| {
@@ -476,6 +703,7 @@ mod tests {
                 &local,
                 &mut inv_ui,
                 &mut crafting_ui,
+                &stations,
                 &mut toasts,
             );
         });
@@ -494,12 +722,16 @@ mod tests {
                 &local,
                 &mut inv_ui,
                 &mut crafting_ui,
+                &stations,
                 &mut toasts,
             );
         });
 
         assert!((inventory_rect.width() - crafting_rect.width()).abs() < 0.5);
-        assert!((inventory_rect.height() - crafting_rect.height()).abs() < 0.5);
+        assert!(
+            (inventory_rect.height() - crafting_rect.height()).abs() < 0.5,
+            "inventory {inventory_rect:?} vs crafting {crafting_rect:?}"
+        );
     }
 
     #[test]
@@ -520,6 +752,7 @@ mod tests {
         });
         let mut runtime = ClientRuntime::default();
         let mut crafting_ui = CraftingUiState::default();
+        let stations = StationContext::default();
         let mut toasts: Vec<String> = Vec::new();
 
         // Click near the screen corner (on the scrim, outside the centered
@@ -556,6 +789,7 @@ mod tests {
                     &local,
                     &mut inv_ui,
                     &mut crafting_ui,
+                    &stations,
                     &mut toasts,
                 );
             },

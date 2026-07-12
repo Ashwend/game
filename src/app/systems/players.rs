@@ -4,21 +4,21 @@ use bevy::{ecs::change_detection::Ref, light::NotShadowCaster, prelude::*};
 
 use crate::{
     app::PLAYER_VISUAL_CENTER_Y,
-    items::{HeldMesh, ToolKind},
+    items::{ArmorJoint, ArmorMesh, HeldMesh, ItemModel},
     protocol::ClientId,
-    server::{Player, PlayerAction, PlayerHeldItem, PlayerLifecycle, PlayerPose, PlayerSleeping},
+    server::{
+        Player, PlayerAction, PlayerEquipmentVisual, PlayerHeldItem, PlayerLifecycle, PlayerPose,
+        PlayerSleeping,
+    },
 };
 
 use super::super::{
-    scene::{
-        ItemVisualAssets, NetworkPlayer, PlayerPart, PlayerVisualAssets, player_visual_position,
-        rig_layout,
-    },
+    scene::{NetworkPlayer, PlayerPart, PlayerVisualAssets, player_visual_position, rig_layout},
     state::{ClientRuntime, swing_duration_seconds},
 };
 use super::items::{
-    carry_forearm_rotation, carry_upper_arm_rotation, held_item_hand_transform, held_item_layers,
-    insert_held_layer_material, remote_swing_arm_pose,
+    ArmorVisuals, HeldItemVisuals, armor_layers, carry_forearm_rotation, carry_upper_arm_rotation,
+    held_item_hand_transform, held_item_layers, insert_held_layer_material, remote_swing_arm_pose,
 };
 
 const REMOTE_PLAYER_INTERPOLATION_SECONDS: f32 = 0.1;
@@ -149,6 +149,7 @@ pub(crate) fn apply_snapshot_system(
             &mut NetworkPlayerInterpolation,
             &mut RemoteLocomotion,
             &mut RemoteHeld,
+            &mut RemoteEquipment,
             &mut RemoteAction,
             Option<&DyingPlayer>,
             Option<&SleepingPlayer>,
@@ -161,6 +162,7 @@ pub(crate) fn apply_snapshot_system(
         Option<&PlayerLifecycle>,
         Option<&PlayerSleeping>,
         Option<&PlayerHeldItem>,
+        Option<&PlayerEquipmentVisual>,
         Option<&PlayerAction>,
     )>,
 ) {
@@ -179,18 +181,23 @@ pub(crate) fn apply_snapshot_system(
     let mut visible_ids = HashSet::new();
     let entities = &mut *entities;
 
-    for (player, pose, lifecycle, sleeping, held, action) in &replicated {
+    for (player, pose, lifecycle, sleeping, held, equipment, action) in &replicated {
         if player.client_id == local_client_id {
             continue;
         }
         let is_dead = matches!(lifecycle, Some(PlayerLifecycle::Dead { .. }));
         let is_sleeping = matches!(sleeping, Some(PlayerSleeping(true)));
-        // Cosmetic peer state for the rig animators: held mesh, current swing,
-        // and horizontal speed / grounded derived from the replicated pose.
+        // Cosmetic peer state for the rig animators: held mesh, worn armor,
+        // current swing, and horizontal speed / grounded derived from the
+        // replicated pose.
         let held_mesh = held.and_then(|held| held.0);
-        let (action_seq, action_tool) = action
-            .map(|action| (action.seq, action.tool))
-            .unwrap_or((0, ToolKind::Hands));
+        let equipment_visual = equipment
+            .copied()
+            .map(remote_equipment_from)
+            .unwrap_or_default();
+        let (action_seq, action_model) = action
+            .map(|action| (action.seq, action.model))
+            .unwrap_or((0, ItemModel::Bag));
         let velocity = Vec3::from(pose.velocity);
         let horizontal_speed = velocity.with_y(0.0).length();
         // Keep the entity around even while dead so the tilt-and-fade
@@ -207,6 +214,7 @@ pub(crate) fn apply_snapshot_system(
                 mut interpolation,
                 mut loco,
                 mut held_comp,
+                mut equipment_comp,
                 mut action_comp,
                 dying,
                 asleep,
@@ -273,8 +281,15 @@ pub(crate) fn apply_snapshot_system(
                     loco.speed = horizontal_speed;
                     loco.grounded = pose.grounded;
                     held_comp.0 = held_mesh;
+                    // Worn-armor mirror: manual edge detection against the local
+                    // value (never `Ref::is_changed`, which lies for
+                    // Lightyear-touched components). Rig rendering off this is
+                    // Phase 4; today the write just keeps the local handle current.
+                    if *equipment_comp != equipment_visual {
+                        *equipment_comp = equipment_visual;
+                    }
                     action_comp.seq = action_seq;
-                    action_comp.tool = action_tool;
+                    action_comp.model = action_model;
                     // Track the sleep<->awake transition so the marker, the
                     // pose, and the interpolation stay in sync.
                     let woke = asleep.is_some() && !is_sleeping;
@@ -340,9 +355,10 @@ pub(crate) fn apply_snapshot_system(
                         grounded: pose.grounded,
                     },
                     RemoteHeld(held_mesh),
+                    equipment_visual,
                     RemoteAction {
                         seq: action_seq,
-                        tool: action_tool,
+                        model: action_model,
                     },
                     spawn_transform,
                     Visibility::Visible,
@@ -605,17 +621,49 @@ pub(crate) struct RemoteLocomotion {
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub(crate) struct RemoteHeld(pub(crate) Option<HeldMesh>);
 
+/// Local mirror of the replicated `PlayerEquipmentVisual`: the four worn-armor
+/// mesh selectors for a remote body. Copied off the replicated component by
+/// `apply_snapshot_system` with manual edge detection (never `Ref::is_changed`,
+/// which lies for Lightyear-touched components). No rig rendering consumes it
+/// yet, that is Phase 4; landing the mirror now keeps the wire path exercised
+/// and gives the future rig-attachment system a local handle to read.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct RemoteEquipment {
+    pub(crate) head: Option<ArmorMesh>,
+    pub(crate) chest: Option<ArmorMesh>,
+    pub(crate) legs: Option<ArmorMesh>,
+    pub(crate) feet: Option<ArmorMesh>,
+}
+
+/// Copy a replicated `PlayerEquipmentVisual` into the local `RemoteEquipment`
+/// mirror. A plain field copy; kept as a named helper so both the spawn and the
+/// per-frame edge-detected update read the same mapping.
+fn remote_equipment_from(visual: PlayerEquipmentVisual) -> RemoteEquipment {
+    RemoteEquipment {
+        head: visual.head,
+        chest: visual.chest,
+        legs: visual.legs,
+        feet: visual.feet,
+    }
+}
+
 /// Local mirror of the replicated `PlayerAction` (current swing).
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub(crate) struct RemoteAction {
     pub(crate) seq: u32,
-    pub(crate) tool: ToolKind,
+    /// The swing archetype the peer is swinging (weapon's own model or a gather
+    /// tool's archetype). Drives the third-person swing arc directly off the wire.
+    pub(crate) model: ItemModel,
 }
 
 /// An in-progress third-person swing on a remote body.
 #[derive(Debug, Clone, Copy)]
 struct RemoteSwing {
-    tool: ToolKind,
+    /// Swing animation archetype: drives the third-person arc and duration. Read
+    /// straight from the peer's replicated `PlayerAction.model` (a weapon's own
+    /// archetype or a gather tool's), so peers animate the right swing directly
+    /// off the wire.
+    model: ItemModel,
     elapsed: f32,
     duration: f32,
 }
@@ -641,6 +689,13 @@ pub(crate) struct PlayerRig {
     /// Last-seen replicated held mesh, for change detection (NOT `is_changed`,
     /// which lies for Lightyear-touched components).
     last_held: Option<HeldMesh>,
+    /// Worn-armor layer entities parented to the rig joints (despawned + rebuilt
+    /// on an equipment change), across all four slots and both L/R mirrors.
+    armor_layers: Vec<Entity>,
+    /// Last-seen replicated worn armor, for the same manual edge detection as
+    /// `last_held` (NEVER `is_changed`, which lies for Lightyear-touched
+    /// components).
+    last_equipment: RemoteEquipment,
     /// Last-seen swing seq, for edge detection.
     last_swing_seq: u32,
     swing: Option<RemoteSwing>,
@@ -649,6 +704,22 @@ pub(crate) struct PlayerRig {
     /// True once the rig parts have been repointed to the per-corpse fade
     /// material (so the repoint runs once per death, not every frame).
     corpse_faded: bool,
+}
+
+/// The rig joint entity(ies) a worn-armor [`ArmorJoint`] attaches under, per the
+/// P4a ART CONTRACT: helmets and chest shells parent to the Body (there is no
+/// Head rig part, the head is baked into the Body mesh); the chest's symmetric
+/// shoulder aux, the leg shells, and the feet shells attach to BOTH the left and
+/// right joint. Returned as a small fixed-capacity list the caller iterates, so
+/// a `*Both` joint fans one authored (X-symmetric) mesh out to two child
+/// entities with no mirroring transform.
+fn armor_joint_entities(rig: &PlayerRig, joint: ArmorJoint) -> Vec<Entity> {
+    match joint {
+        ArmorJoint::Body => vec![rig.body],
+        ArmorJoint::UpperArmsBoth => vec![rig.upper_arm_l, rig.upper_arm_r],
+        ArmorJoint::ThighsBoth => vec![rig.thigh_l, rig.thigh_r],
+        ArmorJoint::ShinsBoth => vec![rig.shin_l, rig.shin_r],
+    }
 }
 
 impl PlayerRig {
@@ -708,6 +779,8 @@ pub(crate) fn reconcile_player_rigs_system(
             shin_r: parts[&PlayerPart::ShinR],
             held_layers: Vec::new(),
             last_held: None,
+            armor_layers: Vec::new(),
+            last_equipment: RemoteEquipment::default(),
             last_swing_seq: 0,
             swing: None,
             stride_phase: 0.0,
@@ -717,16 +790,23 @@ pub(crate) fn reconcile_player_rigs_system(
 }
 
 /// Structural appearance updates: swap the hand-held tool when the replicated
-/// held item changes, and repoint the rig parts to the per-corpse fade material
+/// held item changes, rebuild the worn-armor layers when the replicated
+/// equipment changes, and repoint the rig parts to the per-corpse fade material
 /// on death (and back on respawn). Runs only on real changes, so the steady
 /// state costs nothing.
 pub(crate) fn apply_remote_player_appearance_system(
     mut commands: Commands,
-    item_assets: Res<ItemVisualAssets>,
+    held_visuals: Res<HeldItemVisuals>,
+    armor_visuals: Res<ArmorVisuals>,
     player_assets: Res<PlayerVisualAssets>,
-    mut rigs: Query<(&mut PlayerRig, &RemoteHeld, Option<&DyingPlayer>)>,
+    mut rigs: Query<(
+        &mut PlayerRig,
+        &RemoteHeld,
+        &RemoteEquipment,
+        Option<&DyingPlayer>,
+    )>,
 ) {
-    for (mut rig, held, dying) in &mut rigs {
+    for (mut rig, held, equipment, dying) in &mut rigs {
         // Held-item swap.
         if held.0 != rig.last_held {
             rig.last_held = held.0;
@@ -736,10 +816,10 @@ pub(crate) fn apply_remote_player_appearance_system(
             if let Some(mesh) = held.0 {
                 let grip = held_item_hand_transform(mesh);
                 let anchor = rig.hand_anchor;
-                for (layer_mesh, layer_material) in held_item_layers(&item_assets, mesh, false) {
+                for held_layer in held_item_layers(&held_visuals, mesh, false) {
                     let mut layer = commands.spawn((
                         Name::new("Held Item (remote)"),
-                        Mesh3d(layer_mesh),
+                        Mesh3d(held_layer.mesh),
                         grip,
                         Visibility::Inherited,
                         // Shadow would be noise at this scale; it rides the
@@ -747,8 +827,52 @@ pub(crate) fn apply_remote_player_appearance_system(
                         NotShadowCaster,
                         ChildOf(anchor),
                     ));
-                    insert_held_layer_material(&mut layer, layer_material);
+                    insert_held_layer_material(&mut layer, held_layer.material);
                     rig.held_layers.push(layer.id());
+                }
+            }
+        }
+
+        // Worn-armor swap: same manual edge detection as the held item (NEVER
+        // `is_changed`, which lies for Lightyear-touched components). On any
+        // change to the four worn selectors, tear down every armor layer and
+        // rebuild them from the current set, parenting each shell to the joint(s)
+        // the ART CONTRACT dictates. A shell is authored pivot-local for identity
+        // attach, so the child transform is `IDENTITY`; the `*Both` joints attach
+        // the same (X-symmetric) mesh at both the left and right joint.
+        if *equipment != rig.last_equipment {
+            rig.last_equipment = *equipment;
+            for entity in std::mem::take(&mut rig.armor_layers) {
+                commands.entity(entity).despawn();
+            }
+            let worn = [
+                equipment.head,
+                equipment.chest,
+                equipment.legs,
+                equipment.feet,
+            ];
+            for mesh in worn.into_iter().flatten() {
+                for layer in armor_layers(&armor_visuals, mesh) {
+                    for joint in armor_joint_entities(&rig, layer.joint) {
+                        let entity = commands
+                            .spawn((
+                                Name::new("Armor (remote)"),
+                                Mesh3d(layer.mesh.clone()),
+                                MeshMaterial3d(layer.material.clone()),
+                                // Shells are authored pivot-local for identity
+                                // attach at their joint.
+                                Transform::IDENTITY,
+                                Visibility::Inherited,
+                                // The rig itself is a shadow caster; the armor
+                                // shells sit flush over the body parts, so their
+                                // own shadow would only fight the body's. Match
+                                // the held-layer choice and skip the shadow pass.
+                                NotShadowCaster,
+                                ChildOf(joint),
+                            ))
+                            .id();
+                        rig.armor_layers.push(entity);
+                    }
                 }
             }
         }
@@ -842,10 +966,15 @@ pub(crate) fn animate_remote_players_system(
         let mut swing = rig.swing;
         if action.seq > rig.last_swing_seq {
             rig.last_swing_seq = action.seq;
+            // The wire `model` is the swing archetype directly (a weapon's own
+            // Club/Spear/Sword/Mace, a gather tool's Hatchet/Pickaxe), so a peer
+            // animates the right swing straight off the replicated action, no need
+            // to infer it from the held mesh.
+            let model = action.model;
             swing = Some(RemoteSwing {
-                tool: action.tool,
+                model,
                 elapsed: 0.0,
-                duration: swing_duration_seconds(action.tool).max(0.05),
+                duration: swing_duration_seconds(model).max(0.05),
             });
         }
 
@@ -906,7 +1035,7 @@ pub(crate) fn animate_remote_players_system(
                     None
                 } else {
                     let phase01 = (active.elapsed / active.duration).clamp(0.0, 1.0);
-                    let pose = remote_swing_arm_pose(active.tool, phase01);
+                    let pose = remote_swing_arm_pose(active.model, phase01);
                     torso_twist = pose.torso_twist;
                     // The pose is a DELTA on the rest pose (the bent carry pose
                     // when holding a tool, the straight pose otherwise): the
@@ -1082,5 +1211,95 @@ mod tests {
         // Different ids (very likely) produce a different roll magnitude.
         let other = compute_fall_axes(8, Transform::IDENTITY);
         assert!((a.2 - other.2).abs() > f32::EPSILON || a.0 != other.0);
+    }
+
+    /// Build a `PlayerRig` with ten distinct placeholder joint entities so the
+    /// pure attachment helpers can be exercised without a running app. Only the
+    /// joint entity fields matter here.
+    fn test_rig() -> PlayerRig {
+        let mut next = 0u32;
+        let mut fresh = || {
+            let entity = Entity::from_raw_u32(next).expect("valid raw entity index");
+            next += 1;
+            entity
+        };
+        PlayerRig {
+            body: fresh(),
+            upper_arm_l: fresh(),
+            upper_arm_r: fresh(),
+            forearm_l: fresh(),
+            forearm_r: fresh(),
+            hand_anchor: fresh(),
+            thigh_l: fresh(),
+            thigh_r: fresh(),
+            shin_l: fresh(),
+            shin_r: fresh(),
+            held_layers: Vec::new(),
+            last_held: None,
+            armor_layers: Vec::new(),
+            last_equipment: RemoteEquipment::default(),
+            last_swing_seq: 0,
+            swing: None,
+            stride_phase: 0.0,
+            corpse_faded: false,
+        }
+    }
+
+    #[test]
+    fn armor_joints_map_to_the_contract_rig_parts() {
+        // The ART CONTRACT joint mapping, resolved to actual rig entities: helmets
+        // and chest shells go on the Body (one part, there is no Head rig part);
+        // the shoulder aux, legs, and feet mirror across both L/R joints.
+        let rig = test_rig();
+        assert_eq!(armor_joint_entities(&rig, ArmorJoint::Body), vec![rig.body]);
+        assert_eq!(
+            armor_joint_entities(&rig, ArmorJoint::UpperArmsBoth),
+            vec![rig.upper_arm_l, rig.upper_arm_r]
+        );
+        assert_eq!(
+            armor_joint_entities(&rig, ArmorJoint::ThighsBoth),
+            vec![rig.thigh_l, rig.thigh_r]
+        );
+        assert_eq!(
+            armor_joint_entities(&rig, ArmorJoint::ShinsBoth),
+            vec![rig.shin_l, rig.shin_r]
+        );
+    }
+
+    #[test]
+    fn a_full_chest_piece_resolves_to_three_attachment_targets() {
+        // The chest piece is the only one that fans out to three child entities:
+        // one torso shell on the Body plus a shoulder aux on each upper arm. This
+        // is the rig-entity half of the pure layout test in `items::visual`.
+        let rig = test_rig();
+        let visual = ArmorMesh::IronCuirass.visual();
+        let targets: Vec<Entity> = visual
+            .layers()
+            .flat_map(|layer| armor_joint_entities(&rig, layer.joint))
+            .collect();
+        assert_eq!(targets, vec![rig.body, rig.upper_arm_l, rig.upper_arm_r]);
+    }
+
+    #[test]
+    fn remote_equipment_edge_detection_fires_only_on_a_change() {
+        // The appearance system rebuilds armor when the mirror differs from the
+        // last-seen value (the `last_held` pattern, never `is_changed`). Pin that
+        // the `PartialEq` on `RemoteEquipment` distinguishes a real equip from an
+        // identical re-send, so a steady state never churns the layer entities.
+        let bare = RemoteEquipment::default();
+        let helmed = RemoteEquipment {
+            head: Some(ArmorMesh::LamellarHelm),
+            ..RemoteEquipment::default()
+        };
+        // Same value: no rebuild.
+        assert_eq!(bare, RemoteEquipment::default());
+        // A new worn piece: rebuild.
+        assert_ne!(bare, helmed);
+        // Swapping one slot's mesh is still a change.
+        let iron_helmed = RemoteEquipment {
+            head: Some(ArmorMesh::IronHelm),
+            ..RemoteEquipment::default()
+        };
+        assert_ne!(helmed, iron_helmed);
     }
 }

@@ -265,11 +265,15 @@ pub(crate) const LOADING_SPLASH_FADE_SECONDS: f32 = 0.5;
 /// minimum on-screen time even if warmup were to skip.
 pub(crate) const LOADING_SPLASH_STARTUP_MIN_HOLD_SECONDS: f32 = 1.2;
 /// Consecutive frames the world-entry readiness condition (Welcome applied,
-/// live scene geometry spawned, local player replicated) must hold before the
-/// splash is allowed to fade. A few frames give the renderer time to actually
-/// draw the freshly-spawned scene, so the crossfade reveals a live world
-/// instead of an empty frame that pops in a moment later.
-pub(crate) const WORLD_ENTRY_SETTLE_FRAMES: u32 = 3;
+/// live scene geometry spawned, local player replicated, entity spawn queues
+/// drained) must hold before the splash is allowed to fade. The window does
+/// two jobs: it gives the renderer time to actually draw the freshly-spawned
+/// scene, and it absorbs the mid-stream flicker of the queue-drained signals
+/// (a spawn queue is momentarily empty between replication packets while
+/// more of the initial world is still in flight; a fresh arrival re-fills it
+/// and resets this counter). Twelve frames is ~200 ms at 60 fps, short
+/// enough to be invisible next to the splash's minimum hold.
+pub(crate) const WORLD_ENTRY_SETTLE_FRAMES: u32 = 12;
 /// Safety valve for the world-entry gate: if a readiness signal never arrives
 /// (e.g. a replication hiccup), reveal the world anyway once the splash has
 /// been up this long so the player is never stranded on the loading overlay.

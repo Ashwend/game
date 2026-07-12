@@ -20,7 +20,31 @@ use super::{GameServer, ServerSettings};
 
 /// A fresh authoritative server in the standard test configuration: no auth,
 /// singleplayer host id 1, deterministic world seed.
+///
+/// Fresh worlds spawn ruin loot caches as world deployables (a pure function of
+/// the seed). Those would break the many tests that assert on absolute
+/// `deployed_entities` counts / emptiness after a placement, so this baseline
+/// strips them, leaving a clean deployable map. Tests that specifically exercise
+/// ruins use [`server_with_ruins`], which keeps them.
 pub(crate) fn server() -> GameServer {
+    let mut server = server_with_ruins();
+    let cache_ids: Vec<crate::protocol::DeployedEntityId> = server
+        .deployed_entities
+        .iter()
+        .filter(|(_, e)| matches!(e.kind, crate::items::DeployableKind::RuinCache))
+        .map(|(id, _)| *id)
+        .collect();
+    for id in cache_ids {
+        server.remove_deployed_entity_tracked(id);
+    }
+    // Clear the dirty/removed sync deltas so the first `drain_deployable_sync`
+    // in a test starts from a truly clean slate.
+    let _ = server.drain_deployable_sync();
+    server
+}
+
+/// Like [`server`], but keeps the world's ruin caches. Used by the ruins tests.
+pub(crate) fn server_with_ruins() -> GameServer {
     GameServer::new(
         WorldSave::new("Test", Some(1)),
         ServerSettings {
@@ -92,7 +116,24 @@ pub(crate) fn place_foundation(
     server: &mut GameServer,
     position: Vec3Net,
 ) -> crate::protocol::DeployedEntityId {
-    let piece = crate::building::BuildingPiece::Foundation;
+    place_building(
+        server,
+        crate::building::BuildingPiece::Foundation,
+        position,
+        0.0,
+    )
+}
+
+/// Insert an arbitrary sticks-tier building piece directly into the
+/// authoritative map at `position`/`yaw`, bypassing the placement command's
+/// material and socket-snap validation. Used by tests that need a specific
+/// collider (e.g. a vertical wall in a projectile's path). Returns the id.
+pub(crate) fn place_building(
+    server: &mut GameServer,
+    piece: crate::building::BuildingPiece,
+    position: Vec3Net,
+    yaw: f32,
+) -> crate::protocol::DeployedEntityId {
     let tier = crate::building::BuildingTier::Sticks;
     let max_health = crate::building::building_max_health(piece, tier);
     let id = server.next_deployed_entity_id;
@@ -102,7 +143,7 @@ pub(crate) fn place_foundation(
         item_id: crate::items::intern_item_id(crate::building::building_item_id(piece)),
         kind: crate::items::DeployableKind::Building { piece, tier },
         position,
-        yaw: 0.0,
+        yaw,
         health: max_health,
         max_health,
         owner: Some(1),
@@ -114,6 +155,8 @@ pub(crate) fn place_foundation(
         storage: None,
         torch: None,
         cupboard: None,
+        ruin_cache: None,
+        fuse: None,
     };
     server.insert_deployed_entity(id, entity);
     server.chunk_manager.track_deployed_entity(id, position);

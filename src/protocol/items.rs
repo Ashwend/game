@@ -3,7 +3,67 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ACTIONBAR_SLOT_COUNT, CraftingJobId, INVENTORY_SLOT_COUNT};
+use super::{ACTIONBAR_SLOT_COUNT, CraftingJobId, EQUIPMENT_SLOT_COUNT, INVENTORY_SLOT_COUNT};
+
+/// One of the four worn-armor slots. Each armor piece declares (via its
+/// [`crate::items::ArmorProfile`]) which slot it fits, and a stack can only be
+/// moved into the matching [`ItemContainer::Equipment`] slot. Ordered head to
+/// feet; the discriminant order is the index mapping used by
+/// [`ItemContainerSlot::equipment`], so never reorder these (it is a wire and
+/// save layout).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum EquipmentSlot {
+    Head,
+    Chest,
+    Legs,
+    Feet,
+}
+
+impl EquipmentSlot {
+    /// Every slot in index order, so the paperdoll UI and the mitigation
+    /// recompute can iterate all four without hardcoding the list.
+    pub const ALL: [EquipmentSlot; EQUIPMENT_SLOT_COUNT] = [
+        EquipmentSlot::Head,
+        EquipmentSlot::Chest,
+        EquipmentSlot::Legs,
+        EquipmentSlot::Feet,
+    ];
+
+    /// The `equipment_slots` vector index this slot maps to. The inverse of
+    /// [`EquipmentSlot::from_index`]. Kept in lockstep with the enum order.
+    pub const fn index(self) -> usize {
+        match self {
+            EquipmentSlot::Head => 0,
+            EquipmentSlot::Chest => 1,
+            EquipmentSlot::Legs => 2,
+            EquipmentSlot::Feet => 3,
+        }
+    }
+
+    /// Short display name for the paperdoll UI: shown on an empty slot so the
+    /// player reads what goes there, and in the tooltip title fallback.
+    pub const fn label(self) -> &'static str {
+        match self {
+            EquipmentSlot::Head => "Head",
+            EquipmentSlot::Chest => "Chest",
+            EquipmentSlot::Legs => "Legs",
+            EquipmentSlot::Feet => "Feet",
+        }
+    }
+
+    /// Resolve a slot from its `equipment_slots` index, or `None` if out of
+    /// range. Used to interpret an [`ItemContainerSlot`] whose container is
+    /// [`ItemContainer::Equipment`].
+    pub const fn from_index(index: usize) -> Option<EquipmentSlot> {
+        match index {
+            0 => Some(EquipmentSlot::Head),
+            1 => Some(EquipmentSlot::Chest),
+            2 => Some(EquipmentSlot::Legs),
+            3 => Some(EquipmentSlot::Feet),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ItemStack {
@@ -26,9 +86,17 @@ impl ItemStack {
     /// kits) routes through here so new tools always spawn pristine.
     pub fn new(item_id: impl AsRef<str>, quantity: u16) -> Self {
         let item_id = crate::items::intern_item_id(item_id.as_ref());
-        let durability = crate::items::item_definition(&item_id)
-            .and_then(|definition| definition.tool)
-            .and_then(|tool| tool.max_durability);
+        // A durable item's wear budget comes from whichever profile it carries:
+        // a gather tool's `max_durability`, a dedicated weapon's, or a worn
+        // armor piece's. An item carries at most one of these profiles today, so
+        // the fallback order never double-counts.
+        let durability = crate::items::item_definition(&item_id).and_then(|definition| {
+            definition
+                .tool
+                .and_then(|tool| tool.max_durability)
+                .or_else(|| definition.weapon.and_then(|weapon| weapon.max_durability))
+                .or_else(|| definition.armor.and_then(|armor| armor.max_durability))
+        });
         Self {
             item_id,
             quantity,
@@ -41,6 +109,11 @@ impl ItemStack {
 pub enum ItemContainer {
     Inventory,
     Actionbar,
+    /// The worn-armor paperdoll. The `slot` index of an
+    /// [`ItemContainerSlot`] with this container is an
+    /// [`EquipmentSlot::index`]; moving a stack in requires the item's
+    /// [`crate::items::ArmorProfile`] slot to match.
+    Equipment,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -61,6 +134,16 @@ impl ItemContainerSlot {
         Self {
             container: ItemContainer::Actionbar,
             slot,
+        }
+    }
+
+    /// Address a worn-armor slot. The index comes from
+    /// [`EquipmentSlot::index`], so `equipment(EquipmentSlot::Head)` targets
+    /// `equipment_slots[0]`.
+    pub const fn equipment(slot: EquipmentSlot) -> Self {
+        Self {
+            container: ItemContainer::Equipment,
+            slot: slot.index(),
         }
     }
 }
@@ -132,6 +215,15 @@ impl PlayerCraftingState {
 pub struct PlayerInventoryState {
     pub inventory_slots: Vec<Option<ItemStack>>,
     pub actionbar_slots: Vec<Option<ItemStack>>,
+    /// The four worn-armor slots, indexed by [`EquipmentSlot::index`]. Persists
+    /// via `PersistedPlayer.inventory` (one save-format bump). `#[serde(default)]`
+    /// so an in-memory `PlayerInventoryState` deserialized from a pre-bump shape
+    /// (or built via a struct literal that omits it) comes back with an empty
+    /// paperdoll rather than failing to decode; `normalize_capacity` then pads
+    /// it to the canonical length. The wire path always carries the field once
+    /// both sides run this build.
+    #[serde(default)]
+    pub equipment_slots: Vec<Option<ItemStack>>,
     pub active_actionbar_slot: usize,
 }
 
@@ -146,6 +238,7 @@ impl PlayerInventoryState {
         Self {
             inventory_slots: vec![None; INVENTORY_SLOT_COUNT],
             actionbar_slots: vec![None; ACTIONBAR_SLOT_COUNT],
+            equipment_slots: vec![None; EQUIPMENT_SLOT_COUNT],
             active_actionbar_slot: 0,
         }
     }
@@ -159,6 +252,11 @@ impl PlayerInventoryState {
     pub fn normalize_capacity(&mut self) {
         self.inventory_slots.resize(INVENTORY_SLOT_COUNT, None);
         self.actionbar_slots.resize(ACTIONBAR_SLOT_COUNT, None);
+        // A save (or a serde-defaulted state) written before the paperdoll
+        // landed has zero equipment slots; pad it up so the four worn slots
+        // exist and stay in the on-wire shape. Trimming an over-long vec keeps
+        // the length canonical the same way the bag/actionbar do.
+        self.equipment_slots.resize(EQUIPMENT_SLOT_COUNT, None);
         if self.active_actionbar_slot >= ACTIONBAR_SLOT_COUNT {
             self.active_actionbar_slot = 0;
         }
@@ -177,8 +275,15 @@ impl PlayerInventoryState {
         match slot.container {
             ItemContainer::Inventory => self.inventory_slots.get(slot.slot),
             ItemContainer::Actionbar => self.actionbar_slots.get(slot.slot),
+            ItemContainer::Equipment => self.equipment_slots.get(slot.slot),
         }
         .and_then(Option::as_ref)
+    }
+
+    /// Read the currently-worn piece in `slot`, if any. Thin typed wrapper over
+    /// [`PlayerInventoryState::slot`] for the mitigation recompute and UI.
+    pub fn equipment(&self, slot: EquipmentSlot) -> Option<&ItemStack> {
+        self.slot(ItemContainerSlot::equipment(slot))
     }
 }
 

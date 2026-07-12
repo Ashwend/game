@@ -20,14 +20,16 @@ mod wheel;
 
 pub(crate) use cursor::{center_cursor_on_focus_system, update_cursor_system};
 pub(crate) use inventory_shortcuts::{
-    gameplay_inventory_shortcuts_system, send_crafting_command, send_furnace_command,
-    send_inventory_command, send_loot_bag_command, send_place_deployable_command,
+    PredictedArrowEvent, RangedFireSampler, gameplay_inventory_shortcuts_system,
+    send_crafting_command, send_furnace_command, send_inventory_command, send_loot_bag_command,
+    send_place_deployable_command, send_workbench_command,
 };
 pub(crate) use look::mouse_look_system;
 pub(crate) use menu_toggles::{
     chat_shortcut_system, close_furnace_on_escape_system, close_loot_bag_on_escape_system,
-    open_crafting_modal, sync_furnace_open_flag_system, sync_loot_bag_open_flag_system,
-    toggle_crafting_system, toggle_inventory_system, toggle_pause_system, toggle_perf_stats_system,
+    close_workbench_on_escape_system, sync_furnace_open_flag_system,
+    sync_loot_bag_open_flag_system, sync_workbench_open_flag_system, toggle_crafting_system,
+    toggle_inventory_system, toggle_pause_system, toggle_perf_stats_system,
 };
 pub(crate) use movement::client_input_system;
 pub(crate) use wheel::wheel_menu_system;

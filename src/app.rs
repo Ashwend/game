@@ -54,46 +54,57 @@ use self::{
     },
     scene::{
         GrassInstancingPlugin, GrassState, TerrainMaterial, ToonMaterial, ToonViewmodelMaterial,
-        apply_world_scene_system, setup_scene, stream_grass_system, update_sky_system,
+        animate_meteor_shower_site_fire_system, apply_world_scene_system,
+        meteor_shower_audio_system, meteor_shower_camera_shake_system, meteor_shower_rumble_system,
+        setup_scene, stream_grass_system, tick_meteor_ember_system,
+        update_meteor_shower_ground_system, update_meteor_sky_system, update_sky_system,
     },
     state::{
         AuthFlow, BuildingPlanState, ClientErrorToast, ClientRuntime, ClientSettings,
         ClientSettingsStore, CombatFeedbackState, CraftingHudState, CraftingUiState, CurrentUser,
         DeployablePlacementState, GatherInputState, InventoryUiState, LocalPlayerState, LookState,
         MenuBackdropTime, MenuBackdropVisibility, MenuState, OptionsUiState, PickupTargetState,
-        PredictionState, RemoteImpactEvent, SaveStore, SessionShutdownTasks, TestModeConfig,
-        ToastState, ToolSwapState, WheelMenuState, WorkosAuth, WorldMapState, WorldMapUiState,
-        apply_prediction_overlay_system, update_local_player_state_system,
+        PredictionState, RangedDrawState, RemoteImpactEvent, SaveStore, SessionShutdownTasks,
+        TestModeConfig, ToastState, ToolSwapState, WheelMenuState, WorkosAuth, WorldMapState,
+        WorldMapUiState, apply_prediction_overlay_system, update_local_player_state_system,
     },
     systems::{
         AutoConnectRequest, CameraImpactKick, CameraMotionEffects, ClientSystemSet,
-        CraftCompletionWatch, DeployedEntityVisuals, DroppedItemEntities, LastTrackedScreen,
-        LootBagEntities, PendingSessionEndReason, RemotePlayerEntities, ResourceNodeEntities,
-        SessionTracker, animate_door_panels_system, animate_furnace_fire_system,
+        CraftCompletionWatch, DeployedEntityVisuals, DroppedItemEntities, EquipmentWatch,
+        ExplosionEvent, LastTrackedScreen, LootBagEntities, MeteorShowerImpactWatch,
+        PendingSessionEndReason, PredictedArrowEvent, ProjectileVisuals, RangedFireSampler,
+        RemotePlayerEntities, ResourceNodeEntities, SessionTracker, WorkbenchWatch,
+        animate_charge_fuse_system, animate_door_panels_system, animate_furnace_fire_system,
         animate_remote_players_system, animate_torch_fire_system, app_quit_system,
         apply_deployed_entities_system, apply_display_settings_system, apply_dropped_items_system,
         apply_graphics_settings_system, apply_held_item_visual_system, apply_loot_bags_system,
-        apply_remote_player_appearance_system, apply_resource_node_stage_system,
-        apply_resource_nodes_system, apply_snapshot_system, apply_test_mode_overrides_system,
-        apply_update_system, auto_connect_poll_system, auto_connect_start_system,
-        camera_follow_system, center_cursor_on_focus_system, chat_shortcut_system,
-        chunk_overlay_system, client_input_system, close_furnace_on_escape_system,
-        close_loot_bag_on_escape_system, craft_complete_cue_system, drive_auth_flow_system,
-        error_relay_system, flush_settings_on_exit_system, gameplay_inventory_shortcuts_system,
-        generate_world_map_texture_system, maintain_wall_visual_insets_system,
-        maintain_world_grid_system, menu_backdrop_camera_system, mouse_look_system,
+        apply_projectiles_system, apply_remote_player_appearance_system,
+        apply_resource_node_stage_system, apply_resource_nodes_system, apply_snapshot_system,
+        apply_test_mode_overrides_system, apply_update_system, auto_connect_poll_system,
+        auto_connect_start_system, camera_follow_system, center_cursor_on_focus_system,
+        chat_shortcut_system, chunk_overlay_system, client_input_system,
+        close_furnace_on_escape_system, close_loot_bag_on_escape_system,
+        close_workbench_on_escape_system, craft_complete_cue_system, drive_auth_flow_system,
+        equipment_change_system, error_relay_system, flush_settings_on_exit_system,
+        gameplay_inventory_shortcuts_system, generate_world_map_texture_system,
+        maintain_wall_visual_insets_system, maintain_world_grid_system,
+        menu_backdrop_camera_system, meteor_shower_impact_system, mouse_look_system,
         multiplayer_test_owns_window, network_tick_system, placement_input_system,
         reconcile_player_rigs_system, reposition_test_window_system, save_client_settings_system,
         screen_viewed_system, session_ended_system, session_shutdown_poll_system,
-        session_started_system, spawn_impact_effects_system, surface_client_error_toasts_system,
-        sway_hay_grass_system, sync_furnace_open_flag_system, sync_loot_bag_open_flag_system,
-        sync_view_radius_system, tick_combat_feedback_system, tick_felling_trees_system,
-        tick_furnace_particles_system, tick_impact_chips_system, tick_resource_node_pop_in_system,
-        tick_torch_particles_system, toggle_crafting_system, toggle_inventory_system,
-        toggle_pause_system, toggle_perf_stats_system, update_claim_boundary_system,
-        update_cursor_system, update_link_ping_system, update_pickup_target_system,
-        update_placement_ghost_system, update_tool_swap_state_system, wheel_menu_system,
-        world_map_input_system,
+        session_started_system, setup_paperdoll_preview, spawn_explosion_effects_system,
+        spawn_impact_effects_system, spawn_predicted_arrows_system,
+        surface_client_error_toasts_system, sway_hay_grass_system, sword_slash_trail_system,
+        sync_furnace_open_flag_system, sync_loot_bag_open_flag_system,
+        sync_paperdoll_preview_system, sync_view_radius_system, sync_viewmodel_fov_system,
+        sync_workbench_open_flag_system, tick_charge_spark_particles_system,
+        tick_combat_feedback_system, tick_explosion_flash_system, tick_explosion_smoke_system,
+        tick_felling_trees_system, tick_furnace_particles_system, tick_impact_chips_system,
+        tick_resource_node_pop_in_system, tick_torch_particles_system, toggle_crafting_system,
+        toggle_inventory_system, toggle_pause_system, toggle_perf_stats_system,
+        update_claim_boundary_system, update_cursor_system, update_link_ping_system,
+        update_pickup_target_system, update_placement_ghost_system, update_tool_swap_state_system,
+        wheel_menu_system, workbench_upgrade_system, world_map_input_system,
     },
     ui::{
         ButtonSoundRequests, InventorySoundRequests, apply_ui_scale_system, button_sound_system,
@@ -158,6 +169,7 @@ const CLIENT_UPDATE_ORDER: &[ClientSystemSet] = &[
     ClientSystemSet::Players,
     ClientSystemSet::DroppedItems,
     ClientSystemSet::ResourceNodes,
+    ClientSystemSet::Projectiles,
     ClientSystemSet::Grass,
     ClientSystemSet::DeployedEntities,
     // Placement preview / input rides after the snapshot has been applied
@@ -338,12 +350,16 @@ fn insert_client_resources(
         .insert_resource(CraftingHudState::default())
         .insert_resource(CraftCompletionWatch::default())
         .insert_resource(DeployablePlacementState::default())
+        .insert_resource(crate::app::systems::ChargeGhostMeshes::default())
         .insert_resource(WheelMenuState::default())
         .init_resource::<WorldMapState>()
         .init_resource::<WorldMapUiState>()
         .insert_resource(BuildingPlanState::default())
         .insert_resource(PickupTargetState::default())
         .insert_resource(GatherInputState::default())
+        .insert_resource(RangedDrawState::default())
+        .insert_resource(crate::app::state::ThrowChargeState::default())
+        .insert_resource(RangedFireSampler::default())
         .insert_resource(ToolSwapState::default())
         .insert_resource(CameraImpactKick::default())
         .insert_resource(CameraMotionEffects::default())
@@ -352,12 +368,17 @@ fn insert_client_resources(
         .insert_resource(DroppedItemEntities::default())
         .insert_resource(LootBagEntities::default())
         .insert_resource(ResourceNodeEntities::default())
+        .insert_resource(crate::app::state::WorldStreamState::default())
+        .insert_resource(ProjectileVisuals::default())
         .insert_resource(GrassState::default())
         .insert_resource(RemotePlayerEntities::default())
         .insert_resource(LookState::default())
         .insert_resource(ToastState::default())
         .insert_resource(LastTrackedScreen::default())
         .insert_resource(SessionTracker::default())
+        .insert_resource(EquipmentWatch::default())
+        .insert_resource(WorkbenchWatch::default())
+        .insert_resource(MeteorShowerImpactWatch::default())
         .insert_resource(PendingSessionEndReason::default())
         // `continuous()` rather than `desktop_app()`: the menu backdrop
         // camera pans continuously (see `menu_backdrop_camera_system`) and
@@ -371,7 +392,9 @@ fn insert_client_resources(
         .init_resource::<InventorySoundRequests>()
         .add_message::<RemoteImpactEvent>()
         .add_message::<ClientErrorToast>()
-        .add_message::<IncomingVoiceMessage>();
+        .add_message::<IncomingVoiceMessage>()
+        .add_message::<PredictedArrowEvent>()
+        .add_message::<ExplosionEvent>();
 }
 
 /// `DefaultPlugins` plus the `WindowPlugin` configuration, including the
@@ -470,10 +493,16 @@ fn add_third_party_plugins(app: &mut App, settings: &ClientSettings) {
     #[cfg(feature = "replication-trace")]
     {
         use self::systems::replication_trace::{
-            ReplicationTraceState, log_replicated_storage_changes_system,
+            ReplicationTraceState, log_replicated_projectile_changes_system,
+            log_replicated_storage_changes_system,
         };
-        app.init_resource::<ReplicationTraceState>()
-            .add_systems(Update, log_replicated_storage_changes_system);
+        app.init_resource::<ReplicationTraceState>().add_systems(
+            Update,
+            (
+                log_replicated_storage_changes_system,
+                log_replicated_projectile_changes_system,
+            ),
+        );
     }
     // `./cli profile` (Cargo feature `profile`): pair the Chrome trace
     // emitted by `bevy/trace_chrome` with text diagnostics so the log shows
@@ -641,6 +670,9 @@ fn add_startup_and_egui_systems(app: &mut App) {
     app.add_systems(Startup, setup_scene)
         .add_systems(Startup, setup_voice_system)
         .add_systems(Startup, setup_item_icons)
+        // The paperdoll preview clones the rig meshes + materials that
+        // `setup_scene` builds, so it must run after it.
+        .add_systems(Startup, setup_paperdoll_preview.after(setup_scene))
         .add_systems(
             EguiPrimaryContextPass,
             (ui_system, button_sound_system, inventory_sound_system).chain(),
@@ -689,6 +721,8 @@ fn add_input_systems(app: &mut App) {
             close_furnace_on_escape_system,
             sync_loot_bag_open_flag_system,
             close_loot_bag_on_escape_system,
+            sync_workbench_open_flag_system,
+            close_workbench_on_escape_system,
         )
             .in_set(ClientSystemSet::PauseToggle),
     )
@@ -835,6 +869,14 @@ fn add_scene_systems(app: &mut App) {
                 .chain()
                 .after(ClientSystemSet::Players),
         )
+        // The inventory paperdoll's off-screen character preview: gates its
+        // camera to the Inventory tab and mirrors the local player's worn
+        // armor + held item onto the preview rig. After the Players set so it
+        // reads this frame's local-player state.
+        .add_systems(
+            Update,
+            sync_paperdoll_preview_system.after(ClientSystemSet::Players),
+        )
         .add_systems(
             Update,
             apply_world_scene_system.in_set(ClientSystemSet::WorldScene),
@@ -862,6 +904,15 @@ fn add_scene_systems(app: &mut App) {
             )
                 .chain()
                 .in_set(ClientSystemSet::ResourceNodes),
+        )
+        .add_systems(
+            Update,
+            // Spawn predicted own-arrows before the reconciler so a shot fired this
+            // frame is tracked when the reconciler runs; the reconciler then advances
+            // both replicated and predicted arrows and dedupes them.
+            (spawn_predicted_arrows_system, apply_projectiles_system)
+                .chain()
+                .in_set(ClientSystemSet::Projectiles),
         )
         .add_systems(Update, stream_grass_system.in_set(ClientSystemSet::Grass))
         .add_systems(
@@ -893,6 +944,14 @@ fn add_scene_systems(app: &mut App) {
             (update_placement_ghost_system, update_claim_boundary_system)
                 .in_set(ClientSystemSet::PlacementGhost),
         )
+        // Ghost-ready clones of the charge body meshes (COLOR_0 alpha
+        // saturated); before the ghost system so the clone exists the frame
+        // it is first needed once the glbs load.
+        .add_systems(
+            Update,
+            crate::app::systems::prepare_charge_ghost_meshes_system
+                .before(ClientSystemSet::PlacementGhost),
+        )
         .add_systems(
             Update,
             // Door panels ease open/closed after the deployable visuals
@@ -905,15 +964,48 @@ fn add_scene_systems(app: &mut App) {
         // Running in both Update and PostUpdate would advance the impact-kick
         // timer twice per frame (halving its visible duration) and write a
         // stale camera transform that other Update-phase systems would read.
+        // The viewmodel FOV sync chains after it so both cameras pinch with the
+        // ranged draw on the same frame (the follow system advances the pinch).
         .add_systems(
             PostUpdate,
-            camera_follow_system.before(TransformSystems::Propagate),
+            (camera_follow_system, sync_viewmodel_fov_system)
+                .chain()
+                .before(TransformSystems::Propagate),
         )
         .add_systems(
             Update,
-            apply_held_item_visual_system.in_set(ClientSystemSet::HeldItem),
+            (apply_held_item_visual_system, sword_slash_trail_system)
+                .in_set(ClientSystemSet::HeldItem),
         )
-        .add_systems(Update, update_sky_system.in_set(ClientSystemSet::Sky));
+        .add_systems(Update, update_sky_system.in_set(ClientSystemSet::Sky))
+        .add_systems(
+            Update,
+            update_meteor_sky_system.in_set(ClientSystemSet::Sky),
+        )
+        .add_systems(
+            Update,
+            tick_meteor_ember_system.in_set(ClientSystemSet::Sky),
+        )
+        .add_systems(
+            Update,
+            update_meteor_shower_ground_system.in_set(ClientSystemSet::Sky),
+        )
+        .add_systems(
+            Update,
+            animate_meteor_shower_site_fire_system.in_set(ClientSystemSet::Sky),
+        )
+        .add_systems(
+            Update,
+            meteor_shower_audio_system.in_set(ClientSystemSet::Sky),
+        )
+        .add_systems(
+            Update,
+            meteor_shower_rumble_system.in_set(ClientSystemSet::Sky),
+        )
+        .add_systems(
+            Update,
+            meteor_shower_camera_shake_system.in_set(ClientSystemSet::Sky),
+        );
 }
 
 /// Look-target scan, the impact-effect pipeline, furnace/node ticks, transition
@@ -983,6 +1075,15 @@ fn add_audio_systems(app: &mut App) {
     // this frame integrates next).
     .add_systems(Update, animate_torch_fire_system)
     .add_systems(Update, tick_torch_particles_system)
+    // Placed-charge fuse VFX/SFX: spark emitter + hiss + meteorite-crystal shimmer,
+    // and the spark-particle integrator. Both self-gate (no assets / dt == 0).
+    .add_systems(Update, animate_charge_fuse_system)
+    .add_systems(Update, tick_charge_spark_particles_system)
+    // Explosion feedback VFX: spawn the flash/debris/smoke on an `ExplosionEvent`
+    // (raised in the network tick), then tick the flash + smoke down. Self-gating.
+    .add_systems(Update, spawn_explosion_effects_system)
+    .add_systems(Update, tick_explosion_flash_system)
+    .add_systems(Update, tick_explosion_smoke_system)
     .add_systems(
         Update,
         tick_felling_trees_system.in_set(ClientSystemSet::NodeDeathTick),
@@ -1075,6 +1176,9 @@ fn add_test_and_analytics_systems(app: &mut App) {
             session_started_system,
             session_ended_system,
             error_relay_system,
+            equipment_change_system,
+            workbench_upgrade_system,
+            meteor_shower_impact_system,
         )
             .chain()
             .in_set(ClientSystemSet::Analytics),
@@ -1105,7 +1209,7 @@ mod schedule_tests {
                 LocalPlayerSync | Focus | ChatShortcut | PauseToggle | InventoryToggle
                 | CraftingToggle | Cursor | Look | Input | ToolSwap | InventoryShortcuts
                 | Network | WorldGridRebuild | SessionShutdown | Quit | Display | SettingsSave
-                | WorldScene | Players | DroppedItems | ResourceNodes | Grass
+                | WorldScene | Players | DroppedItems | ResourceNodes | Projectiles | Grass
                 | DeployedEntities | PlacementGhost | PlacementInput | HeldItem | Sky
                 | PickupTarget | Footsteps | ImpactEffectsSpawn | ImpactEffectsTick
                 | FurnaceFireAnimate | FurnaceParticleTick | ImpactSounds | TransitionStingers
@@ -1143,6 +1247,7 @@ mod schedule_tests {
             Players,
             DroppedItems,
             ResourceNodes,
+            Projectiles,
             Grass,
             DeployedEntities,
             PlacementGhost,

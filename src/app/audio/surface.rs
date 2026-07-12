@@ -44,7 +44,10 @@ impl SurfaceMaterial {
 /// footstep pool exists, route `BlockKind::Stone` to `Stone` here.
 pub(crate) fn surface_for_block_kind(kind: BlockKind) -> SurfaceMaterial {
     match kind {
-        BlockKind::Standard | BlockKind::Stone => SurfaceMaterial::Concrete,
+        // Ruin masonry reads as stone, so it shares the concrete surface too.
+        BlockKind::Standard | BlockKind::Stone | BlockKind::RuinMasonry => {
+            SurfaceMaterial::Concrete
+        }
     }
 }
 
@@ -66,6 +69,9 @@ pub(crate) fn surface_for_resource_model(model: ResourceNodeModel) -> SurfaceMat
         // Plain rock vein, same impact pool as the small surface
         // stones, just at the heavier per-swing strike.
         ResourceNodeModel::StoneVein => SurfaceMaterial::Stone,
+        // Meteorite reads as heavy rock/crystal on impact: reuse the stone
+        // surface pool (a dedicated crystal-chime pool can come later).
+        ResourceNodeModel::Meteorite => SurfaceMaterial::Stone,
         // Crude materials: branches read as wood, surface stone as stone,
         // hay tufts as dirt (closest "soft scrape" in the surface taxonomy).
         ResourceNodeModel::BranchPile => SurfaceMaterial::Wood,

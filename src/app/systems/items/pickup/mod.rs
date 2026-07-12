@@ -10,7 +10,7 @@
 mod targets;
 
 use targets::{
-    best_deployable_target, best_loot_bag_target, best_player_target,
+    best_deployable_target, best_loot_bag_target, best_player_target, player_attack_target_range,
     refresh_dropped_target_anchor, set_deployable_pickup_target, set_dropped_pickup_target,
     set_loot_bag_pickup_target, set_player_pickup_target, set_resource_pickup_target,
 };
@@ -28,7 +28,8 @@ use crate::{
     server::{
         Deployable, DeployableActive, DeployableAuth, DeployableStability, DeployableTransform,
         DroppedItem, DroppedItemTransform, LootBagEntity, LootBagTransform, Player, PlayerHealth,
-        PlayerPose, PlayerProfile, PlayerSleeping, ResourceNode, ResourceNodeStorage,
+        PlayerPose, PlayerProfile, PlayerSleeping, Projectile, ProjectileTransform, ResourceNode,
+        ResourceNodeStorage,
     },
 };
 
@@ -59,7 +60,9 @@ pub(crate) fn update_pickup_target_system(
         Option<&PlayerSleeping>,
     )>,
     loot_bags: Query<(&LootBagEntity, &LootBagTransform)>,
+    projectiles: Query<(&Projectile, &ProjectileTransform)>,
     user: Option<Res<crate::app::state::CurrentUser>>,
+    local_player: Res<crate::app::state::LocalPlayerState>,
     mut pickup_target: ResMut<PickupTargetState>,
 ) {
     if menu.screen != Screen::InGame || menu.pause_open || menu.inventory_open || menu.chat_open {
@@ -122,11 +125,16 @@ pub(crate) fn update_pickup_target_system(
         deployables.iter().map(|(a, b, c, d, _)| (a, b, c, d)),
     );
     let local_client_id = runtime.client_id;
+    // Player-attack targeting range is the active item's reach minus the fixed
+    // margin (RULE): the spear reaches players at 4.0 m, tools and the other
+    // weapons at 3.0 m. Node/deployable targeting keeps its own ranges.
+    let player_attack_range = player_attack_target_range(&local_player);
     let player_target = best_player_target(
         eye,
         look.yaw,
         look.pitch,
         local_client_id,
+        player_attack_range,
         remote_players
             .iter()
             .map(
@@ -140,6 +148,22 @@ pub(crate) fn update_pickup_target_system(
             ),
     );
     let loot_bag_target = best_loot_bag_target(eye, look.yaw, look.pitch, loot_bags.iter());
+    // Stuck (at-rest) arrows are E-recoverable before their despawn TTL. Rest
+    // is signalled by a near-zero replicated speed (the server snaps a stuck
+    // arrow to a tiny direction-only epsilon velocity); an in-flight arrow
+    // (tens of m/s) is never a target. Same look-ray scoring as a dropped item.
+    const PROJECTILE_REST_SPEED_MPS: f32 = 0.5;
+    let projectile_target = projectiles
+        .iter()
+        .filter(|(_, transform)| {
+            transform.velocity.length_squared()
+                < PROJECTILE_REST_SPEED_MPS * PROJECTILE_REST_SPEED_MPS
+        })
+        .filter_map(|(projectile, transform)| {
+            pickup_score_at_position(eye, look.yaw, look.pitch, transform.position)
+                .map(|score| (projectile, transform, score))
+        })
+        .min_by(|(_, _, a), (_, _, b)| a.total_cmp(b));
 
     // Pick whichever option is closest along the look ray. Dropped
     // items + resource nodes both return projection-along-ray scores;
@@ -149,12 +173,14 @@ pub(crate) fn update_pickup_target_system(
     let deployable_score = deployable_target.as_ref().map(|(_, _, _, score, _)| *score);
     let player_score = player_target.as_ref().map(|(_, score)| *score);
     let loot_bag_score = loot_bag_target.as_ref().map(|(_, _, score)| *score);
+    let projectile_score = projectile_target.as_ref().map(|(_, _, score)| *score);
     let best = [
         item_score,
         node_score,
         deployable_score,
         player_score,
         loot_bag_score,
+        projectile_score,
     ]
     .into_iter()
     .flatten()
@@ -173,6 +199,15 @@ pub(crate) fn update_pickup_target_system(
                 transform,
                 &camera,
                 &dropped_entities,
+            );
+        }
+    } else if projectile_score == Some(best) {
+        if let Some((projectile, transform, _)) = projectile_target {
+            targets::set_projectile_pickup_target(
+                &mut pickup_target,
+                projectile,
+                transform,
+                &camera,
             );
         }
     } else if node_score == Some(best) {

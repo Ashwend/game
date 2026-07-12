@@ -8,7 +8,7 @@
 use super::*;
 use crate::{
     game_balance::{STONE_HATCHET_PVP_DAMAGE, STONE_PICKAXE_PVP_DAMAGE},
-    items::{BASIC_HATCHET_ID, BASIC_PICKAXE_ID},
+    items::{BASIC_HATCHET_ID, BASIC_PICKAXE_ID, IRON_MACE_ID, ItemModel, WOODEN_CLUB_ID},
     protocol::{
         AccountId, AttackPlayerCommand, ClientMessage, ItemStack, LootBagCommand, LootBagSlotRef,
         MAX_HEALTH, PROTOCOL_VERSION, PlayerMovement,
@@ -63,6 +63,14 @@ fn equip_pickaxe(server: &mut GameServer, client_id: ClientId) {
     client.inventory.active_actionbar_slot = 0;
 }
 
+/// Equip an arbitrary weapon (or any item) into the active actionbar slot, so a
+/// test can put a spear / sword / mace in hand.
+fn equip_item(server: &mut GameServer, client_id: ClientId, item_id: &str) {
+    let client = server.clients.get_mut(&client_id).expect("client exists");
+    client.inventory.actionbar_slots[0] = Some(ItemStack::new(item_id, 1));
+    client.inventory.active_actionbar_slot = 0;
+}
+
 fn attack(server: &mut GameServer, attacker: ClientId, target: ClientId) -> Vec<ServerEnvelope> {
     server.apply_attack_player_command(
         attacker,
@@ -111,6 +119,153 @@ fn attack_in_range_with_axe_applies_damage_and_emits_player_impact() {
             .any(|e| matches!(&e.message, ServerMessage::Knockback { .. })),
         "Knockback should be in the envelope set"
     );
+}
+
+/// Extract the `model` carried by the single `PlayerImpact` in an attack's
+/// envelope set, so a test can assert the peer-visible impact identity.
+fn player_impact_model_of(envelopes: &[ServerEnvelope]) -> ItemModel {
+    envelopes
+        .iter()
+        .find_map(|e| match &e.message {
+            ServerMessage::PlayerImpact { model, .. } => Some(*model),
+            _ => None,
+        })
+        .expect("PlayerImpact envelope present")
+}
+
+#[test]
+fn weapon_hit_broadcasts_its_own_item_model_not_hands() {
+    // The wire impact identity is now `ItemModel`: a weapon hit must broadcast the
+    // weapon's OWN archetype on `PlayerImpact`, so a peer's audio/VFX/camera
+    // reaction reads as that weapon rather than the retired `Hands` interim.
+    let mut server = server();
+    let attacker = connect_named(&mut server, 1, "Attacker");
+    let target = connect_named(&mut server, 2, "Target");
+    place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
+    place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
+
+    // A club hit broadcasts the Club model.
+    equip_item(&mut server, attacker, WOODEN_CLUB_ID);
+    let club_impact = attack(&mut server, attacker, target);
+    assert_eq!(
+        player_impact_model_of(&club_impact),
+        ItemModel::Club,
+        "a club hit must ship the Club impact identity, not Bag/Hands"
+    );
+
+    // A mace hit broadcasts the Mace model.
+    reset_attack_cooldown(&mut server, attacker);
+    equip_item(&mut server, attacker, IRON_MACE_ID);
+    let mace_impact = attack(&mut server, attacker, target);
+    assert_eq!(
+        player_impact_model_of(&mace_impact),
+        ItemModel::Mace,
+        "a mace hit must ship the Mace impact identity"
+    );
+}
+
+#[test]
+fn tool_hit_broadcasts_its_archetype_model() {
+    // Anchor for the re-key: a gather-tool hit still broadcasts its archetype (a
+    // hatchet reads as Hatchet, a pickaxe as Pickaxe), never a weapon model or
+    // the empty-hand bag.
+    let mut server = server();
+    let attacker = connect_named(&mut server, 1, "Attacker");
+    let target = connect_named(&mut server, 2, "Target");
+    place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
+    place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
+
+    equip_axe(&mut server, attacker);
+    assert_eq!(
+        player_impact_model_of(&attack(&mut server, attacker, target)),
+        ItemModel::Hatchet,
+        "a hatchet hit ships the Hatchet impact identity"
+    );
+
+    reset_attack_cooldown(&mut server, attacker);
+    equip_pickaxe(&mut server, attacker);
+    assert_eq!(
+        player_impact_model_of(&attack(&mut server, attacker, target)),
+        ItemModel::Pickaxe,
+        "a pickaxe hit ships the Pickaxe impact identity"
+    );
+}
+
+/// Extract the single Knockback impulse from an attack's envelope set.
+fn knockback_impulse_of(envelopes: &[ServerEnvelope]) -> Vec3Net {
+    envelopes
+        .iter()
+        .find_map(|e| match &e.message {
+            ServerMessage::Knockback { impulse } => Some(*impulse),
+            _ => None,
+        })
+        .expect("Knockback envelope present")
+}
+
+/// Clear the attacker's per-swing cooldown so the next `attack()` isn't dropped
+/// as rate-limited. The test server's tick never advances, so back-to-back swings
+/// would otherwise all hit the `next_attack_tick` gate.
+fn reset_attack_cooldown(server: &mut GameServer, attacker: ClientId) {
+    if let Some(client) = server.clients.get_mut(&attacker) {
+        client.next_attack_tick = 0;
+    }
+}
+
+#[test]
+fn knockback_scale_command_scales_the_impulse() {
+    // The `/knockback-scale` admin command must multiply the knockback impulse a
+    // PvP hit sends. A fresh server is neutral (1.0), so a 2.0 factor doubles the
+    // impulse vector component-for-component, and resetting to 1.0 restores it.
+    let mut server = server();
+    // Account id 1 is the singleplayer host, so this attacker is admin.
+    let attacker = connect_named(&mut server, 1, "Attacker");
+    let target = connect_named(&mut server, 2, "Target");
+    place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
+    place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
+    equip_axe(&mut server, attacker);
+
+    // Neutral baseline.
+    let base = knockback_impulse_of(&attack(&mut server, attacker, target));
+    assert!(base.z.abs() > 0.0, "baseline knockback should be non-zero");
+
+    // Double the knockback and swing again; each component scales by 2x.
+    let out = server.apply_command(attacker, "/knockback-scale 2".to_owned());
+    assert!(
+        out.iter()
+            .any(|e| matches!(&e.message, ServerMessage::Toast(t)
+                if matches!(t.kind, crate::protocol::ToastKind::Success))),
+        "a successful /knockback-scale should reply with a success toast",
+    );
+    reset_attack_cooldown(&mut server, attacker);
+    let doubled = knockback_impulse_of(&attack(&mut server, attacker, target));
+    assert!((doubled.x - base.x * 2.0).abs() < 1e-4);
+    assert!((doubled.y - base.y * 2.0).abs() < 1e-4);
+    assert!((doubled.z - base.z * 2.0).abs() < 1e-4);
+
+    // Reset to neutral restores the original impulse.
+    server.apply_command(attacker, "/knockback-scale 1".to_owned());
+    reset_attack_cooldown(&mut server, attacker);
+    let restored = knockback_impulse_of(&attack(&mut server, attacker, target));
+    assert!((restored.x - base.x).abs() < 1e-4);
+    assert!((restored.z - base.z).abs() < 1e-4);
+}
+
+#[test]
+fn knockback_scale_zero_removes_the_impulse() {
+    // A 0.0 factor zeroes the knockback, still emitting the envelope but with a
+    // null impulse, so tuning can bracket the shipped feel from zero upward.
+    let mut server = server();
+    let attacker = connect_named(&mut server, 1, "Attacker");
+    let target = connect_named(&mut server, 2, "Target");
+    place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
+    place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
+    equip_axe(&mut server, attacker);
+
+    server.apply_command(attacker, "/knockback-scale 0".to_owned());
+    let impulse = knockback_impulse_of(&attack(&mut server, attacker, target));
+    assert_eq!(impulse.x, 0.0);
+    assert_eq!(impulse.y, 0.0);
+    assert_eq!(impulse.z, 0.0);
 }
 
 #[test]
@@ -550,7 +705,10 @@ fn attack_applies_armor_reduction() {
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_axe(&mut server, attacker);
-    server.clients.get_mut(&target).unwrap().armor = 50; // 50% reduction
+    // 50% melee mitigation. A hatchet is Blunt, so the melee column is what the
+    // hit reads. Set it directly (rather than equipping a set) to keep the test
+    // focused on the mitigation math.
+    server.clients.get_mut(&target).unwrap().protection.melee = 50;
 
     let start = target_health(&server, target);
     attack(&mut server, attacker, target);
@@ -768,4 +926,283 @@ fn attack_damage_clamps_at_zero_health() {
     attack(&mut server, attacker, target);
     assert_eq!(target_health(&server, target), 0.0);
     let _ = MAX_HEALTH;
+}
+
+// ---- Equipment mitigation, durability wear, and loot-bag drain ----
+
+use crate::items::{PADDED_HOOD_ID, PADDED_LEGGINGS_ID, PADDED_TUNIC_ID, PADDED_WRAPS_ID};
+use crate::protocol::{EquipmentSlot, InventoryCommand, ItemContainerSlot};
+
+/// Equip a padded piece via the real inventory command path so the server
+/// recomputes mitigation exactly as it would in-game. Places the piece in the
+/// first bag slot, then issues a Move into the matching equipment slot.
+fn equip_padded(server: &mut GameServer, client_id: ClientId, item_id: &str, slot: EquipmentSlot) {
+    {
+        let client = server.clients.get_mut(&client_id).expect("client exists");
+        client.inventory.inventory_slots[0] = Some(ItemStack::new(item_id, 1));
+    }
+    server.receive(
+        client_id,
+        ClientMessage::Inventory(InventoryCommand::Move {
+            from: ItemContainerSlot::inventory(0),
+            to: ItemContainerSlot::equipment(slot),
+            quantity: None,
+            seq: 0,
+        }),
+    );
+}
+
+#[test]
+fn equipping_a_padded_set_reduces_melee_damage() {
+    let mut server = server();
+    let attacker = connect_named(&mut server, 1, "Attacker");
+    let target = connect_named(&mut server, 2, "Target");
+    place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
+    place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
+    equip_pickaxe(&mut server, attacker);
+
+    // A full padded set = 12% melee mitigation. A stone pickaxe deals
+    // STONE_PICKAXE_PVP_DAMAGE (15); 15 * (100-12)/100 = 13 (integer floor).
+    equip_padded(&mut server, target, PADDED_HOOD_ID, EquipmentSlot::Head);
+    equip_padded(&mut server, target, PADDED_TUNIC_ID, EquipmentSlot::Chest);
+    equip_padded(&mut server, target, PADDED_LEGGINGS_ID, EquipmentSlot::Legs);
+    equip_padded(&mut server, target, PADDED_WRAPS_ID, EquipmentSlot::Feet);
+
+    // The recompute fed the replicated melee armor too.
+    assert_eq!(server.clients[&target].protection.melee, 12);
+
+    let start = target_health(&server, target);
+    attack(&mut server, attacker, target);
+    let damage = start - target_health(&server, target);
+    let expected = (STONE_PICKAXE_PVP_DAMAGE * (100 - 12) / 100) as f32;
+    assert_eq!(
+        damage, expected,
+        "12% melee mitigation should floor 15 to 13"
+    );
+}
+
+#[test]
+fn a_melee_hit_wears_only_the_pieces_that_stopped_it() {
+    let mut server = server();
+    let attacker = connect_named(&mut server, 1, "Attacker");
+    let target = connect_named(&mut server, 2, "Target");
+    place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
+    place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
+    equip_axe(&mut server, attacker);
+
+    // Wraps protect against melee (1%), so they wear on a Blunt hit.
+    equip_padded(&mut server, target, PADDED_WRAPS_ID, EquipmentSlot::Feet);
+    let full = crate::game_balance::PADDED_ARMOR_DURABILITY;
+
+    attack(&mut server, attacker, target);
+
+    let worn = server.clients[&target].inventory.equipment_slots[EquipmentSlot::Feet.index()]
+        .as_ref()
+        .and_then(|stack| stack.durability);
+    assert_eq!(
+        worn,
+        Some(full - 1),
+        "the melee-stopping piece should wear by 1"
+    );
+}
+
+#[test]
+fn a_broken_piece_stays_worn_but_stops_protecting() {
+    let mut server = server();
+    let attacker = connect_named(&mut server, 1, "Attacker");
+    let target = connect_named(&mut server, 2, "Target");
+    place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
+    place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
+    equip_pickaxe(&mut server, attacker);
+
+    // A full padded set, then break the tunic (the biggest melee contributor).
+    equip_padded(&mut server, target, PADDED_HOOD_ID, EquipmentSlot::Head);
+    equip_padded(&mut server, target, PADDED_TUNIC_ID, EquipmentSlot::Chest);
+    equip_padded(&mut server, target, PADDED_LEGGINGS_ID, EquipmentSlot::Legs);
+    equip_padded(&mut server, target, PADDED_WRAPS_ID, EquipmentSlot::Feet);
+    {
+        let stack = server
+            .clients
+            .get_mut(&target)
+            .unwrap()
+            .inventory
+            .equipment_slots[EquipmentSlot::Chest.index()]
+        .as_mut()
+        .unwrap();
+        stack.durability = Some(0);
+    }
+    // Recompute mitigation now that the chest is broken: it must drop the tunic's
+    // 5% melee, leaving 7% (hood 3 + legs 3 + wraps 1). The broken chest stays in
+    // the slot.
+    server.recompute_protection(target);
+    assert_eq!(server.clients[&target].protection.melee, 12 - 5);
+    assert!(
+        server.clients[&target].inventory.equipment_slots[EquipmentSlot::Chest.index()].is_some(),
+        "a broken piece stays equipped"
+    );
+}
+
+#[test]
+fn death_drains_worn_armor_into_the_loot_bag_and_zeroes_mitigation() {
+    let mut server = server();
+    let attacker = connect_named(&mut server, 1, "Attacker");
+    let target = connect_named(&mut server, 2, "Victim");
+    place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
+    place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
+    equip_pickaxe(&mut server, attacker);
+    equip_padded(&mut server, target, PADDED_HOOD_ID, EquipmentSlot::Head);
+    server.clients.get_mut(&target).unwrap().controller.health = 1.0; // one swing kills.
+
+    attack(&mut server, attacker, target);
+
+    // The worn hood dropped into the single death bag alongside anything else.
+    let bags: Vec<_> = server.loot_bags_iter().collect();
+    assert_eq!(bags.len(), 1, "death should spawn exactly one loot bag");
+    let (_, bag) = bags[0];
+    assert!(
+        bag.slots
+            .iter()
+            .any(|slot| matches!(slot, Some(s) if s.item_id.as_ref() == PADDED_HOOD_ID)),
+        "loot bag should hold the victim's worn hood"
+    );
+    // The paperdoll is empty and mitigation is back to zero.
+    let client = server.clients.get(&target).unwrap();
+    assert!(client.inventory.equipment_slots.iter().all(Option::is_none));
+    assert_eq!(client.protection, crate::items::ArmorProtection::default());
+}
+
+#[test]
+fn pierce_interaction_is_unchanged_by_the_equipment_rework() {
+    // P1c's pierce-then-mitigation math still holds against a worn set: a swing
+    // whose attack profile pierces some armor shaves the effective melee value
+    // first. Assert the end-to-end shape via the pure combat helpers against the
+    // protection the equipment path produces.
+    use crate::combat::{damage_after_armor, effective_armor_after_pierce};
+
+    let mut server = server();
+    let target = connect_named(&mut server, 2, "Target");
+    equip_padded(&mut server, target, PADDED_HOOD_ID, EquipmentSlot::Head);
+    equip_padded(&mut server, target, PADDED_TUNIC_ID, EquipmentSlot::Chest);
+    equip_padded(&mut server, target, PADDED_LEGGINGS_ID, EquipmentSlot::Legs);
+    equip_padded(&mut server, target, PADDED_WRAPS_ID, EquipmentSlot::Feet);
+    let melee = server.clients[&target].protection.melee; // 12
+
+    // No pierce: 100 raw through 12 armor = 88.
+    assert_eq!(
+        damage_after_armor(100, effective_armor_after_pierce(melee, 0)),
+        88
+    );
+    // 50% pierce halves the effective armor to 6, letting 94 through.
+    assert_eq!(
+        damage_after_armor(100, effective_armor_after_pierce(melee, 50)),
+        94
+    );
+}
+
+// ---- melee weapons ----
+
+use crate::items::{IRON_SWORD_ID, STONE_SPEAR_ID};
+
+#[test]
+fn a_mace_hit_pierces_armor_against_an_armored_target() {
+    // The mace is the anti-armor weapon: its 50% pierce shaves the target's
+    // effective armor before mitigation, so an armored victim takes more from a
+    // mace than the same armor would leave through a non-piercing weapon.
+    use crate::combat::{damage_after_armor, effective_armor_after_pierce};
+    use crate::game_balance::{IRON_MACE_ARMOR_PIERCE_PCT, IRON_MACE_PVP_DAMAGE};
+
+    let mut server = server();
+    let attacker = connect_named(&mut server, 1, "Attacker");
+    let target = connect_named(&mut server, 2, "Target");
+    place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
+    place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
+    equip_item(&mut server, attacker, IRON_MACE_ID);
+    // 40% melee mitigation. A mace is Blunt, so the melee column is what the hit
+    // reads. Set it directly to keep the test on the pierce math.
+    server.clients.get_mut(&target).unwrap().protection.melee = 40;
+
+    let start = target_health(&server, target);
+    attack(&mut server, attacker, target);
+    let dealt = start - target_health(&server, target);
+
+    // Expected: pierce halves the effective armor (40 -> 20), then mitigation.
+    let effective = effective_armor_after_pierce(40, IRON_MACE_ARMOR_PIERCE_PCT);
+    assert_eq!(effective, 20, "50% pierce halves 40 armor to 20");
+    let expected = damage_after_armor(IRON_MACE_PVP_DAMAGE, effective) as f32;
+    assert_eq!(dealt, expected, "the mace pierces before mitigation");
+
+    // And it beats what the same armor would leave through with no pierce, the
+    // whole point of the anti-armor weapon.
+    let without_pierce = damage_after_armor(IRON_MACE_PVP_DAMAGE, 40) as f32;
+    assert!(
+        dealt > without_pierce,
+        "pierce lets more damage through than the raw armor would"
+    );
+}
+
+#[test]
+fn a_spear_connects_where_a_sword_does_not_at_extended_range() {
+    // The spear's whole identity is reach: it validates a hit at a distance the
+    // sword (standard 3.5 m reach) rejects. Server range is feet-to-feet, so a
+    // target at 4.2 m is inside the spear's 4.5 m reach but past the sword's.
+    let target_z = -4.2;
+
+    // Sword at 4.2 m: rejected (out of its 3.5 m reach), no damage.
+    let mut sword_server = server();
+    let sword_attacker = connect_named(&mut sword_server, 1, "Swordsman");
+    let sword_target = connect_named(&mut sword_server, 2, "Target");
+    place_player(
+        &mut sword_server,
+        sword_attacker,
+        Vec3Net::new(0.0, 0.0, 0.0),
+        0.0,
+    );
+    place_player(
+        &mut sword_server,
+        sword_target,
+        Vec3Net::new(0.0, 0.0, target_z),
+        0.0,
+    );
+    equip_item(&mut sword_server, sword_attacker, IRON_SWORD_ID);
+    let sword_start = target_health(&sword_server, sword_target);
+    let sword_envelopes = attack(&mut sword_server, sword_attacker, sword_target);
+    assert_eq!(
+        sword_start,
+        target_health(&sword_server, sword_target),
+        "the sword cannot reach a target at 4.2 m"
+    );
+    assert!(
+        sword_envelopes.is_empty(),
+        "an out-of-reach sword swing emits nothing"
+    );
+
+    // Spear at the same 4.2 m: connects (inside its 4.5 m reach).
+    let mut spear_server = server();
+    let spear_attacker = connect_named(&mut spear_server, 1, "Spearman");
+    let spear_target = connect_named(&mut spear_server, 2, "Target");
+    place_player(
+        &mut spear_server,
+        spear_attacker,
+        Vec3Net::new(0.0, 0.0, 0.0),
+        0.0,
+    );
+    place_player(
+        &mut spear_server,
+        spear_target,
+        Vec3Net::new(0.0, 0.0, target_z),
+        0.0,
+    );
+    equip_item(&mut spear_server, spear_attacker, STONE_SPEAR_ID);
+    let spear_start = target_health(&spear_server, spear_target);
+    let spear_envelopes = attack(&mut spear_server, spear_attacker, spear_target);
+    assert!(
+        target_health(&spear_server, spear_target) < spear_start,
+        "the spear reaches a target at 4.2 m where the sword cannot"
+    );
+    assert!(
+        spear_envelopes
+            .iter()
+            .any(|e| matches!(&e.message, ServerMessage::PlayerImpact { .. })),
+        "the spear hit reaches nearby peers"
+    );
 }

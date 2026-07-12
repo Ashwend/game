@@ -19,15 +19,52 @@ const CELL_SIZE: f32 = 4.0;
 /// `(cell_x, cell_z)` in the horizontal plane, vertical extent is unbounded
 /// per cell because the world is mostly "flat with stuff on top." Built or
 /// rebuilt by the runtime; consulted by the collision routines.
+///
+/// Besides the AABBs the grid carries the world's analytic FLOOR: flat at
+/// `y = 0` everywhere except over a live meteor shower crater, whose raised-rim
+/// mound is walked over via [`Self::floor_height`] (the collision routines use
+/// it as the ground baseline instead of a hardcoded 0).
 #[derive(Debug, Clone, Default)]
 pub struct BlockGrid {
     blocks: Vec<WorldBlock>,
     cells: HashMap<(i32, i32), Vec<u32>>,
+    /// Ground-zero `(x, z)` of the live meteor shower crater, if one is impacted.
+    crater: Option<[f32; 2]>,
 }
 
 impl BlockGrid {
     pub fn build(world: &WorldData) -> Self {
         Self::build_with_extras(world, &[])
+    }
+
+    /// Install (or clear) the live meteor shower crater so the analytic floor
+    /// follows its raised-rim mound. Set from the event state by whoever owns
+    /// this grid; `None` restores the flat plane.
+    pub fn set_crater(&mut self, center: Option<[f32; 2]>) {
+        self.crater = center;
+    }
+
+    /// The installed crater centre, for change detection by the owner.
+    pub fn crater(&self) -> Option<[f32; 2]> {
+        self.crater
+    }
+
+    /// The world floor height at `(x, z)`: `0.0` everywhere except over a live
+    /// meteor shower crater, where it follows the shared crater surface profile
+    /// (`crate::world::crater_surface_height`), so players walk up and over the
+    /// rim mound instead of clipping through it.
+    pub fn floor_height(&self, x: f32, z: f32) -> f32 {
+        let Some([cx, cz]) = self.crater else {
+            return 0.0;
+        };
+        let (dx, dz) = (x - cx, z - cz);
+        let distance_sq = dx * dx + dz * dz;
+        // Cheap reject: outside the skirt the floor is exactly flat.
+        if distance_sq >= crate::world::CRATER_SKIRT_RADIUS_M * crate::world::CRATER_SKIRT_RADIUS_M
+        {
+            return 0.0;
+        }
+        crate::world::crater_surface_height(distance_sq.sqrt())
     }
 
     /// Same as [`build`] but mixes additional collider blocks into the chunk.
@@ -53,7 +90,11 @@ impl BlockGrid {
                 }
             }
         }
-        Self { blocks, cells }
+        Self {
+            blocks,
+            cells,
+            crater: None,
+        }
     }
 
     /// Returns the block stored at `index`. Collision routines read through

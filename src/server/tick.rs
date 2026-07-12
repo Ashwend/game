@@ -42,10 +42,25 @@ impl GameServer {
         }
         self.tick_furnaces();
         self.tick_torches();
+        self.tick_ruin_caches();
         self.tick_loot_bags(delta_seconds);
         self.expire_chat_bubbles();
+        // Lift the crossbow reload movement slow off anyone whose reload window
+        // (`next_ranged_tick`) elapsed this tick, restoring full movement.
+        self.tick_reload_slows();
 
-        let mut envelopes = self.tick_crafting();
+        // Armed explosive charges: count each fuse down and detonate any that
+        // reach zero this tick. Returns the blast consequences (player damage,
+        // structure destruction, the VFX/SFX cue), so it has to feed the
+        // envelope stream, unlike the (envelope-free) torch/furnace ticks above.
+        let mut envelopes = self.tick_fuses();
+
+        // meteor shower event: schedule -> announce -> impact -> cleanup. Real
+        // time (this tick count), not the day/night clock, so `/time-speed` does
+        // not accelerate meteors. Returns its own broadcast/consequence envelopes.
+        envelopes.extend(self.tick_world_events());
+        envelopes.extend(self.tick_projectiles(delta_seconds));
+        envelopes.extend(self.tick_crafting());
         envelopes.extend(self.disconnect_stale_clients());
         if self.tick.is_multiple_of(DROPPED_ITEM_MERGE_INTERVAL_TICKS) {
             // The merge cue is a quiet UI blip; deliver it only to

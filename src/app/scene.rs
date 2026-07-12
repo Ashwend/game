@@ -14,6 +14,7 @@ mod assets;
 mod components;
 mod grass;
 mod mesh;
+mod meteor_shower;
 mod sky;
 mod terrain;
 mod toon;
@@ -21,8 +22,8 @@ mod world;
 
 pub(crate) use assets::{
     DeployableVisualAssets, FurnaceFireAssets, ImpactEffectAssets, ItemVisualAssets,
-    PlayerVisualAssets, ResourceVisualAssets, TorchFireAssets, menu_backdrop_depth_of_field,
-    player_visual_position, setup_scene,
+    MeteorEmberAssets, PlayerVisualAssets, ResourceVisualAssets, TorchFireAssets,
+    menu_backdrop_depth_of_field, player_visual_position, setup_scene,
 };
 #[cfg(test)]
 pub(crate) use components::WorldGeometry;
@@ -37,7 +38,15 @@ pub(crate) use components::{
 pub(crate) use components::ViewmodelCamera;
 pub(crate) use grass::{GrassDevFlags, GrassInstancingPlugin, GrassState, stream_grass_system};
 pub(crate) use mesh::{PLAYER_HEAD_TOP_LOCAL_Y, PlayerPart, rig_layout};
-pub(crate) use sky::{SUN_SOFT_SHADOW_SIZE, SunLight, update_sky_system};
+pub(crate) use meteor_shower::{
+    animate_meteor_shower_site_fire_system, meteor_shower_audio_system,
+    meteor_shower_camera_shake_system, meteor_shower_rumble_system,
+    update_meteor_shower_ground_system,
+};
+pub(crate) use sky::{
+    SUN_SOFT_SHADOW_SIZE, SunLight, tick_meteor_ember_system, update_meteor_sky_system,
+    update_sky_system,
+};
 pub(crate) use terrain::{TerrainMaterial, TerrainTextureAssets};
 pub(crate) use toon::{ToonMaterial, ToonViewmodelMaterial};
 pub(crate) use world::{WorldSceneState, apply_world_scene_system};

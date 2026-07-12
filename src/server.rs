@@ -71,6 +71,7 @@ mod commands;
 mod connection;
 mod container_slots;
 mod crafting;
+mod defuse;
 pub mod deployable_ecs;
 mod deployables;
 mod dirty_tracked_map;
@@ -79,17 +80,23 @@ mod door;
 pub mod dropped_item_ecs;
 mod dropped_items;
 mod entity_index;
+mod explosion;
 mod furnace;
+mod fuse;
 mod inventory;
 mod lifecycle;
 pub mod loot_bag;
 pub mod loot_bag_ecs;
+mod meteor_shower;
 pub(crate) mod movement;
 mod persistence;
 pub mod player_ecs;
+pub mod projectile_ecs;
+mod projectiles;
 mod queries;
 pub mod resource_node_ecs;
 mod resource_nodes;
+mod ruin_cache;
 mod sleeping_bag;
 mod stability;
 mod storage_box;
@@ -101,6 +108,7 @@ mod toasts;
 mod tool_wear;
 mod torch;
 mod voice;
+mod workbench;
 mod world_map;
 mod world_time;
 
@@ -120,10 +128,14 @@ pub use loot_bag_ecs::{
     LootBagView, despawn_loot_bag_entity, spawn_loot_bag_entity,
 };
 pub use player_ecs::{
-    Player, PlayerAction, PlayerArmor, PlayerChatBubble, PlayerChunk, PlayerCrafting, PlayerHealth,
-    PlayerHeldItem, PlayerIndex, PlayerInputAck, PlayerInventory, PlayerLifecycle,
-    PlayerOpenContainers, PlayerPose, PlayerPrivate, PlayerProfile, PlayerSleeping, PlayerView,
-    despawn_player_entity, spawn_player_entity,
+    Player, PlayerAction, PlayerArmor, PlayerChatBubble, PlayerChunk, PlayerCrafting,
+    PlayerEquipmentVisual, PlayerHealth, PlayerHeldItem, PlayerIndex, PlayerInputAck,
+    PlayerInventory, PlayerLifecycle, PlayerOpenContainers, PlayerPose, PlayerPrivate,
+    PlayerProfile, PlayerSleeping, PlayerView, despawn_player_entity, spawn_player_entity,
+};
+pub use projectile_ecs::{
+    Projectile, ProjectileChunk, ProjectileIndex, ProjectileTransform, ProjectileView,
+    despawn_projectile_entity, spawn_projectile_entity,
 };
 pub use resource_node_ecs::{
     ResourceNode, ResourceNodeChunk, ResourceNodeIndex, ResourceNodeStorage,
@@ -223,6 +235,17 @@ pub struct GameServer {
     /// the entities whose replicated `active` flag flips, via
     /// `for_each_mut_then_mark`. Anchor chunks are owned by `chunk_manager`.
     pub(super) deployed_entities: DirtyTrackedMap<DeployedEntityId, deployables::DeployedEntity>,
+    /// Live in-flight projectiles (arrows), keyed by id. A [`DirtyTrackedMap`]
+    /// so the per-tick integration flags exactly the ones that moved for the
+    /// `sync_projectile_entities` mirror. Transient: never persisted, cleared on
+    /// restart. Anchor chunks tracked via `chunk_manager` (the dropped-item
+    /// re-anchor pattern) so a fast arrow rides the right AoI room as it flies.
+    pub(super) projectiles: DirtyTrackedMap<crate::protocol::ProjectileId, projectiles::Projectile>,
+    /// Cosmetic stuck arrows resting in the world, keyed by projectile id, with
+    /// the tick they should despawn. Kept server-side only (the projectile mirror
+    /// entity is what the client renders while it is one of these); on expiry the
+    /// mirror entity is despawned. Not persisted.
+    pub(super) stuck_projectiles: std::collections::HashMap<crate::protocol::ProjectileId, u64>,
     /// Death-loot containers, keyed by id. Spawned by the PvP kill
     /// chain in `combat.rs`; despawned when emptied + closed by every
     /// looker. Anchor chunks tracked via `chunk_manager` so the
@@ -238,6 +261,9 @@ pub struct GameServer {
     next_client_id: ClientId,
     next_resource_node_id: ResourceNodeId,
     next_deployed_entity_id: DeployedEntityId,
+    /// Monotonic id allocator for live projectiles. Session-scoped (projectiles
+    /// are transient, never persisted), so it resets to 1 on every restart.
+    next_projectile_id: crate::protocol::ProjectileId,
     next_loot_bag_id: crate::protocol::LootBagId,
     tick: u64,
     /// Authoritative day/night clock. Mirrored to clients via
@@ -267,6 +293,19 @@ pub struct GameServer {
     /// owner, and persisted in the world save. See `world_map`. (The biome
     /// terrain image isn't here, the client generates it from the seed.)
     world_map_markers: world_map::WorldMapMarkerStore,
+    /// Global PvP knockback multiplier, set live by the `/knockback-scale` admin
+    /// command for combat-feel tuning (the Dev combat panel drives it). `1.0` is
+    /// the shipped feel; the attack path multiplies the resolved knockback speed
+    /// by this before building the impulse. Deliberately NOT persisted (it is not
+    /// written to `WorldStateSave` in `world_save`) and resets to `1.0` on every
+    /// server restart, matching the throwaway nature of a live-tuning cheat.
+    knockback_scale: f32,
+    /// meteor shower event engine: the scheduler for the next event plus the
+    /// live event (announce through crater despawn). Deliberately NOT persisted:
+    /// on world load the scheduler rolls a fresh next event and an in-flight
+    /// event does not survive a restart, so the save format is untouched. See
+    /// `src/server/meteor_shower.rs`.
+    meteor_shower: meteor_shower::MeteorShowerState,
 }
 
 #[derive(Debug)]
@@ -282,12 +321,14 @@ pub(super) struct ServerClient {
     pub(super) online: bool,
     pub(super) controller: PlayerController,
     pub(super) inventory: PlayerInventoryState,
-    /// Authoritative damage reduction (0–100, percent). Today always
-    /// `0`, armor items don't exist yet, but kept on the client so
-    /// the damage path doesn't have to special-case the missing field.
-    /// Replicated to every peer via the [`PlayerArmor`] component
-    /// attached to the mirror entity.
-    pub(super) armor: u8,
+    /// Authoritative per-damage-kind mitigation (each 0..=60 percent), recomputed
+    /// from the worn armor in `inventory.equipment_slots` whenever equipment can
+    /// change (an equip/unequip move, connect/restore, durability wear, death).
+    /// The combat path picks the value by [`crate::combat::DamageKind`], then
+    /// pierce, then `damage_after_armor`. The melee component feeds the
+    /// replicated [`PlayerArmor`] for the HUD. An empty paperdoll is all-zero, so
+    /// a bare player takes full damage exactly as before armor existed.
+    pub(super) protection: crate::items::ArmorProtection,
     pub(super) is_admin: bool,
     /// Admin `/speed` movement-speed multiplier for this player. `1.0` is
     /// normal; replicated to the owning client via [`PlayerInputAck`] and
@@ -301,6 +342,24 @@ pub(super) struct ServerClient {
     /// tool's per-swing cooldown; the cooldown is set on every accepted
     /// `AttackPlayer` after damage lands.
     pub(super) next_attack_tick: u64,
+    /// Tick a bow/crossbow draw began, or `None` when no draw is active. Set on
+    /// an accepted `RangedCommand::DrawStart`, cleared on fire / cancel / item
+    /// swap / death. The fire path reads it to compute the draw fraction and
+    /// scale the shot's damage. The draw also slows movement while set (via
+    /// `run_speed_multiplier`), restored to `1.0` on every clear path.
+    pub(super) draw_started_tick: Option<u64>,
+    /// Reused cooldown floor for ranged shots (bow post-fire floor, crossbow
+    /// reload). Kept separate from `next_attack_tick` so a ranged shot and a
+    /// melee swing don't share a cooldown. Stamped on every accepted fire.
+    pub(super) next_ranged_tick: u64,
+    /// True while a crossbow reload movement slow is active. Set on an accepted
+    /// crossbow fire (which also drops `run_speed_multiplier` to
+    /// `CROSSBOW_RELOAD_MOVE_MULTIPLIER`), and cleared with the multiplier
+    /// restored to `1.0` when the reload window (`next_ranged_tick`) elapses, on
+    /// item swap, or on death. The flag makes the restore idempotent and keeps it
+    /// from stomping a concurrently-set admin `/speed`: only a reload we armed is
+    /// ever restored.
+    pub(super) reload_slow_active: bool,
     /// Authoritative life state. `Alive` while the player is up and
     /// running, `Dead { … }` between HP-hits-zero and the respawn
     /// request. Dropped inputs and attack rejections gate on this so
@@ -325,6 +384,10 @@ pub(super) struct ServerClient {
     /// open at a time, opening a new furnace closes the previous.
     /// Cleared on disconnect.
     pub(super) open_furnace: Option<DeployedEntityId>,
+    /// The workbench the player currently has open, if any. Same "one open at
+    /// a time" rule as furnaces; opening a new workbench closes the previous.
+    /// Cleared on disconnect and when the entity is destroyed.
+    pub(super) open_workbench: Option<DeployedEntityId>,
     /// The loot container (a world bag or a sleeper's live inventory) the
     /// player currently has open, if any. Same "one open container at a time"
     /// rule as furnaces, opening one closes any previously-open container.
@@ -342,10 +405,11 @@ pub(super) struct ServerClient {
     /// Peer-visible swing animation state, stamped from the cosmetic
     /// `ClientMessage::SwingStart`. `swing_seq` increments once per accepted
     /// swing-start (mirroring the client's local `swing_seed`); peers
-    /// edge-detect a change to play the third-person swing. `swing_tool`
-    /// selects the swing curve. Mirrored into the [`PlayerAction`] component.
+    /// edge-detect a change to play the third-person swing. `swing_model` is the
+    /// swing archetype (a weapon its own model, a gather tool its archetype).
+    /// Mirrored into the [`PlayerAction`] component.
     pub(super) swing_seq: u32,
-    pub(super) swing_tool: crate::items::ToolKind,
+    pub(super) swing_model: crate::items::ItemModel,
 }
 
 #[derive(Debug, Clone)]
@@ -403,6 +467,9 @@ pub(super) fn sleeping_body_from_persisted(
     } else {
         PlayerLifecycle::Alive
     };
+    // Recompute mitigation from the restored worn armor so a body that logged
+    // out wearing a set comes back protected, not at zero.
+    let protection = crate::items::equipped_protection(&inventory.equipment_slots);
     ServerClient {
         client_id,
         account_id: player.account_id,
@@ -410,23 +477,27 @@ pub(super) fn sleeping_body_from_persisted(
         online: false,
         controller,
         inventory,
-        armor: 0,
+        protection,
         lifecycle,
         is_admin: player.is_admin,
         run_speed_multiplier: 1.0,
         last_seen_tick: tick,
         next_gather_tick: tick,
         next_attack_tick: tick,
+        draw_started_tick: None,
+        next_ranged_tick: tick,
+        reload_slow_active: false,
         chat_bubble: None,
         view_tier: crate::protocol::ViewRadiusTier::default(),
         crafting: PlayerCraftingState::default(),
         next_craft_job_id: 1,
         open_furnace: None,
+        open_workbench: None,
         open_container: None,
         applied_action_seq: 0,
         ping_ms: 0,
         swing_seq: 0,
-        swing_tool: crate::items::ToolKind::Hands,
+        swing_model: crate::items::ItemModel::Bag,
     }
 }
 

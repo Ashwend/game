@@ -3,8 +3,9 @@
 //! The local player's pending audio cues come out of [`GatherInputState`];
 //! remote players' come through [`RemoteImpactEvent`]. Both flow into
 //! [`PlaySound`] events on the central audio bus, choice of clip is a
-//! `(ToolKind, SurfaceMaterial)` lookup against
-//! [`super::manifest::impact_sound_for`].
+//! `(ItemModel, SurfaceMaterial)` lookup against
+//! [`super::manifest::impact_sound_for`] (or the per-weapon PvP lookup
+//! [`super::manifest::impact_sound_for_player`] for player hits).
 
 use bevy::prelude::*;
 
@@ -25,9 +26,9 @@ pub(crate) fn play_impact_sounds_system(
 ) {
     if let Some(cue) = gather_input.take_pending_audio_cue() {
         let id = if cue.is_player_hit {
-            impact_sound_for_player(cue.tool)
+            impact_sound_for_player(cue.model)
         } else {
-            impact_sound_for(cue.tool, cue.surface)
+            impact_sound_for(cue.model, cue.surface)
         };
         if let Some(id) = id {
             play.write(PlaySound::at(id, cue.anchor));
@@ -44,9 +45,9 @@ pub(crate) fn play_impact_sounds_system(
     }
     for event in remote_impacts.read() {
         let id = if event.is_player_hit {
-            impact_sound_for_player(event.tool)
+            impact_sound_for_player(event.model)
         } else {
-            impact_sound_for(event.tool, event.surface)
+            impact_sound_for(event.model, event.surface)
         };
         if let Some(id) = id {
             play.write(PlaySound::at(id, event.anchor));
@@ -71,29 +72,29 @@ pub(crate) fn emit_tree_fall_sound(play: &mut MessageWriter<PlaySound>, anchor: 
 mod tests {
     use super::super::surface::SurfaceMaterial;
     use super::*;
-    use crate::items::ToolKind;
+    use crate::items::ItemModel;
 
     #[test]
     fn impact_table_is_independent_of_visual_effect_kind() {
         // The whole point of the audio rekey: we drive selection from
-        // (tool, surface) regardless of what particle the visual system
+        // (model, surface) regardless of what particle the visual system
         // chose to spawn.
         assert_eq!(
-            impact_sound_for(ToolKind::Axe, SurfaceMaterial::Wood),
+            impact_sound_for(ItemModel::Hatchet, SurfaceMaterial::Wood),
             Some(SoundId::ImpactAxeOnWood)
         );
         assert_eq!(
-            impact_sound_for(ToolKind::Pickaxe, SurfaceMaterial::Coal),
+            impact_sound_for(ItemModel::Pickaxe, SurfaceMaterial::Coal),
             Some(SoundId::ImpactPickaxeOnCoal)
         );
-        // Wrong-tool-on-deployable used to fall through to a miss
-        // whoosh; the mixed-down pools cover those gaps now.
+        // Wrong-archetype-on-deployable still resolves a mixed-down pool,
+        // never a silent gap.
         assert_eq!(
-            impact_sound_for(ToolKind::Axe, SurfaceMaterial::Stone),
+            impact_sound_for(ItemModel::Hatchet, SurfaceMaterial::Stone),
             Some(SoundId::ImpactAxeGeneric)
         );
         assert_eq!(
-            impact_sound_for(ToolKind::Pickaxe, SurfaceMaterial::Wood),
+            impact_sound_for(ItemModel::Pickaxe, SurfaceMaterial::Wood),
             Some(SoundId::ImpactPickaxeOnWood)
         );
     }

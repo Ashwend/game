@@ -69,6 +69,15 @@ pub(crate) struct DeployedEntity {
     /// other kind; the place handler initialises an empty list for placed
     /// cupboards. The owner lives on `owner`, not in here.
     pub(super) cupboard: Option<super::claim::CupboardState>,
+    /// Ruin-cache-only refill bookkeeping (schedule + counter). `None` for
+    /// every other kind. The cache's loot lives in `storage` (the shared
+    /// storage-box grid), so this holds only the refill state.
+    pub(super) ruin_cache: Option<super::ruin_cache::RuinCacheState>,
+    /// Explosive-charge-only fuse countdown. `None` for every other kind; the
+    /// place / rest path arms it (`Some`) the moment the charge is set. The
+    /// countdown is server-only (never replicated); on zero the charge
+    /// detonates and is removed. Persisted so a reload resumes the fuse.
+    pub(super) fuse: Option<super::fuse::FuseState>,
     /// Structural stability percentage (0-100). Building pieces and
     /// doors get theirs from the support graph (see
     /// [`super::stability`]); free-standing deployables sit on the
@@ -151,6 +160,8 @@ impl DeployedEntity {
             storage: None,
             torch: None,
             cupboard: None,
+            ruin_cache: None,
+            fuse: None,
             stability: 100,
         }
     }
@@ -189,6 +200,13 @@ impl GameServer {
         // (no floor-surface requirement) and carry a burn timer.
         if matches!(profile.kind, DeployableKind::Torch { .. }) {
             return self.place_torch(client_id, command, definition, profile);
+        }
+        // Explosive charges take their own path too: placing one ARMS its fuse
+        // immediately, a sticky charge (ember) mounts on a wall like a torch,
+        // and, crucially, a charge is allowed inside an enemy claim (that is the
+        // whole point of raiding), so the claim gate is skipped for it.
+        if matches!(profile.kind, DeployableKind::Explosive { .. }) {
+            return self.place_charge(client_id, command, definition, profile);
         }
 
         let Some(client) = self.clients.get(&client_id) else {
@@ -412,6 +430,99 @@ impl GameServer {
         )
     }
 
+    /// Place a blackpowder charge as an armed `DeployableKind::Explosive`. Two
+    /// things set it apart from a plain deployable:
+    ///
+    /// 1. **The claim gate is skipped.** A charge is the raiding tool: placing it
+    ///    inside an enemy claim is the entire point, so `claim_blocks_footprint`
+    ///    (which would reject any other deployable there) is deliberately not
+    ///    consulted. Every other placement check (reach, finite guard, surface)
+    ///    still runs. See docs/base-building-and-claims.md.
+    /// 2. **The fuse arms on placement.** The entity ships with a `Some(FuseState)`
+    ///    counting down from the profile's `fuse_ticks`, so `tick_fuses`
+    ///    detonates it after the hiss window with no further command.
+    ///
+    /// A ground charge (keg, satchel) needs a real surface under it (world
+    /// floor or a platform top).
+    fn place_charge(
+        &mut self,
+        client_id: ClientId,
+        command: PlaceDeployableCommand,
+        definition: &crate::items::ItemDefinition,
+        profile: DeployableProfile,
+    ) -> Vec<ServerEnvelope> {
+        let Some(explosive) = definition.explosive else {
+            // Only reachable if an Explosive-kind item lost its profile; refuse
+            // cleanly rather than place an un-fused charge.
+            return place_toast(client_id, ToastKind::Error, "Invalid charge".to_owned());
+        };
+
+        let Some(client) = self.clients.get(&client_id) else {
+            return Vec::new();
+        };
+        let feet = client.controller.position;
+        if !feet.within_horizontal_range(command.position, PLACEMENT_REACH_M) {
+            return place_toast(client_id, ToastKind::Warning, "Too far away".to_owned());
+        }
+        if !command.position.x.is_finite()
+            || !command.position.y.is_finite()
+            || !command.position.z.is_finite()
+            || !command.yaw.is_finite()
+        {
+            return place_toast(client_id, ToastKind::Error, "Invalid placement".to_owned());
+        }
+        // A ground charge needs a real surface (world floor or a platform top).
+        if !command.wall_mounted && !self.valid_deployable_surface(command.position) {
+            return place_toast(
+                client_id,
+                ToastKind::Warning,
+                "Place on the ground, a floor, or a wall".to_owned(),
+            );
+        }
+
+        // NOTE: the claim gate is intentionally absent here. A charge is
+        // allowed inside an enemy claim, that is how raiding works.
+
+        let owner_account_id = client.account_id;
+        let Some(client) = self.clients.get_mut(&client_id) else {
+            return Vec::new();
+        };
+        let removed = take_items_from_inventory(&mut client.inventory, definition.id, 1);
+        if removed != 1 {
+            return place_toast(
+                client_id,
+                ToastKind::Warning,
+                format!("You don't have a {}", definition.name),
+            );
+        }
+
+        let id = self.next_deployed_entity_id;
+        self.next_deployed_entity_id = self.next_deployed_entity_id.saturating_add(1);
+        let entity = DeployedEntity {
+            id,
+            // Arm the fuse the instant the charge is set.
+            fuse: Some(super::fuse::FuseState::armed(explosive.fuse_ticks)),
+            ..DeployedEntity::new(
+                command.item_id.clone(),
+                profile.kind,
+                command.position,
+                command.yaw,
+                profile.max_health,
+                Some(owner_account_id),
+                self.tick,
+            )
+        };
+        let position = entity.position;
+        self.insert_deployed_entity(id, entity);
+        self.chunk_manager.track_deployed_entity(id, position);
+
+        place_toast(
+            client_id,
+            ToastKind::Success,
+            format!("Placed {}", definition.name),
+        )
+    }
+
     pub(super) fn apply_damage_deployable_command(
         &mut self,
         client_id: ClientId,
@@ -443,6 +554,12 @@ impl GameServer {
         let Some(entity) = self.deployed_entities.get(&command.id) else {
             return Vec::new();
         };
+        // Ruin caches are indestructible: they are permanent world fixtures, so
+        // no damage source (not even an admin) removes one. Reject cleanly
+        // before the ownership gate reads the (owner-less) cache.
+        if matches!(entity.kind, DeployableKind::RuinCache) {
+            return Vec::new();
+        }
         // Ownership gate: raid targets (building blocks, doors, sleeping
         // bags) are damageable by anyone, that's what makes raiding a
         // game. World-spawned entities (`owner = None`) likewise. Other
@@ -485,6 +602,20 @@ impl GameServer {
         };
         entity.health = entity.health.saturating_sub(damage);
         let dead = entity.health == 0;
+        // A charge that reaches 0 HP FIZZLES: it is destroyed WITHOUT detonating,
+        // no blast and no material refund, the defender's counterplay. Capture
+        // whether this dying entity is a charge (and its armed owner) before the
+        // destroy so we can toast the owner.
+        let fizzling_charge = if dead {
+            match self.deployed_entities.get(&command.id) {
+                Some(entity) if matches!(entity.kind, DeployableKind::Explosive { .. }) => {
+                    Some(entity.owner)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
 
         // Apply the swing cooldown after a successful hit so spamming
         // damage swings doesn't bypass the gather throttle.
@@ -492,15 +623,33 @@ impl GameServer {
             client.next_gather_tick = self.tick + tool.cooldown_ticks.max(1);
         }
 
+        let mut envelopes = Vec::new();
         if dead {
+            // `destroy_deployed_entity` removes the charge (no contents to spill)
+            // and reruns stability. It does NOT detonate, which is exactly the
+            // fizzle: reaching 0 HP disarms the charge harmlessly.
             self.destroy_deployed_entity(command.id);
+            // Tell the owner their charge was shot out, if they are online.
+            if let Some(Some(owner_account)) = fizzling_charge
+                && let Some(owner_client) = self
+                    .clients
+                    .values()
+                    .find(|c| c.online && c.account_id == owner_account)
+            {
+                envelopes.extend(place_toast(
+                    owner_client.client_id,
+                    ToastKind::Warning,
+                    "Your charge was fizzled".to_owned(),
+                ));
+            }
         }
         // Survivor health change replicates via the ECS mirror →
         // Lightyear's `DeployableHealth` diff. See
         // [Networking § Replication](../../docs/networking.md#replication).
 
         // The swing connected with the structure, so the tool wears.
-        self.consume_active_tool_durability(client_id)
+        envelopes.extend(self.consume_active_tool_durability(client_id));
+        envelopes
     }
 
     /// Remove a placed structure entirely (gameplay death + tracker
@@ -579,6 +728,9 @@ impl GameServer {
         for client in self.clients.values_mut() {
             if client.open_furnace == Some(id) {
                 client.open_furnace = None;
+            }
+            if client.open_workbench == Some(id) {
+                client.open_workbench = None;
             }
             if client.open_container == Some(super::loot_bag::OpenContainer::StorageBox(id)) {
                 client.open_container = None;
@@ -660,6 +812,33 @@ impl GameServer {
                             .map(|s| super::storage_box::StorageBoxState::from_persisted(s, tier))
                             .unwrap_or_else(|| super::storage_box::StorageBoxState::new(tier)),
                     ),
+                    // A ruin cache stores its loot in the same storage grid; it
+                    // has a fixed slot count and its own persisted grid.
+                    DeployableKind::RuinCache => Some(
+                        p.storage
+                            .map(|s| {
+                                super::storage_box::StorageBoxState::from_ruin_cache_persisted(s)
+                            })
+                            .unwrap_or_else(super::storage_box::StorageBoxState::new_ruin_cache),
+                    ),
+                    _ => None,
+                };
+                let ruin_cache = match p.kind {
+                    DeployableKind::RuinCache => Some(
+                        p.ruin_cache
+                            .map(super::ruin_cache::RuinCacheState::from_persisted)
+                            .unwrap_or_default(),
+                    ),
+                    _ => None,
+                };
+                // An armed charge resumes its countdown where it left off. Only
+                // an `Explosive` kind carries a fuse; every other kind restores
+                // `None`. A charge with no persisted fuse (an impossible state in
+                // practice) stays un-armed rather than crashing.
+                let fuse = match p.kind {
+                    DeployableKind::Explosive { .. } => {
+                        p.fuse.map(super::fuse::FuseState::from_persisted)
+                    }
                     _ => None,
                 };
                 Some((
@@ -682,10 +861,49 @@ impl GameServer {
                         storage,
                         torch,
                         cupboard,
+                        ruin_cache,
+                        fuse,
                     },
                 ))
             })
             .collect()
+    }
+
+    /// Build a world-gen ruin cache entity: a `RuinCache` deployable with no
+    /// owner, stocked immediately (its `storage` grid rolled at refill counter
+    /// 0) so the first visit finds loot, and an empty refill schedule. Used
+    /// only by the fresh-world spawn path; on reload caches come from the save.
+    pub(super) fn spawn_ruin_cache_entity(
+        id: DeployedEntityId,
+        position: Vec3Net,
+        yaw: f32,
+        placed_at_tick: u64,
+    ) -> DeployedEntity {
+        let item_id = crate::items::intern_item_id(crate::items::RUIN_CACHE_ID);
+        let max_health = item_definition(&item_id)
+            .and_then(|def| def.deployable)
+            .map(|p| p.max_health)
+            .unwrap_or(crate::game_balance::RUIN_CACHE_MAX_HP);
+        let mut storage = super::storage_box::StorageBoxState::new_ruin_cache();
+        storage.slots = super::ruin_cache::initial_cache_slots(id);
+        DeployedEntity {
+            // `DeployedEntity::new` deliberately leaves `id` at 0 for the
+            // placement path (which assigns it at insert); this gen-time path
+            // owns the id itself, so set it here. A 0 id would make every
+            // cache's mirror view collide on one bogus replicated entity.
+            id,
+            storage: Some(storage),
+            ruin_cache: Some(super::ruin_cache::RuinCacheState::default()),
+            ..DeployedEntity::new(
+                item_id,
+                DeployableKind::RuinCache,
+                position,
+                yaw,
+                max_health,
+                None,
+                placed_at_tick,
+            )
+        }
     }
 
     /// Convert the live map back into save records. Order is sorted by
@@ -710,6 +928,8 @@ impl GameServer {
                 storage: entity.storage.as_ref().map(|s| s.to_persisted()),
                 torch: entity.torch.as_ref().map(|t| t.to_persisted()),
                 cupboard: entity.cupboard.as_ref().map(|c| c.to_persisted()),
+                ruin_cache: entity.ruin_cache.as_ref().map(|r| r.to_persisted()),
+                fuse: entity.fuse.as_ref().map(|f| f.to_persisted()),
             })
             .collect();
         entries.sort_by_key(|entry| entry.id);

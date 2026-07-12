@@ -9,10 +9,13 @@ sources:
   - src/server/chunk_manager/regrow.rs - handle_node_depleted, tick, place_fresh_node
   - src/server/chunk_manager/save.rs - ChunkManagerSave, PendingRegrowSave
   - src/net/host/rooms.rs - attach_room_gated_replication, update_client_room_subscriptions, ensure_chunk_room_*
+  - src/net/host/mirror.rs - sync_projectile_entities
+  - src/server/meteor_shower.rs - spawn_meteor_shower_shards, cleanup_meteor_shower
   - src/server/queries.rs - client_aoi_key, visible_chunks_for_client, retained_chunks_for_client
 related:
   - docs/replication.md - the attach helpers, bug #740, the host mirror this AoI gates
-  - docs/worlds-and-saves.md - the pure generation pipeline that feeds the initial spawn list, and ChunkManagerSave persistence
+  - docs/worlds-and-saves.md - the pure generation pipeline that feeds the initial spawn list (including the ruin footprints), and ChunkManagerSave persistence
+  - docs/meteor-shower.md - the meteor event that splices shard nodes into the live map at runtime
   - docs/networking.md - SetViewRadius wire message, channels, ServerTickPulse gate
   - docs/profiling.md - the ~1800-visible-entity floor that AoI scale produces
 ---
@@ -47,8 +50,11 @@ So "what a player sees" is the union of entities in the rooms that player's send
 | Players | `players: HashSet<ClientId>` | `player_chunks` | Yes, on accepted movement |
 | Deployables | `deployed_entities: HashSet<DeployedEntityId>` | `deployed_entity_chunks` | No (anchored once at place) |
 | Loot bags | (id-only, no per-chunk set) | `loot_bag_chunks` | No (anchored once at spawn) |
+| Projectiles | (none, never enters `ChunkManager`) | (none) | **Yes, room-only, in the mirror sync** |
 
 Entities themselves live in their owning `GameServer` collections (`resource_nodes`, `dropped_items`, `clients`, etc.); `ChunkManager` stores only ids. `live_by_kind` is grouped by kind so the regrow scheduler can answer "is this kind at cap?" in O(1) (`ActiveChunkState::live_count`).
+
+Projectiles are the deliberate exception: an in-flight arrow is never tracked by `ChunkManager` (no per-chunk set, no reverse index). Its anchor is a pure `ChunkCoord::from_world` of the current position, recomputed by the mirror sync (`sync_projectile_entities`, `src/net/host/mirror.rs`) for every dirty projectile each server tick and cached on the ECS-side `ProjectileChunk` marker; when it changes, the sync calls `move_entity_between_rooms` directly so observing clients gain/lose visibility at the boundary. Projectiles are few and short-lived, so recomputing per sync is cheaper than membership bookkeeping. The projectile component split lives in [replication.md](replication.md).
 
 Membership mutators live in `src/server/chunk_manager/membership.rs` and follow a uniform `track_` / `untrack_` / `update_*_chunk` shape (`track_player`, `track_deployed_entity`, `track_loot_bag`, `track_resource_node`, etc.). Call sites of note:
 
@@ -70,7 +76,7 @@ This is a safety net for a dropped item physics-launched past the perimeter wall
 
 ### Per-physics-step dropped-item re-anchoring
 
-Dropped items are the only entity that drifts across chunk boundaries under simulation. After the physics step, `GameServer::tick` (`src/server/tick.rs`) re-anchors exactly the items the step actually moved, which are precisely the ids the dropped-item store flagged dirty:
+Dropped items are the only `ChunkManager`-tracked entity that drifts across chunk boundaries under simulation (in-flight projectiles also drift, but re-anchor room-only in the mirror sync; see the exception note above). After the physics step, `GameServer::tick` (`src/server/tick.rs`) re-anchors exactly the items the step actually moved, which are precisely the ids the dropped-item store flagged dirty:
 
 ```
 let moved = self.dropped_items.dirty_ids().collect();
@@ -128,9 +134,18 @@ When a node is depleted (gather/inventory/admin removal), `handle_node_depleted`
 
 `ChunkManager::tick` (`regrow.rs:54 - tick`) is driven from `GameServer::tick` each server tick. It drains every event whose `fire_tick` has arrived and calls `place_fresh_node` (`regrow.rs:77`) for each. Placement is **capacity-gated**: it refuses if the chunk is already at `capacity[kind]` (the same per-chunk ceiling the generator used; see below), picks a fresh Poisson-disk position via the per-chunk generator (`candidate_positions`, salted so repeats get fresh points), and rejects any candidate within 1.2 m of a surviving node (`collides_with_existing`). Better to drop a respawn than jam a node into an occupied square. The result is spliced back into `GameServer::resource_nodes` and the mirror sync turns it into a replicated entity on the next `Update`.
 
+Ruin footprints are a node-rejection input to both placement passes: `ChunkManager` recomputes the seed-pure footprint list (`ruin_footprints`, `src/world/ruins.rs`) on construction and on load (never persisted) and passes it into `candidate_positions`, the same rejection input `generate_world_spawns` consumes at initial generation, so a regrow can never drop a node inside a ruin the initial pass kept clear. The ruin pipeline itself (site scatter, prefab layouts, cache footprints) is documented in [worlds-and-saves.md](worlds-and-saves.md).
+
+### Runtime and rare node sources
+
+Two sources feed nodes into this system differently:
+
+- **Meteorite** is a normal world-gen kind. It rides the raw ore channel (`channel_for`, `src/world/chunk/classification.rs`), has base capacity 1 and only in `RockyOutcrop`/`OreVein` chunks (`base_capacity`, same file), and is further gated in `chunk_kind_target` (`src/world/chunk/generator.rs:87`) by a centre-distance ring (`METEORITE_MIN_CENTER_DISTANCE_FRACTION`) plus an ore-channel floor, so most eligible chunks hold none. It depletes and regrows like any other kind, capped by that same ceiling.
+- **Meteor shower shard nodes** are spliced into the live map at runtime by the meteor event (`spawn_meteor_shower_shards`, `src/server/meteor_shower.rs:577`): each shard enters membership via `track_resource_node` so it is AoI-visible like any node. A shard mined by a player depletes through the normal gather path, so its regrow event is subject to the same capacity gate as any other kind. Any shard still unmined at event end is force-despawned by `cleanup_meteor_shower` (`meteor_shower.rs:654`), which removes it and calls `untrack_resource_node` with **no regrow scheduled** (event spawns, not world nodes). See [meteor-shower.md](meteor-shower.md).
+
 ### Capacity ceiling is shared with world-gen
 
-`build_empty_grids` (`src/server/chunk_manager/mod.rs - build_empty_grids`) computes each chunk's per-kind `capacity` from `chunk_kind_target(classification, channels, kind)`, the **same** formula `src/world/chunk/generator.rs` uses to place the initial nodes. This is load-bearing: if regrow used a different ceiling than world-gen, the world would silently over- or under-fill on respawn. Change one, change both. Classification is recomputed from the seed on every load (not persisted), so this stays in sync automatically. See [worlds-and-saves.md](worlds-and-saves.md) for the classification/generator pipeline and the consequences of editing `BIOME_BIAS` or thresholds.
+`build_empty_grids` (`src/server/chunk_manager/mod.rs - build_empty_grids`) computes each chunk's per-kind `capacity` from `chunk_kind_target(classification, channels, kind, center_dist_frac)`, the **same** formula `src/world/chunk/generator.rs` uses to place the initial nodes. The fourth argument (the chunk centre's distance from the world origin as a fraction of the playable radius) exists for the meteorite ring gate; both sites compute it via the shared `chunk_center_distance_fraction`, so the meteorite ceiling cannot drift between generation and regrow. This is load-bearing: if regrow used a different ceiling than world-gen, the world would silently over- or under-fill on respawn. Change one, change both. Classification is recomputed from the seed on every load (not persisted), so this stays in sync automatically. See [worlds-and-saves.md](worlds-and-saves.md) for the classification/generator pipeline and the consequences of editing `BIOME_BIAS` or thresholds.
 
 ## Density falloff: RING_BUDGET, applied once at creation
 
@@ -158,13 +173,14 @@ For each `(coord, kind)` group, the ring distance is the Chebyshev distance `coo
 
 - **Membership is the AoI source of truth, not the entity map.** A node added straight to `GameServer::resource_nodes` without `track_resource_node` exists but is invisible to every client.
 - **Every chunk-anchored spawn must go through `attach_room_gated_replication` (static) or `attach_player_replication` (players).** A bare `Replicate` lands in shared `ReplicationGroupId(0)` and silently drops post-spawn diffs (Lightyear 0.26.4 bug #740). Owned by [replication.md](replication.md).
-- **Do not re-anchor nodes, deployables, or loot bags per frame.** Only dropped items (physics drift) and players (movement) change chunks after spawn. Nodes change membership only on depletion/regrow.
+- **Do not re-anchor nodes, deployables, or loot bags per frame.** Only dropped items (physics drift), players (movement), and in-flight projectiles change chunks after spawn. Projectiles are the not-in-ChunkManager exception: `sync_projectile_entities` re-anchors them room-only from a pure `ChunkCoord::from_world` of the current position (see the membership exception note above). Nodes change membership only on depletion/regrow.
 - **`RING_BUDGET` is creation-only.** Editing it changes only newly created worlds; existing saves keep their budgeted node ids.
 - **Regrow capacity and world-gen capacity must agree** (`chunk_kind_target`). They share one function for exactly this reason.
 
 ## Related docs
 
 - [docs/replication.md](replication.md) - the `attach_room_gated_replication` / `attach_player_replication` helpers, the per-entity `ReplicationGroup` fix for bug #740, the host mirror-sync systems, and the `ServerTickPulse` gate this AoI system shares.
-- [docs/worlds-and-saves.md](worlds-and-saves.md) - the deterministic `src/world/chunk/` generation pipeline (classification, Poisson-disk generator, noise), `chunk_kind_target`, and the full `WorldStateSave` / save-format story `ChunkManagerSave` embeds into.
+- [docs/worlds-and-saves.md](worlds-and-saves.md) - the deterministic `src/world/chunk/` generation pipeline (classification, Poisson-disk generator, noise), `chunk_kind_target`, the ruin pipeline behind `ruin_footprints`, and the full `WorldStateSave` / save-format story `ChunkManagerSave` embeds into.
+- [docs/meteor-shower.md](meteor-shower.md) - the meteor event that splices meteorite shard nodes into the live map at runtime and force-despawns unmined ones at cleanup.
 - [docs/networking.md](networking.md) - the `SetViewRadius` wire message, channel registration, and the `ServerTickPulse` / `server_tick_advanced` run condition.
 - [docs/profiling.md](profiling.md) - the ~1800-visible-entity floor that AoI scale produces and the per-frame-iteration pitfalls when reconciling replicated entities client-side.

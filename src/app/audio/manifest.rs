@@ -13,7 +13,7 @@
 
 use std::sync::OnceLock;
 
-use crate::items::ToolKind;
+use crate::items::ItemModel;
 
 use super::{category::SoundCategory, surface::SurfaceMaterial};
 
@@ -74,11 +74,38 @@ pub(crate) enum SoundId {
     SwingMiss,
 
     /// PvP melee impact ("thump" of a blunt tool landing on a player).
-    /// Routed off the existing axe-wood pool until dedicated assets
-    /// land, see `impact_sound_for_player`. One pool covers every
-    /// tool today; per-tool variants can be added later by branching
-    /// on `ToolKind` in the lookup.
+    /// The gather-tool (hatchet/pickaxe) PvP pool. Routed off the existing
+    /// axe-wood pool until dedicated foley lands, see `impact_sound_for_player`.
     ImpactPlayerBlunt,
+    /// PvP impact for the wooden club: the blunter of the two impact character
+    /// sets (aliases the pickaxe-ore hard-thud pool). ALIAS, swap `sound_paths`
+    /// to real club-on-flesh foley when recorded.
+    ImpactPlayerClub,
+    /// PvP impact for the stone spear: a sharper puncture read (aliases the
+    /// axe-wood "hatchet-vs-flesh" pool, the closest existing thump). ALIAS.
+    ImpactPlayerSpear,
+    /// PvP impact for the iron sword: the sharper of the two sets (aliases the
+    /// axe-wood pool, matching the hatchet's brighter transient). ALIAS.
+    ImpactPlayerSword,
+    /// PvP impact for the iron mace: the heaviest blunt read (aliases the
+    /// pickaxe-ore hard-thud pool, the bluntest existing set). ALIAS.
+    ImpactPlayerMace,
+
+    // --- Ranged (bow / crossbow) cues ---
+    //
+    // Deliberately SPARSE: every draw / release / whoosh / fire / reload cue
+    // tried so far read wrong in play (owner reports), so the shot itself is
+    // silent; only the dry-click and the spatial arrow-lodge impact remain.
+    /// Ranged dry-click: pulling the trigger on a crossbow still on reload
+    /// cooldown (or a bow with no arrow). A quiet, no-shot cue. Aliases the
+    /// door-code-wrong dull knock. Non-spatial.
+    RangedDryClick,
+    /// An arrow/bolt lodging in the world (tree, stone, ground, wall): a sharp
+    /// snap into a wood-body knock with a faint shaft-vibration buzz. Backed by
+    /// the synthesized `impacts/arrow-impact-*.wav` pool; the old routing fell
+    /// into the tool-impact pools and read as a pickaxe striking rock (owner
+    /// report). Spatial at the impact point.
+    ImpactArrowWorld,
 
     // --- Footsteps per surface ---
     FootstepDirt,
@@ -139,6 +166,55 @@ pub(crate) enum SoundId {
     /// the latch catching (`ui/button-click.wav` down 1 semitone at
     /// 110 ms).
     DoorClose,
+
+    // --- meteor shower ---
+    /// Retired approach-roar cue. The dedicated `world/meteor-flyby.wav` crossing
+    /// bed now carries the whole approach-and-pass shape, so there is no separate
+    /// roar to trigger (folding it in avoids a doubled sound). Kept as a variant
+    /// (still pathed + defaulted so the manifest stays exhaustive) but no longer
+    /// written by the renderer. Aliases the flyby bed.
+    MeteorShowerRoar,
+    /// The impact explosion boom, played spatially at the crater with a distance
+    /// delay (light-then-sound). Backed by `world/meteor-impact.wav`, a 9.3 s mono
+    /// one-shot whose leading silence is trimmed so the hit lands at t=0.
+    MeteorShowerImpact,
+    /// The meteor's crossing/approach rumble: `world/meteor-flyby.wav`, an 18 s
+    /// stereo bed with its own approach-then-pass shape. Played ONCE per event
+    /// (NOT looped, a loop would restart mid-descent and sound wrong), non-spatial,
+    /// with the renderer scaling its gain each frame by proximity (inaudible when
+    /// the object is kilometres out, swelling as it screams overhead). Timed to end
+    /// at impact so the `MeteorShowerImpact` boom takes over cleanly.
+    MeteorShowerRumble,
+
+    // --- Explosives ---
+    /// A placed charge's fuse hiss, played spatially at the charge and re-fired
+    /// on a short cadence while the camera is near so it reads as a continuous
+    /// sizzle a defender can locate by ear. Dedicated foley
+    /// (`explosions/fuse-sizzle-*.wav`): two windows cut straight from the
+    /// reference fuse recording's steady burn, RMS-matched so the refire
+    /// cadence overlaps into one continuous sizzle.
+    FuseHiss,
+    /// The detonation: a low physical thump at the blast, played spatially so a
+    /// nearby player feels the weight of the breach. Dedicated foley
+    /// (`explosions/explosion-close-*.wav`): instant attack, short body, tail
+    /// cut hard (fully decayed by ~1.3-1.7 s) so nothing echoes or lingers.
+    ExplosionThump,
+    /// The far rumble that trails the thump, played spatially at the blast with a
+    /// distance delay (`distance / speed_of_sound`) so a distant breach lands as
+    /// flash-then-rumble. Dedicated foley (`explosions/explosion-far-*.wav`),
+    /// low-passed for the distance read, trimmed so the swell arrives promptly
+    /// (the delay is the consumer's job, not dead air in the file).
+    ExplosionRumble,
+    /// The thrower's own release cue when a powder bomb leaves the hand at the
+    /// toss pose's release frame: a short front-loaded air-cut whoosh
+    /// (`explosions/throw-whoosh-1.wav`). Non-spatial (the local thrower's own
+    /// toss).
+    BombThrowRelease,
+    /// An admin `/tp` yanked this player across the map: a swell-then-pass
+    /// whoosh (`transitions/teleport-whoosh.wav`) so the relocation reads as an
+    /// event instead of a silent camera jump. Non-spatial (it belongs to the
+    /// teleported player, not a point in the world).
+    TeleportWhoosh,
 }
 
 /// Returns every defined sound. Useful for the loader at startup so we
@@ -160,6 +236,12 @@ pub(crate) fn all_sound_ids() -> &'static [SoundId] {
         SoundId::OreStageCrumble,
         SoundId::OreNodeBreak,
         SoundId::ImpactPlayerBlunt,
+        SoundId::ImpactPlayerClub,
+        SoundId::ImpactPlayerSpear,
+        SoundId::ImpactPlayerSword,
+        SoundId::ImpactPlayerMace,
+        SoundId::RangedDryClick,
+        SoundId::ImpactArrowWorld,
         SoundId::SwingMiss,
         SoundId::FootstepDirt,
         SoundId::FootstepWood,
@@ -177,6 +259,14 @@ pub(crate) fn all_sound_ids() -> &'static [SoundId] {
         SoundId::DoorCodeWrong,
         SoundId::DoorOpen,
         SoundId::DoorClose,
+        SoundId::MeteorShowerRoar,
+        SoundId::MeteorShowerImpact,
+        SoundId::MeteorShowerRumble,
+        SoundId::FuseHiss,
+        SoundId::ExplosionThump,
+        SoundId::ExplosionRumble,
+        SoundId::BombThrowRelease,
+        SoundId::TeleportWhoosh,
     ]
 }
 
@@ -331,12 +421,17 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
             looped: false,
         },
 
-        // PvP melee blunt impact, a meatier thump than chipping at a
-        // tree, so it sits a bit louder than the resource impact pool.
-        // Wider pitch jitter (±9 %) because rapid hits would otherwise
-        // sound metronomic; the body of a player gives a different
-        // resonance each time.
-        SoundId::ImpactPlayerBlunt => SoundDefaults {
+        // PvP melee impact, a meatier thump than chipping at a tree, so it sits a
+        // bit louder than the resource impact pool. Wider pitch jitter (±9 %)
+        // because rapid hits would otherwise sound metronomic; the body of a
+        // player gives a different resonance each time. Every weapon's PvP pool
+        // shares these mix defaults; only the sample set (see `sound_paths`)
+        // differs, so recording real per-weapon foley is a one-line swap.
+        SoundId::ImpactPlayerBlunt
+        | SoundId::ImpactPlayerClub
+        | SoundId::ImpactPlayerSpear
+        | SoundId::ImpactPlayerSword
+        | SoundId::ImpactPlayerMace => SoundDefaults {
             category: SoundCategory::Sfx3d,
             base_gain_db: -8.0,
             spatial: Some(SpatialDefaults {
@@ -344,6 +439,28 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
                 height_offset: 1.0,
             }),
             pitch_jitter: 0.09,
+            looped: false,
+        },
+
+        // Dry-click: a quiet negative-feedback knock, deliberately understated so
+        // it reads as "not yet" without nagging.
+        SoundId::RangedDryClick => SoundDefaults {
+            category: SoundCategory::Sfx2d,
+            base_gain_db: -18.0,
+            spatial: None,
+            pitch_jitter: 0.0,
+            looped: false,
+        },
+        // Arrow lodging in the world: spatial at the impact point, mixed like
+        // the tool-impact pool with the same variety jitter.
+        SoundId::ImpactArrowWorld => SoundDefaults {
+            category: SoundCategory::Sfx3d,
+            base_gain_db: -10.0,
+            spatial: Some(SpatialDefaults {
+                scale: 0.06,
+                height_offset: 1.0,
+            }),
+            pitch_jitter: 0.05,
             looped: false,
         },
 
@@ -489,6 +606,113 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
             pitch_jitter: 0.04,
             looped: false,
         },
+
+        // Retired: the flyby bed now carries the approach, so the roar is never
+        // triggered. Kept defaulted (non-spatial, non-looped) so the manifest
+        // stays exhaustive; the level is moot since it is not written anymore.
+        SoundId::MeteorShowerRoar => SoundDefaults {
+            category: SoundCategory::Sfx3d,
+            base_gain_db: -4.0,
+            spatial: None,
+            pitch_jitter: 0.0,
+            looped: false,
+        },
+        // The impact boom is spatial at the crater and a loud one-shot (NOT
+        // looped). A wide full-gain zone (small scale) so the 9.3 s explosion
+        // still reads as a heavy blast from a fair way off, matching the map-wide
+        // plume.
+        SoundId::MeteorShowerImpact => SoundDefaults {
+            category: SoundCategory::Sfx3d,
+            base_gain_db: -2.0,
+            spatial: Some(SpatialDefaults {
+                scale: 0.012,
+                height_offset: 2.0,
+            }),
+            pitch_jitter: 0.0,
+            looped: false,
+        },
+        // The crossing rumble is a non-spatial ONE-SHOT bed (NOT looped: the file
+        // has its own approach-then-pass shape, and a loop would restart it
+        // mid-descent). The renderer scales its gain by proximity each frame (the
+        // announce gives it the meteor's world position, so a manifest spatial
+        // falloff would double-count), starting it near-silent and swelling it
+        // toward this reference as the fireball closes, so a distant meteor is a
+        // whisper and an overhead pass a felt roar. No pitch jitter (a signature
+        // cue).
+        SoundId::MeteorShowerRumble => SoundDefaults {
+            category: SoundCategory::Sfx3d,
+            base_gain_db: -3.0,
+            spatial: None,
+            pitch_jitter: 0.0,
+            looped: false,
+        },
+
+        // Fuse hiss: quiet + spatial at the charge so it does not dominate but is
+        // locatable by ear when close. A tight spatial scale (fast falloff) so a
+        // charge across a base does not hiss in your ear. Light jitter so the
+        // re-fired sample does not machine-gun one identical hiss. Dropped from
+        // -20 after the switch to the reference-sample sizzle (owner feedback:
+        // the burn should sit under the action, never dominate it).
+        SoundId::FuseHiss => SoundDefaults {
+            category: SoundCategory::Sfx3d,
+            base_gain_db: -29.0,
+            spatial: Some(SpatialDefaults {
+                scale: 0.10,
+                height_offset: 0.4,
+            }),
+            pitch_jitter: 0.06,
+            looped: false,
+        },
+        // Detonation thump: loud, spatial, no jitter (a signature event should
+        // sound the same each time). A wide full-gain zone (small scale) so a
+        // breach reads heavy from a fair way off, matching the far rumble.
+        SoundId::ExplosionThump => SoundDefaults {
+            category: SoundCategory::Sfx3d,
+            base_gain_db: -3.0,
+            spatial: Some(SpatialDefaults {
+                scale: 0.02,
+                height_offset: 1.0,
+            }),
+            pitch_jitter: 0.0,
+            looped: false,
+        },
+        // Far rumble: the delayed tail. Slightly quieter than the thump and a
+        // wider full-gain zone so it carries; the distance delay (scheduled by the
+        // consumer) is what sells the flash-then-sound.
+        SoundId::ExplosionRumble => SoundDefaults {
+            category: SoundCategory::Sfx3d,
+            base_gain_db: -6.0,
+            spatial: Some(SpatialDefaults {
+                scale: 0.012,
+                height_offset: 1.5,
+            }),
+            pitch_jitter: 0.0,
+            looped: false,
+        },
+        // Bomb release: the local thrower's own toss cue, non-spatial so it always
+        // reads regardless of aim, a touch quiet (it punctuates the toss, not an
+        // alarm). Light jitter so a rapid toss/toss does not machine-gun one whoosh.
+        // The dedicated whoosh peaks ~9 dB hotter than the old miss-pool alias
+        // (-3 dBFS vs -12), so the base gain drops by the same amount to keep the
+        // perceived level.
+        SoundId::BombThrowRelease => SoundDefaults {
+            category: SoundCategory::Sfx2d,
+            base_gain_db: -21.0,
+            spatial: None,
+            pitch_jitter: 0.05,
+            looped: false,
+        },
+        // Teleport: the moved player's own relocation cue, non-spatial (you are
+        // the destination). No jitter: a signature event should sound like
+        // itself. Mixed clearly audible but not startling; an admin /tp already
+        // surprises the player enough.
+        SoundId::TeleportWhoosh => SoundDefaults {
+            category: SoundCategory::Sfx2d,
+            base_gain_db: -10.0,
+            spatial: None,
+            pitch_jitter: 0.0,
+            looped: false,
+        },
     }
 }
 
@@ -540,15 +764,34 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
     static ORE_CRUMBLE: [&str; 1] = ["impacts/ore-crumble.wav"];
     static ORE_BREAK: [&str; 1] = ["impacts/ore-break.wav"];
 
-    // PvP player-impact pool. Today shares the axe-wood sample set,
-    // the "meaty thump" character is roughly right and re-using the
-    // existing assets means the PvP loop ships without blocking on a
-    // dedicated audio capture. Drop in `impacts/player-blunt-*.wav`
-    // and rewrite this static to switch over.
-    static PLAYER_BLUNT: [&str; 3] = [
+    // PvP player-impact pools. Every weapon aliases an existing impact sample
+    // set chosen for its character until dedicated foley is recorded, at which
+    // point each becomes a one-line `static` swap:
+    //   - The "softer / sharper" set (axe-wood) reads as a hatchet-bright
+    //     transient: the gather-tool PvP thump, the sword, and the spear
+    //     (hatchet-vs-flesh) route here.
+    //   - The "harder / blunter" set (pickaxe-ore) reads as a heavy hard thud:
+    //     the club and the mace route here.
+    static PLAYER_BLUNT_SOFT: [&str; 3] = [
         "impacts/axe-wood-1.wav",
         "impacts/axe-wood-2.wav",
         "impacts/axe-wood-3.wav",
+    ];
+    static PLAYER_BLUNT_HARD: [&str; 3] = [
+        "impacts/pickaxe-ore-1.wav",
+        "impacts/pickaxe-ore-2.wav",
+        "impacts/pickaxe-ore-3.wav",
+    ];
+
+    // Ranged cue pools. Deliberately sparse: the shot itself is silent (every
+    // launch cue tried read wrong in play, owner reports), so only the
+    // dry-click (aliasing the door-code-wrong dull knock) and the arrow
+    // impact pool remain.
+    static RANGED_DRY_CLICK: [&str; 1] = ["ui/door-code-wrong.wav"];
+    static ARROW_IMPACT: [&str; 3] = [
+        "impacts/arrow-impact-1.wav",
+        "impacts/arrow-impact-2.wav",
+        "impacts/arrow-impact-3.wav",
     ];
 
     static INVENTORY_PICKUP: [&str; 1] = ["inventory/pickup-item.wav"];
@@ -563,6 +806,36 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
     static DOOR_CODE_WRONG: [&str; 1] = ["ui/door-code-wrong.wav"];
     static DOOR_OPEN: [&str; 1] = ["world/door-open.wav"];
     static DOOR_CLOSE: [&str; 1] = ["world/door-close.wav"];
+
+    // Dedicated meteor foley. The crossing/approach bed (and the retired roar,
+    // folded into it) ride the flyby; the impact rides the explosion boom.
+    static METEOR_FLYBY: [&str; 1] = ["world/meteor-flyby.wav"];
+    static METEOR_IMPACT: [&str; 1] = ["world/meteor-impact.wav"];
+
+    // Dedicated explosion foley (trimmed / mono-folded / normalized offline).
+    // close-1 and close-2 are cut straight from the user-supplied reference
+    // explosion samples; close-3 and both far rumbles are Mixkit recordings
+    // (free license, no attribution) tightened to the same short no-echo
+    // profile; the sizzles are two windows of the reference fuse recording's
+    // steady burn, re-fired on the fuse cadence.
+    static EXPLOSION_CLOSE: [&str; 3] = [
+        "explosions/explosion-close-1.wav",
+        "explosions/explosion-close-2.wav",
+        "explosions/explosion-close-3.wav",
+    ];
+    static EXPLOSION_FAR: [&str; 2] = [
+        "explosions/explosion-far-1.wav",
+        "explosions/explosion-far-2.wav",
+    ];
+    static FUSE_SIZZLE: [&str; 2] = [
+        "explosions/fuse-sizzle-1.wav",
+        "explosions/fuse-sizzle-2.wav",
+    ];
+    static THROW_WHOOSH: [&str; 1] = ["explosions/throw-whoosh-1.wav"];
+
+    // Cut from the user-supplied swoosh reference set: a swell-then-pass
+    // whoosh for the admin-/tp relocation cue.
+    static TELEPORT_WHOOSH: [&str; 1] = ["transitions/teleport-whoosh.wav"];
 
     match id {
         SoundId::UiButtonClick => &UI_CLICK,
@@ -583,7 +856,14 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         SoundId::ImpactPickaxeOnWood => &PICKAXE_WOOD,
         SoundId::OreStageCrumble => &ORE_CRUMBLE,
         SoundId::OreNodeBreak => &ORE_BREAK,
-        SoundId::ImpactPlayerBlunt => &PLAYER_BLUNT,
+        // Gather-tool PvP thump, the sword, and the spear share the sharper
+        // (axe-wood) set; the club and mace share the blunter (pickaxe-ore) set.
+        SoundId::ImpactPlayerBlunt | SoundId::ImpactPlayerSword | SoundId::ImpactPlayerSpear => {
+            &PLAYER_BLUNT_SOFT
+        }
+        SoundId::ImpactPlayerClub | SoundId::ImpactPlayerMace => &PLAYER_BLUNT_HARD,
+        SoundId::RangedDryClick => &RANGED_DRY_CLICK,
+        SoundId::ImpactArrowWorld => &ARROW_IMPACT,
         SoundId::SwingMiss => &MISS,
         SoundId::FootstepDirt => footstep_paths(FootstepMaterial::Dirt),
         SoundId::FootstepWood => footstep_paths(FootstepMaterial::Wood),
@@ -601,52 +881,83 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         SoundId::DoorCodeWrong => &DOOR_CODE_WRONG,
         SoundId::DoorOpen => &DOOR_OPEN,
         SoundId::DoorClose => &DOOR_CLOSE,
+        // Dedicated meteor foley. The retired roar and the crossing rumble both
+        // ride the flyby bed (the roar is no longer triggered); the impact rides
+        // the explosion boom.
+        SoundId::MeteorShowerRoar | SoundId::MeteorShowerRumble => &METEOR_FLYBY,
+        SoundId::MeteorShowerImpact => &METEOR_IMPACT,
+        // Dedicated explosion foley (see the statics above). The old aliases
+        // (miss whoosh for the fuse, tree-fall for the boom) are gone.
+        SoundId::FuseHiss => &FUSE_SIZZLE,
+        SoundId::ExplosionThump => &EXPLOSION_CLOSE,
+        SoundId::ExplosionRumble => &EXPLOSION_FAR,
+        SoundId::BombThrowRelease => &THROW_WHOOSH,
+        SoundId::TeleportWhoosh => &TELEPORT_WHOOSH,
     }
 }
 
-/// Map a (tool, surface) pair to the impact `SoundId` to play. Returns
-/// `None` for pairs that have no dedicated sound, callers should fall
-/// back to the swing whoosh in that case.
+/// Map a swing archetype ([`ItemModel`]) + struck surface to the impact
+/// `SoundId` to play for a resource / deployable hit. Returns `None` for pairs
+/// that have no dedicated sound; callers should fall back to the swing whoosh.
 ///
-/// New combinations slot in by adding a row here. The audio-selection
-/// table replaces the old `ImpactEffectKind`-keyed dispatch, which was
-/// stuck at "tree → wood chips, anything else → stone shards".
-pub(crate) fn impact_sound_for(tool: ToolKind, surface: SurfaceMaterial) -> Option<SoundId> {
-    match (tool, surface) {
-        (ToolKind::Axe, SurfaceMaterial::Wood) => Some(SoundId::ImpactAxeOnWood),
-        // Hatchet biting anything else (ore, stone vein, stone structure,
+/// Keyed on the wire impact identity: gather hits arrive as the Hatchet /
+/// Pickaxe archetype (the hammer's repair tap resolves to Hatchet too, so it is
+/// covered by the hatchet arm). Weapon archetypes never reach here (a weapon hit
+/// is a player hit, routed through [`impact_sound_for_player`], or a
+/// hands-tier deployable hit that maps to the hatchet cue).
+pub(crate) fn impact_sound_for(model: ItemModel, surface: SurfaceMaterial) -> Option<SoundId> {
+    // Collapse the swing archetype into its resource-impact family. The
+    // bag / deployable (bare-hand) archetype has no dedicated impact clip, it
+    // reports `None` exactly as the old `ToolKind::Hands` arm did, so a crude
+    // hand-pick (branch pile, surface stone, hay) stays silent on the remote path
+    // and falls back to the whoosh locally. A gather hit arrives as Hatchet or
+    // Pickaxe; a weapon that struck a deployable resolves to its own archetype
+    // and reads as the pickaxe (heavy) or hatchet (everything else) family.
+    let heavy_pick = match model {
+        ItemModel::Pickaxe | ItemModel::Mace => true,
+        ItemModel::Hatchet | ItemModel::Club | ItemModel::Spear | ItemModel::Sword => false,
+        // An arrow/bolt lodging in the world gets its own cue on every surface;
+        // the tool pools read as a pickaxe chipping rock (owner report).
+        ItemModel::Bow | ItemModel::Crossbow => return Some(SoundId::ImpactArrowWorld),
+        // No dedicated impact clip for the empty-hand / deployable punch, or the
+        // thrown bomb (its damage is the blast, whose cue is the explosion audio,
+        // not a swing-contact clip).
+        ItemModel::Bag | ItemModel::Deployable | ItemModel::ThrownBomb => return None,
+    };
+    match (heavy_pick, surface) {
+        (false, SurfaceMaterial::Wood) => Some(SoundId::ImpactAxeOnWood),
+        // Hatchet-class biting anything else (ore, stone vein, stone structure,
         // hay, dirt). Generic mixed-down pickaxe-ore sample.
-        (ToolKind::Axe, _) => Some(SoundId::ImpactAxeGeneric),
-        (ToolKind::Pickaxe, SurfaceMaterial::Wood) => Some(SoundId::ImpactPickaxeOnWood),
-        (ToolKind::Pickaxe, SurfaceMaterial::Stone) => Some(SoundId::ImpactPickaxeOnStone),
-        (ToolKind::Pickaxe, SurfaceMaterial::Coal) => Some(SoundId::ImpactPickaxeOnCoal),
-        (ToolKind::Pickaxe, SurfaceMaterial::Iron) => Some(SoundId::ImpactPickaxeOnIron),
-        (ToolKind::Pickaxe, SurfaceMaterial::Sulfur) => Some(SoundId::ImpactPickaxeOnSulfur),
-        // Hammer repairs thunk like axe work: wood-on-wood for wooden
-        // structures, the generic bite for everything else.
-        (ToolKind::Hammer, SurfaceMaterial::Wood) => Some(SoundId::ImpactAxeOnWood),
-        (ToolKind::Hammer, _) => Some(SoundId::ImpactAxeGeneric),
-        // Bare hands never reach here, the input layer suppresses the
-        // swing entirely when no real tool is equipped. The arm exists
-        // so the match stays exhaustive against future ToolKind /
-        // SurfaceMaterial additions.
-        (ToolKind::Hands, _)
-        | (
-            ToolKind::Pickaxe,
-            SurfaceMaterial::Dirt | SurfaceMaterial::Concrete | SurfaceMaterial::Sand,
-        ) => None,
+        (false, _) => Some(SoundId::ImpactAxeGeneric),
+        (true, SurfaceMaterial::Wood) => Some(SoundId::ImpactPickaxeOnWood),
+        (true, SurfaceMaterial::Stone) => Some(SoundId::ImpactPickaxeOnStone),
+        (true, SurfaceMaterial::Coal) => Some(SoundId::ImpactPickaxeOnCoal),
+        (true, SurfaceMaterial::Iron) => Some(SoundId::ImpactPickaxeOnIron),
+        (true, SurfaceMaterial::Sulfur) => Some(SoundId::ImpactPickaxeOnSulfur),
+        (true, SurfaceMaterial::Dirt | SurfaceMaterial::Concrete | SurfaceMaterial::Sand) => None,
     }
 }
 
-/// PvP-impact sound lookup. Every melee tool routes to the single
-/// `ImpactPlayerBlunt` pool today; per-tool variants can be added
-/// later by branching on `tool` here without touching call sites.
-pub(crate) fn impact_sound_for_player(tool: ToolKind) -> Option<SoundId> {
-    match tool {
-        ToolKind::Axe | ToolKind::Pickaxe => Some(SoundId::ImpactPlayerBlunt),
-        // Hands and hammers can't damage players (the server rejects
-        // both), so neither produces a PvP impact sound.
-        ToolKind::Hands | ToolKind::Hammer => None,
+/// PvP-impact sound lookup, keyed on the swing archetype. Each melee weapon
+/// routes to its own PvP pool (aliasing an existing sample set until dedicated
+/// foley lands); the gather tools share the generic blunt pool. The bag /
+/// deployable archetype produces no PvP sound (bare hands can't damage players;
+/// the server rejects it).
+pub(crate) fn impact_sound_for_player(model: ItemModel) -> Option<SoundId> {
+    match model {
+        // Gather tools (a desperation weapon) share the generic blunt thump.
+        ItemModel::Hatchet | ItemModel::Pickaxe => Some(SoundId::ImpactPlayerBlunt),
+        ItemModel::Club => Some(SoundId::ImpactPlayerClub),
+        ItemModel::Spear => Some(SoundId::ImpactPlayerSpear),
+        ItemModel::Sword => Some(SoundId::ImpactPlayerSword),
+        ItemModel::Mace => Some(SoundId::ImpactPlayerMace),
+        // Ranged hits share the generic blunt thump as a placeholder; P3b's feel
+        // pass gives arrow impacts their own cue.
+        ItemModel::Bow | ItemModel::Crossbow => Some(SoundId::ImpactPlayerBlunt),
+        // Bare hands / deployable-in-hand can't damage players, and a thrown bomb
+        // does no contact damage (its blast is the damage), so none produce a
+        // PvP-contact cue.
+        ItemModel::Bag | ItemModel::Deployable | ItemModel::ThrownBomb => None,
     }
 }
 
@@ -762,36 +1073,205 @@ mod tests {
     #[test]
     fn impact_table_covers_canonical_pairs() {
         assert_eq!(
-            impact_sound_for(ToolKind::Axe, SurfaceMaterial::Wood),
+            impact_sound_for(ItemModel::Hatchet, SurfaceMaterial::Wood),
             Some(SoundId::ImpactAxeOnWood)
         );
         assert_eq!(
-            impact_sound_for(ToolKind::Pickaxe, SurfaceMaterial::Iron),
+            impact_sound_for(ItemModel::Pickaxe, SurfaceMaterial::Iron),
             Some(SoundId::ImpactPickaxeOnIron)
         );
-        // Hatchet on a non-wood surface (e.g. striking a furnace) used
-        // to fall through to the miss whoosh, now it ships the
+        // Hatchet on a non-wood surface (e.g. striking a furnace) ships the
         // mixed-down generic axe impact.
         assert_eq!(
-            impact_sound_for(ToolKind::Axe, SurfaceMaterial::Iron),
+            impact_sound_for(ItemModel::Hatchet, SurfaceMaterial::Iron),
             Some(SoundId::ImpactAxeGeneric)
         );
         assert_eq!(
-            impact_sound_for(ToolKind::Axe, SurfaceMaterial::Stone),
+            impact_sound_for(ItemModel::Hatchet, SurfaceMaterial::Stone),
             Some(SoundId::ImpactAxeGeneric)
         );
-        // Pickaxe on wood (e.g. striking a workbench) used to fall
-        // through to the miss whoosh, now it ships the mixed-down
+        // Pickaxe on wood (e.g. striking a workbench) ships the mixed-down
         // pickaxe-on-wood impact.
         assert_eq!(
-            impact_sound_for(ToolKind::Pickaxe, SurfaceMaterial::Wood),
+            impact_sound_for(ItemModel::Pickaxe, SurfaceMaterial::Wood),
             Some(SoundId::ImpactPickaxeOnWood)
         );
-        // Bare hands never reach the dispatcher today, but the table
-        // still reports `None` so the fallback stays explicit.
+        // The bag (empty-hand / deployable-in-hand) archetype reports `None` so
+        // the fallback stays explicit.
         assert_eq!(
-            impact_sound_for(ToolKind::Hands, SurfaceMaterial::Wood),
+            impact_sound_for(ItemModel::Bag, SurfaceMaterial::Wood),
             None
+        );
+    }
+
+    #[test]
+    fn every_item_model_resolves_a_pvp_or_no_sound() {
+        // Completeness: `impact_sound_for_player` is total over the whole
+        // `ItemModel` enum. Every weapon archetype resolves to a distinct pool;
+        // gather tools share the blunt pool; the non-combat archetypes report
+        // `None` (they cannot damage players).
+        assert_eq!(
+            impact_sound_for_player(ItemModel::Club),
+            Some(SoundId::ImpactPlayerClub)
+        );
+        assert_eq!(
+            impact_sound_for_player(ItemModel::Spear),
+            Some(SoundId::ImpactPlayerSpear)
+        );
+        assert_eq!(
+            impact_sound_for_player(ItemModel::Sword),
+            Some(SoundId::ImpactPlayerSword)
+        );
+        assert_eq!(
+            impact_sound_for_player(ItemModel::Mace),
+            Some(SoundId::ImpactPlayerMace)
+        );
+        assert_eq!(
+            impact_sound_for_player(ItemModel::Hatchet),
+            Some(SoundId::ImpactPlayerBlunt)
+        );
+        assert_eq!(
+            impact_sound_for_player(ItemModel::Pickaxe),
+            Some(SoundId::ImpactPlayerBlunt)
+        );
+        assert_eq!(impact_sound_for_player(ItemModel::Bag), None);
+        assert_eq!(impact_sound_for_player(ItemModel::Deployable), None);
+
+        // And every archetype resolves a resource impact sound or a defensible
+        // `None` (never a panic): iterating `ItemModel::ALL` proves totality.
+        for &model in ItemModel::ALL {
+            let _ = impact_sound_for(model, SurfaceMaterial::Wood);
+            let _ = impact_sound_for_player(model);
+        }
+    }
+
+    #[test]
+    fn ranged_cues_alias_the_expected_existing_pools() {
+        // The P3b ranged cues are aliases onto existing sample sets until
+        // dedicated foley lands. Pin each alias so a swap of one cue's pool can't
+        // silently drift the others, and so recording real foley is a visible,
+        // one-line `sound_paths` change with a test that flips with it. This is
+        // the ranged analogue of the PvP alias coverage above.
+        assert_eq!(
+            sound_paths(SoundId::RangedDryClick),
+            &["ui/door-code-wrong.wav"]
+        );
+        // Arrows lodging in the world carry their own synthesized pool on every
+        // surface (the tool pools read as a pickaxe chipping rock, owner report).
+        assert_eq!(
+            sound_paths(SoundId::ImpactArrowWorld),
+            &[
+                "impacts/arrow-impact-1.wav",
+                "impacts/arrow-impact-2.wav",
+                "impacts/arrow-impact-3.wav",
+            ]
+        );
+        for surface in [
+            SurfaceMaterial::Wood,
+            SurfaceMaterial::Stone,
+            SurfaceMaterial::Dirt,
+        ] {
+            assert_eq!(
+                impact_sound_for(ItemModel::Bow, surface),
+                Some(SoundId::ImpactArrowWorld)
+            );
+            assert_eq!(
+                impact_sound_for(ItemModel::Crossbow, surface),
+                Some(SoundId::ImpactArrowWorld)
+            );
+        }
+    }
+
+    #[test]
+    fn explosive_cues_bind_the_dedicated_explosion_foley() {
+        // The fuse, both blast cues, and the throw release bind the dedicated
+        // recordings under `assets/explosions/` (the old miss-whoosh /
+        // tree-fall aliases are retired). Pin the paths so a manifest
+        // regression is loud.
+        assert_eq!(
+            sound_paths(SoundId::FuseHiss),
+            &[
+                "explosions/fuse-sizzle-1.wav",
+                "explosions/fuse-sizzle-2.wav",
+            ]
+        );
+        assert_eq!(
+            sound_paths(SoundId::ExplosionThump),
+            &[
+                "explosions/explosion-close-1.wav",
+                "explosions/explosion-close-2.wav",
+                "explosions/explosion-close-3.wav",
+            ]
+        );
+        assert_eq!(
+            sound_paths(SoundId::ExplosionRumble),
+            &[
+                "explosions/explosion-far-1.wav",
+                "explosions/explosion-far-2.wav",
+            ]
+        );
+        assert_eq!(
+            sound_paths(SoundId::BombThrowRelease),
+            &["explosions/throw-whoosh-1.wav"]
+        );
+    }
+
+    #[test]
+    fn every_manifest_path_points_at_a_real_asset_file() {
+        // The library loads paths lazily, so a typo'd path only surfaces as a
+        // silent missing sound at runtime. Pin every pool entry to a file in
+        // the repo's `assets/` so CI catches a rename or a forgotten commit.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+        for id in all_sound_ids() {
+            for path in sound_paths(*id) {
+                assert!(
+                    root.join(path).is_file(),
+                    "{id:?} points at missing asset {path}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn teleport_whoosh_is_a_non_spatial_local_cue() {
+        // The teleport whoosh belongs to the moved player (you ARE the
+        // destination), so it must stay non-spatial: a spatial mix would race
+        // the ear position against the snap itself.
+        assert_eq!(
+            sound_paths(SoundId::TeleportWhoosh),
+            &["transitions/teleport-whoosh.wav"]
+        );
+        assert!(sound_defaults(SoundId::TeleportWhoosh).spatial.is_none());
+    }
+
+    #[test]
+    fn explosive_cues_are_spatial_so_distance_reads() {
+        // The fuse hiss and both blast cues are world events located in space, so
+        // each must declare spatial defaults (a defender locates a charge by ear,
+        // and a distant breach reads by its falloff). This is the explosive
+        // completeness check: every explosive cue resolves both a path (above) and
+        // a spatial mix here.
+        for id in [
+            SoundId::FuseHiss,
+            SoundId::ExplosionThump,
+            SoundId::ExplosionRumble,
+        ] {
+            assert!(
+                sound_defaults(id).spatial.is_some(),
+                "{id:?} must be a spatial world cue"
+            );
+        }
+    }
+
+    #[test]
+    fn ranged_cues_are_non_spatial_local_player_cues() {
+        // The one remaining local ranged cue (the dry-click) belongs to the
+        // shooter, so it must be non-spatial: distance falloff must never
+        // quiet a player's own weapon. The arrow-impact cue is spatial by
+        // design (it belongs to the lodge point, not the shooter).
+        assert!(
+            sound_defaults(SoundId::RangedDryClick).spatial.is_none(),
+            "the dry-click should be a non-spatial local-player cue"
         );
     }
 }

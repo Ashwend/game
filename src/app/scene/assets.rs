@@ -12,7 +12,10 @@ use bevy::{
     pbr::{Atmosphere, AtmosphereSettings, ScatteringMedium},
     post_process::dof::{DepthOfField, DepthOfFieldMode},
     prelude::*,
-    render::view::{Hdr, NoIndirectDrawing},
+    render::{
+        render_resource::{Extent3d, TextureDimension, TextureFormat},
+        view::{Hdr, NoIndirectDrawing},
+    },
 };
 
 use bevy_egui::PrimaryEguiContext;
@@ -68,13 +71,15 @@ pub(crate) const VERTEX_MATERIAL_COLOR: Color = Color::WHITE;
 /// silhouette lives in the texture's alpha), `z = 0` disables the ink-edge outline
 /// (grass blades want no drawn silhouette). The painted texture supplies the green;
 /// the mesh COLOR_0 root→tip ramp tints it (`detail * COLOR_0`).
-fn hay_tall_grass_material(tex: Handle<Image>) -> ToonMaterial {
+fn hay_tall_grass_material(tex: Handle<Image>, no_glow_tex: Handle<Image>) -> ToonMaterial {
     ToonMaterial {
         detail: tex,
         params: Vec4::new(3.0, 0.4, 0.0, 2.0),
         tex_scale: 1.0, // the hay card carries its own UVs; triplanar scale unused
         fade: 1.0,
         dev_flags: 0,
+        emissive_tex: no_glow_tex,
+        emissive: Vec4::ZERO,
     }
 }
 
@@ -93,29 +98,19 @@ pub(crate) struct PlayerVisualAssets {
 #[derive(Resource, Clone)]
 pub(crate) struct ItemVisualAssets {
     pub(crate) dropped_mesh: Handle<Mesh>,
+    /// The one procedural cuboid the bag silhouette (raw materials +
+    /// deployables-in-hand) renders as. The authored tool/hammer/plan glbs load
+    /// through the [`crate::items::HeldMesh`] visual table into
+    /// [`HeldItemVisuals`], not fields here.
     pub(crate) held_bag_mesh: Handle<Mesh>,
-    /// Both tool tiers (stone and iron) are authored Blender glbs matching their
-    /// inventory icons. Each renders as two overlaid layers sharing one swing
-    /// transform: a `*_body` (the wood haft plus its twine bindings) drawn from
-    /// the glb's primitive 0, and a `*_head` (worked stone or forged iron) from
-    /// primitive 1. The geometry + UVs + COLOR_0 come from the glb; the cel
-    /// `ToonMaterial`s below carry the textures (the tool tiers share three).
-    pub(crate) held_stone_hatchet_body_mesh: Handle<Mesh>,
-    pub(crate) held_stone_hatchet_head_mesh: Handle<Mesh>,
-    pub(crate) held_stone_pickaxe_body_mesh: Handle<Mesh>,
-    pub(crate) held_stone_pickaxe_head_mesh: Handle<Mesh>,
-    pub(crate) held_iron_hatchet_body_mesh: Handle<Mesh>,
-    pub(crate) held_iron_hatchet_head_mesh: Handle<Mesh>,
-    pub(crate) held_iron_pickaxe_body_mesh: Handle<Mesh>,
-    pub(crate) held_iron_pickaxe_head_mesh: Handle<Mesh>,
-    /// Shared cel [`ToonMaterial`]s for the tool layers: the tools joined the
-    /// cel/anime family, so each layer is lit by the same PBR-then-posterise path
-    /// as the ore + deployables instead of a flat per-glb `StandardMaterial`. The
-    /// wood haft plus its twine bindings ride `tool_wood_material`; the worked
-    /// head rides `tool_stone_material` (knapped stone) or `tool_iron_material`
-    /// (forged steel). Per-tool colour comes from the glb COLOR_0 (warm wood / tan
-    /// twine / grey stone / cool steel); the light neutral-grain textures only add
-    /// surface detail (`detail * COLOR_0`). Sources: `assets/textures/tools/*`.
+    /// Shared cel [`ToonMaterial`]s for the tool layers, resolved from a
+    /// [`crate::items::HeldMeshMaterial`] family. The tools joined the cel/anime
+    /// family, so each layer is lit by the same PBR-then-posterise path as the ore
+    /// and deployables. Wood carries the haft plus its twine bindings; Stone is
+    /// knapped stone; Iron is forged steel plus the hammer bands; Parchment is the
+    /// building-plan paper. Per-item colour comes from the glb COLOR_0 (warm wood,
+    /// tan twine, grey stone, cool steel); the light neutral-grain textures only
+    /// add surface detail (`detail * COLOR_0`). Sources: `assets/textures/tools/*`.
     pub(crate) tool_wood_material: Handle<ToonMaterial>,
     pub(crate) tool_stone_material: Handle<ToonMaterial>,
     pub(crate) tool_iron_material: Handle<ToonMaterial>,
@@ -128,23 +123,29 @@ pub(crate) struct ItemVisualAssets {
     pub(crate) tool_stone_vm_material: Handle<ToonViewmodelMaterial>,
     pub(crate) tool_iron_vm_material: Handle<ToonViewmodelMaterial>,
     /// Parchment material for the rolled building-plan scroll (world + viewmodel
-    /// variants, same as the tools). The scroll paper rides this; its twine ties
-    /// reuse the wood material with a brown COLOR_0.
+    /// variants, same as the tools). Its twine ties reuse the wood material with a
+    /// brown COLOR_0.
     pub(crate) tool_parchment_material: Handle<ToonMaterial>,
     pub(crate) tool_parchment_vm_material: Handle<ToonViewmodelMaterial>,
+    /// Woven-cloth cel material for the explosive charges (world + viewmodel):
+    /// the powder bomb's wrap and the satchel's pack body bind this, and the
+    /// satchel's leather strap reuses it too (both ride the shared `cloth.png`
+    /// tool tile; each glb's COLOR_0 carries the fabric colour vs the tan leather,
+    /// the same `detail * COLOR_0` cel path the tools use).
+    pub(crate) tool_cloth_material: Handle<ToonMaterial>,
+    pub(crate) tool_cloth_vm_material: Handle<ToonViewmodelMaterial>,
+    /// Pale bowstring / crossbow-string cord cel material (world + viewmodel). The
+    /// bow and crossbow string legs bind this; each glb's COLOR_0 carries the
+    /// pale-tan cord colour, and the neutral-grain tile only adds a faint twist of
+    /// surface detail (`detail * COLOR_0`, the same cel path the tools use). Reuses
+    /// the light neutral `parchment` tile (there is no dedicated cord texture; the
+    /// cord is slim enough that its grain barely reads, only its colour does).
+    pub(crate) tool_cord_material: Handle<ToonMaterial>,
+    pub(crate) tool_cord_vm_material: Handle<ToonViewmodelMaterial>,
     pub(crate) dropped_material: Handle<StandardMaterial>,
+    /// Flat `StandardMaterial` the bag silhouette binds (resolved from the
+    /// `BagStandard` family; no cel/viewmodel variant).
     pub(crate) held_bag_material: Handle<StandardMaterial>,
-    /// Construction hammer (a wooden mallet): an authored glb like the tools,
-    /// two primitives = wood body (handle + mallet head) on `tool_wood*` and the
-    /// two iron band hoops on `tool_iron*`. Cel-shaded via the same tool toon
-    /// materials. Source: `art/items/hammer/hammer.blend`.
-    pub(crate) held_hammer_body_mesh: Handle<Mesh>,
-    pub(crate) held_hammer_bands_mesh: Handle<Mesh>,
-    /// Building-plan scroll: an authored glb, two primitives = parchment paper
-    /// (roll + flap) on `tool_parchment*` and the twine ties on `tool_wood*`
-    /// (brown COLOR_0). Source: `art/items/building_plan/building_plan.blend`.
-    pub(crate) held_plan_paper_mesh: Handle<Mesh>,
-    pub(crate) held_plan_ties_mesh: Handle<Mesh>,
 }
 
 #[derive(Resource, Clone)]
@@ -157,6 +158,10 @@ pub(crate) struct ResourceVisualAssets {
     pub(crate) iron_node_meshes: [Handle<Mesh>; ORE_NODE_STAGE_COUNT],
     pub(crate) sulfur_node_meshes: [Handle<Mesh>; ORE_NODE_STAGE_COUNT],
     pub(crate) stone_vein_meshes: [Handle<Mesh>; ORE_NODE_STAGE_COUNT],
+    /// Meteorite (rare node): dark slag mound + erupting crystal
+    /// spikes, per depletion stage. Distinct silhouette + its own emissive
+    /// material (see `meteorite_toon_material`), not the shared ore boulder.
+    pub(crate) meteorite_node_meshes: [Handle<Mesh>; ORE_NODE_STAGE_COUNT],
     /// Full-detail live trees, authored as Blender glbs (`art/trees/*`): each
     /// loads two primitives, a textured bark TRUNK (opaque, `*_bark_material`)
     /// and an alpha-masked needle/leaf CANOPY (`*_foliage_material`), spawned as
@@ -196,6 +201,11 @@ pub(crate) struct ResourceVisualAssets {
     /// colour rides on the glb COLOR_0, so the rock texture + toon ramp are shared
     /// (see [`ToonMaterial`] and `art/ore/build_ore.py`).
     pub(crate) ore_toon_material: Handle<ToonMaterial>,
+    /// Meteorite cel material: the same PBR-then-posterise path as the ore, plus a
+    /// night-glow emissive term gated to the crystal facets (COLOR_0 alpha = 1)
+    /// via `meteorite_crystal_emissive.png`. The slag body (alpha 0) stays dark. The
+    /// only material in the scene with a non-zero emissive tint.
+    pub(crate) meteorite_toon_material: Handle<ToonMaterial>,
     pub(crate) vertex_material: Handle<StandardMaterial>,
     /// Cel-shaded ([`ToonMaterial`]) alpha-masked cards for the harvestable hay
     /// tuft: the shared grass-tuft texture, lit by the same PBR-then-posterise path
@@ -222,6 +232,11 @@ pub(crate) struct ResourceVisualAssets {
 #[derive(Resource, Clone)]
 pub(crate) struct DeployableVisualAssets {
     pub(crate) workbench_mesh: Handle<Mesh>,
+    /// Tier-2 workbench model (heavier bench + anvil + vice + bolted frame +
+    /// lower-shelf clutter), swapped in by [`Self::workbench_mesh`] when a placed
+    /// bench is upgraded. Same footprint + ground origin as tier 1, so the
+    /// placement collider is unchanged. Source: `art/deployables/build_deployables.py`.
+    pub(crate) workbench_t2_mesh: Handle<Mesh>,
     pub(crate) furnace_mesh: Handle<Mesh>,
     /// Building piece meshes indexed `[piece][tier]` via
     /// [`Self::building_mesh`]. Authored Blender glbs built from the same box
@@ -253,9 +268,23 @@ pub(crate) struct DeployableVisualAssets {
     /// Procedural torch haft + head (origin at the base so it mounts on the
     /// ground or tilts off a wall about its foot).
     pub(crate) torch_mesh: Handle<Mesh>,
+    /// Placed-charge body meshes (primitive 0 of each explosive glb): the staved
+    /// keg barrel, the strapped satchel pack, and the cloth bomb. Sources:
+    /// `assets/items/{powder_keg,satchel_charge,powder_bomb}/model.glb`.
+    pub(crate) charge_keg_mesh: Handle<Mesh>,
+    pub(crate) charge_satchel_mesh: Handle<Mesh>,
+    pub(crate) charge_bomb_mesh: Handle<Mesh>,
     /// Authored Tool Cupboard model (Blender glb, vertex-coloured like the
     /// workbench/furnace; origin at the base so it sits on a foundation).
     pub(crate) tool_cupboard_mesh: Handle<Mesh>,
+    /// Authored ruin props and the loot cache (Blender glbs under
+    /// `assets/ruins/`, vertex-coloured for cel identity: weathered pale stone
+    /// with dark iron bands). Spawned by the ruin rendering system at the site
+    /// element transforms and the cache deployable, all on the toon stone
+    /// material. Source: `art/ruins/build_ruins.py`.
+    pub(crate) ruin_cache_mesh: Handle<Mesh>,
+    pub(crate) ruin_broken_pillar_mesh: Handle<Mesh>,
+    pub(crate) ruin_fallen_arch_mesh: Handle<Mesh>,
     /// Cel-shaded wood material (hand-painted plank line-art, UV-mapped) for the
     /// wooden deployables: workbench, storage boxes, tool cupboard, torch.
     pub(crate) toon_wood_material: Handle<ToonMaterial>,
@@ -265,12 +294,21 @@ pub(crate) struct DeployableVisualAssets {
     /// Cel-shaded fabric material (woven-quilt line-art, UV-mapped) for the
     /// sleeping bag bedroll. See [Toon / cel shading](../../../docs/toon-shading.md).
     pub(crate) toon_fabric_material: Handle<ToonMaterial>,
+    /// Woven-cloth cel material for placed cloth-bodied charges (the powder bomb
+    /// and the satchel), the shared fabric tile tinted by each glb's COLOR_0.
+    pub(crate) charge_cloth_material: Handle<ToonMaterial>,
     /// Semi-transparent green tint used by the placement ghost when the
     /// slot is valid. Mirrors the convention from popular survival games
     ///, green means "click to place", we pair it with a slight pulse.
     pub(crate) ghost_valid_material: Handle<StandardMaterial>,
     /// Red variant for invalid placement (out of reach, overlapping).
     pub(crate) ghost_invalid_material: Handle<StandardMaterial>,
+    /// Punchier green/red ghost variants for the SMALL placed charges (keg /
+    /// satchel): a knee-high prop at arm's reach vanishes into tall grass at
+    /// the building ghost's subtle alpha, so the charge preview runs a higher
+    /// alpha and a stronger emissive to stay legible.
+    pub(crate) ghost_valid_charge_material: Handle<StandardMaterial>,
+    pub(crate) ghost_invalid_charge_material: Handle<StandardMaterial>,
 }
 
 impl DeployableVisualAssets {
@@ -319,6 +357,16 @@ impl DeployableVisualAssets {
         }
     }
 
+    /// Workbench mesh for a tier: the heavier anvil-and-vice bench at tier 2, the
+    /// plank bench at tier 1. Centralised here so the upgrade's mirror respawn and
+    /// the placement ghost both pick the right model with no scattered `if tier`.
+    pub(crate) fn workbench_mesh(&self, tier: u8) -> Handle<Mesh> {
+        match tier {
+            2 => self.workbench_t2_mesh.clone(),
+            _ => self.workbench_mesh.clone(),
+        }
+    }
+
     /// Authored panel mesh for a door variant.
     pub(crate) fn door_panel_mesh(&self, variant: crate::items::DoorVariant) -> Handle<Mesh> {
         match variant {
@@ -361,6 +409,20 @@ pub(crate) struct TorchFireAssets {
     pub(crate) flame_material: Handle<StandardMaterial>,
     pub(crate) billboard_mesh: Handle<Mesh>,
     pub(crate) billboard_material: Handle<StandardMaterial>,
+}
+
+/// Mesh + material handles for the meteor shower's shed particles. Built once
+/// in `setup_scene`; consumed by the meteor systems in `app::scene::sky`. The
+/// torch/furnace flame templates were too dim for a fireball reading against the
+/// bright day sky, so the meteor gets its own dedicated set: a bright additive
+/// spark (furnace-spark HDR ratio, proven to hold orange in daylight) and a
+/// warm-dark blended smoke puff shed under the fire trail.
+#[derive(Resource, Clone)]
+pub(crate) struct MeteorEmberAssets {
+    pub(crate) ember_mesh: Handle<Mesh>,
+    pub(crate) ember_material: Handle<StandardMaterial>,
+    pub(crate) smoke_mesh: Handle<Mesh>,
+    pub(crate) smoke_material: Handle<StandardMaterial>,
 }
 
 #[derive(Resource, Clone)]
@@ -418,6 +480,25 @@ pub(crate) fn setup_scene(
     // Decoded + mip-chained once here; each world bakes only its own small
     // biome-weight raster when its ground spawns (see `super::world::spawn_world_geometry`).
     commands.insert_resource(super::TerrainTextureAssets::load(&mut images));
+
+    // 1x1 white "no glow" mask, the inert emissive default every cel prop except
+    // the meteorite node binds (see `ToonMaterial::emissive`). Created up front,
+    // before the texture-loading closures capture `images`, so every material
+    // builder can clone it. A white mask + a zero `emissive` tint makes the
+    // shader's emissive term evaluate to zero, so the existing ore/tree/deployable
+    // look is byte-for-byte unchanged; only the meteorite material binds a real
+    // mask + tint.
+    let toon_no_glow_tex = images.add(Image::new_fill(
+        Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        &[255, 255, 255, 255],
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    ));
     // Ambient and clear color are now driven by the day/night cycle in
     // `sky::update_sky_system`. We still insert defaults here so the
     // very first frame (before the system runs) has sensible values
@@ -553,7 +634,11 @@ pub(crate) fn setup_scene(
         Tonemapping::AgX,
         NoIndirectDrawing,
         Projection::from(PerspectiveProjection {
-            fov: 65.0_f32.to_radians(),
+            // The base FOV constant is shared with the ranged-draw pinch sync
+            // (`sync_viewmodel_fov_system`), which is the ONLY thing that ever
+            // rewrites this projection: it pinches proportionally while a bow
+            // draw is held and restores exactly this value otherwise.
+            fov: crate::app::systems::VIEWMODEL_BASE_FOV_DEG.to_radians(),
             // A tight, fully self-contained depth range for the tool. The near
             // plane sits right at the lens so the tool never near-clips even on a
             // hard swing, and the short far plane keeps depth precision dense.
@@ -579,23 +664,14 @@ pub(crate) fn setup_scene(
             ..default()
         }),
     });
-    // Every tool ships as an authored Blender glb (matching its inventory icon).
-    // Geometry loads straight from each model: two primitives -> the two layers
-    // every tool uses (primitive 0 = wooden haft with its twine bindings;
-    // primitive 1 = the worked stone or forged iron head). The glbs carry UVs +
-    // COLOR_0 now; the cel `ToonMaterial`s (built below) carry the textures, so
-    // the four tools joined the same cel/anime family as the ore + deployables.
-    // Sources: `art/items/{wood_stone,iron}_{pickaxe,hatchet}/*.blend`.
-    let stone_pickaxe_glb = embedded_asset_path("items/wood_stone_pickaxe/model.glb");
-    let stone_hatchet_glb = embedded_asset_path("items/wood_stone_hatchet/model.glb");
-    let pickaxe_glb = embedded_asset_path("items/iron_pickaxe/model.glb");
-    let hatchet_glb = embedded_asset_path("items/iron_hatchet/model.glb");
-    // The construction hammer (a wooden mallet) is now an authored glb too:
-    // primitive 0 = wood body (handle + mallet head), primitive 1 = iron bands.
-    let hammer_glb = embedded_asset_path("items/hammer/model.glb");
-    // The building-plan scroll glb: primitive 0 = parchment paper (roll + flap),
-    // primitive 1 = the twine ties.
-    let building_plan_glb = embedded_asset_path("items/building_plan/model.glb");
+    // Held items (the tools, the construction hammer, the building-plan scroll)
+    // each ship as an authored Blender glb matching their inventory icon. Their
+    // glb paths and per-primitive material families now live in the declarative
+    // `HeldMesh::visual` table (src/items/visual.rs); `build_held_item_visuals`
+    // (below) folds that table into the `HeldItemVisuals` lookup, loading each
+    // glb primitive and resolving each layer's material family to the shared
+    // handles built here. So a new held item is one table row plus its glb, not
+    // per-item fields + loads + a match arm across three files.
     let prim_mesh = |glb: &str, primitive: usize| -> Handle<Mesh> {
         asset_server
             .load(GltfAssetLabel::Primitive { mesh: 0, primitive }.from_asset(glb.to_owned()))
@@ -630,6 +706,8 @@ pub(crate) fn setup_scene(
         tex_scale: 1.0,
         fade: 1.0,
         dev_flags: 0,
+        emissive_tex: toon_no_glow_tex.clone(),
+        emissive: Vec4::ZERO,
     };
     // Camera-relative variant for the first-person held viewmodel (same texture +
     // params; only the shader's light frame differs, see `ToonViewmodelMaterial`).
@@ -651,18 +729,21 @@ pub(crate) fn setup_scene(
     let tool_wood_vm_material = toon_viewmodel_materials.add(tool_vm(wood_tex));
     let tool_stone_vm_material = toon_viewmodel_materials.add(tool_vm(stone_tex));
     let tool_iron_vm_material = toon_viewmodel_materials.add(tool_vm(iron_tex));
-    let tool_parchment_vm_material = toon_viewmodel_materials.add(tool_vm(parchment_tex));
-    commands.insert_resource(ItemVisualAssets {
+    let tool_parchment_vm_material = toon_viewmodel_materials.add(tool_vm(parchment_tex.clone()));
+    // Explosive-charge cloth family: the powder bomb's wrap, the satchel's pack
+    // body, and the satchel's leather strap all bind this one cloth-tile cel
+    // material (each glb's COLOR_0 gives it the fabric vs tan-leather colour).
+    let cloth_tex = load_tool_texture("cloth");
+    let tool_cloth_material = toon_materials.add(tool_toon(cloth_tex.clone()));
+    let tool_cloth_vm_material = toon_viewmodel_materials.add(tool_vm(cloth_tex));
+    // Bowstring / crossbow-string cord: a slim pale cord whose COLOR_0 carries the
+    // colour. Reuses the neutral-grain parchment tile (no dedicated cord texture);
+    // the string is thin enough that only its COLOR_0 reads.
+    let tool_cord_material = toon_materials.add(tool_toon(parchment_tex.clone()));
+    let tool_cord_vm_material = toon_viewmodel_materials.add(tool_vm(parchment_tex.clone()));
+    let item_visual_assets = ItemVisualAssets {
         dropped_mesh: meshes.add(low_poly_bag_mesh()),
         held_bag_mesh: meshes.add(Cuboid::new(0.26, 0.22, 0.34)),
-        held_stone_hatchet_body_mesh: prim_mesh(&stone_hatchet_glb, 0),
-        held_stone_hatchet_head_mesh: prim_mesh(&stone_hatchet_glb, 1),
-        held_stone_pickaxe_body_mesh: prim_mesh(&stone_pickaxe_glb, 0),
-        held_stone_pickaxe_head_mesh: prim_mesh(&stone_pickaxe_glb, 1),
-        held_iron_hatchet_body_mesh: prim_mesh(&hatchet_glb, 0),
-        held_iron_hatchet_head_mesh: prim_mesh(&hatchet_glb, 1),
-        held_iron_pickaxe_body_mesh: prim_mesh(&pickaxe_glb, 0),
-        held_iron_pickaxe_head_mesh: prim_mesh(&pickaxe_glb, 1),
         tool_wood_material,
         tool_stone_material,
         tool_iron_material,
@@ -671,6 +752,10 @@ pub(crate) fn setup_scene(
         tool_iron_vm_material,
         tool_parchment_material,
         tool_parchment_vm_material,
+        tool_cloth_material,
+        tool_cloth_vm_material,
+        tool_cord_material,
+        tool_cord_vm_material,
         dropped_material: materials.add(StandardMaterial {
             base_color: DROPPED_BAG_COLOR,
             perceptual_roughness: 0.95,
@@ -683,11 +768,73 @@ pub(crate) fn setup_scene(
             reflectance: 0.15,
             ..default()
         }),
-        held_hammer_body_mesh: prim_mesh(&hammer_glb, 0),
-        held_hammer_bands_mesh: prim_mesh(&hammer_glb, 1),
-        held_plan_paper_mesh: prim_mesh(&building_plan_glb, 0),
-        held_plan_ties_mesh: prim_mesh(&building_plan_glb, 1),
-    });
+    };
+    // Precompute the in-hand layer stacks for every held item from the declarative
+    // `HeldMesh::visual` table, then hand both resources to the world. `held_item_layers`
+    // (first-person and remote-player rig) is a plain map lookup into this.
+    commands.insert_resource(crate::app::systems::build_held_item_visuals(
+        &asset_server,
+        &item_visual_assets,
+    ));
+    commands.insert_resource(item_visual_assets);
+    // Worn-armor rig visuals. Armor matches the PLAYER RIG's material family
+    // (PBR `StandardMaterial`, not the cel/toon family the held tools use above),
+    // so each family (cloth / wood slat / steel) is one shared `StandardMaterial`
+    // built here from its detail texture; COLOR_0 on the glb carries per-piece
+    // colour, the texture only adds surface grain, exactly how the rig itself
+    // renders. `build_armor_visuals` then folds the declarative `ArmorMesh::visual`
+    // table into the `ArmorVisuals` lookup the rig-attachment system reads. A new
+    // armor set is one table row plus its glbs, no material or attachment code.
+    let mut load_named_texture = |rel: &str| -> Handle<Image> {
+        let bytes =
+            embedded_bytes(rel).unwrap_or_else(|| panic!("embedded armor texture missing: {rel}"));
+        let mut image = Image::from_buffer(
+            bytes,
+            ImageType::Extension("png"),
+            CompressedImageFormats::NONE,
+            true,
+            ImageSampler::Descriptor(tree_texture_sampler()),
+            RenderAssetUsages::RENDER_WORLD,
+        )
+        .unwrap_or_else(|err| panic!("decode armor texture {rel}: {err:?}"));
+        build_mip_chain(&mut image);
+        images.add(image)
+    };
+    let armor_materials = crate::app::systems::ArmorMaterials {
+        // Matte woven cloth (padded set), roughness ~0.9 per the rendering-materials
+        // doc; identity colour from the glb COLOR_0.
+        cloth: materials.add(StandardMaterial {
+            base_color: VERTEX_MATERIAL_COLOR,
+            base_color_texture: Some(load_named_texture("textures/tools/cloth.png")),
+            perceptual_roughness: 0.92,
+            reflectance: 0.12,
+            ..default()
+        }),
+        // Matte hewn-wood slats (lamellar set), same matte roughness as the wood
+        // building tiers.
+        wood_slat: materials.add(StandardMaterial {
+            base_color: VERTEX_MATERIAL_COLOR,
+            base_color_texture: Some(load_named_texture("textures/props/wood_slat.png")),
+            perceptual_roughness: 0.9,
+            reflectance: 0.13,
+            ..default()
+        }),
+        // Forged steel plate (iron set): metallic with honest roughness so it
+        // reads as plate catching the sky IBL, not a chrome mirror (matches the
+        // iron-door material intent).
+        steel: materials.add(StandardMaterial {
+            base_color: VERTEX_MATERIAL_COLOR,
+            base_color_texture: Some(load_named_texture("textures/tools/steel.png")),
+            metallic: 0.9,
+            perceptual_roughness: 0.5,
+            reflectance: 0.5,
+            ..default()
+        }),
+    };
+    commands.insert_resource(crate::app::systems::build_armor_visuals(
+        &asset_server,
+        &armor_materials,
+    ));
     // Tree textures: bark (tiles up the trunk) + canopy foliage detail. Both are
     // now soft, low-contrast PAINTED cel detail (the canopy is solid faceted
     // geometry, not alpha cards, so foliage is opaque too): the cel `ToonMaterial`
@@ -740,6 +887,30 @@ pub(crate) fn setup_scene(
         build_mip_chain(&mut image);
         images.add(image)
     };
+
+    // Meteorite node textures: `meteorite_crystal.png` is the subtle vein-grain
+    // detail (rides `detail * COLOR_0` like every cel prop); `meteorite_crystal_emissive.png`
+    // is the GLOW MASK (bright = emits) sampled by the emissive term. Both decoded
+    // sRGB with a CPU mip chain + repeat/aniso sampler. Sources:
+    // `assets/textures/props/meteorite_crystal*.png`.
+    let mut load_prop_texture = |name: &str| -> Handle<Image> {
+        let rel = format!("textures/props/{name}.png");
+        let bytes =
+            embedded_bytes(&rel).unwrap_or_else(|| panic!("embedded prop texture missing: {rel}"));
+        let mut image = Image::from_buffer(
+            bytes,
+            ImageType::Extension("png"),
+            CompressedImageFormats::NONE,
+            true,
+            ImageSampler::Descriptor(tree_texture_sampler()),
+            RenderAssetUsages::RENDER_WORLD,
+        )
+        .unwrap_or_else(|err| panic!("decode prop texture {rel}: {err:?}"));
+        build_mip_chain(&mut image);
+        images.add(image)
+    };
+    let meteorite_crystal_tex = load_prop_texture("meteorite_crystal");
+    let meteorite_crystal_emissive_tex = load_prop_texture("meteorite_crystal_emissive");
 
     // Hand-painted toon detail textures for the deployables, mapped by the
     // box-projected UVs baked into each model (`art/deployables/build_deployables.py`).
@@ -805,6 +976,7 @@ pub(crate) fn setup_scene(
         iron_node_meshes: ore_stage_meshes("iron"),
         sulfur_node_meshes: ore_stage_meshes("sulfur"),
         stone_vein_meshes: ore_stage_meshes("stone"),
+        meteorite_node_meshes: ore_stage_meshes("meteorite"),
         pine_tree_small_trunk_mesh: tree_prim(&pine_small_glb, 0),
         pine_tree_small_foliage_mesh: tree_prim(&pine_small_glb, 1),
         pine_tree_medium_trunk_mesh: tree_prim(&pine_medium_glb, 0),
@@ -843,6 +1015,30 @@ pub(crate) fn setup_scene(
             tex_scale: 1.0, // ore glbs carry their own UVs; triplanar scale unused
             fade: 1.0,
             dev_flags: 0,
+            emissive_tex: toon_no_glow_tex.clone(),
+            emissive: Vec4::ZERO,
+        }),
+        // Meteorite: same ore cel params, plus the night-glow emissive. The
+        // crystal COLOR_0 (ember-orange) already tints the surface; the emissive
+        // ADDS a warm glow on top, gated to the crystal facets by COLOR_0 alpha
+        // (`emissive.a = 1`) so the dark slag body never lights up. The tint is
+        // tuned to read from far at night without blowing out at noon (added after
+        // the exposed cel term, so the bright daytime surround keeps it a crystal,
+        // not a white blob). The `meteorite_crystal_emissive.png` mask fades the glow
+        // toward the crystal tips.
+        meteorite_toon_material: toon_materials.add(ToonMaterial {
+            detail: meteorite_crystal_tex.clone(),
+            params: Vec4::new(3.0, 0.0, 0.8, 2.2),
+            tex_scale: 1.0,
+            fade: 1.0,
+            dev_flags: 0,
+            emissive_tex: meteorite_crystal_emissive_tex.clone(),
+            // HDR-bright hot orange (values > 1) so it blooms and stays visibly
+            // lit at night after the tonemapper compresses highlights; the shader
+            // floors the glow so the whole crystal reads, not just the sparse
+            // vein mask. `a = 1` gates the glow to the crystal facets (COLOR_0
+            // alpha 1) so the slag body stays dark.
+            emissive: Vec4::new(4.5, 1.7, 0.35, 1.0),
         }),
         vertex_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
@@ -857,12 +1053,15 @@ pub(crate) fn setup_scene(
         hay_grass_materials: [
             toon_materials.add(hay_tall_grass_material(
                 asset_server.load(embedded_asset_path("textures/tall_grass_1.png")),
+                toon_no_glow_tex.clone(),
             )),
             toon_materials.add(hay_tall_grass_material(
                 asset_server.load(embedded_asset_path("textures/tall_grass_2.png")),
+                toon_no_glow_tex.clone(),
             )),
             toon_materials.add(hay_tall_grass_material(
                 asset_server.load(embedded_asset_path("textures/tall_grass_3.png")),
+                toon_no_glow_tex.clone(),
             )),
         ],
         // Trees join the cel family: trunk + canopy are now cel-shaded
@@ -881,6 +1080,8 @@ pub(crate) fn setup_scene(
             tex_scale: 1.0,
             fade: 1.0,
             dev_flags: 0,
+            emissive_tex: toon_no_glow_tex.clone(),
+            emissive: Vec4::ZERO,
         }),
         birch_bark_material: toon_materials.add(ToonMaterial {
             detail: birch_bark_tex,
@@ -888,6 +1089,8 @@ pub(crate) fn setup_scene(
             tex_scale: 1.0,
             fade: 1.0,
             dev_flags: 0,
+            emissive_tex: toon_no_glow_tex.clone(),
+            emissive: Vec4::ZERO,
         }),
         // Canopy: clean cel bands + a slightly wider ink edge so the leafy mass
         // reads with a drawn silhouette outline (the anime "sticker" look from the
@@ -899,6 +1102,8 @@ pub(crate) fn setup_scene(
             tex_scale: 1.0,
             fade: 1.0,
             dev_flags: 0,
+            emissive_tex: toon_no_glow_tex.clone(),
+            emissive: Vec4::ZERO,
         }),
         birch_foliage_material: toon_materials.add(ToonMaterial {
             detail: birch_foliage_tex,
@@ -906,6 +1111,8 @@ pub(crate) fn setup_scene(
             tex_scale: 1.0,
             fade: 1.0,
             dev_flags: 0,
+            emissive_tex: toon_no_glow_tex.clone(),
+            emissive: Vec4::ZERO,
         }),
         // Weathered dead bark: the same pine bark detail, but the dead-snag glb
         // carries a cool-grey COLOR_0 (set in build_tree.py) so `texture * COLOR_0`
@@ -917,6 +1124,8 @@ pub(crate) fn setup_scene(
             tex_scale: 1.0,
             fade: 1.0,
             dev_flags: 0,
+            emissive_tex: toon_no_glow_tex.clone(),
+            emissive: Vec4::ZERO,
         }),
     });
     // Placed structures are authored Blender glbs matching their inventory icons
@@ -927,11 +1136,20 @@ pub(crate) fn setup_scene(
     // procedural trees/ore nodes do. Sources:
     // `art/items/{workbench_t1,crude_furnace,storage_box_small,storage_box_large}/*.blend`.
     let workbench_glb = embedded_asset_path("items/workbench_t1/model.glb");
+    let workbench_t2_glb = embedded_asset_path("items/workbench_t2/model.glb");
     let furnace_glb = embedded_asset_path("items/crude_furnace/model.glb");
     let storage_box_small_glb = embedded_asset_path("items/storage_box_small/model.glb");
     let storage_box_large_glb = embedded_asset_path("items/storage_box_large/model.glb");
     let torch_glb = embedded_asset_path("items/torch/model.glb");
+    // Placed-charge glbs: the same 2-primitive models the held-item table loads
+    // (body prim 0 + accent/crystal prim 1).
+    let powder_keg_glb = embedded_asset_path("items/powder_keg/model.glb");
+    let satchel_charge_glb = embedded_asset_path("items/satchel_charge/model.glb");
+    let powder_bomb_glb = embedded_asset_path("items/powder_bomb/model.glb");
     let tool_cupboard_glb = embedded_asset_path("items/tool_cupboard/model.glb");
+    let ruin_cache_glb = embedded_asset_path("ruins/ruin_cache_chest.glb");
+    let ruin_broken_pillar_glb = embedded_asset_path("ruins/broken_pillar.glb");
+    let ruin_fallen_arch_glb = embedded_asset_path("ruins/fallen_arch.glb");
     let sleeping_bag_glb = embedded_asset_path("items/sleeping_bag/model.glb");
     // Authored door panels (wood + iron, a matched family). Source:
     // `art/building/build_door.py`.
@@ -1023,8 +1241,21 @@ pub(crate) fn setup_scene(
         building_material(wood_tex, 0.92, 0.13, 1.0),
         building_material(stone_tex, 0.95, 0.1, 0.5),
     ];
+    // Shared bright-ember spark for every charge's fuse rig (an additive cube,
+    // same recipe as the furnace spark). Built here so the fuse rig can spark.
+    commands.insert_resource(crate::app::systems::ChargeFuseAssets {
+        spark_mesh: meshes.add(Cuboid::new(0.03, 0.03, 0.03)),
+        spark_material: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.9, 0.55, 0.15),
+            emissive: LinearRgba::rgb(9.0, 4.2, 0.8),
+            alpha_mode: AlphaMode::Add,
+            unlit: true,
+            ..default()
+        }),
+    });
     commands.insert_resource(DeployableVisualAssets {
         workbench_mesh: prim_mesh(&workbench_glb, 0),
+        workbench_t2_mesh: prim_mesh(&workbench_t2_glb, 0),
         furnace_mesh: prim_mesh(&furnace_glb, 0),
         building_meshes,
         building_materials,
@@ -1052,7 +1283,13 @@ pub(crate) fn setup_scene(
         storage_box_small_mesh: prim_mesh(&storage_box_small_glb, 0),
         storage_box_large_mesh: prim_mesh(&storage_box_large_glb, 0),
         torch_mesh: prim_mesh(&torch_glb, 0),
+        charge_keg_mesh: prim_mesh(&powder_keg_glb, 0),
+        charge_satchel_mesh: prim_mesh(&satchel_charge_glb, 0),
+        charge_bomb_mesh: prim_mesh(&powder_bomb_glb, 0),
         tool_cupboard_mesh: prim_mesh(&tool_cupboard_glb, 0),
+        ruin_cache_mesh: prim_mesh(&ruin_cache_glb, 0),
+        ruin_broken_pillar_mesh: prim_mesh(&ruin_broken_pillar_glb, 0),
+        ruin_fallen_arch_mesh: prim_mesh(&ruin_fallen_arch_glb, 0),
         // Per-surface cel-shaded materials for the deployables: hand-painted
         // wood / stone / fabric line-art mapped by the models' baked box-projected
         // UVs (tex_scale is the dead triplanar fallback, unused now the props
@@ -1068,6 +1305,8 @@ pub(crate) fn setup_scene(
             tex_scale: 1.5,
             fade: 1.0,
             dev_flags: 0,
+            emissive_tex: toon_no_glow_tex.clone(),
+            emissive: Vec4::ZERO,
         }),
         toon_stone_material: toon_materials.add(ToonMaterial {
             detail: deployable_stone_tex.clone(),
@@ -1075,6 +1314,8 @@ pub(crate) fn setup_scene(
             tex_scale: 1.5,
             fade: 1.0,
             dev_flags: 0,
+            emissive_tex: toon_no_glow_tex.clone(),
+            emissive: Vec4::ZERO,
         }),
         toon_fabric_material: toon_materials.add(ToonMaterial {
             detail: deployable_fabric_tex.clone(),
@@ -1082,6 +1323,19 @@ pub(crate) fn setup_scene(
             tex_scale: 1.5,
             fade: 1.0,
             dev_flags: 0,
+            emissive_tex: toon_no_glow_tex.clone(),
+            emissive: Vec4::ZERO,
+        }),
+        // Placed cloth charges (bomb + satchel) reuse the deployable fabric
+        // line-art; each glb's COLOR_0 gives the wrap its colour.
+        charge_cloth_material: toon_materials.add(ToonMaterial {
+            detail: deployable_fabric_tex.clone(),
+            params: Vec4::new(3.0, 0.0, 1.0, 1.4),
+            tex_scale: 1.5,
+            fade: 1.0,
+            dev_flags: 0,
+            emissive_tex: toon_no_glow_tex.clone(),
+            emissive: Vec4::ZERO,
         }),
         ghost_valid_material: materials.add(StandardMaterial {
             // Translucent green: visible against grass + stone without
@@ -1098,6 +1352,24 @@ pub(crate) fn setup_scene(
         ghost_invalid_material: materials.add(StandardMaterial {
             base_color: Color::srgba(0.96, 0.32, 0.32, 0.42),
             emissive: Color::srgb(0.40, 0.06, 0.06).into(),
+            alpha_mode: AlphaMode::Blend,
+            perceptual_roughness: 0.85,
+            reflectance: 0.10,
+            ..default()
+        }),
+        // The charge-ghost variants: same hues, higher alpha + hotter
+        // emissive, so the small keg/satchel preview reads through grass.
+        ghost_valid_charge_material: materials.add(StandardMaterial {
+            base_color: Color::srgba(0.36, 0.92, 0.42, 0.55),
+            emissive: Color::srgb(0.14, 0.65, 0.22).into(),
+            alpha_mode: AlphaMode::Blend,
+            perceptual_roughness: 0.85,
+            reflectance: 0.10,
+            ..default()
+        }),
+        ghost_invalid_charge_material: materials.add(StandardMaterial {
+            base_color: Color::srgba(0.96, 0.32, 0.32, 0.58),
+            emissive: Color::srgb(0.70, 0.10, 0.10).into(),
             alpha_mode: AlphaMode::Blend,
             perceptual_roughness: 0.85,
             reflectance: 0.10,
@@ -1139,6 +1411,67 @@ pub(crate) fn setup_scene(
             base_color: Color::srgb(0.55, 0.03, 0.02),
             perceptual_roughness: 0.7,
             reflectance: 0.2,
+            ..default()
+        }),
+    });
+    // Explosion feedback VFX: debris shards (grey + ember mix), a bright flash,
+    // and a smoke puff. Reuses the impact stone-shard silhouette for debris.
+    commands.insert_resource(crate::app::systems::ExplosionEffectAssets {
+        shard_mesh: meshes.add(impact_stone_shard_mesh()),
+        shard_grey_material: materials.add(StandardMaterial {
+            // Dark smoke-grey blasted debris.
+            base_color: Color::srgb(0.20, 0.19, 0.18),
+            perceptual_roughness: 0.95,
+            reflectance: 0.08,
+            ..default()
+        }),
+        shard_ember_material: materials.add(StandardMaterial {
+            // Hot ember-orange fragments, faintly emissive so they read as
+            // freshly-blasted embers among the grey.
+            base_color: Color::srgb(0.75, 0.32, 0.08),
+            emissive: LinearRgba::rgb(2.2, 0.7, 0.1),
+            perceptual_roughness: 0.85,
+            reflectance: 0.10,
+            ..default()
+        }),
+        flash_mesh: meshes.add(Sphere::new(1.0).mesh().ico(2).expect("valid ico")),
+        flash_material: materials.add(StandardMaterial {
+            // A hard bright additive pop of light at ground zero.
+            base_color: Color::srgb(1.0, 0.85, 0.55),
+            emissive: LinearRgba::rgb(14.0, 8.0, 3.0),
+            alpha_mode: AlphaMode::Add,
+            unlit: true,
+            ..default()
+        }),
+        smoke_mesh: meshes.add(Sphere::new(0.5).mesh().ico(1).expect("valid ico")),
+        smoke_material: materials.add(StandardMaterial {
+            // Translucent dark grey smoke; blends and fades as the puff grows.
+            base_color: Color::srgba(0.14, 0.13, 0.12, 0.55),
+            alpha_mode: AlphaMode::Blend,
+            perceptual_roughness: 1.0,
+            reflectance: 0.02,
+            unlit: true,
+            ..default()
+        }),
+        fireball_material: materials.add(StandardMaterial {
+            // The roiling fire body: additive hot orange, dimmer than the
+            // flash so the pop still reads inside it, HDR enough to bloom.
+            base_color: Color::srgb(0.9, 0.45, 0.12),
+            emissive: LinearRgba::rgb(6.5, 2.4, 0.4),
+            alpha_mode: AlphaMode::Add,
+            unlit: true,
+            ..default()
+        }),
+        // A thin flat torus: the ground shockwave ring. Unit major radius so
+        // the tick system's scale IS the ring radius in metres.
+        ring_mesh: meshes.add(Torus::new(0.96, 1.0)),
+        ring_material: materials.add(StandardMaterial {
+            // A pale dusty pressure ring, additive and faint so it reads as a
+            // racing disturbance rather than a solid hoop.
+            base_color: Color::srgb(0.9, 0.82, 0.66),
+            emissive: LinearRgba::rgb(1.6, 1.4, 1.0),
+            alpha_mode: AlphaMode::Add,
+            unlit: true,
             ..default()
         }),
     });
@@ -1194,6 +1527,42 @@ pub(crate) fn setup_scene(
             // The quad is double-sided so the billboard reads from either
             // face without the yaw needing to pick a winding.
             cull_mode: None,
+            ..default()
+        }),
+    });
+    commands.insert_resource(MeteorEmberAssets {
+        // A spark point: the meteor sheds a dense stream of these off the tail, so
+        // keep the mesh cheap (ico(1), 80 tris) and let the additive HDR base colour
+        // carry the read. Bumped from 0.05 to 0.12 so each shed ember is a visible
+        // glowing chunk, not a sub-pixel dust mote.
+        ember_mesh: meshes.add(Sphere::new(0.12).mesh().ico(1).expect("valid subdivisions")),
+        ember_material: materials.add(StandardMaterial {
+            // Additive + unlit HDR ember: bright SATURATED orange. Under AgX a big
+            // bright warm area washes to cream, but these sparks are TINY, so a
+            // moderately bright orange (high red, ~0.3 green, ~0 blue) blooms into
+            // clearly-orange glowing specks streaming off the tail rather than white
+            // dots. Kept saturated (low green, zero blue) so they stay ember, not
+            // pale-yellow dust.
+            base_color: Color::linear_rgb(6.0, 1.05, 0.02),
+            emissive: LinearRgba::rgb(7.2, 1.25, 0.02),
+            alpha_mode: AlphaMode::Add,
+            unlit: true,
+            fog_enabled: false,
+            ..default()
+        }),
+        // A soft round puff for the faint smoke shed under the fire trail.
+        smoke_mesh: meshes.add(Sphere::new(0.5).mesh().ico(1).expect("valid subdivisions")),
+        smoke_material: materials.add(StandardMaterial {
+            // Translucent warm-dark grey; blends and fades as the puff grows,
+            // reading as a thin smoke ribbon under the fire rather than a solid
+            // shape. Fog off so a distant plume does not haze out.
+            base_color: Color::srgba(0.09, 0.07, 0.06, 0.45),
+            alpha_mode: AlphaMode::Blend,
+            perceptual_roughness: 1.0,
+            reflectance: 0.02,
+            fog_enabled: false,
+            cull_mode: None,
+            unlit: true,
             ..default()
         }),
     });

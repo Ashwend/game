@@ -46,6 +46,11 @@ Find your intent, jump to the doc. This mirrors `CLAUDE.md`'s routing table; if 
 - Commit code / add a lint or dependency / check a naming convention: [code-style.md](code-style.md)
 - Design a new gameplay feature, tune the loop, or understand intent/scope: [game-design.md](game-design.md)
 - Model a held item/prop, derive a sibling tool, author a glb, generate an icon/texture: [playbooks/art-pipeline.md](playbooks/art-pipeline.md)
+- Add armor, a ranged weapon, or touch arrows/projectiles: [pvp-combat.md](pvp-combat.md)
+- Add an explosive / placed charge, touch the fuse/defuse flow, or workbench tiers: [crafting-and-deployables.md](crafting-and-deployables.md)
+- Change ruins (POI scatter, prefab layouts) or meteorite worldgen: [worlds-and-saves.md](worlds-and-saves.md)
+- Touch the meteor shower event (announce, trajectory, scheduler, impact, VFX/HUD): [meteor-shower.md](meteor-shower.md)
+- Add a weapon / armor set / explosive / ranged weapon, or touch workbench tiers, ruins, meteorite, or the meteor shower event: the shipped behavior lives in the same subsystem docs (weapons/armor/ranged/explosives in [pvp-combat.md](pvp-combat.md), charges + workbench tiers + ruin caches in [crafting-and-deployables.md](crafting-and-deployables.md), the item rows in [items-and-resources.md](items-and-resources.md), ruins/meteorite worldgen in [worlds-and-saves.md](worlds-and-saves.md), the meteor shower event in [meteor-shower.md](meteor-shower.md)); the design intent behind them lives in [game-design.md](game-design.md).
 
 ## Per-doc index
 
@@ -64,6 +69,7 @@ One row per agent doc. `owns` is the single concern the doc is source of truth f
 | [base-building-and-claims.md](base-building-and-claims.md) | building geometry/cost/HP, stability, doors, Tool Cupboard claims | before changing building rules, doors, or the claim system |
 | [pvp-combat.md](pvp-combat.md) | combat validation, weapon feel, knockback, death/respawn, loot bags | before touching combat, knockback, or the death/respawn flow |
 | [worlds-and-saves.md](worlds-and-saves.md) | world generation, biome classification, and save persistence | before changing generation, a persisted struct, or save format |
+| [meteor-shower.md](meteor-shower.md) | the meteor shower event end to end: announce wire contract, seed-pure trajectory math, scheduler and site selection, impact resolution, crater/shards/VFX/HUD | before touching anything meteor-related |
 | [chunks-and-aoi.md](chunks-and-aoi.md) | runtime chunk grid and Lightyear room-based AoI | before touching chunk membership, AoI math, regrow, or room subscription |
 | [art-direction.md](art-direction.md) | overall look-and-feel, palette, lighting mood | before making a prop cel-shaded or planning a wider art shift |
 | [toon-shading.md](toon-shading.md) | cel shader mechanics and the `ToonMaterial` family | before editing the cel shader or adding a prop to the cel family |
@@ -91,7 +97,7 @@ Several subsystems CLAUDE.md still names as single `.rs` files have since split 
 | --- | --- | --- |
 | protocol | `src/protocol/` directory: `mod.rs`, `messages.rs`, `commands.rs`, `items.rs`, `math.rs`, `world.rs`, `world_map.rs` | there is no `src/protocol.rs`; wire variants live in `messages.rs` |
 | host adapter | `src/net/host.rs` file plus `src/net/host/` directory: `mirror.rs`, `rooms.rs`, `routing.rs`, `handle.rs`, `admin.rs` | file and directory coexist; mirror-sync is `host/mirror.rs`, room/AoI subscription is `host/rooms.rs`, admin socket is `host/admin.rs` |
-| server authority | `src/server/` directory, one file per concern: `connection.rs`, `inventory.rs`, `movement.rs`, `crafting.rs`, `combat.rs`, `building.rs`, `door.rs`, `claim.rs`, `stability.rs`, `dropped_items.rs`, `resource_nodes.rs`, `sleeping_bag.rs`, `storage_box.rs`, `torch.rs`, `world_time.rs`, `world_map.rs`, plus `commands/`, `furnace/`, `chunk_manager/`, `tests/` | each `*_ecs.rs` (e.g. `resource_node_ecs.rs`, `dropped_item_ecs.rs`, `player_ecs.rs`, `deployable_ecs.rs`, `loot_bag_ecs.rs`) holds the replicated mirror components for that concern |
+| server authority | `src/server/` directory, one file per concern: `connection.rs`, `inventory.rs`, `movement.rs`, `crafting.rs`, `combat.rs`, `building.rs`, `door.rs`, `claim.rs`, `stability.rs`, `dropped_items.rs`, `resource_nodes.rs`, `sleeping_bag.rs`, `storage_box.rs`, `torch.rs`, `world_time.rs`, `world_map.rs`, `workbench.rs`, `fuse.rs`, `explosion.rs`, `defuse.rs`, `projectiles.rs`, `projectile_ecs.rs`, `meteor_shower.rs`, `ruin_cache.rs`, plus `commands/`, `furnace/`, `chunk_manager/`, `workbench/`, `tests/` | each `*_ecs.rs` (e.g. `resource_node_ecs.rs`, `dropped_item_ecs.rs`, `player_ecs.rs`, `deployable_ecs.rs`, `loot_bag_ecs.rs`) holds the replicated mirror components for that concern |
 | resource nodes | server: `src/server/resource_nodes.rs` + `src/server/resource_node_ecs.rs` + `src/server/tests/resource_nodes.rs`; client: `src/app/systems/items/resource_nodes/` directory (`mod.rs`, `spawn.rs`, `stages.rs`, `pop_in.rs`, `hay_sway.rs`, `tests.rs`) | the client reconciliation pattern CLAUDE.md cites lives in `app/systems/items/resource_nodes/mod.rs` |
 | deployables | `src/server/deployables.rs` file plus `src/server/deployables/tests.rs`; replicated mirror in `src/server/deployable_ecs.rs`; client placement in `src/app/systems/deployables/placement.rs` | the deployables tests are in the sibling directory, not inline |
 | loot bags | `src/server/loot_bag.rs` + `src/server/loot_bag_ecs.rs` + `src/server/loot_bag/` (`slots.rs`, `tests.rs`) + `src/server/tests/loot_bag.rs`; client `src/app/ui/loot_bag.rs` and `src/app/systems/items/loot_bag.rs` | bag slot logic is `loot_bag/slots.rs`; two test files (`loot_bag/tests.rs` and `tests/loot_bag.rs`) |

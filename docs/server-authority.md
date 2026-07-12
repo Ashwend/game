@@ -18,7 +18,8 @@ related:
   - docs/chunks-and-aoi.md - chunk_manager, the AoI gate GameServer anchors entities to
   - docs/pvp-combat.md - combat/swing/death subsystem detail
   - docs/base-building-and-claims.md - building/door/claim/stability detail
-  - docs/crafting-and-deployables.md - crafting/furnace/loot-bag/deployable detail
+  - docs/crafting-and-deployables.md - crafting/furnace/workbench/loot-bag/deployable/explosive detail
+  - docs/meteor-shower.md - the meteor shower event that tick_world_events drives
   - docs/worlds-and-saves.md - WorldSave and the persistence boundary
 ---
 
@@ -44,6 +45,8 @@ Authoritative state on `GameServer` (`src/server.rs` - struct fields):
 | `dropped_items` | `DirtyTrackedMap<DroppedItemId, DroppedItemBody>` | yes | yes | Physics step marks only moved bodies dirty. |
 | `resource_nodes` | `DirtyTrackedMap<ResourceNodeId, ResourceNodeState>` | yes | yes (live counts via `chunk_manager`) | |
 | `deployed_entities` | `DirtyTrackedMap<DeployedEntityId, DeployedEntity>` | yes | yes | Buildings, furnaces, torches, boxes, cupboards, bags-on-frames. |
+| `projectiles` | `DirtyTrackedMap<ProjectileId, Projectile>` | yes | **no** | In-flight arrows, transient (cleared on restart); the per-tick integration marks movers dirty, re-anchored via `chunk_manager` like dropped items. |
+| `stuck_projectiles` | `HashMap<ProjectileId, u64>` | no | no | Server-only TTL bookkeeping for cosmetic stuck arrows (projectile id -> despawn tick); the client renders the projectile mirror entity meanwhile. |
 | `loot_bags` | `HashMap<LootBagId, LootBag>` | yes | yes | Plain `HashMap` (full-walk mirror sync), not a `DirtyTrackedMap`. |
 | `persisted_players` | `HashMap<AccountId, PersistedPlayer>` | no | yes | Offline inventory/position/admin snapshots. |
 | `world_time` | `WorldTime` | broadcast (`WorldTime` msg), not per-component | yes | |
@@ -51,6 +54,7 @@ Authoritative state on `GameServer` (`src/server.rs` - struct fields):
 | `chunk_manager` | `ChunkManager` | no | yes (`ChunkManagerSave`) | Owns anchor chunks + regrow schedule. See [chunks-and-aoi.md](chunks-and-aoi.md). |
 | `claim_footprints` | `HashMap<DeployedEntityId, Vec<(f32,f32)>>` | **no** | **no** | Server-only derived cache. Rebuilt by `recompute_claim_footprints` on structural change. |
 | `world` / `world_grid` | `WorldData` / `BlockGrid` | no | yes (`world`) | `world_grid` is a block spatial index used **only** for combat line-of-sight, not movement (movement is client-authoritative). |
+| `meteor_shower` | `MeteorShowerState` | no | no | Runtime-only meteor-event engine (scheduler + live event). Deliberately neither replicated nor persisted: world load rolls a fresh next event, an in-flight event does not survive restart. |
 | `next_*_id`, `tick`, `auto_save_*` | scalars | no | partly | Bookkeeping counters. |
 
 `claim_footprints` is the one to remember: it is never persisted and never replicated. It is a pure runtime cache derived from placed cupboards + connected building footprint, recomputed on every structural change. Do not try to ship or save it.
@@ -84,7 +88,7 @@ tick_authoritative_server crosses a fixed step (src/net/host.rs)
 ### receive() and tick() contracts
 
 - `GameServer::receive(client_id, ClientMessage) -> Vec<ServerEnvelope>` (`src/server/dispatch.rs` - `receive`). Calls `mark_client_seen` first, then dispatches one `ClientMessage` variant to an `apply_*` handler. Never sends on the wire; returns envelopes.
-- `GameServer::tick(delta_seconds: f32) -> Vec<ServerEnvelope>` (`src/server/tick.rs` - `tick`). Advances `self.tick` and the world clock, steps dropped-item physics, runs the chunk-manager regrow tick, ticks furnaces/torches/loot-bags/crafting, expires chat bubbles, sweeps stale clients, and emits the surviving periodic broadcasts. Returns envelopes.
+- `GameServer::tick(delta_seconds: f32) -> Vec<ServerEnvelope>` (`src/server/tick.rs` - `tick`). Advances `self.tick` and the world clock, steps dropped-item physics, runs the chunk-manager regrow tick, ticks furnaces/torches/loot-bags/crafting, expires chat bubbles, runs the gameplay subsystems (`tick_ruin_caches` ruin-cache refills, `tick_reload_slows` lifting the crossbow reload movement slow once the reload window elapses, `tick_fuses` counting armed charges down to detonation envelopes, `tick_world_events` driving the meteor shower schedule/announce/impact/cleanup on real tick time so `/time-speed` does not accelerate meteors, and `tick_projectiles` stepping the ballistic sim), sweeps stale clients, and emits the surviving periodic broadcasts. Returns envelopes.
 
 ### ServerEnvelope and DeliveryTarget
 
@@ -113,16 +117,23 @@ Every server concern owns a file (or directory) under `src/server/`. Open the ow
 | Dropped items | `dropped_items.rs`, `dropped_item_ecs.rs` | Physics + merge/cleanup; mirror components. |
 | Resource nodes | `resource_nodes.rs`, `resource_node_ecs.rs` | Gather rules; mirror components. See [items-and-resources.md](items-and-resources.md). |
 | Combat / PvP | `combat.rs`, `swing.rs` | `apply_attack_player_command`, `apply_swing_start`. See [pvp-combat.md](pvp-combat.md). |
+| Ranged / projectiles | `projectiles.rs`, `projectile_ecs.rs` | Draw/fire validation, server ballistic sim, stuck arrows; mirror components. See [pvp-combat.md](pvp-combat.md). |
 | Player lifecycle / death / respawn | `combat.rs`, `sleeping_bag.rs`, `lifecycle.rs` | Death pile and respawn in `combat.rs` (`kill_player`, `apply_respawn_command`); respawn-at-bag in `sleeping_bag.rs`. `lifecycle.rs` owns only `GameServer` construction and the `with_auto_save` / `with_workos` builders. |
 | Base building | `building.rs`, `stability.rs`, `door.rs` | Placement, stability graph, doors. See [base-building-and-claims.md](base-building-and-claims.md). |
 | Tool Cupboard claims | `claim.rs` | Footprint cache, per-object auth. See [base-building-and-claims.md](base-building-and-claims.md). |
 | Crafting | `crafting.rs` | Queue tick. See [crafting-and-deployables.md](crafting-and-deployables.md). |
 | Furnaces | `furnace/` (`state.rs`, `tick.rs`, `commands.rs`, `commands/`) | Smelt state machine. See [crafting-and-deployables.md](crafting-and-deployables.md). |
+| Workbenches / tier upgrade | `workbench.rs`, `workbench/` | Open/close + the generic in-place tier upgrade via the `DEPLOYABLE_UPGRADES` table. See [crafting-and-deployables.md](crafting-and-deployables.md). |
 | Deployables | `deployables.rs`, `deployable_ecs.rs`, `deployables/` | Placement/damage/ownership; mirror components. |
+| Explosive fuses | `fuse.rs` | Armed-charge countdown -> detonation (`tick_fuses`). See [crafting-and-deployables.md](crafting-and-deployables.md). |
+| Explosion resolution | `explosion.rs` | `resolve_explosion` AoE against players and structures. See [pvp-combat.md](pvp-combat.md). |
+| Charge defuse | `defuse.rs` | Claim-authorized defuse + half-materials refund. See [crafting-and-deployables.md](crafting-and-deployables.md). |
 | Loot bags / death piles | `loot_bag.rs`, `loot_bag_ecs.rs`, `loot_bag/` | Spawned by the kill chain, despawned when emptied + closed. |
 | Sleeping bags / respawn points | `sleeping_bag.rs` | `RespawnAtBag`. |
 | Storage boxes | `storage_box.rs` | `OpenStorageBox`. |
 | Torches | `torch.rs` | Burn timer, ticked in `tick`. |
+| Ruin caches | `ruin_cache.rs` | Refill scheduler + seeded loot rolls for world-spawned caches. See [crafting-and-deployables.md](crafting-and-deployables.md). |
+| Meteor shower event | `meteor_shower.rs` | Scheduler, siting, impact, crater cleanup (`tick_world_events`). See [meteor-shower.md](meteor-shower.md). |
 | World map | `world_map.rs` | Marker store + `RequestWorldMap` -> `WorldMapMarkers`. (Terrain is client-side from seed; the raster code here is not on the wire.) |
 | Tool wear | `tool_wear.rs` | Durability decrement. |
 | Voice routing | `voice.rs` | `apply_voice_frame`, spatial fan-out, `VOICE_AUDIBLE_RANGE = 50.0`. See [voice.md](voice.md). |
@@ -150,6 +161,9 @@ The `match` in `GameServer::receive` (`src/server/dispatch.rs`). This is the ind
 | `Gather(c)` | `note_action_seq` then `apply_gather_command` | `resource_nodes.rs` |
 | `PlaceDeployable(c)` | `apply_place_deployable_command` | `deployables.rs` |
 | `Furnace(c)` | `apply_furnace_command` | `furnace/commands.rs` |
+| `Workbench(c)` | `apply_workbench_command` | `workbench.rs` |
+| `Ranged(c)` | `apply_ranged_command` (draw start/cancel, fire) | `projectiles.rs` |
+| `Explosive(c)` | `apply_explosive_command` (`Throw` -> `throw_explosive`, `Defuse` -> `defuse_charge`) | `projectiles.rs` / `defuse.rs` |
 | `DamageDeployable(c)` | `apply_damage_deployable_command` | `deployables.rs` |
 | `AttackPlayer(c)` | `apply_attack_player_command` | `combat.rs` |
 | `SwingStart(c)` | `note_action_seq` then `apply_swing_start` | `swing.rs` |
@@ -195,11 +209,11 @@ A logged-out player leaves a Rust-style sleeping body in the world. `ServerClien
 
 The constant gotcha: **any loop over `self.clients` that fans out network traffic or counts "online" players must filter `client.online`.** `apply_voice_frame` (`voice.rs`) and the `PlayerList` builder (`tick.rs`) both do. Forgetting it builds envelopes the router silently drops, or shows logged-out players as online. Stale-client sweep: `CLIENT_STALE_TIMEOUT_TICKS = 20 * 3` (`src/server.rs`), i.e. 3 missed 1 Hz heartbeats sweeps a live client to a sleeping body, via `disconnect_stale_clients` in `tick`.
 
-Known stub: `ServerClient.armor` is a wired-end-to-end replicated field (`PlayerArmor` component) but is hardcoded `0`; armor items do not exist yet. Do not mistake it for working armor.
+Armor is live: `ServerClient.protection` (`src/server.rs` - `struct ServerClient`, an `ArmorProtection`) holds the authoritative per-damage-kind mitigation, recomputed via `crate::items::equipped_protection` from the worn equipment slots whenever equipment can change (equip/unequip moves, connect/restore, durability wear, death). The mirror ships only the melee component as the replicated `PlayerArmor` HUD value (`src/server/queries.rs`); the full per-kind protection stays server-only.
 
 ## Slash commands
 
-`GameServer::apply_command` (`src/server/commands/mod.rs`) parses the leading `/`, splits on whitespace, and dispatches. Submodules: `kit.rs`, `player.rs`, `time.rs`, `world.rs`. Commands: `/spawn`, `/drain`, `/time`, `/speed`, `/time-speed` (aliases `timespeed`, `timescale`), `/test-kit` (alias `testkit`), `/give`, `/tp` (alias `teleport`), `/help`. All except `/help` are admin-gated; `/help` lists every command and marks the gated ones for non-admins.
+`GameServer::apply_command` (`src/server/commands/mod.rs`) parses the leading `/`, splits on whitespace, and dispatches. Submodules: `kit.rs`, `player.rs`, `time.rs`, `world.rs` (plus colocated `tests.rs`); the two `/meteor_shower` handlers live in `src/server/meteor_shower.rs`. Commands: `/spawn`, `/drain`, `/time`, `/speed`, `/knockback-scale` (alias `knockbackscale`), `/time-speed` (aliases `timespeed`, `timescale`), `/test-kit` (alias `testkit`), `/give`, `/tp` (alias `teleport`), `/ruins [tp]`, `/meteor_shower`, `/meteor_shower-here` (alias `meteor_showerhere`), `/help`. All except `/help` are admin-gated; `/help` lists every command and marks the gated ones for non-admins.
 
 ## Loopback vs dedicated: the only differences
 
@@ -213,7 +227,7 @@ Nothing else differs. Do not branch gameplay on the mode inside `src/server/`.
 
 ## Tests: submodule-per-subsystem
 
-Server behavior is covered by `src/server/tests/` (`src/server/tests/mod.rs` registers the submodules and re-exports the shared `connect_host` / `movement` / `server` / `equip_basic_tools` harness from `src/server/test_support.rs`). Current submodules: `building`, `claim`, `combat`, `commands`, `connection`, `door`, `dropped_items`, `furnace`, `inventory`, `loot_bag`, `movement`, `resource_nodes`, `sleeping_bag`, `storage_box`, `tool_wear`. Some modules also keep colocated `#[cfg(test)]` unit tests (e.g. `voice.rs`, `dirty_tracked_map.rs`); the `net` module's integration tests live in `src/net/tests.rs` (declared in `src/net.rs`).
+Server behavior is covered by `src/server/tests/` (`src/server/tests/mod.rs` registers the submodules and re-exports the shared `connect_host` / `movement` / `server` / `equip_basic_tools` harness from `src/server/test_support.rs`). Current submodules: `building`, `claim`, `combat`, `commands`, `connection`, `door`, `dropped_items`, `explosives`, `furnace`, `inventory`, `loot_bag`, `movement`, `projectiles`, `resource_nodes`, `ruins`, `sleeping_bag`, `storage_box`, `tool_wear`. Some modules also keep colocated `#[cfg(test)]` unit tests (e.g. `voice.rs`, `dirty_tracked_map.rs`); the `net` module's integration tests live in `src/net/tests.rs` (declared in `src/net.rs`).
 
 Convention: add a test for new server behavior in the matching `tests/` submodule. Protocol changes, server authority, persistence, and the dispatch contract especially should be tested near the owning module.
 
@@ -225,6 +239,7 @@ Convention: add a test for new server behavior in the matching `tests/` submodul
 - [docs/movement.md](movement.md) - the client-authoritative movement trust boundary.
 - [docs/pvp-combat.md](pvp-combat.md) - combat, swing, death, respawn, loot bags.
 - [docs/base-building-and-claims.md](base-building-and-claims.md) - building, stability, doors, Tool Cupboard claims.
-- [docs/crafting-and-deployables.md](crafting-and-deployables.md) - crafting queue, furnaces, the unified deployable system.
+- [docs/crafting-and-deployables.md](crafting-and-deployables.md) - crafting queue, furnaces, workbench tiers, the unified deployable system, charges/fuses/defuse.
+- [docs/meteor-shower.md](meteor-shower.md) - the meteor shower event (scheduler, siting, impact, cleanup) that `tick_world_events` drives.
 - [docs/worlds-and-saves.md](worlds-and-saves.md) - `WorldSave` and the persistence boundary `tick` defers to.
 - [docs/playbooks/add-replicated-entity.md](playbooks/add-replicated-entity.md) - the step-by-step for a new networked entity.

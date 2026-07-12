@@ -48,7 +48,7 @@ drain_host_commands → [drain_admin_socket (unix)] → receive_client_messages
   → handle_disconnected_clients → tick_authoritative_server → mirror_systems
 ```
 
-`tick_authoritative_server` advances the fixed 20 Hz simulation and sets `ServerTickPulse.advanced` only on updates where a tick boundary crossed. The `mirror_systems` tuple (the five `sync_*_entities` mirror systems plus `update_client_room_subscriptions`) is `.run_if(server_tick_advanced)`, so it runs only on tick-advancing updates, not every host-loop iteration. Everything before `tick_authoritative_server` (command/admin drains, receive, disconnect handling) runs every update and stays ungated. The mirror systems themselves are documented in `docs/replication.md`.
+`tick_authoritative_server` advances the fixed 20 Hz simulation and sets `ServerTickPulse.advanced` only on updates where a tick boundary crossed. The `mirror_systems` tuple (the six `sync_*_entities` mirror systems plus `update_client_room_subscriptions`) is `.run_if(server_tick_advanced)`, so it runs only on tick-advancing updates, not every host-loop iteration. Everything before `tick_authoritative_server` (command/admin drains, receive, disconnect handling) runs every update and stays ungated. The mirror systems themselves are documented in `docs/replication.md`.
 
 ## Channels
 
@@ -68,7 +68,7 @@ Two distinct gates.
 
 **Netcode `protocol_id`** is `LIGHTYEAR_PROTOCOL_ID = 0x4153_4857_454E_4401` (`src/net/channels.rs`, the bytes `b"ASHWEND\x01"`). It is a **fixed constant, deliberately independent of `PROTOCOL_VERSION`**. Netcode rejects a mismatched id at the transport layer before any application message is exchanged; if it tracked the app version, a version-bumped client would be bounced there and could never learn *which* version the server runs. Keeping it fixed lets every connection reach the app-level `Auth` handshake. Bump it only on a genuinely incompatible transport change.
 
-**App-level `PROTOCOL_VERSION = 37`** (`src/protocol/mod.rs`) is the real version gate. It rides in `ClientMessage::Auth` alongside the human-readable `GAME_VERSION` (the crate version). `GameServer::connect` compares both against its own; a mismatch returns a typed `VersionMismatchRejection`, which `src/net/host/routing.rs` turns into `ServerMessage::VersionMismatch { server_version, server_protocol }`. The client pairs that with its compiled-in `GAME_VERSION` to show a "you're newer/older" modal and disconnects cleanly. Bump `PROTOCOL_VERSION` on any breaking wire change so mismatched builds are rejected cleanly at `Auth`.
+**App-level `PROTOCOL_VERSION = 43`** (`src/protocol/mod.rs`) is the real version gate. It rides in `ClientMessage::Auth` alongside the human-readable `GAME_VERSION` (the crate version). `GameServer::connect` compares both against its own; a mismatch returns a typed `VersionMismatchRejection`, which `src/net/host/routing.rs` turns into `ServerMessage::VersionMismatch { server_version, server_protocol }`. The client pairs that with its compiled-in `GAME_VERSION` to show a "you're newer/older" modal and disconnects cleanly. Bump `PROTOCOL_VERSION` on any breaking wire change so mismatched builds are rejected cleanly at `Auth`.
 
 **Wire-skew fallback** (`src/net/host/routing.rs` - `handle_unauthenticated_message`): postcard is not self-describing, so a genuinely version-skewed client's `Auth` can deserialize into a *different* `ClientMessage` variant. An unauthenticated client whose first message is not `Auth` is therefore answered with `VersionMismatch` too, and the surfaced variant is logged. That path **swallows** benign version-agnostic control messages (`Heartbeat`, `Ping`, `Disconnect`) instead of bouncing the player, because a same-version client can legitimately have one of those queued from a prior in-process session (singleplayer → main menu → multiplayer) or reordered ahead of its reliable `Auth`. On the client, a `VersionMismatch` arriving after a `Welcome` is dropped as stale, and one landing in the same receive batch as an `AuthRejected` is suppressed (the auth rejection is the real reason).
 
@@ -86,7 +86,7 @@ Pointer-level only; the per-variant payloads and delivery live in `src/protocol/
 
 **The rule for which path new state takes:** per-entity world state the client renders or simulates against (a node, a drop, a deployable, a player, a loot bag) goes through Lightyear replication, **not** a `ServerMessage` variant. Presence, clocks, diagnostics, and one-shot intent signals go through a message. Never reintroduce a periodic full-state broadcast; the old `WorldSnapshot` wire was deleted and the replication path already re-ships unacked windows on its own (see CLAUDE.md replicated-state rules and `docs/replication.md`).
 
-### `ClientMessage` (29 variants, `src/protocol/messages.rs`)
+### `ClientMessage` (32 variants, `src/protocol/messages.rs`)
 
 All ride **Reliable** except `Voice` (UnreliableUnordered) and `Movement` + `Ping` (Unreliable).
 
@@ -94,26 +94,29 @@ All ride **Reliable** except `Voice` (UnreliableUnordered) and `Movement` + `Pin
 - Movement: `Movement` (client-authoritative pose; see `docs/movement.md`)
 - Social: `Chat`, `Command`
 - Inventory / crafting: `Inventory`, `Crafting`, `OpenStorageBox { .. }`
-- Gather / combat: `Gather`, `AttackPlayer`, `DamageDeployable`, `SwingStart` (cosmetic swing-start that drives the third-person swing animation; reliable so every swing animates on peers, including whiffs)
+- Gather / combat: `Gather`, `AttackPlayer`, `DamageDeployable`, `SwingStart` (cosmetic swing-start that drives the third-person swing animation; carries the swing archetype as an `ItemModel` so peers animate the right weapon; reliable so every swing animates on peers, including whiffs), `Ranged(RangedCommand::{DrawStart, DrawCancel, Fire { aim_dir }})` (bow/crossbow: draw start/cancel track the server-side draw window and the movement slow; `Fire` validates weapon + ammo + cooldown + finite aim, scales damage by the observed draw fraction, consumes one arrow, and spawns a server-simulated projectile. Reliable so a dropped fire can't eat the shot the player took), `Explosive(ExplosiveCommand::{Throw { aim_dir }, Defuse { id }})` (`Throw` throws a held powder bomb: validates the active item is a thrown explosive, consumes one, and launches a heavier-ballistics projectile that arms its fuse on coming to rest. Placed charges (keg, satchel, ember) ride `PlaceDeployable`, not this. `Defuse` defuses the placed charge `id`: the server validates reach and, if the charge sits inside a Tool Cupboard claim, that the requester is authorized on it (a charge outside any claim can be defused by anyone); on success the charge is removed without detonation and half its recipe materials (rounded down) are refunded to the defuser, overflow dropping at their feet. Reliable so a dropped throw can't eat the bomb)
+- Stations: `Furnace`, `Workbench`
 - Deployables / building: `PlaceDeployable`, `Furnace`, `PlaceBuilding`, `Building`, `Door`, `SleepingBag`, `Claim`
 - Loot / death: `LootBag`, `LootSleeper { .. }`, `Respawn`, `RespawnAtBag { .. }`
 - AoI / map: `SetViewRadius { .. }` (drives the per-client AoI ring size; see `docs/chunks-and-aoi.md`), `RequestWorldMap`, `WorldMapMarker(WorldMapMarkerCommand)`
 - Voice: `Voice`
 
-### `ServerMessage` (23 variants, `src/protocol/messages.rs`)
+### `ServerMessage` (26 variants, `src/protocol/messages.rs`)
 
-Reliable: `Welcome`, `AuthRejected`, `VersionMismatch`, `Kicked`, `PlayerEvent`, `Chat`, `ItemMerged`, `Toast`, `ResourceNodeDepleted`, `Knockback`, `PlayerKilled`, `DoorCodePrompt`, `DoorCodeResult`, `WorldMapMarkers`.
-Unreliable: `Correction`, `ResourceImpact`, `PlayerImpact`, `WorldTime`, `PerfStats`, `Pong`, `PlayerList`, `Heartbeat`.
+Reliable: `Welcome`, `AuthRejected`, `VersionMismatch`, `Kicked`, `PlayerEvent`, `Chat`, `ItemMerged`, `Toast`, `ResourceNodeDepleted`, `Knockback`, `PlayerKilled`, `DoorCodePrompt`, `DoorCodeResult`, `WorldMapMarkers`, `MeteorShower`.
+Unreliable: `Correction`, `ResourceImpact`, `PlayerImpact`, `ProjectileImpact`, `Explosion`, `WorldTime`, `PerfStats`, `Pong`, `PlayerList`, `Heartbeat`.
 UnreliableUnordered: `Voice`.
 
 - Handshake / lifecycle: `Welcome`, `AuthRejected`, `VersionMismatch`, `Kicked`, `Heartbeat`, `Pong`
 - Movement: `Correction` (cosmetic; authoritative pose replicates as `PlayerPose`)
 - Social: `Chat`, `PlayerEvent`, `Toast`
 - Inventory: `ItemMerged`
-- Combat / death: `ResourceImpact`, `PlayerImpact` (both cosmetic feedback; authoritative damage lands via the replicated health component, so they ride unreliable), `Knockback`, `PlayerKilled`
+- Combat / death: `ResourceImpact`, `PlayerImpact` (both cosmetic feedback; authoritative damage lands via the replicated health component, so they ride unreliable; `PlayerImpact` carries the swing's `ItemModel` impact identity so peer audio/VFX/camera reaction match the weapon that landed the hit), `ProjectileImpact { position, model, surface, owner_confirmation }` (cosmetic arrow thunk/stick fan-out to nearby peers when a server-simulated projectile hits a player, deployable, or the world; the authoritative damage already lands via the replicated health/deployable diff, so it is unreliable like `PlayerImpact`. Peers see the projectile itself as a replicated entity, so this only powers the impact VFX/SFX, not the flight. Two delivery shapes: the proximity fan-out excludes the shooter and carries `owner_confirmation = false`; on a Player/Deployable hit the shooter also gets one owner-tagged copy (`owner_confirmation = true`) that raises their crosshair hit marker, the melee attacker's confirmation. A World rest sends the shooter nothing, its client cues that from the arrow's moving -> stuck transition), `Knockback`, `PlayerKilled`
 - Doors: `DoorCodePrompt`, `DoorCodeResult`
 - Resource nodes: `ResourceNodeDepleted` (see below)
 - Presence / clocks / diagnostics (periodic, deliberately **not** entity state): `WorldTime` (~1/min day-night clock the client extrapolates locally), `PerfStats` (~1 Hz per-client perf-HUD diagnostics), `PlayerList` (~1 Hz presence roster including players outside the receiver's AoI ring, so it can't ride chunk-gated replication)
+- World events: `MeteorShower { impact_position, impact_tick, trajectory_seed }` (the meteor-event announce). Broadcast once at T minus the warning window and resent to any client that connects while the event is alive (through the post-impact crater window) via the connection/welcome path. The client computes the whole sky show, countdown, danger warning, and temporary map marker as a deterministic function of this one payload plus its authoritative-clock estimate (`crate::world::meteor_shower`), so the meteor is never per-tick replicated. Follows the `WorldTime` precedent: an event via a message, not a replicated entity, because the trajectory is a function of time.
+- Explosions: `Explosion { position, kind }` (an explosive detonated). Purely a cosmetic VFX/SFX cue: the authoritative blast (player damage, structure destruction) already landed server-side and replicates through the normal player/deployable mirrors, so it rides unreliable like the other impact cues. Fanned out to clients within a generous range (`EXPLOSION_CUE_RANGE_M`) so a distant breach is still seen/heard; the client scales the flash/thump/rumble/shake by its own distance. `kind` is the `ExplosiveKind` so a bomb pop and a satchel blast can differ (the client applies a per-kind gain offset to the shared foley pools). Consumed by the explosive VFX/SFX package (this package ships only the cue).
 - Map: `WorldMapMarkers`
 - Voice: `Voice`
 
@@ -139,7 +142,7 @@ Wire schema: a `DedicatedAdminRequest` serialized with `serde_json::to_writer` p
 - `src/net/channels.rs` - `LightyearProtocolPlugin`: channel registration, the `register_component::<T>()` registry, `LIGHTYEAR_PROTOCOL_ID`, the `PacketDelivery → channel` table, and the private-key context.
 - `src/net/host.rs` - `spawn_loopback_server`, `run_game_server`, `run_host`, `tick_authoritative_server`, `ServerTickPulse`, the `mirror_systems` tuple wiring.
 - `src/net/host/routing.rs` - `handle_unauthenticated_message`, authenticated routing, connection maps.
-- `src/net/host/mirror.rs` - the five `sync_*_entities` mirror systems (see `docs/replication.md`).
+- `src/net/host/mirror.rs` - the six `sync_*_entities` mirror systems (see `docs/replication.md`).
 - `src/net/host/rooms.rs` - room/AoI subscription helpers, `attach_room_gated_replication`, `attach_player_replication` (see `docs/replication.md` and `docs/chunks-and-aoi.md`).
 - `src/net/host/handle.rs` - host command handle, final-save request, thread shutdown.
 - `src/net/host/admin.rs` (Unix only) - admin socket listener and `DedicatedAdminRequest` dispatch.

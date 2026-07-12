@@ -6,7 +6,7 @@ use crate::{
     app::audio::{PlaySound, SoundId},
     app::scene::{ImpactEffectAssets, ToonMaterial, tree_mesh_height},
     app::state::ImpactEffectKind,
-    items::ToolKind,
+    items::ItemModel,
     protocol::ResourceNodeId,
     resources::ResourceNodeModel,
     util::hash::hashed_unit,
@@ -250,7 +250,7 @@ fn spawn_ore_shatter(
     // equivalent signal from `TreeFall`.
     play.write(PlaySound::at(SoundId::OreNodeBreak, burst_anchor));
 
-    camera_kick.trigger(ToolKind::Pickaxe);
+    camera_kick.trigger(ItemModel::Pickaxe);
 }
 
 pub(crate) fn tick_felling_trees_system(
@@ -346,7 +346,7 @@ fn fire_landing_feedback(
 ) {
     if !tree.landing_kick_fired {
         tree.landing_kick_fired = true;
-        camera_kick.trigger(ToolKind::Pickaxe);
+        camera_kick.trigger(ItemModel::Pickaxe);
     }
     if !tree.landing_chips_fired {
         tree.landing_chips_fired = true;

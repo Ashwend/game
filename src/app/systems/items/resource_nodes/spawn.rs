@@ -241,6 +241,7 @@ pub(crate) fn ore_stage_mesh(
         ResourceNodeModel::IronOre => &assets.iron_node_meshes,
         ResourceNodeModel::SulfurOre => &assets.sulfur_node_meshes,
         ResourceNodeModel::StoneVein => &assets.stone_vein_meshes,
+        ResourceNodeModel::Meteorite => &assets.meteorite_node_meshes,
         _ => return None,
     };
     let index = (stage as usize).min(meshes.len() - 1);
@@ -268,6 +269,12 @@ pub(crate) fn resource_node_visual(
         ResourceNodeModel::IronOre => (assets.iron_node_meshes[0].clone(), toon()),
         ResourceNodeModel::SulfurOre => (assets.sulfur_node_meshes[0].clone(), toon()),
         ResourceNodeModel::StoneVein => (assets.stone_vein_meshes[0].clone(), toon()),
+        // Meteorite gets its own emissive cel material (night glow) instead of
+        // the shared ore material; the mesh is the slag-mound + crystal glb.
+        ResourceNodeModel::Meteorite => (
+            assets.meteorite_node_meshes[0].clone(),
+            ResourceNodeMaterial::Toon(assets.meteorite_toon_material.clone()),
+        ),
         // Trees: the cel-shaded bark trunk mesh + shared bark `ToonMaterial`. The
         // solid faceted canopy is a separate child (see `tree_foliage_visual` +
         // the spawn path), also cel-shaded.

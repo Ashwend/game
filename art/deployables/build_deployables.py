@@ -319,8 +319,141 @@ def build_workbench():
     print("built workbench")
 
 
+# --------------------------------------------------------------- workbench tier 2
+# Extra palette entries for the heavier bench: dark iron (anvil, vice, bolts) and
+# a cruder darker oak for the reinforced frame + clutter. All * the white plank /
+# (implicitly) grey textures; the cel material carries the surface grain.
+IRON = (0.090, 0.095, 0.105)      # dark forged iron (anvil, vice, bolt heads)
+IRON_LT = (0.150, 0.158, 0.170)   # lit iron highlight (anvil face)
+OAK_DK = (0.235, 0.150, 0.078)    # reinforced frame timber (darker than the top)
+LOG_END = (0.520, 0.360, 0.200)   # pale sawn log end on the shelf clutter
+
+
+def build_workbench_t2():
+    """The upgraded bench from the approved concept (art/concepts/workbench_t2),
+    minus the floating tool rack (dropped per review) and the modern bottles
+    (replaced with cruder clutter). Same footprint + ground origin as tier 1 so
+    the placement collider (item registry `collider_half_*`) needs no change: a
+    thick plank top over a bolted, reinforced frame, with an ANVIL and a VICE on
+    the top and a lower shelf carrying crude clutter (sawn logs + a mallet).
+    Kept in the same cel-toon `detail * COLOR_0` pipeline as tier 1: iron parts
+    ride a dark COLOR_0, the wood a warm oak, all box-UV'd and lightly bevelled so
+    the ink edge inks every corner."""
+    bpy.ops.wm.read_homefile(use_empty=True)
+    mesh = bpy.data.meshes.new("workbench_t2")
+    obj = bpy.data.objects.new("workbench_t2", mesh)
+    bpy.context.collection.objects.link(obj)
+    bm = bmesh.new()
+    col = bm.loops.layers.float_color.new("Color")
+    uv = bm.loops.layers.uv.new("UVMap")
+
+    def wood(center, half, color=WOOD, tile=TILE_WOOD):
+        add_box(bm, col, uv, center, half, color, tile)
+
+    def iron(center, half, color=IRON):
+        add_box(bm, col, uv, center, half, color, TILE_STONE)
+
+    # --- footprint matched to tier 1 (HX 0.52, HZ 0.34, top centre y 0.78) ---
+    HX = 0.52
+    HZ = 0.34
+    TOP_Y = 0.78
+    TOP_HY = 0.065     # a touch thicker slab than t1: it reads heavier
+    UNDER = TOP_Y - TOP_HY
+    LEG_HX = LEG_HZ = 0.075     # chunkier legs than t1
+    LEG_INSET = 0.06
+    lx = HX - LEG_INSET - LEG_HX
+    lz = HZ - LEG_INSET - LEG_HZ
+
+    # Plank top: three thick boards with seams.
+    boards = 3
+    gap = 0.012
+    bw = (2 * HZ - (boards - 1) * gap) / boards
+    for i in range(boards):
+        cz = -HZ + bw / 2 + i * (bw + gap)
+        wood((0.0, TOP_Y, cz), (HX, TOP_HY, bw / 2))
+    # Front apron lip (thick edge read).
+    wood((0.0, UNDER - 0.05, -HZ + 0.03), (HX - 0.02, 0.06, 0.03))
+
+    # Four chunky legs.
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            wood((sx * lx, UNDER / 2.0, sz * lz), (LEG_HX, UNDER / 2.0, LEG_HZ), OAK_DK)
+    # Reinforced frame: doubled aprons + diagonal-ish braces (as short stubs).
+    rail_y = UNDER - 0.11
+    wood((0.0, rail_y, -lz), (lx, 0.06, 0.032), OAK_DK)
+    wood((0.0, rail_y, lz), (lx, 0.06, 0.032), OAK_DK)
+    wood((-lx, rail_y, 0.0), (0.032, 0.06, lz), OAK_DK)
+    wood((lx, rail_y, 0.0), (0.032, 0.06, lz), OAK_DK)
+    # Bolt heads on the leg tops (the concept's bolted frame): small iron studs.
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            iron((sx * lx, UNDER - 0.02, sz * (lz + LEG_HZ - 0.02)),
+                 (0.03, 0.03, 0.012))
+
+    # Lower shelf (plank deck) + support rails.
+    shelf_y = 0.20
+    wood((0.0, shelf_y, 0.0), (lx, 0.026, lz), WOOD_DK)
+    wood((0.0, shelf_y - 0.035, -lz), (lx, 0.035, 0.03), OAK_DK)
+    wood((0.0, shelf_y - 0.035, lz), (lx, 0.035, 0.03), OAK_DK)
+
+    # --- ANVIL on the top-left: base block, waist, horn-tapered top face ---
+    ax = -0.26
+    anvil_y = TOP_Y + TOP_HY
+    iron((ax, anvil_y + 0.045, 0.02), (0.10, 0.045, 0.075), IRON)       # base
+    iron((ax, anvil_y + 0.105, 0.02), (0.055, 0.03, 0.05), IRON)        # waist
+    iron((ax, anvil_y + 0.155, 0.02), (0.125, 0.028, 0.06), IRON_LT)    # face/horn
+    # a stubby horn poking off the -X end of the face
+    iron((ax - 0.14, anvil_y + 0.150, 0.02), (0.045, 0.02, 0.03), IRON_LT)
+
+    # --- VICE clamped to the front-right edge: jaws + screw handle ---
+    vx = 0.30
+    vy = TOP_Y + TOP_HY
+    iron((vx, vy + 0.03, -HZ + 0.05), (0.05, 0.03, 0.05), IRON)          # body
+    iron((vx - 0.045, vy + 0.06, -HZ + 0.05), (0.012, 0.045, 0.05), IRON_LT)  # fixed jaw
+    iron((vx + 0.045, vy + 0.06, -HZ + 0.05), (0.012, 0.045, 0.05), IRON_LT)  # moving jaw
+    iron((vx, vy + 0.06, -HZ - 0.02), (0.012, 0.012, 0.06), IRON)        # screw
+    iron((vx, vy + 0.06, -HZ - 0.085), (0.045, 0.012, 0.012), IRON_LT)   # handle bar
+
+    # --- crude clutter on the lower shelf: a stack of sawn logs + a mallet ---
+    log_y = shelf_y + 0.026 + 0.045
+    for i, cz in enumerate((-0.12, -0.02, 0.08)):
+        wood((-0.18, log_y, cz), (0.16, 0.045, 0.045), OAK_DK)
+        # pale sawn ends (a thin cap of lighter wood at each log's -X face)
+        wood((-0.34 + 0.001, log_y, cz), (0.006, 0.043, 0.043), LOG_END)
+    # a mallet lying on the right of the shelf: head + handle
+    wood((0.24, log_y, 0.02), (0.05, 0.05, 0.05), OAK_DK)                # head
+    wood((0.24, log_y, -0.18), (0.018, 0.018, 0.14), WOOD)              # handle
+
+    bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
+    bm.normal_update()
+    bmesh.ops.bevel(bm, geom=list(bm.edges), offset=0.012, segments=2,
+                    affect="EDGES", clamp_overlap=True)
+    bm.normal_update()
+    for f in bm.faces:
+        f.normal_update()
+        for loop in f.loops:
+            loop[uv].uv = cube_uv(loop.vert.co, f.normal, TILE_WOOD)
+    bm.to_mesh(mesh)
+    bm.free()
+    if "Color" in mesh.color_attributes:
+        i = mesh.color_attributes.find("Color")
+        mesh.color_attributes.render_color_index = i
+        mesh.color_attributes.active_color_index = i
+    m = bpy.data.materials.new("workbench_t2_mat")
+    m.use_nodes = True
+    bsdf = m.node_tree.nodes.get("Principled BSDF")
+    vc = m.node_tree.nodes.new("ShaderNodeVertexColor")
+    vc.layer_name = "Color"
+    m.node_tree.links.new(vc.outputs["Color"], bsdf.inputs["Base Color"])
+    mesh.materials.append(m)
+    out = os.path.join(ITEMS, "workbench_t2", "model.glb")
+    export_glb(obj, out)
+    print("built workbench t2")
+
+
 def main():
     build_workbench()
+    build_workbench_t2()
     build_sleeping_bag()
     # Furnace is organically displaced already, so it keeps its hard mesh; the
     # boxy props get a light bevel so the cel edge inks every corner.

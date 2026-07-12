@@ -8,7 +8,8 @@ use bevy::{
 use crate::{
     app::state::{
         ClientErrorToast, ClientRuntime, ClientSettings, GatherInputState, InventoryUiState,
-        KeyAction, MenuState, PickupTargetState, PredictionState, SwingTarget, ToolSwapState,
+        KeyAction, MenuState, PickupTargetState, PredictionState, RangedDrawState, SwingTarget,
+        ToolSwapState,
     },
     protocol::{
         ACTIONBAR_SLOT_COUNT, ClientMessage, InventoryCommand, ItemContainerSlot, LootBagCommand,
@@ -18,13 +19,16 @@ use crate::{
 
 use super::gating::{gameplay_accepts_controls, primary_window_focused};
 
+mod explosive;
 mod predict;
+mod ranged;
 mod send;
 mod swing;
 
 #[cfg(test)]
 mod tests;
 
+pub(crate) use ranged::{PredictedArrowEvent, RangedFireSampler};
 pub(crate) use send::*;
 
 pub(in crate::app::systems::input) use send::send_gameplay_message;
@@ -32,7 +36,7 @@ use send::send_place_deployable_or_furnace_open;
 
 use predict::{predict_pickup, predict_resource_node_pickup};
 use swing::{
-    dispatch_swing_impact, equipped_tool_can_harvest_target, equipped_tool_kind,
+    dispatch_swing_impact, equipped_swing, equipped_tool_can_harvest_target,
     resource_target_is_crude,
 };
 
@@ -47,9 +51,10 @@ pub(crate) struct GameplayInventoryShortcutsParams<'w, 's> {
     local_player: Res<'w, crate::app::state::LocalPlayerState>,
     prediction: ResMut<'w, PredictionState>,
     gather_input: ResMut<'w, GatherInputState>,
+    ranged_input: ResMut<'w, RangedDrawState>,
+    throw_charge: ResMut<'w, crate::app::state::ThrowChargeState>,
     inventory_ui: ResMut<'w, InventoryUiState>,
     menu: ResMut<'w, MenuState>,
-    crafting_ui: ResMut<'w, crate::app::state::CraftingUiState>,
     pickup_target: Res<'w, PickupTargetState>,
     swap_state: Res<'w, ToolSwapState>,
     settings: Res<'w, ClientSettings>,
@@ -58,13 +63,25 @@ pub(crate) struct GameplayInventoryShortcutsParams<'w, 's> {
     wheel: Res<'w, crate::app::state::WheelMenuState>,
     error_toasts: MessageWriter<'w, ClientErrorToast>,
     play_sound: MessageWriter<'w, crate::app::audio::PlaySound>,
+    predicted_arrows: MessageWriter<'w, PredictedArrowEvent>,
     primary_window: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+    analytics: Res<'w, crate::analytics::Analytics>,
+    ranged_fire_sampler: ResMut<'w, ranged::RangedFireSampler>,
 }
 
 pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryShortcutsParams) {
     if !gameplay_accepts_controls(&params.menu, primary_window_focused(&params.primary_window)) {
         params.mouse_wheel.clear();
         params.gather_input.cancel();
+        // An overlay opening (or losing focus) mid-charge abandons the bomb
+        // wind-up too (no throw fires from behind a menu).
+        params.throw_charge.cancel();
+        // An overlay opening (or losing focus) mid-draw abandons the shot: send a
+        // DrawCancel so the server lowers the bow and restores movement, instead of
+        // leaving the player stuck at draw speed behind the menu. The local reload
+        // clock keeps burning through the overlay, mirroring the server's cooldown
+        // (gameplay never pauses; only controls are gated here).
+        ranged::idle_tick_and_cancel(&mut params);
         return;
     }
     // While a radial wheel is open the mouse drives the wheel pointer
@@ -73,6 +90,8 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
     if params.wheel.blocks_input() {
         params.mouse_wheel.clear();
         params.gather_input.cancel();
+        params.throw_charge.cancel();
+        ranged::idle_tick_and_cancel(&mut params);
         return;
     }
 
@@ -173,6 +192,17 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
                 },
             );
             params.inventory_ui.note_pickup_intent();
+        } else if let Some(projectile_id) = params.pickup_target.projectile_id {
+            // Pull a stuck (at-rest) arrow back into the bag before its despawn
+            // TTL. Not predicted: the grant arrives via the normal inventory
+            // replication + acquisition toast, and a rejected recovery (someone
+            // else grabbed it first, bag full) simply leaves the world as-is.
+            send_inventory_command(
+                &mut params.runtime,
+                &mut params.error_toasts,
+                InventoryCommand::RecoverProjectile { projectile_id },
+            );
+            params.inventory_ui.note_pickup_intent();
         } else if let Some(resource_node_id) = params.pickup_target.resource_node_id
             && resource_target_is_crude(&params.pickup_target)
         {
@@ -201,10 +231,10 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
             params.inventory_ui.note_pickup_intent();
         } else if let Some(id) = params.pickup_target.deployable_id {
             // Same key, different intent: opening a placed structure's
-            // UI. Furnace opens its server-side interactive view;
-            // workbench is a client-only convenience that opens the
-            // crafting modal (the workbench is otherwise just a
-            // proximity gate). Other deployable kinds no-op for now.
+            // server-side interactive view. Furnace opens its smelt grid;
+            // workbench opens its upgrade UI. Both track a per-client open
+            // pointer server-side and reply via `PlayerPrivate`. Other
+            // deployable kinds no-op for now.
             use crate::items::DeployableKind;
             match params.pickup_target.deployable_kind {
                 Some(DeployableKind::Furnace { .. }) => {
@@ -215,12 +245,10 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
                     );
                 }
                 Some(DeployableKind::Workbench { .. }) => {
-                    crate::app::systems::input::open_crafting_modal(
-                        &mut params.menu,
-                        &mut params.inventory_ui,
-                        &mut params.crafting_ui,
+                    crate::app::systems::input::send_workbench_command(
                         &mut params.runtime,
                         &mut params.error_toasts,
+                        crate::protocol::WorkbenchCommand::Open { id },
                     );
                 }
                 // Door E (tap = open / code prompt, hold = pick-up wheel)
@@ -232,17 +260,18 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
                 // wheel) lives in the hold-aware path in
                 // `super::super::wheel`; nothing fires on plain press.
                 Some(DeployableKind::SleepingBag) => {}
-                Some(DeployableKind::StorageBox { .. }) => {
-                    // Open the box's container UI. The server validates
-                    // range + kind and replies by populating
-                    // `PlayerPrivate.open_loot_bag` (shared container
-                    // view), so the transfer panel appears on the next
-                    // replication tick.
+                // Storage boxes and ruin caches share the container view: both
+                // store their slots on the deployable and open through the same
+                // `OpenStorageBox` message (the server accepts either kind). The
+                // server validates range + kind and replies by populating
+                // `PlayerPrivate.open_loot_bag` (shared container view), so the
+                // transfer panel appears on the next replication tick.
+                Some(DeployableKind::StorageBox { .. } | DeployableKind::RuinCache) => {
                     send_gameplay_message(
                         &mut params.runtime,
                         &mut params.error_toasts,
                         ClientMessage::OpenStorageBox { id },
-                        "storage box open",
+                        "container open",
                     );
                 }
                 // Tool Cupboard E (tap = authorize/deauthorize yourself,
@@ -250,9 +279,16 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
                 // `super::super::wheel` path, like the sleeping bag;
                 // nothing fires on plain press here.
                 Some(DeployableKind::ToolCupboard) => {}
-                // Building blocks and torches have no E interaction; the
-                // hammer is the building interface, a torch is just a light.
-                Some(DeployableKind::Building { .. } | DeployableKind::Torch { .. }) | None => {}
+                // Building blocks, torches, and armed charges have no E
+                // interaction on plain press; the hammer is the building
+                // interface, a torch is just a light, and a charge's defuse is
+                // the hold-E wheel (in the explosive VFX package).
+                Some(
+                    DeployableKind::Building { .. }
+                    | DeployableKind::Torch { .. }
+                    | DeployableKind::Explosive { .. },
+                )
+                | None => {}
             }
         } else if let Some(id) = params.pickup_target.loot_bag_id {
             // Open the death loot bag. Server validates range +
@@ -291,11 +327,47 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
         params.local_player.lifecycle,
         Some(crate::server::PlayerLifecycle::Dead { .. })
     );
-    let equipped_tool = if params.swap_state.is_swapping() || local_dead {
+
+    // Ranged weapons (bow, crossbow) run their own draw/fire/reload loop, not the
+    // melee swing state machine. When one is held, drive it and skip the melee path
+    // entirely (a ranged weapon has no ToolProfile/WeaponProfile, so `equipped_swing`
+    // already returns None for it and the swing below would be a no-op, but taking
+    // this branch also keeps any stale melee swing cancelled and drives the draw).
+    let swapping = params.swap_state.is_swapping();
+    // A thrown explosive (powder bomb) intercepts before both the ranged and the
+    // melee paths: it neither draws nor lands a melee hit. It DOES drive the swing
+    // state machine (with the `ThrownBomb` archetype) so its overhand toss pose
+    // plays, the release cue + throw fire at the pose's release frame, and the
+    // recovery beat gates re-throw; so we do NOT cancel the swing here, and we
+    // still drain the SwingStart below so peers see the toss.
+    if explosive::drive_explosive_input(&mut params, local_dead, swapping) {
+        if let Some((seq, model)) = params.gather_input.take_swing_start() {
+            send_gameplay_message(
+                &mut params.runtime,
+                &mut params.error_toasts,
+                ClientMessage::SwingStart(SwingStartCommand { seq, model }),
+                "swing start",
+            );
+        }
+        return;
+    }
+    if ranged::drive_ranged_input(&mut params, local_dead, swapping) {
+        // A ranged weapon is active: it does not swing, so no SwingStart is queued
+        // and the melee dispatch is skipped. Make sure a leftover melee swing from a
+        // just-swapped-away tool is cleared.
+        params.gather_input.cancel();
+        return;
+    }
+
+    // The swing archetype (for timing/poses) paired with the impact identity
+    // (`ToolKind`, or the interim `Hands` default for weapons). `Some` for any
+    // real tool or weapon, `None` for bare hands / non-combat items, so the swing
+    // start below gates on it exactly as it did on the old tool kind.
+    let equipped = if params.swap_state.is_swapping() || local_dead {
         params.gather_input.cancel();
         None
     } else {
-        equipped_tool_kind(&params.local_player)
+        equipped_swing(&params.local_player)
     };
     // Pick the swing target. Priority:
     //  1. Another player inside attack range. Players win over
@@ -313,7 +385,7 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
     //     which short-circuits the swing before this check runs.
     let target =
         if let Some(player_id) = params.pickup_target.player_id
-            && equipped_tool.is_some()
+            && equipped.is_some()
         {
             Some(SwingTarget::Player(player_id))
         } else if let Some(node_id) = params.pickup_target.resource_node_id.filter(|_| {
@@ -321,18 +393,26 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
         }) {
             Some(SwingTarget::ResourceNode(node_id))
         } else if let Some(deployable_id) = params.pickup_target.deployable_id
-            && equipped_tool.is_some()
+            && equipped.is_some()
         {
             Some(SwingTarget::Deployable(deployable_id))
         } else {
             None
         };
+    // Dev combat-feel timing scales (neutral by default, so a release build and an
+    // untouched dev session swing exactly as shipped). Read straight off settings
+    // each frame, the same direct-read pattern the lighting sliders use.
+    let feel = crate::app::state::SwingFeelScales {
+        duration_scale: params.settings.dev.combat.swing_duration_scale,
+        impact_fraction_offset: params.settings.dev.combat.impact_fraction_offset,
+    };
     let impact = params.gather_input.update(
         params.time.delta_secs(),
         params.mouse_buttons.just_pressed(MouseButton::Left),
         params.mouse_buttons.pressed(MouseButton::Left),
-        equipped_tool,
+        equipped,
         target,
+        feel,
     );
     if let Some(impact) = impact {
         dispatch_swing_impact(&mut params, impact);
@@ -341,11 +421,11 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
     // peer-visible PlayerAction so other players see the matching third-person
     // swing on the rigged body. Fires on whiffs too; the impact dispatch above
     // only handles swings that connect.
-    if let Some((seq, tool)) = params.gather_input.take_swing_start() {
+    if let Some((seq, model)) = params.gather_input.take_swing_start() {
         send_gameplay_message(
             &mut params.runtime,
             &mut params.error_toasts,
-            ClientMessage::SwingStart(SwingStartCommand { seq, tool }),
+            ClientMessage::SwingStart(SwingStartCommand { seq, model }),
             "swing start",
         );
     }

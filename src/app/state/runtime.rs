@@ -118,6 +118,52 @@ pub(crate) struct ClientRuntime {
     /// Latest connected-player roster from `ServerMessage::PlayerList`, name +
     /// ping for every online player (AoI-independent). Cleared on disconnect.
     pub(crate) players: Vec<crate::protocol::PlayerListEntry>,
+    /// The live meteor shower event, if one has been announced. Seeded by a
+    /// single `ServerMessage::MeteorShower` (resent to late joiners) and cleared
+    /// once the client-side clock passes the crater despawn window. The sky
+    /// visual, countdown HUD, danger warning, and temporary map marker all read
+    /// this; nothing about the meteor is per-tick replicated.
+    pub(crate) meteor_shower: Option<MeteorShowerEvent>,
+}
+
+/// Client-side mirror of an announced meteor shower event. A pure record of the
+/// announce payload; all timing is derived on read against the authoritative
+/// clock estimate ([`ClientRuntime::server_tick`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct MeteorShowerEvent {
+    /// Ground-zero world position (y is floor level).
+    pub(crate) impact_position: crate::protocol::Vec3Net,
+    /// Server tick the meteor strikes.
+    pub(crate) impact_tick: u64,
+    /// Seeds the fireball's approach azimuth (see `crate::world::meteor_shower`).
+    pub(crate) trajectory_seed: u64,
+    /// The client tick estimate at which this event stops being rendered (the
+    /// crater and its map marker are removed). Derived from `impact_tick` plus
+    /// the despawn window at announce time so the client cleans up without a
+    /// second message.
+    pub(crate) despawn_tick: u64,
+}
+
+impl MeteorShowerEvent {
+    /// Real seconds until impact from the given clock estimate. Negative once the
+    /// meteor has struck (the crater phase).
+    pub(crate) fn seconds_to_impact(&self, estimated_tick: u64) -> f32 {
+        (self.impact_tick as f64 - estimated_tick as f64) as f32
+            / crate::protocol::SERVER_TICK_RATE_HZ
+    }
+
+    /// Whether the impact has already happened at the given clock estimate (the
+    /// crater / shard phase; the fireball is gone).
+    pub(crate) fn has_impacted(&self, estimated_tick: u64) -> bool {
+        estimated_tick >= self.impact_tick
+    }
+
+    /// Whether the event is still live (pre-impact fireball or post-impact
+    /// crater) at the given clock estimate. `false` once the crater despawns, at
+    /// which point the runtime drops it.
+    pub(crate) fn is_alive(&self, estimated_tick: u64) -> bool {
+        estimated_tick < self.despawn_tick
+    }
 }
 
 /// Surfaces a client-side error string as a toast. Emitted by any system
@@ -237,6 +283,7 @@ impl ClientRuntime {
         self.messages.clear();
         self.input_sequence = 0;
         self.depleted_node_ids.clear();
+        self.meteor_shower = None;
         self.connection.reset();
         self.world_time = WorldTime::default();
         self.server_tick_estimate = 0.0;
@@ -265,6 +312,7 @@ impl ClientRuntime {
         self.is_admin = false;
         self.depleted_node_ids.clear();
         self.players.clear();
+        self.meteor_shower = None;
         self.local_ping_ms = 0;
         self.connection.reset();
     }
@@ -296,7 +344,20 @@ impl ClientRuntime {
         // item profile to match the server-side overlap test.
         let mut extras: Vec<WorldBlock> = resource_node_colliders.into_iter().collect();
         extras.extend(deployable_colliders);
-        self.world_grid = Some(BlockGrid::build_with_extras(world, &extras));
+        let mut grid = BlockGrid::build_with_extras(world, &extras);
+        // Carry the live crater's analytic floor across rebuilds (the per-frame
+        // sync in `tick_world_time` also covers the impact moment itself).
+        grid.set_crater(self.impacted_crater_center());
+        self.world_grid = Some(grid);
+    }
+
+    /// Ground-zero `(x, z)` of the live, already-impacted meteor shower crater, if
+    /// any. Drives the movement grid's analytic floor so players walk over the
+    /// crater mound; `None` before impact and once the event cleans up.
+    fn impacted_crater_center(&self) -> Option<[f32; 2]> {
+        self.meteor_shower
+            .filter(|event| event.has_impacted(self.server_tick()))
+            .map(|event| [event.impact_position.x, event.impact_position.z])
     }
 
     /// Replace the grass-displacer footprints (placed deployables/buildings only, not
@@ -380,6 +441,10 @@ impl ClientRuntime {
                 // as floating damage, chip burst, and HP
                 // replication.
             }
+            ServerMessage::ProjectileImpact { .. } => {
+                // Fanned out to a `RemoteImpactEvent` by the network tick system
+                // for the arrow thunk/stick cue; runtime keeps no state for it.
+            }
             ServerMessage::Knockback { impulse } => {
                 // Apply the server-authored impulse directly to the
                 // local prediction's velocity. A cheater ignoring
@@ -413,6 +478,28 @@ impl ClientRuntime {
             ServerMessage::WorldTime(snapshot) => {
                 self.apply_world_time_snapshot(snapshot);
             }
+            ServerMessage::MeteorShower {
+                impact_position,
+                impact_tick,
+                trajectory_seed,
+            } => {
+                // Store the announce; the sky/HUD/map systems derive everything
+                // from it against the local clock estimate. The crater persists
+                // for the despawn window after impact, matching the server, so a
+                // late joiner who gets the resend during the crater phase still
+                // sees the crater. Idempotent: a resend of the same event just
+                // overwrites with identical data.
+                let despawn_tick = impact_tick.saturating_add(
+                    (crate::game_balance::METEOR_SHOWER_DESPAWN_SECONDS
+                        * crate::protocol::SERVER_TICK_RATE_HZ) as u64,
+                );
+                self.meteor_shower = Some(MeteorShowerEvent {
+                    impact_position,
+                    impact_tick,
+                    trajectory_seed,
+                    despawn_tick,
+                });
+            }
             ServerMessage::PerfStats(stats) => {
                 self.perf_stats = Some(stats);
             }
@@ -440,6 +527,12 @@ impl ClientRuntime {
                 // Routed to `WorldMapState` by the network tick system. No
                 // runtime history.
             }
+            ServerMessage::Explosion { .. } => {
+                // Cosmetic detonation cue; the flash / thump / rumble / screen
+                // shake are driven off this in the network tick system (see
+                // `network.rs`), and the authoritative blast already landed via
+                // the replicated mirrors. Nothing to keep in runtime history.
+            }
             ServerMessage::Heartbeat => {}
         }
     }
@@ -462,6 +555,24 @@ impl ClientRuntime {
         self.world_time.advance(delta_seconds);
         self.server_tick_estimate +=
             f64::from(delta_seconds.max(0.0)) * f64::from(crate::protocol::SERVER_TICK_RATE_HZ);
+        // Drop a finished meteor shower event once its crater window closes on the
+        // local clock estimate, matching the server's cleanup. The visuals key
+        // on `runtime.meteor_shower`, so clearing it here removes the crater/marker.
+        if let Some(event) = self.meteor_shower
+            && !event.is_alive(self.server_tick())
+        {
+            self.meteor_shower = None;
+        }
+        // Keep the movement grid's analytic crater floor in step with the event
+        // (installed the frame the impact lands, cleared when the event ends).
+        // The grid rebuild path is fingerprint-gated on collider changes, so it
+        // alone would miss the impact moment.
+        let crater = self.impacted_crater_center();
+        if let Some(grid) = self.world_grid.as_mut()
+            && grid.crater() != crater
+        {
+            grid.set_crater(crater);
+        }
     }
 
     /// Best estimate of the current authoritative server tick, advanced
@@ -469,6 +580,14 @@ impl ClientRuntime {
     /// predictions of tick-based gates (the building demolish window).
     pub(crate) fn server_tick(&self) -> u64 {
         self.server_tick_estimate.max(0.0) as u64
+    }
+
+    /// The same clock estimate with its sub-tick fraction intact. Anything
+    /// animating continuously off the server clock (the meteor shower's
+    /// descent) must use this: truncating to a whole 20 Hz tick quantises
+    /// motion into 50 ms steps, which stutters at render frame rates.
+    pub(crate) fn server_tick_precise(&self) -> f64 {
+        self.server_tick_estimate.max(0.0)
     }
 
     pub(crate) fn push_system_message(&mut self, text: impl Into<String>) {

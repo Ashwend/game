@@ -90,7 +90,7 @@ If you add a **new owner-only component** to a player-shaped entity, add its ove
 
 Add `app.register_component::<YourComponent>()` for every replicated component to `src/net/channels.rs` (`LightyearProtocolPlugin::build`, after the existing `register_component` calls). Both server and client install the same `LightyearProtocolPlugin`, so one registration covers both sides; the registries must match exactly or the wire bytes will not round-trip. Identity and every mutable component need a line.
 
-If this is a wire-breaking change (new components shift the protocol), bump `PROTOCOL_VERSION` in `src/protocol/mod.rs` (currently `37`). Leave `LIGHTYEAR_PROTOCOL_ID` (`src/net/channels.rs` - `LIGHTYEAR_PROTOCOL_ID`, a fixed constant independent of `PROTOCOL_VERSION`) alone unless the transport itself becomes incompatible.
+If this is a wire-breaking change (new components shift the protocol), bump `PROTOCOL_VERSION` in `src/protocol/mod.rs` (currently `39`). Leave `LIGHTYEAR_PROTOCOL_ID` (`src/net/channels.rs` - `LIGHTYEAR_PROTOCOL_ID`, a fixed constant independent of `PROTOCOL_VERSION`) alone unless the transport itself becomes incompatible.
 
 ## Mutation must go through the mandatory-entry helpers
 

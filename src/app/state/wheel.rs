@@ -55,6 +55,9 @@ pub(crate) enum WheelAction {
     AuthorizeCupboard(DeployedEntityId),
     DeauthorizeCupboard(DeployedEntityId),
     ClearCupboard(DeployedEntityId),
+    /// Explosive-charge hold-E wheel: defuse the live charge (server gates on
+    /// reach + claim authorization, refunds half the materials).
+    DefuseCharge(DeployedEntityId),
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +134,10 @@ pub(crate) enum PickupHoldKind {
     /// Tap toggles the door open / prompts for the code, hold opens the
     /// pick-up wheel.
     Door,
+    /// A live placed charge: there is no useful tap action (a charge is not
+    /// interacted with by tapping), so the hold opens the defuse wheel and a
+    /// quick tap is a no-op.
+    Explosive,
 }
 
 /// In-flight pickup-key hold on a deployable: a quick release does the

@@ -281,10 +281,17 @@ fn jittered_speed(jitter: f32, seed: u32) -> f32 {
 }
 
 /// Public helper for fixed-volume spawns that need to stand outside the
-/// normal `PlaySound` pipeline, currently the ambient-emitter system,
-/// which owns the loop entity itself so it can fade and despawn it
-/// independently. Returns the entity it spawned.
-pub(crate) fn spawn_managed_loop(
+/// normal `PlaySound` pipeline (the ambient-emitter system and the meteor
+/// crossing bed), which own the spawned entity themselves so they can
+/// fade, gain-scale, and despawn it independently. Returns the entity it
+/// spawned. `looped` selects the playback mode: ambient beds loop; the
+/// meteor flyby plays once (`false`) because the file has its own
+/// approach-then-pass shape and a loop would restart it mid-descent.
+// A low-level spawn helper: each parameter is an independent knob the two callers
+// set differently (anchor, gain offset, starting scale, loop mode), so collapsing
+// them into a struct would only add indirection.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spawn_managed_sound(
     commands: &mut Commands,
     library: &SoundLibrary,
     settings: &ClientSettings,
@@ -292,6 +299,7 @@ pub(crate) fn spawn_managed_loop(
     anchor: Option<Vec3>,
     gain_offset_db: f32,
     starting_volume_scale: f32,
+    looped: bool,
 ) -> Option<Entity> {
     let defaults = library.defaults_for(id);
     let pool = library.pools.get(&id)?;
@@ -305,7 +313,12 @@ pub(crate) fn spawn_managed_loop(
         );
         Volume::Linear(v.to_linear() * starting_volume_scale.clamp(0.0, 1.0))
     };
-    let mut playback = PlaybackSettings::LOOP.with_volume(volume);
+    let base = if looped {
+        PlaybackSettings::LOOP
+    } else {
+        PlaybackSettings::DESPAWN
+    };
+    let mut playback = base.with_volume(volume);
     let entity = if let (Some(anchor), Some(spatial)) = (anchor, defaults.spatial) {
         playback = playback
             .with_spatial(true)

@@ -13,26 +13,35 @@
 //! - `remote_swing_pose`, the third-person body-rig swing curves (arm
 //!   rotations) shared with `app::systems::players`.
 
+mod armor;
 mod dropped;
 mod held;
 mod loot_bag;
 mod pickup;
+mod projectiles;
 mod remote_swing_pose;
 mod resource_nodes;
+mod slash_trail;
 mod swing_poses;
 mod tool_swap;
 
+pub(crate) use armor::{ArmorMaterials, ArmorVisuals, armor_layers, build_armor_visuals};
 pub(crate) use dropped::{DroppedItemEntities, apply_dropped_items_system};
 pub(crate) use held::{
-    apply_held_item_visual_system, carry_forearm_rotation, carry_upper_arm_rotation,
-    held_item_hand_transform, held_item_layers, insert_held_layer_material,
+    HeldItemVisuals, apply_held_item_visual_system, build_held_item_visuals,
+    carry_forearm_rotation, carry_upper_arm_rotation, held_item_hand_transform, held_item_layers,
+    insert_held_layer_material,
 };
 pub(crate) use loot_bag::{LootBagEntities, apply_loot_bags_system};
 pub(crate) use pickup::update_pickup_target_system;
+pub(crate) use projectiles::{
+    ProjectileVisuals, apply_projectiles_system, spawn_predicted_arrows_system,
+};
 pub(crate) use remote_swing_pose::remote_swing_arm_pose;
 pub(crate) use resource_nodes::{
     ResourceNodeEntities, apply_resource_node_stage_system, apply_resource_nodes_system,
     insert_resource_node_material, resource_node_transform_at, resource_node_visual,
     sway_hay_grass_system, tick_resource_node_pop_in_system, tree_foliage_visual,
 };
+pub(crate) use slash_trail::sword_slash_trail_system;
 pub(crate) use tool_swap::update_tool_swap_state_system;

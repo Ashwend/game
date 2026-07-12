@@ -3,9 +3,14 @@ use bevy_egui::egui;
 
 use crate::{
     app::{
-        state::{ClientRuntime, ClientSettings, CombatFeedbackState},
+        state::{
+            ClientRuntime, ClientSettings, CombatFeedbackState, LocalPlayerState, RangedDrawState,
+            ThrowChargeState,
+        },
         voice::VoiceState,
     },
+    inventory::count_items_in_inventory,
+    items::item_definition,
     protocol::MAX_HEALTH,
 };
 
@@ -14,12 +19,24 @@ use super::theme;
 const HEALTH_WIDTH: f32 = 192.0;
 const HEALTH_HEIGHT: f32 = 30.0;
 const HEALTH_ICON_WIDTH: f32 = 30.0;
+/// Height of the draw/reload progress bar that sits just above the actionbar, in
+/// px. A slim status readout, not a focal element, but tall enough to read at a
+/// glance from across the screen (the earlier 5 px bar was too thin to see).
+const RANGED_BAR_HEIGHT: f32 = 8.0;
+/// Vertical gap between the top of the actionbar and the bottom of the ranged
+/// progress bar, in px, so the bar floats clear of the actionbar frame.
+const RANGED_BAR_GAP: f32 = 6.0;
+/// Inset of the ammo count from the actionbar's lower-right corner, in px. Places
+/// the small count inside the bottom-right of the actionbar frame where it reads
+/// at a glance without covering a slot.
+const RANGED_AMMO_INSET: egui::Vec2 = egui::vec2(6.0, 4.0);
 /// Fixed width of the perf overlay so chunk labels like
 /// `(-99, -99) Rocky outcrop` don't push the values column around.
 const PERF_BOX_WIDTH: f32 = 240.0;
 const PERF_LABEL_WIDTH: f32 = 96.0;
 const PERF_VALUE_WIDTH: f32 = 124.0;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn hud_ui(
     ctx: &egui::Context,
     runtime: &ClientRuntime,
@@ -27,6 +44,10 @@ pub(super) fn hud_ui(
     settings: &ClientSettings,
     voice: &VoiceState,
     combat: &CombatFeedbackState,
+    local_player: &LocalPlayerState,
+    ranged: &RangedDrawState,
+    throw_charge: &ThrowChargeState,
+    actionbar_rect: Option<egui::Rect>,
 ) {
     if settings.hud.show_perf_stats {
         perf_stats_ui(ctx, runtime, diagnostics);
@@ -36,6 +57,7 @@ pub(super) fn hud_ui(
     }
 
     voice_indicator(ctx, voice);
+    meteor_shower_hud(ctx, runtime);
 
     let Some(player) = runtime.local_view() else {
         return;
@@ -49,12 +71,184 @@ pub(super) fn hud_ui(
         player.position.z,
         player.yaw,
     );
+    if let Some(view) = ranged_hud_view(local_player, ranged) {
+        ranged_hud(ctx, &view, actionbar_rect);
+    } else if let Some(view) = throw_hud_view(local_player, throw_charge) {
+        // The bomb's charge reuses the ranged bar wholesale (same track, same
+        // brightening draw fill), with the held bomb count as the "ammo".
+        ranged_hud(ctx, &view, actionbar_rect);
+    }
 
     egui::Area::new("hud_bars".into())
         .anchor(egui::Align2::RIGHT_BOTTOM, [-18.0, -18.0])
         .show(ctx, |ui| {
             health_bar(ui, player.health);
         });
+}
+
+/// What the ranged progress bar is filling with: a bow draw ramping to full, or a
+/// crossbow reload cranking back to ready.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum RangedHudFill {
+    Draw(f32),
+    Reload(f32),
+}
+
+/// Resolved per-frame inputs for the ranged HUD: the arrow count and (while a draw
+/// or reload is live) the progress-bar fill. `None` whenever the active item is
+/// not a ranged weapon, which is what keeps the HUD silent for melee / tools /
+/// bare hands.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RangedHudView {
+    ammo: u32,
+    fill: Option<RangedHudFill>,
+}
+
+/// Resolve the ranged HUD view off the active item + draw state. `None` unless a
+/// ranged weapon is the active actionbar item.
+fn ranged_hud_view(
+    local_player: &LocalPlayerState,
+    ranged: &RangedDrawState,
+) -> Option<RangedHudView> {
+    let private = local_player.private.as_ref()?;
+    let profile = private
+        .inventory
+        .active_actionbar_stack()
+        .and_then(|stack| item_definition(&stack.item_id))
+        .and_then(|definition| definition.ranged)?;
+    let ammo = count_items_in_inventory(&private.inventory, profile.ammo_item);
+    let fill = if ranged.is_drawing() {
+        Some(RangedHudFill::Draw(ranged.draw_fraction()))
+    } else if ranged.is_reloading() {
+        Some(RangedHudFill::Reload(ranged.reload_fraction()))
+    } else {
+        None
+    };
+    Some(RangedHudView { ammo, fill })
+}
+
+/// Resolve the thrown-bomb charge HUD view: the held bomb count plus (while a
+/// charge is held) the ranged draw bar filling with the charge fraction. `None`
+/// unless the active item is a thrown explosive AND a charge is live, so the
+/// bar stays silent while just carrying a bomb.
+fn throw_hud_view(
+    local_player: &LocalPlayerState,
+    throw_charge: &ThrowChargeState,
+) -> Option<RangedHudView> {
+    if !throw_charge.is_charging() {
+        return None;
+    }
+    let private = local_player.private.as_ref()?;
+    let stack = private.inventory.active_actionbar_stack()?;
+    let explosive = item_definition(&stack.item_id).and_then(|def| def.explosive)?;
+    if explosive.delivery != crate::items::ExplosiveDelivery::Thrown {
+        return None;
+    }
+    Some(RangedHudView {
+        ammo: count_items_in_inventory(&private.inventory, &stack.item_id),
+        fill: Some(RangedHudFill::Draw(throw_charge.charge_fraction())),
+    })
+}
+
+/// The actionbar-anchored ranged readout: a small ammo count tucked into the
+/// bottom-right of the actionbar, and (only while drawing / reloading) a
+/// semi-transparent horizontal progress bar sitting just above the actionbar that
+/// fills left-to-right with the draw fraction (bow) or reload progress (crossbow).
+/// Both anchor off `actionbar_rect` (one frame stale, which is fine). Painted on a
+/// dedicated foreground layer like the hit marker so no Area clips it. When the
+/// actionbar rect isn't known yet (pre-first-frame), the HUD stays silent rather
+/// than falling back to the crosshair.
+fn ranged_hud(ctx: &egui::Context, view: &RangedHudView, actionbar_rect: Option<egui::Rect>) {
+    let Some(bar) = actionbar_rect else {
+        return;
+    };
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("ranged_hud"),
+    ));
+
+    // Ammo count: small, monospace, muted; warms to red when the quiver is empty
+    // so "why won't it fire" answers itself. Anchored to the actionbar's
+    // bottom-right corner, inset so it reads as a corner label.
+    let ammo_color = if view.ammo == 0 {
+        egui::Color32::from_rgba_unmultiplied(235, 110, 90, 235)
+    } else {
+        egui::Color32::from_rgba_unmultiplied(230, 233, 238, 200)
+    };
+    painter.text(
+        bar.right_bottom() - RANGED_AMMO_INSET,
+        egui::Align2::RIGHT_BOTTOM,
+        format!("{}", view.ammo),
+        egui::FontId::monospace(14.0),
+        ammo_color,
+    );
+
+    // Draw / reload progress bar: a translucent track plus the filled sweep,
+    // spanning the actionbar width and sitting just above it. Only painted while a
+    // draw or reload is live, so it is quiet during idle aim.
+    let Some(fill) = view.fill else {
+        return;
+    };
+    let (fraction, color) = match fill {
+        // Draw charge: brightens as it fills so full draw reads at a glance. Warm
+        // bright cord that goes near-opaque at full draw.
+        RangedHudFill::Draw(f) => {
+            let f = f.clamp(0.0, 1.0);
+            let alpha = (170.0 + 80.0 * f) as u8;
+            (
+                f,
+                egui::Color32::from_rgba_unmultiplied(240, 242, 245, alpha),
+            )
+        }
+        // Reload progress: a cool "busy" fill, but bright enough to read clearly
+        // against a lit world (the earlier dim value washed out on close inspection).
+        RangedHudFill::Reload(f) => (
+            f.clamp(0.0, 1.0),
+            egui::Color32::from_rgba_unmultiplied(150, 200, 255, 230),
+        ),
+    };
+    let (track_rect, fill_rect) = ranged_bar_rects(bar, fraction);
+    // A darker opaque backing under the whole track so the fill reads with real
+    // contrast against any world colour behind it, not just a faint tint.
+    painter.rect_filled(
+        track_rect,
+        2.0,
+        egui::Color32::from_rgba_unmultiplied(12, 16, 22, 200),
+    );
+    if fill_rect.width() > 0.0 {
+        painter.rect_filled(fill_rect, 2.0, color);
+    }
+    // A thin light frame around the track so its extent is legible even at a low
+    // fill fraction.
+    painter.rect_stroke(
+        track_rect,
+        2.0,
+        egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgba_unmultiplied(230, 233, 238, 90),
+        ),
+        egui::StrokeKind::Inside,
+    );
+    // Keep the bar animating while it is live.
+    ctx.request_repaint();
+}
+
+/// Geometry for the ranged progress bar: the full-width translucent track and the
+/// left-to-right fill, both sitting `RANGED_BAR_GAP` above `actionbar` and
+/// spanning its width. Pure so the placement is unit-testable without egui state.
+fn ranged_bar_rects(actionbar: egui::Rect, fraction: f32) -> (egui::Rect, egui::Rect) {
+    let fraction = fraction.clamp(0.0, 1.0);
+    let bottom = actionbar.top() - RANGED_BAR_GAP;
+    let top = bottom - RANGED_BAR_HEIGHT;
+    let track = egui::Rect::from_min_max(
+        egui::pos2(actionbar.left(), top),
+        egui::pos2(actionbar.right(), bottom),
+    );
+    let fill = egui::Rect::from_min_max(
+        track.min,
+        egui::pos2(track.left() + track.width() * fraction, track.bottom()),
+    );
+    (track, fill)
 }
 
 /// Subtle "transmitting" chip anchored under the top-center of the screen.
@@ -119,6 +313,170 @@ fn voice_indicator(ctx: &egui::Context, voice: &VoiceState) {
     if envelope < 0.999 {
         ctx.request_repaint();
     }
+}
+
+/// Format a meteor shower countdown for the HUD pill from the seconds remaining to
+/// impact. Under 30 s it switches to a terse "Impact imminent"; otherwise it
+/// reads `M:SS`. Pure so it can be unit-tested.
+fn format_meteor_shower_countdown(seconds_to_impact: f32) -> String {
+    if seconds_to_impact <= 30.0 {
+        return "Impact imminent".to_owned();
+    }
+    let total = seconds_to_impact.max(0.0) as u32;
+    let minutes = total / 60;
+    let secs = total % 60;
+    format!("MeteorShower {minutes}:{secs:02}")
+}
+
+/// Escalation intensity `0.0..=1.0` for the danger-zone evacuation warning,
+/// ramping over the final 60 seconds before impact. `0.0` at 60 s out, `1.0` at
+/// impact, held at `1.0` briefly after. Pure so the threshold is unit-testable.
+fn meteor_shower_danger_intensity(seconds_to_impact: f32) -> f32 {
+    // Before the last minute the warning is present but calm (a small floor);
+    // in the final 60 s it climbs to full.
+    ((60.0 - seconds_to_impact) / 60.0).clamp(0.0, 1.0)
+}
+
+/// The meteor shower countdown pill and the danger-zone evacuation warning. Both are
+/// computed client-side from the announce payload (`runtime.meteor_shower`) plus the
+/// player's own position against the authoritative clock estimate, so they cost
+/// nothing on the wire and can never desync from the countdown. Silent when no
+/// event is live or after impact.
+fn meteor_shower_hud(ctx: &egui::Context, runtime: &ClientRuntime) {
+    let Some(event) = runtime.meteor_shower else {
+        return;
+    };
+    let now = runtime.server_tick();
+    // Only the pre-impact fireball phase gets a countdown; after impact the pill
+    // and warning go quiet (the crater visual takes over).
+    if event.has_impacted(now) {
+        return;
+    }
+    let seconds_to_impact = event.seconds_to_impact(now);
+
+    // Countdown pill: CENTER_TOP, the voice-indicator template.
+    let imminent = seconds_to_impact <= 30.0;
+    let (fill, stroke, text_color) = if imminent {
+        (
+            egui::Color32::from_rgba_unmultiplied(38, 10, 6, 235),
+            egui::Color32::from_rgba_unmultiplied(255, 120, 70, 200),
+            egui::Color32::from_rgb(255, 190, 150),
+        )
+    } else {
+        (
+            egui::Color32::from_rgba_unmultiplied(10, 8, 12, 220),
+            egui::Color32::from_rgba_unmultiplied(248, 150, 70, 110),
+            theme::text(),
+        )
+    };
+    let label = format_meteor_shower_countdown(seconds_to_impact);
+    egui::Area::new("meteor_shower_countdown".into())
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_TOP, [0.0, 24.0])
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(fill)
+                .stroke(egui::Stroke::new(1.0, stroke))
+                .corner_radius(12)
+                .inner_margin(egui::Margin::symmetric(14, 6))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        // A small painter-drawn ember dot, warmer/pulsing when
+                        // imminent (no font glyph dependency, same reason as the
+                        // voice indicator).
+                        let dot_radius = 4.5;
+                        let (dot_rect, _) = ui.allocate_exact_size(
+                            egui::vec2(dot_radius * 2.0, dot_radius * 2.0),
+                            egui::Sense::hover(),
+                        );
+                        let pulse = if imminent {
+                            let t = ctx.input(|input| input.time) as f32;
+                            0.5 + 0.5 * (t * std::f32::consts::TAU * 1.6).sin()
+                        } else {
+                            1.0
+                        };
+                        let dot_alpha = (150.0 + pulse * 105.0) as u8;
+                        ui.painter().circle_filled(
+                            dot_rect.center(),
+                            dot_radius,
+                            egui::Color32::from_rgba_unmultiplied(255, 120, 60, dot_alpha),
+                        );
+                        ui.add_space(3.0);
+                        ui.label(
+                            egui::RichText::new(label)
+                                .size(13.0)
+                                .strong()
+                                .color(text_color),
+                        );
+                    });
+                });
+        });
+    if imminent {
+        ctx.request_repaint();
+    }
+
+    // Danger-zone evacuation warning: only when the player's OWN position is
+    // inside the danger radius of the impact point. Escalates over the final 60 s
+    // (colour + pulse). Because the impact siting guarantees the clearance
+    // exceeds the blast, the warning directs players OUT of the zone rather than
+    // under a roof that cannot exist inside it.
+    let Some(player) = runtime.local_view() else {
+        return;
+    };
+    let inside_danger = event.impact_position.within_horizontal_range(
+        player.position,
+        crate::game_balance::METEOR_SHOWER_DANGER_RADIUS_M,
+    );
+    if !inside_danger {
+        return;
+    }
+    let intensity = meteor_shower_danger_intensity(seconds_to_impact);
+    meteor_shower_danger_warning(ctx, intensity);
+}
+
+/// The escalating "evacuate the area" banner shown while the player stands inside
+/// the danger zone. Sits below the countdown pill; its colour saturates and it
+/// pulses faster as `intensity` (0..=1, ramping over the final 60 s) climbs.
+fn meteor_shower_danger_warning(ctx: &egui::Context, intensity: f32) {
+    let intensity = intensity.clamp(0.0, 1.0);
+    let t = ctx.input(|input| input.time) as f32;
+    // Pulse frequency rises with intensity so it feels more urgent late.
+    let freq = 1.0 + intensity * 3.0;
+    let pulse = 0.5 + 0.5 * (t * std::f32::consts::TAU * freq).sin();
+    // Border/background redden and brighten with intensity + pulse.
+    let base = 60.0 + intensity * 140.0;
+    let glow = (base + pulse * 55.0).min(255.0) as u8;
+    let fill_alpha = (150.0 + intensity * 90.0) as u8;
+
+    egui::Area::new("meteor_shower_danger".into())
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_TOP, [0.0, 64.0])
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(egui::Color32::from_rgba_unmultiplied(48, 6, 4, fill_alpha))
+                .stroke(egui::Stroke::new(
+                    1.5 + intensity * 1.5,
+                    egui::Color32::from_rgba_unmultiplied(glow, 40, 24, 235),
+                ))
+                .corner_radius(10)
+                .inner_margin(egui::Margin::symmetric(16, 8))
+                .show(ui, |ui| {
+                    let green = 200u8.saturating_sub((intensity * 80.0) as u8);
+                    // Extend, never wrap: the banner must stay one line however
+                    // large the late-intensity text grows.
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new("Meteor shower incoming. Evacuate the area.")
+                                .size(15.0 + intensity * 3.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(255, green, 170)),
+                        )
+                        .wrap_mode(egui::TextWrapMode::Extend),
+                    );
+                });
+        });
+    // Always animating while the warning is up.
+    ctx.request_repaint();
 }
 
 /// Small chip rendered in the top-left when the session has gone silent
@@ -564,6 +922,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn meteor_shower_countdown_formats_minutes_and_switches_to_imminent() {
+        // Well out: M:SS with zero-padded seconds.
+        assert_eq!(format_meteor_shower_countdown(504.0), "MeteorShower 8:24");
+        assert_eq!(format_meteor_shower_countdown(65.0), "MeteorShower 1:05");
+        // The 30 s boundary and below switches to the terse imminent copy.
+        assert_eq!(format_meteor_shower_countdown(31.0), "MeteorShower 0:31");
+        assert_eq!(format_meteor_shower_countdown(30.0), "Impact imminent");
+        assert_eq!(format_meteor_shower_countdown(5.0), "Impact imminent");
+        assert_eq!(format_meteor_shower_countdown(0.0), "Impact imminent");
+    }
+
+    #[test]
+    fn meteor_shower_danger_intensity_ramps_over_the_final_minute() {
+        // Before the last minute: no escalation yet.
+        assert_eq!(meteor_shower_danger_intensity(120.0), 0.0);
+        assert_eq!(meteor_shower_danger_intensity(60.0), 0.0);
+        // Halfway through the final minute: ~half intensity.
+        assert!((meteor_shower_danger_intensity(30.0) - 0.5).abs() < 1e-3);
+        // At (and past) impact: full intensity, clamped.
+        assert_eq!(meteor_shower_danger_intensity(0.0), 1.0);
+        assert_eq!(meteor_shower_danger_intensity(-5.0), 1.0);
+        // Monotonic as impact nears.
+        assert!(meteor_shower_danger_intensity(10.0) > meteor_shower_danger_intensity(40.0));
+    }
+
     fn player(health: f32) -> PlayerState {
         PlayerState {
             client_id: 1,
@@ -592,6 +976,10 @@ mod tests {
                 &ClientSettings::default(),
                 &voice,
                 &CombatFeedbackState::default(),
+                &LocalPlayerState::default(),
+                &RangedDrawState::default(),
+                &ThrowChargeState::default(),
+                None,
             );
         });
 
@@ -611,6 +999,10 @@ mod tests {
                 &ClientSettings::default(),
                 &voice,
                 &CombatFeedbackState::default(),
+                &LocalPlayerState::default(),
+                &RangedDrawState::default(),
+                &ThrowChargeState::default(),
+                None,
             );
         });
 
@@ -699,6 +1091,153 @@ mod tests {
         assert!(!active.shapes.is_empty());
     }
 
+    /// A `LocalPlayerState` whose active actionbar item is `item_id`, with
+    /// `arrows` arrows in the bag, for the ranged-HUD resolver tests.
+    fn local_player_holding(item_id: &str, arrows: u16) -> LocalPlayerState {
+        use crate::protocol::{ItemStack, PlayerInventoryState};
+        let mut inventory = PlayerInventoryState::empty();
+        inventory.actionbar_slots[0] = Some(ItemStack::new(item_id, 1));
+        if arrows > 0 {
+            inventory.inventory_slots[0] = Some(ItemStack::new("arrow", arrows));
+        }
+        LocalPlayerState {
+            entity: None,
+            private: Some(crate::server::PlayerPrivate {
+                inventory,
+                crafting: crate::protocol::PlayerCraftingState::default(),
+                open_furnace: None,
+                open_loot_bag: None,
+                open_workbench: None,
+                last_processed_input: 0,
+                applied_action_seq: 0,
+                run_speed_multiplier: 1.0,
+            }),
+            lifecycle: None,
+        }
+    }
+
+    #[test]
+    fn ranged_hud_is_silent_for_melee_or_empty_hands() {
+        // No private yet (pre-connect) and a melee tool both resolve to no view,
+        // which is what keeps the HUD dark for everything that isn't a bow.
+        let ranged = RangedDrawState::default();
+        assert!(ranged_hud_view(&LocalPlayerState::default(), &ranged).is_none());
+        assert!(
+            ranged_hud_view(&local_player_holding("stone_hatchet", 5), &ranged).is_none(),
+            "a melee tool never shows the ranged HUD"
+        );
+    }
+
+    #[test]
+    fn ranged_hud_view_reports_ammo_and_draw_fill() {
+        // Holding a bow with 5 arrows: the view carries the count; idle shows no
+        // bar fill; a held draw fills the bar with the draw fraction.
+        let local = local_player_holding("wooden_bow", 5);
+        let mut ranged = RangedDrawState::default();
+        let idle = ranged_hud_view(&local, &ranged).expect("a held bow shows the HUD");
+        assert_eq!(idle.ammo, 5);
+        assert_eq!(idle.fill, None, "no bar fill while not drawing");
+
+        // Start + hold a draw: the fill tracks the draw fraction.
+        let profile = crate::items::item_definition("wooden_bow")
+            .and_then(|d| d.ranged)
+            .expect("wooden_bow has a ranged profile");
+        let _ = ranged.update(0.0, true, true, Some(profile), true);
+        let _ = ranged.update(0.5, false, true, Some(profile), true);
+        let drawn = ranged_hud_view(&local, &ranged).expect("still holding the bow");
+        match drawn.fill {
+            Some(RangedHudFill::Draw(f)) => assert!(f > 0.0, "the bar fills with the draw"),
+            other => panic!("expected a draw fill, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ranged_hud_view_shows_reload_progress_for_the_crossbow() {
+        let local = local_player_holding("crossbow", 3);
+        let mut ranged = RangedDrawState::default();
+        let profile = crate::items::item_definition("crossbow")
+            .and_then(|d| d.ranged)
+            .expect("crossbow has a ranged profile");
+        // Fire and arm the reload the way the input layer does.
+        let _ = ranged.update(0.0, true, true, Some(profile), true);
+        ranged.begin_reload(profile);
+        let _ = ranged.update(0.5, false, false, Some(profile), true);
+        let view = ranged_hud_view(&local, &ranged).expect("crossbow shows the HUD");
+        match view.fill {
+            Some(RangedHudFill::Reload(f)) => {
+                assert!(f > 0.0 && f < 1.0, "the bar tracks the reload, got {f}");
+            }
+            other => panic!("expected a reload fill, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ranged_hud_paints_the_count_and_bar_when_the_actionbar_rect_is_known() {
+        // A view with a live draw fill + a known actionbar rect paints shapes (the
+        // ammo count text + the progress bar); this pins the painter path against
+        // silently drawing nothing.
+        let actionbar =
+            egui::Rect::from_min_size(egui::pos2(300.0, 540.0), egui::vec2(200.0, 44.0));
+        let ctx = egui::Context::default();
+        let output = ctx.run(raw_input(), |ctx| {
+            ranged_hud(
+                ctx,
+                &RangedHudView {
+                    ammo: 12,
+                    fill: Some(RangedHudFill::Draw(0.6)),
+                },
+                Some(actionbar),
+            );
+        });
+        assert!(!output.shapes.is_empty());
+    }
+
+    #[test]
+    fn ranged_hud_is_silent_without_a_known_actionbar_rect() {
+        // Before the actionbar has been laid out (its rect is None), the ranged
+        // HUD paints nothing rather than falling back to the crosshair.
+        let ctx = egui::Context::default();
+        let output = ctx.run(raw_input(), |ctx| {
+            ranged_hud(
+                ctx,
+                &RangedHudView {
+                    ammo: 12,
+                    fill: Some(RangedHudFill::Draw(0.6)),
+                },
+                None,
+            );
+        });
+        assert!(output.shapes.is_empty());
+    }
+
+    #[test]
+    fn ranged_bar_sits_above_the_actionbar_and_fills_left_to_right() {
+        let actionbar =
+            egui::Rect::from_min_size(egui::pos2(300.0, 540.0), egui::vec2(200.0, 44.0));
+        // Empty fill: the track spans the full actionbar width; the fill is
+        // zero-width. Both sit entirely above the actionbar.
+        let (track, fill) = ranged_bar_rects(actionbar, 0.0);
+        assert!(
+            track.bottom() <= actionbar.top(),
+            "the bar sits above the actionbar"
+        );
+        assert!((track.left() - actionbar.left()).abs() < 1e-4);
+        assert!((track.right() - actionbar.right()).abs() < 1e-4);
+        assert!(fill.width() < 1e-4, "an empty draw has no fill");
+
+        // Half fill: the fill covers the left half of the track and shares its top.
+        let (track, fill) = ranged_bar_rects(actionbar, 0.5);
+        assert!((fill.width() - track.width() * 0.5).abs() < 1e-3);
+        assert!(
+            (fill.left() - track.left()).abs() < 1e-4,
+            "fills from the left"
+        );
+
+        // Full fill covers the whole track; over-unity fractions clamp.
+        let (track, fill) = ranged_bar_rects(actionbar, 2.0);
+        assert!((fill.width() - track.width()).abs() < 1e-3);
+    }
+
     #[test]
     fn perf_overlay_is_gated_by_the_settings_toggle() {
         let runtime = ClientRuntime::default();
@@ -718,6 +1257,10 @@ mod tests {
                 &settings,
                 &voice,
                 &CombatFeedbackState::default(),
+                &LocalPlayerState::default(),
+                &RangedDrawState::default(),
+                &ThrowChargeState::default(),
+                None,
             );
         });
         assert!(off.shapes.is_empty());
@@ -734,6 +1277,10 @@ mod tests {
                 &settings,
                 &voice,
                 &CombatFeedbackState::default(),
+                &LocalPlayerState::default(),
+                &RangedDrawState::default(),
+                &ThrowChargeState::default(),
+                None,
             );
         });
         assert!(!on.shapes.is_empty());

@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     protocol::{
-        AccountId, ClientId, OpenFurnaceView, OpenLootBagView, PlayerCraftingState,
-        PlayerInventoryState, Vec3Net,
+        AccountId, ClientId, OpenFurnaceView, OpenLootBagView, OpenWorkbenchView,
+        PlayerCraftingState, PlayerInventoryState, Vec3Net,
     },
     world::ChunkCoord,
 };
@@ -94,6 +94,10 @@ pub struct PlayerOpenContainers {
     /// Full per-client view of the currently-opened loot bag, if any.
     /// Mirrors `open_furnace` for the bag UI.
     pub open_loot_bag: Option<OpenLootBagView>,
+    /// Per-client view of the currently-opened workbench, if any (id + current
+    /// tier). Mirrors `open_furnace` for the workbench upgrade UI. Costs are
+    /// not carried; the client reads the shared upgrade table.
+    pub open_workbench: Option<OpenWorkbenchView>,
 }
 
 /// Owner-only per-player state the client's movement/prediction layer
@@ -140,6 +144,7 @@ pub struct PlayerPrivate {
     pub crafting: PlayerCraftingState,
     pub open_furnace: Option<OpenFurnaceView>,
     pub open_loot_bag: Option<OpenLootBagView>,
+    pub open_workbench: Option<OpenWorkbenchView>,
     pub last_processed_input: u64,
     pub applied_action_seq: u32,
     /// Admin `/speed` run-speed multiplier (see [`PlayerInputAck`]).
@@ -204,18 +209,64 @@ pub struct PlayerSleeping(pub bool);
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlayerHeldItem(pub Option<crate::items::HeldMesh>);
 
+/// Peer-visible selectors for the worn-armor meshes on a player's rig, one per
+/// equipment slot (`None` when that slot is empty or holds a non-armor item).
+/// Lets a remote client render another player's armor without shipping item-id
+/// strings or re-resolving the registry per diff.
+///
+/// Carries the 1-byte [`crate::items::ArmorMesh`] selectors, mirroring
+/// [`PlayerHeldItem`]. Derived purely from the authoritative
+/// `inventory.equipment_slots` in `players_iter`, so it needs no client input.
+/// Changes only on an equip/unequip, so it sits apart from the 20 Hz pose. Rig
+/// rendering is Phase 4; this package lands the wire path with replication-trace
+/// coverage.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlayerEquipmentVisual {
+    pub head: Option<crate::items::ArmorMesh>,
+    pub chest: Option<crate::items::ArmorMesh>,
+    pub legs: Option<crate::items::ArmorMesh>,
+    pub feet: Option<crate::items::ArmorMesh>,
+}
+
+impl PlayerEquipmentVisual {
+    /// Derive the four worn-armor mesh selectors from a player's equipment
+    /// slots. A slot with no piece, or a piece whose id carries no
+    /// [`crate::items::ArmorProfile`], resolves to `None`. Indexes via
+    /// [`crate::protocol::EquipmentSlot::index`] so the head/chest/legs/feet
+    /// mapping matches the paperdoll layout everywhere.
+    pub fn from_equipment_slots(equipment_slots: &[Option<crate::protocol::ItemStack>]) -> Self {
+        use crate::protocol::EquipmentSlot;
+        let mesh_at = |slot: EquipmentSlot| -> Option<crate::items::ArmorMesh> {
+            equipment_slots
+                .get(slot.index())
+                .and_then(Option::as_ref)
+                .and_then(|stack| crate::items::armor_profile(&stack.item_id))
+                .map(|profile| profile.mesh)
+        };
+        Self {
+            head: mesh_at(EquipmentSlot::Head),
+            chest: mesh_at(EquipmentSlot::Chest),
+            legs: mesh_at(EquipmentSlot::Legs),
+            feet: mesh_at(EquipmentSlot::Feet),
+        }
+    }
+}
+
 /// Peer-visible swing action. `seq` increments once per accepted swing-start;
 /// the remote consumer edge-detects a change in `seq` against a stored
 /// last-seen value (NOT `Ref::is_changed`, which lies for Lightyear-touched
-/// components) and plays `tool`'s swing curve from elapsed 0 at the moment of
-/// observation. No tick is carried: movement is client-authoritative, so there
-/// is no trusted shared clock to compare a `start_tick` against (the pose
-/// reconciler fabricates its tick from `last_changed()` for the same reason).
-/// `seq == 0` is the spawn default (no swing yet).
+/// components) and plays `model`'s swing curve from elapsed 0 at the moment of
+/// observation. `model` is the swing archetype (a weapon its own
+/// Club/Spear/Sword/Mace, a gather tool its Hatchet/Pickaxe), so a peer animates
+/// the right weapon directly off the wire rather than inferring it from the held
+/// mesh. No tick is carried: movement is client-authoritative, so there is no
+/// trusted shared clock to compare a `start_tick` against (the pose reconciler
+/// fabricates its tick from `last_changed()` for the same reason). `seq == 0` is
+/// the spawn default (no swing yet).
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlayerAction {
     pub seq: u32,
-    pub tool: crate::items::ToolKind,
+    pub model: crate::items::ItemModel,
 }
 
 /// Anchor chunk for room subscription. Updated when the player crosses
@@ -249,6 +300,7 @@ pub struct PlayerView {
     pub lifecycle: PlayerLifecycle,
     pub sleeping: PlayerSleeping,
     pub held: PlayerHeldItem,
+    pub equipment_visual: PlayerEquipmentVisual,
     pub action: PlayerAction,
 }
 
@@ -271,8 +323,9 @@ pub fn spawn_player_entity(world: &mut World, view: PlayerView, chunk: ChunkCoor
             view.armor,
             view.lifecycle,
             view.sleeping,
-            view.held,
-            view.action,
+            // Peer-visible cosmetic bundle grouped into one nested tuple so the
+            // top-level spawn stays within Bevy's 15-element bundle-tuple limit.
+            (view.held, view.equipment_visual, view.action),
             PlayerChunk(chunk),
         ))
         .id();
@@ -315,6 +368,7 @@ mod tests {
             lifecycle: PlayerLifecycle::default(),
             sleeping: PlayerSleeping::default(),
             held: PlayerHeldItem::default(),
+            equipment_visual: PlayerEquipmentVisual::default(),
             action: PlayerAction::default(),
         }
     }

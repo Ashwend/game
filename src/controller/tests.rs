@@ -647,3 +647,94 @@ fn buffer_does_not_auto_fire_without_a_press() {
     assert_eq!(transitions, 0, "no press, no jump");
     assert!(controller.grounded);
 }
+
+#[test]
+fn player_walks_up_and_over_the_crater_mound() {
+    use crate::world::{CRATER_RIM_HEIGHT_M, CRATER_SKIRT_RADIUS_M, crater_surface_height};
+
+    // A crater at the origin; the player starts outside the skirt and walks
+    // straight through the centre. The analytic floor must carry them up the
+    // rim, over, down into the bowl, and out the far side, never below the
+    // crater surface and never launched into a real fall on the way in.
+    let world = WorldData {
+        floor_size: 64.0,
+        blocks: Vec::new(),
+        resource_nodes: Vec::new(),
+    };
+    let mut grid = BlockGrid::build(&world);
+    grid.set_crater(Some([0.0, 0.0]));
+
+    let mut controller = PlayerController::spawn();
+    controller.position = Vec3Net::new(0.0, 0.0, CRATER_SKIRT_RADIUS_M + 2.0);
+    // Walk forward (-Z, toward the crater centre) at run speed.
+    controller.apply_input(input(1, Vec3Net::new(0.0, 0.0, 1.0), true, false));
+
+    let mut max_y = 0.0f32;
+    let mut worst_sink = 0.0f32;
+    for _ in 0..1400 {
+        controller.simulate_with_grid(1.0 / 120.0, &grid);
+        max_y = max_y.max(controller.position.y);
+        let distance = (controller.position.x * controller.position.x
+            + controller.position.z * controller.position.z)
+            .sqrt();
+        let floor = crater_surface_height(distance);
+        worst_sink = worst_sink.max(floor - controller.position.y);
+        if controller.position.z < -(CRATER_SKIRT_RADIUS_M + 2.0) {
+            break;
+        }
+    }
+
+    assert!(
+        controller.position.z < -(CRATER_SKIRT_RADIUS_M + 2.0),
+        "player should cross the crater, stopped at z {}",
+        controller.position.z
+    );
+    assert!(
+        max_y > CRATER_RIM_HEIGHT_M * 0.85,
+        "the walk should crest the rim mound, peaked at {max_y}"
+    );
+    assert!(
+        worst_sink < 0.08,
+        "feet should track the crater surface, sank {worst_sink} below it"
+    );
+    // Past the skirt the floor is flat again and the player is back at grade.
+    assert!(controller.position.y.abs() < 0.05);
+    assert!(controller.grounded);
+}
+
+#[test]
+fn crater_floor_supports_standing_inside_the_bowl() {
+    use crate::world::crater_surface_height;
+
+    let world = WorldData {
+        floor_size: 64.0,
+        blocks: Vec::new(),
+        resource_nodes: Vec::new(),
+    };
+    let mut grid = BlockGrid::build(&world);
+    grid.set_crater(Some([10.0, -5.0]));
+
+    // Drop a player from above the bowl floor, 2 m out from ground zero: they
+    // must land ON the crater surface, not fall through to the flat plane.
+    let mut controller = PlayerController::spawn();
+    controller.position = Vec3Net::new(12.0, 3.0, -5.0);
+    controller.grounded = false;
+    controller.apply_input(input(1, Vec3Net::ZERO, false, false));
+    for _ in 0..400 {
+        controller.simulate_with_grid(1.0 / 120.0, &grid);
+    }
+    let floor = crater_surface_height(2.0);
+    assert!(
+        (controller.position.y - floor).abs() < 0.02,
+        "should rest on the bowl floor at {floor}, got {}",
+        controller.position.y
+    );
+    assert!(controller.grounded);
+
+    // Clearing the crater restores the flat plane.
+    grid.set_crater(None);
+    for _ in 0..400 {
+        controller.simulate_with_grid(1.0 / 120.0, &grid);
+    }
+    assert!(controller.position.y.abs() < 0.02);
+}

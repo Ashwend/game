@@ -1,14 +1,25 @@
 pub mod chunk;
 pub mod map_texture;
+pub mod meteor_shower;
+pub mod ruins;
 pub mod terrain_texture;
 
 pub use chunk::{
     CHUNK_SIZE_M, ChunkClassification, ChunkCoord, ChunkDims, ChunkRng, ChunkSpawn,
     ClassificationChannels, NodeKind, PlayableBounds, base_capacity, build_world_blocks,
-    chunk_kind_target, fbm, generate_chunk_spawns, generate_world_spawns, kind_target, splitmix64,
-    value_noise_2d,
+    chunk_center_distance_fraction, chunk_kind_target, fbm, generate_chunk_spawns,
+    generate_world_spawns, kind_target, splitmix64, value_noise_2d,
 };
 pub use map_texture::{WORLD_MAP_TEXELS, biome_legend, render_world_map_rgba, world_map_bounds};
+pub use meteor_shower::{
+    CRATER_BOWL_RADIUS_M, CRATER_FLOOR_HEIGHT_M, CRATER_RIM_END_M, CRATER_RIM_HEIGHT_M,
+    CRATER_SKIRT_RADIUS_M, METEOR_FLIGHT_SECONDS, MeteorWorldState, crater_surface_height,
+    meteor_world_state,
+};
+pub use ruins::{
+    RUIN_MASONRY_TIER, RuinElement, RuinElementKind, RuinFootprint, RuinPrefab, RuinProp,
+    RuinRenderElement, RuinSite, point_in_any_footprint, ruin_footprints, ruin_layout,
+};
 pub use terrain_texture::{
     TERRAIN_WEIGHT_TEXELS, biome_blend_weights, fill_terrain_weight_rows,
     render_terrain_weight_rgba,
@@ -142,15 +153,20 @@ impl WorldData {
     /// function is consistent with `MapType::world_seed()`, the actual
     /// node generation happens server-side.
     pub fn chunk_world(seed: u64, dims: ChunkDims) -> Self {
-        // Touch `seed` so callers can be confident this signature
-        // does not silently drop input. Pure block geometry doesn't need
-        // it (perimeter walls are dims-only), but keeping the parameter
-        // signals intent and leaves room for seed-influenced blocks
-        // (e.g. landmark rocks) later.
-        let _ = seed;
+        // Perimeter walls are dims-only, but ruin structures are a pure
+        // function of the seed: scatter the layout and append every site's
+        // static collision blocks so the `BlockGrid` (built from
+        // `WorldData.blocks` on both server and client) gives ruin collision,
+        // projectile LoS, and melee LoS for free, exactly like the perimeter
+        // walls. The client swaps the plain block visuals for real building /
+        // prop meshes; the blocks themselves are the shared collision truth.
+        let mut blocks = build_world_blocks(dims);
+        for site in ruins::ruin_layout(seed, dims) {
+            blocks.extend(site.static_blocks());
+        }
         Self {
             floor_size: dims.world_size_m(),
-            blocks: build_world_blocks(dims),
+            blocks,
             resource_nodes: Vec::new(),
         }
     }
@@ -457,6 +473,13 @@ pub enum BlockKind {
     /// Grayish stone block, used for perimeter walls and similar structural
     /// pieces that should read as masonry rather than test geometry.
     Stone,
+    /// Ruin masonry collision. Contributes to the `BlockGrid` (collision,
+    /// projectile LoS, melee LoS) like any block, but the world scene renderer
+    /// skips it: the ruin rendering system spawns the real building-piece and
+    /// prop meshes at the site element transforms instead of a grey cuboid.
+    /// `WorldData` is never persisted (rebuilt from the seed each load), so
+    /// appending this variant costs no save-format change.
+    RuinMasonry,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -482,6 +505,23 @@ impl WorldBlock {
             half_extents,
             kind: BlockKind::Stone,
         }
+    }
+
+    /// A ruin-masonry collision block: solid in the `BlockGrid`, but skipped by
+    /// the world scene renderer (the ruin system draws the real meshes).
+    pub const fn ruin(center: Vec3Net, half_extents: Vec3Net) -> Self {
+        Self {
+            center,
+            half_extents,
+            kind: BlockKind::RuinMasonry,
+        }
+    }
+
+    /// Same block with its [`BlockKind`] replaced. Used to retag reused
+    /// building-collider boxes as [`BlockKind::RuinMasonry`].
+    pub const fn with_kind(mut self, kind: BlockKind) -> Self {
+        self.kind = kind;
+        self
     }
 
     pub fn min(self) -> Vec3Net {
@@ -537,11 +577,21 @@ mod tests {
     fn chunk_world_has_perimeter_walls_and_no_spawns() {
         let world = WorldData::test_world();
         assert!(world.floor_size > 0.0);
-        assert_eq!(world.blocks.len(), 4, "expected four perimeter walls");
         assert!(world.resource_nodes.is_empty());
-        for block in world.blocks {
+        // Exactly four perimeter walls (the only `Stone` blocks); ruin masonry
+        // is `RuinMasonry` and is seed-dependent, so filter to the walls.
+        let walls: Vec<_> = world
+            .blocks
+            .iter()
+            .filter(|b| b.kind == BlockKind::Stone)
+            .collect();
+        assert_eq!(walls.len(), 4, "expected four perimeter walls");
+        for block in &world.blocks {
             assert!(block.min().y >= 0.0);
-            assert_eq!(block.kind, BlockKind::Stone);
+            assert!(matches!(
+                block.kind,
+                BlockKind::Stone | BlockKind::RuinMasonry
+            ));
         }
     }
 

@@ -2,7 +2,7 @@ use bevy::{light::NotShadowCaster, mesh::VertexAttributeValues, prelude::*};
 
 use crate::{
     app::{
-        scene::ResourceVisualAssets,
+        scene::{DeployableVisualAssets, ResourceVisualAssets, ToonMaterial},
         state::{ClientRuntime, MenuState, Screen},
         systems::{
             insert_resource_node_material, resource_node_transform_at, resource_node_visual,
@@ -10,7 +10,7 @@ use crate::{
         },
     },
     resources::{resource_node_definition, spawn_resource_node},
-    world::{BlockKind, WorldData},
+    world::{BlockKind, RUIN_MASONRY_TIER, RuinElementKind, RuinProp, WorldData, ruin_layout},
 };
 
 use super::{
@@ -72,6 +72,7 @@ pub(crate) fn apply_world_scene_system(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     resource_assets: Option<Res<ResourceVisualAssets>>,
+    deployable_assets: Option<Res<DeployableVisualAssets>>,
     terrain_assets: Option<Res<TerrainTextureAssets>>,
     mut images: Option<ResMut<Assets<Image>>>,
     mut terrain_materials: Option<ResMut<Assets<TerrainMaterial>>>,
@@ -122,10 +123,71 @@ pub(crate) fn apply_world_scene_system(
                     &mut materials,
                 );
                 spawn_world_geometry(&mut commands, &mut meshes, &mut materials, world, ground);
+                // Ruin structures are collision-only in `world.blocks` (tagged
+                // `RuinMasonry`, skipped by the block renderer above); render
+                // the real building-piece and prop meshes here from the shared
+                // ruin layout (a pure function of the seed, identical to what
+                // the server placed and the map draws).
+                if let (Some(deployables), Some((seed, dims))) =
+                    (deployable_assets.as_deref(), runtime.world_map_seed_dims)
+                {
+                    spawn_ruins(&mut commands, deployables, seed, dims);
+                }
             }
         }
     }
     scene_state.applied = desired;
+}
+
+/// Spawn the visible ruin meshes for a live world: the reused stone
+/// building-piece meshes and the authored ruin props, at each site's element
+/// transforms. Collision comes from the `RuinMasonry` blocks in `world.blocks`;
+/// this is purely visual. Tagged `WorldGeometry` so it despawns on world change.
+fn spawn_ruins(
+    commands: &mut Commands,
+    assets: &DeployableVisualAssets,
+    seed: u64,
+    dims: crate::world::ChunkDims,
+) {
+    for site in ruin_layout(seed, dims) {
+        for element in site.render_elements() {
+            let base = Vec3::new(element.position.x, element.position.y, element.position.z);
+            let rotation = Quat::from_rotation_y(element.yaw);
+            match element.kind {
+                RuinElementKind::Building(piece) => {
+                    // Reuse the stone-tier building mesh + PBR stone material.
+                    // A "broken" wall is the full mesh scaled down in Y, which
+                    // reads as a rubble stub without a bespoke model.
+                    let mesh = assets.building_mesh(piece, RUIN_MASONRY_TIER);
+                    let material = assets.building_material(RUIN_MASONRY_TIER);
+                    commands.spawn((
+                        Name::new(format!("Ruin {}", piece.label())),
+                        WorldGeometry,
+                        Mesh3d(mesh),
+                        MeshMaterial3d(material),
+                        Transform::from_translation(base)
+                            .with_rotation(rotation)
+                            .with_scale(Vec3::new(1.0, element.height_scale.max(0.05), 1.0)),
+                    ));
+                }
+                RuinElementKind::Prop(prop) => {
+                    let mesh = match prop {
+                        RuinProp::BrokenPillar => assets.ruin_broken_pillar_mesh.clone(),
+                        RuinProp::FallenArch => assets.ruin_fallen_arch_mesh.clone(),
+                    };
+                    // Props are cel-shaded on the shared toon stone material
+                    // (weathered pale stone + dark iron bands via COLOR_0).
+                    commands.spawn((
+                        Name::new(format!("Ruin {}", prop.asset_stem())),
+                        WorldGeometry,
+                        Mesh3d(mesh),
+                        MeshMaterial3d::<ToonMaterial>(assets.toon_stone_material.clone()),
+                        Transform::from_translation(base).with_rotation(rotation),
+                    ));
+                }
+            }
+        }
+    }
 }
 
 /// The flat dark-green ground material (the look before biome texturing). Used
@@ -263,14 +325,22 @@ fn spawn_world_geometry(
         ..default()
     });
     for (index, block) in world.blocks.iter().enumerate() {
+        // Ruin masonry is collision-only here; the ruin rendering system
+        // spawns the real building-piece and prop meshes at the site element
+        // transforms, so skip drawing a plain grey cuboid for it.
+        if block.kind == BlockKind::RuinMasonry {
+            continue;
+        }
         let size = block.size();
         let material = match block.kind {
             BlockKind::Stone => stone_material.clone(),
             BlockKind::Standard => block_materials[index % block_materials.len()].clone(),
+            BlockKind::RuinMasonry => continue,
         };
         let name = match block.kind {
             BlockKind::Stone => format!("Stone Wall {}", index + 1),
             BlockKind::Standard => format!("Test Cube {}", index + 1),
+            BlockKind::RuinMasonry => continue,
         };
         commands.spawn((
             Name::new(name),

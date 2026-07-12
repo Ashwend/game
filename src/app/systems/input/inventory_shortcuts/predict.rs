@@ -2,7 +2,7 @@ use crate::{
     app::state::{PickupTargetState, PredictionState},
     inventory::accepted_inventory_quantity,
     protocol::{DroppedItemId, ItemStack, ResourceNodeId},
-    resources::next_payout_from_storage,
+    resources::{next_payout_from_storage, resource_node_definition},
 };
 
 use super::swing::equipped_tool_profile;
@@ -32,7 +32,14 @@ pub(super) fn predict_gather(
     };
     let tool = equipped_tool_profile(local_player);
     let storage = prediction.effective_node_storage(node_id, &target.resource_storage);
-    let Some(payout) = next_payout_from_storage(&storage, tool) else {
+    // The node's per-swing cap must come from the same definition the server
+    // reads, or the optimistic gain overshoots on capped nodes (meteorite).
+    let per_swing_yield = target
+        .resource_definition_id
+        .as_deref()
+        .and_then(resource_node_definition)
+        .and_then(|definition| definition.per_swing_yield);
+    let Some(payout) = next_payout_from_storage(&storage, tool, per_swing_yield) else {
         return 0;
     };
     let mut effective = inventory.clone();

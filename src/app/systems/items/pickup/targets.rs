@@ -11,18 +11,19 @@ use bevy::prelude::*;
 use crate::{
     app::{
         scene::{MainCamera, NetworkDroppedItem},
-        state::PickupTargetState,
+        state::{LocalPlayerState, PickupTargetState},
     },
     // The interact ranges come straight from the authoritative balance
     // constants (not redefined here) so the client tooltip/targeting can never
     // disagree with what the server will accept, no "tooltip says reachable,
     // server says no" pops, and there is a single tuning knob per range.
     game_balance::{
-        COMBAT_PLAYER_BODY_CENTRE_Y as PLAYER_BODY_CENTRE_Y,
+        COMBAT_ATTACK_RANGE_M, COMBAT_PLAYER_BODY_CENTRE_Y as PLAYER_BODY_CENTRE_Y,
+        COMBAT_PLAYER_TARGET_REACH_MARGIN_M,
         COMBAT_SLEEPING_BODY_CENTRE_Y as SLEEPING_BODY_CENTRE_Y,
         DEPLOYABLE_DAMAGE_RANGE_M as DEPLOYABLE_INTERACT_RANGE_M, LOOT_BAG_INTERACT_RANGE_M,
     },
-    items::{look_forward, pickup_anchor_from_position},
+    items::{item_definition, look_forward, pickup_anchor_from_position},
     protocol::Vec3Net,
     resources::resource_node_anchor_for,
     server::{
@@ -34,11 +35,28 @@ use crate::{
 
 use super::viewport_position;
 
-/// Max range at which a melee swing can reach another player. Tighter
-/// than gather range, players are smaller targets than ore veins, so
-/// we need them well inside arm's reach before "swing at player" wins
-/// over "swing at the deployable behind them".
-pub(super) const ATTACK_RANGE_M: f32 = 3.0;
+/// Player-attack targeting range for the active item, as a RULE: the swing's
+/// authoritative reach (the active [`crate::combat::AttackProfile`]'s `reach_m`)
+/// minus a fixed [`COMBAT_PLAYER_TARGET_REACH_MARGIN_M`] margin. The server
+/// validates the hit at the full `reach_m`, and the client only marks a player
+/// as the target inside that value minus the margin, so a hit the client shows
+/// as landing is one the server still accepts (the movement-prediction delta
+/// lives in the gap). A standard-reach weapon or tool (3.5 m) therefore targets
+/// players at 3.0 m and the spear (4.5 m reach) at 4.0 m. When the held item has
+/// no attack profile (bare hands, a non-combat item), there is no swing anyway,
+/// so we fall back to the standard-reach value (3.0 m) for a sane tooltip range.
+/// Non-player targeting (nodes, deployables) keeps its own ranges.
+pub(super) fn player_attack_target_range(local_player: &LocalPlayerState) -> f32 {
+    let reach = local_player
+        .private
+        .as_ref()
+        .and_then(|private| private.inventory.active_actionbar_stack())
+        .and_then(|stack| item_definition(&stack.item_id))
+        .and_then(crate::combat::resolve_attack_profile)
+        .map(|profile| profile.reach_m)
+        .unwrap_or(COMBAT_ATTACK_RANGE_M);
+    (reach - COMBAT_PLAYER_TARGET_REACH_MARGIN_M).max(0.0)
+}
 /// Cone cosine for loot bag interaction, same as deployables since
 /// bags sit at roughly the same eye-level cone an aimed E would
 /// expect to hit.
@@ -122,15 +140,16 @@ pub(super) struct PlayerTargetCandidate<'a> {
     pub(super) sleeping: bool,
 }
 
-/// Find the closest remote player whose body AABB is hit by the look
-/// ray within [`ATTACK_RANGE_M`]. Score is the ray-AABB entry distance
-/// so it slots into the same min-score pick as the other target
-/// categories.
+/// Find the closest remote player whose body AABB is hit by the look ray within
+/// `max_range` (the active item's [`player_attack_target_range`]). Score is the
+/// ray-AABB entry distance so it slots into the same min-score pick as the other
+/// target categories.
 pub(super) fn best_player_target<'a>(
     eye: Vec3Net,
     yaw: f32,
     pitch: f32,
     local_client_id: Option<crate::protocol::ClientId>,
+    max_range: f32,
     players: impl Iterator<Item = PlayerTargetCandidate<'a>>,
 ) -> Option<(PlayerTargetCandidate<'a>, f32)> {
     let forward = look_forward(yaw, pitch);
@@ -159,7 +178,7 @@ pub(super) fn best_player_target<'a>(
         ) else {
             continue;
         };
-        if distance > ATTACK_RANGE_M {
+        if distance > max_range {
             continue;
         }
         if best.as_ref().map(|(_, s)| distance < *s).unwrap_or(true) {
@@ -369,6 +388,26 @@ pub(super) fn refresh_dropped_target_anchor(
             transform.translation.y,
             transform.translation.z,
         )));
+}
+
+/// Write a stuck (at-rest) arrow as the pickup target. `stack` carries the
+/// ammo item so the shared tooltip shows "Arrow / Press E to pick up" exactly
+/// like a dropped item; the recovery command itself only ships the projectile
+/// id (the server resolves the true ammo item authoritatively). Both ranged
+/// weapons fire the one arrow item today, so the client-side label is the
+/// plain [`crate::items::ARROW_ID`].
+pub(super) fn set_projectile_pickup_target(
+    pickup_target: &mut PickupTargetState,
+    projectile: &crate::server::Projectile,
+    transform: &crate::server::ProjectileTransform,
+    camera: &Query<(&Camera, &Transform), With<MainCamera>>,
+) {
+    pickup_target.clear();
+    pickup_target.projectile_id = Some(projectile.id);
+    pickup_target.stack = Some(crate::protocol::ItemStack::new(crate::items::ARROW_ID, 1));
+    let anchor = pickup_anchor_from_position(transform.position);
+    pickup_target.world_position = Some(anchor);
+    pickup_target.screen_position = viewport_position(camera, anchor);
 }
 
 pub(super) fn set_dropped_pickup_target(

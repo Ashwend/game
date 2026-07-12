@@ -109,6 +109,8 @@ mod tests {
                     burn_ticks_left,
                 }),
                 cupboard: None,
+                ruin_cache: None,
+                fuse: None,
             },
         );
         id

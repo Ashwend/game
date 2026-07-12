@@ -125,12 +125,12 @@ pub(crate) fn toggle_pause_system(
 }
 
 fn handle_pause_escape(menu: &mut MenuState) {
-    // Furnace + loot bag are both handled by their own
+    // Furnace + loot bag + workbench are handled by their own
     // close-on-escape systems because the close path is a network
     // round-trip (server clears the open-state field, replication
     // mirrors it back). Bailing here means ESC stops at "close the
-    // bag" instead of falling through to open the pause menu.
-    if menu.furnace_open || menu.loot_bag_open {
+    // container" instead of falling through to open the pause menu.
+    if menu.furnace_open || menu.loot_bag_open || menu.workbench_open {
         return;
     }
 
@@ -189,6 +189,24 @@ pub(crate) fn sync_furnace_open_flag_system(
         .is_some();
     if menu.furnace_open != open {
         menu.furnace_open = open;
+    }
+}
+
+/// Same as `sync_furnace_open_flag_system` but for the workbench. Drives
+/// `MenuState.workbench_open` off the replicated `PlayerPrivate.open_workbench`
+/// so the input-gating helpers suppress movement/look/swing while the
+/// workbench upgrade UI is up.
+pub(crate) fn sync_workbench_open_flag_system(
+    local_player: Res<crate::app::state::LocalPlayerState>,
+    mut menu: ResMut<MenuState>,
+) {
+    let open = local_player
+        .private
+        .as_ref()
+        .and_then(|private| private.open_workbench.as_ref())
+        .is_some();
+    if menu.workbench_open != open {
+        menu.workbench_open = open;
     }
 }
 
@@ -252,6 +270,28 @@ pub(crate) fn close_furnace_on_escape_system(
     }
 }
 
+/// Send a workbench `Close` command when ESC is pressed while the workbench
+/// modal is open. Mirror of `close_furnace_on_escape_system`: the close path is
+/// a network round-trip (server clears `open_workbench`, replication mirrors it
+/// back), kept separate from the local-only pause/inventory toggles.
+pub(crate) fn close_workbench_on_escape_system(
+    keys: Res<ButtonInput<KeyCode>>,
+    menu: Res<MenuState>,
+    mut runtime: ResMut<crate::app::state::ClientRuntime>,
+    mut error_toasts: MessageWriter<crate::app::state::ClientErrorToast>,
+) {
+    if menu.screen != Screen::InGame || !menu.workbench_open {
+        return;
+    }
+    if keys.just_pressed(KeyCode::Escape) {
+        crate::app::systems::input::send_workbench_command(
+            &mut runtime,
+            &mut error_toasts,
+            crate::protocol::WorkbenchCommand::Close,
+        );
+    }
+}
+
 pub(crate) fn toggle_inventory_system(
     keys: Res<ButtonInput<KeyCode>>,
     settings: Res<ClientSettings>,
@@ -296,6 +336,9 @@ pub(crate) fn toggle_inventory_system(
             if menu.loot_bag_open {
                 close_open_loot_bag(&mut runtime, &mut error_toasts);
             }
+            if menu.workbench_open {
+                close_open_workbench(&mut runtime, &mut error_toasts);
+            }
         } else {
             inventory_ui.cancel_drag();
         }
@@ -326,6 +369,19 @@ fn close_open_loot_bag(
         runtime,
         error_toasts,
         crate::protocol::LootBagCommand::Close,
+    );
+}
+
+/// Same idea for the workbench: opening inventory / crafting / a new modal
+/// shouldn't leave the workbench upgrade UI ghosted behind the new view.
+fn close_open_workbench(
+    runtime: &mut crate::app::state::ClientRuntime,
+    error_toasts: &mut MessageWriter<crate::app::state::ClientErrorToast>,
+) {
+    crate::app::systems::input::send_workbench_command(
+        runtime,
+        error_toasts,
+        crate::protocol::WorkbenchCommand::Close,
     );
 }
 
@@ -421,6 +477,11 @@ pub(crate) fn open_crafting_modal(
         // Same lifecycle as the furnace: server-side state, close
         // round-trip clears the local mirror on the next tick.
         close_open_loot_bag(runtime, error_toasts);
+    }
+    if menu.workbench_open {
+        // Same server-side lifecycle: ship Close and let the next
+        // snapshot clear the mirrored `workbench_open` flag.
+        close_open_workbench(runtime, error_toasts);
     }
     // Reset transient browser state so a fresh open behaves like a
     // fresh open: empty search, scrolled to the top. We intentionally

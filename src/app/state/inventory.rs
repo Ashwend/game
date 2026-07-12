@@ -4,7 +4,8 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 
 use crate::protocol::{
-    FurnaceSlotRef, ItemContainerSlot, ItemStack, LootBagSlotRef, PlayerInventoryState,
+    EQUIPMENT_SLOT_COUNT, FurnaceSlotRef, ItemContainerSlot, ItemStack, LootBagSlotRef,
+    PlayerInventoryState,
 };
 
 /// Either-or addressable slot used by the unified drag pipeline. The
@@ -51,6 +52,12 @@ impl UnifiedSlotRef {
                 crate::protocol::ItemContainer::Actionbar => {
                     FurnaceSlotRef::PlayerActionbar(slot.slot)
                 }
+                // Equipment (paperdoll) slots don't map onto a furnace command;
+                // the furnace UI never surfaces a paperdoll slot as a drag
+                // target, so this is unreachable in practice. Fail closed to the
+                // fuel sentinel so a misroute is rejected server-side rather than
+                // silently smelting a worn piece.
+                crate::protocol::ItemContainer::Equipment => FurnaceSlotRef::Fuel,
             },
             // Bag → furnace is not a valid move; the caller should
             // never reach here. Return a sentinel so a misroute fails
@@ -75,6 +82,11 @@ impl UnifiedSlotRef {
                 crate::protocol::ItemContainer::Actionbar => {
                     LootBagSlotRef::PlayerActionbar(slot.slot)
                 }
+                // Paperdoll slots don't map onto a loot-bag command (the bag UI
+                // never exposes a paperdoll drag target). Fail closed to a bag
+                // sentinel so a misroute is rejected rather than moving a worn
+                // piece into a bag through the wrong command family.
+                crate::protocol::ItemContainer::Equipment => LootBagSlotRef::Bag(0),
             },
             Self::Furnace(_) => LootBagSlotRef::Bag(0),
         }
@@ -132,6 +144,12 @@ pub(crate) struct InventoryUiState {
     /// command path; released outside, it falls back to the
     /// standard inventory drop-on-ground.
     pub(crate) loot_bag_rect: Option<egui::Rect>,
+    /// Rect of each worn-armor (paperdoll) slot, indexed by
+    /// [`crate::protocol::EquipmentSlot::index`]. Registered per frame while the
+    /// Inventory tab is up so a drag released over a paperdoll slot counts as
+    /// landing on an inventory surface (never falls through to drop-on-ground).
+    /// Every entry is `None` on the Crafting tab or with the panel closed.
+    pub(crate) equipment_rects: [Option<egui::Rect>; EQUIPMENT_SLOT_COUNT],
     /// Single-frame inbox for shift+click "quick transfer" intents.
     /// The slot widget sets this when the player Shift+LMBs a slot
     /// while a container surface (furnace today) is up; the container's
@@ -147,6 +165,13 @@ pub(crate) struct InventoryUiState {
     /// Lets the panel drop a focused recipe-search text input when the
     /// player flips Crafting->Inventory, not just when the panel closes.
     pub(crate) was_crafting: bool,
+    /// Whether the panel is showing the admin item-grant tab. Client-local
+    /// VIEW state only: the panel-open source of truth stays the `MenuState`
+    /// bools (`inventory_open` carries the admin tab), so every overlay /
+    /// control gate keeps working unchanged. Reset when the panel closes (a
+    /// reopen always lands on Inventory) and forced off for non-admins; the
+    /// server independently rejects `/give` from non-admins regardless.
+    pub(crate) admin_tab: bool,
     /// Per-slot flash elapsed time. A slot is inserted with elapsed = 0
     /// whenever its quantity grows (or a new stack lands in an empty slot)
     /// and is removed once the elapsed time passes [`SLOT_FLASH_DURATION_SECS`].
@@ -172,6 +197,7 @@ impl InventoryUiState {
         self.actionbar_rect = None;
         self.furnace_rect = None;
         self.loot_bag_rect = None;
+        self.equipment_rects = [None; EQUIPMENT_SLOT_COUNT];
         // Last frame's shift+click should have been consumed by now.
         // Clearing here makes the field strictly single-frame so a
         // surface that opens after the click was recorded can't pick up
@@ -416,9 +442,11 @@ mod tests {
             )),
             furnace_rect: None,
             loot_bag_rect: None,
+            equipment_rects: [None; EQUIPMENT_SLOT_COUNT],
             pending_quick_transfer: Some(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0))),
             was_open: true,
             was_crafting: false,
+            admin_tab: false,
             slot_flashes: HashMap::new(),
             last_seen_inventory: None,
             pickup_intent_secs_remaining: 0.0,

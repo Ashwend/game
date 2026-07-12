@@ -205,7 +205,13 @@ impl ClassificationChannels {
             // Stone vein follows the same rocky channel as the small
             // surface lumps, wherever the ground is stony, both spawn.
             NodeKind::SurfaceStone | NodeKind::StoneVein => self.stone,
-            NodeKind::CoalOre | NodeKind::IronOre | NodeKind::SulfurOre => self.ore,
+            // Meteorite rides the ore channel: it only ever spawns in the rich
+            // ore/rocky biomes (gated further by classification + distance in
+            // `chunk_kind_target`), so tracking the ore intensity keeps it in the
+            // same veins as the other minerals.
+            NodeKind::CoalOre | NodeKind::IronOre | NodeKind::SulfurOre | NodeKind::Meteorite => {
+                self.ore
+            }
             NodeKind::HayGrass => self.hay,
             // Branches are a fallout of trees + plains, they show up where
             // forests and meadows are present. Take the max so a forest
@@ -235,6 +241,7 @@ pub fn base_capacity(classification: ChunkClassification, kind: NodeKind) -> u16
         (Forest, HayGrass) => 12,
         (Forest, CoalOre | IronOre | SulfurOre) => 0,
         (Forest, StoneVein) => 0,
+        (Forest, Meteorite) => 0,
 
         (RockyOutcrop, TreeSmall) => 1,
         (RockyOutcrop, TreeMedium) => 1,
@@ -248,6 +255,11 @@ pub fn base_capacity(classification: ChunkClassification, kind: NodeKind) -> u16
         // The headline rock vein for rocky chunks, the player should be
         // able to walk into one of these and gather stone in earnest.
         (RockyOutcrop, StoneVein) => 4,
+        // Meteorite: base 1, so at most one per eligible chunk. The strict
+        // distance-ring + noise-mask gate in `chunk_kind_target` makes most
+        // eligible chunks hold none (roughly an order of magnitude rarer than
+        // iron), so this is a ceiling, not a per-chunk guarantee.
+        (RockyOutcrop, Meteorite) => 1,
 
         (OreVein, TreeSmall) => 0,
         (OreVein, TreeMedium) => 1,
@@ -261,6 +273,10 @@ pub fn base_capacity(classification: ChunkClassification, kind: NodeKind) -> u16
         // Plain rock alongside the ore, visually grounds the ore-vein
         // chunk as a bigger rocky region.
         (OreVein, StoneVein) => 2,
+        // Meteorite: base 1 (the ore-vein biome is the other eligible one);
+        // same strict distance + noise gate as rocky, so most ore-vein chunks
+        // still hold none.
+        (OreVein, Meteorite) => 1,
 
         (Plains, TreeSmall) => 2,
         (Plains, TreeMedium) => 1,
@@ -270,6 +286,7 @@ pub fn base_capacity(classification: ChunkClassification, kind: NodeKind) -> u16
         (Plains, HayGrass) => 28,
         (Plains, CoalOre | IronOre | SulfurOre) => 0,
         (Plains, StoneVein) => 1,
+        (Plains, Meteorite) => 0,
 
         (Mixed, TreeSmall) => 2,
         (Mixed, TreeMedium) => 3,
@@ -281,6 +298,10 @@ pub fn base_capacity(classification: ChunkClassification, kind: NodeKind) -> u16
         (Mixed, IronOre) => 1,
         (Mixed, SulfurOre) => 0,
         (Mixed, StoneVein) => 2,
+        // Meteorite is deliberately barren-biome-only (rocky/ore); Mixed
+        // transition cells never seed it, keeping it a reward for pushing into
+        // the committed rocky/ore regions.
+        (Mixed, Meteorite) => 0,
     }
 }
 

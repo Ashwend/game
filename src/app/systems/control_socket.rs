@@ -41,7 +41,7 @@ use super::HeadlessCapture;
 use crate::{
     app::state::{ClientRuntime, LocalPlayerState, LookState, MenuState, Screen, WorldMapUiState},
     controller::MAX_LOOK_PITCH,
-    items::{ToolKind, intern_item_id, item_definition},
+    items::{ItemModel, intern_item_id, item_definition},
     protocol::{
         ClientMessage, InventoryCommand, PlaceDeployableCommand, SwingStartCommand, Vec3Net,
     },
@@ -146,8 +146,19 @@ pub(crate) enum ControlRequest {
     /// Navigate between menu screens (main_menu / worlds / multiplayer /
     /// options / in_game). Does not start a session; connect via `--connect`.
     SetScreen { screen: String },
-    /// Open or close the inventory panel.
-    SetInventoryOpen { open: bool },
+    /// Open or close the inventory panel. `admin_tab` additionally lands the
+    /// panel on the admin item-grant tab (admins only; the panel forces the
+    /// flag off otherwise), so an agent can screenshot it headless.
+    SetInventoryOpen {
+        open: bool,
+        #[serde(default)]
+        admin_tab: bool,
+    },
+    /// Open or close the unified panel on the Crafting tab, standing in for
+    /// the C hotkey a headless (unfocused) window can't receive. Opening
+    /// clears `inventory_open` the same way the toggle systems keep the two
+    /// bools mutually exclusive.
+    SetCraftingOpen { open: bool },
     /// Open or close the world-map overlay, bypassing the focus + toggle-key
     /// gate the normal input path uses (the headless window is unfocused, so a
     /// key press can't open it). Opening also fires a `RequestWorldMap` so the
@@ -177,6 +188,17 @@ pub(crate) enum ControlRequest {
     /// empty hand swings bare-handed. Lets an agent capture the remote swing
     /// animation headless (the normal LMB path is focus-gated).
     Swing,
+    /// Throw the held powder bomb along the current look direction at `power`
+    /// (charge fraction 0..1, default 1.0). Sends the real
+    /// `ExplosiveCommand::Throw`, so the server runs the full consume /
+    /// ballistics / bounce / fuse / blast path; only the hold-LMB charge UI is
+    /// bypassed (it is focus-gated, like [`Self::Swing`]'s LMB path). Lets an
+    /// agent watch a bomb arc, roll, and detonate headless.
+    ThrowBomb { power: Option<f32> },
+    /// Random-respawn a dead agent (the death splash's Respawn button; the
+    /// button itself is unreachable headless). Sends `ClientMessage::Respawn`;
+    /// the server no-ops it for a living player.
+    Respawn,
     /// Select the actionbar slot that currently holds `item_id` (searches the
     /// replicated actionbar), making it the active/held item. Unlike
     /// [`Self::SelectActionbarSlot`] this doesn't depend on knowing the slot
@@ -184,6 +206,30 @@ pub(crate) enum ControlRequest {
     /// building plan is what raises the placement ghost, so this lets an agent
     /// start a placement preview headlessly (e.g. `crude_furnace`, `building_plan`).
     SelectActionbarItem { item_id: String },
+    /// Equip a wearable piece from the bag/actionbar into its matching
+    /// paperdoll slot, standing in for the shift-click quick-equip a headless
+    /// agent can't perform (e.g. to verify worn-armor visuals on the rig or
+    /// the inventory's character preview). The destination slot resolves from
+    /// the piece's `ArmorProfile`; the server still validates the move.
+    EquipItem { item_id: String },
+    /// Force the local ranged draw/reload state for a frame so an agent can
+    /// screenshot the animated bow / crossbow viewmodel poses headless (the real
+    /// draw is driven by the focus-gated mouse button). Dev-only, like [`Self::Swing`]:
+    /// it writes straight onto [`crate::app::state::RangedDrawState`] via its debug
+    /// override, which the pose system reads the same frame. `draw` holds a bow draw
+    /// at that fraction (0..1); `reload` sets the crossbow reload crank fraction
+    /// (0..1); `recoil` sets the crossbow fire kick (0..1); `aim` holds the
+    /// crossbow aim-down-sights fraction (0..1); `swing` freezes the melee swing
+    /// fraction (0..1) so a mid-swing viewmodel (a spear thrust, a sword slash)
+    /// can be screenshotted. All optional; omitted fields clear (a plain call
+    /// with no fields clears every override back to live input).
+    RangedPoseDebug {
+        draw: Option<f32>,
+        reload: Option<f32>,
+        recoil: Option<f32>,
+        aim: Option<f32>,
+        swing: Option<f32>,
+    },
     /// Return a JSON snapshot of key client state for assertions.
     DumpState,
 }
@@ -199,6 +245,12 @@ struct ControlResponse {
 /// shape an agent asserts against.
 #[derive(Debug, Serialize)]
 struct ClientStateDump {
+    /// The placement ghost's world position `[x, y, z]`, or `null` when no
+    /// ghost is up (no placeable held, or no valid aim surface). Lets an agent
+    /// assert the green/red preview is live without reading pixels.
+    ghost_position: Option<[f32; 3]>,
+    /// Whether the ghost previews a VALID placement (green) this frame.
+    ghost_valid: bool,
     client_id: Option<u64>,
     is_admin: bool,
     world_loaded: bool,
@@ -227,6 +279,22 @@ struct ClientStateDump {
     /// Replicated deployables in AoI (placed structures, building blocks,
     /// doors, bags) so an agent can assert on placements and resolve ids.
     deployables: Vec<DeployableDump>,
+    /// The live meteor shower fireball's true world position `[x, y, z]` this frame,
+    /// or `null` when no meteor is in flight (no event, not yet in flight, or
+    /// already struck). Lets a headless capture aim the camera straight at the
+    /// descending object without knowing the trajectory seed. Dev-only, like the
+    /// rest of this dump.
+    meteor_world: Option<[f32; 3]>,
+    /// The live fireball's world-space velocity `[x, y, z]` (m/s), or `null` when
+    /// no meteor is in flight. Lets a headless capture stand broadside to the
+    /// trajectory so the trail is not occluded behind the ball. Dev-only.
+    meteor_velocity: Option<[f32; 3]>,
+    /// The announced meteor shower impact point `[x, y, z]`, or `null` when no event
+    /// is live. Non-null for the whole event (countdown, flight, crater), unlike
+    /// `meteor_world`: lets an agent position itself relative to ground zero
+    /// BEFORE the strike (e.g. inside the danger radius for the HUD warning, or
+    /// at a safe vantage for the impact) and find the crater afterwards. Dev-only.
+    meteor_shower_impact: Option<[f32; 3]>,
 }
 
 #[derive(Debug, Serialize)]
@@ -298,6 +366,10 @@ pub(crate) fn drain_control_socket(
     mut menu: ResMut<MenuState>,
     mut look: ResMut<LookState>,
     mut world_map_ui: ResMut<WorldMapUiState>,
+    mut ranged_input: ResMut<crate::app::state::RangedDrawState>,
+    mut gather_input: ResMut<crate::app::state::GatherInputState>,
+    mut inventory_ui: ResMut<crate::app::state::InventoryUiState>,
+    placement: Res<crate::app::state::DeployablePlacementState>,
     local_player: Res<LocalPlayerState>,
     capture: Option<Res<HeadlessCapture>>,
     replicated_deployables: Query<(
@@ -347,6 +419,10 @@ pub(crate) fn drain_control_socket(
             &mut menu,
             &mut look,
             &mut world_map_ui,
+            &mut ranged_input,
+            &mut gather_input,
+            &mut inventory_ui,
+            &placement,
             &local_player,
             capture,
             &deployables,
@@ -362,6 +438,10 @@ fn handle_stream(
     menu: &mut MenuState,
     look: &mut LookState,
     world_map_ui: &mut WorldMapUiState,
+    ranged_input: &mut crate::app::state::RangedDrawState,
+    gather_input: &mut crate::app::state::GatherInputState,
+    inventory_ui: &mut crate::app::state::InventoryUiState,
+    placement: &crate::app::state::DeployablePlacementState,
     local_player: &LocalPlayerState,
     capture: Option<&HeadlessCapture>,
     deployables: &[DeployableDump],
@@ -377,6 +457,10 @@ fn handle_stream(
             menu,
             look,
             world_map_ui,
+            ranged_input,
+            gather_input,
+            inventory_ui,
+            placement,
             local_player,
             capture,
             deployables,
@@ -398,6 +482,10 @@ fn handle_request(
     menu: &mut MenuState,
     look: &mut LookState,
     world_map_ui: &mut WorldMapUiState,
+    ranged_input: &mut crate::app::state::RangedDrawState,
+    gather_input: &mut crate::app::state::GatherInputState,
+    inventory_ui: &mut crate::app::state::InventoryUiState,
+    placement: &crate::app::state::DeployablePlacementState,
     local_player: &LocalPlayerState,
     capture: Option<&HeadlessCapture>,
     deployables: &[DeployableDump],
@@ -442,22 +530,96 @@ fn handle_request(
                 .private
                 .as_ref()
                 .context("not in a world (no inventory)")?;
-            let slot = private
+            let holds = |stack: &Option<crate::protocol::ItemStack>| {
+                stack.as_ref().map(|s| s.item_id.as_ref()) == Some(item_id.as_str())
+            };
+            // Prefer an actionbar slot that already holds the item.
+            if let Some(slot) = private.inventory.actionbar_slots.iter().position(holds) {
+                let session = runtime
+                    .session
+                    .as_mut()
+                    .context("no active session (not in a world)")?;
+                session.send(ClientMessage::Inventory(
+                    InventoryCommand::SelectActionbarSlot { slot },
+                ))?;
+                return Ok(format!("selected actionbar slot {slot} ({item_id})"));
+            }
+            // Fall back to the inventory grid: the test-kit overflows equipables
+            // past the ninth into the bag (e.g. the crossbow), so an agent still
+            // needs to hold them. Move the stack into a free actionbar slot, then
+            // select it. This is a dev-harness convenience only; the server still
+            // validates the move.
+            let inv_slot = private
+                .inventory
+                .inventory_slots
+                .iter()
+                .position(holds)
+                .with_context(|| {
+                    format!("item '{item_id}' is not in the actionbar or inventory")
+                })?;
+            let free_actionbar = private
                 .inventory
                 .actionbar_slots
                 .iter()
-                .position(|stack| {
-                    stack.as_ref().map(|s| s.item_id.as_ref()) == Some(item_id.as_str())
-                })
-                .with_context(|| format!("item '{item_id}' is not in the actionbar"))?;
+                .position(Option::is_none)
+                .context("no free actionbar slot to move the item into")?;
             let session = runtime
                 .session
                 .as_mut()
                 .context("no active session (not in a world)")?;
+            // A distinct seq per move so the server never treats it as stale.
+            static MOVE_SEQ: AtomicU32 = AtomicU32::new(1);
+            let seq = MOVE_SEQ.fetch_add(1, Ordering::Relaxed);
+            session.send(ClientMessage::Inventory(InventoryCommand::Move {
+                from: crate::protocol::ItemContainerSlot::inventory(inv_slot),
+                to: crate::protocol::ItemContainerSlot::actionbar(free_actionbar),
+                quantity: None,
+                seq,
+            }))?;
             session.send(ClientMessage::Inventory(
-                InventoryCommand::SelectActionbarSlot { slot },
+                InventoryCommand::SelectActionbarSlot {
+                    slot: free_actionbar,
+                },
             ))?;
-            Ok(format!("selected actionbar slot {slot} ({item_id})"))
+            Ok(format!(
+                "moved {item_id} from inventory {inv_slot} to actionbar {free_actionbar} and selected it"
+            ))
+        }
+        ControlRequest::EquipItem { item_id } => {
+            let private = local_player
+                .private
+                .as_ref()
+                .context("not in a world (no inventory)")?;
+            let profile = crate::items::armor_profile(&item_id)
+                .with_context(|| format!("'{item_id}' has no armor profile (not wearable)"))?;
+            let holds = |stack: &Option<crate::protocol::ItemStack>| {
+                stack.as_ref().map(|s| s.item_id.as_ref()) == Some(item_id.as_str())
+            };
+            let from = if let Some(slot) = private.inventory.inventory_slots.iter().position(holds)
+            {
+                crate::protocol::ItemContainerSlot::inventory(slot)
+            } else if let Some(slot) = private.inventory.actionbar_slots.iter().position(holds) {
+                crate::protocol::ItemContainerSlot::actionbar(slot)
+            } else {
+                anyhow::bail!("item '{item_id}' is not in the bag or actionbar");
+            };
+            let session = runtime
+                .session
+                .as_mut()
+                .context("no active session (not in a world)")?;
+            // A distinct seq per move so the server never treats it as stale.
+            static EQUIP_SEQ: AtomicU32 = AtomicU32::new(1);
+            let seq = EQUIP_SEQ.fetch_add(1, Ordering::Relaxed);
+            session.send(ClientMessage::Inventory(InventoryCommand::Move {
+                from,
+                to: crate::protocol::ItemContainerSlot::equipment(profile.slot),
+                quantity: None,
+                seq,
+            }))?;
+            Ok(format!(
+                "equip queued: {item_id} -> {:?} slot",
+                profile.slot
+            ))
         }
         ControlRequest::PlaceDeployable {
             item_id,
@@ -572,14 +734,18 @@ fn handle_request(
             Ok(format!("door pickup queued for {door}"))
         }
         ControlRequest::OpenStorageBox => {
+            // Ruin caches share the storage container wire path, so the same
+            // request opens whichever is nearer when no box is around; this
+            // lets an agent verify cache lootability headlessly.
             let target = nearest_deployable_id(runtime, deployables, "StorageBox")
-                .context("no storage box in AoI")?;
+                .or_else(|| nearest_deployable_id(runtime, deployables, "RuinCache"))
+                .context("no storage box or ruin cache in AoI")?;
             let session = runtime
                 .session
                 .as_mut()
                 .context("no active session (not in a world)")?;
             session.send(ClientMessage::OpenStorageBox { id: target })?;
-            Ok(format!("storage box open queued for {target}"))
+            Ok(format!("container open queued for {target}"))
         }
         ControlRequest::CloseContainer => {
             let session = runtime
@@ -644,9 +810,17 @@ fn handle_request(
             menu.screen = parse_screen(&screen)?;
             Ok(format!("screen set to {:?}", menu.screen))
         }
-        ControlRequest::SetInventoryOpen { open } => {
+        ControlRequest::SetInventoryOpen { open, admin_tab } => {
             menu.inventory_open = open;
-            Ok(format!("inventory_open = {open}"))
+            inventory_ui.admin_tab = open && admin_tab;
+            Ok(format!("inventory_open = {open} (admin_tab = {admin_tab})"))
+        }
+        ControlRequest::SetCraftingOpen { open } => {
+            menu.crafting_open = open;
+            if open {
+                menu.inventory_open = false;
+            }
+            Ok(format!("crafting_open = {open}"))
         }
         ControlRequest::SetWorldMapOpen { open } => {
             menu.world_map_open = open;
@@ -696,14 +870,17 @@ fn handle_request(
             Ok(format!("warped to [{x:.2}, {z:.2}]"))
         }
         ControlRequest::Swing => {
-            let tool = local_player
+            // Derive the swing archetype from the held item exactly as the client
+            // and server do: a weapon's own model, a gather tool's archetype, else
+            // the bag punch. The server re-derives it too, so this only picks the
+            // animation for the headless-harness swing.
+            let model = local_player
                 .private
                 .as_ref()
                 .and_then(|private| private.inventory.active_actionbar_stack())
                 .and_then(|stack| item_definition(&stack.item_id))
-                .and_then(|definition| definition.tool)
-                .map(|profile| profile.kind)
-                .unwrap_or(ToolKind::Hands);
+                .map(|definition| definition.swing_model())
+                .unwrap_or(ItemModel::Bag);
             // Monotonic per-process seq so the server never rejects it as stale
             // (it keeps the max). One source for all clients in this process is
             // fine: the server dedupes per client_id.
@@ -713,11 +890,64 @@ fn handle_request(
                 .session
                 .as_mut()
                 .context("no active session (not in a world)")?;
-            session.send(ClientMessage::SwingStart(SwingStartCommand { seq, tool }))?;
-            Ok(format!("swing {tool:?} (seq {seq}) sent"))
+            session.send(ClientMessage::SwingStart(SwingStartCommand { seq, model }))?;
+            Ok(format!("swing {model:?} (seq {seq}) sent"))
+        }
+        ControlRequest::ThrowBomb { power } => {
+            let power = power.unwrap_or(1.0).clamp(0.0, 1.0);
+            let view = runtime
+                .local_view()
+                .context("no local player view (not in a world)")?;
+            let dir = crate::items::look_forward(view.yaw, view.pitch);
+            let session = runtime
+                .session
+                .as_mut()
+                .context("no active session (not in a world)")?;
+            session.send(ClientMessage::Explosive(
+                crate::protocol::ExplosiveCommand::Throw {
+                    aim_dir: Vec3Net::new(dir.x, dir.y, dir.z),
+                    power,
+                },
+            ))?;
+            Ok(format!("bomb thrown at power {power:.2}"))
+        }
+        ControlRequest::Respawn => {
+            let session = runtime
+                .session
+                .as_mut()
+                .context("no active session (not in a world)")?;
+            session.send(ClientMessage::Respawn)?;
+            // Mirror the death-splash button: drop the splash so the HUD
+            // returns the moment the respawned state replicates.
+            menu.death_splash = None;
+            Ok("respawn requested".to_owned())
+        }
+        ControlRequest::RangedPoseDebug {
+            draw,
+            reload,
+            recoil,
+            aim,
+            swing,
+        } => {
+            // Force the ranged / swing pose so the animated bow / crossbow / melee
+            // viewmodel can be screenshotted headless. Clears to live input when
+            // every field is None.
+            let any_ranged =
+                draw.is_some() || reload.is_some() || recoil.is_some() || aim.is_some();
+            let over = any_ranged.then_some(crate::app::state::RangedPoseOverride {
+                draw,
+                reload,
+                recoil,
+                aim,
+            });
+            ranged_input.set_debug_override(over);
+            gather_input.set_debug_swing_override(swing);
+            Ok(format!(
+                "pose override set (draw={draw:?} reload={reload:?} recoil={recoil:?} aim={aim:?} swing={swing:?})"
+            ))
         }
         ControlRequest::DumpState => {
-            let dump = build_dump(runtime, menu, local_player, deployables);
+            let dump = build_dump(runtime, menu, local_player, placement, deployables);
             Ok(serde_json::to_string(&dump)?)
         }
     }
@@ -727,10 +957,13 @@ fn build_dump(
     runtime: &ClientRuntime,
     menu: &MenuState,
     local_player: &LocalPlayerState,
+    placement: &crate::app::state::DeployablePlacementState,
     deployables: &[DeployableDump],
 ) -> ClientStateDump {
     let view = runtime.local_view();
     ClientStateDump {
+        ghost_position: placement.world_position.map(|p| [p.x, p.y, p.z]),
+        ghost_valid: placement.valid,
         client_id: runtime.client_id,
         is_admin: runtime.is_admin,
         world_loaded: runtime.world.is_some(),
@@ -762,6 +995,31 @@ fn build_dump(
             })
             .collect(),
         deployables: deployables.to_vec(),
+        meteor_world: runtime.meteor_shower.and_then(|event| {
+            crate::world::meteor_world_state(
+                bevy::math::Vec2::new(event.impact_position.x, event.impact_position.z),
+                event.impact_tick,
+                event.trajectory_seed,
+                runtime.server_tick_precise(),
+            )
+            .map(|state| [state.position.x, state.position.y, state.position.z])
+        }),
+        meteor_velocity: runtime.meteor_shower.and_then(|event| {
+            crate::world::meteor_world_state(
+                bevy::math::Vec2::new(event.impact_position.x, event.impact_position.z),
+                event.impact_tick,
+                event.trajectory_seed,
+                runtime.server_tick_precise(),
+            )
+            .map(|state| [state.velocity.x, state.velocity.y, state.velocity.z])
+        }),
+        meteor_shower_impact: runtime.meteor_shower.map(|event| {
+            [
+                event.impact_position.x,
+                event.impact_position.y,
+                event.impact_position.z,
+            ]
+        }),
     }
 }
 
@@ -834,7 +1092,10 @@ mod tests {
             serde_json::from_str(r#"{"command":"set_inventory_open","open":true}"#).unwrap();
         assert!(matches!(
             inv,
-            ControlRequest::SetInventoryOpen { open: true }
+            ControlRequest::SetInventoryOpen {
+                open: true,
+                admin_tab: false
+            }
         ));
 
         let cmd: ControlRequest =

@@ -165,6 +165,10 @@ fn deployable_tooltip_text(
         DeployableKind::StorageBox { .. } => {
             (kind.label().to_owned(), "Press E to open".to_owned())
         }
+        DeployableKind::RuinCache => (
+            "Ruin Cache".to_owned(),
+            "Press E to loot\nAncient fittings and salvage. Refills over time.".to_owned(),
+        ),
         DeployableKind::Torch { .. } => (
             "Torch".to_owned(),
             "Burns for hours to light the area.".to_owned(),
@@ -180,6 +184,10 @@ fn deployable_tooltip_text(
             };
             ("Tool Cupboard".to_owned(), body.to_owned())
         }
+        DeployableKind::Explosive { kind } => (
+            kind.label().to_owned(),
+            "Armed and ticking\nHold E to defuse it (recover half the materials)\nOr hit it to fizzle it, no refund".to_owned(),
+        ),
     }
 }
 

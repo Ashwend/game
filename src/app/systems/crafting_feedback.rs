@@ -8,22 +8,26 @@
 //! (see `CraftingHudState::note_cancel_requested`) completed, so the
 //! craft-complete cue fires. Cancels stay silent.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use bevy::prelude::*;
 
 use crate::{
+    analytics::{Analytics, Event},
     app::{
         audio::{PlaySound, SoundId},
         state::{CraftingHudState, LocalPlayerState},
     },
+    crafting::RecipeId,
     protocol::CraftingJobId,
 };
 
-/// Job ids seen in the replicated crafting queue last frame.
+/// Jobs seen in the replicated crafting queue last frame, mapped to their
+/// recipe id so a vanished (completed) job can be attributed to its recipe for
+/// the `craft_completed` analytics event.
 #[derive(Resource, Default)]
 pub(crate) struct CraftCompletionWatch {
-    previous_jobs: HashSet<CraftingJobId>,
+    previous_jobs: HashMap<CraftingJobId, RecipeId>,
 }
 
 pub(crate) fn craft_complete_cue_system(
@@ -31,6 +35,7 @@ pub(crate) fn craft_complete_cue_system(
     mut watch: ResMut<CraftCompletionWatch>,
     mut hud_state: ResMut<CraftingHudState>,
     mut play_sound: MessageWriter<PlaySound>,
+    analytics: Res<Analytics>,
 ) {
     let Some(private) = local_player.private.as_ref() else {
         // Disconnected: forget everything so jobs restored on the next
@@ -41,15 +46,25 @@ pub(crate) fn craft_complete_cue_system(
         return;
     };
 
-    let current: HashSet<CraftingJobId> =
-        private.crafting.jobs.iter().map(|job| job.job_id).collect();
+    let current: HashMap<CraftingJobId, RecipeId> = private
+        .crafting
+        .jobs
+        .iter()
+        .map(|job| (job.job_id, job.recipe_id.clone()))
+        .collect();
 
     // One cue per frame even if a batch of jobs completed in the same
-    // replication tick; overlapping identical chimes just sound louder.
+    // replication tick; overlapping identical chimes just sound louder. The
+    // analytics event, in contrast, fires once per completed recipe (a batch of
+    // five swords is five `craft_completed` events, matching per-completion
+    // dashboards).
     let mut completed_any = false;
-    for job_id in watch.previous_jobs.iter() {
-        if !current.contains(job_id) && !hud_state.consume_cancelled(*job_id) {
+    for (job_id, recipe_id) in watch.previous_jobs.iter() {
+        if !current.contains_key(job_id) && !hud_state.consume_cancelled(*job_id) {
             completed_any = true;
+            analytics.track(Event::CraftCompleted {
+                recipe_id: recipe_id.as_ref().to_owned(),
+            });
         }
     }
     if completed_any {

@@ -12,10 +12,10 @@
 //! `src/server/inventory.rs`.
 
 use crate::{
-    items::{item_definition, normalize_stack, stack_limit},
+    items::{armor_profile, item_definition, normalize_stack, stack_limit},
     protocol::{
-        ACTIONBAR_SLOT_COUNT, INVENTORY_SLOT_COUNT, ItemContainer, ItemContainerSlot, ItemStack,
-        PlayerInventoryState,
+        ACTIONBAR_SLOT_COUNT, EQUIPMENT_SLOT_COUNT, EquipmentSlot, INVENTORY_SLOT_COUNT,
+        ItemContainer, ItemContainerSlot, ItemStack, PlayerInventoryState,
     },
 };
 
@@ -29,6 +29,17 @@ pub fn move_stack(
         return;
     }
 
+    // Moves into a paperdoll slot take a dedicated equip path: slot-type
+    // validation plus always-swap semantics (armor never merges, so equipping
+    // over an occupied slot swaps the incumbent out, even for two pieces sharing
+    // an item id). Runs in the shared path so the server and the client's
+    // optimistic prediction reach the same decision by construction. A rejected
+    // equip mutates nothing (validation happens before any state change).
+    if to.container == ItemContainer::Equipment {
+        equip_move(inventory, from, to, quantity);
+        return;
+    }
+
     let Some((moving, removed_all)) = remove_stack_for_move(inventory, from, quantity) else {
         return;
     };
@@ -36,6 +47,71 @@ pub fn move_stack(
     if let Some(remainder) = remainder {
         restore_stack(inventory, from, remainder);
     }
+}
+
+/// Perform a validated move whose destination is an [`ItemContainer::Equipment`]
+/// slot. Rejects (leaving the inventory untouched) unless the source is a single
+/// armor piece whose profile slot matches the destination. On success it swaps:
+/// the source piece is worn and any incumbent piece is placed back in the source
+/// slot. Swap (never merge) is the right semantics for the paperdoll, two pieces
+/// of the same slot type, even the same item id, exchange rather than stacking
+/// (armor's stack limit is one).
+fn equip_move(
+    inventory: &mut PlayerInventoryState,
+    from: ItemContainerSlot,
+    to: ItemContainerSlot,
+    quantity: Option<u16>,
+) {
+    if !equip_move_is_valid(inventory, from, to, quantity) {
+        return;
+    }
+    // Take the whole source piece (armor is always a stack of one), then swap it
+    // with whatever currently occupies the destination equipment slot.
+    let Some((moving, _)) = remove_stack_for_move(inventory, from, None) else {
+        return;
+    };
+    let Some(target) = slot_mut(inventory, to) else {
+        // Should not happen (validated above), but restore the source rather
+        // than dropping the piece if it somehow does.
+        restore_stack(inventory, from, moving);
+        return;
+    };
+    let displaced = target.replace(moving);
+    // The incumbent (if any) goes back to the now-empty source slot. It is armor
+    // of the same slot type, so it lands in the bag/actionbar cleanly.
+    if let Some(displaced) = displaced {
+        restore_stack(inventory, from, displaced);
+    }
+}
+
+/// Whether a move whose destination is an [`ItemContainer::Equipment`] slot is
+/// allowed. The source stack must be a single armor piece whose
+/// [`crate::items::ArmorProfile`] slot matches the target paperdoll slot, and
+/// the caller must be moving the whole stack (armor never stacks, and a partial
+/// equip makes no sense). Reads only, so a `false` result leaves the inventory
+/// untouched.
+fn equip_move_is_valid(
+    inventory: &PlayerInventoryState,
+    from: ItemContainerSlot,
+    to: ItemContainerSlot,
+    quantity: Option<u16>,
+) -> bool {
+    let Some(target_slot) = EquipmentSlot::from_index(to.slot) else {
+        return false;
+    };
+    let Some(source) = inventory.slot(from) else {
+        return false;
+    };
+    // Whole-stack only: an armor stack is always quantity 1, so any explicit
+    // partial quantity is a malformed equip request. `None` means "move all",
+    // which is fine.
+    if quantity.is_some_and(|q| q != source.quantity) {
+        return false;
+    }
+    // Non-armor items (and unknown ids) carry no armor profile, so they can
+    // never enter a paperdoll slot. The profile's declared slot must match the
+    // destination (a helmet only in the head slot).
+    armor_profile(&source.item_id).is_some_and(|profile| profile.slot == target_slot)
 }
 
 fn remove_stack_for_move(
@@ -250,11 +326,19 @@ pub fn add_stack_to_inventory(
 }
 
 /// Whether a freshly added stack of `item_id` should prefer an empty
-/// actionbar slot over the bag. True for tools and deployables, the items
-/// the player equips and uses directly, and false for everything else, so
-/// gathered resources still flow into the main inventory as before.
+/// actionbar slot over the bag. True for the items the player equips and uses
+/// directly: tools, deployables, and the combat weapons (melee + ranged). A
+/// freshly crafted or picked-up sword, bow, or crossbow is a quick-access item
+/// exactly like a hatchet, so it lands on the toolbar before spilling into the
+/// bag. False for everything else, so gathered resources still flow into the
+/// main inventory as before.
 fn prefers_actionbar(item_id: &str) -> bool {
-    item_definition(item_id).is_some_and(|def| def.tool.is_some() || def.deployable.is_some())
+    item_definition(item_id).is_some_and(|def| {
+        def.tool.is_some()
+            || def.deployable.is_some()
+            || def.weapon.is_some()
+            || def.ranged.is_some()
+    })
 }
 
 /// How many units of `stack` would actually fit if added to `inventory`,
@@ -276,6 +360,7 @@ fn slot_mut(
     match slot.container {
         ItemContainer::Inventory => inventory.inventory_slots.get_mut(slot.slot),
         ItemContainer::Actionbar => inventory.actionbar_slots.get_mut(slot.slot),
+        ItemContainer::Equipment => inventory.equipment_slots.get_mut(slot.slot),
     }
 }
 
@@ -283,9 +368,11 @@ fn slot_exists(inventory: &PlayerInventoryState, slot: ItemContainerSlot) -> boo
     (match slot.container {
         ItemContainer::Inventory => slot.slot < INVENTORY_SLOT_COUNT,
         ItemContainer::Actionbar => slot.slot < ACTIONBAR_SLOT_COUNT,
+        ItemContainer::Equipment => slot.slot < EQUIPMENT_SLOT_COUNT,
     }) && (match slot.container {
         ItemContainer::Inventory => slot.slot < inventory.inventory_slots.len(),
         ItemContainer::Actionbar => slot.slot < inventory.actionbar_slots.len(),
+        ItemContainer::Equipment => slot.slot < inventory.equipment_slots.len(),
     })
 }
 
@@ -571,6 +658,160 @@ mod tests {
                 .map(|s| s.item_id.as_ref()),
             Some(BASIC_PICKAXE_ID)
         );
+        assert_eq!(
+            inventory.inventory_slots[0].as_ref().map(|s| s.quantity),
+            Some(3)
+        );
+    }
+
+    // ---- Equipment slot-type validation (shared move path) ----
+
+    use crate::items::{PADDED_HOOD_ID, PADDED_TUNIC_ID};
+    use crate::protocol::EquipmentSlot;
+
+    #[test]
+    fn move_armor_into_its_matching_slot_equips_it() {
+        let mut inventory = PlayerInventoryState::empty();
+        inventory.inventory_slots[0] = Some(ItemStack::new(PADDED_HOOD_ID, 1));
+
+        move_stack(
+            &mut inventory,
+            ItemContainerSlot::inventory(0),
+            ItemContainerSlot::equipment(EquipmentSlot::Head),
+            None,
+        );
+
+        // The hood moved into the head slot and left the bag.
+        assert!(inventory.inventory_slots[0].is_none());
+        assert_eq!(
+            inventory
+                .equipment(EquipmentSlot::Head)
+                .map(|stack| stack.item_id.as_ref()),
+            Some(PADDED_HOOD_ID)
+        );
+    }
+
+    #[test]
+    fn move_armor_into_the_wrong_slot_is_rejected_cleanly() {
+        let mut inventory = PlayerInventoryState::empty();
+        inventory.inventory_slots[0] = Some(ItemStack::new(PADDED_HOOD_ID, 1));
+
+        // A hood is a head piece; the chest slot must refuse it.
+        move_stack(
+            &mut inventory,
+            ItemContainerSlot::inventory(0),
+            ItemContainerSlot::equipment(EquipmentSlot::Chest),
+            None,
+        );
+
+        // Nothing moved: the hood is still in the bag and the chest slot is empty
+        // (no partial state).
+        assert_eq!(
+            inventory.inventory_slots[0]
+                .as_ref()
+                .map(|stack| stack.item_id.as_ref()),
+            Some(PADDED_HOOD_ID)
+        );
+        assert!(inventory.equipment(EquipmentSlot::Chest).is_none());
+    }
+
+    #[test]
+    fn move_non_armor_into_an_equipment_slot_is_rejected() {
+        let mut inventory = PlayerInventoryState::empty();
+        inventory.inventory_slots[0] = Some(ItemStack::new(COAL_ID, 5));
+
+        move_stack(
+            &mut inventory,
+            ItemContainerSlot::inventory(0),
+            ItemContainerSlot::equipment(EquipmentSlot::Head),
+            None,
+        );
+
+        // The coal never enters the paperdoll and stays put in the bag.
+        assert_eq!(
+            inventory.inventory_slots[0].as_ref().map(|s| s.quantity),
+            Some(5)
+        );
+        assert!(inventory.equipment(EquipmentSlot::Head).is_none());
+    }
+
+    #[test]
+    fn swapping_two_same_slot_armor_pieces_via_equip_move() {
+        // A hood is worn; a second hood in the bag is dragged onto the same slot.
+        // The worn piece swaps out to the bag, the new one equips. Both are head
+        // pieces, so the move is valid.
+        let mut inventory = PlayerInventoryState::empty();
+        let mut worn = ItemStack::new(PADDED_HOOD_ID, 1);
+        worn.durability = Some(10); // a distinctly-worn incumbent
+        inventory.equipment_slots[EquipmentSlot::Head.index()] = Some(worn);
+        inventory.inventory_slots[0] = Some(ItemStack::new(PADDED_HOOD_ID, 1));
+
+        move_stack(
+            &mut inventory,
+            ItemContainerSlot::inventory(0),
+            ItemContainerSlot::equipment(EquipmentSlot::Head),
+            None,
+        );
+
+        // The freshly-equipped hood is at full durability; the swapped-out
+        // incumbent (durability 10) landed back in the source bag slot.
+        assert_eq!(
+            inventory
+                .equipment(EquipmentSlot::Head)
+                .and_then(|stack| stack.durability),
+            Some(crate::game_balance::PADDED_ARMOR_DURABILITY)
+        );
+        assert_eq!(
+            inventory.inventory_slots[0]
+                .as_ref()
+                .and_then(|stack| stack.durability),
+            Some(10)
+        );
+    }
+
+    #[test]
+    fn moving_armor_out_of_an_equipment_slot_follows_existing_rules() {
+        // Unequip: a worn piece moves back to the bag with no slot-type gate
+        // (only moves INTO equipment are validated). Durability is preserved.
+        let mut inventory = PlayerInventoryState::empty();
+        let mut worn = ItemStack::new(PADDED_TUNIC_ID, 1);
+        worn.durability = Some(42);
+        inventory.equipment_slots[EquipmentSlot::Chest.index()] = Some(worn);
+
+        move_stack(
+            &mut inventory,
+            ItemContainerSlot::equipment(EquipmentSlot::Chest),
+            ItemContainerSlot::inventory(3),
+            None,
+        );
+
+        assert!(inventory.equipment(EquipmentSlot::Chest).is_none());
+        assert_eq!(
+            inventory.inventory_slots[3]
+                .as_ref()
+                .and_then(|stack| stack.durability),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn sort_leaves_equipment_untouched() {
+        // sort_inventory only repacks the bag; a worn piece and the actionbar
+        // stay exactly where they are.
+        let mut inventory = PlayerInventoryState::empty();
+        inventory.equipment_slots[EquipmentSlot::Head.index()] =
+            Some(ItemStack::new(PADDED_HOOD_ID, 1));
+        inventory.inventory_slots[4] = Some(ItemStack::new(COAL_ID, 3));
+
+        sort_inventory(&mut inventory);
+
+        assert_eq!(
+            inventory
+                .equipment(EquipmentSlot::Head)
+                .map(|stack| stack.item_id.as_ref()),
+            Some(PADDED_HOOD_ID)
+        );
+        // The bag was still repacked to the front.
         assert_eq!(
             inventory.inventory_slots[0].as_ref().map(|s| s.quantity),
             Some(3)

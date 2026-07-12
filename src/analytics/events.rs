@@ -127,6 +127,26 @@ impl ErrorCategory {
     }
 }
 
+/// Coarse cause of a local death, taken from what the `PlayerKilled` wire
+/// message cheaply carries: a named killer (another player) versus none
+/// (the environment, the meteor shower, or a self-inflicted explosive).
+/// The exact `DamageKind` is not on that message, and adding it would be a
+/// protocol change out of scope for the analytics pass, so this stays coarse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeathCause {
+    Player,
+    Environment,
+}
+
+impl DeathCause {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Player => "player",
+            Self::Environment => "environment",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum Event {
     AppStarted,
@@ -165,6 +185,48 @@ pub(crate) enum Event {
     },
     DeployablePlaced {
         kind: String,
+    },
+    /// A crafting job finished. `recipe_id` is the registry id string (never a
+    /// display name), matching the id shipped in `CraftingCommand::Enqueue`.
+    CraftCompleted {
+        recipe_id: String,
+    },
+    /// A piece of armor was moved into an equipment slot. `item_id` is the
+    /// registry id; `slot` is the worn slot ("head" / "chest" / "legs" /
+    /// "feet").
+    ItemEquipped {
+        item_id: String,
+        slot: String,
+    },
+    /// A placed workbench was upgraded to a higher tier. `tier` is the new
+    /// (post-upgrade) tier.
+    WorkbenchUpgraded {
+        tier: u8,
+    },
+    /// The local player loosed a shot from a ranged weapon. `weapon` is the
+    /// registry id (`wooden_bow` / `crossbow`). Sampled, not one-per-shot, so a
+    /// held crossbow trigger does not flood the pipe (see the fire site).
+    RangedFired {
+        weapon: String,
+    },
+    /// An explosive detonated within cue range of the local player, observed off
+    /// the cosmetic `ServerMessage::Explosion`. `kind` is the charge kind.
+    ExplosiveDetonated {
+        kind: String,
+    },
+    /// The local player defused a placed charge. `kind` is the charge kind.
+    ExplosiveDefused {
+        kind: String,
+    },
+    /// The client received the meteor shower announce (a meteor event went live).
+    MeteorShowerAnnounced,
+    /// The local player was within cue range of a meteor shower impact when it
+    /// struck (they witnessed the strike, whether or not it hit them).
+    MeteorShowerImpactWitnessed,
+    /// The local player died. `cause` is coarse (player kill vs environment);
+    /// see [`DeathCause`].
+    PlayerDeath {
+        cause: DeathCause,
     },
     Error {
         category: ErrorCategory,
@@ -219,6 +281,28 @@ impl Event {
             ),
             Self::DeployablePlaced { kind } => {
                 ("deployable_placed", props(&[("kind", json!(kind))]))
+            }
+            Self::CraftCompleted { recipe_id } => {
+                ("craft_completed", props(&[("recipe_id", json!(recipe_id))]))
+            }
+            Self::ItemEquipped { item_id, slot } => (
+                "item_equipped",
+                props(&[("item_id", json!(item_id)), ("slot", json!(slot))]),
+            ),
+            Self::WorkbenchUpgraded { tier } => {
+                ("workbench_upgraded", props(&[("tier", json!(*tier))]))
+            }
+            Self::RangedFired { weapon } => ("ranged_fired", props(&[("weapon", json!(weapon))])),
+            Self::ExplosiveDetonated { kind } => {
+                ("explosive_detonated", props(&[("kind", json!(kind))]))
+            }
+            Self::ExplosiveDefused { kind } => {
+                ("explosive_defused", props(&[("kind", json!(kind))]))
+            }
+            Self::MeteorShowerAnnounced => ("meteor_shower_announced", Map::new()),
+            Self::MeteorShowerImpactWitnessed => ("meteor_shower_impact_witnessed", Map::new()),
+            Self::PlayerDeath { cause } => {
+                ("player_death", props(&[("cause", json!(cause.as_str()))]))
             }
             Self::Error { category } => ("error", props(&[("category", json!(category.as_str()))])),
             Self::AnalyticsDropped { count } => {
@@ -368,6 +452,80 @@ mod tests {
             assert_eq!(value["event"], "connect_failed");
             assert_eq!(value["properties"]["reason"], expected);
         }
+    }
+
+    #[test]
+    fn craft_completed_carries_recipe_id() {
+        let value = shape(Event::CraftCompleted {
+            recipe_id: "iron_sword".to_owned(),
+        });
+        assert_eq!(value["event"], "craft_completed");
+        assert_eq!(value["properties"]["recipe_id"], "iron_sword");
+    }
+
+    #[test]
+    fn item_equipped_carries_item_and_slot() {
+        let value = shape(Event::ItemEquipped {
+            item_id: "iron_chest".to_owned(),
+            slot: "chest".to_owned(),
+        });
+        assert_eq!(value["event"], "item_equipped");
+        assert_eq!(value["properties"]["item_id"], "iron_chest");
+        assert_eq!(value["properties"]["slot"], "chest");
+    }
+
+    #[test]
+    fn workbench_upgraded_carries_tier_as_number() {
+        let value = shape(Event::WorkbenchUpgraded { tier: 2 });
+        assert_eq!(value["event"], "workbench_upgraded");
+        assert_eq!(value["properties"]["tier"], json!(2));
+    }
+
+    #[test]
+    fn ranged_fired_carries_weapon() {
+        let value = shape(Event::RangedFired {
+            weapon: "crossbow".to_owned(),
+        });
+        assert_eq!(value["event"], "ranged_fired");
+        assert_eq!(value["properties"]["weapon"], "crossbow");
+    }
+
+    #[test]
+    fn explosive_events_carry_kind() {
+        let detonated = shape(Event::ExplosiveDetonated {
+            kind: "powder_keg".to_owned(),
+        });
+        assert_eq!(detonated["event"], "explosive_detonated");
+        assert_eq!(detonated["properties"]["kind"], "powder_keg");
+
+        let defused = shape(Event::ExplosiveDefused {
+            kind: "satchel_charge".to_owned(),
+        });
+        assert_eq!(defused["event"], "explosive_defused");
+        assert_eq!(defused["properties"]["kind"], "satchel_charge");
+    }
+
+    #[test]
+    fn meteor_shower_events_have_empty_props() {
+        assert_eq!(shape(Event::MeteorShowerAnnounced)["properties"], json!({}));
+        assert_eq!(
+            shape(Event::MeteorShowerImpactWitnessed)["properties"],
+            json!({})
+        );
+    }
+
+    #[test]
+    fn player_death_records_coarse_cause() {
+        let by_player = shape(Event::PlayerDeath {
+            cause: DeathCause::Player,
+        });
+        assert_eq!(by_player["event"], "player_death");
+        assert_eq!(by_player["properties"]["cause"], "player");
+
+        let by_env = shape(Event::PlayerDeath {
+            cause: DeathCause::Environment,
+        });
+        assert_eq!(by_env["properties"]["cause"], "environment");
     }
 
     #[test]

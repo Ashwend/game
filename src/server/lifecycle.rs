@@ -40,7 +40,7 @@ impl GameServer {
         // Resource nodes: trust the saved state once a world has ever been
         // hosted (so harvested resources don't respawn). For brand-new worlds
         // the save has `None` and we seed from the chunk generator.
-        let (mut chunk_manager, resource_nodes) = match (
+        let (mut chunk_manager, resource_nodes, fresh_world) = match (
             save.state.resource_nodes.take(),
             save.state.chunk_manager.take(),
         ) {
@@ -50,7 +50,7 @@ impl GameServer {
                     .map(|node| (node.id, node))
                     .collect();
                 let manager = ChunkManager::from_save(saved_chunk, load_tick_for_chunk);
-                (manager, nodes)
+                (manager, nodes, false)
             }
             _ => {
                 // Brand-new world: generate from seed + dims. Any partial
@@ -61,7 +61,7 @@ impl GameServer {
                     ChunkManager::new_for_world(save.map.world_seed(), save.map.chunk_dims());
                 let nodes: HashMap<ResourceNodeId, ResourceNodeState> =
                     spawns.into_iter().map(|node| (node.id, node)).collect();
-                (manager, nodes)
+                (manager, nodes, true)
             }
         };
 
@@ -132,7 +132,27 @@ impl GameServer {
         // highest known id so a future place can't collide with a
         // persisted one.
         let persisted_deployables = std::mem::take(&mut save.state.deployed_entities);
-        let deployed_entities = Self::restore_deployed_entities(persisted_deployables);
+        let mut deployed_entities = Self::restore_deployed_entities(persisted_deployables);
+        // On a brand-new world, spawn the ruin loot caches once. They are a
+        // pure function of the seed (same layout the static ruin blocks and the
+        // map glyphs derive from), owner-less, and stocked immediately so the
+        // first visit finds loot. On a reload they come back from the save like
+        // any deployable, so only fresh worlds spawn them.
+        if fresh_world {
+            let mut next_cache_id = next_id_floor(
+                save.state.next_deployed_entity_id,
+                deployed_entities.keys().copied(),
+            );
+            let placed_tick = save.state.last_authoritative_tick;
+            for site in crate::world::ruin_layout(save.map.world_seed(), save.map.chunk_dims()) {
+                for point in site.cache_points() {
+                    let id = next_cache_id;
+                    next_cache_id = next_cache_id.saturating_add(1);
+                    let entity = Self::spawn_ruin_cache_entity(id, point, site.yaw, placed_tick);
+                    deployed_entities.insert(id, entity);
+                }
+            }
+        }
         for entity in deployed_entities.values() {
             chunk_manager.track_deployed_entity(entity.id, entity.position);
             // Mirror the structure's solid boxes into the dropped-item
@@ -152,6 +172,10 @@ impl GameServer {
         );
         let world_time = save.state.world_time();
         let tick = save.state.last_authoritative_tick;
+        // the meteor shower is not persisted: roll a fresh next event off the world seed
+        // at load. Captured before `save` moves into the struct literal.
+        let meteor_shower =
+            super::meteor_shower::MeteorShowerState::new(tick, save.map.world_seed());
 
         // Wrap the authoritative maps in dirty-tracked stores and seed every
         // initial entry dirty so the first mirror sync spawns all mirror
@@ -178,12 +202,17 @@ impl GameServer {
             resource_nodes,
             chunk_manager,
             deployed_entities,
+            // Projectiles are transient: nothing to restore from the save, they
+            // start empty on every load and are cleared on restart.
+            projectiles: DirtyTrackedMap::default(),
+            stuck_projectiles: HashMap::new(),
             loot_bags: HashMap::new(),
             claim_footprints: HashMap::new(),
             next_dropped_item_id,
             next_client_id,
             next_resource_node_id,
             next_deployed_entity_id,
+            next_projectile_id: 1,
             next_loot_bag_id: 1,
             world_time,
             last_world_time_broadcast_tick: tick,
@@ -192,6 +221,10 @@ impl GameServer {
             auto_save_pending: false,
             auto_save_announce: true,
             world_map_markers,
+            // Neutral until an admin runs `/knockback-scale`; not persisted, so
+            // every fresh server starts at the shipped feel.
+            knockback_scale: 1.0,
+            meteor_shower,
         };
         // Stability is not persisted: recompute it from the restored
         // pieces (which also culls anything a legacy save left without a

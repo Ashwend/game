@@ -58,6 +58,11 @@ pub(crate) struct NetworkLootBag {
 #[derive(Component)]
 pub(crate) struct HeldItemVisual {
     pub(crate) item_id: crate::items::ItemId,
+    /// Which animatable rig piece this layer is, so the per-frame update can give
+    /// it its own local transform (bow limbs / string, crossbow string) on top of
+    /// the shared whole-item swing transform. [`HeldPieceSlot::Static`] for every
+    /// melee / tool layer (identity local transform), so those are unchanged.
+    pub(crate) slot: crate::items::HeldPieceSlot,
 }
 
 #[derive(Component)]
@@ -96,6 +101,7 @@ pub(crate) fn tree_mesh_height(model: ResourceNodeModel) -> Option<f32> {
         | ResourceNodeModel::IronOre
         | ResourceNodeModel::SulfurOre
         | ResourceNodeModel::StoneVein
+        | ResourceNodeModel::Meteorite
         | ResourceNodeModel::SurfaceStone
         | ResourceNodeModel::BranchPile
         | ResourceNodeModel::HayGrass => None,

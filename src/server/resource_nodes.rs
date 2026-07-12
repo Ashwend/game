@@ -164,6 +164,9 @@ pub(super) fn resource_impact_kind(model: ResourceNodeModel) -> ResourceImpactKi
         ResourceNodeModel::IronOre => ResourceImpactKind::IronOre,
         ResourceNodeModel::SulfurOre => ResourceImpactKind::SulfurOre,
         ResourceNodeModel::StoneVein => ResourceImpactKind::StoneVein,
+        // Meteorite reuses the stone-vein wire impact kind (rocky strike, iron
+        // pickaxe): no new wire variant, so no protocol bump for the node.
+        ResourceNodeModel::Meteorite => ResourceImpactKind::StoneVein,
         ResourceNodeModel::BranchPile => ResourceImpactKind::Branches,
         ResourceNodeModel::SurfaceStone => ResourceImpactKind::SurfaceStone,
         ResourceNodeModel::HayGrass => ResourceImpactKind::HayGrass,

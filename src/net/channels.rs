@@ -15,9 +15,10 @@ use crate::{
         Deployable, DeployableActive, DeployableAuth, DeployableHealth, DeployableLabel,
         DeployableStability, DeployableTransform, DroppedItem, DroppedItemTransform,
         LootBagContents, LootBagEntity, LootBagTransform, Player, PlayerAction, PlayerArmor,
-        PlayerChatBubble, PlayerCrafting, PlayerHealth, PlayerHeldItem, PlayerInputAck,
-        PlayerInventory, PlayerLifecycle, PlayerOpenContainers, PlayerPose, PlayerProfile,
-        PlayerSleeping, ResourceNode, ResourceNodeStorage,
+        PlayerChatBubble, PlayerCrafting, PlayerEquipmentVisual, PlayerHealth, PlayerHeldItem,
+        PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerOpenContainers, PlayerPose,
+        PlayerProfile, PlayerSleeping, Projectile, ProjectileTransform, ResourceNode,
+        ResourceNodeStorage,
     },
 };
 
@@ -108,6 +109,10 @@ impl Plugin for LightyearProtocolPlugin {
         // than the pose, so they sit apart from it (one diff per tool swap /
         // per swing, not per movement tick).
         app.register_component::<PlayerHeldItem>();
+        // Peer-visible worn-armor mesh selectors (one per equipment slot), for
+        // rendering another player's armor on their rig. Changes only on
+        // equip/unequip, so it sits apart from the pose alongside the held item.
+        app.register_component::<PlayerEquipmentVisual>();
         app.register_component::<PlayerAction>();
         // Owner-only player state, gated per component to the owning
         // sender in `attach_player_replication`.
@@ -121,6 +126,11 @@ impl Plugin for LightyearProtocolPlugin {
         app.register_component::<LootBagEntity>();
         app.register_component::<LootBagTransform>();
         app.register_component::<LootBagContents>();
+        // In-flight projectiles (arrows): one identity component + one mutable
+        // transform (position + velocity for client extrapolation between the
+        // 20 Hz diffs).
+        app.register_component::<Projectile>();
+        app.register_component::<ProjectileTransform>();
     }
 }
 

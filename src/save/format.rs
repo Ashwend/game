@@ -94,7 +94,23 @@ pub(super) const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 /// fieldless variant changes that variant's positional postcard layout, so
 /// any save holding a door would deserialise wrong; old v16 saves are
 /// rejected at load.
-pub(super) const SAVE_FORMAT_VERSION: u32 = 17;
+///
+/// `18` added `PlayerInventoryState::equipment_slots` (the four worn-armor
+/// paperdoll slots). Every `PersistedPlayer` embeds a `PlayerInventoryState`,
+/// and postcard is positional, so the new field shifts every later byte of a
+/// persisted player; old v17 saves are rejected at load. (`normalize_capacity`
+/// still pads a short vec on any state built via the serde default, but the
+/// on-disk version gate is the primary guard.)
+///
+/// `19` added the `DeployableKind::RuinCache` variant (world-spawned ruin loot
+/// caches) and `PersistedDeployedEntity::ruin_cache` (the cache refill
+/// schedule + counter). The new enum variant shifts the positional postcard
+/// layout of every `DeployableKind`, and the new trailing field shifts every
+/// later byte of a persisted deployable, so old v18 saves are rejected at load.
+/// `20` added the `DeployableKind::Explosive { kind }` variant (placed
+/// blackpowder charges) and `PersistedDeployedEntity::fuse` (an armed charge's
+/// remaining fuse), same positional-layout shift, so v19 saves are rejected.
+pub(super) const SAVE_FORMAT_VERSION: u32 = 20;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
 /// at >100MB/s compression and ~1GB/s decompression.
 const ZSTD_LEVEL: i32 = 5;
@@ -294,13 +310,36 @@ mod tests {
     /// zstd version/level change from false-failing.
     #[test]
     fn world_save_postcard_layout_is_stable() {
-        use super::super::types::WorldStateSave;
-        use crate::protocol::{DroppedWorldItem, ItemStack, QuatNet, Vec3Net};
+        use super::super::types::{PersistedPlayer, WorldStateSave};
+        use crate::protocol::{
+            DroppedWorldItem, EquipmentSlot, ItemStack, PlayerInventoryState, QuatNet, Vec3Net,
+        };
         use crate::world::{MapType, ProceduralMapSize};
         use sha2::{Digest, Sha256};
 
+        // A persisted player carrying a worn armor piece, so the golden fixture
+        // actually exercises the new `equipment_slots` field: the hash below
+        // guards its on-disk layout, not just the empty-Vec case.
+        let mut inventory = PlayerInventoryState::empty();
+        inventory.equipment_slots[EquipmentSlot::Head.index()] =
+            Some(ItemStack::new("padded_hood", 1));
+        let persisted_player = PersistedPlayer {
+            account_id: 11,
+            name: "Golden Player".to_owned(),
+            position: Vec3Net::new(4.0, 5.0, 6.0),
+            velocity: Vec3Net::ZERO,
+            yaw: 0.25,
+            pitch: -0.1,
+            health: 87.0,
+            grounded: true,
+            last_processed_input: 99,
+            is_admin: false,
+            inventory,
+        };
+
         let state = WorldStateSave {
             last_authoritative_tick: 123,
+            players: vec![persisted_player],
             dropped_items: vec![DroppedWorldItem {
                 id: 5,
                 stack: ItemStack::new("wood", 9),
@@ -333,7 +372,7 @@ mod tests {
         let digest = Sha256::digest(&payload);
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(
-            hex, "8ae0b93968b625f9ada046d06399c0439aa53369ce28134ed3002ef88c1f5795",
+            hex, "9e3b27ec16d0e82dcff3f911510f35fe05f8d766b1d18b81cd3d66f39c4e661b",
             "WorldSave postcard layout changed. If intentional, bump \
              SAVE_FORMAT_VERSION and update this golden hash to {hex}."
         );
@@ -440,6 +479,16 @@ mod tests {
                 smelt_progress_ticks: 25,
             }),
             torch: None,
+            // Exercise the v19 ruin-cache field so the golden hash guards its
+            // on-disk layout (the concrete kind is irrelevant to the byte
+            // layout, only the Option shape matters).
+            ruin_cache: Some(super::super::types::PersistedRuinCacheState {
+                refill_at_tick: Some(9_999),
+                refill_counter: 3,
+            }),
+            // Exercise the v20 fuse field the same way, so the round-trip covers
+            // an armed-charge fuse surviving encode/decode.
+            fuse: Some(super::super::types::PersistedFuseState { ticks_left: 77 }),
         });
 
         let bytes = encode_world_save(&save).expect("encode");

@@ -7,6 +7,7 @@ sources:
   - src/world/chunk/classification.rs - ChunkClassification, ClassificationChannels, BIOME_BIAS, base_capacity
   - src/world/chunk/generator.rs - kind_target, chunk_kind_target, generate_world_spawns, PlayableBounds
   - src/resources.rs - spawn_resource_node, tree_is_dead (dead-snag decision)
+  - src/world/ruins.rs - RuinPrefab, ruin_layout, ruin_footprints, RuinSite
   - src/save/format.rs - SAVE_FORMAT_VERSION, encode/decode, world_save_postcard_layout_is_stable
   - src/save/types.rs - WorldSave, WorldStateSave, PersistedPlayer
   - src/server/chunk_manager/save.rs - ChunkManagerSave
@@ -16,6 +17,7 @@ related:
   - docs/items-and-resources.md - the NodeKind/resource-node registry the generator places
   - docs/replication.md - how the generated nodes reach clients (per-component replication, not a snapshot)
   - docs/server-authority.md - GameServer ownership and the tick loop that drives regrow + auto-save
+  - docs/meteor-shower.md - the meteor shower event; its state is transient and deliberately absent from the save format
 ---
 
 # World generation and persistence
@@ -63,9 +65,23 @@ Two facts that bite agents:
 - **Per-chunk target** comes from `chunk_kind_target(classification, channels, kind)`, which wraps `kind_target(base_capacity, channel)`. `kind_target = round(base * (0.55 + channel * 0.7) * DENSITY_MULTIPLIER)` with `DENSITY_MULTIPLIER = 2.0`.
 - **`kind_target` / `chunk_kind_target` are the single shared capacity formula** used by both world-gen and the runtime regrow ceilings (`ChunkManager::build_empty_grids`). If you change one, change both or the world over/under-fills. This is the most important coupling in the system; the doc-comments at `kind_target` and in `chunk_manager` call it out explicitly.
 - **Forest-fringe ore rule** (folded into `chunk_kind_target`): a `Forest` chunk holds no coal or sulfur (those stay in the high-risk barren biomes), gets a single lucky iron node only where the raw ore channel `>= FOREST_IRON_ORE_CHANNEL (0.64)`, and an occasional stone vein where the stone channel `>= FOREST_STONE_VEIN_CHANNEL (0.56)`. Qualifying forest chunks cluster on the edge of nearby barren biomes, so the strike reads as a lucky fringe find.
+- **Meteorite gate** (also folded into `chunk_kind_target`): `NodeKind::Meteorite` seeds only in `RockyOutcrop` / `OreVein` chunks, each at base capacity **1** (`base_capacity`, `src/world/chunk/classification.rs`), and only where the chunk centre sits at least `METEORITE_MIN_CENTER_DISTANCE_FRACTION` (0.4) of the playable radius from the origin **and** the raw ore channel clears `METEORITE_ORE_CHANNEL_FLOOR` (0.72). Most eligible chunks hold none (roughly an order of magnitude rarer than iron). Generation and the regrow capacity grid pass the same `center_dist_frac` for a given coord, so the two meteorite ceilings can't drift.
 - **Placement** is Poisson-disk rejection sampling: candidates are drawn inside the chunk with `EDGE_MARGIN_M = 0.5` from the boundary, accepted against a per-kind noise mask (`KIND_MASK_FREQUENCY = 1/28`, `KIND_MASK_OCTAVES = 3`, `accept_floor = 0.25`) so nodes cluster, and rejected if they violate the kind's own `min_spacing_m()` or the global `CROSS_KIND_MIN_SPACING_M = 0.7`. Up to `MAX_CANDIDATES_PER_NODE = 18` candidates are tried per node before giving up. Candidates outside `PlayableBounds` are dropped.
 - **Tree variants** alternate pine/birch deterministically via a `splitmix64` variant counter (`tree_variant_counter`), resolved through `NodeKind::variant_definition_id`. `NodeKind` collapses small/medium/large tree variants into three kinds; both pine and birch definition ids map back to the same kind.
 - Node ids are dense and contiguous starting at `1`, in chunk-iteration order; the server adopts the high-water mark for its `ResourceNodeId` counter.
+
+### Ruin POIs (`src/world/ruins.rs`)
+
+Ruins are landmark points of interest carrying refilling loot caches: three hand-authored prefabs (`RuinPrefab::CollapsedShrine | BrokenForge | WatchtowerStub`) kitbashed from stone-tier building-piece meshes (`RUIN_MASONRY_TIER = BuildingTier::Stone`) plus two authored props (`RuinProp::BrokenPillar`, `FallenArch`). Each prefab carries 1 to 3 cache points, every one sitting over a foundation slab (pinned by test, spawned at the foundation top).
+
+`ruin_layout(world_seed, dims)` is the single shared scatter, a pure function of `(world_seed, dims)` exactly like the node pipeline; the layout is never persisted and is recomputed from the seed on every load. Placement is Poisson-style rejection sampling from a seeded `splitmix64` whole-world stream: `RUIN_SCATTER_CANDIDATES` (40) candidates are drawn across the playable interior and kept only if outside the centre exclusion ring (`RUIN_SPAWN_EXCLUSION_RADIUS_FRACTION` = 0.15 of the playable radius, keeping ruins away from the fresh-spawn area), inside `PlayableBounds` shrunk by `RUIN_BOUNDS_MARGIN_M` (12 m), and at least `RUIN_MIN_SPACING_M` (180 m) from every already-accepted site. All four constants live in `src/game_balance.rs`. A rejected candidate still draws its prefab and yaw, so the stream advances identically regardless of how many candidates pass.
+
+Four surfaces derive from the one layout; server and client each call the same function, so no ruin data travels on the wire:
+
+- **`ruin_footprints`** (one circle per site, `footprint_radius_m` 6 to 8 m) gates node placement: `generate_chunk_spawns` rejects any resource-node candidate inside a footprint, and the regrow path passes the same footprints so a regrown node can't land inside a ruin either.
+- **`RuinSite::static_blocks`** registers each site's collision/LoS geometry as `WorldBlock`s in `WorldData::chunk_world` (the perimeter-wall precedent, so the `BlockGrid` gives collision, projectile LoS, and melee LoS for free). Masonry reuses `building_collider_blocks`, retagged `BlockKind::RuinMasonry` so the client scene skips the plain cuboid and draws the real mesh.
+- **`RuinSite::cache_points`** spawn the owner-less `RuinCache` deployables at fresh worldgen only (`GameServer::new`, the `fresh_world` branch in `src/server/lifecycle.rs`, stocked immediately); on reload the caches come back from the save like any other deployable (format v19). Cache refill and loot rules live in [docs/crafting-and-deployables.md](crafting-and-deployables.md).
+- **`RuinSite::render_elements`** feed the client's mesh spawns (`src/app/scene/world.rs`) and the world-map ruin glyphs (`src/app/ui/world_map.rs`), both computed client-side from the same seed.
 
 ### Dead-tree snags (save format v15)
 
@@ -83,7 +99,7 @@ A `WorldSave` (`src/save/types.rs`) on disk is, in order (`src/save/format.rs` -
 
 ### Format version and the no-migration contract
 
-`SAVE_FORMAT_VERSION = 17` (`src/save/format.rs`). A version mismatch is **rejected**, never migrated (`decode_world_save` bails on `version != SAVE_FORMAT_VERSION`), and the worlds-screen surfaces it as a "couldn't load" banner. The full v1..v17 changelog is documented inline above the constant.
+`SAVE_FORMAT_VERSION = 20` (`src/save/format.rs`). A version mismatch is **rejected**, never migrated (`decode_world_save` bails on `version != SAVE_FORMAT_VERSION`), and the worlds-screen surfaces it as a "couldn't load" banner. The full v1..v20 changelog is documented inline above the constant. Recent bumps: v18 added `equipment_slots` on the player; v19 added the `DeployableKind::RuinCache` variant plus `PersistedDeployedEntity::ruin_cache` (the ruin loot cache refill schedule); v20 added the `DeployableKind::Explosive { kind }` variant (placed blackpowder charges) plus `PersistedDeployedEntity::fuse` (an armed charge's remaining fuse, so a reload resumes the countdown).
 
 postcard is **positional and non-self-describing**: any field add, remove, reorder, or retype on `WorldSave` or any nested persisted struct silently changes the byte layout. Two guards exist:
 
@@ -112,13 +128,15 @@ The persisted authoritative state (`src/save/types.rs` - `WorldStateSave`), in f
 | `next_resource_node_id` | `ResourceNodeId` | admin-spawn id counter; floored above the chunk high-water mark |
 | `world_time_seconds_of_day` | `f32` | persisted day/night clock (v3) |
 | `world_time_multiplier` | `f32` | persisted day/night speed (v3) |
-| `deployed_entities` | `Vec<PersistedDeployedEntity>` | placed structures (workbenches, furnaces, doors, storage, torches, cupboards, sleeping bags) (v6+) |
+| `deployed_entities` | `Vec<PersistedDeployedEntity>` | placed structures (workbenches, furnaces, doors, storage, torches, cupboards, sleeping bags), world-spawned ruin loot caches (v6+; ruin caches v19), and armed blackpowder charges with their remaining fuse (v20) |
 | `next_deployed_entity_id` | `DeployedEntityId` | floored on load |
 | `world_map_markers` | `Vec<PersistedAccountMarkers>` | per-account map pins (v14); marker-id counter re-derived on load |
 
 `ResourceNodeState` (`src/protocol/world.rs`) is `{ id, definition_id, position, yaw, storage: Vec<ItemStack>, dead: bool }`. The old `respawn_progress` field was **removed in save format v8** and survives only as a changelog comment; depleted nodes are now removed entirely and regrow as fresh entities. `dead` was added in v15 (above).
 
 `ChunkManagerSave` (`src/server/chunk_manager/save.rs`) persists `world_seed`, `dims`, `next_node_id`, `node_chunks` (`node_id -> (coord, kind)`, replayed so live sets rebuild **without** re-running the placement RNG), and `pending_regrows` as `ticks_from_now` (re-clamped to `>= MIN_REGROW_TICKS` on load so a long-idle save doesn't fire a respawn backlog at `t+0`).
+
+**Meteor shower event state is transient, on purpose.** `MeteorShowerState` is not a `WorldStateSave` field; on load `GameServer::new` rolls a fresh next event off the world seed (`src/server/meteor_shower.rs` module header), so an in-flight meteor does not survive a restart and the event needed no format bump. Event mechanics live in [docs/meteor-shower.md](meteor-shower.md).
 
 ### World time
 
@@ -159,4 +177,5 @@ The runtime view tiers, for reference: `ViewRadiusTier` is `Low | Medium | High`
 - [docs/items-and-resources.md](items-and-resources.md) - the `NodeKind` and resource-node registry the generator places, plus tool/gather rules.
 - [docs/replication.md](replication.md) - how generated nodes reach clients via per-component replication, and the `ReplicationGroup` per-entity-group requirement.
 - [docs/server-authority.md](server-authority.md) - `GameServer` ownership and the tick loop that drives regrow and auto-save.
+- [docs/meteor-shower.md](meteor-shower.md) - the meteor shower event; its state is transient and never enters `WorldStateSave`.
 - [docs/playbooks/add-content.md](playbooks/add-content.md) - step-by-step for adding a new ore/tree/resource node the generator will place.

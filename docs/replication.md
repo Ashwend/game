@@ -49,6 +49,7 @@ The `mirror_systems` tuple is:
 sync_resource_node_entities,
 sync_dropped_item_entities,
 sync_deployable_entities,
+sync_projectile_entities,
 sync_player_entities,
 sync_loot_bag_entities,
 update_client_room_subscriptions,
@@ -62,7 +63,7 @@ update_client_room_subscriptions,
 
 `src/net/host.rs` is the bootstrap only: `spawn_loopback_server`, `run_game_server`, `run_host`, `tick_authoritative_server`, the `ServerTickPulse` resource, and the `mirror_systems` wiring. The work lives in `src/net/host/`:
 
-- `mirror.rs` - the five exclusive `sync_*` systems (`world: &mut World`) and the `refresh_player_component!` macro. This is where `HashMap -> ECS` reconciliation and the server-side `MUTATE` trace logs live.
+- `mirror.rs` - the six exclusive `sync_*` systems (`world: &mut World`) and the `refresh_player_component!` macro. This is where `HashMap -> ECS` reconciliation and the server-side `MUTATE` trace logs live.
 - `rooms.rs` - chunk-room AoI: `attach_room_gated_replication` / `attach_player_replication` (the only sanctioned spawn paths), `owner_only_overrides`, `rebind_player_owner_if_changed`, `update_client_room_subscriptions`, `install_replication_sender_on_link`, and the unit test guarding the per-entity `ReplicationGroup` contract.
 - `routing.rs` - `receive_client_messages`, `route_envelopes`, the pre-auth handshake (`handle_unauthenticated_message`, `VersionMismatch`).
 - `admin.rs` - the dedicated-only Unix admin socket.
@@ -102,6 +103,15 @@ Lightyear ships **whole-component values**, not field diffs. So bundling fields 
 | `DroppedItem` | identity + stack | id and the `ItemStack`; the stack count is value-delta trace-gated |
 | `DroppedItemTransform` | mutable | physics body transform; the drop step flags only bodies that actually moved |
 
+### Projectile (`src/server/projectile_ecs.rs`)
+
+The in-flight arrow (bow / crossbow). Transient: never persisted, and its authoritative state (`GameServer::projectiles`) is a `DirtyTrackedMap` cleared on restart. Unlike the other props a projectile MOVES every tick, so `sync_projectile_entities` re-anchors it to its current chunk room (via `move_entity_between_rooms`, the dropped-item pattern) as it flies. The anchor chunk is a pure function of the projectile's position (`ChunkCoord::from_world`), not tracked by `chunk_manager`, since projectiles are few and short-lived. `RECV` trace lives in its own `log_replicated_projectile_changes_system` (the main trace system is at Bevy's system-param cap).
+
+| Component | Mutability | Notes |
+| --- | --- | --- |
+| `Projectile` | identity | `id`, `model` (the firing weapon's Bow/Crossbow archetype for impact VFX/cue), and `owner` (the shooter); all immutable post-spawn |
+| `ProjectileTransform` | per-tick | position + velocity, replicated together so the client extrapolates the arrow's path between the 20 Hz diffs (a fast arrow moves metres per tick); trace-covered as `ProjectileTransform` |
+
 ### Loot bag (`src/server/loot_bag_ecs.rs`)
 
 | Component | Mutability | Notes |
@@ -122,8 +132,9 @@ Peer-visible (broadcast to every sender in the same chunk room):
 | `PlayerHealth` | on damage/heal | |
 | `PlayerChatBubble` | on chat | live bubble text, `None` once expired |
 | `PlayerHeldItem` | on swap | ships the 1-byte `HeldMesh` enum, NOT the item id string |
+| `PlayerEquipmentVisual` | on equip/unequip | four 1-byte `ArmorMesh` selectors (head/chest/legs/feet) that drive the worn armor on the third-person rig; ships selectors, NOT item id strings (mirrors `PlayerHeldItem`); registered in `src/net/channels.rs`, refreshed in `sync_player_entities` |
 | `PlayerAction` | on swing | `{ seq, tool }`; peers edge-detect a `seq` change (never `Ref::is_changed`) |
-| `PlayerArmor` | inert | registered + trace-covered + wired end-to-end, but the value is hardcoded `0`. Armor items do not exist yet (`src/net/host/mirror.rs`, "Today only mutated by future systems"). Do not mistake it for working armor. |
+| `PlayerArmor` | on equipment change | the melee column of the worn set's `ArmorProtection` (percent mitigation), rebuilt server-side on every equip/unequip or armor durability wear (`src/server/queries.rs` builds `PlayerArmor(client.protection.melee)`); feeds the HUD armor readout. The full per-kind protection stays server-only. |
 | `PlayerLifecycle` | on death/respawn | Alive / Dead, drives corpse anim + death splash |
 | `PlayerSleeping(bool)` | on logout/wake | Rust-style logged-out body marker |
 
@@ -133,7 +144,7 @@ Owner-only (gated to the owning client's sender, never seen by peers):
 | --- | --- | --- |
 | `PlayerInventory` | on inventory change | |
 | `PlayerCrafting` | while jobs run | |
-| `PlayerOpenContainers` | while a furnace/loot-bag view is open | the loot-bag UI rides `open_loot_bag` here, not `LootBagContents` |
+| `PlayerOpenContainers` | while a furnace/loot-bag/workbench view is open | the loot-bag UI rides `open_loot_bag` here, not `LootBagContents`; the workbench upgrade UI rides `open_workbench: Option<OpenWorkbenchView>` (id + current tier, `src/server/player_ecs.rs`) |
 | `PlayerInputAck` | per-tick while moving | last processed input + applied action seq |
 
 The four owner-only components were split out because the old `PlayerPublic`/`PlayerPrivate` mega-components re-shipped the full inventory at 20 Hz (the input ack ticking every tick made the bundled value compare unequal). The client reassembles the four owner-only components into one view struct in `update_local_player_state_system`.

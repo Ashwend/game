@@ -77,7 +77,7 @@ scripts/ashwend-control.py /tmp/ashwend-control.sock screenshot /tmp/spawn.png
 - **Gate on `wait-in-world`, never a fixed sleep.** `in_world` is true only when `client_id`, the world, and the local player entity are all present (`build_dump`: `client_id.is_some() && world.is_some() && local_player.entity.is_some()`). The driver's `wait-in-world` polls `dump_state` every 0.25s until `in_world` or timeout.
 - **Screenshots are asynchronous.** The screenshot command spawns a `Screenshot` entity with a `save_to_disk` observer; the PNG lands a frame or two later. Poll for the file before reading it. The reply (`"screenshot queued to ... (lands within a frame or two)"`) does not mean the file exists yet.
 - **Socket timeouts.** The server reads/writes each request with a 2s timeout (`handle_stream`); the Python driver uses a 20.0s connect/recv timeout per request (`send(..., timeout=20.0)`). `wait-in-world`'s own default budget is 30.0s.
-- **Session-gated commands.** Anything that forwards a `ClientMessage` (`send_command`, `select_actionbar_*`, `place_*`, `door_*`, `open_storage_box`, `close_container`, `upgrade_building`, `demolish_building`, `warp`, `swing`, `add_world_map_marker`) requires an active session and returns `"no active session (not in a world)"` (or a similar "not in a world" message) off-menu. Of the world-map commands, only `add_world_map_marker` is session-gated. `set_screen` / `set_inventory_open` / `set_look` / `set_world_map_open` / `set_world_map_view` mutate client UI/map state directly and can run pre-session (`set_world_map_open` only forwards `RequestWorldMap` when a session is already present, and returns Ok otherwise), but they do not start one (connect via `--connect`).
+- **Session-gated commands.** Anything that forwards a `ClientMessage` (`send_command`, `select_actionbar_*`, `equip_item`, `place_*`, `door_*`, `open_storage_box`, `close_container`, `upgrade_building`, `demolish_building`, `warp`, `swing`, `add_world_map_marker`) requires an active session and returns `"no active session (not in a world)"` (or a similar "not in a world" message) off-menu. Of the world-map commands, only `add_world_map_marker` is session-gated. `set_screen` / `set_inventory_open` / `set_crafting_open` / `set_look` / `set_world_map_open` / `set_world_map_view` mutate client UI/map state directly and can run pre-session (`set_world_map_open` only forwards `RequestWorldMap` when a session is already present, and returns Ok otherwise), but they do not start one (connect via `--connect`).
 
 ## Control-command catalog
 
@@ -85,11 +85,12 @@ Wire format: line-delimited JSON, one request per connection, reply `{"ok": bool
 
 | `command` | Fields | Effect |
 |---|---|---|
-| `dump_state` | (none) | JSON snapshot for assertions (schema below). |
+| `dump_state` | (none) | JSON snapshot for assertions (schema below). Includes `ghost_position` / `ghost_valid`, the live placement-ghost pose, so an agent can assert a placement preview without reading pixels. |
 | `screenshot` | `path` | Queue a PNG of the capture image (headless) or live window. Async. |
 | `send_command` | `text` | Forward a slash command (no leading `/`) to the server. |
 | `select_actionbar_slot` | `slot` (usize, 0-based) | Put that slot's item in hand (e.g. after `test-kit` the iron pickaxe is slot 3). |
 | `select_actionbar_item` | `item_id` | Find the actionbar slot holding `item_id` and select it; resilient to loadout shifts. Holding a deployable or `building_plan` raises its placement ghost. |
+| `equip_item` | `item_id` | Equip a wearable from the bag/actionbar into its matching paperdoll slot (stands in for shift-click). Destination resolves from the piece's `ArmorProfile`; the server validates the move. Verifies worn-armor rigs and the inventory's character preview. |
 | `place_deployable` | `item_id`, `distance?` (default 2.2), `height?` (default 0.0) | Drop a carried structure that far ahead along the **view yaw**, front (`+Z`) turned back toward the camera. Server still validates inventory/ground/overlap. |
 | `place_building` | `piece`, `distance?` (default 3.0), `height?` | Place a building piece. Foundations ride the raw aim; other pieces re-derive the nearest replicated socket near the aim point (`resolve_building_pose`). |
 | `place_door` | `code`, `flip?` (default false), `iron?` (default false) | Hang a carried door in the nearest doorway with a lock code. `iron` picks `DoorVariant::Iron` else `HewnLog`. |
@@ -102,12 +103,16 @@ Wire format: line-delimited JSON, one request per connection, reply `{"ok": bool
 | `demolish_building` | `piece?` | Hammer-demolish the nearest building block (optional piece-kind filter). Server enforces hammer/ownership/demolish-window; cascade follows. |
 | `set_look` | `yaw`, `pitch` (radians) | Point the camera absolutely. Pitch clamped to `MAX_LOOK_PITCH`. Use to aim at ground targets and view-ray commands like `/drain`. |
 | `set_screen` | `screen` | Navigate menu screens (`main_menu`/`worlds`/`multiplayer`/`options`/`in_game`; tolerant of case and `_`/`-`/space). Does not start a session. |
-| `set_inventory_open` | `open` | Open/close the inventory panel. |
+| `set_inventory_open` | `open`, `admin_tab?` | Open/close the inventory panel; `admin_tab: true` lands it on the admin item-grant tab (admins only). |
+| `set_crafting_open` | `open` | Open/close the unified panel on the Crafting tab (stands in for the C hotkey; clears `inventory_open` on open, matching the toggle systems' mutual exclusion). |
 | `set_world_map_open` | `open` | Open/close the world-map overlay, bypassing the focus + toggle-key gate. Opening also sends `RequestWorldMap` so terrain + markers stream in for the screenshot. |
 | `add_world_map_marker` | `x`, `z` | Drop a map marker at world `(x, z)` as if right-clicking the map. Server assigns the id and persists it. |
 | `set_world_map_view` | `zoom`, `center_x`, `center_z` | Set map pan/zoom directly (`zoom` 1.0 fits the whole world; `center_*` is the world point at the map centre). |
 | `warp` | `x`, `z` | Teleport the local player to absolute `(x, z)`, keeping the current height; zeroes velocity. Movement is client-authoritative, so the next send carries it to peers. |
 | `swing` | (none) | Fire one cosmetic swing of the held tool (empty hand → `Hands`). Captures the third-person remote swing headless (the LMB path is focus-gated). Uses a monotonic per-process seq so the server never rejects it as stale. |
+| `throw_bomb` | `power?` (0..1, default 1.0) | Throw the held powder bomb along the current look at that charge fraction. Sends the real `ExplosiveCommand::Throw`, so the server runs the full consume / ballistics / bounce / fuse / blast path; only the hold-LMB charge UI is bypassed. Raw JSON only (not in the Python driver's dispatch). |
+| `respawn` | (none) | Random-respawn a dead agent (the death splash's Respawn button, which is unreachable headless). Also clears the local death splash. Raw JSON only. |
+| `ranged_pose_debug` | `draw?`, `reload?`, `recoil?`, `aim?`, `swing?` (all 0..1) | Force the ranged / melee viewmodel pose for headless capture: hold a bow draw, set the crossbow reload crank / fire recoil / aim-down-sights fraction, or freeze the melee swing fraction (a mid-slash frame). Omitted fields clear; a bare call restores live input. Driver: `ranged-pose-debug draw=1.0` style `key=value` tokens. |
 
 Notes the catalog can't fit in a cell:
 
@@ -136,6 +141,8 @@ Notes the catalog can't fit in a cell:
 | `local_ping_ms` | `u16` | Local RTT estimate. |
 | `players` | `[{client_id, name, ping_ms}]` | Connected roster. |
 | `deployables` | `[DeployableDump]` | Replicated placed structures in AoI. |
+| `meteor_world` | `[f32;3]?` | The live meteor shower fireball's true world position this frame, or `null` when no meteor is in flight. Aim a capture straight at the descending object without the trajectory seed: `yaw = atan2(-(mx - px), -(mz - pz))`, `pitch = atan2(my - eye_y, horizontal_dist)`. |
+| `meteor_shower_impact` | `[f32;3]?` | The announced meteor shower impact point, non-null for the WHOLE event (countdown, flight, crater), unlike `meteor_world`. Lets an agent position relative to ground zero before the strike (danger-radius HUD checks, impact vantages) and find the crater afterwards. |
 
 `DeployableDump`: `{ id: u64, kind: String, position: [f32;3], yaw: f32, health: u32, max_health: u32, active: bool }`. `kind` is the `Debug` string of the deployable kind (this is what door/box/building target resolution matches against). Use `deployables[]` to resolve ids and verify placements: `id`/`kind`/`position` confirm a placement landed, `health`/`max_health` confirm an upgrade, `active` confirms e.g. a furnace lit.
 
@@ -163,9 +170,15 @@ Without `GAME_HEADLESS_CAPTURE`, screenshots read the live window framebuffer, s
 
 Normal `./cli dev` play is untouched by all three.
 
+## Capturing the meteor shower descent
+
+The meteor is a true world-space object (`src/world/meteor_shower.rs - meteor_world_state`), so a capture must aim the camera at its real position, not a fixed sky spot. The `dump_state` fields `meteor_world` (position) and `meteor_velocity` are provided for exactly this: they are non-null only while a fireball is in flight (the committed 45 s descent, `METEOR_FLIGHT_SECONDS`).
+
+Recipe: forward `meteor_shower 45` (a 45 s warning, so the whole descent is on screen), poll `dump_state` until `meteor_world` is non-null, then each frame `warp` to a broadside vantage (perpendicular to the entry->impact bearing, ~330 m out so you clear the 60 m danger zone and the 18 m blast) and `set_look` toward `meteor_world` (`yaw = atan2(-(mx-px), -(mz-pz))`, `pitch = atan2(my - (py+1.6), horizontal_dist)`). Capture shortly after announce (distant burning point, high), around 60% through (larger, closer), and in the final seconds (large, low, streaking). Switch `time` between a daytime value and `23:15` for the day/night pair. Never stand within ~120 m of the announced impact, the blast is lethal. The fireball's far-plane proxy keeps it followable the whole way in.
+
 ## Slash commands the socket can forward
 
-`send_command` forwards the text as `ClientMessage::Command`. Dispatch table (`src/server/commands/mod.rs`): `spawn`, `drain`, `time`, `speed` (run-speed cheat), `time-speed` / `timespeed` / `timescale`, `test-kit` / `testkit`, `give`, `tp` / `teleport`, `help`. Every command except `help` checks `client.is_admin` and replies `"admin only"` when false. `test-kit` grants the early-game kit (the four tools, workbench_t1, crude_furnace, building_plan, hammer, hewn_log_door, sleeping_bag, plus 100 of each of ten resources with wood appearing twice); `tp` teleports every other connected player to you (for PvP/death staging). See `docs/server-authority.md` for the command handlers.
+`send_command` forwards the text as `ClientMessage::Command`. Dispatch table (`src/server/commands/mod.rs`): `spawn`, `drain`, `time`, `speed` (run-speed cheat), `time-speed` / `timespeed` / `timescale`, `test-kit` / `testkit`, `give`, `tp` / `teleport`, `meteor_shower [warning_seconds]` (force a meteor event; default 30), `help`. Every command except `help` checks `client.is_admin` and replies `"admin only"` when false. `test-kit` grants the early-game kit (the four tools, workbench_t1, crude_furnace, building_plan, hammer, hewn_log_door, sleeping_bag, plus 100 of each of ten resources with wood appearing twice); `tp` teleports every other connected player to you (for PvP/death staging). See `docs/server-authority.md` for the command handlers.
 
 ## Three-socket map
 

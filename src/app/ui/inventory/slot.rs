@@ -165,24 +165,6 @@ pub(crate) fn paint_slot(
     }
 }
 
-/// Draw a non-interactive filler tile: a dimmer, flatter empty slot used to
-/// pad the inventory grid out to the panel height without handing the player a
-/// usable slot. It allocates the same footprint as a real slot but takes no
-/// input and reads as "locked / not available".
-pub(crate) fn draw_disabled_slot(ui: &mut egui::Ui) {
-    let (_, rect) = ui.allocate_space(Vec2::splat(SLOT_SIZE));
-    ui.painter().rect(
-        rect,
-        5,
-        // More transparent + darker than an empty usable slot so the panel
-        // background shows through and the tile visibly recedes; the stroke is
-        // a faint hint rather than the crisp border real slots get.
-        Color32::from_rgba_unmultiplied(6, 9, 13, 120),
-        Stroke::new(1.0, Color32::from_rgba_unmultiplied(70, 82, 96, 34)),
-        egui::StrokeKind::Inside,
-    );
-}
-
 /// Overlay drawn on top of a slot when its contents grew. A warm fill plus
 /// a brighter stroke pulse together: the fill makes the slot "glow" briefly,
 /// the stroke makes the rectangle pop out from neighboring slots.
@@ -333,6 +315,30 @@ fn item_tooltip_body(stack: &ItemStack) -> String {
         lines.push("Hold it, then left-click to place".to_owned());
     }
 
+    // Armor: the per-kind protection percentages and (if it wears) its
+    // durability, the same numbers the paperdoll's protection summary sums.
+    // Only the non-zero columns are shown so a piece that only guards one kind
+    // reads cleanly.
+    if let Some(armor) = definition.armor {
+        lines.push(format!("Fits: {} slot", armor.slot.label()));
+        let mut protections = Vec::new();
+        if armor.melee_protection_pct > 0 {
+            protections.push(format!("Melee {}%", armor.melee_protection_pct));
+        }
+        if armor.projectile_protection_pct > 0 {
+            protections.push(format!("Ranged {}%", armor.projectile_protection_pct));
+        }
+        if armor.blast_protection_pct > 0 {
+            protections.push(format!("Blast {}%", armor.blast_protection_pct));
+        }
+        if !protections.is_empty() {
+            lines.push(format!("Protection: {}", protections.join("  ")));
+        }
+        if let (Some(remaining), Some(max)) = (stack.durability, armor.max_durability) {
+            lines.push(format!("Durability: {remaining}/{max}"));
+        }
+    }
+
     if definition.equipable {
         lines.push("Equipable".to_owned());
     }
@@ -372,6 +378,7 @@ pub(crate) fn slot_stack(
     match slot.container {
         ItemContainer::Inventory => inventory.inventory_slots.get(slot.slot),
         ItemContainer::Actionbar => inventory.actionbar_slots.get(slot.slot),
+        ItemContainer::Equipment => inventory.equipment_slots.get(slot.slot),
     }
     .and_then(Option::as_ref)
 }
@@ -439,6 +446,21 @@ mod tests {
             body.contains("left-click"),
             "placement control shown: {body}"
         );
+    }
+
+    #[test]
+    fn tooltip_body_surfaces_armor_stats() {
+        use crate::items::PADDED_TUNIC_ID;
+        let body = item_tooltip_body(&ItemStack::new(PADDED_TUNIC_ID, 1));
+        // The tunic's slot, its non-zero protection columns, and its durability
+        // all come from the ArmorProfile the bag otherwise never exposes.
+        assert!(body.contains("Chest slot"), "fits slot shown: {body}");
+        assert!(
+            body.contains("Protection:"),
+            "protection line shown: {body}"
+        );
+        assert!(body.contains('%'), "protection percentages shown: {body}");
+        assert!(body.contains("Durability:"), "durability shown: {body}");
     }
 
     #[test]

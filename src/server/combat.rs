@@ -28,15 +28,15 @@
 //! message.
 
 use crate::{
-    combat::{damage_after_armor, tool_player_damage},
+    combat::{damage_after_armor, effective_armor_after_pierce, resolve_attack_profile},
     controller::BlockGrid,
-    items::{HANDS_TOOL, item_definition},
+    items::item_definition,
     protocol::{AttackPlayerCommand, ClientId, MAX_HEALTH, PlayerState, ServerMessage, Vec3Net},
     server::{DeliveryTarget, GameServer, PlayerLifecycle, ServerEnvelope},
 };
 
 use crate::game_balance::{
-    COMBAT_ATTACK_RANGE_M as ATTACK_RANGE_M, COMBAT_ATTACKER_EYE_HEIGHT as ATTACKER_EYE_HEIGHT,
+    COMBAT_ATTACKER_EYE_HEIGHT as ATTACKER_EYE_HEIGHT,
     COMBAT_KNOCKBACK_VERTICAL_FRACTION as KNOCKBACK_VERTICAL_FRACTION,
     COMBAT_TARGET_CHEST_HEIGHT as TARGET_CHEST_HEIGHT,
 };
@@ -45,6 +45,45 @@ use crate::game_balance::{
 /// is laid flat on the ground, so the swing lands near floor level rather than
 /// at standing chest height.
 const SLEEPING_HIT_HEIGHT: f32 = 0.35;
+
+/// The proximity impact broadcast half of a player hit: a cosmetic
+/// `PlayerImpact` fanned out to nearby peers (excluding the attacker, who
+/// already ran their own prediction). `None` on a hit that has no attacker to
+/// credit the effect visuals to (e.g. a future environmental hit).
+pub(super) struct PlayerImpactFanout {
+    /// World anchor the impact effect plays at (the victim's chest/hit point).
+    pub(super) anchor: Vec3Net,
+    /// The attacker's world position, used by the victim's hit-direction arrow.
+    pub(super) attacker_position: Vec3Net,
+    /// Impact identity carried on the wire: the swing's archetype (a weapon's own
+    /// Club/Spear/Sword/Mace, or a gather tool's Hatchet/Pickaxe), so a peer's
+    /// hit audio, VFX, and camera reaction match what landed the hit.
+    pub(super) model: crate::items::ItemModel,
+}
+
+/// One resolved player hit, fed to [`GameServer::apply_player_damage`]. Melee
+/// builds it after validation; projectiles (Phase 3) and explosions (Phase 6)
+/// will build it from their own resolution and reuse the same tail so the
+/// Correction-before-Knockback and lethal-through-`kill_player` contract holds
+/// for every damage source.
+pub(super) struct PlayerDamageHit<'a> {
+    pub(super) target_id: ClientId,
+    /// The attacker to credit a kill to, or `None` for a sourceless hit.
+    pub(super) attacker_id: Option<ClientId>,
+    /// Killer display name for the death splash; empty for a sourceless hit.
+    pub(super) attacker_name: &'a str,
+    /// Post-armor damage to subtract from the victim's health (already > 0; the
+    /// caller drops zero-damage hits before building this).
+    pub(super) damage_dealt: u32,
+    /// The damage kind of this hit. Drives which worn pieces wear (a piece wears
+    /// only if it protects against this kind) so a projectile frays projectile
+    /// armor, not the pieces that only stop melee.
+    pub(super) kind: crate::combat::DamageKind,
+    /// Knockback impulse to shove the victim with.
+    pub(super) knockback: Vec3Net,
+    /// Optional cosmetic impact broadcast to nearby peers.
+    pub(super) impact: Option<PlayerImpactFanout>,
+}
 
 impl GameServer {
     /// Process a client's `AttackPlayer` request. All validation is
@@ -70,17 +109,18 @@ impl GameServer {
         let attacker_yaw = attacker.controller.yaw;
         let attacker_pitch = attacker.controller.pitch;
         let attacker_name = attacker.name.clone();
-        let tool_profile = attacker
+
+        // Resolve the swing's combat stats from the active item: a weapon's
+        // `WeaponProfile` if it has one, else its gather tool's `ToolProfile`.
+        // `None` means the item can't damage a player (bare hands, the hammer,
+        // an empty slot, or a non-combat item), so the swing is dropped with no
+        // cooldown touched (the client gates these too; defence in depth).
+        let Some(profile) = attacker
             .inventory
             .active_actionbar_stack()
             .and_then(|stack| item_definition(&stack.item_id))
-            .and_then(|def| def.tool)
-            .unwrap_or(HANDS_TOOL);
-
-        let Some(damage_instance) = tool_player_damage(tool_profile, attacker_id) else {
-            // Hands or non-combat tool, nothing to do. Cooldown is not
-            // touched because no swing was accepted (the client gates
-            // bare-hand swings too; defence in depth).
+            .and_then(resolve_attack_profile)
+        else {
             return Vec::new();
         };
 
@@ -110,8 +150,10 @@ impl GameServer {
         // sleeper, range + line-of-sight still gate the swing.
         let target_sleeping = !target.online;
         let target_pos = target.controller.position;
-        let target_armor = target.armor;
-        let target_health_before = target.controller.health;
+        // Pick the mitigation that matches this swing's damage kind (melee for a
+        // Blunt tool/weapon today). Pierce and `damage_after_armor` run on this
+        // value below, exactly as they did on the old scalar `armor`.
+        let target_armor = target.protection.for_kind(profile.kind);
 
         let attacker_eye = Vec3Net::new(
             attacker_pos.x,
@@ -128,8 +170,10 @@ impl GameServer {
         // Range, feet-to-feet horizontal distance keeps the check
         // close to "can my swing reach them?" without bias from
         // height differences (a target standing on a one-block step
-        // is still meleeable).
-        if !attacker_pos.within_horizontal_range(target_pos, ATTACK_RANGE_M) {
+        // is still meleeable). Reach comes from the resolved profile so a
+        // future longer-reach weapon validates against its own value, and the
+        // client's prediction reads the same field off the same resolution.
+        if !attacker_pos.within_horizontal_range(target_pos, profile.reach_m) {
             return Vec::new();
         }
 
@@ -156,21 +200,100 @@ impl GameServer {
             return Vec::new();
         }
 
-        let damage_dealt = damage_after_armor(damage_instance.raw, target_armor);
+        // Pierce runs before mitigation, so a future armor-piercing weapon
+        // shaves the effective armor first, then the reduced value applies.
+        // Today every profile pierces 0, so this is `target_armor` unchanged.
+        let effective_armor = effective_armor_after_pierce(target_armor, profile.armor_pierce_pct);
+        let damage_dealt = damage_after_armor(profile.damage, effective_armor);
         let mut envelopes = Vec::new();
         if damage_dealt == 0 {
             // Fully blocked by armor today is impossible (armor is 0)
             // but the path handles it: cooldown still ticks, no HP
             // diff, no feedback to peers (no actual hit landed).
-            self.set_attack_cooldown(attacker_id, tool_profile.cooldown_ticks);
+            self.set_attack_cooldown(attacker_id, profile.cooldown_ticks);
             return envelopes;
         }
 
-        let new_health = (target_health_before - damage_dealt as f32).max(0.0);
+        // The shared post-hit tail (health write, Correction-first, private
+        // Knockback, impact fan-out, kill routing). Projectiles and explosions
+        // will reuse it so the Correction-before-Knockback and lethal-through-
+        // kill_player contract lives in exactly one place.
+        // Apply the live combat-feel knockback multiplier (default 1.0, set by the
+        // `/knockback-scale` admin command). Scaling the speed before building the
+        // impulse keeps the vertical/horizontal split intact.
+        let knockback_speed = profile.knockback_speed * self.knockback_scale;
+        envelopes.extend(self.apply_player_damage(PlayerDamageHit {
+            target_id,
+            attacker_id: Some(attacker_id),
+            attacker_name: &attacker_name,
+            damage_dealt,
+            kind: profile.kind,
+            knockback: knockback_impulse(attacker_pos, target_pos, knockback_speed),
+            impact: Some(PlayerImpactFanout {
+                anchor: target_chest,
+                attacker_position: attacker_pos,
+                model: profile.model,
+            }),
+        }));
+
+        // The swing connected, so the attacker's tool wears. After the
+        // kill handling on purpose: the killing blow lands even if it is
+        // also the swing that breaks the tool.
+        envelopes.extend(self.consume_active_tool_durability(attacker_id));
+
+        self.set_attack_cooldown(attacker_id, profile.cooldown_ticks);
+        envelopes
+    }
+
+    /// Apply one already-validated, already-mitigated hit to a player and emit
+    /// its consequences in the mandated order. This is the shared post-hit tail
+    /// every damage source funnels through so the invariants from
+    /// `docs/pvp-combat.md` live in one place:
+    ///
+    /// 1. Write the new health onto the victim's controller.
+    /// 2. Push the victim a `Correction` carrying that health, **before** the
+    ///    knockback envelope, so the knockback impulse is applied last on the
+    ///    client and survives a position snap on a high-latency link.
+    /// 3. Push the private `Knockback` envelope to the victim.
+    /// 4. Fan a cosmetic `PlayerImpact` out to nearby peers (except the
+    ///    attacker), when the hit carries one.
+    /// 5. If health hit zero, route the kill through `kill_player`.
+    ///
+    /// The caller has already subtracted armor and confirmed `damage_dealt > 0`;
+    /// durability wear and attack cooldown are the melee swing's business and
+    /// stay with the caller (a projectile or explosion has no melee tool to
+    /// wear and no per-swing cooldown to stamp).
+    pub(super) fn apply_player_damage(&mut self, hit: PlayerDamageHit<'_>) -> Vec<ServerEnvelope> {
+        let PlayerDamageHit {
+            target_id,
+            attacker_id,
+            attacker_name,
+            damage_dealt,
+            kind,
+            knockback,
+            impact,
+        } = hit;
+
+        let Some(target) = self.clients.get(&target_id) else {
+            return Vec::new();
+        };
+        let new_health = (target.controller.health - damage_dealt as f32).max(0.0);
         if let Some(target_mut) = self.clients.get_mut(&target_id) {
             target_mut.controller.health = new_health;
         }
-        let _ = target_health_before;
+
+        // Worn armor frays on a hit it helped absorb. Any piece whose protection
+        // for this damage kind is nonzero loses one durability; a piece already
+        // at zero stays worn but adds nothing. Mitigation is recomputed after so
+        // a piece that just broke stops protecting the next hit. Skipped on a
+        // lethal hit: the kill path drains the whole paperdoll into the loot bag
+        // this same call, so wearing pieces first would only churn a value about
+        // to be dropped.
+        if new_health > 0.0 {
+            self.wear_worn_armor(target_id, kind);
+        }
+
+        let mut envelopes = Vec::new();
 
         // Tell the victim their HP dropped. Health is server-authoritative,
         // the client never predicts its own damage, so the target's local
@@ -200,46 +323,37 @@ impl GameServer {
             });
         }
 
-        // Knockback direction: horizontal attacker → target, with a
-        // small upward component so the target slides instead of
-        // grinding into the floor.
-        let knockback_impulse =
-            knockback_impulse(attacker_pos, target_pos, damage_instance.knockback_speed);
+        // Knockback: shove the victim, applied after the correction on the
+        // client so the impulse survives a position snap.
         envelopes.push(ServerEnvelope {
             target: DeliveryTarget::Client(target_id),
-            message: ServerMessage::Knockback {
-                impulse: knockback_impulse,
-            },
+            message: ServerMessage::Knockback { impulse: knockback },
         });
 
         // Peers within perception range see the impact; the attacker
         // already produced their own feedback via prediction, and
         // distant clients can neither hear nor see it.
-        envelopes.extend(self.envelopes_within_range(
-            target_chest,
-            crate::game_balance::IMPACT_MESSAGE_RANGE_M,
-            Some(attacker_id),
-            ServerMessage::PlayerImpact {
-                attacker: attacker_id,
-                target: target_id,
-                position: target_chest,
-                attacker_position: attacker_pos,
-                tool: tool_profile.kind,
-                damage_dealt,
-            },
-        ));
-
-        // Phase 5 hooks in: if HP just hit zero, this is also a kill.
-        if new_health <= 0.0 {
-            envelopes.extend(self.kill_player(target_id, Some(attacker_id), &attacker_name));
+        if let Some(impact) = impact {
+            envelopes.extend(self.envelopes_within_range(
+                impact.anchor,
+                crate::game_balance::IMPACT_MESSAGE_RANGE_M,
+                attacker_id,
+                ServerMessage::PlayerImpact {
+                    attacker: attacker_id.unwrap_or(0),
+                    target: target_id,
+                    position: impact.anchor,
+                    attacker_position: impact.attacker_position,
+                    model: impact.model,
+                    damage_dealt,
+                },
+            ));
         }
 
-        // The swing connected, so the attacker's tool wears. After the
-        // kill handling on purpose: the killing blow lands even if it is
-        // also the swing that breaks the tool.
-        envelopes.extend(self.consume_active_tool_durability(attacker_id));
+        // If HP just hit zero, this is also a kill.
+        if new_health <= 0.0 {
+            envelopes.extend(self.kill_player(target_id, attacker_id, attacker_name));
+        }
 
-        self.set_attack_cooldown(attacker_id, tool_profile.cooldown_ticks);
         envelopes
     }
 
@@ -343,6 +457,14 @@ impl GameServer {
                     drops.push(stack);
                 }
             }
+            // Worn armor drops like everything else: the paperdoll empties into
+            // the same bag, so a killer loots the victim's set alongside their
+            // bag and belt.
+            for slot in client.inventory.equipment_slots.iter_mut() {
+                if let Some(stack) = slot.take() {
+                    drops.push(stack);
+                }
+            }
             drops
         };
         if !drops.is_empty() {
@@ -352,6 +474,11 @@ impl GameServer {
         // view just emptied into the death bag; close it so a stale Move can't
         // reach into the now-dead body.
         self.close_sleeper_views(target_id);
+        // End any bow draw the victim had active so their draw movement-slow
+        // doesn't survive into the respawn, and lift any crossbow reload slow for
+        // the same reason.
+        self.clear_ranged_draw(target_id);
+        self.clear_reload_slow(target_id);
 
         // Now flip lifecycle + lock health at zero so any pending
         // damage path with stale state can't double-kill or knock the
@@ -363,6 +490,11 @@ impl GameServer {
             };
             client.controller.health = 0.0;
             client.controller.velocity = Vec3Net::ZERO;
+            // The paperdoll just drained into the loot bag, so mitigation is
+            // zero. Recompute (rather than assume) so the replicated HUD armor
+            // and the per-kind protection track the now-empty slots.
+            client.protection =
+                crate::items::equipped_protection(&client.inventory.equipment_slots);
         }
 
         let killer_name = (!killer_name.is_empty()).then(|| killer_name.to_owned());
@@ -386,6 +518,55 @@ impl GameServer {
     fn set_attack_cooldown(&mut self, attacker_id: ClientId, cooldown_ticks: u64) {
         if let Some(client) = self.clients.get_mut(&attacker_id) {
             client.next_attack_tick = self.tick + cooldown_ticks.max(1);
+        }
+    }
+
+    /// Wear the worn armor of `target_id` after a hit of `kind`: each piece
+    /// whose protection for that kind is nonzero (and whose durability is above
+    /// zero) loses one durability. Then recompute the player's mitigation so a
+    /// piece that just hit zero stops protecting the next hit. Only pieces that
+    /// actually contributed to blocking this kind of damage fray, so ranged fire
+    /// wears the projectile-stopping pieces, not the ones that only matter in
+    /// melee.
+    fn wear_worn_armor(&mut self, target_id: ClientId, kind: crate::combat::DamageKind) {
+        let Some(client) = self.clients.get_mut(&target_id) else {
+            return;
+        };
+        let mut worn_any = false;
+        for slot in client.inventory.equipment_slots.iter_mut() {
+            let Some(stack) = slot.as_mut() else {
+                continue;
+            };
+            let Some(profile) = crate::items::armor_profile(&stack.item_id) else {
+                continue;
+            };
+            // Only pieces that protect against this kind wear, and only while
+            // they still have durability to lose.
+            if profile.protection_for(kind) == 0 {
+                continue;
+            }
+            if let Some(durability) = stack.durability.as_mut()
+                && *durability > 0
+            {
+                *durability -= 1;
+                worn_any = true;
+            }
+        }
+        if worn_any {
+            self.recompute_protection(target_id);
+        }
+    }
+
+    /// Recompute and store a player's per-kind mitigation from their worn armor.
+    /// The single place `ServerClient::protection` is refreshed after the
+    /// equipment could have changed (an equip/unequip move or a durability wear);
+    /// connect/restore recompute inline at construction. Also re-derives the
+    /// replicated melee `PlayerArmor` value for the HUD, since it is fed from
+    /// this same computation.
+    pub(super) fn recompute_protection(&mut self, client_id: ClientId) {
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.protection =
+                crate::items::equipped_protection(&client.inventory.equipment_slots);
         }
     }
 
@@ -489,7 +670,7 @@ fn next_f32(state: &mut u64) -> f32 {
 
 use crate::game_balance::RESPAWN_MIN_DISTANCE_M;
 
-fn knockback_impulse(attacker_pos: Vec3Net, target_pos: Vec3Net, speed: f32) -> Vec3Net {
+pub(super) fn knockback_impulse(attacker_pos: Vec3Net, target_pos: Vec3Net, speed: f32) -> Vec3Net {
     let dx = target_pos.x - attacker_pos.x;
     let dz = target_pos.z - attacker_pos.z;
     let len_sq = dx * dx + dz * dz;
@@ -541,7 +722,12 @@ fn line_of_sight_clear(grid: &BlockGrid, from: Vec3Net, to: Vec3Net) -> bool {
 /// Slab-method ray-AABB intersection returning the entry distance
 /// along `direction` (which is assumed normalised). `None` when the
 /// ray misses or the box is entirely behind the origin.
-fn ray_aabb_entry(
+///
+/// Shared with the projectile sim (`server::projectiles`), which sweeps each
+/// tick's segment against candidate blocks exactly like `line_of_sight_clear`
+/// does: normalise the segment direction, compare the returned entry distance to
+/// the segment length. Requires a pre-normalised `direction`.
+pub(super) fn ray_aabb_entry(
     origin: Vec3Net,
     direction: Vec3Net,
     block: crate::world::WorldBlock,

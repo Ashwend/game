@@ -93,8 +93,14 @@ impl ChunkManager {
         // organically placed, then pick the first candidate that doesn't
         // collide with the surviving live nodes.
         let bounds = PlayableBounds::from_dims(self.dims);
-        let candidates =
-            candidate_positions(self.world_seed, coord, kind, self.placement_counter, bounds);
+        let candidates = candidate_positions(
+            self.world_seed,
+            coord,
+            kind,
+            self.placement_counter,
+            bounds,
+            &self.ruin_footprints,
+        );
         self.placement_counter = splitmix64(self.placement_counter ^ 0xA5A5_5A5A);
 
         for spawn in candidates {
@@ -131,16 +137,18 @@ fn candidate_positions(
     kind: NodeKind,
     salt: u64,
     bounds: PlayableBounds,
+    ruin_footprints: &[crate::world::RuinFootprint],
 ) -> Vec<ChunkSpawn> {
     // We just want a few candidates, not the full target capacity, the
     // caller filters by collision and picks the first survivor. Re-run
     // the per-chunk generator with a salted seed so we're not handing
     // out the same point set every time. The bounds get forwarded so a
     // regrow can't land past the perimeter wall any more than the
-    // initial pass can.
+    // initial pass can, and the ruin footprints so a regrow can't drop a
+    // node inside a ruin the initial pass kept clear.
     let salted_seed = splitmix64(world_seed ^ salt);
     let mut next_id: u64 = 1;
-    generate_chunk_spawns(salted_seed, coord, &mut next_id, bounds)
+    generate_chunk_spawns(salted_seed, coord, &mut next_id, bounds, ruin_footprints)
         .into_iter()
         .filter(|spawn| spawn.kind == kind)
         .collect()

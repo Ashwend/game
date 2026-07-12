@@ -1,7 +1,7 @@
 use crate::{
     items::{
-        COAL_ID, FIBER_ID, IRON_ORE_ID, STONE_ID, SULFUR_ORE_ID, ToolKind, ToolProfile, WOOD_ID,
-        look_forward,
+        COAL_ID, FIBER_ID, IRON_ORE_ID, METEORITE_ID, STONE_ID, SULFUR_ORE_ID, ToolKind,
+        ToolProfile, WOOD_ID, look_forward,
     },
     protocol::{ItemStack, ResourceNodeId, ResourceNodeState, Vec3Net},
     world::{ClassificationChannels, WorldBlock, WorldResourceNodeSpawn, splitmix64},
@@ -15,6 +15,10 @@ pub const SULFUR_NODE_ID: &str = "sulfur_node";
 /// the "1 stone from hand-pickup" → "you need a steady stone supply"
 /// gap before the player has access to an ore vein.
 pub const STONE_NODE_ID: &str = "stone_node";
+/// Rare crystal mineral. Iron-pickaxe gated (tier 2), spawns
+/// only in far rocky/ore chunks at very low density (see the worldgen
+/// gating in `src/world/chunk/`). Yields the `meteorite` item.
+pub const METEORITE_NODE_ID: &str = "meteorite_node";
 // Tree IDs: the un-suffixed names (`pine_tree`, `birch_tree`) are the
 // medium variants. Old saves that referenced these IDs before size
 // variants existed continue to load as medium without migration.
@@ -55,6 +59,11 @@ pub enum ResourceNodeModel {
     /// silhouette as the ore variants but no embedded coal/iron/sulfur
     /// chunks on top, so it reads as "the rock under the ore".
     StoneVein,
+    /// Meteorite: rare glowing-crystal mineral in dark slag rock.
+    /// Distinct silhouette (slag mound + erupting crystal spikes),
+    /// iron-pickaxe gated, and its crystals glow at night via the ore
+    /// material's emissive path. Reads as ore for gather feedback/collider.
+    Meteorite,
     PineTreeSmall,
     PineTreeMedium,
     PineTreeLarge,
@@ -83,7 +92,10 @@ impl ResourceNodeModel {
     }
 
     pub fn is_ore(self) -> bool {
-        matches!(self, Self::CoalOre | Self::IronOre | Self::SulfurOre)
+        matches!(
+            self,
+            Self::CoalOre | Self::IronOre | Self::SulfurOre | Self::Meteorite
+        )
     }
 
     /// Crude, hand-harvestable starter resource (branch pile, surface
@@ -151,6 +163,11 @@ pub struct ResourceNodeDefinition {
     pub model: ResourceNodeModel,
     pub required_tool: ToolRequirement,
     pub storage: &'static [ResourceMaterial],
+    /// Cap on how much a single swing may extract from this node, regardless
+    /// of the tool's `gather_amount`. `None` means tool-limited (the default
+    /// for every common node). Rare small-storage nodes set it so a find takes
+    /// several deliberate hits instead of vanishing into one swing.
+    pub per_swing_yield: Option<u16>,
     pub anchor_height: f32,
     pub ray_radius: f32,
 }
@@ -162,6 +179,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         model: ResourceNodeModel::CoalOre,
         required_tool: ToolRequirement::new(ToolKind::Pickaxe, 1),
         storage: &[ResourceMaterial::new(COAL_ID, 72)],
+        per_swing_yield: None,
         anchor_height: 0.62,
         ray_radius: 0.72,
     },
@@ -171,6 +189,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         model: ResourceNodeModel::IronOre,
         required_tool: ToolRequirement::new(ToolKind::Pickaxe, 1),
         storage: &[ResourceMaterial::new(IRON_ORE_ID, 72)],
+        per_swing_yield: None,
         anchor_height: 0.66,
         ray_radius: 0.72,
     },
@@ -180,6 +199,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         model: ResourceNodeModel::SulfurOre,
         required_tool: ToolRequirement::new(ToolKind::Pickaxe, 1),
         storage: &[ResourceMaterial::new(SULFUR_ORE_ID, 72)],
+        per_swing_yield: None,
         anchor_height: 0.58,
         ray_radius: 0.72,
     },
@@ -192,8 +212,30 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         // can stock up on stone for crafting without juggling pickup
         // rocks, but still finite enough to require moving around.
         storage: &[ResourceMaterial::new(STONE_ID, 96)],
+        per_swing_yield: None,
         anchor_height: 0.60,
         ray_radius: 0.72,
+    },
+    ResourceNodeDefinition {
+        id: METEORITE_NODE_ID,
+        name: "Meteorite",
+        model: ResourceNodeModel::Meteorite,
+        // Iron-pickaxe gate (tier 2): this is the node that finally makes the
+        // iron upgrade a hard requirement, not just a bigger yield. A stone
+        // pickaxe is rejected (see `ToolRequirement::allows`).
+        required_tool: ToolRequirement::new(ToolKind::Pickaxe, 2),
+        // Small finite yield: rare node, a handful of the rare mineral per find
+        // (feeds the workbench t2 upgrade and later explosives). Same single-stack
+        // storage convention as the ore rows, just far less of it. The per-swing
+        // cap turns the find into a short mining beat (several deliberate hits):
+        // an iron pickaxe's 12 gather_amount would otherwise vaporise all 8 in
+        // a single swing.
+        storage: &[ResourceMaterial::new(METEORITE_ID, 8)],
+        per_swing_yield: Some(crate::game_balance::METEORITE_PER_SWING_YIELD),
+        // Anchor mid-mound; the crystal spikes rise above it. Slightly wider ray
+        // radius so aiming at the tall crystal cluster still focuses the node.
+        anchor_height: 0.55,
+        ray_radius: 0.80,
     },
     ResourceNodeDefinition {
         id: PINE_TREE_SMALL_NODE_ID,
@@ -201,6 +243,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         model: ResourceNodeModel::PineTreeSmall,
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
         storage: &[ResourceMaterial::new(WOOD_ID, 24)],
+        per_swing_yield: None,
         anchor_height: 1.35,
         ray_radius: 0.72,
     },
@@ -210,6 +253,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         model: ResourceNodeModel::PineTreeMedium,
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
         storage: &[ResourceMaterial::new(WOOD_ID, 48)],
+        per_swing_yield: None,
         anchor_height: 1.45,
         ray_radius: 0.86,
     },
@@ -219,6 +263,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         model: ResourceNodeModel::PineTreeLarge,
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
         storage: &[ResourceMaterial::new(WOOD_ID, 84)],
+        per_swing_yield: None,
         anchor_height: 1.55,
         ray_radius: 1.05,
     },
@@ -228,6 +273,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         model: ResourceNodeModel::BirchTreeSmall,
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
         storage: &[ResourceMaterial::new(WOOD_ID, 18)],
+        per_swing_yield: None,
         anchor_height: 1.25,
         ray_radius: 0.68,
     },
@@ -237,6 +283,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         model: ResourceNodeModel::BirchTreeMedium,
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
         storage: &[ResourceMaterial::new(WOOD_ID, 42)],
+        per_swing_yield: None,
         anchor_height: 1.40,
         ray_radius: 0.82,
     },
@@ -246,6 +293,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         model: ResourceNodeModel::BirchTreeLarge,
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
         storage: &[ResourceMaterial::new(WOOD_ID, 72)],
+        per_swing_yield: None,
         anchor_height: 1.50,
         ray_radius: 0.98,
     },
@@ -255,6 +303,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         model: ResourceNodeModel::SurfaceStone,
         required_tool: ToolRequirement::new(ToolKind::Hands, 0),
         storage: &[ResourceMaterial::new(STONE_ID, 1)],
+        per_swing_yield: None,
         anchor_height: 0.18,
         ray_radius: 0.55,
     },
@@ -267,6 +316,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         // bootstrap alive without making hand-gathering compete with a
         // hatchet on a tree.
         storage: &[ResourceMaterial::new(WOOD_ID, 1)],
+        per_swing_yield: None,
         anchor_height: 0.16,
         ray_radius: 0.55,
     },
@@ -281,6 +331,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         // so aiming at the visible grass missed it and E wouldn't prompt. Raise
         // the anchor to the middle of the visible tuft and widen the radius so
         // looking anywhere at the clump focuses it.
+        per_swing_yield: None,
         anchor_height: 0.42,
         ray_radius: 0.68,
     },
@@ -482,7 +533,9 @@ pub fn best_resource_node_target<'a>(
 }
 
 pub fn next_resource_payout(node: &ResourceNodeState, tool: ToolProfile) -> Option<ItemStack> {
-    next_payout_from_storage(&node.storage, tool)
+    let per_swing_yield = resource_node_definition(&node.definition_id)
+        .and_then(|definition| definition.per_swing_yield);
+    next_payout_from_storage(&node.storage, tool, per_swing_yield)
 }
 
 /// Core payout rule shared by the server's `next_resource_payout` and the
@@ -491,9 +544,18 @@ pub fn next_resource_payout(node: &ResourceNodeState, tool: ToolProfile) -> Opti
 /// from the replicated `ResourceNodeStorage` component (folded with any
 /// unconfirmed predicted takes) without fabricating a node. Keeping a single
 /// implementation is what guarantees the client's optimistic gain matches the
-/// server's authoritative payout.
-pub fn next_payout_from_storage(storage: &[ItemStack], tool: ToolProfile) -> Option<ItemStack> {
-    let quantity = tool.gather_amount.max(1);
+/// server's authoritative payout. `per_swing_yield` is the node definition's
+/// per-swing cap ([`ResourceNodeDefinition::per_swing_yield`]); both callers
+/// must resolve it from the same definition or prediction drifts.
+pub fn next_payout_from_storage(
+    storage: &[ItemStack],
+    tool: ToolProfile,
+    per_swing_yield: Option<u16>,
+) -> Option<ItemStack> {
+    let mut quantity = tool.gather_amount.max(1);
+    if let Some(cap) = per_swing_yield {
+        quantity = quantity.min(cap.max(1));
+    }
     storage
         .iter()
         .find(|stack| stack.quantity > 0)
@@ -556,7 +618,8 @@ pub fn resource_node_collider_at(definition_id: &str, position: Vec3Net) -> Opti
         ResourceNodeModel::CoalOre
         | ResourceNodeModel::IronOre
         | ResourceNodeModel::SulfurOre
-        | ResourceNodeModel::StoneVein => Some(ore_collider_block(position)),
+        | ResourceNodeModel::StoneVein
+        | ResourceNodeModel::Meteorite => Some(ore_collider_block(position)),
         // Crude clutter (surface stones, branch piles, hay tufts) is
         // walk-through, small enough that a collider feels buggy and the
         // player needs to be able to stand on top to interact.
@@ -593,6 +656,104 @@ fn ore_collider_block(position: Vec3Net) -> WorldBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meteorite_node_requires_an_iron_pickaxe() {
+        use crate::items::{HANDS_TOOL, ToolKind, ToolProfile};
+        let meteorite = resource_node_definition(METEORITE_NODE_ID).expect("meteorite definition");
+        assert_eq!(
+            meteorite.required_tool,
+            ToolRequirement::new(ToolKind::Pickaxe, 2),
+            "meteorite must gate on a tier-2 (iron) pickaxe"
+        );
+
+        let stone_pick = ToolProfile {
+            kind: ToolKind::Pickaxe,
+            tier: 1,
+            gather_amount: 6,
+            cooldown_ticks: 1,
+            max_durability: Some(50),
+            player_damage: 10,
+        };
+        let iron_pick = ToolProfile {
+            kind: ToolKind::Pickaxe,
+            tier: 2,
+            gather_amount: 12,
+            cooldown_ticks: 1,
+            max_durability: Some(100),
+            player_damage: 12,
+        };
+        let iron_axe = ToolProfile {
+            kind: ToolKind::Axe,
+            tier: 2,
+            gather_amount: 12,
+            cooldown_ticks: 1,
+            max_durability: Some(100),
+            player_damage: 12,
+        };
+        // Stone pickaxe (tier 1) is rejected; a hatchet (wrong kind) is rejected;
+        // only the iron pickaxe (tier >= 2) is allowed. Bare hands never gather.
+        assert!(
+            !meteorite.required_tool.allows(stone_pick),
+            "a stone pickaxe must NOT mine meteorite"
+        );
+        assert!(
+            !meteorite.required_tool.allows(iron_axe),
+            "a hatchet must NOT mine meteorite"
+        );
+        assert!(
+            !meteorite.required_tool.allows(HANDS_TOOL),
+            "bare hands must NOT mine meteorite"
+        );
+        assert!(
+            meteorite.required_tool.allows(iron_pick),
+            "an iron pickaxe must mine meteorite"
+        );
+    }
+
+    #[test]
+    fn meteorite_yields_the_meteorite_item_and_is_ore_shaped() {
+        let meteorite = resource_node_definition(METEORITE_NODE_ID).expect("meteorite definition");
+        // 8 total per node (the rare-yield convention), all of the meteorite item.
+        let total: u16 = meteorite.storage.iter().map(|m| m.quantity).sum();
+        assert_eq!(total, 8, "meteorite node yields 8 total");
+        assert!(
+            meteorite.storage.iter().all(|m| m.item_id == METEORITE_ID),
+            "meteorite storage must be the meteorite item"
+        );
+        // Reads as ore for the stage/collider/feedback paths.
+        assert!(meteorite.model.is_ore(), "meteorite must classify as ore");
+        let node = ResourceNodeState {
+            id: 1,
+            definition_id: METEORITE_NODE_ID.to_owned(),
+            position: Vec3Net::new(2.0, 0.0, -1.0),
+            yaw: 0.0,
+            storage: Vec::new(),
+            dead: false,
+        };
+        let collider = resource_node_collider(&node).expect("meteorite gets an ore collider");
+        assert_eq!(
+            collider.min().y,
+            0.0,
+            "meteorite collider sits on the ground"
+        );
+    }
+
+    #[test]
+    fn every_node_yield_item_is_a_registered_item() {
+        // A node whose yield item id is not in the item registry silently drops
+        // the payout (see `next_payout_from_storage`); pin every row here.
+        for definition in RESOURCE_NODE_DEFINITIONS {
+            for material in definition.storage {
+                assert!(
+                    crate::items::item_definition(material.item_id).is_some(),
+                    "node {} yields unknown item id {}",
+                    definition.id,
+                    material.item_id
+                );
+            }
+        }
+    }
 
     #[test]
     fn requirement_label_names_the_tool_without_a_phantom_tier() {
@@ -677,23 +838,71 @@ mod tests {
             vec![ItemStack::new(COAL_ID, 100)],
         ];
 
-        for storage in &storages {
-            let node = ResourceNodeState {
-                id: 1,
-                definition_id: COAL_NODE_ID.to_owned(),
-                position: Vec3Net::ZERO,
-                yaw: 0.0,
-                storage: storage.clone(),
-                dead: false,
-            };
-            for tool in tools {
-                assert_eq!(
-                    next_resource_payout(&node, tool),
-                    next_payout_from_storage(storage, tool),
-                    "client/server payout diverged for {storage:?} + {tool:?}"
-                );
+        // Cover both an uncapped node (coal) and the per-swing-capped
+        // meteorite node: the client mirrors the server only if it resolves
+        // the same definition cap (see `predict_gather`).
+        for definition_id in [COAL_NODE_ID, METEORITE_NODE_ID] {
+            let per_swing_yield = resource_node_definition(definition_id)
+                .and_then(|definition| definition.per_swing_yield);
+            for storage in &storages {
+                let node = ResourceNodeState {
+                    id: 1,
+                    definition_id: definition_id.to_owned(),
+                    position: Vec3Net::ZERO,
+                    yaw: 0.0,
+                    storage: storage.clone(),
+                    dead: false,
+                };
+                for tool in tools {
+                    assert_eq!(
+                        next_resource_payout(&node, tool),
+                        next_payout_from_storage(storage, tool, per_swing_yield),
+                        "client/server payout diverged for {definition_id} + {storage:?} + {tool:?}"
+                    );
+                }
             }
         }
+    }
+
+    #[test]
+    fn meteorite_takes_several_swings_to_exhaust() {
+        // The rare node must be a short mining beat, not a one-hit payout: an
+        // iron pickaxe (gather_amount 12, more than the node's whole 8-item
+        // storage) is capped to METEORITE_PER_SWING_YIELD per swing, so
+        // draining the node takes 8 / 2 = 4 swings.
+        let iron_pick = ToolProfile {
+            kind: ToolKind::Pickaxe,
+            tier: 2,
+            gather_amount: 12,
+            cooldown_ticks: 1,
+            max_durability: Some(100),
+            player_damage: 12,
+        };
+        let definition = resource_node_definition(METEORITE_NODE_ID).expect("meteorite definition");
+        let mut node = ResourceNodeState {
+            id: 1,
+            definition_id: METEORITE_NODE_ID.to_owned(),
+            position: Vec3Net::ZERO,
+            yaw: 0.0,
+            storage: definition_storage_stacks(definition),
+            dead: false,
+        };
+        let mut swings = 0;
+        while let Some(payout) = next_resource_payout(&node, iron_pick) {
+            assert_eq!(
+                payout.quantity,
+                crate::game_balance::METEORITE_PER_SWING_YIELD,
+                "each swing pays out exactly the per-swing cap"
+            );
+            remove_resource_from_storage(&mut node, &payout.item_id, payout.quantity);
+            swings += 1;
+            assert!(swings <= 8, "meteorite drain must terminate");
+        }
+        assert!(
+            resource_storage_is_empty(&node),
+            "the node ends fully drained"
+        );
+        assert_eq!(swings, 4, "8 meteorite at 2 per swing is a 4-hit node");
     }
 
     #[test]

@@ -80,6 +80,11 @@ pub(crate) struct MenuState {
     /// without reaching into the replicated state from every
     /// helper.
     pub(crate) loot_bag_open: bool,
+    /// Mirrors `local_player.open_workbench.is_some()` from replication. Same
+    /// purpose as `furnace_open`: input gating without reaching into the
+    /// replicated state from every helper. Synced by
+    /// [`crate::app::systems::sync_workbench_open_flag_system`].
+    pub(crate) workbench_open: bool,
     /// True while the world-map overlay is toggled open. A translucent overlay
     /// (server-rastered terrain + the player's own markers + a grid and facing
     /// arrow) is shown; the cursor is freed for marker interaction and
@@ -252,6 +257,7 @@ impl Default for MenuState {
             crafting_open: false,
             furnace_open: false,
             loot_bag_open: false,
+            workbench_open: false,
             world_map_open: false,
             chat_open: false,
             chat_focus_pending: false,
@@ -280,6 +286,39 @@ impl MenuState {
         self.text_prompt.is_some() || self.confirmation.is_some() || self.notice.is_some()
     }
 
+    /// True while a centred panel overlay (inventory, crafting, furnace, loot
+    /// bag, workbench, or the world map) covers the screen. The first-person
+    /// held item hides while one is up: the viewmodel camera composites AFTER
+    /// the UI pass (its whole job is drawing the tool over the finished frame),
+    /// so a visible held item would render on top of the panel instead of
+    /// behind it. Chat and toasts are corner overlays and deliberately don't
+    /// count; the pause menu is handled separately by the held-item gate.
+    pub(crate) fn panel_overlay_open(&self) -> bool {
+        self.inventory_open
+            || self.crafting_open
+            || self.furnace_open
+            || self.loot_bag_open
+            || self.workbench_open
+            || self.world_map_open
+    }
+
+    /// True while a world-entry loading splash (`EnteringWorld` /
+    /// `JoiningServer`) is on screen. The screen is already `InGame`
+    /// underneath it (so simulation runs, per the gameplay-never-pauses
+    /// invariant), but the player can't see the world yet: input gating
+    /// hides the held viewmodel and freezes controls, and the entity
+    /// reconcilers switch to their aggressive loading spawn budgets (frame
+    /// hitches behind an opaque overlay are invisible).
+    pub(crate) fn world_entry_splash_active(&self) -> bool {
+        self.loading_splash.as_ref().is_some_and(|splash| {
+            matches!(
+                splash.kind,
+                crate::app::state::LoadingSplashKind::EnteringWorld
+                    | crate::app::state::LoadingSplashKind::JoiningServer
+            )
+        })
+    }
+
     /// Hand off to the in-game screen after a successful singleplayer or
     /// multiplayer session start. Resets the modal/chat overlay state. Both
     /// session-start paths (loopback singleplayer and direct multiplayer)
@@ -299,6 +338,7 @@ impl MenuState {
         self.crafting_open = false;
         self.furnace_open = false;
         self.loot_bag_open = false;
+        self.workbench_open = false;
         self.chat_open = false;
         self.chat_focus_pending = false;
         self.text_prompt = None;
@@ -361,5 +401,31 @@ mod tests {
         splash.closing_elapsed = Some(0.25);
         splash.begin_closing();
         assert_eq!(splash.closing_elapsed, Some(0.25));
+    }
+
+    #[test]
+    fn panel_overlays_count_but_chat_and_dialogs_do_not() {
+        // The held item hides behind every centred panel overlay; chat is a
+        // corner overlay and dialogs are handled by their own gate, so neither
+        // counts here.
+        let mut menu = MenuState::default();
+        assert!(!menu.panel_overlay_open());
+
+        menu.chat_open = true;
+        assert!(!menu.panel_overlay_open(), "chat is not a panel overlay");
+        menu.chat_open = false;
+
+        for set in [
+            |m: &mut MenuState| m.inventory_open = true,
+            |m: &mut MenuState| m.crafting_open = true,
+            |m: &mut MenuState| m.furnace_open = true,
+            |m: &mut MenuState| m.loot_bag_open = true,
+            |m: &mut MenuState| m.workbench_open = true,
+            |m: &mut MenuState| m.world_map_open = true,
+        ] {
+            let mut menu = MenuState::default();
+            set(&mut menu);
+            assert!(menu.panel_overlay_open());
+        }
     }
 }

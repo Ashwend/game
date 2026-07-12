@@ -25,6 +25,8 @@ Usage:
   ashwend-control.py <socket> set-look <yaw> <pitch>     # absolute radians; pitch clamped like mouse look
   ashwend-control.py <socket> set-screen <name>          # main_menu|worlds|multiplayer|options|in_game
   ashwend-control.py <socket> set-inventory-open <true|false>
+  ashwend-control.py <socket> set-crafting-open <true|false>  # open the unified panel on the Crafting tab (stands in for the C hotkey)
+  ashwend-control.py <socket> equip-item <item_id>       # equip a wearable from the bag into its paperdoll slot (stands in for shift-click)
   ashwend-control.py <socket> set-world-map-open <true|false>  # open/close the map overlay (bypasses focus gate); opening pulls terrain + markers
   ashwend-control.py <socket> add-world-map-marker <x> <z>     # drop a map marker at world (x, z), as if right-clicking the map
   ashwend-control.py <socket> set-world-map-view <zoom> <cx> <cz>  # set map pan/zoom (zoom 1 = whole world; centre at world cx,cz)
@@ -133,9 +135,26 @@ def main(argv):
         },
         "warp": lambda: {"command": "warp", "x": float(rest[0]), "z": float(rest[1])},
         "swing": lambda: {"command": "swing"},
+        # Force the ranged bow / crossbow / melee viewmodel pose for headless
+        # capture (dev-only). Pass key=value tokens: draw=<0..1>, reload=<0..1>,
+        # recoil=<0..1>, swing=<0..1>. No tokens clears the override back to live
+        # input.
+        "ranged-pose-debug": lambda: {
+            "command": "ranged_pose_debug",
+            **{
+                tok.split("=", 1)[0]: float(tok.split("=", 1)[1])
+                for tok in rest
+                if "=" in tok
+            },
+        },
         "set-screen": lambda: {"command": "set_screen", "screen": rest[0]},
         "set-inventory-open": lambda: {
             "command": "set_inventory_open",
+            "open": rest[0].lower() in ("1", "true", "yes", "on"),
+        },
+        "equip-item": lambda: {"command": "equip_item", "item_id": rest[0]},
+        "set-crafting-open": lambda: {
+            "command": "set_crafting_open",
             "open": rest[0].lower() in ("1", "true", "yes", "on"),
         },
         "set-world-map-open": lambda: {

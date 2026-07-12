@@ -43,6 +43,21 @@ pub enum ClientMessage {
     /// server tracks at most one open furnace per client; opening a new
     /// one auto-closes the previous.
     Furnace(FurnaceCommand),
+    /// Open/close/upgrade a workbench the player is standing next to. Like the
+    /// furnace, the server tracks at most one open workbench per client. The
+    /// only mutating op is the in-place tier upgrade.
+    Workbench(WorkbenchCommand),
+    /// Draw / cancel / fire a held ranged weapon (bow, crossbow). The server
+    /// validates the weapon and ammo, tracks the draw window, scales the shot's
+    /// damage by draw time, consumes one arrow, and spawns a server-simulated
+    /// projectile. See [`RangedCommand`] and `docs/pvp-combat.md`.
+    Ranged(RangedCommand),
+    /// Throw a held explosive (the powder bomb). The server validates the held
+    /// item is a thrown explosive, consumes one, and launches a heavier-
+    /// ballistics projectile that arms its fuse on coming to rest. Placed
+    /// charges (keg, satchel, ember) ride `PlaceDeployable`, not this. See
+    /// [`ExplosiveCommand`].
+    Explosive(ExplosiveCommand),
     /// Damage a placed structure (workbench, furnace, …). Server
     /// validates the active tool, the target's range/cone, and applies
     /// per-tool damage; the structure despawns when health reaches 0.
@@ -170,6 +185,14 @@ impl ClientMessage {
             | Self::Gather(_)
             | Self::PlaceDeployable(_)
             | Self::Furnace(_)
+            | Self::Workbench(_)
+            // Ranged draw/cancel/fire are gameplay-affecting intents (a dropped
+            // fire would eat the shot the player took), so they ride the reliable
+            // channel like the melee attack and swing-start.
+            | Self::Ranged(_)
+            // A thrown bomb is a one-shot, item-consuming intent (a dropped throw
+            // would eat the bomb), so it is reliable like the ranged fire.
+            | Self::Explosive(_)
             | Self::DamageDeployable(_)
             | Self::AttackPlayer(_)
             // Reliable: a swing-start is tiny (~5 bytes) and infrequent, and
@@ -286,9 +309,43 @@ pub enum ServerMessage {
         /// this to point a damage-direction indicator at the source; peers
         /// ignore it.
         attacker_position: Vec3Net,
-        tool: crate::items::ToolKind,
+        /// The swing's impact identity: the weapon's own archetype
+        /// (Club/Spear/Sword/Mace) or a gather tool's archetype
+        /// (Hatchet/Pickaxe). Drives the peer hit audio, the impact VFX, and
+        /// the target's camera reaction, so the feedback matches what actually
+        /// landed the hit rather than a generic stand-in.
+        model: crate::items::ItemModel,
         /// Post-armor damage in HP. Used for the floating damage text.
         damage_dealt: u32,
+    },
+    /// A server-simulated projectile struck something (a player, a deployable, or
+    /// the world). Fanned out to nearby peers so their client can play the arrow
+    /// thunk / stick VFX and audio at the impact point. Purely cosmetic: the
+    /// authoritative damage already landed via the replicated `PlayerHealth` /
+    /// `DeployableHealth` diff (players also get a `Correction`), so this rides
+    /// the unreliable channel like `PlayerImpact`. `model` is the firing weapon's
+    /// archetype (Bow/Crossbow); `surface` tells the client which material cue to
+    /// play.
+    ///
+    /// Two delivery shapes share this variant. The peer fan-out (proximity,
+    /// excludes the shooter) carries `owner_confirmation = false`. A separate copy
+    /// is sent straight to the shooter on a Player or Deployable hit with
+    /// `owner_confirmation = true`, so the shooter's own client can raise the
+    /// crosshair hit marker (the melee attacker's confirmation) in addition to the
+    /// impact cue. A World rest never sends the owner copy: the shooter's client
+    /// already produces that cue from the arrow's moving -> stuck transition.
+    ProjectileImpact {
+        /// World position the projectile came to rest / struck.
+        position: Vec3Net,
+        /// The firing weapon's archetype (Bow/Crossbow), for the impact audio/VFX.
+        model: crate::items::ItemModel,
+        /// What the projectile hit, so the client picks the right material cue.
+        surface: ProjectileSurface,
+        /// True only on the copy delivered to the shooter for a Player/Deployable
+        /// hit; drives the crosshair hit marker. Peers (and World rests) see
+        /// `false`. `serde(default)` keeps older saves/messages decoding.
+        #[serde(default)]
+        owner_confirmation: bool,
     },
     /// Knockback impulse sent only to the target of a PvP hit. The
     /// target applies it to its local velocity predictor; a cheater
@@ -329,6 +386,34 @@ pub enum ServerMessage {
     /// clock or speed. Clients integrate locally between broadcasts using
     /// the same multiplier, so the visible cycle stays smooth.
     WorldTime(WorldTimeSnapshot),
+    /// A meteor shower event is live: the announce. Broadcast reliably once
+    /// at T minus the warning window, and resent to any client that connects
+    /// while the event is still alive (including the post-impact crater window)
+    /// so late joiners see the fireball / crater immediately. The client
+    /// computes the entire sky show, countdown, danger warning, and temporary
+    /// map marker as a deterministic function of this payload plus its own
+    /// authoritative-clock estimate, so nothing about the meteor is per-tick
+    /// replicated. `impact_tick` is the server tick the meteor strikes;
+    /// `trajectory_seed` seeds the fireball's approach azimuth. See
+    /// `docs/meteor_shower.md` and `crate::world::meteor_shower`.
+    MeteorShower {
+        impact_position: Vec3Net,
+        impact_tick: u64,
+        trajectory_seed: u64,
+    },
+    /// An explosive detonated at `position`. Purely a cosmetic VFX/SFX cue: the
+    /// authoritative blast (player damage, structure destruction) already lands
+    /// server-side and replicates through the normal player/deployable mirrors,
+    /// so a dropped cue only costs one client a flash and a thump. Fanned out to
+    /// clients within a generous range so a distant breach is still seen and
+    /// heard (the audible-thump-plus-far-rumble feel), with the client scaling
+    /// the effect by its own distance. `kind` selects the charge's effect
+    /// (a bomb pop vs an ember-charge blast). Consumed by the explosive VFX
+    /// package; this package only ships the cue.
+    Explosion {
+        position: Vec3Net,
+        kind: crate::items::ExplosiveKind,
+    },
     /// A voice frame forwarded from `speaker` after the server confirmed
     /// the listener is within audible range. The position is the speaker's
     /// authoritative position at send time so the client can apply spatial
@@ -391,6 +476,11 @@ impl ServerMessage {
             // Marker edits are rare and must not be dropped (a lost delete
             // would resurrect a pin), so they ride the reliable channel.
             | Self::WorldMapMarkers { .. }
+            // The meteor shower announce is a one-shot event that seeds the whole
+            // client-side sky show; a dropped announce would leave a player
+            // blind to an incoming meteor, so it rides the reliable channel
+            // (and is resent on connect for late joiners regardless).
+            | Self::MeteorShower { .. }
             | Self::Toast(_) => PacketDelivery::Reliable,
             // Voice rides an unordered unreliable channel so every delivered
             // frame is played even if it arrives out of order. See the
@@ -406,6 +496,11 @@ impl ServerMessage {
             Self::Correction(_)
             | Self::ResourceImpact { .. }
             | Self::PlayerImpact { .. }
+            | Self::ProjectileImpact { .. }
+            // The explosion cue is pure cosmetic feedback (flash + thump); the
+            // authoritative blast already landed via the replicated mirrors, so
+            // it rides the unreliable channel like the other impact cues.
+            | Self::Explosion { .. }
             | Self::WorldTime(_)
             | Self::PerfStats(_)
             | Self::Pong { .. }
@@ -500,6 +595,20 @@ pub enum ResourceImpactKind {
     SurfaceStone,
     /// Plant fibres (hay tuft). Soft thud, no particle burst yet.
     HayGrass,
+}
+
+/// What a projectile struck, carried on [`ServerMessage::ProjectileImpact`] so
+/// the client picks the right impact material cue (a flesh thunk vs a wood/stone
+/// thock). Deliberately coarse: the three outcomes the projectile sim resolves.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum ProjectileSurface {
+    /// Hit a player body (the flesh-hit cue).
+    Player,
+    /// Hit a placed deployable or building piece (a wood/stone structure thock).
+    Deployable,
+    /// Came to rest against the world (terrain / perimeter wall): the arrow-stick
+    /// thock.
+    World,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]

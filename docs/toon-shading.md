@@ -92,6 +92,8 @@ These live in `assets/shaders/toon.wgsl`, not in `params`, so changing them retu
 | `@uniform(2)` | `params: Vec4` | Cel tuning (see below). Retunable without a shader recompile. |
 | `@uniform(3)` | `tex_scale: f32` | Texture tiles/metre for the triplanar path used by UV-less meshes. Dead: every shipping family carries UVs, so this is never read (see [Triplanar path](#triplanar-path-tex_scale-is-dead)). |
 | `@uniform(4)` | `fade: f32` | Per-instance opacity. `1.0` for every static prop; only the tree-felling dissolve drives it below `1.0`. |
+| `@texture(6)` + `@sampler(7)` | `emissive_tex: Handle<Image>` | Night-glow vein mask (bright = extra glow). Every prop except the meteorite node binds the shared 1x1 white "no glow" image (`toon_no_glow_tex`), so with a zero `emissive` tint the term is inert. |
+| `@uniform(8)` | `emissive: Vec4` | Self-illumination. `rgb` = HDR-bright glow colour ADDED on top of the cel-lit surface (after the day/night-exposed cel term, so it stays visible at night without blowing out in daylight); `a >= 0.5` gates the glow by COLOR_0 vertex alpha so one mesh can mix glowing and non-glowing geometry. `Vec4::ZERO` = no emission (every prop but meteorite). See [Emissive night-glow](#emissive-night-glow-meteorite). |
 
 ### `params: Vec4` packing
 
@@ -107,6 +109,18 @@ These live in `assets/shaders/toon.wgsl`, not in `params`, so changing them retu
 - `params.y > 0.0` -> `AlphaMode::Mask(params.y)` (hard cutout card, draws in the opaque/alpha-mask pass, depth-correct, no sort).
 - else `fade < 1.0` -> `AlphaMode::Blend` (the felling dissolve flips the *cloned* material into the transparent pass).
 - else -> `AlphaMode::Opaque` (the common case; cel props draw in the cheap opaque pass and depth-occlude the transparent detail grass correctly).
+
+## Emissive night-glow (meteorite)
+
+The meteorite node is the one cel prop that self-illuminates so it reads from far at night (its exploration function). The glow is the smallest addition that survives the cel pipeline and leaves every existing prop untouched:
+
+- **One additive term, after the cel pass.** The shader adds `emissive.rgb * glow_amount * glow_gate` to the posterised `rgb` just before fog/tonemapping. Adding *after* the day/night-exposed cel term (not folding it into the lighting) is what keeps a crystal visibly lit in the dark while the bright daytime surround keeps it reading as a crystal rather than a blown-out blob.
+- **Vertex-alpha gate, not a separate mesh.** `emissive.a >= 0.5` gates the glow by the mesh's COLOR_0 vertex alpha, so a single glb mixes glowing geometry (crystals, alpha 1.0) with a non-glowing body (the dark slag mound, alpha 0.0). `art/ore/build_ore.py` bakes that alpha (its `paint_face` writes alpha 1.0 for crystals, 0.0 for slag; every non-ember build leaves alpha 1.0, which is inert because their tint is zero).
+- **The mask BOOSTS veins, it does not gate.** `meteorite_crystal_emissive.png` is a sparse vein pattern (mostly black). The shader uses it as `glow_amount = 0.55 + 0.45 * vein`, a baseline glow across the whole crystal plus hot veins, so the crystal is lit everywhere and not just where the mask is bright.
+- **HDR-bright tint for bloom.** `emissive` ships `Vec4::new(4.5, 1.7, 0.35, 1.0)` (values > 1) so the glow blooms and survives the tonemapper's highlight compression at night.
+- **Inert for every other prop.** All other `ToonMaterial` sites bind the shared 1x1 white `toon_no_glow_tex` and `Vec4::ZERO`, so the `if emissive.r/g/b > 0` branch is skipped and existing ore/tree/deployable output is byte-for-byte unchanged.
+
+The meteorite node is the only material with a non-zero `emissive`; it also carries its own detail texture (`meteorite_crystal.png`), otherwise it runs the same ore-family cel params.
 
 ## Triplanar path (`tex_scale` is dead)
 

@@ -78,11 +78,33 @@ const FOREST_STONE_VEIN_CHANNEL: f32 = 0.56;
 /// high, the edge of a nearby barren biome, a forest can hold a lone iron node
 /// and a little more often a stone vein, so a forest newcomer can still strike
 /// it lucky without diluting the barren yields.
+///
+/// `center_dist_frac` is the chunk centre's distance from the world origin as a
+/// fraction of the playable radius; it gates meteorite to the outer reaches
+/// (see [`crate::game_balance::METEORITE_MIN_CENTER_DISTANCE_FRACTION`]). Both
+/// world generation and the regrow capacity grid pass the SAME value for a given
+/// coord, so their meteorite ceilings can't drift.
 pub fn chunk_kind_target(
     classification: ChunkClassification,
     channels: ClassificationChannels,
     kind: NodeKind,
+    center_dist_frac: f32,
 ) -> u16 {
+    // Meteorite: rocky/ore biomes only (base_capacity is 0 elsewhere), beyond
+    // the centre-distance ring, and only where the ore channel runs very high.
+    // Base 1 + this strict gate makes it roughly an order of magnitude rarer than
+    // iron, so most eligible chunks hold none.
+    if kind == NodeKind::Meteorite {
+        let base = base_capacity(classification, kind);
+        if base == 0
+            || center_dist_frac < crate::game_balance::METEORITE_MIN_CENTER_DISTANCE_FRACTION
+            || channels.ore < crate::game_balance::METEORITE_ORE_CHANNEL_FLOOR
+        {
+            return 0;
+        }
+        return base; // at most 1 per eligible chunk
+    }
+
     if classification == ChunkClassification::Forest {
         match kind {
             // A single lucky iron node where the ore channel is high.
@@ -105,6 +127,19 @@ pub fn chunk_kind_target(
         base_capacity(classification, kind),
         channels.channel_for(kind),
     )
+}
+
+/// Distance of a chunk centre from the world origin `(0, 0)` as a fraction of the
+/// playable radius. Used by the meteorite distance-ring gate. Shared by
+/// generation and the regrow capacity grid so both compute the identical value
+/// (and thus the identical meteorite ceiling) for a given coord.
+pub fn chunk_center_distance_fraction(coord: ChunkCoord, bounds: PlayableBounds) -> f32 {
+    let (cx, cz) = coord.centre();
+    let dist = (cx * cx + cz * cz).sqrt();
+    // The playable half-extent is the "radius" the fraction is measured against.
+    // `PlayableBounds` is a square centred on the origin, so max_x is that radius.
+    let radius = bounds.max_x.max(1.0);
+    dist / radius
 }
 
 /// One node placement decided by the generator. Carries the kind so the
@@ -165,12 +200,22 @@ impl PlayableBounds {
 /// are dense and contiguous starting from `1`, the server adopts these
 /// for its `ResourceNodeId` counter so admin-spawned nodes pick up safely
 /// above the world-authored range.
-pub fn generate_world_spawns(world_seed: u64, dims: ChunkDims) -> Vec<ChunkSpawn> {
+///
+/// `ruin_footprints` are the circular footprints of the world's ruin sites
+/// (a pure function of the same seed, see [`crate::world::ruins`]); node
+/// candidates that land inside a ruin are rejected so nothing spawns inside a
+/// structure. Pass an empty slice for a ruin-free generation.
+pub fn generate_world_spawns(
+    world_seed: u64,
+    dims: ChunkDims,
+    ruin_footprints: &[crate::world::ruins::RuinFootprint],
+) -> Vec<ChunkSpawn> {
     let bounds = PlayableBounds::from_dims(dims);
     let mut out = Vec::new();
     let mut next_id: u64 = 1;
     for coord in dims.coords() {
-        let mut chunk_spawns = generate_chunk_spawns(world_seed, coord, &mut next_id, bounds);
+        let mut chunk_spawns =
+            generate_chunk_spawns(world_seed, coord, &mut next_id, bounds, ruin_footprints);
         out.append(&mut chunk_spawns);
     }
     out
@@ -187,9 +232,28 @@ pub fn generate_chunk_spawns(
     coord: ChunkCoord,
     next_id: &mut u64,
     bounds: PlayableBounds,
+    ruin_footprints: &[crate::world::ruins::RuinFootprint],
 ) -> Vec<ChunkSpawn> {
     let channels = ClassificationChannels::sample(world_seed, coord);
     let classification = channels.classify();
+    let center_dist_frac = chunk_center_distance_fraction(coord, bounds);
+
+    // Pre-filter the world's ruin footprints down to just those whose circle
+    // can reach into this chunk (the chunk AABB expanded by the footprint
+    // radius). At a few dozen ruins this leaves the per-candidate check a
+    // one-or-two-element scan instead of a walk of every ruin.
+    let (origin_x, origin_z) = coord.origin();
+    let overlapping_ruins: Vec<crate::world::ruins::RuinFootprint> = ruin_footprints
+        .iter()
+        .copied()
+        .filter(|fp| {
+            let nearest_x = fp.x.clamp(origin_x, origin_x + CHUNK_SIZE_M);
+            let nearest_z = fp.z.clamp(origin_z, origin_z + CHUNK_SIZE_M);
+            let dx = fp.x - nearest_x;
+            let dz = fp.z - nearest_z;
+            dx * dx + dz * dz <= fp.radius * fp.radius
+        })
+        .collect();
 
     // Track placed points across all kinds in this chunk for the
     // cross-kind spacing rule, index is `(world_x, world_z)`. Each
@@ -203,7 +267,7 @@ pub fn generate_chunk_spawns(
         // (a channel just above the ~0.42 threshold still delivers ~0.7×
         // capacity, a saturated channel ~1.05×), with the forest-fringe ore
         // rule folded in. Shared verbatim with the regrow capacity grid.
-        let target = chunk_kind_target(classification, channels, kind);
+        let target = chunk_kind_target(classification, channels, kind, center_dist_frac);
         if target == 0 {
             continue;
         }
@@ -220,7 +284,6 @@ pub fn generate_chunk_spawns(
         while placed < target && attempt < max_attempts {
             attempt += 1;
 
-            let (origin_x, origin_z) = coord.origin();
             let x = origin_x + rng.next_range(EDGE_MARGIN_M, CHUNK_SIZE_M - EDGE_MARGIN_M);
             let z = origin_z + rng.next_range(EDGE_MARGIN_M, CHUNK_SIZE_M - EDGE_MARGIN_M);
 
@@ -230,6 +293,13 @@ pub fn generate_chunk_spawns(
             // outer ring would scatter trees and ore where the player
             // can't reach them.
             if !bounds.contains(x, z) {
+                continue;
+            }
+
+            // Reject candidates that fall inside a ruin structure so nodes
+            // never spawn inside masonry. Only the ruins reaching this chunk
+            // are in `overlapping_ruins`, so this is a tiny scan.
+            if crate::world::ruins::point_in_any_footprint(&overlapping_ruins, x, z) {
                 continue;
             }
 
@@ -354,14 +424,17 @@ mod tests {
                     match c {
                         ChunkClassification::Forest => {
                             forest += 1;
+                            // iron/stone-vein ignore the distance fraction, so the
+                            // value here is irrelevant; pass 1.0.
                             forest_iron +=
-                                u32::from(chunk_kind_target(c, ch, NodeKind::IronOre) > 0);
+                                u32::from(chunk_kind_target(c, ch, NodeKind::IronOre, 1.0) > 0);
                             forest_vein +=
-                                u32::from(chunk_kind_target(c, ch, NodeKind::StoneVein) > 0);
+                                u32::from(chunk_kind_target(c, ch, NodeKind::StoneVein, 1.0) > 0);
                         }
                         ChunkClassification::OreVein | ChunkClassification::RockyOutcrop => {
                             barren_chunks += 1;
-                            barren_iron += u32::from(chunk_kind_target(c, ch, NodeKind::IronOre));
+                            barren_iron +=
+                                u32::from(chunk_kind_target(c, ch, NodeKind::IronOre, 1.0));
                         }
                         _ => {}
                     }
@@ -395,11 +468,154 @@ mod tests {
         );
     }
 
+    /// Channels rich enough in ore to clear the meteorite floor.
+    fn rich_ore_channels() -> ClassificationChannels {
+        ClassificationChannels {
+            forest: 0.1,
+            stone: 0.3,
+            ore: 0.90, // >= METEORITE_ORE_CHANNEL_FLOOR
+            hay: 0.1,
+        }
+    }
+
+    #[test]
+    fn meteorite_spawns_in_far_rocky_or_ore_chunks_with_rich_ore() {
+        // Just past the distance ring, rich ore channel, eligible classification:
+        // exactly the lone meteorite node.
+        let far = crate::game_balance::METEORITE_MIN_CENTER_DISTANCE_FRACTION + 0.05;
+        for classification in [
+            ChunkClassification::RockyOutcrop,
+            ChunkClassification::OreVein,
+        ] {
+            let target = chunk_kind_target(
+                classification,
+                rich_ore_channels(),
+                NodeKind::Meteorite,
+                far,
+            );
+            assert_eq!(
+                target, 1,
+                "far {classification:?} with rich ore should seed exactly one meteorite"
+            );
+        }
+    }
+
+    #[test]
+    fn meteorite_never_spawns_in_forest_or_plains_even_far_and_rich() {
+        let far = crate::game_balance::METEORITE_MIN_CENTER_DISTANCE_FRACTION + 0.3;
+        for classification in [
+            ChunkClassification::Forest,
+            ChunkClassification::Plains,
+            ChunkClassification::Mixed,
+        ] {
+            assert_eq!(
+                chunk_kind_target(
+                    classification,
+                    rich_ore_channels(),
+                    NodeKind::Meteorite,
+                    far
+                ),
+                0,
+                "meteorite must never seed in {classification:?} (base_capacity 0)"
+            );
+        }
+    }
+
+    #[test]
+    fn meteorite_never_spawns_inside_the_center_ring() {
+        // Same eligible+rich chunk, but its centre is inside the distance ring:
+        // no meteorite, no matter how rich the ore.
+        let inside = crate::game_balance::METEORITE_MIN_CENTER_DISTANCE_FRACTION - 0.05;
+        assert_eq!(
+            chunk_kind_target(
+                ChunkClassification::OreVein,
+                rich_ore_channels(),
+                NodeKind::Meteorite,
+                inside,
+            ),
+            0,
+            "an eligible chunk inside the centre ring must hold no meteorite"
+        );
+    }
+
+    #[test]
+    fn meteorite_needs_a_high_ore_channel_even_when_eligible() {
+        // Far, eligible, but the ore channel is below the strict floor -> none.
+        let far = crate::game_balance::METEORITE_MIN_CENTER_DISTANCE_FRACTION + 0.2;
+        let thin_ore = ClassificationChannels {
+            forest: 0.1,
+            stone: 0.3,
+            ore: crate::game_balance::METEORITE_ORE_CHANNEL_FLOOR - 0.05,
+            hay: 0.1,
+        };
+        assert_eq!(
+            chunk_kind_target(
+                ChunkClassification::RockyOutcrop,
+                thin_ore,
+                NodeKind::Meteorite,
+                far,
+            ),
+            0,
+            "an eligible far chunk below the ore floor must hold no meteorite"
+        );
+    }
+
+    #[test]
+    fn meteorite_kind_target_is_never_more_than_one() {
+        // Rarity ceiling: across a wide sweep of eligible far chunks the target is
+        // always 0 or 1 (never a cluster), keeping it ~an order of magnitude rarer
+        // than iron.
+        for seed in 0..20u64 {
+            for x in -40..40 {
+                for z in -40..40 {
+                    let coord = ChunkCoord::new(x, z);
+                    let ch = ClassificationChannels::sample(seed, coord);
+                    let c = ch.classify();
+                    // Use a generous distance fraction so the ring never clips it.
+                    let target = chunk_kind_target(c, ch, NodeKind::Meteorite, 1.0);
+                    assert!(
+                        target <= 1,
+                        "meteorite target must be 0 or 1, got {target} at {coord:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn meteorite_is_far_rarer_than_iron_across_a_world() {
+        // Sanity on the intended ~order-of-magnitude rarity: over a real world's
+        // spawns, meteorite nodes are a small fraction of iron nodes.
+        let dims = ChunkDims::new(9);
+        let mut iron = 0u32;
+        let mut meteorite = 0u32;
+        for seed in [1u64, 7, 42, 1234] {
+            for spawn in generate_world_spawns(seed, dims, &[]) {
+                match spawn.kind {
+                    NodeKind::IronOre => iron += 1,
+                    NodeKind::Meteorite => meteorite += 1,
+                    _ => {}
+                }
+            }
+        }
+        // Iron must exist to compare against.
+        assert!(
+            iron > 0,
+            "expected some iron nodes across the sampled worlds"
+        );
+        // Meteorite is a rare find: well under a fifth of the iron count. (It can
+        // legitimately be zero on a small/unlucky world, that is still "rarer".)
+        assert!(
+            (meteorite as f32) < (iron as f32) * 0.2,
+            "meteorite should be far rarer than iron: {meteorite} vs {iron} iron"
+        );
+    }
+
     #[test]
     fn generate_world_spawns_is_deterministic() {
         let dims = ChunkDims::new(5);
-        let a = generate_world_spawns(0xABCDEF, dims);
-        let b = generate_world_spawns(0xABCDEF, dims);
+        let a = generate_world_spawns(0xABCDEF, dims, &[]);
+        let b = generate_world_spawns(0xABCDEF, dims, &[]);
         assert_eq!(a.len(), b.len());
         for (sa, sb) in a.iter().zip(b.iter()) {
             assert_eq!(sa.coord, sb.coord);
@@ -413,7 +629,7 @@ mod tests {
     #[test]
     fn generate_world_spawns_produces_unique_ids() {
         let dims = ChunkDims::new(5);
-        let spawns = generate_world_spawns(7, dims);
+        let spawns = generate_world_spawns(7, dims, &[]);
         let mut ids: Vec<u64> = spawns.iter().map(|s| s.spawn.id).collect();
         ids.sort();
         let original_len = ids.len();
@@ -427,7 +643,7 @@ mod tests {
 
     #[test]
     fn generate_world_spawns_populates_5x5_with_variety() {
-        let spawns = generate_world_spawns(42, ChunkDims::new(5));
+        let spawns = generate_world_spawns(42, ChunkDims::new(5), &[]);
         assert!(
             spawns.len() >= 80,
             "expected at least 80 nodes in a 5x5 world, got {}",
@@ -459,7 +675,8 @@ mod tests {
     #[test]
     fn placed_nodes_respect_min_spacing_inside_grid() {
         let mut next_id = 1;
-        let spawns = generate_chunk_spawns(7, ChunkCoord::new(0, 0), &mut next_id, unbounded());
+        let spawns =
+            generate_chunk_spawns(7, ChunkCoord::new(0, 0), &mut next_id, unbounded(), &[]);
         for i in 0..spawns.len() {
             for j in (i + 1)..spawns.len() {
                 let a = &spawns[i].spawn;
@@ -486,7 +703,7 @@ mod tests {
     fn placed_nodes_stay_inside_grid_with_margin() {
         let coord = ChunkCoord::new(1, -1);
         let mut next_id = 1;
-        let spawns = generate_chunk_spawns(7, coord, &mut next_id, unbounded());
+        let spawns = generate_chunk_spawns(7, coord, &mut next_id, unbounded(), &[]);
         let (ox, oz) = coord.origin();
         for spawn in &spawns {
             assert!(spawn.spawn.position.x >= ox + EDGE_MARGIN_M - 1e-3);
@@ -504,7 +721,7 @@ mod tests {
         // generator-side gate.
         let dims = ChunkDims::new(5);
         let bounds = PlayableBounds::from_dims(dims);
-        let spawns = generate_world_spawns(42, dims);
+        let spawns = generate_world_spawns(42, dims, &[]);
         for spawn in &spawns {
             assert!(
                 bounds.contains(spawn.spawn.position.x, spawn.spawn.position.z),
@@ -515,6 +732,39 @@ mod tests {
                 bounds,
             );
         }
+    }
+
+    #[test]
+    fn node_candidates_inside_a_ruin_footprint_are_rejected() {
+        use crate::world::ruins::RuinFootprint;
+        // Drop a big footprint over the whole (0,0) chunk (centre at 32,32,
+        // radius large enough to swallow the 64 m cell) and confirm no node
+        // spawns inside it, while an unblocked run does place nodes there.
+        let coord = ChunkCoord::new(0, 0);
+        let footprint = RuinFootprint {
+            x: 32.0,
+            z: 32.0,
+            radius: 60.0,
+        };
+        let mut next_id = 1;
+        let blocked = generate_chunk_spawns(7, coord, &mut next_id, unbounded(), &[footprint]);
+        for spawn in &blocked {
+            assert!(
+                !footprint.contains(spawn.spawn.position.x, spawn.spawn.position.z),
+                "node {} spawned inside the ruin footprint",
+                spawn.spawn.id
+            );
+        }
+        // A control run with no footprint should place at least one node in the
+        // same chunk, proving the rejection above actually removed some.
+        let mut control_id = 1;
+        let control = generate_chunk_spawns(7, coord, &mut control_id, unbounded(), &[]);
+        assert!(
+            control.len() > blocked.len(),
+            "the footprint should have rejected some nodes (control {} vs blocked {})",
+            control.len(),
+            blocked.len()
+        );
     }
 
     #[test]

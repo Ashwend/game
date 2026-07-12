@@ -222,7 +222,9 @@ fn kind_label(kind: DeployableKind) -> String {
         | DeployableKind::SleepingBag
         | DeployableKind::StorageBox { .. }
         | DeployableKind::Torch { .. }
-        | DeployableKind::ToolCupboard => kind.label().to_owned(),
+        | DeployableKind::ToolCupboard
+        | DeployableKind::RuinCache
+        | DeployableKind::Explosive { .. } => kind.label().to_owned(),
     }
 }
 

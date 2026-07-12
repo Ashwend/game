@@ -161,4 +161,98 @@ pub(super) fn render(ui: &mut egui::Ui, settings: &mut ClientSettings) {
             2,
         );
     });
+
+    ui.add_space(10.0);
+
+    theme::inset_frame().show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(section_label("Combat feel (live)"));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if theme::compact_button(ui, "Neutral", theme::ButtonKind::Secondary, 90.0)
+                    .clicked()
+                {
+                    // Snap every combat slider back to its neutral default (all
+                    // scales 1.0, the offset 0.0) so a tuning pass can reset to
+                    // the shipped feel without touching the other Dev sliders.
+                    settings.dev.combat = Default::default();
+                }
+            });
+        });
+        ui.add_space(2.0);
+        ui.label(caption(
+            "Tune weapon feel live (ideally in a two-client session), then bake the \
+             values into game_balance.rs. Defaults are neutral, so a release build \
+             feels identical. The client sliders apply instantly; knockback is \
+             server state and needs the chat command below.",
+        ));
+        ui.add_space(6.0);
+        let combat = &mut settings.dev.combat;
+        // Swing duration multiplier: stretches / compresses the whole local swing
+        // animation (and its impact cue) without drifting the contact frame.
+        value_slider_row(
+            ui,
+            "Swing duration scale",
+            &mut combat.swing_duration_scale,
+            0.5..=2.0,
+            0.01,
+            2,
+        );
+        // Impact fraction offset: shifts where in the swing the contact cue fires;
+        // the consumer clamps the result to a sane window.
+        value_slider_row(
+            ui,
+            "Impact fraction offset",
+            &mut combat.impact_fraction_offset,
+            -0.2..=0.2,
+            0.01,
+            2,
+        );
+        // Camera kick magnitude: scales both the pitch punch and the drop; 0
+        // disables the kick entirely.
+        value_slider_row(
+            ui,
+            "Camera kick magnitude scale",
+            &mut combat.kick_magnitude_scale,
+            0.0..=3.0,
+            0.01,
+            2,
+        );
+        // Camera kick duration: how long the punch lingers before it settles.
+        value_slider_row(
+            ui,
+            "Camera kick duration scale",
+            &mut combat.kick_duration_scale,
+            0.5..=2.0,
+            0.01,
+            2,
+        );
+        // Hit-stop: the brief attacker-side viewmodel freeze on a confirmed
+        // player hit. Scales the shipped window; 0 disables it, up to 3x for
+        // tuning a heavier committed feel.
+        value_slider_row(
+            ui,
+            "Hit-stop scale",
+            &mut combat.hit_stop_scale,
+            0.0..=3.0,
+            0.01,
+            2,
+        );
+        // Knockback scale: server state, so the slider only remembers the value.
+        // The hint below spells out the chat command that applies it live.
+        value_slider_row(
+            ui,
+            "Knockback scale",
+            &mut combat.knockback_scale,
+            0.0..=3.0,
+            0.01,
+            2,
+        );
+        ui.add_space(2.0);
+        ui.label(caption(&format!(
+            "Knockback is authoritative server state, so this slider does not apply \
+             on its own. Run  /knockback-scale {:.2}  in chat to apply it (admin \
+             only; resets to 1.0 on server restart).",
+            combat.knockback_scale,
+        )));
+    });
 }

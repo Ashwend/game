@@ -11,6 +11,7 @@
 # (assets/items/<id>/icon.png) are kept; everything below is throwaway.
 /art/_staging/
 art/items/*/source/
+art/textures/candidates/
 *.contact.png
 *.preview.png
 

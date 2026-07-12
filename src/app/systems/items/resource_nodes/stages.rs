@@ -228,6 +228,33 @@ mod tests {
     }
 
     #[test]
+    fn meteorite_steps_through_mining_stages_like_ore() {
+        use crate::items::METEORITE_ID;
+        use crate::resources::METEORITE_NODE_ID;
+        let definition = resource_node_definition(METEORITE_NODE_ID).expect("meteorite definition");
+        // It is stage-capable (its slag-mound + crystal glbs have 3 stages).
+        assert!(
+            stage_capable(definition),
+            "meteorite must step through depletion stages"
+        );
+        let total: u16 = definition.storage.iter().map(|m| m.quantity).sum();
+        // Full -> stage 0; mid -> 1; nearly gone / empty -> 2.
+        assert_eq!(
+            ore_depletion_stage(definition, &[ItemStack::new(METEORITE_ID, total)]),
+            0
+        );
+        let mid = ((total as f32) * 0.5) as u16;
+        assert_eq!(
+            ore_depletion_stage(definition, &[ItemStack::new(METEORITE_ID, mid)]),
+            1
+        );
+        assert_eq!(ore_depletion_stage(definition, &[]), 2);
+        // The initial-stage helper agrees for a part-drained meteorite node.
+        let drained = ResourceNodeStorage(vec![ItemStack::new(METEORITE_ID, total / 5)]);
+        assert_eq!(initial_node_stage(METEORITE_NODE_ID, Some(&drained)), 2);
+    }
+
+    #[test]
     fn initial_stage_is_zero_for_trees_and_full_ores() {
         // Trees never stage, regardless of storage.
         let half_tree = ResourceNodeStorage(vec![ItemStack::new(crate::items::WOOD_ID, 10)]);

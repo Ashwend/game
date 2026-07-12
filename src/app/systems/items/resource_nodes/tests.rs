@@ -107,3 +107,29 @@ fn ore_models_carry_per_model_scale_shaping() {
     let ratio = iron.scale.x / iron.scale.y;
     assert!((ratio - 1.1 / 1.05).abs() < 1e-5);
 }
+
+#[test]
+fn caught_up_requires_a_first_pass_and_an_empty_spawn_queue() {
+    // Default state has never reconciled: an empty queue alone must not
+    // report caught-up, or the world-entry gate would pass before the
+    // initial replication burst has even arrived.
+    let mut entities = ResourceNodeEntities::default();
+    assert!(
+        !entities.is_caught_up(),
+        "no reconciliation pass has run yet"
+    );
+
+    entities.applied_first_snapshot = true;
+    assert!(entities.is_caught_up());
+
+    entities.pending_spawns.push(PendingSpawn {
+        id: 1,
+        definition_id: IRON_NODE_ID.to_owned(),
+        position: Vec3Net::new(0.0, 0.0, 0.0),
+        yaw: 0.0,
+        dead: false,
+        stage: 0,
+    });
+    assert!(!entities.is_caught_up(), "a queued spawn holds the gate");
+    assert_eq!(entities.pending_spawn_count(), 1);
+}

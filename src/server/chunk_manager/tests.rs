@@ -78,6 +78,58 @@ fn tick_spawns_pending_regrows() {
 }
 
 #[test]
+fn regrow_handles_the_meteorite_kind() {
+    use crate::resources::METEORITE_NODE_ID;
+
+    // A big world so some far rocky/ore chunks qualify for meteorite. The
+    // generator + capacity grid share `chunk_kind_target`, so a capacity slot
+    // marks a chunk the generator would have seeded meteorite in.
+    let (mut manager, _nodes) = ChunkManager::new_for_world(0x5EED_EA11, ChunkDims::new(25));
+    let ember_coords: Vec<ChunkCoord> = manager
+        .grids
+        .iter()
+        .filter(|(_, grid)| grid.capacity.contains_key(&NodeKind::Meteorite))
+        .map(|(coord, _)| *coord)
+        .collect();
+    assert!(
+        !ember_coords.is_empty(),
+        "a 25x25 world should have at least one meteorite-eligible chunk"
+    );
+
+    // Fire a meteorite regrow in each eligible chunk. Placement can legitimately
+    // come up empty in a given chunk (the strict noise mask + capacity 1 rarity is
+    // the point), so we require that ACROSS the eligible chunks at least one
+    // meteorite actually regrows, and that every placement is a meteorite node
+    // tracked for the AoI system, proving the kind flows through place_fresh_node
+    // and the capacity ceiling like any other kind.
+    let existing: HashMap<ResourceNodeId, ResourceNodeState> = HashMap::new();
+    let mut total_placed = 0usize;
+    for coord in ember_coords {
+        manager.regrow_queue.push(RegrowEvent {
+            fire_tick: 1,
+            coord,
+            kind: NodeKind::Meteorite,
+        });
+        let RegrowResult { spawned } = manager.tick(2, &existing);
+        for state in &spawned {
+            assert_eq!(
+                state.definition_id, METEORITE_NODE_ID,
+                "a meteorite regrow must place meteorite nodes only"
+            );
+            assert!(
+                manager.node_chunks.contains_key(&state.id),
+                "a regrown meteorite node must be tracked for AoI"
+            );
+        }
+        total_placed += spawned.len();
+    }
+    assert!(
+        total_placed >= 1,
+        "at least one meteorite should regrow across the eligible chunks"
+    );
+}
+
+#[test]
 fn view_tier_radius_is_monotonic() {
     assert!(view_tier_radius(ViewRadiusTier::Low) < view_tier_radius(ViewRadiusTier::Medium));
     assert!(view_tier_radius(ViewRadiusTier::Medium) < view_tier_radius(ViewRadiusTier::High));

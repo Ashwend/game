@@ -37,6 +37,14 @@ pub enum InventoryCommand {
         /// Optimistic-prediction sequence number (see [`InventoryCommand::action_seq`]).
         seq: u32,
     },
+    /// Pull a stuck (at-rest) arrow back into the bag before its despawn TTL.
+    /// The projectile must be resting in the world (a recoverable stuck
+    /// arrow); the server validates reach, grants the ammo item, and despawns
+    /// the projectile. Not client-predicted: the grant arrives via the normal
+    /// inventory replication + acquisition toast.
+    RecoverProjectile {
+        projectile_id: ProjectileId,
+    },
     SelectActionbarSlot {
         slot: usize,
     },
@@ -64,9 +72,10 @@ impl InventoryCommand {
             | Self::Drop { seq, .. }
             | Self::PickUp { seq, .. }
             | Self::PickUpResourceNode { seq, .. } => Some(*seq),
-            Self::SelectActionbarSlot { .. } | Self::SelectActionbarOffset { .. } | Self::Sort => {
-                None
-            }
+            Self::SelectActionbarSlot { .. }
+            | Self::SelectActionbarOffset { .. }
+            | Self::Sort
+            | Self::RecoverProjectile { .. } => None,
         }
     }
 }
@@ -130,12 +139,14 @@ pub struct AttackPlayerCommand {
 /// from it so other players' clients can play the matching third-person
 /// swing on the rigged body. `seq` is the client's per-swing counter (its
 /// local `swing_seed`) so the server, and peers, can dedupe back-to-back
-/// swings; `tool` selects the swing curve/cadence. The server reads the
-/// authoritative tool too, so a lie here only mis-picks an animation.
+/// swings; `model` selects the swing archetype (curve/cadence/pose), a weapon
+/// carries its own (Club/Spear/Sword/Mace), a gather tool its archetype. The
+/// server re-derives the model from the authoritative held item too, so a lie
+/// here only mis-picks an animation.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SwingStartCommand {
     pub seq: u32,
-    pub tool: crate::items::ToolKind,
+    pub model: crate::items::ItemModel,
 }
 
 /// Client → server intent to place a building block from the building
@@ -375,6 +386,102 @@ pub struct OpenFurnaceView {
     /// 0.0..1.0, fraction of the currently-burning fuel unit. 0 when
     /// no fuel is burning. Drives the small "fuel" indicator in the UI.
     pub fuel_fraction: f32,
+}
+
+/// Client → server messages for workbench interaction. The server tracks at
+/// most one open workbench per client (opening a new one auto-closes the
+/// previous), mirroring the furnace. The workbench has no item slots: its only
+/// operation is the in-place tier upgrade, which the server validates against
+/// the compile-time upgrade table.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum WorkbenchCommand {
+    /// Open the workbench UI on the server side. The server validates kind +
+    /// range and replies by populating `PlayerPrivate.open_workbench` (the
+    /// per-client view) on the next replication tick.
+    Open { id: DeployedEntityId },
+    /// Close the active workbench, if any. Idempotent, no-op when the player
+    /// has no workbench open.
+    Close,
+    /// Upgrade the workbench in place to its next tier. The server consults the
+    /// upgrade table for the entity's current kind, validates range and
+    /// affordability, consumes the materials, and mutates the tier. Rejected
+    /// (with a toast) when there is no upgrade path, the player is out of
+    /// range, or they can't afford the cost.
+    Upgrade { id: DeployedEntityId },
+}
+
+/// Per-client view of the workbench the player currently has open. Deliberately
+/// minimal: only the entity id and current tier travel. Costs do NOT ship, the
+/// client reads the same compile-time upgrade table ([`crate::items`]) and its
+/// own replicated inventory to render the next tier's cost list and
+/// affordability, keeping recipes/costs off the wire like every other station.
+///
+/// Replicated as a field of `PlayerPrivate.open_workbench`, not a top-level
+/// wire message. Lives in `protocol` because it serialises across the wire
+/// (inside the parent component) and is shared between server build-up and
+/// client UI read-out.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OpenWorkbenchView {
+    pub id: DeployedEntityId,
+    pub tier: u8,
+}
+
+/// Client -> server ranged-weapon intent (bow, crossbow). The server owns the
+/// whole shot: it validates the held weapon and ammo, tracks the draw window, and
+/// simulates the projectile authoritatively. The client only signals draw start,
+/// draw cancel, and fire-with-aim; it never sends damage, projectile velocity, or
+/// hit results.
+///
+/// Draw lifecycle: `DrawStart` begins tracking the draw (and slows movement via
+/// the existing run-speed lever) once the server confirms the held weapon is a
+/// ranged weapon with ammo. `DrawCancel` abandons the draw (weapon lowered, no
+/// shot) and restores movement. `Fire` releases the shot: the server clamps the
+/// damage by the observed draw ticks (a crossbow is always full damage but gated
+/// by its reload cooldown), consumes one arrow, and spawns the projectile from the
+/// shooter's eye along `aim_dir`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub enum RangedCommand {
+    /// Begin drawing the held ranged weapon. Rejected (no draw started) unless the
+    /// active item is a ranged weapon and the shooter has at least one arrow.
+    DrawStart,
+    /// Abandon the current draw without firing. Idempotent: a no-op when no draw
+    /// is active. Restores the draw movement slow.
+    DrawCancel,
+    /// Release the shot along `aim_dir` (a look direction; the server normalizes
+    /// it and rejects a non-finite or zero vector). Damage scales with how long
+    /// the draw was held; the server takes one arrow and launches the projectile.
+    Fire { aim_dir: Vec3Net },
+}
+
+/// Client -> server explosive intent. Placing a charge rides the normal
+/// `PlaceDeployableCommand` path (a placed charge is a deployable); this family
+/// covers the thrown powder bomb (launched through the projectile sim rather
+/// than placed) and defusing a placed charge. The server owns the whole throw:
+/// it validates that the active actionbar item is a thrown explosive, consumes
+/// one, and spawns the heavier-ballistics projectile from the thrower's eye
+/// along `aim_dir`. The client sends only the aim and its charge fraction; it
+/// never decides the bomb's velocity directly, its bounces, or the blast.
+///
+/// APPEND-ONLY: this rides `ClientMessage` and is postcard-encoded by variant
+/// index, so new variants go at the end; `Defuse` was appended in P6c.
+/// (`Throw` gained `power` with the charged-throw rework; PROTOCOL_VERSION was
+/// bumped for it, so mismatched builds reject at the handshake.)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub enum ExplosiveCommand {
+    /// Throw the held explosive along `aim_dir` (a look direction; the server
+    /// normalizes it and rejects a non-finite or zero vector). `power` is the
+    /// hold-to-charge fraction in `[0, 1]` (the bow-draw idiom); the server
+    /// clamps it and scales the launch speed between the bomb's min and max
+    /// throw speeds. Rejected unless the active item is a `Thrown` explosive
+    /// (the powder bomb); consumes one on a valid throw.
+    Throw { aim_dir: Vec3Net, power: f32 },
+    /// Defuse the placed charge `id` (a live keg / satchel charge). The
+    /// server validates the requester is in reach and, if the charge sits inside
+    /// a Tool Cupboard claim, that they are authorized on it (a charge outside
+    /// any claim can be defused by anyone). On success it removes the charge
+    /// without detonation and refunds half its recipe materials (rounded down)
+    /// to the defuser, overflow dropping at their feet.
+    Defuse { id: DeployedEntityId },
 }
 
 /// Client → server crafting intent. Enqueue costs `inputs × quantity` of

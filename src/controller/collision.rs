@@ -37,10 +37,15 @@ pub(super) fn move_with_collisions(
 
     let mut result = MoveResult::default();
     let mut resolved_axis_position = None;
-    if matches!(axis, Axis::Y) && attempted.y < 0.0 {
-        result.collided = true;
-        result.landed = delta < 0.0;
-        resolved_axis_position = Some(0.0);
+    if matches!(axis, Axis::Y) {
+        // The analytic floor: flat world plane, raised over a live MeteorShower
+        // crater so its mound is solid ground rather than a visual shell.
+        let floor = grid.floor_height(attempted.x, attempted.z);
+        if attempted.y < floor {
+            result.collided = true;
+            result.landed = delta < 0.0;
+            resolved_axis_position = Some(floor);
+        }
     }
 
     // Inline the loop into each match arm so the candidate iterator stays a
@@ -171,7 +176,10 @@ pub(super) fn support_height_between(
     min_y: f32,
     max_y: f32,
 ) -> Option<f32> {
-    let mut support = (min_y <= 0.0 && max_y >= 0.0).then_some(0.0);
+    // The analytic floor (flat plane, or the crater mound surface) counts as
+    // support exactly like a block top at that height would.
+    let floor = grid.floor_height(position.x, position.z);
+    let mut support = (min_y <= floor && max_y >= floor).then_some(floor);
 
     for index in grid.candidates_for_player(position) {
         let block = grid.block(index);

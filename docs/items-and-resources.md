@@ -3,10 +3,14 @@ title: Items, tools, resources, and gather rules
 owns: The two compile-time registries (REGISTERED_ITEMS, RESOURCE_NODE_DEFINITIONS), tool/material effectiveness, and the gather payout rule.
 when_to_read: Before adding or editing an item, tool, ore, resource node, or gather rule. The step-by-step lives in docs/playbooks/add-content.md.
 sources:
-  - src/items.rs - ItemDefinition, REGISTERED_ITEMS, tool_effectiveness_pct, DoorVariant, ItemId/intern_item_id
+  - src/items/registry.rs - ItemDefinition, REGISTERED_ITEMS, the item rows
+  - src/items/materials.rs - tool_effectiveness_pct, explosive_effectiveness_pct, DestructibleMaterial
+  - src/items/tools.rs, weapons.rs, armor.rs, ranged.rs, explosives.rs - the per-category profile structs and enums
+  - src/items/deployables.rs, upgrades.rs - DeployableKind, DoorVariant, DEPLOYABLE_UPGRADES
+  - src/items/ids.rs - id string consts, intern_item_id/ItemId
   - src/resources.rs - ResourceNodeDefinition, RESOURCE_NODE_DEFINITIONS, ToolRequirement, next_payout_from_storage
-  - src/game_balance.rs - tool durability/PvP-damage constants
-  - src/crafting.rs - RecipeStation
+  - src/game_balance.rs - tool durability/PvP-damage constants, weapon/armor/explosive constants
+  - src/crafting/types.rs - RecipeStation
   - src/server/chunk_manager/regrow.rs - node respawn timing
 related:
   - docs/crafting-and-deployables.md - recipes, the furnace/smelt path, deployable placement and damage
@@ -19,18 +23,20 @@ related:
 
 # Items, tools, resources, and gather rules
 
-> When to read this: before adding or editing an item, tool, ore, resource node, or gather rule. Source of truth: `src/items.rs`, `src/resources.rs`. Canonical invariants (no-em-dashes, balance-in-game_balance.rs, replicated-state rules) live in CLAUDE.md.
+> When to read this: before adding or editing an item, tool, ore, resource node, or gather rule. Source of truth: `src/items/`, `src/resources.rs`. Canonical invariants (no-em-dashes, balance-in-game_balance.rs, replicated-state rules) live in CLAUDE.md.
 
 Two compile-time `&'static` registries drive the economy:
 
-- `REGISTERED_ITEMS` in `src/items.rs` is every player-holdable thing: raw materials, four tools, the hammer, the building plan, the deployables, plus six hidden building-block definitions.
-- `RESOURCE_NODE_DEFINITIONS` in `src/resources.rs` is every world-spawnable node: three ores, a stone vein, six tree variants, and three crude E-pickup scatter nodes.
+- `REGISTERED_ITEMS` (in `src/items/registry.rs`) is every player-holdable thing: raw materials and refined intermediates, the tools, the hammer, the building plan, the weapons / armor / ranged weapons / explosives, the deployables, plus six hidden building-block definitions.
+- `RESOURCE_NODE_DEFINITIONS` in `src/resources.rs` is every world-spawnable node: three ores, a stone vein, the meteorite node, six tree variants, and three crude E-pickup scatter nodes.
 
 Both are slices baked into the binary. Adding an entry means editing the file and recompiling; there is no dynamic loading. This is intentional: the registries are tiny, and tying them to the binary version means a save file's string ids always resolve against a stable set on load.
 
+`src/items.rs` is now a thin front that re-exports the `src/items/` directory (`registry.rs` for the rows, `materials.rs` for the effectiveness tables and `DestructibleMaterial`, `tools.rs`/`weapons.rs`/`armor.rs`/`ranged.rs`/`explosives.rs` for the per-category profile structs and their enums, `deployables.rs`/`upgrades.rs` for `DeployableKind` and the upgrade table, `ids.rs` for the id consts, `visual.rs` for the mesh/model enums, `pickup.rs`). Call sites still say `crate::items::X`; the flat re-export means the split did not churn them.
+
 ## ItemDefinition shape
 
-`src/items.rs - ItemDefinition` has exactly these fields. The two an agent most often forgets are `description` and `equipable`; both are required on every entry or the slice fails to compile.
+`src/items/registry.rs - ItemDefinition` has exactly these fields. The two an agent most often forgets are `description` and `equipable`; both are required on every entry or the slice fails to compile. The five `Option<*Profile>` fields are a component-style shape: an item carries exactly the profiles that apply to it (a weapon has `weapon`, an armor piece has `armor`, most rows have none).
 
 | field | type | role |
 | --- | --- | --- |
@@ -39,13 +45,17 @@ Both are slices baked into the binary. Adding an entry means editing the file an
 | `description` | `&'static str` | tooltip copy, present on every entry. |
 | `stack_size` | `u16` | declared slot limit. |
 | `equipable` | `bool` | gates whether the item can be held in hand (read in `held.rs`, `tool_swap.rs`, `inventory/slot.rs`, `server/queries.rs`). Raw materials and the hidden building blocks are `false`. |
-| `model` | `ItemModel` | first-person animation archetype: `Bag`, `Hatchet`, `Pickaxe`, `Deployable`. Same-kind tools share an archetype (an iron hatchet swings exactly like a stone one). The hammer uses `Hatchet`. |
-| `held_mesh` | `HeldMesh` | first-person mesh: `Bag`, `StoneHatchet`, `IronHatchet`, `StonePickaxe`, `IronPickaxe`, `Hammer`, `BuildingPlan`. Decoupled from `model` so look and animation vary independently. Replicated as a 1-byte selector on `PlayerHeldItem` so peers render the right mesh without shipping the string id. |
+| `model` | `ItemModel` | first-person animation archetype. Now `Bag`, `Hatchet`, `Pickaxe`, `Deployable` plus the melee archetypes (club chop, spear thrust, sword arc, mace overhead) and the bow/crossbow draw archetypes. Same-kind items share an archetype. |
+| `held_mesh` | `HeldMesh` | first-person mesh selector: the tools (`StoneHatchet`, `IronHatchet`, `StonePickaxe`, `IronPickaxe`), `Hammer`, `BuildingPlan`, plus the weapon and explosive-prop meshes. Decoupled from `model` so look and animation vary independently. Replicated as a 1-byte selector on `PlayerHeldItem` so peers render the right mesh without shipping the string id. |
 | `tint` | `ItemTint` | `ItemTint::new(r, g, b)`, the placeholder/UI tint. |
-| `tool` | `Option<ToolProfile>` | present only for tools. |
+| `tool` | `Option<ToolProfile>` | present only for gather tools (`src/items/tools.rs`). |
+| `weapon` | `Option<WeaponProfile>` | present only for dedicated melee weapons (`src/items/weapons.rs`): `pvp_damage`, `reach_m`, `cooldown_ticks`, `knockback_speed`, `armor_pierce_pct`, `max_durability`. Combat resolution reads `weapon` first, then falls back to `tool`. |
+| `ranged` | `Option<RangedProfile>` | present only for the bow and crossbow (`src/items/ranged.rs`): draw/damage band, projectile speed, cooldown, ammo item. |
+| `armor` | `Option<ArmorProfile>` | present only for armor pieces (`src/items/armor.rs`): the worn `EquipmentSlot`, per-kind protection (melee / projectile / blast), and durability. |
+| `explosive` | `Option<ExplosiveProfile>` | present only for the four charges (`src/items/explosives.rs`): `ExplosiveKind`, base damage, radius, fuse ticks, delivery (`Placed` / `PlacedSticky` / `Thrown`), max health. |
 | `deployable` | `Option<DeployableProfile>` | present only for placeables. |
 
-`effective_stack_size()` short-circuits to `1` when `tool.is_some()`, regardless of the declared `stack_size`, because per-item durability rides on `ItemStack`, so two tools can never share a slot. Everything else stacks to its `stack_size`. The torch is an equipable deployable that is *not* a tool, so it stacks normally (`stack_size: 10`).
+`effective_stack_size()` short-circuits to `1` when the item carries per-item durability (tools, weapons, armor: two worn items can never share a slot). Everything else stacks to its `stack_size`. The torch is an equipable deployable that is *not* a tool, so it stacks normally (`stack_size: 10`); arrows stack to 24.
 
 Lookup goes through a build-once `OnceLock<HashMap<&'static str, &'static ItemDefinition>>`:
 
@@ -55,11 +65,11 @@ Lookup goes through a build-once `OnceLock<HashMap<&'static str, &'static ItemDe
 
 ### ItemId interning
 
-`src/items.rs - ItemId` is `Arc<str>`, not `String`. `intern_item_id(id)` returns the interned `Arc` for an id: registry constants resolve without allocating via an `RwLock<HashMap<Box<str>, Arc<str>>>` cache seeded from `REGISTERED_ITEMS`; unknown ids fall through to a fresh `Arc` that is then cached so subsequent hits also avoid allocating. Clones of an `ItemId` are a refcount bump. Deserialized ids reuse the cached `Arc` on a hit. `RecipeId` in `src/crafting.rs` is the same `Arc<str>` story.
+`src/items/registry.rs - ItemId` is `Arc<str>`, not `String`. `intern_item_id(id)` returns the interned `Arc` for an id: registry constants resolve without allocating via an `RwLock<HashMap<Box<str>, Arc<str>>>` cache seeded from `REGISTERED_ITEMS`; unknown ids fall through to a fresh `Arc` that is then cached so subsequent hits also avoid allocating. Clones of an `ItemId` are a refcount bump. Deserialized ids reuse the cached `Arc` on a hit. `RecipeId` in `src/crafting/types.rs` is the same `Arc<str>` story.
 
 ## ToolProfile and tier scaling
 
-`src/items.rs - ToolProfile` carries `kind` (`ToolKind`), `tier: u8`, `gather_amount: u16`, `cooldown_ticks: u64`, `max_durability: Option<u32>`, and `player_damage: u32`.
+`src/items/tools.rs - ToolProfile` carries `kind` (`ToolKind`), `tier: u8`, `gather_amount: u16`, `cooldown_ticks: u64`, `max_durability: Option<u32>`, and `player_damage: u32`.
 
 `ToolKind` is `Hands`, `Axe`, `Pickaxe`, `Hammer`. `Hands` is the `Default` and is synthesized via `HANDS_TOOL` when no tool is held, so the gather pipeline always has a profile to read; it is never a valid gather tool (see the crude-node rule below). The hammer never gathers and never damages (`gather_amount: 0`, `player_damage: 0`); its swing repairs and its wheel upgrades/demolishes.
 
@@ -72,26 +82,29 @@ Tier is how progression scales, with zero per-tool branching:
 
 `tier`, `gather_amount`, and `cooldown_ticks` are literals inline in `REGISTERED_ITEMS`. Only `max_durability` and `player_damage` pull from `src/game_balance.rs` (`STONE_TOOL_DURABILITY = 200`, `IRON_TOOL_DURABILITY = 600`, `HAMMER_DURABILITY = 600`, and the per-tool `*_PVP_DAMAGE` constants). Do not move tier/gather/cooldown into game_balance; they are intentionally inline.
 
-> The tier-2 gate is currently latent: no node in `RESOURCE_NODE_DEFINITIONS` requires `min_tier 2` (every ore and tree is `min_tier 1`). The iron upgrade is felt only through bigger `gather_amount`/`durability`/PvP, not through gated nodes. If you add a tier-2-only node, that is a new gameplay gate, call it out.
+> The tier-2 gate went live with the meteorite node: `METEORITE_NODE_ID` is the one row that requires `min_tier 2` (an iron pickaxe; a stone pickaxe is rejected). Every ore and tree is still `min_tier 1`, felt only through bigger `gather_amount`/`durability`/PvP. Meteorite is the first node that hard-gates on the iron upgrade, so it sits behind the furnace + iron loop; its worldgen (far rocky/ore chunks only, low density) lives in `src/world/chunk/` and is gated by `METEORITE_MIN_CENTER_DISTANCE_FRACTION` / `METEORITE_ORE_CHANNEL_FLOOR` in `game_balance.rs`.
 
-## Gather payout: yield comes from the tool, not the node
+## Gather payout: yield comes from the tool, optionally capped by the node
 
-There is no `yield_per_swing` field on the node. A node's `storage` is just its finite reservoir; the per-swing quantity scales with the *tool*.
+A node's `storage` is its finite reservoir; the per-swing quantity scales with the *tool*, clamped by the node's optional `per_swing_yield` cap (rare small-storage nodes only; `None` everywhere else).
 
-`src/resources.rs - next_payout_from_storage` is the one rule, shared by the server's `next_resource_payout` and the client-side gather prediction:
+`src/resources.rs - next_payout_from_storage` is the one rule, shared by the server's `next_resource_payout` and the client-side gather prediction (both resolve the cap from the same `ResourceNodeDefinition`):
 
 ```
 quantity = tool.gather_amount.max(1)            // 6 stone, 12 iron, 1 hands
+quantity = quantity.min(per_swing_yield)        // only if the node defines a cap
 // walk storage, take the first non-empty stack, grant min(stack.quantity, quantity)
 ```
 
-Server and client run the identical function so optimistic client gain matches the authoritative payout (test `client_storage_payout_matches_server_node_payout` in `src/resources.rs` checks this for all storage+tool combos). `storage` is a `&[ResourceMaterial]` list even though every current node has exactly one entry; the payout walks the first non-empty stack, do not assume one-item-per-node is enforced.
+The only capped node today is meteorite: `METEORITE_PER_SWING_YIELD = 2` (`game_balance.rs`) over its 8-item storage makes the rare find a deliberate 4-swing beat instead of one iron-pickaxe hit vaporising the node (tests `meteorite_takes_several_swings_to_exhaust`, `client_storage_payout_matches_server_node_payout`).
+
+Server and client run the identical function so optimistic client gain matches the authoritative payout (test `client_storage_payout_matches_server_node_payout` in `src/resources.rs` checks this for all storage+tool combos, uncapped and capped). `storage` is a `&[ResourceMaterial]` list even though every current node has exactly one entry; the payout walks the first non-empty stack, do not assume one-item-per-node is enforced.
 
 Reach is one knob per category: `PICKUP_RANGE = 3.4` (`src/items.rs`) for dropped items, `RESOURCE_GATHER_RANGE = 2.75` (`src/resources.rs`) for nodes. The server validates with lenient distance-only checks (`within_pickup_reach` / `within_gather_reach`) plus `PICKUP_SERVER_REACH_SLACK_M = 1.5` (`src/game_balance.rs`) so it doesn't false-reject a target the client already locked.
 
 ## ResourceNodeDefinition shape
 
-`src/resources.rs - ResourceNodeDefinition` has exactly these fields. There is **no** `capacity`, **no** `yield_per_swing`, **no** `yields_item_id`, and **no** regrow field.
+`src/resources.rs - ResourceNodeDefinition` has exactly these fields. There is **no** `capacity`, **no** `yields_item_id`, and **no** regrow field.
 
 | field | type | role |
 | --- | --- | --- |
@@ -100,6 +113,7 @@ Reach is one knob per category: `PICKUP_RANGE = 3.4` (`src/items.rs`) for droppe
 | `model` | `ResourceNodeModel` | which mesh family (ore/vein/tree-by-size/crude). Drives the render path and collider. |
 | `required_tool` | `ToolRequirement` | `{ kind, min_tier }`, not a bare `ToolKind`. |
 | `storage` | `&'static [ResourceMaterial]` | the finite reservoir; each `ResourceMaterial` is `{ item_id, quantity }`. A node spawns full from this. |
+| `per_swing_yield` | `Option<u16>` | per-swing extraction cap, clamping the tool's `gather_amount`. `None` (tool-limited) everywhere except rare small-storage nodes (meteorite: `Some(METEORITE_PER_SWING_YIELD)`). |
 | `anchor_height` | `f32` | vertical offset for the targeting anchor. |
 | `ray_radius` | `f32` | focus-cylinder radius for look-at targeting. |
 
@@ -119,7 +133,7 @@ A mined-out node respawns 5 to 15 minutes later (jittered) at a noise-valid chun
 
 ## The single tool-vs-material table
 
-`src/items.rs - tool_effectiveness_pct(ToolKind, DestructibleMaterial) -> u32` is the one place that answers "how well does tool X bite material Y", as an integer percentage multiplier. Every destructible-entity damage path reads through it instead of branching on entity type, so balancing a matchup is a one-line edit and a new material is one new arm.
+`src/items/materials.rs - tool_effectiveness_pct(ToolKind, DestructibleMaterial) -> u32` is the one place that answers "how well does tool X bite material Y", as an integer percentage multiplier. Every destructible-entity damage path reads through it instead of branching on entity type, so balancing a matchup is a one-line edit and a new material is one new arm. Its sibling `explosive_effectiveness_pct(ExplosiveKind, DestructibleMaterial) -> u32` lives right beside it and does the same job for the blast raid path (the percentages are in `game_balance.rs` under `*_EFFECTIVENESS_*_PCT`); see [docs/pvp-combat.md](pvp-combat.md) for the explosive raid math.
 
 | tool \ material | Wood | Stone | Sticks | WoodBuilding | StoneBuilding | MetalBuilding | Cloth |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -128,13 +142,13 @@ A mined-out node respawns 5 to 15 minutes later (jittered) at a noise-valid chun
 | Hammer | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Hands | 50 | 50 | 50 | 50 | 50 | 50 | 50 |
 
-Matched proper tool is roughly 1.5x, mismatched proper tool roughly 0.5x. `StoneBuilding` and `MetalBuilding` return `0` for every tool, so those entities are tool-proof by construction (only a future explosives path breaches them). The hammer returns `0` for everything, which closes the "hammer as a free raid tool" hole. `Hands` is a worst-case catch-all (bare hands are normally rejected upstream before reaching here).
+Matched proper tool is roughly 1.5x, mismatched proper tool roughly 0.5x. `StoneBuilding` and `MetalBuilding` return `0` for every tool, so those entities are tool-proof by construction; the explosives (through `explosive_effectiveness_pct`) are the intended breach path for them. The hammer returns `0` for everything, which closes the "hammer as a free raid tool" hole. `Hands` is a worst-case catch-all (bare hands are normally rejected upstream before reaching here).
 
-**Make a deployable tool-immune by giving it a 0-arm material, never by special-casing the damage handler.** The iron door is the worked example.
+**Make a deployable tool-immune by giving it a 0-arm material, never by special-casing the damage handler.** The iron door is the worked example. The same table shape carries the `Cloth` column the placed charges use, so a charge is fizzle-able by a defender's swing.
 
 ## DoorVariant: the immutable-identity pattern
 
-`src/items.rs - DoorVariant` (`HewnLog`, `Iron`) is the canonical example of immutable spawn identity. The variant travels on the replicated `Deployable` component and in the save, and is the single lookup for the door's item id, HP, raid material, and name:
+`src/items/deployables.rs - DoorVariant` (`HewnLog`, `Iron`) is the canonical example of immutable spawn identity. The variant travels on the replicated `Deployable` component and in the save, and is the single lookup for the door's item id, HP, raid material, and name:
 
 | variant | item id | `max_hp()` | `material()` |
 | --- | --- | --- | --- |
@@ -143,23 +157,32 @@ Matched proper tool is roughly 1.5x, mismatched proper tool roughly 0.5x. `Stone
 
 All accessors are `const fn`. Adding a door is one arm here plus a recipe and a model; nothing in the damage/placement/persistence paths changes.
 
-`DeployableKind` (the broader enum) has eight variants: `Workbench`, `Furnace`, `Building`, `Door`, `SleepingBag`, `StorageBox`, `Torch`, `ToolCupboard`. Its `material()` is the source of truth for each kind's `DestructibleMaterial`; `raidable()` flags which kinds anyone may damage. Placement, damage, and ownership for these live in [docs/crafting-and-deployables.md](crafting-and-deployables.md) and [docs/base-building-and-claims.md](base-building-and-claims.md).
+`DeployableKind` (the broader enum, `src/items/deployables.rs`) now has ten variants: `Workbench { tier }`, `Furnace { tier }`, `Building`, `Door`, `SleepingBag`, `StorageBox`, `Torch`, `ToolCupboard`, plus the `RuinCache` (v19) and `Explosive { kind }` (v20). Variants are postcard-encoded by index and appended only, never reordered. Its `material()` is the source of truth for each kind's `DestructibleMaterial` (a placed charge is `Cloth`, so a defender can shoot it out; a ruin cache is indestructible via its own damage guard); `raidable()` flags which kinds anyone may damage. The `Workbench` and `Furnace` `tier` fields are what the generic upgrade table (`src/items/upgrades.rs - DEPLOYABLE_UPGRADES`) mutates in place. Placement, damage, ownership, charges, and the tier upgrade all live in [docs/crafting-and-deployables.md](crafting-and-deployables.md) and [docs/base-building-and-claims.md](base-building-and-claims.md).
 
 ## Full roster
 
-**Raw materials / refined (`Bag` mesh, not equipable):** `wood`, `stone`, `coal`, `iron_ore`, `sulfur_ore`, `fiber`, `plant_twine`, `iron_bar`, `hewn_log`.
+**Raw materials / refined (`Bag` mesh, not equipable):** `wood`, `stone`, `coal`, `iron_ore`, `sulfur_ore`, `fiber`, `plant_twine`, `iron_bar`, `hewn_log`, plus the materials `sulfur` (smelted from sulfur ore), `cloth` (4 fiber to 1, hand-crafted armor padding / charge wrap), `gunpowder` (2 coal + 1 sulfur to 2, bench t1), `meteorite` (mined from the rare node), and `ancient_fittings` (looted from ruin caches, never craftable).
 
 **Tools (four, all equipable, all stack to 1):** `wood_stone_hatchet` (Axe t1), `wood_stone_pickaxe` (Pickaxe t1), `iron_hatchet` (Axe t2), `iron_pickaxe` (Pickaxe t2). Every tool is an authored Blender glb matched to its icon; see [docs/playbooks/art-pipeline.md](playbooks/art-pipeline.md).
 
+**Melee weapons (`weapon` profile, equipable, stack to 1):** `wooden_club` (12 dmg, fast, hand-crafted), `stone_spear` (16, reach 4.5 m, hand), `iron_sword` (20, bench t1), `iron_mace` (26, biggest knockback, 50% armor pierce, bench t2). Combat reads `weapon` before `tool`; weapons gather nothing and do hands-tier damage to structures (they are not raid tools).
+
+**Ranged weapons and ammo (`ranged` profile):** `wooden_bow` (hold-to-draw, 15 to 40 damage, bench t1: 12 wood + 6 plant twine + 2 cloth), `crossbow` (55, slow reload, bench t2: 6 hewn logs + 8 iron bars + 4 plant twine + 4 `ancient_fittings`, making it a ruin-loot sink), `arrow` (stacks to 24, ~50% recoverable, hand-crafted four at a time).
+
+**Armor (`armor` profile, 12 pieces = 3 sets x 4 slots):** the Padded, Lamellar, and Iron sets, each with a head / chest / legs / feet piece keyed to an `EquipmentSlot`. Worn in the four equipment slots, not the actionbar; visible on the third-person rig. Mitigation and slots are detailed in [docs/pvp-combat.md](pvp-combat.md).
+
+**Explosives (`explosive` profile):** `powder_bomb` (thrown, bench t1), `powder_keg` (placed, bench t1), `satchel_charge` (placed, bench t2). The two placed charges become a `DeployableKind::Explosive { kind }` when set; the bomb is lit on the throw and rides the projectile sim end to end (charged throw, bounce/roll, detonates in place). The ember charge was retired. See [docs/crafting-and-deployables.md](crafting-and-deployables.md).
+
 **Build/utility holdables:** `hammer` (Hammer tool, `Hatchet` animation, `Hammer` mesh), `building_plan` (`BuildingPlan` mesh, no tool/deployable).
 
-**Deployables (equipable, render as the bag in hand):** `workbench_t1`, `crude_furnace`, `hewn_log_door`, `iron_door`, `sleeping_bag`, `torch` (stacks to 10), `storage_box_small`, `storage_box_large`, `tool_cupboard`.
+**Deployables (equipable, render as the bag in hand):** `workbench_t1` (upgrades in place to tier 2), `crude_furnace`, `hewn_log_door`, `iron_door`, `sleeping_bag`, `torch` (stacks to 10), `storage_box_small`, `storage_box_large`, `tool_cupboard`. The `ruin_cache` is a world-spawned, non-placeable, indestructible loot container (`equipable: false`, no recipe).
 
 **Six hidden building-block defs** built via `building_piece_item`: foundation, wall, window wall, doorway, ceiling, stairs. Never craftable and never in an inventory; they exist so `DeployedEntity::item_id` resolves through the registry (saves, mirror views, colliders). Their `max_health` and `collider_half_width` are **placeholders**: the authoritative HP and colliders for placed building blocks come from `src/building.rs`, not the registry entry. Do not trust those numbers.
 
-**Resource nodes (13 in `RESOURCE_NODE_DEFINITIONS`):**
+**Resource nodes (14 in `RESOURCE_NODE_DEFINITIONS`):**
 
 - Ores (Pickaxe t1): `coal_node`, `iron_node`, `sulfur_node` (72 each), `stone_node` (Stone Vein, 96 stone).
+- Meteorite (Pickaxe t2, the one iron-gated node): `meteorite_node`, yielding `meteorite`. Rare, emissive, far-from-center rocky/ore chunks only (worldgen gating in `src/world/chunk/`); also runtime-spawned in rich clusters by a meteor shower impact.
 - Trees (Axe t1, six size variants): `pine_tree_small` / `pine_tree` / `pine_tree_large`, `birch_tree_small` / `birch_tree` / `birch_tree_large` (wood, scaling 18 to 84 by size). The un-suffixed ids (`pine_tree`, `birch_tree`) are the **medium** variants on purpose, so pre-size-variant saves load as medium without migration.
 - Crude (Hands, E-pickup): `surface_stone` (1 stone), `branch_pile` (1 wood), `hay_grass` (1 fiber).
 
@@ -179,7 +202,7 @@ The client mirrors replicated nodes into local `NetworkResourceNode` visuals via
 
 ## Smelting is not in the recipe registry
 
-`src/crafting.rs - RecipeStation` has only two variants: `None` (hand-craftable) and `Workbench { min_tier }`. A workbench tier 2 satisfies a tier-1 requirement, mirroring tool tiers. **There is no `Furnace` variant.** Smelting happens inside the furnace's own UI, not the recipe registry: `smelt_result` in `src/server/furnace/state.rs` today maps only `iron_ore -> iron_bar`, and extending it is a one-line change. The recipe queue, furnace state machine, loot bags, and deployable damage all live in [docs/crafting-and-deployables.md](crafting-and-deployables.md).
+`src/crafting/types.rs - RecipeStation` has only two variants: `None` (hand-craftable) and `Workbench { min_tier }`. A workbench tier 2 satisfies a tier-1 requirement, mirroring tool tiers. **There is no `Furnace` variant.** Smelting happens inside the furnace's own UI, not the recipe registry: `smelt_result` in `src/server/furnace/state.rs` maps `iron_ore -> iron_bar` and `sulfur_ore -> sulfur`, and extending it is a one-line change. The recipe queue, furnace state machine, loot bags, deployable damage, the workbench tier upgrade, and the placed charges all live in [docs/crafting-and-deployables.md](crafting-and-deployables.md).
 
 ## ID hygiene
 

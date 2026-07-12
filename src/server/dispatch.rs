@@ -87,6 +87,9 @@ impl GameServer {
                 self.apply_place_deployable_command(client_id, command)
             }
             ClientMessage::Furnace(command) => self.apply_furnace_command(client_id, command),
+            ClientMessage::Workbench(command) => self.apply_workbench_command(client_id, command),
+            ClientMessage::Ranged(command) => self.apply_ranged_command(client_id, command),
+            ClientMessage::Explosive(command) => self.apply_explosive_command(client_id, command),
             ClientMessage::DamageDeployable(command) => {
                 self.apply_damage_deployable_command(client_id, command)
             }

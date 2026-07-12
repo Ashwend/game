@@ -33,7 +33,7 @@ use crate::app::state::{ClientRuntime, ClientSettings};
 use super::{
     category::{SoundCategory, category_volume},
     fader::AudioFader,
-    library::{SoundLibrary, spawn_managed_loop},
+    library::{SoundLibrary, spawn_managed_sound},
     manifest::{SoundId, sound_defaults},
 };
 
@@ -186,7 +186,7 @@ pub(crate) fn manage_ambient_beds_system(
         && let Some(zone) = zone.0
     {
         let defaults = sound_defaults(id);
-        if let Some(entity) = spawn_managed_loop(
+        if let Some(entity) = spawn_managed_sound(
             &mut commands,
             &library,
             &settings,
@@ -194,6 +194,7 @@ pub(crate) fn manage_ambient_beds_system(
             None,
             0.0,
             0.0, // start silent
+            true,
         ) {
             let target = category_volume(
                 SoundCategory::AmbientBed,
@@ -243,7 +244,7 @@ pub(crate) fn manage_ambient_emitters_system(
             (true, None) => {
                 // Just came into range, spawn the loop entity, fade in.
                 let defaults = sound_defaults(emitter.id);
-                if let Some(entity) = spawn_managed_loop(
+                if let Some(entity) = spawn_managed_sound(
                     &mut commands,
                     &library,
                     &settings,
@@ -251,6 +252,7 @@ pub(crate) fn manage_ambient_emitters_system(
                     Some(emitter.anchor),
                     emitter.gain_offset_db,
                     0.0,
+                    true,
                 ) {
                     let target = category_volume(
                         SoundCategory::AmbientEmitter,

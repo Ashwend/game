@@ -3,23 +3,34 @@ use bevy::prelude::*;
 use crate::app::{
     EYE_HEIGHT,
     scene::{MainCamera, NetworkPlayer},
-    state::{ClientRuntime, ClientSettings, MenuState, Screen},
+    state::{ClientRuntime, ClientSettings, MenuState, RangedDrawState, Screen},
 };
 
-use super::effects::{CameraImpactKick, CameraMotionEffects};
+use super::effects::{CameraImpactKick, CameraMotionEffects, KickScales};
 
 type FollowCameraData = (&'static mut Transform, Option<&'static mut Projection>);
 type FollowCameraFilter = (With<MainCamera>, Without<NetworkPlayer>);
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn camera_follow_system(
     runtime: Res<ClientRuntime>,
     menu: Res<MenuState>,
     settings: Res<ClientSettings>,
+    ranged: Res<RangedDrawState>,
     time: Res<Time>,
     mut kick: ResMut<CameraImpactKick>,
     mut motion: ResMut<CameraMotionEffects>,
     mut camera: Query<FollowCameraData, FollowCameraFilter>,
 ) {
+    // Refresh the dev combat-feel kick scales every frame before anything can
+    // early-return, so every `CameraImpactKick::trigger` call site (in any
+    // system, regardless of ordering) reads the current tuning. Neutral scales
+    // (both 1.0) leave the kick byte-identical, so a release build is unaffected.
+    kick.set_scales(KickScales {
+        magnitude: settings.dev.combat.kick_magnitude_scale,
+        duration: settings.dev.combat.kick_duration_scale,
+    });
+
     if menu.screen != Screen::InGame {
         motion.reset();
         return;
@@ -52,6 +63,14 @@ pub(crate) fn camera_follow_system(
         .unwrap_or((0.0, 0.0, true));
 
     motion.advance(time.delta_secs(), horizontal_speed, grounded, fall_speed);
+    // Ranged FOV pinch: tighten toward full bow draw or full crossbow ADS,
+    // ease back out when the hold ends (both fractions are 0 whenever nothing
+    // is held, so release / cancel / swap all restore through the same decay).
+    motion.advance_ranged_pinch(
+        time.delta_secs(),
+        ranged.draw_fraction(),
+        ranged.aim_fraction(),
+    );
 
     let feet = Vec3::from(player.position);
     let eye = feet + Vec3::Y * EYE_HEIGHT;
@@ -115,6 +134,7 @@ mod tests {
         app.insert_resource(Time::<()>::default());
         app.insert_resource(CameraImpactKick::default());
         app.insert_resource(CameraMotionEffects::default());
+        app.insert_resource(RangedDrawState::default());
         app.world_mut().spawn((
             MainCamera,
             Transform::from_xyz(0.0, 0.0, 0.0),

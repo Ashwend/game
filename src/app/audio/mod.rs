@@ -54,6 +54,7 @@ pub(crate) use ambient::{
     AmbientBed, AmbientEmitter, AmbientZone, CurrentAmbientZone, manage_ambient_beds_system,
     manage_ambient_emitters_system,
 };
+pub(crate) use category::category_volume;
 #[expect(
     unused_imports,
     reason = "future-facing audio API surface; some items not wired up yet"
@@ -65,11 +66,9 @@ pub(crate) use footsteps::{FootstepState, play_footsteps_system};
     reason = "future-facing audio API surface; some items not wired up yet"
 )]
 pub(crate) use impact::{emit_tree_fall_sound, play_impact_sounds_system};
-#[expect(
-    unused_imports,
-    reason = "future-facing audio API surface; some items not wired up yet"
-)]
-pub(crate) use library::{PlaySound, SoundLibrary, play_sounds_system, setup_sound_library};
+pub(crate) use library::{
+    PlaySound, SoundLibrary, play_sounds_system, setup_sound_library, spawn_managed_sound,
+};
 pub(crate) use manifest::SoundId;
 #[expect(
     unused_imports,

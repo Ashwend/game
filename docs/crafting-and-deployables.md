@@ -3,15 +3,23 @@ title: Crafting queue, furnace, and the unified deployable system
 owns: The placed-object layer (one DeployedEntity struct for every deployable kind) plus the serial per-player crafting queue, the furnace smelt state machine, torches, and loot bags.
 when_to_read: Before touching crafting, furnaces, deployable placement/damage/destroy/spill, torches, loot bags, or adding a new deployable kind.
 sources:
-  - src/server/deployables.rs - DeployedEntity struct, apply_place_deployable_command, apply_damage_deployable_command, destroy_deployed_entity, spill_container_contents, place_torch
+  - src/server/deployables.rs - DeployedEntity struct, apply_place_deployable_command, apply_damage_deployable_command, destroy_deployed_entity, spill_container_contents, place_torch, place_charge
   - src/server/crafting.rs - apply_crafting_command, enqueue_craft, cancel_craft, tick_crafting, cancel_all_jobs_for_disconnect
-  - src/crafting.rs - REGISTERED_RECIPES, RecipeDefinition, RecipeStation, repair_material_for, MAX_CRAFTING_QUEUE_LEN
+  - src/server/workbench.rs - apply_workbench_command, the tier upgrade via DEPLOYABLE_UPGRADES
+  - src/server/fuse.rs - FuseState, tick_fuses, detonate_charge
+  - src/server/explosion.rs - resolve_explosion
+  - src/server/defuse.rs - the claim-authorized defuse + refund
+  - src/server/ruin_cache.rs - RuinCacheState, tick_ruin_caches, roll_loot
+  - src/crafting/registry.rs - REGISTERED_RECIPES, RecipeCategory
+  - src/crafting/types.rs - RecipeDefinition, RecipeStation, MAX_CRAFTING_QUEUE_LEN
   - src/server/furnace/state.rs - FurnaceState, smelt_result, fuel_burn_ticks_for, FurnaceContainer
   - src/server/furnace/tick.rs - tick_one_furnace, tick_furnaces
   - src/server/furnace/commands.rs - apply_furnace_command, set_open_furnace_active, place_in_fuel_slot_with_swap
   - src/server/torch.rs - TorchState, tick_torches
   - src/server/loot_bag.rs - LootBag, OpenContainer, close_container, spawn_loot_bag, sleeper_is_lootable
-  - src/items.rs - DeployableKind, DoorVariant, raidable, material, tool_effectiveness_pct
+  - src/items/deployables.rs - DeployableKind, DoorVariant, raidable, material
+  - src/items/materials.rs - tool_effectiveness_pct, explosive_effectiveness_pct
+  - src/items/upgrades.rs - DEPLOYABLE_UPGRADES
   - src/game_balance.rs - all tuning constants referenced here
 related:
   - docs/base-building-and-claims.md - building pieces, stability, doors, and the Tool Cupboard claim that ride this same deployable pipeline
@@ -26,7 +34,7 @@ related:
 
 > When to read this: before touching crafting, furnaces, deployable placement/damage, loot bags, or adding a new deployable kind. Source of truth: `src/server/deployables.rs`, `src/server/crafting.rs`, `src/server/furnace/`, `src/server/torch.rs`, `src/server/loot_bag.rs`. Canonical invariants live in CLAUDE.md.
 
-This is the server-authoritative "placed stuff and crafting" layer. Three interaction surfaces share one pattern: authoritative state on `GameServer`, a client UI that reads replicated state and sends commands, and per-component replication of the result. Base building, doors, and the Tool Cupboard claim ride the same deployable pipeline but are documented in [base-building-and-claims.md](base-building-and-claims.md); this doc owns the deployable substrate they sit on, plus crafting, furnaces, torches, and loot bags.
+This is the server-authoritative "placed stuff and crafting" layer. Several interaction surfaces share one pattern: authoritative state on `GameServer`, a client UI that reads replicated state and sends commands, and per-component replication of the result. Base building, doors, and the Tool Cupboard claim ride the same deployable pipeline but are documented in [base-building-and-claims.md](base-building-and-claims.md); this doc owns the deployable substrate they sit on, plus crafting, furnaces, torches, loot bags, the workbench tier upgrade, placed explosive charges, and world-spawned ruin caches.
 
 ## The central invariant: one DeployedEntity for every placed object
 
@@ -34,15 +42,15 @@ Every placed object in the world, workbench, furnace, building block, door, slee
 
 - Identity that is immutable post-spawn: `id`, `item_id`, `kind: DeployableKind`, `position`, `yaw`, `owner: Option<AccountId>`, `placed_at_tick`.
 - Mutable shared state: `health`, `max_health`, `label: Option<String>`, `stability: u8`.
-- One `Option<_>` sub-state field per kind that needs extra state: `furnace: Option<FurnaceState>`, `door: Option<DoorState>`, `storage: Option<StorageBoxState>`, `torch: Option<TorchState>`, `cupboard: Option<CupboardState>`. Every other kind leaves these `None`.
+- One `Option<_>` sub-state field per kind that needs extra state: `furnace: Option<FurnaceState>`, `door: Option<DoorState>`, `storage: Option<StorageBoxState>`, `torch: Option<TorchState>`, `cupboard: Option<CupboardState>`, plus `fuse: Option<FuseState>` (a live placed charge) and `ruin_cache: Option<RuinCacheState>` (a world-spawned loot cache's refill timer). Every other kind leaves these `None`.
 
-`DeployableKind` (`src/items.rs` - `DeployableKind`) has these variants: `Workbench { tier }`, `Furnace { tier }`, `Building { piece, tier }`, `Door { variant }`, `SleepingBag`, `StorageBox { tier }`, `Torch { wall }`, `ToolCupboard`. The enum is positional in postcard saves and on the wire, so new variants MUST append at the end and a new field on an existing fieldless variant changes the layout (see the save-format note below).
+`DeployableKind` (`src/items/deployables.rs` - `DeployableKind`) has these variants: `Workbench { tier }`, `Furnace { tier }`, `Building { piece, tier }`, `Door { variant }`, `SleepingBag`, `StorageBox { tier }`, `Torch { wall }`, `ToolCupboard`, plus `RuinCache` (v19) and `Explosive { kind }` (v20). The enum is positional in postcard saves and on the wire, so new variants MUST append at the end and a new field on an existing fieldless variant changes the layout (see the save-format note below).
 
 ### Add-a-deployable-kind recipe
 
 To add a placed object that carries new state, touch these five points (all in `src/server/deployables.rs` unless noted):
 
-1. **Add the `DeployableKind` variant** at the end of the enum (`src/items.rs`), plus its `name()`, `material()`, and `raidable()` arms.
+1. **Add the `DeployableKind` variant** at the end of the enum (`src/items/deployables.rs`), plus its `name()`, `material()`, and `raidable()` arms.
 2. **Add a sub-state field** `Option<MyState>` to `DeployedEntity` (skip if the kind is stateless). Default it to `None` in `DeployedEntity::new`.
 3. **Initialise it on place** in `apply_place_deployable_command` (the `if matches!(entity.kind, ...)` block after insert), mirroring how furnaces get `FurnaceState::default()` and boxes get `StorageBoxState::new(tier)`.
 4. **Restore and persist it** in `restore_deployed_entities` and `persisted_deployed_entities`, and add the matching `Option<>` to `PersistedDeployedEntity` (`src/save/`). Bump `SAVE_FORMAT_VERSION`.
@@ -69,15 +77,27 @@ Strictly serial, one queue per player. State lives on the per-client `crafting: 
 
 ### Recipe registry
 
-`REGISTERED_RECIPES: &[RecipeDefinition]` in `src/crafting.rs` is the append-only source of truth. `RecipeDefinition` fields: `id`, `name`, `description`, `category: RecipeCategory` (`Materials | Tools | Building | Misc`), `inputs: &[CraftingInput]`, `output_item`, `output_quantity`, `craft_seconds: f32`, `tier: u8` (browser sort order only, `0` = primitive, `1` = stone, `2` = iron), `station: RecipeStation`. Adding a recipe = appending one entry; keep ids stable since queued jobs and saves reference them. Registry tests assert every input/output resolves to a known item. Step-by-step in [playbooks/add-content.md](playbooks/add-content.md).
+`REGISTERED_RECIPES: &[RecipeDefinition]` in `src/crafting/registry.rs` is the append-only source of truth (`src/crafting.rs` is now a thin front re-exporting `registry.rs` for the rows and `types.rs` for the shapes). `RecipeDefinition` fields: `id`, `name`, `description`, `category: RecipeCategory` (`Materials | Tools | Weapons | Armor | Explosives | Building | Misc`, the combat categories back the browser filter chips), `inputs: &[CraftingInput]`, `output_item`, `output_quantity`, `craft_seconds: f32`, `tier: u8` (browser sort order ONLY, higher surfaces first; it is NOT the station tier and does not gate anything, `station.min_tier` gates), `station: RecipeStation`. Adding a recipe = appending one entry; keep ids stable since queued jobs and saves reference them. Registry tests assert every input/output resolves to a known item. Step-by-step in [playbooks/add-content.md](playbooks/add-content.md).
+
+The list also holds the cloth and gunpowder intermediates, the four melee-weapon recipes, the three ranged recipes (wooden_bow, crossbow, arrow), the twelve armor-piece recipes, and the four explosive recipes. The bow and crossbow craft at their workbench tiers (t1 and t2), arrows craft by hand four at a time.
 
 ### Stations
 
-`RecipeStation` is `None` or `Workbench { min_tier }`. `station_in_range` (`src/server/deployables.rs`) scans the player's placed deployables for one whose kind satisfies the station within that deployable's `station_radius` profile field. Station gating is enforced at craft time only, not at placement: a player who somehow holds a furnace can place it without a workbench.
+`RecipeStation` is `None` or `Workbench { min_tier }`. `station_in_range` (`src/server/deployables.rs`) scans the player's placed deployables for one whose kind satisfies the station within that deployable's `station_radius` profile field. A tier-2 workbench satisfies a tier-1 requirement (`tier >= min_tier`), mirroring tool tiers. Station gating is enforced at craft time only, not at placement: a player who somehow holds a furnace can place it without a workbench.
+
+### Workbench tiers and the generic upgrade
+
+A placed workbench upgrades in place from tier 1 to tier 2; it is not a separate deployable. The upgrade path is DATA, not workbench-shaped code: `src/items/upgrades.rs - DEPLOYABLE_UPGRADES` declares `(from kind, to kind, cost)` rows (today the one row is Workbench t1 to t2 for 30 iron_bar + 6 ancient_fittings + 4 meteorite), and `upgrade_for(kind)` looks up the available upgrade. Because `DeployableKind::Furnace { tier }` already exists, a furnace tier 2 later is a table row, not new plumbing.
+
+The client opens the bench with tap-E, which sets the replicated `open_workbench` pointer (`OpenWorkbenchView { id, tier }` on `PlayerPrivate`, the furnace-view pattern). `src/app/ui/workbench.rs - workbench_ui` renders the current tier, a blurb, and the cost list read from the compile-time upgrade table (costs never travel the wire), with an Upgrade button gated on client-side affordability. The server handler (`src/server/workbench.rs - apply_workbench_command`, `WorkbenchCommand::{Open, Close, Upgrade}`) re-validates entity, kind, range, and materials, consumes the cost, and mutates the kind.
+
+Replication gotcha (the identity-component rule): `DeployableKind` is an immutable identity component post-spawn. The upgrade therefore removes and re-inserts the entry under the SAME id (plain remove + insert, not the `_tracked` variants), so the mirror despawns and respawns the entity with the new kind and model. The model swap is instant anyway, so the client-side respawn is invisible. Do not add a separate mutable tier component; that would split tier across two sources of truth.
+
+The crafting browser also learned to show station requirements: a recipe gated behind `Workbench { min_tier: N }` the player cannot satisfy renders a grey "Requires Workbench Tier N" state rather than nothing (the server always enforced the gate; only the UI hint is new). Client can mirror station proximity for the label because deployable kinds replicate to peers.
 
 ### Crafting UI
 
-- `src/app/ui/crafting/` (a directory: `mod.rs`, `recipes.rs`, `rows.rs`, `filter.rs`, `tests.rs`), the full-screen recipe browser with category filter chips and search. (Legacy docs cited a single `src/app/ui/crafting.rs`; that file no longer exists.)
+- `src/app/ui/crafting/` (a directory: `mod.rs`, `recipes.rs`, `filter.rs`, `list.rs`, `details.rs`, `icon.rs`, `tests.rs`), the master/detail recipe browser: a searchable, category-filtered recipe list on the left (item icons + craftable-status dots) and a detail card on the right (description, per-ingredient have/need, batch quantity, Craft). Selection lives in `CraftingUiState::selected_recipe`. (Legacy docs cited a single `src/app/ui/crafting.rs` and later a per-row `rows.rs`; neither exists anymore.)
 - `src/app/ui/crafting_queue.rs`, the always-on HUD stack that survives closing the browser and extrapolates the head job's progress bar between replication frames.
 
 ## Furnace smelt state machine
@@ -93,7 +113,7 @@ Furnaces are deployables with a `FurnaceState` sub-state (`src/server/furnace/st
 **Fuel and recipes** (the two extension points for new smelt content):
 
 - `fuel_burn_ticks_for`: `wood` burns `FURNACE_WOOD_BURN_TICKS` (4s), `coal` burns `FURNACE_COAL_BURN_TICKS` (16s).
-- `smelt_result`: only `iron_ore -> iron_bar` exists today. One output per `FURNACE_SMELT_TICKS_PER_OUTPUT` (6s). Add a smelt recipe by extending `smelt_result` (and `fuel_burn_ticks_for` for a new fuel).
+- `smelt_result`: `iron_ore -> iron_bar` and `sulfur_ore -> sulfur`. One output per `FURNACE_SMELT_TICKS_PER_OUTPUT` (6s). Add a smelt recipe by extending `smelt_result` (and `fuel_burn_ticks_for` for a new fuel). The sulfur smelt is what activates the gunpowder chain (gunpowder is a bench t1 recipe, 2 coal + 1 sulfur to 2).
 
 **Smelt loop** (`tick_one_furnace`):
 
@@ -128,9 +148,9 @@ On success it assigns the id, initialises any kind sub-state, inserts, and track
 
 1. Per-tool cooldown: the swing obeys the same `next_gather_tick` throttle as gathering.
 2. Bare hands rejected (`ToolKind::Hands`), defence in depth behind the client gate.
-3. **Ownership gate:** if the attacker is not an admin AND the kind is not `raidable()` AND it has an owner that is not the attacker, the hit is dropped. `DeployableKind::raidable()` (`src/items.rs`) returns `true` for `Building`, `Door`, `SleepingBag`, **and `ToolCupboard`** (the cupboard is a deliberately raidable soft target; destroying it lifts the claim). World-spawned entities (`owner = None`) are damageable by anyone. Non-raidable player-placed entities (workbench, furnace) only by their owner. Admins bypass for moderation.
+3. **Ownership gate:** if the attacker is not an admin AND the kind is not `raidable()` AND it has an owner that is not the attacker, the hit is dropped. `DeployableKind::raidable()` (`src/items/deployables.rs`) returns `true` for `Building`, `Door`, `SleepingBag`, **and `ToolCupboard`** (the cupboard is a deliberately raidable soft target; destroying it lifts the claim). World-spawned entities (`owner = None`) are damageable by anyone. Non-raidable player-placed entities (workbench, furnace) only by their owner. The ruin cache early-returns as indestructible regardless. Admins bypass for moderation.
 4. **Range to the collider surface, not the centre:** `within_horizontal_range_of_blocks(player_pos, resolved_collider_blocks, DEPLOYABLE_DAMAGE_RANGE_M)` (3.0). This is load-bearing: a foundation is a 3 m slab whose centre sits out of range while its edge is at the player's feet, and a swung-open door panel's collider moves. Centre-distance would silently drop those hits.
-5. Damage = `tool.gather_amount * DEPLOYABLE_DAMAGE_PER_GATHER_POINT (5) * tool_effectiveness_pct(tool.kind, kind.material()) / 100`. The decrement goes through `deployed_entity_mut` so `DeployableHealth` re-syncs. Stone-tier and metal building materials return 0% for every tool by construction (tool-proof). Then the swing cooldown is applied and the active tool's durability is consumed.
+5. Damage = `tool.gather_amount * DEPLOYABLE_DAMAGE_PER_GATHER_POINT (5) * tool_effectiveness_pct(tool.kind, kind.material()) / 100` (`tool_effectiveness_pct` lives in `src/items/materials.rs`). The decrement goes through `deployed_entity_mut` so `DeployableHealth` re-syncs. Stone-tier and metal building materials return 0% for every tool by construction (tool-proof); explosives are the intended breach path, routing through `explosive_effectiveness_pct` on the detonation side instead. Then the swing cooldown is applied and the active tool's durability is consumed.
 
 ### Destroy and spill
 
@@ -144,13 +164,26 @@ A torch (`src/server/torch.rs` - `TorchState`) is a deployable carrying `{ activ
 
 `tick_torches` counts `burn_ticks_left` down while lit (`TORCH_BURN_TICKS`, 8 hours) and extinguishes at 0. Like the furnace, only the `active` flip is replicated (`DeployableActive`), flagged dirty only on the extinguish edge; the steady countdown is server-only and persisted, so a reload resumes the timer.
 
+## Explosives: placed charges, fuses, detonation, defuse
+
+The two placed charges (powder keg, satchel charge) become a `DeployableKind::Explosive { kind }` when set, carrying a `FuseState` sub-state (`src/server/fuse.rs`). This is the torch/furnace timer pattern verbatim: `FuseState { armed, ticks_left }`, ticked by `tick_fuses` beside `tick_torches`, with the countdown server-only (never in the replication delta) and only a replicated flag flipping. A placed charge arms the instant it is set and hisses for 8 to 9 s (`POWDER_KEG_FUSE_TICKS` / `SATCHEL_CHARGE_FUSE_TICKS`). (The wall-sticking ember charge was retired; `ExplosiveKind` kept its first three variants stable, so saves and the wire are unaffected.)
+
+- **Placement** (`place_charge` in `src/server/deployables.rs`): reach-gated like any deployable but it SKIPS the claim gate (raiding into an enemy claim is the point) and skips the footprint-overlap check (like torches). The thrown powder bomb is not placed at all: holding left click charges the throw like a bow draw (client `ThrowChargeState`, min fraction `POWDER_BOMB_MIN_THROW_FRACTION`, HUD reuses the ranged draw bar) and release sends `ClientMessage::Explosive(ExplosiveCommand::Throw { aim_dir, power })`. The server lights the fuse at the throw, scales launch speed by the clamped power (`POWDER_BOMB_MIN/MAX_THROW_SPEED_MPS`), and the bomb lives its whole life in the projectile sim: it bounces and rolls off solids (`step_thrown_explosive` in `src/server/projectiles.rs`, restitution + bounce friction in `game_balance`) and detonates IN PLACE via `resolve_explosion` when `POWDER_BOMB_FUSE_TICKS` runs out, never converting into a deployable (so it cannot be defused or fizzled; its short fuse is the counterplay window). The collider is a SPHERE of just the cloth ball (`POWDER_BOMB_BALL_RADIUS_M`; the fuse cap never collides): the sim sweeps the ball center against radius-inflated AABBs and a radius-lifted ground plane, and the client sinks the mesh by the same radius under the visual root and rolls it at `speed / radius`, so the bomb rolls smoothly on its ball and eases upright at rest (fuse tip surfaced for its spark rig).
+- **Fizzle:** a charge is `Cloth` material with `EXPLOSIVE_CHARGE_HP = 50`, so a defender can shoot or hit it to 0 through the normal deployable-damage path. That destroys it with no detonation, no refund, and an owner toast (distinct from a defuse).
+- **Detonation** (`detonate_charge` -> `src/server/explosion.rs - resolve_explosion`): at fuse zero the server resolves the blast. `resolve_explosion(center, kind)` applies `base_damage * explosive_effectiveness_pct(kind, material) * linear_falloff` to building pieces, doors, and deployables through the existing damage path (so `refresh_structural_stability` handles collapse), and `Blast` damage with falloff to players (self included) through the shared `apply_player_damage` tail. Resource nodes and ruin caches are deliberately untouched. Then it emits the cosmetic `ServerMessage::Explosion { position, kind }` cue within `EXPLOSION_CUE_RANGE_M` = 120 m. The effectiveness matrix and its raid-cost tests are in [items-and-resources.md](items-and-resources.md) and `src/server/tests/explosives.rs`; the raid math and damage-kind detail are in [pvp-combat.md](pvp-combat.md).
+- **Defuse** (`src/server/defuse.rs`, `ExplosiveCommand::Defuse { id }`): a claim-authorized defender within `EXPLOSIVE_DEFUSE_REACH_M` = 5 m can hold-E defuse a live charge (a charge outside any claim is defusable by anyone). It removes the charge without detonation and refunds half the recipe materials (`EXPLOSIVE_DEFUSE_REFUND_NUMERATOR/DENOMINATOR`, floored), overflow dropping at the defuser's feet. The client drives it through the same hold-E wheel as door/bag/cupboard actions (`WheelAction::DefuseCharge`).
+
+## Ruin caches
+
+A `DeployableKind::RuinCache` (`src/server/ruin_cache.rs`) is a world-spawned loot container inside a ruin POI, reusing the storage-box container (loot lives in `DeployedEntity::storage`, opened via `ClientMessage::OpenStorageBox` broadened to accept the cache kind at `RUIN_CACHE_INTERACT_RANGE_M`, `RUIN_CACHE_SLOT_COUNT = 6`). It is the only source of `ancient_fittings`. Server-only refill state is `RuinCacheState { refill_at_tick, refill_counter }`, ticked by `tick_ruin_caches` beside the furnace: on empty it schedules `RUIN_CACHE_REFILL_TICKS`, and on fire it rolls `roll_loot(cache_id, refill_counter)` (seeded: always ancient_fittings, weighted gunpowder / iron_bar / cloth, rare meteorite). Caches spawn on fresh worldgen (owner `None`), are indestructible (the damage path early-returns on the kind), and are not player-placeable (`equipable: false`, no recipe). Placement and the seed-pure ruin layout live in [worlds-and-saves.md](worlds-and-saves.md).
+
 ## Loot bags
 
 A loot bag (`src/server/loot_bag.rs` - `LootBag`) is the container spawned at a dead player's feet holding everything the corpse carried, in `GameServer::loot_bags: HashMap<LootBagId, LootBag>`. It also receives spilled container contents (above). `LOOT_BAG_SLOT_COUNT` matches inventory + actionbar.
 
 **Settle physics:** a bag spawns at chest height (`BAG_SPAWN_HEIGHT_M = 1.0`) and gravity-settles straight down to `rest_y`, the highest support surface under its XZ (world floor or any building/deployable top, scanned at spawn). Once `resting`, it skips per-tick integration, so the cost is O(spawned-this-tick), not O(every-bag). `unsettle_loot_bags_on` re-floats bags when their support is destroyed so they fall to the next surface.
 
-**Interact range:** `LOOT_BAG_INTERACT_RANGE_M = 4.5`, deliberately looser than the 3.0 swing range so a kill that knocks the corpse a step away does not put the loot out of reach. Every `Move`/`QuickTransfer` re-validates range, same as the furnace.
+**Interact range:** `LOOT_BAG_INTERACT_RANGE_M = 4.5`, deliberately looser than the 3.5 m melee swing range (`COMBAT_ATTACK_RANGE_M`) so a kill that knocks the corpse a step away does not put the loot out of reach. Every `Move`/`QuickTransfer` re-validates range, same as the furnace.
 
 **Lifetime: NOT implemented.** The only despawn path is `close_container` GC of an **empty** bag that no one has open (`src/server/loot_bag.rs`). A lifetime/expiry sweep is an explicit future TODO; `spawn_tick` is dead-code-annotated bookkeeping for a future loot-glint cue. Do not document a lifetime sweep as shipped.
 
@@ -166,8 +199,8 @@ A loot bag (`src/server/loot_bag.rs` - `LootBag`) is the container spawned at a 
 
 - **Authority is single files, not directories.** Edit `src/server/deployables.rs` and `src/server/loot_bag.rs` directly. The same-named subdirectories hold only `tests.rs` (and `loot_bag/slots.rs`); there is no `mod.rs` with the implementation.
 - **`src/protocol/` is a directory** (`commands.rs`, `messages.rs`, `mod.rs`, `items.rs`, ...). `MAX_CRAFT_BATCH_SIZE` and `FURNACE_ITEM_SLOT_COUNT` live in `src/protocol/mod.rs`; `OpenFurnaceView`, `CraftingCommand`, `FurnaceCommand`, `LootBagCommand`, and `PlaceDeployableCommand` in `src/protocol/commands.rs`.
-- **`src/app/ui/crafting/` is a directory.** Only `src/app/ui/crafting_queue.rs`, `src/app/ui/furnace.rs`, `src/app/ui/loot_bag.rs`, and `src/app/ui/deployable_overlay.rs` (the look-at tooltip showing stability % and HP) are single files.
-- **Save format is at `SAVE_FORMAT_VERSION = 17`** (`src/save/format.rs`). This slice persists five deployable sub-states on `PersistedDeployedEntity`: furnace, door, storage box, torch, cupboard. `DeployableKind` and its inner enums are positional in postcard, so **any new variant appends at the end and any new field on a variant bumps the version**; reordering silently reinterprets old saves. Stability and claim footprints are **not** persisted, they are recomputed on load.
+- **`src/app/ui/crafting/` is a directory.** `src/app/ui/crafting_queue.rs`, `src/app/ui/furnace.rs`, `src/app/ui/workbench.rs` (the tier-upgrade overlay), `src/app/ui/loot_bag.rs`, and `src/app/ui/deployable_overlay.rs` (the look-at tooltip showing stability % and HP) are single files.
+- **Save format is at `SAVE_FORMAT_VERSION = 20`** (`src/save/format.rs`). This slice persists the deployable sub-states on `PersistedDeployedEntity`: furnace, door, storage box, torch, cupboard, plus the fuse state (a live placed charge round-trips a reload, v20) and the ruin-cache refill state (v19); player equipment landed at v18. `DeployableKind` and its inner enums are positional in postcard, so **any new variant appends at the end and any new field on a variant bumps the version**; reordering silently reinterprets old saves. Stability and claim footprints are **not** persisted, they are recomputed on load. Meteor shower event state is deliberately not persisted (the scheduler rolls a fresh event on load).
 - **Mutate replicated deployable fields through `deployed_entity_mut` / `mark_deployable_dirty`.** A bare `deployed_entities.get_mut` bypasses the dirty flag and the diff is silently dropped.
 - All tuning constants referenced here live in `src/game_balance.rs` (balance never lives inline; see CLAUDE.md).
 

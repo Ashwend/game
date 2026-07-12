@@ -352,13 +352,23 @@ impl GameServer {
             containers: player_ecs::PlayerOpenContainers {
                 open_furnace: self.open_furnace_view_for(client.client_id),
                 open_loot_bag: self.open_loot_bag_view_for(client.client_id),
+                open_workbench: self.open_workbench_view_for(client.client_id),
             },
             input_ack: player_ecs::PlayerInputAck {
                 last_processed_input: client.controller.last_processed_input,
                 applied_action_seq: client.applied_action_seq,
                 run_speed_multiplier: client.run_speed_multiplier,
             },
-            armor: PlayerArmor(client.armor),
+            // The replicated HUD armor value is the melee mitigation; the full
+            // per-kind protection stays server-only.
+            armor: PlayerArmor(client.protection.melee),
+            // Peer-visible worn-armor meshes, derived straight from the
+            // authoritative equipment slots (no client input). A slot with no
+            // piece, or a piece with no armor profile, resolves to `None`. Rig
+            // rendering is Phase 4; this package only lands the wire path.
+            equipment_visual: player_ecs::PlayerEquipmentVisual::from_equipment_slots(
+                &client.inventory.equipment_slots,
+            ),
             lifecycle: client.lifecycle,
             sleeping: player_ecs::PlayerSleeping(!client.online),
             // Peer-visible held mesh: derived straight from the authoritative
@@ -375,7 +385,7 @@ impl GameServer {
             ),
             action: player_ecs::PlayerAction {
                 seq: client.swing_seq,
-                tool: client.swing_tool,
+                model: client.swing_model,
             },
         })
     }

@@ -185,6 +185,7 @@ fn player_holding(item_id: &str) -> crate::app::state::LocalPlayerState {
             crafting: Default::default(),
             open_furnace: None,
             open_loot_bag: None,
+            open_workbench: None,
             last_processed_input: 0,
             applied_action_seq: 0,
             run_speed_multiplier: 1.0,
@@ -446,4 +447,30 @@ fn resource_node_set_fingerprint_skips_colliderless_clutter() {
 
     let with_tree = resource_node_set_fingerprint([&hay, &tree]);
     assert_ne!(empty, with_tree);
+}
+
+#[test]
+fn caught_up_requires_a_first_pass_and_an_empty_spawn_queue() {
+    // Same contract as the resource-node reconciler: never report
+    // caught-up before the first connected pass, and any queued spawn
+    // holds the world-entry gate.
+    let mut visuals = DeployedEntityVisuals::default();
+    assert!(
+        !visuals.is_caught_up(),
+        "no reconciliation pass has run yet"
+    );
+
+    visuals.applied_first_snapshot = true;
+    assert!(visuals.is_caught_up());
+
+    visuals.pending_spawns.push(PendingDeployableSpawn {
+        id: 1,
+        replicated: Entity::PLACEHOLDER,
+        kind: crate::items::DeployableKind::Furnace { tier: 0 },
+        position: crate::protocol::Vec3Net::new(0.0, 0.0, 0.0),
+        yaw: 0.0,
+        active: false,
+    });
+    assert!(!visuals.is_caught_up(), "a queued spawn holds the gate");
+    assert_eq!(visuals.pending_spawn_count(), 1);
 }

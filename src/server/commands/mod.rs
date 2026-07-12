@@ -46,12 +46,18 @@ impl GameServer {
             "drain" => self.command_drain(client_id, &args),
             "time" => self.command_set_time(client_id, &args),
             "speed" => self.command_set_run_speed(client_id, &args),
+            "knockback-scale" | "knockbackscale" => {
+                self.command_set_knockback_scale(client_id, &args)
+            }
             "time-speed" | "timespeed" | "timescale" => {
                 self.command_set_time_multiplier(client_id, &args)
             }
             "test-kit" | "testkit" => self.command_test_kit(client_id),
             "give" => self.command_give(client_id, &args),
             "tp" | "teleport" => self.command_teleport_all(client_id),
+            "ruins" => self.command_ruins(client_id, &args),
+            "meteor" => self.command_meteor_shower(client_id, &args),
+            "meteor-here" | "meteorhere" => self.command_meteor_shower_here(client_id, &args),
             "help" => self.command_help(client_id),
             other => reply_warning(client_id, format!("unknown command: /{other}")),
         }
@@ -96,6 +102,12 @@ impl GameServer {
             "  /speed <multiplier>: admin only"
         };
         lines.push(speed_line.to_owned());
+        let knockback_line = if is_admin {
+            "  /knockback-scale <factor>: scale PvP knockback for feel tuning (0 to 5, 1 to reset)"
+        } else {
+            "  /knockback-scale <factor>: admin only"
+        };
+        lines.push(knockback_line.to_owned());
         let time_speed_line = if is_admin {
             "  /time-speed <multiplier>: set the day/night cycle speed (0 to 240)"
         } else {
@@ -120,6 +132,24 @@ impl GameServer {
             "  /tp: admin only"
         };
         lines.push(tp_line.to_owned());
+        let ruins_line = if is_admin {
+            "  /ruins [tp]: list the nearest ruins with distances; /ruins tp warps you to the nearest"
+        } else {
+            "  /ruins [tp]: admin only"
+        };
+        lines.push(ruins_line.to_owned());
+        let meteor_shower_line = if is_admin {
+            "  /meteor [warning_seconds]: force a meteor now (default 30s to impact)"
+        } else {
+            "  /meteor [warning_seconds]: admin only"
+        };
+        lines.push(meteor_shower_line.to_owned());
+        let meteor_shower_here_line = if is_admin {
+            "  /meteor-here [warning_seconds]: drop a meteor on your position (default 8s, can hit you/bases)"
+        } else {
+            "  /meteor-here [warning_seconds]: admin only"
+        };
+        lines.push(meteor_shower_here_line.to_owned());
 
         lines
             .into_iter()

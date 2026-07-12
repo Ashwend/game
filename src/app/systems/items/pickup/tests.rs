@@ -1,8 +1,14 @@
 use super::*;
 
-use super::targets::ATTACK_RANGE_M;
-
 use crate::protocol::{MAX_HEALTH, Vec3Net};
+
+/// Standard-reach player-attack targeting range: the melee default reach (3.5 m)
+/// minus the fixed margin, so 3.0 m. This is what tools and every weapon except
+/// the spear target players at. The tests pass it explicitly now that
+/// `best_player_target` takes the range as a parameter (it is derived per active
+/// item by `player_attack_target_range`).
+const ATTACK_RANGE_M: f32 = crate::game_balance::COMBAT_ATTACK_RANGE_M
+    - crate::game_balance::COMBAT_PLAYER_TARGET_REACH_MARGIN_M;
 
 fn make_player(
     id: crate::protocol::ClientId,
@@ -40,6 +46,7 @@ fn player_in_view_within_range_resolves_as_target() {
         0.0,
         0.0,
         Some(1),
+        ATTACK_RANGE_M,
         [candidate(&target, false)].into_iter(),
     )
     .expect("player should be in front and in range");
@@ -57,6 +64,7 @@ fn local_player_is_skipped() {
         0.0,
         0.0,
         Some(1),
+        ATTACK_RANGE_M,
         [candidate(&target, false)].into_iter(),
     );
     assert!(hit.is_none(), "local client must not target itself");
@@ -73,6 +81,7 @@ fn player_out_of_range_is_skipped() {
         0.0,
         0.0,
         Some(1),
+        ATTACK_RANGE_M,
         [candidate(&target, false)].into_iter(),
     );
     assert!(hit.is_none(), "player past attack range must not target");
@@ -88,6 +97,7 @@ fn dead_player_is_skipped() {
         0.0,
         0.0,
         Some(1),
+        ATTACK_RANGE_M,
         [candidate(&target, false)].into_iter(),
     );
     assert!(hit.is_none(), "dead targets are not attackable");
@@ -105,6 +115,7 @@ fn sleeping_body_resolves_as_a_low_target() {
         0.0,
         -0.8,
         Some(1),
+        ATTACK_RANGE_M,
         [candidate(&target, true)].into_iter(),
     )
     .expect("a sleeper looked down at should resolve");
@@ -123,9 +134,60 @@ fn player_behind_is_skipped() {
         0.0,
         0.0,
         Some(1),
+        ATTACK_RANGE_M,
         [candidate(&target, false)].into_iter(),
     );
     assert!(hit.is_none(), "behind-camera targets must not register");
+}
+
+/// The reach-margin RULE: player-attack targeting range is the active item's
+/// `AttackProfile` reach minus the fixed margin. A spear (4.5 m reach) targets a
+/// player at 4.2 m, where a standard-reach weapon or tool (3.5 m reach, 3.0 m
+/// targeting) does not. Exercised directly through `best_player_target`'s range
+/// parameter with the two derived ranges.
+#[test]
+fn spear_targets_players_at_a_longer_range_than_tools() {
+    use crate::game_balance::{COMBAT_PLAYER_TARGET_REACH_MARGIN_M, STONE_SPEAR_REACH_M};
+
+    let attacker = Vec3Net::new(0.0, EYE_HEIGHT, 0.0);
+    // A player 4.2 m straight ahead: past the spear's tip (4.5 m reach, targets
+    // at 4.0)? No, 4.2 > 4.0, so even the spear rejects at 4.2 with the margin.
+    // Use 3.8 m to sit inside the spear's 4.0 targeting range but outside the
+    // tool's 3.0 range.
+    let target = make_player(7, 0.0, -3.8, true);
+
+    let spear_range = STONE_SPEAR_REACH_M - COMBAT_PLAYER_TARGET_REACH_MARGIN_M; // 4.0
+    let tool_range = ATTACK_RANGE_M; // 3.0
+
+    let spear_hit = best_player_target(
+        attacker,
+        0.0,
+        0.0,
+        Some(1),
+        spear_range,
+        [candidate(&target, false)].into_iter(),
+    );
+    assert!(
+        spear_hit.is_some(),
+        "the spear's longer reach targets a player at 3.8 m"
+    );
+
+    let tool_hit = best_player_target(
+        attacker,
+        0.0,
+        0.0,
+        Some(1),
+        tool_range,
+        [candidate(&target, false)].into_iter(),
+    );
+    assert!(
+        tool_hit.is_none(),
+        "a standard-reach weapon or tool does not target the same player at 3.8 m"
+    );
+
+    // Pin the two derived ranges to the RULE's exact values.
+    assert_eq!(spear_range, 4.0, "spear targeting range = 4.5 - 0.5");
+    assert_eq!(tool_range, 3.0, "tool/standard targeting range = 3.5 - 0.5");
 }
 
 type DeployableFixture = (

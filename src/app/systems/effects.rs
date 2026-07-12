@@ -18,6 +18,11 @@ const CHIP_GROUND_FRICTION: f32 = 6.0;
 // A chip "near the ground" still gets friction so its outward velocity
 // bleeds off between tiny bounces, rather than skittering forever.
 const CHIP_GROUND_CONTACT_BAND: f32 = 0.04;
+// Fraction of a chip's spin that survives each ground bounce. Spin behaves as
+// physics, not a looping animation: impacts and ground friction bleed the
+// tumble off with the motion, so a chip that has come to rest lies still
+// instead of spinning in place.
+const CHIP_BOUNCE_SPIN_KEEP: f32 = 0.6;
 
 #[derive(Component, Debug, Clone, Copy)]
 pub(crate) struct ImpactChip {
@@ -30,6 +35,43 @@ pub(crate) struct ImpactChip {
     /// Multiplier on the global `IMPACT_GRAVITY`. Use values > 1 for heavier
     /// debris (e.g. rock crumbling at your feet) and 1.0 for regular chips.
     gravity_scale: f32,
+    /// When set, the chip keeps its spawn scale for its whole life and simply
+    /// despawns at the end, instead of shrinking out over the final stretch.
+    /// For debris that should read as solid physical chunks (the MeteorShower
+    /// rock blast), not twinkling particles.
+    fixed_scale: bool,
+}
+
+impl ImpactChip {
+    /// Construct a physics chip (fresh, `age = 0`). The single public constructor
+    /// so other effect spawners (e.g. the explosion debris burst) can reuse the
+    /// same integrator without touching the private fields. `gravity_scale`
+    /// multiplies the shared `IMPACT_GRAVITY` (use `> 1.0` for heavier debris).
+    pub(crate) fn new(
+        velocity: Vec3,
+        spin_axis: Vec3,
+        spin_speed: f32,
+        lifetime: f32,
+        initial_scale: f32,
+        gravity_scale: f32,
+    ) -> Self {
+        Self {
+            velocity,
+            spin_axis,
+            spin_speed,
+            lifetime,
+            age: 0.0,
+            initial_scale,
+            gravity_scale,
+            fixed_scale: false,
+        }
+    }
+
+    /// Keep the spawn scale for the chip's whole life (no end-of-life shrink).
+    pub(crate) fn with_fixed_scale(mut self) -> Self {
+        self.fixed_scale = true;
+        self
+    }
 }
 
 pub(crate) fn spawn_impact_effects_system(
@@ -113,6 +155,7 @@ fn spawn_blood_splatter(
                 age: 0.0,
                 initial_scale: radius,
                 gravity_scale: 0.0,
+                fixed_scale: false,
             },
             Mesh3d(assets.blood_splatter_mesh.clone()),
             MeshMaterial3d(assets.blood_material.clone()),
@@ -192,6 +235,7 @@ pub(crate) fn spawn_ore_shatter_burst(
                 age: 0.0,
                 initial_scale,
                 gravity_scale,
+                fixed_scale: false,
             },
             Mesh3d(assets.stone_shard_mesh.clone()),
             MeshMaterial3d(assets.stone_shard_material.clone()),
@@ -343,6 +387,7 @@ pub(crate) fn spawn_impact_burst(
                 age: 0.0,
                 initial_scale,
                 gravity_scale,
+                fixed_scale: false,
             },
             Mesh3d(mesh.clone()),
             MeshMaterial3d(material.clone()),
@@ -395,25 +440,32 @@ fn advance_chip(transform: &mut Transform, chip: &mut ImpactChip, dt: f32) -> Ch
         transform.translation.y = CHIP_GROUND_Y;
         if chip.velocity.y < 0.0 {
             chip.velocity.y = -chip.velocity.y * CHIP_BOUNCE;
+            // Each impact also bleeds rotational energy.
+            chip.spin_speed *= CHIP_BOUNCE_SPIN_KEEP;
         }
     }
     if transform.translation.y <= CHIP_GROUND_Y + CHIP_GROUND_CONTACT_BAND {
         // Friction applies whenever the chip is on or just above the ground,
         // so its horizontal energy decays continuously through small bounces.
+        // The tumble decays with it: the chip rolls slower as it slides slower
+        // and lies STILL once it has stopped, rather than spinning in place.
         let friction = (1.0 - CHIP_GROUND_FRICTION * dt).max(0.0);
         chip.velocity.x *= friction;
         chip.velocity.z *= friction;
+        chip.spin_speed *= friction;
     }
 
     let rotation = Quat::from_axis_angle(chip.spin_axis, chip.spin_speed * dt);
     transform.rotation = rotation * transform.rotation;
 
-    let life_t = (chip.age / chip.lifetime).clamp(0.0, 1.0);
-    // Hold size most of the way, then shrink off the last 35% for a clean
-    // pop-out rather than a gradual fade.
-    let shrink_t = ((life_t - 0.65) / 0.35).max(0.0);
-    let scale = chip.initial_scale * (1.0 - shrink_t).max(0.0);
-    transform.scale = Vec3::splat(scale);
+    if !chip.fixed_scale {
+        let life_t = (chip.age / chip.lifetime).clamp(0.0, 1.0);
+        // Hold size most of the way, then shrink off the last 35% for a clean
+        // pop-out rather than a gradual fade.
+        let shrink_t = ((life_t - 0.65) / 0.35).max(0.0);
+        let scale = chip.initial_scale * (1.0 - shrink_t).max(0.0);
+        transform.scale = Vec3::splat(scale);
+    }
     ChipStep::Alive
 }
 
@@ -432,6 +484,7 @@ mod tests {
             age: 0.0,
             initial_scale: 1.0,
             gravity_scale: 1.0,
+            fixed_scale: false,
         };
 
         // Mid-life, still alive, gravity has pulled velocity down.
@@ -471,6 +524,7 @@ mod tests {
             age: 0.0,
             initial_scale: 1.0,
             gravity_scale: 1.0,
+            fixed_scale: false,
         };
 
         for _ in 0..40 {
@@ -501,6 +555,7 @@ mod tests {
             age: 0.0,
             initial_scale: 1.0,
             gravity_scale: 1.0,
+            fixed_scale: false,
         };
         let mut heavy_transform = Transform::from_xyz(0.0, 1.0, 0.0);
         let mut heavy = ImpactChip {
@@ -528,6 +583,7 @@ mod tests {
             age: 0.19,
             initial_scale: 1.0,
             gravity_scale: 1.0,
+            fixed_scale: false,
         };
         // One step that crosses the lifetime expires the chip immediately.
         assert_eq!(
@@ -549,6 +605,7 @@ mod tests {
             age: 0.0,
             initial_scale: 1.0,
             gravity_scale: 1.0,
+            fixed_scale: false,
         };
         assert_eq!(
             advance_chip(&mut transform, &mut chip, 1.0 / 60.0),
@@ -558,5 +615,38 @@ mod tests {
         // Velocity reflected upward (with restitution), so now positive.
         assert!(chip.velocity.y > 0.0);
         assert!(chip.velocity.y < 3.0, "bounce should lose energy");
+    }
+
+    #[test]
+    fn chip_spin_bleeds_off_with_its_slide_and_settles_still() {
+        // Spin is physics, not a looping animation: bounces and ground
+        // friction drain it alongside the horizontal slide, so a chip that has
+        // come to rest lies still instead of spinning in place.
+        let mut transform = Transform::from_xyz(0.0, 0.20, 0.0);
+        let mut chip = ImpactChip {
+            velocity: Vec3::new(3.0, -4.0, 0.0),
+            spin_axis: Vec3::Y,
+            spin_speed: 20.0,
+            lifetime: 3.0,
+            age: 0.0,
+            initial_scale: 1.0,
+            gravity_scale: 1.0,
+            fixed_scale: true,
+        };
+        // One airborne step first: spin must NOT decay in flight.
+        let _ = advance_chip(&mut transform, &mut chip, 1.0 / 60.0);
+        assert!(chip.spin_speed > 19.9, "airborne tumble keeps its energy");
+        for _ in 0..60 {
+            let _ = advance_chip(&mut transform, &mut chip, 1.0 / 60.0);
+        }
+        assert!(
+            chip.velocity.x.abs() < 0.5,
+            "the slide should have bled off"
+        );
+        assert!(
+            chip.spin_speed < 1.0,
+            "a settled chip stops tumbling, spin still {}",
+            chip.spin_speed
+        );
     }
 }

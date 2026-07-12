@@ -51,6 +51,14 @@ const DEV_NO_POSTERIZE: u32 = 1u;
 const DEV_NO_BAND_AA: u32 = 2u;
 const DEV_NO_INK: u32 = 4u;
 const DEV_NO_SATURATION: u32 = 8u;
+// Self-illumination (night glow). `emissive_tex` is the glow mask (bright =
+// glowing); `emissive.rgb` is the added glow colour, `emissive.a >= 0.5` gates
+// the glow by COLOR_0 vertex alpha so one mesh can mix glowing crystals with a
+// non-glowing body (the meteorite node). `emissive` is vec4(0) for every other
+// cel prop, so this whole path is inert (existing ore is untouched).
+@group(#{MATERIAL_BIND_GROUP}) @binding(6) var emissive_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(7) var emissive_samp: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(8) var<uniform> emissive: vec4<f32>;
 
 // Saturation lift applied after the cel posterise so the banded result keeps a
 // gentle anime chroma without tipping into the oversaturated/candy look. 1.0 = off.
@@ -198,6 +206,34 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     if (dev_flags & DEV_NO_SATURATION) == 0u {
         let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
         rgb = max(mix(vec3<f32>(luma, luma, luma), rgb, TOON_SATURATION), vec3<f32>(0.0));
+    }
+
+    // Night-glow: ADD an emissive term on top of the cel-lit surface. Added after
+    // the day/night-exposed cel term (not multiplied into lighting), so a crystal
+    // stays visibly lit in the dark for the exploration read, while in daylight
+    // the bright surround keeps it reading as a glowing crystal rather than a
+    // blown-out blob. `emissive` is vec4(0) for every non-ember prop, so this is a
+    // no-op that leaves the existing ore untouched.
+    if emissive.r > 0.0 || emissive.g > 0.0 || emissive.b > 0.0 {
+        // The mask texture is a sparse vein pattern (mostly black): use it to
+        // BOOST bright veins, not to gate the glow, or the crystal would be dark
+        // almost everywhere. A baseline floor makes the whole crystal glow (the
+        // exploration read: visible from far at night), with the mask adding hot
+        // veins on top.
+#ifdef VERTEX_UVS_A
+        let vein = textureSample(emissive_tex, emissive_samp, in.uv).r;
+#else
+        let vein = 0.0;
+#endif
+        let glow_amount = 0.55 + 0.45 * vein;
+        // Gate by COLOR_0 vertex alpha when emissive.a is set, so the meteorite
+        // slag body (alpha 0) stays dark while its crystals (alpha 1) glow.
+#ifdef VERTEX_COLORS
+        let glow_gate = select(1.0, in.color.a, emissive.a >= 0.5);
+#else
+        let glow_gate = select(1.0, 0.0, emissive.a >= 0.5);
+#endif
+        rgb = rgb + emissive.rgb * glow_amount * glow_gate;
     }
 
     // Output alpha: opaque props (and the felling dissolve) ride `lit.a * fade`.

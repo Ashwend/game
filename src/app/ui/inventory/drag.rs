@@ -8,7 +8,10 @@ use crate::{
         },
         systems::{send_furnace_command, send_inventory_command, send_loot_bag_command},
     },
-    protocol::{FurnaceCommand, InventoryCommand, ItemContainerSlot, LootBagCommand},
+    items::armor_profile,
+    protocol::{
+        FurnaceCommand, InventoryCommand, ItemContainer, ItemContainerSlot, LootBagCommand,
+    },
 };
 
 use super::slot::{SLOT_SIZE, paint_slot};
@@ -35,6 +38,23 @@ pub(crate) fn handle_drag_release(
     inventory_ui: &mut InventoryUiState,
     error_toasts: &mut dyn ErrorToastSink,
 ) {
+    // Shift+click quick-equip: a bag/actionbar armor piece shift-clicked on the
+    // Inventory tab records a `pending_quick_transfer`. Resolve it here (this
+    // pass owns the prediction state) into a predicted equip move to the
+    // piece's matching paperdoll slot. A non-armor piece, or one whose slot is
+    // ambiguous, leaves the intent unresolved and the click is a no-op. Only the
+    // plain Inventory tab consumes it; the furnace/loot-bag panels consume their
+    // own quick-transfer before this pass runs.
+    if menu.inventory_open && !menu.furnace_open && !menu.loot_bag_open {
+        resolve_quick_equip(
+            runtime,
+            prediction,
+            local_player,
+            error_toasts,
+            inventory_ui,
+        );
+    }
+
     // Drag is allowed whenever a slot surface is up: the player's own
     // inventory, the furnace modal, or the loot-bag modal. All three
     // surfaces route through this unified pipeline.
@@ -141,6 +161,51 @@ fn send_move_command(
     }
 }
 
+/// Consume a pending shift+click quick-equip intent. Takes effect only when the
+/// intent points at a bag or actionbar slot holding an armor piece whose profile
+/// resolves a target paperdoll slot; then it routes the same predicted equip
+/// `InventoryCommand::Move` a drag onto that slot would send. The shared move
+/// validation still has the final say, so a piece already worn there just swaps.
+fn resolve_quick_equip(
+    runtime: &mut ClientRuntime,
+    prediction: &mut PredictionState,
+    local_player: &LocalPlayerState,
+    error_toasts: &mut dyn ErrorToastSink,
+    inventory_ui: &mut InventoryUiState,
+) {
+    let Some(UnifiedSlotRef::Player(source)) = inventory_ui.pending_quick_transfer else {
+        return;
+    };
+    // Only bag/actionbar sources equip; a paperdoll-slot source has nothing to
+    // equip into (unequip is a drag, not a shift-click).
+    if source.container == ItemContainer::Equipment {
+        return;
+    }
+    let Some(inventory) = local_player.private.as_ref().map(|p| &p.inventory) else {
+        return;
+    };
+    let Some(stack) = inventory.slot(source) else {
+        return;
+    };
+    // Resolve the destination paperdoll slot from the piece's armor profile. A
+    // non-armor item carries no profile, so shift-clicking it here does nothing.
+    let Some(profile) = armor_profile(&stack.item_id) else {
+        return;
+    };
+    let target = UnifiedSlotRef::Player(ItemContainerSlot::equipment(profile.slot));
+    // Consume the intent so a live drag can't also fire this frame.
+    inventory_ui.pending_quick_transfer = None;
+    send_move_command(
+        runtime,
+        prediction,
+        local_player,
+        error_toasts,
+        UnifiedSlotRef::Player(source),
+        target,
+        None,
+    );
+}
+
 /// Predict a player-inventory drop, returning the action sequence the
 /// command should carry (`0` = not predicted). Predicts unconditionally when
 /// the local inventory is known, `remove_stack` no-ops harmlessly on replay
@@ -202,6 +267,10 @@ fn pointer_is_outside_inventory_surfaces(
     let Some(pointer) = ctx.pointer_hover_pos() else {
         return true;
     };
+    let over_equipment = inventory_ui
+        .equipment_rects
+        .iter()
+        .any(|rect| rect.is_some_and(|rect| rect.contains(pointer)));
     !inventory_ui
         .inventory_rect
         .is_some_and(|rect| rect.contains(pointer))
@@ -214,6 +283,7 @@ fn pointer_is_outside_inventory_surfaces(
         && !inventory_ui
             .loot_bag_rect
             .is_some_and(|rect| rect.contains(pointer))
+        && !over_equipment
 }
 
 pub(crate) fn draw_drag_preview(ctx: &egui::Context, inventory_ui: &InventoryUiState) {
@@ -254,6 +324,28 @@ mod tests {
             button: InventoryDragButton::Primary,
         });
         state
+    }
+
+    /// A local player carrying a padded hood in bag slot 0, so drag-to-equip and
+    /// quick-equip have a real armor piece to move onto the head paperdoll slot.
+    fn local_player_with_hood() -> LocalPlayerState {
+        use crate::{items::PADDED_HOOD_ID, protocol::PlayerInventoryState, server::PlayerPrivate};
+        let mut inventory = PlayerInventoryState::empty();
+        inventory.inventory_slots[0] = Some(ItemStack::new(PADDED_HOOD_ID, 1));
+        LocalPlayerState {
+            entity: None,
+            private: Some(PlayerPrivate {
+                inventory,
+                crafting: Default::default(),
+                open_furnace: None,
+                open_loot_bag: None,
+                open_workbench: None,
+                last_processed_input: 0,
+                applied_action_seq: 0,
+                run_speed_multiplier: 1.0,
+            }),
+            lifecycle: None,
+        }
     }
 
     fn run_input(events: Vec<egui::Event>, mut f: impl FnMut(&egui::Context)) {
@@ -512,6 +604,166 @@ mod tests {
         // The bag→player move attempts a LootBag command (fails-soft).
         assert!(inv_ui.drag.is_none());
         assert!(toasts.iter().any(|t| t.contains("not connected")));
+    }
+
+    #[test]
+    fn release_over_equipment_slot_predicts_equip_move() {
+        use crate::items::PADDED_HOOD_ID;
+        use crate::protocol::EquipmentSlot;
+
+        let menu = MenuState {
+            inventory_open: true,
+            ..Default::default()
+        };
+        let mut runtime = ClientRuntime::default();
+        let mut prediction = PredictionState::default();
+        let local_player = local_player_with_hood();
+        let mut inv_ui = InventoryUiState::default();
+        inv_ui.drag = Some(InventoryDrag {
+            source: UnifiedSlotRef::Player(ItemContainerSlot::inventory(0)),
+            stack: ItemStack::new(PADDED_HOOD_ID, 1),
+            quantity: 1,
+            button: InventoryDragButton::Primary,
+        });
+        // Released over the head paperdoll slot.
+        inv_ui.hovered_slot = Some(UnifiedSlotRef::Player(ItemContainerSlot::equipment(
+            EquipmentSlot::Head,
+        )));
+        let mut toasts: Vec<String> = Vec::new();
+
+        let events = vec![
+            egui::Event::PointerButton {
+                pos: egui::pos2(10.0, 10.0),
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+            egui::Event::PointerButton {
+                pos: egui::pos2(10.0, 10.0),
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            },
+        ];
+        run_input(events, |ctx| {
+            handle_drag_release(
+                ctx,
+                &menu,
+                &mut runtime,
+                &mut prediction,
+                &local_player,
+                &mut inv_ui,
+                &mut toasts,
+            );
+        });
+
+        assert!(inv_ui.drag.is_none());
+        // The empty head slot is a predictable destination, so the overlay
+        // already shows the hood worn and the bag slot emptied.
+        let effective = prediction.rebuild_effective(&local_player.private.unwrap().inventory);
+        assert_eq!(
+            effective
+                .equipment(EquipmentSlot::Head)
+                .map(|stack| stack.item_id.as_ref()),
+            Some(PADDED_HOOD_ID),
+            "drag onto the head slot equips the hood"
+        );
+        assert!(effective.inventory_slots[0].is_none());
+    }
+
+    #[test]
+    fn shift_click_quick_equips_armor_to_its_matching_slot() {
+        use crate::items::PADDED_HOOD_ID;
+        use crate::protocol::EquipmentSlot;
+
+        let menu = MenuState {
+            inventory_open: true,
+            ..Default::default()
+        };
+        let mut runtime = ClientRuntime::default();
+        let mut prediction = PredictionState::default();
+        let local_player = local_player_with_hood();
+        let mut inv_ui = InventoryUiState::default();
+        // No drag: the shift+click recorded a quick-transfer intent on bag slot 0.
+        inv_ui.pending_quick_transfer =
+            Some(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0)));
+        let mut toasts: Vec<String> = Vec::new();
+
+        run_input(Vec::new(), |ctx| {
+            handle_drag_release(
+                ctx,
+                &menu,
+                &mut runtime,
+                &mut prediction,
+                &local_player,
+                &mut inv_ui,
+                &mut toasts,
+            );
+        });
+
+        // The hood's armor profile targets the head slot, so the overlay shows
+        // it equipped there, and the intent is consumed.
+        assert!(inv_ui.pending_quick_transfer.is_none());
+        let effective = prediction.rebuild_effective(&local_player.private.unwrap().inventory);
+        assert_eq!(
+            effective
+                .equipment(EquipmentSlot::Head)
+                .map(|stack| stack.item_id.as_ref()),
+            Some(PADDED_HOOD_ID),
+            "shift+click sends the hood to the head slot"
+        );
+    }
+
+    #[test]
+    fn shift_click_ignores_non_armor() {
+        // A non-armor bag item shift-clicked has no paperdoll destination, so the
+        // intent resolves to nothing and no equip is predicted.
+        let menu = MenuState {
+            inventory_open: true,
+            ..Default::default()
+        };
+        let mut runtime = ClientRuntime::default();
+        let mut prediction = PredictionState::default();
+        use crate::protocol::PlayerInventoryState;
+        use crate::server::PlayerPrivate;
+        let mut inventory = PlayerInventoryState::empty();
+        inventory.inventory_slots[0] = Some(ItemStack::new(COAL_ID, 5));
+        let local_player = LocalPlayerState {
+            entity: None,
+            private: Some(PlayerPrivate {
+                inventory,
+                crafting: Default::default(),
+                open_furnace: None,
+                open_loot_bag: None,
+                open_workbench: None,
+                last_processed_input: 0,
+                applied_action_seq: 0,
+                run_speed_multiplier: 1.0,
+            }),
+            lifecycle: None,
+        };
+        let mut inv_ui = InventoryUiState::default();
+        inv_ui.pending_quick_transfer =
+            Some(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0)));
+        let mut toasts: Vec<String> = Vec::new();
+
+        run_input(Vec::new(), |ctx| {
+            handle_drag_release(
+                ctx,
+                &menu,
+                &mut runtime,
+                &mut prediction,
+                &local_player,
+                &mut inv_ui,
+                &mut toasts,
+            );
+        });
+        // Non-armor: the intent is left untouched (no equip fired) and no
+        // predicted move exists.
+        assert!(
+            prediction.is_idle(),
+            "no equip predicted for a non-armor item"
+        );
     }
 
     fn run_preview(inv_ui: &InventoryUiState) -> egui::FullOutput {

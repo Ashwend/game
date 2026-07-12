@@ -1,3 +1,4 @@
+mod admin_items;
 mod chat;
 mod confirm;
 mod crafting;
@@ -26,6 +27,7 @@ mod toast;
 mod tutorial;
 mod update;
 mod wheel;
+mod workbench;
 mod world_map;
 mod worlds;
 
@@ -56,15 +58,18 @@ use egui_commonmark::CommonMarkCache;
 pub(crate) use death_splash::tick_death_splash_system;
 pub(crate) use item_icons::setup_item_icons;
 
-use super::scene::WorldSceneState;
+use super::scene::{GrassState, WorldSceneState};
 use super::state::{
     AuthFlow, ClientErrorToast, ClientRuntime, ClientSettings, CraftingHudState, CraftingUiState,
     CurrentUser, DeployablePlacementState, InventorySoundEvent, LocalPlayerState, MAX_UI_SCALE,
     MIN_UI_SCALE, MenuBackdropTime, MenuBackdropVisibility, MenuState, OptionsUiState,
-    PredictionState, SaveStore, Screen, SessionShutdownTasks, ToastState, WorkosAuth,
-    WorldMapState, WorldMapUiState,
+    PredictionState, RangedDrawState, SaveStore, Screen, SessionShutdownTasks, ToastState,
+    WorkosAuth, WorldMapState, WorldMapUiState,
 };
-use super::systems::PendingSessionEndReason;
+use super::state::{GrassDensity, WorldStreamState};
+use super::systems::{
+    DeployedEntityVisuals, DroppedItemEntities, PendingSessionEndReason, ResourceNodeEntities,
+};
 use super::voice::{VoiceDeviceCache, VoiceState, VoiceUiControl};
 use crate::analytics::Analytics;
 use crate::net::ClientNetwork;
@@ -121,6 +126,10 @@ pub(crate) struct UiResources<'w, 's> {
     /// Transient world-map interaction state (which marker popup is open).
     world_map_ui: ResMut<'w, WorldMapUiState>,
     local_player: Res<'w, LocalPlayerState>,
+    /// Ranged draw/reload state, read by the HUD's ammo count + charge arc.
+    ranged_input: Res<'w, RangedDrawState>,
+    /// Thrown-bomb charge state, read by the HUD's throw charge bar.
+    throw_charge: Res<'w, crate::app::state::ThrowChargeState>,
     prediction: ResMut<'w, PredictionState>,
     scene_state: Res<'w, WorldSceneState>,
     update: ResMut<'w, UpdateState>,
@@ -131,6 +140,29 @@ pub(crate) struct UiResources<'w, 's> {
     /// Replicated resource nodes in the player's AoI, used by the tutorial to
     /// ring the nearest gatherable node during the gather step.
     resource_nodes: Query<'w, 's, &'static crate::server::ResourceNode>,
+    /// Replicated placed deployables in the player's AoI. The crafting panel
+    /// reads these to gate workbench-tier recipes on station proximity, the
+    /// same set the deployable renderer consumes.
+    crafting_stations: Query<
+        'w,
+        's,
+        (
+            &'static crate::server::Deployable,
+            &'static crate::server::DeployableTransform,
+        ),
+    >,
+    /// The budgeted spawn queues that stream the initial world in. The
+    /// world-entry readiness gate (`world_ready_for_play`) holds the loading
+    /// splash until every one of them has drained, and the splash surfaces
+    /// their combined backlog as progress.
+    resource_node_entities: Res<'w, ResourceNodeEntities>,
+    deployable_visuals: Res<'w, DeployedEntityVisuals>,
+    dropped_items: Res<'w, DroppedItemEntities>,
+    grass: Res<'w, GrassState>,
+    /// Replicated-entity arrival tracker: the readiness gate also waits for
+    /// the server's initial send to go quiet, since the spawn queues above
+    /// can be momentarily empty while more of the world is still on the wire.
+    world_stream: Res<'w, WorldStreamState>,
     /// One-shot sound cues (used here to play the completion sting when the
     /// tutorial finishes).
     play_sound: MessageWriter<'w, PlaySound>,
@@ -141,15 +173,62 @@ pub(crate) struct UiResources<'w, 's> {
 
 /// Whether the just-joined world is ready for the player to interact with:
 /// the `Welcome` has been applied (client id + world data present), the live
-/// scene geometry for that world has been spawned, and the local player's
-/// replicated entity has arrived. The loading splash holds until this is true
-/// so the crossfade reveals a populated, rendered scene rather than a
-/// half-streamed one.
+/// scene geometry for that world has been spawned, the local player's
+/// replicated entity has arrived, every budgeted entity-spawn queue has
+/// drained its initial backlog (resource nodes, deployables, dropped items,
+/// and the grass carpet), AND the server's initial replication stream has
+/// gone quiet (no new replicated entity for `STREAM_QUIET_SECS`). The last
+/// condition is what makes the gate honest: the server paces the initial
+/// fill over many ticks, so the client-side queues alone can look drained
+/// mid-stream while more of the world is still on the wire. The loading
+/// splash holds until all of this is true so the crossfade reveals a fully
+/// populated, rendered scene rather than one still streaming in around the
+/// player.
 fn world_ready_for_play(resources: &UiResources) -> bool {
     resources.runtime.client_id.is_some()
         && resources.runtime.world.is_some()
         && resources.local_player.entity.is_some()
         && resources.scene_state.applied_live_version() == Some(resources.runtime.world_version)
+        && entity_spawn_queues_drained(resources)
+        && initial_stream_settled(resources)
+}
+
+/// Whether the server's initial replication stream has settled (see
+/// `WorldStreamState`). `Time` is always present in the running app; the
+/// `Option` exists for test ergonomics, and a missing clock falls back to
+/// "settled" so the gate degrades to the queue-drained conditions instead of
+/// stranding entry on the 20 s timeout.
+fn initial_stream_settled(resources: &UiResources) -> bool {
+    resources.time.as_ref().is_none_or(|time| {
+        resources
+            .world_stream
+            .initial_stream_settled(time.elapsed_secs())
+    })
+}
+
+/// Whether every budgeted spawn queue that streams the initial world in has
+/// drained. Each reconciler reports caught-up only after it has run at least
+/// one pass while connected, so a queue that is empty merely because
+/// replication hasn't delivered yet still counts once combined with the
+/// splash's settle window (a fresh arrival re-fills the queue and resets the
+/// settle counter). Grass is skipped when the density setting is `Off`; a
+/// cleared field never reports caught-up.
+fn entity_spawn_queues_drained(resources: &UiResources) -> bool {
+    let grass_ready = resources.settings.graphics.grass_density == GrassDensity::Off
+        || resources.grass.is_caught_up();
+    resources.resource_node_entities.is_caught_up()
+        && resources.deployable_visuals.is_caught_up()
+        && resources.dropped_items.is_caught_up()
+        && grass_ready
+}
+
+/// Entities still waiting in the budgeted spawn queues, surfaced on the
+/// loading splash as world-entry progress. Dropped items and grass keep no
+/// persistent queue, so this counts the two dominant backlogs (the initial
+/// node fill is ~1800 entries on a full-size world).
+fn entity_spawn_backlog(resources: &UiResources) -> usize {
+    resources.resource_node_entities.pending_spawn_count()
+        + resources.deployable_visuals.pending_spawn_count()
 }
 
 /// egui zoom factor (pixels-per-point multiplier) for the player's chosen UI
@@ -324,9 +403,10 @@ pub(crate) fn ui_system(
     // (world entry, server join). World-entry splashes hold until the joined
     // world is actually ready to play (see `world_ready_for_play`).
     let world_ready = world_ready_for_play(&resources);
+    let world_backlog = entity_spawn_backlog(&resources);
     // Diagnostic breadcrumb for the "I'm in-game but can only see the loader"
     // report: when a world-entry splash is up and the readiness gate hasn't
-    // cleared, log which of the four conditions is still missing, throttled to
+    // cleared, log which of the conditions is still missing, throttled to
     // ~once a second. Otherwise the 20s fallback silently hides the culprit.
     // Reproduce, then read <data_dir>/logs/ashwend.log to see what's stuck.
     if let Some(splash) = resources.menu.loading_splash.as_ref() {
@@ -341,14 +421,29 @@ pub(crate) fn ui_system(
                 *splash_diag_throttle = 0.0;
                 let scene_applied = resources.scene_state.applied_live_version()
                     == Some(resources.runtime.world_version);
+                let last_arrival = resources.time.as_ref().and_then(|time| {
+                    resources
+                        .world_stream
+                        .seconds_since_last_arrival(time.elapsed_secs())
+                });
                 bevy::log::warn!(
                     "loading splash waiting on world-ready ({:.0}s): client_id={} world_data={} \
-                     local_player_entity={} scene_applied={} [world_version={}, scene_version={:?}, screen={:?}]",
+                     local_player_entity={} scene_applied={} nodes_caught_up={} \
+                     deployables_caught_up={} dropped_caught_up={} grass_caught_up={} backlog={} \
+                     stream_settled={} last_arrival_secs_ago={:?} \
+                     [world_version={}, scene_version={:?}, screen={:?}]",
                     splash.elapsed_seconds,
                     resources.runtime.client_id.is_some(),
                     resources.runtime.world.is_some(),
                     resources.local_player.entity.is_some(),
                     scene_applied,
+                    resources.resource_node_entities.is_caught_up(),
+                    resources.deployable_visuals.is_caught_up(),
+                    resources.dropped_items.is_caught_up(),
+                    resources.grass.is_caught_up(),
+                    world_backlog,
+                    initial_stream_settled(&resources),
+                    last_arrival,
                     resources.runtime.world_version,
                     resources.scene_state.applied_live_version(),
                     resources.menu.screen,
@@ -363,6 +458,7 @@ pub(crate) fn ui_system(
         &mut resources.menu,
         &resources.backdrop_visibility,
         world_ready,
+        world_backlog,
         delta_seconds,
     );
     resources

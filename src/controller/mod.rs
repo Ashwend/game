@@ -280,6 +280,31 @@ impl PlayerController {
         let z_delta = self.velocity.z * delta_seconds;
         self.move_horizontal_with_step(grid, Axis::Z, z_delta);
 
+        // Terrain-follow the analytic floor (the meteor shower crater mound):
+        // while grounded ON the floor, glue the feet to its surface so walking
+        // up or down the slope tracks it smoothly instead of stair-stepping
+        // through the gravity/land cycle. Never fires on flat ground (the
+        // deviation is zero), never overrides standing on a block (a
+        // foundation over the crater keeps its own support), and never while
+        // ascending: a fresh jump can still read `grounded` inside
+        // GROUND_EPSILON at high frame rates, and gluing then would eat it.
+        if self.grounded && self.velocity.y <= 0.0 {
+            let floor = grid.floor_height(self.position.x, self.position.z);
+            let deviation = floor - self.position.y;
+            if deviation != 0.0 && deviation.abs() <= STEP_HEIGHT {
+                let on_block = support_height_between(
+                    self.position,
+                    grid,
+                    self.position.y - GROUND_EPSILON,
+                    self.position.y + GROUND_EPSILON,
+                )
+                .is_some_and(|support| (support - floor).abs() > GROUND_EPSILON);
+                if !on_block {
+                    self.position.y = floor;
+                }
+            }
+        }
+
         if self.grounded && !is_supported(self.position, grid) {
             self.grounded = false;
         }

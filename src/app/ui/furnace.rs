@@ -276,6 +276,7 @@ mod tests {
                 crafting: Default::default(),
                 open_furnace,
                 open_loot_bag: None,
+                open_workbench: None,
                 last_processed_input: 0,
                 applied_action_seq: 0,
                 run_speed_multiplier: 1.0,

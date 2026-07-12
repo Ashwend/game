@@ -158,6 +158,10 @@ impl GameServer {
                 (controller, starting_inventory())
             }
         };
+        // Recompute mitigation from whatever armor the restored inventory
+        // carries. A fresh player has an empty paperdoll (all-zero protection);
+        // a returning player who saved wearing a set comes back protected.
+        let protection = crate::items::equipped_protection(&inventory.equipment_slots);
         let client = ServerClient {
             client_id,
             account_id,
@@ -165,27 +169,27 @@ impl GameServer {
             online: true,
             controller,
             inventory,
-            // Phase 1 ships armor on the wire (per-component replicated),
-            // but every player starts with 0, there are no armor items
-            // defined yet. A future armor pass mutates this field
-            // server-side and the replication path picks up the diff.
-            armor: 0,
+            protection,
             lifecycle: crate::server::PlayerLifecycle::Alive,
             is_admin,
             run_speed_multiplier: 1.0,
             last_seen_tick: self.tick,
             next_gather_tick: self.tick,
             next_attack_tick: self.tick,
+            draw_started_tick: None,
+            next_ranged_tick: self.tick,
+            reload_slow_active: false,
             chat_bubble: None,
             view_tier: crate::protocol::ViewRadiusTier::default(),
             crafting: starting_crafting_state(),
             next_craft_job_id: 1,
             open_furnace: None,
+            open_workbench: None,
             open_container: None,
             applied_action_seq: 0,
             ping_ms: 0,
             swing_seq: 0,
-            swing_tool: crate::items::ToolKind::Hands,
+            swing_model: crate::items::ItemModel::Bag,
         };
 
         let initial_position = client.controller.position;
@@ -222,6 +226,13 @@ impl GameServer {
                 world_time,
             },
         });
+        // Late-joiner resend: if a meteor shower event is live (announce through
+        // crater despawn), replay the announce to this client so they see the
+        // fireball / crater immediately, exactly like the WorldTime seed in
+        // Welcome. The client keys the whole sky show off this one payload.
+        if let Some(announce) = self.meteor_shower_announce_for(client_id) {
+            envelopes.push(announce);
+        }
         envelopes.push(ServerEnvelope {
             target: DeliveryTarget::Broadcast,
             message: ServerMessage::PlayerEvent(PlayerEvent::Joined { client_id, name }),
@@ -384,26 +395,27 @@ impl GameServer {
         };
         let world_time = self.world_time_snapshot();
 
-        (
-            client_id,
-            vec![
-                ServerEnvelope {
-                    target: DeliveryTarget::Client(client_id),
-                    message: ServerMessage::Welcome {
-                        client_id,
-                        map: self.save.map.clone(),
-                        world: self.world.clone(),
-                        is_admin,
-                        local_seed,
-                        world_time,
-                    },
-                },
-                ServerEnvelope {
-                    target: DeliveryTarget::Broadcast,
-                    message: ServerMessage::PlayerEvent(PlayerEvent::Joined { client_id, name }),
-                },
-            ],
-        )
+        let mut envelopes = vec![ServerEnvelope {
+            target: DeliveryTarget::Client(client_id),
+            message: ServerMessage::Welcome {
+                client_id,
+                map: self.save.map.clone(),
+                world: self.world.clone(),
+                is_admin,
+                local_seed,
+                world_time,
+            },
+        }];
+        // Same late-joiner resend as the fresh-connect path: a reconnecting
+        // sleeper who missed the broadcast still sees a live meteor / crater.
+        if let Some(announce) = self.meteor_shower_announce_for(client_id) {
+            envelopes.push(announce);
+        }
+        envelopes.push(ServerEnvelope {
+            target: DeliveryTarget::Broadcast,
+            message: ServerMessage::PlayerEvent(PlayerEvent::Joined { client_id, name }),
+        });
+        (client_id, envelopes)
     }
 
     fn is_admin(&self, account_id: AccountId) -> bool {

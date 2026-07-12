@@ -67,6 +67,7 @@ pub(crate) fn update_local_player_state_system(
                         crafting: crafting.0.clone(),
                         open_furnace: containers.open_furnace.clone(),
                         open_loot_bag: containers.open_loot_bag.clone(),
+                        open_workbench: containers.open_workbench,
                         last_processed_input: input_ack.last_processed_input,
                         applied_action_seq: input_ack.applied_action_seq,
                         run_speed_multiplier: input_ack.run_speed_multiplier,

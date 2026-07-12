@@ -32,6 +32,18 @@ use crate::protocol::SERVER_TICK_RATE_HZ;
 /// time and the server's at receive time.
 pub const COMBAT_ATTACK_RANGE_M: f32 = 3.5;
 
+/// Margin, in metres, by which the client's *player*-attack targeting range sits
+/// inside the swing's authoritative reach. The client only marks a remote player
+/// as the swing target when they are within `AttackProfile::reach_m` minus this
+/// margin, while the server validates the hit at the full `reach_m`. The gap
+/// covers the movement-prediction delta between the client's view at swing time
+/// and the server's at receive time, so a hit the client shows as landing is one
+/// the server still accepts (never the "tooltip says reachable, server says no"
+/// pop). Applies to player targeting only: a standard-reach weapon or tool (3.5 m)
+/// targets players at 3.0 m and the spear (4.5 m reach) at 4.0 m. Non-player
+/// targeting (nodes, deployables) keeps its own ranges.
+pub const COMBAT_PLAYER_TARGET_REACH_MARGIN_M: f32 = 0.5;
+
 /// Cosine of the attacker's view-cone half-angle.
 pub const COMBAT_ATTACK_CONE_COS: f32 = 0.92;
 
@@ -112,6 +124,293 @@ pub const IRON_PICKAXE_PVP_DAMAGE: u32 = 22;
 /// not the feel of getting hit.
 pub const HATCHET_KNOCKBACK_SPEED: f32 = 1.8;
 pub const PICKAXE_KNOCKBACK_SPEED: f32 = 4.0;
+
+/// Max meteorite a single pickaxe swing extracts from a meteorite node
+/// (`ResourceNodeDefinition::per_swing_yield`). The node stores 8 total, so a
+/// find is a deliberate 4-hit mining beat; without the cap the iron pickaxe's
+/// 12 gather_amount would exhaust the whole rare node in one swing.
+pub const METEORITE_PER_SWING_YIELD: u16 = 2;
+
+// =====================================================================
+// Weapons (dedicated melee: club, spear, sword, mace)
+// =====================================================================
+//
+// The four melee weapons widen the tool spectrum rather than blur it: the
+// hatchet (fast, light) and pickaxe (slow, heavy) are the reference points, and
+// each weapon stakes out a distinct point between and beyond them. Combat
+// resolves a weapon's `WeaponProfile` ahead of any gather tool (weapons gather
+// nothing), so these are the numbers a swing actually reads.
+//
+// Cooldown ordering is a hard design constraint: club < sword < spear < mace,
+// in server ticks (20 per second), so faster weapons have the smaller floor.
+// The tool anchors are the stone hatchet / pickaxe at 6 ticks and the iron
+// tools at 5; the club sits just slower than the stone hatchet and the rest
+// step up from there. Reach is 3.5 m (the melee default) for everything except
+// the spear, which trades speed for a 4.5 m poke. Durability reuses the tool
+// tiers so a weapon's material tells you how long it lasts.
+
+/// Wooden club: the starter weapon. A fast, cheap chop, slightly slower than the
+/// stone hatchet (7 ticks vs 6) and hitting a touch harder (12 vs the hatchet's
+/// 8), with a moderate shove. Stone-tier durability so it wears like the tools it
+/// is crafted beside.
+pub const WOODEN_CLUB_PVP_DAMAGE: u32 = 12;
+pub const WOODEN_CLUB_KNOCKBACK_SPEED: f32 = 2.4;
+pub const WOODEN_CLUB_COOLDOWN_TICKS: u64 = 7;
+
+/// Stone spear: the space-control weapon. Slow (11 ticks) with the game's only
+/// extended melee reach (4.5 m vs the 3.5 m standard), 16 damage, and a low
+/// knockback (the point is to keep an enemy at the tip, not to fling them out of
+/// range). Stone-tier durability.
+pub const STONE_SPEAR_PVP_DAMAGE: u32 = 16;
+pub const STONE_SPEAR_KNOCKBACK_SPEED: f32 = 1.2;
+pub const STONE_SPEAR_COOLDOWN_TICKS: u64 = 11;
+/// Extended melee reach for the spear, in metres, versus the 3.5 m default
+/// (`COMBAT_ATTACK_RANGE_M`). This is the one weapon that reaches past standard
+/// melee, its whole identity.
+pub const STONE_SPEAR_REACH_M: f32 = 4.5;
+
+/// Iron sword: the workhorse. A balanced 20 damage on a medium cooldown (9
+/// ticks, between the club and the spear) with a moderate shove. Iron-tier
+/// durability, so it outlasts the stone weapons the way iron tools outlast stone.
+pub const IRON_SWORD_PVP_DAMAGE: u32 = 20;
+pub const IRON_SWORD_KNOCKBACK_SPEED: f32 = 3.0;
+pub const IRON_SWORD_COOLDOWN_TICKS: u64 = 9;
+
+/// Iron mace: the anti-armor answer. The slowest weapon (14 ticks, slower even
+/// than the hammer's 8) and the hardest single hit at 26, with the biggest
+/// knockback in the game, heavier than the pickaxe's 4.0 m/s shove, so a landed
+/// mace blow flings a target clear. Its 50% armor pierce is what makes it the
+/// counter to a fully armored opponent: half their mitigation is ignored before
+/// the hit lands. Iron-tier durability.
+pub const IRON_MACE_PVP_DAMAGE: u32 = 26;
+pub const IRON_MACE_KNOCKBACK_SPEED: f32 = 5.0;
+pub const IRON_MACE_COOLDOWN_TICKS: u64 = 14;
+/// Percent of the target's armor the mace ignores before mitigation. The
+/// heaviest weapon punches through half of any set, its role in the
+/// rock-paper-scissors: it punishes iron armor the way nothing else does.
+pub const IRON_MACE_ARMOR_PIERCE_PCT: u8 = 50;
+
+// =====================================================================
+// Ranged (bow, crossbow, arrows, projectile simulation)
+// =====================================================================
+//
+// Ranged weapons carry a `RangedProfile` (parallel to `WeaponProfile`) rather
+// than firing a melee swing. The bow draws to build damage; the crossbow is a
+// flat, slow, hard-hitting shot. Both spawn a server-simulated arrow that flies
+// under gravity and resolves its own hit. Projectile damage is `DamageKind::
+// Projectile`, so armor's projectile column (and the mace's pierce path) apply
+// through the shared post-hit tail. Draw and cooldown are in server ticks
+// (20 per second). Speeds are in metres per second.
+
+/// Wooden bow: minimum draw damage (an instant, no-hold release). Damage lerps
+/// from this floor up to the full-draw ceiling over `WOODEN_BOW_DRAW_TICKS`.
+pub const WOODEN_BOW_DAMAGE_MIN: u32 = 15;
+/// Wooden bow: full-draw damage ceiling, reached after holding the draw for the
+/// full window. A committed, aimed shot rewards the wait.
+pub const WOODEN_BOW_DAMAGE_MAX: u32 = 40;
+/// Wooden bow: arrow launch speed, in metres per second. Still slower and
+/// loopier than the crossbow (the bow stays the arcing option to the
+/// crossbow's snap shot), but raised from the original 35: at that speed
+/// arrows nosed into the ground a few metres out and shots felt powerless
+/// (owner report), so the arc now carries a proper fighting distance.
+pub const WOODEN_BOW_PROJECTILE_SPEED_MPS: f32 = 50.0;
+/// Wooden bow: ticks from draw start to full draw (1.5 s at 20 Hz). Damage scales
+/// linearly across this window; releasing early deals proportionally less.
+pub const WOODEN_BOW_DRAW_TICKS: u64 = (1.5 * SERVER_TICK_RATE_HZ) as u64;
+/// Wooden bow: server anti-spam floor between shots, in ticks. Small; the draw
+/// time is the real pacing lever, not the post-fire cooldown.
+pub const WOODEN_BOW_COOLDOWN_TICKS: u64 = 5;
+/// Bow: minimum draw fraction for a release to fire at all. Below this the
+/// release is a cancel, not a shot: tapping the button can never loose an
+/// arrow (owner requirement), the archer must commit at least this much of the
+/// draw. Enforced on the server off its own observed draw ticks; the client
+/// mirrors it so a too-short release lowers the bow instead of firing.
+/// Instant-fire weapons (crossbow, `draw_ticks_to_full == 0`) are exempt.
+pub const BOW_MIN_DRAW_FRACTION_TO_FIRE: f32 = 0.25;
+/// Bow: launch speed at the minimum firing draw, as a fraction of the profile's
+/// full `projectile_speed_mps`. Speed lerps from this floor at zero draw up to
+/// full speed at full draw, so a barely-held shot lobs out weak and short while
+/// a committed draw sends the arrow at full pace (owner requirement: power
+/// follows the hold). Damage already scales the same way via the profile's
+/// damage band.
+pub const BOW_MIN_RELEASE_SPEED_FRACTION: f32 = 0.45;
+/// Wooden bow: knockback impulse magnitude on a hit, in m/s. A committed,
+/// full-draw arrow shoves the target back noticeably (roughly a sword's worth of
+/// push), so a landed shot reads as a real hit rather than a pinprick.
+pub const WOODEN_BOW_KNOCKBACK_SPEED: f32 = 2.5;
+
+/// Crossbow: flat per-shot damage. No draw scaling (`CROSSBOW_DRAW_TICKS = 0`);
+/// every bolt hits for this, which is why the reload is long.
+pub const CROSSBOW_DAMAGE: u32 = 55;
+/// Crossbow: bolt launch speed, in metres per second. Faster and flatter than the
+/// bow, the ambush weapon: less lead, less drop, but a punishing reload. Bumped a
+/// touch over the old 55 so the bolt reads as a snap shot with almost no lead.
+pub const CROSSBOW_PROJECTILE_SPEED_MPS: f32 = 62.0;
+/// Crossbow: draw window in ticks. Zero: the crossbow is pre-loaded, so a shot is
+/// always at full damage the instant the reload cooldown has elapsed.
+pub const CROSSBOW_DRAW_TICKS: u64 = 0;
+/// Crossbow: reload cooldown between shots, in ticks (3.5 s at 20 Hz). This is
+/// the crossbow's whole cost: 55 flat damage, but a long, audible ratchet before
+/// the next bolt.
+pub const CROSSBOW_COOLDOWN_TICKS: u64 = (3.5 * SERVER_TICK_RATE_HZ) as u64;
+/// Crossbow: knockback impulse magnitude on a hit, in m/s. The heavy hitter of
+/// the two: a 55-damage bolt lands with a real shove (well past the sword and
+/// near the mace), so eating one clearly rocks the target back.
+pub const CROSSBOW_KNOCKBACK_SPEED: f32 = 4.0;
+
+/// Downward acceleration applied to a live projectile each second, in m/s^2. A
+/// gamey arc rather than real-world 9.81: strong enough that arrows visibly drop
+/// and lead matters, gentle enough that the bow stays usable at mid range.
+pub const PROJECTILE_GRAVITY: f32 = -12.0;
+
+/// Hard cap on a projectile's flight time before it despawns, in seconds. Bounds
+/// the per-tick projectile set so a shot into open sky can never linger forever.
+pub const PROJECTILE_MAX_FLIGHT_SECONDS: f32 = 8.0;
+
+/// Ticks after spawn during which a projectile cannot hit its own shooter. Keeps
+/// the arrow from resolving against the shooter's own body box on the first frame
+/// (the projectile spawns at the shooter's eye, inside their collider column).
+pub const PROJECTILE_SELF_HIT_GRACE_TICKS: u64 = 4;
+
+/// How long a stuck arrow lingers after a projectile comes to rest against the
+/// world before it despawns, in seconds. Every world rest sticks and is
+/// E-recoverable for this window; an uncollected arrow is lost when it expires,
+/// which (with hits consuming the arrow outright) is the whole ammo economy.
+pub const PROJECTILE_STUCK_TTL_SECONDS: f32 = 30.0;
+
+/// Speed, in m/s, of the epsilon rest velocity a stuck arrow keeps. Far below
+/// any stuck-detection threshold, so it never reads as motion; its only job is
+/// to carry the final flight DIRECTION on the wire so every client (including
+/// one that first sees the arrow already at rest) orients the stuck shaft along
+/// the shot that planted it instead of pointing it straight up.
+pub const PROJECTILE_REST_DIR_EPSILON: f32 = 0.01;
+
+/// Effectiveness of a projectile hit against a placed deployable, in percent of
+/// the projectile's damage. Weapons (including ranged) are not raid tools:
+/// arrows chip sticks-tier structures only and do a token amount against anything
+/// sturdier, so a base is never raidable with a bow. Mirrors the sticks arm of
+/// `tool_effectiveness_pct` in spirit, expressed as one ranged-specific rule.
+pub const PROJECTILE_DEPLOYABLE_EFFECTIVENESS_PCT: u32 = 100;
+
+/// Run-speed multiplier applied to a player while their bow draw is held. The
+/// draw slows movement to ~60% so drawing is a commitment, not a free kite. Set
+/// on the existing `run_speed_multiplier` lever on draw start and restored to
+/// `1.0` on fire, cancel, item swap, or death.
+pub const BOW_DRAW_MOVE_MULTIPLIER: f32 = 0.6;
+
+/// Run-speed multiplier applied to a player while the crossbow is reloading (its
+/// long post-fire cooldown window). Cranking a windlass while sprinting makes no
+/// sense: the reload impairs movement to ~70% (a lighter penalty than the bow
+/// draw, since the whole reload is already a hard commitment) so ambushing with a
+/// crossbow costs mobility on the recovery. Set on the `run_speed_multiplier`
+/// lever the instant the shot fires and restored to `1.0` when the reload window
+/// (`next_ranged_tick`) elapses, on item swap, or on death.
+pub const CROSSBOW_RELOAD_MOVE_MULTIPLIER: f32 = 0.7;
+
+// =====================================================================
+// Armor (worn-equipment mitigation)
+// =====================================================================
+
+/// Hard ceiling on total damage reduction from worn armor, per damage kind, in
+/// percent. Protection sums across the four worn pieces and is then clamped to
+/// this cap, so no full set (or future stacked set) can push mitigation past
+/// it; a player always takes at least `100 - cap` percent of every hit. 60% is
+/// the spec's ceiling: enough that a full iron set is a real advantage, low
+/// enough that armor never trivializes combat.
+pub const ARMOR_TOTAL_CAP_PCT: u8 = 60;
+
+/// Per-piece protection for the padded (cloth) set, in percent, per damage
+/// kind. The set totals (melee 12 / projectile 10 / blast 4) are split across
+/// the four slots by the spec's weighting (chest 40%, head 25%, legs 25%, feet
+/// 10%) and integer-rounded so each column sums exactly to its set total:
+///
+/// - melee:      head 3 + chest 5 + legs 3 + feet 1 = 12
+/// - projectile: head 3 + chest 4 + legs 2 + feet 1 = 10
+/// - blast:      head 1 + chest 2 + legs 1 + feet 0 = 4
+///
+/// The rounding lands the extra melee/blast weight on the chest (the biggest
+/// slot) and the odd projectile percent on the head, so the "wear the chest
+/// piece first" instinct is rewarded.
+pub const PADDED_HEAD_MELEE_PCT: u8 = 3;
+pub const PADDED_HEAD_PROJECTILE_PCT: u8 = 3;
+pub const PADDED_HEAD_BLAST_PCT: u8 = 1;
+pub const PADDED_CHEST_MELEE_PCT: u8 = 5;
+pub const PADDED_CHEST_PROJECTILE_PCT: u8 = 4;
+pub const PADDED_CHEST_BLAST_PCT: u8 = 2;
+pub const PADDED_LEGS_MELEE_PCT: u8 = 3;
+pub const PADDED_LEGS_PROJECTILE_PCT: u8 = 2;
+pub const PADDED_LEGS_BLAST_PCT: u8 = 1;
+pub const PADDED_FEET_MELEE_PCT: u8 = 1;
+pub const PADDED_FEET_PROJECTILE_PCT: u8 = 1;
+pub const PADDED_FEET_BLAST_PCT: u8 = 0;
+
+/// Impacts a padded (cloth) armor piece survives before it stops protecting.
+/// Each hit that a piece's protection contributes to wears it by 1; a piece at
+/// 0 stays worn but adds nothing until repaired. A modest budget for the
+/// starter set: enough to matter across a fight, cheap enough to re-craft.
+pub const PADDED_ARMOR_DURABILITY: u32 = 100;
+
+/// Per-piece protection for the lamellar (wood slats over cloth) set, in
+/// percent, per damage kind. The set totals (melee 24 / projectile 20 / blast
+/// 10) are split across the four slots by the spec's weighting (chest 40%, head
+/// 25%, legs 25%, feet 10%) and integer-rounded so each column sums exactly to
+/// its set total:
+///
+/// - melee:      head 6 + chest 10 + legs 6 + feet 2 = 24
+/// - projectile: head 5 + chest 8  + legs 5 + feet 2 = 20
+/// - blast:      head 2 + chest 5  + legs 2 + feet 1 = 10
+///
+/// As with the padded set, the rounding lands the extra weight on the chest (the
+/// biggest slot), so wearing the vest first is always the strongest single
+/// choice. Every column is exercised by `full_lamellar_set_sums_to_the_spec_totals`.
+pub const LAMELLAR_HEAD_MELEE_PCT: u8 = 6;
+pub const LAMELLAR_HEAD_PROJECTILE_PCT: u8 = 5;
+pub const LAMELLAR_HEAD_BLAST_PCT: u8 = 2;
+pub const LAMELLAR_CHEST_MELEE_PCT: u8 = 10;
+pub const LAMELLAR_CHEST_PROJECTILE_PCT: u8 = 8;
+pub const LAMELLAR_CHEST_BLAST_PCT: u8 = 5;
+pub const LAMELLAR_LEGS_MELEE_PCT: u8 = 6;
+pub const LAMELLAR_LEGS_PROJECTILE_PCT: u8 = 5;
+pub const LAMELLAR_LEGS_BLAST_PCT: u8 = 2;
+pub const LAMELLAR_FEET_MELEE_PCT: u8 = 2;
+pub const LAMELLAR_FEET_PROJECTILE_PCT: u8 = 2;
+pub const LAMELLAR_FEET_BLAST_PCT: u8 = 1;
+
+/// Impacts a lamellar armor piece survives before it stops protecting. Sits
+/// between the padded starter set (100) and the iron plate set (300): the wood
+/// slats hold up longer than bare cloth but nowhere near forged plate.
+pub const LAMELLAR_ARMOR_DURABILITY: u32 = 200;
+
+/// Per-piece protection for the iron (plate over padding) set, in percent, per
+/// damage kind. The set totals (melee 40 / projectile 36 / blast 20) are split
+/// across the four slots by the spec's weighting (chest 40%, head 25%, legs
+/// 25%, feet 10%) and integer-rounded so each column sums exactly to its set
+/// total:
+///
+/// - melee:      head 10 + chest 16 + legs 10 + feet 4 = 40
+/// - projectile: head 9  + chest 14 + legs 9  + feet 4 = 36
+/// - blast:      head 5  + chest 8  + legs 5  + feet 2 = 20
+///
+/// A full iron set sums to 40 melee, under the 60% cap, so even the top set
+/// leaves a real chunk of every hit landing. Every column is exercised by
+/// `full_iron_set_sums_to_the_spec_totals`.
+pub const IRON_HEAD_MELEE_PCT: u8 = 10;
+pub const IRON_HEAD_PROJECTILE_PCT: u8 = 9;
+pub const IRON_HEAD_BLAST_PCT: u8 = 5;
+pub const IRON_CHEST_MELEE_PCT: u8 = 16;
+pub const IRON_CHEST_PROJECTILE_PCT: u8 = 14;
+pub const IRON_CHEST_BLAST_PCT: u8 = 8;
+pub const IRON_LEGS_MELEE_PCT: u8 = 10;
+pub const IRON_LEGS_PROJECTILE_PCT: u8 = 9;
+pub const IRON_LEGS_BLAST_PCT: u8 = 5;
+pub const IRON_FEET_MELEE_PCT: u8 = 4;
+pub const IRON_FEET_PROJECTILE_PCT: u8 = 4;
+pub const IRON_FEET_BLAST_PCT: u8 = 2;
+
+/// Impacts an iron (plate) armor piece survives before it stops protecting. The
+/// highest durability of the three sets: forged plate outlasts wood slats and
+/// cloth alike, matching its top-tier cost.
+pub const IRON_ARMOR_DURABILITY: u32 = 300;
 
 /// Maximum distance at which the cosmetic impact messages
 /// (`ResourceImpact`, `PlayerImpact`) are delivered. Spatial audio
@@ -338,6 +637,16 @@ pub const FURNACE_COAL_BURN_TICKS: u32 = (16.0 * SERVER_TICK_RATE_HZ) as u32;
 pub const FURNACE_INTERACT_RANGE_M: f32 = 3.0;
 
 // =====================================================================
+// Workbench
+// =====================================================================
+
+/// Maximum interaction range, in metres, for opening (and continuing to use)
+/// a placed workbench's upgrade UI. Kept equal to `FURNACE_INTERACT_RANGE_M`
+/// so every "press E on a structure" interaction feels identical: you stand
+/// next to the bench to work at it.
+pub const WORKBENCH_INTERACT_RANGE_M: f32 = 3.0;
+
+// =====================================================================
 // Loot bags
 // =====================================================================
 
@@ -363,3 +672,352 @@ pub const LOOT_BAG_INTERACT_RANGE_M: f32 = 4.5;
 /// a nearby item you already targeted is low-stakes, so erring lenient here
 /// costs nothing and feels much smoother while sprinting around.
 pub const PICKUP_SERVER_REACH_SLACK_M: f32 = 1.5;
+
+// =====================================================================
+// Exploration worldgen
+// =====================================================================
+
+/// Minimum distance from world centre, as a fraction of the playable radius,
+/// before a meteorite node may spawn. Meteorite is the rare, iron-gated,
+/// night-glowing mineral that gates the workbench tier-2 upgrade and later explosives, so it lives in the committed outer reaches of the map: a chunk whose
+/// centre sits inside this ring (roughly the inner 40% of the map radius) never
+/// seeds meteorite, no matter how rich its ore channel is. The check is against
+/// the world origin `(0, 0)` (the world is centred there) using the same
+/// `PlayableBounds` half-extent both generation and the regrow ceiling read, so
+/// the two stay in lockstep. Pushing outward is the price of the rare mineral.
+pub const METEORITE_MIN_CENTER_DISTANCE_FRACTION: f32 = 0.4;
+
+/// Ore-channel floor an eligible far chunk must clear before it seeds its lone
+/// meteorite node. Set high on purpose: combined with the base capacity of 1
+/// and the distance ring, this makes meteorite roughly an order of magnitude
+/// rarer than iron, so most eligible chunks hold none and finding one is a real
+/// discovery. Mirrors the `FOREST_IRON_ORE_CHANNEL` lucky-strike idiom, but
+/// stricter.
+pub const METEORITE_ORE_CHANNEL_FLOOR: f32 = 0.72;
+
+// =====================================================================
+// Ruins (POI worldgen) and loot caches
+// =====================================================================
+
+/// Minimum spacing, in metres, between two ruin sites. Ruins are landmarks a
+/// player travels between, so they sit far apart: the scatter rejects a
+/// candidate site that lands within this distance of an already-accepted one.
+/// At ~180 m no two ruins share a chunk, and a medium world (~1984 m across)
+/// fits only a handful, keeping each a genuine destination.
+pub const RUIN_MIN_SPACING_M: f32 = 180.0;
+
+/// Radius around world centre, as a fraction of the playable radius, inside
+/// which no ruin may spawn. The spawn point sits at the origin, so this keeps
+/// the ruins (and their PvP-contested caches) out of the fresh-spawn safe area
+/// and gives exploration a reason: roughly the inner 15% of the map is
+/// ruin-free. Measured against the same `PlayableBounds` half-extent the
+/// meteorite ring uses, so the two gates read consistently.
+pub const RUIN_SPAWN_EXCLUSION_RADIUS_FRACTION: f32 = 0.15;
+
+/// Margin, in metres, kept between a ruin site and the edge of `PlayableBounds`
+/// so a ruin's footprint (and its perimeter blocks) never clip the world wall.
+/// Sized above the largest prefab half-extent.
+pub const RUIN_BOUNDS_MARGIN_M: f32 = 12.0;
+
+/// Number of candidate sites the scatter samples per world before it stops.
+/// Rejection sampling against the spacing + exclusion + bounds rules keeps only
+/// the winners, so this caps how densely a map fills: too high and every map
+/// saturates to its packing limit (a ruin every 180 m everywhere, which reads
+/// as clutter, not landmarks). Tuned so a medium world (~1984 m) lands roughly
+/// a dozen genuine destinations and a large world proportionally more.
+/// Deterministic: the same seed always draws the same candidates in order.
+pub const RUIN_SCATTER_CANDIDATES: u32 = 40;
+
+/// HP stored on the ruin-cache deployable. Nominal only: the damage path
+/// rejects the cache before any HP is subtracted, so this value is never
+/// actually depleted. Present because every deployable carries a max_health.
+pub const RUIN_CACHE_MAX_HP: u32 = 1_000;
+
+/// Slot count of a ruin cache's loot grid. Small on purpose: a cache is a
+/// quick grab, not a stockpile, and the refill rolls a handful of stacks.
+pub const RUIN_CACHE_SLOT_COUNT: usize = 6;
+
+/// Max range for opening a ruin cache. Matches the storage-box / furnace
+/// interact range so every "press E on a structure" feels identical.
+pub const RUIN_CACHE_INTERACT_RANGE_M: f32 = 3.0;
+
+/// Real-world minutes between a cache being emptied and its refill firing.
+/// Long enough that a cache is a periodic reason to return to a ruin rather
+/// than a farm, short enough that a cleared ruin is worth revisiting in a
+/// session. Expressed in ticks below.
+pub const RUIN_CACHE_REFILL_MINUTES: f32 = 25.0;
+
+/// Refill delay in server ticks. Derived from `RUIN_CACHE_REFILL_MINUTES` and
+/// `SERVER_TICK_RATE_HZ` so the minutes constant is the single knob (mirrors
+/// the `TORCH_BURN_TICKS` idiom).
+pub const RUIN_CACHE_REFILL_TICKS: u64 =
+    (RUIN_CACHE_REFILL_MINUTES * 60.0 * SERVER_TICK_RATE_HZ) as u64;
+
+/// Ruin-cache loot table. `ancient_fittings` is guaranteed on every roll (the
+/// cache is its exclusive source), between these bounds inclusive.
+pub const RUIN_CACHE_FITTINGS_MIN: u32 = 2;
+pub const RUIN_CACHE_FITTINGS_MAX: u32 = 4;
+
+/// Number of weighted secondary rolls per refill (gunpowder / iron_bar / cloth).
+/// Each roll picks one entry by weight and adds its stack, so a refill yields
+/// the guaranteed fittings plus this many common-material stacks.
+pub const RUIN_CACHE_SECONDARY_ROLLS: u32 = 3;
+
+/// Relative weights for the secondary loot roll. Higher is more likely; the
+/// three must not all be zero. Gunpowder leads (it is the raid feedstock the
+/// cache is meant to seed), iron_bar and cloth trail.
+pub const RUIN_CACHE_WEIGHT_GUNPOWDER: u32 = 5;
+pub const RUIN_CACHE_WEIGHT_IRON_BAR: u32 = 3;
+pub const RUIN_CACHE_WEIGHT_CLOTH: u32 = 2;
+
+/// Stack size a single secondary roll grants for each material.
+pub const RUIN_CACHE_GUNPOWDER_PER_ROLL: u16 = 4;
+pub const RUIN_CACHE_IRON_BAR_PER_ROLL: u16 = 2;
+pub const RUIN_CACHE_CLOTH_PER_ROLL: u16 = 3;
+
+/// Chance, in percent, that a refill also drops a single rare meteorite. The
+/// rare bonus that makes a cache worth opening even when a player is not short
+/// on fittings.
+pub const RUIN_CACHE_METEORITE_CHANCE_PCT: u32 = 8;
+
+// =====================================================================
+// Meteor shower event
+// =====================================================================
+
+/// Minimum and maximum in-game days between scheduled meteor shower events.
+/// The scheduler rolls the next event uniformly in this window (converted to
+/// real server ticks via `REAL_SECONDS_PER_DAY` at cycle multiplier 1). Two to
+/// four in-game days keeps the event a periodic, anticipated flashpoint without
+/// letting it dominate a session. NOTE: these are *in-game* days measured
+/// against the fixed real-time tick clock, so the admin `/time-speed` cheat
+/// (which accelerates only the day/night cycle, not the wall clock) does NOT
+/// pull meteors closer together; the schedule is real-time.
+pub const METEOR_SHOWER_INTERVAL_DAYS_MIN: f32 = 2.0;
+pub const METEOR_SHOWER_INTERVAL_DAYS_MAX: f32 = 4.0;
+
+/// Real seconds between the announce (fireball appears, countdown starts) and
+/// impact. Ten real minutes: long enough that a player anywhere on the map can
+/// see the streak, read the countdown, and either rush the impact site to
+/// contest the shard cluster or evacuate the danger zone. Tunable, an Eco-style
+/// longer approach is just a larger value here.
+pub const METEOR_SHOWER_WARNING_SECONDS: f32 = 600.0;
+
+/// Clearance, in metres, kept between a chosen impact site and ANY player
+/// structure (building piece, deployed entity, or Tool Cupboard claim
+/// footprint). Building safety is guaranteed by SITING, never by a damage
+/// exemption, so this MUST exceed `METEOR_SHOWER_IMPACT_RADIUS_M` (asserted by
+/// `clearance_exceeds_impact_radius`): a base can never be inside the blast.
+/// Sized well past the impact radius so even a base's outer wall stays clear of
+/// the crater's edge.
+pub const METEOR_SHOWER_BUILDING_CLEARANCE_M: f32 = 60.0;
+
+/// Radius, in metres, of the meteor's lethal impact. Players inside take Blast
+/// damage with linear falloff from ground zero; resource nodes inside are
+/// felled/depleted; the meteorite shard cluster scatters within it. Kept below
+/// the building clearance so the siting guarantee holds.
+pub const METEOR_SHOWER_IMPACT_RADIUS_M: f32 = 18.0;
+
+/// Radius, in metres, of the evacuation danger zone. A player whose own position
+/// is inside this ring of the announced impact point gets the escalating
+/// client-side "evacuate" warning over the final 60 seconds. Larger than the
+/// impact radius so the warning gives players room to run clear rather than
+/// firing only once they are already at ground zero.
+pub const METEOR_SHOWER_DANGER_RADIUS_M: f32 = 60.0;
+
+/// Blast damage applied at ground zero (distance 0 from the impact point). At
+/// `MAX_HEALTH` this is lethal through any current armor set (the 60% cap still
+/// leaves ~100 landing), matching the "standing on the marker is lethal" design.
+/// Falls off linearly to 0 at `METEOR_SHOWER_IMPACT_RADIUS_M`.
+pub const METEOR_SHOWER_IMPACT_PLAYER_DAMAGE: f32 = 250.0;
+
+/// Minimum and maximum number of rich meteorite shard nodes the impact
+/// scatters inside the crater. A contested windfall (several nodes' worth of the
+/// rare iron-gated mineral in one spot) that despawns if unmined, so it rewards
+/// rushing the site. Placed with a minimum spacing so they do not overlap.
+pub const METEOR_SHOWER_CRATER_NODE_COUNT_MIN: u32 = 3;
+pub const METEOR_SHOWER_CRATER_NODE_COUNT_MAX: u32 = 6;
+
+/// Real seconds the crater and its shard cluster persist before the server
+/// force-despawns any unmined shards and cleans up the event (crater visual +
+/// map marker removed client-side). Ten minutes: long enough to rush the site
+/// and fight over the cluster, short enough that meteors striking while nobody
+/// is online do not leave the world scattered with stale shards and craters.
+pub const METEOR_SHOWER_DESPAWN_SECONDS: f32 = 600.0;
+
+/// Minimum spacing, in metres, between two scattered crater shard nodes, so the
+/// cluster reads as several distinct nodes rather than one overlapping blob.
+pub const METEOR_SHOWER_CRATER_NODE_SPACING_M: f32 = 2.5;
+
+/// Real seconds the impact site burns after the strike (client-side particle
+/// fires + their glow lights). Much shorter than the crater window: the fires
+/// are the "something just hit here" read for the first minute or two, then
+/// die out and leave only the scorch for the rest of the window.
+pub const METEOR_SHOWER_SITE_FIRE_SECONDS: f32 = 100.0;
+
+/// Real seconds, at the end of `METEOR_SHOWER_SITE_FIRE_SECONDS`, over which the
+/// site fires ramp down (fewer/smaller flames, dimming light) rather than
+/// cutting out at full blaze.
+pub const METEOR_SHOWER_SITE_FIRE_FADE_SECONDS: f32 = 30.0;
+
+/// Number of candidate impact points the site selector samples in the outer
+/// ring before falling back to the max-clearance candidate. Rejection sampling
+/// against the building/deployable/claim/ruin clearance keeps only safe sites;
+/// this caps the search so a heavily-built map still resolves quickly.
+pub const METEOR_SHOWER_SITE_CANDIDATES: u32 = 48;
+
+/// Fraction of the playable radius the impact site must sit BEYOND (measured
+/// from the world centre). Keeps meteors out to the committed outer reaches of
+/// the map, the same "exploration lives outward" instinct the meteorite and
+/// ruin rings use, and away from the central spawn area.
+pub const METEOR_SHOWER_SITE_MIN_CENTER_DISTANCE_FRACTION: f32 = 0.35;
+
+/// Margin, in metres, kept between the impact site and the edge of
+/// `PlayableBounds` so the crater and its shard cluster never clip the world
+/// perimeter wall.
+pub const METEOR_SHOWER_SITE_BOUNDS_MARGIN_M: f32 = 20.0;
+
+// =====================================================================
+// Explosives
+// =====================================================================
+//
+// The three blackpowder charges and the raid economics they drive. Two levers:
+// a per-charge `*_BASE_DAMAGE` (blast damage at ground zero) and the
+// effectiveness matrix `*_EFFECTIVENESS_<material>_PCT` (percent of base a
+// charge deals against each raid material). A charge's damage to a structure is
+// `base * effectiveness_pct / 100 * linear_falloff`. At point-blank the falloff
+// is ~1.0, so the numbers below ARE the per-hit structure damage in the raid
+// math. Wall/door HP (`BUILDING_*_WALL_HP`, `DOOR_MAX_HP`, `IRON_DOOR_MAX_HP`)
+// are the targets these numbers are tuned against.
+//
+// Raid math (point-blank, one charge at the wall):
+//   Hewn wood wall (3,600 HP): keg 900 * 80% = 720/charge -> 5 kegs (3,600) break
+//     it, 4 (2,880) do not. Satchel 2,000 * 85% = 1,700/charge -> 2 satchels +
+//     a bomb (300 * 40% = 120) also break it.
+//   Stone wall (6,000 HP): satchel 2,000 * 45% = 900/charge -> 7 satchels
+//     (6,300) break it.
+//   Iron door (3,000 HP): with no dedicated metal charge the satchel.s 8%
+//     (160/charge, ~19 satchels) is the only thing that touches metal at all;
+//     an iron door is effectively raid-proof until a top-tier metal charge lands.
+// Tune here, never inline.
+
+/// Base blast damage at ground zero for each charge, before the per-material
+/// effectiveness multiplier and the linear distance falloff. Straight from the
+/// spec's "Base dmg" column (300 / 900 / 2,000).
+pub const POWDER_BOMB_BASE_DAMAGE: u32 = 300;
+pub const POWDER_KEG_BASE_DAMAGE: u32 = 900;
+pub const SATCHEL_CHARGE_BASE_DAMAGE: u32 = 2_000;
+
+/// Effectiveness matrix: percent of `base_damage` a charge deals against each
+/// raid material, exactly the spec's per-charge row (Sticks / Wood / Stone /
+/// Metal). Read by `explosive_effectiveness_pct`. `100` means full base damage;
+/// `0` means the charge cannot touch that material at all (a powder bomb or keg
+/// against an iron door).
+pub const POWDER_BOMB_EFFECTIVENESS_STICKS_PCT: u32 = 100;
+pub const POWDER_BOMB_EFFECTIVENESS_WOOD_PCT: u32 = 40;
+pub const POWDER_BOMB_EFFECTIVENESS_STONE_PCT: u32 = 8;
+pub const POWDER_BOMB_EFFECTIVENESS_METAL_PCT: u32 = 0;
+
+pub const POWDER_KEG_EFFECTIVENESS_STICKS_PCT: u32 = 100;
+pub const POWDER_KEG_EFFECTIVENESS_WOOD_PCT: u32 = 80;
+pub const POWDER_KEG_EFFECTIVENESS_STONE_PCT: u32 = 25;
+pub const POWDER_KEG_EFFECTIVENESS_METAL_PCT: u32 = 0;
+
+pub const SATCHEL_CHARGE_EFFECTIVENESS_STICKS_PCT: u32 = 100;
+pub const SATCHEL_CHARGE_EFFECTIVENESS_WOOD_PCT: u32 = 85;
+pub const SATCHEL_CHARGE_EFFECTIVENESS_STONE_PCT: u32 = 45;
+pub const SATCHEL_CHARGE_EFFECTIVENESS_METAL_PCT: u32 = 8;
+
+/// Blast radius, in metres, for each charge. Full base damage at the centre,
+/// falling off linearly to zero at this edge (both against structures and
+/// players). Kept tight so a charge hits the wall it is set against and its
+/// immediate neighbours, not a whole base. From the spec (~3.5 / 4 / 4).
+pub const POWDER_BOMB_RADIUS_M: f32 = 3.5;
+pub const POWDER_KEG_RADIUS_M: f32 = 4.0;
+pub const SATCHEL_CHARGE_RADIUS_M: f32 = 4.0;
+
+/// Fuse length, in server ticks, from arming to detonation. Placed charges
+/// (keg / satchel) arm the instant they are set and hiss for 8 to 9 seconds,
+/// the defender's window to defuse or shoot them out. The thrown bomb is lit
+/// as it leaves the hand: the fuse counts through flight, bounce, and roll,
+/// so it blows wherever it ends up ~4 seconds after the throw. Derived from
+/// real seconds via the tick rate so the seconds are the single knob (the
+/// `TORCH_BURN_TICKS` idiom).
+pub const POWDER_KEG_FUSE_TICKS: u32 = (8.0 * SERVER_TICK_RATE_HZ) as u32;
+pub const SATCHEL_CHARGE_FUSE_TICKS: u32 = (9.0 * SERVER_TICK_RATE_HZ) as u32;
+/// The thrown powder bomb's fuse, counted from the moment it is thrown.
+pub const POWDER_BOMB_FUSE_TICKS: u32 = (4.0 * SERVER_TICK_RATE_HZ) as u32;
+
+/// HP of a placed charge. Deliberately small: a charge is a fizzleable target
+/// (cloth material), so a defender can shoot or hit it a couple of times before
+/// it blows to disarm the raid without a refund. Shared by all the charges.
+pub const EXPLOSIVE_CHARGE_HP: u32 = 50;
+
+/// Launch speed window, in metres per second, of a thrown powder bomb. The
+/// throw charges like a bow draw: launch speed scales linearly with the held
+/// charge fraction from the min (a short drop-toss at minimum charge) to the
+/// max (a full wound-up lob). Heavier ballistics than an arrow (which flies at
+/// 35+): a lobbed charge arcs and drops rather than shooting flat. Gravity is
+/// the shared `PROJECTILE_GRAVITY`.
+pub const POWDER_BOMB_MIN_THROW_SPEED_MPS: f32 = 6.0;
+pub const POWDER_BOMB_MAX_THROW_SPEED_MPS: f32 = 16.0;
+
+/// Seconds of held left-click to reach a full-power throw (the bow's
+/// `draw_seconds` idiom). The charge clamps at 1.0 once reached; holding
+/// longer changes nothing.
+pub const POWDER_BOMB_CHARGE_SECONDS: f32 = 1.1;
+
+/// Minimum charge fraction below which releasing the button cancels instead of
+/// throwing, so a stray tap never lobs a bomb at your own feet (the
+/// `BOW_MIN_DRAW_FRACTION_TO_FIRE` idiom). Enforced client-side (release
+/// cancels) and clamped server-side (a forged lower power throws at this
+/// fraction's speed, never slower).
+pub const POWDER_BOMB_MIN_THROW_FRACTION: f32 = 0.25;
+
+/// Bounce response of the thrown bomb, applied by the server projectile sim on
+/// each solid contact: the normal component of the velocity reflects scaled by
+/// the restitution, the tangential component keeps rolling scaled by the
+/// friction. Together they read as "lands, bounces once or twice, rolls to a
+/// stop" rather than sticking to the first surface it touches.
+pub const POWDER_BOMB_RESTITUTION: f32 = 0.42;
+pub const POWDER_BOMB_BOUNCE_FRICTION: f32 = 0.72;
+
+/// Below this speed (m/s) after a ground contact the bomb stops simulating and
+/// rests in place (still fused). Keeps the tail of the roll from micro-jittering
+/// forever on integrator noise.
+pub const POWDER_BOMB_REST_SPEED_MPS: f32 = 1.1;
+
+/// Radius of the powder bomb's cloth ball (the glb ball spans y 0..0.25; the
+/// fuse cap above it deliberately does NOT collide). The server sim sweeps a
+/// SPHERE of this radius (ground plane lifted by it, block/deployable AABBs
+/// inflated by it), so the replicated position is the BALL CENTER and the
+/// bomb rolls smoothly on its ball instead of pivoting on the mesh base. The
+/// client sinks the mesh by this much under the visual root and rolls about
+/// it at `speed / radius`.
+pub const POWDER_BOMB_BALL_RADIUS_M: f32 = 0.125;
+
+/// Knockback impulse magnitude, in m/s, an explosion applies to a player at
+/// ground zero (scaled down by the linear falloff toward the edge). A single
+/// knob shared by every charge; the direction is radial, away from the blast.
+pub const EXPLOSION_KNOCKBACK_SPEED: f32 = 10.0;
+
+/// Range, in metres, within which the cosmetic `ServerMessage::Explosion` VFX/
+/// SFX cue is fanned out to clients. Generous (well past any blast radius) so a
+/// player hears and sees a distant breach, the audible-thump-plus-far-rumble
+/// feel; the client scales the effect by its own distance to the blast.
+pub const EXPLOSION_CUE_RANGE_M: f32 = 120.0;
+
+/// Reach, in metres, within which a defender may hold-E defuse a placed charge.
+/// Matches the general deployable interaction reach (`DEPLOYABLE_PLACEMENT_REACH_M`)
+/// so walking up to a hissing charge and defusing it uses the same distance the
+/// rest of the deployable interactions do (measured to the charge's collider
+/// surface).
+pub const EXPLOSIVE_DEFUSE_REACH_M: f32 = 5.0;
+
+/// Numerator/denominator of the recipe materials a successful defuse refunds to
+/// the defender, per material and rounded down: half the charge back (`1/2`).
+/// The defuser recovers materials, but never all of them, so defusing still
+/// costs the raider real farm time even when countered, and the defender is not
+/// fully reimbursed for a charge they did not craft. Kept as an integer ratio so
+/// the refund math stays exact (`input.quantity * NUM / DEN`, floor).
+pub const EXPLOSIVE_DEFUSE_REFUND_NUMERATOR: u16 = 1;
+pub const EXPLOSIVE_DEFUSE_REFUND_DENOMINATOR: u16 = 2;

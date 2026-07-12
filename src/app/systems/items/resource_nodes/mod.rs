@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
@@ -6,7 +6,7 @@ use crate::{
     app::{
         audio::PlaySound,
         scene::{ImpactEffectAssets, NetworkResourceNode, ResourceVisualAssets, ToonMaterial},
-        state::{ClientRuntime, PredictionState},
+        state::{ClientRuntime, MenuState, PredictionState, WorldStreamState},
     },
     protocol::{ResourceNodeId, Vec3Net},
     resources::resource_node_definition,
@@ -40,6 +40,29 @@ use stages::initial_node_stage;
 /// frames to drain a backlog. Existing-entity transform updates and
 /// despawns are uncapped, only first-time spawns are budgeted.
 const MAX_RESOURCE_NODE_SPAWNS_PER_FRAME: usize = 8;
+
+/// The budget while the world-entry loading splash is up: the scene is hidden
+/// behind an opaque overlay, so spawn-burst frame hitches are invisible and
+/// the only thing the budget buys is a longer load. Draining aggressively
+/// here shortens the "Placing N objects" wait; the smooth budget above takes
+/// over the moment the world is revealed.
+const MAX_RESOURCE_NODE_SPAWNS_PER_FRAME_LOADING: usize = 64;
+
+/// Post-connect grace window during which freshly-spawned nodes appear
+/// *without* the pop-in chip-burst, so the initial world materialises
+/// quietly instead of as a field of bursts. Comfortably covers the
+/// initial AoI delivery + drain (the ~1800-node fill takes a few seconds
+/// at [`MAX_RESOURCE_NODE_SPAWNS_PER_FRAME`]). No node can regrow this
+/// soon (regrow is 5-15 min, see the chunk manager), so the grace never
+/// swallows a genuine runtime pop-in.
+const INITIAL_LOAD_QUIET_SECS: f32 = 5.0;
+
+/// Past this distance (m from the player) a freshly-spawned node just
+/// *appears* instead of playing the pop-in chip-burst. Distant pop-in is
+/// the "things popping in on the horizon" the outward fill would
+/// otherwise show; gating by distance keeps the satisfying grow only
+/// where the player can read it (a nearby regrow), never at the AoI edge.
+const POP_IN_VISIBLE_DISTANCE_M: f32 = 40.0;
 
 /// Component attached to a freshly-spawned resource node while it
 /// animates into view. The base transform is captured at spawn time so
@@ -100,11 +123,13 @@ pub(crate) struct ResourceNodeEntities {
     /// `RemovedComponents<ResourceNode>` so the system can find which
     /// node id was on a despawned entity without scanning.
     replicated_to_id: HashMap<Entity, ResourceNodeId>,
-    /// FIFO queue of `Added<ResourceNode>` arrivals waiting on the
+    /// Unordered set of `Added<ResourceNode>` arrivals waiting on the
     /// per-frame spawn budget ([`MAX_RESOURCE_NODE_SPAWNS_PER_FRAME`]).
     /// Persisting across frames keeps the spawn rate-limit working
-    /// without re-iterating the replicated query each frame.
-    pending_spawns: VecDeque<PendingSpawn>,
+    /// without re-iterating the replicated query each frame. Drained
+    /// nearest-to-player first (see the drain step), so this is a bag,
+    /// not a FIFO: order within it carries no meaning.
+    pending_spawns: Vec<PendingSpawn>,
     /// Current visual depletion stage per spawned ore/vein mirror (0 for
     /// every other model). The stage system compares freshly computed
     /// stages against this to detect real threshold crossings, replicated
@@ -115,17 +140,42 @@ pub(crate) struct ResourceNodeEntities {
     /// vs. death-effect. See [`PendingDepletion`] / the
     /// [`DEPLETION_GRACE_FRAMES`] grace window.
     pending_depletion_check: HashMap<ResourceNodeId, PendingDepletion>,
-    /// `true` once at least one reconciliation pass has fired.
-    /// Suppresses the fresh-node pop-in animation for the initial wave
-    /// of world geometry, we don't want 30 trees and ores to all pop
-    /// up the moment the player connects.
+    /// `true` once at least one reconciliation pass has fired. Gates the
+    /// one-time catch-up scan (the `Added` filter can't see entities that
+    /// arrived while this system was early-returning; see the note in the
+    /// system body). The pop-in quieting for the initial world load is
+    /// handled separately by [`Self::connected_at_secs`].
     applied_first_snapshot: bool,
+    /// Wall-clock seconds (Bevy `Time::elapsed_secs`) at which the local
+    /// player last connected, stamped once per session and cleared on
+    /// disconnect. Freshly-spawned nodes stay silent (no pop-in) for
+    /// [`INITIAL_LOAD_QUIET_SECS`] after this, so the whole initial world
+    /// load appears quietly instead of as a field of chip-bursts.
+    connected_at_secs: Option<f32>,
     /// Node ids whose visual we've hidden for an unconfirmed predicted
     /// crude pickup (see [`PredictionState::is_node_hidden`]). Mirrors the
     /// prediction overlay's `hidden_nodes`; the local copy lets the reconcile
     /// detect the hide→un-hide / hide→despawn transitions without a per-frame
     /// scan of the full replicated set. Tiny in practice (in-flight pickups).
     suppressed: HashSet<ResourceNodeId>,
+}
+
+impl ResourceNodeEntities {
+    /// Replicated nodes still waiting on the per-frame spawn budget. The
+    /// loading splash surfaces this as world-entry progress.
+    pub(crate) fn pending_spawn_count(&self) -> usize {
+        self.pending_spawns.len()
+    }
+
+    /// True once at least one reconciliation pass has run this session and
+    /// the budgeted spawn queue is empty. Feeds the world-entry readiness
+    /// gate (`world_ready_for_play`): the splash holds until the initial
+    /// node backlog has fully materialised. Momentarily true between
+    /// replication packets mid-stream; the splash's settle window absorbs
+    /// that flicker.
+    pub(crate) fn is_caught_up(&self) -> bool {
+        self.applied_first_snapshot && self.pending_spawns.is_empty()
+    }
 }
 
 type ResourceEntityQuery<'w, 's> = Query<
@@ -161,12 +211,15 @@ type ResourceEntityQuery<'w, 's> = Query<
 pub(crate) fn apply_resource_nodes_system(
     mut commands: Commands,
     mut runtime: ResMut<ClientRuntime>,
+    time: Res<Time>,
     assets: Res<ResourceVisualAssets>,
     impact_assets: Res<ImpactEffectAssets>,
     mut play: MessageWriter<PlaySound>,
     mut materials: ResMut<Assets<ToonMaterial>>,
     mut camera_kick: ResMut<crate::app::systems::CameraImpactKick>,
     mut entities: ResMut<ResourceNodeEntities>,
+    mut stream: ResMut<WorldStreamState>,
+    menu: Res<MenuState>,
     prediction: Res<PredictionState>,
     resource_entities: ResourceEntityQuery,
     all_nodes: Query<(Entity, &ResourceNode, Option<&ResourceNodeStorage>)>,
@@ -175,10 +228,19 @@ pub(crate) fn apply_resource_nodes_system(
 ) {
     if runtime.client_id.is_none() {
         clear_all_tracked_nodes(&mut commands, &mut entities);
+        stream.reset();
         return;
     }
 
     let entities = &mut *entities;
+    stream.note_connected(time.elapsed_secs());
+
+    // Stamp the connect time once so the initial world load can
+    // materialise quietly (see the pop-in gate in the drain step below).
+    // Cleared on disconnect by `clear_all_tracked_nodes`.
+    if entities.connected_at_secs.is_none() {
+        entities.connected_at_secs = Some(time.elapsed_secs());
+    }
 
     // First-run catch-up. The `Added<T>` filter compares against the
     // system's `last_run` tick, which keeps advancing every frame the
@@ -189,13 +251,20 @@ pub(crate) fn apply_resource_nodes_system(
     // first real run (`!applied_first_snapshot`), iterate the full
     // query once to seed the spawn queue and the reverse map. After
     // that, event-driven Added/Removed handles everything.
+    // Replicated arrivals this frame, reported to the world-entry stream
+    // tracker so the loading gate can wait for the server to finish the
+    // initial send. Every row counts (even an AoI-bounce that needs no
+    // spawn): what matters is that the wire is still delivering.
+    let mut arrivals = 0usize;
+
     if !entities.applied_first_snapshot {
         for (replicated_entity, node, storage) in &all_nodes {
+            arrivals += 1;
             entities.replicated_to_id.insert(replicated_entity, node.id);
             if entities.entities.contains_key(&node.id) {
                 continue;
             }
-            entities.pending_spawns.push_back(PendingSpawn {
+            entities.pending_spawns.push(PendingSpawn {
                 id: node.id,
                 definition_id: node.definition_id.clone(),
                 position: node.position,
@@ -293,6 +362,7 @@ pub(crate) fn apply_resource_nodes_system(
         if entities.replicated_to_id.contains_key(&replicated_entity) {
             continue;
         }
+        arrivals += 1;
         entities.replicated_to_id.insert(replicated_entity, node.id);
 
         if entities.pending_depletion_check.remove(&node.id).is_some() {
@@ -306,7 +376,7 @@ pub(crate) fn apply_resource_nodes_system(
             continue;
         }
 
-        entities.pending_spawns.push_back(PendingSpawn {
+        entities.pending_spawns.push(PendingSpawn {
             id: node.id,
             definition_id: node.definition_id.clone(),
             position: node.position,
@@ -316,20 +386,56 @@ pub(crate) fn apply_resource_nodes_system(
         });
     }
 
-    // 3. Drain the spawn queue up to the per-frame budget. The
-    //    initial 1811-node fill takes ~226 frames at budget 8/frame
-    //    to fully populate; thereafter the queue is usually empty
-    //    and this loop is zero iterations.
-    let pop_in_enabled = entities.applied_first_snapshot;
-    let mut spawn_budget = MAX_RESOURCE_NODE_SPAWNS_PER_FRAME;
-    while spawn_budget > 0 {
-        let Some(spawn) = entities.pending_spawns.pop_front() else {
-            break;
+    stream.note_arrivals(time.elapsed_secs(), arrivals);
+
+    // 3. Drain the spawn queue up to the per-frame budget, NEAREST TO THE
+    //    PLAYER FIRST. The initial ~1811-node fill takes ~226 frames at
+    //    budget 8/frame to fully populate; ordering by distance means the
+    //    ground around the player materialises first instead of filling in
+    //    Lightyear's arrival order (which scatters across the whole AoI,
+    //    leaving a blank foreground while distant nodes appear).
+    //    `select_nth_unstable_by` partitions the nearest `budget` to the
+    //    front in average O(n) with no allocation, so even the first-frame
+    //    ~1800-node pass costs a fraction of a millisecond, and the whole
+    //    block is skipped once the queue drains (steady state). Squared
+    //    distance avoids the sqrt; the eye-height offset baked into
+    //    `player_position` is negligible at these ranges.
+    let initial_load_done = entities
+        .connected_at_secs
+        .is_some_and(|t0| time.elapsed_secs() - t0 >= INITIAL_LOAD_QUIET_SECS);
+    let pop_in_dist_sq = POP_IN_VISIBLE_DISTANCE_M * POP_IN_VISIBLE_DISTANCE_M;
+    let to_spawn: Vec<PendingSpawn> = {
+        let pending = &mut entities.pending_spawns;
+        let budget = if menu.world_entry_splash_active() {
+            MAX_RESOURCE_NODE_SPAWNS_PER_FRAME_LOADING
+        } else {
+            MAX_RESOURCE_NODE_SPAWNS_PER_FRAME
         };
+        let take = budget.min(pending.len());
+        if let Some(player) = player_position
+            && take > 0
+            && take < pending.len()
+        {
+            pending.select_nth_unstable_by(take - 1, |a, b| {
+                Vec3::from(a.position)
+                    .distance_squared(player)
+                    .total_cmp(&Vec3::from(b.position).distance_squared(player))
+            });
+        }
+        pending.drain(..take).collect()
+    };
+    for spawn in to_spawn {
         let Some(definition) = resource_node_definition(&spawn.definition_id) else {
             continue;
         };
-        spawn_budget -= 1;
+        // Pop-in (chip-burst + grow) only for a genuine near runtime event:
+        // never during the initial world load (the quiet grace window), and
+        // never for a distant spawn (a far AoI arrival or an out-of-sight
+        // regrow). A nearby regrow still pops.
+        let should_pop_in = initial_load_done
+            && player_position.is_some_and(|player| {
+                Vec3::from(spawn.position).distance_squared(player) <= pop_in_dist_sq
+            });
         let target_transform =
             resource_node_transform_at(spawn.id, spawn.position, spawn.yaw, definition.model);
         spawn_resource_node_entity(
@@ -343,7 +449,7 @@ pub(crate) fn apply_resource_nodes_system(
             spawn.dead,
             spawn.stage,
             target_transform,
-            pop_in_enabled,
+            should_pop_in,
         );
     }
 
@@ -403,6 +509,7 @@ fn clear_all_tracked_nodes(commands: &mut Commands, entities: &mut ResourceNodeE
     entities.suppressed.clear();
     entities.stages.clear();
     entities.applied_first_snapshot = false;
+    entities.connected_at_secs = None;
 }
 
 #[allow(clippy::too_many_arguments)]

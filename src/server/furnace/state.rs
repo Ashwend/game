@@ -5,7 +5,7 @@
 //! over the smelt math don't need to spin up a server.
 
 use crate::{
-    items::{COAL_ID, IRON_BAR_ID, IRON_ORE_ID, WOOD_ID},
+    items::{COAL_ID, IRON_BAR_ID, IRON_ORE_ID, SULFUR_ID, SULFUR_ORE_ID, WOOD_ID},
     protocol::{DeployedEntityId, FURNACE_ITEM_SLOT_COUNT, ItemStack, OpenFurnaceView},
     save::PersistedFurnaceState,
 };
@@ -157,13 +157,14 @@ pub(super) fn max_fuel_burn_ticks_for(stack: Option<&ItemStack>) -> u32 {
         .unwrap_or(WOOD_BURN_TICKS)
 }
 
-/// Smelt-result map. Right now there's only one (iron ore → iron bar);
-/// extending this is how new smelt recipes ship.
+/// Smelt-result map: which raw input the furnace refines into what, one
+/// unit at a time. Single source of truth for smeltables; extending this
+/// match is how new smelt recipes ship.
 pub(super) fn smelt_result(item_id: &str) -> Option<ItemStack> {
-    if item_id == IRON_ORE_ID {
-        Some(ItemStack::new(IRON_BAR_ID, 1))
-    } else {
-        None
+    match item_id {
+        IRON_ORE_ID => Some(ItemStack::new(IRON_BAR_ID, 1)),
+        SULFUR_ORE_ID => Some(ItemStack::new(SULFUR_ID, 1)),
+        _ => None,
     }
 }
 

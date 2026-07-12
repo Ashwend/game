@@ -19,21 +19,31 @@ use super::GameplayInventoryShortcutsParams;
 use super::predict::predict_gather;
 use super::send::send_gameplay_message;
 
-/// Tool kind backing a left-click swing. Only items with a real
-/// [`ToolProfile`] count, bare hands and non-tool items (ores, wood,
-/// deployables-in-hand) return `None` so the swing never starts and no
-/// impact-detection fires. Fists can't damage anything in this game
-/// today, and an in-hand ore swinging at a tree shouldn't pretend to.
-pub(super) fn equipped_tool_kind(
+/// The swing archetype ([`ItemModel`]) backing a left-click swing: its
+/// duration/contact fraction, pose, camera kick, audio pool, and the impact
+/// identity carried on the wire (`SwingStart`/`PlayerImpact`). Both a real gather
+/// tool and a dedicated weapon produce a swing:
+///
+/// - A tool maps its [`ToolKind`] to a swing archetype (Hatchet/Pickaxe).
+/// - A weapon animates and reads as its own registry `model`
+///   (Club/Spear/Sword/Mace).
+///
+/// This is exactly the server's [`crate::items::ItemDefinition::swing_model`]
+/// derivation, so the client's local swing and the server's stamped peer-visible
+/// swing can never disagree. Bare hands and non-combat, non-tool items (ores,
+/// wood, deployables-in-hand) return `None`, so the swing never starts.
+pub(super) fn equipped_swing(
     local_player: &crate::app::state::LocalPlayerState,
-) -> Option<ToolKind> {
-    local_player
+) -> Option<crate::items::ItemModel> {
+    let definition = local_player
         .private
         .as_ref()
         .and_then(|private| private.inventory.active_actionbar_stack())
-        .and_then(|stack| item_definition(&stack.item_id))
-        .and_then(|definition| definition.tool)
-        .map(|profile| profile.kind)
+        .and_then(|stack| item_definition(&stack.item_id))?;
+    if definition.tool.is_some() || definition.weapon.is_some() {
+        return Some(definition.swing_model());
+    }
+    None
 }
 
 /// Resolve the active actionbar item to a tool profile, falling back to
@@ -41,8 +51,8 @@ pub(super) fn equipped_tool_kind(
 /// the same fallback in `apply_gather_command`, so the client's hit
 /// check and the server's payout decision stay aligned for crude
 /// (hand-harvestable) nodes. Used only by the harvest-check path; the
-/// swing-start path goes through [`equipped_tool_kind`] which treats
-/// the empty-hand case as "no tool".
+/// swing-start path goes through [`equipped_swing`] which treats the
+/// empty-hand case as "no swing".
 pub(super) fn equipped_tool_profile(
     local_player: &crate::app::state::LocalPlayerState,
 ) -> ToolProfile {
@@ -106,12 +116,12 @@ fn dispatch_resource_swing(
     });
     params.gather_input.set_pending_audio_cue(PendingAudioCue {
         anchor,
-        tool: impact.tool,
+        model: impact.model,
         surface,
         is_player_hit: false,
     });
 
-    params.camera_kick.trigger(impact.tool);
+    params.camera_kick.trigger(impact.model);
     params.combat_feedback.trigger_hit_marker(false);
 
     // Predict the payout landing in the bag instantly. The node's visual
@@ -191,20 +201,24 @@ fn dispatch_deployable_swing(
     });
     params.gather_input.set_pending_audio_cue(PendingAudioCue {
         anchor,
-        tool: impact.tool,
+        model: impact.model,
         surface,
         is_player_hit: false,
     });
 
-    params.camera_kick.trigger(impact.tool);
+    params.camera_kick.trigger(impact.model);
     params.combat_feedback.trigger_hit_marker(false);
 
     // A hammer swing on any placed structure is a repair tap, not
     // damage; the server applies the material cost + HP restore
     // (tier materials for building blocks and doors, the crafting
     // recipe's primary material for crafted deployables). The hammer
-    // never damages anything.
-    let message = if impact.tool == crate::items::ToolKind::Hammer {
+    // never damages anything. The hammer and the hatchet share a swing
+    // archetype (Hatchet), so we re-resolve the held tool here rather than
+    // inferring intent from the swing model.
+    let is_hammer =
+        equipped_tool_profile(&params.local_player).kind == crate::items::ToolKind::Hammer;
+    let message = if is_hammer {
         ClientMessage::Building(crate::protocol::BuildingCommand::Repair { id: deployable_id })
     } else {
         ClientMessage::DamageDeployable(DamageDeployableCommand { id: deployable_id })
@@ -256,32 +270,44 @@ fn dispatch_player_swing(
     });
     params.gather_input.set_pending_audio_cue(PendingAudioCue {
         anchor,
-        tool: impact.tool,
+        model: impact.model,
         surface,
         is_player_hit: true,
     });
 
-    // Predicted floating damage number, orange, since the local
-    // client is the attacker. The server replies with
-    // `PlayerImpact { damage_dealt }` so a desync would cost only
-    // the brief mismatch between this predicted value and the
-    // armor-reduced server value. Today every player has armor 0
-    // so the prediction is always exact. Damage is per tool profile
-    // (iron hits harder than stone), so resolve the held item the
-    // same way the server does rather than going by kind alone.
-    let held_tool = equipped_tool_profile(&params.local_player);
-    if let Some(damage) = crate::combat::tool_player_damage(held_tool, 0) {
+    // Predicted floating damage number, orange, since the local client is the
+    // attacker. The server replies with `PlayerImpact { damage_dealt }` so a
+    // desync would cost only the brief mismatch between this predicted value and
+    // the armor-reduced server value. Resolve the held item's `AttackProfile` the
+    // same way the server does (a weapon's own damage, or a gather tool's
+    // per-tier damage) rather than going by tool alone, so a weapon's predicted
+    // number is right too.
+    if let Some(profile) = params
+        .local_player
+        .private
+        .as_ref()
+        .and_then(|private| private.inventory.active_actionbar_stack())
+        .and_then(|stack| item_definition(&stack.item_id))
+        .and_then(crate::combat::resolve_attack_profile)
+    {
         params
             .commands
             .spawn(crate::app::ui::floating_text::FloatingDamageText::new(
                 anchor,
-                damage.raw,
+                profile.damage,
                 crate::app::ui::floating_text::FloatingDamageRole::Dealt,
             ));
     }
 
-    params.camera_kick.trigger(impact.tool);
+    params.camera_kick.trigger(impact.model);
     params.combat_feedback.trigger_hit_marker(true);
+    // Attacker-side hit-stop: a brief viewmodel freeze on this confirmed local
+    // player hit (only here, never on a node/deployable hit or a whiff). Scaled
+    // by the Dev `hit_stop_scale` slider (neutral 1.0, 0 disables), read the same
+    // per-frame way as the swing/kick feel.
+    params
+        .gather_input
+        .trigger_hit_stop(params.settings.dev.combat.hit_stop_scale);
 
     send_gameplay_message(
         &mut params.runtime,

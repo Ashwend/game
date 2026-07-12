@@ -23,9 +23,10 @@
 //!   - `DeployableHealth`, `DeployableActive`, `DeployableLabel`, `DeployableStability`
 //!   - `PlayerPose`, `PlayerHealth`, `PlayerInventory`, `PlayerInputAck`,
 //!     `PlayerArmor`, `PlayerLifecycle`, `PlayerSleeping`, `PlayerHeldItem`,
-//!     `PlayerAction`
+//!     `PlayerEquipmentVisual`, `PlayerAction`
 //!   - `LootBagContents`, `LootBagTransform`
 //!   - `DroppedItemTransform`, `DroppedItem` (stack-merge)
+//!   - `ProjectileTransform` (in-flight arrow position + velocity)
 //!
 //! If a server `MUTATE` line fires but the client `RECV` line doesn't,
 //! Lightyear is not delivering the update after the initial spawn.
@@ -35,9 +36,9 @@ use bevy::{ecs::change_detection::Ref, prelude::*};
 use crate::server::{
     Deployable, DeployableActive, DeployableAuth, DeployableHealth, DeployableLabel,
     DeployableStability, DroppedItem, DroppedItemTransform, LootBagContents, LootBagEntity,
-    LootBagTransform, Player, PlayerAction, PlayerArmor, PlayerHealth, PlayerHeldItem,
-    PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerPose, PlayerSleeping, ResourceNode,
-    ResourceNodeStorage,
+    LootBagTransform, Player, PlayerAction, PlayerArmor, PlayerEquipmentVisual, PlayerHealth,
+    PlayerHeldItem, PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerPose, PlayerSleeping,
+    Projectile, ProjectileTransform, ResourceNode, ResourceNodeStorage,
 };
 
 /// Tracks the last-seen value per id so we can log a clean
@@ -54,6 +55,7 @@ pub(crate) struct ReplicationTraceState {
     player_lifecycle: std::collections::HashMap<u64, PlayerLifecycle>,
     player_sleeping: std::collections::HashMap<u64, bool>,
     player_held: std::collections::HashMap<u64, Option<crate::items::HeldMesh>>,
+    player_equipment: std::collections::HashMap<u64, PlayerEquipmentVisual>,
     player_action_seq: std::collections::HashMap<u64, u32>,
     loot_bag_occupied: std::collections::HashMap<u64, usize>,
     dropped_item_qty: std::collections::HashMap<u64, u16>,
@@ -79,6 +81,7 @@ pub(crate) fn log_replicated_storage_changes_system(
     players_lifecycle: Query<(Entity, &Player, Ref<PlayerLifecycle>)>,
     players_sleeping: Query<(Entity, &Player, Ref<PlayerSleeping>)>,
     players_held: Query<(Entity, &Player, Ref<PlayerHeldItem>)>,
+    players_equipment: Query<(Entity, &Player, Ref<PlayerEquipmentVisual>)>,
     players_action: Query<(Entity, &Player, Ref<PlayerAction>)>,
     loot_bags: Query<(Entity, &LootBagEntity, Ref<LootBagContents>)>,
     loot_bag_transforms: Query<(Entity, &LootBagEntity, Ref<LootBagTransform>)>,
@@ -382,14 +385,41 @@ pub(crate) fn log_replicated_storage_changes_system(
         }
     }
 
+    // Worn-armor mesh selectors ship on an equip/unequip. Value-delta gated on
+    // the whole component, same is_changed() reason as the held mesh.
+    for (entity, player, equipment) in &players_equipment {
+        if equipment.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: PlayerEquipmentVis  SPAWN  client={} entity={entity:?} eq={:?}",
+                player.client_id, *equipment
+            );
+            state.player_equipment.insert(player.client_id, *equipment);
+        } else if equipment.is_changed() {
+            let before = state
+                .player_equipment
+                .get(&player.client_id)
+                .copied()
+                .unwrap_or_default();
+            if before != *equipment {
+                info!(
+                    target: "replication_trace",
+                    "client: PlayerEquipmentVis  RECV   client={} entity={entity:?} {before:?} -> {:?}",
+                    player.client_id, *equipment
+                );
+                state.player_equipment.insert(player.client_id, *equipment);
+            }
+        }
+    }
+
     // Swing action ships once per swing (seq increments). Value-delta gated on
     // the seq for the same is_changed() reason.
     for (entity, player, action) in &players_action {
         if action.is_added() {
             info!(
                 target: "replication_trace",
-                "client: PlayerAction       SPAWN  client={} entity={entity:?} seq={} tool={:?}",
-                player.client_id, action.seq, action.tool
+                "client: PlayerAction       SPAWN  client={} entity={entity:?} seq={} model={:?}",
+                player.client_id, action.seq, action.model
             );
             state.player_action_seq.insert(player.client_id, action.seq);
         } else if action.is_changed() {
@@ -401,8 +431,8 @@ pub(crate) fn log_replicated_storage_changes_system(
             if before != action.seq {
                 info!(
                     target: "replication_trace",
-                    "client: PlayerAction       RECV   client={} entity={entity:?} seq {before} -> {} tool={:?}",
-                    player.client_id, action.seq, action.tool
+                    "client: PlayerAction       RECV   client={} entity={entity:?} seq {before} -> {} model={:?}",
+                    player.client_id, action.seq, action.model
                 );
                 state.player_action_seq.insert(player.client_id, action.seq);
             }
@@ -475,6 +505,32 @@ pub(crate) fn log_replicated_storage_changes_system(
                 );
                 state.dropped_item_qty.insert(drop.id, after);
             }
+        }
+    }
+}
+
+/// Projectile transform RECV trace, split into its own system because the main
+/// trace system is already at Bevy's system-parameter cap. Projectiles move
+/// every tick while in flight, so like the dropped-item transform this gates on
+/// `is_changed()` (the moving-transform case where every replication tick is a
+/// real change). A `RECV` line should pair with a `ProjectileTransform MUTATE`
+/// line from the host each tick the arrow flies.
+pub(crate) fn log_replicated_projectile_changes_system(
+    projectiles: Query<(Entity, &Projectile, Ref<ProjectileTransform>)>,
+) {
+    for (entity, projectile, transform) in &projectiles {
+        if transform.is_added() {
+            info!(
+                target: "replication_trace",
+                "client: ProjectileTransform SPAWN id={} entity={entity:?} pos={:?}",
+                projectile.id, transform.position
+            );
+        } else if transform.is_changed() {
+            info!(
+                target: "replication_trace",
+                "client: ProjectileTransform RECV  id={} entity={entity:?} pos={:?}",
+                projectile.id, transform.position
+            );
         }
     }
 }

@@ -6,7 +6,7 @@
 //! furnace module's `mod.rs` so they remain test-reachable without
 //! widening the production surface.
 
-use crate::items::{COAL_ID, IRON_BAR_ID, IRON_ORE_ID, WOOD_ID};
+use crate::items::{COAL_ID, IRON_BAR_ID, IRON_ORE_ID, SULFUR_ID, SULFUR_ORE_ID, WOOD_ID};
 use crate::protocol::{FURNACE_ITEM_SLOT_COUNT, FurnaceCommand, FurnaceSlotRef, ItemStack};
 use crate::server::furnace::{
     FurnaceState, SMELT_TICKS_PER_OUTPUT, WOOD_BURN_TICKS, merge_into_optional_slot,
@@ -47,6 +47,39 @@ fn iron_ore_smelts_to_iron_bar_consuming_fuel() {
         .map(|stack| stack.quantity)
         .sum();
     assert_eq!(bar_count, 1, "one iron bar should have been produced");
+    assert!(furnace.active, "furnace should remain active");
+}
+
+#[test]
+fn sulfur_ore_smelts_to_sulfur_consuming_fuel() {
+    let mut furnace = FurnaceState {
+        fuel: smeltable_input(COAL_ID, 5),
+        items: Default::default(),
+        active: true,
+        fuel_burn_ticks_left: 0,
+        smelt_progress_ticks: 0,
+    };
+    furnace.items[0] = smeltable_input(SULFUR_ORE_ID, 2);
+
+    // Smelt one output's worth of ticks, same timing as iron ore.
+    for _ in 0..SMELT_TICKS_PER_OUTPUT {
+        tick_one_furnace(&mut furnace);
+    }
+    // One ore consumed.
+    assert_eq!(
+        furnace.items[0].as_ref().map(|s| s.quantity),
+        Some(1),
+        "one sulfur ore should have been consumed",
+    );
+    // One refined sulfur produced (lands in a slot somewhere).
+    let sulfur_count: u16 = furnace
+        .items
+        .iter()
+        .filter_map(|slot| slot.as_ref())
+        .filter(|stack| stack.item_id.as_ref() == SULFUR_ID)
+        .map(|stack| stack.quantity)
+        .sum();
+    assert_eq!(sulfur_count, 1, "one sulfur should have been produced");
     assert!(furnace.active, "furnace should remain active");
 }
 
@@ -125,6 +158,8 @@ fn furnace_auto_shutoff_marks_the_deployable_dirty_for_the_mirror() {
         storage: None,
         torch: None,
         cupboard: None,
+        ruin_cache: None,
+        fuse: None,
     };
     server.insert_deployed_entity(id, entity);
     let _ = server.drain_deployable_sync();
@@ -222,6 +257,8 @@ fn removing_fuel_resets_the_burn_timer() {
             storage: None,
             torch: None,
             cupboard: None,
+            ruin_cache: None,
+            fuse: None,
         };
         server.deployed_entities.insert(id, entity);
         id
@@ -312,6 +349,8 @@ fn partial_fuel_drag_keeps_burn_timer_running() {
             storage: None,
             torch: None,
             cupboard: None,
+            ruin_cache: None,
+            fuse: None,
         };
         server.deployed_entities.insert(id, entity);
         id
@@ -401,6 +440,8 @@ fn moving_from_furnace_to_a_specific_player_inventory_slot_respects_the_target()
             storage: None,
             torch: None,
             cupboard: None,
+            ruin_cache: None,
+            fuse: None,
         };
         server.deployed_entities.insert(id, entity);
         id
@@ -515,6 +556,8 @@ fn furnace_test_fixture() -> (
         storage: None,
         torch: None,
         cupboard: None,
+        ruin_cache: None,
+        fuse: None,
     };
     server.deployed_entities.insert(entity_id, entity);
     server.clients.get_mut(&client_id).unwrap().open_furnace = Some(entity_id);

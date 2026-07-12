@@ -156,6 +156,14 @@ pub struct PersistedDeployedEntity {
     /// Tool-Cupboard-only authorized-account list, same pattern as
     /// `furnace`. `None` for every other kind.
     pub cupboard: Option<PersistedCupboardState>,
+    /// Ruin-cache-only refill bookkeeping, same pattern as `furnace`. `None`
+    /// for every other kind. The cache's loot lives in `storage`; this holds
+    /// only the refill schedule and counter. Added in save format v19.
+    pub ruin_cache: Option<PersistedRuinCacheState>,
+    /// Explosive-charge-only fuse countdown, same pattern as `furnace`. `None`
+    /// for every other kind. An armed charge saved mid-fuse resumes its
+    /// countdown on load. Added in save format v20.
+    pub fuse: Option<PersistedFuseState>,
 }
 
 /// Persisted door state: the lock code, the accounts that have entered
@@ -195,12 +203,30 @@ pub struct PersistedStorageBoxState {
     pub slots: Vec<Option<ItemStack>>,
 }
 
+/// Persisted ruin-cache refill state: the pending refill tick (if any) and the
+/// refill counter that seeds each roll. The cache's loot itself persists in the
+/// entity's `storage` grid, so this carries only the schedule, letting an
+/// emptied cache resume its countdown across a reload rather than restarting.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PersistedRuinCacheState {
+    pub refill_at_tick: Option<u64>,
+    pub refill_counter: u64,
+}
+
 /// Persisted torch state: the lit flag plus the remaining burn in ticks, so
 /// a torch picks up its countdown where it left off across a reload.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PersistedTorchState {
     pub active: bool,
     pub burn_ticks_left: u32,
+}
+
+/// Persisted explosive-charge fuse state: the remaining fuse in ticks, so an
+/// armed charge saved mid-countdown resumes where it left off across a reload
+/// (rather than restarting its fuse or detonating on load).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PersistedFuseState {
+    pub ticks_left: u32,
 }
 
 impl WorldStateSave {

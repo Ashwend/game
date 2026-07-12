@@ -41,6 +41,15 @@ impl GameServer {
                 if let Some(client) = self.clients.get_mut(&client_id) {
                     move_stack(&mut client.inventory, from, to, quantity);
                 }
+                // A move that touched the paperdoll (equipped or unequipped a
+                // piece) can change mitigation, so recompute. The shared
+                // `move_stack` validates the slot type, so a rejected equip left
+                // the inventory untouched and this is a harmless no-op recompute.
+                if matches!(from.container, crate::protocol::ItemContainer::Equipment)
+                    || matches!(to.container, crate::protocol::ItemContainer::Equipment)
+                {
+                    self.recompute_protection(client_id);
+                }
                 Vec::new()
             }
             InventoryCommand::Drop { from, quantity, .. } => {
@@ -59,12 +68,19 @@ impl GameServer {
             InventoryCommand::PickUpResourceNode {
                 resource_node_id, ..
             } => self.pick_up_resource_node(client_id, resource_node_id),
+            InventoryCommand::RecoverProjectile { projectile_id } => {
+                self.apply_recover_projectile(client_id, projectile_id)
+            }
             InventoryCommand::SelectActionbarSlot { slot } => {
                 if slot < ACTIONBAR_SLOT_COUNT
                     && let Some(client) = self.clients.get_mut(&client_id)
                 {
                     client.inventory.active_actionbar_slot = slot;
                 }
+                // Swapping off a drawn bow ends the draw and restores movement;
+                // swapping off a reloading crossbow lifts its reload slow too.
+                self.clear_ranged_draw(client_id);
+                self.clear_reload_slow(client_id);
                 Vec::new()
             }
             InventoryCommand::SelectActionbarOffset { offset } => {
@@ -72,6 +88,8 @@ impl GameServer {
                     client.inventory.active_actionbar_slot =
                         offset_actionbar_slot(client.inventory.active_actionbar_slot, offset);
                 }
+                self.clear_ranged_draw(client_id);
+                self.clear_reload_slow(client_id);
                 Vec::new()
             }
             InventoryCommand::Sort => {

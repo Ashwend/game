@@ -32,16 +32,24 @@ pub(crate) struct CraftingUiState {
     /// recipe's `&'static str` id so the row doesn't allocate when it
     /// only needs to *read* the current quantity.
     pub(crate) quantities: HashMap<&'static str, String>,
+    /// Recipe the detail card is showing, set by clicking a list row. `None`
+    /// (and any id the current filter hides) falls back to the top visible
+    /// entry, so the card is never empty while recipes are listed. The stored
+    /// id survives a filter that hides it: clearing the filter restores the
+    /// player's own selection.
+    pub(crate) selected_recipe: Option<&'static str>,
 }
 
 impl CraftingUiState {
     /// Reset the transient browser view to a fresh-open state: clear the
-    /// search filter and scroll the recipe list back to the top. Shared by
-    /// the `C` hotkey, the "open workbench" path, and the tab-bar switch into
-    /// the crafting tab so every entry behaves the same.
+    /// search filter, scroll the recipe list back to the top, and drop the
+    /// selection back to the default (top visible recipe). Shared by the `C`
+    /// hotkey, the "open workbench" path, and the tab-bar switch into the
+    /// crafting tab so every entry behaves the same.
     pub(crate) fn reset_browser(&mut self) {
         self.search.clear();
         self.scroll_reset_pending = true;
+        self.selected_recipe = None;
     }
 }
 

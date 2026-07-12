@@ -642,4 +642,86 @@ mod tests {
         assert!(!state.is_node_hidden(NODE));
         assert!(state.is_idle());
     }
+
+    #[test]
+    fn equip_move_predicts_then_confirms_via_the_prune_contract() {
+        use crate::items::PADDED_HOOD_ID;
+        use crate::protocol::EquipmentSlot;
+
+        // A hood sits in bag slot 0; predict equipping it into the head slot.
+        // The prediction overlay replays the same shared `move_stack`, so the
+        // slot-type validation lets it through and the effective view shows the
+        // hood worn and the bag slot empty.
+        let mut state = PredictionState::default();
+        let seq = state.alloc_seq();
+        state.push_move(
+            seq,
+            ItemContainerSlot::inventory(0),
+            ItemContainerSlot::equipment(EquipmentSlot::Head),
+            None,
+        );
+
+        let replicated = inv_with(Some(ItemStack::new(PADDED_HOOD_ID, 1)));
+        let effective = state.rebuild_effective(&replicated);
+        assert!(
+            effective.inventory_slots[0].is_none(),
+            "predicted unequip of bag slot"
+        );
+        assert_eq!(
+            effective
+                .equipment(EquipmentSlot::Head)
+                .map(|stack| stack.item_id.as_ref()),
+            Some(PADDED_HOOD_ID),
+            "predicted equip shows the hood worn"
+        );
+
+        // Server confirms: the replicated inventory now has the hood worn, and
+        // applied_action_seq == seq. Pruning drops the pending op; refolding over
+        // the confirmed state must not double-move (the slot is already empty).
+        let mut confirmed = PlayerInventoryState::empty();
+        confirmed.equipment_slots[EquipmentSlot::Head.index()] =
+            Some(ItemStack::new(PADDED_HOOD_ID, 1));
+        state.prune(seq);
+        assert!(state.is_idle());
+        let effective = state.rebuild_effective(&confirmed);
+        assert_eq!(
+            effective
+                .equipment(EquipmentSlot::Head)
+                .map(|stack| stack.item_id.as_ref()),
+            Some(PADDED_HOOD_ID),
+            "no double-move after confirm"
+        );
+        assert!(effective.inventory_slots[0].is_none());
+    }
+
+    #[test]
+    fn rejected_equip_move_evaporates_on_prune() {
+        use crate::items::PADDED_HOOD_ID;
+        use crate::protocol::EquipmentSlot;
+
+        // Predict equipping the hood, then the server rejects (e.g. a stale
+        // client state): applied_action_seq advances but the replicated
+        // inventory is unchanged. Pruning drops the op and the refold shows the
+        // hood right back in the bag, worn nowhere.
+        let mut state = PredictionState::default();
+        let seq = state.alloc_seq();
+        state.push_move(
+            seq,
+            ItemContainerSlot::inventory(0),
+            ItemContainerSlot::equipment(EquipmentSlot::Head),
+            None,
+        );
+
+        state.prune(seq);
+        let replicated = inv_with(Some(ItemStack::new(PADDED_HOOD_ID, 1)));
+        let effective = state.rebuild_effective(&replicated);
+        assert_eq!(
+            effective.inventory_slots[0]
+                .as_ref()
+                .map(|stack| stack.item_id.as_ref()),
+            Some(PADDED_HOOD_ID),
+            "rejected equip leaves the hood in the bag"
+        );
+        assert!(effective.equipment(EquipmentSlot::Head).is_none());
+    }
 }

@@ -19,6 +19,7 @@ pub(super) fn loading_splash_ui(
     menu: &mut MenuState,
     backdrop_visibility: &MenuBackdropVisibility,
     world_ready: bool,
+    world_backlog: usize,
     delta_seconds: f32,
 ) {
     let alpha = {
@@ -52,10 +53,10 @@ pub(super) fn loading_splash_ui(
         .as_ref()
         .expect("splash present after tick");
 
-    draw_overlay(ctx, splash, alpha);
+    draw_overlay(ctx, splash, alpha, world_backlog);
 }
 
-fn draw_overlay(ctx: &egui::Context, splash: &LoadingSplash, alpha: u8) {
+fn draw_overlay(ctx: &egui::Context, splash: &LoadingSplash, alpha: u8, world_backlog: usize) {
     let rect = ctx.content_rect();
     let fill = egui::Color32::from_rgba_unmultiplied(2, 4, 7, alpha);
     egui::Area::new(egui::Id::new("loading_splash"))
@@ -72,11 +73,17 @@ fn draw_overlay(ctx: &egui::Context, splash: &LoadingSplash, alpha: u8) {
             ui.allocate_rect(local_rect, egui::Sense::click_and_drag());
             ui.painter().rect_filled(local_rect, 0, fill);
 
-            draw_panel(ui, splash, rect, alpha);
+            draw_panel(ui, splash, rect, alpha, world_backlog);
         });
 }
 
-fn draw_panel(ui: &mut egui::Ui, splash: &LoadingSplash, screen_rect: egui::Rect, alpha: u8) {
+fn draw_panel(
+    ui: &mut egui::Ui,
+    splash: &LoadingSplash,
+    screen_rect: egui::Rect,
+    alpha: u8,
+    world_backlog: usize,
+) {
     let center = egui::pos2(screen_rect.width() * 0.5, screen_rect.height() * 0.5 - 28.0);
     let title = splash.title();
     let subtitle = splash.target_label.trim();
@@ -135,6 +142,33 @@ fn draw_panel(ui: &mut egui::Ui, splash: &LoadingSplash, screen_rect: egui::Rect
         egui::FontId::new(13.0, egui::FontFamily::Proportional),
         hint_color,
     );
+
+    // World-entry progress: while the readiness gate holds the splash, show
+    // a STEADY status line. It renders every frame until the splash is ready
+    // (only the text varies), because the spawn queue empties and refills
+    // between replication packets; keying visibility on `backlog > 0` made
+    // the line blink in and out.
+    let world_entry = matches!(
+        splash.kind,
+        LoadingSplashKind::EnteringWorld | LoadingSplashKind::JoiningServer
+    );
+    if world_entry && !splash.ready {
+        let progress = if world_backlog > 0 {
+            format!("Placing {world_backlog} objects…")
+        } else {
+            "Settling the world…".to_owned()
+        };
+        ui.painter().text(
+            spinner_center + egui::vec2(0.0, 56.0),
+            egui::Align2::CENTER_TOP,
+            progress,
+            egui::FontId::new(12.0, egui::FontFamily::Proportional),
+            with_alpha(
+                egui::Color32::from_rgb(130, 148, 168),
+                scale_alpha(alpha, 0.6),
+            ),
+        );
+    }
 }
 
 fn with_alpha(color: egui::Color32, alpha: u8) -> egui::Color32 {
@@ -221,7 +255,7 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| loading_splash_ui(ctx, &mut menu, &backdrop, false, 0.05),
+            |ctx| loading_splash_ui(ctx, &mut menu, &backdrop, false, 0, 0.05),
         );
         assert!(menu.loading_splash.as_ref().expect("startup splash").ready);
     }
@@ -246,7 +280,7 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| loading_splash_ui(ctx, &mut menu, &backdrop, false, 0.016),
+            |ctx| loading_splash_ui(ctx, &mut menu, &backdrop, false, 0, 0.016),
         );
 
         assert!(!output.shapes.is_empty());

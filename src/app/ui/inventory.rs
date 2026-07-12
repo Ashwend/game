@@ -5,6 +5,7 @@
 //! hotbar, and (re-exported) the drag pipeline and pickup tooltip.
 
 pub(super) mod drag;
+mod paperdoll;
 mod pickup;
 pub(super) mod slot;
 
@@ -17,22 +18,23 @@ use crate::{
     },
 };
 
-use self::slot::{SLOT_SIZE, draw_disabled_slot, draw_slot, slot_stack};
+use self::slot::{SLOT_SIZE, draw_slot, slot_stack};
 
 pub(super) use self::drag::{draw_drag_preview, handle_drag_release};
+pub(in crate::app::ui) use self::paperdoll::{
+    PAPERDOLL_COLUMN_GAP, PAPERDOLL_COLUMN_WIDTH, draw_paperdoll_column,
+};
 pub(in crate::app::ui) use self::pickup::pickup_tooltip;
 
 const SLOT_GAP: f32 = 6.0;
 /// Columns in the bag grid. Shared so the furnace's "Your inventory" mirror
 /// lays the bag out with the exact same shape (and sizes its panel to fit).
 pub(in crate::app::ui) const INVENTORY_COLUMNS: usize = 12;
-/// Rows actually drawn in the grid. The first `INVENTORY_SLOT_COUNT` cells
-/// (12x5 = 60) are real, usable slots; any cells past that are inert filler
-/// tiles. We draw an extra row beyond the real slots so the inventory tab
-/// doesn't look half-empty inside the fixed-height shell, while leaving room
-/// above for the tab's Sort header (the crafting tab gets its vertical room
-/// from the panel height, not from this count).
-const INVENTORY_DISPLAY_ROWS: usize = 6;
+/// Rows in the bag grid: every cell is a real, usable slot (12x5 = 60). The
+/// old extra row of inert filler tiles read as "locked slots", so the grid now
+/// draws exactly the real slots and the panel spends the leftover height on
+/// the header and the controls-hint footer instead.
+const INVENTORY_ROWS: usize = INVENTORY_SLOT_COUNT.div_ceil(INVENTORY_COLUMNS);
 
 /// Width of a drag-enabled container modal (furnace, loot bag) sized so the
 /// shared player-inventory mirror grid (the widest element) fills the inner
@@ -92,10 +94,11 @@ pub(super) fn draw_inventory_grid(
     ui: &mut egui::Ui,
     local_player: &LocalPlayerState,
     inventory_ui: &mut InventoryUiState,
+    shift_transfer_enabled: bool,
 ) {
     let inventory = local_player.private.as_ref().map(|p| &p.inventory);
 
-    let rows = INVENTORY_DISPLAY_ROWS as f32;
+    let rows = INVENTORY_ROWS as f32;
     let grid_height = rows * SLOT_SIZE + (rows - 1.0) * SLOT_GAP;
 
     // Drive the vertical spacing ourselves (the theme's default item spacing
@@ -103,35 +106,34 @@ pub(super) fn draw_inventory_grid(
     ui.spacing_mut().item_spacing.y = 0.0;
     ui.add_space(((ui.available_height() - grid_height) / 2.0).max(0.0));
 
-    for row in 0..INVENTORY_DISPLAY_ROWS {
+    for row in 0..INVENTORY_ROWS {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = SLOT_GAP;
             for column in 0..INVENTORY_COLUMNS {
                 let index = row * INVENTORY_COLUMNS + column;
-                if index < INVENTORY_SLOT_COUNT {
-                    let slot = ItemContainerSlot::inventory(index);
-                    let stack = inventory.and_then(|inventory| slot_stack(inventory, slot));
-                    draw_slot(
-                        ui,
-                        UnifiedSlotRef::Player(slot),
-                        stack,
-                        None,
-                        false,
-                        true,
-                        // Bag and furnace are mutually exclusive surfaces;
-                        // shift+click out of the bag has no destination, so
-                        // the gesture falls through to the normal drag.
-                        false,
-                        inventory_ui,
-                    );
-                } else {
-                    // Inert filler past the real slot count: present for layout,
-                    // never interactive.
-                    draw_disabled_slot(ui);
+                if index >= INVENTORY_SLOT_COUNT {
+                    break;
                 }
+                let slot = ItemContainerSlot::inventory(index);
+                let stack = inventory.and_then(|inventory| slot_stack(inventory, slot));
+                draw_slot(
+                    ui,
+                    UnifiedSlotRef::Player(slot),
+                    stack,
+                    None,
+                    false,
+                    true,
+                    // On the Inventory tab shift+click quick-equips an armor
+                    // piece to its matching paperdoll slot; the intent is
+                    // resolved by the drag-release pass. With no container
+                    // surface up (furnace/bag closed) the gesture otherwise
+                    // has no destination and falls through to a normal drag.
+                    shift_transfer_enabled,
+                    inventory_ui,
+                );
             }
         });
-        if row + 1 < INVENTORY_DISPLAY_ROWS {
+        if row + 1 < INVENTORY_ROWS {
             ui.add_space(SLOT_GAP);
         }
     }
@@ -213,6 +215,7 @@ mod tests {
                 crafting: Default::default(),
                 open_furnace: None,
                 open_loot_bag: None,
+                open_workbench: None,
                 last_processed_input: 0,
                 applied_action_seq: 0,
                 run_speed_multiplier: 1.0,
@@ -274,14 +277,14 @@ mod tests {
         let mut inv_ui_a = InventoryUiState::default();
         let empty_out = run_ui(|ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                draw_inventory_grid(ui, &empty, &mut inv_ui_a);
+                draw_inventory_grid(ui, &empty, &mut inv_ui_a, false);
             });
         });
 
         let mut inv_ui_b = InventoryUiState::default();
         let full_out = run_ui(|ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                draw_inventory_grid(ui, &full, &mut inv_ui_b);
+                draw_inventory_grid(ui, &full, &mut inv_ui_b, false);
             });
         });
 

@@ -274,6 +274,84 @@ pub(super) fn sync_dropped_item_entities(world: &mut World) {
     }
 }
 
+/// Reconciles `GameServer::projectiles` into ECS entities. Like the dropped-item
+/// sync but projectiles MOVE every tick, so a live one is re-anchored to its
+/// current chunk (via `move_entity_between_rooms`) as it flies. The anchor chunk
+/// is a pure function of the projectile's position (no chunk_manager tracking):
+/// projectiles are few and short-lived, so recomputing it per sync is cheap.
+pub(super) fn sync_projectile_entities(world: &mut World) {
+    let _span = info_span!("sync_projectile_entities").entered();
+    #[allow(clippy::type_complexity)]
+    let (dirty_views, removed): (
+        Vec<crate::server::ProjectileView>,
+        Vec<crate::protocol::ProjectileId>,
+    ) = {
+        let mut server = world.resource_mut::<AuthoritativeServer>();
+        let (dirty_ids, removed_ids) = server.0.drain_projectile_sync();
+        let dirty_views = dirty_ids
+            .into_iter()
+            .filter_map(|id| server.0.projectile_view(id))
+            .collect();
+        (dirty_views, removed_ids)
+    };
+
+    // 1. Despawn the mirror entities for removed ids.
+    for id in removed {
+        crate::server::despawn_projectile_entity(world, id);
+    }
+
+    // 2. Spawn fresh entities; refresh transform + re-anchor chunk for movers.
+    for view in dirty_views {
+        let live_chunk = ChunkCoord::from_world(view.position.x, view.position.z);
+        let existing = world
+            .resource::<crate::server::ProjectileIndex>()
+            .get(view.id);
+        match existing {
+            Some(entity) => {
+                let new_transform = crate::server::ProjectileTransform {
+                    position: view.position,
+                    velocity: view.velocity,
+                };
+                if let Some(mut transform) =
+                    world.get_mut::<crate::server::ProjectileTransform>(entity)
+                    && (transform.position != new_transform.position
+                        || transform.velocity != new_transform.velocity)
+                {
+                    #[cfg(feature = "replication-trace")]
+                    {
+                        let before = transform.position;
+                        info!(
+                            target: "replication_trace",
+                            "server: ProjectileTransform MUTATE id={} entity={entity:?} pos {before:?} -> {:?}",
+                            view.id, new_transform.position
+                        );
+                    }
+                    *transform = new_transform;
+                }
+                // Re-anchor room membership as the arrow crosses chunk borders so
+                // observing clients gain/lose visibility at the boundary.
+                let old_chunk = world
+                    .get::<crate::server::ProjectileChunk>(entity)
+                    .map(|c| c.0);
+                if let Some(prev) = old_chunk
+                    && prev != live_chunk
+                {
+                    move_entity_between_rooms(world, entity, prev, live_chunk);
+                    if let Some(mut chunk_marker) =
+                        world.get_mut::<crate::server::ProjectileChunk>(entity)
+                    {
+                        chunk_marker.0 = live_chunk;
+                    }
+                }
+            }
+            None => {
+                let entity = crate::server::spawn_projectile_entity(world, view, live_chunk);
+                attach_room_gated_replication(world, entity, live_chunk);
+            }
+        }
+    }
+}
+
 /// Reconciles `GameServer::deployed_entities` into ECS entities. Same
 /// delta shape as `sync_resource_node_entities`: drain the dirty/removed
 /// sets and only touch the changed ids. Each surviving id has its
@@ -541,6 +619,14 @@ pub(super) fn sync_player_entities(world: &mut World) {
                     world,
                     entity,
                     view.client_id,
+                    "PlayerEquipmentVis ",
+                    crate::server::PlayerEquipmentVisual,
+                    view.equipment_visual
+                );
+                refresh_player_component!(
+                    world,
+                    entity,
+                    view.client_id,
                     "PlayerAction       ",
                     crate::server::PlayerAction,
                     view.action
@@ -579,9 +665,10 @@ pub(super) fn sync_player_entities(world: &mut World) {
                     crate::server::PlayerInputAck,
                     view.input_ack
                 );
-                // Refresh armor. Today only mutated by future systems,
-                // change detection still tracks it so the wire diff is
-                // ready the moment armor items start landing.
+                // Refresh armor. Carries the melee column of the worn
+                // set's protection, recomputed server-side on every
+                // equip/unequip or durability wear, so the HUD armor
+                // value ships the tick it changes.
                 if let Some(mut armor) = world.get_mut::<crate::server::PlayerArmor>(entity)
                     && *armor != view.armor
                 {

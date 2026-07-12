@@ -45,7 +45,7 @@ Base-building pieces, doors, and the Tool Cupboard are all ordinary `DeployedEnt
 
 `hewn_log` is workbench-refined (10 raw `wood` each). There is no separate sticks item; branch piles hand-yield 1 `wood`. The constants are `BUILDING_*_WALL_HP`, `BUILDING_STICKS_COST_*`, `BUILDING_HEWN_WOOD_COST_*`, `BUILDING_STONE_COST_*` in `src/game_balance.rs`. Per CLAUDE.md, all balance values live there, not inline.
 
-**Variant order is load-bearing.** `BuildingPiece`, `BuildingTier`, `DoorVariant`, and `DeployableKind` are positional in postcard saves and on the wire. New variants append at the end; reordering silently reinterprets old saves. Adding a field to a previously fieldless variant (as `Door` gained `variant` at save v17) also changes the layout. Any such change bumps `SAVE_FORMAT_VERSION` (`src/save/format.rs` - currently `17`).
+**Variant order is load-bearing.** `BuildingPiece`, `BuildingTier`, `DoorVariant`, and `DeployableKind` are positional in postcard saves and on the wire. New variants append at the end; reordering silently reinterprets old saves. Adding a field to a previously fieldless variant (as `Door` gained `variant` at save v17) also changes the layout. Any such change bumps `SAVE_FORMAT_VERSION` (`src/save/format.rs` - currently `20`). The most recent `DeployableKind` append is `Explosive { kind }` (placed blackpowder charges, v20), after `RuinCache` (world-spawned ruin loot cache, v19).
 
 ## Geometry, quarter-turn sockets, and multi-box colliders
 
@@ -136,15 +136,33 @@ The one place that answers "how well does tool X bite material Y" is `tool_effec
 | `Sticks` | 300% | 200% | shreds in a few swings |
 | `WoodBuilding` (hewn wood, wood door, cupboard) | 15% | 5% | slow but real tool raids (an iron hatchet needs ~400 swings and most of its durability per wall) |
 | `StoneBuilding` (stone tier) | 0% | 0% | tool-proof by construction |
-| `MetalBuilding` (iron door) | 0% | 0% | tool-proof; only future explosives breach it |
+| `MetalBuilding` (iron door) | 0% | 0% | tool-proof; only explosives breach it |
 | `Cloth` (sleeping bag) | 300% | 300% | tears in a couple of hits |
 
 So a stone base with iron doors is tool-raid-proof by construction, and the wood door / Tool Cupboard are the intentional soft entry points. Bare hands never reach this table (rejected upstream in the damage gate); the `Hands` catch-all keeps the math total. This is balance data, so it lives in `src/items.rs`/`src/game_balance.rs` and changing a matchup is a single-line edit, per CLAUDE.md.
 
+### Explosives: the stone/metal counter
+
+Tools cannot breach `StoneBuilding` or `MetalBuilding`; blackpowder explosives are the designed counter, and their raid table is the explosive analogue of the tool one. The one place that answers "how well does charge X breach material Y" is `explosive_effectiveness_pct(kind, material)` (`src/items.rs`, beside `tool_effectiveness_pct`), a percent multiplier on the charge's `base_damage`; the actual numbers live in `src/game_balance.rs`. An explosion applies `base * effectiveness_pct/100 * linear_falloff` to every building piece, door, and deployable in radius, through the same deployable damage internals (so a destroyed piece spills contents and `refresh_structural_stability` collapses what it held up). The three charges and their per-material effectiveness (the wall-sticking ember charge was retired; a future top-tier charge will take its slot):
+
+| Charge (base dmg) | Sticks | Wood | Stone | Metal |
+| --- | --- | --- | --- | --- |
+| Powder Bomb (300, thrown) | 100% | 40% | 8% | 0% |
+| Powder Keg (900, placed) | 100% | 80% | 25% | 0% |
+| Satchel Charge (2,000, placed) | 100% | 85% | 45% | 8% |
+
+Resulting point-blank raid math (tuned against the wall/door HP above): a hewn wood wall (3,600) falls to 5 kegs; a stone wall (6,000) to 7 satchels. An iron door (3,000) is effectively raid-proof until the ember charge's replacement lands: the satchel's 8% (160/charge) would need ~19 charges. The raid-economics tests in `src/server/tests/explosives.rs` pin these counts end to end through `resolve_explosion`.
+
+Charge mechanics that interact with the claim/building system:
+- **Placing a charge is allowed inside an enemy claim.** That is the point of raiding, so `place_charge` (`src/server/deployables.rs`) skips the `claim_blocks_footprint` gate every other deployable passes; every other placement check (reach, finite guard, surface) still runs.
+- **Placing arms the fuse immediately.** The charge carries a server-only `FuseState` countdown (`fuse: Option<FuseState>` on `DeployedEntity`, ticked by `tick_fuses` next to `tick_torches`); on zero it detonates via `resolve_explosion` and is removed.
+- **Charges are fizzleable.** A placed charge has small HP (`EXPLOSIVE_CHARGE_HP`) and `Cloth` material, so any tool or projectile shreds it in a couple of hits; reaching 0 HP through the normal deployable damage path FIZZLES it (destroyed, no detonation, no refund, a toast to the owner), the defender's counterplay.
+- **Resource nodes are exempt.** A charge is a raiding tool, not a mining tool: `resolve_explosion` deliberately leaves resource nodes untouched.
+
 ## Persistence and gotchas
 
-- Five persisted deployable sub-states live on `PersistedDeployedEntity`: `PersistedFurnaceState`, `PersistedDoorState`, `PersistedStorageBoxState`, `PersistedTorchState`, `PersistedCupboardState` (`src/save/`). Stability and claim footprints are **not** persisted; both are recomputed on load.
-- `SAVE_FORMAT_VERSION` is `17` (`src/save/format.rs`). Relevant history: torch v13, cupboard v16, door `variant` v17. Postcard is positional, so old saves are rejected on a layout change; any enum-variant append or fieldless-variant-gains-a-field change requires a version bump.
+- Seven persisted deployable sub-states live on `PersistedDeployedEntity`: `PersistedFurnaceState`, `PersistedDoorState`, `PersistedStorageBoxState`, `PersistedTorchState`, `PersistedCupboardState`, `PersistedRuinCacheState`, `PersistedFuseState` (`src/save/`). Stability and claim footprints are **not** persisted; both are recomputed on load.
+- `SAVE_FORMAT_VERSION` is `20` (`src/save/format.rs`). Relevant history: torch v13, cupboard v16, door `variant` v17, player equipment v18, ruin cache v19, explosive charge fuse v20. Postcard is positional, so old saves are rejected on a layout change; any enum-variant append or fieldless-variant-gains-a-field change requires a version bump.
 - When mutating any replicated field on a deployable, go through `deployed_entity_mut(id)` or `mark_deployable_dirty(id)` so the mirror re-syncs. A bare `deployed_entities.get_mut` bypasses the dirty flag and silently drops the diff. See the replicated-state rules in CLAUDE.md and [replication.md](replication.md).
 - Range checks against placed structures measure to the **collider surface** (`within_horizontal_range_of_blocks`), load-bearing for hitting/opening 3 m foundation slabs and swung-open door panels, not the entity centre.
 

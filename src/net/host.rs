@@ -37,7 +37,7 @@ use self::{
     handle::HostCommand,
     mirror::{
         sync_deployable_entities, sync_dropped_item_entities, sync_loot_bag_entities,
-        sync_player_entities, sync_resource_node_entities,
+        sync_player_entities, sync_projectile_entities, sync_resource_node_entities,
     },
     rooms::{install_replication_sender_on_link, update_client_room_subscriptions},
     routing::{
@@ -375,6 +375,7 @@ fn run_host(
     app.insert_resource(crate::server::DeployableIndex::default());
     app.insert_resource(crate::server::PlayerIndex::default());
     app.insert_resource(crate::server::LootBagIndex::default());
+    app.insert_resource(crate::server::ProjectileIndex::default());
     install_admin_socket(&mut app, admin_socket)?;
 
     app.add_systems(Startup, move |mut commands: Commands| {
@@ -390,6 +391,7 @@ fn run_host(
         sync_resource_node_entities,
         sync_dropped_item_entities,
         sync_deployable_entities,
+        sync_projectile_entities,
         sync_player_entities,
         sync_loot_bag_entities,
         update_client_room_subscriptions,
