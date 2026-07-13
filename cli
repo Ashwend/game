@@ -111,10 +111,13 @@ case "$cmd" in
     # .github/workflows/quality-gate.yml: fmt, clippy (-D warnings), check, and
     # tests, including the `--all-features` leg that exercises the
     # `replication-trace`/`profile`/`dev-fast` cfg-gated code paths a plain
-    # `./cli check` (default features only) never compiles.
+    # `./cli check` (default features only) never compiles, plus the `--release`
+    # leg (the only one with `debug_assertions` off) that catches
+    # cfg(debug_assertions) mismatches the shipped build would trip on.
     cargo fmt --all -- --check
     cargo clippy --locked --all-targets --all-features -- -D warnings
     cargo check --locked --all-targets --all-features
+    cargo clippy --locked --all-targets --release -- -D warnings
     cargo test --locked --all-targets
     ;;
   setup-hooks)

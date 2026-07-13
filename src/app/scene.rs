@@ -32,11 +32,17 @@ pub(crate) use components::{
     NetworkDroppedItem, NetworkLootBag, NetworkPlayer, NetworkResourceNode, VIEWMODEL_RENDER_LAYER,
     tree_mesh_height,
 };
-// `ViewmodelCamera` is consumed cross-module only by the debug-only headless
-// capture redirect; the in-scene spawn in `assets.rs` uses `components::` directly.
-#[cfg(debug_assertions)]
+// `ViewmodelCamera` is consumed cross-module by the release viewmodel-FOV sync
+// (`app::systems::camera::viewmodel_fov`) and by the debug-only headless-capture
+// redirect; the in-scene spawn in `assets.rs` uses `components::` directly. Keep
+// this re-export ungated: `sync_viewmodel_fov_system` references it in every
+// profile, so gating it on `debug_assertions` breaks the release build.
 pub(crate) use components::ViewmodelCamera;
-pub(crate) use grass::{GrassDevFlags, GrassInstancingPlugin, GrassState, stream_grass_system};
+pub(crate) use grass::{GrassInstancingPlugin, GrassState, stream_grass_system};
+// `GrassDevFlags` is read only by the debug-only `dev_render` tab, so its
+// re-export is gated to match and stays off the release surface.
+#[cfg(debug_assertions)]
+pub(crate) use grass::GrassDevFlags;
 pub(crate) use mesh::{PLAYER_HEAD_TOP_LOCAL_Y, PlayerPart, rig_layout};
 pub(crate) use meteor_shower::{
     animate_meteor_shower_site_fire_system, meteor_shower_audio_system,

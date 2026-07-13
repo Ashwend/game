@@ -19,6 +19,10 @@ pub(crate) enum OptionsTab {
     Keybindings,
     /// Live shader / pipeline toggles for isolating visual glitches. Listed in the
     /// tab bar only on debug builds (see [`Self::ALL`]); never shipped to players.
+    /// The variant stays in the enum in every profile so the `label` and render
+    /// matches stay total, but release never constructs it, hence the dead-code
+    /// allow there.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     Dev,
 }
 

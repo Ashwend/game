@@ -49,7 +49,11 @@ use std::sync::Arc;
 
 mod instancing;
 
-pub(crate) use instancing::{GrassDevFlags, GrassInstancingPlugin};
+pub(crate) use instancing::GrassInstancingPlugin;
+// `GrassDevFlags` is re-exported up to `scene` only for the debug-only Dev render
+// tab; the release grass pipeline references `instancing::GrassDevFlags` directly.
+#[cfg(debug_assertions)]
+pub(crate) use instancing::GrassDevFlags;
 use instancing::{InstanceData, InstanceMaterialData};
 
 use super::components::WorldGeometry;

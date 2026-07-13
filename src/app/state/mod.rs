@@ -53,7 +53,12 @@ pub(crate) use inventory::{
 pub(crate) use local_player::{
     LocalPlayerState, apply_prediction_overlay_system, update_local_player_state_system,
 };
-pub(crate) use look::{AgentWalk, LookState};
+pub(crate) use look::LookState;
+// `AgentWalk` is named cross-module only by the debug/unix-only control socket,
+// so its re-export is gated to match and stays off the release surface. The type
+// itself is still exercised in release via `LookState::active_agent_walk`.
+#[cfg(all(unix, debug_assertions))]
+pub(crate) use look::AgentWalk;
 pub(crate) use menu::{
     CurrentUser, DeathSplash, MenuState, SaveStore, Screen, TextPrompt, TextPromptKind,
 };

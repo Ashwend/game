@@ -27,6 +27,7 @@ jobs:
           # workflow. Everything is exercised here, fmt, clippy, check, tests.
           - label: default
             features: ""
+            extra_flags: ""
             run_fmt: true
             run_tests: true
           # `--all-features` includes `dev-fast` (bevy/dynamic_linking) which
@@ -34,6 +35,19 @@ jobs:
           # building, but only the cheap check, no need to repeat tests.
           - label: all-features
             features: "--all-features"
+            extra_flags: ""
+            run_fmt: false
+            run_tests: false
+          # Release-profile build: the ONLY leg with `debug_assertions` off, so
+          # it is the one that compiles the shipped configuration. Catches
+          # cfg(debug_assertions) mismatches, an item gated to debug builds but
+          # named from always-compiled code, that every debug leg builds green
+          # and only the release/publish build would have failed on. Default
+          # features keep the compile bounded; the mismatch is orthogonal to
+          # features so this still catches it.
+          - label: release
+            features: ""
+            extra_flags: "--release"
             run_fmt: false
             run_tests: false
     steps:
@@ -76,10 +90,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --locked --all-targets ${{ matrix.features }} -- -D warnings
+        run: cargo clippy --locked --all-targets ${{ matrix.features }} ${{ matrix.extra_flags }} -- -D warnings
 
       - name: Check all targets
-        run: cargo check --locked --all-targets ${{ matrix.features }}
+        run: cargo check --locked --all-targets ${{ matrix.features }} ${{ matrix.extra_flags }}
 
       - name: Run tests
         if: matrix.run_tests

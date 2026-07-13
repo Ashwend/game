@@ -451,7 +451,10 @@ fn default_combat_offset() -> f32 {
 }
 
 /// `dev_flags` uniform bits read by `toon.wgsl` / `toon_viewmodel.wgsl`. A SET bit
-/// DISABLES that stage, so the default value (0) renders normally.
+/// DISABLES that stage, so the default value (0) renders normally. Packed only by
+/// the debug-only Dev render tab (`DevSettings::toon_flags`), so the whole surface
+/// is gated to match `dev_render` and stays out of the release build.
+#[cfg(debug_assertions)]
 pub(crate) mod toon_dev_bits {
     pub(crate) const NO_POSTERIZE: u32 = 1 << 0;
     pub(crate) const NO_BAND_AA: u32 = 1 << 1;
@@ -459,12 +462,18 @@ pub(crate) mod toon_dev_bits {
     pub(crate) const NO_SATURATION: u32 = 1 << 3;
 }
 
-/// `dev_flags` uniform bits read by `grass_instanced.wgsl` (set = disable).
+/// `dev_flags` uniform bits read by `grass_instanced.wgsl` (set = disable). Debug
+/// only, as with [`toon_dev_bits`].
+#[cfg(debug_assertions)]
 pub(crate) mod grass_dev_bits {
     pub(crate) const NO_CEL: u32 = 1 << 0;
     pub(crate) const NO_WIND: u32 = 1 << 1;
 }
 
+/// The flag-packing helpers feed the debug-only Dev render tab; the whole impl
+/// compiles out of release alongside `dev_render` (the `DevSettings` struct itself
+/// is still serialized in every profile).
+#[cfg(debug_assertions)]
 impl DevSettings {
     /// Pack the toon-shader toggles into the `dev_flags` uniform bitfield.
     pub(crate) fn toon_flags(&self) -> u32 {
