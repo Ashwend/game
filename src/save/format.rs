@@ -110,7 +110,17 @@ pub(super) const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 /// `20` added the `DeployableKind::Explosive { kind }` variant (placed
 /// blackpowder charges) and `PersistedDeployedEntity::fuse` (an armed charge's
 /// remaining fuse), same positional-layout shift, so v19 saves are rejected.
-pub(super) const SAVE_FORMAT_VERSION: u32 = 20;
+///
+/// `21` retired the "ancient" content vocabulary: the persisted item id
+/// strings `meteorite` and `ancient_fittings` became `meteorite_alloy` and
+/// `salvaged_fittings` (plus the new furnace-smelted `meteorite_ingot`), and
+/// the ruin prefab set was rebuilt as burnt-out houses. No struct layout
+/// drift this time, a v20 save DECODES fine, which is exactly the trap: it
+/// would load full of stacks whose ids no longer resolve to any item
+/// definition (invisible, unusable zombie items in inventories, storage, and
+/// furnaces). Rejecting the version keeps the no-migration contract honest,
+/// so a redeploy starts a fresh world instead of a subtly broken one.
+pub(super) const SAVE_FORMAT_VERSION: u32 = 21;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
 /// at >100MB/s compression and ~1GB/s decompression.
 const ZSTD_LEVEL: i32 = 5;
