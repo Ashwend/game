@@ -158,9 +158,9 @@ pub(crate) struct ResourceVisualAssets {
     pub(crate) iron_node_meshes: [Handle<Mesh>; ORE_NODE_STAGE_COUNT],
     pub(crate) sulfur_node_meshes: [Handle<Mesh>; ORE_NODE_STAGE_COUNT],
     pub(crate) stone_vein_meshes: [Handle<Mesh>; ORE_NODE_STAGE_COUNT],
-    /// Meteorite (rare node): dark slag mound + erupting crystal
-    /// spikes, per depletion stage. Distinct silhouette + its own emissive
-    /// material (see `meteorite_toon_material`), not the shared ore boulder.
+    /// Meteorite (rare node): a squat scorched slag mound studded with pale
+    /// raw-alloy nuggets, per depletion stage. Distinct silhouette, but the
+    /// same shared `ore_toon_material` as every other ore (nothing glows).
     pub(crate) meteorite_node_meshes: [Handle<Mesh>; ORE_NODE_STAGE_COUNT],
     /// Full-detail live trees, authored as Blender glbs (`art/trees/*`): each
     /// loads two primitives, a textured bark TRUNK (opaque, `*_bark_material`)
@@ -197,15 +197,11 @@ pub(crate) struct ResourceVisualAssets {
     pub(crate) surface_stone_mesh: Handle<Mesh>,
     pub(crate) branch_pile_mesh: Handle<Mesh>,
     pub(crate) hay_grass_mesh: Handle<Mesh>,
-    /// One shared cel-shaded material for all four ore/vein nodes: the per-mineral
-    /// colour rides on the glb COLOR_0, so the rock texture + toon ramp are shared
-    /// (see [`ToonMaterial`] and `art/ore/build_ore.py`).
+    /// One shared cel-shaded material for all five ore/vein nodes (meteorite
+    /// included): the per-mineral colour rides on the glb COLOR_0, so the rock
+    /// texture + toon ramp are shared (see [`ToonMaterial`] and
+    /// `art/ore/build_ore.py`).
     pub(crate) ore_toon_material: Handle<ToonMaterial>,
-    /// Meteorite cel material: the same PBR-then-posterise path as the ore, plus a
-    /// night-glow emissive term gated to the crystal facets (COLOR_0 alpha = 1)
-    /// via `meteorite_crystal_emissive.png`. The slag body (alpha 0) stays dark. The
-    /// only material in the scene with a non-zero emissive tint.
-    pub(crate) meteorite_toon_material: Handle<ToonMaterial>,
     pub(crate) vertex_material: Handle<StandardMaterial>,
     /// Cel-shaded ([`ToonMaterial`]) alpha-masked cards for the harvestable hay
     /// tuft: the shared grass-tuft texture, lit by the same PBR-then-posterise path
@@ -277,14 +273,18 @@ pub(crate) struct DeployableVisualAssets {
     /// Authored Tool Cupboard model (Blender glb, vertex-coloured like the
     /// workbench/furnace; origin at the base so it sits on a foundation).
     pub(crate) tool_cupboard_mesh: Handle<Mesh>,
-    /// Authored ruin props and the loot cache (Blender glbs under
-    /// `assets/ruins/`, vertex-coloured for cel identity: weathered pale stone
-    /// with dark iron bands). Spawned by the ruin rendering system at the site
-    /// element transforms and the cache deployable, all on the toon stone
-    /// material. Source: `art/ruins/build_ruins.py`.
+    /// The salvage chest spawned inside burnt-house ruins (Blender glb under
+    /// `assets/ruins/`, vertex-coloured for cel identity: charred wood body
+    /// with near-black iron bands). Rendered on the toon wood material.
+    /// Source: `art/ruins/build_ruins.py`.
     pub(crate) ruin_cache_mesh: Handle<Mesh>,
-    pub(crate) ruin_broken_pillar_mesh: Handle<Mesh>,
-    pub(crate) ruin_fallen_arch_mesh: Handle<Mesh>,
+    /// Burnt-house shell meshes, one `(timber, masonry)` primitive pair per
+    /// [`crate::world::RuinPrefab`], indexed by `RuinPrefab::index()`. Prim 0
+    /// is the charred timber (toon wood material), prim 1 the stone plinth +
+    /// rubble (toon stone material). Sources:
+    /// `assets/ruins/burnt_{cottage,farmhouse,shed,barn}.glb`, built by
+    /// `art/ruins/build_ruins.py`.
+    pub(crate) ruin_house_meshes: [(Handle<Mesh>, Handle<Mesh>); 4],
     /// Cel-shaded wood material (hand-painted plank line-art, UV-mapped) for the
     /// wooden deployables: workbench, storage boxes, tool cupboard, torch.
     pub(crate) toon_wood_material: Handle<ToonMaterial>,
@@ -481,13 +481,13 @@ pub(crate) fn setup_scene(
     // biome-weight raster when its ground spawns (see `super::world::spawn_world_geometry`).
     commands.insert_resource(super::TerrainTextureAssets::load(&mut images));
 
-    // 1x1 white "no glow" mask, the inert emissive default every cel prop except
-    // the meteorite node binds (see `ToonMaterial::emissive`). Created up front,
-    // before the texture-loading closures capture `images`, so every material
-    // builder can clone it. A white mask + a zero `emissive` tint makes the
-    // shader's emissive term evaluate to zero, so the existing ore/tree/deployable
-    // look is byte-for-byte unchanged; only the meteorite material binds a real
-    // mask + tint.
+    // 1x1 white "no glow" mask, the inert emissive default every cel prop
+    // binds (see `ToonMaterial::emissive`). Created up front, before the
+    // texture-loading closures capture `images`, so every material builder can
+    // clone it. A white mask + a zero `emissive` tint makes the shader's
+    // emissive term evaluate to zero. No material binds a real glow any more
+    // (the old meteorite crystal emissive is gone; nothing in this world is
+    // magic), so the term is currently a no-op kept for the material API.
     let toon_no_glow_tex = images.add(Image::new_fill(
         Extent3d {
             width: 1,
@@ -888,30 +888,6 @@ pub(crate) fn setup_scene(
         images.add(image)
     };
 
-    // Meteorite node textures: `meteorite_crystal.png` is the subtle vein-grain
-    // detail (rides `detail * COLOR_0` like every cel prop); `meteorite_crystal_emissive.png`
-    // is the GLOW MASK (bright = emits) sampled by the emissive term. Both decoded
-    // sRGB with a CPU mip chain + repeat/aniso sampler. Sources:
-    // `assets/textures/props/meteorite_crystal*.png`.
-    let mut load_prop_texture = |name: &str| -> Handle<Image> {
-        let rel = format!("textures/props/{name}.png");
-        let bytes =
-            embedded_bytes(&rel).unwrap_or_else(|| panic!("embedded prop texture missing: {rel}"));
-        let mut image = Image::from_buffer(
-            bytes,
-            ImageType::Extension("png"),
-            CompressedImageFormats::NONE,
-            true,
-            ImageSampler::Descriptor(tree_texture_sampler()),
-            RenderAssetUsages::RENDER_WORLD,
-        )
-        .unwrap_or_else(|err| panic!("decode prop texture {rel}: {err:?}"));
-        build_mip_chain(&mut image);
-        images.add(image)
-    };
-    let meteorite_crystal_tex = load_prop_texture("meteorite_crystal");
-    let meteorite_crystal_emissive_tex = load_prop_texture("meteorite_crystal_emissive");
-
     // Hand-painted toon detail textures for the deployables, mapped by the
     // box-projected UVs baked into each model (`art/deployables/build_deployables.py`).
     // Near-white line-art grain (plank seams / cobble coursing / quilt weave) so
@@ -1018,28 +994,6 @@ pub(crate) fn setup_scene(
             emissive_tex: toon_no_glow_tex.clone(),
             emissive: Vec4::ZERO,
         }),
-        // Meteorite: same ore cel params, plus the night-glow emissive. The
-        // crystal COLOR_0 (ember-orange) already tints the surface; the emissive
-        // ADDS a warm glow on top, gated to the crystal facets by COLOR_0 alpha
-        // (`emissive.a = 1`) so the dark slag body never lights up. The tint is
-        // tuned to read from far at night without blowing out at noon (added after
-        // the exposed cel term, so the bright daytime surround keeps it a crystal,
-        // not a white blob). The `meteorite_crystal_emissive.png` mask fades the glow
-        // toward the crystal tips.
-        meteorite_toon_material: toon_materials.add(ToonMaterial {
-            detail: meteorite_crystal_tex.clone(),
-            params: Vec4::new(3.0, 0.0, 0.8, 2.2),
-            tex_scale: 1.0,
-            fade: 1.0,
-            dev_flags: 0,
-            emissive_tex: meteorite_crystal_emissive_tex.clone(),
-            // HDR-bright hot orange (values > 1) so it blooms and stays visibly
-            // lit at night after the tonemapper compresses highlights; the shader
-            // floors the glow so the whole crystal reads, not just the sparse
-            // vein mask. `a = 1` gates the glow to the crystal facets (COLOR_0
-            // alpha 1) so the slag body stays dark.
-            emissive: Vec4::new(4.5, 1.7, 0.35, 1.0),
-        }),
         vertex_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.98,
@@ -1142,14 +1096,16 @@ pub(crate) fn setup_scene(
     let storage_box_large_glb = embedded_asset_path("items/storage_box_large/model.glb");
     let torch_glb = embedded_asset_path("items/torch/model.glb");
     // Placed-charge glbs: the same 2-primitive models the held-item table loads
-    // (body prim 0 + accent/crystal prim 1).
+    // (body prim 0 + accent prim 1).
     let powder_keg_glb = embedded_asset_path("items/powder_keg/model.glb");
     let satchel_charge_glb = embedded_asset_path("items/satchel_charge/model.glb");
     let powder_bomb_glb = embedded_asset_path("items/powder_bomb/model.glb");
     let tool_cupboard_glb = embedded_asset_path("items/tool_cupboard/model.glb");
     let ruin_cache_glb = embedded_asset_path("ruins/ruin_cache_chest.glb");
-    let ruin_broken_pillar_glb = embedded_asset_path("ruins/broken_pillar.glb");
-    let ruin_fallen_arch_glb = embedded_asset_path("ruins/fallen_arch.glb");
+    // Burnt-house shells, one glb per RuinPrefab in RuinPrefab::ALL order
+    // (see `ruin_house_meshes` on the struct).
+    let ruin_house_glbs = crate::world::RuinPrefab::ALL
+        .map(|prefab| embedded_asset_path(&format!("ruins/{}.glb", prefab.asset_stem())));
     let sleeping_bag_glb = embedded_asset_path("items/sleeping_bag/model.glb");
     // Authored door panels (wood + iron, a matched family). Source:
     // `art/building/build_door.py`.
@@ -1288,8 +1244,26 @@ pub(crate) fn setup_scene(
         charge_bomb_mesh: prim_mesh(&powder_bomb_glb, 0),
         tool_cupboard_mesh: prim_mesh(&tool_cupboard_glb, 0),
         ruin_cache_mesh: prim_mesh(&ruin_cache_glb, 0),
-        ruin_broken_pillar_mesh: prim_mesh(&ruin_broken_pillar_glb, 0),
-        ruin_fallen_arch_mesh: prim_mesh(&ruin_fallen_arch_glb, 0),
+        // Shell prim 0 = charred timber, prim 1 = stone plinth + rubble; the
+        // build script authors the material slots in that order.
+        ruin_house_meshes: [
+            (
+                prim_mesh(&ruin_house_glbs[0], 0),
+                prim_mesh(&ruin_house_glbs[0], 1),
+            ),
+            (
+                prim_mesh(&ruin_house_glbs[1], 0),
+                prim_mesh(&ruin_house_glbs[1], 1),
+            ),
+            (
+                prim_mesh(&ruin_house_glbs[2], 0),
+                prim_mesh(&ruin_house_glbs[2], 1),
+            ),
+            (
+                prim_mesh(&ruin_house_glbs[3], 0),
+                prim_mesh(&ruin_house_glbs[3], 1),
+            ),
+        ],
         // Per-surface cel-shaded materials for the deployables: hand-painted
         // wood / stone / fabric line-art mapped by the models' baked box-projected
         // UVs (tex_scale is the dead triplanar fallback, unused now the props

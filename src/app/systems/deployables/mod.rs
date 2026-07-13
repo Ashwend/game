@@ -848,9 +848,7 @@ fn deployable_visual(
         DeployableKind::Torch { .. } => assets.torch_mesh.clone(),
         DeployableKind::ToolCupboard => assets.tool_cupboard_mesh.clone(),
         DeployableKind::RuinCache => assets.ruin_cache_mesh.clone(),
-        // Placed charge: the authored charge body glb (primitive 0). The ember
-        // charge additionally spawns its glowing crystal (primitive 1) as an
-        // emissive child at the spawn site (see the reconciler).
+        // Placed charge: the authored charge body glb (primitive 0).
         DeployableKind::Explosive { kind } => charge_body_mesh(assets, kind),
     };
     // Building pieces carry their tier's textured `StandardMaterial` (twig /
@@ -865,13 +863,16 @@ fn deployable_visual(
         DeployableKind::Door { variant } => {
             DeployableMaterial::Standard(assets.door_material(variant))
         }
-        // The furnace and the ruin cache read as weathered stone.
-        DeployableKind::Furnace { .. } | DeployableKind::RuinCache => {
+        // The furnace reads as weathered stone.
+        DeployableKind::Furnace { .. } => {
             DeployableMaterial::Toon(assets.toon_stone_material.clone())
         }
+        // The salvage chest is charred wood under iron bands, so it rides the
+        // wood plank line-art with its near-black COLOR_0 identity.
         DeployableKind::Workbench { .. }
         | DeployableKind::StorageBox { .. }
         | DeployableKind::ToolCupboard
+        | DeployableKind::RuinCache
         | DeployableKind::Torch { .. } => {
             DeployableMaterial::Toon(assets.toon_wood_material.clone())
         }

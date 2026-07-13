@@ -82,6 +82,18 @@ impl GameServer {
             Err(reason) => return building_toast(client_id, ToastKind::Warning, reason.to_owned()),
         };
 
+        // Ruins are shared loot spots: no player construction inside a
+        // footprint plus the placement margin (nobody walls in the salvage
+        // chests). Tested at the snapped centre; the margin comfortably
+        // covers a piece's half-extent.
+        if self.ruin_blocks_placement(position) {
+            return building_toast(
+                client_id,
+                ToastKind::Warning,
+                "Too close to a ruin to build".to_owned(),
+            );
+        }
+
         // Building privilege: a Tool Cupboard projects a claim over its
         // base + a margin ring. Non-authorized players can't build anything
         // inside it, every piece including the first (twig) tier is

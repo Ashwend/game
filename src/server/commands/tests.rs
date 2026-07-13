@@ -3,9 +3,9 @@ use super::*;
 use crate::{
     auth::AuthMode,
     items::{
-        ANCIENT_FITTINGS_ID, BASIC_HATCHET_ID, BASIC_PICKAXE_ID, CLOTH_ID, COAL_ID,
-        CRUDE_FURNACE_ID, FIBER_ID, GUNPOWDER_ID, IRON_BAR_ID, IRON_ORE_ID, METEORITE_ID,
-        PADDED_HOOD_ID, PADDED_LEGGINGS_ID, PADDED_TUNIC_ID, PADDED_WRAPS_ID, PLANT_TWINE_ID,
+        BASIC_HATCHET_ID, BASIC_PICKAXE_ID, CLOTH_ID, COAL_ID, CRUDE_FURNACE_ID, FIBER_ID,
+        GUNPOWDER_ID, IRON_BAR_ID, IRON_ORE_ID, METEORITE_ALLOY_ID, PADDED_HOOD_ID,
+        PADDED_LEGGINGS_ID, PADDED_TUNIC_ID, PADDED_WRAPS_ID, PLANT_TWINE_ID, SALVAGED_FITTINGS_ID,
         STONE_ID, SULFUR_ID, SULFUR_ORE_ID, WOOD_ID, WORKBENCH_T1_ID, stack_limit,
     },
     protocol::{GAME_VERSION, PROTOCOL_VERSION, Vec3Net},
@@ -526,8 +526,8 @@ fn test_kit_command_grants_full_kit_and_routes_equipables_to_actionbar() {
         CLOTH_ID,
         PLANT_TWINE_ID,
         IRON_BAR_ID,
-        METEORITE_ID,
-        ANCIENT_FITTINGS_ID,
+        METEORITE_ALLOY_ID,
+        SALVAGED_FITTINGS_ID,
     ] {
         let expected = stack_limit(resource).expect("registered resource").min(100);
         let stack = client

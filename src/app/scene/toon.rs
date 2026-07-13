@@ -72,21 +72,19 @@ pub(crate) struct ToonMaterial {
     pub(crate) dev_flags: u32,
     /// Self-illumination mask. Bright = glowing, sampled at the mesh UV; bind a
     /// 1x1 white image for a mask-less material (the whole prop then rides
-    /// `emissive`'s alpha gate). Only the meteorite node uses a real mask
-    /// (`meteorite_crystal_emissive.png`); every other cel prop binds white and a zero
-    /// `emissive` tint, so the term is inert for them.
+    /// `emissive`'s alpha gate). Currently every cel prop binds white and a
+    /// zero `emissive` tint, so the term is inert scene-wide (no magic, no
+    /// glowing ore; the path stays for future mundane light sources).
     #[texture(6)]
     #[sampler(7)]
     pub(crate) emissive_tex: Handle<Image>,
     /// Emissive term `rgb` = glow colour added on top of the cel-lit surface;
-    /// `a` = whether the glow is gated by COLOR_0 vertex alpha (`a >= 0.5`) so a
-    /// single mesh can mix glowing and non-glowing geometry (the meteorite
-    /// crystals glow, the slag body does not). `Vec4::ZERO` = no emission (every
-    /// non-ember prop), so the shader path is a no-op and existing ore is
-    /// untouched. The night-glow reads at range because it is added AFTER the
-    /// day/night-exposed cel term, so it stays visible in the dark without
-    /// blowing out in daylight (the surround is bright then, so the added glow
-    /// reads as a lit crystal, not a white blob).
+    /// `a` = whether the glow is gated by COLOR_0 vertex alpha (`a >= 0.5`) so
+    /// a single mesh could mix glowing and non-glowing geometry.
+    /// `Vec4::ZERO` = no emission, which is what every material ships today,
+    /// so the shader path is a no-op. A future glow reads at range because it
+    /// is added AFTER the day/night-exposed cel term, so it stays visible in
+    /// the dark without blowing out in daylight.
     #[uniform(8)]
     pub(crate) emissive: Vec4,
 }

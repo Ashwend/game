@@ -10,7 +10,7 @@ use crate::{
         },
     },
     resources::{resource_node_definition, spawn_resource_node},
-    world::{BlockKind, RUIN_MASONRY_TIER, RuinElementKind, RuinProp, WorldData, ruin_layout},
+    world::{BlockKind, WorldData, ruin_layout},
 };
 
 use super::{
@@ -139,10 +139,13 @@ pub(crate) fn apply_world_scene_system(
     scene_state.applied = desired;
 }
 
-/// Spawn the visible ruin meshes for a live world: the reused stone
-/// building-piece meshes and the authored ruin props, at each site's element
-/// transforms. Collision comes from the `RuinMasonry` blocks in `world.blocks`;
-/// this is purely visual. Tagged `WorldGeometry` so it despawns on world change.
+/// Spawn the visible burnt-house shells for a live world: one authored glb
+/// per site (two primitives: charred timber + stone plinth/rubble, each on
+/// its cel material). Collision comes from the `RuinMasonry` blocks in
+/// `world.blocks`; this is purely visual. A shell is a single authored mesh,
+/// so no two faces are coplanar by construction (the old building-piece
+/// kitbash z-fought where foundations abutted). Tagged `WorldGeometry` so it
+/// despawns on world change.
 fn spawn_ruins(
     commands: &mut Commands,
     assets: &DeployableVisualAssets,
@@ -150,43 +153,26 @@ fn spawn_ruins(
     dims: crate::world::ChunkDims,
 ) {
     for site in ruin_layout(seed, dims) {
-        for element in site.render_elements() {
-            let base = Vec3::new(element.position.x, element.position.y, element.position.z);
-            let rotation = Quat::from_rotation_y(element.yaw);
-            match element.kind {
-                RuinElementKind::Building(piece) => {
-                    // Reuse the stone-tier building mesh + PBR stone material.
-                    // A "broken" wall is the full mesh scaled down in Y, which
-                    // reads as a rubble stub without a bespoke model.
-                    let mesh = assets.building_mesh(piece, RUIN_MASONRY_TIER);
-                    let material = assets.building_material(RUIN_MASONRY_TIER);
-                    commands.spawn((
-                        Name::new(format!("Ruin {}", piece.label())),
-                        WorldGeometry,
-                        Mesh3d(mesh),
-                        MeshMaterial3d(material),
-                        Transform::from_translation(base)
-                            .with_rotation(rotation)
-                            .with_scale(Vec3::new(1.0, element.height_scale.max(0.05), 1.0)),
-                    ));
-                }
-                RuinElementKind::Prop(prop) => {
-                    let mesh = match prop {
-                        RuinProp::BrokenPillar => assets.ruin_broken_pillar_mesh.clone(),
-                        RuinProp::FallenArch => assets.ruin_fallen_arch_mesh.clone(),
-                    };
-                    // Props are cel-shaded on the shared toon stone material
-                    // (weathered pale stone + dark iron bands via COLOR_0).
-                    commands.spawn((
-                        Name::new(format!("Ruin {}", prop.asset_stem())),
-                        WorldGeometry,
-                        Mesh3d(mesh),
-                        MeshMaterial3d::<ToonMaterial>(assets.toon_stone_material.clone()),
-                        Transform::from_translation(base).with_rotation(rotation),
-                    ));
-                }
-            }
-        }
+        let base = Vec3::new(site.x, 0.0, site.z);
+        let rotation = Quat::from_rotation_y(site.yaw());
+        let (timber_mesh, masonry_mesh) = &assets.ruin_house_meshes[site.prefab.index()];
+        // Charred timber: the wood cel material under a near-black COLOR_0
+        // identity (the grain survives as faint ember-brown streaks).
+        commands.spawn((
+            Name::new(format!("Ruin {} timber", site.prefab.asset_stem())),
+            WorldGeometry,
+            Mesh3d(timber_mesh.clone()),
+            MeshMaterial3d::<ToonMaterial>(assets.toon_wood_material.clone()),
+            Transform::from_translation(base).with_rotation(rotation),
+        ));
+        // Stone plinth + rubble: the shared cel stone material.
+        commands.spawn((
+            Name::new(format!("Ruin {} masonry", site.prefab.asset_stem())),
+            WorldGeometry,
+            Mesh3d(masonry_mesh.clone()),
+            MeshMaterial3d::<ToonMaterial>(assets.toon_stone_material.clone()),
+            Transform::from_translation(base).with_rotation(rotation),
+        ));
     }
 }
 

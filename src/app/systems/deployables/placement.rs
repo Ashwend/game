@@ -220,6 +220,17 @@ pub(crate) fn update_placement_ghost_system(
     };
 
     let player_feet = runtime.local_player_position();
+    // Refresh the ruin-footprint cache when the world changes; the gate
+    // after the pose update mirrors the server's ruin placement rejection.
+    if placement.ruin_footprints_key != runtime.world_map_seed_dims {
+        placement.ruin_footprints_key = runtime.world_map_seed_dims;
+        placement.ruin_footprints = match runtime.world_map_seed_dims {
+            Some((seed, dims)) => {
+                crate::world::ruin_footprints(&crate::world::ruin_layout(seed, dims))
+            }
+            None => Vec::new(),
+        };
+    }
     let ghost_kind = match intent {
         GhostIntent::Deployable(_, profile) => {
             update_free_placement(
@@ -269,6 +280,24 @@ pub(crate) fn update_placement_ghost_system(
             }
         }
     };
+
+    // Ruin exclusion: player construction is banned inside a ruin footprint
+    // plus the placement margin (the shared salvage chests must stay
+    // unwallable and uncampable), so force the ghost red there, exactly
+    // matching the server gate. Explosive charges stay exempt: raid tools
+    // work anywhere.
+    if placement.valid
+        && !matches!(ghost_kind, DeployableKind::Explosive { .. })
+        && let Some(pos) = placement.world_position
+        && crate::world::point_near_any_footprint(
+            &placement.ruin_footprints,
+            pos.x,
+            pos.z,
+            crate::game_balance::RUIN_PLACEMENT_EXCLUSION_MARGIN_M,
+        )
+    {
+        placement.valid = false;
+    }
 
     // Building privilege: if the snapped placement falls inside a Tool
     // Cupboard claim the local player isn't authorized for, force the ghost

@@ -1,13 +1,16 @@
-//! Ruin structures: deterministic point-of-interest worldgen.
+//! Burnt-out houses: deterministic point-of-interest worldgen.
 //!
-//! A ruin is a small hand-authored prefab (collapsed shrine, broken forge,
-//! watchtower stub) kitbashed from stone-tier building-piece meshes plus a few
-//! new ruin props, scattered across the world at generation time and carrying
-//! one to three refilling loot caches. Everything in this module is a **pure
-//! function of `(world_seed, dims)`**, exactly like the resource-node spawn
-//! pipeline, so the server (worldgen + cache spawning) and the client (map
-//! glyphs) compute the identical layout with no wire traffic and no divergence
-//! risk (singleplayer == multiplayer).
+//! A ruin is a small hand-authored burnt-house prefab (a cottage, farmhouse,
+//! shed, or barn gutted by a meteor strike), scattered across the world at
+//! generation time and carrying one to three restocking salvage chests. The
+//! world's story is written in these: the meteor storm the players live under
+//! has been falling for a while, and the houses it hit are what's left to
+//! scavenge. No lost civilisation, nothing arcane; just homes that burnt.
+//! Everything in this module is a **pure function of `(world_seed, dims)`**,
+//! exactly like the resource-node spawn pipeline, so the server (worldgen +
+//! chest spawning) and the client (map glyphs, shell meshes) compute the
+//! identical layout with no wire traffic and no divergence risk
+//! (singleplayer == multiplayer).
 //!
 //! The load-bearing entry point is [`ruin_layout`]: same seed, same sites;
 //! different seeds, different sites. From a layout you can derive:
@@ -16,16 +19,21 @@
 //!   (nodes must not spawn inside a ruin),
 //! - [`RuinSite::static_blocks`] for the collision/LoS geometry registered as
 //!   world blocks (the perimeter-wall precedent),
-//! - [`RuinSite::cache_points`] for the world-space cache spawn positions, and
-//! - [`RuinSite::render_elements`] for the client's mesh spawns.
+//! - [`RuinSite::cache_points`] for the world-space chest spawn positions, and
+//! - the site transform (`x`, `z`, [`RuinSite::yaw`]) for the client's shell
+//!   mesh spawn (one authored glb per prefab, see `assets/ruins/`).
 //!
 //! Placement (in [`ruin_layout`]) is Poisson-style rejection sampling seeded
 //! from the world seed: candidates are drawn across the playable interior,
 //! rejected if inside the centre exclusion ring, outside the bounds margin, or
 //! within `RUIN_MIN_SPACING_M` of an already-accepted site.
+//!
+//! Sites rotate in exact quarter turns only. The collision pipeline is
+//! AABB-only ([`WorldBlock`] has no yaw), so a quarter-turn grid keeps every
+//! collider box exactly coincident with the authored shell; an arbitrary yaw
+//! would force loose enclosing boxes that block doorways and clip walls.
 
 use crate::{
-    building::{BuildingPiece, BuildingTier, FOUNDATION_SIZE_M, building_collider_blocks},
     game_balance::{
         RUIN_BOUNDS_MARGIN_M, RUIN_MIN_SPACING_M, RUIN_SCATTER_CANDIDATES,
         RUIN_SPAWN_EXCLUSION_RADIUS_FRACTION,
@@ -37,58 +45,116 @@ use crate::{
     },
 };
 
-/// The three hand-authored ruin prefabs. Appended-only; the discriminant is
-/// never persisted (a ruin layout is recomputed from the seed on every load),
-/// so ordering is free to change, but keep it stable for readable tests.
+/// The four hand-authored burnt-house prefabs. Appended-only; the discriminant
+/// is never persisted (a ruin layout is recomputed from the seed on every
+/// load), so ordering is free to change, but keep it stable for readable
+/// tests. Each maps to one authored shell glb (`assets/ruins/<stem>.glb`,
+/// built by `art/ruins/build_ruins.py`) plus the collider boxes below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuinPrefab {
-    /// A ring of stone foundations with three broken wall stubs and a fallen
-    /// arch over the old entrance, a single cache in the sunken centre.
-    CollapsedShrine,
-    /// A stone platform with a half-standing forge wall, a leaning pillar, and
-    /// two caches where the smiths' stores would have been.
-    BrokenForge,
-    /// A 2x2 foundation ring with three broken wall segments at varying heights
-    /// and a broken pillar, one cache tucked against the tallest wall.
-    WatchtowerStub,
+    /// A one-room home: back wall mostly standing, the rest burnt to stubs,
+    /// a door gap in the front wall. One chest against the back wall.
+    BurntCottage,
+    /// The largest shell: an L-shaped main room + annex, one tall gable end
+    /// still up. Two chests (main room and annex).
+    BurntFarmhouse,
+    /// A three-sided outbuilding, open across the front. One chest.
+    BurntShed,
+    /// A wide barn: two gable ends standing, long walls burnt low, a cart
+    /// opening in one long side. Two chests.
+    BurntBarn,
+}
+
+/// One axis-aligned collider box in prefab-local space: `center` is the box
+/// centre (y included, so a wall box sits on the plinth top), `half` the half
+/// extents. Rotated into world space by the site's quarter-turn yaw.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RuinBox {
+    pub center: (f32, f32, f32),
+    pub half: (f32, f32, f32),
+}
+
+impl RuinBox {
+    const fn new(center: (f32, f32, f32), half: (f32, f32, f32)) -> Self {
+        Self { center, half }
+    }
 }
 
 impl RuinPrefab {
     /// Every prefab, in a stable order. The scatter picks from this by index.
-    pub const ALL: [Self; 3] = [
-        Self::CollapsedShrine,
-        Self::BrokenForge,
-        Self::WatchtowerStub,
+    pub const ALL: [Self; 4] = [
+        Self::BurntCottage,
+        Self::BurntFarmhouse,
+        Self::BurntShed,
+        Self::BurntBarn,
     ];
 
     pub const fn label(self) -> &'static str {
         match self {
-            Self::CollapsedShrine => "Collapsed Shrine",
-            Self::BrokenForge => "Broken Forge",
-            Self::WatchtowerStub => "Watchtower Stub",
+            Self::BurntCottage => "Burnt Cottage",
+            Self::BurntFarmhouse => "Burnt Farmhouse",
+            Self::BurntShed => "Burnt Shed",
+            Self::BurntBarn => "Burnt Barn",
         }
     }
 
-    /// Prefab-local element list. Coordinates are in metres relative to the
-    /// site centre (`+X` east, `+Z` south, `+Y` up), pre-rotation. The site's
-    /// own yaw rotates the whole set into the world.
-    pub fn elements(self) -> &'static [RuinElement] {
+    /// Asset stem of the prefab's shell glb: `assets/ruins/<stem>.glb`.
+    pub const fn asset_stem(self) -> &'static str {
         match self {
-            Self::CollapsedShrine => COLLAPSED_SHRINE,
-            Self::BrokenForge => BROKEN_FORGE,
-            Self::WatchtowerStub => WATCHTOWER_STUB,
+            Self::BurntCottage => "burnt_cottage",
+            Self::BurntFarmhouse => "burnt_farmhouse",
+            Self::BurntShed => "burnt_shed",
+            Self::BurntBarn => "burnt_barn",
         }
     }
 
-    /// Prefab-local cache spawn points (1 to 3 per prefab). Each is a local
-    /// XZ offset from the site centre; every point lies over a foundation
-    /// element (pinned by test), and [`RuinSite::cache_points`] spawns the
-    /// cache at the foundation TOP so it sits proud on the platform.
+    /// Stable dense index (0..[`RuinPrefab::ALL`]`.len()`), for asset arrays.
+    pub const fn index(self) -> usize {
+        match self {
+            Self::BurntCottage => 0,
+            Self::BurntFarmhouse => 1,
+            Self::BurntShed => 2,
+            Self::BurntBarn => 3,
+        }
+    }
+
+    /// The stone floor plinths the house stands on. Solid, walkable at
+    /// `FLOOR_TOP_M` (the building-foundation height, so the movement step-up
+    /// that handles foundations handles these too). Separate from
+    /// [`RuinPrefab::wall_boxes`] because the chest points must sit over a
+    /// plinth (pinned by test).
+    pub fn plinth_boxes(self) -> &'static [RuinBox] {
+        match self {
+            Self::BurntCottage => COTTAGE_PLINTHS,
+            Self::BurntFarmhouse => FARMHOUSE_PLINTHS,
+            Self::BurntShed => SHED_PLINTHS,
+            Self::BurntBarn => BARN_PLINTHS,
+        }
+    }
+
+    /// The standing wall stubs (charred plank walls at their surviving
+    /// heights). Door and cart openings are genuine gaps between boxes, so
+    /// they stay passable. Matched by hand to the authored shell geometry in
+    /// `art/ruins/build_ruins.py`; edit the two together.
+    pub fn wall_boxes(self) -> &'static [RuinBox] {
+        match self {
+            Self::BurntCottage => COTTAGE_WALLS,
+            Self::BurntFarmhouse => FARMHOUSE_WALLS,
+            Self::BurntShed => SHED_WALLS,
+            Self::BurntBarn => BARN_WALLS,
+        }
+    }
+
+    /// Prefab-local chest spawn points (1 to 3 per prefab). Each is a local
+    /// XZ offset from the site centre; every point lies over a plinth
+    /// (pinned by test), and [`RuinSite::cache_points`] spawns the chest at
+    /// the plinth TOP so it sits proud on the floor.
     pub fn cache_points(self) -> &'static [(f32, f32)] {
         match self {
-            Self::CollapsedShrine => &[(0.0, 0.0)],
-            Self::BrokenForge => &[(-2.2, 1.6), (2.4, -1.2)],
-            Self::WatchtowerStub => &[(1.1, 1.1)],
+            Self::BurntCottage => &[(0.9, -1.3)],
+            Self::BurntFarmhouse => &[(-2.2, -1.5), (4.5, 1.2)],
+            Self::BurntShed => &[(-0.5, -0.6)],
+            Self::BurntBarn => &[(-2.6, 0.0), (2.4, 1.0)],
         }
     }
 
@@ -98,104 +164,32 @@ impl RuinPrefab {
     /// per node than a per-element polygon and reads the same in practice.
     pub const fn footprint_radius_m(self) -> f32 {
         match self {
-            // Both the shrine and forge sprawl a bit wider than the tower stub.
-            Self::CollapsedShrine => 7.5,
-            Self::BrokenForge => 8.0,
-            Self::WatchtowerStub => 6.0,
+            Self::BurntCottage => 6.0,
+            Self::BurntFarmhouse => 8.5,
+            Self::BurntShed => 4.5,
+            Self::BurntBarn => 7.5,
         }
     }
 }
 
-/// One placed piece of a prefab. Either a reused stone building-piece mesh or
-/// one of the new ruin props. `local` is the piece base centre in prefab-local
-/// space; `yaw` is a local rotation added to the site yaw; `height_scale`
-/// truncates wall-like pieces so a ruin reads as broken (1.0 = full height).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RuinElement {
-    pub kind: RuinElementKind,
-    pub local_x: f32,
-    pub local_z: f32,
-    pub local_yaw: f32,
-    /// Fraction of full height the element keeps. Applies to wall-like building
-    /// pieces (a "broken wall" is a short wall) and to tall props. `1.0` for a
-    /// full-height or naturally-short element.
-    pub height_scale: f32,
-}
-
-impl RuinElement {
-    const fn building(piece: BuildingPiece, x: f32, z: f32, yaw: f32, height: f32) -> Self {
-        Self {
-            kind: RuinElementKind::Building(piece),
-            local_x: x,
-            local_z: z,
-            local_yaw: yaw,
-            height_scale: height,
-        }
-    }
-
-    const fn prop(prop: RuinProp, x: f32, z: f32, yaw: f32) -> Self {
-        Self {
-            kind: RuinElementKind::Prop(prop),
-            local_x: x,
-            local_z: z,
-            local_yaw: yaw,
-            height_scale: 1.0,
-        }
-    }
-}
-
-/// What an element renders and collides as.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuinElementKind {
-    /// A stone-tier building piece reused as static ruin masonry. Renders with
-    /// the client's existing building mesh for `(piece, Stone)`; collides via
-    /// [`building_collider_blocks`].
-    Building(BuildingPiece),
-    /// One of the new authored ruin props.
-    Prop(RuinProp),
-}
-
-/// The new authored ruin props (cel-shaded world glbs under `assets/ruins/`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuinProp {
-    /// Tapered fluted pillar stump with a fractured top.
-    BrokenPillar,
-    /// Two pillar stumps carrying a collapsed lintel lying at an angle.
-    FallenArch,
-}
-
-impl RuinProp {
-    pub const fn asset_stem(self) -> &'static str {
-        match self {
-            Self::BrokenPillar => "broken_pillar",
-            Self::FallenArch => "fallen_arch",
-        }
-    }
-
-    /// Half-extents of the prop's collision box, in metres, before the
-    /// element's `height_scale` and the site yaw are applied. Kept simple: a
-    /// single upright AABB is enough for movement collision and line-of-sight
-    /// against a stumpy prop.
-    const fn collider_half_extents(self) -> (f32, f32, f32) {
-        match self {
-            // A stubby pillar: ~0.9 m tall (half 0.45), ~0.35 m radius.
-            Self::BrokenPillar => (0.35, 0.45, 0.35),
-            // A wide, low arch span: ~2.6 m across, ~1.2 m tall.
-            Self::FallenArch => (1.3, 0.6, 0.6),
-        }
-    }
-}
-
-/// One scattered ruin: which prefab, where (world XZ), and its world yaw. The
-/// ground height is `y = 0` (the world floor is flat); this stays a field so a
-/// future heightmap can snap it without changing the shape.
+/// One scattered ruin: which prefab, where (world XZ), and its orientation in
+/// exact quarter turns (see the module docs for why not arbitrary yaw). The
+/// ground height is `y = 0` (the world floor is flat); this stays implicit so
+/// a future heightmap can snap it without changing the shape.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RuinSite {
     pub prefab: RuinPrefab,
     pub x: f32,
     pub z: f32,
-    pub yaw: f32,
+    /// Orientation in quarter turns about +Y, `0..=3`.
+    pub quarter_turns: u8,
 }
+
+/// Height of the walkable stone floor plinth top, and therefore the chest
+/// spawn height. Matches the building-foundation height on purpose: the
+/// movement code already steps players up onto foundation tops, so plinths
+/// walk identically.
+pub const FLOOR_TOP_M: f32 = crate::building::FOUNDATION_HEIGHT_M;
 
 impl RuinSite {
     /// World-space centre of the site as a [`Vec3Net`] at ground level.
@@ -203,27 +197,29 @@ impl RuinSite {
         Vec3Net::new(self.x, 0.0, self.z)
     }
 
-    /// Rotate a prefab-local XZ offset by the site yaw into world space.
-    fn local_to_world(self, local_x: f32, local_z: f32) -> (f32, f32) {
-        let (sin, cos) = self.yaw.sin_cos();
-        (
-            self.x + local_x * cos - local_z * sin,
-            self.z + local_x * sin + local_z * cos,
-        )
+    /// The site yaw in radians (quarter turns about +Y), for render
+    /// transforms. Collider math never touches this; it rotates exactly via
+    /// [`rotate_quarter`].
+    pub fn yaw(self) -> f32 {
+        f32::from(self.quarter_turns) * std::f32::consts::FRAC_PI_2
     }
 
-    /// World-space cache spawn positions. Every prefab places its cache points
-    /// on the foundation slab, so a cache's base sits at the foundation TOP
-    /// (`FOUNDATION_HEIGHT_M`), proud on the platform rather than half-embedded
-    /// in it. If a future prefab ever puts a cache on bare ground, make the
-    /// height per-point prefab data instead of this constant.
+    /// Rotate a prefab-local XZ offset by the site's quarter turns into a
+    /// world offset, exactly (no trig, no float drift at the cardinals).
+    fn local_to_world(self, local_x: f32, local_z: f32) -> (f32, f32) {
+        let (rx, rz) = rotate_quarter(self.quarter_turns, local_x, local_z);
+        (self.x + rx, self.z + rz)
+    }
+
+    /// World-space chest spawn positions, at the plinth top so a chest sits
+    /// proud on the floor rather than half-embedded in it.
     pub fn cache_points(self) -> Vec<Vec3Net> {
         self.prefab
             .cache_points()
             .iter()
             .map(|&(lx, lz)| {
                 let (wx, wz) = self.local_to_world(lx, lz);
-                Vec3Net::new(wx, crate::building::FOUNDATION_HEIGHT_M, wz)
+                Vec3Net::new(wx, FLOOR_TOP_M, wz)
             })
             .collect()
     }
@@ -231,73 +227,48 @@ impl RuinSite {
     /// Static collision/LoS blocks for the whole site, in world space. These
     /// are registered as [`WorldBlock`]s at world build (the perimeter-wall
     /// precedent), so the `BlockGrid` gives collision, projectile LoS, and
-    /// melee LoS for free.
+    /// melee LoS for free. Because sites rotate in quarter turns only, every
+    /// box here is exactly the authored geometry, not a loose enclosure.
     pub fn static_blocks(self) -> Vec<WorldBlock> {
-        let mut blocks = Vec::new();
-        for element in self.prefab.elements() {
-            let (wx, wz) = self.local_to_world(element.local_x, element.local_z);
-            let world_yaw = self.yaw + element.local_yaw;
-            match element.kind {
-                RuinElementKind::Building(piece) => {
-                    // Reuse the exact building collider geometry so ruin
-                    // masonry collides like a real wall/foundation. Broken
-                    // (height-scaled) walls are still full-footprint solid at
-                    // the base, which is what a rubble stub should be. Retag
-                    // each box as ruin masonry so the scene renderer skips the
-                    // plain cuboid and the ruin system draws the real mesh.
-                    let position = Vec3Net::new(wx, 0.0, wz);
-                    blocks.extend(
-                        building_collider_blocks(piece, position, world_yaw)
-                            .into_iter()
-                            .map(|b| b.with_kind(crate::world::BlockKind::RuinMasonry)),
-                    );
-                }
-                RuinElementKind::Prop(prop) => {
-                    let (hx, hy, hz) = prop.collider_half_extents();
-                    let hy = hy * element.height_scale;
-                    // Rotate the box's half-extents footprint by the yaw. For
-                    // an axis-aligned grid we keep the box axis-aligned and use
-                    // the larger horizontal half-extent so the collider fully
-                    // encloses the rotated prop (a slightly loose but never
-                    // pass-through fit, matching the AABB-only pipeline).
-                    let horizontal = hx.max(hz);
-                    let center = Vec3Net::new(wx, hy, wz);
-                    let half = Vec3Net::new(horizontal, hy, horizontal);
-                    blocks.push(WorldBlock::ruin(center, half));
-                }
-            }
-        }
-        blocks
-    }
-
-    /// Per-element render transforms for the client: `(kind, world position,
-    /// world yaw, height_scale)`. The client maps each `Building(piece)` to the
-    /// stone-tier building mesh and each `Prop` to its glb, applying the height
-    /// scale as a Y scale.
-    pub fn render_elements(self) -> Vec<RuinRenderElement> {
         self.prefab
-            .elements()
+            .plinth_boxes()
             .iter()
-            .map(|element| {
-                let (wx, wz) = self.local_to_world(element.local_x, element.local_z);
-                RuinRenderElement {
-                    kind: element.kind,
-                    position: Vec3Net::new(wx, 0.0, wz),
-                    yaw: self.yaw + element.local_yaw,
-                    height_scale: element.height_scale,
-                }
+            .chain(self.prefab.wall_boxes())
+            .map(|b| {
+                let (cx, cy, cz) = b.center;
+                let (hx, hy, hz) = b.half;
+                let (wx, wz) = self.local_to_world(cx, cz);
+                let (rhx, rhz) = rotate_quarter_half_extents(self.quarter_turns, hx, hz);
+                WorldBlock::ruin(Vec3Net::new(wx, cy, wz), Vec3Net::new(rhx, hy, rhz))
             })
             .collect()
     }
 }
 
-/// A single element resolved to world space for rendering.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RuinRenderElement {
-    pub kind: RuinElementKind,
-    pub position: Vec3Net,
-    pub yaw: f32,
-    pub height_scale: f32,
+/// Rotate an XZ offset by `quarter_turns` quarter turns about +Y. MUST match
+/// Bevy's `Quat::from_rotation_y(yaw)` at the cardinals (`x' = x cos + z sin`,
+/// `z' = -x sin + z cos`), the same convention as `rotate_offset` in
+/// `src/building.rs`, because the client renders the shell mesh with exactly
+/// that quaternion at [`RuinSite::yaw`]. The opposite spin here once rotated
+/// the colliders 180 degrees against the visuals on q=1/q=3 sites (an
+/// invisible wall standing in the visible doorway); pinned by test against
+/// `building::rotate_offset` semantics.
+fn rotate_quarter(quarter_turns: u8, x: f32, z: f32) -> (f32, f32) {
+    match quarter_turns % 4 {
+        0 => (x, z),
+        1 => (z, -x),
+        2 => (-x, -z),
+        _ => (-z, x),
+    }
+}
+
+/// Half extents swap between X and Z on odd quarter turns.
+fn rotate_quarter_half_extents(quarter_turns: u8, hx: f32, hz: f32) -> (f32, f32) {
+    if quarter_turns.is_multiple_of(2) {
+        (hx, hz)
+    } else {
+        (hz, hx)
+    }
 }
 
 /// A ruin's circular footprint in world space, used to reject resource-node
@@ -335,10 +306,23 @@ pub fn point_in_any_footprint(footprints: &[RuinFootprint], x: f32, z: f32) -> b
     footprints.iter().any(|fp| fp.contains(x, z))
 }
 
+/// True if `(x, z)` falls inside any ruin footprint inflated by `margin`
+/// metres. The player-placement gate (server validation and the client
+/// ghost) tests against `RUIN_PLACEMENT_EXCLUSION_MARGIN_M`, so nobody can
+/// wall in a salvage chest or camp a restock with a sleeping bag.
+pub fn point_near_any_footprint(footprints: &[RuinFootprint], x: f32, z: f32, margin: f32) -> bool {
+    footprints.iter().any(|fp| {
+        let dx = x - fp.x;
+        let dz = z - fp.z;
+        let reach = fp.radius + margin;
+        dx * dx + dz * dz <= reach * reach
+    })
+}
+
 /// **The** shared, deterministic ruin scatter. A pure function of
 /// `(world_seed, dims)`: the server calls it at world build (for static blocks,
-/// cache spawns, and the node-rejection footprints) and the client calls it for
-/// the map glyphs, so both agree with zero coordination.
+/// chest spawns, and the node-rejection footprints) and the client calls it for
+/// the map glyphs and shell meshes, so both agree with zero coordination.
 ///
 /// Placement is Poisson-style rejection sampling: draw `RUIN_SCATTER_CANDIDATES`
 /// candidate points across the playable interior from a seeded stream, and keep
@@ -349,8 +333,8 @@ pub fn point_in_any_footprint(footprints: &[RuinFootprint], x: f32, z: f32) -> b
 /// - inside `PlayableBounds` shrunk by `RUIN_BOUNDS_MARGIN_M`, and
 /// - at least `RUIN_MIN_SPACING_M` from every already-accepted site.
 ///
-/// Each accepted site draws its prefab and yaw from the same seeded stream, so
-/// the whole layout round-trips identically.
+/// Each accepted site draws its prefab and orientation from the same seeded
+/// stream, so the whole layout round-trips identically.
 pub fn ruin_layout(world_seed: u64, dims: ChunkDims) -> Vec<RuinSite> {
     let bounds = PlayableBounds::from_dims(dims);
     // Shrink the placement box by the ruin margin so a site's footprint never
@@ -387,12 +371,13 @@ pub fn ruin_layout(world_seed: u64, dims: ChunkDims) -> Vec<RuinSite> {
     for _ in 0..RUIN_SCATTER_CANDIDATES {
         let x = min_x + (max_x - min_x) * next();
         let z = min_z + (max_z - min_z) * next();
-        // Draw the prefab and yaw unconditionally so a rejected candidate still
-        // advances the stream by the same amount, keeping the sequence a pure
-        // function of the seed regardless of how many candidates pass.
+        // Draw the prefab and orientation unconditionally so a rejected
+        // candidate still advances the stream by the same amount, keeping the
+        // sequence a pure function of the seed regardless of how many
+        // candidates pass.
         let prefab_pick = (next() * RuinPrefab::ALL.len() as f32) as usize;
         let prefab = RuinPrefab::ALL[prefab_pick.min(RuinPrefab::ALL.len() - 1)];
-        let yaw = (next() - 0.5) * std::f32::consts::TAU;
+        let quarter_turns = ((next() * 4.0) as u8).min(3);
 
         // Outside the centre ring?
         if x * x + z * z < exclusion_sq {
@@ -406,79 +391,120 @@ pub fn ruin_layout(world_seed: u64, dims: ChunkDims) -> Vec<RuinSite> {
         }) {
             continue;
         }
-        sites.push(RuinSite { prefab, x, z, yaw });
+        sites.push(RuinSite {
+            prefab,
+            x,
+            z,
+            quarter_turns,
+        });
     }
     sites
 }
 
 // ---------------------------------------------------------------------------
-// Prefab data. Coordinates are prefab-local metres; the site yaw rotates the
-// whole set. `FOUNDATION_SIZE_M` (3 m) is the grid the building pieces snap to,
-// so foundations sit on a 3 m lattice and walls span a foundation edge.
+// Prefab collider data. Coordinates are prefab-local metres (+X east, +Z
+// south, +Y up), matched by hand to the authored shell geometry in
+// `art/ruins/build_ruins.py`; edit the two together. Wall boxes stand on the
+// plinth top (base y = FLOOR_TOP_M) at the average surviving height of their
+// charred planks. Door / cart openings are real gaps between boxes.
 // ---------------------------------------------------------------------------
 
-const F: f32 = FOUNDATION_SIZE_M; // 3.0 m grid step, for readable offsets.
-const HALF_TURN: f32 = std::f32::consts::PI;
-const QUARTER_TURN: f32 = std::f32::consts::FRAC_PI_2;
+/// Wall collider thickness (half extent). The authored plank walls are a
+/// touch thinner; the collider rounds up so a wall never reads passable.
+const WT: f32 = 0.15;
+/// Plinth half height; the slab spans ground to `FLOOR_TOP_M`.
+const PH: f32 = FLOOR_TOP_M / 2.0;
 
-/// Collapsed shrine: a small ring of four stone foundations with a fallen arch
-/// over the entrance and two broken wall stubs. The single cache sits in the
-/// centre. 4 foundations + 2 broken walls + 1 fallen arch + 1 broken pillar.
-const COLLAPSED_SHRINE: &[RuinElement] = &[
-    // A 2x2 foundation slab.
-    RuinElement::building(BuildingPiece::Foundation, -F * 0.5, -F * 0.5, 0.0, 1.0),
-    RuinElement::building(BuildingPiece::Foundation, F * 0.5, -F * 0.5, 0.0, 1.0),
-    RuinElement::building(BuildingPiece::Foundation, -F * 0.5, F * 0.5, 0.0, 1.0),
-    RuinElement::building(BuildingPiece::Foundation, F * 0.5, F * 0.5, 0.0, 1.0),
-    // Two broken back walls at differing heights.
-    RuinElement::building(BuildingPiece::Wall, -F * 0.5, -F, 0.0, 0.55),
-    RuinElement::building(BuildingPiece::Wall, F * 0.5, -F, 0.0, 0.35),
-    // A fallen arch across the front entrance.
-    RuinElement::prop(RuinProp::FallenArch, 0.0, F, QUARTER_TURN),
-    // A toppled pillar off to one side.
-    RuinElement::prop(RuinProp::BrokenPillar, -F, F * 0.5, 0.0),
+/// Burnt cottage: one 6.4 x 4.9 m plinth. Back (north, -Z) wall mostly
+/// standing, west wall partial, east wall a low stub, front wall split by the
+/// door gap. Sloped ("slope"-profile) walls carry TWO collider boxes, a tall
+/// half and a low half, so the collider tracks the visual burn line instead
+/// of blocking an invisible full-height plane over knee-high planks. The
+/// slope always descends toward the wall's +axis end, matching the build
+/// script's deterministic envelope.
+const COTTAGE_PLINTHS: &[RuinBox] = &[RuinBox::new((0.0, PH, 0.0), (3.2, PH, 2.45))];
+const COTTAGE_WALLS: &[RuinBox] = &[
+    // Back wall, tallest survivor.
+    RuinBox::new((0.0, FLOOR_TOP_M + 1.1, -2.1), (2.85, 1.1, WT)),
+    // West wall, sloping down toward +Z: tall half, then low half.
+    RuinBox::new((-2.85, FLOOR_TOP_M + 0.9, -0.975), (WT, 0.9, 0.975)),
+    RuinBox::new((-2.85, FLOOR_TOP_M + 0.585, 0.975), (WT, 0.585, 0.975)),
+    // East wall, burnt to a knee-high stub.
+    RuinBox::new((2.85, FLOOR_TOP_M + 0.4, 0.0), (WT, 0.4, 1.95)),
+    // Front wall, left of the door gap (gap spans x 0.0..1.2, a touch wider
+    // than the standard 1.1 m doorway so an angled approach never snags).
+    RuinBox::new((-1.425, FLOOR_TOP_M + 0.5, 2.1), (1.425, 0.5, WT)),
+    // Front wall, right of the door gap, sloping down toward +X.
+    RuinBox::new((1.6125, FLOOR_TOP_M + 0.7, 2.1), (0.4125, 0.7, WT)),
+    RuinBox::new((2.4375, FLOOR_TOP_M + 0.455, 2.1), (0.4125, 0.455, WT)),
+    // Stone chimney stub standing over the back wall's east end.
+    RuinBox::new((1.9, FLOOR_TOP_M + 1.3, -2.1), (0.28, 1.3, 0.28)),
 ];
 
-/// Broken forge: a wide stone platform with a half-standing forge wall, a
-/// leaning pillar, and two caches. 6 foundations + 3 broken walls + 1 broken
-/// pillar.
-const BROKEN_FORGE: &[RuinElement] = &[
-    // A 3x2 platform.
-    RuinElement::building(BuildingPiece::Foundation, -F, -F * 0.5, 0.0, 1.0),
-    RuinElement::building(BuildingPiece::Foundation, 0.0, -F * 0.5, 0.0, 1.0),
-    RuinElement::building(BuildingPiece::Foundation, F, -F * 0.5, 0.0, 1.0),
-    RuinElement::building(BuildingPiece::Foundation, -F, F * 0.5, 0.0, 1.0),
-    RuinElement::building(BuildingPiece::Foundation, 0.0, F * 0.5, 0.0, 1.0),
-    RuinElement::building(BuildingPiece::Foundation, F, F * 0.5, 0.0, 1.0),
-    // A half-standing forge wall across the back, plus two shorter stubs.
-    RuinElement::building(BuildingPiece::Wall, 0.0, -F, 0.0, 0.7),
-    RuinElement::building(BuildingPiece::Wall, -F, -F, 0.0, 0.4),
-    RuinElement::building(BuildingPiece::Wall, -F * 1.5, 0.0, QUARTER_TURN, 0.5),
-    // A leaning pillar by the smith's corner.
-    RuinElement::prop(RuinProp::BrokenPillar, F * 1.2, F, 0.0),
+/// Burnt farmhouse: L-shape, a 7.5 x 5.5 m main room plus a 3 x 3.5 m annex
+/// off the south-east corner. The north wall still carries most of its gable.
+const FARMHOUSE_PLINTHS: &[RuinBox] = &[
+    RuinBox::new((-0.75, PH, 0.0), (3.75, PH, 2.75)),
+    RuinBox::new((4.5, PH, 1.0), (1.5, PH, 1.75)),
+];
+const FARMHOUSE_WALLS: &[RuinBox] = &[
+    // Main north wall, the tall survivor.
+    RuinBox::new((-0.75, FLOOR_TOP_M + 1.15, -2.55), (3.55, 1.15, WT)),
+    // Main west wall, sloping down toward +Z: tall half, then low half.
+    RuinBox::new((-4.3, FLOOR_TOP_M + 0.8, -1.2), (WT, 0.8, 1.2)),
+    RuinBox::new((-4.3, FLOOR_TOP_M + 0.52, 1.2), (WT, 0.52, 1.2)),
+    // Main south wall, left of the door gap (gap spans x -1.65..-0.45, a
+    // touch wider than the standard 1.1 m doorway).
+    RuinBox::new((-2.975, FLOOR_TOP_M + 0.45, 2.55), (1.325, 0.45, WT)),
+    // Main south wall, right of the door gap, sloping down toward +X.
+    RuinBox::new((0.3625, FLOOR_TOP_M + 0.6, 2.55), (0.8125, 0.6, WT)),
+    RuinBox::new((1.9875, FLOOR_TOP_M + 0.39, 2.55), (0.8125, 0.39, WT)),
+    // Annex east wall, sloping down toward +Z.
+    RuinBox::new((5.8, FLOOR_TOP_M + 0.7, 0.225), (WT, 0.7, 0.775)),
+    RuinBox::new((5.8, FLOOR_TOP_M + 0.455, 1.775), (WT, 0.455, 0.775)),
+    // Annex south wall.
+    RuinBox::new((4.4, FLOOR_TOP_M + 0.5, 2.55), (1.4, 0.5, WT)),
+    // Annex north stub.
+    RuinBox::new((4.4, FLOOR_TOP_M + 0.3, -0.55), (1.4, 0.3, WT)),
+    // Stone chimney stub standing in the west wall.
+    RuinBox::new((-4.3, FLOOR_TOP_M + 1.5, -0.9), (0.28, 1.5, 0.28)),
 ];
 
-/// Watchtower stub: a 2x2 foundation ring with three broken wall segments at
-/// varying heights and a broken pillar. One cache. 4 foundations + 3 broken
-/// walls + 1 broken pillar.
-const WATCHTOWER_STUB: &[RuinElement] = &[
-    // A 2x2 base ring.
-    RuinElement::building(BuildingPiece::Foundation, -F * 0.5, -F * 0.5, 0.0, 1.0),
-    RuinElement::building(BuildingPiece::Foundation, F * 0.5, -F * 0.5, 0.0, 1.0),
-    RuinElement::building(BuildingPiece::Foundation, -F * 0.5, F * 0.5, 0.0, 1.0),
-    RuinElement::building(BuildingPiece::Foundation, F * 0.5, F * 0.5, 0.0, 1.0),
-    // Three broken wall segments at varying heights around the ring.
-    RuinElement::building(BuildingPiece::Wall, -F * 0.5, -F, 0.0, 0.8),
-    RuinElement::building(BuildingPiece::Wall, F * 0.5, -F, 0.0, 0.5),
-    RuinElement::building(BuildingPiece::Wall, -F, -F * 0.5, QUARTER_TURN, 0.3),
-    // A broken pillar at the far corner.
-    RuinElement::prop(RuinProp::BrokenPillar, F * 0.5, F, HALF_TURN),
+/// Burnt shed: a 3.9 x 3.3 m three-sided outbuilding, open across the front
+/// (south) side.
+const SHED_PLINTHS: &[RuinBox] = &[RuinBox::new((0.0, PH, 0.0), (1.95, PH, 1.65))];
+const SHED_WALLS: &[RuinBox] = &[
+    // Back wall, sloping down toward +X: tall half, then low half.
+    RuinBox::new((-0.85, FLOOR_TOP_M + 0.8, -1.4), (0.85, 0.8, WT)),
+    RuinBox::new((0.85, FLOOR_TOP_M + 0.52, -1.4), (0.85, 0.52, WT)),
+    // West wall, sloping down toward +Z.
+    RuinBox::new((-1.7, FLOOR_TOP_M + 0.6, -0.675), (WT, 0.6, 0.675)),
+    RuinBox::new((-1.7, FLOOR_TOP_M + 0.39, 0.675), (WT, 0.39, 0.675)),
+    // East wall, lower.
+    RuinBox::new((1.7, FLOOR_TOP_M + 0.35, 0.0), (WT, 0.35, 1.35)),
 ];
 
-/// The stone tier all ruin masonry renders at (weathered stone building
-/// pieces). Exposed so the client mesh lookup uses the same tier as the
-/// collider geometry.
-pub const RUIN_MASONRY_TIER: BuildingTier = BuildingTier::Stone;
+/// Burnt barn: an 8.4 x 5.9 m plinth, both gable ends still standing tall,
+/// long walls burnt low, a cart opening in the north side (gap spans
+/// x -1.2..1.2).
+const BARN_PLINTHS: &[RuinBox] = &[RuinBox::new((0.0, PH, 0.0), (4.2, PH, 2.95))];
+const BARN_WALLS: &[RuinBox] = &[
+    // West gable end, the tall one: low shoulder, full-height peak third,
+    // low shoulder, tracking the triangular gable envelope.
+    RuinBox::new((-3.9, FLOOR_TOP_M + 0.91, -1.7333), (WT, 0.91, 0.8667)),
+    RuinBox::new((-3.9, FLOOR_TOP_M + 1.4, 0.0), (WT, 1.4, 0.8667)),
+    RuinBox::new((-3.9, FLOOR_TOP_M + 0.91, 1.7333), (WT, 0.91, 0.8667)),
+    // East gable end, same shape, lower.
+    RuinBox::new((3.9, FLOOR_TOP_M + 0.65, -1.7333), (WT, 0.65, 0.8667)),
+    RuinBox::new((3.9, FLOOR_TOP_M + 1.0, 0.0), (WT, 1.0, 0.8667)),
+    RuinBox::new((3.9, FLOOR_TOP_M + 0.65, 1.7333), (WT, 0.65, 0.8667)),
+    // North wall, west of the cart opening.
+    RuinBox::new((-2.55, FLOOR_TOP_M + 0.5, -2.6), (1.35, 0.5, WT)),
+    // North wall, east of the cart opening.
+    RuinBox::new((2.55, FLOOR_TOP_M + 0.5, -2.6), (1.35, 0.5, WT)),
+    // South wall, one long low run.
+    RuinBox::new((0.0, FLOOR_TOP_M + 0.35, 2.6), (3.75, 0.35, WT)),
+];
 
 #[cfg(test)]
 mod tests {
@@ -497,7 +523,7 @@ mod tests {
             assert_eq!(sa.prefab, sb.prefab);
             assert_eq!(sa.x, sb.x);
             assert_eq!(sa.z, sb.z);
-            assert_eq!(sa.yaw, sb.yaw);
+            assert_eq!(sa.quarter_turns, sb.quarter_turns);
         }
     }
 
@@ -592,19 +618,36 @@ mod tests {
     }
 
     #[test]
+    fn orientations_are_quarter_turns_and_varied() {
+        // Every site's orientation is a legal quarter turn, and across seeds
+        // the draw actually uses the whole range (variation, not a constant).
+        let mut seen = [false; 4];
+        for seed in 0..20u64 {
+            for site in ruin_layout(seed, medium_dims()) {
+                assert!(site.quarter_turns < 4, "quarter turns must be 0..=3");
+                seen[site.quarter_turns as usize] = true;
+            }
+        }
+        assert!(
+            seen.iter().all(|s| *s),
+            "all four orientations should appear across seeds: {seen:?}"
+        );
+    }
+
+    #[test]
     fn every_prefab_has_between_one_and_three_cache_points() {
         for prefab in RuinPrefab::ALL {
             let n = prefab.cache_points().len();
             assert!(
                 (1..=3).contains(&n),
-                "{prefab:?} must carry 1..=3 caches, has {n}"
+                "{prefab:?} must carry 1..=3 chests, has {n}"
             );
         }
     }
 
     #[test]
     fn cache_points_sit_inside_the_footprint() {
-        // Each prefab's cache points must be within the footprint radius of the
+        // Each prefab's chest points must be within the footprint radius of the
         // site centre, or the node-rejection footprint wouldn't protect them.
         for prefab in RuinPrefab::ALL {
             let radius = prefab.footprint_radius_m();
@@ -612,63 +655,121 @@ mod tests {
                 let dist = (lx * lx + lz * lz).sqrt();
                 assert!(
                     dist <= radius,
-                    "{prefab:?} cache at ({lx}, {lz}) is {dist} from centre, outside footprint {radius}"
+                    "{prefab:?} chest at ({lx}, {lz}) is {dist} from centre, outside footprint {radius}"
                 );
             }
         }
     }
 
     #[test]
-    fn cache_points_stand_on_a_foundation_element() {
-        // `RuinSite::cache_points` spawns every cache at the foundation TOP
-        // (`FOUNDATION_HEIGHT_M`), which is only correct if each local cache
-        // point actually lies over a Foundation element's 3 m footprint. Pin
-        // that data invariant per prefab so a future prefab edit can't leave a
-        // cache floating in the air or embedded in the ground.
-        let half = FOUNDATION_SIZE_M / 2.0;
+    fn collider_boxes_sit_inside_the_footprint() {
+        // The footprint circle must enclose every collider box corner, or the
+        // node-rejection gate could let a node spawn inside a wall.
+        for prefab in RuinPrefab::ALL {
+            let radius = prefab.footprint_radius_m();
+            for b in prefab.plinth_boxes().iter().chain(prefab.wall_boxes()) {
+                let (cx, _, cz) = b.center;
+                let (hx, _, hz) = b.half;
+                let corner = ((cx.abs() + hx).powi(2) + (cz.abs() + hz).powi(2)).sqrt();
+                assert!(
+                    corner <= radius,
+                    "{prefab:?} box at ({cx}, {cz}) reaches {corner}, outside footprint {radius}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cache_points_stand_on_a_plinth() {
+        // `RuinSite::cache_points` spawns every chest at the plinth TOP
+        // (`FLOOR_TOP_M`), which is only correct if each local chest point
+        // actually lies over a plinth slab's footprint. Pin that data
+        // invariant per prefab so a future prefab edit can't leave a chest
+        // floating in the air or embedded in the ground.
         for prefab in RuinPrefab::ALL {
             for &(cx, cz) in prefab.cache_points() {
-                let covered = prefab.elements().iter().any(|e| {
-                    matches!(e.kind, RuinElementKind::Building(BuildingPiece::Foundation))
-                        && (e.local_x - cx).abs() <= half
-                        && (e.local_z - cz).abs() <= half
+                let covered = prefab.plinth_boxes().iter().any(|b| {
+                    (b.center.0 - cx).abs() <= b.half.0 && (b.center.2 - cz).abs() <= b.half.2
                 });
                 assert!(
                     covered,
-                    "{prefab:?} cache at ({cx}, {cz}) is not over any foundation element"
+                    "{prefab:?} chest at ({cx}, {cz}) is not over any plinth slab"
                 );
             }
         }
-        // And the world-space spawn height is exactly the foundation top.
+        // And the world-space spawn height is exactly the plinth top.
         let site = RuinSite {
-            prefab: RuinPrefab::CollapsedShrine,
+            prefab: RuinPrefab::BurntCottage,
             x: 100.0,
             z: -40.0,
-            yaw: 0.7,
+            quarter_turns: 3,
         };
         for point in site.cache_points() {
-            assert_eq!(point.y, crate::building::FOUNDATION_HEIGHT_M);
+            assert_eq!(point.y, FLOOR_TOP_M);
         }
     }
 
     #[test]
-    fn every_prefab_has_elements_and_at_least_one_prop() {
+    fn every_prefab_has_plinths_and_walls() {
         for prefab in RuinPrefab::ALL {
-            let elements = prefab.elements();
-            assert!(!elements.is_empty(), "{prefab:?} has no elements");
-            let props = elements
-                .iter()
-                .filter(|e| matches!(e.kind, RuinElementKind::Prop(_)))
-                .count();
-            assert!(props >= 1, "{prefab:?} should use at least one ruin prop");
-            let buildings = elements
-                .iter()
-                .filter(|e| matches!(e.kind, RuinElementKind::Building(_)))
-                .count();
             assert!(
-                buildings >= 1,
-                "{prefab:?} should reuse at least one building piece"
+                !prefab.plinth_boxes().is_empty(),
+                "{prefab:?} has no floor plinth"
             );
+            assert!(
+                prefab.wall_boxes().len() >= 3,
+                "{prefab:?} should keep at least three wall stubs standing"
+            );
+        }
+    }
+
+    #[test]
+    fn wall_boxes_stand_on_the_plinth_top() {
+        // Every wall box's base must sit exactly at the plinth top, so the
+        // authored shell (whose planks rise off the plinth) and the collider
+        // agree vertically.
+        for prefab in RuinPrefab::ALL {
+            for b in prefab.wall_boxes() {
+                let base = b.center.1 - b.half.1;
+                assert!(
+                    (base - FLOOR_TOP_M).abs() < 1e-5,
+                    "{prefab:?} wall box base {base} should sit at the plinth top {FLOOR_TOP_M}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn static_blocks_rotate_exactly_with_the_site() {
+        // A quarter-turned site's blocks are the same boxes with X/Z swapped
+        // (rotated about the site centre), never a loose enclosure.
+        let flat = RuinSite {
+            prefab: RuinPrefab::BurntBarn,
+            x: 0.0,
+            z: 0.0,
+            quarter_turns: 0,
+        };
+        let turned = RuinSite {
+            quarter_turns: 1,
+            ..flat
+        };
+        let flat_blocks = flat.static_blocks();
+        let turned_blocks = turned.static_blocks();
+        assert_eq!(flat_blocks.len(), turned_blocks.len());
+        for (a, b) in flat_blocks.iter().zip(turned_blocks.iter()) {
+            // One quarter turn under Bevy's `from_rotation_y(FRAC_PI_2)`
+            // (the quaternion the client renders the shell with, and the
+            // same mapping as `building.rs - rotate_offset` step 1):
+            // (x, z) -> (z, -x). Centres rotate, half extents swap. If this
+            // ever disagrees with the rendered shell again, the collider
+            // layout stands 180 degrees against the visuals on q=1/q=3
+            // sites (an invisible wall in the visible doorway).
+            assert!((b.center.x - a.center.z).abs() < 1e-5);
+            assert!((b.center.z - -a.center.x).abs() < 1e-5);
+            assert!((b.half_extents.x - a.half_extents.z).abs() < 1e-5);
+            assert!((b.half_extents.z - a.half_extents.x).abs() < 1e-5);
+            assert_eq!(a.center.y, b.center.y);
+            assert_eq!(a.half_extents.y, b.half_extents.y);
         }
     }
 
@@ -688,7 +789,7 @@ mod tests {
     #[test]
     fn map_glyphs_and_worldgen_share_one_layout() {
         // The client map draws a glyph per site from `ruin_layout`, and the
-        // server worldgen spawns caches / static blocks from the SAME call.
+        // server worldgen spawns chests / static blocks from the SAME call.
         // This pins that they are byte-identical for a given seed, so a glyph
         // can never sit where there is no ruin (singleplayer == multiplayer).
         for seed in [TEST_WORLD_SEED_FIXTURE, 1, 55, 777] {

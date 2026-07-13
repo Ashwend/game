@@ -53,7 +53,7 @@ pub(crate) use inventory::{
 pub(crate) use local_player::{
     LocalPlayerState, apply_prediction_overlay_system, update_local_player_state_system,
 };
-pub(crate) use look::LookState;
+pub(crate) use look::{AgentWalk, LookState};
 pub(crate) use menu::{
     CurrentUser, DeathSplash, MenuState, SaveStore, Screen, TextPrompt, TextPromptKind,
 };

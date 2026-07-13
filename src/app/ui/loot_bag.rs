@@ -144,6 +144,7 @@ fn draw_panel(
         ContainerViewKind::LootBag => "Loot bag",
         ContainerViewKind::Sleeper => "Sleeping player",
         ContainerViewKind::StorageBox => "Storage box",
+        ContainerViewKind::SalvageChest => "Salvage chest",
     };
     ui.horizontal(|ui| {
         ui.label(theme::section(title));

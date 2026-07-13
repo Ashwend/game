@@ -134,6 +134,11 @@ def main(argv):
             "pitch": float(rest[1]),
         },
         "warp": lambda: {"command": "warp", "x": float(rest[0]), "z": float(rest[1])},
+        "walk": lambda: {
+            "command": "walk",
+            "seconds": float(rest[0]),
+            **({"run": rest[1].lower() in ("1", "true", "yes", "on")} if len(rest) > 1 else {}),
+        },
         "swing": lambda: {"command": "swing"},
         # Force the ranged bow / crossbow / melee viewmodel pose for headless
         # capture (dev-only). Pass key=value tokens: draw=<0..1>, reload=<0..1>,

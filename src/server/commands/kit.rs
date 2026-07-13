@@ -2,15 +2,15 @@
 
 use crate::{
     items::{
-        ANCIENT_FITTINGS_ID, ARROW_ID, BASIC_HATCHET_ID, BASIC_PICKAXE_ID, BUILDING_PLAN_ID,
-        CLOTH_ID, COAL_ID, CROSSBOW_ID, CRUDE_FURNACE_ID, FIBER_ID, GUNPOWDER_ID, HAMMER_ID,
-        HEWN_LOG_DOOR_ID, HEWN_LOG_ID, IRON_BAR_ID, IRON_BOOTS_ID, IRON_CUIRASS_ID,
-        IRON_GREAVES_ID, IRON_HATCHET_ID, IRON_HELM_ID, IRON_MACE_ID, IRON_ORE_ID, IRON_PICKAXE_ID,
-        IRON_SWORD_ID, LAMELLAR_BOOTS_ID, LAMELLAR_GREAVES_ID, LAMELLAR_HELM_ID, LAMELLAR_VEST_ID,
-        METEORITE_ID, PADDED_HOOD_ID, PADDED_LEGGINGS_ID, PADDED_TUNIC_ID, PADDED_WRAPS_ID,
-        PLANT_TWINE_ID, POWDER_BOMB_ID, POWDER_KEG_ID, SATCHEL_CHARGE_ID, SLEEPING_BAG_ID,
-        STONE_ID, STONE_SPEAR_ID, SULFUR_ID, SULFUR_ORE_ID, WOOD_ID, WOODEN_BOW_ID, WOODEN_CLUB_ID,
-        WORKBENCH_T1_ID, item_definition, stack_limit,
+        ARROW_ID, BASIC_HATCHET_ID, BASIC_PICKAXE_ID, BUILDING_PLAN_ID, CLOTH_ID, COAL_ID,
+        CROSSBOW_ID, CRUDE_FURNACE_ID, FIBER_ID, GUNPOWDER_ID, HAMMER_ID, HEWN_LOG_DOOR_ID,
+        HEWN_LOG_ID, IRON_BAR_ID, IRON_BOOTS_ID, IRON_CUIRASS_ID, IRON_GREAVES_ID, IRON_HATCHET_ID,
+        IRON_HELM_ID, IRON_MACE_ID, IRON_ORE_ID, IRON_PICKAXE_ID, IRON_SWORD_ID, LAMELLAR_BOOTS_ID,
+        LAMELLAR_GREAVES_ID, LAMELLAR_HELM_ID, LAMELLAR_VEST_ID, METEORITE_ALLOY_ID,
+        METEORITE_INGOT_ID, PADDED_HOOD_ID, PADDED_LEGGINGS_ID, PADDED_TUNIC_ID, PADDED_WRAPS_ID,
+        PLANT_TWINE_ID, POWDER_BOMB_ID, POWDER_KEG_ID, SALVAGED_FITTINGS_ID, SATCHEL_CHARGE_ID,
+        SLEEPING_BAG_ID, STONE_ID, STONE_SPEAR_ID, SULFUR_ID, SULFUR_ORE_ID, WOOD_ID,
+        WOODEN_BOW_ID, WOODEN_CLUB_ID, WORKBENCH_T1_ID, item_definition, stack_limit,
     },
     protocol::{ClientId, ItemStack},
 };
@@ -87,10 +87,10 @@ impl GameServer {
         ];
         // Wood appears twice on purpose: a starter base (foundation +
         // four wall pieces) costs more than one 100-stack. The
-        // intermediates (refined sulfur, gunpowder, cloth) and the two
-        // rare, uncraftable exploration resources (meteorite, ancient
-        // fittings) ride along so a tester can craft and upgrade without
-        // farming them.
+        // intermediates (refined sulfur, gunpowder, cloth, meteorite
+        // ingots) and the rare exploration resources (meteorite alloy,
+        // salvaged fittings) ride along so a tester can craft and upgrade
+        // without farming them.
         const RESOURCES: &[&str] = &[
             WOOD_ID,
             WOOD_ID,
@@ -105,14 +105,16 @@ impl GameServer {
             PLANT_TWINE_ID,
             IRON_BAR_ID,
             HEWN_LOG_ID,
-            METEORITE_ID,
-            ANCIENT_FITTINGS_ID,
+            METEORITE_ALLOY_ID,
+            METEORITE_INGOT_ID,
+            SALVAGED_FITTINGS_ID,
             // Arrows for the bow and crossbow, a full stack (clamped to 24).
             ARROW_ID,
         ];
         // A full stack of each resource, capped at that item's registry
-        // stack limit so cloth (50), meteorite (20), and ancient fittings
-        // (50) land as a legal max stack rather than an oversized one.
+        // stack limit so cloth (50), meteorite alloy / ingots (20), and
+        // salvaged fittings (50) land as a legal max stack rather than an
+        // oversized one.
         const RESOURCE_TARGET_QUANTITY: u16 = 100;
 
         let mut placed = 0u32;
@@ -140,7 +142,7 @@ impl GameServer {
 
         // Resources: inventory only. We clamp the target quantity to each
         // resource's stack limit (twine/wood/stone cap at 200, iron_bar /
-        // sulfur / gunpowder at 100, cloth / ancient_fittings at 50,
+        // sulfur / gunpowder at 100, cloth / salvaged_fittings at 50,
         // meteorite at 20) so no slot ever holds an illegal oversized
         // stack. We pick the first empty inventory slot directly so
         // granting a kit doesn't merge into the player's existing piles in

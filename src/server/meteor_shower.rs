@@ -44,7 +44,7 @@ use super::{
 };
 
 /// A live meteor shower event. Present from the announce (at T minus the warning
-/// window) through impact and until the crater/shard cluster despawns.
+/// window) through impact and until the crater/crater cluster despawns.
 #[derive(Debug, Clone)]
 pub(super) struct ActiveMeteorShower {
     /// Ground-zero position (y is floor level). The wire announce, the crater
@@ -54,15 +54,15 @@ pub(super) struct ActiveMeteorShower {
     pub(super) impact_tick: u64,
     /// Seeds the fireball's approach azimuth on the client.
     pub(super) trajectory_seed: u64,
-    /// Whether the impact has already resolved (blast applied, shards spawned).
+    /// Whether the impact has already resolved (blast applied, crater nodes spawned).
     /// The tick loop resolves exactly once when the clock reaches `impact_tick`.
     pub(super) resolved: bool,
-    /// Server tick the crater + shards despawn and the event cleans up.
+    /// Server tick the crater + crater-node cluster despawn and the event cleans up.
     pub(super) despawn_tick: u64,
-    /// Shard node ids spawned by the impact, force-despawned at `despawn_tick`
+    /// Crater node ids spawned by the impact, force-despawned at `despawn_tick`
     /// if still unmined. A player mining one out drops it from the live map via
     /// the normal gather path; cleanup only touches ids still present.
-    pub(super) shard_nodes: Vec<ResourceNodeId>,
+    pub(super) crater_nodes: Vec<ResourceNodeId>,
 }
 
 /// Server-owned meteor shower scheduler + active event. Not persisted; rolled fresh
@@ -132,7 +132,7 @@ impl GameServer {
             envelopes.extend(self.resolve_meteor_shower_impact());
         }
 
-        // 3. Cleanup: force-despawn any unmined shards and clear the event when
+        // 3. Cleanup: force-despawn any unmined crater nodes and clear the event when
         //    the crater window closes, then roll the next event.
         let despawn_due = self
             .meteor_shower
@@ -319,7 +319,7 @@ impl GameServer {
             trajectory_seed,
             resolved: false,
             despawn_tick,
-            shard_nodes: Vec::new(),
+            crater_nodes: Vec::new(),
         });
 
         vec![ServerEnvelope {
@@ -439,7 +439,7 @@ impl GameServer {
     }
 
     /// Resolve the meteor impact: apply the Blast to players in the radius,
-    /// deplete resource nodes in the radius, and scatter the meteorite shard
+    /// deplete resource nodes in the radius, and scatter the meteorite crater
     /// cluster. Marks the event resolved so it never fires twice.
     fn resolve_meteor_shower_impact(&mut self) -> Vec<ServerEnvelope> {
         let Some(event) = self.meteor_shower.active.as_ref() else {
@@ -465,12 +465,12 @@ impl GameServer {
         // broadcast) so clients play the shatter/fell death effect.
         envelopes.extend(self.deplete_nodes_in_radius(center, METEOR_SHOWER_IMPACT_RADIUS_M));
 
-        // Scatter the rich meteorite shard cluster inside the radius.
-        let shard_nodes = self.spawn_meteor_shower_shards(center, trajectory_seed);
+        // Scatter the rich meteorite crater cluster inside the radius.
+        let crater_nodes = self.spawn_meteor_shower_crater_nodes(center, trajectory_seed);
 
         if let Some(event) = self.meteor_shower.active.as_mut() {
             event.resolved = true;
-            event.shard_nodes = shard_nodes;
+            event.crater_nodes = crater_nodes;
         }
 
         envelopes
@@ -571,12 +571,12 @@ impl GameServer {
         envelopes
     }
 
-    /// Scatter `METEOR_SHOWER_CRATER_NODE_COUNT_MIN..=MAX` rich meteorite shard
+    /// Scatter `METEOR_SHOWER_CRATER_NODE_COUNT_MIN..=MAX` rich meteorite crater
     /// nodes inside the impact radius via the P5a runtime-spawn recipe. Placement
-    /// is seeded from `trajectory_seed` with a minimum spacing so shards do not
+    /// is seeded from `trajectory_seed` with a minimum spacing so crater nodes do not
     /// overlap. Returns the spawned node ids so cleanup can force-despawn any
     /// unmined ones later.
-    fn spawn_meteor_shower_shards(
+    fn spawn_meteor_shower_crater_nodes(
         &mut self,
         center: Vec3Net,
         trajectory_seed: u64,
@@ -600,7 +600,7 @@ impl GameServer {
             return Vec::new();
         };
 
-        // Keep shards inside a slightly-inset ring so they sit within the crater,
+        // Keep crater nodes inside a slightly-inset ring so they sit within the crater,
         // not on its rim.
         let scatter_radius =
             (METEOR_SHOWER_IMPACT_RADIUS_M * 0.8).max(METEOR_SHOWER_CRATER_NODE_SPACING_M);
@@ -608,12 +608,12 @@ impl GameServer {
 
         let mut placed: Vec<Vec3Net> = Vec::new();
         let mut spawned: Vec<ResourceNodeId> = Vec::new();
-        // Give each shard a bounded number of placement attempts so a tight
+        // Give each crater node a bounded number of placement attempts so a tight
         // spacing can't loop forever.
         let mut attempts = 0u32;
         while (spawned.len() as u32) < count && attempts < count * 12 {
             attempts += 1;
-            // Uniform disc sample: sqrt on the radius fraction so shards don't
+            // Uniform disc sample: sqrt on the radius fraction so crater nodes don't
             // clump at the centre. Seated ON the crater surface (the client
             // renders the raised-rim mound from the same shared profile), sunk
             // a touch so the boulder beds into the jittered mesh instead of
@@ -651,21 +651,21 @@ impl GameServer {
         spawned
     }
 
-    /// Force-despawn any unmined shard nodes and clear the event, then roll the
-    /// next one. Broadcasts `ResourceNodeDepleted` per remaining shard so clients
+    /// Force-despawn any unmined crater nodes and clear the event, then roll the
+    /// next one. Broadcasts `ResourceNodeDepleted` per remaining crater node so clients
     /// remove the visual; untracks each cleanly (NO regrow, these were event
     /// spawns, not world nodes) via `untrack_resource_node`.
     fn cleanup_meteor_shower(&mut self) -> Vec<ServerEnvelope> {
         let mut envelopes = Vec::new();
-        let shards = self
+        let crater_nodes = self
             .meteor_shower
             .active
             .as_ref()
-            .map(|event| event.shard_nodes.clone())
+            .map(|event| event.crater_nodes.clone())
             .unwrap_or_default();
 
-        for id in shards {
-            // Only touch shards still in the live map; a player may have mined one
+        for id in crater_nodes {
+            // Only touch crater nodes still in the live map; a player may have mined one
             // out already (which removed + untracked it via the gather path).
             if self.remove_resource_node(id).is_some() {
                 self.chunk_manager.untrack_resource_node(id);
@@ -806,7 +806,7 @@ mod tests {
 
 /// Integration tests against a live `GameServer`: site selection with real
 /// structures, impact resolution (falloff, armor, lethality, node clearing,
-/// shard spawns), the announce resend to a mid-event joiner, and the
+/// crater-node spawns), the announce resend to a mid-event joiner, and the
 /// force-despawn + cleanup lifecycle.
 #[cfg(test)]
 mod server_tests {
@@ -837,7 +837,7 @@ mod server_tests {
             trajectory_seed: 0xABCD_1234,
             resolved: false,
             despawn_tick: impact_tick + 1000,
-            shard_nodes: Vec::new(),
+            crater_nodes: Vec::new(),
         });
     }
 
@@ -1043,7 +1043,7 @@ mod server_tests {
     }
 
     #[test]
-    fn impact_clears_nodes_in_radius_and_spawns_shards_in_range() {
+    fn impact_clears_nodes_in_radius_and_spawns_crater_nodes_in_range() {
         let mut server = server();
         let center = Vec3Net::new(200.0, 0.0, 200.0);
 
@@ -1109,77 +1109,79 @@ mod server_tests {
             "the cleared node must broadcast a depletion so clients animate it"
         );
 
-        // The shard cluster spawned within count bounds, all meteorite, all
+        // The crater cluster spawned within count bounds, all meteorite, all
         // inside the crater, and all tracked in the AoI index.
-        let shards = server
+        let crater_nodes = server
             .meteor_shower
             .active
             .as_ref()
             .unwrap()
-            .shard_nodes
+            .crater_nodes
             .clone();
         assert!(
-            (shards.len() as u32) >= METEOR_SHOWER_CRATER_NODE_COUNT_MIN
-                && (shards.len() as u32) <= METEOR_SHOWER_CRATER_NODE_COUNT_MAX,
-            "shard count {} out of [{METEOR_SHOWER_CRATER_NODE_COUNT_MIN}, \
+            (crater_nodes.len() as u32) >= METEOR_SHOWER_CRATER_NODE_COUNT_MIN
+                && (crater_nodes.len() as u32) <= METEOR_SHOWER_CRATER_NODE_COUNT_MAX,
+            "crater-node count {} out of [{METEOR_SHOWER_CRATER_NODE_COUNT_MIN}, \
              {METEOR_SHOWER_CRATER_NODE_COUNT_MAX}]",
-            shards.len()
+            crater_nodes.len()
         );
-        for id in &shards {
-            let node = server.resource_nodes.get(id).expect("shard node is live");
+        for id in &crater_nodes {
+            let node = server.resource_nodes.get(id).expect("crater node is live");
             assert_eq!(
                 node.definition_id, METEORITE_NODE_ID,
-                "shards are meteorite"
+                "crater nodes are meteorite"
             );
             let d = node.position.horizontal_distance_squared(center).sqrt();
             assert!(
                 d <= METEOR_SHOWER_IMPACT_RADIUS_M,
-                "shard {id} inside the crater"
+                "crater node {id} inside the crater"
             );
             assert!(
                 server.chunk_manager.node_chunk(*id).is_some(),
-                "shard {id} must be tracked in the chunk index (AoI visible)"
+                "crater node {id} must be tracked in the chunk index (AoI visible)"
             );
         }
     }
 
     #[test]
-    fn forced_despawn_and_cleanup_removes_shards_and_reschedules() {
+    fn forced_despawn_and_cleanup_removes_crater_nodes_and_reschedules() {
         let mut server = server();
         let center = Vec3Net::new(150.0, 0.0, -150.0);
         let now = server.tick;
         force_event(&mut server, center, now);
         let _ = server.resolve_meteor_shower_impact();
-        let shards = server
+        let crater_nodes = server
             .meteor_shower
             .active
             .as_ref()
             .unwrap()
-            .shard_nodes
+            .crater_nodes
             .clone();
-        assert!(!shards.is_empty());
+        assert!(!crater_nodes.is_empty());
 
         // Jump the clock past the despawn tick and run cleanup.
         server.tick = server.meteor_shower.active.as_ref().unwrap().despawn_tick + 1;
         let envelopes = server.cleanup_meteor_shower();
 
-        // Every shard was removed + untracked and a depletion broadcast.
-        for id in &shards {
+        // Every crater node was removed + untracked and a depletion broadcast.
+        for id in &crater_nodes {
             assert!(
                 server.resource_nodes.get(id).is_none(),
-                "shard {id} despawned"
+                "crater node {id} despawned"
             );
             assert!(
                 server.chunk_manager.node_chunk(*id).is_none(),
-                "shard {id} untracked from the chunk index"
+                "crater node {id} untracked from the chunk index"
             );
         }
         assert!(
-            shards.iter().all(|id| envelopes.iter().any(|e| matches!(
-                &e.message,
-                ServerMessage::ResourceNodeDepleted { id: broadcast } if broadcast == id
-            ))),
-            "each despawned shard must broadcast a depletion"
+            crater_nodes
+                .iter()
+                .all(|id| envelopes.iter().any(|e| matches!(
+                    &e.message,
+                    ServerMessage::ResourceNodeDepleted { id: broadcast } if broadcast == id
+                ))),
+            "each despawned crater node must broadcast a depletion"
         );
         // The event cleared and a fresh next event was rolled.
         assert!(

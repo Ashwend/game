@@ -17,13 +17,16 @@ pub const GUNPOWDER_ID: &str = "gunpowder";
 pub const FIBER_ID: &str = "fiber";
 /// Woven fiber cloth. The padding and wrapping behind the cloth armor set.
 pub const CLOTH_ID: &str = "cloth";
-/// Rare glowing mineral mined from meteorite nodes. Feeds the workbench
-/// tier-2 upgrade and (later) top-tier explosives and gear.
-pub const METEORITE_ID: &str = "meteorite";
-/// Salvaged mechanisms (hinges, gears, springs) looted from ruins. Cannot
-/// be crafted; the "scrap" sink for the workbench tier-2 upgrade and later
-/// crossbow / iron-armor recipes.
-pub const ANCIENT_FITTINGS_ID: &str = "ancient_fittings";
+/// Raw sky-metal pried out of meteorite nodes: a natural iron-nickel alloy
+/// fused into the cooled slag. Smelts into meteorite ingots in a furnace.
+pub const METEORITE_ALLOY_ID: &str = "meteorite_alloy";
+/// Refined bar smelted from meteorite alloy. The metal behind the workbench
+/// tier-2 upgrade and (later) top-tier gear.
+pub const METEORITE_INGOT_ID: &str = "meteorite_ingot";
+/// Salvaged mechanisms (hinges, latches, springs) stripped from burnt-out
+/// houses. Cannot be crafted; the "scrap" sink for the workbench tier-2
+/// upgrade and later crossbow / iron-armor recipes.
+pub const SALVAGED_FITTINGS_ID: &str = "salvaged_fittings";
 pub const PLANT_TWINE_ID: &str = "plant_twine";
 /// Refined wood. Raw `wood` worked into a clean structural billet at a
 /// workbench, the handle stock for tier-2 tools and the building block for
@@ -82,11 +85,11 @@ pub const TORCH_ID: &str = "torch";
 /// The base-claim Tool Cupboard deployable.
 pub const TOOL_CUPBOARD_ID: &str = "tool_cupboard";
 
-/// The ruin loot cache: a weathered stone-and-iron strongbox spawned inside
-/// ruin structures at world generation. Not craftable and not placeable by
-/// players (`equipable: false`); it exists only as the deployable a ruin site
-/// spawns. Anyone can open it, and it refills its loot on a timer. It is the
-/// exclusive source of `ancient_fittings`.
+/// The ruin loot cache: a small charred-wood, iron-banded chest spawned
+/// inside the burnt-out houses at world generation. Not craftable and not
+/// placeable by players (`equipable: false`); it exists only as the
+/// deployable a ruin site spawns. Anyone can open it, and it refills its
+/// loot on a timer. It is the exclusive source of `salvaged_fittings`.
 pub const RUIN_CACHE_ID: &str = "ruin_cache";
 
 /// Padded (cloth) armor set, one id per worn slot. The starter armor set:
@@ -105,7 +108,7 @@ pub const LAMELLAR_GREAVES_ID: &str = "lamellar_greaves";
 pub const LAMELLAR_BOOTS_ID: &str = "lamellar_boots";
 
 /// Iron (plate over padding) armor set, one id per worn slot. The top set of
-/// the tree: forged at a tier-2 workbench with looted ancient fittings.
+/// the tree: forged at a tier-2 workbench with looted salvaged fittings.
 /// Meshes and icons live at `assets/items/<id>/{model.glb,icon.png}`.
 pub const IRON_HELM_ID: &str = "iron_helm";
 pub const IRON_CUIRASS_ID: &str = "iron_cuirass";

@@ -188,6 +188,16 @@ pub(crate) struct InventoryUiState {
     /// attributed to that pickup and consumes the timer; once it expires,
     /// inventory gains are silent (tool harvesting, server grants).
     pickup_intent_secs_remaining: f32,
+    /// Same shape for losses: set by [`Self::note_drop_intent`] when the
+    /// player explicitly throws something away with the drop shortcut (the
+    /// one loss that happens with every item UI closed). While positive, a
+    /// total decrease plays the drop cue even without an item UI up. All
+    /// other audible losses happen inside an open item surface (drag-drop,
+    /// container transfers, crafting), which
+    /// [`Self::observe_inventory`] gates on directly, so server-side
+    /// consumption (firing an arrow, a thrown bomb burning its stack)
+    /// stays silent instead of clicking like a UI interaction.
+    drop_intent_secs_remaining: f32,
 }
 
 impl InventoryUiState {
@@ -225,6 +235,9 @@ impl InventoryUiState {
             self.pickup_intent_secs_remaining =
                 (self.pickup_intent_secs_remaining - delta).max(0.0);
         }
+        if self.drop_intent_secs_remaining > 0.0 {
+            self.drop_intent_secs_remaining = (self.drop_intent_secs_remaining - delta).max(0.0);
+        }
     }
 
     /// Mark that the player just sent a pickup command. The next
@@ -234,6 +247,13 @@ impl InventoryUiState {
     /// stay silent.
     pub(crate) fn note_pickup_intent(&mut self) {
         self.pickup_intent_secs_remaining = PICKUP_INTENT_WINDOW_SECS;
+    }
+
+    /// Mark that the player just sent an explicit drop command (the drop
+    /// shortcut). The next inventory total decrease observed within the
+    /// intent window plays the drop cue even with every item UI closed.
+    pub(crate) fn note_drop_intent(&mut self) {
+        self.drop_intent_secs_remaining = PICKUP_INTENT_WINDOW_SECS;
     }
 
     /// Diff `inventory` against [`Self::last_seen_inventory`] and start a
@@ -247,9 +267,18 @@ impl InventoryUiState {
     /// or this is the seeding observation. The very first observation
     /// after (re)connecting never reports a sound, since "every slot
     /// gained the items it had before disconnect" is not a real pickup.
+    ///
+    /// `item_ui_open` is whether any item surface (inventory/crafting
+    /// panel, furnace, loot bag / container) is up this frame. The
+    /// drop/move cues are UI-handling feedback, so they only play while the
+    /// player is actually handling items there, or (for drops) within the
+    /// [`Self::note_drop_intent`] window of the drop shortcut. Without the
+    /// gate, every server-side consumption, a fired arrow, a thrown bomb, a
+    /// crafted batch's inputs, clicked like a UI interaction mid-combat.
     pub(crate) fn observe_inventory(
         &mut self,
         inventory: &PlayerInventoryState,
+        item_ui_open: bool,
     ) -> Option<InventorySoundEvent> {
         let last = self.last_seen_inventory.take();
         let mut event = None;
@@ -269,17 +298,38 @@ impl InventoryUiState {
                 }
             }
             event = inventory_sound_event(previous, inventory);
-            // Inventory gains the player didn't ask for (harvest payouts,
-            // admin grants) should stay silent. A real pickup has a
-            // matching command sent within the last few frames; consume
-            // the intent flag so a delayed harvest delta that arrives
-            // after a successful pickup doesn't replay the cue.
-            if matches!(event, Some(InventorySoundEvent::Pickup { .. })) {
-                if self.pickup_intent_secs_remaining > 0.0 {
-                    self.pickup_intent_secs_remaining = 0.0;
-                } else {
-                    event = None;
+            match event {
+                // Inventory gains the player didn't ask for (harvest
+                // payouts, admin grants) should stay silent. A real pickup
+                // has a matching command sent within the last few frames;
+                // consume the intent flag so a delayed harvest delta that
+                // arrives after a successful pickup doesn't replay the cue.
+                Some(InventorySoundEvent::Pickup { .. }) => {
+                    if self.pickup_intent_secs_remaining > 0.0 {
+                        self.pickup_intent_secs_remaining = 0.0;
+                    } else {
+                        event = None;
+                    }
                 }
+                // Losses are audible only when the player is handling items
+                // (an item UI is up) or just pressed the drop shortcut;
+                // otherwise it's ammo/charge consumption, not a UI action.
+                Some(InventorySoundEvent::Drop) => {
+                    if self.drop_intent_secs_remaining > 0.0 {
+                        self.drop_intent_secs_remaining = 0.0;
+                    } else if !item_ui_open {
+                        event = None;
+                    }
+                }
+                // Shuffles only happen from an open item surface; a
+                // server-side rearrangement with everything closed is not a
+                // player action.
+                Some(InventorySoundEvent::Move) => {
+                    if !item_ui_open {
+                        event = None;
+                    }
+                }
+                None => {}
             }
         }
         self.last_seen_inventory = Some(inventory.clone());
@@ -450,6 +500,7 @@ mod tests {
             slot_flashes: HashMap::new(),
             last_seen_inventory: None,
             pickup_intent_secs_remaining: 0.0,
+            drop_intent_secs_remaining: 0.0,
         };
 
         state.begin_frame();
@@ -473,14 +524,14 @@ mod tests {
 
         let mut first = PlayerInventoryState::empty();
         first.actionbar_slots[0] = Some(ItemStack::new("hatchet", 1));
-        state.observe_inventory(&first);
+        state.observe_inventory(&first, false);
         // The first observation seeds the baseline, nothing should flash.
         assert!(state.slot_flashes.is_empty());
 
         let mut second = first.clone();
         second.inventory_slots[3] = Some(ItemStack::new("coal", 4));
         second.actionbar_slots[0] = Some(ItemStack::new("hatchet", 1));
-        state.observe_inventory(&second);
+        state.observe_inventory(&second, false);
         assert!(
             state
                 .slot_flashes
@@ -496,7 +547,7 @@ mod tests {
 
         let mut third = second.clone();
         third.inventory_slots[3] = Some(ItemStack::new("coal", 9));
-        state.observe_inventory(&third);
+        state.observe_inventory(&third, false);
         assert!(
             state
                 .slot_flashes
@@ -510,7 +561,7 @@ mod tests {
 
         // Seed baseline, no event on the first observation.
         let baseline = PlayerInventoryState::empty();
-        assert_eq!(state.observe_inventory(&baseline), None);
+        assert_eq!(state.observe_inventory(&baseline, true), None);
 
         // A noted pickup intent followed by a quantity gain reads as
         // Pickup carrying the gained item's id (the material cue picks
@@ -520,7 +571,7 @@ mod tests {
         let mut after_pickup = baseline.clone();
         after_pickup.inventory_slots[0] = Some(ItemStack::new("coal", 3));
         assert_eq!(
-            state.observe_inventory(&after_pickup),
+            state.observe_inventory(&after_pickup, true),
             Some(InventorySoundEvent::Pickup {
                 item_id: Some("coal".into())
             })
@@ -532,18 +583,18 @@ mod tests {
         after_move.inventory_slots[0] = None;
         after_move.actionbar_slots[0] = Some(ItemStack::new("coal", 3));
         assert_eq!(
-            state.observe_inventory(&after_move),
+            state.observe_inventory(&after_move, true),
             Some(InventorySoundEvent::Move)
         );
 
         // Same snapshot again → no event.
-        assert_eq!(state.observe_inventory(&after_move), None);
+        assert_eq!(state.observe_inventory(&after_move, true), None);
 
         // Quantity shrank → Drop.
         let mut after_drop = after_move.clone();
         after_drop.actionbar_slots[0] = Some(ItemStack::new("coal", 1));
         assert_eq!(
-            state.observe_inventory(&after_drop),
+            state.observe_inventory(&after_drop, true),
             Some(InventorySoundEvent::Drop)
         );
     }
@@ -552,21 +603,21 @@ mod tests {
     fn observe_inventory_returns_none_when_nothing_changed() {
         let mut state = InventoryUiState::default();
         let snapshot = PlayerInventoryState::empty();
-        assert_eq!(state.observe_inventory(&snapshot), None);
-        assert_eq!(state.observe_inventory(&snapshot), None);
+        assert_eq!(state.observe_inventory(&snapshot, false), None);
+        assert_eq!(state.observe_inventory(&snapshot, false), None);
     }
 
     #[test]
     fn observe_inventory_suppresses_pickup_without_intent() {
         let mut state = InventoryUiState::default();
         let baseline = PlayerInventoryState::empty();
-        state.observe_inventory(&baseline);
+        state.observe_inventory(&baseline, false);
 
         // No `note_pickup_intent`, a quantity gain here is a harvest
         // payout, not a pickup, and must stay silent.
         let mut grew = baseline.clone();
         grew.inventory_slots[0] = Some(ItemStack::new("wood", 1));
-        assert_eq!(state.observe_inventory(&grew), None);
+        assert_eq!(state.observe_inventory(&grew, false), None);
     }
 
     #[test]
@@ -577,22 +628,22 @@ mod tests {
         state.tick_slot_flashes(PICKUP_INTENT_WINDOW_SECS + 0.05);
 
         let baseline = PlayerInventoryState::empty();
-        state.observe_inventory(&baseline);
+        state.observe_inventory(&baseline, false);
         let mut grew = baseline.clone();
         grew.inventory_slots[0] = Some(ItemStack::new("stone", 1));
-        assert_eq!(state.observe_inventory(&grew), None);
+        assert_eq!(state.observe_inventory(&grew, false), None);
     }
 
     #[test]
     fn pickup_intent_is_consumed_so_later_gain_stays_silent() {
         let mut state = InventoryUiState::default();
         let mut snapshot = PlayerInventoryState::empty();
-        state.observe_inventory(&snapshot);
+        state.observe_inventory(&snapshot, false);
 
         state.note_pickup_intent();
         snapshot.inventory_slots[0] = Some(ItemStack::new("ore", 2));
         assert_eq!(
-            state.observe_inventory(&snapshot),
+            state.observe_inventory(&snapshot, false),
             Some(InventorySoundEvent::Pickup {
                 item_id: Some("ore".into())
             })
@@ -601,7 +652,60 @@ mod tests {
         // A second gain in the same window (e.g. a harvest tick that
         // landed right after) must not piggyback on the spent intent.
         snapshot.inventory_slots[0] = Some(ItemStack::new("ore", 5));
-        assert_eq!(state.observe_inventory(&snapshot), None);
+        assert_eq!(state.observe_inventory(&snapshot, false), None);
+    }
+
+    #[test]
+    fn ammo_consumption_stays_silent_with_every_item_ui_closed() {
+        // Firing the bow / throwing a bomb shrinks a stack server-side. With
+        // no item UI open and no drop shortcut pressed, that loss must NOT
+        // click like a UI interaction (the drop cue mid-combat bug).
+        let mut state = InventoryUiState::default();
+        let mut snapshot = PlayerInventoryState::empty();
+        snapshot.actionbar_slots[0] = Some(ItemStack::new("arrow", 12));
+        state.observe_inventory(&snapshot, false);
+
+        snapshot.actionbar_slots[0] = Some(ItemStack::new("arrow", 11));
+        assert_eq!(state.observe_inventory(&snapshot, false), None);
+
+        // The whole stack burning away is still consumption, still silent.
+        snapshot.actionbar_slots[0] = None;
+        assert_eq!(state.observe_inventory(&snapshot, false), None);
+    }
+
+    #[test]
+    fn drop_shortcut_intent_lets_the_drop_cue_through_once() {
+        let mut state = InventoryUiState::default();
+        let mut snapshot = PlayerInventoryState::empty();
+        snapshot.actionbar_slots[0] = Some(ItemStack::new("stone", 10));
+        state.observe_inventory(&snapshot, false);
+
+        // The drop shortcut notes intent; the matching loss clicks even
+        // with every panel closed.
+        state.note_drop_intent();
+        snapshot.actionbar_slots[0] = Some(ItemStack::new("stone", 9));
+        assert_eq!(
+            state.observe_inventory(&snapshot, false),
+            Some(InventorySoundEvent::Drop)
+        );
+
+        // The intent is consumed: a later unrelated loss stays silent.
+        snapshot.actionbar_slots[0] = Some(ItemStack::new("stone", 8));
+        assert_eq!(state.observe_inventory(&snapshot, false), None);
+    }
+
+    #[test]
+    fn moves_without_an_open_item_ui_stay_silent() {
+        // A server-side rearrangement with everything closed is not a
+        // player action; the shuffle cue only backs open-UI handling.
+        let mut state = InventoryUiState::default();
+        let mut snapshot = PlayerInventoryState::empty();
+        snapshot.inventory_slots[0] = Some(ItemStack::new("coal", 3));
+        state.observe_inventory(&snapshot, false);
+
+        snapshot.inventory_slots[0] = None;
+        snapshot.actionbar_slots[2] = Some(ItemStack::new("coal", 3));
+        assert_eq!(state.observe_inventory(&snapshot, false), None);
     }
 
     #[test]

@@ -5,7 +5,10 @@
 //! over the smelt math don't need to spin up a server.
 
 use crate::{
-    items::{COAL_ID, IRON_BAR_ID, IRON_ORE_ID, SULFUR_ID, SULFUR_ORE_ID, WOOD_ID},
+    items::{
+        COAL_ID, IRON_BAR_ID, IRON_ORE_ID, METEORITE_ALLOY_ID, METEORITE_INGOT_ID, SULFUR_ID,
+        SULFUR_ORE_ID, WOOD_ID,
+    },
     protocol::{DeployedEntityId, FURNACE_ITEM_SLOT_COUNT, ItemStack, OpenFurnaceView},
     save::PersistedFurnaceState,
 };
@@ -164,6 +167,7 @@ pub(super) fn smelt_result(item_id: &str) -> Option<ItemStack> {
     match item_id {
         IRON_ORE_ID => Some(ItemStack::new(IRON_BAR_ID, 1)),
         SULFUR_ORE_ID => Some(ItemStack::new(SULFUR_ID, 1)),
+        METEORITE_ALLOY_ID => Some(ItemStack::new(METEORITE_INGOT_ID, 1)),
         _ => None,
     }
 }

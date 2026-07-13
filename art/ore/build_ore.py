@@ -13,22 +13,19 @@ then the empty node despawns with a shatter (no stage-3 mesh).
 
 Run headless:
   Blender --background --python build_ore.py -- <type> <stage> <out.glb> [preview.png] [rock_tex.png]
-  type: coal|iron|sulfur|stone|ember   stage: 0|1|2
+  type: coal|iron|sulfur|stone|meteorite   stage: 0|1|2
 Geometry is deterministic per stage (identical silhouette across the four ore
 types, like the procedural design); <type> only selects the COLOR_0 palette.
 Stone vein gets no bright mineral chunks (its "chunks" are exposed darker rock),
 so it stays visually distinct.
 
-`ember` (the meteorite node) is the ONE type with a distinct
-silhouette: a DARK SLAG mound (near-black, clearly darker than the shared grey
-ore body) with a cluster of tall faceted CRYSTAL SPIKES erupting upward from the
-crown (stage 0 full spikes, stages 1-2 progressively broken stumps, mirroring how
-the ore chunk cluster depletes). The crystals carry an ember-orange COLOR_0 and,
-crucially, COLOR_0 ALPHA = 1.0 as a GLOW MASK (slag alpha = 0.0); the Rust
-`ToonMaterial` reads that alpha to add a night-visible emissive term only on the
-crystal facets (see `docs/toon-shading.md`). Every non-meteorite type keeps alpha 1.0
-throughout, and Rust binds a zero emissive tint for them, so the glow path is a
-no-op for the existing ore nodes.
+`meteorite` is the ONE type with a distinct silhouette: a squat DARK SLAG
+mound (scorched basalt, clearly darker than the shared grey ore body) studded
+with a dense crown cluster of pale raw-ALLOY nuggets (iron-nickel fused into
+the rock; the nugget cluster depletes across the stages exactly like the ore
+chunks). Nothing glows: this world has no magic, so the old erupting-crystal +
+emissive-mask build is gone and every type writes plain COLOR_0 alpha 1.0.
+Rust binds the same shared ore cel material for all five types.
 
 Z-up authoring frame, bottom at z=0; export_yup -> game +Y up, bottom at y=0 to
 match the procedural meshes' anchor. export_materials='NONE' (~10 KB glbs); Rust
@@ -67,16 +64,16 @@ PALETTE = {
                    chunk=(0.840, 0.560, 0.040), chunk_hi=(0.965, 0.800, 0.150)),
     "stone":  dict(rock=_ROCK, rock_dark=_ROCK_DARK,
                    chunk=(0.225, 0.210, 0.188), chunk_hi=(0.420, 0.400, 0.360)),
-    # Meteorite: a DARK SLAG body (near-black basalt, well below the shared grey
-    # so the node reads as scorched rock, not just a dim ore boulder) with
-    # ember-orange CRYSTAL spikes. The crystal colour double-drives the emissive
-    # tint in Rust, so keep it a saturated glowing orange; `_hi` lights the tips.
-    "meteorite":  dict(rock=(0.055, 0.050, 0.058), rock_dark=(0.028, 0.026, 0.032),
-                   chunk=(0.900, 0.320, 0.045), chunk_hi=(1.000, 0.620, 0.140)),
+    # Meteorite: a DARK SLAG body (scorched basalt, well below the shared grey
+    # so the node reads as burnt sky-rock, not just a dim ore boulder) studded
+    # with pale raw-alloy nuggets. The nuggets are silvery iron-nickel: bright
+    # against the slag but plain metal, nothing emissive.
+    "meteorite":  dict(rock=(0.085, 0.078, 0.082), rock_dark=(0.040, 0.036, 0.040),
+                   chunk=(0.400, 0.410, 0.460), chunk_hi=(0.660, 0.680, 0.760)),
 }
 pal = PALETTE[TYPE]
-# Meteorite swaps the studded-chunk cluster for erupting crystal spikes; every
-# other type keeps the boulder + embedded ore-chunk build.
+# Meteorite keeps the shared studded-boulder build but swaps in its own squat,
+# craggier stage table below (distinct silhouette, same construction).
 IS_METEORITE = (TYPE == "meteorite")
 
 # ---- per-stage shape: boulder size + crater + chunk placements + rubble -------
@@ -108,38 +105,30 @@ STAGES = {
                 (200, 0.64, 0.070), (300, 0.70, 0.058)]),
 }
 
-# Meteorite stages: a squatter, darker SLAG mound topped by a cluster of tall
-# faceted crystal SPIKES that erupt upward from the crown. Each spike is
-# (azimuth_deg, base_elev 0..1, height, base_radius, lean_deg). Stage 0 is a full
-# fan of spikes; stages 1-2 break them down to shorter stumps (the mined-out
-# read), mirroring how the ore-chunk cluster depletes. A few small rubble shards
-# (spilled glowing crystal) join the later stages.
+# Meteorite stages: a squatter, darker, craggier SLAG mound with a dense
+# crown cluster of raw-alloy nuggets (plus a couple of flank nuggets for
+# other-angle readability). Same (azimuth_deg, elevation 0..1, radius) chunk
+# convention as STAGES; the cluster depletes and the crater opens as the node
+# is mined, mirroring the ore rows.
 METEORITE_STAGES = {
     0: dict(
-        height=0.66, rscale=0.52, crater=0.0, jitter=0.20,
-        spikes=[  # tall central fan, tallest in the middle, splaying outward
-            (30, 0.62, 0.62, 0.075, 8),
-            (0, 0.70, 0.78, 0.086, 2),
-            (330, 0.60, 0.56, 0.070, -10),
-            (60, 0.58, 0.50, 0.066, 16),
-            (300, 0.56, 0.46, 0.062, -18),
-            (150, 0.54, 0.44, 0.060, 14),
-            (210, 0.55, 0.48, 0.064, -12),
-            (95, 0.50, 0.36, 0.052, 24)],
+        height=0.66, rscale=0.52, crater=0.0, jitter=0.30,
+        chunks=[  # crown cluster around az~20, spread so nuggets stay distinct
+            (20, 0.86, 0.112), (350, 0.70, 0.096), (58, 0.68, 0.092),
+            (12, 0.54, 0.088), (85, 0.80, 0.078),
+            # flank nuggets for other-angle readability
+            (160, 0.64, 0.084), (215, 0.56, 0.078), (300, 0.60, 0.080)],
         rubble=[]),
     1: dict(
-        height=0.56, rscale=0.48, crater=0.20, jitter=0.22,
-        spikes=[
-            (10, 0.62, 0.44, 0.078, 6),
-            (320, 0.56, 0.34, 0.066, -14),
-            (160, 0.52, 0.30, 0.060, 12)],
-        rubble=[(40, 0.62, 0.052), (330, 0.60, 0.044)]),
+        height=0.56, rscale=0.48, crater=0.20, jitter=0.32,
+        chunks=[(15, 0.72, 0.098), (55, 0.58, 0.086), (330, 0.56, 0.080),
+                (170, 0.55, 0.078)],
+        rubble=[(40, 0.62, 0.062), (200, 0.60, 0.054), (330, 0.64, 0.048)]),
     2: dict(
-        height=0.44, rscale=0.44, crater=0.42, jitter=0.24,
-        spikes=[
-            (350, 0.54, 0.26, 0.070, -6),
-            (120, 0.50, 0.20, 0.058, 10)],
-        rubble=[(30, 0.64, 0.050), (200, 0.60, 0.044), (280, 0.66, 0.038)]),
+        height=0.44, rscale=0.44, crater=0.42, jitter=0.34,
+        chunks=[(25, 0.55, 0.086), (340, 0.50, 0.076)],
+        rubble=[(30, 0.64, 0.060), (120, 0.60, 0.050), (210, 0.66, 0.052),
+                (300, 0.62, 0.044)]),
 }
 st = METEORITE_STAGES[STAGE] if IS_METEORITE else STAGES[STAGE]
 
@@ -177,20 +166,19 @@ def boulder_lobe(az, zc):
             + 0.08 * math.cos(5.0 * az + 2.1))
 
 
-def paint_face(f, col, uv, color_of, alpha=1.0):
-    """Flat-shade a face: per-loop COLOR_0 = (color_of(vert), alpha) and box UV.
-    `alpha` is the meteorite GLOW MASK (0 = slag, 1 = crystal); every non-meteorite
-    build leaves it at the default 1.0 so those glbs are byte-identical to before
-    (Rust binds a zero emissive tint for them, so the alpha is inert there)."""
+def paint_face(f, col, uv, color_of):
+    """Flat-shade a face: per-loop COLOR_0 = (color_of(vert), 1.0) and box UV.
+    Alpha is always 1.0: the old meteorite glow mask is gone (no magic, no
+    emissive ore), and Rust binds a zero emissive tint for every type."""
     n = f.normal
     for lp in f.loops:
         v = lp.vert
-        lp[col] = (*color_of(v), alpha)
+        lp[col] = (*color_of(v), 1.0)
         lp[uv].uv = box_uv(v.co, n)
 
 
 # ---- BOULDER body -------------------------------------------------------------
-def add_boulder(bm, col, uv, height, rscale, crater, jitter, seed, glow_alpha=1.0):
+def add_boulder(bm, col, uv, height, rscale, crater, jitter, seed):
     # subdiv 2 (320 faces) + smooth shading -> a higher-quality rounded rock
     # whose form comes from the lobes, not from coarse facets. The stylized
     # stone texture carries the surface detail.
@@ -239,9 +227,7 @@ def add_boulder(bm, col, uv, height, rscale, crater, jitter, seed, glow_alpha=1.
         return (max(0.0, base[0] + n), max(0.0, base[1] + n), max(0.0, base[2] + n))
     for f in new_faces:
         f.smooth = True                      # smooth-shaded rounded boulder
-        # glow_alpha 0.0 on the meteorite SLAG body so only the crystals emit;
-        # 1.0 (default) everywhere else (inert: Rust binds zero emissive there).
-        paint_face(f, col, uv, color_of, glow_alpha)
+        paint_face(f, col, uv, color_of)
 
 
 # ---- ORE CHUNK / RUBBLE nuggets (jittered, tilted box) ------------------------
@@ -293,117 +279,36 @@ def chunk_pos(az_deg, elev, height, rscale):
     return (math.cos(a) * rxy, math.sin(a) * rxy, z)
 
 
-# ---- EMBER CRYSTAL SPIKE (tapered faceted prism) ------------------------------
-# A tall crystal: a pentagonal base ring extruded up and tapered to a point, with
-# a short shoulder facet just below the tip so it reads as a cut gem rather than a
-# plain cone. Leans away from the cluster axis. COLOR_0 alpha = 1.0 marks every
-# crystal loop as GLOW (the slag body is 0.0), so the Rust toon material emits
-# only on these facets. Faceted (flat-shaded) so the cel bands + ink edge catch
-# each face like the concept's crystals.
-def add_crystal(bm, col, uv, base_center, height, base_r, lean_deg, lean_az, seed,
-                c_main, c_hi):
-    from mathutils import Matrix
-    bx, by, bz = base_center
-    sides = 5
-    # Lean: tilt the whole spike away from the cluster centre so the fan splays.
-    lean = math.radians(lean_deg)
-    lean_axis = Vector((-math.sin(lean_az), math.cos(lean_az), 0.0))
-    rot = Matrix.Rotation(lean, 4, lean_axis) if abs(lean_deg) > 1e-3 else Matrix.Identity(4)
-    twist = hash01(seed, 7.0) * math.tau               # random facet phase
-    # base ring
-    ring = []
-    for i in range(sides):
-        a = twist + i / sides * math.tau
-        jr = base_r * (0.86 + 0.28 * hash01(seed + i, 3.0))
-        local = rot @ Vector((math.cos(a) * jr, math.sin(a) * jr, 0.0))
-        ring.append(bm.verts.new((bx + local.x, by + local.y, bz + local.z)))
-    # shoulder ring (~80% height, pulled inward) for a gem-cut girdle
-    sh = []
-    sh_z = height * 0.78
-    for i in range(sides):
-        a = twist + i / sides * math.tau
-        jr = base_r * 0.34 * (0.8 + 0.4 * hash01(seed + i, 5.0))
-        local = rot @ Vector((math.cos(a) * jr, math.sin(a) * jr, sh_z))
-        sh.append(bm.verts.new((bx + local.x, by + local.y, bz + local.z)))
-    # apex (slightly jittered off-axis so tips aren't all dead straight)
-    apex_local = rot @ Vector(((hash01(seed, 1.0) - 0.5) * base_r * 0.3,
-                               (hash01(seed, 2.0) - 0.5) * base_r * 0.3, height))
-    apex = bm.verts.new((bx + apex_local.x, by + apex_local.y, bz + apex_local.z))
-    bm.verts.ensure_lookup_table()
-    faces = []
-    for i in range(sides):
-        j = (i + 1) % sides
-        faces.append(bm.faces.new([ring[i], ring[j], sh[j], sh[i]]))   # body facet
-        faces.append(bm.faces.new([sh[i], sh[j], apex]))               # tip facet
-    bmesh.ops.recalc_face_normals(bm, faces=faces)
-    tip_set = set(sh) | {apex}
-
-    def color_of(v):
-        # brighter toward the tip so the crystal reads lit from within
-        t = 0.7 if v in tip_set else 0.0
-        return lerp3(c_main, c_hi, t)
-    for f in faces:
-        f.smooth = False
-        paint_face(f, col, uv, color_of, 1.0)          # alpha 1.0 = GLOW mask
-
-
-def crystal_base_pos(az_deg, elev, height, rscale):
-    """Seat a crystal base on the slag crown, pulled toward the axis so the fan
-    springs from the top of the mound rather than its flanks."""
-    a = math.radians(az_deg)
-    z = elev * height
-    prof = max(0.20, math.sqrt(max(0.0, 1.0 - (2.0 * elev - 1.0) ** 2)))
-    lobe = boulder_lobe(a, 2.0 * elev - 1.0)
-    rxy = rscale * prof * lobe * 0.55                   # inward: crown cluster
-    return (math.cos(a) * rxy, math.sin(a) * rxy, z)
-
-
 # ---- assemble -----------------------------------------------------------------
 bpy.ops.wm.read_homefile(use_empty=True)
 bm = bmesh.new()
 uv = bm.loops.layers.uv.new("UVMap")
 col = bm.loops.layers.float_color.new("Color")
 
-if IS_METEORITE:
-    # Dark slag mound (glow_alpha 0.0 -> no emissive), then the erupting crystal
-    # fan, then a few spilled glowing shards on the later stages.
-    add_boulder(bm, col, uv, st["height"], st["rscale"], st["crater"], st["jitter"],
-                seed=7.0, glow_alpha=0.0)
-    for k, (az, elev, sh_h, base_r, lean) in enumerate(st["spikes"]):
-        base = crystal_base_pos(az, elev, st["height"], st["rscale"])
-        # sink the base slightly into the slag so the crystal grows out of it
-        base = (base[0], base[1], base[2] - base_r * 0.4)
-        add_crystal(bm, col, uv, base, sh_h, base_r, lean, math.radians(az),
-                    seed=40.0 + k * 4, c_main=pal["chunk"], c_hi=pal["chunk_hi"])
-    for k, (az, rad_frac, r) in enumerate(st["rubble"]):
-        a = math.radians(az)
-        rx = st["rscale"] * rad_frac + r
-        pos = (math.cos(a) * rx, math.sin(a) * rx, r * 0.5)
-        # a small leaning shard of glowing crystal (alpha 1.0 via add_crystal)
-        add_crystal(bm, col, uv, pos, r * 2.4, r, 34 if k % 2 else -28,
-                    a, seed=90.0 + k * 5, c_main=pal["chunk"], c_hi=pal["chunk_hi"])
-else:
-    add_boulder(bm, col, uv, st["height"], st["rscale"], st["crater"], st["jitter"], seed=7.0)
+# One shared build for all five types: boulder + studded nugget cluster +
+# rubble. The meteorite differs only in its stage table (squatter, craggier
+# slag mound) and palette (dark slag body, pale alloy nuggets).
+add_boulder(bm, col, uv, st["height"], st["rscale"], st["crater"], st["jitter"], seed=7.0)
 
-    for k, (az, elev, r) in enumerate(st["chunks"]):
-        pos = chunk_pos(az, elev, st["height"], st["rscale"])
-        # seat the nugget into the rock: pull toward the axis + drop it a touch so
-        # it pokes out as an embedded lump rather than floating on the surface.
-        pos = (pos[0] * 0.80, pos[1] * 0.80, pos[2] - r * 0.55)
-        rr = r * (0.92 + 0.22 * hash01(k + 1, az))
-        add_chunk(bm, col, uv, pos, (rr, rr * 0.9, rr * 0.85), seed=20.0 + k * 3,
-                  c_main=pal["chunk"], c_hi=pal["chunk_hi"], tilt=0.5)
+for k, (az, elev, r) in enumerate(st["chunks"]):
+    pos = chunk_pos(az, elev, st["height"], st["rscale"])
+    # seat the nugget into the rock: pull toward the axis + drop it a touch so
+    # it pokes out as an embedded lump rather than floating on the surface.
+    pos = (pos[0] * 0.80, pos[1] * 0.80, pos[2] - r * 0.55)
+    rr = r * (0.92 + 0.22 * hash01(k + 1, az))
+    add_chunk(bm, col, uv, pos, (rr, rr * 0.9, rr * 0.85), seed=20.0 + k * 3,
+              c_main=pal["chunk"], c_hi=pal["chunk_hi"], tilt=0.5)
 
-    for k, (az, rad_frac, r) in enumerate(st["rubble"]):
-        a = math.radians(az)
-        rx = st["rscale"] * rad_frac + r
-        pos = (math.cos(a) * rx, math.sin(a) * rx, r * 0.4)
-        # rubble: mostly broken rock, every other piece a spilled ore pebble
-        is_ore = (k % 2 == 1)
-        cm = pal["chunk"] if is_ore else pal["rock_dark"]
-        ch = pal["chunk_hi"] if is_ore else pal["rock"]
-        add_chunk(bm, col, uv, pos, (r, r * 0.85, r * 0.5), seed=80.0 + k * 5,
-                  c_main=cm, c_hi=ch, tilt=0.7)
+for k, (az, rad_frac, r) in enumerate(st["rubble"]):
+    a = math.radians(az)
+    rx = st["rscale"] * rad_frac + r
+    pos = (math.cos(a) * rx, math.sin(a) * rx, r * 0.4)
+    # rubble: mostly broken rock, every other piece a spilled ore pebble
+    is_ore = (k % 2 == 1)
+    cm = pal["chunk"] if is_ore else pal["rock_dark"]
+    ch = pal["chunk_hi"] if is_ore else pal["rock"]
+    add_chunk(bm, col, uv, pos, (r, r * 0.85, r * 0.5), seed=80.0 + k * 5,
+              c_main=cm, c_hi=ch, tilt=0.7)
 
 me = bpy.data.meshes.new(f"ore_{TYPE}_{STAGE}")
 bm.to_mesh(me)

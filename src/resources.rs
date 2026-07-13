@@ -1,6 +1,6 @@
 use crate::{
     items::{
-        COAL_ID, FIBER_ID, IRON_ORE_ID, METEORITE_ID, STONE_ID, SULFUR_ORE_ID, ToolKind,
+        COAL_ID, FIBER_ID, IRON_ORE_ID, METEORITE_ALLOY_ID, STONE_ID, SULFUR_ORE_ID, ToolKind,
         ToolProfile, WOOD_ID, look_forward,
     },
     protocol::{ItemStack, ResourceNodeId, ResourceNodeState, Vec3Net},
@@ -15,9 +15,9 @@ pub const SULFUR_NODE_ID: &str = "sulfur_node";
 /// the "1 stone from hand-pickup" → "you need a steady stone supply"
 /// gap before the player has access to an ore vein.
 pub const STONE_NODE_ID: &str = "stone_node";
-/// Rare crystal mineral. Iron-pickaxe gated (tier 2), spawns
+/// Rare fallen sky-rock. Iron-pickaxe gated (tier 2), spawns
 /// only in far rocky/ore chunks at very low density (see the worldgen
-/// gating in `src/world/chunk/`). Yields the `meteorite` item.
+/// gating in `src/world/chunk/`). Yields the `meteorite_alloy` item.
 pub const METEORITE_NODE_ID: &str = "meteorite_node";
 // Tree IDs: the un-suffixed names (`pine_tree`, `birch_tree`) are the
 // medium variants. Old saves that referenced these IDs before size
@@ -59,10 +59,10 @@ pub enum ResourceNodeModel {
     /// silhouette as the ore variants but no embedded coal/iron/sulfur
     /// chunks on top, so it reads as "the rock under the ore".
     StoneVein,
-    /// Meteorite: rare glowing-crystal mineral in dark slag rock.
-    /// Distinct silhouette (slag mound + erupting crystal spikes),
-    /// iron-pickaxe gated, and its crystals glow at night via the ore
-    /// material's emissive path. Reads as ore for gather feedback/collider.
+    /// Meteorite: a scorched slag boulder with raw alloy nodules fused
+    /// into it. Distinct silhouette (dark cracked mound + pale metal
+    /// seams), iron-pickaxe gated, no glow (nothing in this world is
+    /// magic). Reads as ore for gather feedback/collider.
     Meteorite,
     PineTreeSmall,
     PineTreeMedium,
@@ -224,16 +224,16 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         // iron upgrade a hard requirement, not just a bigger yield. A stone
         // pickaxe is rejected (see `ToolRequirement::allows`).
         required_tool: ToolRequirement::new(ToolKind::Pickaxe, 2),
-        // Small finite yield: rare node, a handful of the rare mineral per find
-        // (feeds the workbench t2 upgrade and later explosives). Same single-stack
-        // storage convention as the ore rows, just far less of it. The per-swing
-        // cap turns the find into a short mining beat (several deliberate hits):
-        // an iron pickaxe's 12 gather_amount would otherwise vaporise all 8 in
-        // a single swing.
-        storage: &[ResourceMaterial::new(METEORITE_ID, 8)],
+        // Small finite yield: rare node, a handful of raw alloy per find
+        // (smelts into the ingots behind the workbench t2 upgrade). Same
+        // single-stack storage convention as the ore rows, just far less of
+        // it. The per-swing cap turns the find into a short mining beat
+        // (several deliberate hits): an iron pickaxe's 12 gather_amount
+        // would otherwise vaporise all 8 in a single swing.
+        storage: &[ResourceMaterial::new(METEORITE_ALLOY_ID, 8)],
         per_swing_yield: Some(crate::game_balance::METEORITE_PER_SWING_YIELD),
-        // Anchor mid-mound; the crystal spikes rise above it. Slightly wider ray
-        // radius so aiming at the tall crystal cluster still focuses the node.
+        // Anchor mid-mound. Slightly wider ray radius so aiming at the
+        // boulder's upper seams still focuses the node.
         anchor_height: 0.55,
         ray_radius: 0.80,
     },
@@ -718,7 +718,10 @@ mod tests {
         let total: u16 = meteorite.storage.iter().map(|m| m.quantity).sum();
         assert_eq!(total, 8, "meteorite node yields 8 total");
         assert!(
-            meteorite.storage.iter().all(|m| m.item_id == METEORITE_ID),
+            meteorite
+                .storage
+                .iter()
+                .all(|m| m.item_id == METEORITE_ALLOY_ID),
             "meteorite storage must be the meteorite item"
         );
         // Reads as ore for the stage/collider/feedback paths.

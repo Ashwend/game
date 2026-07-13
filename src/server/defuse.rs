@@ -194,7 +194,7 @@ mod tests {
         };
         assert_eq!(get(crate::items::GUNPOWDER_ID), Some(30));
         assert_eq!(get(crate::items::CLOTH_ID), Some(2));
-        assert_eq!(get(crate::items::ANCIENT_FITTINGS_ID), Some(1));
+        assert_eq!(get(crate::items::SALVAGED_FITTINGS_ID), Some(1));
     }
 
     #[test]

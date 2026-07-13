@@ -144,7 +144,7 @@ impl DeployableKind {
             }
             Self::Torch { .. } => "Torch",
             Self::ToolCupboard => "Tool Cupboard",
-            Self::RuinCache => "Ruin Cache",
+            Self::RuinCache => "Salvage Chest",
             Self::Explosive { kind } => kind.label(),
         }
     }
@@ -172,9 +172,9 @@ impl DeployableKind {
             // building privilege, so it has to be a reachable raid goal.
             Self::ToolCupboard => DestructibleMaterial::WoodBuilding,
             // Indestructible in practice (the damage path rejects it before
-            // reading this), so the material is only nominal. Stone reads
-            // right for a weathered strongbox.
-            Self::RuinCache => DestructibleMaterial::Stone,
+            // reading this), so the material is only nominal. Wood reads
+            // right for a charred, iron-banded chest.
+            Self::RuinCache => DestructibleMaterial::Wood,
             // A placed charge is deliberately fragile: cloth means any tool or
             // projectile shreds it in a couple of hits, which is exactly the
             // defender's fizzle counterplay. The material only gates how easy the

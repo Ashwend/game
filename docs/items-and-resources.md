@@ -161,13 +161,13 @@ All accessors are `const fn`. Adding a door is one arm here plus a recipe and a 
 
 ## Full roster
 
-**Raw materials / refined (`Bag` mesh, not equipable):** `wood`, `stone`, `coal`, `iron_ore`, `sulfur_ore`, `fiber`, `plant_twine`, `iron_bar`, `hewn_log`, plus the materials `sulfur` (smelted from sulfur ore), `cloth` (4 fiber to 1, hand-crafted armor padding / charge wrap), `gunpowder` (2 coal + 1 sulfur to 2, bench t1), `meteorite` (mined from the rare node), and `ancient_fittings` (looted from ruin caches, never craftable).
+**Raw materials / refined (`Bag` mesh, not equipable):** `wood`, `stone`, `coal`, `iron_ore`, `sulfur_ore`, `fiber`, `plant_twine`, `iron_bar`, `hewn_log`, plus the materials `sulfur` (smelted from sulfur ore), `cloth` (4 fiber to 1, hand-crafted armor padding / charge wrap), `gunpowder` (2 coal + 1 sulfur to 2, bench t1), `meteorite_alloy` (mined from the rare meteorite node), `meteorite_ingot` (furnace-smelted from the alloy, the top-tier metal), and `salvaged_fittings` (looted from the salvage chests in burnt-out houses, never craftable).
 
 **Tools (four, all equipable, all stack to 1):** `wood_stone_hatchet` (Axe t1), `wood_stone_pickaxe` (Pickaxe t1), `iron_hatchet` (Axe t2), `iron_pickaxe` (Pickaxe t2). Every tool is an authored Blender glb matched to its icon; see [docs/playbooks/art-pipeline.md](playbooks/art-pipeline.md).
 
 **Melee weapons (`weapon` profile, equipable, stack to 1):** `wooden_club` (12 dmg, fast, hand-crafted), `stone_spear` (16, reach 4.5 m, hand), `iron_sword` (20, bench t1), `iron_mace` (26, biggest knockback, 50% armor pierce, bench t2). Combat reads `weapon` before `tool`; weapons gather nothing and do hands-tier damage to structures (they are not raid tools).
 
-**Ranged weapons and ammo (`ranged` profile):** `wooden_bow` (hold-to-draw, 15 to 40 damage, bench t1: 12 wood + 6 plant twine + 2 cloth), `crossbow` (55, slow reload, bench t2: 6 hewn logs + 8 iron bars + 4 plant twine + 4 `ancient_fittings`, making it a ruin-loot sink), `arrow` (stacks to 24, ~50% recoverable, hand-crafted four at a time).
+**Ranged weapons and ammo (`ranged` profile):** `wooden_bow` (hold-to-draw, 15 to 40 damage, bench t1: 12 wood + 6 plant twine + 2 cloth), `crossbow` (55, slow reload, bench t2: 6 hewn logs + 8 iron bars + 4 plant twine + 4 `salvaged_fittings`, making it a ruin-loot sink), `arrow` (stacks to 24, ~50% recoverable, hand-crafted four at a time).
 
 **Armor (`armor` profile, 12 pieces = 3 sets x 4 slots):** the Padded, Lamellar, and Iron sets, each with a head / chest / legs / feet piece keyed to an `EquipmentSlot`. Worn in the four equipment slots, not the actionbar; visible on the third-person rig. Mitigation and slots are detailed in [docs/pvp-combat.md](pvp-combat.md).
 
@@ -182,7 +182,7 @@ All accessors are `const fn`. Adding a door is one arm here plus a recipe and a 
 **Resource nodes (14 in `RESOURCE_NODE_DEFINITIONS`):**
 
 - Ores (Pickaxe t1): `coal_node`, `iron_node`, `sulfur_node` (72 each), `stone_node` (Stone Vein, 96 stone).
-- Meteorite (Pickaxe t2, the one iron-gated node): `meteorite_node`, yielding `meteorite`. Rare, emissive, far-from-center rocky/ore chunks only (worldgen gating in `src/world/chunk/`); also runtime-spawned in rich clusters by a meteor shower impact.
+- Meteorite (Pickaxe t2, the one iron-gated node): `meteorite_node`, yielding `meteorite_alloy` (furnace-smelts to `meteorite_ingot`). Rare, a scorched slag boulder studded with pale alloy nuggets, far-from-center rocky/ore chunks only (worldgen gating in `src/world/chunk/`); also runtime-spawned in rich clusters by a meteor shower impact.
 - Trees (Axe t1, six size variants): `pine_tree_small` / `pine_tree` / `pine_tree_large`, `birch_tree_small` / `birch_tree` / `birch_tree_large` (wood, scaling 18 to 84 by size). The un-suffixed ids (`pine_tree`, `birch_tree`) are the **medium** variants on purpose, so pre-size-variant saves load as medium without migration.
 - Crude (Hands, E-pickup): `surface_stone` (1 stone), `branch_pile` (1 wood), `hay_grass` (1 fiber).
 
@@ -202,7 +202,7 @@ The client mirrors replicated nodes into local `NetworkResourceNode` visuals via
 
 ## Smelting is not in the recipe registry
 
-`src/crafting/types.rs - RecipeStation` has only two variants: `None` (hand-craftable) and `Workbench { min_tier }`. A workbench tier 2 satisfies a tier-1 requirement, mirroring tool tiers. **There is no `Furnace` variant.** Smelting happens inside the furnace's own UI, not the recipe registry: `smelt_result` in `src/server/furnace/state.rs` maps `iron_ore -> iron_bar` and `sulfur_ore -> sulfur`, and extending it is a one-line change. The recipe queue, furnace state machine, loot bags, deployable damage, the workbench tier upgrade, and the placed charges all live in [docs/crafting-and-deployables.md](crafting-and-deployables.md).
+`src/crafting/types.rs - RecipeStation` has only two variants: `None` (hand-craftable) and `Workbench { min_tier }`. A workbench tier 2 satisfies a tier-1 requirement, mirroring tool tiers. **There is no `Furnace` variant.** Smelting happens inside the furnace's own UI, not the recipe registry: `smelt_result` in `src/server/furnace/state.rs` maps `iron_ore -> iron_bar`, `sulfur_ore -> sulfur`, and `meteorite_alloy -> meteorite_ingot`, and extending it is a one-line change. The recipe queue, furnace state machine, loot bags, deployable damage, the workbench tier upgrade, and the placed charges all live in [docs/crafting-and-deployables.md](crafting-and-deployables.md).
 
 ## ID hygiene
 

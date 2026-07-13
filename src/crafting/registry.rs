@@ -6,15 +6,15 @@
 use std::{collections::HashMap, sync::OnceLock};
 
 use crate::items::{
-    ANCIENT_FITTINGS_ID, ARROW_ID, BASIC_HATCHET_ID, BASIC_PICKAXE_ID, BUILDING_PLAN_ID, CLOTH_ID,
-    COAL_ID, CROSSBOW_ID, CRUDE_FURNACE_ID, FIBER_ID, GUNPOWDER_ID, HAMMER_ID, HEWN_LOG_DOOR_ID,
-    HEWN_LOG_ID, IRON_BAR_ID, IRON_BOOTS_ID, IRON_CUIRASS_ID, IRON_DOOR_ID, IRON_GREAVES_ID,
-    IRON_HATCHET_ID, IRON_HELM_ID, IRON_MACE_ID, IRON_PICKAXE_ID, IRON_SWORD_ID, LAMELLAR_BOOTS_ID,
+    ARROW_ID, BASIC_HATCHET_ID, BASIC_PICKAXE_ID, BUILDING_PLAN_ID, CLOTH_ID, COAL_ID, CROSSBOW_ID,
+    CRUDE_FURNACE_ID, FIBER_ID, GUNPOWDER_ID, HAMMER_ID, HEWN_LOG_DOOR_ID, HEWN_LOG_ID,
+    IRON_BAR_ID, IRON_BOOTS_ID, IRON_CUIRASS_ID, IRON_DOOR_ID, IRON_GREAVES_ID, IRON_HATCHET_ID,
+    IRON_HELM_ID, IRON_MACE_ID, IRON_PICKAXE_ID, IRON_SWORD_ID, LAMELLAR_BOOTS_ID,
     LAMELLAR_GREAVES_ID, LAMELLAR_HELM_ID, LAMELLAR_VEST_ID, PADDED_HOOD_ID, PADDED_LEGGINGS_ID,
     PADDED_TUNIC_ID, PADDED_WRAPS_ID, PLANT_TWINE_ID, POWDER_BOMB_ID, POWDER_KEG_ID,
-    SATCHEL_CHARGE_ID, SLEEPING_BAG_ID, STONE_ID, STONE_SPEAR_ID, STORAGE_BOX_LARGE_ID,
-    STORAGE_BOX_SMALL_ID, SULFUR_ID, TOOL_CUPBOARD_ID, TORCH_ID, WOOD_ID, WOODEN_BOW_ID,
-    WOODEN_CLUB_ID, WORKBENCH_T1_ID, item_definition,
+    SALVAGED_FITTINGS_ID, SATCHEL_CHARGE_ID, SLEEPING_BAG_ID, STONE_ID, STONE_SPEAR_ID,
+    STORAGE_BOX_LARGE_ID, STORAGE_BOX_SMALL_ID, SULFUR_ID, TOOL_CUPBOARD_ID, TORCH_ID, WOOD_ID,
+    WOODEN_BOW_ID, WOODEN_CLUB_ID, WORKBENCH_T1_ID, item_definition,
 };
 
 use super::types::{CraftingInput, RecipeCategory, RecipeDefinition, RecipeStation};
@@ -32,7 +32,7 @@ pub const STONE_SPEAR_RECIPE_ID: &str = "stone_spear";
 pub const IRON_SWORD_RECIPE_ID: &str = "iron_sword";
 pub const IRON_MACE_RECIPE_ID: &str = "iron_mace";
 /// Ranged weapons and their ammunition. The bow and arrows are hand/tier-1
-/// entry-level; the crossbow is a tier-2 forge job that sinks looted ancient
+/// entry-level; the crossbow is a tier-2 forge job that sinks looted salvaged
 /// fittings.
 pub const WOODEN_BOW_RECIPE_ID: &str = "wooden_bow";
 pub const CROSSBOW_RECIPE_ID: &str = "crossbow";
@@ -50,7 +50,7 @@ pub const LAMELLAR_VEST_RECIPE_ID: &str = "lamellar_vest";
 pub const LAMELLAR_GREAVES_RECIPE_ID: &str = "lamellar_greaves";
 pub const LAMELLAR_BOOTS_RECIPE_ID: &str = "lamellar_boots";
 /// Iron (plate) armor set recipes, workbench tier 2. Total across the set is
-/// ~30 iron_bar + 10 cloth + 6 ancient_fittings.
+/// ~30 iron_bar + 10 cloth + 6 salvaged_fittings.
 pub const IRON_HELM_RECIPE_ID: &str = "iron_helm";
 pub const IRON_CUIRASS_RECIPE_ID: &str = "iron_cuirass";
 pub const IRON_GREAVES_RECIPE_ID: &str = "iron_greaves";
@@ -67,7 +67,7 @@ pub const STORAGE_BOX_LARGE_RECIPE_ID: &str = "storage_box_large";
 pub const TORCH_RECIPE_ID: &str = "torch";
 pub const TOOL_CUPBOARD_RECIPE_ID: &str = "tool_cupboard";
 /// Blackpowder explosive recipes. The bomb and keg are workbench tier 1; the
-/// satchel is tier 2 (the ancient-fittings sink).
+/// satchel is tier 2 (the salvaged-fittings sink).
 pub const POWDER_BOMB_RECIPE_ID: &str = "powder_bomb";
 pub const POWDER_KEG_RECIPE_ID: &str = "powder_keg";
 pub const SATCHEL_CHARGE_RECIPE_ID: &str = "satchel_charge";
@@ -288,7 +288,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         inputs: &[
             CraftingInput::new(HEWN_LOG_ID, 6),
             CraftingInput::new(IRON_BAR_ID, 8),
-            CraftingInput::new(ANCIENT_FITTINGS_ID, 4),
+            CraftingInput::new(SALVAGED_FITTINGS_ID, 4),
             CraftingInput::new(PLANT_TWINE_ID, 4),
         ],
         output_item: CROSSBOW_ID,
@@ -452,7 +452,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         station: RecipeStation::Workbench { min_tier: 1 },
     },
     // Iron (plate) armor set. Workbench tier 2. The set totals ~30 iron_bar +
-    // 10 cloth + 6 ancient_fittings, split chest-heaviest: chest 12/4/3, head
+    // 10 cloth + 6 salvaged_fittings, split chest-heaviest: chest 12/4/3, head
     // 8/2/1, legs 7/2/1, feet 3/2/1.
     RecipeDefinition {
         id: IRON_HELM_RECIPE_ID,
@@ -463,7 +463,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         inputs: &[
             CraftingInput::new(IRON_BAR_ID, 8),
             CraftingInput::new(CLOTH_ID, 2),
-            CraftingInput::new(ANCIENT_FITTINGS_ID, 1),
+            CraftingInput::new(SALVAGED_FITTINGS_ID, 1),
         ],
         output_item: IRON_HELM_ID,
         output_quantity: 1,
@@ -480,7 +480,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         inputs: &[
             CraftingInput::new(IRON_BAR_ID, 12),
             CraftingInput::new(CLOTH_ID, 4),
-            CraftingInput::new(ANCIENT_FITTINGS_ID, 3),
+            CraftingInput::new(SALVAGED_FITTINGS_ID, 3),
         ],
         output_item: IRON_CUIRASS_ID,
         output_quantity: 1,
@@ -496,7 +496,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         inputs: &[
             CraftingInput::new(IRON_BAR_ID, 7),
             CraftingInput::new(CLOTH_ID, 2),
-            CraftingInput::new(ANCIENT_FITTINGS_ID, 1),
+            CraftingInput::new(SALVAGED_FITTINGS_ID, 1),
         ],
         output_item: IRON_GREAVES_ID,
         output_quantity: 1,
@@ -513,7 +513,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         inputs: &[
             CraftingInput::new(IRON_BAR_ID, 3),
             CraftingInput::new(CLOTH_ID, 2),
-            CraftingInput::new(ANCIENT_FITTINGS_ID, 1),
+            CraftingInput::new(SALVAGED_FITTINGS_ID, 1),
         ],
         output_item: IRON_BOOTS_ID,
         output_quantity: 1,
@@ -706,7 +706,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
     },
     // Blackpowder explosives. Costs are spec-exact. The bomb and keg are the
     // workbench-tier-1 raiding starters; the satchel is tier-2 and sinks the
-    // looted ancient fittings.
+    // looted salvaged fittings.
     RecipeDefinition {
         id: POWDER_BOMB_RECIPE_ID,
         name: "Powder Bomb",
@@ -750,7 +750,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         inputs: &[
             CraftingInput::new(GUNPOWDER_ID, 60),
             CraftingInput::new(CLOTH_ID, 4),
-            CraftingInput::new(ANCIENT_FITTINGS_ID, 2),
+            CraftingInput::new(SALVAGED_FITTINGS_ID, 2),
         ],
         output_item: SATCHEL_CHARGE_ID,
         output_quantity: 1,

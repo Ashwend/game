@@ -271,7 +271,7 @@ impl ChunkManager {
     }
 
     /// Stop tracking a resource node WITHOUT scheduling a regrow. Used when an
-    /// event-spawned node is force-despawned at cleanup (meteor shower crater shards
+    /// event-spawned node is force-despawned at cleanup (meteor shower crater crater nodes
     /// that timed out unmined): they are not world nodes and must not respawn,
     /// unlike a harvested node which goes through `handle_node_depleted`. Removes
     /// the node from its chunk's live set and the membership index and nothing

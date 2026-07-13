@@ -423,15 +423,16 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         deployable: None,
     },
     ItemDefinition {
-        id: METEORITE_ID,
-        name: "Meteorite",
-        description: "A rare crystal that glows with a banked orange heat. \
-                      Mined from slag-dark outcrops far from the world's centre.",
+        id: METEORITE_ALLOY_ID,
+        name: "Meteorite Alloy",
+        description: "Raw sky-metal pried from a cooled meteorite: iron and \
+                      nickel fused into dark slag. Smelts into ingots in a \
+                      furnace.",
         stack_size: 20,
         equipable: false,
         model: ItemModel::Bag,
         held_mesh: HeldMesh::Bag,
-        tint: ItemTint::new(232, 126, 52),
+        tint: ItemTint::new(96, 92, 104),
         tool: None,
         weapon: None,
         ranged: None,
@@ -440,10 +441,27 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         deployable: None,
     },
     ItemDefinition {
-        id: ANCIENT_FITTINGS_ID,
-        name: "Ancient Fittings",
-        description: "Salvaged hinges, gears, and springs from older works. \
-                      Too intricate to forge by hand; found, not made.",
+        id: METEORITE_INGOT_ID,
+        name: "Meteorite Ingot",
+        description: "A dense bar smelted from meteorite alloy. Harder than \
+                      iron; the metal behind top-tier workbench upgrades.",
+        stack_size: 20,
+        equipable: false,
+        model: ItemModel::Bag,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(148, 144, 158),
+        tool: None,
+        weapon: None,
+        ranged: None,
+        armor: None,
+        explosive: None,
+        deployable: None,
+    },
+    ItemDefinition {
+        id: SALVAGED_FITTINGS_ID,
+        name: "Salvaged Fittings",
+        description: "Hinges, latches, and springs stripped from burnt-out \
+                      homes. Too intricate to forge by hand; found, not made.",
         stack_size: 50,
         equipable: false,
         model: ItemModel::Bag,
@@ -1099,10 +1117,11 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         // keeps it off the action bar and out of any placeable-item UI, and it
         // has no recipe, so players can neither craft nor place it.
         id: RUIN_CACHE_ID,
-        name: "Ruin Cache",
-        description: "A weathered stone-and-iron strongbox left in the ruins. \
-                      Press E to open it; anyone can loot it, and it slowly \
-                      refills. The only source of ancient fittings.",
+        name: "Salvage Chest",
+        description: "A small iron-banded chest that survived the fire that \
+                      took the house around it. Press E to open it; anyone \
+                      can loot it, and it slowly restocks. The only source \
+                      of salvaged fittings.",
         stack_size: 1,
         equipable: false,
         model: ItemModel::Deployable,
@@ -1115,11 +1134,12 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         explosive: None,
         deployable: Some(DeployableProfile {
             kind: DeployableKind::RuinCache,
-            // Collider matches the hip-height strongbox model (~1.2 x 0.88 x
-            // 0.95 m, art/ruins/build_ruins.py) so E-targeting lands on it.
+            // Collider matches the small knee-height chest model (~0.92 x
+            // 0.66 x 0.6 m, art/ruins/build_ruins.py) so E-targeting lands
+            // on it.
             max_health: crate::game_balance::RUIN_CACHE_MAX_HP,
-            collider_half_width: 0.6,
-            collider_half_height: 0.48,
+            collider_half_width: 0.46,
+            collider_half_height: 0.33,
             station_radius: 0.0,
         }),
     },

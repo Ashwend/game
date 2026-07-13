@@ -89,11 +89,23 @@ pub(crate) fn client_input_system(
 
     let accepts_movement_input =
         gameplay_accepts_movement(&params.menu, primary_window_focused(&params.primary_window));
-    let direction = movement_direction_from_keys(
+    let mut direction = movement_direction_from_keys(
         &params.keys,
         &params.settings.keybindings,
         accepts_movement_input,
     );
+    let mut run = accepts_movement_input
+        && params
+            .settings
+            .keybindings
+            .pressed(KeyAction::Run, &params.keys);
+    // Dev harness: an unexpired `walk` order from the control socket holds
+    // forward input at the current look yaw, bypassing the focus gate (the
+    // headless window is never focused), so agents can walk the real world.
+    if let Some(walk) = params.look.active_agent_walk() {
+        direction = Vec3Net::new(0.0, 0.0, 1.0);
+        run = walk.run;
+    }
 
     params.runtime.input_sequence += 1;
     let sequence = params.runtime.input_sequence;
@@ -101,11 +113,7 @@ pub(crate) fn client_input_system(
     let input = PlayerInput {
         sequence,
         direction,
-        run: accepts_movement_input
-            && params
-                .settings
-                .keybindings
-                .pressed(KeyAction::Run, &params.keys),
+        run,
         jump: accepts_movement_input
             && params
                 .settings

@@ -92,8 +92,8 @@ pub(crate) fn resource_node_transform_at(
         // Stone veins are wider/flatter than ore mounds, they read as
         // an outcrop rather than a focused deposit.
         ResourceNodeModel::StoneVein => (0.0, Vec3::new(1.18, 0.86, 1.08)),
-        // Meteorite: near-unit; the glb already carries the tall crystal fan, so
-        // extra vertical scale would just stretch the spikes.
+        // Meteorite: near-unit; the glb is a squat studded slag boulder, so
+        // extra vertical scale would just distort it.
         ResourceNodeModel::Meteorite => (0.0, Vec3::new(1.0, 1.0, 1.0)),
         ResourceNodeModel::PineTreeSmall
         | ResourceNodeModel::PineTreeMedium

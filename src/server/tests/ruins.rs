@@ -2,7 +2,7 @@
 //! non-placeable gate, and the refill loop end to end on a real `GameServer`.
 
 use crate::{
-    items::{ANCIENT_FITTINGS_ID, DeployableKind, RUIN_CACHE_ID, intern_item_id},
+    items::{DeployableKind, RUIN_CACHE_ID, SALVAGED_FITTINGS_ID, intern_item_id},
     protocol::{
         ClientMessage, ContainerViewKind, DamageDeployableCommand, LootBagCommand, LootBagSlotRef,
         PlaceDeployableCommand, Vec3Net,
@@ -213,8 +213,8 @@ fn emptying_a_cache_schedules_and_fires_a_refill() {
             .slots
             .iter()
             .flatten()
-            .any(|s| s.item_id.as_ref() == crate::items::ANCIENT_FITTINGS_ID),
-        "a refilled cache always holds ancient fittings"
+            .any(|s| s.item_id.as_ref() == crate::items::SALVAGED_FITTINGS_ID),
+        "a refilled cache always holds salvaged fittings"
     );
 }
 
@@ -265,13 +265,17 @@ fn anyone_can_open_and_loot_a_cache_through_the_container_path() {
     let view = server
         .open_loot_bag_view_for(client_id)
         .expect("an open cache resolves a container view");
-    assert_eq!(view.kind, ContainerViewKind::StorageBox);
+    assert_eq!(
+        view.kind,
+        ContainerViewKind::SalvageChest,
+        "a ruin cache titles its container panel as a salvage chest"
+    );
     let fittings_slot = view
         .slots
         .iter()
         .position(|slot| {
             slot.as_ref()
-                .is_some_and(|stack| stack.item_id.as_ref() == ANCIENT_FITTINGS_ID)
+                .is_some_and(|stack| stack.item_id.as_ref() == SALVAGED_FITTINGS_ID)
         })
         .expect("a stocked cache view shows its fittings");
 
@@ -287,7 +291,7 @@ fn anyone_can_open_and_loot_a_cache_through_the_container_path() {
     let looted = server.clients[&client_id].inventory.inventory_slots[0]
         .as_ref()
         .expect("the fittings moved into the player inventory");
-    assert_eq!(looted.item_id.as_ref(), ANCIENT_FITTINGS_ID);
+    assert_eq!(looted.item_id.as_ref(), SALVAGED_FITTINGS_ID);
     assert!(
         server.deployed_entities[&cache_id]
             .storage
@@ -296,5 +300,202 @@ fn anyone_can_open_and_loot_a_cache_through_the_container_path() {
             .slots[fittings_slot]
             .is_none(),
         "the cache slot emptied"
+    );
+}
+
+#[test]
+fn stale_chests_from_an_old_layout_reseat_on_load() {
+    // Salvage chests persist in the save, but their placement is a pure
+    // function of the seed. If the prefab set changes between builds, an old
+    // save's chests can end up buried inside the reworked shells (an
+    // invisible collider in a doorway). Loading must self-heal: drop chests
+    // off any live cache point and restock every current point.
+    let server = server_with_ruins();
+    let expected = cache_count(&server);
+    let mut save = server.world_save();
+
+    // Tamper like an old-layout save: strand one chest off-point and delete
+    // another entirely.
+    let mut strayed = false;
+    let mut deleted = false;
+    save.state.deployed_entities.retain_mut(|entity| {
+        if entity.item_id != RUIN_CACHE_ID {
+            return true;
+        }
+        if !strayed {
+            strayed = true;
+            entity.position.x += 1.7;
+            entity.position.z += 0.9;
+            return true;
+        }
+        if !deleted {
+            deleted = true;
+            return false;
+        }
+        true
+    });
+    assert!(
+        strayed && deleted,
+        "the test world needs at least two chests"
+    );
+
+    let restored = crate::server::GameServer::new(
+        save,
+        crate::server::ServerSettings {
+            auth_mode: crate::auth::AuthMode::NoAuth,
+            singleplayer_host: Some(1),
+        },
+    );
+    assert_eq!(
+        cache_count(&restored),
+        expected,
+        "every current cache point should hold exactly one chest after load"
+    );
+    // And every survivor stands on a live layout point (the strayed one is
+    // gone, not carried along).
+    let seed = restored.save.map.world_seed();
+    let dims = restored.save.map.chunk_dims();
+    let points: Vec<_> = ruin_layout(seed, dims)
+        .into_iter()
+        .flat_map(|site| site.cache_points())
+        .collect();
+    for entity in restored.deployed_entities.values() {
+        if !matches!(entity.kind, DeployableKind::RuinCache) {
+            continue;
+        }
+        assert!(
+            points.iter().any(|point| {
+                (point.x - entity.position.x).abs() < 0.05
+                    && (point.z - entity.position.z).abs() < 0.05
+            }),
+            "chest at {:?} is not on any live cache point",
+            entity.position
+        );
+    }
+}
+
+#[test]
+fn player_placement_is_rejected_near_a_ruin() {
+    // Ruins hold the shared salvage chests; players must not be able to
+    // wall them in or camp them with a sleeping bag. The gate covers the
+    // footprint circle plus RUIN_PLACEMENT_EXCLUSION_MARGIN_M.
+    let mut server = server_with_ruins();
+    let client_id = connect_named(&mut server, "squatter");
+    let seed = server.save.map.world_seed();
+    let dims = server.save.map.chunk_dims();
+    let site = ruin_layout(seed, dims)
+        .into_iter()
+        .next()
+        .expect("the test world scatters ruins");
+
+    // Stand just outside the ruin so reach never interferes, aim at the
+    // site centre (well inside the footprint).
+    let stand = Vec3Net::new(site.x + site.prefab.footprint_radius_m() + 1.0, 0.0, site.z);
+    if let Some(client) = server.clients.get_mut(&client_id) {
+        client.controller.position = stand;
+        client.inventory.inventory_slots[0] = Some(crate::protocol::ItemStack::new(
+            crate::items::SLEEPING_BAG_ID,
+            1,
+        ));
+    }
+    server.chunk_manager.update_player_chunk(client_id, stand);
+    let target = Vec3Net::new(site.x + site.prefab.footprint_radius_m() - 1.0, 0.0, site.z);
+    let bags_before = server
+        .deployed_entities
+        .values()
+        .filter(|entity| matches!(entity.kind, DeployableKind::SleepingBag))
+        .count();
+    server.receive(
+        client_id,
+        ClientMessage::PlaceDeployable(crate::protocol::PlaceDeployableCommand {
+            item_id: intern_item_id(crate::items::SLEEPING_BAG_ID),
+            position: target,
+            yaw: 0.0,
+            wall_mounted: false,
+        }),
+    );
+    let bags_after = server
+        .deployed_entities
+        .values()
+        .filter(|entity| matches!(entity.kind, DeployableKind::SleepingBag))
+        .count();
+    assert_eq!(
+        bags_before, bags_after,
+        "a sleeping bag inside a ruin footprint must be rejected"
+    );
+
+    // Well past the footprint + margin the same placement succeeds.
+    let clear = Vec3Net::new(
+        site.x
+            + site.prefab.footprint_radius_m()
+            + crate::game_balance::RUIN_PLACEMENT_EXCLUSION_MARGIN_M
+            + 3.0,
+        0.0,
+        site.z,
+    );
+    if let Some(client) = server.clients.get_mut(&client_id) {
+        client.controller.position = clear;
+    }
+    server.chunk_manager.update_player_chunk(client_id, clear);
+    server.receive(
+        client_id,
+        ClientMessage::PlaceDeployable(crate::protocol::PlaceDeployableCommand {
+            item_id: intern_item_id(crate::items::SLEEPING_BAG_ID),
+            position: clear,
+            yaw: 0.0,
+            wall_mounted: false,
+        }),
+    );
+    assert_eq!(
+        server
+            .deployed_entities
+            .values()
+            .filter(|entity| matches!(entity.kind, DeployableKind::SleepingBag))
+            .count(),
+        bags_after + 1,
+        "the same bag placed clear of the ruin must succeed"
+    );
+}
+
+#[test]
+fn building_pieces_are_rejected_near_a_ruin() {
+    let mut server = server_with_ruins();
+    let client_id = connect_named(&mut server, "builder");
+    let seed = server.save.map.world_seed();
+    let dims = server.save.map.chunk_dims();
+    let site = ruin_layout(seed, dims)
+        .into_iter()
+        .next()
+        .expect("the test world scatters ruins");
+
+    let stand = Vec3Net::new(site.x + site.prefab.footprint_radius_m() + 1.0, 0.0, site.z);
+    if let Some(client) = server.clients.get_mut(&client_id) {
+        client.controller.position = stand;
+        // Plenty of wood so the cost gate can't be the reason it fails.
+        client.inventory.inventory_slots[0] =
+            Some(crate::protocol::ItemStack::new(crate::items::WOOD_ID, 200));
+    }
+    server.chunk_manager.update_player_chunk(client_id, stand);
+    let buildings_before = server
+        .deployed_entities
+        .values()
+        .filter(|entity| matches!(entity.kind, DeployableKind::Building { .. }))
+        .count();
+    server.receive(
+        client_id,
+        ClientMessage::PlaceBuilding(crate::protocol::PlaceBuildingCommand {
+            piece: crate::building::BuildingPiece::Foundation,
+            position: Vec3Net::new(site.x + site.prefab.footprint_radius_m() - 1.0, 0.0, site.z),
+            yaw: 0.0,
+        }),
+    );
+    assert_eq!(
+        server
+            .deployed_entities
+            .values()
+            .filter(|entity| matches!(entity.kind, DeployableKind::Building { .. }))
+            .count(),
+        buildings_before,
+        "a foundation inside a ruin footprint must be rejected"
     );
 }

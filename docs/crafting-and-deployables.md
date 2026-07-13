@@ -87,7 +87,7 @@ The list also holds the cloth and gunpowder intermediates, the four melee-weapon
 
 ### Workbench tiers and the generic upgrade
 
-A placed workbench upgrades in place from tier 1 to tier 2; it is not a separate deployable. The upgrade path is DATA, not workbench-shaped code: `src/items/upgrades.rs - DEPLOYABLE_UPGRADES` declares `(from kind, to kind, cost)` rows (today the one row is Workbench t1 to t2 for 30 iron_bar + 6 ancient_fittings + 4 meteorite), and `upgrade_for(kind)` looks up the available upgrade. Because `DeployableKind::Furnace { tier }` already exists, a furnace tier 2 later is a table row, not new plumbing.
+A placed workbench upgrades in place from tier 1 to tier 2; it is not a separate deployable. The upgrade path is DATA, not workbench-shaped code: `src/items/upgrades.rs - DEPLOYABLE_UPGRADES` declares `(from kind, to kind, cost)` rows (today the one row is Workbench t1 to t2 for 30 iron_bar + 6 salvaged_fittings + 4 meteorite ingots), and `upgrade_for(kind)` looks up the available upgrade. Because `DeployableKind::Furnace { tier }` already exists, a furnace tier 2 later is a table row, not new plumbing.
 
 The client opens the bench with tap-E, which sets the replicated `open_workbench` pointer (`OpenWorkbenchView { id, tier }` on `PlayerPrivate`, the furnace-view pattern). `src/app/ui/workbench.rs - workbench_ui` renders the current tier, a blurb, and the cost list read from the compile-time upgrade table (costs never travel the wire), with an Upgrade button gated on client-side affordability. The server handler (`src/server/workbench.rs - apply_workbench_command`, `WorkbenchCommand::{Open, Close, Upgrade}`) re-validates entity, kind, range, and materials, consumes the cost, and mutates the kind.
 
@@ -137,10 +137,11 @@ Free placement is for the simple kinds. Doors and building blocks reject this pa
 1. Item resolves to a deployable profile.
 2. Reach: feet-to-target horizontal distance `<= DEPLOYABLE_PLACEMENT_REACH_M` (5.0).
 3. Surface: `valid_deployable_surface`, which is `|y| <= 0.25` (world floor) OR exactly on the walkable top of a building platform cell. Yaw and cells are axis-aligned because building yaw is quarter-turn snapped.
-4. Finite-value check on position and yaw.
-5. AABB overlap: the candidate's `collider_blocks` must not intersect any existing deployable's solid boxes (`any_deployable_overlaps`).
-6. Claim: `claim_blocks_footprint` rejects placement inside someone else's Tool Cupboard claim (footprint-aware so a wide box can't be slid halfway in). Tool Cupboards additionally must sit on a building platform.
-7. Consume one item from inventory; stamp `owner = placing player's AccountId`.
+4. Ruin exclusion: `ruin_blocks_placement` rejects any spot inside a ruin footprint plus `RUIN_PLACEMENT_EXCLUSION_MARGIN_M` (3 m), so the shared salvage chests can't be walled in or bag-camped. Applies to free placement, torches, and building pieces; explosive charges are exempt (raid tools work anywhere). The client ghost mirrors the gate (turns red) from the same seed-pure footprints.
+5. Finite-value check on position and yaw.
+6. AABB overlap: the candidate's `collider_blocks` must not intersect any existing deployable's solid boxes (`any_deployable_overlaps`).
+7. Claim: `claim_blocks_footprint` rejects placement inside someone else's Tool Cupboard claim (footprint-aware so a wide box can't be slid halfway in). Tool Cupboards additionally must sit on a building platform.
+8. Consume one item from inventory; stamp `owner = placing player's AccountId`.
 
 On success it assigns the id, initialises any kind sub-state, inserts, and tracks the entity in the chunk manager. A placed Tool Cupboard triggers `recompute_claim_footprints`.
 
@@ -160,7 +161,7 @@ On success it assigns the id, initialises any kind sub-state, inserts, and track
 
 ## Torches
 
-A torch (`src/server/torch.rs` - `TorchState`) is a deployable carrying `{ active (lit), burn_ticks_left }`. Placed via `place_torch` (`src/server/deployables.rs`), which is the only free-placement path that relaxes the floor-surface check: a wall-mounted torch trusts the client raycast (`command.wall_mounted` -> `DeployableKind::Torch { wall }`), a floor torch still needs `valid_deployable_surface`. The mount is baked into the immutable `kind`, so it replicates for free. Placement is still reach-gated and claim-gated.
+A torch (`src/server/torch.rs` - `TorchState`) is a deployable carrying `{ active (lit), burn_ticks_left }`. Placed via `place_torch` (`src/server/deployables.rs`), which is the only free-placement path that relaxes the floor-surface check: a wall-mounted torch trusts the client raycast (`command.wall_mounted` -> `DeployableKind::Torch { wall }`), a floor torch still needs `valid_deployable_surface`. The mount is baked into the immutable `kind`, so it replicates for free. Placement is still reach-gated, claim-gated, and ruin-gated.
 
 `tick_torches` counts `burn_ticks_left` down while lit (`TORCH_BURN_TICKS`, 8 hours) and extinguishes at 0. Like the furnace, only the `active` flip is replicated (`DeployableActive`), flagged dirty only on the extinguish edge; the steady countdown is server-only and persisted, so a reload resumes the timer.
 
@@ -175,7 +176,7 @@ The two placed charges (powder keg, satchel charge) become a `DeployableKind::Ex
 
 ## Ruin caches
 
-A `DeployableKind::RuinCache` (`src/server/ruin_cache.rs`) is a world-spawned loot container inside a ruin POI, reusing the storage-box container (loot lives in `DeployedEntity::storage`, opened via `ClientMessage::OpenStorageBox` broadened to accept the cache kind at `RUIN_CACHE_INTERACT_RANGE_M`, `RUIN_CACHE_SLOT_COUNT = 6`). It is the only source of `ancient_fittings`. Server-only refill state is `RuinCacheState { refill_at_tick, refill_counter }`, ticked by `tick_ruin_caches` beside the furnace: on empty it schedules `RUIN_CACHE_REFILL_TICKS`, and on fire it rolls `roll_loot(cache_id, refill_counter)` (seeded: always ancient_fittings, weighted gunpowder / iron_bar / cloth, rare meteorite). Caches spawn on fresh worldgen (owner `None`), are indestructible (the damage path early-returns on the kind), and are not player-placeable (`equipable: false`, no recipe). Placement and the seed-pure ruin layout live in [worlds-and-saves.md](worlds-and-saves.md).
+A `DeployableKind::RuinCache` (`src/server/ruin_cache.rs`) is a world-spawned salvage chest inside a burnt-out house (ruin POI), reusing the storage-box container (loot lives in `DeployedEntity::storage`, opened via `ClientMessage::OpenStorageBox` broadened to accept the cache kind at `RUIN_CACHE_INTERACT_RANGE_M`, `RUIN_CACHE_SLOT_COUNT = 6`). It is the only source of `salvaged_fittings`. Server-only refill state is `RuinCacheState { refill_at_tick, refill_counter }`, ticked by `tick_ruin_caches` beside the furnace: on empty it schedules `RUIN_CACHE_REFILL_TICKS`, and on fire it rolls `roll_loot(cache_id, refill_counter)` (seeded: always salvaged_fittings, weighted gunpowder / iron_bar / cloth, rare meteorite_alloy). Caches spawn on fresh worldgen (owner `None`), are indestructible (the damage path early-returns on the kind), and are not player-placeable (`equipable: false`, no recipe). Placement and the seed-pure ruin layout live in [worlds-and-saves.md](worlds-and-saves.md).
 
 ## Loot bags
 

@@ -1075,7 +1075,7 @@ fn add_audio_systems(app: &mut App) {
     // this frame integrates next).
     .add_systems(Update, animate_torch_fire_system)
     .add_systems(Update, tick_torch_particles_system)
-    // Placed-charge fuse VFX/SFX: spark emitter + hiss + meteorite-crystal shimmer,
+    // Placed-charge fuse VFX/SFX: spark emitter + hiss + heat shimmer,
     // and the spark-particle integrator. Both self-gate (no assets / dt == 0).
     .add_systems(Update, animate_charge_fuse_system)
     .add_systems(Update, tick_charge_spark_particles_system)

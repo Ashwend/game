@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     inventory::count_items_in_inventory,
-    items::{ANCIENT_FITTINGS_ID, IRON_BAR_ID, METEORITE_ID, WORKBENCH_T1_ID},
+    items::{IRON_BAR_ID, METEORITE_INGOT_ID, SALVAGED_FITTINGS_ID, WORKBENCH_T1_ID},
     protocol::{ItemStack, ToastKind, Vec3Net},
     server::test_support::{connect_named, server},
 };
@@ -44,8 +44,8 @@ fn fixture() -> (GameServer, ClientId, DeployedEntityId) {
 fn give_upgrade_materials(server: &mut GameServer, client_id: ClientId) {
     let client = server.clients.get_mut(&client_id).unwrap();
     client.inventory.inventory_slots[0] = Some(ItemStack::new(IRON_BAR_ID, 30));
-    client.inventory.inventory_slots[1] = Some(ItemStack::new(ANCIENT_FITTINGS_ID, 6));
-    client.inventory.inventory_slots[2] = Some(ItemStack::new(METEORITE_ID, 4));
+    client.inventory.inventory_slots[1] = Some(ItemStack::new(SALVAGED_FITTINGS_ID, 6));
+    client.inventory.inventory_slots[2] = Some(ItemStack::new(METEORITE_INGOT_ID, 4));
 }
 
 fn kind_of(server: &GameServer, id: DeployedEntityId) -> DeployableKind {
@@ -155,7 +155,7 @@ fn upgrade_out_of_range_warns_and_does_not_consume() {
     );
     let inv = &server.clients[&client].inventory;
     assert_eq!(count_items_in_inventory(inv, IRON_BAR_ID), 30);
-    assert_eq!(count_items_in_inventory(inv, METEORITE_ID), 4);
+    assert_eq!(count_items_in_inventory(inv, METEORITE_INGOT_ID), 4);
 }
 
 #[test]
@@ -206,8 +206,8 @@ fn upgrade_success_consumes_inputs_mutates_tier_and_keeps_same_id() {
     // Every cost input fully consumed.
     let inv = &server.clients[&client].inventory;
     assert_eq!(count_items_in_inventory(inv, IRON_BAR_ID), 0);
-    assert_eq!(count_items_in_inventory(inv, ANCIENT_FITTINGS_ID), 0);
-    assert_eq!(count_items_in_inventory(inv, METEORITE_ID), 0);
+    assert_eq!(count_items_in_inventory(inv, SALVAGED_FITTINGS_ID), 0);
+    assert_eq!(count_items_in_inventory(inv, METEORITE_INGOT_ID), 0);
 
     // The upgraded bench keeps its original item id (definition still resolves).
     assert_eq!(

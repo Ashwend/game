@@ -120,7 +120,7 @@ pub enum NodeKind {
     IronOre,
     SulfurOre,
     StoneVein,
-    /// Rare crystal node. Appended LAST so the postcard variant
+    /// Rare fallen sky-rock node. Appended LAST so the postcard variant
     /// index of every existing kind is unchanged (old `ChunkManagerSave`
     /// files stay loadable, see docs/worlds-and-saves.md).
     Meteorite,

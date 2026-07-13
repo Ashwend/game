@@ -155,6 +155,10 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
         // appears via server replication (no local ground ghost in Tier 1).
         let seq = params.prediction.alloc_seq();
         params.prediction.push_drop(seq, from, Some(1));
+        // The drop shortcut is the one audible loss that happens with every
+        // item UI closed; the intent window lets its cue through while
+        // ammo/charge consumption stays silent.
+        params.inventory_ui.note_drop_intent();
         send_inventory_command(
             &mut params.runtime,
             &mut params.error_toasts,

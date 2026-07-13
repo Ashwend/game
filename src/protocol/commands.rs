@@ -296,6 +296,11 @@ pub enum ContainerViewKind {
     Sleeper,
     /// A placed storage box deployable.
     StorageBox,
+    /// A world-spawned salvage chest in a burnt-out house (the ruin cache).
+    /// Same container plumbing as a storage box; only the panel copy
+    /// differs. Appended LAST so existing variants keep their postcard
+    /// variant indices.
+    SalvageChest,
 }
 
 /// Per-client view of the container currently open on the server (loot

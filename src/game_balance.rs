@@ -125,7 +125,7 @@ pub const IRON_PICKAXE_PVP_DAMAGE: u32 = 22;
 pub const HATCHET_KNOCKBACK_SPEED: f32 = 1.8;
 pub const PICKAXE_KNOCKBACK_SPEED: f32 = 4.0;
 
-/// Max meteorite a single pickaxe swing extracts from a meteorite node
+/// Max meteorite alloy a single pickaxe swing extracts from a meteorite node
 /// (`ResourceNodeDefinition::per_swing_yield`). The node stores 8 total, so a
 /// find is a deliberate 4-hit mining beat; without the cap the iron pickaxe's
 /// 12 gather_amount would exhaust the whole rare node in one swing.
@@ -719,6 +719,15 @@ pub const RUIN_SPAWN_EXCLUSION_RADIUS_FRACTION: f32 = 0.15;
 /// Sized above the largest prefab half-extent.
 pub const RUIN_BOUNDS_MARGIN_M: f32 = 12.0;
 
+/// Extra ring, in metres, past a ruin's footprint circle inside which players
+/// cannot place anything (deployables, torches, building pieces). Ruins are
+/// shared, contested loot spots: without the gate a player walls in the
+/// salvage chests or drops a sleeping bag next to one and camps the restock.
+/// Explosive charges are exempt (raid tools stay usable anywhere; the chests
+/// are indestructible regardless). Small on purpose so bases can still be
+/// built within sight of a ruin.
+pub const RUIN_PLACEMENT_EXCLUSION_MARGIN_M: f32 = 3.0;
+
 /// Number of candidate sites the scatter samples per world before it stops.
 /// Rejection sampling against the spacing + exclusion + bounds rules keeps only
 /// the winners, so this caps how densely a map fills: too high and every map
@@ -753,7 +762,7 @@ pub const RUIN_CACHE_REFILL_MINUTES: f32 = 25.0;
 pub const RUIN_CACHE_REFILL_TICKS: u64 =
     (RUIN_CACHE_REFILL_MINUTES * 60.0 * SERVER_TICK_RATE_HZ) as u64;
 
-/// Ruin-cache loot table. `ancient_fittings` is guaranteed on every roll (the
+/// Ruin-cache loot table. `salvaged_fittings` is guaranteed on every roll (the
 /// cache is its exclusive source), between these bounds inclusive.
 pub const RUIN_CACHE_FITTINGS_MIN: u32 = 2;
 pub const RUIN_CACHE_FITTINGS_MAX: u32 = 4;
@@ -775,9 +784,10 @@ pub const RUIN_CACHE_GUNPOWDER_PER_ROLL: u16 = 4;
 pub const RUIN_CACHE_IRON_BAR_PER_ROLL: u16 = 2;
 pub const RUIN_CACHE_CLOTH_PER_ROLL: u16 = 3;
 
-/// Chance, in percent, that a refill also drops a single rare meteorite. The
-/// rare bonus that makes a cache worth opening even when a player is not short
-/// on fittings.
+/// Chance, in percent, that a restock also drops a single chunk of meteorite
+/// alloy (a fragment of the strike that burnt the house down). The rare bonus
+/// that makes a chest worth opening even when a player is not short on
+/// fittings.
 pub const RUIN_CACHE_METEORITE_CHANCE_PCT: u32 = 8;
 
 // =====================================================================
@@ -798,7 +808,7 @@ pub const METEOR_SHOWER_INTERVAL_DAYS_MAX: f32 = 4.0;
 /// Real seconds between the announce (fireball appears, countdown starts) and
 /// impact. Ten real minutes: long enough that a player anywhere on the map can
 /// see the streak, read the countdown, and either rush the impact site to
-/// contest the shard cluster or evacuate the danger zone. Tunable, an Eco-style
+/// contest the crater cluster or evacuate the danger zone. Tunable, an Eco-style
 /// longer approach is just a larger value here.
 pub const METEOR_SHOWER_WARNING_SECONDS: f32 = 600.0;
 
@@ -813,7 +823,7 @@ pub const METEOR_SHOWER_BUILDING_CLEARANCE_M: f32 = 60.0;
 
 /// Radius, in metres, of the meteor's lethal impact. Players inside take Blast
 /// damage with linear falloff from ground zero; resource nodes inside are
-/// felled/depleted; the meteorite shard cluster scatters within it. Kept below
+/// felled/depleted; the meteorite crater cluster scatters within it. Kept below
 /// the building clearance so the siting guarantee holds.
 pub const METEOR_SHOWER_IMPACT_RADIUS_M: f32 = 18.0;
 
@@ -830,21 +840,21 @@ pub const METEOR_SHOWER_DANGER_RADIUS_M: f32 = 60.0;
 /// Falls off linearly to 0 at `METEOR_SHOWER_IMPACT_RADIUS_M`.
 pub const METEOR_SHOWER_IMPACT_PLAYER_DAMAGE: f32 = 250.0;
 
-/// Minimum and maximum number of rich meteorite shard nodes the impact
+/// Minimum and maximum number of rich meteorite crater nodes the impact
 /// scatters inside the crater. A contested windfall (several nodes' worth of the
 /// rare iron-gated mineral in one spot) that despawns if unmined, so it rewards
 /// rushing the site. Placed with a minimum spacing so they do not overlap.
 pub const METEOR_SHOWER_CRATER_NODE_COUNT_MIN: u32 = 3;
 pub const METEOR_SHOWER_CRATER_NODE_COUNT_MAX: u32 = 6;
 
-/// Real seconds the crater and its shard cluster persist before the server
-/// force-despawns any unmined shards and cleans up the event (crater visual +
+/// Real seconds the crater and its crater cluster persist before the server
+/// force-despawns any unmined crater nodes and cleans up the event (crater visual +
 /// map marker removed client-side). Ten minutes: long enough to rush the site
 /// and fight over the cluster, short enough that meteors striking while nobody
-/// is online do not leave the world scattered with stale shards and craters.
+/// is online do not leave the world scattered with stale crater nodes and craters.
 pub const METEOR_SHOWER_DESPAWN_SECONDS: f32 = 600.0;
 
-/// Minimum spacing, in metres, between two scattered crater shard nodes, so the
+/// Minimum spacing, in metres, between two scattered crater crater nodes, so the
 /// cluster reads as several distinct nodes rather than one overlapping blob.
 pub const METEOR_SHOWER_CRATER_NODE_SPACING_M: f32 = 2.5;
 
@@ -872,7 +882,7 @@ pub const METEOR_SHOWER_SITE_CANDIDATES: u32 = 48;
 pub const METEOR_SHOWER_SITE_MIN_CENTER_DISTANCE_FRACTION: f32 = 0.35;
 
 /// Margin, in metres, kept between the impact site and the edge of
-/// `PlayableBounds` so the crater and its shard cluster never clip the world
+/// `PlayableBounds` so the crater and its crater cluster never clip the world
 /// perimeter wall.
 pub const METEOR_SHOWER_SITE_BOUNDS_MARGIN_M: f32 = 20.0;
 

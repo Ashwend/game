@@ -69,8 +69,8 @@ pub(crate) fn surface_for_resource_model(model: ResourceNodeModel) -> SurfaceMat
         // Plain rock vein, same impact pool as the small surface
         // stones, just at the heavier per-swing strike.
         ResourceNodeModel::StoneVein => SurfaceMaterial::Stone,
-        // Meteorite reads as heavy rock/crystal on impact: reuse the stone
-        // surface pool (a dedicated crystal-chime pool can come later).
+        // Meteorite reads as heavy dense rock on impact: reuse the stone
+        // surface pool (a dedicated dense-metal pool can come later).
         ResourceNodeModel::Meteorite => SurfaceMaterial::Stone,
         // Crude materials: branches read as wood, surface stone as stone,
         // hay tufts as dirt (closest "soft scrape" in the surface taxonomy).

@@ -108,7 +108,7 @@ pub struct MeteorWorldState {
 // Crater surface geometry (metres), shared by everything that must agree on
 // the impact site's shape: the client's crater mesh + fire anchoring
 // (`app::scene::meteor_shower`), the movement collider's analytic floor
-// (`controller`), and the server's shard-node placement. The terrain plane
+// (`controller`), and the server's crater-node placement. The terrain plane
 // cannot be cut, so the "dug in" read comes from a raised, irregular rim lip
 // around a floor that sits at grade.
 /// Radius of the rim crest (the top of the raised lip).
@@ -130,7 +130,7 @@ pub const CRATER_FLOOR_HEIGHT_M: f32 = 0.08;
 /// at [`CRATER_BOWL_RADIUS_M`], falling back to just above grade at
 /// [`CRATER_RIM_END_M`], then a flat skirt out to [`CRATER_SKIRT_RADIUS_M`]
 /// and exactly grade (0) beyond. Pure so the mesh, the movement floor, and
-/// the server's shard placement all sample the identical surface.
+/// the server's crater-node placement all sample the identical surface.
 pub fn crater_surface_height(distance: f32) -> f32 {
     if !distance.is_finite() || distance < 0.0 {
         return CRATER_FLOOR_HEIGHT_M;

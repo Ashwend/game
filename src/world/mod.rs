@@ -17,8 +17,8 @@ pub use meteor_shower::{
     meteor_world_state,
 };
 pub use ruins::{
-    RUIN_MASONRY_TIER, RuinElement, RuinElementKind, RuinFootprint, RuinPrefab, RuinProp,
-    RuinRenderElement, RuinSite, point_in_any_footprint, ruin_footprints, ruin_layout,
+    RuinBox, RuinFootprint, RuinPrefab, RuinSite, point_in_any_footprint, point_near_any_footprint,
+    ruin_footprints, ruin_layout,
 };
 pub use terrain_texture::{
     TERRAIN_WEIGHT_TEXELS, biome_blend_weights, fill_terrain_weight_rows,
@@ -473,12 +473,13 @@ pub enum BlockKind {
     /// Grayish stone block, used for perimeter walls and similar structural
     /// pieces that should read as masonry rather than test geometry.
     Stone,
-    /// Ruin masonry collision. Contributes to the `BlockGrid` (collision,
-    /// projectile LoS, melee LoS) like any block, but the world scene renderer
-    /// skips it: the ruin rendering system spawns the real building-piece and
-    /// prop meshes at the site element transforms instead of a grey cuboid.
-    /// `WorldData` is never persisted (rebuilt from the seed each load), so
-    /// appending this variant costs no save-format change.
+    /// Ruin collision (burnt-house plinths and wall stubs). Contributes to
+    /// the `BlockGrid` (collision, projectile LoS, melee LoS) like any block,
+    /// but the world scene renderer skips it: the ruin rendering system
+    /// spawns the authored burnt-house shell glb at the site transform
+    /// instead of a grey cuboid. `WorldData` is never persisted (rebuilt from
+    /// the seed each load), so appending this variant costs no save-format
+    /// change.
     RuinMasonry,
 }
 

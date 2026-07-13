@@ -397,7 +397,7 @@ pub(super) fn world_map_ui(
                 // appended here rather than in `biome_legend`).
                 let mut legend: Vec<(&'static str, [u8; 3])> =
                     crate::world::biome_legend().to_vec();
-                legend.push(("Ruins (landmark)", [206, 200, 186]));
+                legend.push(("Burnt ruins (landmark)", [186, 180, 172]));
                 let font = egui::FontId::proportional(11.0);
                 let text_col = egui::Color32::from_gray(210);
                 let sw = 11.0;
@@ -699,40 +699,41 @@ fn draw_meteor_shower_marker(painter: &egui::Painter, pos: egui::Pos2, time: f32
     painter.circle_filled(pos, 1.6, egui::Color32::from_rgb(255, 240, 210));
 }
 
-/// Draw a faint permanent ruin glyph centred on `pos`: a small broken-column
-/// pictogram (a low pale-stone shaft with a fractured, angled top over a wide
-/// base). Deliberately faint and desaturated so ruins read as background
-/// landmarks, never competing with the player's own markers.
+/// Draw a faint permanent ruin glyph centred on `pos`: a small burnt-house
+/// pictogram (a squat wall rectangle under a half-collapsed roof line, one
+/// gable still up, the other side fallen in). Deliberately faint and
+/// desaturated so ruins read as background landmarks, never competing with
+/// the player's own markers.
 fn draw_ruin_glyph(painter: &egui::Painter, pos: egui::Pos2) {
-    // Pale weathered-stone fill, low alpha so it sits behind the markers.
-    let fill = egui::Color32::from_rgba_unmultiplied(206, 200, 186, 150);
-    let outline = egui::Color32::from_rgba_unmultiplied(70, 66, 58, 170);
-    let w = 4.0; // half-width of the column shaft
+    // Ash-grey fill, low alpha so it sits behind the markers.
+    let fill = egui::Color32::from_rgba_unmultiplied(186, 180, 172, 150);
+    let outline = egui::Color32::from_rgba_unmultiplied(62, 58, 54, 170);
+    let w = 5.5; // half-width of the house body
     let h = 6.0; // half-height of the glyph
 
-    // Wide base slab.
-    let base = egui::Rect::from_min_max(
-        egui::pos2(pos.x - w * 1.6, pos.y + h * 0.55),
-        egui::pos2(pos.x + w * 1.6, pos.y + h),
+    // Squat wall rectangle.
+    let walls = egui::Rect::from_min_max(
+        egui::pos2(pos.x - w, pos.y - h * 0.1),
+        egui::pos2(pos.x + w, pos.y + h),
     );
-    painter.rect_filled(base, 1.0, fill);
+    painter.rect_filled(walls, 1.0, fill);
     painter.rect_stroke(
-        base,
+        walls,
         1.0,
         egui::Stroke::new(0.8, outline),
         egui::StrokeKind::Middle,
     );
 
-    // Broken column shaft with a fractured (angled) top: a quad narrower than
-    // the base, its top edge sloped so it reads as snapped off.
-    let shaft = vec![
-        egui::pos2(pos.x - w, pos.y + h * 0.55),
-        egui::pos2(pos.x + w, pos.y + h * 0.55),
-        egui::pos2(pos.x + w, pos.y - h * 0.2),
-        egui::pos2(pos.x - w, pos.y - h * 0.7),
+    // Half-collapsed roof: the left gable still rises to a peak, then the
+    // ridge line drops and breaks off short of the right wall.
+    let roof = vec![
+        egui::pos2(pos.x - w, pos.y - h * 0.1),
+        egui::pos2(pos.x - w * 0.35, pos.y - h),
+        egui::pos2(pos.x + w * 0.25, pos.y - h * 0.35),
+        egui::pos2(pos.x + w * 0.55, pos.y - h * 0.1),
     ];
     painter.add(egui::Shape::convex_polygon(
-        shaft,
+        roof,
         fill,
         egui::Stroke::new(0.8, outline),
     ));

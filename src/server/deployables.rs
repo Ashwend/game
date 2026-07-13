@@ -168,6 +168,20 @@ impl DeployedEntity {
 }
 
 impl GameServer {
+    /// True when `(x, z)` is too close to a ruin for player construction:
+    /// inside any footprint circle plus the placement margin. Ruins hold the
+    /// shared salvage chests; letting players build there walls the chests
+    /// in or camps the restock. Explosive charges deliberately skip this
+    /// gate (raid tools work anywhere; the chests are indestructible).
+    pub(super) fn ruin_blocks_placement(&self, position: Vec3Net) -> bool {
+        crate::world::point_near_any_footprint(
+            &self.ruin_footprints,
+            position.x,
+            position.z,
+            crate::game_balance::RUIN_PLACEMENT_EXCLUSION_MARGIN_M,
+        )
+    }
+
     pub(super) fn apply_place_deployable_command(
         &mut self,
         client_id: ClientId,
@@ -226,6 +240,13 @@ impl GameServer {
                 client_id,
                 ToastKind::Warning,
                 "Place on the ground or on a floor".to_owned(),
+            );
+        }
+        if self.ruin_blocks_placement(command.position) {
+            return place_toast(
+                client_id,
+                ToastKind::Warning,
+                "Too close to a ruin to place anything".to_owned(),
             );
         }
         if !command.position.x.is_finite()
@@ -377,6 +398,13 @@ impl GameServer {
                 client_id,
                 ToastKind::Warning,
                 "Place on the ground, a floor, or a wall".to_owned(),
+            );
+        }
+        if self.ruin_blocks_placement(command.position) {
+            return place_toast(
+                client_id,
+                ToastKind::Warning,
+                "Too close to a ruin to place anything".to_owned(),
             );
         }
         // Building privilege gate (torches are construction too): can't

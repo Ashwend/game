@@ -192,6 +192,12 @@ pub struct GameServer {
     /// against it, but the data is here for any future server-side
     /// collision or validation check.
     world_grid: BlockGrid,
+    /// Ruin footprint circles for the current world, computed once at load
+    /// from the same seed-pure layout the static blocks and salvage chests
+    /// derive from. Placement validation rejects player structures inside a
+    /// footprint plus `RUIN_PLACEMENT_EXCLUSION_MARGIN_M` (explosive charges
+    /// exempt), so nobody walls in or camps the shared salvage chests.
+    ruin_footprints: Vec<crate::world::RuinFootprint>,
     settings: ServerSettings,
     /// WorkOS access-token verifier, present only on a dedicated server run in
     /// [`AuthMode::Workos`]. Loopback (singleplayer) and `Test` runs leave it

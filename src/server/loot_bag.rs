@@ -368,10 +368,17 @@ impl GameServer {
             OpenContainer::StorageBox(entity_id) => {
                 let entity = self.deployed_entities.get(&entity_id)?;
                 let storage = entity.storage.as_ref()?;
+                // The ruin cache rides the storage-box container pointer but
+                // titles its panel as the salvage chest it is.
+                let kind = if matches!(entity.kind, crate::items::DeployableKind::RuinCache) {
+                    ContainerViewKind::SalvageChest
+                } else {
+                    ContainerViewKind::StorageBox
+                };
                 Some(OpenLootBagView {
                     id: entity_id,
                     slots: storage.slots.clone(),
-                    kind: ContainerViewKind::StorageBox,
+                    kind,
                 })
             }
         }

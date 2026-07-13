@@ -26,7 +26,7 @@ use crate::{
         RUIN_CACHE_SLOT_COUNT, RUIN_CACHE_WEIGHT_CLOTH, RUIN_CACHE_WEIGHT_GUNPOWDER,
         RUIN_CACHE_WEIGHT_IRON_BAR,
     },
-    items::{ANCIENT_FITTINGS_ID, CLOTH_ID, GUNPOWDER_ID, IRON_BAR_ID, METEORITE_ID},
+    items::{CLOTH_ID, GUNPOWDER_ID, IRON_BAR_ID, METEORITE_ALLOY_ID, SALVAGED_FITTINGS_ID},
     protocol::{DeployedEntityId, ItemStack},
     save::PersistedRuinCacheState,
     server::GameServer,
@@ -160,15 +160,15 @@ impl LootRng {
 }
 
 /// Roll the ruin-cache loot table for `(cache_id, refill_counter)`. Guarantees
-/// `ancient_fittings` (the cache's exclusive source) plus weighted secondary
+/// `salvaged_fittings` (the cache's exclusive source) plus weighted secondary
 /// rolls and a rare meteorite. Pure and deterministic so tests can pin it.
 pub(crate) fn roll_loot(cache_id: DeployedEntityId, refill_counter: u64) -> Vec<ItemStack> {
     let mut rng = LootRng::new(cache_id, refill_counter);
     let mut loot: Vec<ItemStack> = Vec::new();
 
-    // Ancient fittings ALWAYS, between the configured bounds.
+    // Salvaged fittings ALWAYS, between the configured bounds.
     let fittings = rng.range_inclusive(RUIN_CACHE_FITTINGS_MIN, RUIN_CACHE_FITTINGS_MAX);
-    loot.push(ItemStack::new(ANCIENT_FITTINGS_ID, fittings as u16));
+    loot.push(ItemStack::new(SALVAGED_FITTINGS_ID, fittings as u16));
 
     // Weighted secondary rolls: gunpowder / iron_bar / cloth.
     let total_weight =
@@ -190,7 +190,7 @@ pub(crate) fn roll_loot(cache_id: DeployedEntityId, refill_counter: u64) -> Vec<
 
     // Rare meteorite bonus.
     if rng.percent() < RUIN_CACHE_METEORITE_CHANCE_PCT {
-        loot.push(ItemStack::new(METEORITE_ID, 1));
+        loot.push(ItemStack::new(METEORITE_ALLOY_ID, 1));
     }
 
     loot
@@ -240,7 +240,7 @@ mod tests {
                 let loot = roll_loot(cache_id, counter);
                 let fittings: u16 = loot
                     .iter()
-                    .filter(|s| s.item_id.as_ref() == ANCIENT_FITTINGS_ID)
+                    .filter(|s| s.item_id.as_ref() == SALVAGED_FITTINGS_ID)
                     .map(|s| s.quantity)
                     .sum();
                 assert!(
@@ -294,7 +294,10 @@ mod tests {
         let trials = 2000usize;
         for i in 0..trials {
             let loot = roll_loot(i as u64, (i as u64) % 7);
-            if loot.iter().any(|s| s.item_id.as_ref() == METEORITE_ID) {
+            if loot
+                .iter()
+                .any(|s| s.item_id.as_ref() == METEORITE_ALLOY_ID)
+            {
                 ember += 1;
             }
         }
@@ -342,8 +345,8 @@ mod tests {
             slots
                 .iter()
                 .flatten()
-                .any(|s| s.item_id.as_ref() == ANCIENT_FITTINGS_ID),
-            "a refill always includes ancient fittings"
+                .any(|s| s.item_id.as_ref() == SALVAGED_FITTINGS_ID),
+            "a refill always includes salvaged fittings"
         );
     }
 
@@ -384,7 +387,7 @@ mod tests {
             slots
                 .iter()
                 .flatten()
-                .any(|s| s.item_id.as_ref() == ANCIENT_FITTINGS_ID),
+                .any(|s| s.item_id.as_ref() == SALVAGED_FITTINGS_ID),
             "a freshly spawned cache should already hold fittings"
         );
         assert_eq!(slots.len(), RUIN_CACHE_SLOT_COUNT);

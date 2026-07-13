@@ -230,6 +230,12 @@ pub(crate) enum ControlRequest {
         aim: Option<f32>,
         swing: Option<f32>,
     },
+    /// Hold forward movement input at the current look yaw for `seconds`
+    /// (optionally at run speed), so an agent can walk the real world and
+    /// exercise collision / step-up end to end. Dev-only, like
+    /// [`Self::Swing`]; expires on its own, and a second call replaces the
+    /// order (`seconds: 0` cancels).
+    Walk { seconds: f32, run: Option<bool> },
     /// Return a JSON snapshot of key client state for assertions.
     DumpState,
 }
@@ -945,6 +951,15 @@ fn handle_request(
             Ok(format!(
                 "pose override set (draw={draw:?} reload={reload:?} recoil={recoil:?} aim={aim:?} swing={swing:?})"
             ))
+        }
+        ControlRequest::Walk { seconds, run } => {
+            let run = run.unwrap_or(false);
+            let seconds = seconds.clamp(0.0, 30.0);
+            look.agent_walk = (seconds > 0.0).then(|| crate::app::state::AgentWalk {
+                deadline: std::time::Instant::now() + Duration::from_secs_f32(seconds),
+                run,
+            });
+            Ok(format!("walking forward for {seconds:.1}s (run={run})"))
         }
         ControlRequest::DumpState => {
             let dump = build_dump(runtime, menu, local_player, placement, deployables);

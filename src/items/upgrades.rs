@@ -16,7 +16,7 @@
 use crate::crafting::CraftingInput;
 
 use super::deployables::DeployableKind;
-use super::ids::{ANCIENT_FITTINGS_ID, IRON_BAR_ID, METEORITE_ID};
+use super::ids::{IRON_BAR_ID, METEORITE_INGOT_ID, SALVAGED_FITTINGS_ID};
 
 /// One upgrade path: mutate a placed `from` structure into `to` in place,
 /// consuming `cost`. `from` and `to` share the entity id; only the kind (and
@@ -36,8 +36,8 @@ pub const DEPLOYABLE_UPGRADES: &[DeployableUpgrade] = &[DeployableUpgrade {
     to: DeployableKind::Workbench { tier: 2 },
     cost: &[
         CraftingInput::new(IRON_BAR_ID, 30),
-        CraftingInput::new(ANCIENT_FITTINGS_ID, 6),
-        CraftingInput::new(METEORITE_ID, 4),
+        CraftingInput::new(SALVAGED_FITTINGS_ID, 6),
+        CraftingInput::new(METEORITE_INGOT_ID, 4),
     ],
 }];
 
@@ -66,7 +66,7 @@ mod tests {
             upgrade
                 .cost
                 .iter()
-                .any(|input| input.item_id == METEORITE_ID && input.quantity == 4)
+                .any(|input| input.item_id == METEORITE_INGOT_ID && input.quantity == 4)
         );
     }
 

@@ -233,7 +233,7 @@ fn draw_cost_row(ui: &mut egui::Ui, item_id: &str, have: u32, need: u32) {
 mod tests {
     use super::*;
     use crate::{
-        items::{ANCIENT_FITTINGS_ID, IRON_BAR_ID, METEORITE_ID},
+        items::{IRON_BAR_ID, METEORITE_INGOT_ID, SALVAGED_FITTINGS_ID},
         protocol::ItemStack,
         server::PlayerPrivate,
     };
@@ -265,8 +265,8 @@ mod tests {
     fn affordable_inventory() -> PlayerInventoryState {
         let mut inventory = PlayerInventoryState::empty();
         inventory.inventory_slots[0] = Some(ItemStack::new(IRON_BAR_ID, 30));
-        inventory.inventory_slots[1] = Some(ItemStack::new(ANCIENT_FITTINGS_ID, 6));
-        inventory.inventory_slots[2] = Some(ItemStack::new(METEORITE_ID, 4));
+        inventory.inventory_slots[1] = Some(ItemStack::new(SALVAGED_FITTINGS_ID, 6));
+        inventory.inventory_slots[2] = Some(ItemStack::new(METEORITE_INGOT_ID, 4));
         inventory
     }
 

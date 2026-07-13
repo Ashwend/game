@@ -39,8 +39,10 @@ impl GameServer {
         let load_tick_for_chunk = save.state.last_authoritative_tick;
         // Resource nodes: trust the saved state once a world has ever been
         // hosted (so harvested resources don't respawn). For brand-new worlds
-        // the save has `None` and we seed from the chunk generator.
-        let (mut chunk_manager, resource_nodes, fresh_world) = match (
+        // the save has `None` and we seed from the chunk generator. (No
+        // fresh-world flag any more: the one consumer, ruin-chest spawning,
+        // now reconciles against the current layout on every load.)
+        let (mut chunk_manager, resource_nodes) = match (
             save.state.resource_nodes.take(),
             save.state.chunk_manager.take(),
         ) {
@@ -50,7 +52,7 @@ impl GameServer {
                     .map(|node| (node.id, node))
                     .collect();
                 let manager = ChunkManager::from_save(saved_chunk, load_tick_for_chunk);
-                (manager, nodes, false)
+                (manager, nodes)
             }
             _ => {
                 // Brand-new world: generate from seed + dims. Any partial
@@ -61,7 +63,7 @@ impl GameServer {
                     ChunkManager::new_for_world(save.map.world_seed(), save.map.chunk_dims());
                 let nodes: HashMap<ResourceNodeId, ResourceNodeState> =
                     spawns.into_iter().map(|node| (node.id, node)).collect();
-                (manager, nodes, true)
+                (manager, nodes)
             }
         };
 
@@ -133,24 +135,59 @@ impl GameServer {
         // persisted one.
         let persisted_deployables = std::mem::take(&mut save.state.deployed_entities);
         let mut deployed_entities = Self::restore_deployed_entities(persisted_deployables);
-        // On a brand-new world, spawn the ruin loot caches once. They are a
-        // pure function of the seed (same layout the static ruin blocks and the
-        // map glyphs derive from), owner-less, and stocked immediately so the
-        // first visit finds loot. On a reload they come back from the save like
-        // any deployable, so only fresh worlds spawn them.
-        if fresh_world {
+        // Ruin salvage chests are world furniture, not player property: their
+        // placement is a pure function of the seed (the same layout the static
+        // ruin blocks and map glyphs derive from). Reconcile the persisted set
+        // against the CURRENT layout on every load, not just on fresh worlds:
+        // keep chests standing on a live cache point, drop chests stranded by
+        // a layout change (an old save's chests can otherwise end up buried
+        // inside a reworked shell's walls or doorway as an invisible
+        // collider), and spawn any missing point stocked, so old worlds
+        // self-heal to the current ruin set. A brand-new world is just the
+        // "every point is missing" case. The same layout also seeds the ruin
+        // footprints the placement gate tests against.
+        let ruin_sites = crate::world::ruin_layout(save.map.world_seed(), save.map.chunk_dims());
+        let ruin_footprints = crate::world::ruin_footprints(&ruin_sites);
+        {
+            let cache_points: Vec<(crate::protocol::Vec3Net, f32)> = ruin_sites
+                .into_iter()
+                .flat_map(|site| {
+                    let yaw = site.yaw();
+                    site.cache_points()
+                        .into_iter()
+                        .map(move |point| (point, yaw))
+                })
+                .collect();
+            let on_a_live_point = |position: crate::protocol::Vec3Net| {
+                cache_points.iter().any(|(point, _)| {
+                    (point.x - position.x).abs() < 0.05
+                        && (point.y - position.y).abs() < 0.05
+                        && (point.z - position.z).abs() < 0.05
+                })
+            };
+            deployed_entities.retain(|_, entity| {
+                !matches!(entity.kind, crate::items::DeployableKind::RuinCache)
+                    || on_a_live_point(entity.position)
+            });
             let mut next_cache_id = next_id_floor(
                 save.state.next_deployed_entity_id,
                 deployed_entities.keys().copied(),
             );
             let placed_tick = save.state.last_authoritative_tick;
-            for site in crate::world::ruin_layout(save.map.world_seed(), save.map.chunk_dims()) {
-                for point in site.cache_points() {
-                    let id = next_cache_id;
-                    next_cache_id = next_cache_id.saturating_add(1);
-                    let entity = Self::spawn_ruin_cache_entity(id, point, site.yaw, placed_tick);
-                    deployed_entities.insert(id, entity);
+            for (point, yaw) in cache_points {
+                let occupied = deployed_entities.values().any(|entity| {
+                    matches!(entity.kind, crate::items::DeployableKind::RuinCache)
+                        && (entity.position.x - point.x).abs() < 0.05
+                        && (entity.position.y - point.y).abs() < 0.05
+                        && (entity.position.z - point.z).abs() < 0.05
+                });
+                if occupied {
+                    continue;
                 }
+                let id = next_cache_id;
+                next_cache_id = next_cache_id.saturating_add(1);
+                let entity = Self::spawn_ruin_cache_entity(id, point, yaw, placed_tick);
+                deployed_entities.insert(id, entity);
             }
         }
         for entity in deployed_entities.values() {
@@ -192,6 +229,7 @@ impl GameServer {
             save,
             world,
             world_grid,
+            ruin_footprints,
             settings,
             workos: None,
             clients,

@@ -10,12 +10,12 @@ sources:
   - src/server/chunk_manager/save.rs - ChunkManagerSave, PendingRegrowSave
   - src/net/host/rooms.rs - attach_room_gated_replication, update_client_room_subscriptions, ensure_chunk_room_*
   - src/net/host/mirror.rs - sync_projectile_entities
-  - src/server/meteor_shower.rs - spawn_meteor_shower_shards, cleanup_meteor_shower
+  - src/server/meteor_shower.rs - spawn_meteor_shower_crater_nodes, cleanup_meteor_shower
   - src/server/queries.rs - client_aoi_key, visible_chunks_for_client, retained_chunks_for_client
 related:
   - docs/replication.md - the attach helpers, bug #740, the host mirror this AoI gates
   - docs/worlds-and-saves.md - the pure generation pipeline that feeds the initial spawn list (including the ruin footprints), and ChunkManagerSave persistence
-  - docs/meteor-shower.md - the meteor event that splices shard nodes into the live map at runtime
+  - docs/meteor-shower.md - the meteor event that splices crater nodes into the live map at runtime
   - docs/networking.md - SetViewRadius wire message, channels, ServerTickPulse gate
   - docs/profiling.md - the ~1800-visible-entity floor that AoI scale produces
 ---
@@ -141,7 +141,7 @@ Ruin footprints are a node-rejection input to both placement passes: `ChunkManag
 Two sources feed nodes into this system differently:
 
 - **Meteorite** is a normal world-gen kind. It rides the raw ore channel (`channel_for`, `src/world/chunk/classification.rs`), has base capacity 1 and only in `RockyOutcrop`/`OreVein` chunks (`base_capacity`, same file), and is further gated in `chunk_kind_target` (`src/world/chunk/generator.rs:87`) by a centre-distance ring (`METEORITE_MIN_CENTER_DISTANCE_FRACTION`) plus an ore-channel floor, so most eligible chunks hold none. It depletes and regrows like any other kind, capped by that same ceiling.
-- **Meteor shower shard nodes** are spliced into the live map at runtime by the meteor event (`spawn_meteor_shower_shards`, `src/server/meteor_shower.rs:577`): each shard enters membership via `track_resource_node` so it is AoI-visible like any node. A shard mined by a player depletes through the normal gather path, so its regrow event is subject to the same capacity gate as any other kind. Any shard still unmined at event end is force-despawned by `cleanup_meteor_shower` (`meteor_shower.rs:654`), which removes it and calls `untrack_resource_node` with **no regrow scheduled** (event spawns, not world nodes). See [meteor-shower.md](meteor-shower.md).
+- **Meteor shower crater nodes** are spliced into the live map at runtime by the meteor event (`spawn_meteor_shower_crater_nodes`, `src/server/meteor_shower.rs:577`): each crater node enters membership via `track_resource_node` so it is AoI-visible like any node. A crater node mined by a player depletes through the normal gather path, so its regrow event is subject to the same capacity gate as any other kind. Any crater node still unmined at event end is force-despawned by `cleanup_meteor_shower` (`meteor_shower.rs:654`), which removes it and calls `untrack_resource_node` with **no regrow scheduled** (event spawns, not world nodes). See [meteor-shower.md](meteor-shower.md).
 
 ### Capacity ceiling is shared with world-gen
 
@@ -181,6 +181,6 @@ For each `(coord, kind)` group, the ring distance is the Chebyshev distance `coo
 
 - [docs/replication.md](replication.md) - the `attach_room_gated_replication` / `attach_player_replication` helpers, the per-entity `ReplicationGroup` fix for bug #740, the host mirror-sync systems, and the `ServerTickPulse` gate this AoI system shares.
 - [docs/worlds-and-saves.md](worlds-and-saves.md) - the deterministic `src/world/chunk/` generation pipeline (classification, Poisson-disk generator, noise), `chunk_kind_target`, the ruin pipeline behind `ruin_footprints`, and the full `WorldStateSave` / save-format story `ChunkManagerSave` embeds into.
-- [docs/meteor-shower.md](meteor-shower.md) - the meteor event that splices meteorite shard nodes into the live map at runtime and force-despawns unmined ones at cleanup.
+- [docs/meteor-shower.md](meteor-shower.md) - the meteor event that splices meteorite crater nodes into the live map at runtime and force-despawns unmined ones at cleanup.
 - [docs/networking.md](networking.md) - the `SetViewRadius` wire message, channel registration, and the `ServerTickPulse` / `server_tick_advanced` run condition.
 - [docs/profiling.md](profiling.md) - the ~1800-visible-entity floor that AoI scale produces and the per-frame-iteration pitfalls when reconciling replicated entities client-side.

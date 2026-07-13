@@ -166,8 +166,8 @@ fn deployable_tooltip_text(
             (kind.label().to_owned(), "Press E to open".to_owned())
         }
         DeployableKind::RuinCache => (
-            "Ruin Cache".to_owned(),
-            "Press E to loot\nAncient fittings and salvage. Refills over time.".to_owned(),
+            "Salvage Chest".to_owned(),
+            "Press E to loot\nSalvaged fittings and supplies. Restocks over time.".to_owned(),
         ),
         DeployableKind::Torch { .. } => (
             "Torch".to_owned(),

@@ -738,3 +738,123 @@ fn crater_floor_supports_standing_inside_the_bowl() {
     }
     assert!(controller.position.y.abs() < 0.02);
 }
+
+#[test]
+fn player_walks_into_a_burnt_house_through_the_door_gap() {
+    // A burnt-house ruin must be enterable on foot: the door gap is a real
+    // hole in the wall colliders and the 0.4 m floor plinth is within
+    // STEP_HEIGHT, so walking straight at the doorway should carry the
+    // player up onto the plinth without a jump.
+    let site = crate::world::RuinSite {
+        prefab: crate::world::RuinPrefab::BurntCottage,
+        x: 0.0,
+        z: 0.0,
+        quarter_turns: 0,
+    };
+    let world = WorldData {
+        floor_size: 60.0,
+        blocks: site.static_blocks(),
+        resource_nodes: Vec::new(),
+    };
+    // The cottage door gap spans x 0.1..1.1 on the z = 2.1 front wall.
+    // Approach from outside (z = 4), walking forward (yaw 0 faces -Z).
+    let mut controller = PlayerController::spawn();
+    controller.position = Vec3Net::new(0.6, 0.0, 4.0);
+    controller.apply_input(input(1, Vec3Net::new(0.0, 0.0, 1.0), false, false));
+    for _ in 0..600 {
+        controller.simulate(1.0 / 120.0, &world);
+    }
+    assert!(
+        controller.position.z < 1.6,
+        "player should have walked through the doorway, stuck at z={}",
+        controller.position.z
+    );
+    assert!(
+        (controller.position.y - crate::world::ruins::FLOOR_TOP_M).abs() < 0.05,
+        "player should stand on the plinth top, y={}",
+        controller.position.y
+    );
+}
+
+#[test]
+fn player_walks_into_the_barn_through_the_cart_opening() {
+    // Same contract for the barn's wide cart opening (x -1.2..1.2 on the
+    // z = -2.6 north wall), approached from the north walking +Z.
+    let site = crate::world::RuinSite {
+        prefab: crate::world::RuinPrefab::BurntBarn,
+        x: 0.0,
+        z: 0.0,
+        quarter_turns: 0,
+    };
+    let world = WorldData {
+        floor_size: 60.0,
+        blocks: site.static_blocks(),
+        resource_nodes: Vec::new(),
+    };
+    let mut controller = PlayerController::spawn();
+    controller.position = Vec3Net::new(0.0, 0.0, -5.0);
+    controller.apply_input(PlayerInput {
+        sequence: 1,
+        direction: Vec3Net::new(0.0, 0.0, 1.0),
+        run: false,
+        jump: false,
+        yaw: std::f32::consts::PI,
+        pitch: 0.0,
+    });
+    for _ in 0..600 {
+        controller.simulate(1.0 / 120.0, &world);
+    }
+    assert!(
+        controller.position.z > -2.0,
+        "player should have walked through the cart opening, stuck at z={}",
+        controller.position.z
+    );
+    assert!(
+        (controller.position.y - crate::world::ruins::FLOOR_TOP_M).abs() < 0.05,
+        "player should stand on the plinth top, y={}",
+        controller.position.y
+    );
+}
+
+#[test]
+fn player_walks_into_a_quarter_turned_house_through_its_door() {
+    // Regression: the ruin collider rotation once spun opposite to the
+    // rendered shell (Bevy `from_rotation_y`), leaving an invisible wall in
+    // the visible doorway on q=1/q=3 sites. Walk a quarter-turned cottage's
+    // door: local (0.6, 2.1) maps through (x, z) -> (z, -x) to world
+    // (2.1, -0.6), door facing +X.
+    let site = crate::world::RuinSite {
+        prefab: crate::world::RuinPrefab::BurntCottage,
+        x: 0.0,
+        z: 0.0,
+        quarter_turns: 1,
+    };
+    let world = WorldData {
+        floor_size: 60.0,
+        blocks: site.static_blocks(),
+        resource_nodes: Vec::new(),
+    };
+    let mut controller = PlayerController::spawn();
+    controller.position = Vec3Net::new(4.6, 0.0, -0.6);
+    controller.apply_input(PlayerInput {
+        sequence: 1,
+        direction: Vec3Net::new(0.0, 0.0, 1.0),
+        run: false,
+        jump: false,
+        yaw: std::f32::consts::FRAC_PI_2,
+        pitch: 0.0,
+    });
+    for _ in 0..600 {
+        controller.simulate(1.0 / 120.0, &world);
+    }
+    assert!(
+        controller.position.x < 1.6,
+        "player should have walked through the rotated doorway, stuck at x={}",
+        controller.position.x
+    );
+    assert!(
+        (controller.position.y - crate::world::ruins::FLOOR_TOP_M).abs() < 0.05,
+        "player should stand on the plinth top, y={}",
+        controller.position.y
+    );
+}

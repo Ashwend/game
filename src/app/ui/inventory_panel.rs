@@ -103,12 +103,17 @@ pub(super) fn inventory_panel_ui(
 ) {
     // Per-frame inventory bookkeeping runs regardless of which tab (or none)
     // is up: slot flashes and pickup/move/drop cues track the replicated
-    // inventory whether or not the player is looking at the grid.
+    // inventory whether or not the player is looking at the grid. The
+    // drop/move cues additionally gate on an item surface being open (see
+    // `observe_inventory`), so ammo/charge consumption mid-combat doesn't
+    // click like a UI interaction.
     inventory_ui.begin_frame();
     inventory_ui.tick_slot_flashes(delta_seconds);
+    let item_ui_open =
+        menu.inventory_open || menu.crafting_open || menu.furnace_open || menu.loot_bag_open;
     match local_player.private.as_ref().map(|p| &p.inventory) {
         Some(inventory) => {
-            if let Some(event) = inventory_ui.observe_inventory(inventory) {
+            if let Some(event) = inventory_ui.observe_inventory(inventory, item_ui_open) {
                 inventory_sound_requests.push(event);
             }
         }

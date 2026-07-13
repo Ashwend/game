@@ -52,6 +52,14 @@ pub(crate) struct DeployablePlacementState {
     /// mount. Shipped in `PlaceDeployableCommand.wall_mounted` and folded
     /// into the ghost's kind so the preview tilts. Ignored for other kinds.
     pub(crate) wall_mounted: bool,
+    /// Ruin footprint circles for the current world, mirroring the server's
+    /// placement gate so a ghost inside a footprint (plus the placement
+    /// margin) turns red instead of being rejected on the wire. Cached per
+    /// `(seed, dims)` (the key below) and refreshed lazily by
+    /// `update_placement_ghost_system` when the world changes.
+    pub(crate) ruin_footprints: Vec<crate::world::RuinFootprint>,
+    /// The `(seed, dims)` the cached footprints were computed for.
+    pub(crate) ruin_footprints_key: Option<(u64, crate::world::ChunkDims)>,
 }
 
 /// What the building ghost's cost label shows: the material, how much the

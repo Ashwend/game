@@ -6,7 +6,10 @@
 //! furnace module's `mod.rs` so they remain test-reachable without
 //! widening the production surface.
 
-use crate::items::{COAL_ID, IRON_BAR_ID, IRON_ORE_ID, SULFUR_ID, SULFUR_ORE_ID, WOOD_ID};
+use crate::items::{
+    COAL_ID, IRON_BAR_ID, IRON_ORE_ID, METEORITE_ALLOY_ID, METEORITE_INGOT_ID, SULFUR_ID,
+    SULFUR_ORE_ID, WOOD_ID,
+};
 use crate::protocol::{FURNACE_ITEM_SLOT_COUNT, FurnaceCommand, FurnaceSlotRef, ItemStack};
 use crate::server::furnace::{
     FurnaceState, SMELT_TICKS_PER_OUTPUT, WOOD_BURN_TICKS, merge_into_optional_slot,
@@ -80,6 +83,40 @@ fn sulfur_ore_smelts_to_sulfur_consuming_fuel() {
         .map(|stack| stack.quantity)
         .sum();
     assert_eq!(sulfur_count, 1, "one sulfur should have been produced");
+    assert!(furnace.active, "furnace should remain active");
+}
+
+#[test]
+fn meteorite_alloy_smelts_to_ingot_consuming_fuel() {
+    let mut furnace = FurnaceState {
+        fuel: smeltable_input(COAL_ID, 5),
+        items: Default::default(),
+        active: true,
+        fuel_burn_ticks_left: 0,
+        smelt_progress_ticks: 0,
+    };
+    furnace.items[0] = smeltable_input(METEORITE_ALLOY_ID, 2);
+
+    // Same timing as the other smeltables: one output per window.
+    for _ in 0..SMELT_TICKS_PER_OUTPUT {
+        tick_one_furnace(&mut furnace);
+    }
+    assert_eq!(
+        furnace.items[0].as_ref().map(|s| s.quantity),
+        Some(1),
+        "one meteorite alloy should have been consumed",
+    );
+    let ingot_count: u16 = furnace
+        .items
+        .iter()
+        .filter_map(|slot| slot.as_ref())
+        .filter(|stack| stack.item_id.as_ref() == METEORITE_INGOT_ID)
+        .map(|stack| stack.quantity)
+        .sum();
+    assert_eq!(
+        ingot_count, 1,
+        "one meteorite ingot should have been produced"
+    );
     assert!(furnace.active, "furnace should remain active");
 }
 
