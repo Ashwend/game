@@ -215,24 +215,33 @@ mod tests {
     }
 
     #[test]
-    fn splash_fades_immediately_when_load_took_longer_than_min_hold() {
+    fn splash_fade_starts_immediately_when_load_took_longer_than_min_hold() {
         let mut splash = LoadingSplash::new(LoadingSplashKind::EnteringWorld, "Slow World");
         // Long load that exceeds the min-hold window before the world is
         // ready: the player has already been looking at the splash longer
-        // than min, so once ready, fade can start straight away.
+        // than min, so once ready the crossfade begins straight away (no
+        // extra hold) but still runs its full window rather than cutting.
         for _ in 0..40 {
             let _ = splash.tick(0.1);
         }
         splash.ready = true;
-        // Fade should complete within `FADE_SECONDS` from here.
+        // First post-ready frame is still opaque, then the fade must pass
+        // through intermediate alpha before completing.
+        assert_eq!(splash.tick(0.05), Some(u8::MAX));
+        let mut saw_partial = false;
         let mut faded = false;
         for _ in 0..30 {
-            if splash.tick(0.05).is_none() {
-                faded = true;
-                break;
+            match splash.tick(0.05) {
+                Some(alpha) if alpha < u8::MAX => saw_partial = true,
+                Some(_) => {}
+                None => {
+                    faded = true;
+                    break;
+                }
             }
         }
-        assert!(faded);
+        assert!(saw_partial, "reveal must crossfade, not hard cut");
+        assert!(faded, "fade should complete within the fade window");
     }
 
     #[test]

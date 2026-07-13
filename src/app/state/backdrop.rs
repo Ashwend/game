@@ -59,12 +59,12 @@ impl MenuBackdropVisibility {
 /// menu renders this fixed time instead, so the title screen is identical on
 /// every visit. Pinned, not ticked: the menu never cycles.
 ///
-/// 07:00, early morning: the look chosen for the backdrop by sweeping the dev
+/// 06:40, early morning: the look chosen for the backdrop by sweeping the dev
 /// backdrop-time slider. A low morning sun rakes long soft light across the
 /// field, with enough directionality to read as a gradient rather than a hard
 /// split, because the grass/prop cel shader floors deep shadow against the real
 /// shade rather than crushing it to near-black.
-pub(crate) const MENU_BACKDROP_SECONDS: f32 = 7.0 * 3600.0;
+pub(crate) const MENU_BACKDROP_SECONDS: f32 = 6.0 * 3600.0 + 40.0 * 60.0;
 
 /// Live override for the menu-backdrop time of day, read by the sky system when
 /// a backdrop-using screen is up. Defaults to the shipped

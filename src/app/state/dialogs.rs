@@ -305,6 +305,14 @@ pub(crate) struct LoadingSplash {
     /// the settle window in [`Self::note_world_ready`]; reset to 0 whenever the
     /// condition lapses so a transient blip can't fade the splash early.
     world_ready_frames: u32,
+    /// Seconds the fade-out has been running. Starts accumulating on the
+    /// first frame the splash is both `ready` and past its minimum hold, so
+    /// the crossfade always runs its full window from that moment. Measuring
+    /// the fade from the hold boundary instead would skip it entirely on any
+    /// load slower than hold + fade (i.e. every real world entry) and
+    /// hard-cut into the scene. Kept separate from `elapsed_seconds` so that
+    /// clock's cap can never stall the fade.
+    fade_elapsed_seconds: Option<f32>,
 }
 
 impl LoadingSplash {
@@ -315,6 +323,7 @@ impl LoadingSplash {
             elapsed_seconds: 0.0,
             ready: false,
             world_ready_frames: 0,
+            fade_elapsed_seconds: None,
         }
     }
 
@@ -373,6 +382,12 @@ impl LoadingSplash {
     /// Advance the timer and return the splash overlay alpha for this
     /// frame. Returns `None` once the splash has fully faded so the caller
     /// can drop it.
+    ///
+    /// The crossfade window is anchored to the first tick the splash is
+    /// eligible to fade (`ready` and past the minimum hold), not to the hold
+    /// boundary itself: readiness usually arrives long after the hold has
+    /// elapsed, and measuring from the boundary would put the splash past the
+    /// whole fade window in one frame, a hard cut instead of a crossfade.
     pub(crate) fn tick(&mut self, delta_seconds: f32) -> Option<u8> {
         self.elapsed_seconds = (self.elapsed_seconds + delta_seconds.max(0.0)).min(60.0);
         let hold = self.min_hold_seconds();
@@ -380,7 +395,9 @@ impl LoadingSplash {
         if !self.ready || self.elapsed_seconds < hold {
             return Some(u8::MAX);
         }
-        let into_fade = self.elapsed_seconds - hold;
+        let fade_elapsed = self.fade_elapsed_seconds.get_or_insert(0.0);
+        let into_fade = *fade_elapsed;
+        *fade_elapsed += delta_seconds.max(0.0);
         if into_fade >= fade {
             return None;
         }
@@ -560,6 +577,39 @@ mod tests {
         splash.elapsed_seconds = WORLD_ENTRY_READY_TIMEOUT_SECONDS;
         splash.note_world_ready(false);
         assert!(splash.ready, "the timeout fallback must reveal the world");
+    }
+
+    #[test]
+    fn slow_load_still_crossfades_instead_of_hard_cutting() {
+        let mut splash = LoadingSplash::new(LoadingSplashKind::EnteringWorld, "World");
+        // Simulate a real-world load: several seconds pass (well past
+        // hold + fade) before readiness arrives.
+        for _ in 0..100 {
+            assert_eq!(splash.tick(0.05), Some(u8::MAX));
+        }
+        splash.ready = true;
+        // The fade window is anchored to this moment, so the reveal must be
+        // a gradient over LOADING_SPLASH_FADE_SECONDS, never a one-frame cut.
+        assert_eq!(splash.tick(0.05), Some(u8::MAX), "fade starts from opaque");
+        let mut alphas = Vec::new();
+        while let Some(alpha) = splash.tick(0.05) {
+            alphas.push(alpha);
+            assert!(alphas.len() < 100, "fade must complete");
+        }
+        let expected_frames = (LOADING_SPLASH_FADE_SECONDS / 0.05) as usize;
+        assert!(
+            alphas.len() >= expected_frames - 2,
+            "fade should span ~{expected_frames} frames, got {}",
+            alphas.len()
+        );
+        assert!(
+            alphas.windows(2).all(|pair| pair[1] <= pair[0]),
+            "alpha must decrease monotonically"
+        );
+        assert!(
+            alphas.iter().any(|&alpha| alpha > 0 && alpha < u8::MAX),
+            "fade must pass through intermediate alpha, not cut"
+        );
     }
 
     #[test]
