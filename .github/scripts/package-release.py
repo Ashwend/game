@@ -8,8 +8,10 @@ executable, so they must travel together in the archive.
 - macOS: assemble a proper `Ashwend.app` bundle (Info.plist + both binaries
   under `Contents/MacOS/`) and zip it with `ditto` so bundle metadata and the
   executable bits survive. The self-updater replaces `Contents/MacOS/ashwend`
-  in place. The bundle is intentionally *not* code-signed here, see
-  docs/updates.md.
+  in place. When `MACOS_SIGNING_IDENTITY` is set (CI imports the Developer ID
+  certificate first) the bundle is Developer ID signed, notarized, and
+  stapled; without it the build falls back to an ad-hoc signature. See
+  docs/updates-and-distribution.md.
 - Linux: a `.tar.gz` of both bare binaries with the executable bit set.
 - Windows: a `.zip` of both `.exe`s.
 """
@@ -17,10 +19,13 @@ executable, so they must travel together in the archive.
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import plistlib
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import zipfile
@@ -30,6 +35,7 @@ from pathlib import Path
 INSTALLER_DIR = Path(__file__).resolve().parents[1] / "installer"
 DMG_SPEC = INSTALLER_DIR / "ashwend-dmg.json"
 INNO_SCRIPT = INSTALLER_DIR / "ashwend.iss"
+ENTITLEMENTS = INSTALLER_DIR / "ashwend-entitlements.plist"
 
 GAME_BASE = "ashwend"
 UPDATER_BASE = "ashwend-updater"
@@ -116,6 +122,33 @@ def build_app_bundle(game: Path, updater: Path, version: str) -> Path:
     return app
 
 
+def signing_identity() -> str | None:
+    """The Developer ID identity, exported by the release workflow after it
+    imports the certificate secret into a throwaway keychain. Empty or unset
+    means "no certificate available": fall back to ad-hoc signing so forks and
+    pre-secret runs still produce a launchable build."""
+    identity = os.environ.get("MACOS_SIGNING_IDENTITY", "").strip()
+    return identity or None
+
+
+def notary_credentials() -> dict[str, str] | None:
+    """Apple notary service credentials from the environment. All three must
+    be present together; a partial set is a secrets misconfiguration and gets a
+    hard error rather than a silently unnotarized release."""
+    keys = ("APPLE_ID", "APPLE_TEAM_ID", "APPLE_APP_SPECIFIC_PASSWORD")
+    values = {key: os.environ.get(key, "").strip() for key in keys}
+    present = sorted(key for key, value in values.items() if value)
+    if not present:
+        return None
+    missing = sorted(key for key, value in values.items() if not value)
+    if missing:
+        raise SystemExit(
+            f"notarization secrets misconfigured: {', '.join(present)} set "
+            f"but {', '.join(missing)} missing"
+        )
+    return values
+
+
 def adhoc_sign(app: Path) -> None:
     # Ad-hoc sign the assembled bundle. The Rust toolchain only applies a
     # *linker* ad-hoc signature to each bare binary, which is invalid as a
@@ -129,14 +162,130 @@ def adhoc_sign(app: Path) -> None:
     # time (the in-app self-updater uses non-`--deep` re-signing precisely
     # because it *is* running from inside the bundle it re-signs).
     #
-    # Not notarized, that needs a paid Developer ID. When that lands, swap the
-    # `-` identity for the Developer ID and add an `xcrun notarytool` step here.
+    # This is the fallback path for builds without the signing secrets; real
+    # releases go through developer_id_sign + notarize_and_staple_app instead.
     subprocess.run(
         ["codesign", "--force", "--deep", "--sign", "-", str(app)],
         check=True,
     )
     subprocess.run(
         ["codesign", "--verify", "--deep", "--strict", str(app)],
+        check=True,
+    )
+
+
+def developer_id_sign(app: Path, identity: str) -> None:
+    """Developer ID signing shaped for notarization: every executable needs
+    the hardened runtime (`--options runtime`) and a secure timestamp, and
+    nested binaries must be signed before the bundle that seals them (inside
+    out, so no `--deep`). Signing the bundle also signs its main executable
+    (`Contents/MacOS/ashwend`), which is where the entitlements land: the
+    hardened runtime blocks mic capture for voice chat without the
+    audio-input entitlement."""
+    if not ENTITLEMENTS.exists():
+        raise SystemExit(f"entitlements plist not found: {ENTITLEMENTS}")
+    updater = app / "Contents" / "MacOS" / UPDATER_BASE
+    subprocess.run(
+        [
+            "codesign",
+            "--force",
+            "--timestamp",
+            "--options",
+            "runtime",
+            "--sign",
+            identity,
+            str(updater),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "codesign",
+            "--force",
+            "--timestamp",
+            "--options",
+            "runtime",
+            "--entitlements",
+            str(ENTITLEMENTS),
+            "--sign",
+            identity,
+            str(app),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["codesign", "--verify", "--deep", "--strict", str(app)],
+        check=True,
+    )
+
+
+def notarize_file(path: Path, creds: dict[str, str]) -> None:
+    """Submit one file (a zip or a dmg) to Apple's notary service and wait for
+    the verdict. `notarytool submit --wait` has historically returned exit
+    code 0 even for a rejected submission, so parse the JSON status and
+    require "Accepted" explicitly; on rejection, fetch and print the notary
+    log (it names the offending file and check) before failing."""
+    auth = [
+        "--apple-id",
+        creds["APPLE_ID"],
+        "--team-id",
+        creds["APPLE_TEAM_ID"],
+        "--password",
+        creds["APPLE_APP_SPECIFIC_PASSWORD"],
+    ]
+    result = subprocess.run(
+        [
+            "xcrun",
+            "notarytool",
+            "submit",
+            str(path),
+            *auth,
+            "--wait",
+            "--timeout",
+            "30m",
+            "--output-format",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    print(result.stdout)
+    if result.stderr:
+        print(result.stderr, file=sys.stderr)
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+    status = payload.get("status")
+    submission_id = payload.get("id")
+    if result.returncode == 0 and status == "Accepted":
+        return
+    if submission_id:
+        log = subprocess.run(
+            ["xcrun", "notarytool", "log", submission_id, *auth],
+            capture_output=True,
+            text=True,
+        )
+        print(log.stdout)
+        if log.stderr:
+            print(log.stderr, file=sys.stderr)
+    raise SystemExit(f"notarization of {path.name} failed: status={status!r}")
+
+
+def notarize_and_staple_app(app: Path, creds: dict[str, str]) -> None:
+    """Notarize the signed bundle and staple the ticket onto it. The notary
+    service takes archives, not bare bundles, so submit a throwaway ditto zip
+    (the release zip is created afterwards, from the stapled bundle, so
+    browser-downloaded copies pass Gatekeeper even offline). The closing
+    `spctl` assessment proves end to end that Gatekeeper accepts the result;
+    it fails loudly here rather than on a player's machine."""
+    with tempfile.TemporaryDirectory() as tmp:
+        upload = Path(tmp) / "notarize-upload.zip"
+        zip_app_bundle(app, upload)
+        notarize_file(upload, creds)
+    subprocess.run(["xcrun", "stapler", "staple", str(app)], check=True)
+    subprocess.run(
+        ["spctl", "--assess", "--type", "execute", "-vv", str(app)],
         check=True,
     )
 
@@ -277,10 +426,38 @@ def main() -> None:
 
     if "apple-darwin" in args.target:
         app = build_app_bundle(game, updater, args.version)
-        adhoc_sign(app)
+        identity = signing_identity()
+        creds = notary_credentials()
+        if identity:
+            if creds is None:
+                raise SystemExit(
+                    "MACOS_SIGNING_IDENTITY is set but APPLE_ID / APPLE_TEAM_ID / "
+                    "APPLE_APP_SPECIFIC_PASSWORD are not; refusing to ship a "
+                    "signed-but-unnotarized build"
+                )
+            developer_id_sign(app, identity)
+            notarize_and_staple_app(app, creds)
+        else:
+            if creds is not None:
+                raise SystemExit(
+                    "notarization secrets are set but MACOS_SIGNING_IDENTITY is not; "
+                    "the certificate import step did not run or found no identity"
+                )
+            print(
+                "::warning::MACOS_SIGNING_IDENTITY not set; falling back to "
+                "ad-hoc signing (not notarized)"
+            )
+            adhoc_sign(app)
         zip_app_bundle(app, output)
         if args.dmg_asset:
-            build_dmg(Path(args.dmg_asset).resolve())
+            dmg = Path(args.dmg_asset).resolve()
+            build_dmg(dmg)
+            if identity and creds is not None:
+                # Notarize and staple the dmg itself too (it wraps the already
+                # stapled bundle, but a stapled dmg mounts cleanly offline and
+                # skips a second Gatekeeper round trip on first open).
+                notarize_file(dmg, creds)
+                subprocess.run(["xcrun", "stapler", "staple", str(dmg)], check=True)
             print(f"packaged {args.dmg_asset}")
     elif output.suffix == ".zip":
         create_zip([game, updater], output)

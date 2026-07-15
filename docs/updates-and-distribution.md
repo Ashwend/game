@@ -12,8 +12,9 @@ sources:
   - src/app/systems/update.rs - apply_update_system (saves the open SP world before relaunch)
   - src/app/ui/update.rs - update_modal, current_changelog_modal, update_corner_pill, pause_update_row
   - .github/scripts/release_assets.py - canonical asset-name source of truth (its docstring is the rename checklist)
-  - .github/scripts/package-release.py - bundle/zip/tar/dmg/installer builder + ad-hoc signing
+  - .github/scripts/package-release.py - bundle/zip/tar/dmg/installer builder + macOS signing/notarization
   - .github/installer/ashwend.iss - per-user Inno Setup installer
+  - .github/installer/ashwend-entitlements.plist - hardened-runtime entitlements (mic capture)
 related:
   - docs/ui-and-client.md - where the update widgets register in the egui frame
   - docs/voice.md - why Info.plist carries NSMicrophoneUsageDescription
@@ -140,11 +141,16 @@ Ashwend.app/Contents/
 
 The icon source is the committed `.github/assets/AppIcon.icns` (`package-release.py` - `ICON_SRC`), copied directly into the bundle. There is no committed AppIcon regeneration script.
 
-The bundle is **ad-hoc signed**, not notarized (notarization needs a paid Developer ID, deferred). Build-time signing is `codesign --force --deep --sign -` then `--verify --deep --strict` (`package-release.py` - `adhoc_sign`); `--deep` is fine here because nothing in the bundle is running at build time.
+The bundle is **Developer ID signed, notarized, and stapled** when the release workflow has the Apple secrets (`package-release.py` - `developer_id_sign` + `notarize_and_staple_app`); without them it falls back to the old **ad-hoc** signature with a workflow warning (`adhoc_sign`), so forks and pre-secret runs still build. The two paths:
 
-**The runtime re-sign is intentionally non-`--deep`** (`src/bin/ashwend-updater.rs` - `resign_app_bundle`: `codesign --force --sign -`). Self-update replaces only `Contents/MacOS/ashwend`, breaking the bundle seal; the updater re-seals before relaunch. It runs *from inside the same bundle*, so `--deep` would try to rewrite the live `ashwend-updater` binary. This asymmetry (build sign `--deep`, runtime re-sign non-`--deep`) is load-bearing; do not unify them. The re-sign is best-effort: a de-quarantined bundle still launches from the inner binary's own signature if it fails.
+- **Developer ID path.** The `Import Apple signing certificate` step in `release.yml` decodes the `APPLE_CERTIFICATE_P12` secret into a throwaway keychain, derives the `Developer ID Application` identity, and exports it as `MACOS_SIGNING_IDENTITY`. Packaging then signs inside-out (nested `ashwend-updater` first, then the bundle, which signs the main executable), **no `--deep`**, each with `--timestamp --options runtime`. The hardened runtime is mandatory for notarization, and under it mic capture needs the `com.apple.security.device.audio-input` entitlement (`.github/installer/ashwend-entitlements.plist`, applied on the bundle sign) or voice chat dies with only `NSMicrophoneUsageDescription` present. Notarization submits a throwaway ditto zip via `xcrun notarytool submit --wait` (JSON status parsed explicitly; `notarytool` has returned exit 0 on rejection), staples the ticket onto the `.app`, and `spctl --assess --type execute` proves Gatekeeper accepts it before anything ships. The release `.zip` and `.dmg` are both built **from the stapled bundle**, and the `.dmg` is then notarized and stapled itself.
+- **Ad-hoc fallback.** `codesign --force --deep --sign -` then `--verify --deep --strict`; `--deep` is fine here because nothing in the bundle is running at build time. A misconfigured half-set of secrets (identity without notary credentials, or the reverse) is a hard packaging error, never a silently downgraded release.
 
-Because the app is not notarized, first launch of a browser-downloaded copy needs one trip through System Settings -> Privacy & Security -> Open Anyway. The `curl | sh install.sh` path avoids even that (curl does not set `com.apple.quarantine`).
+The Apple secrets (GitHub repo Actions secrets): `APPLE_CERTIFICATE_P12` (base64 `.p12` export of the Developer ID Application certificate + private key), `APPLE_CERTIFICATE_PASSWORD` (the export password), `APPLE_ID`, `APPLE_TEAM_ID`, and `APPLE_APP_SPECIFIC_PASSWORD` (notary service auth for `notarytool`).
+
+**The runtime re-sign is intentionally non-`--deep`** (`src/bin/ashwend-updater.rs` - `resign_app_bundle`: `codesign --force --sign -`). Self-update replaces only `Contents/MacOS/ashwend`, breaking the bundle seal; the updater re-seals before relaunch. It runs *from inside the same bundle*, so `--deep` would try to rewrite the live `ashwend-updater` binary. This asymmetry (build sign non-`--deep` inside-out, runtime re-sign non-`--deep`) is load-bearing; do not unify them. The re-sign is best-effort: a de-quarantined bundle still launches from the inner binary's own signature if it fails. **Known limitation:** the player's machine has no Developer ID key, so a self-updated bundle degrades from Developer ID to ad-hoc until self-update swaps the whole bundle (see below). It still launches (self-update downloads carry no `com.apple.quarantine`, so Gatekeeper never re-assesses), but the mic TCC grant is keyed to the signing identity and may re-prompt after the first self-update.
+
+A notarized, stapled first install launches clean with no Gatekeeper prompt. Ad-hoc fallback builds still need one trip through System Settings -> Privacy & Security -> Open Anyway when browser-downloaded; the `curl | sh install.sh` path avoids that (curl does not set `com.apple.quarantine`).
 
 ## Packaging: the six release assets
 
@@ -171,20 +177,23 @@ Asset names are baked into shipped binaries at compile time (`asset::HOST_ASSET_
 
 ### dmg and setup.exe specifics
 
-- **macOS `.dmg`** (`package-release.py` - `build_dmg`): wraps the same ad-hoc-signed `Ashwend.app` with `appdmg` (`npx --yes appdmg`, spec `.github/installer/ashwend-dmg.json`). `appdmg` writes the volume `.DS_Store` directly, so it runs headless on CI where Finder/AppleScript dmg tools hang. It does not re-sign; a post-build `hdiutil` mount + `codesign --verify --deep --strict` fails the release if the bundle lost its seal.
+- **macOS `.dmg`** (`package-release.py` - `build_dmg`): wraps the same signed (and, on the Developer ID path, stapled) `Ashwend.app` with `appdmg` (`npx --yes appdmg`, spec `.github/installer/ashwend-dmg.json`). `appdmg` writes the volume `.DS_Store` directly, so it runs headless on CI where Finder/AppleScript dmg tools hang. It does not re-sign; a post-build `hdiutil` mount + `codesign --verify --deep --strict` fails the release if the bundle lost its seal. On the Developer ID path the finished `.dmg` is then notarized and stapled itself, so it mounts clean offline.
 - **Windows `setup.exe`** (`package-release.py` - `build_windows_installer`): compiles `.github/installer/ashwend.iss` with Inno Setup (`iscc`). **Installs per-user to `{localappdata}\Programs\Ashwend` with `PrivilegesRequired=lowest` and `DisableDirPage=yes`** precisely because the self-updater swaps `ashwend.exe` with a non-elevated `std::fs::rename`; Program Files is UAC-protected and would silently break auto-update, and `DisableDirPage` stops a user relocating into a protected dir. The `AppId` GUID (`307311E9-...`) must never change or upgrades stop recognizing prior installs. Inno over MSI: an MSI component table would fight the out-of-band binary swap.
 
 The Windows app icon is embedded as a Win32 resource by `build.rs` via `winresource` from `.github/assets/ashwend.ico`. This embedding is host-gated on `#[cfg(windows)]` (the build script's host, not the target), so cross-compiling Windows from another host skips the icon, as `build.rs`'s own comment warns.
 
-Neither installer is code-signed, so Gatekeeper ("Open Anyway") and SmartScreen ("unknown publisher") prompts remain until notarization / an Authenticode cert lands. The installers improve presentation, not the trust prompts.
+The macOS `.dmg` is signed and notarized on the Developer ID path (no Gatekeeper prompt); the Windows `setup.exe` is still not Authenticode-signed, so the SmartScreen "unknown publisher" prompt remains until a Windows signing cert lands.
 
 The public domain is **ashwend.com**: `website/public/install.sh` documents `curl -fsSL https://www.ashwend.com/install.sh | sh`, `ashwend.iss` uses `https://ashwend.com`, README links `https://www.ashwend.com`. (Not `ashwend.game`.)
 
 > Deploy ordering: `website/src/data/content.ts` points the macOS/Windows download buttons at the `.dmg`/`setup.exe`, which resolve to `releases/latest/download/...`. Deploy the website only after the first release that publishes those assets, or the buttons 404.
 
-## When notarization lands
+## Notarization follow-ups
 
-If a paid Developer ID is acquired: swap the ad-hoc `-` identity in `package-release.py` for the Developer ID plus an `xcrun notarytool` step, and change self-update to swap the **whole bundle** (so the relaunched app stays notarized) instead of the inner binary + ad-hoc re-sign. This is a proposal, not shipped.
+Developer ID signing + notarization shipped in CI (see the signing section above). Still open:
+
+- **Whole-bundle self-update swap.** Self-update still replaces only `Contents/MacOS/ashwend` and ad-hoc re-signs, so an updated install degrades to ad-hoc until reinstalled. The fix is swapping the entire `.app` from the (fully signed, stapled) release zip so the relaunched app stays notarized; that touches `src/update/download.rs` extraction, `ARCHIVE_GAME_MEMBER`, and the updater swap logic. Not shipped.
+- **Website/installer copy.** `website/src/components/Playtest.tsx` (Open Anyway instructions), `website/public/install.sh` header comment, and `website/public/llms.txt` still describe the ad-hoc Gatekeeper flow. Update them only after the first notarized release is published, mirroring the deploy-ordering note above.
 
 ## Related docs
 

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Notarization requires the hardened runtime, and the hardened runtime
+	     blocks microphone capture unless this entitlement is present (the
+	     Info.plist NSMicrophoneUsageDescription alone is not enough under it).
+	     Ashwend captures the mic for in-game voice chat. Keep this list
+	     minimal: the game loads no third-party dylibs and does no JIT, so no
+	     library-validation or executable-memory exceptions are needed. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>
