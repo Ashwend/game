@@ -128,9 +128,20 @@ pub struct LoginHandle {
     // browser wait; the interactive login worker watches it and stops polling
     // the loopback listener so the bound port is released for a later attempt.
     cancel: Arc<AtomicBool>,
+    // When the work began, for the poller's lifecycle logging (see
+    // [`Self::started`]).
+    started: Instant,
 }
 
 impl LoginHandle {
+    /// When this handle's work began. The POLLER owns lifecycle logging (in
+    /// flight / resolved, with durations off this instant): the silent restore
+    /// starts before the Bevy app builds, so anything the worker thread logged
+    /// would race the tracing subscriber's installation and be dropped.
+    pub fn started(&self) -> Instant {
+        self.started
+    }
+
     pub fn poll(&self) -> LoginOutcome {
         let Ok(rx) = self.rx.lock() else {
             return LoginOutcome::Failed("sign-in state was lost".to_owned());
@@ -165,6 +176,7 @@ impl LoginHandle {
         Self {
             rx: Mutex::new(rx),
             cancel: Arc::new(AtomicBool::new(false)),
+            started: Instant::now(),
         }
     }
 
@@ -177,6 +189,7 @@ impl LoginHandle {
             Self {
                 rx: Mutex::new(rx),
                 cancel: Arc::new(AtomicBool::new(false)),
+                started: Instant::now(),
             },
             tx,
         )
@@ -199,6 +212,7 @@ pub fn begin_login(config: &WorkosConfig, hint: ScreenHint) -> LoginHandle {
     LoginHandle {
         rx: Mutex::new(rx),
         cancel,
+        started: Instant::now(),
     }
 }
 
@@ -211,33 +225,46 @@ pub fn has_stored_session() -> bool {
 
 /// Background variant of [`restore_session`] for the startup "verifying" state:
 /// runs the refresh on a worker thread and reports via a [`LoginHandle`].
+///
+/// No logging here on purpose: this starts before the Bevy app (and thus the
+/// tracing subscriber) exists, so worker-side log calls would be silently
+/// dropped. The poller (`drive_auth_flow_system`) logs the lifecycle instead,
+/// timed off [`LoginHandle::started`]. The error string travels to the poller
+/// for that log; the UI never shows it for a silent restore.
 pub fn begin_restore(config: &WorkosConfig) -> LoginHandle {
     let (tx, rx) = mpsc::channel();
     let config = config.clone();
     thread::Builder::new()
         .name("workos-restore".to_owned())
         .spawn(move || {
-            let result =
-                restore_session(&config).ok_or_else(|| "your session has expired".to_owned());
-            let _ = tx.send(result);
+            let _ = tx.send(restore_session(&config));
         })
         .ok();
     LoginHandle {
         rx: Mutex::new(rx),
         cancel: Arc::new(AtomicBool::new(false)),
+        started: Instant::now(),
     }
 }
 
-/// Silently restore a session at startup from the stored refresh token. Returns
-/// `None` (and clears the stored token) if there's no token or the refresh
-/// fails, the caller then shows the login splash.
-pub fn restore_session(config: &WorkosConfig) -> Option<Session> {
-    let refresh_token = load_refresh_token()?;
-    match refresh(config, &refresh_token) {
-        Ok(session) => Some(session),
-        Err(_) => {
-            clear_refresh_token();
-            None
+/// Silently restore a session at startup from the stored refresh token.
+///
+/// A definitive provider rejection clears the stored token: it is dead, and the
+/// next launch should go straight to the login splash. A transport failure
+/// (offline boot, sleepy Wi-Fi, provider outage) keeps it, so the player is not
+/// signed out over a network blip; this launch falls back to the login splash
+/// but the next one retries silently.
+pub fn restore_session(config: &WorkosConfig) -> Result<Session, String> {
+    let Some(refresh_token) = load_refresh_token() else {
+        return Err("no stored session".to_owned());
+    };
+    match refresh_grant(config, &refresh_token) {
+        Ok(session) => Ok(session),
+        Err(error) => {
+            if error.is_rejected() {
+                clear_refresh_token();
+            }
+            Err(error.into_message())
         }
     }
 }
@@ -245,6 +272,15 @@ pub fn restore_session(config: &WorkosConfig) -> Option<Session> {
 /// Refresh an access token that's expired or about to. Rotates and re-stores
 /// the refresh token.
 pub fn refresh(config: &WorkosConfig, refresh_token: &str) -> Result<Session, String> {
+    refresh_grant(config, refresh_token).map_err(super::tokens::AuthCallError::into_message)
+}
+
+/// [`refresh`] with the rejected-vs-transport split preserved, for callers
+/// (the silent restore) that must react differently to the two.
+fn refresh_grant(
+    config: &WorkosConfig,
+    refresh_token: &str,
+) -> Result<Session, super::tokens::AuthCallError> {
     let response = post_authenticate(serde_json::json!({
         "client_id": config.client_id,
         "grant_type": "refresh_token",
@@ -328,7 +364,8 @@ fn run_login_flow(
         "grant_type": "authorization_code",
         "code": code,
         "code_verifier": verifier,
-    }))?;
+    }))
+    .map_err(super::tokens::AuthCallError::into_message)?;
     let session = session_from(response);
     store_refresh_token(&session.refresh_token);
     Ok(session)

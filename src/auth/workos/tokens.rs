@@ -26,14 +26,49 @@ struct WorkosUser {
     first_name: Option<String>,
 }
 
+/// Connect / overall deadline for the WorkOS token exchange. The default ureq
+/// agent has NO timeouts, so a dead network (sleeping Wi-Fi, captive portal,
+/// IPv6 black hole) at boot would hold the "Authenticating" splash for the
+/// OS-level TCP timeout, over a minute of spinner. The exchange is one small
+/// JSON round trip; if it hasn't answered in this window it isn't going to.
+const AUTH_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const AUTH_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Token-endpoint failure, split by whether the provider definitively rejected
+/// the grant (the presented token/code is dead) or the call failed in transit
+/// (network trouble; a stored refresh token may still be perfectly good).
+/// The silent boot-time restore keys off this split: it must not throw away
+/// the player's session over a flaky Wi-Fi link.
+#[derive(Debug)]
+pub(super) enum AuthCallError {
+    Rejected(String),
+    Transport(String),
+}
+
+impl AuthCallError {
+    pub(super) fn into_message(self) -> String {
+        match self {
+            Self::Rejected(message) | Self::Transport(message) => message,
+        }
+    }
+
+    pub(super) fn is_rejected(&self) -> bool {
+        matches!(self, Self::Rejected(_))
+    }
+}
+
 /// POST a grant (`authorization_code` or `refresh_token`) to the WorkOS token
 /// endpoint. Public client, no secret; PKCE proves the app's identity.
-pub(super) fn post_authenticate(body: serde_json::Value) -> Result<AuthResponse, String> {
-    ureq::post(super::config::AUTHENTICATE_URL)
+pub(super) fn post_authenticate(body: serde_json::Value) -> Result<AuthResponse, AuthCallError> {
+    ureq::AgentBuilder::new()
+        .timeout_connect(AUTH_CONNECT_TIMEOUT)
+        .timeout(AUTH_TIMEOUT)
+        .build()
+        .post(super::config::AUTHENTICATE_URL)
         .send_json(body)
-        .map_err(describe_ureq_error)?
+        .map_err(classify_ureq_error)?
         .into_json::<AuthResponse>()
-        .map_err(|err| format!("unexpected sign-in response: {err}"))
+        .map_err(|err| AuthCallError::Transport(format!("unexpected sign-in response: {err}")))
 }
 
 pub(super) fn session_from(response: AuthResponse) -> Session {
@@ -70,13 +105,22 @@ pub(super) fn access_token_expiry(token: &str) -> Option<SystemTime> {
     Some(SystemTime::UNIX_EPOCH + Duration::from_secs(claims.exp))
 }
 
-fn describe_ureq_error(error: ureq::Error) -> String {
+fn classify_ureq_error(error: ureq::Error) -> AuthCallError {
     match error {
         ureq::Error::Status(code, response) => {
             let detail = response.into_string().unwrap_or_default();
-            format!("sign-in rejected ({code}): {detail}")
+            // Only a 4xx is the provider saying "this grant is dead". A 5xx is
+            // the provider having a bad day, which is transport-shaped: the
+            // grant may still be fine.
+            if (400..500).contains(&code) {
+                AuthCallError::Rejected(format!("sign-in rejected ({code}): {detail}"))
+            } else {
+                AuthCallError::Transport(format!("sign-in provider error ({code}): {detail}"))
+            }
         }
-        ureq::Error::Transport(transport) => format!("sign-in network error: {transport}"),
+        ureq::Error::Transport(transport) => {
+            AuthCallError::Transport(format!("sign-in network error: {transport}"))
+        }
     }
 }
 

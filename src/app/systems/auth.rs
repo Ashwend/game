@@ -11,11 +11,18 @@ use crate::{
 /// auth state machine: on success it installs [`CurrentUser`] and crossfades into
 /// the title screen; on failure it drops back to the login splash (surfacing
 /// the error only for an explicit sign-in attempt, not a silent refresh).
+///
+/// This poller also owns the auth lifecycle LOGGING (in flight, resolved, with
+/// durations off `LoginHandle::started`): the silent restore's worker thread
+/// starts before the tracing subscriber exists, so anything it logged itself
+/// would be dropped, and a player report of "stuck on Authenticating" would
+/// again be undiagnosable from ashwend.log.
 pub(crate) fn drive_auth_flow_system(
     mut commands: Commands,
     analytics: Res<Analytics>,
     mut auth: ResMut<AuthFlow>,
     mut menu: ResMut<MenuState>,
+    mut restore_marker_logged: Local<bool>,
 ) {
     // Title-screen account actions.
     if menu.sign_out_requested {
@@ -56,15 +63,30 @@ pub(crate) fn drive_auth_flow_system(
         return;
     }
 
-    let (outcome, was_explicit) = match &*auth {
-        AuthFlow::Verifying(handle) => (handle.poll(), false),
-        AuthFlow::Authenticating(handle) => (handle.poll(), true),
+    if !*restore_marker_logged && matches!(*auth, AuthFlow::Verifying(_)) {
+        // One boot-time marker so a restore that never resolves (dead network,
+        // provider outage) still leaves a trace: this line with no matching
+        // "restored/failed" line after it means the refresh call is stuck.
+        *restore_marker_logged = true;
+        info!("auth: silent session restore in flight");
+    }
+
+    let (outcome, was_explicit, elapsed_seconds) = match &*auth {
+        AuthFlow::Verifying(handle) => (handle.poll(), false, handle.started().elapsed()),
+        AuthFlow::Authenticating(handle) => (handle.poll(), true, handle.started().elapsed()),
         AuthFlow::LoggedOut { .. } | AuthFlow::Authenticated => return,
+    };
+    let elapsed_seconds = elapsed_seconds.as_secs_f32();
+    let flow = if was_explicit {
+        "sign-in"
+    } else {
+        "session restore"
     };
 
     match outcome {
         LoginOutcome::Pending => {}
         LoginOutcome::Success(session) => {
+            info!("auth: {flow} succeeded in {elapsed_seconds:.2}s");
             let session = *session;
             commands.insert_resource(CurrentUser(AuthenticatedUser {
                 account_id: session.account_id,
@@ -77,6 +99,7 @@ pub(crate) fn drive_auth_flow_system(
             menu.loading_splash = Some(LoadingSplash::startup());
         }
         LoginOutcome::Failed(error) => {
+            warn!("auth: {flow} failed after {elapsed_seconds:.2}s: {error}");
             *auth = AuthFlow::LoggedOut {
                 error: was_explicit.then_some(error),
             };

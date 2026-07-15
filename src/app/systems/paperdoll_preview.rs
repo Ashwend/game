@@ -32,7 +32,9 @@ use crate::{
 };
 
 use super::super::scene::{PlayerPart, PlayerVisualAssets, rig_layout};
-use super::super::state::{InventoryUiState, LocalPlayerState, MenuState, Screen};
+use super::super::state::{
+    InventoryUiState, LoadingSplashKind, LocalPlayerState, MenuState, Screen,
+};
 use super::items::{
     ArmorVisuals, HeldItemVisuals, armor_layers, carry_forearm_rotation, carry_upper_arm_rotation,
     held_item_hand_transform, held_item_layers, insert_held_layer_material,
@@ -234,6 +236,24 @@ fn preview_visible(menu: &MenuState, inventory_ui: &InventoryUiState) -> bool {
         && !menu.pause_open
 }
 
+/// Whether the preview camera should render even though the inventory is
+/// closed: while a world-entry loading splash still covers the screen, the
+/// camera is forced on so its render pass compiles behind the opaque cover.
+/// The preview's off-screen target is its own pipeline-cache key
+/// (`Rgba8UnormSrgb`, not the swapchain format), so on a fresh binary the
+/// first frame it renders specializes new pipelines for every material family
+/// in view; without this warmup that cost lands as a one-time hitch on the
+/// player's first inventory open after an update (cold Metal shader cache).
+fn pipeline_warmup_active(menu: &MenuState) -> bool {
+    menu.screen == Screen::InGame
+        && menu.loading_splash.as_ref().is_some_and(|splash| {
+            matches!(
+                splash.kind,
+                LoadingSplashKind::EnteringWorld | LoadingSplashKind::JoiningServer
+            )
+        })
+}
+
 /// Per-frame sync: gate the camera to the Inventory tab, sway the rig, and
 /// rebuild the worn-armor / held-item layers when the local (predicted)
 /// inventory changes. Steady state with the tab open is two equality checks.
@@ -254,7 +274,7 @@ pub(crate) fn sync_paperdoll_preview_system(
         return;
     };
 
-    let active = preview_visible(&menu, &inventory_ui);
+    let active = preview_visible(&menu, &inventory_ui) || pipeline_warmup_active(&menu);
     if let Ok(mut camera) = cameras.get_mut(preview.camera)
         && camera.is_active != active
     {
@@ -391,5 +411,38 @@ mod tests {
         // Not in-game (e.g. a menu screen): never.
         menu.screen = Screen::MainMenu;
         assert!(!preview_visible(&menu, &inventory_ui));
+    }
+
+    #[test]
+    fn warmup_renders_only_under_a_world_entry_splash() {
+        use crate::app::state::LoadingSplash;
+
+        // No splash: no warmup (the inventory-open path owns the camera).
+        let mut menu = MenuState {
+            screen: Screen::InGame,
+            ..Default::default()
+        };
+        assert!(!pipeline_warmup_active(&menu));
+
+        // World-entry splashes force the camera on while the cover is opaque.
+        for kind in [
+            LoadingSplashKind::EnteringWorld,
+            LoadingSplashKind::JoiningServer,
+        ] {
+            menu.loading_splash = Some(LoadingSplash::new(kind, "target"));
+            assert!(pipeline_warmup_active(&menu), "{kind:?} should warm up");
+        }
+
+        // The startup splash never coexists with a world; no warmup.
+        menu.loading_splash = Some(LoadingSplash::startup());
+        assert!(!pipeline_warmup_active(&menu));
+
+        // A splash without the in-game screen (mid-transition) never renders.
+        menu.loading_splash = Some(LoadingSplash::new(
+            LoadingSplashKind::JoiningServer,
+            "target",
+        ));
+        menu.screen = Screen::MainMenu;
+        assert!(!pipeline_warmup_active(&menu));
     }
 }

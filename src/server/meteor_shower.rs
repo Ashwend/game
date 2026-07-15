@@ -146,7 +146,7 @@ impl GameServer {
         envelopes
     }
 
-    /// `/meteor_shower [warning_seconds]` (admin, default 30): force an immediate
+    /// `/meteor [warning_seconds]` (admin, default 30): force an immediate
     /// meteor shower schedule for testing. Clears any in-flight event and begins a
     /// fresh one whose impact lands `warning_seconds` from now, so a tester does
     /// not have to wait the 2-to-4-in-game-day interval. Returns the announce
@@ -174,7 +174,7 @@ impl GameServer {
                     return vec![meteor_shower_toast(
                         client_id,
                         crate::protocol::ToastKind::Warning,
-                        "usage: /meteor_shower [warning_seconds], e.g. /meteor_shower 30",
+                        "usage: /meteor [warning_seconds], e.g. /meteor 30",
                     )];
                 }
             }
@@ -190,7 +190,7 @@ impl GameServer {
         envelopes
     }
 
-    /// `/meteor_shower-here [warning_seconds]` (admin, default 8): force a meteor shower
+    /// `/meteor-here [warning_seconds]` (admin, default 8): force a meteor shower
     /// whose impact lands at the CALLER'S CURRENT POSITION, so an admin can drop
     /// one exactly where they stand to watch it. Bypasses `select_meteor_shower_site`
     /// and its building-clearance check entirely: by design this can land on the
@@ -226,7 +226,7 @@ impl GameServer {
                     return vec![meteor_shower_toast(
                         client_id,
                         crate::protocol::ToastKind::Warning,
-                        "usage: /meteor_shower-here [warning_seconds], e.g. /meteor_shower-here 8",
+                        "usage: /meteor-here [warning_seconds], e.g. /meteor-here 8",
                     )];
                 }
             }

@@ -310,7 +310,12 @@ pub(crate) fn animate_meteor_shower_site_fire_system(
     for (entity, global, mut fire, mut light) in &mut fires {
         if intensity <= 0.0 {
             // Burnt out: remove the fire and its light, leave the crater.
-            commands.entity(entity).despawn();
+            // `try_despawn`, not `despawn`: when the event ends (or the menu
+            // backdrop opens) the crater rig teardown recursively despawns
+            // these same fire children in this very frame, and whichever
+            // command applies second would hit a dead entity and log a WARN
+            // per fire (12 of them, every teardown).
+            commands.entity(entity).try_despawn();
             continue;
         }
         let flicker = furnace_flicker(t, fire.phase);
@@ -580,7 +585,9 @@ pub(crate) fn meteor_shower_rumble_system(
             // once-per-event start guard.
             if loop_state.event_tick != event.impact_tick {
                 if let Some(entity) = loop_state.entity.take() {
-                    commands.entity(entity).despawn();
+                    // The bed is a one-shot that may have already self-despawned
+                    // at the file's end; despawning it again must stay silent.
+                    commands.entity(entity).try_despawn();
                 }
                 loop_state.event_tick = event.impact_tick;
                 loop_state.started = false;
@@ -625,7 +632,8 @@ pub(crate) fn meteor_shower_rumble_system(
                 loop_state.fade =
                     (loop_state.fade - time.delta_secs() * FLYBY_FADE_OUT_PER_S).max(0.0);
                 if loop_state.fade <= 0.0 {
-                    commands.entity(entity).despawn();
+                    // Same one-shot self-despawn race as the replaced-event arm.
+                    commands.entity(entity).try_despawn();
                     loop_state.entity = None;
                 } else if let Ok(mut sink) = sinks.get_mut(entity) {
                     sink.set_volume(Volume::Linear(loop_state.last_volume * loop_state.fade));
