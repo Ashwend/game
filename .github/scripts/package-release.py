@@ -224,7 +224,13 @@ def notarize_file(path: Path, creds: dict[str, str]) -> None:
     the verdict. `notarytool submit --wait` has historically returned exit
     code 0 even for a rejected submission, so parse the JSON status and
     require "Accepted" explicitly; on rejection, fetch and print the notary
-    log (it names the offending file and check) before failing."""
+    log (it names the offending file and check) before failing.
+
+    The generous 2h timeout is deliberate: Apple applies extended scanning to
+    a team's first submissions (the very first took over 30 minutes and timed
+    out a whole release build), while steady-state runs finish in minutes. The
+    repo is public so macOS runner minutes are free; waiting is cheaper than
+    rebuilding."""
     auth = [
         "--apple-id",
         creds["APPLE_ID"],
@@ -242,7 +248,7 @@ def notarize_file(path: Path, creds: dict[str, str]) -> None:
             *auth,
             "--wait",
             "--timeout",
-            "30m",
+            "2h",
             "--output-format",
             "json",
         ],
