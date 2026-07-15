@@ -8,7 +8,7 @@ use crate::protocol::AccountId;
 /// Fallback account id for a lone `--connect` launch with no `GAME_ACCOUNT_ID`
 /// set. A distinctive value so it's obvious in logs/saves that no real identity
 /// was injected.
-const DEFAULT_BYPASS_ACCOUNT_ID: AccountId = 76_561_197_960_287_930;
+const DEFAULT_BYPASS_ACCOUNT_ID: AccountId = AccountId(76_561_197_960_287_930);
 
 /// Identity a signed-in client carries on the `Auth` handshake. `account_id`
 /// keys every authoritative map and the save format; `token` is the WorkOS
@@ -44,8 +44,8 @@ pub fn account_id_from_sub(sub: &str) -> AccountId {
     let mut bytes = [0u8; 8];
     bytes.copy_from_slice(&digest[..8]);
     match u64::from_be_bytes(bytes) {
-        0 => 1,
-        id => id,
+        0 => AccountId(1),
+        id => AccountId(id),
     }
 }
 
@@ -57,8 +57,8 @@ pub fn account_id_from_sub(sub: &str) -> AccountId {
 pub fn bypass_identity_from_env() -> AuthenticatedUser {
     let account_id = std::env::var("GAME_ACCOUNT_ID")
         .ok()
-        .and_then(|value| value.parse::<AccountId>().ok())
-        .filter(|&id| id != 0)
+        .and_then(|value| value.parse::<u64>().ok().map(AccountId))
+        .filter(|&id| id != AccountId(0))
         .unwrap_or(DEFAULT_BYPASS_ACCOUNT_ID);
     let display_name = std::env::var("GAME_PLAYER_NAME")
         .or_else(|_| std::env::var("USER"))
@@ -79,7 +79,7 @@ mod tests {
         let id = account_id_from_sub("user_01ABC");
         assert_eq!(id, account_id_from_sub("user_01ABC"));
         assert_ne!(id, account_id_from_sub("user_01XYZ"));
-        assert_ne!(id, 0);
+        assert_ne!(id.0, 0);
     }
 
     #[test]

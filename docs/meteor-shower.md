@@ -54,9 +54,9 @@ Everything downstream (fireball position, countdown, danger warning, map marker,
 
 The announce is stored on `runtime.meteor_shower` as an `MeteorShowerEvent` (src/app/state/runtime.rs; the receive path is in src/app/systems/network.rs, which also distinguishes a genuinely new announce from a late-join resend by comparing `impact_tick`). `ClientRuntime::tick_world_time` drops the event once the crater window closes on the local clock and installs/clears the crater's analytic movement floor on the block grid. Every consumer reads only `runtime.meteor_shower` plus the clock estimate:
 
-- **Fireball.** `MeteorVisual` body layers plus the segmented trail, driven by `update_meteor_sky_system` (src/app/scene/sky.rs - MeteorVisual, update_meteor_sky_system) evaluating `meteor_world_state` at the fractional `runtime.server_tick_precise()`. The fireball is a true world-anchored object, not a disc on the sky dome; while beyond `METEOR_PROXY_DISTANCE` it renders on a far-plane proxy along the true direction.
+- **Fireball.** `MeteorVisual` body layers plus the segmented trail, driven by `update_meteor_sky_system` (src/app/scene/meteor_sky.rs - MeteorVisual, update_meteor_sky_system) evaluating `meteor_world_state` at the fractional `runtime.server_tick_precise()`. The fireball is a true world-anchored object, not a disc on the sky dome; while beyond `METEOR_PROXY_DISTANCE` it renders on a far-plane proxy along the true direction.
 - **Impact site.** Crater mesh, site fires, the one-time rock blast, pre-armed boom/flyby audio, and the distance-scaled rumble and camera kick (src/app/scene/meteor_shower.rs).
-- **HUD.** Countdown pill plus the escalating evacuation warning while the player is inside `METEOR_SHOWER_DANGER_RADIUS_M` = 60 m (src/app/ui/hud.rs - meteor_shower_hud).
+- **HUD.** Countdown pill plus the escalating evacuation warning while the player is inside `METEOR_SHOWER_DANGER_RADIUS_M` = 60 m (src/app/ui/hud/meteor_shower.rs - meteor_shower_hud).
 - **Map.** Temporary pulsing impact marker (src/app/ui/world_map.rs - draw_meteor_shower_marker).
 
 Per-surface detail (draw order, crater mesh construction, audio cue timing) lives in the "Meteor shower: countdown HUD, map marker, and sky/ground VFX" section of [docs/ui-and-client.md](ui-and-client.md); do not duplicate it here.

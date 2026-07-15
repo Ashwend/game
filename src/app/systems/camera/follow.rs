@@ -11,7 +11,7 @@ use super::effects::{CameraImpactKick, CameraMotionEffects, KickScales};
 type FollowCameraData = (&'static mut Transform, Option<&'static mut Projection>);
 type FollowCameraFilter = (With<MainCamera>, Without<NetworkPlayer>);
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 pub(crate) fn camera_follow_system(
     runtime: Res<ClientRuntime>,
     menu: Res<MenuState>,
@@ -102,7 +102,7 @@ mod tests {
 
     fn player_state(position: Vec3Net, yaw: f32, pitch: f32) -> PlayerState {
         PlayerState {
-            client_id: 1,
+            client_id: crate::protocol::ClientId(1),
             position,
             velocity: Vec3Net::ZERO,
             yaw,

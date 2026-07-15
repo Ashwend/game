@@ -12,7 +12,7 @@
 //! popup, and hovers a marker to see its label. Every mutation goes to the
 //! server through [`crate::protocol::WorldMapMarkerCommand`]; the server owns
 //! the marker store and pushes the updated list back. See
-//! [`crate::app::systems::world_map`] for the data + input side.
+//! `crate::app::systems::world_map` for the data + input side.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -94,7 +94,6 @@ fn view_uv(bounds: Bounds, view: &MapView) -> egui::Rect {
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn world_map_ui(
     ctx: &egui::Context,
     world_map: &WorldMapState,

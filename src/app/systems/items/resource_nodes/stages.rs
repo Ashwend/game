@@ -1,6 +1,6 @@
 //! Visual mining stages for ore/vein nodes.
 //!
-//! Ore and stone-vein nodes step through [`ORE_NODE_STAGE_COUNT`] meshes
+//! Ore and stone-vein nodes step through `ORE_NODE_STAGE_COUNT` meshes
 //! as their replicated `ResourceNodeStorage` drains: untouched, worn
 //! down, nearly mined out. The stage swap is purely cosmetic, gather
 //! rules, colliders, and targeting are unchanged, but it makes a worked
@@ -23,7 +23,7 @@ use crate::{
         systems::effects::spawn_ore_shatter_burst,
     },
     protocol::ItemStack,
-    resources::{ResourceNodeDefinition, resource_node_definition},
+    resource_nodes::{ResourceNodeDefinition, resource_node_definition},
     server::{ResourceNode, ResourceNodeStorage},
 };
 
@@ -91,7 +91,8 @@ pub(super) fn initial_node_stage(definition_id: &str, storage: Option<&ResourceN
 }
 
 fn stage_capable(definition: &ResourceNodeDefinition) -> bool {
-    definition.model.is_ore() || definition.model == crate::resources::ResourceNodeModel::StoneVein
+    definition.model.is_ore()
+        || definition.model == crate::resource_nodes::ResourceNodeModel::StoneVein
 }
 
 /// Swap ore/vein mirror meshes when the replicated storage crosses a
@@ -163,7 +164,7 @@ pub(crate) fn apply_resource_node_stage_system(
         // but if one ever does the mesh still corrects silently.)
         if stage > previous {
             let anchor = Vec3::from(node.position) + Vec3::Y * STAGE_BURST_HEIGHT;
-            let seed = (node.id as u32)
+            let seed = (node.id.0 as u32)
                 .wrapping_mul(0x85EB_CA77)
                 .wrapping_add(stage as u32);
             spawn_ore_shatter_burst(
@@ -183,7 +184,7 @@ mod tests {
     use super::*;
     use crate::{
         items::COAL_ID,
-        resources::{COAL_NODE_ID, PINE_TREE_NODE_ID},
+        resource_nodes::{COAL_NODE_ID, PINE_TREE_NODE_ID},
     };
 
     fn coal_definition() -> &'static ResourceNodeDefinition {
@@ -230,7 +231,7 @@ mod tests {
     #[test]
     fn meteorite_steps_through_mining_stages_like_ore() {
         use crate::items::METEORITE_ALLOY_ID;
-        use crate::resources::METEORITE_NODE_ID;
+        use crate::resource_nodes::METEORITE_NODE_ID;
         let definition = resource_node_definition(METEORITE_NODE_ID).expect("meteorite definition");
         // It is stage-capable (its slag-mound glbs have 3 stages).
         assert!(

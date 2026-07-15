@@ -113,7 +113,8 @@ struct PendingConnect {
 
 /// Bevy plugin that wires the Lightyear client into the main app: registers
 /// the shared `ClientNetwork` resource and the systems that drive the
-/// connection lifecycle. Pairs with [`LightyearProtocolPlugin`] which
+/// connection lifecycle. Pairs with
+/// [`LightyearProtocolPlugin`](crate::net::LightyearProtocolPlugin) which
 /// installs Lightyear's own channels and message types.
 pub(crate) struct ClientNetworkPlugin;
 
@@ -455,7 +456,7 @@ fn process_pending_connect_system(
     commands.trigger(client::Connect { entity });
 }
 
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity, reason = "Bevy system query type")]
 fn send_client_messages_system(
     time: Res<Time>,
     network: Res<ClientNetwork>,

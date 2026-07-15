@@ -2,8 +2,8 @@
 //! optional secondary key; persisted as stable string identifiers so the
 //! `settings.dat` survives a `KeyCode` reshuffle in a future Bevy release.
 //!
-//! Gameplay systems should always go through [`KeyBindings`] (or [`Self::pressed`]
-//! / [`Self::just_pressed`] / [`Self::just_released`]) instead of touching
+//! Gameplay systems should always go through [`KeyBindings`] (or
+//! [`KeyBindings::pressed`] / [`KeyBindings::just_pressed`]) instead of touching
 //! `KeyCode` directly. This keeps the rebind UI authoritative and gives us a
 //! single place to query "which key is bound to X".
 

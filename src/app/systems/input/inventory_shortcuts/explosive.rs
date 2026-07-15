@@ -4,11 +4,11 @@
 //! A thrown explosive (the powder bomb) does not land a melee hit (no melee
 //! profile) and is not a ranged weapon (no `RangedProfile`), so neither the
 //! melee dispatch nor the draw/fire loop ([`super::ranged`]) fires for it.
-//! Instead this loop drives [`ThrowChargeState`] (the bow-draw idiom): a held
+//! Instead this loop drives [`ThrowChargeState`](crate::app::state::ThrowChargeState) (the bow-draw idiom): a held
 //! left click builds the charge (the wind-up pose pulls the bomb back, the HUD
 //! charge bar fills), and releasing at or above the minimum fraction primes
 //! the toss on the shared swing state machine
-//! ([`GatherInputState::begin_primed_swing`] with the [`ItemModel::ThrownBomb`]
+//! ([`GatherInputState::begin_primed_swing`](crate::app::state::GatherInputState::begin_primed_swing) with the [`ItemModel::ThrownBomb`]
 //! archetype), which skips straight to the release beat. When the toss crosses
 //! its release frame it plays the release cue and sends
 //! [`ExplosiveCommand::Throw`] with the stashed power along the camera-forward

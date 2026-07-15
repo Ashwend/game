@@ -385,7 +385,7 @@ fn close_open_workbench(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 pub(crate) fn toggle_crafting_system(
     keys: Res<ButtonInput<KeyCode>>,
     settings: Res<ClientSettings>,

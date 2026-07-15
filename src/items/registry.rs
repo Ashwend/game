@@ -19,20 +19,99 @@ use super::visual::{ArmorMesh, HeldMesh, ItemModel, ItemTint};
 use super::weapons::WeaponProfile;
 use crate::protocol::EquipmentSlot;
 
-/// Identifier shared between `ItemStack`, `ItemMerged`, and item definitions.
-/// Backed by `Arc<str>` so clones are a refcount bump instead of a heap copy.
-/// Known IDs are interned to a single allocation at startup; deserialized IDs
-/// are looked up against the registry and reuse the cached `Arc` on hits.
-pub type ItemId = Arc<str>;
+/// Interned item identifier: a newtype over `Arc<str>` kept distinct from
+/// [`crate::crafting::RecipeId`] so passing one where the other is expected is
+/// a compile error instead of a silent mixup.
+///
+/// Shared between `ItemStack`, `ItemMerged`, and item definitions. Backed by
+/// `Arc<str>` so clones are a refcount bump instead of a heap copy. Known IDs
+/// are interned to a single allocation at startup; deserialized IDs are looked
+/// up against the registry and reuse the cached `Arc` on hits.
+/// `#[serde(transparent)]` keeps every encoding (postcard wire, postcard
+/// saves, JSON) byte-identical to the bare string.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(transparent)]
+pub struct ItemId(Arc<str>);
 
-/// Returns the interned `Arc<str>` for `id`. Compile-time constants from
+impl ItemId {
+    /// The bare id string (e.g. `"wood"`).
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// True when both ids share the same interned allocation. Content
+    /// equality is `==`; this is the test hook for the interning guarantee.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::ops::Deref for ItemId {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for ItemId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<str> for ItemId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ItemId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl PartialEq<str> for ItemId {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for ItemId {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl From<&str> for ItemId {
+    /// Routes through [`intern_item_id`] so `"wood".into()` reuses the
+    /// registry's cached allocation.
+    fn from(id: &str) -> Self {
+        intern_item_id(id)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ItemId {
+    /// Interns on decode so an id deserialized without the protocol's
+    /// `deserialize_with` hook still dedups to one allocation per id.
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = <String as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(intern_item_id(&raw))
+    }
+}
+
+/// Returns the interned [`ItemId`] for `id`. Compile-time constants from
 /// `REGISTERED_ITEMS` resolve without allocating on hits via an O(1) hash
 /// lookup; unknown ids fall through to a fresh `Arc` and are cached so
 /// subsequent hits also avoid allocating. Stays open to runtime-loaded items.
 pub fn intern_item_id(id: &str) -> ItemId {
     let registry = interned_registry();
     if let Some(cached) = registry.read().ok().and_then(|map| map.get(id).cloned()) {
-        return cached;
+        return ItemId(cached);
     }
     // Allocate outside the write lock so a contended path doesn't hold the
     // lock through the heap allocation. The double-insert window is harmless:
@@ -45,11 +124,11 @@ pub fn intern_item_id(id: &str) -> ItemId {
         // keeps the registry's "one Arc per id" invariant in lockstep with
         // anything that already grabbed the earlier-inserted Arc.
         if let Some(cached) = map.get(id).cloned() {
-            return cached;
+            return ItemId(cached);
         }
         map.insert(Box::from(id), fresh.clone());
     }
-    fresh
+    ItemId(fresh)
 }
 
 fn interned_registry() -> &'static RwLock<HashMap<Box<str>, Arc<str>>> {
@@ -193,7 +272,7 @@ const fn building_piece_item(
 /// `tool`/`weapon`/`ranged` stay `None`. Registered as an `equipable` item so it
 /// can reach a hand for inspection, though it is really worn on the paperdoll;
 /// the equip move validates the slot against the profile.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "flat const item constructor")]
 const fn armor_item(
     id: &'static str,
     name: &'static str,

@@ -373,7 +373,12 @@ mod tests {
     };
 
     fn job(job_id: u64, progress: u32, total: u32) -> CraftingJob {
-        let mut j = CraftingJob::new(job_id, PLANT_TWINE_RECIPE_ID, total, 1);
+        let mut j = CraftingJob::new(
+            crate::protocol::CraftingJobId(job_id),
+            PLANT_TWINE_RECIPE_ID,
+            total,
+            1,
+        );
         j.progress_ticks = progress;
         j
     }
@@ -486,7 +491,10 @@ mod tests {
     #[test]
     fn hud_clears_progress_when_no_jobs() {
         let mut hud = CraftingHudState::default();
-        hud.progress.insert(99, baseline_from(&job(99, 1, 2), 0.0));
+        hud.progress.insert(
+            crate::protocol::CraftingJobId(99),
+            baseline_from(&job(99, 1, 2), 0.0),
+        );
         let mut runtime = ClientRuntime::default();
         let local = local_player_with_jobs(Vec::new());
         let mut toasts: Vec<String> = Vec::new();
@@ -520,8 +528,10 @@ mod tests {
     fn hud_drops_baselines_for_jobs_that_left_queue() {
         let mut hud = CraftingHudState::default();
         // Seed a stale baseline for a job that's no longer present.
-        hud.progress
-            .insert(404, baseline_from(&job(404, 1, 2), 0.0));
+        hud.progress.insert(
+            crate::protocol::CraftingJobId(404),
+            baseline_from(&job(404, 1, 2), 0.0),
+        );
         let mut runtime = ClientRuntime::default();
         let local = local_player_with_jobs(vec![job(0, 0, 40)]);
         let mut toasts: Vec<String> = Vec::new();
@@ -529,7 +539,13 @@ mod tests {
         run_ui(|ui| {
             crafting_queue_hud(ui.ctx(), &mut runtime, &local, &mut hud, &mut toasts);
         });
-        assert!(!hud.progress.contains_key(&404));
-        assert!(hud.progress.contains_key(&0));
+        assert!(
+            !hud.progress
+                .contains_key(&crate::protocol::CraftingJobId(404))
+        );
+        assert!(
+            hud.progress
+                .contains_key(&crate::protocol::CraftingJobId(0))
+        );
     }
 }

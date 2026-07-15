@@ -56,7 +56,7 @@ pub(crate) struct WheelContext<'w> {
     analytics: Res<'w, Analytics>,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 pub(crate) fn wheel_menu_system(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,

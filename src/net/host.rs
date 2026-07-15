@@ -309,7 +309,7 @@ fn install_admin_socket(_app: &mut App, admin_socket: Option<PathBuf>) -> Result
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "host bootstrap plumbing")]
 fn run_host(
     mut reserved_addr: ReservedUdpAddr,
     save: WorldSave,
@@ -492,7 +492,7 @@ fn drain_host_commands(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 fn tick_authoritative_server(
     mut commands: Commands,
     time: Res<Time>,

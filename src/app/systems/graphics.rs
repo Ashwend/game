@@ -1,4 +1,4 @@
-//! Applies the player's [`GraphicsSettings`](crate::app::state::GraphicsSettings)
+//! Applies the player's `GraphicsSettings`
 //! to the live camera. Mirrors the `apply_display_settings_system` pattern: it
 //! is change-gated on `ClientSettings` so it only does work on the frame a
 //! setting actually moves, and on the first frame after the resource exists.

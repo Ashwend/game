@@ -3,7 +3,8 @@
 //! shipping recipe payloads on the wire.
 //!
 //! The shape mirrors [`crate::items`]:
-//! - String ids back every recipe, interned to `Arc<str>` for cheap clones.
+//! - String ids back every recipe, interned into the [`RecipeId`] newtype
+//!   (an `Arc<str>` under the hood) for cheap clones.
 //! - A `&'static [RecipeDefinition]` slice is the source of truth.
 //! - An `id → definition` index gives O(1) lookups for the server's enqueue
 //!   path and the client's UI.

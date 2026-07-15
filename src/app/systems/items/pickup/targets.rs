@@ -25,7 +25,7 @@ use crate::{
     },
     items::{item_definition, look_forward, pickup_anchor_from_position},
     protocol::Vec3Net,
-    resources::resource_node_anchor_for,
+    resource_nodes::resource_node_anchor_for,
     server::{
         Deployable, DeployableActive, DeployableStability, DeployableTransform, DroppedItem,
         DroppedItemTransform, LootBagEntity, LootBagTransform, Player, ResourceNode,
@@ -288,7 +288,8 @@ pub(super) fn best_deployable_target<'a>(
     best
 }
 
-/// Slab-method ray entry distance against an arbitrary [`WorldBlock`]
+/// Slab-method ray entry distance against an arbitrary
+/// [`WorldBlock`](crate::world::WorldBlock)
 /// (per-axis half-extents, unlike the player body box's square footprint).
 /// Returns 0 when the eye is inside the box.
 fn ray_block_entry_distance(
@@ -335,7 +336,6 @@ fn ray_block_entry_distance(
 /// (off to the side and at foot height), while the hit box centre is on
 /// the piece the player is actually looking at, and it stays put between
 /// rescans so the tooltip tracks smoothly.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn set_deployable_pickup_target(
     pickup_target: &mut PickupTargetState,
     meta: &Deployable,

@@ -33,7 +33,7 @@ use crate::{
         METEOR_SHOWER_WARNING_SECONDS,
     },
     protocol::{ClientId, ResourceNodeId, SERVER_TICK_RATE_HZ, ServerMessage, Vec3Net},
-    resources::{METEORITE_NODE_ID, spawn_resource_node},
+    resource_nodes::{METEORITE_NODE_ID, spawn_resource_node},
     world::{NodeKind, PlayableBounds, WorldResourceNodeSpawn, splitmix64},
     world_time::REAL_SECONDS_PER_DAY,
 };
@@ -818,7 +818,7 @@ mod server_tests {
         },
         items::{IRON_BOOTS_ID, IRON_CUIRASS_ID, IRON_GREAVES_ID, IRON_HELM_ID},
         protocol::{ItemStack, MAX_HEALTH, ServerMessage, Vec3Net},
-        resources::METEORITE_NODE_ID,
+        resource_nodes::METEORITE_NODE_ID,
         server::test_support::{connect_named, place_building, server},
         world::{NodeKind, PlayableBounds},
     };
@@ -870,7 +870,9 @@ mod server_tests {
                 cells.push((60.0 + gx as f32 * 3.0, 60.0 + gz as f32 * 3.0));
             }
         }
-        server.claim_footprints.insert(999, cells);
+        server
+            .claim_footprints
+            .insert(crate::protocol::DeployedEntityId(999), cells);
 
         let obstacles = server.meteor_shower_obstacle_positions();
         assert!(!obstacles.is_empty(), "the test world must have structures");
@@ -1048,13 +1050,13 @@ mod server_tests {
         let center = Vec3Net::new(200.0, 0.0, 200.0);
 
         // Spawn a couple of resource nodes inside the crater and one just outside.
-        let kind = NodeKind::from_definition_id(crate::resources::COAL_NODE_ID).unwrap();
+        let kind = NodeKind::from_definition_id(crate::resource_nodes::COAL_NODE_ID).unwrap();
         let inside = server.allocate_resource_node_id();
         let inside_pos = Vec3Net::new(center.x + 3.0, 0.0, center.z);
-        let node = crate::resources::spawn_resource_node(
+        let node = crate::resource_nodes::spawn_resource_node(
             &crate::world::WorldResourceNodeSpawn::new(
                 inside,
-                crate::resources::COAL_NODE_ID,
+                crate::resource_nodes::COAL_NODE_ID,
                 inside_pos,
                 0.0,
             ),
@@ -1072,10 +1074,10 @@ mod server_tests {
             0.0,
             center.z,
         );
-        let node = crate::resources::spawn_resource_node(
+        let node = crate::resource_nodes::spawn_resource_node(
             &crate::world::WorldResourceNodeSpawn::new(
                 outside,
-                crate::resources::COAL_NODE_ID,
+                crate::resource_nodes::COAL_NODE_ID,
                 outside_pos,
                 0.0,
             ),
@@ -1269,7 +1271,7 @@ mod server_tests {
             .connect(
                 crate::protocol::PROTOCOL_VERSION,
                 Some(crate::protocol::GAME_VERSION.to_owned()),
-                42,
+                crate::protocol::AccountId(42),
                 "LateJoiner".to_owned(),
                 String::new(),
             )

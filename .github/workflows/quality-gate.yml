@@ -95,6 +95,14 @@ jobs:
       - name: Check all targets
         run: cargo check --locked --all-targets ${{ matrix.features }} ${{ matrix.extra_flags }}
 
+      - name: Build docs
+        # Default leg only. Gates the crate's intra-doc-link graph:
+        # [lints.rustdoc] denies broken_intra_doc_links, and the codebase
+        # uses those links as its internal cross-reference system, so a
+        # rename that orphans them fails here instead of rotting silently.
+        if: matrix.label == 'default'
+        run: cargo doc --no-deps --locked --document-private-items
+
       - name: Run tests
         if: matrix.run_tests
         run: cargo test --locked --all-targets ${{ matrix.features }}

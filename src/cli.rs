@@ -64,7 +64,7 @@ enum Command {
         /// token. Under `--auth workos`, prefer the `urn:ashwend:admin` token
         /// claim so admin isn't pinned to a raw account id.
         #[arg(long = "admin")]
-        admins: Vec<AccountId>,
+        admins: Vec<u64>,
         /// Map size used only when generating a *fresh* world. Existing
         /// saves keep whatever size they were authored with.
         #[arg(long, value_enum, default_value_t = MapSizeArg::Medium)]
@@ -85,7 +85,7 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         port: u16,
         /// Names assigned to the two test clients. Pass twice to override
-        /// both, once to override the first. Defaults: `Alpha`, `Bravo`.
+        /// both, once to override the first. Defaults: `player1`, `player2`.
         #[arg(long, num_args = 1..=2)]
         names: Option<Vec<String>>,
     },
@@ -187,6 +187,7 @@ pub fn run() -> Result<()> {
                 AuthMode::NoAuth => None,
             };
             let mut world = load_server_world(world, map_size.into())?;
+            let admins: Vec<AccountId> = admins.into_iter().map(AccountId).collect();
             seed_admin_accounts(&mut world.save, &admins);
             net::run_dedicated_server(
                 bind,
@@ -209,7 +210,7 @@ pub fn run() -> Result<()> {
 /// how `multiplayer-test` pre-seeds `save.admins` before launch.
 fn seed_admin_accounts(save: &mut WorldSave, admins: &[AccountId]) {
     for &account_id in admins {
-        if account_id != 0 && !save.admins.contains(&account_id) {
+        if account_id != crate::protocol::AccountId(0) && !save.admins.contains(&account_id) {
             save.admins.push(account_id);
         }
     }
@@ -363,12 +364,18 @@ mod tests {
     #[test]
     fn seed_admin_accounts_appends_unique_nonzero_ids() {
         let mut save = WorldSave::new_with_map("seed test", None, MapType::default());
-        save.admins = vec![10];
+        save.admins = vec![crate::protocol::AccountId(10)];
 
         // 0 is skipped, 10 is already present (no dup), 20 and 30 are added.
-        seed_admin_accounts(&mut save, &[0, 10, 20, 20, 30]);
+        seed_admin_accounts(
+            &mut save,
+            &[0, 10, 20, 20, 30].map(crate::protocol::AccountId),
+        );
 
-        assert_eq!(save.admins, vec![10, 20, 30]);
+        assert_eq!(
+            save.admins,
+            [10, 20, 30].map(crate::protocol::AccountId).to_vec()
+        );
     }
 
     #[test]

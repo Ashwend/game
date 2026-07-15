@@ -3,7 +3,7 @@ title: Movement and the client-authoritative trust boundary
 owns: The character controller (deterministic fixed-substep kinematic simulation), movement feel/tuning, the server movement trust boundary, and client reconciliation.
 when_to_read: Before touching the character controller, movement feel/tuning, the server movement trust boundary, or debugging rubber-banding.
 sources:
-  - src/controller/mod.rs - PlayerController, simulate_with_grid, simulate_step, jump/coyote/step-up
+  - src/controller.rs - PlayerController, simulate_with_grid, simulate_step, jump/coyote/step-up
   - src/controller/movement.rs - speed constants, desired_horizontal_velocity, accelerate_air air cap
   - src/server/movement.rs - accept_client_movement (server trust boundary)
   - src/server/dispatch.rs - ClientMessage::Movement handler, alive gate
@@ -30,9 +30,9 @@ The movement slice has four parts that live in four different places. Get the ge
 
 ## Deterministic fixed-substep simulator
 
-The controller is `PlayerController` (`src/controller/mod.rs - PlayerController`). It is a pure kinematic simulator: feed it input, call `simulate_*`, read the integrated pose. It has no networking and no reconciliation.
+The controller is `PlayerController` (`src/controller.rs - PlayerController`). It is a pure kinematic simulator: feed it input, call `simulate_*`, read the integrated pose. It has no networking and no reconciliation.
 
-`simulate_with_grid` (`src/controller/mod.rs:203`) clamps the frame delta to `MAX_SIMULATION_DELTA` (0.1 s) then advances in fixed chunks of `MAX_SIMULATION_STEP` (`1.0 / 120.0` s):
+`simulate_with_grid` (`src/controller.rs:203`) clamps the frame delta to `MAX_SIMULATION_DELTA` (0.1 s) then advances in fixed chunks of `MAX_SIMULATION_STEP` (`1.0 / 120.0` s):
 
 ```
 remaining = delta.clamp(0.0, 0.1)
@@ -41,14 +41,14 @@ while remaining > 0: step = min(remaining, 1/120); simulate_step(step); remainin
 
 This makes physics frame-rate-independent and is load-bearing: the air-strafe cap, the jump arc, and the bunny-hop tests all assert substep-level behaviour. When writing a movement test, step at `1.0 / 120.0` to observe one substep; a single large delta is auto-split. `simulate(delta, world)` is the convenience entry that builds a `BlockGrid` per call; hot loops (client prediction) call `simulate_with_grid` with a cached grid instead.
 
-Per substep (`simulate_step`, `src/controller/mod.rs - simulate_step`): refresh `grounded` via `is_supported`, tick the coyote/jump timers, fire a buffered jump if eligible, accelerate horizontally (ground vs air paths), then resolve collision **per axis, X then Z then Y** through `move_with_collisions`. Step-up (`try_step_up`) lets the player walk over obstacles up to `STEP_HEIGHT` (0.45 m) without jumping, and smooths the camera through `step_view_offset_y` without smoothing the physical collision.
+Per substep (`simulate_step`, `src/controller.rs - simulate_step`): refresh `grounded` via `is_supported`, tick the coyote/jump timers, fire a buffered jump if eligible, accelerate horizontally (ground vs air paths), then resolve collision **per axis, X then Z then Y** through `move_with_collisions`. Step-up (`try_step_up`) lets the player walk over obstacles up to `STEP_HEIGHT` (0.45 m) without jumping, and smooths the camera through `step_view_offset_y` without smoothing the physical collision.
 
 The world floor is ANALYTIC, not a block: flat `y = 0` everywhere except over a live meteor shower crater, where `BlockGrid::floor_height` (`src/controller/grid.rs - floor_height`) follows the shared crater surface (`crate::world::crater_surface_height`) so players walk up and over the rim mound. The grid owner installs/clears the crater centre via `BlockGrid::set_crater` (client: `ClientRuntime::tick_world_time` + `rebuild_world_grid` off the event state). While grounded and not ascending, `simulate_step` glues the feet to that floor (terrain-follow) so slopes track smoothly instead of stair-stepping through the gravity/land cycle; the guard against ascending protects the high-fps jump (see gotchas). Guarded by `player_walks_up_and_over_the_crater_mound`, `crater_floor_supports_standing_inside_the_bowl`.
 
 `PlayerController` stores: `position`, `velocity`, `yaw`, `pitch`, `health`, `grounded`, `last_processed_input`, plus internals an agent editing feel needs to know about: `last_input` (the held `PlayerInput`), `jump_buffer_timer`, `coyote_timer`, `step_view_offset_y`, and `speed_multiplier` (the `/speed` cheat, see below). Seed constructors only: `from_player_state` (Welcome/Correction) and `from_persisted` (save load). There is no `reconcile` method.
 
 Module layout under `src/controller/`:
-- `mod.rs`: `PlayerController`, substep loop, jump/coyote/leap, step-up.
+- `controller.rs` (module root): `PlayerController`, substep loop, jump/coyote/leap, step-up.
 - `movement.rs`: speed constants, `desired_horizontal_velocity`, `accelerate_air` (the air cap), camera-relative direction.
 - `collision.rs`: swept world-block AABB collision, support checks, `player_overlaps_world`.
 - `grid.rs`: `BlockGrid`, the coarse spatial index over `WorldData::blocks`.
@@ -56,7 +56,7 @@ Module layout under `src/controller/`:
 
 ## Tuning constants
 
-All feel constants live in `src/controller/mod.rs` and `src/controller/movement.rs`, **not** in `game_balance.rs` (that file owns gameplay balance: combat ranges, deployable/building/furnace values). The comments next to each constant hold the why; read them before changing a number, several encode a deliberate retune away from a value that read badly.
+All feel constants live in `src/controller.rs` and `src/controller/movement.rs`, **not** in `game_balance.rs` (that file owns gameplay balance: combat ranges, deployable/building/furnace values). The comments next to each constant hold the why; read them before changing a number, several encode a deliberate retune away from a value that read badly.
 
 | Constant | Value | File | Note (paraphrased from the code comment) |
 | --- | --- | --- | --- |
@@ -69,17 +69,17 @@ All feel constants live in `src/controller/mod.rs` and `src/controller/movement.
 | `GROUND_ACCELERATION` | 68.0 | movement.rs | |
 | `GROUND_DECELERATION` | 76.0 | movement.rs | |
 | `AIR_ACCELERATION` | 13.0 | movement.rs | |
-| `JUMP_SPEED` | 6.8 m/s | mod.rs | |
-| `GRAVITY` | 18.0 | mod.rs | |
-| `MAX_FALL_SPEED` | 32.0 m/s | mod.rs | |
-| `STEP_HEIGHT` | 0.45 m | mod.rs | Step-up ceiling. |
-| `PLAYER_RADIUS` | 0.35 m | mod.rs | Capsule radius for collision. |
-| `PLAYER_HEIGHT` | 1.8 m | mod.rs | |
-| `LEAP_TAKEOFF_SPEED` | 7.25 m/s | mod.rs | Running-jump forward boost; sits just above `RUN_SPEED` so it isn't an exploit. |
-| `LEAP_MAX_HORIZONTAL_SPEED` | 7.4 m/s | mod.rs | |
-| `JUMP_BUFFER_SECONDS` | 0.18 s | mod.rs | Buffer window for a pressed jump. |
-| `COYOTE_TIME_SECONDS` | 0.1 s | mod.rs | Grace window to still jump just after leaving ground. |
-| `MAX_LOOK_PITCH` | `FRAC_PI_2 - 0.01` | mod.rs | Pitch clamp, also enforced server-side. |
+| `JUMP_SPEED` | 6.8 m/s | controller.rs | |
+| `GRAVITY` | 18.0 | controller.rs | |
+| `MAX_FALL_SPEED` | 32.0 m/s | controller.rs | |
+| `STEP_HEIGHT` | 0.45 m | controller.rs | Step-up ceiling. |
+| `PLAYER_RADIUS` | 0.35 m | controller.rs | Capsule radius for collision. |
+| `PLAYER_HEIGHT` | 1.8 m | controller.rs | |
+| `LEAP_TAKEOFF_SPEED` | 7.25 m/s | controller.rs | Running-jump forward boost; sits just above `RUN_SPEED` so it isn't an exploit. |
+| `LEAP_MAX_HORIZONTAL_SPEED` | 7.4 m/s | controller.rs | |
+| `JUMP_BUFFER_SECONDS` | 0.18 s | controller.rs | Buffer window for a pressed jump. |
+| `COYOTE_TIME_SECONDS` | 0.1 s | controller.rs | Grace window to still jump just after leaving ground. |
+| `MAX_LOOK_PITCH` | `FRAC_PI_2 - 0.01` | controller.rs | Pitch clamp, also enforced server-side. |
 | `SERVER_EYE_HEIGHT` | 1.62 m | server/movement.rs | Eye offset used for server-side range/LOS checks. |
 
 ## The trust boundary: two sites
@@ -119,7 +119,7 @@ The accepted pose is replicated to peers as the `PlayerPose` component on the pl
 3. Sets `predicted.speed_multiplier` from the replicated `/speed` value, then `predicted.apply_input(input)` and `predicted.simulate_with_grid(delta, grid)` against the cached `runtime.world_grid` (no per-frame grid rebuild).
 4. Emits a `PlayerMovement` from the integrated result and sends it, paced.
 
-Prediction runs every frame; the **wire send is decoupled and throttled**. `MOVEMENT_SEND_RATE_HZ = SERVER_TICK_RATE_HZ * 1.5 = 30 Hz` while the state is changing, `MOVEMENT_IDLE_SEND_RATE_HZ = 1 Hz` when fully stationary (`SERVER_TICK_RATE_HZ = 20.0`, `src/protocol/mod.rs - SERVER_TICK_RATE_HZ`). The server keeps only the newest movement per tick and the sequence guard makes latest-state-wins; a dropped send loses nothing, the next send carries the integrated result. Do not "fix" the pacing back to per-frame: at 144 fps that was ~144 msgs/s with ~85% overwritten unread, which was the bug this pacing fixes. On a send error the system leaves `last_sent` stale so the next interval retries as a changed send.
+Prediction runs every frame; the **wire send is decoupled and throttled**. `MOVEMENT_SEND_RATE_HZ = SERVER_TICK_RATE_HZ * 1.5 = 30 Hz` while the state is changing, `MOVEMENT_IDLE_SEND_RATE_HZ = 1 Hz` when fully stationary (`SERVER_TICK_RATE_HZ = 20.0`, `src/protocol.rs - SERVER_TICK_RATE_HZ`). The server keeps only the newest movement per tick and the sequence guard makes latest-state-wins; a dropped send loses nothing, the next send carries the integrated result. Do not "fix" the pacing back to per-frame: at 144 fps that was ~144 msgs/s with ~85% overwritten unread, which was the bug this pacing fixes. On a send error the system leaves `last_sent` stale so the next interval retries as a changed send.
 
 Loopback singleplayer and direct multiplayer use this exact path (`client_input_system` always emits `ClientMessage::Movement` through `session.send`; the server handles it identically for loopback host and dedicated). There is no separate singleplayer movement code.
 
@@ -137,7 +137,7 @@ Reconciliation lives in `src/app/state/runtime.rs`, not in the controller. If yo
 These are the easy-to-break invariants. Each has a guarding test in `src/controller/tests.rs`.
 
 - **Air-strafe cap with knockback preservation.** `accelerate_air` (`src/controller/movement.rs:127`) clamps the horizontal magnitude to `max(AIR_MAX_HORIZONTAL_SPEED * speed_multiplier, entry_speed)`. Air control can never *gain* speed past the cap (kills diagonal air-strafe bunny-hop ratcheting), but it never *crushes* a pre-existing over-speed (knockback, a forward leap). Clamping to a bare cap would silently kill knockback feel. Guarded by `air_strafing_cannot_ratchet_speed_past_the_air_cap` and `air_control_preserves_knockback_overspeed`.
-- **Jump buffer decays only while grounded** (`src/controller/mod.rs - simulate_step`). A press anywhere in the jump arc persists until landing and fires on the first touch-down substep; that is what makes bunny-hopping work. The buffer is reset to 0 the instant a jump fires, so it cannot accumulate ghost jumps across long airtime. Do not "simplify" it to decay-always. Guarded by `early_air_press_still_fires_jump_on_landing`, `rapid_tap_bunny_hops_on_every_landing`, `buffer_does_not_auto_fire_without_a_press`.
+- **Jump buffer decays only while grounded** (`src/controller.rs - simulate_step`). A press anywhere in the jump arc persists until landing and fires on the first touch-down substep; that is what makes bunny-hopping work. The buffer is reset to 0 the instant a jump fires, so it cannot accumulate ghost jumps across long airtime. Do not "simplify" it to decay-always. Guarded by `early_air_press_still_fires_jump_on_landing`, `rapid_tap_bunny_hops_on_every_landing`, `buffer_does_not_auto_fire_without_a_press`.
 - **High-framerate jump not smothered.** When grounded, downward velocity is clamped to 0 but upward velocity is left alone, because at high fps a fresh jump's first substep moves only a few cm and still reads `grounded`. Replacing upward `JUMP_SPEED` with 0 there would silently eat the jump. Guarded by `high_framerate_jump_is_not_smothered_by_grounded_clamp`.
 - **Coyote time** (`COYOTE_TIME_SECONDS` 0.1 s): the jump remains available for a short grace window after leaving the ground.
 - **Leap takeoff** (`apply_leap_takeoff`): a running jump (run held, forward input past `LEAP_FORWARD_INPUT_THRESHOLD`) gets a forward boost up to `LEAP_MAX_HORIZONTAL_SPEED`, tuned just above `RUN_SPEED` so it is a feel boost, not an exploit. Guarded by `run_jump_creates_modest_forward_boost`.

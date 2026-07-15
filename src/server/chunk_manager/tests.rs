@@ -79,7 +79,7 @@ fn tick_spawns_pending_regrows() {
 
 #[test]
 fn regrow_handles_the_meteorite_kind() {
-    use crate::resources::METEORITE_NODE_ID;
+    use crate::resource_nodes::METEORITE_NODE_ID;
 
     // A big world so some far rocky/ore chunks qualify for meteorite. The
     // generator + capacity grid share `chunk_kind_target`, so a capacity slot
@@ -140,7 +140,7 @@ fn dropped_item_anchor_moves_when_position_crosses_chunk_boundary() {
     // Use a wider world so we can move across a chunk boundary
     // without falling off the playable map.
     let (mut manager, _nodes) = ChunkManager::new_for_world(0xCAFE, ChunkDims::new(5));
-    let id: DroppedItemId = 42;
+    let id: DroppedItemId = crate::protocol::DroppedItemId(42);
 
     manager.track_dropped_item(id, Vec3Net::new(8.0, 0.0, 0.0));
     let initial: Vec<_> = manager.dropped_items_in(ChunkCoord::new(0, 0)).collect();
@@ -173,7 +173,7 @@ fn dropped_item_anchor_moves_when_position_crosses_chunk_boundary() {
 #[test]
 fn player_anchor_follows_position_updates() {
     let (mut manager, _nodes) = ChunkManager::new_for_world(0xCAFE, ChunkDims::new(5));
-    let client_id: ClientId = 7;
+    let client_id: ClientId = crate::protocol::ClientId(7);
 
     manager.track_player(client_id, Vec3Net::ZERO);
     assert_eq!(manager.player_chunk(client_id), Some(ChunkCoord::new(0, 0)));

@@ -119,6 +119,8 @@ mod workbench;
 mod world_map;
 mod world_time;
 
+use self::dirty_tracked_map::DirtyTrackedMap;
+use self::dropped_items::{DroppedItemBody, DroppedItemPhysics};
 pub use chunk_manager::{ChunkManager, ChunkManagerSave, view_tier_radius};
 pub use connection::VersionMismatchRejection;
 pub use deployable_ecs::{
@@ -149,10 +151,6 @@ pub use resource_node_ecs::{
     ResourceNode, ResourceNodeChunk, ResourceNodeIndex, ResourceNodeStorage,
     despawn_resource_node_entity, spawn_resource_node_entity,
 };
-pub use voice::VOICE_AUDIBLE_RANGE;
-
-use self::dirty_tracked_map::DirtyTrackedMap;
-use self::dropped_items::{DroppedItemBody, DroppedItemPhysics};
 // Re-exported into the module namespace only for the in-tree tests, which
 // reach these tick-cadence constants through `tests::*`'s `use super::*`.
 // Production code references them from `self::tick`, not here.
@@ -401,7 +399,7 @@ pub(super) struct ServerClient {
     /// Active crafting queue. Inputs already debited; outputs pending.
     /// Snapshots send a clone of this to the owning client only.
     pub(super) crafting: PlayerCraftingState,
-    /// Next id handed out for [`crafting::jobs`]. Wraps after 2^64 jobs,
+    /// Next id handed out for [`PlayerCraftingState::jobs`]. Wraps after 2^64 jobs,
     /// which won't happen, it's a u64 so the wrap is harmless even if
     /// the player runs a crafting macro for years.
     pub(super) next_craft_job_id: CraftingJobId,
@@ -517,7 +515,7 @@ pub(super) fn sleeping_body_from_persisted(
         chat_bubble: None,
         view_tier: crate::protocol::ViewRadiusTier::default(),
         crafting: PlayerCraftingState::default(),
-        next_craft_job_id: 1,
+        next_craft_job_id: crate::protocol::CraftingJobId(1),
         open_furnace: None,
         open_workbench: None,
         open_container: None,

@@ -1,6 +1,6 @@
 use super::pop_in::{POP_IN_DURATION_SECS, ease_out_cubic, pop_in_transform};
 use super::*;
-use crate::resources::{COAL_NODE_ID, IRON_NODE_ID, ResourceNodeModel, SULFUR_NODE_ID};
+use crate::resource_nodes::{COAL_NODE_ID, IRON_NODE_ID, ResourceNodeModel, SULFUR_NODE_ID};
 
 #[test]
 fn pop_in_starts_below_floor_and_settles_to_base_transform() {
@@ -34,8 +34,13 @@ fn ore_transform_matches_spawn_y_so_rock_sits_on_ground() {
     // transform must not raise them above the floor.
     for ore_id in [COAL_NODE_ID, IRON_NODE_ID, SULFUR_NODE_ID] {
         let position = Vec3Net::new(2.0, 0.0, -3.0);
-        let definition = crate::resources::resource_node_definition(ore_id).unwrap();
-        let transform = resource_node_transform_at(7, position, 0.0, definition.model);
+        let definition = crate::resource_nodes::resource_node_definition(ore_id).unwrap();
+        let transform = resource_node_transform_at(
+            crate::protocol::ResourceNodeId(7),
+            position,
+            0.0,
+            definition.model,
+        );
         assert_eq!(
             transform.translation.y, position.y,
             "{ore_id} mesh must sit at the spawn y (no floating offset)"
@@ -66,7 +71,12 @@ fn pop_in_overshoots_above_unit_scale_mid_curve() {
 #[test]
 fn tree_transform_carries_bounded_uniform_jitter_on_the_ground() {
     let position = Vec3Net::new(1.0, 0.0, 2.0);
-    let transform = resource_node_transform_at(11, position, 0.5, ResourceNodeModel::PineTreeLarge);
+    let transform = resource_node_transform_at(
+        crate::protocol::ResourceNodeId(11),
+        position,
+        0.5,
+        ResourceNodeModel::PineTreeLarge,
+    );
     // Trees scale uniformly (no squash), within the ±12% jitter band.
     assert_eq!(transform.scale.x, transform.scale.y);
     assert_eq!(transform.scale.y, transform.scale.z);
@@ -81,13 +91,16 @@ fn tree_transform_carries_bounded_uniform_jitter_on_the_ground() {
 fn size_jitter_is_deterministic_per_node_id_and_varies_between_ids() {
     let position = Vec3Net::new(0.0, 0.0, 0.0);
     let model = ResourceNodeModel::PineTreeMedium;
-    let first = resource_node_transform_at(3, position, 0.0, model);
-    let again = resource_node_transform_at(3, position, 0.0, model);
+    let first =
+        resource_node_transform_at(crate::protocol::ResourceNodeId(3), position, 0.0, model);
+    let again =
+        resource_node_transform_at(crate::protocol::ResourceNodeId(3), position, 0.0, model);
     assert_eq!(
         first.scale, again.scale,
         "same node id must always produce the same size"
     );
-    let other = resource_node_transform_at(4, position, 0.0, model);
+    let other =
+        resource_node_transform_at(crate::protocol::ResourceNodeId(4), position, 0.0, model);
     assert_ne!(
         first.scale, other.scale,
         "different node ids should land on different sizes"
@@ -97,8 +110,18 @@ fn size_jitter_is_deterministic_per_node_id_and_varies_between_ids() {
 #[test]
 fn ore_models_carry_per_model_scale_shaping() {
     let position = Vec3Net::new(0.0, 0.0, 0.0);
-    let iron = resource_node_transform_at(5, position, 0.0, ResourceNodeModel::IronOre);
-    let coal = resource_node_transform_at(5, position, 0.0, ResourceNodeModel::CoalOre);
+    let iron = resource_node_transform_at(
+        crate::protocol::ResourceNodeId(5),
+        position,
+        0.0,
+        ResourceNodeModel::IronOre,
+    );
+    let coal = resource_node_transform_at(
+        crate::protocol::ResourceNodeId(5),
+        position,
+        0.0,
+        ResourceNodeModel::CoalOre,
+    );
     // Iron has a distinct non-uniform shape on top of the shared jitter;
     // coal stays uniform.
     assert_ne!(iron.scale, coal.scale);
@@ -123,7 +146,7 @@ fn caught_up_requires_a_first_pass_and_an_empty_spawn_queue() {
     assert!(entities.is_caught_up());
 
     entities.pending_spawns.push(PendingSpawn {
-        id: 1,
+        id: crate::protocol::ResourceNodeId(1),
         definition_id: IRON_NODE_ID.to_owned(),
         position: Vec3Net::new(0.0, 0.0, 0.0),
         yaw: 0.0,

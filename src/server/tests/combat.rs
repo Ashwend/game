@@ -91,8 +91,8 @@ fn target_health(server: &GameServer, target: ClientId) -> f32 {
 #[test]
 fn attack_in_range_with_axe_applies_damage_and_emits_player_impact() {
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     // Attacker at origin, target 2 m in front (-Z). Attacker faces -Z (yaw=0).
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
@@ -139,8 +139,8 @@ fn weapon_hit_broadcasts_its_own_item_model_not_hands() {
     // weapon's OWN archetype on `PlayerImpact`, so a peer's audio/VFX/camera
     // reaction reads as that weapon rather than the retired `Hands` interim.
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
 
@@ -170,8 +170,8 @@ fn tool_hit_broadcasts_its_archetype_model() {
     // hatchet reads as Hatchet, a pickaxe as Pickaxe), never a weapon model or
     // the empty-hand bag.
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
 
@@ -218,8 +218,8 @@ fn knockback_scale_command_scales_the_impulse() {
     // impulse vector component-for-component, and resetting to 1.0 restores it.
     let mut server = server();
     // Account id 1 is the singleplayer host, so this attacker is admin.
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_axe(&mut server, attacker);
@@ -255,8 +255,8 @@ fn knockback_scale_zero_removes_the_impulse() {
     // A 0.0 factor zeroes the knockback, still emitting the envelope but with a
     // null impulse, so tuning can bracket the shipped feel from zero upward.
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_axe(&mut server, attacker);
@@ -278,8 +278,8 @@ fn point_blank_attack_lands_with_level_aim() {
     // test now matches the client (look ray vs body box), so a level-aim swing
     // at point-blank range must register.
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     // Half a metre apart, attacker facing -Z with level pitch (place_player
     // sets pitch = 0).
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
@@ -309,8 +309,8 @@ fn non_fatal_hit_sends_the_victim_a_health_correction() {
     // when the server sends a `Correction`. A landed hit must therefore push
     // one to the target carrying the reduced health.
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_axe(&mut server, attacker);
@@ -343,8 +343,8 @@ fn a_sleeping_body_can_be_attacked_and_damaged() {
     // living body, so it can be swung on and killed (its gear then drops as a
     // loot bag, and the owner respawns fresh on their next login).
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let victim = connect_named(&mut server, 2, "Victim");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let victim = connect_named(&mut server, crate::protocol::AccountId(2), "Victim");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, victim, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_axe(&mut server, attacker);
@@ -361,7 +361,7 @@ fn a_sleeping_body_can_be_attacked_and_damaged() {
 
     // A nearby online witness; the impact cue is range-gated to online
     // clients, so the sleeping victim itself receives nothing.
-    let witness = connect_named(&mut server, 3, "Witness");
+    let witness = connect_named(&mut server, crate::protocol::AccountId(3), "Witness");
     place_player(&mut server, witness, Vec3Net::new(2.0, 0.0, 0.0), 0.0);
 
     let start_hp = target_health(&server, victim);
@@ -385,8 +385,8 @@ fn a_sleeper_is_hittable_without_facing_it() {
     // apply), so a standing player can strike the body without centring it. A
     // standing target facing away the same way would be out of the cone.
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let victim = connect_named(&mut server, 2, "Victim");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let victim = connect_named(&mut server, crate::protocol::AccountId(2), "Victim");
     // Attacker faces +Z (yaw = PI), away from the victim sitting at -Z.
     place_player(
         &mut server,
@@ -418,8 +418,8 @@ fn a_sleeper_is_hittable_without_facing_it() {
 #[test]
 fn looting_a_sleeper_opens_their_live_inventory_non_destructively() {
     let mut server = server();
-    let looter = connect_named(&mut server, 1, "Looter");
-    let target = connect_named(&mut server, 2, "Sleeper");
+    let looter = connect_named(&mut server, crate::protocol::AccountId(1), "Looter");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Sleeper");
     place_player(&mut server, looter, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -1.0), 0.0);
     server
@@ -500,8 +500,8 @@ fn looting_a_sleeper_opens_their_live_inventory_non_destructively() {
 #[test]
 fn an_empty_sleeper_still_opens_showing_nothing() {
     let mut server = server();
-    let looter = connect_named(&mut server, 1, "Looter");
-    let target = connect_named(&mut server, 2, "Sleeper");
+    let looter = connect_named(&mut server, crate::protocol::AccountId(1), "Looter");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Sleeper");
     place_player(&mut server, looter, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -1.0), 0.0);
 
@@ -529,8 +529,8 @@ fn an_empty_sleeper_still_opens_showing_nothing() {
 #[test]
 fn waking_a_sleeper_closes_anyone_looting_it() {
     let mut server = server();
-    let looter = connect_named(&mut server, 1, "Looter");
-    let target = connect_named(&mut server, 2, "Sleeper");
+    let looter = connect_named(&mut server, crate::protocol::AccountId(1), "Looter");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Sleeper");
     place_player(&mut server, looter, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -1.0), 0.0);
 
@@ -542,7 +542,7 @@ fn waking_a_sleeper_closes_anyone_looting_it() {
     let _ = server.connect(
         PROTOCOL_VERSION,
         Some(crate::protocol::GAME_VERSION.to_owned()),
-        2,
+        crate::protocol::AccountId(2),
         "Sleeper".to_owned(),
         String::new(),
     );
@@ -555,8 +555,8 @@ fn waking_a_sleeper_closes_anyone_looting_it() {
 #[test]
 fn attack_outside_range_is_rejected_without_damage() {
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -20.0), 0.0);
     equip_axe(&mut server, attacker);
@@ -572,8 +572,8 @@ fn attack_outside_range_is_rejected_without_damage() {
 #[test]
 fn attack_without_tool_is_rejected() {
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     // No tool equipped (bare hands).
@@ -588,7 +588,7 @@ fn attack_without_tool_is_rejected() {
 #[test]
 fn attack_self_is_rejected() {
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
     equip_axe(&mut server, attacker);
 
     let start_hp = target_health(&server, attacker);
@@ -601,8 +601,8 @@ fn attack_self_is_rejected() {
 #[test]
 fn attack_dead_target_is_rejected() {
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_axe(&mut server, attacker);
@@ -624,8 +624,8 @@ fn attack_dead_target_is_rejected() {
 #[test]
 fn attack_in_cooldown_is_rejected() {
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_pickaxe(&mut server, attacker);
@@ -650,8 +650,8 @@ fn attack_in_cooldown_is_rejected() {
 #[test]
 fn pickaxe_deals_more_damage_than_axe_in_one_swing() {
     let mut axe_server = server();
-    let axe_attacker = connect_named(&mut axe_server, 1, "Axer");
-    let axe_target = connect_named(&mut axe_server, 2, "Target");
+    let axe_attacker = connect_named(&mut axe_server, crate::protocol::AccountId(1), "Axer");
+    let axe_target = connect_named(&mut axe_server, crate::protocol::AccountId(2), "Target");
     place_player(
         &mut axe_server,
         axe_attacker,
@@ -670,8 +670,8 @@ fn pickaxe_deals_more_damage_than_axe_in_one_swing() {
     let axe_damage = axe_start - target_health(&axe_server, axe_target);
 
     let mut pick_server = server();
-    let pick_attacker = connect_named(&mut pick_server, 1, "Picker");
-    let pick_target = connect_named(&mut pick_server, 2, "Target");
+    let pick_attacker = connect_named(&mut pick_server, crate::protocol::AccountId(1), "Picker");
+    let pick_target = connect_named(&mut pick_server, crate::protocol::AccountId(2), "Target");
     place_player(
         &mut pick_server,
         pick_attacker,
@@ -700,8 +700,8 @@ fn pickaxe_deals_more_damage_than_axe_in_one_swing() {
 #[test]
 fn attack_applies_armor_reduction() {
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_axe(&mut server, attacker);
@@ -720,8 +720,8 @@ fn attack_applies_armor_reduction() {
 #[test]
 fn attack_behind_attacker_is_rejected_by_view_cone() {
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     // Attacker faces -Z (yaw 0); target sits behind at +Z.
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, 2.0), 0.0);
@@ -735,12 +735,12 @@ fn attack_behind_attacker_is_rejected_by_view_cone() {
 #[test]
 fn player_impact_reaches_nearby_peers_but_not_attacker_or_distant_clients() {
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     // A spectator far outside IMPACT_MESSAGE_RANGE_M: the cosmetic cue
     // must not be shipped across the map to clients who can neither
     // hear nor see it.
-    let distant = connect_named(&mut server, 3, "Distant");
+    let distant = connect_named(&mut server, crate::protocol::AccountId(3), "Distant");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     place_player(
@@ -778,8 +778,8 @@ fn player_impact_reaches_nearby_peers_but_not_attacker_or_distant_clients() {
 fn player_dies_spawns_loot_bag_and_emits_player_killed() {
     use crate::items::WOOD_ID;
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Victim");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Victim");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_pickaxe(&mut server, attacker);
@@ -823,8 +823,8 @@ fn player_dies_spawns_loot_bag_and_emits_player_killed() {
 #[test]
 fn dead_player_cannot_be_attacked_again() {
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Victim");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Victim");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_pickaxe(&mut server, attacker);
@@ -842,8 +842,8 @@ fn dead_player_cannot_be_attacked_again() {
 #[test]
 fn respawn_command_resets_health_and_moves_player() {
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Victim");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Victim");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_pickaxe(&mut server, attacker);
@@ -872,7 +872,7 @@ fn respawn_command_resets_health_and_moves_player() {
 #[test]
 fn respawn_command_rejected_when_alive() {
     let mut server = server();
-    let client = connect_named(&mut server, 1, "Alpha");
+    let client = connect_named(&mut server, crate::protocol::AccountId(1), "Alpha");
     let envelopes = server.apply_respawn_command(client);
     assert!(
         envelopes.is_empty(),
@@ -884,8 +884,8 @@ fn respawn_command_rejected_when_alive() {
 fn dead_player_movement_updates_are_ignored() {
     use crate::protocol::ClientMessage;
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Victim");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Victim");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_pickaxe(&mut server, attacker);
@@ -915,8 +915,8 @@ fn dead_player_movement_updates_are_ignored() {
 #[test]
 fn attack_damage_clamps_at_zero_health() {
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_pickaxe(&mut server, attacker);
@@ -955,8 +955,8 @@ fn equip_padded(server: &mut GameServer, client_id: ClientId, item_id: &str, slo
 #[test]
 fn equipping_a_padded_set_reduces_melee_damage() {
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_pickaxe(&mut server, attacker);
@@ -984,8 +984,8 @@ fn equipping_a_padded_set_reduces_melee_damage() {
 #[test]
 fn a_melee_hit_wears_only_the_pieces_that_stopped_it() {
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_axe(&mut server, attacker);
@@ -1009,8 +1009,8 @@ fn a_melee_hit_wears_only_the_pieces_that_stopped_it() {
 #[test]
 fn a_broken_piece_stays_worn_but_stops_protecting() {
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_pickaxe(&mut server, attacker);
@@ -1045,8 +1045,8 @@ fn a_broken_piece_stays_worn_but_stops_protecting() {
 #[test]
 fn death_drains_worn_armor_into_the_loot_bag_and_zeroes_mitigation() {
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Victim");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Victim");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_pickaxe(&mut server, attacker);
@@ -1080,7 +1080,7 @@ fn pierce_interaction_is_unchanged_by_the_equipment_rework() {
     use crate::combat::{damage_after_armor, effective_armor_after_pierce};
 
     let mut server = server();
-    let target = connect_named(&mut server, 2, "Target");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     equip_padded(&mut server, target, PADDED_HOOD_ID, EquipmentSlot::Head);
     equip_padded(&mut server, target, PADDED_TUNIC_ID, EquipmentSlot::Chest);
     equip_padded(&mut server, target, PADDED_LEGGINGS_ID, EquipmentSlot::Legs);
@@ -1112,8 +1112,8 @@ fn a_mace_hit_pierces_armor_against_an_armored_target() {
     use crate::game_balance::{IRON_MACE_ARMOR_PIERCE_PCT, IRON_MACE_PVP_DAMAGE};
 
     let mut server = server();
-    let attacker = connect_named(&mut server, 1, "Attacker");
-    let target = connect_named(&mut server, 2, "Target");
+    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
     equip_item(&mut server, attacker, IRON_MACE_ID);
@@ -1149,8 +1149,12 @@ fn a_spear_connects_where_a_sword_does_not_at_extended_range() {
 
     // Sword at 4.2 m: rejected (out of its 3.5 m reach), no damage.
     let mut sword_server = server();
-    let sword_attacker = connect_named(&mut sword_server, 1, "Swordsman");
-    let sword_target = connect_named(&mut sword_server, 2, "Target");
+    let sword_attacker = connect_named(
+        &mut sword_server,
+        crate::protocol::AccountId(1),
+        "Swordsman",
+    );
+    let sword_target = connect_named(&mut sword_server, crate::protocol::AccountId(2), "Target");
     place_player(
         &mut sword_server,
         sword_attacker,
@@ -1178,8 +1182,9 @@ fn a_spear_connects_where_a_sword_does_not_at_extended_range() {
 
     // Spear at the same 4.2 m: connects (inside its 4.5 m reach).
     let mut spear_server = server();
-    let spear_attacker = connect_named(&mut spear_server, 1, "Spearman");
-    let spear_target = connect_named(&mut spear_server, 2, "Target");
+    let spear_attacker =
+        connect_named(&mut spear_server, crate::protocol::AccountId(1), "Spearman");
+    let spear_target = connect_named(&mut spear_server, crate::protocol::AccountId(2), "Target");
     place_player(
         &mut spear_server,
         spear_attacker,

@@ -86,7 +86,7 @@ mod tests {
 
     fn place_lit_torch(server: &mut GameServer, burn_ticks_left: u32) -> DeployedEntityId {
         let id = server.next_deployed_entity_id;
-        server.next_deployed_entity_id += 1;
+        server.next_deployed_entity_id.0 += 1;
         server.insert_deployed_entity(
             id,
             DeployedEntity {
@@ -97,7 +97,7 @@ mod tests {
                 yaw: 0.0,
                 health: 60,
                 max_health: 60,
-                owner: Some(1),
+                owner: Some(crate::protocol::AccountId(1)),
                 furnace: None,
                 placed_at_tick: 0,
                 door: None,

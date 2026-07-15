@@ -2,7 +2,7 @@
 """Drive the Ashwend dev client control socket.
 
 The client opens this Unix socket only when GAME_CONTROL_SOCKET is set (see
-src/app/systems/control_socket.rs). It speaks one line-delimited JSON request
+src/control_socket/). It speaks one line-delimited JSON request
 per connection and replies with {"ok": bool, "message": str}. This is a thin,
 stdlib-only driver so an agent can launch the game, act, and assert on state
 without reading pixels.

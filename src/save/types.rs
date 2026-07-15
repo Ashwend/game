@@ -101,13 +101,13 @@ impl Default for WorldStateSave {
             dropped_items: Vec::new(),
             resource_nodes: None,
             chunk_manager: None,
-            next_dropped_item_id: default_next_id(),
-            next_client_id: default_next_id(),
+            next_dropped_item_id: crate::protocol::DroppedItemId(default_next_id()),
+            next_client_id: crate::protocol::ClientId(default_next_id()),
             next_resource_node_id: default_next_resource_node_id(),
             world_time_seconds_of_day: default_world_time_seconds(),
             world_time_multiplier: default_world_time_multiplier(),
             deployed_entities: Vec::new(),
-            next_deployed_entity_id: default_next_id(),
+            next_deployed_entity_id: crate::protocol::DeployedEntityId(default_next_id()),
             world_map_markers: Vec::new(),
         }
     }
@@ -251,7 +251,7 @@ fn default_next_id() -> u64 {
 /// the small integers (1..=72 at last count); starting the counter at 10_000
 /// keeps the two ID spaces disjoint without us having to remember to bump it
 /// every time a new hand-authored node is added.
-const ADMIN_SPAWN_NODE_ID_BASE: ResourceNodeId = 10_000;
+const ADMIN_SPAWN_NODE_ID_BASE: ResourceNodeId = ResourceNodeId(10_000);
 
 fn default_next_resource_node_id() -> ResourceNodeId {
     ADMIN_SPAWN_NODE_ID_BASE

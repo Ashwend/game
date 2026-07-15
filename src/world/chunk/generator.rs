@@ -344,7 +344,7 @@ pub fn generate_chunk_spawns(
                 coord,
                 kind,
                 spawn: WorldResourceNodeSpawn::new(
-                    *next_id,
+                    crate::protocol::ResourceNodeId(*next_id),
                     definition_id,
                     Vec3Net::new(x, 0.0, z),
                     yaw,
@@ -630,7 +630,7 @@ mod tests {
     fn generate_world_spawns_produces_unique_ids() {
         let dims = ChunkDims::new(5);
         let spawns = generate_world_spawns(7, dims, &[]);
-        let mut ids: Vec<u64> = spawns.iter().map(|s| s.spawn.id).collect();
+        let mut ids: Vec<u64> = spawns.iter().map(|s| s.spawn.id.0).collect();
         ids.sort();
         let original_len = ids.len();
         ids.dedup();

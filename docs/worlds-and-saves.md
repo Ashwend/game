@@ -3,10 +3,10 @@ title: World generation and persistence
 owns: Procedural world generation (map sizing, biome classification, the deterministic spawn pipeline) and the on-disk save format (GAMESAVE binary, the persisted struct inventory, load/seed-vs-restore).
 when_to_read: Before changing world generation, biome classification, a persisted struct, or the save format.
 sources:
-  - src/world/mod.rs - MapType, ProceduralMapSize, WorldData, TEST_WORLD_SEED
+  - src/world.rs - MapType, ProceduralMapSize, WorldData, TEST_WORLD_SEED
   - src/world/chunk/classification.rs - ChunkClassification, ClassificationChannels, BIOME_BIAS, base_capacity
   - src/world/chunk/generator.rs - kind_target, chunk_kind_target, generate_world_spawns, PlayableBounds
-  - src/resources.rs - spawn_resource_node, tree_is_dead (dead-snag decision)
+  - src/resource_nodes.rs - spawn_resource_node, tree_is_dead (dead-snag decision)
   - src/world/ruins.rs - RuinPrefab, ruin_layout, ruin_footprints, RuinSite
   - src/save/format.rs - SAVE_FORMAT_VERSION, encode/decode, world_save_postcard_layout_is_stable
   - src/save/types.rs - WorldSave, WorldStateSave, PersistedPlayer
@@ -28,12 +28,12 @@ This doc owns two coupled concerns: how a `(seed, size)` pair turns into a deter
 
 ## Map sizing and the bounded arena
 
-A world is a single `MapType::Procedural { seed, size }` (`src/world/mod.rs` - `MapType`). There is currently no other map variant.
+A world is a single `MapType::Procedural { seed, size }` (`src/world.rs` - `MapType`). There is currently no other map variant.
 
 - `ProceduralMapSize` is `Small | Medium | Large`, mapping to **15 / 31 / 63** chunk cells per side (`ProceduralMapSize::dims`). Each is forced odd via `| 1` so a single center chunk sits over the origin where the player spawns. `LARGE_DIMS = 63`; medium and small derive as `LARGE_DIMS / 2` and `LARGE_DIMS / 4` then `| 1`.
 - Chunk edge is `CHUNK_SIZE_M = 64.0` m, so the three sizes are **960 / 1984 / 4032** m square playable areas.
 - **The default is `Medium` (31x31 = 1984 m)** (`ProceduralMapSize` `#[default] Medium`). `MapType::default()`, `WorldData::test_world()`, and a fresh `WorldSave` all produce a 31x31 world. Some module docstrings/tests still describe a "5x5 chunks span -2..=2" test world (e.g. `ChunkDims::new(5)` in generation tests); that 5x5 framing is a legacy test fixture, **not** the real default-world size.
-- `TEST_WORLD_SEED = 0x7E57_5EED_5EED_5EED` (`src/world/mod.rs` - `TEST_WORLD_SEED`) is the default map seed, used by tests and the loopback menu backdrop.
+- `TEST_WORLD_SEED = 0x7E57_5EED_5EED_5EED` (`src/world.rs` - `TEST_WORLD_SEED`) is the default map seed, used by tests and the loopback menu backdrop.
 
 `WorldData` for a grid world (`WorldData::chunk_world`) carries only the **4 perimeter stone walls** (`build_world_blocks`, four `BlockKind::Stone` blocks centred on the origin) and an **always-empty `resource_nodes`** vector. The server's `ChunkManager` owns every resource node; `WorldData.resource_nodes` is populated only for the hand-authored `WorldData::menu_backdrop_world` (the main-menu splash scene), never for grid worlds.
 
@@ -45,7 +45,7 @@ Everything under `src/world/chunk/` is a pure function of `(world_seed, coord)` 
 
 ### Noise primitives (`src/world/chunk/noise.rs`)
 
-`value_noise_2d`, `fbm` (octave-summed value noise), `splitmix64` (the integer mixer used for per-channel/per-node seeds), and `ChunkRng` (the per-chunk stream the placement loop draws from). All exported through `src/world/mod.rs`.
+`value_noise_2d`, `fbm` (octave-summed value noise), `splitmix64` (the integer mixer used for per-channel/per-node seeds), and `ChunkRng` (the per-chunk stream the placement loop draws from). All exported through `src/world.rs`.
 
 ### Classification (recomputed, not persisted)
 
@@ -85,7 +85,7 @@ Four surfaces derive from the one layout; server and client each call the same f
 
 ### Dead-tree snags (save format v15)
 
-Whether a tree is a bare dead snag is decided **at spawn**, authoritatively, in `spawn_resource_node` (`src/resources.rs`), and frozen on `ResourceNodeState.dead` so it replicates and persists rather than being re-derived per client. `tree_is_dead(seed, id, position)` samples the forest channel at the node's exact position and runs a **smoothstep** over `DEAD_TREE_FOREST_LOW = 0.40` to `DEAD_TREE_FOREST_HIGH = 0.60`: forest interiors stay lush, the open is bare snags, the edge thins into a mix. A per-node `splitmix64(id)` hash makes a given tree stable. `world_seed = None` (the menu backdrop, which neither replicates nor saves) leaves all trees alive.
+Whether a tree is a bare dead snag is decided **at spawn**, authoritatively, in `spawn_resource_node` (`src/resource_nodes.rs`), and frozen on `ResourceNodeState.dead` so it replicates and persists rather than being re-derived per client. `tree_is_dead(seed, id, position)` samples the forest channel at the node's exact position and runs a **smoothstep** over `DEAD_TREE_FOREST_LOW = 0.40` to `DEAD_TREE_FOREST_HIGH = 0.60`: forest interiors stay lush, the open is bare snags, the edge thins into a mix. A per-node `splitmix64(id)` hash makes a given tree stable. `world_seed = None` (the menu backdrop, which neither replicates nor saves) leaves all trees alive.
 
 ## Save model
 

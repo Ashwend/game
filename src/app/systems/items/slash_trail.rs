@@ -178,7 +178,7 @@ pub(crate) struct SlashTrailHandles {
 /// lazily on first use as a child of the main camera (the viewmodel layer
 /// draws over the finished frame, exactly like the held item; the ribbon's
 /// vertices are authored directly in camera space).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 pub(crate) fn sword_slash_trail_system(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,

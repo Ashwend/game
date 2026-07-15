@@ -67,7 +67,7 @@ impl BlockGrid {
         crate::world::crater_surface_height(distance_sq.sqrt())
     }
 
-    /// Same as [`build`] but mixes additional collider blocks into the chunk.
+    /// Same as [`Self::build`] but mixes additional collider blocks into the chunk.
     /// Use this on the client to compose static world geometry with
     /// per-frame dynamic colliders such as live tree trunks.
     pub fn build_with_extras(world: &WorldData, extras: &[WorldBlock]) -> Self {

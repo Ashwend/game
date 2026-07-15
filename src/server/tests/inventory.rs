@@ -50,7 +50,7 @@ fn applied_action_seq_tracks_predicted_inventory_commands_only() {
     server.receive(
         client_id,
         ClientMessage::Inventory(InventoryCommand::PickUp {
-            dropped_item_id: 999_999,
+            dropped_item_id: crate::protocol::DroppedItemId(999_999),
             seq: 7,
         }),
     );

@@ -9,10 +9,6 @@ mod camera;
 mod chunk_overlay;
 mod combat_feedback;
 mod crafting_feedback;
-// Dev-only agent automation: the control socket and off-screen capture are
-// gated on `debug_assertions` so they compile out of shipped release builds.
-#[cfg(all(unix, debug_assertions))]
-mod control_socket;
 mod deployables;
 #[cfg(debug_assertions)]
 pub(crate) mod dev_render;
@@ -21,6 +17,9 @@ pub(crate) mod effects;
 pub(crate) mod explosion_vfx;
 mod furnace_fire;
 mod graphics;
+// Dev-only agent automation: the off-screen capture is gated on
+// `debug_assertions` so it compiles out of shipped release builds. Its
+// sibling, the dev control socket, lives in top-level `crate::control_socket`.
 #[cfg(debug_assertions)]
 mod headless_capture;
 pub(crate) mod input;
@@ -59,8 +58,6 @@ pub(crate) use camera::{
 };
 pub(crate) use chunk_overlay::chunk_overlay_system;
 pub(crate) use combat_feedback::tick_combat_feedback_system;
-#[cfg(all(unix, debug_assertions))]
-pub(crate) use control_socket::{ClientControlSocket, drain_control_socket};
 pub(crate) use crafting_feedback::{CraftCompletionWatch, craft_complete_cue_system};
 pub(crate) use deployables::charge_fuse::{
     ChargeFuseAssets, animate_charge_fuse_system, tick_charge_spark_particles_system,

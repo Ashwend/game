@@ -59,7 +59,7 @@ Standing box (`COMBAT_PLAYER_BODY_*`): half-width 0.40, half-height 0.95, centre
 
 ### Sleeping bodies are PvP targets
 
-A logged-out player (`!target.online`) is a hittable low/wide body box. The aim test is **waived** for sleepers (range + LOS only); a helpless body should be hittable without precise aim. The LOS/impact anchor drops from chest height (`COMBAT_TARGET_CHEST_HEIGHT` = 0.95) to `SLEEPING_HIT_HEIGHT` = 0.35 (a private const in `src/server/combat.rs`) so a standing attacker looking down has a clear line. When changing the hit logic, exercise both the standing and sleeping paths.
+A logged-out player (`!target.online`) is a hittable low/wide body box. The aim test is **waived** for sleepers (range + LOS only); a helpless body should be hittable without precise aim. The LOS/impact anchor drops from chest height (`COMBAT_TARGET_CHEST_HEIGHT` = 0.95) to `COMBAT_SLEEPING_BODY_CENTRE_Y` = 0.35 (from `src/game_balance.rs`, imported in `src/server/combat.rs` as `SLEEPING_HIT_HEIGHT`) so a standing attacker looking down has a clear line. When changing the hit logic, exercise both the standing and sleeping paths.
 
 ## Damage primitives (wire-invisible)
 
@@ -171,7 +171,7 @@ Back in the attack path, after the kill, `consume_active_tool_durability` still 
 While dead:
 - Movement is dropped: `src/server/dispatch.rs` only calls `accept_client_movement` when `client.lifecycle.is_alive()`, so a corpse can't slide.
 - The attack handler rejects any swing whose attacker or target is `Dead`.
-- The client gates swing/held-item on the local `PlayerLifecycle::Dead` check (`src/app/systems/input/inventory_shortcuts/mod.rs`).
+- The client gates swing/held-item on the local `PlayerLifecycle::Dead` check (`src/app/systems/input/inventory_shortcuts.rs`).
 
 Gameplay never pauses while dead: the death splash and respawn UI gate **controls** only (via `gameplay_accepts_controls`), not simulation. See docs/gameplay-gating.md.
 
@@ -187,7 +187,7 @@ Two server-validated paths, both rejected unless the caller `is_dead()`:
 ### Death splash and corpse animation (client)
 
 - `src/app/ui/death_splash.rs`: `BLACK_FADE_SECS` = 4.0 (slow fade to black), then `TITLE_FADE_SECS` = 0.6 (YOU DIED title + "Killed by {name}" subline + Respawn button fade in). `CLOSE_FADE_SECS` = 0.45 fades back out cleanly when the respawn `Correction` lands. `killer_name` lives on the splash state.
-- `src/app/systems/players.rs - DyingPlayer`: a remote player flipping to `Dead` keeps its visual entity and gains a `DyingPlayer` component driving a kick (`DEATH_UPWARD_KICK_S` = 0.12 s), a feet-pivot fall (`DEATH_FALL_DURATION_S` = 0.65 s, `DEATH_FALL_ANGLE_RAD` = `FRAC_PI_2 + 0.12` rad ~= 96.9 deg), a damped bounce, a hold, then a fade (`DEATH_FADE_DURATION_S` = 0.9 s) via a per-spawn cloned `StandardMaterial { alpha_mode: Blend }`. Not a true ragdoll (the mesh is a single baked mesh, no skeleton); the pivot + roll + bounce read as a collapse. Dead players are filtered out of the peer nameplate overlay.
+- `src/app/systems/players/death_anim.rs - DyingPlayer`: a remote player flipping to `Dead` keeps its visual entity and gains a `DyingPlayer` component driving a kick (`DEATH_UPWARD_KICK_S` = 0.12 s), a feet-pivot fall (`DEATH_FALL_DURATION_S` = 0.65 s, `DEATH_FALL_ANGLE_RAD` = `FRAC_PI_2 + 0.12` rad ~= 96.9 deg), a damped bounce, a hold, then a fade (`DEATH_FADE_DURATION_S` = 0.9 s) via a per-spawn cloned `StandardMaterial { alpha_mode: Blend }`. Not a true ragdoll (the mesh is a single baked mesh, no skeleton); the pivot + roll + bounce read as a collapse. Dead players are filtered out of the peer nameplate overlay.
 
 ## Feel and client feedback
 
@@ -202,7 +202,7 @@ Two server-validated paths, both rejected unless the caller `is_dead()`:
 
 ## Loot bags
 
-A kill drops **one** container at the death position holding every stack the corpse carried, so looting is one E-open. `LOOT_BAG_SLOT_COUNT` = `INVENTORY_SLOT_COUNT` (60) + `ACTIONBAR_SLOT_COUNT` (9) = **69** (`src/protocol/mod.rs`). Bags spawn at chest height (`BAG_SPAWN_HEIGHT_M` = 1.0), gravity-settle (`BAG_GRAVITY` = 18.0) to the highest support under their XZ (`BAG_RESTING_Y` = 0.05 above it), and resting bags skip per-tick integration. Interact range is `LOOT_BAG_INTERACT_RANGE_M` = 4.5 m (looser than the 3.5 m melee swing range, `COMBAT_ATTACK_RANGE_M`). There is **no lifetime/expiry despawn**; an empty bag with no one watching is GC'd by `close_container`.
+A kill drops **one** container at the death position holding every stack the corpse carried, so looting is one E-open. `LOOT_BAG_SLOT_COUNT` = `INVENTORY_SLOT_COUNT` (60) + `ACTIONBAR_SLOT_COUNT` (9) = **69** (`src/protocol.rs`). Bags spawn at chest height (`BAG_SPAWN_HEIGHT_M` = 1.0), gravity-settle (`BAG_GRAVITY` = 18.0) to the highest support under their XZ (`BAG_RESTING_Y` = 0.05 above it), and resting bags skip per-tick integration. Interact range is `LOOT_BAG_INTERACT_RANGE_M` = 4.5 m (looser than the 3.5 m melee swing range, `COMBAT_ATTACK_RANGE_M`). There is **no lifetime/expiry despawn**; an empty bag with no one watching is GC'd by `close_container`.
 
 Loot bags are a replicated networked entity (HashMap on `GameServer` + ECS mirror + per-entity `ReplicationGroup`, anchored to a chunk for AoI), following the resource-node/dropped-item pattern. The open/move/quick-transfer command path and the unified `OpenContainer` view (`LootBag` / `Sleeper` / `StorageBox`) are owned by the crafting-and-deployables doc, since storage boxes and sleeping-body loot share the exact same wire path. See docs/crafting-and-deployables.md for the container command path, spill-on-destroy, and the loot-bag UI.
 

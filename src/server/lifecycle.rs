@@ -90,10 +90,10 @@ impl GameServer {
         }
 
         let next_dropped_item_id = next_id_floor(
-            save.state.next_dropped_item_id,
-            dropped_items.keys().copied(),
+            save.state.next_dropped_item_id.0,
+            dropped_items.keys().map(|id| id.0),
         );
-        let mut next_client_id = save.state.next_client_id.max(1);
+        let mut next_client_id = save.state.next_client_id.max(crate::protocol::ClientId(1));
 
         // Rebuild every persisted player as a logged-out sleeping body so
         // a server restart doesn't despawn anyone: bodies come back at
@@ -109,7 +109,7 @@ impl GameServer {
         let mut account_to_client = HashMap::new();
         for player in persisted {
             let client_id = next_client_id;
-            next_client_id += 1;
+            next_client_id.0 += 1;
             let body = super::sleeping_body_from_persisted(player, client_id, load_tick);
             account_to_client.insert(body.account_id, client_id);
             chunk_manager.track_player(client_id, body.controller.position);
@@ -125,8 +125,9 @@ impl GameServer {
         let next_resource_node_id = next_id_floor(
             save.state
                 .next_resource_node_id
+                .0
                 .max(chunk_manager.next_node_id()),
-            resource_nodes.keys().copied(),
+            resource_nodes.keys().map(|id| id.0),
         );
         // Deployables: restore from save and re-anchor to their chunks
         // so the next mirror sync spawns the replicated entity and any
@@ -170,8 +171,8 @@ impl GameServer {
                     || on_a_live_point(entity.position)
             });
             let mut next_cache_id = next_id_floor(
-                save.state.next_deployed_entity_id,
-                deployed_entities.keys().copied(),
+                save.state.next_deployed_entity_id.0,
+                deployed_entities.keys().map(|id| id.0),
             );
             let placed_tick = save.state.last_authoritative_tick;
             for (point, yaw) in cache_points {
@@ -186,8 +187,13 @@ impl GameServer {
                 }
                 let id = next_cache_id;
                 next_cache_id = next_cache_id.saturating_add(1);
-                let entity = Self::spawn_ruin_cache_entity(id, point, yaw, placed_tick);
-                deployed_entities.insert(id, entity);
+                let entity = Self::spawn_ruin_cache_entity(
+                    crate::protocol::DeployedEntityId(id),
+                    point,
+                    yaw,
+                    placed_tick,
+                );
+                deployed_entities.insert(crate::protocol::DeployedEntityId(id), entity);
             }
         }
         for entity in deployed_entities.values() {
@@ -199,8 +205,8 @@ impl GameServer {
                 .sync_deployable_colliders(entity.id, &entity.resolved_collider_blocks());
         }
         let next_deployed_entity_id = next_id_floor(
-            save.state.next_deployed_entity_id,
-            deployed_entities.keys().copied(),
+            save.state.next_deployed_entity_id.0,
+            deployed_entities.keys().map(|id| id.0),
         );
         // Per-player map markers: rebuild the store from the save (floors the
         // id counter above the highest survivor internally).
@@ -246,12 +252,12 @@ impl GameServer {
             stuck_projectiles: HashMap::new(),
             loot_bags: HashMap::new(),
             claim_footprints: HashMap::new(),
-            next_dropped_item_id,
+            next_dropped_item_id: crate::protocol::DroppedItemId(next_dropped_item_id),
             next_client_id,
-            next_resource_node_id,
-            next_deployed_entity_id,
-            next_projectile_id: 1,
-            next_loot_bag_id: 1,
+            next_resource_node_id: crate::protocol::ResourceNodeId(next_resource_node_id),
+            next_deployed_entity_id: crate::protocol::DeployedEntityId(next_deployed_entity_id),
+            next_projectile_id: crate::protocol::ProjectileId(1),
+            next_loot_bag_id: crate::protocol::LootBagId(1),
             world_time,
             last_world_time_broadcast_tick: tick,
             auto_save_interval_ticks: 0,
@@ -271,7 +277,7 @@ impl GameServer {
         server
     }
 
-    /// Attach a WorkOS access-token verifier (dedicated [`AuthMode::Workos`]
+    /// Attach a WorkOS access-token verifier (dedicated [`AuthMode::Workos`](crate::auth::AuthMode::Workos)
     /// only). A builder so the loopback/test construction paths stay untouched.
     pub fn with_workos(
         mut self,

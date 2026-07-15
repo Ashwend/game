@@ -643,7 +643,7 @@ impl HeldMeshVisual {
 /// players can render another player's armor without shipping item-id strings or
 /// re-resolving the registry per diff. No rig rendering consumes it yet (that is
 /// Phase 4); this package only lands the wire selector and derives it
-/// server-side. Adding a set is a new variant here plus its [`ArmorProfile`]
+/// server-side. Adding a set is a new variant here plus its [`ArmorProfile`](crate::items::ArmorProfile)
 /// row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ArmorMesh {
@@ -679,7 +679,7 @@ pub enum ArmorMesh {
 
 impl ArmorMesh {
     /// Every [`ArmorMesh`] variant, so a completeness test can assert each has a
-    /// registered piece behind it. Adding a variant without an [`ArmorProfile`]
+    /// registered piece behind it. Adding a variant without an [`ArmorProfile`](crate::items::ArmorProfile)
     /// row then fails a test rather than shipping an unreachable mesh selector.
     pub const ALL: &'static [ArmorMesh] = &[
         ArmorMesh::PaddedHood,

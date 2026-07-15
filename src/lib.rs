@@ -1,26 +1,30 @@
-pub mod analytics;
-pub mod app;
-pub mod auth;
+pub(crate) mod analytics;
+pub(crate) mod app;
+pub(crate) mod auth;
 pub mod building;
-pub mod cli;
-pub mod combat;
-pub mod console;
+pub(crate) mod cli;
+pub(crate) mod combat;
+pub(crate) mod console;
+// Dev/agent-only client control socket: Unix-only and gated on
+// `debug_assertions`, so shipped release builds compile it out entirely.
+#[cfg(all(unix, debug_assertions))]
+pub(crate) mod control_socket;
 pub mod controller;
 pub mod crafting;
 pub mod game_balance;
-pub mod inventory;
+pub(crate) mod inventory;
 pub mod items;
-pub mod local_crypto;
-pub mod logging;
-pub mod net;
+pub(crate) mod local_crypto;
+pub(crate) mod logging;
+pub(crate) mod net;
 pub mod protocol;
-pub mod resources;
+pub mod resource_nodes;
 pub mod save;
 pub mod server;
-pub mod update;
-pub mod util;
+pub(crate) mod update;
+pub(crate) mod util;
 pub mod world;
-pub mod world_time;
+pub(crate) mod world_time;
 
 pub fn run() -> anyhow::Result<()> {
     cli::run()

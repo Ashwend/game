@@ -12,7 +12,7 @@ use crate::{
 
 fn user() -> AuthenticatedUser {
     AuthenticatedUser {
-        account_id: 1,
+        account_id: crate::protocol::AccountId(1),
         display_name: "Host".to_owned(),
         token: String::new(),
     }

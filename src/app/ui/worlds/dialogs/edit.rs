@@ -208,7 +208,7 @@ mod tests {
             .0
             .create_world_with_map(
                 initial_name,
-                Some(42),
+                Some(crate::protocol::AccountId(42)),
                 MapType::Procedural {
                     seed: 7,
                     size: ProceduralMapSize::Small,

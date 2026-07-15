@@ -204,6 +204,3 @@ fn workbench_toast(client_id: ClientId, kind: ToastKind, text: String) -> Vec<Se
         message: ServerMessage::Toast(crate::protocol::ToastMessage::new(kind, text)),
     }]
 }
-
-#[cfg(test)]
-mod tests;

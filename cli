@@ -116,14 +116,28 @@ case "$cmd" in
     fi
     ;;
   check)
-    cargo check --locked --all-targets
+    cargo check --locked --all-targets "$@"
     ;;
   test)
-    cargo test --locked --all-targets
+    # Extra args pass straight to cargo test, so `./cli test inventory`
+    # filters by name and `./cli test -- --nocapture` shows output.
+    cargo test --locked --all-targets "$@"
     ;;
   lint)
     cargo fmt --all -- --check
     cargo clippy --locked --all-targets --all-features -- -D warnings
+    ;;
+  fix)
+    # Apply what `lint` only checks: clippy autofixes, then formatting.
+    # `--allow-dirty --allow-staged` because this is exactly the command you
+    # run on a work-in-progress tree to make CI happy.
+    cargo clippy --fix --allow-dirty --allow-staged --locked --all-targets --all-features
+    cargo fmt --all
+    ;;
+  doc)
+    # Same invocation as the CI docs gate (broken intra-doc links are denied
+    # via [lints.rustdoc]); add --open locally to browse.
+    cargo doc --no-deps --locked --document-private-items "$@"
     ;;
   ci)
     # Reproduce the GitHub Quality Gate locally in one command. Mirrors
@@ -135,8 +149,13 @@ case "$cmd" in
     # cfg(debug_assertions) mismatches the shipped build would trip on.
     cargo fmt --all -- --check
     cargo clippy --locked --all-targets --all-features -- -D warnings
+    # Default-features clippy mirrors CI's `default` leg: code behind
+    # `cfg(not(feature = ...))` is only compiled here, never in the
+    # all-features leg, so skipping this can pass locally and fail CI.
+    cargo clippy --locked --all-targets -- -D warnings
     cargo check --locked --all-targets --all-features
     cargo clippy --locked --all-targets --release -- -D warnings
+    cargo doc --no-deps --locked --document-private-items
     cargo test --locked --all-targets
     ;;
   setup-hooks)
@@ -230,10 +249,12 @@ Commands:
   admin        Send an announcement or shutdown command to a dedicated server admin socket.
   multiplayer-test
                Launch a fresh local server + two auto-connecting client windows for multiplayer iteration.
-  check        Run cargo check for all targets.
-  test         Run unit/integration tests.
+  check        Run cargo check for all targets. Extra args pass through.
+  test         Run unit/integration tests. Extra args pass through: ./cli test inventory, ./cli test -- --nocapture.
   lint         Run rustfmt check and clippy with warnings denied.
-  ci           Reproduce the full CI Quality Gate locally (fmt, clippy, check, test, incl. --all-features).
+  fix          Apply clippy autofixes and formatting (the write-mode counterpart of lint).
+  doc          Build crate docs incl. private items; broken intra-doc links are errors. Pass --open to browse.
+  ci           Reproduce the full CI Quality Gate locally (fmt, clippy, check, doc, test, incl. --all-features).
   setup-hooks  Enable the checked-in git hooks (.githooks) so ./cli lint runs on push.
   audit        Run cargo audit against the RustSec advisory database (installs cargo-audit if missing).
   coverage     Print text coverage when cargo-llvm-cov is installed, otherwise run tests.
@@ -242,5 +263,11 @@ Commands:
   publish      Build release binaries into builds/ for macOS, Linux, and Windows targets.
   web-build    Build the website and zip it to ./ashwend-web.zip (gitignored) for Cloudflare Pages drop-in.
 EOF
+    # An unknown subcommand should fail loudly (exit 1 to stderr), not
+    # silently succeed as help. `help` itself still exits 0.
+    if [[ "$cmd" != "help" ]]; then
+      echo "unknown command: $cmd" >&2
+      exit 1
+    fi
     ;;
 esac

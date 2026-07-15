@@ -3,13 +3,13 @@ title: Profiling and performance discipline
 owns: The performance workflow: F2 perf HUD, ./cli profile Chrome-trace capture, the Perfetto trace_processor SQL recipe, named server spans, and the canonical perf-bug fixes.
 when_to_read: Before optimizing, when chasing a frame spike, or before adding any O(live-entities)-per-tick work.
 sources:
-  - src/app/ui/hud.rs - perf overlay render (perf_stats_ui, frame_time_stats)
+  - src/app/ui/hud/perf.rs - perf overlay render (perf_stats_ui, frame_time_stats)
   - src/app/systems/input/menu_toggles.rs - toggle_perf_stats_system (F2 toggle)
   - src/protocol/messages.rs - PerfStatsSnapshot, ServerMessage::PerfStats
   - src/server/tick.rs - server_tick / chunk_manager_tick spans, PerfStats broadcast
   - src/server.rs - PERF_STATS_BROADCAST_INTERVAL_TICKS
-  - src/app/systems/items/resource_nodes/mod.rs - apply_resource_nodes_system (event-driven reconciliation pattern)
-  - src/app/systems/deployables/mod.rs - maintain_world_grid_system (event-gated grid)
+  - src/app/systems/items/resource_nodes.rs - apply_resource_nodes_system (event-driven reconciliation pattern)
+  - src/app/systems/deployables.rs - maintain_world_grid_system (event-gated grid)
   - src/app/systems/input/cursor.rs - compare-before-assign fix
   - src/app/systems/display.rs - target_limiter (framepace Manual vs Auto)
   - src/net/host/mirror.rs - named sync_* spans
@@ -18,12 +18,12 @@ related:
   - docs/replication.md - the Changed<T>-lies rule and the event-driven reconciliation pattern this doc points at
   - docs/build-and-dev.md - ./cli subcommands (profile, dev, dev-fast)
   - docs/chunks-and-aoi.md - the AoI visible-node floor that drives per-frame client cost
-  - projects/resource-node-instancing.md - unimplemented proposal to cut the render-pipeline floor
+  - docs/resource-node-instancing.md - unimplemented proposal to cut the render-pipeline floor
 ---
 
 # Profiling and performance discipline
 
-> When to read this: before optimizing, when chasing a frame spike, or before adding any O(live-entities)-per-tick work. Source of truth: `src/app/ui/hud.rs`, `src/app/systems/input/menu_toggles.rs`, the `profile` Cargo feature in `Cargo.toml`. Canonical invariants live in CLAUDE.md.
+> When to read this: before optimizing, when chasing a frame spike, or before adding any O(live-entities)-per-tick work. Source of truth: `src/app/ui/hud/perf.rs`, `src/app/systems/input/menu_toggles.rs`, the `profile` Cargo feature in `Cargo.toml`. Canonical invariants live in CLAUDE.md.
 
 The binary/package is `ashwend` (`Cargo.toml` `[package] name`). Several paths in the older profiling notes are stale: `protocol`, `items/resource_nodes`, and `deployables` are all directories now, not single files. The current paths are in the `sources` front-matter above; verify a path exists before trusting any file:line you read elsewhere.
 
@@ -36,7 +36,7 @@ Workflow tiers, cheapest first:
 
 The overlay toggles on **F2** in `src/app/systems/input/menu_toggles.rs` (`toggle_perf_stats_system`), which flips `settings.hud.show_perf_stats`. F2 is hardcoded and deliberately not rebindable (it sits in the debug-toggle bucket; see the comment on the system). The toggle no-ops unless the screen is `InGame` with no pause/chat/dialog modal open.
 
-The overlay is *rendered* in `src/app/ui/hud.rs` (`perf_stats_ui`), gated by `settings.hud.show_perf_stats`. If F2 does not toggle, the binding is the menu_toggles file; if the panel is blank or stale, the consumer is hud.rs. Do not look for the toggle in hud.rs.
+The overlay is *rendered* in `src/app/ui/hud/perf.rs` (`perf_stats_ui`), gated by `settings.hud.show_perf_stats`. If F2 does not toggle, the binding is the menu_toggles file; if the panel is blank or stale, the consumer is hud/perf.rs. Do not look for the toggle in the hud module.
 
 Fields rendered (`perf_stats_ui`, `frame_time_stats`):
 
@@ -205,11 +205,11 @@ A peak at small `gap_ms` (about the slow-frame duration) means **consecutive** s
 
 Each of these was found via the workflow above and is already fixed once in the codebase. When a trace reproduces the symptom, the fix is usually the same shape.
 
-**A system iterating N replicated entities every frame to discover "nothing changed".** The most common bug shape here. `apply_resource_nodes_system` (`src/app/systems/items/resource_nodes/mod.rs`) and `maintain_world_grid_system` (`src/app/systems/deployables/mod.rs`) both had it. The fix is event-driven: react to `Added<T>` and `RemovedComponents<T>` plus your own bookkeeping, with a cheap probe at the top that early-returns when no events fired. Iterating the full AoI query every frame costs 1-4 ms for the noop case alone at AoI scale (the in-code comment on `maintain_world_grid_system` calls the old fingerprint-every-frame approach "a lie at scale", 1-2 ms/frame with ~1811 nodes). This is **the** reconciliation pattern; copy it from `apply_resource_nodes_system` exactly: pending-spawn `VecDeque` to carry the per-frame budget across frames, reverse `Entity -> Id` map so `RemovedComponents` can find the local mirror, and a one-time `applied_first_snapshot` catch-up scan because the `Added` filter's `last_run` tick misses entities that arrived during early-return `client_id == None` frames. Full write-up in [docs/replication.md](replication.md).
+**A system iterating N replicated entities every frame to discover "nothing changed".** The most common bug shape here. `apply_resource_nodes_system` (`src/app/systems/items/resource_nodes.rs`) and `maintain_world_grid_system` (`src/app/systems/deployables.rs`) both had it. The fix is event-driven: react to `Added<T>` and `RemovedComponents<T>` plus your own bookkeeping, with a cheap probe at the top that early-returns when no events fired. Iterating the full AoI query every frame costs 1-4 ms for the noop case alone at AoI scale (the in-code comment on `maintain_world_grid_system` calls the old fingerprint-every-frame approach "a lie at scale", 1-2 ms/frame with ~1811 nodes). This is **the** reconciliation pattern; copy it from `apply_resource_nodes_system` exactly: pending-spawn `VecDeque` to carry the per-frame budget across frames, reverse `Entity -> Id` map so `RemovedComponents` can find the local mirror, and a one-time `applied_first_snapshot` catch-up scan because the `Added` filter's `last_run` tick misses entities that arrived during early-return `client_id == None` frames. Full write-up in [docs/replication.md](replication.md).
 
 **Per-frame spawn budgets, not time throttles.** Both reconciliation systems cap how many entities they instantiate per frame and carry the remainder forward, rather than doing all the work in one frame or gating on a timer:
 - Resource nodes: `MAX_RESOURCE_NODE_SPAWNS_PER_FRAME = 8`, queued in `pending_spawns: VecDeque`. The initial ~1811-node AoI fill takes ~226 frames at 8/frame (see the in-code comment).
-- Grass: `MAX_GRASS_TILE_SPAWNS_PER_FRAME = 12` (`src/app/scene/grass/mod.rs`), with `fill_pending` carry-over and an early-out when the camera tile is unchanged and nothing is pending. This is the "grass throttle"; it is a spawn budget, not a time throttle. The mental model matters when tuning: raise the cap to fill faster at the cost of fatter frames during the fill.
+- Grass: `MAX_GRASS_TILE_SPAWNS_PER_FRAME = 12` (`src/app/scene/grass.rs`), with `fill_pending` carry-over and an early-out when the camera tile is unchanged and nothing is pending. This is the "grass throttle"; it is a spawn budget, not a time throttle. The mental model matters when tuning: raise the cap to fill faster at the cost of fatter frames during the fill.
 
 **Spurious change-detection on resources.** Bevy fires change detection on any `&mut` deref, even when the new value equals the old. Compare-before-assign. Hit in `src/app/systems/input/cursor.rs`: every-frame writes to `CursorOptions.visible` / `grab_mode` tripped `bevy_winit`'s `changed_cursor_options` slow winit path, ~684 us mean / 16 ms outlier on the main thread. The fix only assigns when the value actually flips.
 
@@ -236,11 +236,11 @@ Lightyear's receive path uses `insert_by_ids(...)`, which **always** bumps the c
 
 ## The remaining floor (unimplemented)
 
-The one large optimization not yet built is reducing the per-frame render-pipeline cost of the ~1800-visible-entity AoI floor (real PBR meshes with shadows, all visible at once). It is captured as a design proposal in [projects/resource-node-instancing.md](../projects/resource-node-instancing.md), **status: proposal, not implemented**. Option A (chunk-level mesh merge, keeps Bevy PBR/shadows/batching) is the recommended path; nothing is built. The cost figures in that doc date to the 2026-05-29 capture session and predate later art passes (trees, grass, toon) that changed the visible-entity mix, so treat them as historical, not current. Do not assume any merged-mesh / chunk-visual system exists in `src/`.
+The one large optimization not yet built is reducing the per-frame render-pipeline cost of the ~1800-visible-entity AoI floor (real PBR meshes with shadows, all visible at once). It is captured as a design proposal in [resource-node-instancing.md](resource-node-instancing.md), **status: proposal, not implemented**. Option A (chunk-level mesh merge, keeps Bevy PBR/shadows/batching) is the recommended path; nothing is built. The cost figures in that doc date to the 2026-05-29 capture session and predate later art passes (trees, grass, toon) that changed the visible-entity mix, so treat them as historical, not current. Do not assume any merged-mesh / chunk-visual system exists in `src/`.
 
 ## Related docs
 
 - [docs/replication.md](replication.md) - the `Changed<T>`-lies rule and the full event-driven reconciliation pattern this doc points at.
 - [docs/build-and-dev.md](build-and-dev.md) - the `./cli` surface (`profile`, `dev`, `dev-fast`).
 - [docs/chunks-and-aoi.md](chunks-and-aoi.md) - the AoI ring and visible-node floor that drives per-frame client cost.
-- [projects/resource-node-instancing.md](../projects/resource-node-instancing.md) - unimplemented proposal to cut the render-pipeline floor.
+- [resource-node-instancing.md](resource-node-instancing.md) - unimplemented proposal to cut the render-pipeline floor.

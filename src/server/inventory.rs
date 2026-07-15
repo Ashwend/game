@@ -5,7 +5,7 @@ use crate::{
         ACTIONBAR_SLOT_COUNT, ClientId, DroppedItemId, DroppedWorldItem, InventoryCommand,
         ItemStack, PlayerInventoryState, ResourceNodeId, Vec3Net,
     },
-    resources::{resource_node_definition, within_gather_reach},
+    resource_nodes::{resource_node_definition, within_gather_reach},
 };
 
 use super::{
@@ -123,7 +123,7 @@ impl GameServer {
             return;
         };
         let id = self.next_dropped_item_id;
-        self.next_dropped_item_id += 1;
+        self.next_dropped_item_id.0 += 1;
         let physics_body = self
             .dropped_item_physics
             .spawn_body(position, velocity, yaw);

@@ -34,7 +34,7 @@ use crate::{
 /// this sets (`menu.world_map_open`) frees the cursor and gates look/swing via
 /// `gameplay_accepts_controls`, never the simulation; movement stays live
 /// through `gameplay_accepts_movement`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 pub(crate) fn world_map_input_system(
     time: Res<Time>,
     settings: Res<ClientSettings>,

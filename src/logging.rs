@@ -88,7 +88,7 @@ pub fn install_file_layer(_app: &mut App) -> Option<BoxedLayer> {
 }
 
 /// Install the dedicated server's tracing subscriber: an `EnvFilter`
-/// (`RUST_LOG`, defaulting to [`DEFAULT_SERVER_FILTER`]), a stderr layer so
+/// (`RUST_LOG`, defaulting to `info` plus [`NOISY_CRATE_LOG_FILTER`]), a stderr layer so
 /// journald/systemd captures everything, and a file layer to
 /// `ashwend-server.log` when it can be opened. Must be called once, before the
 /// server's Bevy app starts. Safe to call even if a subscriber somehow already

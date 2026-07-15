@@ -6,8 +6,8 @@ sources:
   - src/app/scene/toon.rs - ToonMaterial, the one shared cel material
   - src/app/scene/sky.rs - SUN_PEAK_ILLUMINANCE, NIGHT_AMBIENT_FLOOR, compute_lighting (daylight-calibrated mood)
   - src/app/scene/assets.rs - per-family ToonMaterial params, the cel-vs-PBR material handles
-  - src/app/systems/deployables/mod.rs - DeployableMaterial::Toon vs Standard family split
-  - src/app/scene/grass/mod.rs - instanced-grass colour (per-biome tint, not uniform)
+  - src/app/systems/deployables.rs - DeployableMaterial::Toon vs Standard family split
+  - src/app/scene/grass.rs - instanced-grass colour (per-biome tint, not uniform)
   - art/ore/build_ore.py - ore identity-in-chunks COLOR_0 rule
   - art/trees/build_tree.py - solid faceted canopy, up-biased normals
 related:
@@ -43,7 +43,7 @@ Mixing cel and PBR on adjacent props reads as a mistake, so the conversion proce
 | Ore / vein nodes (coal, iron, sulfur, stone vein) | cel | shared `ToonMaterial` (`ore_toon_material`) | `src/app/scene/assets.rs` - `ore_toon_material` |
 | Trees (pine + birch trunk + solid faceted canopy) | cel | per-species bark + foliage `ToonMaterial` | `src/app/scene/assets.rs` - `pine_bark_material` .. `birch_foliage_material` |
 | Dead snags | cel | bark `ToonMaterial` over a cool-grey `COLOR_0` glb | `src/app/scene/assets.rs` - `dead_bark_material` |
-| Free-standing deployables (workbench, furnace, storage boxes, torch, tool cupboard, sleeping bag) | cel | toon wood / stone / fabric `ToonMaterial` | `src/app/systems/deployables/mod.rs` - `DeployableMaterial::Toon` |
+| Free-standing deployables (workbench, furnace, storage boxes, torch, tool cupboard, sleeping bag) | cel | toon wood / stone / fabric `ToonMaterial` | `src/app/systems/deployables.rs` - `DeployableMaterial::Toon` |
 | Harvestable hay / tall-grass tufts | cel (alpha-masked card) | `ToonMaterial` with `params.y` cutoff | `src/app/scene/assets.rs` - `hay_grass_materials` |
 | GPU-instanced detail grass | cel-lit (PBR-then-posterize, not `ToonMaterial`) | custom instanced pipeline | `src/app/scene/grass/instancing.rs` + `assets/shaders/grass_instanced.wgsl` |
 | Building pieces (sticks / hewn wood / stone tiers) | PBR | textured `StandardMaterial` | `src/app/scene/assets.rs` - `building_materials` |
@@ -52,7 +52,7 @@ Mixing cel and PBR on adjacent props reads as a mistake, so the conversion proce
 | Held tools (stone + iron pickaxe/hatchet) | PBR | `StandardMaterial` (two-layer body/head) | `src/app/scene/assets.rs` - `held_*_body_material`, `held_*_head_material` |
 | Terrain ground floor | PBR (custom `TerrainMaterial`) | biome splat-blend, daylight-lit | see `docs/rendering-materials.md` |
 
-The deployable family routes through one of three shared cel materials: furnace uses **toon stone**, sleeping bag uses **toon fabric**, every other wooden deployable uses **toon wood** (`src/app/systems/deployables/mod.rs` - the `DeployableMaterial` mapping). Building pieces and doors stay PBR for now (the `DeployableMaterial::Standard` branch); that is the next natural family if the conversion continues.
+The deployable family routes through one of three shared cel materials: furnace uses **toon stone**, sleeping bag uses **toon fabric**, every other wooden deployable uses **toon wood** (`src/app/systems/deployables.rs` - the `DeployableMaterial` mapping). Building pieces and doors stay PBR for now (the `DeployableMaterial::Standard` branch); that is the next natural family if the conversion continues.
 
 The instanced detail grass is in the cel-lit camp but does **not** use `ToonMaterial`: it is the project's only custom render pipeline and hand-builds its own `apply_pbr_lighting` + posterize in `grass_instanced.wgsl`. Treat it as part of the cel family for visual consistency, but edit it through the grass pipeline, not the shared material. Mechanics are in `docs/toon-shading.md` and `docs/rendering-materials.md`.
 
@@ -61,7 +61,7 @@ The instanced detail grass is in the cel-lit camp but does **not** use `ToonMate
 - **Vertex-colour albedos are LINEAR.** `COLOR_0` never goes through the sRGB decode that `Color::srgb` performs, so a value eyeballed as perceptual mid-grey renders ~1.5-2x brighter (chalk white in daylight). Pick `COLOR_0` physically; if converting an sRGB pick, raise it to ~2.2 power. The calibration anchor is the ground at linear `(0.027, 0.095, 0.040)`; anything that should "sit in the scene" lives within a few multiples of that. Physical-albedo conversion detail lives in `docs/rendering-materials.md`.
 - **Ore identity is in the chunks, not the rock.** The rock body is **one shared bright warm-grey on every node** (`_ROCK` in `art/ore/build_ore.py`); the per-mineral identity (iron rust, coal near-black, sulfur yellow, stone-vein plain knobs) rides **entirely** in the studded mineral chunks' `COLOR_0`. This is a user-directed decision: an earlier "tint the whole mound toward the mineral" look read as a coloured blob, and players expect chunks of ore in plain stone. Keep the rock grey.
 - **Identity must read at gameplay distance.** Colour that matters belongs in bold, large surfaces (the mineral chunks, the canopy mass, the trunk), not tiny accents. Anything subtle washes out by the time the cel bands quantise it.
-- **Detail grass colour is NOT uniform across biomes.** It is a per-biome tint (`biome_grass_tint` in `src/app/scene/grass/mod.rs`): forest stays lush green, plains dries to yellow-green, rocky desaturates toward grey, ore dulls toward brown, multiplied onto the neutral blade green, plus low-frequency tonal patches and per-blade warm/cool jitter so the field reads as a painterly mass. (An earlier design tried one flat dry-green and per-biome density-only variation; the live code grades colour by biome. If a sibling doc still says "uniform grass colour," it is stale.) Density also varies by biome: bare rock/ore thin the field via `GRASS_BIOME_MAX_THIN`.
+- **Detail grass colour is NOT uniform across biomes.** It is a per-biome tint (`biome_grass_tint` in `src/app/scene/grass.rs`): forest stays lush green, plains dries to yellow-green, rocky desaturates toward grey, ore dulls toward brown, multiplied onto the neutral blade green, plus low-frequency tonal patches and per-blade warm/cool jitter so the field reads as a painterly mass. (An earlier design tried one flat dry-green and per-biome density-only variation; the live code grades colour by biome. If a sibling doc still says "uniform grass colour," it is stale.) Density also varies by biome: bare rock/ore thin the field via `GRASS_BIOME_MAX_THIN`.
 
 ## Lighting and mood
 

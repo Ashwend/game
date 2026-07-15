@@ -250,7 +250,6 @@ fn reserve_input(
 
 /// Draw the guidance for the current step. Outline rects come from egui temp
 /// memory, stashed by the panel widgets earlier this frame.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::app::ui) fn tutorial_ui(
     ctx: &egui::Context,
     step: TutorialStep,
@@ -641,7 +640,12 @@ mod tests {
         // should treat the chain as satisfiable and stay on a craft step.
         let inventory = with_items(&[(WOOD_ID, 4), (STONE_ID, 5)]);
         let crafting = PlayerCraftingState {
-            jobs: vec![CraftingJob::new(1, PLANT_TWINE_RECIPE_ID, 60, 2)],
+            jobs: vec![CraftingJob::new(
+                crate::protocol::CraftingJobId(1),
+                PLANT_TWINE_RECIPE_ID,
+                60,
+                2,
+            )],
         };
         assert_eq!(
             tutorial_step(Some(&inventory), Some(&crafting), false, true),
@@ -655,8 +659,18 @@ mod tests {
         let inventory = PlayerInventoryState::empty();
         let crafting = PlayerCraftingState {
             jobs: vec![
-                CraftingJob::new(1, STONE_PICKAXE_RECIPE_ID, 60, 1),
-                CraftingJob::new(2, STONE_HATCHET_RECIPE_ID, 60, 1),
+                CraftingJob::new(
+                    crate::protocol::CraftingJobId(1),
+                    STONE_PICKAXE_RECIPE_ID,
+                    60,
+                    1,
+                ),
+                CraftingJob::new(
+                    crate::protocol::CraftingJobId(2),
+                    STONE_HATCHET_RECIPE_ID,
+                    60,
+                    1,
+                ),
             ],
         };
         assert_eq!(

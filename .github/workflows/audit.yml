@@ -80,3 +80,23 @@ jobs:
           # so the bevy/rapier/lightyear transitive graph doesn't block PRs
           #, the noisier checks here are licenses, advisories, and sources.
           command-arguments: "--hide-inclusion-graph"
+
+  machete:
+    name: cargo machete
+    runs-on: ubuntu-24.04
+    # Flags direct dependencies that no source file references anymore.
+    # Covers what audit and deny don't: audit checks advisories, deny's
+    # `bans` dedups versions, but neither notices a dep that rotted into
+    # dead weight (e.g. a transitive dep once promoted to direct and later
+    # unused). Pure source scan, no build, so no toolchain or cache needed.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install cargo-machete
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+
+      - name: Run cargo-machete
+        run: cargo machete

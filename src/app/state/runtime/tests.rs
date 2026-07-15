@@ -52,11 +52,11 @@ fn welcome_seeds_prediction_admin_flag_and_world() {
     let mut runtime = ClientRuntime::default();
     let before_version = runtime.world_version;
     runtime.apply_message(ServerMessage::Welcome {
-        client_id: 42,
+        client_id: crate::protocol::ClientId(42),
         map: crate::world::MapType::default(),
         world: WorldData::default(),
         is_admin: true,
-        local_seed: player_state(42, Vec3Net::new(5.0, 0.0, -3.0)),
+        local_seed: player_state(crate::protocol::ClientId(42), Vec3Net::new(5.0, 0.0, -3.0)),
         world_time: WorldTimeSnapshot {
             seconds_of_day: 100.0,
             multiplier: 1.0,
@@ -64,7 +64,7 @@ fn welcome_seeds_prediction_admin_flag_and_world() {
         },
     });
 
-    assert_eq!(runtime.client_id, Some(42));
+    assert_eq!(runtime.client_id, Some(crate::protocol::ClientId(42)));
     assert!(runtime.is_admin);
     assert!(runtime.world.is_some());
     assert!(runtime.predicted_local.is_some());
@@ -82,11 +82,11 @@ fn welcome_seeds_prediction_admin_flag_and_world() {
 fn kicked_logs_error_and_clears_session_state() {
     let mut runtime = ClientRuntime::default();
     runtime.apply_message(ServerMessage::Welcome {
-        client_id: 1,
+        client_id: crate::protocol::ClientId(1),
         map: crate::world::MapType::default(),
         world: WorldData::default(),
         is_admin: true,
-        local_seed: player_state(1, Vec3Net::ZERO),
+        local_seed: player_state(crate::protocol::ClientId(1), Vec3Net::ZERO),
         world_time: WorldTimeSnapshot {
             seconds_of_day: 0.0,
             multiplier: 1.0,
@@ -112,8 +112,8 @@ fn kicked_logs_error_and_clears_session_state() {
 #[test]
 fn knockback_adds_impulse_and_lifts_off_ground() {
     let mut runtime = ClientRuntime::default();
-    runtime.seed_local_prediction(&player_state(1, Vec3Net::ZERO));
-    runtime.client_id = Some(1);
+    runtime.seed_local_prediction(&player_state(crate::protocol::ClientId(1), Vec3Net::ZERO));
+    runtime.client_id = Some(crate::protocol::ClientId(1));
     runtime.predicted_local.as_mut().unwrap().grounded = true;
     runtime.predicted_local.as_mut().unwrap().velocity = Vec3Net::ZERO;
 
@@ -150,15 +150,21 @@ fn world_time_message_clamps_and_updates_the_mirror() {
 #[test]
 fn resource_node_depleted_marks_id_for_death_animation() {
     let mut runtime = ClientRuntime::default();
-    runtime.apply_message(ServerMessage::ResourceNodeDepleted { id: 9 });
-    assert!(runtime.depleted_node_ids.contains(&9));
+    runtime.apply_message(ServerMessage::ResourceNodeDepleted {
+        id: crate::protocol::ResourceNodeId(9),
+    });
+    assert!(
+        runtime
+            .depleted_node_ids
+            .contains(&crate::protocol::ResourceNodeId(9))
+    );
 }
 
 #[test]
 fn player_killed_logs_you_died() {
     let mut runtime = ClientRuntime::default();
     runtime.apply_message(ServerMessage::PlayerKilled {
-        killer: Some(2),
+        killer: Some(crate::protocol::ClientId(2)),
         killer_name: Some("Bob".to_owned()),
         respawn_bags: Vec::new(),
     });
@@ -168,12 +174,15 @@ fn player_killed_logs_you_died() {
 #[test]
 fn correction_snaps_only_past_the_threshold() {
     let mut runtime = ClientRuntime::default();
-    runtime.seed_local_prediction(&player_state(1, Vec3Net::new(0.0, 0.0, 0.0)));
-    runtime.client_id = Some(1);
+    runtime.seed_local_prediction(&player_state(
+        crate::protocol::ClientId(1),
+        Vec3Net::new(0.0, 0.0, 0.0),
+    ));
+    runtime.client_id = Some(crate::protocol::ClientId(1));
 
     // Sub-threshold position delta (0.5 m) → no snap, but health is
     // always overwritten.
-    let mut small = player_state(1, Vec3Net::new(0.5, 0.0, 0.0));
+    let mut small = player_state(crate::protocol::ClientId(1), Vec3Net::new(0.5, 0.0, 0.0));
     small.health = 30.0;
     runtime.apply_message(ServerMessage::Correction(small));
     let predicted = runtime.predicted_local.as_ref().unwrap();
@@ -184,7 +193,7 @@ fn correction_snaps_only_past_the_threshold() {
     assert_eq!(predicted.health, 30.0, "health always follows the server");
 
     // Large delta (10 m) → full snap to the corrected state.
-    let big = player_state(1, Vec3Net::new(10.0, 0.0, 0.0));
+    let big = player_state(crate::protocol::ClientId(1), Vec3Net::new(10.0, 0.0, 0.0));
     runtime.apply_message(ServerMessage::Correction(big));
     assert!(
         (runtime.predicted_local.as_ref().unwrap().position.x - 10.0).abs() < 0.01,
@@ -195,9 +204,9 @@ fn correction_snaps_only_past_the_threshold() {
 #[test]
 fn correction_for_a_different_client_is_ignored() {
     let mut runtime = ClientRuntime::default();
-    runtime.seed_local_prediction(&player_state(1, Vec3Net::ZERO));
-    runtime.client_id = Some(1);
-    let mut other = player_state(2, Vec3Net::new(99.0, 0.0, 0.0));
+    runtime.seed_local_prediction(&player_state(crate::protocol::ClientId(1), Vec3Net::ZERO));
+    runtime.client_id = Some(crate::protocol::ClientId(1));
+    let mut other = player_state(crate::protocol::ClientId(2), Vec3Net::new(99.0, 0.0, 0.0));
     other.health = 1.0;
 
     runtime.apply_message(ServerMessage::Correction(other));
@@ -231,7 +240,10 @@ fn local_view_and_position_track_prediction() {
     assert!(runtime.local_view().is_none());
     assert!(runtime.local_player_position().is_none());
 
-    runtime.seed_local_prediction(&player_state(1, Vec3Net::new(1.0, 2.0, 3.0)));
+    runtime.seed_local_prediction(&player_state(
+        crate::protocol::ClientId(1),
+        Vec3Net::new(1.0, 2.0, 3.0),
+    ));
     let view = runtime.local_view().expect("view present after seed");
     assert_eq!(view.health, MAX_HEALTH);
     let pos = runtime.local_player_position().expect("position present");

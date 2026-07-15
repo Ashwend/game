@@ -264,8 +264,15 @@ fn replace_file(temp_path: &Path, path: &Path) -> Result<()> {
             Ok(())
         }
         Err(error) => {
-            if backup_path.exists() {
-                let _ = fs::rename(&backup_path, path);
+            if backup_path.exists() && fs::rename(&backup_path, path).is_err() {
+                // Best-effort restore failed: the previous save still exists,
+                // but at the backup path. Surface it so the stray `.bak` and
+                // the missing primary aren't a silent mystery.
+                bevy::log::warn!(
+                    "could not restore save backup {} to {} after a failed replace",
+                    backup_path.display(),
+                    path.display()
+                );
             }
             Err(error).with_context(|| {
                 format!(
@@ -334,7 +341,7 @@ mod tests {
         inventory.equipment_slots[EquipmentSlot::Head.index()] =
             Some(ItemStack::new("padded_hood", 1));
         let persisted_player = PersistedPlayer {
-            account_id: 11,
+            account_id: crate::protocol::AccountId(11),
             name: "Golden Player".to_owned(),
             position: Vec3Net::new(4.0, 5.0, 6.0),
             velocity: Vec3Net::ZERO,
@@ -351,19 +358,19 @@ mod tests {
             last_authoritative_tick: 123,
             players: vec![persisted_player],
             dropped_items: vec![DroppedWorldItem {
-                id: 5,
+                id: crate::protocol::DroppedItemId(5),
                 stack: ItemStack::new("wood", 9),
                 position: Vec3Net::new(1.0, 2.0, 3.0),
                 yaw: 0.5,
                 rotation: QuatNet::IDENTITY,
             }],
             resource_nodes: Some(Vec::new()),
-            next_dropped_item_id: 6,
-            next_client_id: 2,
-            next_resource_node_id: 1000,
+            next_dropped_item_id: crate::protocol::DroppedItemId(6),
+            next_client_id: crate::protocol::ClientId(2),
+            next_resource_node_id: crate::protocol::ResourceNodeId(1000),
             world_time_seconds_of_day: 42.0,
             world_time_multiplier: 1.0,
-            next_deployed_entity_id: 1,
+            next_deployed_entity_id: crate::protocol::DeployedEntityId(1),
             ..Default::default()
         };
         let save = WorldSave {
@@ -374,7 +381,7 @@ mod tests {
                 size: ProceduralMapSize::Small,
             },
             created_at_unix: 1_700_000_000,
-            admins: vec![7],
+            admins: vec![crate::protocol::AccountId(7)],
             state,
         };
 
@@ -406,7 +413,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("game-save-file-test-{}", uuid::Uuid::new_v4()));
         let path = root.join("nested").join("world.save");
-        let save = WorldSave::new("Dedicated File", Some(123));
+        let save = WorldSave::new("Dedicated File", Some(crate::protocol::AccountId(123)));
 
         save_world_file(&path, &save).expect("world file should save");
 
@@ -420,7 +427,7 @@ mod tests {
 
     #[test]
     fn round_trip_preserves_empty_world() {
-        let save = WorldSave::new("Round Trip Empty", Some(42));
+        let save = WorldSave::new("Round Trip Empty", Some(crate::protocol::AccountId(42)));
         let bytes = encode_world_save(&save).expect("encode");
         let decoded = decode_world_save(&bytes).expect("decode");
         assert_eq!(save, decoded, "empty round trip should be byte-identical");
@@ -434,17 +441,17 @@ mod tests {
             save::{PersistedDeployedEntity, PersistedFurnaceState, PersistedPlayer},
         };
 
-        let mut save = WorldSave::new("Round Trip Populated", Some(1));
+        let mut save = WorldSave::new("Round Trip Populated", Some(crate::protocol::AccountId(1)));
         save.state.last_authoritative_tick = 1234;
-        save.state.next_dropped_item_id = 17;
-        save.state.next_client_id = 9;
-        save.state.next_resource_node_id = 99;
-        save.state.next_deployed_entity_id = 42;
+        save.state.next_dropped_item_id = crate::protocol::DroppedItemId(17);
+        save.state.next_client_id = crate::protocol::ClientId(9);
+        save.state.next_resource_node_id = crate::protocol::ResourceNodeId(99);
+        save.state.next_deployed_entity_id = crate::protocol::DeployedEntityId(42);
         save.state.world_time_seconds_of_day = 4321.5;
         save.state.world_time_multiplier = 2.0;
 
         save.state.players.push(PersistedPlayer {
-            account_id: 1,
+            account_id: crate::protocol::AccountId(1),
             name: "Alice".to_owned(),
             position: Vec3Net::new(1.0, 0.0, 2.0),
             velocity: Vec3Net::ZERO,
@@ -458,7 +465,7 @@ mod tests {
         });
 
         save.state.dropped_items.push(DroppedWorldItem {
-            id: 7,
+            id: crate::protocol::DroppedItemId(7),
             stack: ItemStack::new(IRON_ORE_ID, 4),
             position: Vec3Net::new(3.0, 0.0, 5.0),
             yaw: 0.0,
@@ -468,14 +475,14 @@ mod tests {
         save.state.resource_nodes = Some(Vec::new());
 
         save.state.deployed_entities.push(PersistedDeployedEntity {
-            id: 11,
+            id: crate::protocol::DeployedEntityId(11),
             item_id: CRUDE_FURNACE_ID.to_owned(),
             kind: DeployableKind::Furnace { tier: 1 },
             position: Vec3Net::new(0.0, 0.0, 0.0),
             yaw: 0.0,
             health: 800,
             max_health: 800,
-            owner: Some(1),
+            owner: Some(crate::protocol::AccountId(1)),
             placed_at_tick: 4_200,
             door: None,
             label: None,
@@ -511,7 +518,7 @@ mod tests {
 
     #[test]
     fn rejects_truncated_compressed_payload() {
-        let save = WorldSave::new("Truncate", Some(1));
+        let save = WorldSave::new("Truncate", Some(crate::protocol::AccountId(1)));
         let bytes = encode_world_save(&save).expect("encode");
         // Snip 8 bytes off the end of the compressed payload, zstd
         // should refuse it on decode.
@@ -524,7 +531,7 @@ mod tests {
 
     #[test]
     fn rejects_corrupted_compressed_payload() {
-        let save = WorldSave::new("Corrupt", Some(1));
+        let save = WorldSave::new("Corrupt", Some(crate::protocol::AccountId(1)));
         let mut bytes = encode_world_save(&save).expect("encode");
         // Flip a byte in the middle of the compressed payload.
         let mid = bytes.len() / 2;

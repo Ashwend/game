@@ -12,7 +12,7 @@ sources:
   - src/server/queries.rs - mandatory-entry helpers + drain_*_sync
   - src/server/player_ecs.rs - player identity/public/owner-only component split
   - src/server/deployable_ecs.rs - Deployable identity + per-field components
-  - src/app/systems/items/resource_nodes/mod.rs - canonical event-driven client reconciler
+  - src/app/systems/items/resource_nodes.rs - canonical event-driven client reconciler
   - src/app/systems/replication_trace.rs - client RECV trace logs
 related:
   - docs/networking.md - transport, channels, ClientMessage/ServerMessage inventory, handshake
@@ -28,7 +28,7 @@ related:
 
 This doc owns the replication internals. For the wire-message inventory, channels, and handshake see [docs/networking.md](networking.md); for the authoritative `GameServer` and its dispatch/tick contract see [docs/server-authority.md](server-authority.md); for the chunk grid and AoI ring math see [docs/chunks-and-aoi.md](chunks-and-aoi.md).
 
-Lightyear version is exactly `0.26.4` (Cargo.toml, features `client, server, netcode, udp, replication`). Every "0.26.4 bug" claim below is version-matched; re-verify on upgrade.
+Lightyear version is `0.28.0` (Cargo.toml, features `client, server, netcode, udp, replication`). The upstream-bug workarounds below were discovered and version-matched against `0.26.4` (bug #740) and deliberately retained through the 0.28 upgrade; the regression test in `src/net/tests.rs` guards the behavior, so drop a workaround only when that test proves it obsolete.
 
 ## The two execution paths
 
@@ -41,7 +41,7 @@ The system chain in `run_host` (`src/net/host.rs`, the `mirror_systems` tuple) i
 
 ### The ServerTickPulse gate
 
-The host loop calls `app.update()` roughly 500-1000 times per second, but the simulation tick is 20 Hz (`SERVER_TICK_RATE_HZ = 20.0`, `src/protocol/mod.rs`). The mirror-sync and room-subscription systems only have work when a fixed tick actually crossed. They share a `run_if(server_tick_advanced)` condition driven by `ServerTickPulse.advanced` (`src/net/host.rs`, set in `tick_authoritative_server` when the accumulator passes `fixed_delta`).
+The host loop calls `app.update()` roughly 500-1000 times per second, but the simulation tick is 20 Hz (`SERVER_TICK_RATE_HZ = 20.0`, `src/protocol.rs`). The mirror-sync and room-subscription systems only have work when a fixed tick actually crossed. They share a `run_if(server_tick_advanced)` condition driven by `ServerTickPulse.advanced` (`src/net/host.rs`, set in `tick_authoritative_server` when the accumulator passes `fixed_delta`).
 
 The `mirror_systems` tuple is:
 
@@ -63,7 +63,7 @@ update_client_room_subscriptions,
 
 `src/net/host.rs` is the bootstrap only: `spawn_loopback_server`, `run_game_server`, `run_host`, `tick_authoritative_server`, the `ServerTickPulse` resource, and the `mirror_systems` wiring. The work lives in `src/net/host/`:
 
-- `mirror.rs` - the six exclusive `sync_*` systems (`world: &mut World`) and the `refresh_player_component!` macro. This is where `HashMap -> ECS` reconciliation and the server-side `MUTATE` trace logs live.
+- `mirror.rs` - the six exclusive `sync_*` systems (`world: &mut World`) and the `refresh_player_component!` macro. This is where `HashMap -> ECS` reconciliation and the server-side `MUTATE` trace logs live. Five of the six ride the shared `reconcile_mirror_entities` skeleton (snapshot the delta, despawn removed ids, then refresh-or-spawn per item); only the per-entity refresh/spawn closures are bespoke. `sync_resource_node_entities` stays fully bespoke for its world-load spawn budget.
 - `rooms.rs` - chunk-room AoI: `attach_room_gated_replication` / `attach_player_replication` (the only sanctioned spawn paths), `owner_only_overrides`, `rebind_player_owner_if_changed`, `update_client_room_subscriptions`, `install_replication_sender_on_link`, and the unit test guarding the per-entity `ReplicationGroup` contract.
 - `routing.rs` - `receive_client_messages`, `route_envelopes`, the pre-auth handshake (`handle_unauthenticated_message`, `VersionMismatch`).
 - `admin.rs` - the dedicated-only Unix admin socket.
@@ -226,7 +226,7 @@ Per-client AoI ring size is driven by `ClientMessage::SetViewRadius` (view tier 
 
 Client reconciliation systems that mirror replicated entities into local-only visuals MUST be event-driven (CLAUDE.md replicated-state rule 6). React to `Added<T>` and `RemovedComponents<T>`; never iterate the full replicated query every frame. At AoI scale (~1800 nodes) the noop full-iteration costs 1-4 ms per frame for nothing. See [docs/profiling.md](profiling.md).
 
-The canonical pattern is `src/app/systems/items/resource_nodes/mod.rs`. Copy its structure:
+The canonical pattern is `src/app/systems/items/resource_nodes.rs`. Copy its structure:
 
 - **Pending-spawn `VecDeque`.** `Added<ResourceNode>` arrivals queue up and are drained against a per-frame budget (`MAX_RESOURCE_NODE_SPAWNS_PER_FRAME = 8`), so a chunk full of fresh spawns never stalls a single frame. The queue preserves the budget across frames.
 - **Reverse `Entity -> Id` map** (`replicated_to_id`). `RemovedComponents<ResourceNode>` only hands you the despawned `Entity`; the reverse map lets you find which local mirror to tear down.
@@ -235,7 +235,7 @@ The canonical pattern is `src/app/systems/items/resource_nodes/mod.rs`. Copy its
 
 ### The ResourceNodeDepleted disambiguator
 
-A Lightyear entity despawn alone cannot distinguish "node depleted (play the death effect)" from "node left my AoI ring (silent despawn)". The server sends `ServerMessage::ResourceNodeDepleted` on the reliable channel as the disambiguator. The client pairs it with the matching Lightyear despawn via `pending_depletion_check` + `DEPLETION_GRACE_FRAMES = 3` (`src/app/systems/items/resource_nodes/mod.rs`). This is the one place a reliable message complements replication rather than replacing it: it signals intent, it is not patching a dropped diff. Do not generalize it into a state broadcast.
+A Lightyear entity despawn alone cannot distinguish "node depleted (play the death effect)" from "node left my AoI ring (silent despawn)". The server sends `ServerMessage::ResourceNodeDepleted` on the reliable channel as the disambiguator. The client pairs it with the matching Lightyear despawn via `pending_depletion_check` + `DEPLETION_GRACE_FRAMES = 3` (`src/app/systems/items/resource_nodes.rs`). This is the one place a reliable message complements replication rather than replacing it: it signals intent, it is not patching a dropped diff. Do not generalize it into a state broadcast.
 
 ## Add a replicated entity (recipe)
 

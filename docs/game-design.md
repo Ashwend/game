@@ -7,7 +7,7 @@ sources:
   - src/items/materials.rs - tool_effectiveness_pct + explosive_effectiveness_pct (raid-balance tables), DestructibleMaterial::raidable
   - src/items/ - the item registry split (weapons, armor, ranged, explosives, deployables, upgrades)
   - src/crafting/registry.rs - REGISTERED_RECIPES, RecipeStation gating
-  - src/resources.rs - crude starter nodes, ToolRequirement::allows tier logic
+  - src/resource_nodes.rs - crude starter nodes, ToolRequirement::allows tier logic
   - src/game_balance.rs - every gameplay tuning constant (weapons, armor, explosives, meteor shower)
 related:
   - CLAUDE.md - the singleplayer==multiplayer and gameplay-never-pauses invariants this doc builds on
@@ -21,7 +21,7 @@ related:
 
 # Game design, direction, and core loop
 
-> When to read this: before designing a new gameplay feature, tuning the loop, or to learn what is deliberately absent. Source of truth: `README.md` (pillar), `src/items.rs` + `src/crafting.rs` + `src/resources.rs` + `src/game_balance.rs` (the loop and its numbers). Canonical invariants live in CLAUDE.md.
+> When to read this: before designing a new gameplay feature, tuning the loop, or to learn what is deliberately absent. Source of truth: `README.md` (pillar), `src/items.rs` + `src/crafting.rs` + `src/resource_nodes.rs` + `src/game_balance.rs` (the loop and its numbers). Canonical invariants live in CLAUDE.md.
 
 This is direction, not mechanics. For how a subsystem works, follow the cross-links. Every number here is re-derived from the registries; do not trust prose over `src/game_balance.rs`.
 
@@ -33,9 +33,9 @@ The second pillar is an engineering invariant, not a player-facing mode: solo an
 
 ## The core loop (implemented, as ordered gates)
 
-Each step is gated by the one before it. The gate is the design, not an accident of code. All gather/craft numbers below are read live from `src/resources.rs`, `src/crafting.rs`, and `src/items.rs`.
+Each step is gated by the one before it. The gate is the design, not an accident of code. All gather/craft numbers below are read live from `src/resource_nodes.rs`, `src/crafting.rs`, and `src/items.rs`.
 
-1. **Crude hand-gather (no tool).** Spawn with empty hands. Three crude nodes carry `ToolRequirement{kind: Hands}` (`src/resources.rs` - `SURFACE_STONE_NODE_ID`, `BRANCH_PILE_NODE_ID`, `HAY_GRASS_NODE_ID`): Loose Stone (1 stone), Branch Pile (1 wood), Tall Grass (1 fiber). A `Hands` requirement means E-pickup only; `ToolRequirement::allows` (`src/resources.rs`) rejects swinging any tool, including bare hands, at them. They exist solely to bootstrap the first tools. Do not make them tool-gatherable.
+1. **Crude hand-gather (no tool).** Spawn with empty hands. Three crude nodes carry `ToolRequirement{kind: Hands}` (`src/resource_nodes.rs` - `SURFACE_STONE_NODE_ID`, `BRANCH_PILE_NODE_ID`, `HAY_GRASS_NODE_ID`): Loose Stone (1 stone), Branch Pile (1 wood), Tall Grass (1 fiber). A `Hands` requirement means E-pickup only; `ToolRequirement::allows` (`src/resource_nodes.rs`) rejects swinging any tool, including bare hands, at them. They exist solely to bootstrap the first tools. Do not make them tool-gatherable.
 
 2. **No-station stone tools.** Stone Hatchet and Stone Pickaxe craft at `RecipeStation::None` (`src/crafting.rs` - `STONE_HATCHET_RECIPE_ID`, `STONE_PICKAXE_RECIPE_ID`), no workbench required. Tier 1, `gather_amount: 6`, durability 200 (`STONE_TOOL_DURABILITY`).
 
@@ -59,9 +59,9 @@ Each step is gated by the one before it. The gate is the design, not an accident
 
 12. **Tier-2 workbench and explosives (siege).** A placed workbench upgrades in place to tier 2 (30 iron bar + 6 salvaged fittings + 4 meteorite ingots) via the generic deployable upgrade path, unlocking the top-tier gear and the blackpowder charges. Gunpowder (coal + sulfur) feeds three explosives: powder bomb (thrown with a charged wind-up, lit on the throw, bounces and rolls), powder keg, and satchel charge (placed). These are the designed counter to stone bases: charges deal `Blast` damage through an effectiveness matrix, and placed charges hiss on an 8 to 9 s fuse that a claim-authorized defender can hold-E defuse or shoot out. (The wall-sticking ember charge was retired; metal is effectively raid-proof until its replacement lands.) See [crafting and deployables](crafting-and-deployables.md) and [PvP combat](pvp-combat.md).
 
-13. **One loot bag, instant respawn.** On death the player drops ONE loot bag holding the entire carry (`LOOT_BAG_SLOT_COUNT` = inventory 60 + actionbar 9 = 69 slots; `src/protocol/mod.rs`), not N scattered items. Respawn is instant at full HP, placed at least 12 m from any live player (`RESPAWN_MIN_DISTANCE_M`) to stop spawn-camping. There is no respawn cooldown.
+13. **One loot bag, instant respawn.** On death the player drops ONE loot bag holding the entire carry (`LOOT_BAG_SLOT_COUNT` = inventory 60 + actionbar 9 = 69 slots; `src/protocol.rs`), not N scattered items. Respawn is instant at full HP, placed at least 12 m from any live player (`RESPAWN_MIN_DISTANCE_M`) to stop spawn-camping. There is no respawn cooldown.
 
-Tier progression is implicit, not branchy: a higher-tier tool auto-satisfies every lower-tier node requirement via `tool.tier >= min_tier` (`src/resources.rs` - `ToolRequirement::allows`), and a tier-2 workbench satisfies a tier-1 station via `tier >= min_tier` (`src/crafting/types.rs` - `RecipeStation::satisfied_by`). Do not special-case tiers; bump the number.
+Tier progression is implicit, not branchy: a higher-tier tool auto-satisfies every lower-tier node requirement via `tool.tier >= min_tier` (`src/resource_nodes.rs` - `ToolRequirement::allows`), and a tier-2 workbench satisfies a tier-1 station via `tier >= min_tier` (`src/crafting/types.rs` - `RecipeStation::satisfied_by`). Do not special-case tiers; bump the number.
 
 The tech tree is substantial. The base tree is still the tools-and-base spine (plant twine, hewn log, stone+iron hatchet, stone+iron pickaxe, workbench, furnace, building plan, hammer, hewn-log door, iron door, sleeping bag, torch, small+large storage box, tool cupboard). On top of it sit the advanced rows: cloth and gunpowder intermediates, the melee weapons and armor sets, the bow/arrow/crossbow line, and the four explosives, plus the in-place tier-2 workbench upgrade (a table row, not a recipe). The authoritative list is always `src/crafting/registry.rs` - `REGISTERED_RECIPES`. A determined session or two still reaches the end, but the raiding tier now has real farm depth behind it.
 
@@ -118,10 +118,10 @@ The look is moving from PBR toward a cel-shaded / anime style. Converted to the 
 ## Source-of-truth pointers
 
 - **Every gameplay tuning constant lives in `src/game_balance.rs`**, never inline in a subsystem. The file header makes this a hard rule; subsystem files only re-export. Any doc or instinct that points a balance edit elsewhere is wrong (this is a CLAUDE.md invariant).
-- The loop's shape lives in the registries: `src/items/` (items, tools, weapons, armor, ranged, explosives, `tool_effectiveness_pct`/`explosive_effectiveness_pct` in `materials.rs`, `DestructibleMaterial`), `src/crafting/` (recipes in `registry.rs`, stations in `types.rs`), `src/resources.rs` (nodes, gather rules), `src/building.rs` (tiers, pieces), plus `src/world/ruins.rs` and `src/world/meteor_shower.rs` for the exploration content.
+- The loop's shape lives in the registries: `src/items/` (items, tools, weapons, armor, ranged, explosives, `tool_effectiveness_pct`/`explosive_effectiveness_pct` in `materials.rs`, `DestructibleMaterial`), `src/crafting/` (recipes in `registry.rs`, stations in `types.rs`), `src/resource_nodes.rs` (nodes, gather rules), `src/building.rs` (tiers, pieces), plus `src/world/ruins.rs` and `src/world/meteor_shower.rs` for the exploration content.
 - **Do not trust pre-recalibration combat tuning notes.** Earlier docs carried a swing-timing column (0.50 s hatchet) and a "constants live in `combat.rs`" sourcing that both drifted; the real swing is 0.78 s and the constants moved to `game_balance.rs` under `COMBAT_`. Re-derive from `src/game_balance.rs` plus `src/app/state/gather.rs` before quoting combat numbers. The current truth is in [PvP combat](pvp-combat.md).
 
-Protocol/runtime anchors (verify before quoting): `PROTOCOL_VERSION = 43`, `SAVE_FORMAT_VERSION = 20`, `SERVER_TICK_RATE_HZ = 20.0`, `MAX_HEALTH = 100.0` (`src/protocol/mod.rs`, `src/save/format.rs`). Every time-based balance constant derives its tick count from `SERVER_TICK_RATE_HZ`.
+Protocol/runtime anchors (verify before quoting): `PROTOCOL_VERSION = 43`, `SAVE_FORMAT_VERSION = 20`, `SERVER_TICK_RATE_HZ = 20.0`, `MAX_HEALTH = 100.0` (`src/protocol.rs`, `src/save/format.rs`). Every time-based balance constant derives its tick count from `SERVER_TICK_RATE_HZ`.
 
 ## Related docs
 

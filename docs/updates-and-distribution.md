@@ -3,7 +3,7 @@ title: Self-update, changelog modals, and packaging
 owns: The client-only update subsystem (src/update/ + the sibling ashwend-updater binary) and the release packaging/asset-rename pipeline.
 when_to_read: Before changing release-asset names, the self-update flow, either changelog modal, or installer/signing config.
 sources:
-  - src/update/mod.rs - UpdatePlugin, UpdateState, UpdateStatus, the worker + message pump
+  - src/update.rs - UpdatePlugin, UpdateState, UpdateStatus, the worker + message pump
   - src/update/github.rs - releases client, latest_stable, changelog_since, changelog_for
   - src/update/asset.rs - HOST_ASSET_NAME / ARCHIVE_GAME_MEMBER / UPDATER_BINARY per-host constants
   - src/update/download.rs - download + sha256 verify + extract + stage
@@ -35,7 +35,7 @@ Both changelog views live on the same `UpdateState` resource with two independen
 
 ## Boot check flow and the UpdateStatus state machine
 
-`UpdateState::spawn()` (`src/update/mod.rs` - `spawn`) starts one named OS thread `ashwend-update-worker` running `run_worker`. There is no async runtime in the app; this mirrors the analytics worker (`src/analytics/client.rs` - `game-analytics-worker`): one thread + blocking `ureq`. The worker does the boot check once, then blocks on a command channel to serve a later `Download`.
+`UpdateState::spawn()` (`src/update.rs` - `spawn`) starts one named OS thread `ashwend-update-worker` running `run_worker`. There is no async runtime in the app; this mirrors the analytics worker (`src/analytics/client.rs` - `game-analytics-worker`): one thread + blocking `ureq`. The worker does the boot check once, then blocks on a command channel to serve a later `Download`.
 
 The check (`check_latest` -> `github::fetch_releases`) hits the public GitHub Releases API for `Ashwend/game` (`src/update/github.rs` - `REPO_OWNER`/`REPO_NAME`). The repo is public, so no auth, only the `User-Agent: ashwend/<GAME_VERSION>` header GitHub requires. Network parameters worth knowing before tuning:
 
@@ -44,7 +44,7 @@ The check (`check_latest` -> `github::fetch_releases`) hits the public GitHub Re
 
 **Any failure is treated as "up to date" and logged once** (`check_latest` returns `Checked { available: None, current_changelog: None }` on error). A flaky network never blocks or nags. `GameServer`-side gameplay is unaffected; this is purely a client UI probe.
 
-`UpdateStatus` (`src/update/mod.rs` - `enum UpdateStatus`):
+`UpdateStatus` (`src/update.rs` - `enum UpdateStatus`):
 
 ```
 Checking ──► UpToDate          (nothing newer, or check failed: same UX)
@@ -56,7 +56,7 @@ Checking ──► UpToDate          (nothing newer, or check failed: same UX)
          (any download/extract/verify error) ──► Failed(String)
 ```
 
-The worker pushes `Msg` values; `poll_update_messages_system` (`mod.rs` - `poll_update_messages_system`) drains them into `UpdateState` each frame:
+The worker pushes `Msg` values; `poll_update_messages_system` (`src/update.rs` - `poll_update_messages_system`) drains them into `UpdateState` each frame:
 
 - `Checked { available, current_changelog }`: stores `current_changelog` unconditionally (drives the "What's new" modal); if `available` is `Some` and not already skipped, sets `status = Available` and auto-opens the update modal (`modal_open = !skipped`).
 - `Progress { received, total }`: refreshes the `Downloading` payload.
@@ -67,7 +67,7 @@ The worker pushes `Msg` values; `poll_update_messages_system` (`mod.rs` - `poll_
 
 ### GAME_SKIP_UPDATE_CHECK (debug builds only)
 
-`const SKIP_ENV = "GAME_SKIP_UPDATE_CHECK"` and the early return in `spawn()` are both behind `#[cfg(debug_assertions)]` (`mod.rs` - `SKIP_ENV` / `spawn`), so the env var is genuinely compiled out of release builds. When set in a dev build the state is constructed as `UpToDate` with no worker. The agent test harness sets it so the update modal can't cover the scene mid-screenshot (see `docs/headless-agent-testing.md`). Do not document or rely on it for release builds.
+`const SKIP_ENV = "GAME_SKIP_UPDATE_CHECK"` and the early return in `spawn()` are both behind `#[cfg(debug_assertions)]` (`src/update.rs` - `SKIP_ENV` / `spawn`), so the env var is genuinely compiled out of release builds. When set in a dev build the state is constructed as `UpToDate` with no worker. The agent test harness sets it so the update modal can't cover the scene mid-screenshot (see `docs/headless-agent-testing.md`). Do not document or rely on it for release builds.
 
 ## The two changelog modals
 
@@ -93,7 +93,7 @@ Changelog markdown is compacted by `clean_release_body` (`src/update/github.rs`)
 
 ## Self-update transport
 
-`begin_download` (`mod.rs` - `begin_download`) sends `Cmd::Download` to the worker, which calls `download::download_and_stage` (`src/update/download.rs`):
+`begin_download` (`src/update.rs` - `begin_download`) sends `Cmd::Download` to the worker, which calls `download::download_and_stage` (`src/update/download.rs`):
 
 1. **Download** the host's release archive (`asset.browser_download_url`) to the system temp dir, streamed 64 KiB at a time with progress callbacks.
 2. **Verify sha256** against GitHub's published `digest` (`"sha256:<hex>"`). **Warn-only when GitHub omits a digest** (`verify_sha256` logs and returns `Ok` on `None`). A non-`sha256:` prefix is rejected. Security note: this tolerates the brief window right after a release before GitHub computes a digest. If you tighten this to hard-fail, account for that window.
@@ -102,7 +102,7 @@ Changelog markdown is compacted by `clean_release_body` (`src/update/github.rs`)
 
 On success the worker sends `Staged { path }` -> status `Ready`.
 
-`can_self_update()` (`mod.rs` / `src/update/apply.rs` - `can_self_update`) is true only when the host publishes an asset *and* the sibling updater binary exists beside the running game (`updater_path`). When false the modal's primary button opens the releases page instead (`apply::open_download_page` -> `crate::util::open_url`, `src/util.rs:28`).
+`can_self_update()` (`src/update.rs` / `src/update/apply.rs` - `can_self_update`) is true only when the host publishes an asset *and* the sibling updater binary exists beside the running game (`updater_path`). When false the modal's primary button opens the releases page instead (`apply::open_download_page` -> `crate::util::open_url`, `src/util.rs:28`).
 
 ### Apply path (saves the open world first)
 
@@ -167,7 +167,7 @@ A notarized, stapled first install launches clean with no Gatekeeper prompt. Ad-
 
 The bare `.zip`/`.tar.gz` archives are the **self-update transport**. Each ships both binaries (`ashwend` + `ashwend-updater`) side by side. The `.dmg` and `setup.exe` are website-only first-install packages and are **never** consumed by self-update (the updater reads `zip`/`tar.gz`, not a dmg or installer). Never point `HOST_ASSET_NAME` at a `.dmg` or installer.
 
-`ashwend-updater` is auto-discovered from `src/bin/` (no `[[bin]]` section); `Cargo.toml` only sets `default-run = "ashwend"`. The crate version is `0.21.0` (`Cargo.toml`), exposed at runtime as `GAME_VERSION = env!("CARGO_PKG_VERSION")` in `src/protocol/mod.rs:42`.
+`ashwend-updater` is auto-discovered from `src/bin/` (no `[[bin]]` section); `Cargo.toml` only sets `default-run = "ashwend"`. The crate version is `0.21.0` (`Cargo.toml`), exposed at runtime as `GAME_VERSION = env!("CARGO_PKG_VERSION")` in `src/protocol.rs:42`.
 
 ### Renaming an asset is a multi-file change
 

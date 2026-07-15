@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn pickup_target_uses_view_ray_and_range() {
         let item = DroppedWorldItem {
-            id: 1,
+            id: crate::protocol::DroppedItemId(1),
             stack: ItemStack::new(COAL_ID, 1),
             position: Vec3Net::new(0.0, 0.0, -2.0),
             yaw: 0.0,
@@ -119,7 +119,7 @@ mod tests {
     #[test]
     fn server_pickup_reach_is_lenient_and_distance_only() {
         let item = DroppedWorldItem {
-            id: 1,
+            id: crate::protocol::DroppedItemId(1),
             stack: ItemStack::new(COAL_ID, 1),
             position: Vec3Net::new(0.0, 0.0, -2.0),
             yaw: 0.0,

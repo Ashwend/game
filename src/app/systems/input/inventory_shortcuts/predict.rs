@@ -2,7 +2,7 @@ use crate::{
     app::state::{PickupTargetState, PredictionState},
     inventory::accepted_inventory_quantity,
     protocol::{DroppedItemId, ItemStack, ResourceNodeId},
-    resources::{next_payout_from_storage, resource_node_definition},
+    resource_nodes::{next_payout_from_storage, resource_node_definition},
 };
 
 use super::swing::equipped_tool_profile;

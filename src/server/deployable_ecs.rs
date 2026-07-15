@@ -190,17 +190,31 @@ mod tests {
     #[test]
     fn spawn_and_despawn_round_trip_index() {
         let mut world = fresh_world();
-        let entity = spawn_deployable_entity(&mut world, workbench_view(5), ChunkCoord::new(0, 0));
-        assert_eq!(world.resource::<DeployableIndex>().get(5), Some(entity));
+        let entity = spawn_deployable_entity(
+            &mut world,
+            workbench_view(crate::protocol::DeployedEntityId(5)),
+            ChunkCoord::new(0, 0),
+        );
+        assert_eq!(
+            world
+                .resource::<DeployableIndex>()
+                .get(crate::protocol::DeployedEntityId(5)),
+            Some(entity)
+        );
 
         // Components are populated.
         let identity = world.get::<Deployable>(entity).expect("identity");
-        assert_eq!(identity.id, 5);
+        assert_eq!(identity.id, crate::protocol::DeployedEntityId(5));
         let health = world.get::<DeployableHealth>(entity).expect("health");
         assert_eq!(health.0, 100);
 
-        let despawned = despawn_deployable_entity(&mut world, 5);
+        let despawned = despawn_deployable_entity(&mut world, crate::protocol::DeployedEntityId(5));
         assert_eq!(despawned, Some(entity));
-        assert!(world.resource::<DeployableIndex>().get(5).is_none());
+        assert!(
+            world
+                .resource::<DeployableIndex>()
+                .get(crate::protocol::DeployedEntityId(5))
+                .is_none()
+        );
     }
 }

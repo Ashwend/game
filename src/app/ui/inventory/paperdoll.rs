@@ -9,7 +9,7 @@
 //! drag onto a slot dresses the figure the same frame. The slots reuse the
 //! shared [`draw_slot`] widget, so a drag from the bag onto a paperdoll slot
 //! rides the exact same drag pipeline as a bag-to-bag move: the destination is
-//! a `UnifiedSlotRef::Player` addressing an [`ItemContainer::Equipment`] slot,
+//! a `UnifiedSlotRef::Player` addressing an [`ItemContainer::Equipment`](crate::protocol::ItemContainer::Equipment) slot,
 //! and the shared move validation (armor-only, slot-matched, swap-never-merge)
 //! silently rejects an invalid drop. The column records each slot's rect on
 //! [`InventoryUiState`] so a release over a slot counts as landing on an

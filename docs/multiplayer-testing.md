@@ -32,7 +32,7 @@ This doc owns the helper itself. For driving a **single** headless client throug
 
 Port: `--port 0` (the default) reserves a free port by binding and dropping a TCP listener, then hands that port to the UDP server. Pass `--port <n>` to pin it.
 
-Names: defaults are `player1` (left) and `player2` (right), from `DEFAULT_NAMES`. Override with `--names`, one or two values, blank/whitespace values fall back to the default for that slot. (The `MultiplayerTest` clap doc-comment in `src/cli.rs` still says the defaults are `Alpha`/`Bravo`; that comment is stale, the real defaults are `player1`/`player2`.)
+Names: defaults are `player1` (left) and `player2` (right), from `DEFAULT_NAMES`. Override with `--names`, one or two values, blank/whitespace values fall back to the default for that slot.
 
 Account IDs are fixed and distinct: `TEST_ACCOUNT_IDS = [76561197960287001, 76561197960287002]`. They differ from the default local-dev bypass id so a test run does not collide with a real local session, and they are the ids seeded into `save.admins`.
 
@@ -102,7 +102,7 @@ In this mode each client instead gets:
 | Env var | Value |
 | --- | --- |
 | `GAME_HEADLESS_CAPTURE` | `1280x960` (off-screen render target) |
-| `GAME_CONTROL_SOCKET` | `/tmp/ashwend-mptest-0.sock` and `/tmp/ashwend-mptest-1.sock` |
+| `GAME_CONTROL_SOCKET` | `/tmp/ashwend-mptest-<harness pid>-0.sock` and `...-1.sock` (PID-scoped so concurrent runs don't collide; the helper prints both paths at launch) |
 | `GAME_TEST_INVENTORY_OPEN` | `0` (inventory forced closed so it never covers the other player) |
 
 The `GAME_TEST_WINDOW_*` geometry keys are deliberately **omitted** in headless mode, the on-screen reposition path fights the hidden capture window, so `config.window` is `None` and `reposition_test_window_system` no-ops.
@@ -118,7 +118,7 @@ In GUI mode both client processes run real audio and share the same default micr
 1. Both clients capture the same speech from your mic and send it. The server does **not** echo your own voice back, the receive filter skips packets whose `speaker` matches the listener's own `client_id` (`src/server/voice.rs`, `client.client_id != speaker`), so you don't hear yourself directly.
 2. Without headphones you still get a round-trip loop: client A's speaker output is captured by the mic and sent, client B plays it, B's output is captured again, and so on. There is no Discord-style echo suppression. For voice debugging on one machine, use headphones.
 
-Spatial attenuation uses `VOICE_AUDIBLE_RANGE = 50.0` meters (`src/server/voice.rs`); the two test players spawn ~2.5m apart, well inside range. See [voice.md](voice.md) for the rest of the pipeline.
+Spatial attenuation uses `VOICE_AUDIBLE_RANGE_M = 50.0` meters (`src/game_balance.rs`); the two test players spawn ~2.5m apart, well inside range. See [voice.md](voice.md) for the rest of the pipeline.
 
 ## Related docs
 

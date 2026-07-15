@@ -47,6 +47,17 @@ unnested_or_patterns = "warn"
 # promotes these to a hard gate like the rest.
 dbg_macro = "warn"
 todo = "warn"
+# Every `unsafe` block must carry a `// SAFETY:` comment stating the invariant
+# it relies on. The crate has only a handful of unsafe blocks (AppKit calls,
+# env mutation in tests), so this is near-zero churn and keeps it that way.
+undocumented_unsafe_blocks = "warn"
+
+# The codebase leans heavily on intra-doc links (`[\`Type\`]`) as its internal
+# cross-reference system; a rename must not silently orphan them. CI runs
+# `cargo doc --no-deps --document-private-items` so these actually gate.
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
 
 [dependencies]
 anyhow = "1.0.102"
@@ -192,10 +203,23 @@ opt-level = 3
 # percent faster runtime, no PDB/symbols leaked into release tarballs.
 # `thin` LTO keeps build times reasonable; `fat` shaves a bit more off but
 # multiplies link time. Switch to `fat` only if profiling justifies it.
+#
+# `overflow-checks = true`: the shipped authoritative server does arithmetic on
+# client-supplied values (item counts, tick counters); a silent wrap there is a
+# correctness/exploit bug, and every test run is debug-profile (checked), so
+# without this the shipped build is the only configuration that wraps. The
+# cost is a branch on integer math, noise next to the simulation itself.
+#
+# Panic strategy stays the default `unwind` ON PURPOSE: the analytics crash
+# reporter (`src/analytics/crash.rs`) and the analytics worker isolation
+# (`src/analytics/client.rs`) both rely on `catch_unwind`; `abort` would turn
+# any caught worker panic into a process kill. Revisit only if analytics stops
+# depending on unwinding.
 [profile.release]
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+overflow-checks = true
 
 # `bevy_framepace` has no crates.io release for Bevy 0.19 yet (latest published is
 # 0.21.0, Bevy 0.18). We override it to hacknus's open PR (aevyrie/bevy_framepace#77,

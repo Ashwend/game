@@ -72,7 +72,7 @@ fn spawn_loot_bag_lays_out_items_and_pads_with_empty_slots() {
 #[test]
 fn open_loot_bag_within_range_records_open_state() {
     let mut server = server();
-    let client = connect_named(&mut server, 1, "Looter");
+    let client = connect_named(&mut server, crate::protocol::AccountId(1), "Looter");
     place_player(&mut server, client, Vec3Net::new(0.0, 0.0, 0.0));
     let bag_id = server.spawn_loot_bag(
         Vec3Net::new(1.0, 0.0, 0.0),
@@ -98,7 +98,7 @@ fn open_loot_bag_within_range_records_open_state() {
 #[test]
 fn open_loot_bag_out_of_range_is_rejected() {
     let mut server = server();
-    let client = connect_named(&mut server, 1, "FarAway");
+    let client = connect_named(&mut server, crate::protocol::AccountId(1), "FarAway");
     place_player(&mut server, client, Vec3Net::new(0.0, 0.0, 0.0));
     // Bag well outside the interact radius.
     let far = LOOT_BAG_INTERACT_RANGE_M * 4.0;
@@ -119,7 +119,7 @@ fn open_loot_bag_out_of_range_is_rejected() {
 #[test]
 fn close_loot_bag_empty_destroys_the_entity() {
     let mut server = server();
-    let client = connect_named(&mut server, 1, "Looter");
+    let client = connect_named(&mut server, crate::protocol::AccountId(1), "Looter");
     place_player(&mut server, client, Vec3Net::new(0.0, 0.0, 0.0));
     let bag_id = server.spawn_loot_bag(Vec3Net::new(1.0, 0.0, 0.0), 0.0, Vec::new());
 
@@ -138,7 +138,7 @@ fn close_loot_bag_empty_destroys_the_entity() {
 #[test]
 fn close_loot_bag_keeps_nonempty_entity_alive() {
     let mut server = server();
-    let client = connect_named(&mut server, 1, "Looter");
+    let client = connect_named(&mut server, crate::protocol::AccountId(1), "Looter");
     place_player(&mut server, client, Vec3Net::new(0.0, 0.0, 0.0));
     let bag_id = server.spawn_loot_bag(
         Vec3Net::new(1.0, 0.0, 0.0),
@@ -158,7 +158,7 @@ fn close_loot_bag_keeps_nonempty_entity_alive() {
 #[test]
 fn move_from_bag_into_empty_player_slot_transfers_full_stack() {
     let mut server = server();
-    let client = connect_named(&mut server, 1, "Looter");
+    let client = connect_named(&mut server, crate::protocol::AccountId(1), "Looter");
     place_player(&mut server, client, Vec3Net::new(0.0, 0.0, 0.0));
     let bag_id = server.spawn_loot_bag(
         Vec3Net::new(1.0, 0.0, 0.0),
@@ -191,7 +191,7 @@ fn move_from_bag_into_empty_player_slot_transfers_full_stack() {
 #[test]
 fn partial_move_leaves_remainder_in_source_slot() {
     let mut server = server();
-    let client = connect_named(&mut server, 1, "Looter");
+    let client = connect_named(&mut server, crate::protocol::AccountId(1), "Looter");
     place_player(&mut server, client, Vec3Net::new(0.0, 0.0, 0.0));
     let bag_id = server.spawn_loot_bag(
         Vec3Net::new(1.0, 0.0, 0.0),
@@ -224,7 +224,7 @@ fn partial_move_leaves_remainder_in_source_slot() {
 #[test]
 fn move_into_matching_stack_merges_quantities() {
     let mut server = server();
-    let client = connect_named(&mut server, 1, "Looter");
+    let client = connect_named(&mut server, crate::protocol::AccountId(1), "Looter");
     place_player(&mut server, client, Vec3Net::new(0.0, 0.0, 0.0));
     {
         let c = server.clients.get_mut(&client).unwrap();
@@ -257,7 +257,7 @@ fn move_into_matching_stack_merges_quantities() {
 #[test]
 fn move_with_closed_bag_is_a_noop() {
     let mut server = server();
-    let client = connect_named(&mut server, 1, "Looter");
+    let client = connect_named(&mut server, crate::protocol::AccountId(1), "Looter");
     place_player(&mut server, client, Vec3Net::new(0.0, 0.0, 0.0));
     let bag_id = server.spawn_loot_bag(
         Vec3Net::new(1.0, 0.0, 0.0),
@@ -288,7 +288,7 @@ fn move_with_closed_bag_is_a_noop() {
 #[test]
 fn quick_transfer_from_bag_lands_in_first_empty_inventory_slot() {
     let mut server = server();
-    let client = connect_named(&mut server, 1, "Looter");
+    let client = connect_named(&mut server, crate::protocol::AccountId(1), "Looter");
     place_player(&mut server, client, Vec3Net::new(0.0, 0.0, 0.0));
     let bag_id = server.spawn_loot_bag(
         Vec3Net::new(1.0, 0.0, 0.0),
@@ -326,7 +326,7 @@ fn quick_transfer_from_bag_lands_in_first_empty_inventory_slot() {
 #[test]
 fn quick_transfer_from_player_lands_in_first_empty_bag_slot() {
     let mut server = server();
-    let client = connect_named(&mut server, 1, "Looter");
+    let client = connect_named(&mut server, crate::protocol::AccountId(1), "Looter");
     place_player(&mut server, client, Vec3Net::new(0.0, 0.0, 0.0));
     {
         let c = server.clients.get_mut(&client).unwrap();
@@ -355,7 +355,7 @@ fn quick_transfer_from_player_lands_in_first_empty_bag_slot() {
 #[test]
 fn destroy_loot_bag_clears_open_pointer() {
     let mut server = server();
-    let client = connect_named(&mut server, 1, "Looter");
+    let client = connect_named(&mut server, crate::protocol::AccountId(1), "Looter");
     place_player(&mut server, client, Vec3Net::new(0.0, 0.0, 0.0));
     let bag_id = server.spawn_loot_bag(
         Vec3Net::new(1.0, 0.0, 0.0),
@@ -519,4 +519,115 @@ fn loot_bags_iter_yields_every_spawned_bag() {
     assert!(ids.contains(&a));
     assert!(ids.contains(&b));
     assert_eq!(ids.len(), 2);
+}
+
+// Moved from `src/server/loot_bag/tests.rs` so every server test lives
+// under `src/server/tests/`. Kept as a nested module: these exercise the
+// slot-level primitives and the bag struct directly, not the command flow
+// covered above.
+mod slot_and_bag_tests {
+    use crate::items::{COAL_ID, WOOD_ID, stack_limit};
+    use crate::protocol::{ItemStack, LOOT_BAG_SLOT_COUNT, Vec3Net};
+    use crate::server::{
+        container_slots::{insert_into_slot, restore_slot},
+        loot_bag::LootBag,
+        test_support::server,
+    };
+
+    #[test]
+    fn insert_into_empty_slot_fills_it() {
+        let mut slot: Option<ItemStack> = None;
+        let leftover = insert_into_slot(&mut slot, ItemStack::new(WOOD_ID, 5));
+        assert!(leftover.is_none());
+        assert_eq!(slot.as_ref().unwrap().quantity, 5);
+    }
+
+    #[test]
+    fn insert_into_matching_slot_merges_up_to_limit_and_returns_overflow() {
+        let limit = stack_limit(WOOD_ID).unwrap();
+        let mut slot = Some(ItemStack::new(WOOD_ID, limit - 2));
+        // Incoming 5 → only 2 fit, 3 overflow back.
+        let leftover = insert_into_slot(&mut slot, ItemStack::new(WOOD_ID, 5));
+        assert_eq!(slot.as_ref().unwrap().quantity, limit);
+        let overflow = leftover.expect("overflow returned when limit is hit");
+        assert_eq!(overflow.quantity, 3);
+        assert_eq!(overflow.item_id.as_ref(), WOOD_ID);
+    }
+
+    #[test]
+    fn insert_into_full_matching_slot_rejects_entire_stack() {
+        let limit = stack_limit(WOOD_ID).unwrap();
+        let mut slot = Some(ItemStack::new(WOOD_ID, limit));
+        let leftover = insert_into_slot(&mut slot, ItemStack::new(WOOD_ID, 4));
+        assert_eq!(
+            slot.as_ref().unwrap().quantity,
+            limit,
+            "full slot is unchanged"
+        );
+        assert_eq!(leftover.expect("rejected").quantity, 4);
+    }
+
+    #[test]
+    fn insert_into_mismatched_slot_swaps_contents() {
+        let mut slot = Some(ItemStack::new(COAL_ID, 3));
+        let displaced = insert_into_slot(&mut slot, ItemStack::new(WOOD_ID, 1));
+        // The incoming item now occupies the slot; the old stack is returned.
+        assert_eq!(slot.as_ref().unwrap().item_id.as_ref(), WOOD_ID);
+        let out = displaced.expect("mismatch swaps the old stack out");
+        assert_eq!(out.item_id.as_ref(), COAL_ID);
+        assert_eq!(out.quantity, 3);
+    }
+
+    #[test]
+    fn restore_slot_merges_partial_back_into_same_item() {
+        // removed_all = false + matching item → quantities add.
+        let mut slot = Some(ItemStack::new(WOOD_ID, 6));
+        restore_slot(&mut slot, ItemStack::new(WOOD_ID, 4), false);
+        assert_eq!(slot.as_ref().unwrap().quantity, 10);
+    }
+
+    #[test]
+    fn restore_slot_overwrites_when_source_was_fully_drained() {
+        // removed_all = true → the stack is placed straight back (slot was
+        // emptied during the take, so there's nothing to merge with).
+        let mut slot: Option<ItemStack> = None;
+        restore_slot(&mut slot, ItemStack::new(COAL_ID, 7), true);
+        assert_eq!(slot.as_ref().unwrap().item_id.as_ref(), COAL_ID);
+        assert_eq!(slot.as_ref().unwrap().quantity, 7);
+    }
+
+    #[test]
+    fn loot_bag_is_empty_reflects_slot_contents() {
+        let mut bag = LootBag {
+            id: crate::protocol::LootBagId(1),
+            position: Vec3Net::ZERO,
+            yaw: 0.0,
+            slots: vec![None; LOOT_BAG_SLOT_COUNT],
+            spawn_tick: 0,
+            velocity_y: 0.0,
+            resting: true,
+            rest_y: 0.05,
+        };
+        assert!(bag.is_empty());
+        bag.slots[2] = Some(ItemStack::new(WOOD_ID, 1));
+        assert!(!bag.is_empty());
+
+        // to_view mirrors the slot layout.
+        let view = bag.to_view();
+        assert_eq!(view.id, crate::protocol::LootBagId(1));
+        assert_eq!(view.slots[2].as_ref().unwrap().quantity, 1);
+    }
+
+    #[test]
+    fn spawn_loot_bag_truncates_overflowing_item_list() {
+        let mut server = server();
+        // More stacks than the bag has slots, the extras are dropped.
+        let items: Vec<ItemStack> = (0..(LOOT_BAG_SLOT_COUNT + 3))
+            .map(|_| ItemStack::new(WOOD_ID, 1))
+            .collect();
+        let id = server.spawn_loot_bag(Vec3Net::ZERO, 0.0, items);
+        let bag = &server.loot_bags[&id];
+        assert_eq!(bag.slots.len(), LOOT_BAG_SLOT_COUNT);
+        assert!(bag.slots.iter().all(Option::is_some));
+    }
 }

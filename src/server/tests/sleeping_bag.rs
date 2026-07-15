@@ -13,7 +13,7 @@ fn connect_other(server: &mut GameServer, account_id: u64, name: &str) -> Client
         .connect(
             crate::protocol::PROTOCOL_VERSION,
             Some(crate::protocol::GAME_VERSION.to_owned()),
-            account_id,
+            crate::protocol::AccountId(account_id),
             name.to_owned(),
             String::new(),
         )
@@ -154,13 +154,17 @@ fn death_lists_owned_bags_with_their_names() {
         }),
     );
 
-    let bags = server.respawn_bag_options(1);
+    let bags = server.respawn_bag_options(crate::protocol::AccountId(1));
     assert_eq!(bags.len(), 1);
     assert_eq!(bags[0].id, id);
     assert_eq!(bags[0].name, "north camp");
 
     // Other accounts see nothing.
-    assert!(server.respawn_bag_options(999).is_empty());
+    assert!(
+        server
+            .respawn_bag_options(crate::protocol::AccountId(999))
+            .is_empty()
+    );
 }
 
 #[test]

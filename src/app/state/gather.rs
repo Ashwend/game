@@ -137,8 +137,8 @@ impl ImpactEffectKind {
     /// to distinguish a full tree (heavy WoodChips) from a branch pile
     /// (light Sticks), an ore vein from a surface rock, and grass tufts
     /// from anything else.
-    pub(crate) fn for_resource_model(model: crate::resources::ResourceNodeModel) -> Self {
-        use crate::resources::ResourceNodeModel::*;
+    pub(crate) fn for_resource_model(model: crate::resource_nodes::ResourceNodeModel) -> Self {
+        use crate::resource_nodes::ResourceNodeModel::*;
         match model {
             PineTreeSmall | PineTreeMedium | PineTreeLarge | BirchTreeSmall | BirchTreeMedium
             | BirchTreeLarge => Self::WoodChips,

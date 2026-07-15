@@ -3,7 +3,7 @@ title: "Playbook: author a model or icon"
 owns: The repeatable model/icon authoring pipeline (hand-modelled held tools, parametric-script glb families, and the skill<->repo boundary).
 when_to_read: When modelling a new held item or prop, deriving a sibling tool, authoring a deployable/building glb, or generating an icon/texture.
 sources:
-  - "src/app/scene/assets.rs - setup_scene asset wiring (prim_mesh / glb_material closures, ItemVisualAssets, DeployableVisualAssets)"
+  - "src/app/scene/assets.rs - setup_scene asset wiring (the prim_mesh closure in insert_deployable_visuals, ItemVisualAssets, DeployableVisualAssets)"
   - "src/app/systems/items/held.rs - held_item_layers"
   - "src/app/scene/toon.rs - ToonMaterial"
   - "art/ore/build_ore.py - parametric ore glbs"
@@ -32,7 +32,7 @@ Two facts shape everything below: in-game props get their colour from a `COLOR_0
 | `export_materials` | `'EXPORT'` (glb embeds its own materials) | ore + trees use `'NONE'`; building, door, and deployable scripts use `'EXPORT'` (Rust attaches/selects the shared material either way) |
 | Primitives | 2 (matte haft = prim 0, worked head = prim 1) | typically 1 (trees = 2: trunk + foliage) |
 | Material kind | `StandardMaterial`, two per tool, tinted by COLOR_0 | mostly `ToonMaterial`; building pieces + doors are textured `StandardMaterial` |
-| Rust load | `prim_mesh` + `glb_material` (both closures in `assets.rs`) | `prim_mesh` only; material built/selected in Rust |
+| Rust load | `prim_mesh` (closure in `assets.rs` - `insert_deployable_visuals`) | `prim_mesh` only; material built/selected in Rust |
 
 Rule of thumb: **do not** commit a headless build script for a hand-modelled tool, and **do not** hand-model in interactive Blender a shape that must stay in lockstep with a Rust constant (a building piece, a tree silhouette, an ore stage). Those go through a parametric script that mirrors the constant.
 
@@ -85,7 +85,7 @@ Each script mirrors a Rust constant as its parity point and exports COLOR_0 glbs
 |---|---|---|---|---|
 | `art/ore/build_ore.py` | `assets/ore/<type>/stage_{0,1,2}.glb` (4 types x 3 stages) | `ResourceVisualAssets` (ore stage meshes), `ore_toon_material` | `ToonMaterial` (one shared, COLOR_0 = per-mineral) | `src/app/systems/items/resource_nodes/stages.rs` (3 stages) |
 | `art/trees/build_tree.py` | `assets/trees/<species>_<size>/model.glb` (mesh0 trunk, mesh1 foliage) | bark/foliage/dead `ToonMaterial`s | `ToonMaterial` (bark, foliage, dead-bark variants) | `src/app/scene/mesh/trees.rs` geometry constants + `tree_mesh_height` (`src/app/scene/components.rs`; pine 4.5/6.6/9.1, birch 3.6/5.3/7.15) |
-| `art/building/build_pieces.py` | `assets/building/<piece>_<tier>.glb` (6 pieces x 3 tiers) | `building_meshes` + `building_materials` | textured `StandardMaterial` per tier | `crate::building::piece_local_boxes` (`src/building.rs:640`) |
+| `art/building/build_pieces.py` | `assets/building/<piece>_<tier>.glb` (6 pieces x 3 tiers) | `building_meshes` + `building_materials` | textured `StandardMaterial` per tier | `crate::building::piece_local_boxes` (`src/building/collision.rs` - `piece_local_boxes`) |
 | `art/building/build_door.py` | `assets/items/{hewn_log_door,iron_door}/model.glb` | `hewn_door_*` / `iron_door_*` | textured `StandardMaterial` (iron door: roughness 0.55, metallic 0.8) | door panel geometry |
 | `art/deployables/build_deployables.py` | UV-baked `assets/items/{workbench_t1,crude_furnace,storage_box_*,tool_cupboard,torch}/model.glb` + workbench rebuild | `DeployableVisualAssets` meshes, `toon_{wood,stone,fabric}_material` | `ToonMaterial` (see deployables section) | `DeployableProfile.collider_half_width` in `src/items.rs` (workbench 0.55, furnace 0.50) |
 
@@ -101,7 +101,7 @@ This is the section that drifted hardest in the old doc. The current reality:
 
 - Deployable glbs carry `POSITION/NORMAL/COLOR_0` but originally had **no UVs**. `art/deployables/build_deployables.py` bakes box-projected `cube_uv` UVs into the furnace, both chests, the tool cupboard, and the torch, and **rebuilds the workbench from scratch** (plank bench, not the old 4-leg stool). Geometry of the unwrapped props is otherwise untouched.
 - The surface is `detail_texture * COLOR_0`. The detail textures (`assets/textures/deployables/{wood,stone,fabric}.png`) are near-white plank/cobble line-art, so COLOR_0 carries the wood-brown / stone-grey and the texture multiplies dark seams on top.
-- Rust attaches a `ToonMaterial`, **not** a base-white `StandardMaterial` and **not** a `glb_material` call. The per-prop selection is in `deployable_visual` in `src/app/systems/deployables/mod.rs`:
+- Rust attaches a `ToonMaterial`, **not** a base-white `StandardMaterial` and **not** a `glb_material` call. The per-prop selection is in `deployable_visual` in `src/app/systems/deployables.rs`:
   - furnace -> `toon_stone_material`
   - workbench, storage boxes, tool cupboard, torch -> `toon_wood_material`
   - sleeping bag -> `toon_fabric_material`
@@ -112,11 +112,10 @@ If you author a new deployable: run it through `build_deployables.py` to bake UV
 
 ## Wire a model into Rust
 
-In `src/app/scene/assets.rs` (`setup_scene`), the two DRY closures already exist:
+In `src/app/scene/assets.rs` (`insert_deployable_visuals`, one of the `setup_scene` helpers), the DRY loader closure already exists:
 
 ```rust
-let prim_mesh    = |glb: &str, primitive: usize| asset_server.load(GltfAssetLabel::Primitive { mesh: 0, primitive }.from_asset(glb.to_owned()));
-let glb_material = |glb: &str, index: usize| asset_server.load(GltfAssetLabel::Material { index, is_scale_inverted: false }.from_asset(glb.to_owned()));
+let prim_mesh = |glb: &str, primitive: usize| asset_server.load(GltfAssetLabel::Primitive { mesh: 0, primitive }.from_asset(glb.to_owned()));
 ```
 
 Glb paths come from `embedded_asset_path("items/<id>/model.glb")` (re-exported from `embedded_assets::asset_path` in `src/app.rs`). For a **held tool**, store `*_body_mesh` / `*_head_mesh` (prims 0/1) and `*_body_material` / `*_head_material` (materials 0/1) in `ItemVisualAssets`, then add the two layers to `held_item_layers` in `src/app/systems/items/held.rs`. Held items render as overlaid layers sharing one swing transform, one layer per primitive; this same function feeds the third-person rig so peers see what is held. For a **parametric prop**, load only `prim_mesh(&glb, 0)` and attach the shared material (no `glb_material`).
@@ -144,7 +143,7 @@ When a new item shares an existing tool's shape (a stone tier of an iron tool, a
 Build (`cargo build` re-embeds the glb), launch the headless harness ([headless-agent-testing.md](../headless-agent-testing.md)), and screenshot. First-person reveals problems a Blender render hides.
 
 - **Held tool:** grant a debug kit with `/test-kit` (alias `/testkit`, admin only, `command_test_kit` in `src/server/commands/kit.rs`). The actionbar fills equipables first in `EQUIPABLES` order: stone hatchet (0), stone pickaxe (1), iron hatchet (2), iron pickaxe (3), then workbench, furnace, building plan, hammer, hewn door, sleeping bag.
-- **Deployable:** `scripts/ashwend-control.py <sock> place-deployable <item_id> [distance]` drops the carried structure in front of the player, facing them (position from view yaw, so it works without aiming at the ground). The control socket lives in `src/app/systems/control_socket.rs`.
+- **Deployable:** `scripts/ashwend-control.py <sock> place-deployable <item_id> [distance]` drops the carried structure in front of the player, facing them (position from view yaw, so it works without aiming at the ground). The control socket lives in `src/control_socket/`.
 
 ## Related docs
 

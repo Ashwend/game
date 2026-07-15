@@ -1,8 +1,11 @@
 mod audio;
 mod embedded_assets;
 mod scene;
-mod state;
-mod systems;
+// `state` and `systems` are crate-visible (not app-private) only so the
+// dev-only control socket (`crate::control_socket`) can poke client state
+// and reach the headless capture; nothing else outside `app` should dip in.
+pub(crate) mod state;
+pub(crate) mod systems;
 mod ui;
 mod voice;
 
@@ -119,7 +122,7 @@ use self::{
 use self::systems::{HeadlessCapture, insert_capture_target, redirect_camera_to_capture};
 
 #[cfg(all(unix, debug_assertions))]
-use self::systems::{ClientControlSocket, drain_control_socket};
+use crate::control_socket::{ClientControlSocket, drain_control_socket};
 
 #[cfg(all(debug_assertions, target_os = "macos"))]
 use self::systems::relinquish_macos_focus_system;

@@ -552,7 +552,7 @@ pub(crate) struct MeteorRumbleLoop {
 /// ~0.25 s instead of being cut mid-waveform, which used to produce a loud
 /// click at impact. Zero wire cost: the distance is computed client-side from
 /// the announce payload. Runs in `ClientSystemSet::Sky`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 pub(crate) fn meteor_shower_rumble_system(
     mut commands: Commands,
     runtime: Res<ClientRuntime>,
@@ -990,7 +990,7 @@ fn spawn_impact_rock_blast(
     // cuboid. Two earthy tints (grey stone, brown dirt-clod).
     let rock_meshes: Vec<Handle<Mesh>> = (0..5u32)
         .map(|i| {
-            meshes.add(super::sky::irregular_rock_mesh(
+            meshes.add(super::meteor_sky::irregular_rock_mesh(
                 0.45,
                 seed.wrapping_add(i.wrapping_mul(0x9E37_79B1)),
             ))

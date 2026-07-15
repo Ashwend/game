@@ -107,11 +107,14 @@ mod tests {
         let mut world = World::new();
         let entity = world.spawn_empty().id();
         let mut idx = LootBagIndex::default();
-        idx.insert(42, entity);
-        assert_eq!(idx.get(42), Some(entity));
+        idx.insert(crate::protocol::LootBagId(42), entity);
+        assert_eq!(idx.get(crate::protocol::LootBagId(42)), Some(entity));
         assert_eq!(idx.iter().count(), 1);
-        assert_eq!(idx.remove(42), Some(entity));
-        assert!(idx.get(42).is_none(), "removed ids should be gone");
+        assert_eq!(idx.remove(crate::protocol::LootBagId(42)), Some(entity));
+        assert!(
+            idx.get(crate::protocol::LootBagId(42)).is_none(),
+            "removed ids should be gone"
+        );
         assert_eq!(idx.iter().count(), 0);
     }
 
@@ -119,7 +122,7 @@ mod tests {
     fn spawn_loot_bag_entity_attaches_components_and_indexes_id() {
         let mut world = world_with_index();
         let view = LootBagView {
-            id: 9,
+            id: crate::protocol::LootBagId(9),
             position: Vec3Net::new(1.0, 2.0, 3.0),
             yaw: 0.25,
             slots: Some(vec![Some(ItemStack::new("wood", 4)), None]),
@@ -133,7 +136,7 @@ mod tests {
             .get::<LootBag>()
             .copied()
             .expect("spawn attaches LootBag identity");
-        assert_eq!(id.id, 9);
+        assert_eq!(id.id, crate::protocol::LootBagId(9));
         let transform = world
             .entity(entity)
             .get::<LootBagTransform>()
@@ -155,25 +158,38 @@ mod tests {
         assert_eq!(coord, chunk);
 
         // The index should know about the new bag for O(1) ECS lookup.
-        assert_eq!(world.resource::<LootBagIndex>().get(9), Some(entity));
+        assert_eq!(
+            world
+                .resource::<LootBagIndex>()
+                .get(crate::protocol::LootBagId(9)),
+            Some(entity)
+        );
     }
 
     #[test]
     fn despawn_removes_entity_and_index_entry() {
         let mut world = world_with_index();
         let view = LootBagView {
-            id: 3,
+            id: crate::protocol::LootBagId(3),
             position: Vec3Net::ZERO,
             yaw: 0.0,
             slots: None,
         };
         let _ = spawn_loot_bag_entity(&mut world, view, ChunkCoord::new(0, 0));
-        assert!(world.resource::<LootBagIndex>().get(3).is_some());
+        assert!(
+            world
+                .resource::<LootBagIndex>()
+                .get(crate::protocol::LootBagId(3))
+                .is_some()
+        );
 
-        let removed = despawn_loot_bag_entity(&mut world, 3);
+        let removed = despawn_loot_bag_entity(&mut world, crate::protocol::LootBagId(3));
         assert!(removed.is_some());
         assert!(
-            world.resource::<LootBagIndex>().get(3).is_none(),
+            world
+                .resource::<LootBagIndex>()
+                .get(crate::protocol::LootBagId(3))
+                .is_none(),
             "despawn must clear the index so a fresh spawn doesn't clash with a stale entity"
         );
     }
@@ -181,6 +197,6 @@ mod tests {
     #[test]
     fn despawn_unknown_id_is_noop() {
         let mut world = world_with_index();
-        assert!(despawn_loot_bag_entity(&mut world, 999).is_none());
+        assert!(despawn_loot_bag_entity(&mut world, crate::protocol::LootBagId(999)).is_none());
     }
 }

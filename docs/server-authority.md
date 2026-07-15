@@ -7,8 +7,8 @@ sources:
   - src/server/dispatch.rs - GameServer::receive, the ClientMessage match
   - src/server/tick.rs - GameServer::tick, surviving periodic broadcasts
   - src/server/connection.rs - connect, wake_sleeper, hard_disconnect
-  - src/server/voice.rs - apply_voice_frame, VOICE_AUDIBLE_RANGE
-  - src/server/commands/mod.rs - apply_command, slash-command table
+  - src/server/voice.rs - apply_voice_frame (range constant: src/game_balance.rs - VOICE_AUDIBLE_RANGE_M)
+  - src/server/commands.rs - apply_command, slash-command table
   - src/server/queries.rs - mandatory-entry helpers for DirtyTrackedMap fields
   - src/net/host.rs - run_host, tick_authoritative_server, mirror_systems wiring
   - src/net/host/routing.rs - receive_client_messages, route_envelopes
@@ -123,7 +123,7 @@ Every server concern owns a file (or directory) under `src/server/`. Open the ow
 | Tool Cupboard claims | `claim.rs` | Footprint cache, per-object auth. See [base-building-and-claims.md](base-building-and-claims.md). |
 | Crafting | `crafting.rs` | Queue tick. See [crafting-and-deployables.md](crafting-and-deployables.md). |
 | Furnaces | `furnace/` (`state.rs`, `tick.rs`, `commands.rs`, `commands/`) | Smelt state machine. See [crafting-and-deployables.md](crafting-and-deployables.md). |
-| Workbenches / tier upgrade | `workbench.rs`, `workbench/` | Open/close + the generic in-place tier upgrade via the `DEPLOYABLE_UPGRADES` table. See [crafting-and-deployables.md](crafting-and-deployables.md). |
+| Workbenches / tier upgrade | `workbench.rs` | Open/close + the generic in-place tier upgrade via the `DEPLOYABLE_UPGRADES` table. See [crafting-and-deployables.md](crafting-and-deployables.md). |
 | Deployables | `deployables.rs`, `deployable_ecs.rs`, `deployables/` | Placement/damage/ownership; mirror components. |
 | Explosive fuses | `fuse.rs` | Armed-charge countdown -> detonation (`tick_fuses`). See [crafting-and-deployables.md](crafting-and-deployables.md). |
 | Explosion resolution | `explosion.rs` | `resolve_explosion` AoE against players and structures. See [pvp-combat.md](pvp-combat.md). |
@@ -136,8 +136,8 @@ Every server concern owns a file (or directory) under `src/server/`. Open the ow
 | Meteor shower event | `meteor_shower.rs` | Scheduler, siting, impact, crater cleanup (`tick_world_events`). See [meteor-shower.md](meteor-shower.md). |
 | World map | `world_map.rs` | Marker store + `RequestWorldMap` -> `WorldMapMarkers`. (Terrain is client-side from seed; the raster code here is not on the wire.) |
 | Tool wear | `tool_wear.rs` | Durability decrement. |
-| Voice routing | `voice.rs` | `apply_voice_frame`, spatial fan-out, `VOICE_AUDIBLE_RANGE = 50.0`. See [voice.md](voice.md). |
-| Slash commands | `commands/` (`mod.rs`, `kit.rs`, `player.rs`, `time.rs`, `world.rs`) | `apply_command`. Table below. |
+| Voice routing | `voice.rs` | `apply_voice_frame`, spatial fan-out, range from `game_balance::VOICE_AUDIBLE_RANGE_M` (50 m). See [voice.md](voice.md). |
+| Slash commands | `commands.rs` + `commands/` (`kit.rs`, `player.rs`, `time.rs`, `world.rs`) | `apply_command`. Table below. |
 | Chunk grid / AoI / regrow | `chunk_manager/` | See [chunks-and-aoi.md](chunks-and-aoi.md). |
 | Persistence boundary | `persistence.rs`, `lifecycle.rs` | `world_save`, auto-save flag plumbing. See [worlds-and-saves.md](worlds-and-saves.md). |
 | Toasts | `toasts.rs` | Issuer-targeted toast helpers. |
@@ -155,7 +155,7 @@ The `match` in `GameServer::receive` (`src/server/dispatch.rs`). This is the ind
 | `Auth { .. }` | rejects (already authenticated) | `dispatch.rs` |
 | `Movement(m)` | `accept_client_movement` (only if `is_alive()`), re-anchors chunk | `dispatch.rs` / `movement.rs` |
 | `Chat { text }` | sanitize, set chat bubble, broadcast | `dispatch.rs` |
-| `Command { text }` | `apply_command` | `commands/mod.rs` |
+| `Command { text }` | `apply_command` | `commands.rs` |
 | `Inventory(c)` | `note_action_seq` then `apply_inventory_command` | `inventory.rs` |
 | `Crafting(c)` | `apply_crafting_command` | `crafting.rs` |
 | `Gather(c)` | `note_action_seq` then `apply_gather_command` | `resource_nodes.rs` |
@@ -213,7 +213,7 @@ Armor is live: `ServerClient.protection` (`src/server.rs` - `struct ServerClient
 
 ## Slash commands
 
-`GameServer::apply_command` (`src/server/commands/mod.rs`) parses the leading `/`, splits on whitespace, and dispatches. Submodules: `kit.rs`, `player.rs`, `time.rs`, `world.rs` (plus colocated `tests.rs`); the two `/meteor_shower` handlers live in `src/server/meteor_shower.rs`. Commands: `/spawn`, `/drain`, `/time`, `/speed`, `/knockback-scale` (alias `knockbackscale`), `/time-speed` (aliases `timespeed`, `timescale`), `/test-kit` (alias `testkit`), `/give`, `/tp` (alias `teleport`), `/ruins [tp]`, `/meteor_shower`, `/meteor_shower-here` (alias `meteor_showerhere`), `/help`. All except `/help` are admin-gated; `/help` lists every command and marks the gated ones for non-admins.
+`GameServer::apply_command` (`src/server/commands.rs`) parses the leading `/`, splits on whitespace, and dispatches. Submodules: `kit.rs`, `player.rs`, `time.rs`, `world.rs` (plus colocated `tests.rs`); the two `/meteor_shower` handlers live in `src/server/meteor_shower.rs`. Commands: `/spawn`, `/drain`, `/time`, `/speed`, `/knockback-scale` (alias `knockbackscale`), `/time-speed` (aliases `timespeed`, `timescale`), `/test-kit` (alias `testkit`), `/give`, `/tp` (alias `teleport`), `/ruins [tp]`, `/meteor_shower`, `/meteor_shower-here` (alias `meteor_showerhere`), `/help`. All except `/help` are admin-gated; `/help` lists every command and marks the gated ones for non-admins.
 
 ## Loopback vs dedicated: the only differences
 
@@ -227,7 +227,7 @@ Nothing else differs. Do not branch gameplay on the mode inside `src/server/`.
 
 ## Tests: submodule-per-subsystem
 
-Server behavior is covered by `src/server/tests/` (`src/server/tests/mod.rs` registers the submodules and re-exports the shared `connect_host` / `movement` / `server` / `equip_basic_tools` harness from `src/server/test_support.rs`). Current submodules: `building`, `claim`, `combat`, `commands`, `connection`, `door`, `dropped_items`, `explosives`, `furnace`, `inventory`, `loot_bag`, `movement`, `projectiles`, `resource_nodes`, `ruins`, `sleeping_bag`, `storage_box`, `tool_wear`. Some modules also keep colocated `#[cfg(test)]` unit tests (e.g. `voice.rs`, `dirty_tracked_map.rs`); the `net` module's integration tests live in `src/net/tests.rs` (declared in `src/net.rs`).
+Server behavior is covered by `src/server/tests/` (`src/server/tests.rs` registers the submodules and re-exports the shared `connect_host` / `movement` / `server` / `equip_basic_tools` harness from `src/server/test_support.rs`). Current submodules: `building`, `claim`, `combat`, `commands`, `connection`, `deployables`, `door`, `dropped_items`, `explosives`, `furnace`, `heal`, `inventory`, `loot_bag`, `movement`, `projectiles`, `resource_nodes`, `ruins`, `sleeping_bag`, `storage_box`, `tool_wear`, `workbench`. Some modules also keep colocated `#[cfg(test)]` unit tests (e.g. `voice.rs`, `dirty_tracked_map.rs`); the `net` module's integration tests live in `src/net/tests.rs` (declared in `src/net.rs`).
 
 Convention: add a test for new server behavior in the matching `tests/` submodule. Protocol changes, server authority, persistence, and the dispatch contract especially should be tested near the owning module.
 

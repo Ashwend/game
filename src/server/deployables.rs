@@ -145,7 +145,7 @@ impl DeployedEntity {
         placed_at_tick: u64,
     ) -> Self {
         Self {
-            id: 0,
+            id: crate::protocol::DeployedEntityId(0),
             item_id,
             kind,
             position,
@@ -327,7 +327,7 @@ impl GameServer {
         }
 
         let id = self.next_deployed_entity_id;
-        self.next_deployed_entity_id = self.next_deployed_entity_id.saturating_add(1);
+        self.next_deployed_entity_id.0 = self.next_deployed_entity_id.0.saturating_add(1);
         let mut entity = DeployedEntity { id, ..candidate };
         // Furnaces ship with an empty operational state so the client
         // can render the slot grid the moment the entity appears in
@@ -431,7 +431,7 @@ impl GameServer {
         }
 
         let id = self.next_deployed_entity_id;
-        self.next_deployed_entity_id = self.next_deployed_entity_id.saturating_add(1);
+        self.next_deployed_entity_id.0 = self.next_deployed_entity_id.0.saturating_add(1);
         let entity = DeployedEntity {
             id,
             torch: Some(super::torch::TorchState::new()),
@@ -525,7 +525,7 @@ impl GameServer {
         }
 
         let id = self.next_deployed_entity_id;
-        self.next_deployed_entity_id = self.next_deployed_entity_id.saturating_add(1);
+        self.next_deployed_entity_id.0 = self.next_deployed_entity_id.0.saturating_add(1);
         let entity = DeployedEntity {
             id,
             // Arm the fuse the instant the charge is set.
@@ -986,6 +986,3 @@ pub(super) fn within_horizontal_range_of_blocks(
         (dx * dx + dz * dz).sqrt() <= range
     })
 }
-
-#[cfg(test)]
-mod tests;

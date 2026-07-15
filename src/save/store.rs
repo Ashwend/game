@@ -177,12 +177,12 @@ mod tests {
     fn create_load_and_delete_world() {
         let store = temp_store();
         let save = store
-            .create_world("  Test World  ", Some(123))
+            .create_world("  Test World  ", Some(crate::protocol::AccountId(123)))
             .expect("world should be created");
 
         assert_eq!(save.name, "Test World");
         assert_eq!(save.map, MapType::default());
-        assert_eq!(save.admins, vec![123]);
+        assert_eq!(save.admins, vec![crate::protocol::AccountId(123)]);
         assert!(!save.map.world_data().blocks.is_empty());
 
         let loaded = store.load_world(save.id).expect("world should load");
@@ -204,7 +204,7 @@ mod tests {
     fn list_worlds_reports_corrupted_files_separately_from_valid_ones() {
         let store = temp_store();
         let good = store
-            .create_world("Good", Some(123))
+            .create_world("Good", Some(crate::protocol::AccountId(123)))
             .expect("good world should save");
         let bad_path = store.root().join(format!("broken.{SAVE_EXTENSION}"));
         std::fs::create_dir_all(store.root()).expect("store dir");
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn corrupted_entry_recovers_name_and_id_when_only_version_mismatches() {
         let store = temp_store();
-        let save = WorldSave::new("Recovered Name", Some(123));
+        let save = WorldSave::new("Recovered Name", Some(crate::protocol::AccountId(123)));
         let mut bytes = encode_world_save(&save).expect("save should encode");
         // Stomp the format version so the regular decode path rejects the
         // file, but the postcard payload itself is still well-formed.
@@ -263,7 +263,7 @@ mod tests {
         let save = store
             .create_world_with_map(
                 "Procedural",
-                Some(123),
+                Some(crate::protocol::AccountId(123)),
                 MapType::Procedural {
                     seed: 99,
                     size: ProceduralMapSize::Large,
@@ -289,7 +289,7 @@ mod tests {
         let save = store
             .create_world_with_map(
                 "Original",
-                Some(123),
+                Some(crate::protocol::AccountId(123)),
                 MapType::Procedural {
                     seed: 99,
                     size: ProceduralMapSize::Large,
@@ -313,7 +313,7 @@ mod tests {
     fn failed_temp_write_keeps_existing_world_file() {
         let store = temp_store();
         let mut save = store
-            .create_world("Original", Some(123))
+            .create_world("Original", Some(crate::protocol::AccountId(123)))
             .expect("world should be created");
         let path = store.world_path(save.id);
         let temp_path = atomic_temp_path(&path).expect("temp path should resolve");
@@ -333,7 +333,7 @@ mod tests {
     fn full_state_round_trips_through_binary_format() {
         let store = temp_store();
         let mut save = store
-            .create_world("Stateful", Some(42))
+            .create_world("Stateful", Some(crate::protocol::AccountId(42)))
             .expect("world should be created");
 
         let mut inventory = PlayerInventoryState::empty();
@@ -346,7 +346,7 @@ mod tests {
 
         save.state.last_authoritative_tick = 12345;
         save.state.players.push(PersistedPlayer {
-            account_id: 42,
+            account_id: crate::protocol::AccountId(42),
             name: "Tester".to_owned(),
             position: Vec3Net::new(1.0, 2.5, -3.0),
             velocity: Vec3Net::new(0.1, 0.0, 0.2),
@@ -359,8 +359,8 @@ mod tests {
             inventory,
         });
         save.state.resource_nodes = Some(Vec::new());
-        save.state.next_dropped_item_id = 99;
-        save.state.next_client_id = 5;
+        save.state.next_dropped_item_id = crate::protocol::DroppedItemId(99);
+        save.state.next_client_id = crate::protocol::ClientId(5);
 
         store.save_world(&save).expect("save should write");
 

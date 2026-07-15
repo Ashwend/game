@@ -43,7 +43,7 @@ const TERRAIN_TILE_SIZE_M: f32 = 7.0;
 
 /// Camera distance (m) where the tiled ground detail starts fading toward the
 /// flat per-biome map colour, and where it's fully faded. The shader does the
-/// fade ([`assets/shaders/terrain.wgsl`]); it both hides the far tile repeat and
+/// fade (`assets/shaders/terrain.wgsl`); it both hides the far tile repeat and
 /// resolves the residual minification shimmer into the flat map palette (which is
 /// the look we want at range). Tuned to land inside the daytime fog band so the
 /// hand-off isn't conspicuous. Carried in `params.z`/`params.w`.

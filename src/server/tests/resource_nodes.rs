@@ -2,7 +2,7 @@ use super::*;
 
 fn coal_node(id: u64, quantity: u16) -> ResourceNodeState {
     ResourceNodeState {
-        id,
+        id: crate::protocol::ResourceNodeId(id),
         definition_id: COAL_NODE_ID.to_owned(),
         position: Vec3Net::new(0.0, 0.0, -2.2),
         yaw: 0.0,
@@ -29,10 +29,10 @@ fn mirror_sync_deltas_track_insert_mutate_and_remove() {
         "drain should clear the delta sets"
     );
 
-    let id = 999_001;
+    let id = crate::protocol::ResourceNodeId(999_001);
 
     // Insert is recorded as dirty (→ sync spawns a mirror entity).
-    server.insert_resource_node(id, coal_node(id, 5));
+    server.insert_resource_node(id, coal_node(id.0, 5));
     let (dirty, removed) = server.drain_resource_node_sync();
     assert_eq!(dirty, vec![id]);
     assert!(removed.is_empty());
@@ -54,7 +54,7 @@ fn mirror_sync_deltas_track_insert_mutate_and_remove() {
 
     // Insert + remove within one sync window collapses to a single removal
     // (the entity was never spawned, so the sync's despawn no-ops).
-    server.insert_resource_node(id, coal_node(id, 5));
+    server.insert_resource_node(id, coal_node(id.0, 5));
     assert!(server.remove_resource_node(id).is_some());
     let (dirty, removed) = server.drain_resource_node_sync();
     assert!(dirty.is_empty(), "removed-after-insert must not stay dirty");
@@ -77,10 +77,16 @@ fn requeue_resource_node_sync_redirties_for_next_pass() {
     // Simulate the mirror sync deferring a batch of fresh spawns past its
     // per-tick budget: requeue puts them back on the dirty set so the next
     // pass drains them again.
-    server.requeue_resource_node_sync([10_001, 10_002, 10_003]);
+    server
+        .requeue_resource_node_sync([10_001, 10_002, 10_003].map(crate::protocol::ResourceNodeId));
     let (mut dirty, removed) = server.drain_resource_node_sync();
     dirty.sort_unstable();
-    assert_eq!(dirty, vec![10_001, 10_002, 10_003]);
+    assert_eq!(
+        dirty,
+        [10_001, 10_002, 10_003]
+            .map(crate::protocol::ResourceNodeId)
+            .to_vec()
+    );
     assert!(removed.is_empty());
 
     // Drained, so a follow-up pass with nothing requeued is empty.
@@ -89,10 +95,13 @@ fn requeue_resource_node_sync_redirties_for_next_pass() {
 
     // Requeue dedups against an existing dirty mark (it's a set): a node
     // freshly inserted and also requeued appears once.
-    server.insert_resource_node(20_001, coal_node(20_001, 5));
-    server.requeue_resource_node_sync([20_001]);
+    server.insert_resource_node(
+        crate::protocol::ResourceNodeId(20_001),
+        coal_node(20_001, 5),
+    );
+    server.requeue_resource_node_sync([crate::protocol::ResourceNodeId(20_001)]);
     let (dirty, _) = server.drain_resource_node_sync();
-    assert_eq!(dirty, vec![20_001]);
+    assert_eq!(dirty, vec![crate::protocol::ResourceNodeId(20_001)]);
 }
 
 #[test]
@@ -116,7 +125,9 @@ fn pickaxe_depletes_node_and_removes_it_from_the_world() {
     let client_id = connect_host(&mut server);
     equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
-    server.resource_nodes.insert(99, coal_node(99, 3));
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(99), coal_node(99, 3));
     look_at_test_node(&mut server, client_id);
     server.receive(
         client_id,
@@ -126,7 +137,7 @@ fn pickaxe_depletes_node_and_removes_it_from_the_world() {
     server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
-            resource_node_id: 99,
+            resource_node_id: crate::protocol::ResourceNodeId(99),
             seq: 0,
             hit_point: Vec3Net::ZERO,
         }),
@@ -138,7 +149,9 @@ fn pickaxe_depletes_node_and_removes_it_from_the_world() {
     // manager schedules a fresh-position respawn 5-15 minutes later. The
     // server should no longer hold this node id.
     assert!(
-        server.resource_nodes_iter().all(|(id, _)| *id != 99),
+        server
+            .resource_nodes_iter()
+            .all(|(id, _)| *id != crate::protocol::ResourceNodeId(99)),
         "depleted node should be removed from the live server state"
     );
     assert!(inventory.inventory_slots.iter().any(|slot| {
@@ -154,7 +167,9 @@ fn applied_action_seq_advances_on_accepted_and_rejected_gather() {
     equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
     // High storage so the node never depletes during the test.
-    server.resource_nodes.insert(99, coal_node(99, 100));
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(99), coal_node(99, 100));
     look_at_test_node(&mut server, client_id);
     server.receive(
         client_id,
@@ -165,7 +180,7 @@ fn applied_action_seq_advances_on_accepted_and_rejected_gather() {
     server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
-            resource_node_id: 99,
+            resource_node_id: crate::protocol::ResourceNodeId(99),
             seq: 5,
             hit_point: Vec3Net::ZERO,
         }),
@@ -186,7 +201,7 @@ fn applied_action_seq_advances_on_accepted_and_rejected_gather() {
     server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
-            resource_node_id: 99,
+            resource_node_id: crate::protocol::ResourceNodeId(99),
             seq: 9,
             hit_point: Vec3Net::ZERO,
         }),
@@ -205,7 +220,7 @@ fn applied_action_seq_advances_on_accepted_and_rejected_gather() {
     server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
-            resource_node_id: 99,
+            resource_node_id: crate::protocol::ResourceNodeId(99),
             seq: 4,
             hit_point: Vec3Net::ZERO,
         }),
@@ -223,7 +238,9 @@ fn second_gather_on_removed_node_is_silently_dropped() {
     let client_id = connect_host(&mut server);
     equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
-    server.resource_nodes.insert(99, coal_node(99, 1));
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(99), coal_node(99, 1));
     look_at_test_node(&mut server, client_id);
     server.receive(
         client_id,
@@ -234,12 +251,16 @@ fn second_gather_on_removed_node_is_silently_dropped() {
     server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
-            resource_node_id: 99,
+            resource_node_id: crate::protocol::ResourceNodeId(99),
             seq: 0,
             hit_point: Vec3Net::ZERO,
         }),
     );
-    assert!(!server.resource_nodes.contains_key(&99));
+    assert!(
+        !server
+            .resource_nodes
+            .contains_key(&crate::protocol::ResourceNodeId(99))
+    );
 
     // Any further gather attempts against the removed id produce nothing
     //, no toasts, no impacts, no inventory change.
@@ -250,7 +271,7 @@ fn second_gather_on_removed_node_is_silently_dropped() {
     let envelopes = server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
-            resource_node_id: 99,
+            resource_node_id: crate::protocol::ResourceNodeId(99),
             seq: 0,
             hit_point: Vec3Net::ZERO,
         }),
@@ -273,7 +294,9 @@ fn successful_gather_emits_success_toast_to_requesting_client() {
     let client_id = connect_host(&mut server);
     equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
-    server.resource_nodes.insert(99, coal_node(99, 5));
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(99), coal_node(99, 5));
     look_at_test_node(&mut server, client_id);
     server.receive(
         client_id,
@@ -283,7 +306,7 @@ fn successful_gather_emits_success_toast_to_requesting_client() {
     let envelopes = server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
-            resource_node_id: 99,
+            resource_node_id: crate::protocol::ResourceNodeId(99),
             seq: 0,
             hit_point: Vec3Net::ZERO,
         }),
@@ -314,7 +337,9 @@ fn gather_into_full_inventory_emits_warning_toast_and_locks_cooldown() {
     let client_id = connect_host(&mut server);
     equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
-    server.resource_nodes.insert(99, coal_node(99, 5));
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(99), coal_node(99, 5));
     look_at_test_node(&mut server, client_id);
     server.receive(
         client_id,
@@ -341,7 +366,7 @@ fn gather_into_full_inventory_emits_warning_toast_and_locks_cooldown() {
     let envelopes = server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
-            resource_node_id: 99,
+            resource_node_id: crate::protocol::ResourceNodeId(99),
             seq: 0,
             hit_point: Vec3Net::ZERO,
         }),
@@ -375,7 +400,9 @@ fn failed_gather_emits_no_toast() {
     let client_id = connect_host(&mut server);
     equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
-    server.resource_nodes.insert(99, coal_node(99, 5));
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(99), coal_node(99, 5));
     look_at_test_node(&mut server, client_id);
     // Holding the hatchet (slot 0) instead of the pickaxe means the tool does
     // not allow harvesting the coal node; no toast should fire.
@@ -383,7 +410,7 @@ fn failed_gather_emits_no_toast() {
     let envelopes = server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
-            resource_node_id: 99,
+            resource_node_id: crate::protocol::ResourceNodeId(99),
             seq: 0,
             hit_point: Vec3Net::ZERO,
         }),
@@ -411,7 +438,7 @@ fn successful_gather_broadcasts_impact_to_peers_only() {
             .connect(
                 crate::protocol::PROTOCOL_VERSION,
                 Some(crate::protocol::GAME_VERSION.to_owned()),
-                2,
+                crate::protocol::AccountId(2),
                 "Peer".to_owned(),
                 String::new(),
             )
@@ -427,7 +454,9 @@ fn successful_gather_broadcasts_impact_to_peers_only() {
     };
     equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
-    server.resource_nodes.insert(99, coal_node(99, 5));
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(99), coal_node(99, 5));
     look_at_test_node(&mut server, client_id);
     server.receive(
         client_id,
@@ -440,7 +469,7 @@ fn successful_gather_broadcasts_impact_to_peers_only() {
     let envelopes = server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
-            resource_node_id: 99,
+            resource_node_id: crate::protocol::ResourceNodeId(99),
             seq: 0,
             hit_point,
         }),
@@ -480,7 +509,7 @@ fn gather_impact_clamps_a_bogus_hit_point_to_the_node() {
             .connect(
                 crate::protocol::PROTOCOL_VERSION,
                 Some(crate::protocol::GAME_VERSION.to_owned()),
-                2,
+                crate::protocol::AccountId(2),
                 "Peer".to_owned(),
                 String::new(),
             )
@@ -496,7 +525,9 @@ fn gather_impact_clamps_a_bogus_hit_point_to_the_node() {
     };
     equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
-    server.resource_nodes.insert(99, coal_node(99, 5));
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(99), coal_node(99, 5));
     look_at_test_node(&mut server, client_id);
     server.receive(
         client_id,
@@ -508,7 +539,7 @@ fn gather_impact_clamps_a_bogus_hit_point_to_the_node() {
     let envelopes = server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
-            resource_node_id: 99,
+            resource_node_id: crate::protocol::ResourceNodeId(99),
             seq: 0,
             hit_point: Vec3Net::new(500.0, 9000.0, -500.0),
         }),
@@ -540,14 +571,16 @@ fn failed_gather_emits_no_impact_broadcast() {
     let client_id = connect_host(&mut server);
     equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
-    server.resource_nodes.insert(99, coal_node(99, 5));
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(99), coal_node(99, 5));
     look_at_test_node(&mut server, client_id);
     // Still holding the hatchet at slot 0, wrong tool for coal.
 
     let envelopes = server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
-            resource_node_id: 99,
+            resource_node_id: crate::protocol::ResourceNodeId(99),
             seq: 0,
             hit_point: Vec3Net::ZERO,
         }),
@@ -567,13 +600,15 @@ fn resource_gathering_requires_matching_tool_and_server_cooldown() {
     let client_id = connect_host(&mut server);
     equip_basic_tools(&mut server, client_id);
     server.resource_nodes.clear();
-    server.resource_nodes.insert(99, coal_node(99, 9));
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(99), coal_node(99, 9));
     look_at_test_node(&mut server, client_id);
 
     server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
-            resource_node_id: 99,
+            resource_node_id: crate::protocol::ResourceNodeId(99),
             seq: 0,
             hit_point: Vec3Net::ZERO,
         }),
@@ -581,7 +616,7 @@ fn resource_gathering_requires_matching_tool_and_server_cooldown() {
     assert_eq!(
         server
             .resource_nodes
-            .get(&99)
+            .get(&crate::protocol::ResourceNodeId(99))
             .and_then(|node| node.storage.first())
             .map(|stack| stack.quantity),
         Some(9)
@@ -594,7 +629,7 @@ fn resource_gathering_requires_matching_tool_and_server_cooldown() {
     server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
-            resource_node_id: 99,
+            resource_node_id: crate::protocol::ResourceNodeId(99),
             seq: 0,
             hit_point: Vec3Net::ZERO,
         }),
@@ -602,7 +637,7 @@ fn resource_gathering_requires_matching_tool_and_server_cooldown() {
     assert_eq!(
         server
             .resource_nodes
-            .get(&99)
+            .get(&crate::protocol::ResourceNodeId(99))
             .and_then(|node| node.storage.first())
             .map(|stack| stack.quantity),
         Some(3)
@@ -611,7 +646,7 @@ fn resource_gathering_requires_matching_tool_and_server_cooldown() {
     server.receive(
         client_id,
         ClientMessage::Gather(ResourceGatherCommand {
-            resource_node_id: 99,
+            resource_node_id: crate::protocol::ResourceNodeId(99),
             seq: 0,
             hit_point: Vec3Net::ZERO,
         }),
@@ -619,7 +654,7 @@ fn resource_gathering_requires_matching_tool_and_server_cooldown() {
     assert_eq!(
         server
             .resource_nodes
-            .get(&99)
+            .get(&crate::protocol::ResourceNodeId(99))
             .and_then(|node| node.storage.first())
             .map(|stack| stack.quantity),
         Some(3)

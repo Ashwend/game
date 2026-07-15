@@ -11,7 +11,7 @@
 //!    [`RenderPropsFilled`] sentinel so subsequent frames early-return.
 //!
 //! The same keys are also surfaced as PostHog Person properties via a
-//! `$set` envelope in [`SuperProps::person_set`], the worker attaches that
+//! `$set` envelope in [`person_set`], the worker attaches that
 //! to every event so hardware/OS info lives on the user's profile in
 //! PostHog, not just on each event row.
 

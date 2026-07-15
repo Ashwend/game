@@ -154,7 +154,7 @@ pub(crate) struct InventoryUiState {
     /// The slot widget sets this when the player Shift+LMBs a slot
     /// while a container surface (furnace today) is up; the container's
     /// UI consumes it, sends the network command, and clears the
-    /// field. Cleared at frame start by [`begin_frame`] so a stale
+    /// field. Cleared at frame start by [`Self::begin_frame`] so a stale
     /// click from a previous frame can never fire twice.
     pub(crate) pending_quick_transfer: Option<UnifiedSlotRef>,
     /// Whether the unified inventory + crafting panel was open last frame

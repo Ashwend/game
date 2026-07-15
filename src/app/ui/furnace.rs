@@ -259,7 +259,7 @@ mod tests {
 
     fn furnace_view(active: bool) -> OpenFurnaceView {
         OpenFurnaceView {
-            id: 1,
+            id: crate::protocol::DeployedEntityId(1),
             fuel: Some(ItemStack::new(COAL_ID, 5)),
             items: vec![Some(ItemStack::new(IRON_ORE_ID, 3)), None, None],
             active,

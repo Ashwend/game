@@ -1,7 +1,7 @@
 //! Persistent anonymous identifier sent to PostHog as `distinct_id`.
 //!
 //! Stored as a plain UUID v4 string at `<data_dir>/analytics_id`, sibling to
-//! [`crate::app::state::ClientSettingsStore`]'s settings file. Kept out of
+//! `crate::app::state::ClientSettingsStore`'s settings file. Kept out of
 //! the settings file so resetting display/audio settings does not also reset
 //! the user's analytics identity, and so a player who deletes
 //! `settings.dat` to "start fresh" does not have their analytics history

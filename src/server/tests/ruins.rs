@@ -58,7 +58,10 @@ fn spawned_caches_are_owner_less_and_stocked() {
             entity.id, *map_id,
             "cache entity id must match its map key or replication collapses"
         );
-        assert!(entity.id != 0, "a spawned cache must carry a real id");
+        assert!(
+            entity.id != crate::protocol::DeployedEntityId(0),
+            "a spawned cache must carry a real id"
+        );
         // And the cache must sit at the foundation top, proud on the platform.
         assert!(
             (entity.position.y - crate::building::FOUNDATION_HEIGHT_M).abs() < 1e-3,
@@ -343,7 +346,7 @@ fn stale_chests_from_an_old_layout_reseat_on_load() {
         save,
         crate::server::ServerSettings {
             auth_mode: crate::auth::AuthMode::NoAuth,
-            singleplayer_host: Some(1),
+            singleplayer_host: Some(crate::protocol::AccountId(1)),
         },
     );
     assert_eq!(

@@ -1,6 +1,7 @@
 //! Weapon taxonomy: the per-item [`WeaponProfile`] that a dedicated combat
-//! weapon carries on its [`ItemDefinition`], separate from the gather-oriented
-//! [`ToolProfile`].
+//! weapon carries on its [`ItemDefinition`](crate::items::ItemDefinition),
+//! separate from the gather-oriented
+//! [`ToolProfile`](crate::items::ToolProfile).
 //!
 //! A weapon is a pure PvP object: it declares its own damage, reach, cooldown,
 //! knockback, and armor penetration, and it does not gather resources (it has no
@@ -11,7 +12,7 @@
 
 /// Combat stats for a dedicated weapon. Resolved into a
 /// [`crate::combat::AttackProfile`] at the top of the server hit path (and by
-/// the client's prediction), taking precedence over any [`ToolProfile`] on the
+/// the client's prediction), taking precedence over any [`ToolProfile`](crate::items::ToolProfile) on the
 /// same item.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WeaponProfile {
@@ -28,6 +29,6 @@ pub struct WeaponProfile {
     /// before mitigation, so a 50% pierce halves the effective armor.
     pub armor_pierce_pct: u8,
     /// Impacts the weapon survives before breaking, or `None` for a weapon that
-    /// never wears. Mirrors [`ToolProfile::max_durability`].
+    /// never wears. Mirrors [`ToolProfile::max_durability`](crate::items::ToolProfile::max_durability).
     pub max_durability: Option<u32>,
 }

@@ -7,7 +7,7 @@ sources:
   - src/cli.rs - clap Command enum (Client/Server/Admin/MultiplayerTest)
   - src/cli/multiplayer_test.rs - run_multiplayer_test
   - Cargo.toml - [features], [lints], [profile.*], rust-version
-  - rust-toolchain.toml - pinned channel 1.94.0
+  - rust-toolchain.toml - pinned channel 1.95.0
   - .cargo/config.toml - CMAKE_POLICY_VERSION_MINIMUM workaround
   - .github/workflows/quality-gate.yml - the CI matrix ./cli ci mirrors
   - src/app/embedded_assets.rs - EmbeddedAssetsPlugin (why published builds need no sibling assets/)
@@ -97,7 +97,7 @@ A fresh machine needs a rustup toolchain (the pinned channel is picked up automa
 
 ## Toolchain and reproducibility
 
-- **Pinned channel:** `1.94.0` with `clippy` + `rustfmt` components (`rust-toolchain.toml`). `Cargo.toml` also declares `rust-version = "1.94"` (MSRV) and `edition = "2024"`.
+- **Pinned channel:** `1.95.0` with `clippy` + `rustfmt` components (`rust-toolchain.toml`). `Cargo.toml` also declares `rust-version = "1.95"` (MSRV) and `edition = "2024"`.
 - **`--locked` everywhere:** `check`, `test`, `lint`, `ci`, `build` all pass `--locked` so builds resolve against the committed `Cargo.lock` and fail rather than silently bumping a dependency.
 - **`[profile.dev.package."*"] opt-level = 3`** (`Cargo.toml`): dependencies (Bevy, rapier3d, lightyear) compile optimized even in dev so `./cli dev` is playable. The crate's own code stays at the default dev opt-level for fast incremental rebuilds. This is why `./cli profile` can capture a representative trace from a dev build.
 - **`[profile.release]`:** `lto = "thin"`, `codegen-units = 1`, `strip = "symbols"`. Smaller binaries and no symbols leaked into release tarballs at the cost of a longer link step.

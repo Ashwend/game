@@ -5,10 +5,10 @@
 //! Add a variant here when introducing a surface that needs its own
 //! per-step pool or its own tool-impact pool. The mapping helpers below
 //! convert from world-side concepts ([`crate::world::BlockKind`],
-//! [`crate::resources::ResourceNodeModel`]) so that game code never
+//! [`crate::resource_nodes::ResourceNodeModel`]) so that game code never
 //! has to spell out "iron ore plays stone-impact" by hand.
 
-use crate::{resources::ResourceNodeModel, world::BlockKind};
+use crate::{resource_nodes::ResourceNodeModel, world::BlockKind};
 
 // Some variants are unconstructed today, they exist so the audio
 // manifest's footstep + impact tables can declare pools for surfaces

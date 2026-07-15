@@ -45,23 +45,31 @@ use crate::server::{
 /// `before -> after` diff rather than just "changed".
 #[derive(Resource, Default)]
 pub(crate) struct ReplicationTraceState {
-    node_qty: std::collections::HashMap<u64, u16>,
-    deployable_health: std::collections::HashMap<u64, u32>,
-    deployable_active: std::collections::HashMap<u64, bool>,
-    deployable_label: std::collections::HashMap<u64, Option<String>>,
-    deployable_stability: std::collections::HashMap<u64, u8>,
-    deployable_auth: std::collections::HashMap<u64, Vec<crate::protocol::AccountId>>,
-    player_armor: std::collections::HashMap<u64, u8>,
-    player_lifecycle: std::collections::HashMap<u64, PlayerLifecycle>,
-    player_sleeping: std::collections::HashMap<u64, bool>,
-    player_held: std::collections::HashMap<u64, Option<crate::items::HeldMesh>>,
-    player_equipment: std::collections::HashMap<u64, PlayerEquipmentVisual>,
-    player_action_seq: std::collections::HashMap<u64, u32>,
-    loot_bag_occupied: std::collections::HashMap<u64, usize>,
-    dropped_item_qty: std::collections::HashMap<u64, u16>,
+    node_qty: std::collections::HashMap<crate::protocol::ResourceNodeId, u16>,
+    deployable_health: std::collections::HashMap<crate::protocol::DeployedEntityId, u32>,
+    deployable_active: std::collections::HashMap<crate::protocol::DeployedEntityId, bool>,
+    deployable_label: std::collections::HashMap<crate::protocol::DeployedEntityId, Option<String>>,
+    deployable_stability: std::collections::HashMap<crate::protocol::DeployedEntityId, u8>,
+    deployable_auth: std::collections::HashMap<
+        crate::protocol::DeployedEntityId,
+        Vec<crate::protocol::AccountId>,
+    >,
+    player_armor: std::collections::HashMap<crate::protocol::ClientId, u8>,
+    player_lifecycle: std::collections::HashMap<crate::protocol::ClientId, PlayerLifecycle>,
+    player_sleeping: std::collections::HashMap<crate::protocol::ClientId, bool>,
+    player_held:
+        std::collections::HashMap<crate::protocol::ClientId, Option<crate::items::HeldMesh>>,
+    player_equipment: std::collections::HashMap<crate::protocol::ClientId, PlayerEquipmentVisual>,
+    player_action_seq: std::collections::HashMap<crate::protocol::ClientId, u32>,
+    loot_bag_occupied: std::collections::HashMap<crate::protocol::LootBagId, usize>,
+    dropped_item_qty: std::collections::HashMap<crate::protocol::DroppedItemId, u16>,
 }
 
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[expect(
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    reason = "Bevy system params and query types"
+)]
 pub(crate) fn log_replicated_storage_changes_system(
     nodes: Query<(Entity, &ResourceNode, Ref<ResourceNodeStorage>)>,
     deployables: Query<(

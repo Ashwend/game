@@ -289,8 +289,6 @@ impl PlayerInventoryState {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use crate::items::{COAL_ID, IRON_ORE_ID, intern_item_id};
 
     use super::*;
@@ -357,7 +355,7 @@ mod tests {
         // through the global intern table, so the decoded `Arc<str>` is the
         // same allocation the registry already holds (refcount bump, not a
         // fresh heap copy).
-        assert!(Arc::ptr_eq(&decoded.item_id, &intern_item_id(IRON_ORE_ID)));
+        assert!(decoded.item_id.ptr_eq(&intern_item_id(IRON_ORE_ID)));
     }
 
     #[test]
@@ -381,16 +379,22 @@ mod tests {
     fn crafting_job_recipe_id_round_trips_and_reuses_the_interned_arc() {
         use crate::crafting::{STONE_HATCHET_RECIPE_ID, intern_recipe_id};
 
-        let job = CraftingJob::new(7, STONE_HATCHET_RECIPE_ID, 120, 2);
+        let job = CraftingJob::new(
+            crate::protocol::CraftingJobId(7),
+            STONE_HATCHET_RECIPE_ID,
+            120,
+            2,
+        );
         let encoded = postcard::to_allocvec(&job).expect("encode crafting job");
         let decoded: CraftingJob = postcard::from_bytes(&encoded).expect("decode crafting job");
 
         assert_eq!(decoded, job);
         // Same interning guarantee as the item id, via
         // `deserialize_interned_recipe_id`.
-        assert!(Arc::ptr_eq(
-            &decoded.recipe_id,
-            &intern_recipe_id(STONE_HATCHET_RECIPE_ID)
-        ));
+        assert!(
+            decoded
+                .recipe_id
+                .ptr_eq(&intern_recipe_id(STONE_HATCHET_RECIPE_ID))
+        );
     }
 }

@@ -12,14 +12,15 @@ use crate::{
     protocol::{
         AttackPlayerCommand, ClientMessage, DamageDeployableCommand, ResourceGatherCommand,
     },
-    resources::resource_node_definition,
+    resource_nodes::resource_node_definition,
 };
 
 use super::GameplayInventoryShortcutsParams;
 use super::predict::predict_gather;
 use super::send::send_gameplay_message;
 
-/// The swing archetype ([`ItemModel`]) backing a left-click swing: its
+/// The swing archetype ([`ItemModel`](crate::items::ItemModel)) backing a
+/// left-click swing: its
 /// duration/contact fraction, pose, camera kick, audio pool, and the impact
 /// identity carried on the wire (`SwingStart`/`PlayerImpact`). Both a real gather
 /// tool and a dedicated weapon produce a swing:
@@ -84,7 +85,7 @@ pub(super) fn dispatch_swing_impact(
 fn dispatch_resource_swing(
     params: &mut GameplayInventoryShortcutsParams,
     impact: SwingImpact,
-    node_id: u64,
+    node_id: crate::protocol::ResourceNodeId,
 ) {
     // Target was harvestable when the swing tick read it, but the resource
     // node's anchor / kind metadata could still be missing if the entity
@@ -154,7 +155,7 @@ fn dispatch_resource_swing(
 fn dispatch_deployable_swing(
     params: &mut GameplayInventoryShortcutsParams,
     impact: SwingImpact,
-    deployable_id: u64,
+    deployable_id: crate::protocol::DeployedEntityId,
 ) {
     let Some(anchor) = params
         .pickup_target
@@ -337,7 +338,7 @@ pub(super) fn equipped_tool_can_harvest_target(
 /// tree-chip burst).
 pub(super) fn resource_target_model(
     target: &PickupTargetState,
-) -> Option<crate::resources::ResourceNodeModel> {
+) -> Option<crate::resource_nodes::ResourceNodeModel> {
     let definition_id = target.resource_definition_id.as_deref()?;
     resource_node_definition(definition_id).map(|definition| definition.model)
 }
@@ -355,7 +356,10 @@ pub(super) fn resource_target_is_crude(target: &PickupTargetState) -> bool {
     definition.required_tool.kind == ToolKind::Hands
 }
 
-pub(super) fn resource_target_anchor(target: &PickupTargetState, node_id: u64) -> Option<Vec3> {
+pub(super) fn resource_target_anchor(
+    target: &PickupTargetState,
+    node_id: crate::protocol::ResourceNodeId,
+) -> Option<Vec3> {
     let position = target.world_position?;
     if target.resource_node_id != Some(node_id) {
         return None;

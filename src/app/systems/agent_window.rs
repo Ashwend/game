@@ -33,6 +33,8 @@ pub(crate) fn relinquish_macos_focus_system(_main_thread: NonSendMarker) {
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     // `deactivate` is the documented way to give up active (frontmost) status;
     // paired with the accessory policy, focus returns to the previous app.
+    // SAFETY: called on the main thread (guaranteed by the NonSendMarker and
+    // the MainThreadMarker check above), which is AppKit's only requirement.
     #[allow(deprecated)]
     unsafe {
         app.deactivate();

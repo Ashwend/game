@@ -22,7 +22,7 @@ pub(crate) const SLOT_SIZE: f32 = 56.0;
 /// non-empty slot records a [`InventoryUiState::pending_quick_transfer`]
 /// instead of starting a drag; the parent surface is then responsible
 /// for routing that intent to the appropriate network command.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "egui UI plumbing")]
 pub(crate) fn draw_slot(
     ui: &mut egui::Ui,
     slot: UnifiedSlotRef,
@@ -119,7 +119,7 @@ pub(crate) fn draw_slot(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "egui UI plumbing")]
 pub(crate) fn paint_slot(
     ui: &egui::Ui,
     rect: Rect,

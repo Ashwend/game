@@ -95,7 +95,7 @@ mod tests {
 
     fn session() -> Session {
         Session {
-            account_id: 77,
+            account_id: crate::protocol::AccountId(77),
             display_name: "Ada".to_owned(),
             email: "ada@example.com".to_owned(),
             access_token: "access".to_owned(),
@@ -127,7 +127,7 @@ mod tests {
             .world()
             .get_resource::<CurrentUser>()
             .expect("a successful login installs the signed-in user");
-        assert_eq!(user.0.account_id, 77);
+        assert_eq!(user.0.account_id, crate::protocol::AccountId(77));
         assert_eq!(user.0.display_name, "Ada");
         assert_eq!(user.0.token, "access");
 

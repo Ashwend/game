@@ -27,6 +27,11 @@ A fresh machine needs a Rust toolchain installed via [rustup](https://rustup.rs)
 system packages below before `./cli dev` builds. The only third-party C library
 is libopus, used by voice chat; the rest are the usual Bevy desktop deps.
 
+Expect the first `./cli dev` to take a while (often 10+ minutes): dependencies
+(Bevy, rapier3d, lightyear) compile at `opt-level = 3` even in dev builds so
+the game is playable, and that cost is paid once. Incremental rebuilds after
+that are fast; `./cli dev-fast` makes them faster still.
+
 - **Linux** (Debian/Ubuntu):
   `sudo apt-get install -y g++ pkg-config libx11-dev libasound2-dev libudev-dev libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev libopus-dev`
 - **macOS**: `brew install opus`. If the build falls back to compiling a bundled

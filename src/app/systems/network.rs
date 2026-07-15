@@ -57,7 +57,7 @@ pub(crate) struct NetworkTickWriters<'w> {
     pub(crate) explosions: MessageWriter<'w, crate::app::systems::ExplosionEvent>,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 pub(crate) fn network_tick_system(
     time: Res<Time>,
     mut commands: Commands,

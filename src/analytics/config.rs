@@ -9,7 +9,7 @@
 //! 2. **`analytics.local.toml`** at `repo_root`. Gitignored. Used by local
 //!    dev builds to point at the dev PostHog project, or by a packaged
 //!    binary that ships a sibling TOML.
-//! 3. **Runtime environment variables** listed in [`env`]. Override
+//! 3. **Runtime environment variables** listed in [`mod@env`]. Override
 //!    anything above, useful for one-off runs, CI smoke tests, or
 //!    flipping analytics off (`POSTHOG_ENABLED=false`) without touching
 //!    the binary.
@@ -288,6 +288,8 @@ mod tests {
     }
 
     fn set(key: &str, value: &str) {
+        // SAFETY: tests are serialized by ENV_LOCK so concurrent env
+        // mutation is excluded.
         unsafe { std::env::set_var(key, value) };
     }
 

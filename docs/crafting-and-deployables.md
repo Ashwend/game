@@ -64,7 +64,7 @@ Strictly serial, one queue per player. State lives on the per-client `crafting: 
 
 **Wire shape:** `ClientMessage::Crafting(CraftingCommand)` with `Enqueue { recipe_id, quantity }` / `Cancel { job_id }` (`src/protocol/commands.rs` - `CraftingCommand`). The queue replicates back to its owner via the `PlayerCrafting` component (owner-only), so the HUD reads its own queue straight off the replicated component, no snapshot variant.
 
-**Caps:** queue length `MAX_CRAFTING_QUEUE_LEN = 16` (`src/crafting.rs`), batch size `MAX_CRAFT_BATCH_SIZE = 100` (`src/protocol/mod.rs`). `enqueue_craft` clamps the requested batch to `1..=100` before any input math.
+**Caps:** queue length `MAX_CRAFTING_QUEUE_LEN = 16` (`src/crafting.rs`), batch size `MAX_CRAFT_BATCH_SIZE = 100` (`src/protocol.rs`). `enqueue_craft` clamps the requested batch to `1..=100` before any input math.
 
 **Flow** (`src/server/crafting.rs` - `enqueue_craft`, `tick_crafting`, `cancel_craft`):
 
@@ -97,7 +97,7 @@ The crafting browser also learned to show station requirements: a recipe gated b
 
 ### Crafting UI
 
-- `src/app/ui/crafting/` (a directory: `mod.rs`, `recipes.rs`, `filter.rs`, `list.rs`, `details.rs`, `icon.rs`, `tests.rs`), the master/detail recipe browser: a searchable, category-filtered recipe list on the left (item icons + craftable-status dots) and a detail card on the right (description, per-ingredient have/need, batch quantity, Craft). Selection lives in `CraftingUiState::selected_recipe`. (Legacy docs cited a single `src/app/ui/crafting.rs` and later a per-row `rows.rs`; neither exists anymore.)
+- Root `src/app/ui/crafting.rs` + `src/app/ui/crafting/` (`recipes.rs`, `filter.rs`, `list.rs`, `details.rs`, `icon.rs`, `tests.rs`), the master/detail recipe browser: a searchable, category-filtered recipe list on the left (item icons + craftable-status dots) and a detail card on the right (description, per-ingredient have/need, batch quantity, Craft). Selection lives in `CraftingUiState::selected_recipe`. (Legacy docs cited a single `src/app/ui/crafting.rs` and later a per-row `rows.rs`; neither exists anymore.)
 - `src/app/ui/crafting_queue.rs`, the always-on HUD stack that survives closing the browser and extrapolates the head job's progress bar between replication frames.
 
 ## Furnace smelt state machine
@@ -108,7 +108,7 @@ Furnaces are deployables with a `FurnaceState` sub-state (`src/server/furnace/st
 - `tick.rs`: `tick_one_furnace` + `GameServer::tick_furnaces`.
 - `commands.rs`: `apply_furnace_command` and the `Open`/`Close`/`SetActive`/`Move`/`QuickTransfer` handlers.
 
-**Slots:** one fuel slot + `FURNACE_ITEM_SLOT_COUNT = 6` smelt slots (`src/protocol/mod.rs`). The `FurnaceContainer` flat index is `0` = fuel, `1 + i` = item slot `i`. The fuel slot only accepts fuel items and never swaps on the move path; draining it resets the burn timer so the UI bar reads 0%.
+**Slots:** one fuel slot + `FURNACE_ITEM_SLOT_COUNT = 6` smelt slots (`src/protocol.rs`). The `FurnaceContainer` flat index is `0` = fuel, `1 + i` = item slot `i`. The fuel slot only accepts fuel items and never swaps on the move path; draining it resets the burn timer so the UI bar reads 0%.
 
 **Fuel and recipes** (the two extension points for new smelt content):
 
@@ -198,8 +198,8 @@ A loot bag (`src/server/loot_bag.rs` - `LootBag`) is the container spawned at a 
 
 ## Module map and gotchas
 
-- **Authority is single files, not directories.** Edit `src/server/deployables.rs` and `src/server/loot_bag.rs` directly. The same-named subdirectories hold only `tests.rs` (and `loot_bag/slots.rs`); there is no `mod.rs` with the implementation.
-- **`src/protocol/` is a directory** (`commands.rs`, `messages.rs`, `mod.rs`, `items.rs`, ...). `MAX_CRAFT_BATCH_SIZE` and `FURNACE_ITEM_SLOT_COUNT` live in `src/protocol/mod.rs`; `OpenFurnaceView`, `CraftingCommand`, `FurnaceCommand`, `LootBagCommand`, and `PlaceDeployableCommand` in `src/protocol/commands.rs`.
+- **Authority is single files, not directories.** Edit `src/server/deployables.rs` and `src/server/loot_bag.rs` directly. The same-named subdirectories hold only `tests.rs` (and `loot_bag/slots.rs`); the implementation lives in the root files.
+- **`src/protocol/` is a directory** fronted by the root `src/protocol.rs` (`commands.rs`, `messages.rs`, `items.rs`, ...). `MAX_CRAFT_BATCH_SIZE` and `FURNACE_ITEM_SLOT_COUNT` live in `src/protocol.rs`; `OpenFurnaceView`, `CraftingCommand`, `FurnaceCommand`, `LootBagCommand`, and `PlaceDeployableCommand` in `src/protocol/commands.rs`.
 - **`src/app/ui/crafting/` is a directory.** `src/app/ui/crafting_queue.rs`, `src/app/ui/furnace.rs`, `src/app/ui/workbench.rs` (the tier-upgrade overlay), `src/app/ui/loot_bag.rs`, and `src/app/ui/deployable_overlay.rs` (the look-at tooltip showing stability % and HP) are single files.
 - **Save format is at `SAVE_FORMAT_VERSION = 20`** (`src/save/format.rs`). This slice persists the deployable sub-states on `PersistedDeployedEntity`: furnace, door, storage box, torch, cupboard, plus the fuse state (a live placed charge round-trips a reload, v20) and the ruin-cache refill state (v19); player equipment landed at v18. `DeployableKind` and its inner enums are positional in postcard, so **any new variant appends at the end and any new field on a variant bumps the version**; reordering silently reinterprets old saves. Stability and claim footprints are **not** persisted, they are recomputed on load. Meteor shower event state is deliberately not persisted (the scheduler rolls a fresh event on load).
 - **Mutate replicated deployable fields through `deployed_entity_mut` / `mark_deployable_dirty`.** A bare `deployed_entities.get_mut` bypasses the dirty flag and the diff is silently dropped.

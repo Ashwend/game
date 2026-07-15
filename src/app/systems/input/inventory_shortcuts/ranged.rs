@@ -16,7 +16,7 @@
 //! audible payoff. The server owns the shot outcome; this layer only signals
 //! intent and paces feel.
 //!
-//! Own-arrow prediction lives in [`super::super::super::items::projectiles`]; this
+//! Own-arrow prediction lives in `crate::app::systems::items::projectiles`; this
 //! module signals a fired shot to it via a [`PredictedArrowEvent`] the instant a
 //! `Fire` is sent, so the local arrow visual appears without waiting for the
 //! replicated projectile to arrive.

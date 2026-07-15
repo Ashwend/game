@@ -1,5 +1,6 @@
 //! Explosive taxonomy: the per-item [`ExplosiveProfile`] a blackpowder
-//! explosive carries on its [`ItemDefinition`], and the [`ExplosiveKind`]
+//! explosive carries on its [`ItemDefinition`](crate::items::ItemDefinition),
+//! and the [`ExplosiveKind`]
 //! selector that keys the effectiveness matrix and the client VFX/SFX cue.
 //!
 //! An explosive is a pure raiding object: it declares its base damage, its

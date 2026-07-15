@@ -13,7 +13,7 @@ use crate::items::{
     WOODEN_CLUB_ID,
 };
 use crate::protocol::{ClientMessage, InventoryCommand, ItemStack, PlayerInventoryState, Vec3Net};
-use crate::resources::{
+use crate::resource_nodes::{
     BRANCH_PILE_NODE_ID, COAL_NODE_ID, PINE_TREE_NODE_ID, SURFACE_STONE_NODE_ID,
 };
 use crate::server::{PlayerLifecycle, PlayerPrivate};
@@ -43,7 +43,7 @@ fn local_player_holding(item_id: Option<&str>) -> LocalPlayerState {
 
 fn target_for_node(node_id: u64, definition_id: &str) -> PickupTargetState {
     PickupTargetState {
-        resource_node_id: Some(node_id),
+        resource_node_id: Some(crate::protocol::ResourceNodeId(node_id)),
         resource_definition_id: Some(definition_id.to_owned()),
         world_position: Some(Vec3Net::new(1.0, 2.0, 3.0)),
         ..Default::default()
@@ -135,13 +135,18 @@ fn predict_resource_node_pickup_full_drain_into_empty_bag_predicts_and_hides() {
     let mut target = target_for_node(7, BRANCH_PILE_NODE_ID);
     target.resource_storage = vec![ItemStack::new(WOOD_ID, 3)];
 
-    let seq = predict_resource_node_pickup(&mut prediction, &local, 7, &target);
+    let seq = predict_resource_node_pickup(
+        &mut prediction,
+        &local,
+        crate::protocol::ResourceNodeId(7),
+        &target,
+    );
     assert_ne!(
         seq, 0,
         "a node draining fully into an empty bag is predicted"
     );
     assert!(
-        prediction.is_node_hidden(7),
+        prediction.is_node_hidden(crate::protocol::ResourceNodeId(7)),
         "a full drain hides the node visual"
     );
 
@@ -164,9 +169,14 @@ fn predict_resource_node_pickup_empty_storage_is_not_predicted() {
     let mut prediction = PredictionState::default();
     let target = target_for_node(9, BRANCH_PILE_NODE_ID);
 
-    let seq = predict_resource_node_pickup(&mut prediction, &local, 9, &target);
+    let seq = predict_resource_node_pickup(
+        &mut prediction,
+        &local,
+        crate::protocol::ResourceNodeId(9),
+        &target,
+    );
     assert_eq!(seq, 0);
-    assert!(!prediction.is_node_hidden(9));
+    assert!(!prediction.is_node_hidden(crate::protocol::ResourceNodeId(9)));
     assert!(prediction.is_idle());
 }
 
@@ -226,16 +236,17 @@ fn harvest_check_matches_tool_to_node_requirement() {
 #[test]
 fn resource_target_anchor_requires_matching_node_id() {
     let target = target_for_node(42, COAL_NODE_ID);
-    let anchor = resource_target_anchor(&target, 42).expect("matching id resolves an anchor");
+    let anchor = resource_target_anchor(&target, crate::protocol::ResourceNodeId(42))
+        .expect("matching id resolves an anchor");
     assert_eq!(anchor, Vec3::new(1.0, 2.0, 3.0));
 
     // Mismatched id -> None even though a world position exists.
-    assert!(resource_target_anchor(&target, 7).is_none());
+    assert!(resource_target_anchor(&target, crate::protocol::ResourceNodeId(7)).is_none());
 
     // No world position -> None.
     let mut no_pos = target_for_node(42, COAL_NODE_ID);
     no_pos.world_position = None;
-    assert!(resource_target_anchor(&no_pos, 42).is_none());
+    assert!(resource_target_anchor(&no_pos, crate::protocol::ResourceNodeId(42)).is_none());
 }
 
 #[test]
@@ -295,7 +306,9 @@ fn send_furnace_command_reports_not_connected() {
     send_furnace_command(
         &mut runtime,
         &mut sink,
-        crate::protocol::FurnaceCommand::Open { id: 1 },
+        crate::protocol::FurnaceCommand::Open {
+            id: crate::protocol::DeployedEntityId(1),
+        },
     );
     assert_eq!(sink.len(), 1);
     assert!(sink[0].contains("not connected"));

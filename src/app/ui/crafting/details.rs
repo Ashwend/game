@@ -64,7 +64,7 @@ pub(super) fn ingredient_status(
     IngredientStatus { have, needed }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "egui UI plumbing")]
 pub(super) fn draw_recipe_details(
     ui: &mut egui::Ui,
     entry: &RecipeListEntry,
@@ -257,7 +257,7 @@ fn draw_ingredient_row(ui: &mut egui::Ui, input: &CraftingInput, status: Ingredi
 }
 
 /// The quantity stepper (− / input / + / Max) and the Craft button.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "egui UI plumbing")]
 fn draw_controls_row(
     ui: &mut egui::Ui,
     entry: &RecipeListEntry,

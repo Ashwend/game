@@ -22,10 +22,12 @@ use crate::{
     server::container_slots::{Container, PlayerSlot, SlotSide, take_from_slot},
 };
 
-// `insert_into_slot` and `restore_slot` are re-exported (not just `use`d) so the
-// loot-bag unit tests can exercise these slot-level primitives directly through
-// `super::slots::*`; the implementations live in the shared module.
-pub(super) use crate::server::container_slots::{insert_into_slot, reply_warning, restore_slot};
+// `reply_warning` is re-exported (not just `use`d) because the command handlers
+// in `loot_bag.rs` reach it through `slots::`; the implementations live in the
+// shared module. The slot-level unit tests import the primitives straight from
+// `crate::server::container_slots` (see `src/server/tests/loot_bag.rs`).
+pub(super) use crate::server::container_slots::reply_warning;
+use crate::server::container_slots::{insert_into_slot, restore_slot};
 
 /// The non-player side of an open container, abstracting a loot bag's flat slot
 /// vec from a sleeping player's split inventory/actionbar.

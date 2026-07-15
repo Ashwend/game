@@ -14,6 +14,10 @@
 //! The server re-derives every snap and re-validates every cost; this
 //! module exists so the preview the player sees is the pose the server
 //! will accept.
+//!
+//! Split by concern: this root file owns the ghost update systems and
+//! placement input; the low-level snap/occupancy geometry lives in
+//! [`snapping`] and the claim-boundary ring VFX in [`claim_ring`].
 
 use bevy::{
     input::mouse::AccumulatedMouseMotion, light::NotShadowCaster, prelude::*, window::PrimaryWindow,
@@ -31,11 +35,9 @@ use crate::{
         systems::input::send_place_deployable_command,
     },
     building::{
-        BuildingPiece, BuildingTier, ClaimPlatform, FOUNDATION_SIZE_M, StabilitySupport,
-        building_collider_blocks, candidate_stability_pct, cell_neighbor_sockets, claim_cell_of,
-        claim_cells_overlap_blocks, claim_footprint_cells, door_collider_blocks, placement_cost,
-        platform_top_offset, platform_wall_sockets, positions_match, snap_yaw_quarter_turn,
-        stairs_socket_on, wall_ceiling_sockets, wall_slot_blocked, wall_top_socket,
+        BuildingPiece, BuildingTier, ClaimPlatform, StabilitySupport, building_collider_blocks,
+        candidate_stability_pct, claim_cells_overlap_blocks, claim_footprint_cells,
+        door_collider_blocks, placement_cost, platform_top_offset, snap_yaw_quarter_turn,
     },
     game_balance::{
         BUILDING_MIN_PLACEMENT_STABILITY_PCT, BUILDING_PRIVILEGE_MARGIN_CELLS,
@@ -45,14 +47,23 @@ use crate::{
     items::{
         BUILDING_PLAN_ID, DeployableKind, DeployableProfile, DoorVariant, ItemId, item_definition,
     },
-    protocol::{
-        AccountId, DeployedEntityId, PlaceBuildingCommand, PlaceDeployableCommand, Vec3Net,
-    },
+    protocol::{AccountId, PlaceBuildingCommand, PlaceDeployableCommand, Vec3Net},
     server::{Deployable, DeployableAuth, DeployableStability, DeployableTransform},
     world::WorldBlock,
 };
 
 use super::deployable_visual_transform;
+
+mod claim_ring;
+mod snapping;
+
+pub(crate) use claim_ring::update_claim_boundary_system;
+
+use snapping::{
+    any_replicated_overlap, foundation_cell_occupied, nearest_ceiling_cell,
+    nearest_foundation_neighbor, nearest_free_doorway, nearest_stairs_cell, nearest_wall_hit,
+    nearest_wall_socket, wall_socket_occupied,
+};
 
 /// Ghost-ready variants of the placed-charge body meshes (keg / satchel /
 /// bomb), keyed by the source mesh's handle. The charge glbs follow the
@@ -139,18 +150,6 @@ fn within_reach(point: impl Into<Vec3>, feet: Vec3) -> bool {
 /// right-mouse is held. ~157 px sweeps a quarter turn, slow enough to
 /// land precisely on the angle the player wants while fine-tuning.
 const PLACEMENT_ROTATE_RAD_PER_PIXEL: f32 = 0.01;
-/// How far the aim point may sit from a building socket before the ghost
-/// snaps onto it. Matches the server's `SNAP_TOLERANCE_M`.
-const SNAP_TOLERANCE_M: f32 = 0.75;
-/// Latch radius for cell-sized targets (ceilings, stairs): half a cell
-/// plus a touch of slack. The ghost sends the exact snapped pose, so the
-/// server's tighter tolerance still passes; this only controls how
-/// forgiving the aim is.
-const CELL_SNAP_RANGE_M: f32 = 1.6;
-/// How far the aim point may sit from a doorway before the door ghost
-/// latches onto it. More generous than the socket snap, doorways are
-/// big targets and there's at most a handful nearby.
-const DOOR_SNAP_RANGE_M: f32 = 2.5;
 
 /// What the placement preview is currently showing.
 #[derive(Debug, Clone, PartialEq)]
@@ -168,7 +167,7 @@ pub(super) enum GhostIntent {
 
 /// Update the placement state from the active actionbar item + camera
 /// look ray. Also spawns / despawns the single ghost preview entity.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 pub(crate) fn update_placement_ghost_system(
     mut commands: Commands,
     mut placement: ResMut<DeployablePlacementState>,
@@ -431,198 +430,6 @@ fn placement_blocked_by_claim(
         }
     }
     covered
-}
-
-/// Height of the territory boundary fade, in metres. Short enough to frame
-/// a base without dominating the view.
-const CLAIM_RING_HEIGHT_M: f32 = 2.5;
-/// How often the boundary is recomputed (it only moves when the base or
-/// authorization changes, not as the player walks); redrawn every frame
-/// from the cached segments in between.
-const CLAIM_RING_RECOMPUTE_SECS: f32 = 0.25;
-/// Only ring cupboards within this distance of the player, so a view full
-/// of bases doesn't flood the screen.
-const CLAIM_RING_MAX_DISTANCE_M: f32 = 60.0;
-/// Stacked line segments approximating the vertical alpha gradient
-/// (matches the chunk dev overlay's fade).
-const CLAIM_RING_FADE_SEGMENTS: u32 = 12;
-/// Peak alpha at the floor; the fade tapers to fully transparent at the top.
-const CLAIM_RING_BASE_ALPHA: f32 = 0.5;
-/// Y of the bright floor line, just above ground to dodge z-fighting.
-const CLAIM_RING_FLOOR_Y: f32 = 0.03;
-
-/// One drawn boundary segment: a 3 m floor span on a claim cell edge plus
-/// whether the local player is authorized at that claim (green) or not
-/// (red).
-pub(crate) struct ClaimBoundarySegment {
-    floor_start: Vec3,
-    floor_end: Vec3,
-    authorized: bool,
-}
-
-/// Draw a translucent boundary ring around each nearby Tool Cupboard claim
-/// while the building plan is held: green where the local player may build
-/// (authorized), red where they may not. The ring traces the actual
-/// foundation-projected claim cells (the same shared geometry the server
-/// gates on), and each segment fades from solid at the floor to fully
-/// transparent at the top, like the chunk dev overlay. Drawn with gizmos
-/// (no entities): recomputed on a throttle, redrawn from the cache every
-/// frame.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn update_claim_boundary_system(
-    mut gizmos: Gizmos,
-    time: Res<Time>,
-    plan: Res<BuildingPlanState>,
-    local_player: Res<LocalPlayerState>,
-    menu: Res<MenuState>,
-    runtime: Res<ClientRuntime>,
-    claim_query: Query<(&Deployable, &DeployableTransform, &DeployableAuth)>,
-    user: Option<Res<CurrentUser>>,
-    mut cached: Local<Vec<ClaimBoundarySegment>>,
-    mut since_recompute: Local<f32>,
-) {
-    let holding_plan = matches!(
-        current_ghost_intent(&local_player, &menu, &plan),
-        Some(GhostIntent::Building(_))
-    );
-    if !holding_plan {
-        cached.clear();
-        // Force an immediate recompute the next time the plan comes out.
-        *since_recompute = CLAIM_RING_RECOMPUTE_SECS;
-        return;
-    }
-
-    *since_recompute += time.delta_secs().max(0.0);
-    if *since_recompute >= CLAIM_RING_RECOMPUTE_SECS {
-        *since_recompute = 0.0;
-        let account = user.as_ref().map(|user| user.0.account_id);
-        *cached = compute_claim_boundary_segments(&claim_query, &runtime, account);
-    }
-
-    for segment in cached.iter() {
-        draw_claim_boundary_segment(&mut gizmos, segment);
-    }
-}
-
-/// Build the boundary segments for every nearby claim: trace each
-/// cupboard's footprint cell edges, tagged green/red by the local player's
-/// authorization at that cupboard.
-fn compute_claim_boundary_segments(
-    claim_query: &Query<(&Deployable, &DeployableTransform, &DeployableAuth)>,
-    runtime: &ClientRuntime,
-    account: Option<crate::protocol::AccountId>,
-) -> Vec<ClaimBoundarySegment> {
-    let mut segments = Vec::new();
-    let Some(player) = runtime.local_view() else {
-        return segments;
-    };
-    let (px, pz) = (player.position.x, player.position.z);
-
-    let platforms: Vec<ClaimPlatform> = claim_query
-        .iter()
-        .filter_map(|(meta, transform, _)| {
-            let DeployableKind::Building { piece, .. } = meta.kind else {
-                return None;
-            };
-            let top = platform_top_offset(piece)?;
-            Some(ClaimPlatform {
-                position: transform.position,
-                top: transform.position.y + top,
-            })
-        })
-        .collect();
-
-    const HALF: f32 = FOUNDATION_SIZE_M / 2.0;
-    for (meta, transform, auth) in claim_query {
-        if !matches!(meta.kind, DeployableKind::ToolCupboard) {
-            continue;
-        }
-        let dx = transform.position.x - px;
-        let dz = transform.position.z - pz;
-        if dx * dx + dz * dz > CLAIM_RING_MAX_DISTANCE_M * CLAIM_RING_MAX_DISTANCE_M {
-            continue;
-        }
-        let authorized = account.is_some_and(|account| auth.0.contains(&account));
-
-        // Footprint cells keyed by grid cell (exact neighbour lookups)
-        // with the real XZ centre for positioning.
-        let mut cells: std::collections::HashMap<(i32, i32), (f32, f32)> =
-            std::collections::HashMap::new();
-        for (cx, cz) in claim_footprint_cells(
-            &platforms,
-            transform.position,
-            BUILDING_PRIVILEGE_MARGIN_CELLS,
-        ) {
-            cells.insert(claim_cell_of(cx, cz), (cx, cz));
-        }
-
-        for (cell, (rx, rz)) in &cells {
-            for (sdx, sdz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                if cells.contains_key(&(cell.0 + sdx, cell.1 + sdz)) {
-                    continue;
-                }
-                let edge_x = rx + sdx as f32 * HALF;
-                let edge_z = rz + sdz as f32 * HALF;
-                // The edge runs perpendicular to its outward normal.
-                let (perp_x, perp_z) = (sdz as f32, sdx as f32);
-                segments.push(ClaimBoundarySegment {
-                    floor_start: Vec3::new(
-                        edge_x - perp_x * HALF,
-                        CLAIM_RING_FLOOR_Y,
-                        edge_z - perp_z * HALF,
-                    ),
-                    floor_end: Vec3::new(
-                        edge_x + perp_x * HALF,
-                        CLAIM_RING_FLOOR_Y,
-                        edge_z + perp_z * HALF,
-                    ),
-                    authorized,
-                });
-            }
-        }
-    }
-    segments
-}
-
-/// Draw one boundary segment: a bright floor line plus vertical fades at
-/// its ends and midpoint that taper to transparent at the top.
-fn draw_claim_boundary_segment(gizmos: &mut Gizmos, segment: &ClaimBoundarySegment) {
-    let floor_alpha = (CLAIM_RING_BASE_ALPHA + 0.15).min(1.0);
-    gizmos.line(
-        segment.floor_start,
-        segment.floor_end,
-        claim_ring_color(segment.authorized, floor_alpha),
-    );
-    let mid = segment.floor_start.lerp(segment.floor_end, 0.5);
-    for base in [segment.floor_start, mid, segment.floor_end] {
-        draw_claim_ring_fade(gizmos, base, segment.authorized);
-    }
-}
-
-/// Stack fading vertical line segments from `base` upward with a quadratic
-/// falloff, so it reads as solid at the ground fading to nothing at the top.
-fn draw_claim_ring_fade(gizmos: &mut Gizmos, base: Vec3, authorized: bool) {
-    let seg_h = CLAIM_RING_HEIGHT_M / CLAIM_RING_FADE_SEGMENTS as f32;
-    for seg in 0..CLAIM_RING_FADE_SEGMENTS {
-        let t = seg as f32 / CLAIM_RING_FADE_SEGMENTS as f32;
-        let alpha = (1.0 - t).powi(2) * CLAIM_RING_BASE_ALPHA;
-        let y0 = base.y + seg as f32 * seg_h;
-        let y1 = base.y + (seg + 1) as f32 * seg_h;
-        gizmos.line(
-            Vec3::new(base.x, y0, base.z),
-            Vec3::new(base.x, y1, base.z),
-            claim_ring_color(authorized, alpha),
-        );
-    }
-}
-
-fn claim_ring_color(authorized: bool, alpha: f32) -> Color {
-    let (r, g, b) = if authorized {
-        (0.30, 0.90, 0.42)
-    } else {
-        (0.96, 0.32, 0.32)
-    };
-    Color::srgba(r, g, b, alpha.clamp(0.0, 1.0))
 }
 
 /// The original free-ground flow for classic deployables: ghost follows
@@ -931,83 +738,10 @@ fn torch_in_reach(position: Vec3, player_feet: Option<Vec3>) -> bool {
     player_feet.is_some_and(|feet| within_reach(position, feet))
 }
 
-/// Nearest wall-like building piece the look ray hits, as `(t, point, outward
-/// normal)`. Only near-vertical faces count, a torch mounts on a wall, not a
-/// floor. Player-built walls only; the distant perimeter masonry is ignored.
-fn nearest_wall_hit(
-    origin: Vec3,
-    forward: Vec3,
-    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
-) -> Option<(f32, Vec3, Vec3)> {
-    let mut best: Option<(f32, Vec3, Vec3)> = None;
-    for (meta, transform, _) in replicated.iter() {
-        let DeployableKind::Building { piece, .. } = meta.kind else {
-            continue;
-        };
-        if !piece.is_wall_like() {
-            continue;
-        }
-        for block in
-            crate::building::building_collider_blocks(piece, transform.position, transform.yaw)
-        {
-            let min = Vec3::new(block.min().x, block.min().y, block.min().z);
-            let max = Vec3::new(block.max().x, block.max().y, block.max().z);
-            let Some((t, normal)) = ray_aabb(origin, forward, min, max) else {
-                continue;
-            };
-            // Skip the wall's top/bottom faces: a torch mounts on the side.
-            if normal.y.abs() > 0.5 || t > 50.0 {
-                continue;
-            }
-            if best.as_ref().is_none_or(|(best_t, _, _)| t < *best_t) {
-                best = Some((t, origin + forward * t, normal));
-            }
-        }
-    }
-    best
-}
-
-/// Slab-method ray vs AABB, returning the entry distance and the entry face
-/// normal (pointing back toward the ray origin). `None` when the ray misses or
-/// only meets the box behind the origin.
-fn ray_aabb(origin: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<(f32, Vec3)> {
-    let inv = dir.recip();
-    let mut tmin = f32::NEG_INFINITY;
-    let mut tmax = f32::INFINITY;
-    let mut axis = 0usize;
-    let mut sign = 0.0f32;
-    for i in 0..3 {
-        let lo = (min[i] - origin[i]) * inv[i];
-        let hi = (max[i] - origin[i]) * inv[i];
-        let (near, far, face_sign) = if lo <= hi {
-            (lo, hi, -1.0)
-        } else {
-            (hi, lo, 1.0)
-        };
-        if near > tmin {
-            tmin = near;
-            axis = i;
-            sign = face_sign;
-        }
-        if far < tmax {
-            tmax = far;
-        }
-        if tmax < tmin {
-            return None;
-        }
-    }
-    if tmin < 0.0 {
-        return None;
-    }
-    let mut normal = Vec3::ZERO;
-    normal[axis] = sign;
-    Some((tmin, normal))
-}
-
 /// React to placement input: left-click commits, held right-mouse
 /// freezes the spot and turns mouse motion into rotation (classic
 /// deployables), right-click flips the door ghost, R nudges by 90°.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 pub(crate) fn placement_input_system(
     mouse_motion: Res<AccumulatedMouseMotion>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -1365,268 +1099,6 @@ fn is_free_placement_valid(
         ),
     );
     !any_replicated_overlap(&[candidate], replicated, false)
-}
-
-// ---------------------------------------------------------------------
-// Building snap helpers (client mirrors of the server's snap logic)
-// ---------------------------------------------------------------------
-
-/// Where the look ray crosses the horizontal plane at `plane_y`. Unlike
-/// [`ground_under_aim`] this accepts upward rays, second-storey sockets
-/// sit above the camera when the player stands at ground level.
-fn aim_on_plane(camera_transform: &GlobalTransform, plane_y: f32) -> Option<Vec3> {
-    let origin = camera_transform.translation();
-    let forward = camera_transform.forward().as_vec3();
-    if forward.y.abs() < 1e-4 {
-        return None;
-    }
-    let t = (plane_y - origin.y) / forward.y;
-    if t <= 0.0 || t > 60.0 {
-        return None;
-    }
-    let hit = origin + forward * t;
-    Some(Vec3::new(hit.x, plane_y, hit.z))
-}
-
-/// Distance from where the player is aiming (on the socket's own height
-/// plane) to the socket, or `None` when the look ray can't reach that
-/// plane. Aiming per-plane is what makes upper-storey sockets judged
-/// where the player points, not by a ground projection far behind them.
-fn aim_distance_to(camera_transform: &GlobalTransform, position: Vec3Net) -> Option<f32> {
-    let aim = aim_on_plane(camera_transform, position.y)?;
-    let dx = position.x - aim.x;
-    let dz = position.z - aim.z;
-    Some((dx * dx + dz * dz).sqrt())
-}
-
-fn nearest_wall_socket(
-    camera_transform: &GlobalTransform,
-    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
-) -> Option<crate::building::WallSocket> {
-    let mut best: Option<(f32, crate::building::WallSocket)> = None;
-    let mut consider = |socket: crate::building::WallSocket| {
-        let Some(distance) = aim_distance_to(camera_transform, socket.position) else {
-            return;
-        };
-        if distance <= SNAP_TOLERANCE_M
-            && best.as_ref().is_none_or(|(current, _)| distance < *current)
-        {
-            best = Some((distance, socket));
-        }
-    };
-    for (meta, transform, _) in replicated.iter() {
-        let DeployableKind::Building { piece, .. } = meta.kind else {
-            continue;
-        };
-        if let Some(sockets) = platform_wall_sockets(piece, transform.position, transform.yaw) {
-            for socket in sockets {
-                consider(socket);
-            }
-        }
-        // Walls also stack directly on walls (no floor needed per storey).
-        if let Some(top) = wall_top_socket(piece, transform.position, transform.yaw) {
-            consider(top);
-        }
-    }
-    best.map(|(_, socket)| socket)
-}
-
-/// The ceiling pose nearest the aim: cells flanking a wall's top edge,
-/// or cells adjacent to an existing ceiling (extending a ledge). Whether
-/// the spot is stable enough is the stability gate's call.
-fn nearest_ceiling_cell(
-    camera_transform: &GlobalTransform,
-    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
-) -> Option<(Vec3Net, f32)> {
-    let mut best: Option<(f32, Vec3Net, f32)> = None;
-    let mut consider = |position: Vec3Net, yaw: f32| {
-        let Some(distance) = aim_distance_to(camera_transform, position) else {
-            return;
-        };
-        if distance <= CELL_SNAP_RANGE_M
-            && best
-                .as_ref()
-                .is_none_or(|(current, _, _)| distance < *current)
-        {
-            best = Some((distance, position, yaw));
-        }
-    };
-    for (meta, transform, _) in replicated.iter() {
-        let DeployableKind::Building { piece, .. } = meta.kind else {
-            continue;
-        };
-        if let Some(cells) = wall_ceiling_sockets(piece, transform.position, transform.yaw) {
-            for cell in cells {
-                consider(cell.position, cell.yaw);
-            }
-        }
-        if matches!(piece, BuildingPiece::Ceiling) {
-            for socket in cell_neighbor_sockets(transform.position, transform.yaw) {
-                consider(socket.position, socket.yaw);
-            }
-        }
-    }
-    best.map(|(_, position, yaw)| (position, yaw))
-}
-
-/// The stairs base pose on the platform cell nearest the aim.
-fn nearest_stairs_cell(
-    camera_transform: &GlobalTransform,
-    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
-) -> Option<Vec3Net> {
-    let mut best: Option<(f32, Vec3Net)> = None;
-    for (meta, transform, _) in replicated.iter() {
-        let DeployableKind::Building { piece, .. } = meta.kind else {
-            continue;
-        };
-        let Some(socket) = stairs_socket_on(piece, transform.position, 0.0) else {
-            continue;
-        };
-        let Some(aim) = aim_on_plane(camera_transform, socket.position.y) else {
-            continue;
-        };
-        let dx = socket.position.x - aim.x;
-        let dz = socket.position.z - aim.z;
-        let distance = (dx * dx + dz * dz).sqrt();
-        if distance <= CELL_SNAP_RANGE_M
-            && best.as_ref().is_none_or(|(current, _)| distance < *current)
-        {
-            best = Some((distance, socket.position));
-        }
-    }
-    best.map(|(_, position)| position)
-}
-
-fn nearest_foundation_neighbor(
-    aim: Vec3Net,
-    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
-) -> Option<crate::building::WallSocket> {
-    let mut best: Option<(f32, crate::building::WallSocket)> = None;
-    for (meta, transform, _) in replicated.iter() {
-        let DeployableKind::Building {
-            piece: BuildingPiece::Foundation,
-            ..
-        } = meta.kind
-        else {
-            continue;
-        };
-        for socket in cell_neighbor_sockets(transform.position, transform.yaw) {
-            let dx = socket.position.x - aim.x;
-            let dz = socket.position.z - aim.z;
-            let distance = (dx * dx + dz * dz).sqrt();
-            if distance <= SNAP_TOLERANCE_M
-                && best.as_ref().is_none_or(|(current, _)| distance < *current)
-            {
-                best = Some((distance, socket));
-            }
-        }
-    }
-    best.map(|(_, socket)| socket)
-}
-
-fn wall_socket_occupied(
-    position: Vec3Net,
-    yaw: f32,
-    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
-) -> bool {
-    replicated.iter().any(|(meta, transform, _)| {
-        matches!(meta.kind, DeployableKind::Building { piece, .. } if piece.is_wall_like())
-            && wall_slot_blocked(transform.position, transform.yaw, position, yaw)
-    })
-}
-
-fn foundation_cell_occupied(
-    position: Vec3Net,
-    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
-) -> bool {
-    replicated.iter().any(|(meta, transform, _)| {
-        matches!(
-            meta.kind,
-            DeployableKind::Building {
-                piece: BuildingPiece::Foundation,
-                ..
-            }
-        ) && positions_match(transform.position, position)
-    })
-}
-
-fn any_replicated_overlap(
-    blocks: &[crate::world::WorldBlock],
-    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
-    skip_wall_plane: bool,
-) -> bool {
-    for (meta, transform, _) in replicated.iter() {
-        // Stairs candidates legitimately clip walls/doors on their cell
-        // edges; the caller opts out of those pairs.
-        if skip_wall_plane {
-            let wall_plane = matches!(meta.kind, DeployableKind::Door { .. })
-                || matches!(meta.kind, DeployableKind::Building { piece, .. } if piece.is_wall_like());
-            if wall_plane {
-                continue;
-            }
-        }
-        // Open/closed doesn't matter for placement previews; treat doors
-        // as closed (worst case). The millimetre epsilon mirrors the
-        // server's: touching faces plus f32 rounding aren't a collision.
-        const EPSILON: f32 = 0.001;
-        for other in super::deployable_colliders(meta, transform, false) {
-            for candidate in blocks {
-                let a_min = candidate.min();
-                let a_max = candidate.max();
-                let b_min = other.min();
-                let b_max = other.max();
-                if a_min.x + EPSILON < b_max.x
-                    && a_max.x > b_min.x + EPSILON
-                    && a_min.y + EPSILON < b_max.y
-                    && a_max.y > b_min.y + EPSILON
-                    && a_min.z + EPSILON < b_max.z
-                    && a_max.z > b_min.z + EPSILON
-                {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-/// The nearest doorway (by horizontal distance to the aim point) that
-/// doesn't already hold a door. Doors sit at exactly their doorway's
-/// position, so occupancy is a position match against door entities.
-fn nearest_free_doorway(
-    aim: Vec3Net,
-    replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
-) -> Option<(DeployedEntityId, Vec3Net, f32)> {
-    let mut best: Option<(f32, DeployedEntityId, Vec3Net, f32)> = None;
-    for (meta, transform, _) in replicated.iter() {
-        let DeployableKind::Building {
-            piece: BuildingPiece::Doorway,
-            ..
-        } = meta.kind
-        else {
-            continue;
-        };
-        let dx = transform.position.x - aim.x;
-        let dz = transform.position.z - aim.z;
-        let distance = (dx * dx + dz * dz).sqrt();
-        if distance > DOOR_SNAP_RANGE_M {
-            continue;
-        }
-        let occupied = replicated.iter().any(|(other, other_transform, _)| {
-            matches!(other.kind, DeployableKind::Door { .. })
-                && positions_match(other_transform.position, transform.position)
-        });
-        if occupied {
-            continue;
-        }
-        if best
-            .as_ref()
-            .is_none_or(|(current, _, _, _)| distance < *current)
-        {
-            best = Some((distance, meta.id, transform.position, transform.yaw));
-        }
-    }
-    best.map(|(_, id, position, yaw)| (id, position, yaw))
 }
 
 /// Yaw that turns the deployable's local +Z front toward the player.

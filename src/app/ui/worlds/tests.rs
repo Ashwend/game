@@ -51,7 +51,7 @@ fn temp_store() -> SaveStore {
 
 fn current_user() -> CurrentUser {
     CurrentUser(AuthenticatedUser {
-        account_id: 42,
+        account_id: crate::protocol::AccountId(42),
         display_name: "Dannie".to_owned(),
         token: String::new(),
     })
@@ -63,11 +63,11 @@ fn refresh_worlds_handles_success_and_list_errors() {
     let mut menu = MenuState::default();
     let first = store
         .0
-        .create_world("Beta", Some(42))
+        .create_world("Beta", Some(crate::protocol::AccountId(42)))
         .expect("world should create");
     let second = store
         .0
-        .create_world("Alpha", Some(42))
+        .create_world("Alpha", Some(crate::protocol::AccountId(42)))
         .expect("world should create");
 
     refresh_worlds(&mut menu, &store);
@@ -173,7 +173,7 @@ fn rename_world_from_dialog_updates_name_only() {
         .0
         .create_world_with_map(
             "Original",
-            Some(42),
+            Some(crate::protocol::AccountId(42)),
             MapType::Procedural {
                 seed: 1234,
                 size: ProceduralMapSize::Large,

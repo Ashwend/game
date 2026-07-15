@@ -53,7 +53,7 @@ fn place_wall(server: &mut GameServer, position: Vec3Net, tier: BuildingTier) ->
     let piece = BuildingPiece::Wall;
     let max_health = crate::building::building_max_health(piece, tier);
     let id = server.next_deployed_entity_id;
-    server.next_deployed_entity_id += 1;
+    server.next_deployed_entity_id.0 += 1;
     let entity = crate::server::deployables::DeployedEntity {
         id,
         item_id: intern_item_id(crate::building::building_item_id(piece)),
@@ -62,7 +62,7 @@ fn place_wall(server: &mut GameServer, position: Vec3Net, tier: BuildingTier) ->
         yaw: 0.0,
         health: max_health,
         max_health,
-        owner: Some(1),
+        owner: Some(crate::protocol::AccountId(1)),
         furnace: None,
         placed_at_tick: 0,
         door: None,
@@ -89,7 +89,7 @@ fn witness_furnace(server: &mut GameServer, position: Vec3Net) -> DeployedEntity
         .map(|p| p.max_health)
         .expect("furnace has a deployable profile");
     let id = server.next_deployed_entity_id;
-    server.next_deployed_entity_id += 1;
+    server.next_deployed_entity_id.0 += 1;
     let entity = crate::server::deployables::DeployedEntity {
         id,
         item_id,
@@ -98,7 +98,7 @@ fn witness_furnace(server: &mut GameServer, position: Vec3Net) -> DeployedEntity
         yaw: 0.0,
         health: max_health,
         max_health,
-        owner: Some(1),
+        owner: Some(crate::protocol::AccountId(1)),
         furnace: None,
         placed_at_tick: 0,
         door: None,
@@ -121,7 +121,7 @@ fn place_iron_door(server: &mut GameServer, position: Vec3Net) -> DeployedEntity
     let variant = DoorVariant::Iron;
     let max_health = variant.max_hp();
     let id = server.next_deployed_entity_id;
-    server.next_deployed_entity_id += 1;
+    server.next_deployed_entity_id.0 += 1;
     let entity = crate::server::deployables::DeployedEntity {
         id,
         item_id: intern_item_id(variant.item_id()),
@@ -130,7 +130,7 @@ fn place_iron_door(server: &mut GameServer, position: Vec3Net) -> DeployedEntity
         yaw: 0.0,
         health: max_health,
         max_health,
-        owner: Some(1),
+        owner: Some(crate::protocol::AccountId(1)),
         furnace: None,
         placed_at_tick: 0,
         door: None,
@@ -338,7 +338,7 @@ fn damaging_a_charge_to_zero_fizzles_it_without_detonating() {
 
     // Arm a keg at the origin directly.
     let charge = server.next_deployed_entity_id;
-    server.next_deployed_entity_id += 1;
+    server.next_deployed_entity_id.0 += 1;
     let entity = crate::server::deployables::DeployedEntity {
         id: charge,
         item_id: intern_item_id(POWDER_KEG_ID),
@@ -349,7 +349,7 @@ fn damaging_a_charge_to_zero_fizzles_it_without_detonating() {
         yaw: 0.0,
         health: crate::game_balance::EXPLOSIVE_CHARGE_HP,
         max_health: crate::game_balance::EXPLOSIVE_CHARGE_HP,
-        owner: Some(1),
+        owner: Some(crate::protocol::AccountId(1)),
         furnace: None,
         placed_at_tick: 0,
         door: None,
@@ -622,7 +622,7 @@ fn placing_a_charge_is_allowed_inside_an_enemy_claim() {
     );
 
     // A raider (account 2, NOT authorized) connects and stands on the claim.
-    let raider = connect_account(&mut server, 2 as AccountId, "Raider");
+    let raider = connect_account(&mut server, AccountId(2), "Raider");
     server.clients.get_mut(&raider).unwrap().controller.position = Vec3Net::ZERO;
     server
         .clients
@@ -655,7 +655,7 @@ fn an_armed_charge_survives_a_save_round_trip_with_its_fuse() {
     let mut server = server();
     // Arm a satchel charge with a partial fuse.
     let charge = server.next_deployed_entity_id;
-    server.next_deployed_entity_id += 1;
+    server.next_deployed_entity_id.0 += 1;
     let entity = crate::server::deployables::DeployedEntity {
         id: charge,
         item_id: intern_item_id(SATCHEL_CHARGE_ID),
@@ -666,7 +666,7 @@ fn an_armed_charge_survives_a_save_round_trip_with_its_fuse() {
         yaw: 0.0,
         health: crate::game_balance::EXPLOSIVE_CHARGE_HP,
         max_health: crate::game_balance::EXPLOSIVE_CHARGE_HP,
-        owner: Some(7),
+        owner: Some(crate::protocol::AccountId(7)),
         furnace: None,
         placed_at_tick: 0,
         door: None,
@@ -705,7 +705,7 @@ fn an_armed_charge_survives_a_save_round_trip_with_its_fuse() {
 /// interaction path can find it. Returns its id. Local defuse-test helper.
 fn arm_keg(server: &mut GameServer, position: Vec3Net, owner: AccountId) -> DeployedEntityId {
     let id = server.next_deployed_entity_id;
-    server.next_deployed_entity_id += 1;
+    server.next_deployed_entity_id.0 += 1;
     let entity = crate::server::deployables::DeployedEntity {
         id,
         item_id: intern_item_id(POWDER_KEG_ID),
@@ -745,7 +745,7 @@ fn anyone_can_defuse_a_charge_outside_any_claim() {
     let witness_hp = server.deployed_entities[&witness].health;
 
     // The charge sits on unclaimed ground, owned by some raider (account 9).
-    let charge = arm_keg(&mut server, Vec3Net::ZERO, 9);
+    let charge = arm_keg(&mut server, Vec3Net::ZERO, crate::protocol::AccountId(9));
 
     // A random passer-by (the host, account 1, not the owner) stands on it and
     // defuses it. Outside any claim, anyone in reach may defuse.
@@ -827,10 +827,14 @@ fn an_unauthorized_player_cannot_defuse_a_charge_inside_a_claim() {
     );
 
     // A raider's charge is armed inside the claim.
-    let charge = arm_keg(&mut server, Vec3Net::new(0.0, top, 0.0), 2);
+    let charge = arm_keg(
+        &mut server,
+        Vec3Net::new(0.0, top, 0.0),
+        crate::protocol::AccountId(2),
+    );
 
     // An unauthorized outsider (account 3) stands on the claim and tries to defuse.
-    let outsider = connect_account(&mut server, 3 as AccountId, "Outsider");
+    let outsider = connect_account(&mut server, AccountId(3), "Outsider");
     server
         .clients
         .get_mut(&outsider)
@@ -896,10 +900,14 @@ fn an_authorized_player_can_defuse_a_charge_inside_a_claim() {
         .map(|e| e.id)
         .expect("cupboard placed");
     // The owner (account 1) is auto-authorized on their own cupboard.
-    assert!(server.cupboard_authorizes(cupboard, 1));
+    assert!(server.cupboard_authorizes(cupboard, crate::protocol::AccountId(1)));
 
     // A raider's charge armed inside the claim.
-    let charge = arm_keg(&mut server, Vec3Net::new(0.0, top, 0.0), 2);
+    let charge = arm_keg(
+        &mut server,
+        Vec3Net::new(0.0, top, 0.0),
+        crate::protocol::AccountId(2),
+    );
 
     // The owner stands on the claim and defuses their attacker's charge.
     server.clients.get_mut(&owner).unwrap().controller.position = Vec3Net::new(0.0, top, 0.0);
@@ -937,7 +945,7 @@ fn a_defused_charge_never_detonates() {
     let hp1 = server.deployed_entities[&w1].health;
     let hp2 = server.deployed_entities[&w2].health;
 
-    let charge = arm_keg(&mut server, Vec3Net::ZERO, 9);
+    let charge = arm_keg(&mut server, Vec3Net::ZERO, crate::protocol::AccountId(9));
     let defender = connect_host(&mut server);
     server
         .clients
@@ -958,7 +966,7 @@ fn a_defused_charge_never_detonates() {
 #[test]
 fn defuse_overflow_drops_when_the_bag_is_full() {
     let mut server = server();
-    let charge = arm_keg(&mut server, Vec3Net::ZERO, 9);
+    let charge = arm_keg(&mut server, Vec3Net::ZERO, crate::protocol::AccountId(9));
     let defender = connect_host(&mut server);
     server
         .clients

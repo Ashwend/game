@@ -8,7 +8,7 @@ use crate::{
     app::state::ImpactEffectKind,
     items::ItemModel,
     protocol::ResourceNodeId,
-    resources::ResourceNodeModel,
+    resource_nodes::ResourceNodeModel,
     util::hash::hashed_unit,
 };
 
@@ -55,7 +55,7 @@ pub(crate) struct FellingTree {
     landing_chips_fired: bool,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "split-out system helper")]
 pub(crate) fn spawn_node_death(
     commands: &mut Commands,
     impact_assets: &ImpactEffectAssets,
@@ -119,7 +119,7 @@ fn spawn_crude_pickup_burst(
         kind,
         burst_anchor,
         Vec3::Y,
-        (node_id as u32).wrapping_mul(0xC2B2AE35),
+        (node_id.0 as u32).wrapping_mul(0xC2B2AE35),
         // Bump intensity a touch above 1.0 so the pickup-completed
         // burst reads as "finished" rather than identical to a per-hit
         // chip. Still scales off the small `Sticks`/`Pebbles`/`GrassBlades`
@@ -128,7 +128,7 @@ fn spawn_crude_pickup_burst(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "split-out system helper")]
 fn spawn_tree_felling(
     commands: &mut Commands,
     play: &mut MessageWriter<PlaySound>,
@@ -220,7 +220,6 @@ fn spawn_tree_felling(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn spawn_ore_shatter(
     commands: &mut Commands,
     impact_assets: &ImpactEffectAssets,
@@ -240,7 +239,7 @@ fn spawn_ore_shatter(
         commands,
         impact_assets,
         burst_anchor,
-        (node_id as u32).wrapping_mul(0xC2B2AE35),
+        (node_id.0 as u32).wrapping_mul(0xC2B2AE35),
         1.0,
     );
 
@@ -416,7 +415,7 @@ fn compute_horizontal_fall_direction(
             // Lead away from the player, then rotate by a per-node hashed
             // offset so neighbouring trunks don't all topple in lockstep and a
             // trunk rarely lands straight back over where the player stands.
-            let jitter = (hashed_unit(node_id as u32) - 0.5) * 2.0 * MAX_FALL_JITTER_RADIANS;
+            let jitter = (hashed_unit(node_id.0 as u32) - 0.5) * 2.0 * MAX_FALL_JITTER_RADIANS;
             return (Quat::from_rotation_y(jitter) * away.normalize()).normalize_or_zero();
         }
     }
@@ -424,7 +423,7 @@ fn compute_horizontal_fall_direction(
     // Deterministic fallback so each tree always falls the same way even if
     // the player isn't recorded (e.g. snapshot mid-load). Uses the node id
     // as the seed.
-    let angle = (node_id as f32) * 0.137 + 0.31;
+    let angle = (node_id.0 as f32) * 0.137 + 0.31;
     Vec3::new(angle.cos(), 0.0, angle.sin()).normalize_or_zero()
 }
 
@@ -452,7 +451,7 @@ mod tests {
         let direction = compute_horizontal_fall_direction(
             Some(Vec3::new(0.0, 0.0, 0.0)),
             Vec3::new(4.0, 0.0, 0.0),
-            1,
+            crate::protocol::ResourceNodeId(1),
         );
         // The away direction is +X; the per-node jitter rotates it within a
         // ±MAX cone, so the X component stays at least cos(MAX).
@@ -466,8 +465,16 @@ mod tests {
     fn fall_direction_jitter_varies_per_node_but_stays_in_cone() {
         let player = Vec3::ZERO;
         let tree = Vec3::new(4.0, 0.0, 0.0);
-        let a = compute_horizontal_fall_direction(Some(player), tree, 1);
-        let b = compute_horizontal_fall_direction(Some(player), tree, 2);
+        let a = compute_horizontal_fall_direction(
+            Some(player),
+            tree,
+            crate::protocol::ResourceNodeId(1),
+        );
+        let b = compute_horizontal_fall_direction(
+            Some(player),
+            tree,
+            crate::protocol::ResourceNodeId(2),
+        );
         // Different nodes get different spread...
         assert!(a.distance(b) > 1e-3);
         // ...but every one still leads away from the player (+X half-plane).
@@ -484,7 +491,11 @@ mod tests {
         // length axis (+Y) leans in the same horizontal direction we chose.
         let player = Vec3::ZERO;
         let tree = Vec3::new(4.0, 0.0, 0.0);
-        let dir = compute_horizontal_fall_direction(Some(player), tree, 1);
+        let dir = compute_horizontal_fall_direction(
+            Some(player),
+            tree,
+            crate::protocol::ResourceNodeId(1),
+        );
         let axis = fall_axis_from_direction(dir);
 
         // Part-way through the fall the trunk's length (+Y) tips over.
@@ -499,7 +510,8 @@ mod tests {
 
     #[test]
     fn fall_direction_falls_back_to_deterministic_when_player_missing() {
-        let direction = compute_horizontal_fall_direction(None, Vec3::ZERO, 7);
+        let direction =
+            compute_horizontal_fall_direction(None, Vec3::ZERO, crate::protocol::ResourceNodeId(7));
         assert!(direction.length() > 0.99);
         assert!(direction.length() < 1.01);
         assert!(direction.y.abs() < 1e-6);

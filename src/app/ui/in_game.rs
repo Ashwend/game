@@ -30,7 +30,7 @@ use super::{UiResources, world_ready_for_play};
 ///
 /// Crude (hand-pickup) nodes only, paired with what they yield, so the gather
 /// ring points at branches/stones/grass, never a tree or rock that needs a tool
-/// the player doesn't have yet. Registry access (`crate::resources` /
+/// the player doesn't have yet. Registry access (`crate::resource_nodes` /
 /// `crate::items`) lives here next to the tutorial logic that consumes it.
 fn nearby_crude_nodes(
     resource_nodes: &Query<&'static crate::server::ResourceNode>,
@@ -38,7 +38,7 @@ fn nearby_crude_nodes(
     resource_nodes
         .iter()
         .filter_map(|node| {
-            let definition = crate::resources::resource_node_definition(&node.definition_id)?;
+            let definition = crate::resource_nodes::resource_node_definition(&node.definition_id)?;
             if definition.required_tool.kind != crate::items::ToolKind::Hands {
                 return None;
             }

@@ -3,7 +3,7 @@ use bevy_egui::egui::{self, pos2};
 use crate::{
     app::state::{CupboardAuthState, MenuState, PickupTargetState},
     items::{DeployableKind, ItemDefinition, ToolKind, item_definition},
-    resources::resource_node_definition,
+    resource_nodes::resource_node_definition,
 };
 
 use super::super::theme;
@@ -196,7 +196,7 @@ mod tests {
     use super::*;
     use crate::{
         protocol::{ItemStack, Vec3Net},
-        resources::COAL_NODE_ID,
+        resource_nodes::COAL_NODE_ID,
     };
     use bevy::prelude::Vec2;
 
@@ -215,7 +215,7 @@ mod tests {
         let ctx = egui::Context::default();
         let menu = MenuState::default();
         let pickup_target = PickupTargetState {
-            dropped_item_id: Some(1),
+            dropped_item_id: Some(crate::protocol::DroppedItemId(1)),
             stack: Some(ItemStack::new("unknown-item", 3)),
             world_position: Some(Vec3Net::new(1.0, 2.0, 3.0)),
             screen_position: Some(Vec2::new(100.0, 120.0)),
@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn building_tooltip_only_shows_with_the_hammer() {
         let target = PickupTargetState {
-            deployable_id: Some(1),
+            deployable_id: Some(crate::protocol::DeployedEntityId(1)),
             deployable_kind: Some(DeployableKind::Building {
                 piece: crate::building::BuildingPiece::Wall,
                 tier: crate::building::BuildingTier::Sticks,
@@ -286,7 +286,7 @@ mod tests {
 
         // Non-building deployables keep their tooltip regardless.
         let bag = PickupTargetState {
-            deployable_id: Some(2),
+            deployable_id: Some(crate::protocol::DeployedEntityId(2)),
             deployable_kind: Some(DeployableKind::SleepingBag),
             screen_position: Some(Vec2::new(100.0, 120.0)),
             ..Default::default()
@@ -297,7 +297,7 @@ mod tests {
     #[test]
     fn resource_tooltip_shows_requirement_but_not_remaining_yield() {
         let pickup_target = PickupTargetState {
-            resource_node_id: Some(1),
+            resource_node_id: Some(crate::protocol::ResourceNodeId(1)),
             resource_definition_id: Some(COAL_NODE_ID.to_owned()),
             resource_storage: vec![ItemStack::new("coal", 6)],
             screen_position: Some(Vec2::new(100.0, 120.0)),

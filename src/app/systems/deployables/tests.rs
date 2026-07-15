@@ -83,7 +83,7 @@ fn deployable_kind_label_resolves_known_deployables() {
 fn deployable_collider_uses_profile_extents_and_lifts_center() {
     use crate::items::{WORKBENCH_T1_ID, intern_item_id};
     let meta = Deployable {
-        id: 1,
+        id: crate::protocol::DeployedEntityId(1),
         item_id: intern_item_id(WORKBENCH_T1_ID),
         kind: DeployableKind::Workbench { tier: 1 },
         max_health: 500,
@@ -104,7 +104,7 @@ fn deployable_collider_uses_profile_extents_and_lifts_center() {
 
     // Unknown item id -> no collider rather than a panic.
     let unknown = Deployable {
-        id: 2,
+        id: crate::protocol::DeployedEntityId(2),
         item_id: intern_item_id("not_a_real_item"),
         kind: DeployableKind::Workbench { tier: 1 },
         max_health: 1,
@@ -118,13 +118,13 @@ fn deployable_collider_uses_profile_extents_and_lifts_center() {
 fn door_colliders_follow_the_swing_and_doorways_stay_passable() {
     use crate::items::{HEWN_LOG_DOOR_ID, intern_item_id};
     let door = Deployable {
-        id: 3,
+        id: crate::protocol::DeployedEntityId(3),
         item_id: intern_item_id(HEWN_LOG_DOOR_ID),
         kind: DeployableKind::Door {
             variant: crate::items::DoorVariant::HewnLog,
         },
         max_health: 1,
-        owner: Some(1),
+        owner: Some(crate::protocol::AccountId(1)),
         placed_at_tick: 0,
     };
     let transform = DeployableTransform {
@@ -148,14 +148,14 @@ fn door_colliders_follow_the_swing_and_doorways_stay_passable() {
     assert!(open[0].center.z > 0.3, "open panel sits on the swing side");
 
     let doorway = Deployable {
-        id: 4,
+        id: crate::protocol::DeployedEntityId(4),
         item_id: intern_item_id(crate::building::BUILDING_DOORWAY_ITEM_ID),
         kind: DeployableKind::Building {
             piece: crate::building::BuildingPiece::Doorway,
             tier: crate::building::BuildingTier::Sticks,
         },
         max_health: 1,
-        owner: Some(1),
+        owner: Some(crate::protocol::AccountId(1)),
         placed_at_tick: 0,
     };
     // Two jambs + header, the opening itself stays clear.
@@ -265,7 +265,7 @@ fn deployable_set_fingerprint_distinguishes_membership() {
     let make = |id: u64| {
         (
             Deployable {
-                id,
+                id: crate::protocol::DeployedEntityId(id),
                 item_id: intern_item_id(WORKBENCH_T1_ID),
                 kind: DeployableKind::Workbench { tier: 1 },
                 max_health: 1,
@@ -299,7 +299,7 @@ fn deployable_set_fingerprint_distinguishes_membership() {
 fn deployable_set_fingerprint_tracks_door_open_state() {
     use crate::items::{HEWN_LOG_DOOR_ID, intern_item_id};
     let door = Deployable {
-        id: 9,
+        id: crate::protocol::DeployedEntityId(9),
         item_id: intern_item_id(HEWN_LOG_DOOR_ID),
         kind: DeployableKind::Door {
             variant: crate::items::DoorVariant::HewnLog,
@@ -375,21 +375,21 @@ fn grass_displacer_fingerprint_ignores_doors_walls_and_swing() {
         placed_at_tick: 0,
     };
     let foundation = dep(
-        1,
+        crate::protocol::DeployedEntityId(1),
         DeployableKind::Building {
             piece: BuildingPiece::Foundation,
             tier: BuildingTier::Sticks,
         },
     );
     let wall = dep(
-        2,
+        crate::protocol::DeployedEntityId(2),
         DeployableKind::Building {
             piece: BuildingPiece::Wall,
             tier: BuildingTier::Sticks,
         },
     );
     let door = dep(
-        3,
+        crate::protocol::DeployedEntityId(3),
         DeployableKind::Door {
             variant: crate::items::DoorVariant::HewnLog,
         },
@@ -426,15 +426,15 @@ fn resource_node_set_fingerprint_skips_colliderless_clutter() {
     // Crude clutter (hay grass) contributes no collider, so it doesn't
     // move the fingerprint, only collidable nodes (trees/ore) do.
     let hay = ResourceNode {
-        id: 1,
-        definition_id: crate::resources::HAY_GRASS_NODE_ID.to_owned(),
+        id: crate::protocol::ResourceNodeId(1),
+        definition_id: crate::resource_nodes::HAY_GRASS_NODE_ID.to_owned(),
         position: Vec3Net::new(0.0, 0.0, 0.0),
         yaw: 0.0,
         dead: false,
     };
     let tree = ResourceNode {
-        id: 2,
-        definition_id: crate::resources::PINE_TREE_NODE_ID.to_owned(),
+        id: crate::protocol::ResourceNodeId(2),
+        definition_id: crate::resource_nodes::PINE_TREE_NODE_ID.to_owned(),
         position: Vec3Net::new(0.0, 0.0, 0.0),
         yaw: 0.0,
         dead: false,
@@ -464,7 +464,7 @@ fn caught_up_requires_a_first_pass_and_an_empty_spawn_queue() {
     assert!(visuals.is_caught_up());
 
     visuals.pending_spawns.push(PendingDeployableSpawn {
-        id: 1,
+        id: crate::protocol::DeployedEntityId(1),
         replicated: Entity::PLACEHOLDER,
         kind: crate::items::DeployableKind::Furnace { tier: 0 },
         position: crate::protocol::Vec3Net::new(0.0, 0.0, 0.0),

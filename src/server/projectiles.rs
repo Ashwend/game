@@ -230,7 +230,7 @@ impl GameServer {
                 * power;
         let velocity = dir.scale(speed);
         let id = self.next_projectile_id;
-        self.next_projectile_id += 1;
+        self.next_projectile_id.0 += 1;
         let projectile = Projectile {
             id,
             kind: ProjectileKind::ThrownExplosive(explosive.kind),
@@ -406,7 +406,7 @@ impl GameServer {
         // out slow and short, a full draw sends it at the profile's full speed.
         let velocity = dir.scale(ranged.speed_for_draw(draw_ticks));
         let id = self.next_projectile_id;
-        self.next_projectile_id += 1;
+        self.next_projectile_id.0 += 1;
         let projectile = Projectile {
             id,
             kind: ProjectileKind::Arrow,

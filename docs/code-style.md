@@ -41,6 +41,7 @@ CI does not currently grep for em dashes, so this is enforced socially and by re
 `CLAUDE.md` owns the canonical clean-code rules; the short version:
 
 - No monolithic files. If a file starts mixing transport, domain rules, UI layout, persistence, and tests, split it by concern before extending it. Good existing splits: `src/server/`, `src/controller/`, `src/app/systems/`, `src/app/state/`, `src/app/ui/worlds/`, `src/server/furnace/` (state.rs / tick.rs / commands.rs).
+- Module style is sibling-file, repo-wide: a module with submodules is a `foo.rs` root next to a `foo/` directory, never `foo/mod.rs`. The root file holds the docstring, the `mod` declarations, and flat `pub(crate) use` re-exports so call sites stay `crate::foo::X` (see `src/items.rs`, `src/crafting.rs` for the pattern). Do not introduce `mod.rs` files.
 - Small modules with clear ownership over broad helper files.
 - Keep UI rendering, UI state, session actions, and authoritative game rules in separate modules.
 - Networking transport adapters stay thin: translate to shared `ClientMessage`/`ServerMessage` and delegate gameplay to `GameServer`. Do not put gameplay rules in the transport layer.
@@ -80,7 +81,7 @@ CI runs clippy with `-D warnings`, so every `warn` above is a hard build failure
 
 ### Format (`rustfmt.toml`)
 
-100-column max width, Unix newlines. Run `cargo fmt --all` (or `./cli lint`, which includes `--check`). The toolchain is pinned in `rust-toolchain.toml` (channel `1.94.0`, with `clippy` + `rustfmt` components) so everyone formats and lints identically.
+100-column max width, Unix newlines. Run `cargo fmt --all` (or `./cli lint`, which includes `--check`). The toolchain is pinned in `rust-toolchain.toml` (channel `1.95.0`, with `clippy` + `rustfmt` components) so everyone formats and lints identically.
 
 ### Dependency policy (`deny.toml` + `.cargo/audit.toml`)
 

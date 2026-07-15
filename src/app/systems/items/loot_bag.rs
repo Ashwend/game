@@ -21,7 +21,7 @@ use crate::{
 #[derive(Resource, Default)]
 pub(crate) struct LootBagEntities(pub(crate) HashMap<LootBagId, Entity>);
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 pub(crate) fn apply_loot_bags_system(
     mut commands: Commands,
     runtime: Res<ClientRuntime>,

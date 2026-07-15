@@ -116,7 +116,7 @@ pub(super) fn draw_world_headers(ui: &mut egui::Ui) {
     ui.add_space(6.0);
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "egui UI plumbing")]
 fn draw_world_row(
     ui: &mut egui::Ui,
     menu: &mut MenuState,

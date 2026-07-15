@@ -29,8 +29,8 @@ pub(crate) enum PredictionMatch {
 ///
 /// Pure and total: the caller owns the actual despawn, this only picks the target.
 pub(crate) fn predicted_arrow_should_dedupe(
-    projectile_owner: u64,
-    local_client_id: Option<u64>,
+    projectile_owner: crate::protocol::ClientId,
+    local_client_id: Option<crate::protocol::ClientId>,
     prediction_ages: &[f32],
 ) -> PredictionMatch {
     if Some(projectile_owner) != local_client_id {
@@ -58,7 +58,11 @@ mod tests {
         // A peer's arrow (owner 2) must not retire the local player's (id 1)
         // predictions.
         assert_eq!(
-            predicted_arrow_should_dedupe(2, Some(1), &[0.3, 0.1]),
+            predicted_arrow_should_dedupe(
+                crate::protocol::ClientId(2),
+                Some(crate::protocol::ClientId(1)),
+                &[0.3, 0.1]
+            ),
             PredictionMatch::None
         );
     }
@@ -68,7 +72,11 @@ mod tests {
         // The local player's replicated arrow (owner 1) retires the oldest live
         // prediction. Ages [0.1, 0.4, 0.2] => index 1 is oldest (0.4s).
         assert_eq!(
-            predicted_arrow_should_dedupe(1, Some(1), &[0.1, 0.4, 0.2]),
+            predicted_arrow_should_dedupe(
+                crate::protocol::ClientId(1),
+                Some(crate::protocol::ClientId(1)),
+                &[0.1, 0.4, 0.2]
+            ),
             PredictionMatch::Retire(1)
         );
     }
@@ -78,7 +86,11 @@ mod tests {
         // The local player's replicated arrow with no live prediction (e.g. after a
         // reconnect) simply renders on its own.
         assert_eq!(
-            predicted_arrow_should_dedupe(1, Some(1), &[]),
+            predicted_arrow_should_dedupe(
+                crate::protocol::ClientId(1),
+                Some(crate::protocol::ClientId(1)),
+                &[]
+            ),
             PredictionMatch::None
         );
     }
@@ -87,7 +99,11 @@ mod tests {
     fn a_single_prediction_is_retired_regardless_of_age() {
         // One prediction => it is the oldest, retired the moment the own arrow lands.
         assert_eq!(
-            predicted_arrow_should_dedupe(1, Some(1), &[0.05]),
+            predicted_arrow_should_dedupe(
+                crate::protocol::ClientId(1),
+                Some(crate::protocol::ClientId(1)),
+                &[0.05]
+            ),
             PredictionMatch::Retire(0)
         );
     }
@@ -96,7 +112,7 @@ mod tests {
     fn before_connect_no_local_id_dedupes_nothing() {
         // Pre-connect (no client id) there is no "own" projectile to match.
         assert_eq!(
-            predicted_arrow_should_dedupe(1, None, &[0.2]),
+            predicted_arrow_should_dedupe(crate::protocol::ClientId(1), None, &[0.2]),
             PredictionMatch::None
         );
     }

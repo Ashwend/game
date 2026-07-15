@@ -8,7 +8,7 @@
 //!
 //! Variant pools are declared as a static slice of `&'static str` paths.
 //! For sequentially-numbered pools (e.g. `footstep-dirt-01.wav` … `-12.wav`)
-//! [`numbered_pool`] generates the path list at compile time so adding more
+//! [`footstep_paths`] builds the path list once at startup so adding more
 //! variants is "drop the new files, change the count".
 
 use std::sync::OnceLock;

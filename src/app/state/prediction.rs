@@ -318,7 +318,7 @@ mod tests {
         inv
     }
 
-    const NODE: ResourceNodeId = 42;
+    const NODE: ResourceNodeId = crate::protocol::ResourceNodeId(42);
 
     #[test]
     fn seq_starts_at_one_and_is_monotonic() {
@@ -448,7 +448,7 @@ mod tests {
     #[test]
     fn pickup_hides_then_unhides_on_reject() {
         let mut state = PredictionState::default();
-        let id: DroppedItemId = 7;
+        let id: DroppedItemId = crate::protocol::DroppedItemId(7);
         let seq = state.alloc_seq();
         state.push_pickup(seq, id, ItemStack::new(COAL_ID, 2));
         assert!(state.is_dropped_hidden(id));
@@ -535,14 +535,18 @@ mod tests {
     fn clear_drops_everything() {
         let mut state = PredictionState::default();
         let seq = state.alloc_seq();
-        state.push_pickup(seq, 1, ItemStack::new(COAL_ID, 1));
+        state.push_pickup(
+            seq,
+            crate::protocol::DroppedItemId(1),
+            ItemStack::new(COAL_ID, 1),
+        );
         let seq2 = state.alloc_seq();
         state.push_gather(seq2, NODE, ItemStack::new(COAL_ID, 1));
         let seq3 = state.alloc_seq();
         state.push_node_pickup(seq3, NODE, vec![ItemStack::new(COAL_ID, 1)], true);
         state.clear();
         assert!(state.is_idle());
-        assert!(!state.is_dropped_hidden(1));
+        assert!(!state.is_dropped_hidden(crate::protocol::DroppedItemId(1)));
         assert!(!state.is_node_hidden(NODE));
     }
 
@@ -553,12 +557,19 @@ mod tests {
         // the hidden ids, and the node-take ledger.
         let mut state = PredictionState::default();
         let seq1 = state.alloc_seq();
-        state.push_pickup(seq1, 7, ItemStack::new(COAL_ID, 1));
+        state.push_pickup(
+            seq1,
+            crate::protocol::DroppedItemId(7),
+            ItemStack::new(COAL_ID, 1),
+        );
         let seq2 = state.alloc_seq();
         state.push_node_pickup(seq2, NODE, vec![ItemStack::new(COAL_ID, 2)], true);
 
         state.prune(seq1);
-        assert!(!state.is_dropped_hidden(7), "processed pickup must unhide");
+        assert!(
+            !state.is_dropped_hidden(crate::protocol::DroppedItemId(7)),
+            "processed pickup must unhide"
+        );
         assert!(state.is_node_hidden(NODE), "later op must stay hidden");
         assert!(!state.is_idle());
         let effective = state.rebuild_effective(&PlayerInventoryState::empty());
@@ -623,7 +634,7 @@ mod tests {
         assert_eq!(storage[1].quantity, 2, "spill reduces the second stack");
 
         // A different node sees the untouched base; takes are per-node.
-        let other = state.effective_node_storage(NODE + 1, &base);
+        let other = state.effective_node_storage(ResourceNodeId(NODE.0 + 1), &base);
         assert_eq!(other.len(), 3);
     }
 

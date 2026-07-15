@@ -301,7 +301,7 @@ fn extract_grass(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 fn queue_grass(
     transparent_3d_draw_functions: Res<DrawFunctions<Transparent3d>>,
     grass_pipeline: Res<GrassInstancePipeline>,

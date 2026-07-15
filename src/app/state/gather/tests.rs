@@ -4,23 +4,23 @@ use crate::protocol::{ItemStack, Vec3Net};
 #[test]
 fn pickup_target_clear_removes_cached_target() {
     let mut state = PickupTargetState {
-        dropped_item_id: Some(7),
+        dropped_item_id: Some(crate::protocol::DroppedItemId(7)),
         stack: Some(ItemStack::new("ore", 1)),
-        resource_node_id: Some(8),
+        resource_node_id: Some(crate::protocol::ResourceNodeId(8)),
         resource_definition_id: Some("node".to_owned()),
         resource_storage: vec![ItemStack::new("wood", 2)],
         world_position: Some(Vec3Net::new(1.0, 2.0, 3.0)),
         screen_position: Some(Vec2::new(10.0, 20.0)),
-        deployable_id: Some(42),
+        deployable_id: Some(crate::protocol::DeployedEntityId(42)),
         deployable_kind: Some(crate::items::DeployableKind::Furnace { tier: 1 }),
         deployable_stability: Some(100),
         deployable_cupboard_auth: None,
         deployable_can_modify: false,
         deployable_demolishable: false,
-        player_id: Some(99),
-        loot_bag_id: Some(123),
+        player_id: Some(crate::protocol::ClientId(99)),
+        loot_bag_id: Some(crate::protocol::LootBagId(123)),
         sleeping_player: Some(("Sleeper".to_owned(), 50.0)),
-        projectile_id: Some(31),
+        projectile_id: Some(crate::protocol::ProjectileId(31)),
         elapsed_since_scan: 0.0,
     };
 
@@ -51,7 +51,9 @@ fn gather_input_sends_at_swing_impact_and_repeats_while_held() {
         true,
         true,
         Some(model),
-        Some(SwingTarget::ResourceNode(4)),
+        Some(SwingTarget::ResourceNode(crate::protocol::ResourceNodeId(
+            4,
+        ))),
         SwingFeelScales::default(),
     );
     assert!(tick.is_none());
@@ -63,11 +65,18 @@ fn gather_input_sends_at_swing_impact_and_repeats_while_held() {
             false,
             true,
             Some(model),
-            Some(SwingTarget::ResourceNode(4)),
+            Some(SwingTarget::ResourceNode(crate::protocol::ResourceNodeId(
+                4,
+            ))),
             SwingFeelScales::default(),
         )
         .expect("impact should emit at the impact fraction of the swing");
-    assert_eq!(impact.target, Some(SwingTarget::ResourceNode(4)));
+    assert_eq!(
+        impact.target,
+        Some(SwingTarget::ResourceNode(crate::protocol::ResourceNodeId(
+            4
+        )))
+    );
     assert_eq!(impact.model, model);
 
     // Same swing, no second impact even though we step further.
@@ -78,7 +87,9 @@ fn gather_input_sends_at_swing_impact_and_repeats_while_held() {
                 false,
                 true,
                 Some(model),
-                Some(SwingTarget::ResourceNode(4)),
+                Some(SwingTarget::ResourceNode(crate::protocol::ResourceNodeId(
+                    4
+                ))),
                 SwingFeelScales::default(),
             )
             .is_none()
@@ -89,7 +100,9 @@ fn gather_input_sends_at_swing_impact_and_repeats_while_held() {
         false,
         true,
         Some(model),
-        Some(SwingTarget::ResourceNode(5)),
+        Some(SwingTarget::ResourceNode(crate::protocol::ResourceNodeId(
+            5,
+        ))),
         SwingFeelScales::default(),
     );
     // Swing rolled over into a new swing while LMB is held.
@@ -112,7 +125,9 @@ fn gather_input_emits_exactly_one_impact_event_at_impact_fraction() {
                 true,
                 true,
                 Some(model),
-                Some(SwingTarget::ResourceNode(7)),
+                Some(SwingTarget::ResourceNode(crate::protocol::ResourceNodeId(
+                    7
+                ))),
                 SwingFeelScales::default(),
             )
             .is_none()
@@ -125,11 +140,18 @@ fn gather_input_emits_exactly_one_impact_event_at_impact_fraction() {
             false,
             true,
             Some(model),
-            Some(SwingTarget::ResourceNode(7)),
+            Some(SwingTarget::ResourceNode(crate::protocol::ResourceNodeId(
+                7,
+            ))),
             SwingFeelScales::default(),
         )
         .expect("impact should emit once we cross the impact fraction");
-    assert_eq!(impact.target, Some(SwingTarget::ResourceNode(7)));
+    assert_eq!(
+        impact.target,
+        Some(SwingTarget::ResourceNode(crate::protocol::ResourceNodeId(
+            7
+        )))
+    );
     assert_eq!(impact.model, model);
 
     // No duplicate impact for the remainder of the swing.
@@ -140,7 +162,9 @@ fn gather_input_emits_exactly_one_impact_event_at_impact_fraction() {
                 false,
                 false,
                 Some(model),
-                Some(SwingTarget::ResourceNode(7)),
+                Some(SwingTarget::ResourceNode(crate::protocol::ResourceNodeId(
+                    7
+                ))),
                 SwingFeelScales::default(),
             )
             .is_none()
@@ -190,7 +214,9 @@ fn gather_input_does_nothing_without_a_tool_equipped() {
                 true,
                 true,
                 None,
-                Some(SwingTarget::ResourceNode(4)),
+                Some(SwingTarget::ResourceNode(crate::protocol::ResourceNodeId(
+                    4
+                ))),
                 SwingFeelScales::default()
             )
             .is_none()
@@ -305,7 +331,7 @@ fn hit_stop_holds_the_swing_phase_then_resumes() {
         true,
         true,
         Some(model),
-        Some(SwingTarget::Player(9)),
+        Some(SwingTarget::Player(crate::protocol::ClientId(9))),
         SwingFeelScales::default(),
     );
     let before = state.swing_fraction();
@@ -320,7 +346,7 @@ fn hit_stop_holds_the_swing_phase_then_resumes() {
         false,
         true,
         Some(model),
-        Some(SwingTarget::Player(9)),
+        Some(SwingTarget::Player(crate::protocol::ClientId(9))),
         SwingFeelScales::default(),
     );
     assert_eq!(
@@ -335,7 +361,7 @@ fn hit_stop_holds_the_swing_phase_then_resumes() {
         false,
         true,
         Some(model),
-        Some(SwingTarget::Player(9)),
+        Some(SwingTarget::Player(crate::protocol::ClientId(9))),
         SwingFeelScales::default(),
     );
     assert_eq!(
@@ -350,7 +376,7 @@ fn hit_stop_holds_the_swing_phase_then_resumes() {
         false,
         true,
         Some(model),
-        Some(SwingTarget::Player(9)),
+        Some(SwingTarget::Player(crate::protocol::ClientId(9))),
         SwingFeelScales::default(),
     );
     assert!(
@@ -370,7 +396,7 @@ fn hit_stop_scale_zero_disables_the_freeze() {
         true,
         true,
         Some(model),
-        Some(SwingTarget::Player(9)),
+        Some(SwingTarget::Player(crate::protocol::ClientId(9))),
         SwingFeelScales::default(),
     );
     let before = state.swing_fraction();
@@ -380,7 +406,7 @@ fn hit_stop_scale_zero_disables_the_freeze() {
         false,
         true,
         Some(model),
-        Some(SwingTarget::Player(9)),
+        Some(SwingTarget::Player(crate::protocol::ClientId(9))),
         SwingFeelScales::default(),
     );
     assert!(
@@ -397,7 +423,9 @@ fn each_started_swing_advances_the_seed() {
     // Land each swing (real target) so it rolls straight into the next
     // while held; a whiff would charge the miss-recovery gap instead and
     // not roll over until it elapsed.
-    let target = Some(SwingTarget::ResourceNode(4));
+    let target = Some(SwingTarget::ResourceNode(crate::protocol::ResourceNodeId(
+        4,
+    )));
 
     let _ = state.update(
         0.0,
@@ -501,7 +529,7 @@ fn landed_swing_repeats_with_no_recovery_penalty() {
     let mut state = GatherInputState::default();
     let model = ItemModel::Hatchet;
     let duration = swing_duration_seconds(model);
-    let target = Some(SwingTarget::Player(7));
+    let target = Some(SwingTarget::Player(crate::protocol::ClientId(7)));
 
     // A swing that lands on a player should roll straight into the next
     // one while LMB is held, no recovery gap, full cadence preserved.
@@ -559,7 +587,7 @@ fn tool_swap_or_death_clears_a_pending_miss_recovery() {
         true,
         true,
         Some(model),
-        Some(SwingTarget::Player(3)),
+        Some(SwingTarget::Player(crate::protocol::ClientId(3))),
         SwingFeelScales::default(),
     );
     assert!(
@@ -570,7 +598,7 @@ fn tool_swap_or_death_clears_a_pending_miss_recovery() {
 
 #[test]
 fn impact_effect_kind_maps_models_and_surfaces() {
-    use crate::resources::ResourceNodeModel;
+    use crate::resource_nodes::ResourceNodeModel;
     assert_eq!(
         ImpactEffectKind::for_resource_model(ResourceNodeModel::PineTreeLarge),
         ImpactEffectKind::WoodChips

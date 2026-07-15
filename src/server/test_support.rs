@@ -46,10 +46,10 @@ pub(crate) fn server() -> GameServer {
 /// Like [`server`], but keeps the world's ruin caches. Used by the ruins tests.
 pub(crate) fn server_with_ruins() -> GameServer {
     GameServer::new(
-        WorldSave::new("Test", Some(1)),
+        WorldSave::new("Test", Some(crate::protocol::AccountId(1))),
         ServerSettings {
             auth_mode: AuthMode::NoAuth,
-            singleplayer_host: Some(1),
+            singleplayer_host: Some(crate::protocol::AccountId(1)),
         },
     )
 }
@@ -73,7 +73,7 @@ pub(crate) fn connect_named(server: &mut GameServer, name: &str) -> ClientId {
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
-            1,
+            crate::protocol::AccountId(1),
             name.to_owned(),
             String::new(),
         )
@@ -137,7 +137,7 @@ pub(crate) fn place_building(
     let tier = crate::building::BuildingTier::Sticks;
     let max_health = crate::building::building_max_health(piece, tier);
     let id = server.next_deployed_entity_id;
-    server.next_deployed_entity_id += 1;
+    server.next_deployed_entity_id.0 += 1;
     let entity = super::deployables::DeployedEntity {
         id,
         item_id: crate::items::intern_item_id(crate::building::building_item_id(piece)),
@@ -146,7 +146,7 @@ pub(crate) fn place_building(
         yaw,
         health: max_health,
         max_health,
-        owner: Some(1),
+        owner: Some(crate::protocol::AccountId(1)),
         furnace: None,
         placed_at_tick: 0,
         door: None,

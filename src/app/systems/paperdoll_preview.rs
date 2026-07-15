@@ -237,7 +237,7 @@ fn preview_visible(menu: &MenuState, inventory_ui: &InventoryUiState) -> bool {
 /// Per-frame sync: gate the camera to the Inventory tab, sway the rig, and
 /// rebuild the worn-armor / held-item layers when the local (predicted)
 /// inventory changes. Steady state with the tab open is two equality checks.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 pub(crate) fn sync_paperdoll_preview_system(
     mut commands: Commands,
     preview: Option<ResMut<PaperdollPreview>>,

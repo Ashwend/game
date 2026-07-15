@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     protocol::{ServerMessage, ToastKind},
-    resources::{IRON_NODE_ID, PINE_TREE_LARGE_NODE_ID},
+    resource_nodes::{IRON_NODE_ID, PINE_TREE_LARGE_NODE_ID},
 };
 
 #[test]
@@ -12,14 +12,14 @@ fn spawn_command_requires_admin_and_warns_otherwise() {
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
-            2,
+            crate::protocol::AccountId(2),
             "Guest".to_owned(),
             String::new(),
         )
         .expect("guest should connect");
     let guest_id = server
         .players_iter()
-        .find(|player| player.account_id == 2)
+        .find(|player| player.account_id == crate::protocol::AccountId(2))
         .map(|player| player.client_id)
         .expect("guest client id");
     let before = server.resource_nodes_iter().count();
@@ -52,7 +52,7 @@ fn spawn_command_inserts_a_new_node_for_an_admin() {
     let mut server = server();
     let host_id = connect_host(&mut server);
     let before = server.resource_nodes_iter().count();
-    let known_ids: std::collections::HashSet<u64> =
+    let known_ids: std::collections::HashSet<crate::protocol::ResourceNodeId> =
         server.resource_nodes_iter().map(|(id, _)| *id).collect();
 
     let envelopes = server.receive(
@@ -86,7 +86,7 @@ fn spawn_command_inserts_a_new_node_for_an_admin() {
 fn spawn_command_handles_non_ore_kinds_and_warns_when_kind_is_missing() {
     let mut server = server();
     let host_id = connect_host(&mut server);
-    let before: std::collections::HashSet<u64> =
+    let before: std::collections::HashSet<crate::protocol::ResourceNodeId> =
         server.resource_nodes_iter().map(|(id, _)| *id).collect();
 
     // A tree alias goes through the same registry + chunk-tracking path
@@ -131,8 +131,12 @@ fn spawn_command_handles_non_ore_kinds_and_warns_when_kind_is_missing() {
 /// Spawn a node 2.2 m ahead of the host and aim the host's pitch down at
 /// its anchor so the gather view-ray targeting (which `/drain` reuses)
 /// resolves it. Returns the new node's id.
-fn spawn_node_in_view(server: &mut GameServer, host_id: ClientId, kind: &str) -> u64 {
-    let known_ids: std::collections::HashSet<u64> =
+fn spawn_node_in_view(
+    server: &mut GameServer,
+    host_id: ClientId,
+    kind: &str,
+) -> crate::protocol::ResourceNodeId {
+    let known_ids: std::collections::HashSet<crate::protocol::ResourceNodeId> =
         server.resource_nodes_iter().map(|(id, _)| *id).collect();
     let envelopes = server.receive(
         host_id,
@@ -263,14 +267,14 @@ fn drain_requires_admin_and_a_targeted_node() {
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
-            2,
+            crate::protocol::AccountId(2),
             "Guest".to_owned(),
             String::new(),
         )
         .expect("guest should connect");
     let guest_id = server
         .players_iter()
-        .find(|player| player.account_id == 2)
+        .find(|player| player.account_id == crate::protocol::AccountId(2))
         .map(|player| player.client_id)
         .expect("guest client id");
     let envelopes = server.receive(
@@ -331,14 +335,14 @@ fn help_marks_spawn_as_admin_only_for_non_admins() {
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
-            2,
+            crate::protocol::AccountId(2),
             "Guest".to_owned(),
             String::new(),
         )
         .expect("guest should connect");
     let guest_id = server
         .players_iter()
-        .find(|player| player.account_id == 2)
+        .find(|player| player.account_id == crate::protocol::AccountId(2))
         .map(|player| player.client_id)
         .expect("guest client id");
 

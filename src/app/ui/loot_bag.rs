@@ -214,7 +214,7 @@ mod tests {
             slots[3] = Some(ItemStack::new(COAL_ID, 2));
         }
         OpenLootBagView {
-            id: 7,
+            id: crate::protocol::LootBagId(7),
             slots,
             kind: ContainerViewKind::LootBag,
         }

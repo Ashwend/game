@@ -14,7 +14,9 @@
 //! 2. Self-attack, `attacker == target` is silently dropped.
 //! 3. Target alive, no chain damage on a corpse.
 //! 4. Real tool, bare hands and non-tool items can't deal PvP damage.
-//! 5. Range, feet-to-feet distance must be within [`ATTACK_RANGE_M`].
+//! 5. Range, feet-to-feet distance must be within the attack profile's reach,
+//!    [`COMBAT_ATTACK_RANGE_M`](crate::game_balance::COMBAT_ATTACK_RANGE_M) for
+//!    standard melee.
 //! 6. Aim (live targets only), the look ray must pass through the target's
 //!    body box (the same `crate::combat::player_body_ray_entry` test the
 //!    client targets with); waived for a helpless sleeping body.
@@ -38,13 +40,9 @@ use crate::{
 use crate::game_balance::{
     COMBAT_ATTACKER_EYE_HEIGHT as ATTACKER_EYE_HEIGHT,
     COMBAT_KNOCKBACK_VERTICAL_FRACTION as KNOCKBACK_VERTICAL_FRACTION,
+    COMBAT_SLEEPING_BODY_CENTRE_Y as SLEEPING_HIT_HEIGHT,
     COMBAT_TARGET_CHEST_HEIGHT as TARGET_CHEST_HEIGHT,
 };
-
-/// Hit-point height above the feet for a logged-out sleeping body. The avatar
-/// is laid flat on the ground, so the swing lands near floor level rather than
-/// at standing chest height.
-const SLEEPING_HIT_HEIGHT: f32 = 0.35;
 
 /// The proximity impact broadcast half of a player hit: a cosmetic
 /// `PlayerImpact` fanned out to nearby peers (excluding the attacker, who
@@ -339,7 +337,7 @@ impl GameServer {
                 crate::game_balance::IMPACT_MESSAGE_RANGE_M,
                 attacker_id,
                 ServerMessage::PlayerImpact {
-                    attacker: attacker_id.unwrap_or(0),
+                    attacker: attacker_id.unwrap_or(crate::protocol::ClientId(0)),
                     target: target_id,
                     position: impact.anchor,
                     attacker_position: impact.attacker_position,
@@ -581,7 +579,7 @@ impl GameServer {
         let mut extras: Vec<crate::world::WorldBlock> = self
             .resource_nodes
             .values()
-            .filter_map(crate::resources::resource_node_collider)
+            .filter_map(crate::resource_nodes::resource_node_collider)
             .collect();
         extras.extend(
             self.deployed_entities
@@ -628,7 +626,12 @@ impl GameServer {
         let mut rng_state = self
             .tick
             .wrapping_mul(0x9E3779B97F4A7C15)
-            .wrapping_add(exclude.unwrap_or(0).wrapping_mul(0xBF58476D1CE4E5B9))
+            .wrapping_add(
+                exclude
+                    .unwrap_or(crate::protocol::ClientId(0))
+                    .0
+                    .wrapping_mul(0xBF58476D1CE4E5B9),
+            )
             .wrapping_add(0xD1B54A32D192ED03);
 
         let min_distance_sq = RESPAWN_MIN_DISTANCE_M * RESPAWN_MIN_DISTANCE_M;

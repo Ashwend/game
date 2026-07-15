@@ -90,7 +90,7 @@ const AIM_FORWARD: Vec3Net = Vec3Net::new(0.0, 0.0, -1.0);
 #[test]
 fn fire_with_no_ranged_weapon_does_nothing() {
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     // A bare hand (no weapon, no ammo): the fire is rejected, no projectile.
     let envelopes = fire(&mut server, shooter, AIM_FORWARD);
     assert!(envelopes.is_empty());
@@ -100,7 +100,7 @@ fn fire_with_no_ranged_weapon_does_nothing() {
 #[test]
 fn fire_with_no_ammo_is_rejected() {
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     equip_ranged(&mut server, shooter, WOODEN_BOW_ID, 0);
     fire(&mut server, shooter, AIM_FORWARD);
     assert!(
@@ -112,7 +112,7 @@ fn fire_with_no_ammo_is_rejected() {
 #[test]
 fn fire_consumes_exactly_one_arrow_and_spawns_one_projectile() {
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     equip_ranged(&mut server, shooter, WOODEN_BOW_ID, 5);
     assert_eq!(arrow_count(&server, shooter), 5);
     fire(&mut server, shooter, AIM_FORWARD);
@@ -127,7 +127,7 @@ fn fire_consumes_exactly_one_arrow_and_spawns_one_projectile() {
 #[test]
 fn fire_on_cooldown_is_rejected() {
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     // The crossbow has a long reload; a second immediate shot must be dropped.
     equip_ranged(&mut server, shooter, CROSSBOW_ID, 5);
     fire(&mut server, shooter, AIM_FORWARD);
@@ -156,7 +156,7 @@ fn fire_on_cooldown_is_rejected() {
 #[test]
 fn fire_with_non_finite_aim_is_rejected() {
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     equip_ranged(&mut server, shooter, WOODEN_BOW_ID, 5);
     // A NaN aim direction is dropped before any ammo is touched.
     fire(&mut server, shooter, Vec3Net::new(f32::NAN, 0.0, -1.0));
@@ -179,7 +179,7 @@ fn a_release_below_the_minimum_draw_is_rejected() {
     // A bow release only fires past the minimum draw gate: an undrawn Fire (a
     // tap) and a barely-held one are both dropped, costing nothing.
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     equip_ranged(&mut server, shooter, WOODEN_BOW_ID, 5);
 
     // No DrawStart at all: rejected, no arrow spent.
@@ -217,7 +217,7 @@ fn damage_and_speed_scale_with_the_held_draw() {
     // A shot just past the minimum draw carries scaled-down damage AND a
     // scaled-down launch speed; a full draw carries the maximums.
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     equip_ranged(&mut server, shooter, WOODEN_BOW_ID, 5);
 
     // Just past the minimum firing draw.
@@ -270,7 +270,7 @@ fn crossbow_shot_is_always_full_damage() {
     // A crossbow has a zero draw window, so a shot with no held draw is still the
     // flat crossbow damage.
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     equip_ranged(&mut server, shooter, CROSSBOW_ID, 5);
     fire(&mut server, shooter, AIM_FORWARD);
     let damage = server
@@ -287,8 +287,8 @@ fn crossbow_shot_is_always_full_damage() {
 #[test]
 fn projectile_hits_a_player_and_routes_through_apply_player_damage() {
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
-    let target = connect_named(&mut server, 2, "Target");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     // Shooter at origin firing -Z; target 3 m ahead in the arrow's path.
     place_player(&mut server, shooter, Vec3Net::ZERO, 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -3.0), 0.0);
@@ -380,9 +380,9 @@ fn shooter_gets_exactly_one_confirmation_on_a_player_hit_with_a_nearby_peer() {
     // the shooter gets exactly one owner-confirmation copy (and is absent from
     // the peer fan-out, so no double-delivery).
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
-    let target = connect_named(&mut server, 2, "Target");
-    let peer = connect_named(&mut server, 3, "Peer");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
+    let peer = connect_named(&mut server, crate::protocol::AccountId(3), "Peer");
     place_player(&mut server, shooter, Vec3Net::ZERO, 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -3.0), 0.0);
     // Peer well within the 80 m fan-out radius, off to the side so it isn't in
@@ -419,9 +419,9 @@ fn shooter_still_gets_the_confirmation_when_no_peer_is_in_range() {
     // the proximity fan-out is empty), the shooter still receives exactly one
     // owner-confirmation copy: the owner send is independent of the fan-out.
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
-    let target = connect_named(&mut server, 2, "Target");
-    let peer = connect_named(&mut server, 3, "Peer");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
+    let peer = connect_named(&mut server, crate::protocol::AccountId(3), "Peer");
     place_player(&mut server, shooter, Vec3Net::ZERO, 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -3.0), 0.0);
     // Peer parked beyond the 80 m impact-message range: excluded from the fan-out.
@@ -451,7 +451,7 @@ fn world_rest_sends_the_shooter_no_projectile_impact() {
     // send the shooter any ProjectileImpact: their client cues the world thunk
     // from the arrow's moving -> stuck transition instead.
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     place_player(&mut server, shooter, Vec3Net::ZERO, 0.0);
     equip_ranged(&mut server, shooter, WOODEN_BOW_ID, 5);
     // Lob it nearly straight up so it arcs back down to a world rest.
@@ -490,8 +490,8 @@ fn armored_target_takes_projectile_column_mitigated_damage() {
     // A target wearing projectile armor takes less than the raw shot damage,
     // proving the projectile column of the armor table is applied.
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
-    let target = connect_named(&mut server, 2, "Target");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     place_player(&mut server, shooter, Vec3Net::ZERO, 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -3.0), 0.0);
     equip_ranged(&mut server, shooter, WOODEN_BOW_ID, 5);
@@ -541,7 +541,7 @@ fn shooter_is_not_hit_by_its_own_arrow_at_spawn() {
     // self-hit grace window must keep it from resolving against the shooter on
     // the first frames.
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     place_player(&mut server, shooter, Vec3Net::ZERO, 0.0);
     equip_ranged(&mut server, shooter, WOODEN_BOW_ID, 5);
     let start_hp = server.clients.get(&shooter).unwrap().controller.health;
@@ -563,8 +563,8 @@ fn a_wall_between_shooter_and_target_stops_the_arrow() {
     // A stone foundation wall between the shooter and target blocks the shot, so
     // the target takes no damage and the arrow rests instead.
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
-    let target = connect_named(&mut server, 2, "Target");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
+    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
     place_player(&mut server, shooter, Vec3Net::ZERO, 0.0);
     place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -6.0), 0.0);
     equip_ranged(&mut server, shooter, WOODEN_BOW_ID, 5);
@@ -598,7 +598,7 @@ fn a_projectile_that_rests_despawns_after_the_stuck_ttl() {
     // Fire into open sky with a short-lived shot: after it comes to rest (max
     // flight or a world hit) and the stuck TTL elapses, the projectile is gone.
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     place_player(&mut server, shooter, Vec3Net::ZERO, 0.0);
     equip_ranged(&mut server, shooter, WOODEN_BOW_ID, 5);
     // Fire nearly straight up so the arc is long; the max-flight cap or a ground
@@ -622,7 +622,11 @@ fn a_projectile_that_rests_despawns_after_the_stuck_ttl() {
 
 /// Fire one arrow and rest the shooter's single live projectile at `rest`,
 /// returning its id. Every world rest sticks (E-recoverable until the TTL).
-fn fire_and_rest(server: &mut GameServer, shooter: ClientId, rest: Vec3Net) -> u64 {
+fn fire_and_rest(
+    server: &mut GameServer,
+    shooter: ClientId,
+    rest: Vec3Net,
+) -> crate::protocol::ProjectileId {
     server.clients.get_mut(&shooter).unwrap().next_ranged_tick = 0;
     fire(server, shooter, AIM_FORWARD);
     let (id, projectile) = server
@@ -643,7 +647,7 @@ fn every_world_rest_sticks_with_the_flight_direction_and_no_dropped_item() {
     // dropped-item entity (the old design's cosmetic-stuck-plus-hidden-drop
     // read as arrows vanishing or being un-pickupable).
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     place_player(&mut server, shooter, Vec3Net::ZERO, 0.0);
     equip_ranged(&mut server, shooter, WOODEN_BOW_ID, 5);
     let rest = Vec3Net::new(1.0, 0.0, -2.0);
@@ -680,7 +684,7 @@ fn an_arrow_arcing_into_open_ground_lodges_at_the_surface() {
     // fired down at open ground must lodge at the surface exactly like a tree
     // hit (it used to sail straight through the floor and despawn unrecovered).
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     place_player(&mut server, shooter, Vec3Net::ZERO, 0.0);
     equip_ranged(&mut server, shooter, WOODEN_BOW_ID, 5);
 
@@ -718,7 +722,7 @@ fn an_arrow_arcing_into_open_ground_lodges_at_the_surface() {
 #[test]
 fn a_stuck_arrow_is_recovered_with_e_within_reach() {
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     place_player(&mut server, shooter, Vec3Net::ZERO, 0.0);
     equip_ranged(&mut server, shooter, WOODEN_BOW_ID, 10);
     let rest = Vec3Net::new(1.0, 0.0, -2.0);
@@ -746,7 +750,7 @@ fn a_stuck_arrow_is_recovered_with_e_within_reach() {
 #[test]
 fn recovery_is_rejected_out_of_reach_and_for_flying_arrows() {
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     place_player(&mut server, shooter, Vec3Net::ZERO, 0.0);
     equip_ranged(&mut server, shooter, WOODEN_BOW_ID, 10);
 
@@ -794,7 +798,7 @@ fn reload_move_state(server: &GameServer, client_id: ClientId) -> (f32, bool) {
 #[test]
 fn crossbow_fire_slows_movement_and_the_tick_restores_it_when_the_reload_elapses() {
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     place_player(&mut server, shooter, Vec3Net::ZERO, 0.0);
     equip_ranged(&mut server, shooter, CROSSBOW_ID, 5);
 
@@ -838,7 +842,7 @@ fn bow_fire_does_not_arm_the_reload_slow() {
     // A bow's tiny post-fire floor is not a reload: firing it leaves movement at
     // full speed (the draw slow, tested elsewhere, is the bow's only penalty).
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     place_player(&mut server, shooter, Vec3Net::ZERO, 0.0);
     equip_ranged(&mut server, shooter, WOODEN_BOW_ID, 5);
     fire(&mut server, shooter, AIM_FORWARD);
@@ -854,7 +858,7 @@ fn swapping_off_a_reloading_crossbow_restores_movement() {
     // Switching to another actionbar slot mid-reload lifts the reload slow, so a
     // player is never stuck slow after putting the crossbow away.
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     place_player(&mut server, shooter, Vec3Net::ZERO, 0.0);
     equip_ranged(&mut server, shooter, CROSSBOW_ID, 5);
     // Give slot 1 a hatchet to swap to.
@@ -886,7 +890,7 @@ fn swapping_off_a_reloading_crossbow_restores_movement() {
 #[test]
 fn held_bow_draw_replicates_a_rising_fraction() {
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     equip_ranged(&mut server, shooter, WOODEN_BOW_ID, 5);
 
     let draw_of = |server: &GameServer| {
@@ -924,7 +928,7 @@ fn held_bow_draw_replicates_a_rising_fraction() {
 #[test]
 fn crossbow_never_reports_a_draw_fraction() {
     let mut server = server();
-    let shooter = connect_named(&mut server, 1, "Shooter");
+    let shooter = connect_named(&mut server, crate::protocol::AccountId(1), "Shooter");
     equip_ranged(&mut server, shooter, CROSSBOW_ID, 5);
     server.apply_ranged_command(shooter, RangedCommand::DrawStart);
     server.tick += 100;

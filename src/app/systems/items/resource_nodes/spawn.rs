@@ -7,12 +7,12 @@ use crate::{
         systems::effects::spawn_impact_burst,
     },
     protocol::{ResourceNodeId, Vec3Net},
-    resources::ResourceNodeModel,
+    resource_nodes::ResourceNodeModel,
 };
 
 use super::{ResourceNodeEntities, ResourceNodePopIn, hay_sway::HayGrass};
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "split-out system helper")]
 pub(super) fn spawn_resource_node_entity(
     commands: &mut Commands,
     assets: &ResourceVisualAssets,
@@ -28,7 +28,7 @@ pub(super) fn spawn_resource_node_entity(
 ) {
     // A tree standing where growth is poor renders as a bare dead snag instead of a
     // lush tree. `dead` is the server-authoritative, replicated flag (decided at
-    // generation, see `resources::spawn_resource_node`); this is a pure visual swap,
+    // generation, see `resource_nodes::spawn_resource_node`); this is a pure visual swap,
     // the node is otherwise a normal tree. Snags are a single weathered vertex-
     // coloured mesh, no canopy and no LOD (they're already low-poly).
     let dead_tree = model.is_tree() && dead;
@@ -216,7 +216,7 @@ fn spawn_pop_in_chip_burst(
 ) {
     let burst_anchor = Vec3::from(position) + Vec3::Y * 0.18;
     let kind = ImpactEffectKind::for_resource_model(model);
-    let seed = (id as u32).wrapping_mul(0x9E37_79B1);
+    let seed = (id.0 as u32).wrapping_mul(0x9E37_79B1);
     spawn_impact_burst(
         commands,
         impact_assets,
@@ -313,7 +313,7 @@ pub(crate) fn resource_node_visual(
         // exposure as the detail grass and trees.
         ResourceNodeModel::HayGrass => (
             assets.hay_grass_mesh.clone(),
-            ResourceNodeMaterial::Toon(assets.hay_grass_materials[(id % 3) as usize].clone()),
+            ResourceNodeMaterial::Toon(assets.hay_grass_materials[(id.0 % 3) as usize].clone()),
         ),
     }
 }
@@ -373,5 +373,5 @@ pub(crate) fn tree_foliage_visual(
     })
 }
 
-// Dead-tree vitality is decided server-side now (see `resources::spawn_resource_node`
+// Dead-tree vitality is decided server-side now (see `resource_nodes::spawn_resource_node`
 // + its tests); this module only renders the replicated `dead` flag.

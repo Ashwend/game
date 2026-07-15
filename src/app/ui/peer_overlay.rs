@@ -578,19 +578,19 @@ mod tests {
     #[test]
     fn collect_entries_skips_local_and_dead_peers() {
         let voice = VoiceState::default();
-        let local_id: ClientId = 1;
+        let local_id: ClientId = crate::protocol::ClientId(1);
 
         let remote = Player {
-            client_id: 2,
-            account_id: 200,
+            client_id: crate::protocol::ClientId(2),
+            account_id: crate::protocol::AccountId(200),
         };
         let local = Player {
-            client_id: 1,
-            account_id: 100,
+            client_id: crate::protocol::ClientId(1),
+            account_id: crate::protocol::AccountId(100),
         };
         let dead = Player {
-            client_id: 3,
-            account_id: 300,
+            client_id: crate::protocol::ClientId(3),
+            account_id: crate::protocol::AccountId(300),
         };
         let remote_profile = profile("Remote", false);
         let local_profile = profile("Me", false);
@@ -614,9 +614,15 @@ mod tests {
         ];
 
         let transform = GlobalTransform::from_translation(Vec3::new(0.0, 0.0, 0.0));
-        let np_remote = NetworkPlayer { client_id: 2 };
-        let np_local = NetworkPlayer { client_id: 1 };
-        let np_dead = NetworkPlayer { client_id: 3 };
+        let np_remote = NetworkPlayer {
+            client_id: crate::protocol::ClientId(2),
+        };
+        let np_local = NetworkPlayer {
+            client_id: crate::protocol::ClientId(1),
+        };
+        let np_dead = NetworkPlayer {
+            client_id: crate::protocol::ClientId(3),
+        };
         let loco = RemoteLocomotion::default();
         let network = vec![
             (&np_remote, &transform, &loco),
@@ -628,7 +634,7 @@ mod tests {
 
         // Only the live remote peer survives the local + dead filters.
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].client_id, 2);
+        assert_eq!(entries[0].client_id, crate::protocol::ClientId(2));
         assert!(!entries[0].speaking);
         // Head anchor floats above the transform translation.
         assert!(entries[0].head_world.y > 0.0);

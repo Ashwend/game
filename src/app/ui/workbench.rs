@@ -239,7 +239,10 @@ mod tests {
     };
 
     fn workbench_view(tier: u8) -> OpenWorkbenchView {
-        OpenWorkbenchView { id: 1, tier }
+        OpenWorkbenchView {
+            id: crate::protocol::DeployedEntityId(1),
+            tier,
+        }
     }
 
     fn local_player(

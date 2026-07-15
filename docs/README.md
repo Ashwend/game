@@ -77,6 +77,7 @@ One row per agent doc. `owns` is the single concern the doc is source of truth f
 | [voice.md](voice.md) | voice chat: capture, codec, channel, spatial mixing, UI | before touching mic capture, Opus, the voice channel, or the voice UI |
 | [ui-and-client.md](ui-and-client.md) | client UI architecture, screens, modals, flow | before adding a screen/overlay/modal or to find where a surface lives |
 | [profiling.md](profiling.md) | profiling workflow and the per-tick cost discipline | before optimizing, chasing a spike, or adding O(live-entities) work |
+| [resource-node-instancing.md](resource-node-instancing.md) | unimplemented proposal: cutting the resource-node render floor | only when asked to reduce the ~1800-visible-entity per-frame render cost |
 | [updates-and-distribution.md](updates-and-distribution.md) | self-update flow, changelog modals, packaging/signing | before changing release-asset names, the update flow, or installers |
 | [headless-agent-testing.md](headless-agent-testing.md) | driving the game headless to verify changes | when you need to launch/drive/screenshot/assert on the running game |
 | [multiplayer-testing.md](multiplayer-testing.md) | the two-client multiplayer-test helper | before running or modifying that helper or capturing peer-to-peer visuals |
@@ -87,7 +88,7 @@ One row per agent doc. `owns` is the single concern the doc is source of truth f
 | [playbooks/add-replicated-entity.md](playbooks/add-replicated-entity.md) | repeatable recipe: add a networked entity | when introducing any new per-entity authoritative state the client renders |
 | [playbooks/art-pipeline.md](playbooks/art-pipeline.md) | repeatable recipe: author a model or icon | when modelling a held item/prop, deriving a tool, or generating an icon/texture |
 
-`projects/` holds proposals, not shipped behavior; see the pointer at the bottom. The only one today is [../projects/resource-node-instancing.md](../projects/resource-node-instancing.md) (render-floor reduction, NOT implemented).
+Proposal docs (front-matter `status: proposal`) describe designs that are NOT shipped. The only one today is [resource-node-instancing.md](resource-node-instancing.md) (render-floor reduction, NOT implemented).
 
 ## Directory-vs-file cheat sheet
 
@@ -95,16 +96,16 @@ Several subsystems CLAUDE.md still names as single `.rs` files have since split 
 
 | concern | live layout | notes |
 | --- | --- | --- |
-| protocol | `src/protocol/` directory: `mod.rs`, `messages.rs`, `commands.rs`, `items.rs`, `math.rs`, `world.rs`, `world_map.rs` | there is no `src/protocol.rs`; wire variants live in `messages.rs` |
+| protocol | root `src/protocol.rs` + `src/protocol/` directory: `messages.rs`, `commands.rs`, `items.rs`, `math.rs`, `world.rs`, `world_map.rs` | the root file holds shared consts/ids; wire variants live in `messages.rs` |
 | host adapter | `src/net/host.rs` file plus `src/net/host/` directory: `mirror.rs`, `rooms.rs`, `routing.rs`, `handle.rs`, `admin.rs` | file and directory coexist; mirror-sync is `host/mirror.rs`, room/AoI subscription is `host/rooms.rs`, admin socket is `host/admin.rs` |
 | server authority | `src/server/` directory, one file per concern: `connection.rs`, `inventory.rs`, `movement.rs`, `crafting.rs`, `combat.rs`, `building.rs`, `door.rs`, `claim.rs`, `stability.rs`, `dropped_items.rs`, `resource_nodes.rs`, `sleeping_bag.rs`, `storage_box.rs`, `torch.rs`, `world_time.rs`, `world_map.rs`, `workbench.rs`, `fuse.rs`, `explosion.rs`, `defuse.rs`, `projectiles.rs`, `projectile_ecs.rs`, `meteor_shower.rs`, `ruin_cache.rs`, plus `commands/`, `furnace/`, `chunk_manager/`, `workbench/`, `tests/` | each `*_ecs.rs` (e.g. `resource_node_ecs.rs`, `dropped_item_ecs.rs`, `player_ecs.rs`, `deployable_ecs.rs`, `loot_bag_ecs.rs`) holds the replicated mirror components for that concern |
-| resource nodes | server: `src/server/resource_nodes.rs` + `src/server/resource_node_ecs.rs` + `src/server/tests/resource_nodes.rs`; client: `src/app/systems/items/resource_nodes/` directory (`mod.rs`, `spawn.rs`, `stages.rs`, `pop_in.rs`, `hay_sway.rs`, `tests.rs`) | the client reconciliation pattern CLAUDE.md cites lives in `app/systems/items/resource_nodes/mod.rs` |
-| deployables | `src/server/deployables.rs` file plus `src/server/deployables/tests.rs`; replicated mirror in `src/server/deployable_ecs.rs`; client placement in `src/app/systems/deployables/placement.rs` | the deployables tests are in the sibling directory, not inline |
+| resource nodes | server: `src/server/resource_nodes.rs` + `src/server/resource_node_ecs.rs` + `src/server/tests/resource_nodes.rs`; client: root `src/app/systems/items/resource_nodes.rs` + its directory (`spawn.rs`, `stages.rs`, `pop_in.rs`, `hay_sway.rs`, `tests.rs`) | the client reconciliation pattern CLAUDE.md cites lives in `app/systems/items/resource_nodes.rs` |
+| deployables | `src/server/deployables.rs` file; server tests in `src/server/tests/deployables.rs`; replicated mirror in `src/server/deployable_ecs.rs`; client placement in `src/app/systems/deployables/placement.rs` plus `placement/` (`snapping.rs` snap/occupancy geometry, `claim_ring.rs` claim-boundary ring VFX) | the deployables tests live under `src/server/tests/`, not inline |
 | loot bags | `src/server/loot_bag.rs` + `src/server/loot_bag_ecs.rs` + `src/server/loot_bag/` (`slots.rs`, `tests.rs`) + `src/server/tests/loot_bag.rs`; client `src/app/ui/loot_bag.rs` and `src/app/systems/items/loot_bag.rs` | bag slot logic is `loot_bag/slots.rs`; two test files (`loot_bag/tests.rs` and `tests/loot_bag.rs`) |
-| client audio | `src/app/audio/` directory: `mod.rs`, `ambient.rs`, `music.rs`, `footsteps.rs`, `impact.rs`, `surface.rs`, `fader.rs`, `transitions.rs`, `scheduled.rs`, `library.rs`, `manifest.rs`, `category.rs` | there is no `src/app/systems/audio.rs`; main-menu music is `audio/music.rs`, UI one-shots are queued elsewhere via request resources |
-| client scene/materials | `src/app/scene.rs` file plus `src/app/scene/` directory: `assets.rs`, `world.rs`, `toon.rs`, `terrain.rs`, `sky.rs`, `mesh.rs` (+ `mesh/`), `grass/`, `components.rs` | shared `StandardMaterial` setup is `scene/assets.rs`; cel material is `scene/toon.rs`; terrain material is `scene/terrain.rs` |
+| client audio | root `src/app/audio.rs` + `src/app/audio/` directory: `ambient.rs`, `music.rs`, `footsteps.rs`, `impact.rs`, `surface.rs`, `fader.rs`, `transitions.rs`, `scheduled.rs`, `library.rs`, `manifest.rs`, `category.rs` | there is no `src/app/systems/audio.rs`; main-menu music is `audio/music.rs`, UI one-shots are queued elsewhere via request resources |
+| client scene/materials | `src/app/scene.rs` file plus `src/app/scene/` directory: `assets.rs`, `deployable_assets.rs`, `materials.rs`, `world.rs`, `toon.rs`, `terrain.rs`, `sky.rs`, `meteor_sky.rs`, `meteor_shower.rs`, `mesh.rs` (+ `mesh/`), `grass/`, `components.rs` | shared `StandardMaterial` setup is `scene/assets.rs`; cel material is `scene/toon.rs`; terrain material is `scene/terrain.rs` |
 
-Crate module roots are the top of `src/lib.rs`: `analytics, app, auth, building, cli, combat, console, controller, crafting, game_balance, inventory, items, local_crypto, logging, net, protocol, resources, save, server, update, util, world, world_time`.
+Crate module roots are the top of `src/lib.rs`: `analytics, app, auth, building, cli, combat, console, control_socket (dev/unix only), controller, crafting, game_balance, inventory, items, local_crypto, logging, net, protocol, resource_nodes, save, server, update, util, world, world_time`.
 
 The binary is `ashwend`. `src/cli.rs` dispatches four subcommands: `client` (the default when none is given), `server`, `admin`, and `multiplayer-test`.
 
@@ -123,7 +124,7 @@ Every agent doc (everything in `docs/` except this section's exceptions) follows
 
 - `docs/` describes shipped reality. If a doc claims a behavior, it is in the code; aspirational content is marked explicitly.
 - `docs/playbooks/` holds repeatable procedures (the "how to add an X" recipes). A playbook is a checklist, not a reference; the owning reference doc explains the why.
-- `projects/` holds proposals and design explorations that are NOT shipped. Each carries a STATUS banner at the very top stating implementation state; do not treat one as ground truth for current behavior.
+- Proposal docs live in `docs/` alongside shipped-behavior docs, marked `status: proposal` in front-matter. Each carries a STATUS banner stating implementation state; do not treat one as ground truth for current behavior.
 - `README.md` (repo root) is human-facing and excluded from the agent doc graph. Agents read it only for canonical design-pillar wording and install prerequisites, both of which are mirrored into agent docs ([game-design.md](game-design.md), [build-and-dev.md](build-and-dev.md)). `docs/README.md` (this file) is the agent index.
 
 ## Related docs

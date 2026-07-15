@@ -10,7 +10,7 @@ pub enum ToolKind {
     /// actionbar slot has no tool. Crude pickup nodes carry a
     /// `ToolRequirement` of `Hands` to mark themselves as
     /// E-pickup-only, no tool (including bare hands) can gather them
-    /// by swinging. See [`crate::resources::ToolRequirement::allows`].
+    /// by swinging. See [`crate::resource_nodes::ToolRequirement::allows`].
     /// Also the [`Default`], so a freshly-spawned peer swing action reads
     /// as "empty-handed punch" until the first real swing arrives.
     #[default]

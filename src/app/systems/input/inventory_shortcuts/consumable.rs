@@ -3,7 +3,8 @@
 //!
 //! A consumable has no melee profile, no `RangedProfile`, and no explosive
 //! profile, so none of the other input loops claim it. This one drives
-//! [`ConsumeChargeState`] on the same hold-to-charge idiom as the bow draw and
+//! [`ConsumeChargeState`](crate::app::state::ConsumeChargeState) on the same
+//! hold-to-charge idiom as the bow draw and
 //! the bomb wind-up: a held left click builds the charge (the viewmodel raises
 //! the roll and unrolls its tail, the HUD charge bar fills), and letting go
 //! before it completes abandons the use for free.

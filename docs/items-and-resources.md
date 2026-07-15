@@ -9,7 +9,7 @@ sources:
   - src/server/heal.rs - apply_player_heal, tick_consumable_uses, tick_heal_over_time
   - src/items/deployables.rs, upgrades.rs - DeployableKind, DoorVariant, DEPLOYABLE_UPGRADES
   - src/items/ids.rs - id string consts, intern_item_id/ItemId
-  - src/resources.rs - ResourceNodeDefinition, RESOURCE_NODE_DEFINITIONS, ToolRequirement, next_payout_from_storage
+  - src/resource_nodes.rs - ResourceNodeDefinition, RESOURCE_NODE_DEFINITIONS, ToolRequirement, next_payout_from_storage
   - src/game_balance.rs - tool durability/PvP-damage constants, weapon/armor/explosive constants
   - src/crafting/types.rs - RecipeStation
   - src/server/chunk_manager/regrow.rs - node respawn timing
@@ -24,12 +24,12 @@ related:
 
 # Items, tools, resources, and gather rules
 
-> When to read this: before adding or editing an item, tool, ore, resource node, or gather rule. Source of truth: `src/items/`, `src/resources.rs`. Canonical invariants (no-em-dashes, balance-in-game_balance.rs, replicated-state rules) live in CLAUDE.md.
+> When to read this: before adding or editing an item, tool, ore, resource node, or gather rule. Source of truth: `src/items/`, `src/resource_nodes.rs`. Canonical invariants (no-em-dashes, balance-in-game_balance.rs, replicated-state rules) live in CLAUDE.md.
 
 Two compile-time `&'static` registries drive the economy:
 
 - `REGISTERED_ITEMS` (in `src/items/registry.rs`) is every player-holdable thing: raw materials and refined intermediates, the tools, the hammer, the building plan, the weapons / armor / ranged weapons / explosives, the deployables, plus six hidden building-block definitions.
-- `RESOURCE_NODE_DEFINITIONS` in `src/resources.rs` is every world-spawnable node: three ores, a stone vein, the meteorite node, six tree variants, and three crude E-pickup scatter nodes.
+- `RESOURCE_NODE_DEFINITIONS` in `src/resource_nodes.rs` is every world-spawnable node: three ores, a stone vein, the meteorite node, six tree variants, and three crude E-pickup scatter nodes.
 
 Both are slices baked into the binary. Adding an entry means editing the file and recompiling; there is no dynamic loading. This is intentional: the registries are tiny, and tying them to the binary version means a save file's string ids always resolve against a stable set on load.
 
@@ -67,7 +67,7 @@ Lookup goes through a build-once `OnceLock<HashMap<&'static str, &'static ItemDe
 
 ### ItemId interning
 
-`src/items/registry.rs - ItemId` is `Arc<str>`, not `String`. `intern_item_id(id)` returns the interned `Arc` for an id: registry constants resolve without allocating via an `RwLock<HashMap<Box<str>, Arc<str>>>` cache seeded from `REGISTERED_ITEMS`; unknown ids fall through to a fresh `Arc` that is then cached so subsequent hits also avoid allocating. Clones of an `ItemId` are a refcount bump. Deserialized ids reuse the cached `Arc` on a hit. `RecipeId` in `src/crafting/types.rs` is the same `Arc<str>` story.
+`src/items/registry.rs - ItemId` is a newtype over `Arc<str>` (`#[serde(transparent)]`, so it encodes exactly like the bare string), deliberately distinct from `RecipeId` so passing one where the other is expected is a compile error. `intern_item_id(id)` returns the interned id: registry constants resolve without allocating via an `RwLock<HashMap<Box<str>, Arc<str>>>` cache seeded from `REGISTERED_ITEMS`; unknown ids fall through to a fresh `Arc` that is then cached so subsequent hits also avoid allocating. Clones of an `ItemId` are a refcount bump. Deserialized ids reuse the cached `Arc` on a hit (interning also runs inside the newtype's own `Deserialize`, so ids decode deduped even without the protocol's `deserialize_with` hooks). The newtype derefs to `str` and offers `as_str`/`AsRef<str>`/`Borrow<str>`/`Display`, plus `From<&str>` that routes through the interner; `ptr_eq` is the test hook for the interning guarantee. `RecipeId` in `src/crafting/types.rs` is the same newtype-over-`Arc<str>` story.
 
 ## ToolProfile and tier scaling
 
@@ -84,7 +84,7 @@ Healing routes through a single `apply_player_heal` tail (`src/server/heal.rs`),
 Tier is how progression scales, with zero per-tool branching:
 
 - Stone tools are `tier: 1`, `gather_amount: 6`. Iron tools are the same `kind` at `tier: 2`, `gather_amount: 12`.
-- `ToolRequirement::allows` (`src/resources.rs`) checks `tool.kind == req.kind && tool.tier >= req.min_tier`, so a higher tier automatically satisfies a lower-tier node.
+- `ToolRequirement::allows` (`src/resource_nodes.rs`) checks `tool.kind == req.kind && tool.tier >= req.min_tier`, so a higher tier automatically satisfies a lower-tier node.
 - `max_durability` is the impact budget. Only swings that connect (gather payout, player hit, structure hit) cost a point; whiffs are free. The single wear path is `consume_active_tool_durability` in `src/server/tool_wear.rs`, and the remaining count rides on `ItemStack::durability`. `None` means the tool never wears (`HANDS_TOOL`).
 - `player_damage` is per-swing PvP damage before armor; `0` means the swing is rejected rather than landing a zero-damage hit.
 
@@ -96,7 +96,7 @@ Tier is how progression scales, with zero per-tool branching:
 
 A node's `storage` is its finite reservoir; the per-swing quantity scales with the *tool*, clamped by the node's optional `per_swing_yield` cap (rare small-storage nodes only; `None` everywhere else).
 
-`src/resources.rs - next_payout_from_storage` is the one rule, shared by the server's `next_resource_payout` and the client-side gather prediction (both resolve the cap from the same `ResourceNodeDefinition`):
+`src/resource_nodes.rs - next_payout_from_storage` is the one rule, shared by the server's `next_resource_payout` and the client-side gather prediction (both resolve the cap from the same `ResourceNodeDefinition`):
 
 ```
 quantity = tool.gather_amount.max(1)            // 6 stone, 12 iron, 1 hands
@@ -106,13 +106,13 @@ quantity = quantity.min(per_swing_yield)        // only if the node defines a ca
 
 The only capped node today is meteorite: `METEORITE_PER_SWING_YIELD = 2` (`game_balance.rs`) over its 8-item storage makes the rare find a deliberate 4-swing beat instead of one iron-pickaxe hit vaporising the node (tests `meteorite_takes_several_swings_to_exhaust`, `client_storage_payout_matches_server_node_payout`).
 
-Server and client run the identical function so optimistic client gain matches the authoritative payout (test `client_storage_payout_matches_server_node_payout` in `src/resources.rs` checks this for all storage+tool combos, uncapped and capped). `storage` is a `&[ResourceMaterial]` list even though every current node has exactly one entry; the payout walks the first non-empty stack, do not assume one-item-per-node is enforced.
+Server and client run the identical function so optimistic client gain matches the authoritative payout (test `client_storage_payout_matches_server_node_payout` in `src/resource_nodes.rs` checks this for all storage+tool combos, uncapped and capped). `storage` is a `&[ResourceMaterial]` list even though every current node has exactly one entry; the payout walks the first non-empty stack, do not assume one-item-per-node is enforced.
 
-Reach is one knob per category: `PICKUP_RANGE = 3.4` (`src/items.rs`) for dropped items, `RESOURCE_GATHER_RANGE = 2.75` (`src/resources.rs`) for nodes. The server validates with lenient distance-only checks (`within_pickup_reach` / `within_gather_reach`) plus `PICKUP_SERVER_REACH_SLACK_M = 1.5` (`src/game_balance.rs`) so it doesn't false-reject a target the client already locked.
+Reach is one knob per category: `PICKUP_RANGE = 3.4` (`src/items.rs`) for dropped items, `RESOURCE_GATHER_RANGE = 2.75` (`src/resource_nodes.rs`) for nodes. The server validates with lenient distance-only checks (`within_pickup_reach` / `within_gather_reach`) plus `PICKUP_SERVER_REACH_SLACK_M = 1.5` (`src/game_balance.rs`) so it doesn't false-reject a target the client already locked.
 
 ## ResourceNodeDefinition shape
 
-`src/resources.rs - ResourceNodeDefinition` has exactly these fields. There is **no** `capacity`, **no** `yields_item_id`, and **no** regrow field.
+`src/resource_nodes.rs - ResourceNodeDefinition` has exactly these fields. There is **no** `capacity`, **no** `yields_item_id`, and **no** regrow field.
 
 | field | type | role |
 | --- | --- | --- |
@@ -133,7 +133,7 @@ Authoritative node state lives in `GameServer::resource_nodes` as `HashMap<Resou
 
 ### Regrow timing lives in chunk_manager, not on the node
 
-A mined-out node respawns 5 to 15 minutes later (jittered) at a noise-valid chunk position. The window is `MIN_REGROW_TICKS = 5 * 60 * SERVER_TICK_RATE_HZ` and `MAX_REGROW_TICKS = 15 * 60 * SERVER_TICK_RATE_HZ` in `src/server/chunk_manager/mod.rs`; the jitter is applied in `src/server/chunk_manager/regrow.rs`. It is keyed off `SERVER_TICK_RATE_HZ`, not a hardcoded 20. See [docs/chunks-and-aoi.md](chunks-and-aoi.md).
+A mined-out node respawns 5 to 15 minutes later (jittered) at a noise-valid chunk position. The window is `MIN_REGROW_TICKS = 5 * 60 * SERVER_TICK_RATE_HZ` and `MAX_REGROW_TICKS = 15 * 60 * SERVER_TICK_RATE_HZ` in `src/server/chunk_manager.rs`; the jitter is applied in `src/server/chunk_manager/regrow.rs`. It is keyed off `SERVER_TICK_RATE_HZ`, not a hardcoded 20. See [docs/chunks-and-aoi.md](chunks-and-aoi.md).
 
 ### Tree dead-snag state is server-authoritative
 
@@ -206,7 +206,7 @@ Admin helper: `/drain [remaining-fraction]` (function `command_drain` in `src/se
 
 ## Client reconciliation is event-driven
 
-The client mirrors replicated nodes into local `NetworkResourceNode` visuals via `apply_resource_nodes_system` (`src/app/systems/items/resource_nodes/mod.rs`), reacting to `Added<ResourceNode>` and `RemovedComponents<ResourceNode>`, never iterating the full replicated set per frame (that costs 1 to 4 ms at AoI scale). The `ResourceNodeEntities` resource holds a forward `id -> Entity` map, a reverse `Entity -> id` map (so `RemovedComponents` can find the local mirror), and a `pending_spawns: VecDeque` that drains a per-frame spawn budget across frames. A one-time catch-up scan on the first run after connect handles entities that arrived during early-return `client_id == None` frames. `Ref::is_changed()` lies for Lightyear-touched components, so do not gate work behind it. This is the canonical pattern for any new `apply_*` system; the full rationale is in [docs/replication.md](replication.md) and CLAUDE.md.
+The client mirrors replicated nodes into local `NetworkResourceNode` visuals via `apply_resource_nodes_system` (`src/app/systems/items/resource_nodes.rs`), reacting to `Added<ResourceNode>` and `RemovedComponents<ResourceNode>`, never iterating the full replicated set per frame (that costs 1 to 4 ms at AoI scale). The `ResourceNodeEntities` resource holds a forward `id -> Entity` map, a reverse `Entity -> id` map (so `RemovedComponents` can find the local mirror), and a `pending_spawns: VecDeque` that drains a per-frame spawn budget across frames. A one-time catch-up scan on the first run after connect handles entities that arrived during early-return `client_id == None` frames. `Ref::is_changed()` lies for Lightyear-touched components, so do not gate work behind it. This is the canonical pattern for any new `apply_*` system; the full rationale is in [docs/replication.md](replication.md) and CLAUDE.md.
 
 ## Smelting is not in the recipe registry
 

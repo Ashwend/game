@@ -6,7 +6,8 @@
 //! 1. The source path builds a [`DamageInstance`] describing what it
 //!    wants to do, raw amount, damage kind, knockback impulse magnitude,
 //!    who originated it.
-//! 2. The recipient's [`PlayerArmor`] is read.
+//! 2. The recipient's [`PlayerArmor`](crate::server::player_ecs::PlayerArmor)
+//!    is read.
 //! 3. [`damage_after_armor`] reduces the raw amount.
 //! 4. The reduced value is subtracted from the player's health.
 //!
@@ -183,7 +184,7 @@ fn attack_profile_from_tool(tool: ToolProfile) -> Option<AttackProfile> {
     // Route through the existing table so the damage/knockback stay a single
     // source of truth. The client id here is a throwaway: `AttackProfile`
     // doesn't carry a `DamageSource`, only the numbers.
-    let instance = tool_player_damage(tool, 0)?;
+    let instance = tool_player_damage(tool, crate::protocol::ClientId(0))?;
     Some(AttackProfile {
         damage: instance.raw,
         kind: instance.kind,
@@ -324,20 +325,28 @@ mod tests {
 
     #[test]
     fn tool_player_damage_rejects_hands() {
-        assert!(tool_player_damage(crate::items::HANDS_TOOL, 1).is_none());
-        let axe = tool_player_damage(registered_tool(crate::items::BASIC_HATCHET_ID), 7)
-            .expect("axe damage");
+        assert!(
+            tool_player_damage(crate::items::HANDS_TOOL, crate::protocol::ClientId(1)).is_none()
+        );
+        let axe = tool_player_damage(
+            registered_tool(crate::items::BASIC_HATCHET_ID),
+            crate::protocol::ClientId(7),
+        )
+        .expect("axe damage");
         assert_eq!(axe.raw, crate::game_balance::STONE_HATCHET_PVP_DAMAGE);
         assert!(matches!(axe.kind, DamageKind::Blunt));
         assert!(matches!(
             axe.source,
             DamageSource::Player {
-                client_id: 7,
+                client_id: crate::protocol::ClientId(7),
                 model: ItemModel::Hatchet
             }
         ));
-        let pick = tool_player_damage(registered_tool(crate::items::BASIC_PICKAXE_ID), 7)
-            .expect("pickaxe damage");
+        let pick = tool_player_damage(
+            registered_tool(crate::items::BASIC_PICKAXE_ID),
+            crate::protocol::ClientId(7),
+        )
+        .expect("pickaxe damage");
         assert_eq!(pick.raw, crate::game_balance::STONE_PICKAXE_PVP_DAMAGE);
     }
 
@@ -392,19 +401,31 @@ mod tests {
 
     #[test]
     fn iron_tools_outdamage_their_stone_counterparts() {
-        let stone_axe = tool_player_damage(registered_tool(crate::items::BASIC_HATCHET_ID), 1)
-            .expect("stone axe damage");
-        let iron_axe = tool_player_damage(registered_tool(crate::items::IRON_HATCHET_ID), 1)
-            .expect("iron axe damage");
+        let stone_axe = tool_player_damage(
+            registered_tool(crate::items::BASIC_HATCHET_ID),
+            crate::protocol::ClientId(1),
+        )
+        .expect("stone axe damage");
+        let iron_axe = tool_player_damage(
+            registered_tool(crate::items::IRON_HATCHET_ID),
+            crate::protocol::ClientId(1),
+        )
+        .expect("iron axe damage");
         assert!(iron_axe.raw > stone_axe.raw);
         // Knockback is a kind trait, not a tier trait: upgrading the tool
         // changes damage, not the shove.
         assert_eq!(iron_axe.knockback_speed, stone_axe.knockback_speed);
 
-        let stone_pick = tool_player_damage(registered_tool(crate::items::BASIC_PICKAXE_ID), 1)
-            .expect("stone pickaxe damage");
-        let iron_pick = tool_player_damage(registered_tool(crate::items::IRON_PICKAXE_ID), 1)
-            .expect("iron pickaxe damage");
+        let stone_pick = tool_player_damage(
+            registered_tool(crate::items::BASIC_PICKAXE_ID),
+            crate::protocol::ClientId(1),
+        )
+        .expect("stone pickaxe damage");
+        let iron_pick = tool_player_damage(
+            registered_tool(crate::items::IRON_PICKAXE_ID),
+            crate::protocol::ClientId(1),
+        )
+        .expect("iron pickaxe damage");
         assert!(iron_pick.raw > stone_pick.raw);
     }
 

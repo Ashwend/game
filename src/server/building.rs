@@ -37,12 +37,10 @@ use crate::{
 
 use super::{GameServer, ServerEnvelope, deployables::DeployedEntity};
 
-use crate::game_balance::DEPLOYABLE_PLACEMENT_REACH_M as PLACEMENT_REACH_M;
-
-/// How far a requested pose may sit from the snapped socket before the
-/// server refuses to "correct" it. Generous enough to absorb client float
-/// drift, far too small to teleport a piece somewhere the player didn't aim.
-const SNAP_TOLERANCE_M: f32 = 0.75;
+use crate::game_balance::{
+    BUILDING_SNAP_TOLERANCE_M as SNAP_TOLERANCE_M,
+    DEPLOYABLE_PLACEMENT_REACH_M as PLACEMENT_REACH_M,
+};
 
 impl GameServer {
     pub(super) fn apply_place_building_command(
@@ -195,7 +193,7 @@ impl GameServer {
         take_items_from_inventory(&mut client.inventory, cost_item, cost_quantity);
 
         let id = self.next_deployed_entity_id;
-        self.next_deployed_entity_id = self.next_deployed_entity_id.saturating_add(1);
+        self.next_deployed_entity_id.0 = self.next_deployed_entity_id.0.saturating_add(1);
         let entity = DeployedEntity { id, ..candidate };
         self.insert_deployed_entity(id, entity);
         self.chunk_manager.track_deployed_entity(id, position);

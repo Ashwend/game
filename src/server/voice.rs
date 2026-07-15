@@ -14,16 +14,11 @@ use crate::protocol::{ClientId, MAX_VOICE_FRAME_BYTES, ServerMessage, Vec3Net, V
 
 use super::{DeliveryTarget, GameServer, ServerEnvelope};
 
-/// Core gameplay constant: the maximum distance (in world units / metres)
-/// at which one player can hear another. Used both server-side as the
-/// broadcast filter and client-side as the attenuation curve's endpoint,
-/// so neither half can drift from the other. Intentionally not a player
-/// setting, how far your voice carries is part of the design, not a
-/// preference.
-pub const VOICE_AUDIBLE_RANGE: f32 = 50.0;
+use crate::game_balance::VOICE_AUDIBLE_RANGE_M;
 
-#[doc(hidden)]
-pub(crate) const SERVER_VOICE_BROADCAST_RANGE: f32 = VOICE_AUDIBLE_RANGE;
+/// Server-side alias for the shared audibility range; the client half
+/// reads [`crate::game_balance::VOICE_AUDIBLE_RANGE_M`] directly.
+pub(crate) const SERVER_VOICE_BROADCAST_RANGE: f32 = VOICE_AUDIBLE_RANGE_M;
 
 impl GameServer {
     /// Forwards a voice frame from `speaker` to every other connected client

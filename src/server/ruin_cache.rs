@@ -132,7 +132,7 @@ struct LootRng {
 impl LootRng {
     fn new(cache_id: DeployedEntityId, refill_counter: u64) -> Self {
         let seed = splitmix64(
-            cache_id.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            cache_id.0.wrapping_mul(0x9E37_79B9_7F4A_7C15)
                 ^ refill_counter.wrapping_mul(0xC6BC_2796_92B5_C323)
                 ^ 0x2011_C0DE_CACE_2011,
         );
@@ -237,7 +237,7 @@ mod tests {
     fn roll_always_yields_fittings_within_bounds() {
         for cache_id in 1..50u64 {
             for counter in 0..5u64 {
-                let loot = roll_loot(cache_id, counter);
+                let loot = roll_loot(crate::protocol::DeployedEntityId(cache_id), counter);
                 let fittings: u16 = loot
                     .iter()
                     .filter(|s| s.item_id.as_ref() == SALVAGED_FITTINGS_ID)
@@ -254,15 +254,15 @@ mod tests {
 
     #[test]
     fn roll_is_deterministic_per_cache_and_counter() {
-        let a = roll_loot(7, 3);
-        let b = roll_loot(7, 3);
+        let a = roll_loot(crate::protocol::DeployedEntityId(7), 3);
+        let b = roll_loot(crate::protocol::DeployedEntityId(7), 3);
         assert_eq!(a.len(), b.len());
         for (sa, sb) in a.iter().zip(b.iter()) {
             assert_eq!(sa.item_id, sb.item_id);
             assert_eq!(sa.quantity, sb.quantity);
         }
         // A different counter should (very likely) differ somewhere.
-        let c = roll_loot(7, 4);
+        let c = roll_loot(crate::protocol::DeployedEntityId(7), 4);
         assert!(a != c, "successive refills of a cache should differ");
     }
 
@@ -283,7 +283,7 @@ mod tests {
             "loot table can produce {max_stacks} stacks but the cache has {RUIN_CACHE_SLOT_COUNT} slots"
         );
         for cache_id in 1..20u64 {
-            let loot = roll_loot(cache_id, 0);
+            let loot = roll_loot(crate::protocol::DeployedEntityId(cache_id), 0);
             assert!(loot.len() <= RUIN_CACHE_SLOT_COUNT);
         }
     }
@@ -293,7 +293,7 @@ mod tests {
         let mut ember = 0usize;
         let trials = 2000usize;
         for i in 0..trials {
-            let loot = roll_loot(i as u64, (i as u64) % 7);
+            let loot = roll_loot(crate::protocol::DeployedEntityId(i as u64), (i as u64) % 7);
             if loot
                 .iter()
                 .any(|s| s.item_id.as_ref() == METEORITE_ALLOY_ID)
@@ -316,7 +316,12 @@ mod tests {
         let mut slots: Vec<Option<ItemStack>> = vec![None; RUIN_CACHE_SLOT_COUNT];
 
         // Tick once while empty: schedules a refill, no loot yet.
-        let changed = tick_one_ruin_cache(&mut state, &mut slots, 1, 100);
+        let changed = tick_one_ruin_cache(
+            &mut state,
+            &mut slots,
+            crate::protocol::DeployedEntityId(1),
+            100,
+        );
         assert!(!changed);
         let fire = state.refill_at_tick.expect("a refill should be scheduled");
         assert_eq!(fire, 100 + RUIN_CACHE_REFILL_TICKS);
@@ -326,11 +331,21 @@ mod tests {
         );
 
         // Tick just before the fire tick: still nothing.
-        assert!(!tick_one_ruin_cache(&mut state, &mut slots, 1, fire - 1));
+        assert!(!tick_one_ruin_cache(
+            &mut state,
+            &mut slots,
+            crate::protocol::DeployedEntityId(1),
+            fire - 1
+        ));
         assert!(slots.iter().all(Option::is_none));
 
         // Tick at the fire tick: refill fires.
-        let fired = tick_one_ruin_cache(&mut state, &mut slots, 1, fire);
+        let fired = tick_one_ruin_cache(
+            &mut state,
+            &mut slots,
+            crate::protocol::DeployedEntityId(1),
+            fire,
+        );
         assert!(fired, "refill should fire at the scheduled tick");
         assert!(
             state.refill_at_tick.is_none(),
@@ -353,9 +368,14 @@ mod tests {
     #[test]
     fn a_stocked_cache_does_not_schedule_a_refill() {
         let mut state = RuinCacheState::default();
-        let mut slots = initial_cache_slots(5);
+        let mut slots = initial_cache_slots(crate::protocol::DeployedEntityId(5));
         // Cache has loot: ticking must not schedule anything.
-        let changed = tick_one_ruin_cache(&mut state, &mut slots, 5, 500);
+        let changed = tick_one_ruin_cache(
+            &mut state,
+            &mut slots,
+            crate::protocol::DeployedEntityId(5),
+            500,
+        );
         assert!(!changed);
         assert!(
             state.refill_at_tick.is_none(),
@@ -368,11 +388,21 @@ mod tests {
         let mut state = RuinCacheState::default();
         let mut slots: Vec<Option<ItemStack>> = vec![None; RUIN_CACHE_SLOT_COUNT];
         // Emptied -> schedule.
-        tick_one_ruin_cache(&mut state, &mut slots, 9, 10);
+        tick_one_ruin_cache(
+            &mut state,
+            &mut slots,
+            crate::protocol::DeployedEntityId(9),
+            10,
+        );
         assert!(state.refill_at_tick.is_some());
         // Someone drops a stack back in before the timer.
         slots[0] = Some(ItemStack::new(GUNPOWDER_ID, 1));
-        let changed = tick_one_ruin_cache(&mut state, &mut slots, 9, 20);
+        let changed = tick_one_ruin_cache(
+            &mut state,
+            &mut slots,
+            crate::protocol::DeployedEntityId(9),
+            20,
+        );
         assert!(!changed);
         assert!(
             state.refill_at_tick.is_none(),
@@ -382,7 +412,7 @@ mod tests {
 
     #[test]
     fn initial_slots_are_stocked_with_fittings() {
-        let slots = initial_cache_slots(3);
+        let slots = initial_cache_slots(crate::protocol::DeployedEntityId(3));
         assert!(
             slots
                 .iter()

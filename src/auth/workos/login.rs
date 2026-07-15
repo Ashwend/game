@@ -460,7 +460,7 @@ mod tests {
 
     fn sample_session() -> Session {
         Session {
-            account_id: 5,
+            account_id: crate::protocol::AccountId(5),
             display_name: "n".to_owned(),
             email: "e".to_owned(),
             access_token: "a".to_owned(),
@@ -473,7 +473,9 @@ mod tests {
     fn login_handle_reports_outcomes() {
         let ok = LoginHandle::ready(Ok(sample_session()));
         match ok.poll() {
-            LoginOutcome::Success(session) => assert_eq!(session.account_id, 5),
+            LoginOutcome::Success(session) => {
+                assert_eq!(session.account_id, crate::protocol::AccountId(5));
+            }
             other => panic!("expected success, got {other:?}"),
         }
 

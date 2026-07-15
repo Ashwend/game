@@ -9,7 +9,7 @@ use crate::{
             tree_foliage_visual,
         },
     },
-    resources::{resource_node_definition, spawn_resource_node},
+    resource_nodes::{resource_node_definition, spawn_resource_node},
     world::{BlockKind, WorldData, ruin_layout},
 };
 
@@ -63,7 +63,7 @@ enum GroundMaterial {
     Flat(Handle<StandardMaterial>),
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 pub(crate) fn apply_world_scene_system(
     mut commands: Commands,
     mut scene_state: ResMut<WorldSceneState>,

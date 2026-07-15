@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use super::{ChunkManager, MAX_REGROW_TICKS, MIN_REGROW_TICKS, RegrowEvent};
 use crate::{
     protocol::{ResourceNodeId, ResourceNodeState},
-    resources::spawn_resource_node,
+    resource_nodes::spawn_resource_node,
     world::{ChunkCoord, ChunkSpawn, NodeKind, PlayableBounds, generate_chunk_spawns, splitmix64},
 };
 
@@ -32,7 +32,7 @@ impl ChunkManager {
         }
         // Pick a per-event delay deterministically, same coord+kind+tick
         // round-trips identically on save+load.
-        self.placement_counter = splitmix64(self.placement_counter ^ now_tick ^ node_id);
+        self.placement_counter = splitmix64(self.placement_counter ^ now_tick ^ node_id.0);
         let span = MAX_REGROW_TICKS.saturating_sub(MIN_REGROW_TICKS).max(1);
         let jitter = self.placement_counter % span;
         let fire_tick = now_tick
@@ -110,7 +110,7 @@ impl ChunkManager {
             let id = self.next_node_id;
             self.next_node_id = self.next_node_id.saturating_add(1);
             let world_spawn = crate::world::WorldResourceNodeSpawn::new(
-                id,
+                crate::protocol::ResourceNodeId(id),
                 spawn.spawn.definition_id.clone(),
                 spawn.spawn.position,
                 spawn.spawn.yaw,
@@ -119,9 +119,10 @@ impl ChunkManager {
                 continue;
             };
             if let Some(grid) = self.grids.get_mut(&coord) {
-                grid.record_live(kind, id);
+                grid.record_live(kind, crate::protocol::ResourceNodeId(id));
             }
-            self.node_chunks.insert(id, (coord, kind));
+            self.node_chunks
+                .insert(crate::protocol::ResourceNodeId(id), (coord, kind));
             return Some(state);
         }
         None

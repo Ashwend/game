@@ -3,8 +3,10 @@ title: Driving the game headless (agent testing)
 owns: The dev-only client automation harness (control socket, headless capture, the agent test loop) and how an agent asserts on a running client.
 when_to_read: Whenever you need to launch, drive, screenshot, or assert on the running game to verify a change.
 sources:
-  - src/app/systems/control_socket.rs - ControlRequest enum, ClientStateDump, drain_control_socket
-  - src/app/systems/control_socket/targeting.rs - nearest_deployable_id, resolve_building_pose, building_piece_needle
+  - src/control_socket/wire.rs - ControlRequest enum, ClientStateDump
+  - src/control_socket/listener.rs - ClientControlSocket, drain_control_socket
+  - src/control_socket/handlers.rs - HandlerContext, handle_request dispatch (+ handlers/ per-domain files)
+  - src/control_socket/targeting.rs - nearest_deployable_id, resolve_building_pose, building_piece_needle
   - src/app/systems/headless_capture.rs - HeadlessCapture, resolution_from_env, redirect_camera_to_capture
   - src/app.rs - agent_driven flag, window focused/visible, voice+audio mute, socket+capture wiring
   - scripts/ashwend-control.py - stdlib driver
@@ -20,7 +22,7 @@ related:
 
 # Driving the game headless (agent testing)
 
-> When to read this: launch, drive, screenshot, or assert on a running client to verify a change. Source of truth: `src/app/systems/control_socket.rs`, `src/app/systems/headless_capture.rs`, `src/app.rs`, `scripts/ashwend-control.py`. Canonical invariants live in CLAUDE.md.
+> When to read this: launch, drive, screenshot, or assert on a running client to verify a change. Source of truth: `src/control_socket/`, `src/app/systems/headless_capture.rs`, `src/app.rs`, `scripts/ashwend-control.py`. Canonical invariants live in CLAUDE.md.
 
 The client exposes a dev-only automation harness so an agent can launch the game, act, and assert on JSON state instead of pixels. Two pieces: a per-client Unix **control socket** (`GAME_CONTROL_SOCKET`) that forwards commands / dumps state / queues screenshots, and an off-screen **headless capture** target (`GAME_HEADLESS_CAPTURE`) so screenshots work with a hidden, unfocused window. Both are gated on `debug_assertions` and compiled out of release builds entirely.
 
@@ -29,7 +31,7 @@ The client exposes a dev-only automation harness so an agent can launch the game
 Both the control socket and headless capture live behind `#[cfg(debug_assertions)]` (and the socket additionally behind `#[cfg(unix)]`). In a release build (`./cli publish`, `cargo build --release`) the code is not compiled in: setting `GAME_CONTROL_SOCKET` or `GAME_HEADLESS_CAPTURE` on a shipped binary does nothing, so a bot cannot drive the final game. Wiring is in `src/app.rs` (`agent_driven` flag, capture block, socket bind block).
 
 - Socket bound only when `GAME_CONTROL_SOCKET` names a path, in a dev unix build (`src/app.rs` socket block). A normal `./cli dev` launch never opens it.
-- The socket file is created with mode `0o660` (owner+group only); see `CONTROL_SOCKET_MODE` in `src/app/systems/control_socket.rs`. Keep it in a user-private dir.
+- The socket file is created with mode `0o660` (owner+group only); see `CONTROL_SOCKET_MODE` in `src/control_socket/listener.rs`. Keep it in a user-private dir.
 - Build with `cargo build` / `./cli` (debug) and drive `./target/debug/ashwend`. **Do not try to automate a release binary.**
 
 This is separate from the **host admin socket** (`src/net/host/admin.rs`), which is a production ops tool and stays in release builds. See the three-socket map below.
@@ -81,7 +83,7 @@ scripts/ashwend-control.py /tmp/ashwend-control.sock screenshot /tmp/spawn.png
 
 ## Control-command catalog
 
-Wire format: line-delimited JSON, one request per connection, reply `{"ok": bool, "message": string}`. `dump_state` returns its snapshot as a JSON string in `message`. The catalog below is the full `ControlRequest` enum (`src/app/systems/control_socket.rs - ControlRequest`); `serde` renames variants to `snake_case` so the `command` value is the snake_case form.
+Wire format: line-delimited JSON, one request per connection, reply `{"ok": bool, "message": string}`. `dump_state` returns its snapshot as a JSON string in `message`. The catalog below is the full `ControlRequest` enum (`src/control_socket/wire.rs - ControlRequest`); `serde` renames variants to `snake_case` so the `command` value is the snake_case form.
 
 | `command` | Fields | Effect |
 |---|---|---|
@@ -117,13 +119,13 @@ Wire format: line-delimited JSON, one request per connection, reply `{"ok": bool
 
 Notes the catalog can't fit in a cell:
 
-- **Scripted placement uses view yaw, not the look ray.** `place_deployable` / `place_building` compute forward as `(-sin yaw, 0, -cos yaw)` (see `controller::movement`) and put the structure straight ahead regardless of pitch, so you don't have to aim at the ground. Place a foundation first, read its id from `dump_state.deployables`, then stack: non-foundation pieces snap to the nearest replicated socket within `1.6` m of the aim point (`resolve_building_pose` in `src/app/systems/control_socket/targeting.rs`).
+- **Scripted placement uses view yaw, not the look ray.** `place_deployable` / `place_building` compute forward as `(-sin yaw, 0, -cos yaw)` (see `controller::movement`) and put the structure straight ahead regardless of pitch, so you don't have to aim at the ground. Place a foundation first, read its id from `dump_state.deployables`, then stack: non-foundation pieces snap to the nearest replicated socket within `1.6` m of the aim point (`resolve_building_pose` in `src/control_socket/targeting.rs`).
 - **Target resolution is by nearest deployable over the dump's `kind` debug string.** Doors match `kind.starts_with("Door {")`; building piece filters match a `"piece: <Kind>"` substring with longest-name-first ordering so `Wall` doesn't swallow `WindowWall` (`nearest_deployable_id`, `resolve_building_pose`, `building_piece_needle`).
 - **The Python driver lags the enum in two spots.** `place-door` only forwards `code` and `flip`, never `iron`, so the iron variant can only be hung via raw JSON (`{"command":"place_door","code":"...","iron":true}`). And the driver's `--help` docstring omits `warp` and `swing` even though both are wired in its dispatch table; they work via the driver.
 
 ## dump_state schema
 
-`dump_state` is the primary assertion surface. Shape from `ClientStateDump` (assembled in `build_dump`, `src/app/systems/control_socket.rs`):
+`dump_state` is the primary assertion surface. Shape from `ClientStateDump` (`src/control_socket/wire.rs`, assembled in `build_dump`, `src/control_socket/handlers/capture.rs`):
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -179,7 +181,7 @@ Recipe: forward `meteor_shower 45` (a 45 s warning, so the whole descent is on s
 
 ## Slash commands the socket can forward
 
-`send_command` forwards the text as `ClientMessage::Command`. Dispatch table (`src/server/commands/mod.rs`): `spawn`, `drain`, `time`, `speed` (run-speed cheat), `time-speed` / `timespeed` / `timescale`, `test-kit` / `testkit`, `give`, `tp` / `teleport`, `meteor_shower [warning_seconds]` (force a meteor event; default 30), `help`. Every command except `help` checks `client.is_admin` and replies `"admin only"` when false. `test-kit` grants the early-game kit (the four tools, workbench_t1, crude_furnace, building_plan, hammer, hewn_log_door, sleeping_bag, plus 100 of each of ten resources with wood appearing twice); `tp` teleports every other connected player to you (for PvP/death staging). See `docs/server-authority.md` for the command handlers.
+`send_command` forwards the text as `ClientMessage::Command`. Dispatch table (`src/server/commands.rs`): `spawn`, `drain`, `time`, `speed` (run-speed cheat), `time-speed` / `timespeed` / `timescale`, `test-kit` / `testkit`, `give`, `tp` / `teleport`, `meteor_shower [warning_seconds]` (force a meteor event; default 30), `help`. Every command except `help` checks `client.is_admin` and replies `"admin only"` when false. `test-kit` grants the early-game kit (the four tools, workbench_t1, crude_furnace, building_plan, hammer, hewn_log_door, sleeping_bag, plus 100 of each of ten resources with wood appearing twice); `tp` teleports every other connected player to you (for PvP/death staging). See `docs/server-authority.md` for the command handlers.
 
 ## Three-socket map
 
@@ -193,7 +195,7 @@ The two named sockets are easy to conflate but do different jobs. The control so
 
 ## Two agent-driven clients at once
 
-To capture one player as seen from another (e.g. the remote rig's swing), run the two-client helper in its headless branch: `GAME_TEST_HEADLESS=1 ./cli multiplayer-test`. Both clients then get `GAME_HEADLESS_CAPTURE=1280x960` and per-client sockets `/tmp/ashwend-mptest-0.sock` and `/tmp/ashwend-mptest-1.sock`; drive each socket independently with `scripts/ashwend-control.py`. The default (GUI) path, the spawn/yaw/kit env contract, and the helper internals live in `docs/multiplayer-testing.md`.
+To capture one player as seen from another (e.g. the remote rig's swing), run the two-client helper in its headless branch: `GAME_TEST_HEADLESS=1 ./cli multiplayer-test`. Both clients then get `GAME_HEADLESS_CAPTURE=1280x960` and per-client sockets `/tmp/ashwend-mptest-<harness pid>-0.sock` and `...-1.sock` (PID-scoped so concurrent runs don't collide; the helper prints both paths at launch); drive each socket independently with `scripts/ashwend-control.py`. The default (GUI) path, the spawn/yaw/kit env contract, and the helper internals live in `docs/multiplayer-testing.md`.
 
 ## Related docs
 

@@ -86,7 +86,7 @@ fn active_tab(menu: &MenuState, inventory_ui: &InventoryUiState) -> Option<Tab> 
 
 /// Top-level entry for the unified panel. Replaces the old separate
 /// `inventory_ui` + `crafting_ui` calls in `ui_system`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "egui UI plumbing")]
 pub(super) fn inventory_panel_ui(
     ctx: &egui::Context,
     menu: &mut MenuState,
@@ -202,7 +202,7 @@ pub(super) fn inventory_panel_ui(
 /// Draw the shared scrim + fixed-size panel with its tab bar and the active
 /// tab's body. Returns the panel's outer rect so the caller can record the
 /// inventory drag surface.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "egui UI plumbing")]
 fn draw_panel(
     ctx: &egui::Context,
     menu: &mut MenuState,

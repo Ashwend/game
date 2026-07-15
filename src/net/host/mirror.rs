@@ -4,7 +4,9 @@
 //! Each system walks (the delta of) one authoritative `HashMap` on
 //! `GameServer` and spawns / despawns / refreshes the matching mirror entity
 //! and its per-component replicated fields. They run as exclusive systems
-//! because spawning and despawning need `&mut World`.
+//! because spawning and despawning need `&mut World`. Five of the six share
+//! the [`reconcile_mirror_entities`] skeleton; resource nodes stay bespoke
+//! for their world-load spawn budget.
 
 use bevy::{log::info_span, prelude::*};
 
@@ -15,6 +17,58 @@ use super::rooms::{
     attach_player_replication, attach_room_gated_replication, move_entity_between_rooms,
     reaffirm_entity_room,
 };
+
+/// Shared skeleton for the mirror reconcilers: snapshot the authoritative
+/// delta out of `GameServer` (releasing the server borrow before anything
+/// needs `&mut World`), despawn the mirrors for removed ids, then walk the
+/// changed items and either refresh the tracked entity in place or spawn a
+/// fresh mirror. Only the per-entity payloads differ across the syncs, so
+/// those stay bespoke closures at each call site: which components get the
+/// compare-and-write refresh (only write when the value actually differs,
+/// that is what keeps `Changed` honest), and which spawn helper attaches
+/// replication (`attach_room_gated_replication` / `attach_player_replication`,
+/// never a bare `Replicate`). What the skeleton owns is the ordering
+/// contract: removed ids despawn before dirty items apply, items apply in
+/// snapshot order, and each item resolves to refresh-or-spawn exactly once.
+///
+/// A generic fn rather than a macro (contrast `entity_index!`, which exists
+/// to stamp out distinct named resource types): nothing here needs new types,
+/// and closures keep the call sites type-checked, rustfmt'ed, and
+/// clippy-covered.
+///
+/// `sync_resource_node_entities` deliberately does NOT ride this skeleton:
+/// its spawn budget classifies ids before cloning any state and requeues the
+/// overflow, a two-phase loop this per-item shape cannot express without
+/// growing budget/requeue hooks used by exactly one caller.
+fn reconcile_mirror_entities<Item, Id>(
+    world: &mut World,
+    // Drain/collect the (changed items, removed ids) pair. Delta-driven maps
+    // drain their dirty set here; the full-walk types (players, loot bags)
+    // collect every live view and compute the stale ids against the index.
+    snapshot: impl FnOnce(&mut World) -> (Vec<Item>, Vec<Id>),
+    // Despawn the mirror for one removed id (no-op if it was added and
+    // removed within the same sync window, it never got an entity).
+    mut despawn_removed: impl FnMut(&mut World, Id),
+    // Resolve an item to its tracked entity, or None to (re)spawn. Takes
+    // `&mut World` because the deployable kind-change path despawns the
+    // stale mirror here to force the respawn arm.
+    mut resolve_existing: impl FnMut(&mut World, &Item) -> Option<Entity>,
+    // Compare-and-write the item's mutable components in place.
+    mut refresh: impl FnMut(&mut World, Entity, Item),
+    // Spawn the fresh mirror entity and attach its replication.
+    mut spawn: impl FnMut(&mut World, Item),
+) {
+    let (dirty, removed) = snapshot(world);
+    for id in removed {
+        despawn_removed(world, id);
+    }
+    for item in dirty {
+        match resolve_existing(world, &item) {
+            Some(entity) => refresh(world, entity, item),
+            None => spawn(world, item),
+        }
+    }
+}
 
 /// Max number of *fresh* resource-node mirror entities to spawn in a single
 /// sync pass. World-load-on-connect seeds every node id dirty at once (~1800
@@ -36,6 +90,11 @@ const MAX_RESOURCE_NODE_SPAWNS_PER_SYNC: usize = 128;
 /// `&mut World`. Cheap in steady state (no allocations when the id set
 /// is unchanged); the storage refresh writes are change-detected by Bevy
 /// so they only emit `Changed` ticks when the inner Vec actually differs.
+///
+/// Bespoke rather than sharing `reconcile_mirror_entities`: the spawn budget
+/// below needs to classify ids before cloning any state and requeue the
+/// overflow, so refreshes and spawns run as two separate loops instead of a
+/// per-item refresh-or-spawn.
 pub(super) fn sync_resource_node_entities(world: &mut World) {
     use crate::protocol::ResourceNodeId;
 
@@ -87,7 +146,7 @@ pub(super) fn sync_resource_node_entities(world: &mut World) {
     // 3. Snapshot authoritative state for *only* the refreshes + budgeted spawns,
     //    releasing the server borrow before the spawn / despawn calls need
     //    `&mut World`.
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity, reason = "two-phase snapshot tuple type")]
     let (refreshes, spawns): (
         Vec<(Entity, ResourceNodeId, crate::protocol::ResourceNodeState)>,
         Vec<(crate::protocol::ResourceNodeState, Option<ChunkCoord>)>,
@@ -166,111 +225,96 @@ pub(super) fn sync_resource_node_entities(world: &mut World) {
 /// real merges.
 pub(super) fn sync_dropped_item_entities(world: &mut World) {
     let _span = info_span!("sync_dropped_item_entities").entered();
-    // Snapshot the (small) set of changed states + anchor chunks up front
-    // so the `Res` borrow is released before the spawn/despawn calls need
-    // `&mut World`.
-    #[allow(clippy::type_complexity)]
-    let (dirty_states, removed): (
-        Vec<(
-            crate::protocol::DroppedItemId,
-            crate::protocol::DroppedWorldItem,
-            Option<ChunkCoord>,
-        )>,
-        Vec<crate::protocol::DroppedItemId>,
-    ) = {
-        let mut server = world.resource_mut::<AuthoritativeServer>();
-        let (dirty_ids, removed_ids) = server.0.drain_dropped_item_sync();
-        let dirty_states = dirty_ids
-            .into_iter()
-            .filter_map(|id| {
-                server
-                    .0
-                    .dropped_item_state(id)
-                    .map(|state| (id, state.clone(), server.0.dropped_item_chunk(id)))
-            })
-            .collect();
-        (dirty_states, removed_ids)
-    };
-
-    // 1. Despawn the mirror entities for removed ids (no-op if one was added
-    //    and removed within the same sync window, it never got an entity).
-    for id in removed {
-        crate::server::despawn_dropped_item_entity(world, id);
-    }
-
-    // 2. Spawn fresh entities for new ids; refresh transform + stack for
-    //    changed ones.
-    for (id, item, live_chunk) in dirty_states {
-        let existing = world.resource::<crate::server::DroppedItemIndex>().get(id);
-        match existing {
-            Some(entity) => {
-                // Transform changes every physics tick while the body is
-                // settling; the value compare suppresses no-op writes so
-                // only real moves emit a `Changed` tick.
-                let new_transform = crate::server::DroppedItemTransform {
-                    position: item.position,
-                    yaw: item.yaw,
-                    rotation: item.rotation,
-                };
-                if let Some(mut transform) =
-                    world.get_mut::<crate::server::DroppedItemTransform>(entity)
-                    && (transform.position != new_transform.position
-                        || transform.yaw != new_transform.yaw
-                        || transform.rotation != new_transform.rotation)
+    reconcile_mirror_entities(
+        world,
+        // Snapshot the (small) set of changed states + anchor chunks up front
+        // so the `Res` borrow is released before the spawn/despawn calls need
+        // `&mut World`.
+        |world| {
+            let mut server = world.resource_mut::<AuthoritativeServer>();
+            let (dirty_ids, removed_ids) = server.0.drain_dropped_item_sync();
+            let dirty_states: Vec<_> = dirty_ids
+                .into_iter()
+                .filter_map(|id| {
+                    server
+                        .0
+                        .dropped_item_state(id)
+                        .map(|state| (id, state.clone(), server.0.dropped_item_chunk(id)))
+                })
+                .collect();
+            (dirty_states, removed_ids)
+        },
+        |world, id| {
+            crate::server::despawn_dropped_item_entity(world, id);
+        },
+        |world, &(id, _, _)| world.resource::<crate::server::DroppedItemIndex>().get(id),
+        |world, entity, (_id, item, live_chunk)| {
+            // Transform changes every physics tick while the body is
+            // settling; the value compare suppresses no-op writes so
+            // only real moves emit a `Changed` tick.
+            let new_transform = crate::server::DroppedItemTransform {
+                position: item.position,
+                yaw: item.yaw,
+                rotation: item.rotation,
+            };
+            if let Some(mut transform) =
+                world.get_mut::<crate::server::DroppedItemTransform>(entity)
+                && (transform.position != new_transform.position
+                    || transform.yaw != new_transform.yaw
+                    || transform.rotation != new_transform.rotation)
+            {
+                #[cfg(feature = "replication-trace")]
                 {
-                    #[cfg(feature = "replication-trace")]
-                    {
-                        let before = transform.position;
-                        info!(
-                            target: "replication_trace",
-                            "server: DroppedItemTransform MUTATE id={id} entity={entity:?} pos {before:?} -> {:?}",
-                            new_transform.position
-                        );
-                    }
-                    *transform = new_transform;
-                }
-                if let Some(mut drop) = world.get_mut::<crate::server::DroppedItem>(entity)
-                    && drop.stack != item.stack
-                {
-                    #[cfg(feature = "replication-trace")]
+                    let before = transform.position;
                     info!(
                         target: "replication_trace",
-                        "server: DroppedItem          MUTATE id={id} entity={entity:?} stack {:?} -> {:?}",
-                        drop.stack, item.stack
+                        "server: DroppedItemTransform MUTATE id={_id} entity={entity:?} pos {before:?} -> {:?}",
+                        new_transform.position
                     );
-                    drop.stack = item.stack;
                 }
-                // Dropped items can roll between chunks while their physics
-                // body settles. Keep the room membership and the
-                // `DroppedItemChunk` mirror in step so observing clients
-                // gain/lose visibility at the boundary instead of seeing
-                // the entity disappear off-screen.
-                let old_chunk = world
-                    .get::<crate::server::DroppedItemChunk>(entity)
-                    .map(|c| c.0);
-                if let (Some(live), Some(prev)) = (live_chunk, old_chunk)
-                    && live != prev
+                *transform = new_transform;
+            }
+            if let Some(mut drop) = world.get_mut::<crate::server::DroppedItem>(entity)
+                && drop.stack != item.stack
+            {
+                #[cfg(feature = "replication-trace")]
+                info!(
+                    target: "replication_trace",
+                    "server: DroppedItem          MUTATE id={_id} entity={entity:?} stack {:?} -> {:?}",
+                    drop.stack, item.stack
+                );
+                drop.stack = item.stack;
+            }
+            // Dropped items can roll between chunks while their physics
+            // body settles. Keep the room membership and the
+            // `DroppedItemChunk` mirror in step so observing clients
+            // gain/lose visibility at the boundary instead of seeing
+            // the entity disappear off-screen.
+            let old_chunk = world
+                .get::<crate::server::DroppedItemChunk>(entity)
+                .map(|c| c.0);
+            if let (Some(live), Some(prev)) = (live_chunk, old_chunk)
+                && live != prev
+            {
+                move_entity_between_rooms(world, entity, prev, live);
+                if let Some(mut chunk_marker) =
+                    world.get_mut::<crate::server::DroppedItemChunk>(entity)
                 {
-                    move_entity_between_rooms(world, entity, prev, live);
-                    if let Some(mut chunk_marker) =
-                        world.get_mut::<crate::server::DroppedItemChunk>(entity)
-                    {
-                        chunk_marker.0 = live;
-                    }
+                    chunk_marker.0 = live;
                 }
             }
-            None => {
-                // If chunk_manager hasn't tracked the drop yet, fall back
-                // to the position's chunk so the entity still has a coord;
-                // the next dirty mark will resync the membership.
-                let chunk = live_chunk.unwrap_or_else(|| {
-                    crate::world::ChunkCoord::from_world(item.position.x, item.position.z)
-                });
-                let entity = crate::server::spawn_dropped_item_entity(world, item, chunk);
-                attach_room_gated_replication(world, entity, chunk);
-            }
-        }
-    }
+        },
+        |world, (_id, item, live_chunk)| {
+            // If chunk_manager hasn't tracked the drop yet, fall back
+            // to the position's chunk so the entity still has a coord;
+            // the next dirty mark will resync the membership.
+            let chunk = live_chunk.unwrap_or_else(|| {
+                crate::world::ChunkCoord::from_world(item.position.x, item.position.z)
+            });
+            let entity = crate::server::spawn_dropped_item_entity(world, item, chunk);
+            attach_room_gated_replication(world, entity, chunk);
+        },
+    );
 }
 
 /// Reconciles `GameServer::projectiles` into ECS entities. Like the dropped-item
@@ -280,83 +324,76 @@ pub(super) fn sync_dropped_item_entities(world: &mut World) {
 /// projectiles are few and short-lived, so recomputing it per sync is cheap.
 pub(super) fn sync_projectile_entities(world: &mut World) {
     let _span = info_span!("sync_projectile_entities").entered();
-    #[allow(clippy::type_complexity)]
-    let (dirty_views, removed): (
-        Vec<crate::server::ProjectileView>,
-        Vec<crate::protocol::ProjectileId>,
-    ) = {
-        let mut server = world.resource_mut::<AuthoritativeServer>();
-        let (dirty_ids, removed_ids) = server.0.drain_projectile_sync();
-        let dirty_views = dirty_ids
-            .into_iter()
-            .filter_map(|id| server.0.projectile_view(id))
-            .collect();
-        (dirty_views, removed_ids)
-    };
-
-    // 1. Despawn the mirror entities for removed ids.
-    for id in removed {
-        crate::server::despawn_projectile_entity(world, id);
-    }
-
-    // 2. Spawn fresh entities; refresh transform + re-anchor chunk for movers.
-    for view in dirty_views {
-        let live_chunk = ChunkCoord::from_world(view.position.x, view.position.z);
-        let existing = world
-            .resource::<crate::server::ProjectileIndex>()
-            .get(view.id);
-        match existing {
-            Some(entity) => {
-                let new_transform = crate::server::ProjectileTransform {
-                    position: view.position,
-                    velocity: view.velocity,
-                };
-                if let Some(mut transform) =
-                    world.get_mut::<crate::server::ProjectileTransform>(entity)
-                    && (transform.position != new_transform.position
-                        || transform.velocity != new_transform.velocity)
+    reconcile_mirror_entities(
+        world,
+        |world| {
+            let mut server = world.resource_mut::<AuthoritativeServer>();
+            let (dirty_ids, removed_ids) = server.0.drain_projectile_sync();
+            let dirty_views: Vec<_> = dirty_ids
+                .into_iter()
+                .filter_map(|id| server.0.projectile_view(id))
+                .collect();
+            (dirty_views, removed_ids)
+        },
+        |world, id| {
+            crate::server::despawn_projectile_entity(world, id);
+        },
+        |world, view: &crate::server::ProjectileView| {
+            world
+                .resource::<crate::server::ProjectileIndex>()
+                .get(view.id)
+        },
+        |world, entity, view| {
+            let live_chunk = ChunkCoord::from_world(view.position.x, view.position.z);
+            let new_transform = crate::server::ProjectileTransform {
+                position: view.position,
+                velocity: view.velocity,
+            };
+            if let Some(mut transform) = world.get_mut::<crate::server::ProjectileTransform>(entity)
+                && (transform.position != new_transform.position
+                    || transform.velocity != new_transform.velocity)
+            {
+                #[cfg(feature = "replication-trace")]
                 {
-                    #[cfg(feature = "replication-trace")]
+                    let before = transform.position;
+                    info!(
+                        target: "replication_trace",
+                        "server: ProjectileTransform MUTATE id={} entity={entity:?} pos {before:?} -> {:?}",
+                        view.id, new_transform.position
+                    );
+                }
+                *transform = new_transform;
+            }
+            // Re-anchor room membership as the arrow crosses chunk borders so
+            // observing clients gain/lose visibility at the boundary. When the
+            // chunk is unchanged, RE-AFFIRM the same room instead: a rested
+            // arrow stops moving (so it never crosses a border again), and the
+            // 0.28 room model latches visibility only on a Rooms (re)insert, so
+            // without this its visibility freezes at the rest tick and a
+            // stationary shooter never sees it stick. `tick_projectiles` keeps
+            // a freshly-rested arrow dirty for a short window so this runs a few
+            // times after client subscriptions settle.
+            let old_chunk = world
+                .get::<crate::server::ProjectileChunk>(entity)
+                .map(|c| c.0);
+            match old_chunk {
+                Some(prev) if prev != live_chunk => {
+                    move_entity_between_rooms(world, entity, prev, live_chunk);
+                    if let Some(mut chunk_marker) =
+                        world.get_mut::<crate::server::ProjectileChunk>(entity)
                     {
-                        let before = transform.position;
-                        info!(
-                            target: "replication_trace",
-                            "server: ProjectileTransform MUTATE id={} entity={entity:?} pos {before:?} -> {:?}",
-                            view.id, new_transform.position
-                        );
+                        chunk_marker.0 = live_chunk;
                     }
-                    *transform = new_transform;
                 }
-                // Re-anchor room membership as the arrow crosses chunk borders so
-                // observing clients gain/lose visibility at the boundary. When the
-                // chunk is unchanged, RE-AFFIRM the same room instead: a rested
-                // arrow stops moving (so it never crosses a border again), and the
-                // 0.28 room model latches visibility only on a Rooms (re)insert, so
-                // without this its visibility freezes at the rest tick and a
-                // stationary shooter never sees it stick. `tick_projectiles` keeps
-                // a freshly-rested arrow dirty for a short window so this runs a few
-                // times after client subscriptions settle.
-                let old_chunk = world
-                    .get::<crate::server::ProjectileChunk>(entity)
-                    .map(|c| c.0);
-                match old_chunk {
-                    Some(prev) if prev != live_chunk => {
-                        move_entity_between_rooms(world, entity, prev, live_chunk);
-                        if let Some(mut chunk_marker) =
-                            world.get_mut::<crate::server::ProjectileChunk>(entity)
-                        {
-                            chunk_marker.0 = live_chunk;
-                        }
-                    }
-                    _ => reaffirm_entity_room(world, entity, live_chunk),
-                }
+                _ => reaffirm_entity_room(world, entity, live_chunk),
             }
-            None => {
-                let entity = crate::server::spawn_projectile_entity(world, view, live_chunk);
-                attach_room_gated_replication(world, entity, live_chunk);
-            }
-        }
-    }
+        },
+        |world, view| {
+            let live_chunk = ChunkCoord::from_world(view.position.x, view.position.z);
+            let entity = crate::server::spawn_projectile_entity(world, view, live_chunk);
+            attach_room_gated_replication(world, entity, live_chunk);
+        },
+    );
 }
 
 /// Reconciles `GameServer::deployed_entities` into ECS entities. Same
@@ -365,150 +402,137 @@ pub(super) fn sync_projectile_entities(world: &mut World) {
 /// `DeployableHealth` and `DeployableActive` refreshed in place so a
 /// furnace switching on/off or a wall taking a hit ships exactly one
 /// component delta.
+///
+/// A kind change (hammer tier upgrade) can't be expressed as a diff,
+/// `Deployable` identity is immutable post-spawn by design, so the
+/// resolve step despawns the stale mirror and falls through to the spawn
+/// arm; clients see a remove + add through the normal
+/// `Added`/`RemovedComponents` lifecycle.
 pub(super) fn sync_deployable_entities(world: &mut World) {
     let _span = info_span!("sync_deployable_entities").entered();
-    // Snapshot the (small) set of changed views + anchor chunks up front
-    // so the `Res` borrow is released before the spawn/despawn calls need
-    // `&mut World`.
-    #[allow(clippy::type_complexity)]
-    let (dirty_views, removed): (
-        Vec<(crate::server::DeployableView, Option<ChunkCoord>)>,
-        Vec<crate::protocol::DeployedEntityId>,
-    ) = {
-        let mut server = world.resource_mut::<AuthoritativeServer>();
-        let (dirty_ids, removed_ids) = server.0.drain_deployable_sync();
-        let dirty_views = dirty_ids
-            .into_iter()
-            .filter_map(|id| {
-                server
-                    .0
-                    .deployable_view(id)
-                    .map(|view| (view, server.0.deployable_chunk(id)))
-            })
-            .collect();
-        (dirty_views, removed_ids)
-    };
-
-    // 1. Despawn the mirror entities for removed ids (no-op if one was added
-    //    and removed within the same sync window, it never got an entity).
-    for id in removed {
-        crate::server::despawn_deployable_entity(world, id);
-    }
-
-    // 2. Spawn fresh entities for new ids; refresh health/active/label
-    //    for changed ones. A kind change (hammer tier upgrade) can't be
-    //    expressed as a diff, `Deployable` identity is immutable
-    //    post-spawn by design, so the mirror entity is despawned and
-    //    respawned; clients see a remove + add through the normal
-    //    `Added`/`RemovedComponents` lifecycle.
-    for (view, live_chunk) in dirty_views {
-        let existing = world
-            .resource::<crate::server::DeployableIndex>()
-            .get(view.id);
-        let existing = match existing {
-            Some(entity) => {
-                let kind_changed = world
-                    .get::<crate::server::Deployable>(entity)
-                    .is_some_and(|meta| meta.kind != view.kind);
-                if kind_changed {
-                    #[cfg(feature = "replication-trace")]
+    reconcile_mirror_entities(
+        world,
+        // Snapshot the (small) set of changed views + anchor chunks up front
+        // so the `Res` borrow is released before the spawn/despawn calls need
+        // `&mut World`.
+        |world| {
+            let mut server = world.resource_mut::<AuthoritativeServer>();
+            let (dirty_ids, removed_ids) = server.0.drain_deployable_sync();
+            let dirty_views: Vec<_> = dirty_ids
+                .into_iter()
+                .filter_map(|id| {
+                    server
+                        .0
+                        .deployable_view(id)
+                        .map(|view| (view, server.0.deployable_chunk(id)))
+                })
+                .collect();
+            (dirty_views, removed_ids)
+        },
+        |world, id| {
+            crate::server::despawn_deployable_entity(world, id);
+        },
+        |world, (view, _)| {
+            let existing = world
+                .resource::<crate::server::DeployableIndex>()
+                .get(view.id)?;
+            let kind_changed = world
+                .get::<crate::server::Deployable>(existing)
+                .is_some_and(|meta| meta.kind != view.kind);
+            if kind_changed {
+                #[cfg(feature = "replication-trace")]
+                info!(
+                    target: "replication_trace",
+                    "server: Deployable         RESPAWN id={} entity={existing:?} kind changed to {:?}",
+                    view.id, view.kind
+                );
+                crate::server::despawn_deployable_entity(world, view.id);
+                None
+            } else {
+                Some(existing)
+            }
+        },
+        |world, entity, (view, _)| {
+            if let Some(mut health) = world.get_mut::<crate::server::DeployableHealth>(entity)
+                && health.0 != view.health
+            {
+                #[cfg(feature = "replication-trace")]
+                {
+                    let before = health.0;
                     info!(
                         target: "replication_trace",
-                        "server: Deployable         RESPAWN id={} entity={entity:?} kind changed to {:?}",
-                        view.id, view.kind
+                        "server: DeployableHealth   MUTATE id={} entity={entity:?} {before} -> {}",
+                        view.id, view.health
                     );
-                    crate::server::despawn_deployable_entity(world, view.id);
-                    None
-                } else {
-                    Some(entity)
                 }
+                health.0 = view.health;
             }
-            None => None,
-        };
-        match existing {
-            Some(entity) => {
-                if let Some(mut health) = world.get_mut::<crate::server::DeployableHealth>(entity)
-                    && health.0 != view.health
+            if let Some(mut active) = world.get_mut::<crate::server::DeployableActive>(entity)
+                && active.0 != view.active
+            {
+                #[cfg(feature = "replication-trace")]
                 {
-                    #[cfg(feature = "replication-trace")]
-                    {
-                        let before = health.0;
-                        info!(
-                            target: "replication_trace",
-                            "server: DeployableHealth   MUTATE id={} entity={entity:?} {before} -> {}",
-                            view.id, view.health
-                        );
-                    }
-                    health.0 = view.health;
+                    let before = active.0;
+                    info!(
+                        target: "replication_trace",
+                        "server: DeployableActive   MUTATE id={} entity={entity:?} {before} -> {}",
+                        view.id, view.active
+                    );
                 }
-                if let Some(mut active) = world.get_mut::<crate::server::DeployableActive>(entity)
-                    && active.0 != view.active
-                {
-                    #[cfg(feature = "replication-trace")]
-                    {
-                        let before = active.0;
-                        info!(
-                            target: "replication_trace",
-                            "server: DeployableActive   MUTATE id={} entity={entity:?} {before} -> {}",
-                            view.id, view.active
-                        );
-                    }
-                    active.0 = view.active;
-                }
-                if let Some(mut label) = world.get_mut::<crate::server::DeployableLabel>(entity)
-                    && label.0 != view.label
-                {
-                    #[cfg(feature = "replication-trace")]
-                    {
-                        info!(
-                            target: "replication_trace",
-                            "server: DeployableLabel    MUTATE id={} entity={entity:?} {:?} -> {:?}",
-                            view.id, label.0, view.label
-                        );
-                    }
-                    label.0 = view.label;
-                }
-                if let Some(mut stability) =
-                    world.get_mut::<crate::server::DeployableStability>(entity)
-                    && stability.0 != view.stability
-                {
-                    #[cfg(feature = "replication-trace")]
-                    {
-                        let before = stability.0;
-                        info!(
-                            target: "replication_trace",
-                            "server: DeployableStability MUTATE id={} entity={entity:?} {before} -> {}",
-                            view.id, view.stability
-                        );
-                    }
-                    stability.0 = view.stability;
-                }
-                if let Some(mut auth) = world.get_mut::<crate::server::DeployableAuth>(entity)
-                    && auth.0 != view.authorized
-                {
-                    #[cfg(feature = "replication-trace")]
-                    {
-                        info!(
-                            target: "replication_trace",
-                            "server: DeployableAuth      MUTATE id={} entity={entity:?} {:?} -> {:?}",
-                            view.id, auth.0, view.authorized
-                        );
-                    }
-                    auth.0 = view.authorized.clone();
-                }
+                active.0 = view.active;
             }
-            None => {
-                // If chunk_manager hasn't tracked the placement yet, fall
-                // back to the position's chunk so the entity still has a
-                // coord; the next dirty mark will resync the membership.
-                let chunk = live_chunk.unwrap_or_else(|| {
-                    crate::world::ChunkCoord::from_world(view.position.x, view.position.z)
-                });
-                let entity = crate::server::spawn_deployable_entity(world, view, chunk);
-                attach_room_gated_replication(world, entity, chunk);
+            if let Some(mut label) = world.get_mut::<crate::server::DeployableLabel>(entity)
+                && label.0 != view.label
+            {
+                #[cfg(feature = "replication-trace")]
+                {
+                    info!(
+                        target: "replication_trace",
+                        "server: DeployableLabel    MUTATE id={} entity={entity:?} {:?} -> {:?}",
+                        view.id, label.0, view.label
+                    );
+                }
+                label.0 = view.label;
             }
-        }
-    }
+            if let Some(mut stability) = world.get_mut::<crate::server::DeployableStability>(entity)
+                && stability.0 != view.stability
+            {
+                #[cfg(feature = "replication-trace")]
+                {
+                    let before = stability.0;
+                    info!(
+                        target: "replication_trace",
+                        "server: DeployableStability MUTATE id={} entity={entity:?} {before} -> {}",
+                        view.id, view.stability
+                    );
+                }
+                stability.0 = view.stability;
+            }
+            if let Some(mut auth) = world.get_mut::<crate::server::DeployableAuth>(entity)
+                && auth.0 != view.authorized
+            {
+                #[cfg(feature = "replication-trace")]
+                {
+                    info!(
+                        target: "replication_trace",
+                        "server: DeployableAuth      MUTATE id={} entity={entity:?} {:?} -> {:?}",
+                        view.id, auth.0, view.authorized
+                    );
+                }
+                auth.0 = view.authorized.clone();
+            }
+        },
+        |world, (view, live_chunk)| {
+            // If chunk_manager hasn't tracked the placement yet, fall
+            // back to the position's chunk so the entity still has a
+            // coord; the next dirty mark will resync the membership.
+            let chunk = live_chunk.unwrap_or_else(|| {
+                crate::world::ChunkCoord::from_world(view.position.x, view.position.z)
+            });
+            let entity = crate::server::spawn_deployable_entity(world, view, chunk);
+            attach_room_gated_replication(world, entity, chunk);
+        },
+    );
 }
 
 /// Compare-and-write one replicated player component. Writes only when
@@ -543,245 +567,247 @@ macro_rules! refresh_player_component {
 /// (see `attach_player_replication`).
 pub(super) fn sync_player_entities(world: &mut World) {
     let _span = info_span!("sync_player_entities").entered();
-    let authoritative: Vec<crate::server::PlayerView> = {
-        let server = world.resource::<AuthoritativeServer>();
-        server.0.players_iter().collect()
-    };
-    let live_ids: std::collections::HashSet<crate::protocol::ClientId> =
-        authoritative.iter().map(|view| view.client_id).collect();
+    reconcile_mirror_entities(
+        world,
+        // Full walk, no dirty set: the pose mutates every tick while moving,
+        // so this collects every live view and computes the stale ids (in
+        // the index but no longer connected) against it.
+        |world| {
+            let authoritative: Vec<crate::server::PlayerView> = {
+                let server = world.resource::<AuthoritativeServer>();
+                server.0.players_iter().collect()
+            };
+            let live_ids: std::collections::HashSet<crate::protocol::ClientId> =
+                authoritative.iter().map(|view| view.client_id).collect();
 
-    let stale: Vec<crate::protocol::ClientId> = {
-        let index = world.resource::<crate::server::PlayerIndex>();
-        index
-            .iter()
-            .filter_map(|(id, _)| (!live_ids.contains(&id)).then_some(id))
-            .collect()
-    };
-    for id in stale {
-        // Despawn the player's private mirror entity alongside the public one.
-        // The private entity has no id-index of its own; reach it through the
-        // player's `PlayerPrivateLink`. The per-client private-room mapping is
-        // kept (keyed by client id) so a reconnect reuses the same private room,
-        // matching how chunk rooms are never freed.
-        if let Some(player_entity) = world.resource::<crate::server::PlayerIndex>().get(id)
-            && let Some(private) = world
-                .get::<crate::server::PlayerPrivateLink>(player_entity)
-                .map(|link| link.0)
-        {
-            world.despawn(private);
-        }
-        crate::server::despawn_player_entity(world, id);
-    }
-
-    for view in authoritative {
-        let existing = world
-            .resource::<crate::server::PlayerIndex>()
-            .get(view.client_id);
-        match existing {
-            Some(entity) => {
-                // Owner-only components live on the player's separate private
-                // mirror entity; refresh them there. The private entity and its
-                // private room persist across a reconnect (a woken sleeping body
-                // keeps the same mirror entities), and the new sender re-joins the
-                // private room in `update_client_room_subscriptions`, so no
-                // per-sender re-binding is needed here anymore.
-                let private_entity = world
-                    .get::<crate::server::PlayerPrivateLink>(entity)
-                    .map(|link| link.0);
-                // Peer-visible components. The pose ticks every tick
-                // while moving; profile/health/bubble only on real
-                // changes.
+            let stale: Vec<crate::protocol::ClientId> = {
+                let index = world.resource::<crate::server::PlayerIndex>();
+                index
+                    .iter()
+                    .filter_map(|(id, _)| (!live_ids.contains(&id)).then_some(id))
+                    .collect()
+            };
+            (authoritative, stale)
+        },
+        |world, id| {
+            // Despawn the player's private mirror entity alongside the public one.
+            // The private entity has no id-index of its own; reach it through the
+            // player's `PlayerPrivateLink`. The per-client private-room mapping is
+            // kept (keyed by client id) so a reconnect reuses the same private room,
+            // matching how chunk rooms are never freed.
+            if let Some(player_entity) = world.resource::<crate::server::PlayerIndex>().get(id)
+                && let Some(private) = world
+                    .get::<crate::server::PlayerPrivateLink>(player_entity)
+                    .map(|link| link.0)
+            {
+                world.despawn(private);
+            }
+            crate::server::despawn_player_entity(world, id);
+        },
+        |world, view: &crate::server::PlayerView| {
+            world
+                .resource::<crate::server::PlayerIndex>()
+                .get(view.client_id)
+        },
+        |world, entity, view| {
+            // Owner-only components live on the player's separate private
+            // mirror entity; refresh them there. The private entity and its
+            // private room persist across a reconnect (a woken sleeping body
+            // keeps the same mirror entities), and the new sender re-joins the
+            // private room in `update_client_room_subscriptions`, so no
+            // per-sender re-binding is needed here anymore.
+            let private_entity = world
+                .get::<crate::server::PlayerPrivateLink>(entity)
+                .map(|link| link.0);
+            // Peer-visible components. The pose ticks every tick
+            // while moving; profile/health/bubble only on real
+            // changes.
+            refresh_player_component!(
+                world,
+                entity,
+                view.client_id,
+                "PlayerPose         ",
+                crate::server::PlayerPose,
+                view.pose
+            );
+            refresh_player_component!(
+                world,
+                entity,
+                view.client_id,
+                "PlayerProfile      ",
+                crate::server::PlayerProfile,
+                view.profile
+            );
+            refresh_player_component!(
+                world,
+                entity,
+                view.client_id,
+                "PlayerHealth       ",
+                crate::server::PlayerHealth,
+                view.health
+            );
+            refresh_player_component!(
+                world,
+                entity,
+                view.client_id,
+                "PlayerChatBubble   ",
+                crate::server::PlayerChatBubble,
+                view.chat_bubble
+            );
+            // Peer-visible cosmetic state for the rigged body. NOT
+            // owner-gated (every peer in the room renders these): the held
+            // mesh changes on a tool swap, the action seq on every swing.
+            refresh_player_component!(
+                world,
+                entity,
+                view.client_id,
+                "PlayerHeldItem     ",
+                crate::server::PlayerHeldItem,
+                view.held
+            );
+            refresh_player_component!(
+                world,
+                entity,
+                view.client_id,
+                "PlayerEquipmentVis ",
+                crate::server::PlayerEquipmentVisual,
+                view.equipment_visual
+            );
+            refresh_player_component!(
+                world,
+                entity,
+                view.client_id,
+                "PlayerAction       ",
+                crate::server::PlayerAction,
+                view.action
+            );
+            refresh_player_component!(
+                world,
+                entity,
+                view.client_id,
+                "PlayerChargeFraction   ",
+                crate::server::PlayerChargeFraction,
+                view.charge_fraction
+            );
+            // Owner-only components: refreshed on the private mirror entity,
+            // which is replicated to the owning client alone.
+            if let Some(private_entity) = private_entity {
                 refresh_player_component!(
                     world,
-                    entity,
+                    private_entity,
                     view.client_id,
-                    "PlayerPose         ",
-                    crate::server::PlayerPose,
-                    view.pose
+                    "PlayerInventory    ",
+                    crate::server::PlayerInventory,
+                    view.inventory
                 );
                 refresh_player_component!(
                     world,
-                    entity,
+                    private_entity,
                     view.client_id,
-                    "PlayerProfile      ",
-                    crate::server::PlayerProfile,
-                    view.profile
+                    "PlayerCrafting     ",
+                    crate::server::PlayerCrafting,
+                    view.crafting
                 );
                 refresh_player_component!(
                     world,
-                    entity,
+                    private_entity,
                     view.client_id,
-                    "PlayerHealth       ",
-                    crate::server::PlayerHealth,
-                    view.health
+                    "PlayerOpenContainers",
+                    crate::server::PlayerOpenContainers,
+                    view.containers
                 );
                 refresh_player_component!(
                     world,
-                    entity,
+                    private_entity,
                     view.client_id,
-                    "PlayerChatBubble   ",
-                    crate::server::PlayerChatBubble,
-                    view.chat_bubble
+                    "PlayerInputAck     ",
+                    crate::server::PlayerInputAck,
+                    view.input_ack
                 );
-                // Peer-visible cosmetic state for the rigged body. NOT
-                // owner-gated (every peer in the room renders these): the held
-                // mesh changes on a tool swap, the action seq on every swing.
-                refresh_player_component!(
-                    world,
-                    entity,
-                    view.client_id,
-                    "PlayerHeldItem     ",
-                    crate::server::PlayerHeldItem,
-                    view.held
-                );
-                refresh_player_component!(
-                    world,
-                    entity,
-                    view.client_id,
-                    "PlayerEquipmentVis ",
-                    crate::server::PlayerEquipmentVisual,
-                    view.equipment_visual
-                );
-                refresh_player_component!(
-                    world,
-                    entity,
-                    view.client_id,
-                    "PlayerAction       ",
-                    crate::server::PlayerAction,
-                    view.action
-                );
-                refresh_player_component!(
-                    world,
-                    entity,
-                    view.client_id,
-                    "PlayerChargeFraction   ",
-                    crate::server::PlayerChargeFraction,
-                    view.charge_fraction
-                );
-                // Owner-only components: refreshed on the private mirror entity,
-                // which is replicated to the owning client alone.
-                if let Some(private_entity) = private_entity {
-                    refresh_player_component!(
-                        world,
-                        private_entity,
-                        view.client_id,
-                        "PlayerInventory    ",
-                        crate::server::PlayerInventory,
-                        view.inventory
-                    );
-                    refresh_player_component!(
-                        world,
-                        private_entity,
-                        view.client_id,
-                        "PlayerCrafting     ",
-                        crate::server::PlayerCrafting,
-                        view.crafting
-                    );
-                    refresh_player_component!(
-                        world,
-                        private_entity,
-                        view.client_id,
-                        "PlayerOpenContainers",
-                        crate::server::PlayerOpenContainers,
-                        view.containers
-                    );
-                    refresh_player_component!(
-                        world,
-                        private_entity,
-                        view.client_id,
-                        "PlayerInputAck     ",
-                        crate::server::PlayerInputAck,
-                        view.input_ack
+            }
+            // Refresh armor. Carries the melee column of the worn
+            // set's protection, recomputed server-side on every
+            // equip/unequip or durability wear, so the HUD armor
+            // value ships the tick it changes.
+            if let Some(mut armor) = world.get_mut::<crate::server::PlayerArmor>(entity)
+                && *armor != view.armor
+            {
+                #[cfg(feature = "replication-trace")]
+                {
+                    let before = armor.0;
+                    info!(
+                        target: "replication_trace",
+                        "server: PlayerArmor        MUTATE client={} entity={entity:?} {before} -> {}",
+                        view.client_id, view.armor.0
                     );
                 }
-                // Refresh armor. Carries the melee column of the worn
-                // set's protection, recomputed server-side on every
-                // equip/unequip or durability wear, so the HUD armor
-                // value ships the tick it changes.
-                if let Some(mut armor) = world.get_mut::<crate::server::PlayerArmor>(entity)
-                    && *armor != view.armor
+                *armor = view.armor;
+            }
+            // Refresh lifecycle. Flips on every death / respawn.
+            // Triggers the corpse animation on peers and the death
+            // splash on the owner.
+            if let Some(mut lifecycle) = world.get_mut::<crate::server::PlayerLifecycle>(entity)
+                && *lifecycle != view.lifecycle
+            {
+                #[cfg(feature = "replication-trace")]
                 {
-                    #[cfg(feature = "replication-trace")]
-                    {
-                        let before = armor.0;
-                        info!(
-                            target: "replication_trace",
-                            "server: PlayerArmor        MUTATE client={} entity={entity:?} {before} -> {}",
-                            view.client_id, view.armor.0
-                        );
-                    }
-                    *armor = view.armor;
+                    let before = *lifecycle;
+                    info!(
+                        target: "replication_trace",
+                        "server: PlayerLifecycle    MUTATE client={} entity={entity:?} {before:?} -> {:?}",
+                        view.client_id, view.lifecycle
+                    );
                 }
-                // Refresh lifecycle. Flips on every death / respawn.
-                // Triggers the corpse animation on peers and the death
-                // splash on the owner.
-                if let Some(mut lifecycle) = world.get_mut::<crate::server::PlayerLifecycle>(entity)
-                    && *lifecycle != view.lifecycle
+                *lifecycle = view.lifecycle;
+            }
+            // Refresh the sleeping flag. Flips when a player logs out
+            // (their body stays as a sleeping body) or reconnects (the
+            // body wakes). Peers render the sleeping pose + tooltip off
+            // this.
+            if let Some(mut sleeping) = world.get_mut::<crate::server::PlayerSleeping>(entity)
+                && *sleeping != view.sleeping
+            {
+                #[cfg(feature = "replication-trace")]
                 {
-                    #[cfg(feature = "replication-trace")]
-                    {
-                        let before = *lifecycle;
-                        info!(
-                            target: "replication_trace",
-                            "server: PlayerLifecycle    MUTATE client={} entity={entity:?} {before:?} -> {:?}",
-                            view.client_id, view.lifecycle
-                        );
-                    }
-                    *lifecycle = view.lifecycle;
+                    let before = *sleeping;
+                    info!(
+                        target: "replication_trace",
+                        "server: PlayerSleeping     MUTATE client={} entity={entity:?} {before:?} -> {:?}",
+                        view.client_id, view.sleeping
+                    );
                 }
-                // Refresh the sleeping flag. Flips when a player logs out
-                // (their body stays as a sleeping body) or reconnects (the
-                // body wakes). Peers render the sleeping pose + tooltip off
-                // this.
-                if let Some(mut sleeping) = world.get_mut::<crate::server::PlayerSleeping>(entity)
-                    && *sleeping != view.sleeping
+                *sleeping = view.sleeping;
+            }
+            // Players walk; keep their room subscription aligned with
+            // chunk_manager so peers gain/lose visibility at the
+            // boundary instead of seeing the avatar pop out of view.
+            let live_chunk = world
+                .resource::<AuthoritativeServer>()
+                .0
+                .player_chunk(view.client_id);
+            let old_chunk = world.get::<crate::server::PlayerChunk>(entity).map(|c| c.0);
+            if let (Some(live), Some(prev)) = (live_chunk, old_chunk)
+                && live != prev
+            {
+                move_entity_between_rooms(world, entity, prev, live);
+                if let Some(mut chunk_marker) = world.get_mut::<crate::server::PlayerChunk>(entity)
                 {
-                    #[cfg(feature = "replication-trace")]
-                    {
-                        let before = *sleeping;
-                        info!(
-                            target: "replication_trace",
-                            "server: PlayerSleeping     MUTATE client={} entity={entity:?} {before:?} -> {:?}",
-                            view.client_id, view.sleeping
-                        );
-                    }
-                    *sleeping = view.sleeping;
-                }
-                // Players walk; keep their room subscription aligned with
-                // chunk_manager so peers gain/lose visibility at the
-                // boundary instead of seeing the avatar pop out of view.
-                let live_chunk = world
-                    .resource::<AuthoritativeServer>()
-                    .0
-                    .player_chunk(view.client_id);
-                let old_chunk = world.get::<crate::server::PlayerChunk>(entity).map(|c| c.0);
-                if let (Some(live), Some(prev)) = (live_chunk, old_chunk)
-                    && live != prev
-                {
-                    move_entity_between_rooms(world, entity, prev, live);
-                    if let Some(mut chunk_marker) =
-                        world.get_mut::<crate::server::PlayerChunk>(entity)
-                    {
-                        chunk_marker.0 = live;
-                    }
+                    chunk_marker.0 = live;
                 }
             }
-            None => {
-                let chunk = world
-                    .resource::<AuthoritativeServer>()
-                    .0
-                    .player_chunk(view.client_id)
-                    .unwrap_or_else(|| {
-                        crate::world::ChunkCoord::from_world(
-                            view.pose.position.x,
-                            view.pose.position.z,
-                        )
-                    });
-                let entity = crate::server::spawn_player_entity(world, view, chunk);
-                attach_player_replication(world, entity, chunk);
-            }
-        }
-    }
+        },
+        |world, view| {
+            let chunk = world
+                .resource::<AuthoritativeServer>()
+                .0
+                .player_chunk(view.client_id)
+                .unwrap_or_else(|| {
+                    crate::world::ChunkCoord::from_world(view.pose.position.x, view.pose.position.z)
+                });
+            let entity = crate::server::spawn_player_entity(world, view, chunk);
+            attach_player_replication(world, entity, chunk);
+        },
+    );
 }
 
 /// Reconciles `GameServer::loot_bags` into ECS entities. Sync per
@@ -802,99 +828,100 @@ pub(super) fn sync_player_entities(world: &mut World) {
 /// per-tick dirty marking to avoid freezing a falling bag.
 pub(super) fn sync_loot_bag_entities(world: &mut World) {
     let _span = info_span!("sync_loot_bag_entities").entered();
-    let known: std::collections::HashSet<crate::protocol::LootBagId> = world
-        .resource::<crate::server::LootBagIndex>()
-        .iter()
-        .map(|(id, _)| id)
-        .collect();
-    let authoritative: Vec<crate::server::LootBagView> = {
-        let server = world.resource::<AuthoritativeServer>();
-        server
-            .0
-            .loot_bags_iter()
-            .map(|(id, bag)| crate::server::LootBagView {
-                id,
-                position: bag.position,
-                yaw: bag.yaw,
-                // Slot clones are only needed where the contents
-                // component is actually written: at spawn, and per tick
-                // in trace builds. The release steady state skips the
-                // per-bag Vec clone entirely.
-                slots: (cfg!(feature = "replication-trace") || !known.contains(&id))
-                    .then(|| bag.slots.clone()),
-            })
-            .collect()
-    };
-    let live_ids: std::collections::HashSet<crate::protocol::LootBagId> =
-        authoritative.iter().map(|view| view.id).collect();
+    reconcile_mirror_entities(
+        world,
+        |world| {
+            let known: std::collections::HashSet<crate::protocol::LootBagId> = world
+                .resource::<crate::server::LootBagIndex>()
+                .iter()
+                .map(|(id, _)| id)
+                .collect();
+            let authoritative: Vec<crate::server::LootBagView> = {
+                let server = world.resource::<AuthoritativeServer>();
+                server
+                    .0
+                    .loot_bags_iter()
+                    .map(|(id, bag)| crate::server::LootBagView {
+                        id,
+                        position: bag.position,
+                        yaw: bag.yaw,
+                        // Slot clones are only needed where the contents
+                        // component is actually written: at spawn, and per tick
+                        // in trace builds. The release steady state skips the
+                        // per-bag Vec clone entirely.
+                        slots: (cfg!(feature = "replication-trace") || !known.contains(&id))
+                            .then(|| bag.slots.clone()),
+                    })
+                    .collect()
+            };
+            let live_ids: std::collections::HashSet<crate::protocol::LootBagId> =
+                authoritative.iter().map(|view| view.id).collect();
 
-    let stale: Vec<crate::protocol::LootBagId> = known
-        .iter()
-        .copied()
-        .filter(|id| !live_ids.contains(id))
-        .collect();
-    for id in stale {
-        crate::server::despawn_loot_bag_entity(world, id);
-    }
-
-    for view in authoritative {
-        let existing = world.resource::<crate::server::LootBagIndex>().get(view.id);
-        match existing {
-            Some(entity) => {
-                #[cfg(feature = "replication-trace")]
-                if let Some(slots) = view.slots.clone()
-                    && let Some(mut contents) =
-                        world.get_mut::<crate::server::LootBagContents>(entity)
-                    && contents.0 != slots
+            let stale: Vec<crate::protocol::LootBagId> = known
+                .iter()
+                .copied()
+                .filter(|id| !live_ids.contains(id))
+                .collect();
+            (authoritative, stale)
+        },
+        |world, id| {
+            crate::server::despawn_loot_bag_entity(world, id);
+        },
+        |world, view: &crate::server::LootBagView| {
+            world.resource::<crate::server::LootBagIndex>().get(view.id)
+        },
+        |world, entity, view| {
+            #[cfg(feature = "replication-trace")]
+            if let Some(slots) = view.slots.clone()
+                && let Some(mut contents) = world.get_mut::<crate::server::LootBagContents>(entity)
+                && contents.0 != slots
+            {
                 {
-                    {
-                        let before: usize = contents.0.iter().filter(|s| s.is_some()).count();
-                        let after: usize = slots.iter().filter(|s| s.is_some()).count();
-                        info!(
-                            target: "replication_trace",
-                            "server: LootBagContents    MUTATE id={} entity={entity:?} occupied {before} -> {after}",
-                            view.id
-                        );
-                    }
-                    contents.0 = slots;
-                }
-                // Refresh transform while the bag is still settling.
-                // Change detection suppresses no-op writes, so once
-                // the bag is at rest this short-circuits.
-                let new_transform = crate::server::LootBagTransform {
-                    position: view.position,
-                    yaw: view.yaw,
-                };
-                if let Some(mut transform) =
-                    world.get_mut::<crate::server::LootBagTransform>(entity)
-                    && (transform.position != new_transform.position
-                        || transform.yaw != new_transform.yaw)
-                {
-                    #[cfg(feature = "replication-trace")]
+                    let before: usize = contents.0.iter().filter(|s| s.is_some()).count();
+                    let after: usize = slots.iter().filter(|s| s.is_some()).count();
                     info!(
                         target: "replication_trace",
-                        "server: LootBagTransform     MUTATE id={} entity={entity:?} pos {:?} -> {:?}",
-                        view.id, transform.position, new_transform.position
+                        "server: LootBagContents    MUTATE id={} entity={entity:?} occupied {before} -> {after}",
+                        view.id
                     );
-                    *transform = new_transform;
                 }
+                contents.0 = slots;
             }
-            None => {
-                let chunk = world
-                    .resource::<AuthoritativeServer>()
-                    .0
-                    .loot_bag_chunk(view.id)
-                    .unwrap_or_else(|| {
-                        crate::world::ChunkCoord::from_world(view.position.x, view.position.z)
-                    });
-                let entity = crate::server::spawn_loot_bag_entity(world, view, chunk);
-                attach_room_gated_replication(world, entity, chunk);
-                // `LootBagContents` is registered for replication only in trace
-                // builds (see `net/channels.rs`), so release builds never ship it
-                // to the wire, which is what the old per-entity
-                // `ComponentReplicationOverrides::disable_all()` gate achieved
-                // before lightyear 0.28 removed it.
+            // Refresh transform while the bag is still settling.
+            // Change detection suppresses no-op writes, so once
+            // the bag is at rest this short-circuits.
+            let new_transform = crate::server::LootBagTransform {
+                position: view.position,
+                yaw: view.yaw,
+            };
+            if let Some(mut transform) = world.get_mut::<crate::server::LootBagTransform>(entity)
+                && (transform.position != new_transform.position
+                    || transform.yaw != new_transform.yaw)
+            {
+                #[cfg(feature = "replication-trace")]
+                info!(
+                    target: "replication_trace",
+                    "server: LootBagTransform     MUTATE id={} entity={entity:?} pos {:?} -> {:?}",
+                    view.id, transform.position, new_transform.position
+                );
+                *transform = new_transform;
             }
-        }
-    }
+        },
+        |world, view| {
+            let chunk = world
+                .resource::<AuthoritativeServer>()
+                .0
+                .loot_bag_chunk(view.id)
+                .unwrap_or_else(|| {
+                    crate::world::ChunkCoord::from_world(view.position.x, view.position.z)
+                });
+            let entity = crate::server::spawn_loot_bag_entity(world, view, chunk);
+            attach_room_gated_replication(world, entity, chunk);
+            // `LootBagContents` is registered for replication only in trace
+            // builds (see `net/channels.rs`), so release builds never ship it
+            // to the wire, which is what the old per-entity
+            // `ComponentReplicationOverrides::disable_all()` gate achieved
+            // before lightyear 0.28 removed it.
+        },
+    );
 }

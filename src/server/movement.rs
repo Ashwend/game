@@ -8,12 +8,15 @@ use crate::{
 
 use super::ServerClient;
 
+use crate::game_balance::{
+    DROPPED_ITEM_TOSS_FORWARD_DISTANCE_M as DROP_FORWARD_DISTANCE,
+    DROPPED_ITEM_TOSS_FORWARD_SPEED_MPS as DROP_FORWARD_SPEED,
+    DROPPED_ITEM_TOSS_INHERITED_VELOCITY_SCALE as DROP_INHERITED_VELOCITY_SCALE,
+    DROPPED_ITEM_TOSS_UP_SPEED_MPS as DROP_UP_SPEED,
+};
+
 pub(super) const SERVER_EYE_HEIGHT: f32 = 1.62;
-const DROP_FORWARD_DISTANCE: f32 = 0.48;
 const DROPPED_ITEM_DROP_HEIGHT: f32 = SERVER_EYE_HEIGHT + 0.04;
-const DROP_INHERITED_VELOCITY_SCALE: f32 = 0.65;
-const DROP_FORWARD_SPEED: f32 = 1.6;
-const DROP_UP_SPEED: f32 = 0.45;
 
 pub(super) fn drop_position(controller: &PlayerController) -> Vec3Net {
     let forward = Vec3Net::new(-controller.yaw.sin(), 0.0, -controller.yaw.cos());

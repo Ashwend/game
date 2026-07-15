@@ -1,5 +1,6 @@
 //! Ranged-weapon taxonomy: the per-item [`RangedProfile`] a bow or crossbow
-//! carries on its [`ItemDefinition`], parallel to the melee [`WeaponProfile`].
+//! carries on its [`ItemDefinition`](crate::items::ItemDefinition), parallel
+//! to the melee [`WeaponProfile`](crate::items::WeaponProfile).
 //!
 //! A ranged weapon does not swing: it draws (bow) or reloads (crossbow) and then
 //! fires a server-simulated projectile. The profile declares the shot's damage

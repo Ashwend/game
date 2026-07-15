@@ -4,7 +4,7 @@
 //! `assets/items/<id>/icon.png`, baked into the binary by the embedded-asset
 //! tree and loaded here at startup. [`setup_item_icons`] registers every icon
 //! with `bevy_egui` and caches the resulting [`egui::TextureId`]s; the
-//! inventory renderer ([`super::inventory::slot::paint_item_icon`]) looks them
+//! inventory renderer (`super::inventory::slot::paint_item_icon`) looks them
 //! up by item id and falls back to a tinted-rectangle placeholder when an icon
 //! is missing.
 //!

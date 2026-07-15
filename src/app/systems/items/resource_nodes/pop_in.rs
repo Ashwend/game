@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::{
     protocol::{ResourceNodeId, Vec3Net},
-    resources::ResourceNodeModel,
+    resource_nodes::ResourceNodeModel,
     world::splitmix64,
 };
 
@@ -118,7 +118,7 @@ pub(crate) fn resource_node_transform_at(
 /// honest to the server's gather/aim geometry, which uses fixed per-definition
 /// radii.
 fn size_jitter(id: ResourceNodeId, model: ResourceNodeModel) -> f32 {
-    let unit = (splitmix64(id ^ 0x5EED_C0DE_BADC_0FFE) >> 40) as f32 / (1u64 << 24) as f32;
+    let unit = (splitmix64(id.0 ^ 0x5EED_C0DE_BADC_0FFE) >> 40) as f32 / (1u64 << 24) as f32;
     let (lo, hi) = match model {
         ResourceNodeModel::PineTreeSmall
         | ResourceNodeModel::PineTreeMedium

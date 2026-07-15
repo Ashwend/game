@@ -146,7 +146,7 @@ pub(crate) struct DeathSplash {
     /// Seconds spent in the closing-fade animation. `None` until the
     /// respawn `Correction` lands, at that point the splash keeps
     /// rendering but its backdrop alpha eases from "fully black" back
-    /// to "fully transparent" over [`CLOSE_FADE_SECS`]. The splash
+    /// to "fully transparent" over `CLOSE_FADE_SECS`. The splash
     /// clears itself when the fade completes, so the new HUD doesn't
     /// pop in for a frame underneath a still-black screen.
     pub(crate) closing_elapsed: Option<f32>,
@@ -372,7 +372,7 @@ mod tests {
         let splash = DeathSplash::new(
             None,
             vec![crate::protocol::RespawnBagOption {
-                id: 7,
+                id: crate::protocol::DeployedEntityId(7),
                 name: "home".to_owned(),
             }],
         );

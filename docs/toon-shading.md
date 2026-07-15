@@ -9,7 +9,7 @@ sources:
   - src/app/scene/mesh/builder.rs - build_hay_tuft_mesh (double-sided alpha card)
   - src/app/systems/node_death.rs - apply_fade_out (felling fade uniform)
   - src/app/systems/items/resource_nodes/spawn.rs - ResourceNodeMaterial enum
-  - src/app/systems/deployables/mod.rs - deployable family to material map
+  - src/app/systems/deployables.rs - deployable family to material map
   - src/app.rs - MaterialPlugin::<ToonMaterial> registration
 related:
   - docs/art-direction.md - the look-and-feel vision, what-is-cel-vs-PBR inventory, roadmap and palette philosophy
@@ -33,7 +33,7 @@ One shared `ToonMaterial` asset type (registered once) covers every cel prop:
 - Ore/vein nodes (all four), via `ResourceVisualAssets::ore_toon_material` (`src/app/scene/assets.rs` - `setup_scene`).
 - Trees: pine + birch bark trunks, the **solid faceted** canopies, and the dead snags.
 - The harvestable hay/tall-grass cards.
-- Every free-standing deployable: workbench, furnace, storage boxes, torch, tool cupboard, sleeping bag (`src/app/systems/deployables/mod.rs`).
+- Every free-standing deployable: workbench, furnace, storage boxes, torch, tool cupboard, sleeping bag (`src/app/systems/deployables.rs`).
 
 The GPU-instanced detail grass (`assets/shaders/grass_instanced.wgsl`) is a *separate* material but shares the same PBR-then-posterize idiom and the same band/fill constants (see [Cross-shader constant lockstep](#cross-shader-constant-lockstep)).
 
@@ -125,7 +125,7 @@ No material self-illuminates today: the world has no magic, and the one former u
 
 ## Per-family params (real values that ship)
 
-From `src/app/scene/assets.rs` - `setup_scene` (and the `hay_tall_grass_material` helper). The values intentionally **differ** by family: rounded/organic props (ore, trees) run a softer, narrower ink edge; the boxy deployables run a punchier full-strength wider edge so every beveled corner reads as a drawn outline.
+From `src/app/scene/assets.rs` - `setup_scene` (and the `hay_tall_grass_material` helper in `src/app/scene/materials.rs`). The values intentionally **differ** by family: rounded/organic props (ore, trees) run a softer, narrower ink edge; the boxy deployables run a punchier full-strength wider edge so every beveled corner reads as a drawn outline.
 
 | Family | `params` (x,y,z,w) | `tex_scale` | Shape rationale |
 |---|---|---|---|
@@ -136,7 +136,7 @@ From `src/app/scene/assets.rs` - `setup_scene` (and the `hay_tall_grass_material
 | Hay / tall-grass card | `(3, 0.4, 0, 2.0)` | `1.0` | Alpha-mask cutout (`y=0.4`), no ink edge (`z=0`), card carries its own UVs. |
 | Deployables (wood/stone/fabric) | `(3, 0, 1.0, 1.4)` | `1.5` | Punchier full-strength (`z=1.0`) wide (`w=1.4`) edge for boxy faces; box-projected UVs, so `tex_scale=1.5` is set but unused. |
 
-Deployable family -> material map (`src/app/systems/deployables/mod.rs`): furnace -> `toon_stone_material`; workbench / storage box / tool cupboard / torch -> `toon_wood_material`; sleeping bag -> `toon_fabric_material`. Buildings and doors stay `StandardMaterial`.
+Deployable family -> material map (`src/app/systems/deployables.rs`): furnace -> `toon_stone_material`; workbench / storage box / tool cupboard / torch -> `toon_wood_material`; sleeping bag -> `toon_fabric_material`. Buildings and doors stay `StandardMaterial`.
 
 When retuning, change the relevant `params` `Vec4` (per family) or the WGSL consts (all families). Reuse an existing family's `params` unless you have an art reason to differ; matching banding hardness across the scene is what keeps the look coherent.
 
@@ -169,7 +169,7 @@ The cel-vs-PBR conversion *decision* (whole families only, what is deliberately 
 
 1. **Author the mesh + texture.** Give the glb `COLOR_0` vertex colours (linear albedos; see the colour rules in [rendering-materials.md](rendering-materials.md)). Supply a soft, low-contrast detail texture, or a 1x1 white image for vertex-colour-only props. The full Blender + ComfyUI authoring pipeline is in [playbooks/art-pipeline.md](playbooks/art-pipeline.md). Decode the PNG with `build_mip_chain` (`src/app/scene/terrain.rs`) + the `tree_texture_sampler` (repeat + aniso), the shared loader for every embedded cel texture, because Bevy 0.18 builds no mips for loaded PNGs.
 2. **Pick `params`.** Reuse an existing family's row from the table above unless you have an art reason to differ. Alpha card? Set `params.y` to the cutoff and bake reversed-winding back-faces (see hay). Triplanar (no UVs)? Set `tex_scale` like the deployables.
-3. **Attach the material at the spawn site.** Swap `MeshMaterial3d<StandardMaterial>` for `MeshMaterial3d<ToonMaterial>`. The clean pattern when only *some* models switch is a small enum plus a centralised helper, so every spawn site stays in sync: `ResourceNodeMaterial { Standard, Toon }` + `insert_resource_node_material` (`src/app/systems/items/resource_nodes/spawn.rs`); deployables use `DeployableMaterial { Standard, Toon }` (`src/app/systems/deployables/mod.rs`).
+3. **Attach the material at the spawn site.** Swap `MeshMaterial3d<StandardMaterial>` for `MeshMaterial3d<ToonMaterial>`. The clean pattern when only *some* models switch is a small enum plus a centralised helper, so every spawn site stays in sync: `ResourceNodeMaterial { Standard, Toon }` + `insert_resource_node_material` (`src/app/systems/items/resource_nodes/spawn.rs`); deployables use `DeployableMaterial { Standard, Toon }` (`src/app/systems/deployables.rs`).
 4. **No new registration.** Reuse the single shared `MaterialPlugin::<ToonMaterial>`. Add `app.init_asset::<ToonMaterial>()` to any test that runs `setup_scene`.
 5. **Keep the guards.** Do not unconditionally read `in.uv` / `in.color` (see [Vertex-attribute guards](#vertex-attribute-guards)).
 

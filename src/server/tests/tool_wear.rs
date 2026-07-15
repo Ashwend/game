@@ -32,7 +32,7 @@ fn connect_account(server: &mut GameServer, account_id: AccountId, name: &str) -
 
 fn coal_node(id: u64, quantity: u16) -> ResourceNodeState {
     ResourceNodeState {
-        id,
+        id: crate::protocol::ResourceNodeId(id),
         definition_id: COAL_NODE_ID.to_owned(),
         position: Vec3Net::new(0.0, 0.0, -2.2),
         yaw: 0.0,
@@ -74,7 +74,7 @@ fn gather(server: &mut GameServer, client_id: ClientId, node_id: u64) -> Vec<Ser
     server.apply_gather_command(
         client_id,
         ResourceGatherCommand {
-            resource_node_id: node_id,
+            resource_node_id: crate::protocol::ResourceNodeId(node_id),
             seq: 0,
             hit_point: Vec3Net::ZERO,
         },
@@ -87,7 +87,9 @@ fn gather_impact_consumes_one_durability() {
     let client_id = connect_host(&mut server);
     equip_pickaxe(&mut server, client_id);
     server.resource_nodes.clear();
-    server.resource_nodes.insert(99, coal_node(99, 50));
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(99), coal_node(99, 50));
     look_at_test_node(&mut server, client_id);
 
     assert_eq!(
@@ -119,7 +121,9 @@ fn gather_with_full_inventory_still_wears_the_tool() {
         }
     }
     server.resource_nodes.clear();
-    server.resource_nodes.insert(99, coal_node(99, 50));
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(99), coal_node(99, 50));
     look_at_test_node(&mut server, client_id);
 
     let envelopes = gather(&mut server, client_id, 99);
@@ -144,7 +148,9 @@ fn breaking_swing_still_pays_out_and_clears_the_slot() {
     equip_pickaxe(&mut server, client_id);
     set_active_durability(&mut server, client_id, 1);
     server.resource_nodes.clear();
-    server.resource_nodes.insert(99, coal_node(99, 50));
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(99), coal_node(99, 50));
     look_at_test_node(&mut server, client_id);
 
     let envelopes = gather(&mut server, client_id, 99);
@@ -174,8 +180,8 @@ fn breaking_swing_still_pays_out_and_clears_the_slot() {
 #[test]
 fn pvp_hit_consumes_attacker_durability() {
     let mut server = server();
-    let attacker = connect_account(&mut server, 1, "Attacker");
-    let target = connect_account(&mut server, 2, "Target");
+    let attacker = connect_account(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_account(&mut server, crate::protocol::AccountId(2), "Target");
     equip_pickaxe(&mut server, attacker);
 
     // Attacker at origin facing -Z, target 2 m in front.
@@ -203,8 +209,8 @@ fn pvp_hit_consumes_attacker_durability() {
 #[test]
 fn rejected_pvp_swing_costs_no_durability() {
     let mut server = server();
-    let attacker = connect_account(&mut server, 1, "Attacker");
-    let target = connect_account(&mut server, 2, "Target");
+    let attacker = connect_account(&mut server, crate::protocol::AccountId(1), "Attacker");
+    let target = connect_account(&mut server, crate::protocol::AccountId(2), "Target");
     equip_pickaxe(&mut server, attacker);
 
     // Target far out of melee range: the swing is rejected.

@@ -31,10 +31,10 @@ fn player_state(client_id: ClientId, position: Vec3Net) -> PlayerState {
 
 #[test]
 fn welcome_seeds_local_prediction_from_local_seed() {
-    let mut server_player = player_state(1, Vec3Net::new(2.0, 0.0, 0.0));
+    let mut server_player = player_state(crate::protocol::ClientId(1), Vec3Net::new(2.0, 0.0, 0.0));
     server_player.last_processed_input = 7;
     let mut runtime = ClientRuntime {
-        client_id: Some(1),
+        client_id: Some(crate::protocol::ClientId(1)),
         ..default()
     };
 
@@ -63,12 +63,12 @@ fn correction_updates_health_without_realigning_small_position_drift() {
     // Within-threshold position drift (< 1 m) keeps client prediction
     //, movement is client-authoritative for responsiveness. Only
     // health is mirrored from the server.
-    let mut correction = player_state(1, Vec3Net::new(0.4, 0.0, 0.0));
+    let mut correction = player_state(crate::protocol::ClientId(1), Vec3Net::new(0.4, 0.0, 0.0));
     correction.health = 42.0;
     let mut runtime = ClientRuntime {
-        client_id: Some(1),
+        client_id: Some(crate::protocol::ClientId(1)),
         predicted_local: Some(PlayerController::from_player_state(&player_state(
-            1,
+            crate::protocol::ClientId(1),
             Vec3Net::ZERO,
         ))),
         ..default()
@@ -88,12 +88,12 @@ fn correction_snaps_local_prediction_on_large_position_delta() {
     // snap-back. Without this, /tp + Phase 5 respawn would only
     // change the server-side controller and the local view would
     // keep drifting.
-    let mut correction = player_state(1, Vec3Net::new(40.0, 0.0, -10.0));
+    let mut correction = player_state(crate::protocol::ClientId(1), Vec3Net::new(40.0, 0.0, -10.0));
     correction.health = 80.0;
     let mut runtime = ClientRuntime {
-        client_id: Some(1),
+        client_id: Some(crate::protocol::ClientId(1)),
         predicted_local: Some(PlayerController::from_player_state(&player_state(
-            1,
+            crate::protocol::ClientId(1),
             Vec3Net::ZERO,
         ))),
         ..default()
@@ -310,11 +310,11 @@ fn menu_backdrop_visibility_resets_when_reentering_menu() {
 
 #[test]
 fn apply_message_handles_welcome_chat_events_and_rejections() {
-    let local_seed = player_state(1, Vec3Net::new(1.0, 2.0, 3.0));
+    let local_seed = player_state(crate::protocol::ClientId(1), Vec3Net::new(1.0, 2.0, 3.0));
     let mut runtime = ClientRuntime::default();
 
     runtime.apply_message(ServerMessage::Welcome {
-        client_id: 1,
+        client_id: crate::protocol::ClientId(1),
         map: MapType::default(),
         world: WorldData::test_world(),
         is_admin: true,
@@ -322,11 +322,11 @@ fn apply_message_handles_welcome_chat_events_and_rejections() {
         world_time: WorldTimeSnapshot::from_time(&WorldTime::default(), 9),
     });
     runtime.apply_message(ServerMessage::PlayerEvent(PlayerEvent::Joined {
-        client_id: 2,
+        client_id: crate::protocol::ClientId(2),
         name: "Friend".to_owned(),
     }));
     runtime.apply_message(ServerMessage::PlayerEvent(PlayerEvent::Left {
-        client_id: 2,
+        client_id: crate::protocol::ClientId(2),
         name: "Friend".to_owned(),
     }));
     runtime.apply_message(ServerMessage::Chat(ChatMessage {
@@ -338,7 +338,7 @@ fn apply_message_handles_welcome_chat_events_and_rejections() {
     });
     runtime.apply_message(ServerMessage::Heartbeat);
 
-    assert_eq!(runtime.client_id, Some(1));
+    assert_eq!(runtime.client_id, Some(crate::protocol::ClientId(1)));
     assert!(runtime.is_admin);
     assert!(runtime.world.is_some());
     assert_eq!(
@@ -371,7 +371,7 @@ fn apply_message_handles_welcome_chat_events_and_rejections() {
 #[test]
 fn kicked_message_clears_session_state_and_logs_reason() {
     let mut runtime = ClientRuntime {
-        client_id: Some(1),
+        client_id: Some(crate::protocol::ClientId(1)),
         is_admin: true,
         world: Some(WorldData::test_world()),
         predicted_local: Some(PlayerController::spawn()),
@@ -400,7 +400,7 @@ fn local_view_is_none_without_prediction() {
     // `predicted_local` is seeded by Welcome, there's no local view to
     // hand to UI/gameplay consumers.
     let runtime = ClientRuntime {
-        client_id: Some(1),
+        client_id: Some(crate::protocol::ClientId(1)),
         ..Default::default()
     };
 
@@ -410,11 +410,12 @@ fn local_view_is_none_without_prediction() {
 
 #[test]
 fn local_view_uses_predicted_orientation_with_predicted_position() {
-    let mut predicted_player = player_state(1, Vec3Net::new(5.0, 0.0, 0.0));
+    let mut predicted_player =
+        player_state(crate::protocol::ClientId(1), Vec3Net::new(5.0, 0.0, 0.0));
     predicted_player.yaw = 1.25;
     predicted_player.pitch = -0.35;
     let runtime = ClientRuntime {
-        client_id: Some(1),
+        client_id: Some(crate::protocol::ClientId(1)),
         predicted_local: Some(PlayerController::from_player_state(&predicted_player)),
         ..Default::default()
     };
@@ -428,14 +429,14 @@ fn local_view_uses_predicted_orientation_with_predicted_position() {
 #[test]
 fn correction_ignores_non_matching_players() {
     let mut runtime = ClientRuntime {
-        client_id: Some(1),
+        client_id: Some(crate::protocol::ClientId(1)),
         predicted_local: Some(PlayerController::from_player_state(&player_state(
-            1,
+            crate::protocol::ClientId(1),
             Vec3Net::new(5.0, 0.0, 0.0),
         ))),
         ..Default::default()
     };
-    let mut other_player = player_state(2, Vec3Net::ZERO);
+    let mut other_player = player_state(crate::protocol::ClientId(2), Vec3Net::ZERO);
     other_player.health = 5.0;
 
     runtime.apply_message(ServerMessage::Correction(other_player));

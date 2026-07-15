@@ -83,20 +83,26 @@ mod tests {
     #[test]
     fn cancel_note_is_consumed_once() {
         let mut hud = CraftingHudState::default();
-        hud.note_cancel_requested(7);
-        assert!(hud.consume_cancelled(7), "first lookup consumes the note");
-        assert!(!hud.consume_cancelled(7), "second lookup finds nothing");
+        hud.note_cancel_requested(crate::protocol::CraftingJobId(7));
+        assert!(
+            hud.consume_cancelled(crate::protocol::CraftingJobId(7)),
+            "first lookup consumes the note"
+        );
+        assert!(
+            !hud.consume_cancelled(crate::protocol::CraftingJobId(7)),
+            "second lookup finds nothing"
+        );
     }
 
     #[test]
     fn cancel_notes_are_bounded() {
         let mut hud = CraftingHudState::default();
         for job_id in 0..100u64 {
-            hud.note_cancel_requested(job_id);
+            hud.note_cancel_requested(crate::protocol::CraftingJobId(job_id));
         }
         assert!(hud.recently_cancelled.len() <= 16);
         // The most recent cancels are the ones kept.
-        assert!(hud.consume_cancelled(99));
-        assert!(!hud.consume_cancelled(0));
+        assert!(hud.consume_cancelled(crate::protocol::CraftingJobId(99)));
+        assert!(!hud.consume_cancelled(crate::protocol::CraftingJobId(0)));
     }
 }

@@ -203,7 +203,7 @@ mod tests {
 
     fn user() -> CurrentUser {
         CurrentUser(AuthenticatedUser {
-            account_id: 1,
+            account_id: crate::protocol::AccountId(1),
             display_name: "Tester".to_owned(),
             token: String::new(),
         })

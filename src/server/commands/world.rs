@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     protocol::{ClientId, ItemStack, ServerMessage, ToastKind, ToastMessage, Vec3Net},
-    resources::{
+    resource_nodes::{
         BIRCH_TREE_LARGE_NODE_ID, BIRCH_TREE_NODE_ID, BIRCH_TREE_SMALL_NODE_ID,
         BRANCH_PILE_NODE_ID, COAL_NODE_ID, HAY_GRASS_NODE_ID, IRON_NODE_ID, METEORITE_NODE_ID,
         PINE_TREE_LARGE_NODE_ID, PINE_TREE_NODE_ID, PINE_TREE_SMALL_NODE_ID,
@@ -86,7 +86,7 @@ impl GameServer {
             player_position.z - yaw.cos() * distance,
         );
 
-        let mut rng = SmallRng::seed_from_time_and(client_id);
+        let mut rng = SmallRng::seed_from_time_and(client_id.0);
         let node_id = self.allocate_resource_node_id();
         let spawn = WorldResourceNodeSpawn::new(
             node_id,

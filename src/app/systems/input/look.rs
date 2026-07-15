@@ -18,7 +18,7 @@ use super::gating::{gameplay_accepts_controls, primary_window_focused};
 /// so it only kicks in when a frame genuinely hiccups.
 const MAX_MOUSE_DELTA_PER_FRAME: f32 = 2000.0;
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 pub(crate) fn mouse_look_system(
     accumulated_mouse_motion: Res<AccumulatedMouseMotion>,
     mut look: ResMut<LookState>,

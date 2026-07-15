@@ -101,15 +101,29 @@ mod tests {
     #[test]
     fn spawn_and_despawn_round_trips_index() {
         let mut world = fresh_world();
-        let entity = spawn_dropped_item_entity(&mut world, drop_state(3, 5), ChunkCoord::new(0, 0));
-        assert_eq!(world.resource::<DroppedItemIndex>().get(3), Some(entity));
+        let entity = spawn_dropped_item_entity(
+            &mut world,
+            drop_state(crate::protocol::DroppedItemId(3), 5),
+            ChunkCoord::new(0, 0),
+        );
+        assert_eq!(
+            world
+                .resource::<DroppedItemIndex>()
+                .get(crate::protocol::DroppedItemId(3)),
+            Some(entity)
+        );
 
         let drop = world.get::<DroppedItem>(entity).expect("drop component");
-        assert_eq!(drop.id, 3);
+        assert_eq!(drop.id, crate::protocol::DroppedItemId(3));
         assert_eq!(drop.stack.quantity, 5);
 
-        let despawned = despawn_dropped_item_entity(&mut world, 3);
+        let despawned = despawn_dropped_item_entity(&mut world, crate::protocol::DroppedItemId(3));
         assert_eq!(despawned, Some(entity));
-        assert!(world.resource::<DroppedItemIndex>().get(3).is_none());
+        assert!(
+            world
+                .resource::<DroppedItemIndex>()
+                .get(crate::protocol::DroppedItemId(3))
+                .is_none()
+        );
     }
 }

@@ -108,7 +108,7 @@ impl GameServer {
         }
 
         let client_id = self.next_client_id;
-        self.next_client_id += 1;
+        self.next_client_id.0 += 1;
 
         // Returning players (saved on a prior shutdown or disconnect) keep
         // their inventory, position, and admin status. Their last display
@@ -184,7 +184,7 @@ impl GameServer {
             chat_bubble: None,
             view_tier: crate::protocol::ViewRadiusTier::default(),
             crafting: starting_crafting_state(),
-            next_craft_job_id: 1,
+            next_craft_job_id: crate::protocol::CraftingJobId(1),
             open_furnace: None,
             open_workbench: None,
             open_container: None,
@@ -341,7 +341,7 @@ impl GameServer {
             .clients
             .get(&client_id)
             .map(|client| client.account_id)
-            .unwrap_or_default();
+            .unwrap_or(AccountId(0));
         // The live body is authoritative now; drop any stale crash-safety copy.
         let _ = self.take_persisted_player(account_id);
         let admin_grant = token_admin || self.is_admin(account_id);

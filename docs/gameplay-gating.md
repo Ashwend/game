@@ -51,7 +51,7 @@ Consumers (early-return guards, not run conditions):
 - `src/app/systems/input/cursor.rs` - cursor capture (`should_capture`).
 - `src/app/systems/input/look.rs` - mouse look.
 - `src/app/systems/input/wheel.rs` - the hold-to-open radial wheel.
-- `src/app/systems/input/inventory_shortcuts/mod.rs` - inventory/crafting/chat hotkeys.
+- `src/app/systems/input/inventory_shortcuts.rs` - inventory/crafting/chat hotkeys.
 
 ### 3. `gameplay_accepts_movement(menu, window_focused) -> bool`
 

@@ -87,7 +87,7 @@ pub(super) fn run_multiplayer_test(port: u16, names_override: Option<Vec<String>
     // `/tp` straight out of the gate, those commands are admin-gated
     // and the multiplayer-test loop is the place where they're most
     // useful for verifying PvP / death / respawn.
-    for account_id in TEST_ACCOUNT_IDS {
+    for account_id in TEST_ACCOUNT_IDS.map(crate::protocol::AccountId) {
         if !seeded.admins.contains(&account_id) {
             seeded.admins.push(account_id);
         }
@@ -375,10 +375,22 @@ fn spawn_client(
         // Off-screen render + per-client control socket. Deliberately omit the
         // `GAME_TEST_WINDOW_*` geometry keys: those drive the on-screen
         // window-reposition path, which fights the hidden capture window.
-        command.env("GAME_HEADLESS_CAPTURE", "1280x960").env(
-            "GAME_CONTROL_SOCKET",
-            format!("/tmp/ashwend-mptest-{}.sock", layout.window_index),
+        // The harness PID in the socket path keeps two concurrent headless
+        // runs from stealing each other's sockets (the temp save dir is
+        // already PID-scoped for the same reason); the path is printed so a
+        // driving script can pick it up instead of assuming a fixed name.
+        let socket = format!(
+            "/tmp/ashwend-mptest-{}-{}.sock",
+            std::process::id(),
+            layout.window_index
         );
+        println!(
+            "multiplayer-test: client {} control socket at {socket}",
+            layout.window_index
+        );
+        command
+            .env("GAME_HEADLESS_CAPTURE", "1280x960")
+            .env("GAME_CONTROL_SOCKET", socket);
     } else {
         // On-screen test windows, sized + indexed so the client can place them
         // side-by-side once it can query the real monitor.

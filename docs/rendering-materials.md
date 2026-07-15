@@ -3,7 +3,8 @@ title: PBR material conventions and lighting
 owns: The PBR `StandardMaterial` triplet conventions, the atmosphere/IBL lighting model, the flat-surface normal-jitter recipe, the shared texture loader, and `TerrainMaterial`.
 when_to_read: Before adding a new `StandardMaterial` or tuning reflectance/roughness/metallic on a PBR prop, or changing the atmosphere/IBL lighting.
 sources:
-  - src/app/scene/assets.rs - ATMOSPHERE_AMBIENT_INTENSITY, ATMOSPHERE_ENV_MAP_SIZE, camera/IBL spawn, StandardMaterial handles, tree_texture_sampler
+  - src/app/scene/assets.rs - ATMOSPHERE_AMBIENT_INTENSITY, ATMOSPHERE_ENV_MAP_SIZE, camera/IBL spawn, StandardMaterial handles
+  - src/app/scene/materials.rs - tree_texture_sampler
   - src/app/scene/world.rs - flat_ground_material, build_ground_mesh, stone_material
   - src/app/scene/terrain.rs - TerrainMaterial, build_mip_chain
   - src/app/scene/sky.rs - SUN_PEAK_ILLUMINANCE, MOON_PEAK_ILLUMINANCE, NIGHT_AMBIENT_FLOOR
@@ -126,7 +127,7 @@ Apply the same recipe to any future large flat ground/water/floor surface. Curve
 Bevy 0.18 generates **no mips** for loaded PNGs and ships no runtime mip util, so embedded PNG textures alias into shimmer at distance unless mipped on the CPU. Two helpers handle this and are shared across every textured prop:
 
 - `build_mip_chain` (`pub(crate)` in `src/app/scene/terrain.rs`): box-downsamples a full mip chain into `image.data` and sets `mip_level_count`. The format is `Rgba8UnormSrgb`, so colour channels are averaged in **linear** space (decode -> average -> re-encode); alpha is averaged linearly. Costs ~1 ms per texture at startup.
-- `tree_texture_sampler` (`assets.rs`): a repeat + `anisotropy_clamp: 8` `ImageSamplerDescriptor`, applied to every loaded detail texture.
+- `tree_texture_sampler` (`scene/materials.rs`): a repeat + `anisotropy_clamp: 8` `ImageSamplerDescriptor`, applied to every loaded detail texture.
 
 This pair loads the tree bark/foliage, the ore rock grain, the deployable wood/stone/fabric masters, and the building/door tier textures, all decoded synchronously at startup. Use it for any new textured prop. (PNG only: the game build enables Bevy's `png` image feature, not `jpeg`.)
 

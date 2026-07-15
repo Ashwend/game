@@ -57,7 +57,7 @@ impl DroppedItemEntities {
 /// [`MAX_DROPPED_ITEM_SPAWNS_PER_FRAME`]), retarget interpolation on
 /// real transform updates (`Ref::last_changed()` as the per-id tick),
 /// despawn any that left the AoI ring.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 pub(crate) fn apply_dropped_items_system(
     mut commands: Commands,
     time: Res<Time>,

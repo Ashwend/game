@@ -28,7 +28,6 @@ use super::slot::{SLOT_SIZE, paint_slot};
 /// for player-sourced drags. Furnace-sourced items that get released
 /// in the void snap back to where they came from, better that than
 /// silently dropping a stack of iron bars into the void.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_drag_release(
     ctx: &egui::Context,
     menu: &MenuState,
@@ -107,7 +106,6 @@ pub(crate) fn handle_drag_release(
     inventory_ui.cancel_drag();
 }
 
-#[allow(clippy::too_many_arguments)]
 fn send_move_command(
     runtime: &mut ClientRuntime,
     prediction: &mut PredictionState,

@@ -3,7 +3,7 @@ title: Base building, stability, doors, and Tool Cupboard claims
 owns: building geometry/taxonomy, structural stability, the hammer flow, doors, and the Tool Cupboard claim system
 when_to_read: Before changing building geometry, costs/HP, stability, doors, or the Tool Cupboard claim system.
 sources:
-  - src/building.rs - shared piece/tier taxonomy, geometry, colliders, claim cell math (client + server)
+  - src/building.rs (+ src/building/) - shared piece/tier taxonomy and dimensions (root), sockets.rs, collision.rs, claims.rs, stability.rs, costs.rs (client + server)
   - src/server/building.rs - placement validation, hammer repair/upgrade/demolish authority
   - src/server/stability.rs - refresh_structural_stability Dijkstra + orphan sweep
   - src/server/door.rs - code-lock door authority (DoorState)
@@ -20,11 +20,11 @@ related:
 
 # Base building, stability, doors, and Tool Cupboard claims
 
-> When to read this: before changing building geometry, costs/HP, stability, doors, or the Tool Cupboard claim system. Source of truth: `src/building.rs` (shared geometry), `src/server/building.rs` + `src/server/stability.rs` + `src/server/door.rs` + `src/server/claim.rs` (authority), `src/game_balance.rs` (tuning). Canonical invariants live in CLAUDE.md.
+> When to read this: before changing building geometry, costs/HP, stability, doors, or the Tool Cupboard claim system. Source of truth: `src/building.rs` + `src/building/` (shared geometry), `src/server/building.rs` + `src/server/stability.rs` + `src/server/door.rs` + `src/server/claim.rs` (authority), `src/game_balance.rs` (tuning). Canonical invariants live in CLAUDE.md.
 
 Base-building pieces, doors, and the Tool Cupboard are all ordinary `DeployedEntity` records riding the unified deployable pipeline (placement, replication, AoI, persistence, damage). This doc owns their geometry, the stability graph, the hammer, the door code lock, and the claim system. The pipeline itself (the one `DeployedEntity` struct, spill-on-destroy, the mirror sync) is documented in [crafting-and-deployables.md](crafting-and-deployables.md); read it first if you are adding a new deployable kind.
 
-`src/building.rs` is the single source of truth for geometry/cost rules and is read by **both** the client (ghost preview + snapping) and the server (placement validation, damage, repair/upgrade costs), so the two can never disagree about what a legal placement is. Never fork a geometry rule into a client-only or server-only copy.
+`src/building.rs` is the single source of truth for geometry/cost rules and is read by **both** the client (ghost preview + snapping) and the server (placement validation, damage, repair/upgrade costs), so the two can never disagree about what a legal placement is. Never fork a geometry rule into a client-only or server-only copy. The module is split by concern, re-exported flat (`crate::building::X` regardless of subfile): the taxonomy and piece dimensions in the root `src/building.rs`, socket-snap geometry in `src/building/sockets.rs`, multi-box colliders in `src/building/collision.rs`, claim cell math in `src/building/claims.rs`, support relations in `src/building/stability.rs`, and the cost/HP lookup tables in `src/building/costs.rs`.
 
 ## Piece and tier taxonomy
 
@@ -55,13 +55,13 @@ Dimensions (`src/building.rs`): `FOUNDATION_SIZE_M` 3.0 (also every wall-like pi
 
 **Snapping** (`src/server/building.rs` - `apply_place_building_command`). The server re-derives the snapped pose (`snap_foundation` / `snap_wall_socket` / `snap_ceiling` / `snap_stairs`); the client preview is a best guess. A requested pose more than `SNAP_TOLERANCE_M` (0.75 m) from the snapped socket is refused, not silently corrected. Foundations place anywhere in the raise band (ground up to `FOUNDATION_RAISE_MAX_M` 1.5 m, down to `FOUNDATION_SINK_MAX_M` 0.25 m); snapping onto an existing foundation's 3 m neighbour grid inherits that foundation's yaw and height. Wall-like pieces mount on a platform edge socket or stack on a wall below, one piece per slot. Ceilings nest at `WALL_HEIGHT_M - CEILING_THICKNESS_M` so the walkable top is flush with wall tops.
 
-**Colliders are multi-box.** `piece_local_boxes` (`src/building.rs` - `piece_local_boxes`) returns per-piece local solid boxes; `building_collider_blocks` rotates and translates them into world `WorldBlock`s. Multi-box geometry is what makes window and doorway openings genuinely passable. The same boxes feed the client movement grid, the server spawn-safety grid, and the claim footprint test, so visual, collision, and gameplay always agree.
+**Colliders are multi-box.** `piece_local_boxes` (`src/building/collision.rs` - `piece_local_boxes`) returns per-piece local solid boxes; `building_collider_blocks` rotates and translates them into world `WorldBlock`s. Multi-box geometry is what makes window and doorway openings genuinely passable. The same boxes feed the client movement grid, the server spawn-safety grid, and the claim footprint test, so visual, collision, and gameplay always agree.
 
 **Building-vs-building collision is resolved by SOCKET OCCUPANCY, not the AABB overlap test** (`src/server/building.rs` - `apply_place_building_command`, the `skip` match around the `obstruction` check). Walls legitimately touch their foundation and corner-overlap their neighbours, so the box-overlap test is skipped for wall-like-vs-building and stairs/ceiling-vs-wall pairs; `wall_slot_blocked` / `positions_match` reject same-socket duplicates instead. The box-overlap test only runs against non-building deployables (don't bisect a furnace) and foundation-vs-foundation.
 
 ## Structural stability
 
-Every structural piece (and door) carries a stability percentage derived from its best path to the ground. The **relations** are defined once in `src/building.rs` (`candidate_stability_pct`); the full-world recompute is a max-propagation Dijkstra over the support graph in `src/server/stability.rs` (`compute_stabilities`, driven by `refresh_structural_stability`).
+Every structural piece (and door) carries a stability percentage derived from its best path to the ground. The **relations** are defined once in `src/building/stability.rs` (`candidate_stability_pct`); the full-world recompute is a max-propagation Dijkstra over the support graph in `src/server/stability.rs` (`compute_stabilities`, driven by `refresh_structural_stability`).
 
 - Foundations = 100.
 - Each vertical hop (wall on a platform, wall on a wall, ceiling on a wall, stairs on a platform) retains `STABILITY_RETENTION_VERTICAL_PCT` (90%).
@@ -112,7 +112,7 @@ The open flag replicates via `DeployableActive`, animating the panel client-side
 
 The Tool Cupboard (`DeployableKind::ToolCupboard`, recipe `TOOL_CUPBOARD_RECIPE_ID`) is the anti-grief base-claim object. Authority is in `src/server/claim.rs` (`CupboardState` = the authorized account list). It must sit on a building platform (`on_building_platform`); while it stands it projects **building privilege** over its base.
 
-**Footprint projection** (`src/building.rs` - `claim_footprint_cells`). The claim is foundation-projected, not a sphere: a flood fill from the platform the cupboard rests on over platform adjacency (cardinal neighbours at the same height = contiguous floor; same XZ column at any height = stacked storeys), grown by a margin ring of `BUILDING_PRIVILEGE_MARGIN_CELLS` (5 cells, ~15 m). The result is stored as real XZ cell centres in `GameServer.claim_footprints` so the gate is a cheap point-in-cell test. Rebuilt on every structural change and on cupboard placement (`recompute_claim_footprints`, called from `refresh_structural_stability`). A foundation-projected claim means a raid base can't be wedged against someone's wall the way a fixed radius would allow.
+**Footprint projection** (`src/building/claims.rs` - `claim_footprint_cells`). The claim is foundation-projected, not a sphere: a flood fill from the platform the cupboard rests on over platform adjacency (cardinal neighbours at the same height = contiguous floor; same XZ column at any height = stacked storeys), grown by a margin ring of `BUILDING_PRIVILEGE_MARGIN_CELLS` (5 cells, ~15 m). The result is stored as real XZ cell centres in `GameServer.claim_footprints` so the gate is a cheap point-in-cell test. Rebuilt on every structural change and on cupboard placement (`recompute_claim_footprints`, called from `refresh_structural_stability`). A foundation-projected claim means a raid base can't be wedged against someone's wall the way a fixed radius would allow.
 
 **Auth model** (mirrors the door lock list, deliberately). The owner is implicit and permanent (on the `Deployable`, never in the list, never removable, so clearing the list can never lock the owner out). Anyone within reach authorizes **themselves** by tapping E (`ClaimCommand::AuthorizeSelf`, the Rust model where the real protection is keeping the cupboard behind locked doors). The placer is auto-added at placement but is otherwise an ordinary member. The hold-E wheel offers `DeauthorizeSelf` and `ClearList` (deauthorize everyone else; the caller keeps their access). Range is re-validated on every command (`cupboard_actor_in_range`), measured to the collider surface.
 

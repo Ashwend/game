@@ -220,7 +220,8 @@ pub struct PlayerSleeping(pub bool);
 /// equipped (equipable) actionbar item, or `None` for an empty hand. Lets a
 /// remote client render what another player is holding in their rigged hand.
 ///
-/// Carries the 1-byte [`HeldMesh`] selector, not the `Arc<str>` item id: the
+/// Carries the 1-byte [`HeldMesh`](crate::items::HeldMesh) selector, not the
+/// `Arc<str>` item id: the
 /// renderer only needs to pick a mesh, and shipping a string per diff (plus a
 /// registry re-resolve on the peer) would be wasteful. Derived purely from the
 /// authoritative inventory in `players_iter`, so it needs no client input.
@@ -390,7 +391,7 @@ mod tests {
     fn sample_view(client_id: ClientId) -> PlayerView {
         PlayerView {
             client_id,
-            account_id: 42,
+            account_id: crate::protocol::AccountId(42),
             profile: PlayerProfile {
                 name: "Alice".to_owned(),
                 is_admin: false,
@@ -421,8 +422,17 @@ mod tests {
     #[test]
     fn spawn_and_despawn_round_trip_index() {
         let mut world = fresh_world();
-        let entity = spawn_player_entity(&mut world, sample_view(1), ChunkCoord::new(0, 0));
-        assert_eq!(world.resource::<PlayerIndex>().get(1), Some(entity));
+        let entity = spawn_player_entity(
+            &mut world,
+            sample_view(crate::protocol::ClientId(1)),
+            ChunkCoord::new(0, 0),
+        );
+        assert_eq!(
+            world
+                .resource::<PlayerIndex>()
+                .get(crate::protocol::ClientId(1)),
+            Some(entity)
+        );
 
         let profile = world.get::<PlayerProfile>(entity).expect("profile");
         assert_eq!(profile.name, "Alice");
@@ -443,8 +453,13 @@ mod tests {
         let action = world.get::<PlayerAction>(entity).expect("action");
         assert_eq!(action.seq, 0);
 
-        let despawned = despawn_player_entity(&mut world, 1);
+        let despawned = despawn_player_entity(&mut world, crate::protocol::ClientId(1));
         assert_eq!(despawned, Some(entity));
-        assert!(world.resource::<PlayerIndex>().get(1).is_none());
+        assert!(
+            world
+                .resource::<PlayerIndex>()
+                .get(crate::protocol::ClientId(1))
+                .is_none()
+        );
     }
 }

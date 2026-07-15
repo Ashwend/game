@@ -230,7 +230,7 @@ impl GameServer {
         }
 
         let id = self.next_deployed_entity_id;
-        self.next_deployed_entity_id = self.next_deployed_entity_id.saturating_add(1);
+        self.next_deployed_entity_id.0 = self.next_deployed_entity_id.0.saturating_add(1);
         let entity = DeployedEntity {
             id,
             door: Some(DoorState {

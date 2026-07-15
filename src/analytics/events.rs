@@ -9,7 +9,7 @@
 
 use serde_json::{Map, Value, json};
 
-/// Mirror of [`crate::app::state::Screen`] so the analytics module does not
+/// Mirror of `crate::app::state::Screen` so the analytics module does not
 /// pull in `bevy::Resource` or any UI dependency, plus `SignIn` for the
 /// pre-auth login splash, which is gated by `AuthFlow` (not a `Screen` variant)
 /// and so isn't covered by `map_screen`. Mapped at the hook site.

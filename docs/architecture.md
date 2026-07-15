@@ -58,7 +58,7 @@ The dedicated server (`Command::Server`) runs `MinimalPlugins` (no Bevy `LogPlug
 | `protocol` | `ClientMessage` / `ServerMessage` wire variants, replicated component types, `PROTOCOL_VERSION`. | [networking.md](networking.md) |
 | `controller` (dir) | Shared client-authoritative movement simulation, collision, block spatial grid. | [movement.md](movement.md) |
 | `items` | Item registry, tool profiles, dropped-item helpers. | [items-and-resources.md](items-and-resources.md) |
-| `resources` | Resource-node definitions and gather-rule logic. | [items-and-resources.md](items-and-resources.md) |
+| `resource_nodes` | Resource-node definitions and gather-rule logic. | [items-and-resources.md](items-and-resources.md) |
 | `inventory` | Shared inventory model used by client UI and server. | [items-and-resources.md](items-and-resources.md) |
 | `crafting` | Recipe queue and crafting domain rules. | [crafting-and-deployables.md](crafting-and-deployables.md) |
 | `building` | Base-building taxonomy, socket-snap geometry, costs/HP. | [base-building-and-claims.md](base-building-and-claims.md) |
@@ -78,18 +78,18 @@ The dedicated server (`Command::Server`) runs `MinimalPlugins` (no Bevy `LogPlug
 
 ### net directory layout
 
-`src/net.rs` is the module root (not a `mod.rs`). Children:
+`src/net.rs` is the module root (the repo-wide sibling-file convention; there are no `mod.rs` files). Children:
 
 - `client.rs` - `ClientSession`, `ClientNetwork`, `ClientNetworkPlugin`, `client_plugins()`.
 - `channels.rs` - `LightyearProtocolPlugin`: channel registration plus every `register_component::<T>()` call.
 - `host.rs` + `host/` (dir) - the loopback/dedicated host. The `host/` split is the core of the replication architecture: `mirror.rs` (HashMap -> ECS mirror sync), `rooms.rs` (chunk-room AoI subscription), `routing.rs` (message routing), `handle.rs`, `admin.rs` (Unix admin socket, Unix-only).
-- `dedicated/` (dir) - `mod.rs` (CLI-facing host wrapper) and `admin.rs` (the `DedicatedAdminRequest` / `DedicatedAdminResponse` JSON contract).
+- `dedicated.rs` + `dedicated/` - the root file (CLI-facing host wrapper) and `dedicated/admin.rs` (the `DedicatedAdminRequest` / `DedicatedAdminResponse` JSON contract).
 
 ### app directory layout (the parts you will touch most)
 
 - `app/state/` - client resources split by concern (`MenuState`, dialogs, runtime session state, `LookState`, inventory UI state, toasts, settings, test_mode).
-- `app/systems/` - scheduled client systems by concern: `camera`, `input` (dir, owns gating), `network`, `players`, `items` (dir), `deployables` (dir), `effects`, `node_death`, `display`, `graphics`, `world_map`, `auth`, `auto_connect`, `analytics`, `update`, `settings`, `quit`, plus dev-only `agent_window` / `control_socket` / `headless_capture` and feature-gated `replication_trace`. Audio is **not** here.
-- `app/audio/` (dir) - the entire audio bus: `mod.rs` plus `ambient`, `music`, `footsteps`, `impact`, `fader`, `transitions`, `scheduled`, `library`, `manifest`, `surface`, `category`. `AudioPlugin` is registered in `src/app.rs`.
+- `app/systems/` - scheduled client systems by concern: `camera`, `input` (dir, owns gating), `network`, `players`, `items` (dir), `deployables` (dir), `effects`, `node_death`, `display`, `graphics`, `world_map`, `auth`, `auto_connect`, `analytics`, `update`, `settings`, `quit`, plus dev-only `agent_window` / `headless_capture` and feature-gated `replication_trace`. The dev/agent control socket is the top-level `src/control_socket/` module, not an `app` system dir. Audio is **not** here.
+- `app/audio.rs` + `app/audio/` - the entire audio bus: the root file plus `ambient`, `music`, `footsteps`, `impact`, `fader`, `transitions`, `scheduled`, `library`, `manifest`, `surface`, `category`. `AudioPlugin` is registered in `src/app.rs`.
 - `app/scene/` - first-person scene setup plus three custom client-only render materials: `terrain.rs` (`TerrainMaterial`, biome splat), `toon.rs` (`ToonMaterial`, cel shading), `grass/` (`GrassInstancingPlugin`, one GPU-instanced pipeline). Also `sky.rs`, `assets.rs` (shared `StandardMaterial`s), `mesh/`, `world.rs`. See [art-direction.md](art-direction.md), [toon-shading.md](toon-shading.md), [rendering-materials.md](rendering-materials.md).
 - `app/ui/` - all egui surfaces. See [ui-and-client.md](ui-and-client.md).
 - `app/voice/` - voice chat (cpal worker threads, Opus). See [voice.md](voice.md).
@@ -157,7 +157,7 @@ To make a new overlay freeze input: add its bool to `MenuState` and OR it into `
 `src/app.rs - install_dev_agent_wiring` adds automation hooks. The capture/socket/focus blocks are gated on `cfg(debug_assertions)` (and `unix` / `macos` where relevant), so they compile out of release; a bot cannot drive the shipped game. They cover:
 
 - Off-screen headless capture (`HeadlessCapture`): renders the primary camera into an image, window comes up hidden.
-- The `GAME_CONTROL_SOCKET` Unix control socket (`drain_control_socket`) for screenshot/command/state-dump.
+- The `GAME_CONTROL_SOCKET` Unix control socket (`drain_control_socket`, owned by the top-level `src/control_socket/` module) for screenshot/command/state-dump.
 - macOS focus relinquish for agent-driven launches.
 - Agent-mute: agent-driven runs insert `VoiceDisabled` and a muted `GlobalVolume` (this block runs in every build).
 

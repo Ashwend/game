@@ -192,7 +192,7 @@ pub(super) fn install_replication_sender_on_link(trigger: On<Add, LinkOf>, mut c
 /// full re-insert) from the accumulated chunk-room set plus the client's private
 /// room. On disconnect the sender entity is despawned by lightyear; we just drop
 /// our cached bookkeeping here.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 pub(super) fn update_client_room_subscriptions(
     server: Res<AuthoritativeServer>,
     connections: Res<ServerConnections>,

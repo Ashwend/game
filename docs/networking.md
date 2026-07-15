@@ -7,7 +7,7 @@ sources:
   - src/net/client.rs - ClientSession (struct), start_singleplayer, connect
   - src/net/host.rs - spawn_loopback_server, run_game_server, run_host, tick_authoritative_server
   - src/net/host/routing.rs - handle_unauthenticated_message, message routing
-  - src/protocol/mod.rs - PROTOCOL_VERSION, SERVER_TICK_RATE_HZ, GAME_VERSION
+  - src/protocol.rs - PROTOCOL_VERSION, SERVER_TICK_RATE_HZ, GAME_VERSION
   - src/protocol/messages.rs - ClientMessage, ServerMessage, delivery()
   - src/protocol/world_map.rs - WorldMapMarker, WorldMapMarkerCommand
   - src/net/dedicated/admin.rs - DedicatedAdminRequest, DedicatedAdminResponse
@@ -26,7 +26,7 @@ related:
 
 This doc owns the **transport half**: how bytes move, the channels, the handshake, and the message inventory. Per-component replication (the host mirror, replication groups, rooms/AoI, the catch-up mechanics) lives in `docs/replication.md`. The rule that decides which half a new piece of state belongs to is below in [Message inventory](#message-inventory): per-entity world state the client renders goes through replication; presence, clocks, and diagnostics go through a message.
 
-Lightyear version is `0.26.4` (`Cargo.toml`, features `client, server, netcode, udp, replication`). Several upstream-bug workarounds in `docs/replication.md` are pinned to that exact version.
+Lightyear version is `0.28.0` (`Cargo.toml`, features `client, server, netcode, udp, replication`). Several upstream-bug workarounds in `docs/replication.md` originate from `0.26.4` and are deliberately retained; see that doc for the drop-only-when-proven-obsolete rule.
 
 ## One path, two bootstraps
 
@@ -39,7 +39,7 @@ There is **one** gameplay networking path. Both singleplayer and multiplayer are
 
 Both constructors funnel through `connect_inner`, so message channels, replicated state, prediction, chat, and inventory are identical.
 
-The host side is symmetric. `spawn_loopback_server` (singleplayer) and `run_game_server` (dedicated, reached via `run_dedicated_server` in `src/net/dedicated/mod.rs`) both delegate to the same `run_host` in `src/net/host.rs`. Dedicated entry is `./cli server --bind ... --auth ... [--world ...] [--admin-socket ...]`.
+The host side is symmetric. `spawn_loopback_server` (singleplayer) and `run_game_server` (dedicated, reached via `run_dedicated_server` in `src/net/dedicated.rs`) both delegate to the same `run_host` in `src/net/host.rs`. Dedicated entry is `./cli server --bind ... --auth ... [--world ...] [--admin-socket ...]`.
 
 `run_host` builds the host App, registers the protocol plugin, and schedules a chained system pipeline (`src/net/host.rs` - `run_host`):
 
@@ -68,7 +68,7 @@ Two distinct gates.
 
 **Netcode `protocol_id`** is `LIGHTYEAR_PROTOCOL_ID = 0x4153_4857_454E_4401` (`src/net/channels.rs`, the bytes `b"ASHWEND\x01"`). It is a **fixed constant, deliberately independent of `PROTOCOL_VERSION`**. Netcode rejects a mismatched id at the transport layer before any application message is exchanged; if it tracked the app version, a version-bumped client would be bounced there and could never learn *which* version the server runs. Keeping it fixed lets every connection reach the app-level `Auth` handshake. Bump it only on a genuinely incompatible transport change.
 
-**App-level `PROTOCOL_VERSION = 45`** (`src/protocol/mod.rs`) is the real version gate. It rides in `ClientMessage::Auth` alongside the human-readable `GAME_VERSION` (the crate version). `GameServer::connect` compares both against its own; a mismatch returns a typed `VersionMismatchRejection`, which `src/net/host/routing.rs` turns into `ServerMessage::VersionMismatch { server_version, server_protocol }`. The client pairs that with its compiled-in `GAME_VERSION` to show a "you're newer/older" modal and disconnects cleanly. Bump `PROTOCOL_VERSION` on any breaking wire change so mismatched builds are rejected cleanly at `Auth`.
+**App-level `PROTOCOL_VERSION = 45`** (`src/protocol.rs`) is the real version gate. It rides in `ClientMessage::Auth` alongside the human-readable `GAME_VERSION` (the crate version). `GameServer::connect` compares both against its own; a mismatch returns a typed `VersionMismatchRejection`, which `src/net/host/routing.rs` turns into `ServerMessage::VersionMismatch { server_version, server_protocol }`. The client pairs that with its compiled-in `GAME_VERSION` to show a "you're newer/older" modal and disconnects cleanly. Bump `PROTOCOL_VERSION` on any breaking wire change so mismatched builds are rejected cleanly at `Auth`.
 
 **Wire-skew fallback** (`src/net/host/routing.rs` - `handle_unauthenticated_message`): postcard is not self-describing, so a genuinely version-skewed client's `Auth` can deserialize into a *different* `ClientMessage` variant. An unauthenticated client whose first message is not `Auth` is therefore answered with `VersionMismatch` too, and the surfaced variant is logged. That path **swallows** benign version-agnostic control messages (`Heartbeat`, `Ping`, `Disconnect`) instead of bouncing the player, because a same-version client can legitimately have one of those queued from a prior in-process session (singleplayer → main menu → multiplayer) or reordered ahead of its reliable `Auth`. On the client, a `VersionMismatch` arriving after a `Welcome` is dropped as stale, and one landing in the same receive batch as an `AuthRejected` is suppressed (the auth rejection is the real reason).
 
@@ -82,7 +82,7 @@ The netcode private key (`LIGHTYEAR_PRIVATE_KEY`) defaults to all-zero. `private
 
 ## Message inventory
 
-Pointer-level only; the per-variant payloads and delivery live in `src/protocol/messages.rs`. The wire-protocol module is the directory `src/protocol/` (`mod.rs`, `messages.rs`, `items.rs`, `world.rs`, `world_map.rs`, `commands.rs`, `math.rs`), re-exported flat as `crate::protocol::*`. There is no `src/net/protocol.rs`.
+Pointer-level only; the per-variant payloads and delivery live in `src/protocol/messages.rs`. The wire-protocol module is the root `src/protocol.rs` plus the `src/protocol/` directory (`messages.rs`, `items.rs`, `world.rs`, `world_map.rs`, `commands.rs`, `math.rs`), re-exported flat as `crate::protocol::*`. There is no `src/net/protocol.rs`.
 
 **The rule for which path new state takes:** per-entity world state the client renders or simulates against (a node, a drop, a deployable, a player, a loot bag) goes through Lightyear replication, **not** a `ServerMessage` variant. Presence, clocks, diagnostics, and one-shot intent signals go through a message. Never reintroduce a periodic full-state broadcast; the old `WorldSnapshot` wire was deleted and the replication path already re-ships unacked windows on its own (see CLAUDE.md replicated-state rules and `docs/replication.md`).
 
@@ -146,7 +146,7 @@ Wire schema: a `DedicatedAdminRequest` serialized with `serde_json::to_writer` p
 - `src/net/host/rooms.rs` - room/AoI subscription helpers, `attach_room_gated_replication`, `attach_player_replication` (see `docs/replication.md` and `docs/chunks-and-aoi.md`).
 - `src/net/host/handle.rs` - host command handle, final-save request, thread shutdown.
 - `src/net/host/admin.rs` (Unix only) - admin socket listener and `DedicatedAdminRequest` dispatch.
-- `src/net/dedicated/mod.rs` - CLI-facing `run_dedicated_server`.
+- `src/net/dedicated.rs` - CLI-facing `run_dedicated_server`.
 - `src/net/dedicated/admin.rs` - `DedicatedAdminRequest` / `DedicatedAdminResponse` and the `./cli admin` client helper.
 
 ## Related docs

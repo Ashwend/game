@@ -12,12 +12,12 @@ sources:
   - src/items/visual.rs - HeldMesh, HeldGrip, ArmorMesh, ItemModel
   - src/items/upgrades.rs - DeployableUpgrade, DEPLOYABLE_UPGRADES, upgrade_for
   - src/combat.rs - resolve_attack_profile, AttackProfile, effective_armor_after_pierce, damage_after_armor
-  - src/resources.rs - ResourceNodeDefinition, RESOURCE_NODE_DEFINITIONS, ToolRequirement, next_payout_from_storage
+  - src/resource_nodes.rs - ResourceNodeDefinition, RESOURCE_NODE_DEFINITIONS, ToolRequirement, next_payout_from_storage
   - src/crafting/registry.rs - REGISTERED_RECIPES; src/crafting/types.rs - RecipeDefinition, RecipeStation
   - src/server/workbench.rs - apply_workbench_command (generic upgrade handler)
   - src/server/furnace/state.rs - smelt_result, fuel_burn_ticks_for
   - src/server/deployables.rs - DeployedEntity, apply_place_deployable_command, restore_deployed_entities, spill_container_contents
-  - src/world/chunk/mod.rs - NodeKind, definition_id, from_definition_id
+  - src/world/chunk.rs - NodeKind, definition_id, from_definition_id
 related:
   - docs/items-and-resources.md - the registry reference this playbook operates on
   - docs/crafting-and-deployables.md - the crafting/furnace/deployable system reference
@@ -29,7 +29,7 @@ related:
 
 # Playbook: add a tool, weapon, armor, ore, recipe, smeltable, deployable, or station upgrade
 
-> When to read this: you are adding a new tool, ore/tree node, recipe, smelt recipe, or deployable kind. Source of truth: `src/items.rs`, `src/resources.rs`, `src/crafting.rs`, `src/server/furnace/state.rs`, `src/server/deployables.rs`. Canonical invariants live in CLAUDE.md.
+> When to read this: you are adding a new tool, ore/tree node, recipe, smelt recipe, or deployable kind. Source of truth: `src/items.rs`, `src/resource_nodes.rs`, `src/crafting.rs`, `src/server/furnace/state.rs`, `src/server/deployables.rs`. Canonical invariants live in CLAUDE.md.
 
 Every addition here is data appended to a compile-time `&'static` registry plus, for some, one server extension point. The economy is driven by two registries (`REGISTERED_ITEMS`, `RESOURCE_NODE_DEFINITIONS`) and one recipe table (`REGISTERED_RECIPES`); smelting and deployables each have a small set of named extension points. Pick the right section, fill every field, then read [Append-only rules](#append-only-enum-stable-ids-save-format-bump) before you ship.
 
@@ -71,7 +71,7 @@ A tool is an `ItemDefinition` (`src/items/registry.rs` - `ItemDefinition`) with 
 
 Notes:
 - Tools never reach `tool_effectiveness_pct` for gathering; that table is the destructible-entity damage path. To make a tool that bites a material differently, edit the matchup arm in `tool_effectiveness_pct` (`src/items/materials.rs` - `tool_effectiveness_pct`), do not special-case the damage handler.
-- The tier-2 gate is live: the meteorite node (`src/resources.rs` - `METEORITE_NODE_ID`) requires `ToolRequirement::new(ToolKind::Pickaxe, 2)`, so a stone pickaxe is rejected. Every other node is `min_tier` 1; see [items-and-resources.md](../items-and-resources.md) for the gate's worldgen and yield-cap details.
+- The tier-2 gate is live: the meteorite node (`src/resource_nodes.rs` - `METEORITE_NODE_ID`) requires `ToolRequirement::new(ToolKind::Pickaxe, 2)`, so a stone pickaxe is rejected. Every other node is `min_tier` 1; see [items-and-resources.md](../items-and-resources.md) for the gate's worldgen and yield-cap details.
 
 ## Add a weapon
 
@@ -106,23 +106,23 @@ Mitigation flows automatically: the server recomputes `equipped_protection` on a
 
 ## Add an ore or tree node
 
-A resource node is a static thing the world spawns at generation time. Definition is a `ResourceNodeDefinition` (`src/resources.rs` - `ResourceNodeDefinition`) appended to `RESOURCE_NODE_DEFINITIONS` (`src/resources.rs` - `RESOURCE_NODE_DEFINITIONS`). There are 14 today: 4 ores (coal, iron, sulfur, and the tier-2-gated meteorite), 1 stone vein, 6 tree variants (small/medium/large pine and birch), 3 crude E-pickup scatter nodes.
+A resource node is a static thing the world spawns at generation time. Definition is a `ResourceNodeDefinition` (`src/resource_nodes.rs` - `ResourceNodeDefinition`) appended to `RESOURCE_NODE_DEFINITIONS` (`src/resource_nodes.rs` - `RESOURCE_NODE_DEFINITIONS`). There are 14 today: 4 ores (coal, iron, sulfur, and the tier-2-gated meteorite), 1 stone vein, 6 tree variants (small/medium/large pine and birch), 3 crude E-pickup scatter nodes.
 
-1. Add `pub const X_NODE_ID: &str = "x_node";` near the top of `src/resources.rs`.
+1. Add `pub const X_NODE_ID: &str = "x_node";` near the top of `src/resource_nodes.rs`.
 2. Append the `ResourceNodeDefinition`. Fields (note: there is no `capacity`, no per-swing yield, and no regrow field on the node):
    - `id: X_NODE_ID`, `name: "Display Name"`.
-   - `model: ResourceNodeModel::...` (`src/resources.rs` - `ResourceNodeModel`). Drives the client mesh and the `is_tree`/`is_ore`/`is_crude` classification (collider shape, render scale, gather-skip).
-   - `required_tool: ToolRequirement::new(kind, min_tier)` (`src/resources.rs` - `ToolRequirement`). `ToolRequirement::allows` rejects a `Hands` requirement for any swing, so `ToolRequirement::new(ToolKind::Hands, 0)` marks the node E-pickup-only. Ore/stone use `Pickaxe`, trees use `Axe`. `min_tier` 1 means any pickaxe/hatchet works.
-   - `storage: &[ResourceMaterial::new(item_id, quantity)]`. This is the node's finite reservoir, not a per-swing yield. It is a list, but every current node has exactly one entry; the payout walks the first non-empty stack. Per-swing yield is `tool.gather_amount` clamped to remaining storage (`src/resources.rs` - `next_payout_from_storage`, shared by server and client prediction so they cannot disagree). The yield `item_id` must exist in `REGISTERED_ITEMS` or the payout is silently dropped.
+   - `model: ResourceNodeModel::...` (`src/resource_nodes.rs` - `ResourceNodeModel`). Drives the client mesh and the `is_tree`/`is_ore`/`is_crude` classification (collider shape, render scale, gather-skip).
+   - `required_tool: ToolRequirement::new(kind, min_tier)` (`src/resource_nodes.rs` - `ToolRequirement`). `ToolRequirement::allows` rejects a `Hands` requirement for any swing, so `ToolRequirement::new(ToolKind::Hands, 0)` marks the node E-pickup-only. Ore/stone use `Pickaxe`, trees use `Axe`. `min_tier` 1 means any pickaxe/hatchet works.
+   - `storage: &[ResourceMaterial::new(item_id, quantity)]`. This is the node's finite reservoir, not a per-swing yield. It is a list, but every current node has exactly one entry; the payout walks the first non-empty stack. Per-swing yield is `tool.gather_amount` clamped to remaining storage (`src/resource_nodes.rs` - `next_payout_from_storage`, shared by server and client prediction so they cannot disagree). The yield `item_id` must exist in `REGISTERED_ITEMS` or the payout is silently dropped.
    - `anchor_height: f32`, `ray_radius: f32`. The targeting focus box. Set the anchor to the middle of the visible model and the radius wide enough that looking at the mesh focuses it.
-3. Wire it into chunk generation so the world actually spawns it. Nodes are placed by the chunk generator's Poisson-disk pass (`src/world/chunk/generator.rs`). The generator works in terms of `NodeKind` (`src/world/chunk/mod.rs` - `NodeKind`), not definition-id strings. The definition-id <-> kind mapping must agree in both directions:
+3. Wire it into chunk generation so the world actually spawns it. Nodes are placed by the chunk generator's Poisson-disk pass (`src/world/chunk/generator.rs`). The generator works in terms of `NodeKind` (`src/world/chunk.rs` - `NodeKind`), not definition-id strings. The definition-id <-> kind mapping must agree in both directions:
    - `NodeKind::definition_id` (and `variant_definition_id` for trees) maps a kind to the registry id the generator spawns.
    - `NodeKind::from_definition_id` is the reverse, used for chunk membership and the regrow scheduler. If a new id is not in both, the generator either never spawns it or the regrow/capacity bookkeeping disagrees.
-   - Per-kind density and spacing live in `chunk_kind_target` / `kind_target` (`src/world/chunk/generator.rs`) and `min_spacing_m` / `base_capacity` (`src/world/chunk/mod.rs`, `classification.rs`). The same `kind_target` formula is shared by generation and the regrow ceiling; they must stay one function or the world over- or under-fills.
-4. Add the client render path. The client reads the node's model from the replicated component and dispatches in `src/app/systems/items/resource_nodes/spawn.rs` (the `resource_nodes` module is a directory; reconciliation lives in its `mod.rs`). Reconciliation is event-driven (`Added`/`RemovedComponents`), not per-frame iteration; see CLAUDE.md's replicated-state rules and [add-replicated-entity.md](add-replicated-entity.md) before touching it. You do not add new replicated components for a new node type; the existing `ResourceNode` split already carries definition id, position, and storage.
+   - Per-kind density and spacing live in `chunk_kind_target` / `kind_target` (`src/world/chunk/generator.rs`) and `min_spacing_m` / `base_capacity` (`src/world/chunk.rs`, `classification.rs`). The same `kind_target` formula is shared by generation and the regrow ceiling; they must stay one function or the world over- or under-fills.
+4. Add the client render path. The client reads the node's model from the replicated component and dispatches in `src/app/systems/items/resource_nodes/spawn.rs` (the `resource_nodes` module is a directory; reconciliation lives in the module root `resource_nodes.rs`). Reconciliation is event-driven (`Added`/`RemovedComponents`), not per-frame iteration; see CLAUDE.md's replicated-state rules and [add-replicated-entity.md](add-replicated-entity.md) before touching it. You do not add new replicated components for a new node type; the existing `ResourceNode` split already carries definition id, position, and storage.
 
 Notes:
-- Tree dead-snag state is decided server-side from `world_seed + position` (`src/resources.rs` - `spawn_resource_node`, `tree_is_dead`), frozen on the node, and replicated. It is not re-derived per client.
+- Tree dead-snag state is decided server-side from `world_seed + position` (`src/resource_nodes.rs` - `spawn_resource_node`, `tree_is_dead`), frozen on the node, and replicated. It is not re-derived per client.
 - Ore/stone-vein depletion swaps through stage meshes (thresholds at 70% and 35% remaining, `src/app/systems/items/resource_nodes/stages.rs`). This is purely cosmetic and client-side; gather/collider/targeting are untouched. To exercise depletion without swinging, the admin command is `/drain [remaining-fraction]` (`src/server/commands/world.rs` - `command_drain`), e.g. `/drain 0.4`; `/drain 0` removes the node through the normal depletion path.
 - Crude nodes (`is_crude`) are walk-through (no collider), render smaller, and are E-pickup-only.
 
@@ -177,7 +177,7 @@ Every placed object (workbench, furnace, building block, door, sleeping bag, sto
    - Spill on destroy (only if it is a container): extend `spill_container_contents` (`src/server/deployables.rs` - `spill_container_contents`) so breaking it drops the contents as a loot bag, the way storage boxes and furnaces spill.
    - Mutate through the dirty flag: when changing a replicated field post-spawn, go through `deployed_entity_mut` / `mark_deployable_dirty` so the mirror re-syncs. A bare `deployed_entities.get_mut` bypasses the dirty flag and silently drops the diff.
 4. Replication: the deployable mirror sync (`src/net/host/mirror.rs` - `sync_deployable_entities`) spawns the mirror entity via `attach_room_gated_replication` (`src/net/host/rooms.rs`), which attaches `ReplicationGroup::new_from_entity()`. You do not write a new spawn site; reuse the existing one. Read CLAUDE.md's replicated-state rules and [add-replicated-entity.md](add-replicated-entity.md) before adding any new replicated component for a kind. Identity (including the kind) is immutable post-spawn: a tier upgrade respawns the mirror entity rather than mutating the kind in place.
-5. Client: add placement preview/snapping (`src/app/systems/deployables/placement.rs`) and the structure mesh/material in `src/app/scene/`.
+5. Client: add placement preview (`src/app/systems/deployables/placement.rs`; snap/occupancy geometry in `placement/snapping.rs`) and the structure mesh/material in `src/app/scene/`.
 
 Notes:
 - Stability and claim footprints are derived, never persisted; `restore_deployed_entities` seeds `stability = 100` and a post-load `refresh_structural_stability` recomputes them. Do not save them.

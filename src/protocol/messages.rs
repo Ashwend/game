@@ -276,7 +276,7 @@ pub enum ServerMessage {
     /// [`GAME_VERSION`]/[`PROTOCOL_VERSION`] and tell the player whether
     /// they're newer or older. Sent at the `Auth` handshake instead of a
     /// generic [`Self::AuthRejected`] string. Part of the stable handshake
-    /// surface (see [`crate::net::channels::LIGHTYEAR_PROTOCOL_ID`]): keep this
+    /// surface (see `crate::net::channels::LIGHTYEAR_PROTOCOL_ID`): keep this
     /// variant and its fields wire-stable so a future server can always tell an
     /// older client why it was turned away.
     VersionMismatch {

@@ -3,7 +3,7 @@ title: Runtime chunks and Lightyear room-based AoI
 owns: The server-side ChunkManager runtime (entity-to-chunk membership, node regrow, density-falloff budget) and the chunk-room AoI subscription system that gates per-component replication.
 when_to_read: Before touching chunk membership, AoI ring math, node regrow, or the room-subscription system.
 sources:
-  - src/server/chunk_manager/mod.rs - ChunkManager, ActiveChunkState, RING_BUDGET, view_tier_radius, apply_ring_budget
+  - src/server/chunk_manager.rs - ChunkManager, ActiveChunkState, RING_BUDGET, view_tier_radius, apply_ring_budget
   - src/server/chunk_manager/aoi.rs - visible_chunks, retained_chunks, chunks_within
   - src/server/chunk_manager/membership.rs - anchor_chunk_for, track_*/untrack_*/update_*_chunk
   - src/server/chunk_manager/regrow.rs - handle_node_depleted, tick, place_fresh_node
@@ -28,7 +28,7 @@ related:
 
 ## AoI is Lightyear room-based replication, not a snapshot builder
 
-Read this first. There is **no per-player snapshot system**. The old `WorldSnapshot` periodic full-state wire was deleted during the Lightyear migration and must not be reintroduced (CLAUDE.md replicated-state rule 5). If you grep the codebase the word "snapshot" still appears in a handful of stale docstrings (`src/server/chunk_manager/mod.rs` module header, `aoi.rs` method comments, the `SetViewRadius` protocol comment in `src/protocol/messages.rs`); those refer to nothing that exists. Treat that terminology as drift, not a system to find.
+Read this first. There is **no per-player snapshot system**. The old `WorldSnapshot` periodic full-state wire was deleted during the Lightyear migration and must not be reintroduced (CLAUDE.md replicated-state rule 5). If you grep the codebase the word "snapshot" still appears in a handful of stale docstrings (`src/server/chunk_manager.rs` module header, `aoi.rs` method comments, the `SetViewRadius` protocol comment in `src/protocol/messages.rs`); those refer to nothing that exists. Treat that terminology as drift, not a system to find.
 
 How AoI actually works:
 
@@ -41,7 +41,7 @@ So "what a player sees" is the union of entities in the rooms that player's send
 
 ## ActiveChunkState: membership for every entity type
 
-`ChunkManager` (`src/server/chunk_manager/mod.rs - ChunkManager`) holds a `HashMap<ChunkCoord, ActiveChunkState>` (`grids`) plus a reverse index per entity type so any membership move is O(1):
+`ChunkManager` (`src/server/chunk_manager.rs - ChunkManager`) holds a `HashMap<ChunkCoord, ActiveChunkState>` (`grids`) plus a reverse index per entity type so any membership move is O(1):
 
 | Entity type | Per-chunk set (in `ActiveChunkState`) | Reverse index (`ChunkManager`) | Re-anchored after spawn? |
 | --- | --- | --- | --- |
@@ -87,7 +87,7 @@ for id in moved { self.chunk_manager.update_dropped_item_chunk(id, position); }
 
 ## The AoI ring: two-threshold spatial hysteresis
 
-Ring math is centralized in `src/server/chunk_manager/aoi.rs` so every entity type flows through one visibility decision. The server resolves the client's `ViewRadiusTier` to a Chebyshev grid radius via `view_tier_radius` (`src/server/chunk_manager/mod.rs:122 - view_tier_radius`):
+Ring math is centralized in `src/server/chunk_manager/aoi.rs` so every entity type flows through one visibility decision. The server resolves the client's `ViewRadiusTier` to a Chebyshev grid radius via `view_tier_radius` (`src/server/chunk_manager.rs:122 - view_tier_radius`):
 
 | `ViewRadiusTier` | View radius (chunks) |
 | --- | --- |
@@ -99,7 +99,7 @@ Ring math is centralized in `src/server/chunk_manager/aoi.rs` so every entity ty
 
 Two radii drive subscriptions, and the gap between them is the hysteresis that stops boundary thrash:
 
-- **Add radius** = `view_tier_radius(tier) + LOAD_BUFFER_RINGS` (`LOAD_BUFFER_RINGS = 1`). Computed by `visible_chunks` (`aoi.rs:23 - visible_chunks`). A chunk is **subscribed** as soon as it enters this radius. The extra buffer ring exists so the client's collider grid is already populated one full cell (64 m) away before the player crosses a boundary; without it, freshly-loaded tree/ore colliders placed as close as `EDGE_MARGIN_M` (0.5 m) from the boundary would overlap the player and the next prediction step would shove them upward (a visible vertical spasm). See the long comment on `LOAD_BUFFER_RINGS` in `mod.rs`.
+- **Add radius** = `view_tier_radius(tier) + LOAD_BUFFER_RINGS` (`LOAD_BUFFER_RINGS = 1`). Computed by `visible_chunks` (`aoi.rs:23 - visible_chunks`). A chunk is **subscribed** as soon as it enters this radius. The extra buffer ring exists so the client's collider grid is already populated one full cell (64 m) away before the player crosses a boundary; without it, freshly-loaded tree/ore colliders placed as close as `EDGE_MARGIN_M` (0.5 m) from the boundary would overlap the player and the next prediction step would shove them upward (a visible vertical spasm). See the long comment on `LOAD_BUFFER_RINGS` in `chunk_manager.rs`.
 - **Keep radius** = add radius `+ KEEP_MARGIN_RINGS` (`KEEP_MARGIN_RINGS = 2`). Computed by `retained_chunks` (`aoi.rs:31 - retained_chunks`), always a strict superset of `visible_chunks`. A subscribed chunk is **only unsubscribed** once it falls outside this wider radius.
 
 Because add and keep differ by 2 rings, a player wobbling 1 chunk back and forth across a boundary never crosses both thresholds, so nothing thrashes load -> unload -> reload. This is deterministic (no timer); it costs only the extra fringe rings' replication while the player lingers near an edge.
@@ -128,7 +128,7 @@ This whole system, like the mirror-sync systems, runs only when a 20 Hz fixed ti
 
 When a node is depleted (gather/inventory/admin removal), `handle_node_depleted` (`src/server/chunk_manager/regrow.rs:26 - handle_node_depleted`) removes it from membership and schedules a jittered respawn:
 
-- Delay window is **5 to 15 minutes**, expressed in ticks: `MIN_REGROW_TICKS = 5 * 60 * SERVER_TICK_RATE_HZ` and `MAX_REGROW_TICKS = 15 * 60 * SERVER_TICK_RATE_HZ`, where `SERVER_TICK_RATE_HZ = 20` (`src/protocol/mod.rs - SERVER_TICK_RATE_HZ`). So 6000 to 18000 ticks.
+- Delay window is **5 to 15 minutes**, expressed in ticks: `MIN_REGROW_TICKS = 5 * 60 * SERVER_TICK_RATE_HZ` and `MAX_REGROW_TICKS = 15 * 60 * SERVER_TICK_RATE_HZ`, where `SERVER_TICK_RATE_HZ = 20` (`src/protocol.rs - SERVER_TICK_RATE_HZ`). So 6000 to 18000 ticks.
 - The per-event jitter is deterministic: `placement_counter` is stirred with `splitmix64(counter ^ now_tick ^ node_id)` so the same `(coord, kind, tick)` round-trips identically across save and load. No `std::rand`, no wall clock.
 - Events live in a `BinaryHeap<RegrowEvent>` ordered as a min-heap on `fire_tick` (the `Ord` impl flips the comparison).
 
@@ -145,13 +145,13 @@ Two sources feed nodes into this system differently:
 
 ### Capacity ceiling is shared with world-gen
 
-`build_empty_grids` (`src/server/chunk_manager/mod.rs - build_empty_grids`) computes each chunk's per-kind `capacity` from `chunk_kind_target(classification, channels, kind, center_dist_frac)`, the **same** formula `src/world/chunk/generator.rs` uses to place the initial nodes. The fourth argument (the chunk centre's distance from the world origin as a fraction of the playable radius) exists for the meteorite ring gate; both sites compute it via the shared `chunk_center_distance_fraction`, so the meteorite ceiling cannot drift between generation and regrow. This is load-bearing: if regrow used a different ceiling than world-gen, the world would silently over- or under-fill on respawn. Change one, change both. Classification is recomputed from the seed on every load (not persisted), so this stays in sync automatically. See [worlds-and-saves.md](worlds-and-saves.md) for the classification/generator pipeline and the consequences of editing `BIOME_BIAS` or thresholds.
+`build_empty_grids` (`src/server/chunk_manager.rs - build_empty_grids`) computes each chunk's per-kind `capacity` from `chunk_kind_target(classification, channels, kind, center_dist_frac)`, the **same** formula `src/world/chunk/generator.rs` uses to place the initial nodes. The fourth argument (the chunk centre's distance from the world origin as a fraction of the playable radius) exists for the meteorite ring gate; both sites compute it via the shared `chunk_center_distance_fraction`, so the meteorite ceiling cannot drift between generation and regrow. This is load-bearing: if regrow used a different ceiling than world-gen, the world would silently over- or under-fill on respawn. Change one, change both. Classification is recomputed from the seed on every load (not persisted), so this stays in sync automatically. See [worlds-and-saves.md](worlds-and-saves.md) for the classification/generator pipeline and the consequences of editing `BIOME_BIAS` or thresholds.
 
 ## Density falloff: RING_BUDGET, applied once at creation
 
 To make distant areas read as populated without paying the full per-node cost, outer-ring chunks keep only a fraction of their generated nodes. This is a **fixed spawn budget applied exactly once** at world creation, not a sliding cull, so players moving around never see neighbouring chunks fade in or out (only a brand-new world's outer rings are budgeted).
 
-`apply_ring_budget` (`src/server/chunk_manager/mod.rs:425 - apply_ring_budget`) runs inside `new_for_world` right after `generate_world_spawns`:
+`apply_ring_budget` (`src/server/chunk_manager.rs:425 - apply_ring_budget`) runs inside `new_for_world` right after `generate_world_spawns`:
 
 ```
 const RING_BUDGET: [f32; 5] = [1.0, 0.85, 0.65, 0.45, 0.30];
@@ -165,14 +165,14 @@ For each `(coord, kind)` group, the ring distance is the Chebyshev distance `coo
 
 - `world_seed`, `dims`, `next_node_id`.
 - `node_chunks: Vec<NodeChunkEntry>` (`node_id -> (coord, kind)`), so `from_save` rebuilds the per-chunk live sets by **replay** without re-running placement RNG.
-- `pending_regrows: Vec<PendingRegrowSave>`, each stored as `ticks_from_now` (not an absolute fire tick). On load, `from_save` (`mod.rs:288`) re-clamps each to at least `MIN_REGROW_TICKS` so a save that sat idle for an hour does not dump a backlog of respawns at `t+0`. Classification and capacity are **not** persisted; `build_empty_grids` recomputes them from the seed.
+- `pending_regrows: Vec<PendingRegrowSave>`, each stored as `ticks_from_now` (not an absolute fire tick). On load, `from_save` (`chunk_manager.rs` - `from_save`) re-clamps each to at least `MIN_REGROW_TICKS` so a save that sat idle for an hour does not dump a backlog of respawns at `t+0`. Classification and capacity are **not** persisted; `build_empty_grids` recomputes them from the seed.
 
 `new_for_world` (fresh world) vs `from_save` (restore) is selected at world load by the lifecycle path based on whether both `resource_nodes` and `chunk_manager` are `Some` in the save. Full save-format detail (versioning, the golden-layout test, the field inventory) lives in [worlds-and-saves.md](worlds-and-saves.md).
 
 ## Gotchas
 
 - **Membership is the AoI source of truth, not the entity map.** A node added straight to `GameServer::resource_nodes` without `track_resource_node` exists but is invisible to every client.
-- **Every chunk-anchored spawn must go through `attach_room_gated_replication` (static) or `attach_player_replication` (players).** A bare `Replicate` lands in shared `ReplicationGroupId(0)` and silently drops post-spawn diffs (Lightyear 0.26.4 bug #740). Owned by [replication.md](replication.md).
+- **Every chunk-anchored spawn must go through `attach_room_gated_replication` (static) or `attach_player_replication` (players).** A bare `Replicate` lands in shared `ReplicationGroupId(0)` and silently drops post-spawn diffs (Lightyear bug #740, found on 0.26.4 and still guarded after the 0.28 upgrade). Owned by [replication.md](replication.md).
 - **Do not re-anchor nodes, deployables, or loot bags per frame.** Only dropped items (physics drift), players (movement), and in-flight projectiles change chunks after spawn. Projectiles are the not-in-ChunkManager exception: `sync_projectile_entities` re-anchors them room-only from a pure `ChunkCoord::from_world` of the current position (see the membership exception note above). Nodes change membership only on depletion/regrow.
 - **`RING_BUDGET` is creation-only.** Editing it changes only newly created worlds; existing saves keep their budgeted node ids.
 - **Regrow capacity and world-gen capacity must agree** (`chunk_kind_target`). They share one function for exactly this reason.

@@ -8,8 +8,8 @@ use crate::{
         PADDED_LEGGINGS_ID, PADDED_TUNIC_ID, PADDED_WRAPS_ID, PLANT_TWINE_ID, SALVAGED_FITTINGS_ID,
         STONE_ID, SULFUR_ID, SULFUR_ORE_ID, WOOD_ID, WORKBENCH_T1_ID, stack_limit,
     },
-    protocol::{GAME_VERSION, PROTOCOL_VERSION, Vec3Net},
-    resources::{
+    protocol::{AccountId, GAME_VERSION, PROTOCOL_VERSION, Vec3Net},
+    resource_nodes::{
         BIRCH_TREE_LARGE_NODE_ID, BRANCH_PILE_NODE_ID, COAL_NODE_ID, IRON_NODE_ID,
         PINE_TREE_NODE_ID, PINE_TREE_SMALL_NODE_ID, SULFUR_NODE_ID,
     },
@@ -20,6 +20,7 @@ use crate::{
 /// Spin up a server. `host` controls whether the connecting client
 /// becomes the implicit singleplayer admin.
 fn server_with_host(host: Option<u64>) -> (GameServer, ClientId) {
+    let host = host.map(AccountId);
     let mut server = GameServer::new(
         WorldSave::new("Test", host),
         ServerSettings {
@@ -27,7 +28,7 @@ fn server_with_host(host: Option<u64>) -> (GameServer, ClientId) {
             singleplayer_host: host,
         },
     );
-    let account_id = host.unwrap_or(7);
+    let account_id = host.unwrap_or(AccountId(7));
     let (client_id, _) = server
         .connect(
             PROTOCOL_VERSION,
@@ -246,7 +247,8 @@ fn spawn_admin_inserts_a_node_directly_in_front_of_the_player() {
         // Yaw 0 looks down -Z (forward = (-sin, 0, -cos) = (0, 0, -1)).
         c.controller.yaw = 0.0;
     }
-    let known_ids: std::collections::HashSet<u64> = server.resource_nodes.keys().copied().collect();
+    let known_ids: std::collections::HashSet<crate::protocol::ResourceNodeId> =
+        server.resource_nodes.keys().copied().collect();
 
     let out = server.apply_command(client, "/spawn iron 6".to_owned());
     assert!(has_toast(&out, ToastKind::Success));
@@ -273,7 +275,8 @@ fn spawn_uses_default_distance_when_omitted_and_clamps_tiny_values() {
 
     // The generated world already contains pines and branch piles, so
     // identify the spawned node by id diff, not by definition lookup.
-    let known_ids: std::collections::HashSet<u64> = server.resource_nodes.keys().copied().collect();
+    let known_ids: std::collections::HashSet<crate::protocol::ResourceNodeId> =
+        server.resource_nodes.keys().copied().collect();
     let out = server.apply_command(client, "/spawn pine".to_owned());
     assert!(has_toast(&out, ToastKind::Success));
     let (default_id, default_node) = server
@@ -361,7 +364,7 @@ fn teleport_all_moves_other_players_and_sends_corrections() {
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
-            2,
+            crate::protocol::AccountId(2),
             "Other".to_owned(),
             String::new(),
         )

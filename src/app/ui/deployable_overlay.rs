@@ -61,7 +61,7 @@ pub(crate) struct DeployableOverlayEntry {
     /// looking at the *body* of the workbench (not above it) still
     /// counts as "aiming at it."
     pub(crate) look_target_world: Vec3,
-    pub(crate) id: u64,
+    pub(crate) id: crate::protocol::DeployedEntityId,
     pub(crate) kind: DeployableKind,
     pub(crate) health: u32,
     pub(crate) max_health: u32,
@@ -287,7 +287,8 @@ pub(crate) fn collect_deployable_overlay_entries<'a>(
     let cull_radius = DEPLOYABLE_DRAW_DISTANCE_M + OVERLAY_COLLECT_SLACK_M;
     let cull_sq = cull_radius * cull_radius;
 
-    let mut near_by_id: std::collections::HashMap<u64, Vec3> = std::collections::HashMap::new();
+    let mut near_by_id: std::collections::HashMap<crate::protocol::DeployedEntityId, Vec3> =
+        std::collections::HashMap::new();
     for (entity, transform) in placed_entities {
         let translation = transform.translation();
         if translation.distance_squared(camera_position) <= cull_sq {
@@ -343,7 +344,7 @@ mod tests {
         DeployableOverlayEntry {
             anchor_world: Vec3::Y * 2.0,
             look_target_world: Vec3::Y,
-            id: 7,
+            id: crate::protocol::DeployedEntityId(7),
             kind: DeployableKind::Workbench { tier: 1 },
             health,
             max_health,
@@ -448,15 +449,21 @@ mod tests {
 
     #[test]
     fn collect_entries_pairs_placed_with_replicated_state() {
-        let placed_wb = NetworkDeployedEntity { id: 10 };
-        let placed_furnace = NetworkDeployedEntity { id: 11 };
+        let placed_wb = NetworkDeployedEntity {
+            id: crate::protocol::DeployedEntityId(10),
+        };
+        let placed_furnace = NetworkDeployedEntity {
+            id: crate::protocol::DeployedEntityId(11),
+        };
         // No replicated state for this id: it should be filtered out.
-        let placed_orphan = NetworkDeployedEntity { id: 99 };
+        let placed_orphan = NetworkDeployedEntity {
+            id: crate::protocol::DeployedEntityId(99),
+        };
 
         let tf = GlobalTransform::from_translation(Vec3::new(2.0, 0.0, -3.0));
 
         let dep_wb = Deployable {
-            id: 10,
+            id: crate::protocol::DeployedEntityId(10),
             item_id: intern_item_id(WORKBENCH_T1_ID),
             kind: DeployableKind::Workbench { tier: 1 },
             max_health: 500,
@@ -464,7 +471,7 @@ mod tests {
             placed_at_tick: 0,
         };
         let dep_furnace = Deployable {
-            id: 11,
+            id: crate::protocol::DeployedEntityId(11),
             item_id: intern_item_id(CRUDE_FURNACE_ID),
             kind: DeployableKind::Furnace { tier: 1 },
             max_health: 800,
@@ -485,10 +492,10 @@ mod tests {
         entries.sort_by_key(|e| e.id);
 
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].id, 10);
+        assert_eq!(entries[0].id, crate::protocol::DeployedEntityId(10));
         assert_eq!(entries[0].health, 250);
         assert_eq!(entries[0].max_health, 500);
-        assert_eq!(entries[1].id, 11);
+        assert_eq!(entries[1].id, crate::protocol::DeployedEntityId(11));
         assert_eq!(entries[1].health, 800);
         // Furnace is taller, so its nameplate anchor sits higher than the
         // workbench's for the same ground transform.
@@ -499,14 +506,16 @@ mod tests {
 
     #[test]
     fn collect_entries_culls_beyond_draw_distance() {
-        let placed_far = NetworkDeployedEntity { id: 10 };
+        let placed_far = NetworkDeployedEntity {
+            id: crate::protocol::DeployedEntityId(10),
+        };
         let tf_far = GlobalTransform::from_translation(Vec3::new(
             DEPLOYABLE_DRAW_DISTANCE_M + OVERLAY_COLLECT_SLACK_M + 1.0,
             0.0,
             0.0,
         ));
         let dep = Deployable {
-            id: 10,
+            id: crate::protocol::DeployedEntityId(10),
             item_id: intern_item_id(WORKBENCH_T1_ID),
             kind: DeployableKind::Workbench { tier: 1 },
             max_health: 500,

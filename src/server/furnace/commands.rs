@@ -528,6 +528,3 @@ fn furnace_toast(client_id: ClientId, kind: ToastKind, text: String) -> Vec<Serv
         message: ServerMessage::Toast(ToastMessage::new(kind, text)),
     }]
 }
-
-#[cfg(test)]
-mod tests;

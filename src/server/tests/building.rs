@@ -20,7 +20,7 @@ fn connect_other(server: &mut GameServer, account_id: u64, name: &str) -> Client
         .connect(
             crate::protocol::PROTOCOL_VERSION,
             Some(crate::protocol::GAME_VERSION.to_owned()),
-            account_id,
+            crate::protocol::AccountId(account_id),
             name.to_owned(),
             String::new(),
         )

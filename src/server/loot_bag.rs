@@ -376,7 +376,10 @@ impl GameServer {
                     ContainerViewKind::StorageBox
                 };
                 Some(OpenLootBagView {
-                    id: entity_id,
+                    // The view id is an opaque handle: for storage-box
+                    // containers it carries the deployed entity's id in the
+                    // loot-bag-shaped wire field.
+                    id: LootBagId(entity_id.0),
                     slots: storage.slots.clone(),
                     kind,
                 })
@@ -597,7 +600,7 @@ impl GameServer {
 
     fn allocate_loot_bag_id(&mut self) -> LootBagId {
         let id = self.next_loot_bag_id;
-        self.next_loot_bag_id = self.next_loot_bag_id.saturating_add(1);
+        self.next_loot_bag_id.0 = self.next_loot_bag_id.0.saturating_add(1);
         id
     }
 }
@@ -615,11 +618,10 @@ fn sleeper_inventory_view(
     slots.extend(inventory.inventory_slots.iter().cloned());
     slots.extend(inventory.actionbar_slots.iter().cloned());
     OpenLootBagView {
-        id: sleeper_id,
+        // Opaque-handle reuse (see the doc comment above): the sleeper's
+        // client id travels in the loot-bag-shaped wire field.
+        id: LootBagId(sleeper_id.0),
         slots,
         kind: ContainerViewKind::Sleeper,
     }
 }
-
-#[cfg(test)]
-mod tests;

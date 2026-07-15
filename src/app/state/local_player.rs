@@ -31,7 +31,6 @@ pub(crate) struct LocalPlayerState {
     pub(crate) lifecycle: Option<PlayerLifecycle>,
 }
 
-#[allow(clippy::type_complexity)]
 pub(crate) fn update_local_player_state_system(
     mut runtime: ResMut<ClientRuntime>,
     mut state: ResMut<LocalPlayerState>,

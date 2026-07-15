@@ -1,7 +1,7 @@
 use crate::{
     items::{HANDS_TOOL, ToolProfile, item_definition},
     protocol::{ClientId, ResourceGatherCommand, ResourceImpactKind, ServerMessage, Vec3Net},
-    resources::{
+    resource_nodes::{
         ResourceNodeModel, can_gather_resource_node, next_resource_payout,
         remove_resource_from_storage, resource_node_definition, resource_storage_is_empty,
     },

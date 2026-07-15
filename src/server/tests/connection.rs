@@ -7,13 +7,13 @@ fn singleplayer_host_is_admin() {
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
-            1,
+            crate::protocol::AccountId(1),
             "Host".to_owned(),
             String::new(),
         )
         .expect("host should connect");
 
-    assert_eq!(client_id, 1);
+    assert_eq!(client_id, crate::protocol::ClientId(1));
     assert!(matches!(
         &envelopes[0].message,
         ServerMessage::Welcome { is_admin: true, .. }
@@ -27,10 +27,10 @@ fn workos_mode_rejects_a_connection_it_cannot_verify() {
     // can't validate the token, so the handshake is refused rather than
     // admitting the claimed identity.
     let mut server = GameServer::new(
-        WorldSave::new("Test", Some(1)),
+        WorldSave::new("Test", Some(crate::protocol::AccountId(1))),
         ServerSettings {
             auth_mode: AuthMode::Workos,
-            singleplayer_host: Some(1),
+            singleplayer_host: Some(crate::protocol::AccountId(1)),
         },
     );
     assert!(
@@ -38,7 +38,7 @@ fn workos_mode_rejects_a_connection_it_cannot_verify() {
             .connect(
                 PROTOCOL_VERSION,
                 Some(GAME_VERSION.to_owned()),
-                2,
+                crate::protocol::AccountId(2),
                 "Bad".to_owned(),
                 "not.a.jwt".to_owned(),
             )
@@ -53,7 +53,7 @@ fn rejects_mismatched_client_versions() {
         .connect(
             PROTOCOL_VERSION,
             Some("0.1.0".to_owned()),
-            1,
+            crate::protocol::AccountId(1),
             "Host".to_owned(),
             String::new(),
         )
@@ -70,7 +70,7 @@ fn version_mismatch_is_a_typed_rejection_carrying_both_sides() {
         .connect(
             PROTOCOL_VERSION + 1,
             Some("0.0.1".to_owned()),
-            1,
+            crate::protocol::AccountId(1),
             "Host".to_owned(),
             String::new(),
         )
@@ -154,7 +154,7 @@ fn fresh_spawn_is_random_in_bounds_and_clear_of_colliders() {
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
-            7,
+            crate::protocol::AccountId(7),
             "Wanderer".to_owned(),
             String::new(),
         )
@@ -174,7 +174,7 @@ fn fresh_spawn_is_random_in_bounds_and_clear_of_colliders() {
     let mut extras: Vec<_> = server
         .resource_nodes
         .values()
-        .filter_map(crate::resources::resource_node_collider)
+        .filter_map(crate::resource_nodes::resource_node_collider)
         .collect();
     extras.extend(
         server
@@ -262,7 +262,7 @@ fn two_fresh_players_spawn_apart() {
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
-            11,
+            crate::protocol::AccountId(11),
             "A".to_owned(),
             String::new(),
         )
@@ -271,7 +271,7 @@ fn two_fresh_players_spawn_apart() {
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
-            22,
+            crate::protocol::AccountId(22),
             "B".to_owned(),
             String::new(),
         )
@@ -356,7 +356,7 @@ fn silent_clients_become_sleeping_bodies_after_timeout() {
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
-            1,
+            crate::protocol::AccountId(1),
             "Host".to_owned(),
             String::new(),
         )
@@ -400,7 +400,7 @@ fn disconnect_sleeps_the_body_and_reconnect_wakes_it_in_place() {
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
-            1,
+            crate::protocol::AccountId(1),
             "Host".to_owned(),
             String::new(),
         )
@@ -472,7 +472,7 @@ fn reconnecting_at_zero_health_respawns_alive() {
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
-            1,
+            crate::protocol::AccountId(1),
             "Host".to_owned(),
             String::new(),
         )
@@ -623,7 +623,7 @@ fn reconnect_with_same_identity_takes_over_and_preserves_state() {
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
-            1,
+            crate::protocol::AccountId(1),
             "Host".to_owned(),
             String::new(),
         )
@@ -705,14 +705,14 @@ fn world_save_round_trips_player_inventory_and_position() {
         save,
         ServerSettings {
             auth_mode: AuthMode::NoAuth,
-            singleplayer_host: Some(1),
+            singleplayer_host: Some(crate::protocol::AccountId(1)),
         },
     );
     let (restored_client_id, restored_envelopes) = restored
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
-            1,
+            crate::protocol::AccountId(1),
             "Host".to_owned(),
             String::new(),
         )
@@ -760,7 +760,7 @@ fn world_save_restores_sleeping_bodies_on_boot() {
         save,
         ServerSettings {
             auth_mode: AuthMode::NoAuth,
-            singleplayer_host: Some(1),
+            singleplayer_host: Some(crate::protocol::AccountId(1)),
         },
     );
 
@@ -776,7 +776,12 @@ fn world_save_restores_sleeping_bodies_on_boot() {
     assert!((body.controller.position.x - 3.0).abs() < f32::EPSILON);
     assert!((body.controller.position.z + 9.0).abs() < f32::EPSILON);
     assert!(body.inventory.actionbar_slots[0].is_some());
-    assert_eq!(restored.account_to_client.get(&1), Some(body_id));
+    assert_eq!(
+        restored
+            .account_to_client
+            .get(&crate::protocol::AccountId(1)),
+        Some(body_id)
+    );
 }
 
 #[test]
@@ -801,16 +806,19 @@ fn restored_sleeping_body_wakes_in_place_on_reconnect() {
         save,
         ServerSettings {
             auth_mode: AuthMode::NoAuth,
-            singleplayer_host: Some(1),
+            singleplayer_host: Some(crate::protocol::AccountId(1)),
         },
     );
-    let body_id = *restored.account_to_client.get(&1).expect("body indexed");
+    let body_id = *restored
+        .account_to_client
+        .get(&crate::protocol::AccountId(1))
+        .expect("body indexed");
 
     let (woken_id, _envelopes) = restored
         .connect(
             PROTOCOL_VERSION,
             Some(GAME_VERSION.to_owned()),
-            1,
+            crate::protocol::AccountId(1),
             "Host".to_owned(),
             String::new(),
         )
@@ -841,7 +849,7 @@ fn dead_persisted_player_restores_as_dead_body() {
         save,
         ServerSettings {
             auth_mode: AuthMode::NoAuth,
-            singleplayer_host: Some(1),
+            singleplayer_host: Some(crate::protocol::AccountId(1)),
         },
     );
 

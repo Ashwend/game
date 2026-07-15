@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::{
     protocol::{ClientId, DeployedEntityId, DroppedItemId, LootBagId, ResourceNodeId},
-    resources::ResourceNodeModel,
+    resource_nodes::ResourceNodeModel,
 };
 
 #[derive(Component)]
@@ -60,7 +60,7 @@ pub(crate) struct HeldItemVisual {
     pub(crate) item_id: crate::items::ItemId,
     /// Which animatable rig piece this layer is, so the per-frame update can give
     /// it its own local transform (bow limbs / string, crossbow string) on top of
-    /// the shared whole-item swing transform. [`HeldPieceSlot::Static`] for every
+    /// the shared whole-item swing transform. [`HeldPieceSlot::Static`](crate::items::HeldPieceSlot::Static) for every
     /// melee / tool layer (identity local transform), so those are unchanged.
     pub(crate) slot: crate::items::HeldPieceSlot,
 }

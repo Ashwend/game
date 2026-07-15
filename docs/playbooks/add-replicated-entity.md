@@ -10,7 +10,7 @@ sources:
   - src/net/host/rooms.rs - attach_room_gated_replication / attach_player_replication / rebind_player_owner_if_changed
   - src/net/host.rs - mirror_systems tuple + server_tick_advanced gate
   - src/net/channels.rs - register_component registry + LIGHTYEAR_PROTOCOL_ID
-  - src/app/systems/items/resource_nodes/mod.rs - canonical event-driven client reconciler
+  - src/app/systems/items/resource_nodes.rs - canonical event-driven client reconciler
   - src/app/systems/replication_trace.rs - client RECV trace logs
 related:
   - docs/replication.md - the architecture and the WHY behind every step here
@@ -82,7 +82,7 @@ In the spawn arm of your sync system, call exactly one of these (`src/net/host/r
 - `attach_room_gated_replication(world, entity, chunk)` for a static world entity (resource node, dropped item, deployable, loot bag). It inserts `Replicate::to_clients(NetworkTarget::All) + NetworkVisibility + ReplicationGroup::new_from_entity()` and joins the entity to its chunk's Lightyear `Room`.
 - `attach_player_replication(world, entity, chunk, owner_sender)` for a player-shaped entity with owner-only components. Same as above plus a `ComponentReplicationOverrides<T>` per owner-only component (`disable_all().enable_for(owner_sender)`) so peers never receive those wire bytes.
 
-**Never bypass these with a bare `Replicate::to_clients(...)`.** Both helpers attach `ReplicationGroup::new_from_entity()`; without it Lightyear puts the entity in `ReplicationGroupId(0)` alongside every other group-less entity, and the shared per-group ack tick can advance past a slowly-changing entity's local `Changed` mark, silently dropping the diff (upstream Lightyear 0.26.4 bug [#740](https://github.com/cBournhonesque/lightyear/issues/740)). A unit test in `src/net/host/rooms.rs` asserts the per-entity group id is `ReplicationGroupId(entity.to_bits())` and not `ReplicationGroupId(0)`. `NetworkTarget::All` (not `None`) plus `NetworkVisibility` is also load-bearing: see the long comment on `attach_room_gated_replication` for why `None + room` shipped the spawn but dropped subsequent updates.
+**Never bypass these with a bare `Replicate::to_clients(...)`.** Both helpers attach `ReplicationGroup::new_from_entity()`; without it Lightyear puts the entity in `ReplicationGroupId(0)` alongside every other group-less entity, and the shared per-group ack tick can advance past a slowly-changing entity's local `Changed` mark, silently dropping the diff (upstream Lightyear bug [#740](https://github.com/cBournhonesque/lightyear/issues/740), found on 0.26.4 and still guarded after the 0.28 upgrade). A unit test in `src/net/host/rooms.rs` asserts the per-entity group id is `ReplicationGroupId(entity.to_bits())` and not `ReplicationGroupId(0)`. `NetworkTarget::All` (not `None`) plus `NetworkVisibility` is also load-bearing: see the long comment on `attach_room_gated_replication` for why `None + room` shipped the spawn but dropped subsequent updates.
 
 If you add a **new owner-only component** to a player-shaped entity, add its override in **both** `attach_player_replication` and `rebind_player_owner_if_changed` (`src/net/host/rooms.rs` - `rebind_player_owner_if_changed`). A reconnect that wakes a sleeping body keeps the same mirror entity but gets a *new* sender; `rebind_player_owner_if_changed` must re-point every override or the woken player's owner-only state never reaches them.
 
@@ -90,7 +90,7 @@ If you add a **new owner-only component** to a player-shaped entity, add its ove
 
 Add `app.register_component::<YourComponent>()` for every replicated component to `src/net/channels.rs` (`LightyearProtocolPlugin::build`, after the existing `register_component` calls). Both server and client install the same `LightyearProtocolPlugin`, so one registration covers both sides; the registries must match exactly or the wire bytes will not round-trip. Identity and every mutable component need a line.
 
-If this is a wire-breaking change (new components shift the protocol), bump `PROTOCOL_VERSION` in `src/protocol/mod.rs` (currently `39`). Leave `LIGHTYEAR_PROTOCOL_ID` (`src/net/channels.rs` - `LIGHTYEAR_PROTOCOL_ID`, a fixed constant independent of `PROTOCOL_VERSION`) alone unless the transport itself becomes incompatible.
+If this is a wire-breaking change (new components shift the protocol), bump `PROTOCOL_VERSION` in `src/protocol.rs` (currently `39`). Leave `LIGHTYEAR_PROTOCOL_ID` (`src/net/channels.rs` - `LIGHTYEAR_PROTOCOL_ID`, a fixed constant independent of `PROTOCOL_VERSION`) alone unless the transport itself becomes incompatible.
 
 ## Mutation must go through the mandatory-entry helpers
 
@@ -104,7 +104,7 @@ Add your `sync_*` system to the `mirror_systems` tuple in `run_host` (`src/net/h
 
 ## Client side: an event-driven reconciler
 
-The client mirrors the replicated entities into local-only visuals. **Do not poll the full replicated query every frame.** Iterating ~1800 replicated nodes per frame just to detect "nothing changed" costs 1 to 4 ms/frame for the no-op case, the canonical frame-pacing bug (see [docs/profiling.md](../profiling.md)). React to `Added<T>` and `RemovedComponents<T>` instead. The canonical implementation is `apply_resource_nodes_system` in `src/app/systems/items/resource_nodes/mod.rs`; copy its structure:
+The client mirrors the replicated entities into local-only visuals. **Do not poll the full replicated query every frame.** Iterating ~1800 replicated nodes per frame just to detect "nothing changed" costs 1 to 4 ms/frame for the no-op case, the canonical frame-pacing bug (see [docs/profiling.md](../profiling.md)). React to `Added<T>` and `RemovedComponents<T>` instead. The canonical implementation is `apply_resource_nodes_system` in `src/app/systems/items/resource_nodes.rs`; copy its structure:
 
 - **Pending-spawn `VecDeque`** so the per-frame spawn budget (`MAX_RESOURCE_NODE_SPAWNS_PER_FRAME = 8`, distinct from the server-side per-sync budget) survives across frames. Crossing a chunk boundary can pull tens of entities into view at once; spawning them all in one frame is a command-buffer / GPU-upload hitch.
 - **Reverse `Entity -> Id` map** so `RemovedComponents<T>` can find which local mirror to despawn without scanning.

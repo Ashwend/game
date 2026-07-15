@@ -1,0 +1,12 @@
+{
+  // rust-analyzer gets its own target dir (target/rust-analyzer/) so its
+  // background `cargo check` never contends with `./cli` builds for the
+  // cargo build lock, and flag differences between the two can't invalidate
+  // each other's artifacts (a known local disk-pressure source: divergent
+  // artifact sets in one shared target/).
+  "rust-analyzer.cargo.targetDir": true,
+  // Stay on default features. `profile` pulls bevy/trace_chrome and
+  // `dev-fast` pulls dynamic_linking; CI's all-features leg covers them, and
+  // rust-analyzer compiling them locally roughly doubles check time + disk.
+  "rust-analyzer.cargo.features": []
+}

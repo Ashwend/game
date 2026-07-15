@@ -88,7 +88,7 @@ pub fn spawn_resource_node_entity(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::resources::COAL_NODE_ID;
+    use crate::resource_nodes::COAL_NODE_ID;
 
     fn coal_state(id: ResourceNodeId, quantity: u16) -> ResourceNodeState {
         ResourceNodeState {
@@ -110,19 +110,33 @@ mod tests {
     #[test]
     fn spawn_then_despawn_round_trips_index_and_components() {
         let mut world = fresh_world();
-        let entity =
-            spawn_resource_node_entity(&mut world, coal_state(7, 3), ChunkCoord::new(0, 0));
+        let entity = spawn_resource_node_entity(
+            &mut world,
+            coal_state(crate::protocol::ResourceNodeId(7), 3),
+            ChunkCoord::new(0, 0),
+        );
 
-        assert_eq!(world.resource::<ResourceNodeIndex>().get(7), Some(entity));
+        assert_eq!(
+            world
+                .resource::<ResourceNodeIndex>()
+                .get(crate::protocol::ResourceNodeId(7)),
+            Some(entity)
+        );
         let node = world.get::<ResourceNode>(entity).expect("node component");
         let storage = world
             .get::<ResourceNodeStorage>(entity)
             .expect("storage component");
-        assert_eq!(node.id, 7);
+        assert_eq!(node.id, crate::protocol::ResourceNodeId(7));
         assert_eq!(storage.0[0].quantity, 3);
 
-        let despawned = despawn_resource_node_entity(&mut world, 7);
+        let despawned =
+            despawn_resource_node_entity(&mut world, crate::protocol::ResourceNodeId(7));
         assert_eq!(despawned, Some(entity));
-        assert!(world.resource::<ResourceNodeIndex>().get(7).is_none());
+        assert!(
+            world
+                .resource::<ResourceNodeIndex>()
+                .get(crate::protocol::ResourceNodeId(7))
+                .is_none()
+        );
     }
 }

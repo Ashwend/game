@@ -139,7 +139,7 @@ impl GameServer {
         }
 
         let job_id = client.next_craft_job_id;
-        client.next_craft_job_id = client.next_craft_job_id.wrapping_add(1);
+        client.next_craft_job_id.0 = client.next_craft_job_id.0.wrapping_add(1);
         let job = CraftingJob::new(
             job_id,
             recipe.id,
@@ -378,10 +378,10 @@ mod tests {
 
     fn make_server() -> GameServer {
         GameServer::new(
-            WorldSave::new("Test", Some(1)),
+            WorldSave::new("Test", Some(crate::protocol::AccountId(1))),
             ServerSettings {
                 auth_mode: AuthMode::NoAuth,
-                singleplayer_host: Some(1),
+                singleplayer_host: Some(crate::protocol::AccountId(1)),
             },
         )
     }
@@ -391,7 +391,7 @@ mod tests {
             .connect(
                 PROTOCOL_VERSION,
                 Some(GAME_VERSION.to_owned()),
-                1,
+                crate::protocol::AccountId(1),
                 "Tester".to_owned(),
                 String::new(),
             )

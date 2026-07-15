@@ -135,7 +135,7 @@ mod tests {
     /// is unchanged.
     #[test]
     fn recovers_name_from_a_future_version_save() {
-        let save = WorldSave::new("Future World", Some(1));
+        let save = WorldSave::new("Future World", Some(crate::protocol::AccountId(1)));
         let mut bytes = encode_world_save(&save).expect("encode");
         // Bump the format version byte to a value the loader does not accept.
         let future_version = SAVE_FORMAT_VERSION + 1;
@@ -155,7 +155,7 @@ mod tests {
     fn rejects_all_control_or_whitespace_names() {
         // A name that is nothing but control characters does not survive the
         // best-effort filter (postcard layout drift produces junk like this).
-        let save = WorldSave::new("\u{7}\u{1}\u{2}", Some(1));
+        let save = WorldSave::new("\u{7}\u{1}\u{2}", Some(crate::protocol::AccountId(1)));
         let bytes = encode_world_save(&save).expect("encode");
         assert_eq!(decode_world_name_best_effort(&bytes), None);
     }

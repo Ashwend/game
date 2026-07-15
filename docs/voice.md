@@ -9,7 +9,7 @@ sources:
   - src/app/voice/resample.rs - LinearResampler shared by both ends
   - src/app/voice/devices.rs - cpal enumerate + select-by-name with default fallback
   - src/app/voice/systems.rs - Bevy resources/systems, gating, spatial_gain, talk-dot
-  - src/server/voice.rs - VOICE_AUDIBLE_RANGE + server range filter
+  - src/server/voice.rs - server range filter (range constant: src/game_balance.rs - VOICE_AUDIBLE_RANGE_M)
   - src/net/channels.rs - VoiceChannel (UnorderedUnreliable) registration
   - src/protocol/messages.rs - ClientMessage::Voice / ServerMessage::Voice / VoiceFrame
 related:
@@ -37,7 +37,7 @@ ServerMessage::Voice{speaker,sequence,position,frame} -> Bevy event -> Opus deco
 
 ## End-to-end pipeline
 
-- **Codec** (`src/app/voice/codec.rs` - `VoiceEncoder`/`VoiceDecoder`): libopus via the `opus` crate. 48 kHz mono (`VOICE_SAMPLE_RATE_HZ`), 24 kbps (`VOICE_BITRATE_BPS = 24_000`), `Application::Voip`, in-band FEC on with a 5 % expected-loss hint (`set_packet_loss_perc(5)`). 20 ms frames = 960 samples (`VOICE_FRAME_SAMPLES`, `src/protocol/mod.rs`). The codec is configured in one place so encode and decode stay in lockstep.
+- **Codec** (`src/app/voice/codec.rs` - `VoiceEncoder`/`VoiceDecoder`): libopus via the `opus` crate. 48 kHz mono (`VOICE_SAMPLE_RATE_HZ`), 24 kbps (`VOICE_BITRATE_BPS = 24_000`), `Application::Voip`, in-band FEC on with a 5 % expected-loss hint (`set_packet_loss_perc(5)`). 20 ms frames = 960 samples (`VOICE_FRAME_SAMPLES`, `src/protocol.rs`). The codec is configured in one place so encode and decode stay in lockstep.
 
 - **Capture** (`src/app/voice/capture.rs` - `VoiceCapture`): a cpal input stream on a dedicated worker thread named `voice-capture`. The thread owns the channel-downmix and resampler so the rest of the pipeline can assume mono 48 kHz f32 input. Stereo mics are downmixed to mono; non-48 kHz inputs are resampled to 48 kHz before encode. Publishes a lock-free input-level atomic (`level_micro`) for the options level meter.
 
@@ -70,7 +70,7 @@ Capture and playback both accept `F32`, `I16`, and `U16` device formats and conv
 
 ## Server range filter
 
-`VOICE_AUDIBLE_RANGE: f32 = 50.0` (`src/server/voice.rs`) is the single source of truth for how far a voice carries. It is **not** a player setting; it is a core gameplay rule. The server uses it as the broadcast cap (`SERVER_VOICE_BROADCAST_RANGE` aliases it), and the client uses the same constant as the attenuation curve's endpoint (passed into `spatial_gain` in `src/app/voice/systems.rs`), so the two halves cannot drift. Do not hardcode a second range constant.
+`VOICE_AUDIBLE_RANGE_M: f32 = 50.0` (`src/game_balance.rs`) is the single source of truth for how far a voice carries. It is **not** a player setting; it is a core gameplay rule. The server uses it as the broadcast cap (`SERVER_VOICE_BROADCAST_RANGE` aliases it), and the client uses the same constant as the attenuation curve's endpoint (passed into `spatial_gain` in `src/app/voice/systems.rs`), so the two halves cannot drift. Do not hardcode a second range constant.
 
 `GameServer::apply_voice_frame` (`src/server/voice.rs`):
 
@@ -83,7 +83,7 @@ Privacy falls out of this: the dedicated server is the only hop, so peers never 
 
 ## Client spatial mixing
 
-`spatial_gain` (`src/app/voice/systems.rs`) computes the listener-relative stereo gain pair from the listener pose, the speaker position, `VOICE_AUDIBLE_RANGE`, and `output_volume`. Distance attenuation curve:
+`spatial_gain` (`src/app/voice/systems.rs`) computes the listener-relative stereo gain pair from the listener pose, the speaker position, `VOICE_AUDIBLE_RANGE_M`, and `output_volume`. Distance attenuation curve:
 
 | Distance | Gain |
 |---------:|------|
@@ -155,9 +155,9 @@ Voice runs in four named sets in this order (`src/app.rs`):
 - `src/app/voice/capture.rs`: cpal mic stream plus Opus encode worker; non-blocking spawn, `poll_status`, the Drop-join-after-resolved invariant, the input-level atomic.
 - `src/app/voice/playback.rs`: cpal output stream, per-speaker `Mixer`/`SpeakerSlot`, jitter buffer, PLC/FEC, per-speaker output resampler, allocation-free F32 mix, hard clamp; blocking readiness on spawn.
 - `src/app/voice/systems.rs`: Bevy side. `VoiceState`, `VoiceUiControl`, `VoiceDeviceCache`, `VoiceDisabled`; `setup_voice_system`, `transmit_voice_system`, `receive_voice_system`, `manage_voice_capture_system`, `manage_voice_playback_system`, `manage_voice_monitor_system`, `refresh_voice_devices_system`, `apply_voice_settings_system`; the `IncomingVoiceMessage` event; and `spatial_gain`.
-- `src/server/voice.rs`: `apply_voice_frame` range filter plus the `VOICE_AUDIBLE_RANGE` constant.
+- `src/server/voice.rs`: `apply_voice_frame` range filter plus the `SERVER_VOICE_BROADCAST_RANGE` alias of `game_balance::VOICE_AUDIBLE_RANGE_M`.
 - `src/net/channels.rs`: `VoiceChannel` registration.
-- `src/protocol/messages.rs`: `ClientMessage::Voice(VoiceFrame)`, `ServerMessage::Voice { speaker, sequence, position, frame }`, `VoiceFrame`, and the `PacketDelivery::UnreliableUnordered` mapping. The `VOICE_SAMPLE_RATE_HZ` / `VOICE_FRAME_SAMPLES` / `MAX_VOICE_FRAME_BYTES` constants live in `src/protocol/mod.rs`.
+- `src/protocol/messages.rs`: `ClientMessage::Voice(VoiceFrame)`, `ServerMessage::Voice { speaker, sequence, position, frame }`, `VoiceFrame`, and the `PacketDelivery::UnreliableUnordered` mapping. The `VOICE_SAMPLE_RATE_HZ` / `VOICE_FRAME_SAMPLES` / `MAX_VOICE_FRAME_BYTES` constants live in `src/protocol.rs`.
 
 ## Build dependency
 

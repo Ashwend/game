@@ -14,7 +14,7 @@ fn connect_other(server: &mut GameServer, account_id: u64, name: &str) -> Client
         .connect(
             crate::protocol::PROTOCOL_VERSION,
             Some(crate::protocol::GAME_VERSION.to_owned()),
-            account_id,
+            crate::protocol::AccountId(account_id),
             name.to_owned(),
             String::new(),
         )
@@ -143,7 +143,7 @@ fn door_hangs_in_a_doorway_and_requires_the_code_on_first_open() {
     );
     let state = server.deployed_entities[&id].door.as_ref().unwrap();
     assert!(!state.open, "a correct code authorizes, it does not open");
-    assert!(state.authorized.contains(&1));
+    assert!(state.authorized.contains(&crate::protocol::AccountId(1)));
     assert!(
         envelopes.iter().any(|env| matches!(
             env.message,
@@ -206,7 +206,7 @@ fn changing_the_code_revokes_other_accounts() {
     );
     let state = server.deployed_entities[&id].door.as_ref().unwrap();
     assert_eq!(state.code, "555555");
-    assert_eq!(state.authorized, vec![1]);
+    assert_eq!(state.authorized, vec![crate::protocol::AccountId(1)]);
 
     // The guest can't rotate a code they don't know.
     server.receive(
@@ -354,7 +354,7 @@ fn door_state_round_trips_through_the_save() {
     let restored = GameServer::restore_deployed_entities(save.state.deployed_entities);
     let door = restored[&id].door.as_ref().expect("door state persists");
     assert_eq!(door.code, "8080");
-    assert_eq!(door.authorized, vec![1]);
+    assert_eq!(door.authorized, vec![crate::protocol::AccountId(1)]);
     assert!(door.open);
     assert_eq!(door.parent, doorway);
 }

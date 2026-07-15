@@ -2,7 +2,7 @@
 //!
 //! - [`transmit_voice_system`] drains encoded frames from the capture thread
 //!   and ships them on the wire while push-to-talk is held.
-//! - [`receive_voice_system`] hands incoming [`ServerMessage::Voice`] frames
+//! - [`receive_voice_system`] hands incoming [`ServerMessage::Voice`](crate::protocol::ServerMessage::Voice) frames
 //!   off to the playback mixer with a freshly computed spatial gain.
 //! - [`apply_voice_settings_system`] keeps the capture/playback gain in
 //!   sync with the user's options-panel sliders.
@@ -25,8 +25,8 @@ use crate::{
         ClientErrorToast, ClientRuntime, ClientSettings, KeyAction, MenuState, OptionsTab,
         OptionsUiState, Screen,
     },
+    game_balance::VOICE_AUDIBLE_RANGE_M,
     protocol::{ClientId, ClientMessage, Vec3Net, VoiceFrame},
-    server::VOICE_AUDIBLE_RANGE,
 };
 
 use super::{
@@ -39,7 +39,7 @@ use super::{
 /// never collide with a server-assigned `ClientId` (those count up from 0), so
 /// the loopback stream rides the normal decode/mix path without a nameplate or
 /// the self-filter in [`receive_voice_system`] interfering.
-const VOICE_LOOPBACK_SPEAKER: ClientId = u64::MAX;
+const VOICE_LOOPBACK_SPEAKER: ClientId = crate::protocol::ClientId(u64::MAX);
 
 /// Inbound voice packet event written by the network receive system and
 /// consumed by [`receive_voice_system`]. Decoupling the two with a Bevy
@@ -549,7 +549,7 @@ pub(crate) fn receive_voice_system(
         let (gain_left, gain_right) = spatial_gain(
             listener,
             packet.position,
-            VOICE_AUDIBLE_RANGE,
+            VOICE_AUDIBLE_RANGE_M,
             settings.voice.output_volume,
         );
         if gain_left <= 0.0001 && gain_right <= 0.0001 {

@@ -228,7 +228,9 @@ mod tests {
 
         server.apply_world_map_marker_command(me, WorldMapMarkerCommand::Add { x: 10.0, z: 20.0 });
         server.apply_world_map_marker_command(me, WorldMapMarkerCommand::Add { x: 5.0, z: 6.0 });
-        server.world_map_markers.add(my_account + 1, 30.0, 30.0);
+        server
+            .world_map_markers
+            .add(crate::protocol::AccountId(my_account.0 + 1), 30.0, 30.0);
 
         let reply = server.apply_world_map_request(me);
         let markers = reply_markers(&reply);
@@ -272,36 +274,43 @@ mod tests {
     fn add_stops_at_the_per_player_cap() {
         let mut store = WorldMapMarkerStore::default();
         for _ in 0..WORLD_MAP_MARKER_MAX_PER_PLAYER {
-            assert!(store.add(1, 0.0, 0.0));
+            assert!(store.add(crate::protocol::AccountId(1), 0.0, 0.0));
         }
         assert!(
-            !store.add(1, 0.0, 0.0),
+            !store.add(crate::protocol::AccountId(1), 0.0, 0.0),
             "the cap must reject the next add and leave the list unchanged"
         );
-        assert_eq!(store.markers_for(1).len(), WORLD_MAP_MARKER_MAX_PER_PLAYER);
+        assert_eq!(
+            store.markers_for(crate::protocol::AccountId(1)).len(),
+            WORLD_MAP_MARKER_MAX_PER_PLAYER
+        );
     }
 
     #[test]
     fn persistence_round_trips_and_floors_the_id_counter() {
         let mut store = WorldMapMarkerStore::default();
-        store.add(1, 1.0, 2.0);
-        store.add(1, 3.0, 4.0);
-        store.add(2, 5.0, 6.0);
+        store.add(crate::protocol::AccountId(1), 1.0, 2.0);
+        store.add(crate::protocol::AccountId(1), 3.0, 4.0);
+        store.add(crate::protocol::AccountId(2), 5.0, 6.0);
 
         let restored = WorldMapMarkerStore::from_persisted(store.to_persisted());
-        assert_eq!(restored.markers_for(1).len(), 2);
-        assert_eq!(restored.markers_for(2).len(), 1);
+        assert_eq!(restored.markers_for(crate::protocol::AccountId(1)).len(), 2);
+        assert_eq!(restored.markers_for(crate::protocol::AccountId(2)).len(), 1);
 
         // A new add must not reuse a surviving id.
         let mut restored = restored;
         let existing: std::collections::HashSet<u32> = restored
-            .markers_for(1)
+            .markers_for(crate::protocol::AccountId(1))
             .iter()
-            .chain(restored.markers_for(2))
+            .chain(restored.markers_for(crate::protocol::AccountId(2)))
             .map(|marker| marker.id)
             .collect();
-        restored.add(1, 7.0, 8.0);
-        let new_id = restored.markers_for(1).last().unwrap().id;
+        restored.add(crate::protocol::AccountId(1), 7.0, 8.0);
+        let new_id = restored
+            .markers_for(crate::protocol::AccountId(1))
+            .last()
+            .unwrap()
+            .id;
         assert!(!existing.contains(&new_id), "fresh id must be unique");
     }
 
@@ -309,6 +318,10 @@ mod tests {
     fn request_from_an_unknown_client_yields_nothing() {
         let mut server = crate::server::test_support::server();
         // No client connected with id 999, so there is no account to scope to.
-        assert!(server.apply_world_map_request(999).is_empty());
+        assert!(
+            server
+                .apply_world_map_request(crate::protocol::ClientId(999))
+                .is_empty()
+        );
     }
 }

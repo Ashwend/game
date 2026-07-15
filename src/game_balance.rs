@@ -426,6 +426,28 @@ pub const IMPACT_MESSAGE_RANGE_M: f32 = 80.0;
 pub const ITEM_MERGE_CUE_RANGE_M: f32 = 25.0;
 
 // =====================================================================
+// Dropped items (toss feel)
+// =====================================================================
+
+/// How far in front of the player's feet a dropped item spawns, in
+/// metres. Just past the body so the drop never intersects the player
+/// capsule, close enough that it lands where you're looking.
+pub const DROPPED_ITEM_TOSS_FORWARD_DISTANCE_M: f32 = 0.48;
+
+/// Fraction of the player's current velocity a dropped item inherits.
+/// Dropping while sprinting flings the item ahead; below 1.0 so the
+/// throw reads as a release, not a launch.
+pub const DROPPED_ITEM_TOSS_INHERITED_VELOCITY_SCALE: f32 = 0.65;
+
+/// Forward speed, in m/s, added along the look direction on drop. The
+/// baseline toss when standing still.
+pub const DROPPED_ITEM_TOSS_FORWARD_SPEED_MPS: f32 = 1.6;
+
+/// Upward speed, in m/s, added on drop. A small pop so the item arcs
+/// visibly instead of plummeting straight down at the feet.
+pub const DROPPED_ITEM_TOSS_UP_SPEED_MPS: f32 = 0.45;
+
+// =====================================================================
 // Deployables (workbenches, furnaces, walls, …)
 // =====================================================================
 
@@ -534,6 +556,12 @@ pub const FOUNDATION_RAISE_MAX_M: f32 = 1.5;
 /// platform height: enough to hug small terrain wobble without letting
 /// the slab disappear into the ground.
 pub const FOUNDATION_SINK_MAX_M: f32 = 0.25;
+
+/// How far a client-requested building pose may sit from the snapped
+/// socket before the server refuses to "correct" it. Generous enough to
+/// absorb client float drift, far too small to teleport a piece
+/// somewhere the player didn't aim.
+pub const BUILDING_SNAP_TOLERANCE_M: f32 = 0.75;
 
 /// Hewn log door HP. WoodBuilding material, so it's the designated soft
 /// spot of a stone base: an iron hatchet chews through in ~2.5 minutes.
@@ -672,6 +700,29 @@ pub const LOOT_BAG_INTERACT_RANGE_M: f32 = 4.5;
 /// a nearby item you already targeted is low-stakes, so erring lenient here
 /// costs nothing and feels much smoother while sprinting around.
 pub const PICKUP_SERVER_REACH_SLACK_M: f32 = 1.5;
+
+// =====================================================================
+// Resource nodes (regrow)
+// =====================================================================
+
+/// Minimum delay in ticks before a depleted node respawns. Keeps the
+/// player from camping a single grid for free yield.
+pub const RESOURCE_REGROW_MIN_TICKS: u64 = 5 * 60 * SERVER_TICK_RATE_HZ as u64;
+
+/// Maximum delay. Together with the floor, gives the regrow window the
+/// 5-15 min spec the design called for.
+pub const RESOURCE_REGROW_MAX_TICKS: u64 = 15 * 60 * SERVER_TICK_RATE_HZ as u64;
+
+// =====================================================================
+// Voice
+// =====================================================================
+
+/// Maximum distance, in metres, at which one player can hear another.
+/// Used both server-side as the broadcast filter and client-side as the
+/// attenuation curve's endpoint, so neither half can drift from the
+/// other. Intentionally not a player setting: how far your voice
+/// carries is part of the design, not a preference.
+pub const VOICE_AUDIBLE_RANGE_M: f32 = 50.0;
 
 // =====================================================================
 // Exploration worldgen

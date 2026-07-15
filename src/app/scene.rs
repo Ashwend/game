@@ -12,18 +12,21 @@
 
 mod assets;
 mod components;
+mod deployable_assets;
 mod grass;
+mod materials;
 mod mesh;
 mod meteor_shower;
+mod meteor_sky;
 mod sky;
 mod terrain;
 mod toon;
 mod world;
 
 pub(crate) use assets::{
-    DeployableVisualAssets, FurnaceFireAssets, ImpactEffectAssets, ItemVisualAssets,
-    MeteorEmberAssets, PlayerVisualAssets, ResourceVisualAssets, TorchFireAssets,
-    menu_backdrop_depth_of_field, player_visual_position, setup_scene,
+    FurnaceFireAssets, ImpactEffectAssets, ItemVisualAssets, MeteorEmberAssets, PlayerVisualAssets,
+    ResourceVisualAssets, TorchFireAssets, menu_backdrop_depth_of_field, player_visual_position,
+    setup_scene,
 };
 #[cfg(test)]
 pub(crate) use components::WorldGeometry;
@@ -32,6 +35,7 @@ pub(crate) use components::{
     NetworkDroppedItem, NetworkLootBag, NetworkPlayer, NetworkResourceNode, VIEWMODEL_RENDER_LAYER,
     tree_mesh_height,
 };
+pub(crate) use deployable_assets::DeployableVisualAssets;
 // `ViewmodelCamera` is consumed cross-module by the release viewmodel-FOV sync
 // (`app::systems::camera::viewmodel_fov`) and by the debug-only headless-capture
 // redirect; the in-scene spawn in `assets.rs` uses `components::` directly. Keep
@@ -49,10 +53,8 @@ pub(crate) use meteor_shower::{
     meteor_shower_camera_shake_system, meteor_shower_rumble_system,
     update_meteor_shower_ground_system,
 };
-pub(crate) use sky::{
-    SUN_SOFT_SHADOW_SIZE, SunLight, tick_meteor_ember_system, update_meteor_sky_system,
-    update_sky_system,
-};
+pub(crate) use meteor_sky::{tick_meteor_ember_system, update_meteor_sky_system};
+pub(crate) use sky::{SUN_SOFT_SHADOW_SIZE, SunLight, update_sky_system};
 pub(crate) use terrain::{TerrainMaterial, TerrainTextureAssets};
 pub(crate) use toon::{ToonMaterial, ToonViewmodelMaterial};
 pub(crate) use world::{WorldSceneState, apply_world_scene_system};
@@ -253,7 +255,9 @@ mod tests {
 
     #[test]
     fn network_marker_components_store_client_ids() {
-        let player = NetworkPlayer { client_id: 7 };
+        let player = NetworkPlayer {
+            client_id: crate::protocol::ClientId(7),
+        };
         let seed = PlayerState {
             client_id: player.client_id,
             position: Vec3Net::new(1.0, 2.0, 3.0),

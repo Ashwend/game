@@ -50,10 +50,89 @@ impl RecipeStation {
     }
 }
 
-/// Interned identifier shared between protocol messages, server state, and
-/// the UI. Same `Arc<str>` story as [`crate::items::ItemId`], clones are a
-/// refcount bump and deserialized ids reuse the cached `Arc` on hits.
-pub type RecipeId = Arc<str>;
+/// Interned recipe identifier: a newtype over `Arc<str>` kept distinct from
+/// [`crate::items::ItemId`] so passing one where the other is expected is a
+/// compile error instead of a silent mixup.
+///
+/// Shared between protocol messages, server state, and the UI. Same
+/// `Arc<str>` story as [`crate::items::ItemId`]: clones are a refcount bump
+/// and deserialized ids reuse the cached `Arc` on hits.
+/// `#[serde(transparent)]` keeps every encoding byte-identical to the bare
+/// string.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(transparent)]
+pub struct RecipeId(Arc<str>);
+
+impl RecipeId {
+    /// The bare id string (e.g. `"plant_twine"`).
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// True when both ids share the same interned allocation. Content
+    /// equality is `==`; this is the test hook for the interning guarantee.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::ops::Deref for RecipeId {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for RecipeId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<str> for RecipeId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for RecipeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl PartialEq<str> for RecipeId {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for RecipeId {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl From<&str> for RecipeId {
+    /// Routes through [`intern_recipe_id`] so `.into()` reuses the cached
+    /// allocation.
+    fn from(id: &str) -> Self {
+        intern_recipe_id(id)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for RecipeId {
+    /// Interns on decode so an id deserialized without the protocol's
+    /// `deserialize_with` hook still dedups to one allocation per id.
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = <String as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(intern_recipe_id(&raw))
+    }
+}
 
 /// Cap on a player's queue length. Picked high enough that early players
 /// won't bump into it and low enough that a malicious client can't flood
@@ -152,16 +231,16 @@ pub struct RecipeDefinition {
 pub fn intern_recipe_id(id: &str) -> RecipeId {
     let registry = interned_registry();
     if let Some(cached) = registry.read().ok().and_then(|map| map.get(id).cloned()) {
-        return cached;
+        return RecipeId(cached);
     }
     let fresh: Arc<str> = Arc::from(id);
     if let Ok(mut map) = registry.write() {
         if let Some(cached) = map.get(id).cloned() {
-            return cached;
+            return RecipeId(cached);
         }
         map.insert(Box::from(id), fresh.clone());
     }
-    fresh
+    RecipeId(fresh)
 }
 
 fn interned_registry() -> &'static RwLock<HashMap<Box<str>, Arc<str>>> {
@@ -185,6 +264,6 @@ mod tests {
     fn intern_returns_same_arc_for_same_id() {
         let a = intern_recipe_id(PLANT_TWINE_RECIPE_ID);
         let b = intern_recipe_id(PLANT_TWINE_RECIPE_ID);
-        assert!(Arc::ptr_eq(&a, &b));
+        assert!(a.ptr_eq(&b));
     }
 }

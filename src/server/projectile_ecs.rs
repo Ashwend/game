@@ -104,7 +104,7 @@ mod tests {
         ProjectileView {
             id,
             model: ItemModel::Bow,
-            owner: 1,
+            owner: crate::protocol::ClientId(1),
             position: Vec3Net::new(0.0, 1.6, 0.0),
             velocity: Vec3Net::new(0.0, 0.0, -35.0),
         }
@@ -113,17 +113,31 @@ mod tests {
     #[test]
     fn spawn_and_despawn_round_trip_index() {
         let mut world = fresh_world();
-        let entity = spawn_projectile_entity(&mut world, arrow_view(7), ChunkCoord::new(0, 0));
-        assert_eq!(world.resource::<ProjectileIndex>().get(7), Some(entity));
+        let entity = spawn_projectile_entity(
+            &mut world,
+            arrow_view(crate::protocol::ProjectileId(7)),
+            ChunkCoord::new(0, 0),
+        );
+        assert_eq!(
+            world
+                .resource::<ProjectileIndex>()
+                .get(crate::protocol::ProjectileId(7)),
+            Some(entity)
+        );
 
         let identity = world.get::<Projectile>(entity).expect("identity");
-        assert_eq!(identity.id, 7);
+        assert_eq!(identity.id, crate::protocol::ProjectileId(7));
         assert_eq!(identity.model, ItemModel::Bow);
         let transform = world.get::<ProjectileTransform>(entity).expect("transform");
         assert_eq!(transform.velocity.z, -35.0);
 
-        let despawned = despawn_projectile_entity(&mut world, 7);
+        let despawned = despawn_projectile_entity(&mut world, crate::protocol::ProjectileId(7));
         assert_eq!(despawned, Some(entity));
-        assert!(world.resource::<ProjectileIndex>().get(7).is_none());
+        assert!(
+            world
+                .resource::<ProjectileIndex>()
+                .get(crate::protocol::ProjectileId(7))
+                .is_none()
+        );
     }
 }
