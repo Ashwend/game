@@ -70,7 +70,7 @@ mod tests {
     };
     use bevy::{
         anti_alias::{fxaa::Fxaa, taa::TemporalAntiAliasing},
-        pbr::ScatteringMedium,
+        light::atmosphere::ScatteringMedium,
         post_process::dof::DepthOfField,
         prelude::*,
     };
@@ -146,7 +146,10 @@ mod tests {
             .copied()
             .collect();
         assert_eq!(lights.len(), 2, "sun + moon directional lights");
-        let shadow_casters = lights.iter().filter(|light| light.shadows_enabled).count();
+        let shadow_casters = lights
+            .iter()
+            .filter(|light| light.shadow_maps_enabled)
+            .count();
         assert_eq!(shadow_casters, 1, "exactly the sun should cast shadows");
     }
 

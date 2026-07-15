@@ -27,6 +27,70 @@ pub(crate) fn bag_idle_pose(phase: f32) -> ToolSwingPose {
     }
 }
 
+/// Bandage: the hold-to-use wrap. `charge` 0 is the carry rest, 1 is the wrap
+/// fully going on; `settle` eases back to the carry after the use ends (whether
+/// it completed or was abandoned), blending from `ended_at`, the charge it had
+/// reached.
+///
+/// The read has to be legible in first person from the roll alone, so the motion
+/// is: lift the roll up and across to the *left* of the view (toward the off-hand
+/// the player is notionally binding), rolling it over so the coil face turns
+/// toward the camera and you can see it is a bandage, and pull it in close. The
+/// tail unrolling out of it is the other half of the story and is animated
+/// separately, per-piece, in `bandage_tail_transform`.
+///
+/// A strain tremble ramps in near full, the same idiom the bow draw and the bomb
+/// wind-up use, so the last stretch of the charge feels like effort and the player
+/// can feel how close they are without reading the HUD arc.
+pub(crate) fn bandage_use_pose(
+    charge: f32,
+    settle: f32,
+    ended_at: f32,
+    time_seconds: f32,
+) -> ToolSwingPose {
+    // While a use is live, `charge` drives it. Once it ends, blend from the charge
+    // it reached back to the carry over the settle. `settle` is 1 (fully at rest)
+    // whenever no use is running and none recently ended, so the idle carry is the
+    // natural resting value of this whole function.
+    let live = charge.clamp(0.0, 1.0);
+    let s = settle.clamp(0.0, 1.0);
+    let effective = if live > 0.0 {
+        live
+    } else {
+        // Ease-out on the way back so the roll drops away softly.
+        ended_at.clamp(0.0, 1.0) * (1.0 - smooth(s))
+    };
+
+    // Ease-in-out: the lift starts unhurried, the wrap presses home in the middle,
+    // and the last stretch holds steady against the wound.
+    let e = smooth(effective);
+
+    // Strain tremble in the last 45% of the charge, ramping quadratically. Only
+    // while actually charging: a settling bandage should not shake.
+    let strain = ((live - 0.55) / 0.45).clamp(0.0, 1.0);
+    let tremble = 0.014 * strain * strain;
+
+    ToolSwingPose {
+        // Tip the roll's face up toward the camera so the coil reads.
+        pitch: -0.30 + e * 0.62 + (time_seconds * 37.0).sin() * tremble,
+        // Swing it across to the left (the arm being bound), and turn the coil to
+        // face the viewer as it comes.
+        yaw: 0.25 - e * 0.78 + (time_seconds * 41.0 + 1.7).sin() * tremble,
+        roll: 0.18 + e * 0.55 + (time_seconds * 29.0 + 0.5).sin() * tremble * 0.6,
+        // Draw it in close to the body: the wrap happens against you, not out at
+        // arm's length.
+        forward: e * 0.10,
+        right: -e * 0.14,
+        up: e * 0.13,
+    }
+}
+
+/// Smoothstep on `[0, 1]`. Local to the pose curves.
+fn smooth(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// Thrown powder bomb: a short overhand lob. `phase` 0 is the carry rest; the
 /// hand draws the bomb back and up (wind-up), snaps forward and up through the
 /// release (at ~0.45, matching `THROW_BOMB_IMPACT_FRACTION` where the bomb

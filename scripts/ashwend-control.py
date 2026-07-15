@@ -140,10 +140,10 @@ def main(argv):
             **({"run": rest[1].lower() in ("1", "true", "yes", "on")} if len(rest) > 1 else {}),
         },
         "swing": lambda: {"command": "swing"},
-        # Force the ranged bow / crossbow / melee viewmodel pose for headless
-        # capture (dev-only). Pass key=value tokens: draw=<0..1>, reload=<0..1>,
-        # recoil=<0..1>, swing=<0..1>. No tokens clears the override back to live
-        # input.
+        # Force the ranged bow / crossbow / melee / bandage viewmodel pose for
+        # headless capture (dev-only). Pass key=value tokens: draw=<0..1>,
+        # reload=<0..1>, recoil=<0..1>, swing=<0..1>, use_charge=<0..1>. No tokens
+        # clears the override back to live input.
         "ranged-pose-debug": lambda: {
             "command": "ranged_pose_debug",
             **{

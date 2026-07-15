@@ -237,9 +237,9 @@ mod tests {
         }
     }
 
-    fn run_ui(f: impl FnMut(&egui::Context)) -> egui::FullOutput {
+    fn run_ui(f: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {
         let ctx = egui::Context::default();
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -259,9 +259,9 @@ mod tests {
         let mut inv_ui = InventoryUiState::default();
         let mut toasts: Vec<String> = Vec::new();
 
-        let output = run_ui(|ctx| {
+        let output = run_ui(|ui| {
             loot_bag_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &mut runtime,
                 &local,
@@ -284,9 +284,9 @@ mod tests {
         let mut inv_ui = InventoryUiState::default();
         let mut toasts: Vec<String> = Vec::new();
 
-        let output = run_ui(|ctx| {
+        let output = run_ui(|ui| {
             loot_bag_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &mut runtime,
                 &local,
@@ -305,9 +305,9 @@ mod tests {
         let mut inv_ui = InventoryUiState::default();
         let mut toasts: Vec<String> = Vec::new();
 
-        let output = run_ui(|ctx| {
+        let output = run_ui(|ui| {
             loot_bag_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &mut runtime,
                 &local,
@@ -327,9 +327,9 @@ mod tests {
         let mut inv_ui = InventoryUiState::default();
         let mut toasts: Vec<String> = Vec::new();
 
-        let output = run_ui(|ctx| {
+        let output = run_ui(|ui| {
             loot_bag_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &mut runtime,
                 &local,
@@ -353,9 +353,9 @@ mod tests {
         inv_ui.pending_quick_transfer = Some(UnifiedSlotRef::Bag(0));
         let mut toasts: Vec<String> = Vec::new();
 
-        run_ui(|ctx| {
+        run_ui(|ui| {
             loot_bag_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &mut runtime,
                 &local,

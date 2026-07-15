@@ -42,6 +42,7 @@ impl ClientSettings {
         self.voice = self.voice.sanitized();
         self.input.mouse_sensitivity = self.input.mouse_sensitivity.clamp(0.25, 3.0);
         self.keybindings = self.keybindings.sanitized();
+        self.graphics = self.graphics.sanitized();
         self
     }
 }
@@ -90,23 +91,30 @@ impl Default for DisplaySettings {
 }
 
 impl DisplaySettings {
-    /// The wgpu present mode for the primary window.
+    /// The wgpu present mode for the primary window: always `Immediate`.
     ///
-    /// Always `Immediate` regardless of the user's vsync preference: GPU
-    /// vsync (`Fifo`/`AutoVsync`) misbehaves on macOS Metal, `Fifo`
-    /// flickers, `AutoVsync` fails to cap the frame rate at all. Frame
-    /// limiting is handled CPU-side by `bevy_framepace`, which works
-    /// reliably across platforms. See [`Self::frame_limiter`].
+    /// Frame pacing is done CPU-side by `bevy_framepace` (see [`Self::frame_limiter`]),
+    /// not by GPU vsync. Real vsync (`Fifo`) is deliberately avoided: this scene
+    /// renders at roughly 7.5 ms/frame, right on top of a 140 Hz display's 7.14 ms
+    /// vblank, so `Fifo` misses the vblank on most frames and holds each for a
+    /// second one, collapsing into a 7 ms / 14 ms (140/70 fps) bounce that reads
+    /// as heavy judder while rotating (confirmed by per-frame `dt` logging).
+    /// `Immediate` presents each frame as it is ready (steady ~7.5 ms), and
+    /// framepace paces them just before the vblank so tearing stays minimal.
+    ///
+    /// If the per-frame GPU cost is brought comfortably under the vblank budget,
+    /// tear-free `Fifo` locked to the refresh becomes viable again; revisit then.
     pub(crate) fn present_mode(self) -> PresentMode {
         PresentMode::Immediate
     }
 
-    /// The CPU-side frame limiter applied by `bevy_framepace`.
+    /// The CPU-side [`bevy_framepace`] limiter, paired with the always-`Immediate`
+    /// present mode above.
     ///
-    /// `vsync: true` caps the frame rate to the display's refresh by
-    /// putting the main thread to sleep just before the next frame is
-    /// presented. `vsync: false` runs uncapped (tearing is possible but
-    /// frames are still individually fast).
+    /// `vsync: true` -> `Auto` (paced to the display refresh; `display.rs` resolves
+    /// it to a fixed `Manual` derived from the monitor refresh so framepace does not
+    /// re-query winit every frame). `vsync: false` -> `Off` (uncapped, lowest
+    /// latency, tearing possible).
     pub(crate) fn frame_limiter(self) -> Limiter {
         if self.vsync {
             Limiter::Auto
@@ -234,6 +242,24 @@ pub(crate) struct GraphicsSettings {
     /// claw back GPU.
     #[serde(default)]
     pub(crate) atmosphere: AtmosphereQuality,
+}
+
+impl GraphicsSettings {
+    pub(super) fn sanitized(mut self) -> Self {
+        // MSAA is currently broken on the 0.19 HDR + atmosphere + custom-material
+        // pipeline: selecting it blows the whole frame (and the egui UI) out to a
+        // clipped black-and-white mess, and because the choice persists it traps
+        // the player on an unusable screen. Heal any saved MSAA value back to a
+        // working mode until MSAA is fixed (it is also removed from the selectable
+        // `AntiAliasing::ALL` list, so it can't be re-picked in the meantime).
+        if matches!(
+            self.anti_aliasing,
+            AntiAliasing::Msaa2 | AntiAliasing::Msaa4
+        ) {
+            self.anti_aliasing = AntiAliasing::Fxaa;
+        }
+        self
+    }
 }
 
 impl Default for GraphicsSettings {
@@ -539,6 +565,14 @@ pub(crate) struct ShadowConfig {
     /// Far bound of the shadow cascades, in metres. Smaller = fewer trees
     /// re-rendered into the cascades.
     pub(crate) maximum_distance: f32,
+    /// Number of shadow cascades. This MUST be identical across every non-`Off`
+    /// tier: changing the cascade count at runtime (as `apply_graphics_settings_system`
+    /// does when the player switches tiers) panics Bevy's parallel
+    /// `check_dir_light_mesh_visibility` for one frame, the per-thread queue is
+    /// sized to the old frusta count while the visible-entities list already has
+    /// the new count (`index out of bounds` at `bevy_light/src/lib.rs`). Tiers are
+    /// differentiated by `maximum_distance` + `map_size` instead, which are the
+    /// dominant cost levers anyway. Do not vary this per tier.
     pub(crate) num_cascades: usize,
     /// Per-cascade shadow map resolution (power of two).
     pub(crate) map_size: usize,
@@ -565,18 +599,20 @@ impl ShadowConfig {
 
 /// Sun shadow quality. Shadows over a dense forest re-render every tree into
 /// each cascade, which is one of the heaviest GPU costs, so this trades shadow
-/// distance / cascade count / map resolution against framerate. `Off` disables
-/// sun shadows entirely. Defaults to `Ultra` (the scene runs comfortably maxed
-/// on the target hardware); drop to `High`/`Low` to claw back GPU on weaker GPUs.
+/// distance / map resolution against framerate. The cascade *count* is fixed
+/// across tiers (see [`ShadowConfig::num_cascades`], a runtime count change
+/// panics Bevy). `Off` disables sun shadows entirely. Defaults to `Ultra` (the
+/// scene runs comfortably maxed on the target hardware); drop to `High`/`Low` to
+/// claw back GPU on weaker GPUs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ShadowQuality {
     Off,
     Low,
     High,
-    /// Sharpest tier (default): a 4096 shadow map and a 4th cascade for more even
-    /// texel density across distance. Heaviest in dense forest (every tree
-    /// re-renders into the extra cascade at 4x the map texels).
+    /// Sharpest tier (default): the longest shadow distance and a 4096 shadow map
+    /// (4x High's texel density). Heaviest in dense forest (every tree re-renders
+    /// into the cascades at 4x the map texels).
     #[default]
     Ultra,
 }
@@ -597,9 +633,13 @@ impl ShadowQuality {
     pub(crate) fn config(self) -> Option<ShadowConfig> {
         match self {
             Self::Off => None,
+            // `num_cascades` is IDENTICAL (3) across all three tiers on purpose:
+            // switching tiers must not change the cascade count or Bevy panics
+            // (see `ShadowConfig::num_cascades`). Cost/quality is set by
+            // `maximum_distance` + `map_size`.
             Self::Low => Some(ShadowConfig {
                 maximum_distance: 45.0,
-                num_cascades: 2,
+                num_cascades: 3,
                 map_size: 1024,
                 first_cascade_far_bound: 8.0,
             }),
@@ -611,7 +651,7 @@ impl ShadowQuality {
             }),
             Self::Ultra => Some(ShadowConfig {
                 maximum_distance: 120.0,
-                num_cascades: 4,
+                num_cascades: 3,
                 map_size: 4096,
                 first_cascade_far_bound: 8.0,
             }),
@@ -642,7 +682,11 @@ pub(crate) enum AntiAliasing {
 }
 
 impl AntiAliasing {
-    pub(crate) const ALL: [Self; 5] = [Self::Off, Self::Fxaa, Self::Msaa2, Self::Msaa4, Self::Taa];
+    // MSAA (`Msaa2`/`Msaa4`) is deliberately absent: it is broken on the current
+    // HDR/atmosphere pipeline (clips the whole frame to black-and-white), so it is
+    // not offered. The enum variants stay so old saved settings still deserialize;
+    // `GraphicsSettings::sanitized` heals them to `Fxaa` on load.
+    pub(crate) const ALL: [Self; 3] = [Self::Off, Self::Fxaa, Self::Taa];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -939,6 +983,54 @@ fn default_voice_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitize_heals_broken_msaa_to_fxaa() {
+        // MSAA is broken (clips the frame to black-and-white) and persists, so a
+        // saved MSAA choice must be healed to a working mode on load, otherwise the
+        // player is trapped on an unusable screen every launch.
+        for broken in [AntiAliasing::Msaa2, AntiAliasing::Msaa4] {
+            let mut settings = ClientSettings::default();
+            settings.graphics.anti_aliasing = broken;
+            let healed = settings.sanitized();
+            assert_eq!(healed.graphics.anti_aliasing, AntiAliasing::Fxaa);
+        }
+        // A working mode is left untouched.
+        for keep in [AntiAliasing::Off, AntiAliasing::Fxaa, AntiAliasing::Taa] {
+            let mut settings = ClientSettings::default();
+            settings.graphics.anti_aliasing = keep;
+            assert_eq!(settings.sanitized().graphics.anti_aliasing, keep);
+        }
+    }
+
+    #[test]
+    fn msaa_is_not_a_selectable_option() {
+        // Broken, so it must not appear in the Graphics tab dropdown.
+        assert!(!AntiAliasing::ALL.contains(&AntiAliasing::Msaa2));
+        assert!(!AntiAliasing::ALL.contains(&AntiAliasing::Msaa4));
+    }
+
+    #[test]
+    fn shadow_tiers_share_one_cascade_count() {
+        // Changing the cascade count at runtime (switching tiers) panics Bevy's
+        // parallel `check_dir_light_mesh_visibility`, so every non-Off tier MUST
+        // resolve to the same `num_cascades`. Differentiate tiers by distance /
+        // map size, never by cascade count.
+        let counts: Vec<usize> = ShadowQuality::ALL
+            .iter()
+            .filter_map(|quality| quality.config())
+            .map(|config| config.num_cascades)
+            .collect();
+        assert!(
+            !counts.is_empty(),
+            "expected at least one shadow-casting tier"
+        );
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "all non-Off shadow tiers must use the same cascade count \
+             (got {counts:?}); a runtime change crashes bevy_light"
+        );
+    }
 
     #[test]
     fn dev_combat_defaults_are_neutral() {

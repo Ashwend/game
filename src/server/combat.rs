@@ -423,7 +423,7 @@ impl GameServer {
     /// position so the killer can loot the corpse, flips the
     /// lifecycle to `Dead`, and ships a `PlayerKilled` to the dying
     /// client so its UI can open the death splash.
-    fn kill_player(
+    pub(super) fn kill_player(
         &mut self,
         target_id: ClientId,
         killer_id: Option<ClientId>,
@@ -476,9 +476,11 @@ impl GameServer {
         self.close_sleeper_views(target_id);
         // End any bow draw the victim had active so their draw movement-slow
         // doesn't survive into the respawn, and lift any crossbow reload slow for
-        // the same reason.
+        // the same reason. A bandage half-wrapped when they died goes the same way
+        // (and `tick_heal_over_time` drops any trickle still owed to the corpse).
         self.clear_ranged_draw(target_id);
         self.clear_reload_slow(target_id);
+        self.clear_consumable_use(target_id);
 
         // Now flip lifecycle + lock health at zero so any pending
         // damage path with stale state can't double-kill or knock the

@@ -257,9 +257,9 @@ mod tests {
             input_level: 0.0,
             playback_available: true,
         };
-        ctx.run(input, |ctx| {
+        ctx.run_ui(input, |ui| {
             options_ui(
-                ctx,
+                ui.ctx(),
                 menu,
                 settings,
                 state,

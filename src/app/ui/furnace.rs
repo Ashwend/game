@@ -285,9 +285,9 @@ mod tests {
         }
     }
 
-    fn run_ui(f: impl FnMut(&egui::Context)) -> egui::FullOutput {
+    fn run_ui(f: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {
         let ctx = egui::Context::default();
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -307,9 +307,9 @@ mod tests {
         let mut inv_ui = InventoryUiState::default();
         let mut toasts: Vec<String> = Vec::new();
 
-        let output = run_ui(|ctx| {
+        let output = run_ui(|ui| {
             furnace_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &mut runtime,
                 &local,
@@ -333,9 +333,9 @@ mod tests {
         let mut inv_ui = InventoryUiState::default();
         let mut toasts: Vec<String> = Vec::new();
 
-        let output = run_ui(|ctx| {
+        let output = run_ui(|ui| {
             furnace_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &mut runtime,
                 &local,
@@ -354,9 +354,9 @@ mod tests {
         let mut inv_ui = InventoryUiState::default();
         let mut toasts: Vec<String> = Vec::new();
 
-        let output = run_ui(|ctx| {
+        let output = run_ui(|ui| {
             furnace_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &mut runtime,
                 &local,
@@ -380,9 +380,9 @@ mod tests {
         let mut inv_ui = InventoryUiState::default();
         let mut toasts: Vec<String> = Vec::new();
 
-        let output = run_ui(|ctx| {
+        let output = run_ui(|ui| {
             furnace_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &mut runtime,
                 &local,
@@ -397,13 +397,13 @@ mod tests {
     fn draw_progress_bar_fills_and_empties() {
         // A full bar paints more shapes than an empty one (the fill rect
         // is only drawn when the fraction is > 0).
-        let full_out = run_ui(|ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let full_out = run_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 draw_progress_bar(ui, 1.0, Color32::WHITE);
             });
         });
-        let empty_out = run_ui(|ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let empty_out = run_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 draw_progress_bar(ui, 0.0, Color32::WHITE);
             });
         });

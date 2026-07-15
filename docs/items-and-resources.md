@@ -5,7 +5,8 @@ when_to_read: Before adding or editing an item, tool, ore, resource node, or gat
 sources:
   - src/items/registry.rs - ItemDefinition, REGISTERED_ITEMS, the item rows
   - src/items/materials.rs - tool_effectiveness_pct, explosive_effectiveness_pct, DestructibleMaterial
-  - src/items/tools.rs, weapons.rs, armor.rs, ranged.rs, explosives.rs - the per-category profile structs and enums
+  - src/items/tools.rs, weapons.rs, armor.rs, ranged.rs, explosives.rs, consumables.rs - the per-category profile structs and enums
+  - src/server/heal.rs - apply_player_heal, tick_consumable_uses, tick_heal_over_time
   - src/items/deployables.rs, upgrades.rs - DeployableKind, DoorVariant, DEPLOYABLE_UPGRADES
   - src/items/ids.rs - id string consts, intern_item_id/ItemId
   - src/resources.rs - ResourceNodeDefinition, RESOURCE_NODE_DEFINITIONS, ToolRequirement, next_payout_from_storage
@@ -32,11 +33,11 @@ Two compile-time `&'static` registries drive the economy:
 
 Both are slices baked into the binary. Adding an entry means editing the file and recompiling; there is no dynamic loading. This is intentional: the registries are tiny, and tying them to the binary version means a save file's string ids always resolve against a stable set on load.
 
-`src/items.rs` is now a thin front that re-exports the `src/items/` directory (`registry.rs` for the rows, `materials.rs` for the effectiveness tables and `DestructibleMaterial`, `tools.rs`/`weapons.rs`/`armor.rs`/`ranged.rs`/`explosives.rs` for the per-category profile structs and their enums, `deployables.rs`/`upgrades.rs` for `DeployableKind` and the upgrade table, `ids.rs` for the id consts, `visual.rs` for the mesh/model enums, `pickup.rs`). Call sites still say `crate::items::X`; the flat re-export means the split did not churn them.
+`src/items.rs` is now a thin front that re-exports the `src/items/` directory (`registry.rs` for the rows, `materials.rs` for the effectiveness tables and `DestructibleMaterial`, `tools.rs`/`weapons.rs`/`armor.rs`/`ranged.rs`/`explosives.rs`/`consumables.rs` for the per-category profile structs and their enums, `deployables.rs`/`upgrades.rs` for `DeployableKind` and the upgrade table, `ids.rs` for the id consts, `visual.rs` for the mesh/model enums, `pickup.rs`). Call sites still say `crate::items::X`; the flat re-export means the split did not churn them.
 
 ## ItemDefinition shape
 
-`src/items/registry.rs - ItemDefinition` has exactly these fields. The two an agent most often forgets are `description` and `equipable`; both are required on every entry or the slice fails to compile. The five `Option<*Profile>` fields are a component-style shape: an item carries exactly the profiles that apply to it (a weapon has `weapon`, an armor piece has `armor`, most rows have none).
+`src/items/registry.rs - ItemDefinition` has exactly these fields. The two an agent most often forgets are `description` and `equipable`; both are required on every entry or the slice fails to compile. The six `Option<*Profile>` fields are a component-style shape: an item carries exactly the profiles that apply to it (a weapon has `weapon`, an armor piece has `armor`, most rows have none).
 
 | field | type | role |
 | --- | --- | --- |
@@ -53,6 +54,7 @@ Both are slices baked into the binary. Adding an entry means editing the file an
 | `ranged` | `Option<RangedProfile>` | present only for the bow and crossbow (`src/items/ranged.rs`): draw/damage band, projectile speed, cooldown, ammo item. |
 | `armor` | `Option<ArmorProfile>` | present only for armor pieces (`src/items/armor.rs`): the worn `EquipmentSlot`, per-kind protection (melee / projectile / blast), and durability. |
 | `explosive` | `Option<ExplosiveProfile>` | present only for the four charges (`src/items/explosives.rs`): `ExplosiveKind`, base damage, radius, fuse ticks, delivery (`Placed` / `PlacedSticky` / `Thrown`), max health. |
+| `consumable` | `Option<ConsumableProfile>` | present only for the bandage (`src/items/consumables.rs`): charge ticks, instant heal, heal-over-time and its window, use movement slow. A consumable is held down and applies only when the charge completes **on the server's clock**. |
 | `deployable` | `Option<DeployableProfile>` | present only for placeables. |
 
 `effective_stack_size()` short-circuits to `1` when the item carries per-item durability (tools, weapons, armor: two worn items can never share a slot). Everything else stacks to its `stack_size`. The torch is an equipable deployable that is *not* a tool, so it stacks normally (`stack_size: 10`); arrows stack to 24.
@@ -70,6 +72,12 @@ Lookup goes through a build-once `OnceLock<HashMap<&'static str, &'static ItemDe
 ## ToolProfile and tier scaling
 
 `src/items/tools.rs - ToolProfile` carries `kind` (`ToolKind`), `tier: u8`, `gather_amount: u16`, `cooldown_ticks: u64`, `max_durability: Option<u32>`, and `player_damage: u32`.
+
+### Consumables (healing)
+
+The bandage is the only consumable and the only healing in the game outside a respawn. Its shape is deliberately the **bow's**, not the powder bomb's: the client sends only `UseStart` / `UseCancel`, and the server stamps the start tick, re-derives the charge from its own ticks, and applies the heal itself when it completes. There is no "apply" message, because a forged one would be a free instant heal (the bow can safely accept a client `Fire` only because a forged early release deals *less* damage; a heal has no such gradient). Releasing early is a clean cancel and costs nothing: the item is spent on completion, never on the press.
+
+Healing routes through a single `apply_player_heal` tail (`src/server/heal.rs`), mirroring the single `apply_player_damage` tail on the damage side, so the clamp to `MAX_HEALTH` and the don't-heal-a-corpse rule are stated once. The value splits into an instant chunk and a heal-over-time remainder; the trickle accumulates sub-point in a server-only field and only writes `controller.health` on whole points, or a 10-second heal would ship a replication diff every tick. Balance lives in `game_balance.rs` (`BANDAGE_*`).
 
 `ToolKind` is `Hands`, `Axe`, `Pickaxe`, `Hammer`. `Hands` is the `Default` and is synthesized via `HANDS_TOOL` when no tool is held, so the gather pipeline always has a profile to read; it is never a valid gather tool (see the crude-node rule below). The hammer never gathers and never damages (`gather_amount: 0`, `player_damage: 0`); its swing repairs and its wheel upgrades/demolishes.
 

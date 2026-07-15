@@ -177,6 +177,8 @@ impl GameServer {
             next_gather_tick: self.tick,
             next_attack_tick: self.tick,
             draw_started_tick: None,
+            use_started_tick: None,
+            heal_over_time: None,
             next_ranged_tick: self.tick,
             reload_slow_active: false,
             chat_bubble: None,

@@ -68,9 +68,9 @@ pub struct PlayerHealth(pub f32);
 #[derive(Component, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlayerChatBubble(pub Option<String>);
 
-/// Owner-only inventory state. Replication is gated to the owning
-/// client's sender via `ComponentReplicationOverrides` (see
-/// `net/host/rooms.rs`); peers never receive the wire bytes. Changes on
+/// Owner-only inventory state. Lives on the player's separate *private*
+/// mirror entity (see [`PlayerPrivateState`]), which is replicated only to
+/// the owning client; peers never receive the wire bytes. Changes on
 /// inventory mutation only.
 #[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerInventory(pub PlayerInventoryState);
@@ -150,6 +150,25 @@ pub struct PlayerPrivate {
     /// Admin `/speed` run-speed multiplier (see [`PlayerInputAck`]).
     pub run_speed_multiplier: f32,
 }
+
+/// Identity marker on the per-player **private** mirror entity.
+///
+/// Lightyear 0.28 (bevy_replicon-backed) dropped `ComponentReplicationOverrides`,
+/// the per-component per-sender gate that used to keep the four owner-only
+/// components (`PlayerInventory`, `PlayerCrafting`, `PlayerOpenContainers`,
+/// `PlayerInputAck`) off peers' wires. Those now live on this separate entity,
+/// replicated only to the owning client via a private room that only that
+/// client's sender joins (see `net/host/rooms.rs`). The marker lets the owning
+/// client find its private entity with a single query: it receives exactly one
+/// (its own), because the private room admits no other sender.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlayerPrivateState;
+
+/// Server-only link from a player mirror entity to its [`PlayerPrivateState`]
+/// entity. Not replicated; used to route the owner-only component refreshes to
+/// the private entity and to despawn it alongside the player.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct PlayerPrivateLink(pub Entity);
 
 /// Authoritative damage reduction (0–100, percent). Replicated to every
 /// peer in the same chunk room because the future HUD wants to read its
@@ -269,6 +288,15 @@ pub struct PlayerAction {
     pub model: crate::items::ItemModel,
 }
 
+/// Peer-visible bow-draw progress: `0.0` at rest / not drawing, ramping to `1.0`
+/// at full draw. Server-authoritative, computed each tick from the player's
+/// `draw_started_tick` and the held bow's draw window, so peers can animate a
+/// drawn bow (flexed limbs + pulled string) on the remote rig. Always `0.0` for
+/// an instant-fire weapon (the crossbow) and whenever no bow draw is held.
+/// Changes only while a bow is being drawn, so it sits idle at `0.0` otherwise.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlayerChargeFraction(pub f32);
+
 /// Anchor chunk for room subscription. Updated when the player crosses
 /// a chunk boundary (mirror reads `ChunkManager::player_chunk`).
 #[derive(Component, Debug, Clone, Copy)]
@@ -302,10 +330,24 @@ pub struct PlayerView {
     pub held: PlayerHeldItem,
     pub equipment_visual: PlayerEquipmentVisual,
     pub action: PlayerAction,
+    pub charge_fraction: PlayerChargeFraction,
 }
 
 pub fn spawn_player_entity(world: &mut World, view: PlayerView, chunk: ChunkCoord) -> Entity {
     let id = view.client_id;
+    // Owner-only state lives on a SEPARATE private mirror entity so it can be
+    // replicated to the owner alone (peers never share its private room). Its
+    // owner-gated replication is wired by `attach_player_replication`, which
+    // reaches it through the `PlayerPrivateLink` below.
+    let private_entity = world
+        .spawn((
+            PlayerPrivateState,
+            view.inventory,
+            view.crafting,
+            view.containers,
+            view.input_ack,
+        ))
+        .id();
     let entity = world
         .spawn((
             Player {
@@ -316,17 +358,19 @@ pub fn spawn_player_entity(world: &mut World, view: PlayerView, chunk: ChunkCoor
             view.pose,
             view.health,
             view.chat_bubble,
-            view.inventory,
-            view.crafting,
-            view.containers,
-            view.input_ack,
             view.armor,
             view.lifecycle,
             view.sleeping,
             // Peer-visible cosmetic bundle grouped into one nested tuple so the
             // top-level spawn stays within Bevy's 15-element bundle-tuple limit.
-            (view.held, view.equipment_visual, view.action),
+            (
+                view.held,
+                view.equipment_visual,
+                view.action,
+                view.charge_fraction,
+            ),
             PlayerChunk(chunk),
+            PlayerPrivateLink(private_entity),
         ))
         .id();
     world.resource_mut::<PlayerIndex>().insert(id, entity);
@@ -370,6 +414,7 @@ mod tests {
             held: PlayerHeldItem::default(),
             equipment_visual: PlayerEquipmentVisual::default(),
             action: PlayerAction::default(),
+            charge_fraction: PlayerChargeFraction::default(),
         }
     }
 
@@ -381,7 +426,12 @@ mod tests {
 
         let profile = world.get::<PlayerProfile>(entity).expect("profile");
         assert_eq!(profile.name, "Alice");
-        let ack = world.get::<PlayerInputAck>(entity).expect("input ack");
+        // Owner-only components now live on the separate private mirror entity.
+        let private = world
+            .get::<PlayerPrivateLink>(entity)
+            .expect("private link")
+            .0;
+        let ack = world.get::<PlayerInputAck>(private).expect("input ack");
         assert_eq!(ack.last_processed_input, 0);
         let armor = world.get::<PlayerArmor>(entity).expect("armor");
         assert_eq!(armor.0, 0);

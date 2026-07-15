@@ -392,9 +392,9 @@ mod tests {
     use super::*;
     use crate::{items::COAL_ID, protocol::INVENTORY_SLOT_COUNT};
 
-    fn run_ui(f: impl FnMut(&egui::Context)) -> egui::FullOutput {
+    fn run_ui(f: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {
         let ctx = egui::Context::default();
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -507,8 +507,8 @@ mod tests {
         let mut inv_ui = InventoryUiState::default();
         let slot = UnifiedSlotRef::Player(ItemContainerSlot::actionbar(0));
         let stack = ItemStack::new(COAL_ID, 4);
-        let output = run_ui(|ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let output = run_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 draw_slot(
                     ui,
                     slot,
@@ -532,8 +532,8 @@ mod tests {
         let mut inv_ui = InventoryUiState::default();
         let slot = UnifiedSlotRef::Player(ItemContainerSlot::inventory(0));
         let stack = ItemStack::new(COAL_ID, 2);
-        let output = run_ui(|ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let output = run_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 draw_slot(
                     ui,
                     slot,
@@ -558,7 +558,7 @@ mod tests {
         // The central panel's first widget lands near the top-left; aim
         // the pointer there.
         let ctx = egui::Context::default();
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -567,10 +567,10 @@ mod tests {
                 events: vec![egui::Event::PointerMoved(egui::pos2(20.0, 20.0))],
                 ..Default::default()
             },
-            |ctx| {
+            |ui| {
                 egui::Area::new("slot_test_area".into())
                     .fixed_pos(egui::pos2(0.0, 0.0))
-                    .show(ctx, |ui| {
+                    .show(ui.ctx(), |ui| {
                         draw_slot(
                             ui,
                             slot,
@@ -594,14 +594,14 @@ mod tests {
         // `paint_slot` chooses a brighter fill for the active slot, so
         // active vs idle differ in their painted output.
         let stack = ItemStack::new(COAL_ID, 1);
-        let idle = run_ui(|ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let idle = run_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let (_, rect) = ui.allocate_space(Vec2::splat(SLOT_SIZE));
                 paint_slot(ui, rect, Some(&stack), None, false, false, false, 0.0);
             });
         });
-        let active = run_ui(|ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let active = run_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let (_, rect) = ui.allocate_space(Vec2::splat(SLOT_SIZE));
                 paint_slot(ui, rect, Some(&stack), None, true, false, false, 0.0);
             });
@@ -616,14 +616,14 @@ mod tests {
         // A flash strength > 0 paints an extra overlay rect on top of the
         // base slot, so it yields more shapes than an unflashed slot.
         let stack = ItemStack::new(COAL_ID, 1);
-        let plain = run_ui(|ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let plain = run_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let (_, rect) = ui.allocate_space(Vec2::splat(SLOT_SIZE));
                 paint_slot(ui, rect, Some(&stack), None, false, false, false, 0.0);
             });
         });
-        let flashing = run_ui(|ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let flashing = run_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let (_, rect) = ui.allocate_space(Vec2::splat(SLOT_SIZE));
                 paint_slot(ui, rect, Some(&stack), None, false, false, false, 1.0);
             });

@@ -13,9 +13,8 @@ use crate::world::ChunkCoord;
 use super::AuthoritativeServer;
 use super::rooms::{
     attach_player_replication, attach_room_gated_replication, move_entity_between_rooms,
-    rebind_player_owner_if_changed,
+    reaffirm_entity_room,
 };
-use super::routing::ServerConnections;
 
 /// Max number of *fresh* resource-node mirror entities to spawn in a single
 /// sync pass. World-load-on-connect seeds every node id dirty at once (~1800
@@ -329,19 +328,27 @@ pub(super) fn sync_projectile_entities(world: &mut World) {
                     *transform = new_transform;
                 }
                 // Re-anchor room membership as the arrow crosses chunk borders so
-                // observing clients gain/lose visibility at the boundary.
+                // observing clients gain/lose visibility at the boundary. When the
+                // chunk is unchanged, RE-AFFIRM the same room instead: a rested
+                // arrow stops moving (so it never crosses a border again), and the
+                // 0.28 room model latches visibility only on a Rooms (re)insert, so
+                // without this its visibility freezes at the rest tick and a
+                // stationary shooter never sees it stick. `tick_projectiles` keeps
+                // a freshly-rested arrow dirty for a short window so this runs a few
+                // times after client subscriptions settle.
                 let old_chunk = world
                     .get::<crate::server::ProjectileChunk>(entity)
                     .map(|c| c.0);
-                if let Some(prev) = old_chunk
-                    && prev != live_chunk
-                {
-                    move_entity_between_rooms(world, entity, prev, live_chunk);
-                    if let Some(mut chunk_marker) =
-                        world.get_mut::<crate::server::ProjectileChunk>(entity)
-                    {
-                        chunk_marker.0 = live_chunk;
+                match old_chunk {
+                    Some(prev) if prev != live_chunk => {
+                        move_entity_between_rooms(world, entity, prev, live_chunk);
+                        if let Some(mut chunk_marker) =
+                            world.get_mut::<crate::server::ProjectileChunk>(entity)
+                        {
+                            chunk_marker.0 = live_chunk;
+                        }
                     }
+                    _ => reaffirm_entity_room(world, entity, live_chunk),
                 }
             }
             None => {
@@ -551,6 +558,18 @@ pub(super) fn sync_player_entities(world: &mut World) {
             .collect()
     };
     for id in stale {
+        // Despawn the player's private mirror entity alongside the public one.
+        // The private entity has no id-index of its own; reach it through the
+        // player's `PlayerPrivateLink`. The per-client private-room mapping is
+        // kept (keyed by client id) so a reconnect reuses the same private room,
+        // matching how chunk rooms are never freed.
+        if let Some(player_entity) = world.resource::<crate::server::PlayerIndex>().get(id)
+            && let Some(private) = world
+                .get::<crate::server::PlayerPrivateLink>(player_entity)
+                .map(|link| link.0)
+        {
+            world.despawn(private);
+        }
         crate::server::despawn_player_entity(world, id);
     }
 
@@ -560,15 +579,15 @@ pub(super) fn sync_player_entities(world: &mut World) {
             .get(view.client_id);
         match existing {
             Some(entity) => {
-                // Re-point the owner-only PlayerPrivate override if this
-                // player's sender changed (a reconnect that woke a sleeping
-                // body keeps this same mirror entity but gets a brand-new
-                // sender), otherwise the woken player's inventory/crafting
-                // never replicates to their new connection.
-                let current_sender = world
-                    .resource::<ServerConnections>()
-                    .entity_for_client(view.client_id);
-                rebind_player_owner_if_changed(world, entity, current_sender);
+                // Owner-only components live on the player's separate private
+                // mirror entity; refresh them there. The private entity and its
+                // private room persist across a reconnect (a woken sleeping body
+                // keeps the same mirror entities), and the new sender re-joins the
+                // private room in `update_client_room_subscriptions`, so no
+                // per-sender re-binding is needed here anymore.
+                let private_entity = world
+                    .get::<crate::server::PlayerPrivateLink>(entity)
+                    .map(|link| link.0);
                 // Peer-visible components. The pose ticks every tick
                 // while moving; profile/health/bubble only on real
                 // changes.
@@ -631,40 +650,50 @@ pub(super) fn sync_player_entities(world: &mut World) {
                     crate::server::PlayerAction,
                     view.action
                 );
-                // Owner-only components, replicated to the owning
-                // sender only.
                 refresh_player_component!(
                     world,
                     entity,
                     view.client_id,
-                    "PlayerInventory    ",
-                    crate::server::PlayerInventory,
-                    view.inventory
+                    "PlayerChargeFraction   ",
+                    crate::server::PlayerChargeFraction,
+                    view.charge_fraction
                 );
-                refresh_player_component!(
-                    world,
-                    entity,
-                    view.client_id,
-                    "PlayerCrafting     ",
-                    crate::server::PlayerCrafting,
-                    view.crafting
-                );
-                refresh_player_component!(
-                    world,
-                    entity,
-                    view.client_id,
-                    "PlayerOpenContainers",
-                    crate::server::PlayerOpenContainers,
-                    view.containers
-                );
-                refresh_player_component!(
-                    world,
-                    entity,
-                    view.client_id,
-                    "PlayerInputAck     ",
-                    crate::server::PlayerInputAck,
-                    view.input_ack
-                );
+                // Owner-only components: refreshed on the private mirror entity,
+                // which is replicated to the owning client alone.
+                if let Some(private_entity) = private_entity {
+                    refresh_player_component!(
+                        world,
+                        private_entity,
+                        view.client_id,
+                        "PlayerInventory    ",
+                        crate::server::PlayerInventory,
+                        view.inventory
+                    );
+                    refresh_player_component!(
+                        world,
+                        private_entity,
+                        view.client_id,
+                        "PlayerCrafting     ",
+                        crate::server::PlayerCrafting,
+                        view.crafting
+                    );
+                    refresh_player_component!(
+                        world,
+                        private_entity,
+                        view.client_id,
+                        "PlayerOpenContainers",
+                        crate::server::PlayerOpenContainers,
+                        view.containers
+                    );
+                    refresh_player_component!(
+                        world,
+                        private_entity,
+                        view.client_id,
+                        "PlayerInputAck     ",
+                        crate::server::PlayerInputAck,
+                        view.input_ack
+                    );
+                }
                 // Refresh armor. Carries the melee column of the worn
                 // set's protection, recomputed server-side on every
                 // equip/unequip or durability wear, so the HUD armor
@@ -748,11 +777,8 @@ pub(super) fn sync_player_entities(world: &mut World) {
                             view.pose.position.z,
                         )
                     });
-                let owner_sender = world
-                    .resource::<ServerConnections>()
-                    .entity_for_client(view.client_id);
                 let entity = crate::server::spawn_player_entity(world, view, chunk);
-                attach_player_replication(world, entity, chunk, owner_sender);
+                attach_player_replication(world, entity, chunk);
             }
         }
     }
@@ -863,20 +889,11 @@ pub(super) fn sync_loot_bag_entities(world: &mut World) {
                     });
                 let entity = crate::server::spawn_loot_bag_entity(world, view, chunk);
                 attach_room_gated_replication(world, entity, chunk);
-                // Release builds keep the contents off the wire: no
-                // client-side consumer exists and replicating every
-                // bag's full slot list to every peer in the room is
-                // both bandwidth waste and an information leak. Trace
-                // builds leave it enabled for MUTATE/RECV coverage.
-                #[cfg(not(feature = "replication-trace"))]
-                if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
-                    entity_mut.insert(
-                        lightyear::prelude::ComponentReplicationOverrides::<
-                            crate::server::LootBagContents,
-                        >::default()
-                        .disable_all(),
-                    );
-                }
+                // `LootBagContents` is registered for replication only in trace
+                // builds (see `net/channels.rs`), so release builds never ship it
+                // to the wire, which is what the old per-entity
+                // `ComponentReplicationOverrides::disable_all()` gate achieved
+                // before lightyear 0.28 removed it.
             }
         }
     }

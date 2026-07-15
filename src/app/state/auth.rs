@@ -27,4 +27,13 @@ impl AuthFlow {
     pub(crate) fn is_authenticated(&self) -> bool {
         matches!(self, Self::Authenticated)
     }
+
+    /// True while a silent restore or an explicit sign-in is still resolving,
+    /// i.e. the outcome (menu vs login prompt) is not yet known. The startup
+    /// screen holds the opaque loading cover over the 3D backdrop while this is
+    /// true, so the menu backdrop never peeks out from behind the "Signing you
+    /// in…" splash before auth settles (see `MenuBackdropVisibility::cover_alpha`).
+    pub(crate) fn is_in_flight(&self) -> bool {
+        matches!(self, Self::Verifying(_) | Self::Authenticating(_))
+    }
 }

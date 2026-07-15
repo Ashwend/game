@@ -107,7 +107,7 @@ mod tests {
 
     fn run_tab(settings: &mut ClientSettings) -> (egui::Context, egui::FullOutput) {
         let ctx = egui::Context::default();
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -115,8 +115,8 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     render(ui, settings);
                 });
             },
@@ -136,8 +136,8 @@ mod tests {
     #[test]
     fn test_sequences_space_samples_after_the_click_clears() {
         let ctx = egui::Context::default();
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 queue_test_sequence(ui, &FOOTSTEPS_SAMPLE_SEQUENCE, TEST_FOOTSTEP_SPACING_SECS);
             });
         });

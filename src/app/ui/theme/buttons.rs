@@ -103,7 +103,7 @@ pub(in crate::app::ui) fn compact_button_with_state(
 
 pub(in crate::app::ui) fn compact_button_in_rect(
     ui: &mut egui::Ui,
-    id_source: impl Hash,
+    id_source: impl Hash + std::fmt::Debug,
     rect: egui::Rect,
     label: &str,
     kind: ButtonKind,
@@ -113,7 +113,7 @@ pub(in crate::app::ui) fn compact_button_in_rect(
 
 pub(in crate::app::ui) fn compact_button_in_rect_with_state(
     ui: &mut egui::Ui,
-    id_source: impl Hash,
+    id_source: impl Hash + std::fmt::Debug,
     rect: egui::Rect,
     label: &str,
     kind: ButtonKind,

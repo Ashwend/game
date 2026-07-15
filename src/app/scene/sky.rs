@@ -87,6 +87,24 @@ const DAYLIGHT_PLATEAU_ELEVATION: f32 = 0.35;
 /// uses 10.0 as a reference.
 pub(crate) const SUN_SOFT_SHADOW_SIZE: f32 = 10.0;
 
+/// Apparent diameter of the visible sun disc, in radians. Earth's real sun is
+/// ~0.0093 rad (`SunDisk::EARTH`), which reads as a small pinprick under the
+/// stylised sky. We render it much larger so it feels like a proper sun.
+///
+/// Bigger is also *steadier*: a wider disc covers more pixels, so its
+/// partial-coverage boundary is a smaller fraction of the whole and winks far
+/// less as silhouette edges sweep across it during a strafe (a near-sub-pixel
+/// overexposed disc is a nasty bloom firefly). This only changes the disc the
+/// atmosphere draws (`SunDisk`), not the light's illuminance or shadows.
+const SUN_DISK_ANGULAR_SIZE: f32 = 0.055;
+
+/// Brightness multiplier for the sun disc. `1.0` is physical; `>1.0` overexposes
+/// it so it clips to white and, with bloom on the camera, blooms into a soft
+/// glare halo. Kept overexposed (so it clearly glares) but pulled back from an
+/// extreme value so it feeds the bloom chain less violently as it grazes edges;
+/// the disc reads big-and-bright via the wider `SUN_DISK_ANGULAR_SIZE` instead.
+const SUN_DISK_INTENSITY: f32 = 4.5;
+
 /// Peak moonlight illuminance. Real moonlight is ~0.05 lux; we cheat up hugely
 /// so the player can navigate at night. Tuning knob for night brightness.
 const MOON_PEAK_ILLUMINANCE: f32 = 1_300.0;
@@ -423,7 +441,7 @@ pub(crate) fn setup_sky(
             // Seed only; `update_sky_system` overwrites it from `DevLighting` next frame.
             illuminance: DevLighting::default().sun_peak_illuminance * 0.5,
             color: Color::WHITE,
-            shadows_enabled: true,
+            shadow_maps_enabled: true,
             // PCSS soft shadows: a distance-widening penumbra so the long low-sun
             // tree shadows soften to a gradient instead of a hard line. See
             // `SUN_SOFT_SHADOW_SIZE` + the `experimental_pbr_pcss` feature.
@@ -432,7 +450,13 @@ pub(crate) fn setup_sky(
             shadow_normal_bias: 1.8,
             ..default()
         },
-        SunDisk::EARTH,
+        // A larger, overexposed disc so the sun reads as a glowing sun rather
+        // than an Earth-accurate pinprick; bloom turns the overexposure into a
+        // glare halo. See `SUN_DISK_ANGULAR_SIZE` / `SUN_DISK_INTENSITY`.
+        SunDisk {
+            angular_size: SUN_DISK_ANGULAR_SIZE,
+            intensity: SUN_DISK_INTENSITY,
+        },
         // Cascade split comes from the default shadow tier's `ShadowConfig` so it
         // matches what `apply_graphics_settings_system` re-applies on the first
         // settings frame; no more hardcoded literals that drift from the active
@@ -461,7 +485,7 @@ pub(crate) fn setup_sky(
         DirectionalLight {
             illuminance: 0.0,
             color: Color::srgb(0.70, 0.78, 1.00),
-            shadows_enabled: false,
+            shadow_maps_enabled: false,
             ..default()
         },
         // Also light the viewmodel layer so the in-hand tool dims with the moon at
@@ -1102,7 +1126,7 @@ pub(crate) fn update_meteor_sky_system(
                 (METEOR_CORONA_ENTRY, METEOR_CORONA_IMPACT)
             }
         };
-        if let Some(material) = materials.get_mut(&material.0) {
+        if let Some(mut material) = materials.get_mut(&material.0) {
             let color = entry.lerp(impact, descent.clamp(0.0, 1.0)) * flicker;
             material.base_color = Color::linear_rgb(color.x, color.y, color.z);
         }
@@ -1280,7 +1304,7 @@ fn update_meteor_trail(
         transform.rotation = Quat::from_rotation_arc(Vec3::Y, axis);
         transform.scale = Vec3::new(width, seg_lengths[k], width);
 
-        if let Some(material) = materials.get_mut(&material.0) {
+        if let Some(mut material) = materials.get_mut(&material.0) {
             // Intensity falls root -> tip; hue reddens root -> mid -> tip.
             let kt = k as f32 / (n as f32 - 1.0);
             let intensity = lerp(root_intensity, tip_intensity, kt);

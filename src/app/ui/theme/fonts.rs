@@ -62,8 +62,10 @@ mod tests {
         // `Context::fonts` panics until the first `run`, and `set_fonts`
         // takes effect at the next `begin_pass`, so probe inside a pass.
         let mut registered = false;
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            registered = ctx.fonts(|f| f.families().contains(&FontFamily::Name(TITLE_FONT.into())));
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            registered = ui
+                .ctx()
+                .fonts(|f| f.families().contains(&FontFamily::Name(TITLE_FONT.into())));
         });
         assert!(registered, "title font family was not registered");
     }

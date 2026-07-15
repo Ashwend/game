@@ -224,9 +224,9 @@ mod tests {
         }
     }
 
-    fn run_ui(f: impl FnMut(&egui::Context)) -> egui::FullOutput {
+    fn run_ui(f: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {
         let ctx = egui::Context::default();
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -251,7 +251,7 @@ mod tests {
     fn actionbar_records_rect_when_inventory_present() {
         let local = local_player(Some(PlayerInventoryState::empty()));
         let mut inv_ui = InventoryUiState::default();
-        run_ui(|ctx| draw_actionbar(ctx, &local, &mut inv_ui, true, false, false));
+        run_ui(|ui| draw_actionbar(ui.ctx(), &local, &mut inv_ui, true, false, false));
         assert!(inv_ui.actionbar_rect.is_some());
     }
 
@@ -261,7 +261,7 @@ mod tests {
         // early-returns and records no rect.
         let local = local_player(None);
         let mut inv_ui = InventoryUiState::default();
-        run_ui(|ctx| draw_actionbar(ctx, &local, &mut inv_ui, true, false, false));
+        run_ui(|ui| draw_actionbar(ui.ctx(), &local, &mut inv_ui, true, false, false));
         assert!(inv_ui.actionbar_rect.is_none());
     }
 
@@ -275,15 +275,15 @@ mod tests {
         let full = local_player(Some(full_inv));
 
         let mut inv_ui_a = InventoryUiState::default();
-        let empty_out = run_ui(|ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let empty_out = run_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 draw_inventory_grid(ui, &empty, &mut inv_ui_a, false);
             });
         });
 
         let mut inv_ui_b = InventoryUiState::default();
-        let full_out = run_ui(|ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let full_out = run_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 draw_inventory_grid(ui, &full, &mut inv_ui_b, false);
             });
         });

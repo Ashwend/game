@@ -43,6 +43,15 @@ pub(super) use crate::game_balance::{
 };
 use crate::protocol::SERVER_TICK_RATE_HZ;
 
+/// Ticks after an arrow comes to rest during which the mirror keeps re-affirming
+/// its room membership (see `sync_projectile_entities`). The 0.28 room model
+/// latches per-client visibility on a `Rooms` (re)insert and never recomputes it
+/// per tick; a rested arrow stops moving (so it never re-anchors on its own), so
+/// without this window its visibility would freeze at the rest tick and a
+/// stationary shooter would never see it stick. ~1 s at the server tick rate is
+/// ample for client AoI subscriptions to settle after the shot lands.
+const PROJECTILE_REST_REAFFIRM_TICKS: u64 = SERVER_TICK_RATE_HZ as u64;
+
 /// What a projectile is, which decides its impact behaviour. An arrow damages
 /// on contact and sticks recoverably on a world rest; a thrown explosive deals
 /// NO contact damage: its fuse is lit on the throw, it bounces and rolls off
@@ -467,6 +476,25 @@ impl GameServer {
         for id in expired {
             self.stuck_projectiles.remove(&id);
             self.remove_projectile(id);
+        }
+
+        // Keep freshly-rested arrows in the mirror's dirty set for a short window
+        // so `sync_projectile_entities` re-affirms their room membership a few
+        // times after client AoI subscriptions settle. Without this a rested arrow
+        // never re-anchors (the loop below skips it forever), so under the 0.28
+        // latch-on-(re)insert visibility model a stationary shooter can miss its
+        // stick entirely. See `PROJECTILE_REST_REAFFIRM_TICKS`.
+        let stuck_ttl_ticks = (PROJECTILE_STUCK_TTL_SECONDS * SERVER_TICK_RATE_HZ) as u64;
+        let reaffirm: Vec<ProjectileId> = self
+            .stuck_projectiles
+            .iter()
+            .filter_map(|(&id, &despawn_tick)| {
+                let rest_tick = despawn_tick.saturating_sub(stuck_ttl_ticks);
+                (self.tick.saturating_sub(rest_tick) < PROJECTILE_REST_REAFFIRM_TICKS).then_some(id)
+            })
+            .collect();
+        for id in reaffirm {
+            self.projectiles.mark_dirty(&id);
         }
 
         if self.projectiles.is_empty() {

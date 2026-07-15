@@ -298,9 +298,15 @@ mod tests {
         let ctx = egui::Context::default();
         let mut output = None;
 
-        let _ = ctx.run(raw_input(), |ctx| {
+        let _ = ctx.run_ui(raw_input(), |ui| {
             output = Some(confirmation_modal(
-                ctx, "open", "Title", "Body", "Confirm", "Cancel", true,
+                ui.ctx(),
+                "open",
+                "Title",
+                "Body",
+                "Confirm",
+                "Cancel",
+                true,
             ));
         });
 
@@ -314,11 +320,17 @@ mod tests {
         let ctx = egui::Context::default();
         let mut output = None;
 
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             raw_input_with_events(vec![key_press(egui::Key::Enter)]),
-            |ctx| {
+            |ui| {
                 output = Some(confirmation_modal(
-                    ctx, "enter", "Title", "Body", "Confirm", "Cancel", true,
+                    ui.ctx(),
+                    "enter",
+                    "Title",
+                    "Body",
+                    "Confirm",
+                    "Cancel",
+                    true,
                 ));
             },
         );

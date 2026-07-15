@@ -5,7 +5,8 @@ use bevy_egui::egui;
 
 use crate::{
     app::{
-        scene::{MainCamera, NetworkPlayer, PLAYER_HEAD_TOP_LOCAL_Y},
+        scene::{MainCamera, NetworkPlayer},
+        systems::{RemoteLocomotion, remote_head_anchor_local},
         voice::VoiceState,
     },
     protocol::{ClientId, MAX_HEALTH},
@@ -328,7 +329,9 @@ fn health_fill_color(fraction: f32) -> egui::Color32 {
 /// health, and chat bubble, without that pairing, the overlay would have no
 /// name/health/bubble to display.
 pub(crate) fn collect_peer_overlay_entries<'a>(
-    network_players: impl IntoIterator<Item = (&'a NetworkPlayer, &'a GlobalTransform)>,
+    network_players: impl IntoIterator<
+        Item = (&'a NetworkPlayer, &'a GlobalTransform, &'a RemoteLocomotion),
+    >,
     replicated_players: impl IntoIterator<
         Item = (
             &'a Player,
@@ -356,11 +359,14 @@ pub(crate) fn collect_peer_overlay_entries<'a>(
 
     network_players
         .into_iter()
-        .filter_map(|(player, transform)| {
+        .filter_map(|(player, transform, loco)| {
             let (profile, health, chat_bubble) = state_by_id.remove(&player.client_id)?;
-            let translation = transform.translation();
-            let head_world =
-                translation + Vec3::Y * (PLAYER_HEAD_TOP_LOCAL_Y + NAMETAG_HEAD_CLEARANCE_M);
+            // Anchor to the leaned head (the head rides the pitching Body child, so
+            // it swings in the peer's local Z as they look up/down); project the
+            // root-local anchor through the root GlobalTransform (yaw + world pos),
+            // then float the strip a fixed clearance above it in world space.
+            let head_world = transform.transform_point(remote_head_anchor_local(loco.pitch))
+                + Vec3::Y * NAMETAG_HEAD_CLEARANCE_M;
             Some(PeerOverlayEntry {
                 head_world,
                 client_id: player.client_id,
@@ -378,7 +384,15 @@ pub(crate) fn collect_peer_overlay_entries<'a>(
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct PeerOverlayParams<'w, 's> {
     pub(crate) camera: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<MainCamera>>,
-    pub(crate) network_players: Query<'w, 's, (&'static NetworkPlayer, &'static GlobalTransform)>,
+    pub(crate) network_players: Query<
+        'w,
+        's,
+        (
+            &'static NetworkPlayer,
+            &'static GlobalTransform,
+            &'static RemoteLocomotion,
+        ),
+    >,
     pub(crate) replicated_players: Query<
         'w,
         's,
@@ -478,9 +492,9 @@ mod tests {
     #[test]
     fn peer_overlay_without_camera_draws_nothing() {
         let ctx = egui::Context::default();
-        let output = ctx.run(raw_input(), |ctx| {
+        let output = ctx.run_ui(raw_input(), |ui| {
             peer_overlay_ui(
-                ctx,
+                ui.ctx(),
                 PeerOverlay {
                     camera: None,
                     peers: Vec::new(),
@@ -498,13 +512,13 @@ mod tests {
         let regular = profile("Mortal", false);
         let admin = profile("Overlord", true);
 
-        let regular_out = ctx.run(raw_input(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let regular_out = ctx.run_ui(raw_input(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 nametag(ui, &regular, MAX_HEALTH, 1.0, false);
             });
         });
-        let admin_out = ctx.run(raw_input(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let admin_out = ctx.run_ui(raw_input(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 nametag(ui, &admin, MAX_HEALTH, 1.0, false);
             });
         });
@@ -519,15 +533,15 @@ mod tests {
         let person = profile("Speaker", false);
 
         let ctx_quiet = egui::Context::default();
-        let quiet = ctx_quiet.run(raw_input(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let quiet = ctx_quiet.run_ui(raw_input(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 nametag(ui, &person, MAX_HEALTH, 1.0, false);
             });
         });
 
         let ctx_loud = egui::Context::default();
-        let loud = ctx_loud.run(raw_input(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let loud = ctx_loud.run_ui(raw_input(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 nametag(ui, &person, MAX_HEALTH, 1.0, true);
             });
         });
@@ -538,16 +552,16 @@ mod tests {
     #[test]
     fn chat_bubble_renders_text_but_skips_blank() {
         let ctx = egui::Context::default();
-        let drawn = ctx.run(raw_input(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let drawn = ctx.run_ui(raw_input(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 chat_bubble(ui, "hello there", 1.0);
             });
         });
         assert!(!drawn.shapes.is_empty());
 
         let ctx_blank = egui::Context::default();
-        let blank = ctx_blank.run(raw_input(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let blank = ctx_blank.run_ui(raw_input(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 chat_bubble(ui, "   ", 1.0);
             });
         });
@@ -555,8 +569,8 @@ mod tests {
         // The CentralPanel itself still paints its background, so compare
         // against an empty panel rather than asserting zero shapes.
         let ctx_empty = egui::Context::default();
-        let empty = ctx_empty.run(raw_input(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |_ui| {});
+        let empty = ctx_empty.run_ui(raw_input(), |ui| {
+            egui::CentralPanel::default().show(ui, |_ui| {});
         });
         assert_eq!(blank.shapes.len(), empty.shapes.len());
     }
@@ -603,10 +617,11 @@ mod tests {
         let np_remote = NetworkPlayer { client_id: 2 };
         let np_local = NetworkPlayer { client_id: 1 };
         let np_dead = NetworkPlayer { client_id: 3 };
+        let loco = RemoteLocomotion::default();
         let network = vec![
-            (&np_remote, &transform),
-            (&np_local, &transform),
-            (&np_dead, &transform),
+            (&np_remote, &transform, &loco),
+            (&np_local, &transform, &loco),
+            (&np_dead, &transform, &loco),
         ];
 
         let entries = collect_peer_overlay_entries(network, replicated, Some(local_id), &voice);

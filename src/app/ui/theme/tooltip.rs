@@ -28,7 +28,7 @@ pub(in crate::app::ui) fn wow_tooltip(
 
 pub(in crate::app::ui) fn anchored_wow_tooltip(
     ctx: &egui::Context,
-    id: impl std::hash::Hash,
+    id: impl std::hash::Hash + std::fmt::Debug,
     anchor: egui::Pos2,
     title: &str,
     body: &str,
@@ -74,7 +74,7 @@ mod tests {
     fn tooltip_body_renders_in_headless_context() {
         let ctx = egui::Context::default();
 
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -82,11 +82,11 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     draw_wow_tooltip(ui, "Title", "Body");
                     anchored_wow_tooltip(
-                        ctx,
+                        ui.ctx(),
                         "anchored_test_tooltip",
                         egui::pos2(12.0, 18.0),
                         "Title",

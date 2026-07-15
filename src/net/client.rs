@@ -19,7 +19,10 @@ use lightyear::prelude::{
 use crate::{
     auth::{AuthMode, AuthenticatedUser},
     net::{
-        channels::{LIGHTYEAR_PROTOCOL_ID, PrivateKeyContext, private_key, send_client_message},
+        channels::{
+            LIGHTYEAR_PROTOCOL_ID, NETCODE_CLIENT_TIMEOUT_SECS, PrivateKeyContext, private_key,
+            send_client_message,
+        },
         host::{AutoSaveSink, GameServerHandle, spawn_loopback_server},
     },
     protocol::{ClientMessage, GAME_VERSION, PROTOCOL_VERSION, SERVER_TICK_RATE_HZ, ServerMessage},
@@ -407,7 +410,13 @@ fn process_pending_connect_system(
             private_key: private_key(pending.key_context),
             protocol_id: LIGHTYEAR_PROTOCOL_ID,
         },
-        client::NetcodeConfig::default(),
+        // The client bakes this timeout into its connect token (both sides honor
+        // it). Default is 3s; raised so a slow initial world stream can't self-
+        // disconnect. See `NETCODE_CLIENT_TIMEOUT_SECS`.
+        client::NetcodeConfig {
+            client_timeout_secs: NETCODE_CLIENT_TIMEOUT_SECS,
+            ..Default::default()
+        },
     );
     let netcode = match netcode {
         Ok(netcode) => netcode,
@@ -439,7 +448,7 @@ fn process_pending_connect_system(
             // buffer and apply incoming entity/component diffs. The
             // sibling `ReplicationSender` is installed on the server's
             // `ClientOf` entity inside the host app.
-            ReplicationReceiver::default(),
+            ReplicationReceiver,
             ClientAuthState::default(),
         ))
         .id();

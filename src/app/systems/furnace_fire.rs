@@ -131,7 +131,7 @@ pub(crate) fn sync_furnace_fire(
                         intensity: FURNACE_LIGHT_BASE_INTENSITY,
                         range: 4.5,
                         radius: 0.10,
-                        shadows_enabled: false,
+                        shadow_maps_enabled: false,
                         ..default()
                     },
                     // Local offset matches the furnace mouth: low in the cavity

@@ -919,10 +919,12 @@ pub(crate) fn impact_sound_for(model: ItemModel, surface: SurfaceMaterial) -> Op
         // An arrow/bolt lodging in the world gets its own cue on every surface;
         // the tool pools read as a pickaxe chipping rock (owner report).
         ItemModel::Bow | ItemModel::Crossbow => return Some(SoundId::ImpactArrowWorld),
-        // No dedicated impact clip for the empty-hand / deployable punch, or the
+        // No dedicated impact clip for the empty-hand / deployable punch, the
         // thrown bomb (its damage is the blast, whose cue is the explosion audio,
-        // not a swing-contact clip).
-        ItemModel::Bag | ItemModel::Deployable | ItemModel::ThrownBomb => return None,
+        // not a swing-contact clip), or the bandage (it never strikes anything).
+        ItemModel::Bag | ItemModel::Deployable | ItemModel::ThrownBomb | ItemModel::Bandage => {
+            return None;
+        }
     };
     match (heavy_pick, surface) {
         (false, SurfaceMaterial::Wood) => Some(SoundId::ImpactAxeOnWood),
@@ -954,10 +956,10 @@ pub(crate) fn impact_sound_for_player(model: ItemModel) -> Option<SoundId> {
         // Ranged hits share the generic blunt thump as a placeholder; P3b's feel
         // pass gives arrow impacts their own cue.
         ItemModel::Bow | ItemModel::Crossbow => Some(SoundId::ImpactPlayerBlunt),
-        // Bare hands / deployable-in-hand can't damage players, and a thrown bomb
-        // does no contact damage (its blast is the damage), so none produce a
-        // PvP-contact cue.
-        ItemModel::Bag | ItemModel::Deployable | ItemModel::ThrownBomb => None,
+        // Bare hands / deployable-in-hand can't damage players, a thrown bomb
+        // does no contact damage (its blast is the damage), and a bandage does no
+        // damage at all, so none produce a PvP-contact cue.
+        ItemModel::Bag | ItemModel::Deployable | ItemModel::ThrownBomb | ItemModel::Bandage => None,
     }
 }
 

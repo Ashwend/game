@@ -390,13 +390,13 @@ fn apply_fade_out(
     // the Blend pass (`ToonMaterial::alpha_mode`); up to this point it was opaque
     // so it occluded the grass correctly, and by now it's lying flat on the
     // ground dissolving, so the brief transparent-phase sorting is not visible.
-    if let Some(material) = materials.get_mut(&tree.material) {
+    if let Some(mut material) = materials.get_mut(&tree.material) {
         material.fade = alpha;
     }
     // Dissolve the solid canopy alongside the trunk: the same `fade` ramp fades
     // the whole leafy mass smoothly to nothing.
     if let Some(canopy_material) = tree.canopy_material.as_ref()
-        && let Some(material) = materials.get_mut(canopy_material)
+        && let Some(mut material) = materials.get_mut(canopy_material)
     {
         material.fade = alpha;
     }

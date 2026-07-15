@@ -72,8 +72,12 @@ pub(crate) fn remote_swing_arm_pose(model: ItemModel, phase: f32) -> RemoteArmPo
         // The crossbow reads as a level shoulder brace with a recoil kick on fire,
         // then a dip-and-crank reload cycle.
         ItemModel::Crossbow => crossbow_arm_pose(phase),
-        // Bare hands / a held bundle read as the short straight jab.
-        ItemModel::Bag | ItemModel::Deployable => hands_arm_pose(phase),
+        // Bare hands / a held bundle read as the short straight jab. The bandage
+        // rides here only as a fallback: it never swings, so this pose is not
+        // what a peer sees them do. The bandage's real third-person read is the
+        // use charge, driven off the replicated charge fraction in
+        // `players::animate_remote_held_charge_system`, not off a swing phase.
+        ItemModel::Bag | ItemModel::Deployable | ItemModel::Bandage => hands_arm_pose(phase),
     }
 }
 

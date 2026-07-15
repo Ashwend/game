@@ -19,7 +19,7 @@ use std::sync::OnceLock;
 use bevy::{
     camera::{ClearColorConfig, RenderTarget, visibility::RenderLayers},
     core_pipeline::tonemapping::Tonemapping,
-    image::{BevyDefault, Image},
+    image::Image,
     light::NotShadowCaster,
     prelude::*,
     render::render_resource::TextureFormat,
@@ -96,7 +96,7 @@ pub(crate) fn setup_paperdoll_preview(
     let image = Image::new_target_texture(
         PREVIEW_TEXTURE_WIDTH,
         PREVIEW_TEXTURE_HEIGHT,
-        TextureFormat::bevy_default(),
+        TextureFormat::Rgba8UnormSrgb,
         None,
     );
     let image_handle = images.add(image);
@@ -181,7 +181,7 @@ pub(crate) fn setup_paperdoll_preview(
         DirectionalLight {
             color: Color::srgb(1.0, 0.96, 0.90),
             illuminance: 6500.0,
-            shadows_enabled: false,
+            shadow_maps_enabled: false,
             ..default()
         },
         layer.clone(),
@@ -192,7 +192,7 @@ pub(crate) fn setup_paperdoll_preview(
         DirectionalLight {
             color: Color::srgb(0.75, 0.85, 1.0),
             illuminance: 1800.0,
-            shadows_enabled: false,
+            shadow_maps_enabled: false,
             ..default()
         },
         layer,

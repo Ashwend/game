@@ -429,6 +429,7 @@ mod tests {
             ranged: None,
             armor: None,
             explosive: None,
+            consumable: None,
             deployable: None,
         }
     }

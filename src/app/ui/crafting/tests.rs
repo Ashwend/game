@@ -37,9 +37,9 @@ fn inventory_with(item: &str, qty: u16) -> PlayerInventoryState {
     inv
 }
 
-fn run_ui(f: impl FnMut(&egui::Context)) -> egui::FullOutput {
+fn run_ui(f: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {
     let ctx = egui::Context::default();
-    ctx.run(
+    ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -260,8 +260,8 @@ fn render_body(
     let stations = bench_in_range();
     let mut runtime = ClientRuntime::default();
     let mut toasts: Vec<String> = Vec::new();
-    run_ui(|ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    run_ui(|ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             crafting_body(
                 ui,
                 crafting_ui,

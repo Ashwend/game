@@ -30,6 +30,7 @@ pub(crate) mod node_death;
 mod paperdoll_preview;
 mod players;
 mod quit;
+pub(crate) mod render_stats;
 #[cfg(feature = "replication-trace")]
 pub(crate) mod replication_trace;
 mod settings;
@@ -111,10 +112,12 @@ pub(crate) use paperdoll_preview::{
     paperdoll_preview_texture, setup_paperdoll_preview, sync_paperdoll_preview_system,
 };
 pub(crate) use players::{
-    RemotePlayerEntities, animate_remote_players_system, apply_remote_player_appearance_system,
-    apply_snapshot_system, reconcile_player_rigs_system, tick_dying_players_system,
+    RemoteLocomotion, RemotePlayerEntities, animate_remote_held_charge_system,
+    animate_remote_players_system, apply_remote_player_appearance_system, apply_snapshot_system,
+    reconcile_player_rigs_system, remote_head_anchor_local, tick_dying_players_system,
 };
 pub(crate) use quit::app_quit_system;
+pub(crate) use render_stats::register_render_stats;
 pub(crate) use settings::{
     flush_settings_on_exit_system, save_client_settings_system, sync_view_radius_system,
 };

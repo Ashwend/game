@@ -229,6 +229,10 @@ pub(crate) enum ControlRequest {
         recoil: Option<f32>,
         aim: Option<f32>,
         swing: Option<f32>,
+        /// Holds a consumable (bandage) use charge at this fraction (0..1), so the
+        /// mid-wrap viewmodel and its unrolling tail can be screenshotted.
+        #[serde(default)]
+        use_charge: Option<f32>,
     },
     /// Hold forward movement input at the current look yaw for `seconds`
     /// (optionally at run speed), so an agent can walk the real world and
@@ -373,6 +377,7 @@ pub(crate) fn drain_control_socket(
     mut look: ResMut<LookState>,
     mut world_map_ui: ResMut<WorldMapUiState>,
     mut ranged_input: ResMut<crate::app::state::RangedDrawState>,
+    mut consume_charge: ResMut<crate::app::state::ConsumeChargeState>,
     mut gather_input: ResMut<crate::app::state::GatherInputState>,
     mut inventory_ui: ResMut<crate::app::state::InventoryUiState>,
     placement: Res<crate::app::state::DeployablePlacementState>,
@@ -426,6 +431,7 @@ pub(crate) fn drain_control_socket(
             &mut look,
             &mut world_map_ui,
             &mut ranged_input,
+            &mut consume_charge,
             &mut gather_input,
             &mut inventory_ui,
             &placement,
@@ -445,6 +451,7 @@ fn handle_stream(
     look: &mut LookState,
     world_map_ui: &mut WorldMapUiState,
     ranged_input: &mut crate::app::state::RangedDrawState,
+    consume_charge: &mut crate::app::state::ConsumeChargeState,
     gather_input: &mut crate::app::state::GatherInputState,
     inventory_ui: &mut crate::app::state::InventoryUiState,
     placement: &crate::app::state::DeployablePlacementState,
@@ -464,6 +471,7 @@ fn handle_stream(
             look,
             world_map_ui,
             ranged_input,
+            consume_charge,
             gather_input,
             inventory_ui,
             placement,
@@ -489,6 +497,7 @@ fn handle_request(
     look: &mut LookState,
     world_map_ui: &mut WorldMapUiState,
     ranged_input: &mut crate::app::state::RangedDrawState,
+    consume_charge: &mut crate::app::state::ConsumeChargeState,
     gather_input: &mut crate::app::state::GatherInputState,
     inventory_ui: &mut crate::app::state::InventoryUiState,
     placement: &crate::app::state::DeployablePlacementState,
@@ -934,10 +943,11 @@ fn handle_request(
             recoil,
             aim,
             swing,
+            use_charge,
         } => {
-            // Force the ranged / swing pose so the animated bow / crossbow / melee
-            // viewmodel can be screenshotted headless. Clears to live input when
-            // every field is None.
+            // Force the ranged / swing / consumable pose so the animated bow /
+            // crossbow / melee / bandage viewmodel can be screenshotted headless.
+            // Clears to live input when every field is None.
             let any_ranged =
                 draw.is_some() || reload.is_some() || recoil.is_some() || aim.is_some();
             let over = any_ranged.then_some(crate::app::state::RangedPoseOverride {
@@ -948,8 +958,9 @@ fn handle_request(
             });
             ranged_input.set_debug_override(over);
             gather_input.set_debug_swing_override(swing);
+            consume_charge.set_debug_use(use_charge);
             Ok(format!(
-                "pose override set (draw={draw:?} reload={reload:?} recoil={recoil:?} aim={aim:?} swing={swing:?})"
+                "pose override set (draw={draw:?} reload={reload:?} recoil={recoil:?} aim={aim:?} swing={swing:?} use={use_charge:?})"
             ))
         }
         ControlRequest::Walk { seconds, run } => {

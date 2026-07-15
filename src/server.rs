@@ -27,11 +27,17 @@ const CLIENT_STALE_TIMEOUT_TICKS: u64 = 20 * 3;
 /// lifetime is the same regardless of tick rate.
 const CHAT_BUBBLE_DURATION_TICKS: u64 = (CHAT_BUBBLE_DURATION_SECONDS * SERVER_TICK_RATE_HZ) as u64;
 
-/// Cadence of the routine [`ServerMessage::WorldTime`] broadcast. One per
-/// real minute keeps clients aligned against drift without flooding the
-/// wire, the client integrates locally between broadcasts using the
-/// same multiplier, so the visible cycle stays smooth in between.
-const WORLD_TIME_BROADCAST_INTERVAL_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 60;
+/// Cadence of the routine [`ServerMessage::WorldTime`] broadcast. The client
+/// snaps its `server_tick` estimate and day/night clock to each broadcast and
+/// integrates locally in between. A frame hitch (e.g. the first-frame asset /
+/// pipeline warmup) makes that integration under-count via `Time`'s clamped
+/// delta, so the estimate drifts BEHIND the true tick until the next broadcast.
+/// Tick-timed visuals (the meteor fireball's descent and impact flash) are gated
+/// on this estimate, so a coarse once-a-minute cadence let the visual lag its
+/// replicated gameplay effects (tree damage / ore spawn applied on receipt). A
+/// 2 s cadence bounds that drift to a couple of ticks; the message is a few
+/// bytes, so the extra wire cost is negligible.
+const WORLD_TIME_BROADCAST_INTERVAL_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 2;
 
 /// Cadence of the routine [`ServerMessage::PerfStats`] broadcast, one
 /// per second. The HUD never needs sub-second resolution and the
@@ -83,6 +89,7 @@ mod entity_index;
 mod explosion;
 mod furnace;
 mod fuse;
+mod heal;
 mod inventory;
 mod lifecycle;
 pub mod loot_bag;
@@ -128,10 +135,11 @@ pub use loot_bag_ecs::{
     LootBagView, despawn_loot_bag_entity, spawn_loot_bag_entity,
 };
 pub use player_ecs::{
-    Player, PlayerAction, PlayerArmor, PlayerChatBubble, PlayerChunk, PlayerCrafting,
-    PlayerEquipmentVisual, PlayerHealth, PlayerHeldItem, PlayerIndex, PlayerInputAck,
-    PlayerInventory, PlayerLifecycle, PlayerOpenContainers, PlayerPose, PlayerPrivate,
-    PlayerProfile, PlayerSleeping, PlayerView, despawn_player_entity, spawn_player_entity,
+    Player, PlayerAction, PlayerArmor, PlayerChargeFraction, PlayerChatBubble, PlayerChunk,
+    PlayerCrafting, PlayerEquipmentVisual, PlayerHealth, PlayerHeldItem, PlayerIndex,
+    PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerOpenContainers, PlayerPose,
+    PlayerPrivate, PlayerPrivateLink, PlayerPrivateState, PlayerProfile, PlayerSleeping,
+    PlayerView, despawn_player_entity, spawn_player_entity,
 };
 pub use projectile_ecs::{
     Projectile, ProjectileChunk, ProjectileIndex, ProjectileTransform, ProjectileView,
@@ -366,6 +374,17 @@ pub(super) struct ServerClient {
     /// from stomping a concurrently-set admin `/speed`: only a reload we armed is
     /// ever restored.
     pub(super) reload_slow_active: bool,
+    /// Tick a consumable use (bandage) began, or `None` when none is active. Set
+    /// on an accepted `ConsumableCommand::UseStart`, cleared on completion /
+    /// cancel / item swap / death. The server re-derives the charge fraction from
+    /// this against its OWN tick and applies the effect itself, so a client can
+    /// never assert that it finished charging. Slows movement while set (via
+    /// `run_speed_multiplier`), restored to `1.0` on every clear path.
+    pub(super) use_started_tick: Option<u64>,
+    /// An in-flight heal-over-time (the bandage's trickle), or `None`. Server-only
+    /// state: it never replicates, only its effect on `controller.health` does, and
+    /// it deliberately does not survive a save/restart. See `super::heal`.
+    pub(super) heal_over_time: Option<heal::HealOverTime>,
     /// Authoritative life state. `Alive` while the player is up and
     /// running, `Dead { … }` between HP-hits-zero and the respawn
     /// request. Dropped inputs and attack rejections gate on this so
@@ -491,6 +510,8 @@ pub(super) fn sleeping_body_from_persisted(
         next_gather_tick: tick,
         next_attack_tick: tick,
         draw_started_tick: None,
+        use_started_tick: None,
+        heal_over_time: None,
         next_ranged_tick: tick,
         reload_slow_active: false,
         chat_bubble: None,

@@ -4,6 +4,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
+# Ensure cargo/rustc resolve through the rustup shims (~/.cargo/bin), which
+# honor this repo's rust-toolchain.toml pin. Some shell setups put a specific
+# toolchain's bin dir ahead of the shims in PATH; that silently bypasses the
+# pin and fails the MSRV check (Bevy 0.19 needs rustc 1.95). Prepending the shim
+# dir keeps every `./cli` command on the pinned toolchain regardless of PATH.
+export PATH="$HOME/.cargo/bin:$PATH"
+
 # When the game binary is launched directly (not through `cargo run`),
 # CARGO_MANIFEST_DIR is missing and Bevy's AssetServer falls back to the
 # directory of the executable, which is `target/debug/` during local dev
@@ -93,8 +100,20 @@ case "$cmd" in
     ;;
   multiplayer-test)
     close_existing_game
-    cargo build --bin ashwend
-    ./target/debug/ashwend multiplayer-test "$@"
+    # TRACE=1 builds with the `replication-trace` feature and forces the trace on
+    # (server `<Component> MUTATE` + client `<Component> RECV` lines). A MUTATE
+    # with no matching RECV pinpoints a replication-delivery gap. RUST_LOG is
+    # overridable; the default shows the trace plus warnings only.
+    # `${TRACE:-}` (not `$TRACE`): `set -u` at the top makes a bare unset
+    # variable a hard error, so the default flow would die on the expansion.
+    if [ -n "${TRACE:-}" ]; then
+      cargo build --features replication-trace --bin ashwend
+      RUST_LOG="${RUST_LOG:-warn,replication_trace=info}" \
+        ./target/debug/ashwend multiplayer-test "$@"
+    else
+      cargo build --bin ashwend
+      ./target/debug/ashwend multiplayer-test "$@"
+    fi
     ;;
   check)
     cargo check --locked --all-targets

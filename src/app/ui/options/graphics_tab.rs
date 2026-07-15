@@ -129,7 +129,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut settings = ClientSettings::default();
 
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -137,8 +137,8 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     render(ui, &mut settings);
                 });
             },

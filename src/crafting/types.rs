@@ -81,6 +81,9 @@ pub enum RecipeCategory {
     /// `Armor` for the same append-only reason: it only drives the browser
     /// filter chip.
     Explosives,
+    /// Healing consumables (the bandage). Appended after `Explosives` for the
+    /// same append-only reason: it only drives the browser filter chip.
+    Consumables,
 }
 
 impl RecipeCategory {
@@ -92,6 +95,7 @@ impl RecipeCategory {
         Self::Weapons,
         Self::Armor,
         Self::Explosives,
+        Self::Consumables,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -103,6 +107,7 @@ impl RecipeCategory {
             Self::Weapons => "Weapons",
             Self::Armor => "Armor",
             Self::Explosives => "Explosives",
+            Self::Consumables => "Consumables",
         }
     }
 }

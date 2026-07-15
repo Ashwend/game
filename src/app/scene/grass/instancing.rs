@@ -45,7 +45,7 @@
 use bevy::{
     asset::RenderAssetUsages,
     camera::visibility::RenderLayers,
-    core_pipeline::core_3d::Transparent3d,
+    core_pipeline::core_3d::{Transparent3d, TransparentSortingInfo3d},
     ecs::system::{SystemParamItem, lifetimeless::*},
     image::{
         CompressedImageFormats, ImageAddressMode, ImageFilterMode, ImageSampler,
@@ -53,8 +53,8 @@ use bevy::{
     },
     mesh::{MeshVertexBufferLayoutRef, VertexBufferLayout},
     pbr::{
-        MeshPipeline, MeshPipelineKey, RenderMeshInstances, SetMeshBindGroup, SetMeshViewBindGroup,
-        SetMeshViewBindingArrayBindGroup, ViewKeyCache,
+        MeshPipeline, MeshPipelineKey, MeshPipelineSystems, RenderMeshInstances, SetMeshBindGroup,
+        SetMeshViewBindGroup, SetMeshViewBindingArrayBindGroup, ViewKeyCache,
     },
     prelude::*,
     render::{
@@ -191,7 +191,14 @@ impl Plugin for GrassInstancingPlugin {
         app.sub_app_mut(RenderApp)
             .add_render_command::<Transparent3d, DrawGrass>()
             .init_resource::<SpecializedMeshPipelines<GrassInstancePipeline>>()
-            .add_systems(RenderStartup, init_grass_pipeline)
+            // Bevy 0.19 creates `MeshPipeline` in a RenderStartup system (it was
+            // FromWorld-initialized before RenderStartup in 0.18). Our init clones
+            // it, so it must run after the `MeshPipelineSystems` set that builds it,
+            // or `Res<MeshPipeline>` fails validation at startup.
+            .add_systems(
+                RenderStartup,
+                init_grass_pipeline.after(MeshPipelineSystems),
+            )
             .add_systems(ExtractSchedule, extract_grass)
             .add_systems(
                 Render,
@@ -342,26 +349,37 @@ fn queue_grass(
             else {
                 continue;
             };
-            let Some(mesh) = meshes.get(mesh_instance.mesh_asset_id) else {
+            let Some(mesh) = meshes.get(mesh_instance.mesh_asset_id()) else {
                 continue;
             };
-            let key =
-                *view_key | MeshPipelineKey::from_primitive_topology(mesh.primitive_topology());
+            // 0.19 folds the strip-index-format bits into the key; grass is a
+            // triangle list (non-strip), so the strip index format is irrelevant
+            // and `None` is correct (it's ignored for non-strip topologies).
+            let key = *view_key
+                | MeshPipelineKey::from_primitive_topology_and_strip_index(
+                    mesh.primitive_topology(),
+                    None,
+                );
             let pipeline = pipelines
                 .specialize(&pipeline_cache, &grass_pipeline, key, &mesh.layout)
                 .unwrap();
-            transparent_phase.add(Transparent3d {
-                entity: (entity, *main_entity),
-                pipeline,
-                draw_function: draw_grass,
+            // `add_transient`: the item is re-queued every frame (this system runs
+            // in QueueMeshes) and dropped after the frame, matching the old `.add`.
+            transparent_phase.add_transient(Transparent3d {
                 // Draw the field FIRST among transparent items. The cards write depth
                 // (see `specialize`), so drawing the effectively-opaque grass before the
                 // genuinely-translucent transparent objects lets those depth-test against
-                // it correctly (a particle behind a blade is occluded). The Transparent3d
-                // phase sorts ASCENDING by `distance` (radsort, core_3d), so "first" is
-                // the SMALLEST distance: `f32::MIN`. (The field's mesh `center` sits at
-                // the camera, so its natural rangefinder distance is ~eye-height.)
-                distance: f32::MIN,
+                // it correctly (a particle behind a blade is occluded). In 0.19 the sort
+                // distance is derived from `sorting_info`: `AlwaysOnTop` yields
+                // `f32::NEG_INFINITY`, and the phase sorts ASCENDING (core_3d), so the
+                // grass sorts before every real transparent, the same "drawn first"
+                // result the old `distance: f32::MIN` produced. `distance` is filled in
+                // later by the phase's `recalculate_sort_keys`, so the 0.0 seed is inert.
+                sorting_info: TransparentSortingInfo3d::AlwaysOnTop,
+                distance: 0.0,
+                entity: (entity, *main_entity),
+                pipeline,
+                draw_function: draw_grass,
                 batch_range: 0..1,
                 extra_index: PhaseItemExtraIndex::None,
                 indexed: true,
@@ -615,14 +633,14 @@ impl<P: PhaseItem> RenderCommand<P> for DrawGrassInstanced {
         else {
             return RenderCommandResult::Skip;
         };
-        let Some(gpu_mesh) = meshes.into_inner().get(mesh_instance.mesh_asset_id) else {
+        let Some(gpu_mesh) = meshes.into_inner().get(mesh_instance.mesh_asset_id()) else {
             return RenderCommandResult::Skip;
         };
         let Some(instance_buffer) = instance_buffer else {
             return RenderCommandResult::Skip;
         };
         let Some(vertex_buffer_slice) =
-            mesh_allocator.mesh_vertex_slice(&mesh_instance.mesh_asset_id)
+            mesh_allocator.mesh_vertex_slice(&mesh_instance.mesh_asset_id())
         else {
             return RenderCommandResult::Skip;
         };
@@ -636,7 +654,7 @@ impl<P: PhaseItem> RenderCommand<P> for DrawGrassInstanced {
                 count,
             } => {
                 let Some(index_buffer_slice) =
-                    mesh_allocator.mesh_index_slice(&mesh_instance.mesh_asset_id)
+                    mesh_allocator.mesh_index_slice(&mesh_instance.mesh_asset_id())
                 else {
                     return RenderCommandResult::Skip;
                 };

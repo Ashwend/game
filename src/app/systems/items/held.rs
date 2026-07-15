@@ -23,9 +23,9 @@ use crate::{
 };
 
 use super::swing_poses::{
-    ToolSwingPose, bag_idle_pose, bow_draw_pose, bow_release_pose, club_swing_pose, crossbow_pose,
-    hatchet_swing_pose, lerp, mace_swing_pose, pickaxe_swing_pose, smoothstep, spear_swing_pose,
-    sword_swing_pose, throw_charge_pose, throw_lob_pose,
+    ToolSwingPose, bag_idle_pose, bandage_use_pose, bow_draw_pose, bow_release_pose,
+    club_swing_pose, crossbow_pose, hatchet_swing_pose, lerp, mace_swing_pose, pickaxe_swing_pose,
+    smoothstep, spear_swing_pose, sword_swing_pose, throw_charge_pose, throw_lob_pose,
 };
 
 const HELD_ITEM_FORWARD_OFFSET: f32 = 0.62;
@@ -66,6 +66,19 @@ pub(crate) struct RangedPoseInputs {
     /// at the shoulder), from [`crate::app::state::ThrowChargeState::wind_up`].
     /// Zero for every other item; drives the bomb's hold-to-charge pose.
     pub(crate) throw_wind_up: f32,
+    /// Consumable use charge in `[0, 1]` (0 carry rest, 1 the wrap is going on),
+    /// from [`crate::app::state::ConsumeChargeState::use_fraction`]. Zero for every
+    /// other item; drives the bandage's raise-and-wrap pose and unrolls its tail.
+    pub(crate) use_fraction: f32,
+    /// Settle progress in `[0, 1]` after a consumable use ended (`0` the instant
+    /// it ended, `1` fully back at rest). Runs for BOTH outcomes: a completed
+    /// bandage cinches off, an abandoned one drops back to the carry. Without it
+    /// the item would snap from mid-wrap to rest in a single frame.
+    pub(crate) use_settle: f32,
+    /// The charge the last consumable use had reached when it ended. The settle
+    /// blends *from* here, so an abandoned half-wrap drops back from halfway
+    /// rather than from full.
+    pub(crate) use_ended_at: f32,
     /// Seconds elapsed, seeding the draw tremble noise.
     pub(crate) time_seconds: f32,
 }
@@ -79,6 +92,7 @@ pub(crate) fn apply_held_item_visual_system(
     gather_input: Res<GatherInputState>,
     ranged: Res<RangedDrawState>,
     throw_charge: Res<crate::app::state::ThrowChargeState>,
+    consume: Res<crate::app::state::ConsumeChargeState>,
     swap_state: Res<ToolSwapState>,
     time: Res<Time>,
     camera: Query<Entity, With<MainCamera>>,
@@ -137,6 +151,9 @@ pub(crate) fn apply_held_item_visual_system(
         recoil: ranged.recoil(CROSSBOW_RECOIL_SECONDS),
         aim: ranged.aim_fraction(),
         throw_wind_up: throw_charge.wind_up(),
+        use_fraction: consume.use_fraction(),
+        use_settle: consume.settle_progress(),
+        use_ended_at: consume.ended_at(),
         time_seconds: time.elapsed_secs(),
     };
     // The whole-item swing/carry transform, shared by every layer. Each layer then
@@ -459,6 +476,24 @@ pub(crate) fn held_item_hand_transform(held_mesh: HeldMesh) -> Transform {
         // Long-hafted tools/weapons carry their head in the X plane, so the
         // quarter-turn yaw faces it forward; gripped low toward the butt.
         HeldGrip::LongHafted => (tilt * yaw, -0.16),
+        // The bow is authored upright in its own frame: the limbs run along
+        // local Y, the string/archer side is local +X, and down-range (the
+        // target) is local -X (see `bow_rig`). We want the stave vertical with
+        // down-range pointing along the player's forward (-Z), which is a -90°
+        // yaw about Y: local -X -> player -Z (forward), local +X -> +Z (back
+        // toward the archer), limbs stay vertical. This is the OPPOSITE yaw sign
+        // from the hafted tools; the tool's +90° yaw is what rolled the bow the
+        // wrong way in third-person. Gripped at the riser (the stave's vertical
+        // centre, local Y = 0), so no grip offset.
+        HeldGrip::Bow => (Quat::from_rotation_y(-PI * 0.5), 0.0),
+        // The spear is authored as a vertical shaft (haft along +Y, point at the
+        // top). Lay it COUCHED down the aim: a -90° pitch about X tips local +Y
+        // (the point) forward to the player's -Z, so the shaft runs level with the
+        // point leading and the butt back. Gripped low toward the butt so the
+        // point extends well forward, mirroring the first-person couched carry;
+        // the thrust rides the arm extension on top. Matches the FP
+        // `spear_model_rotation` (`from_rotation_x(-PI/2 + small)`).
+        HeldGrip::Spear => (Quat::from_rotation_x(-PI * 0.5), -0.15),
         // Bag / building-plan silhouettes have no handle; just sit upright.
         HeldGrip::Silhouette => (Quat::IDENTITY, 0.0),
     };
@@ -542,7 +577,7 @@ mod bow_rig {
 /// - The crossbow string slides forward on release / back on the reload crank
 ///   (its nut translating along the down-range axis), each leg rotating about its
 ///   limb tip to track the nut.
-fn held_piece_local_transform(
+pub(crate) fn held_piece_local_transform(
     model: ItemModel,
     slot: HeldPieceSlot,
     ranged: RangedPoseInputs,
@@ -565,6 +600,9 @@ fn held_piece_local_transform(
         (ItemModel::Crossbow, HeldPieceSlot::CrossbowBolt) => {
             crossbow_bolt_transform(crossbow_cock(ranged))
         }
+        (ItemModel::Bandage, HeldPieceSlot::BandageTail) => {
+            bandage_tail_transform(bandage_charge(ranged))
+        }
         // Every static piece (and any slot that doesn't match its model) is the
         // whole-item transform alone.
         _ => Transform::IDENTITY,
@@ -575,6 +613,61 @@ fn held_piece_local_transform(
 /// While drawing it is the live draw fraction; just after loose the release flick
 /// relaxes the limbs back to rest, so the rig follows `1 - release_progress` so the
 /// limbs spring forward as the string snaps off the cheek.
+/// Where the bandage's loose tail is rooted, in the glb's in-game frame: the
+/// bottom tangent of the roll. Authored at (0, 0, -ROLL_R) Blender Z-up, which
+/// the +Y-up export maps to (0, -ROLL_R, 0) here.
+///
+/// This is the pivot the tail scales about, so it MUST match the tail's root
+/// vertex in art/consumables/build_consumables.py. Move it there, move it here,
+/// or the tail will telescope out of thin air instead of out of the roll.
+const BANDAGE_TAIL_PIVOT: Vec3 = Vec3::new(0.0, -0.100, 0.0);
+/// How much of the tail shows at rest. Not zero: a bandage with no tail at all
+/// reads as a plain cylinder, so a stub always hangs out of the roll.
+const BANDAGE_TAIL_REST_SCALE: f32 = 0.18;
+/// How far the tail swings as it unrolls, in radians. A little lateral sway sells
+/// the strip as cloth being pulled rather than a stick telescoping out.
+const BANDAGE_TAIL_SWAY: f32 = 0.30;
+
+/// The bandage's effective charge for the viewmodel: the live charge while a use
+/// is being held, otherwise the charge it ended at, decaying over the settle.
+///
+/// Shared by the whole-item pose and the tail, so the roll and the strip coming
+/// off it can never disagree about how far along the wrap is.
+fn bandage_charge(ranged: RangedPoseInputs) -> f32 {
+    let live = ranged.use_fraction.clamp(0.0, 1.0);
+    if live > 0.0 {
+        return live;
+    }
+    // Not charging: fall back from wherever the last use ended, over the settle.
+    // `use_settle` is 1 when idle, so this is 0 for a player who is just carrying
+    // a bandage around.
+    ranged.use_ended_at.clamp(0.0, 1.0) * (1.0 - smoothstep(ranged.use_settle.clamp(0.0, 1.0)))
+}
+
+/// The bandage's loose tail: it UNROLLS out of the roll as the use charges.
+///
+/// The tail is authored at full extension and rooted at the roll's bottom
+/// tangent, so a non-uniform scale along its length axis (in-game Z, since the
+/// glb runs the strip along authoring +Y) about that root pulls it back into the
+/// roll at rest and pays it out as the charge builds. Only Z scales, so the strip
+/// keeps its width instead of fattening, the same trick the bow string uses.
+///
+/// A small rotation about the roll's own axis (in-game X, the cylinder axis) sways
+/// the strip as it comes off, which is what makes it read as cloth being drawn out
+/// rather than a rod extending.
+fn bandage_tail_transform(charge: f32) -> Transform {
+    let c = charge.clamp(0.0, 1.0);
+    let eased = smoothstep(c);
+    let extend = lerp(BANDAGE_TAIL_REST_SCALE, 1.0, eased);
+    // Sway peaks mid-unroll and settles as the strip comes taut.
+    let sway = (c * PI).sin() * BANDAGE_TAIL_SWAY;
+    pivot_transform(
+        BANDAGE_TAIL_PIVOT,
+        Quat::from_rotation_x(sway),
+        Vec3::new(1.0, 1.0, extend),
+    )
+}
+
 fn bow_draw(ranged: RangedPoseInputs) -> f32 {
     if ranged.drawing {
         ranged.draw_fraction.clamp(0.0, 1.0)
@@ -809,7 +902,8 @@ pub(super) fn held_item_local_transform(
         | ItemModel::Deployable
         | ItemModel::Bow
         | ItemModel::Crossbow
-        | ItemModel::ThrownBomb => HELD_ITEM_DOWN_OFFSET,
+        | ItemModel::ThrownBomb
+        | ItemModel::Bandage => HELD_ITEM_DOWN_OFFSET,
         ItemModel::Hatchet
         | ItemModel::Pickaxe
         | ItemModel::Club
@@ -861,6 +955,12 @@ pub(super) fn held_item_local_transform(
     // than the sky. `spear_swing_pose`'s forward offset then drives the thrust
     // extension along that couched line.
     let spear_model_rotation = Quat::from_rotation_x(-PI * 0.5 + 0.07);
+    // The bandage glb runs its tail along local -Z (straight AWAY from the eye), so
+    // unauthored it unrolls into the distance and foreshortens to nothing. Tip it
+    // -90 deg about X so the tail hangs DOWN into view, then yaw the roll so its
+    // coil face turns toward the camera: the coil is the detail that says
+    // "bandage" rather than "log", and it has to be the thing you see.
+    let bandage_model_rotation = Quat::from_rotation_y(-0.85) * Quat::from_rotation_x(-PI * 0.5);
     let (pose, model_rotation): (ToolSwingPose, Quat) = match model {
         // Ranged weapons don't swing: they draw / reload / fire. The bow holds a
         // draw (or plays its release flick), the crossbow sits shouldered with a
@@ -880,6 +980,21 @@ pub(super) fn held_item_local_transform(
         ),
         // Bag / deployable-in-hand keep the idle bag hold.
         ItemModel::Bag | ItemModel::Deployable => (bag_idle_pose(phase), Quat::IDENTITY),
+        // The bandage neither swings nor fires: its entire animation is the use
+        // charge. The pose lifts the roll across to the off-hand and turns its coil
+        // face toward the camera, and settles back to the carry when the use ends
+        // (completed or abandoned). The tail unrolling out of the roll is the
+        // per-piece half, in `bandage_tail_transform`. No head to face forward, so
+        // no yaw correction.
+        ItemModel::Bandage => (
+            bandage_use_pose(
+                ranged.use_fraction,
+                ranged.use_settle,
+                ranged.use_ended_at,
+                ranged.time_seconds,
+            ),
+            bandage_model_rotation,
+        ),
         // The thrown bomb: while the toss swing is live it plays the overhand
         // lob off the swing phase (primed at the release beat by the charge
         // release); otherwise the hold-to-charge wind-up pose tracks the
@@ -1041,9 +1156,11 @@ pub(super) fn held_item_local_transform(
     }
 
     let (drop, back, pitch_lag) = match model {
-        // Bag, deployable-in-hand, and the thrown bomb are light held bundles
-        // that lift the same gentle way.
-        ItemModel::Bag | ItemModel::Deployable | ItemModel::ThrownBomb => (0.40, 0.04, -0.30),
+        // Bag, deployable-in-hand, the thrown bomb, and the bandage are light held
+        // bundles that lift the same gentle way.
+        ItemModel::Bag | ItemModel::Deployable | ItemModel::ThrownBomb | ItemModel::Bandage => {
+            (0.40, 0.04, -0.30)
+        }
         // The club and sword are hatchet-weight one/two-handers; the spear is
         // similar; they all lift like the hatchet, and so does the bow (a light
         // wooden two-hander). The mace and the crossbow are the heaviest carries,
@@ -1616,6 +1733,7 @@ mod tests {
             ItemModel::Bow,
             ItemModel::Crossbow,
             ItemModel::ThrownBomb,
+            ItemModel::Bandage,
         ];
         for model in all_models {
             // A representative held mesh + the two pose states to compare, per
@@ -1689,11 +1807,29 @@ mod tests {
                         RangedPoseInputs::default(),
                         RangedPoseInputs::default(),
                     ),
+                    // The bandage animates off its USE charge (carry rest vs the
+                    // wrap fully going on). `use_settle: 1.0` on the rest state is
+                    // "fully settled at the carry", which is what an idle bandage is.
+                    ItemModel::Bandage => (
+                        HeldMesh::Bandage,
+                        RangedPoseInputs {
+                            use_fraction: 0.0,
+                            use_settle: 1.0,
+                            ..Default::default()
+                        },
+                        RangedPoseInputs {
+                            use_fraction: 1.0,
+                            ..Default::default()
+                        },
+                    ),
                 };
             // Melee/tool archetypes move off the swing fraction (0.0 -> 0.5); the
-            // ranged archetypes hold swing fraction at 0 and move off their state
-            // inputs instead.
-            let is_ranged = matches!(model, ItemModel::Bow | ItemModel::Crossbow);
+            // ranged archetypes (and the bandage, which charges rather than swings)
+            // hold swing fraction at 0 and move off their state inputs instead.
+            let is_ranged = matches!(
+                model,
+                ItemModel::Bow | ItemModel::Crossbow | ItemModel::Bandage
+            );
             let (swing_a, swing_b) = if is_ranged { (0.0, 0.0) } else { (0.0, 0.5) };
             let rest = held_item_local_transform(model, mesh, swing_a, 1.0, state_a);
             let mid = held_item_local_transform(model, mesh, swing_b, 1.0, state_b);

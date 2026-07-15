@@ -17,6 +17,9 @@ pub const GUNPOWDER_ID: &str = "gunpowder";
 pub const FIBER_ID: &str = "fiber";
 /// Woven fiber cloth. The padding and wrapping behind the cloth armor set.
 pub const CLOTH_ID: &str = "cloth";
+/// Rolled linen strip. Held down to bind a wound: heals instantly on
+/// completion, then trickles the rest in over the following seconds.
+pub const BANDAGE_ID: &str = "bandage";
 /// Raw sky-metal pried out of meteorite nodes: a natural iron-nickel alloy
 /// fused into the cooled slag. Smelts into meteorite ingots in a furnace.
 pub const METEORITE_ALLOY_ID: &str = "meteorite_alloy";

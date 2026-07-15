@@ -375,7 +375,7 @@ mod tests {
     fn long_toast_text_is_truncated_with_ellipsis_in_narrow_width() {
         let ctx = egui::Context::default();
         let color = Color32::WHITE;
-        let _ = ctx.run(egui::RawInput::default(), |_| {});
+        let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
         let galley = layout_single_line(
             &ctx,
             "this is a very long toast message that should not fit in a small width",
@@ -390,7 +390,7 @@ mod tests {
     fn short_toast_text_is_not_truncated_with_room_to_spare() {
         let ctx = egui::Context::default();
         let color = Color32::WHITE;
-        let _ = ctx.run(egui::RawInput::default(), |_| {});
+        let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
         let galley = layout_single_line(&ctx, "ok", color, 200.0);
         assert!(!galley.elided);
     }

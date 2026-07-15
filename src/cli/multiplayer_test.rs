@@ -365,7 +365,12 @@ fn spawn_client(
         .env("GAME_TEST_AUTO_KIT", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
+        // Pipe stderr (where the Bevy/replication-trace logs go) so it can be
+        // prefixed with this client's player name below. Without a per-process
+        // tag a two-client trace is ambiguous: a replication-trace line's
+        // `client=` field is the PLAYER the mirror represents, not the logging
+        // process, and both clients' output interleaves into one stream.
+        .stderr(Stdio::piped());
     if headless {
         // Off-screen render + per-client control socket. Deliberately omit the
         // `GAME_TEST_WINDOW_*` geometry keys: those drive the on-screen
@@ -384,9 +389,26 @@ fn spawn_client(
             .env("GAME_TEST_WINDOW_COUNT", "2")
             .env("GAME_TEST_WINDOW_GAP", TEST_WINDOW_GAP.to_string());
     }
-    command
+    let mut child = command
         .spawn()
-        .with_context(|| format!("could not spawn client binary {}", exe.display()))
+        .with_context(|| format!("could not spawn client binary {}", exe.display()))?;
+    // Prefix this client's stderr with its player name so a two-client
+    // replication trace is unambiguous about which PROCESS logged each line.
+    // Mirrors the `[server]` stdout reader above; the thread ends when the child
+    // exits and its stderr pipe closes.
+    if let Some(stderr) = child.stderr.take() {
+        let tag = name.to_owned();
+        thread::Builder::new()
+            .name(format!("multiplayer-test-client-stderr-{tag}"))
+            .spawn(move || {
+                let reader = BufReader::new(stderr);
+                for line in reader.lines().map_while(Result::ok) {
+                    eprintln!("[{tag}] {line}");
+                }
+            })
+            .ok();
+    }
+    Ok(child)
 }
 
 fn wait_for_clients(clients: &mut Vec<Child>, exit_signal: Arc<AtomicBool>) {

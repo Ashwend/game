@@ -2,6 +2,7 @@ mod auth;
 mod backdrop;
 mod combat_feedback;
 mod connection;
+mod consumable;
 mod crafting;
 mod deployable;
 mod dialogs;
@@ -47,6 +48,7 @@ pub(crate) use wheel::{
     WheelTrigger,
 };
 
+pub(crate) use consumable::{ConsumeAction, ConsumeChargeState};
 pub(crate) use inventory::{
     InventoryDrag, InventoryDragButton, InventorySoundEvent, InventoryUiState, UnifiedSlotRef,
 };
@@ -64,6 +66,7 @@ pub(crate) use menu::{
 };
 pub(crate) use options_ui::{OptionsTab, OptionsUiState, PendingRebind};
 pub(crate) use prediction::PredictionState;
+// Dev-only pose override for headless capture, so it stays off the release surface.
 #[cfg(debug_assertions)]
 pub(crate) use ranged::RangedPoseOverride;
 pub(crate) use ranged::{RangedAction, RangedDrawState};

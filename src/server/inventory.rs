@@ -78,9 +78,12 @@ impl GameServer {
                     client.inventory.active_actionbar_slot = slot;
                 }
                 // Swapping off a drawn bow ends the draw and restores movement;
-                // swapping off a reloading crossbow lifts its reload slow too.
+                // swapping off a reloading crossbow lifts its reload slow too;
+                // swapping off a half-wrapped bandage abandons the use (it is only
+                // spent on completion, so this costs the player nothing).
                 self.clear_ranged_draw(client_id);
                 self.clear_reload_slow(client_id);
+                self.clear_consumable_use(client_id);
                 Vec::new()
             }
             InventoryCommand::SelectActionbarOffset { offset } => {
@@ -90,6 +93,7 @@ impl GameServer {
                 }
                 self.clear_ranged_draw(client_id);
                 self.clear_reload_slow(client_id);
+                self.clear_consumable_use(client_id);
                 Vec::new()
             }
             InventoryCommand::Sort => {

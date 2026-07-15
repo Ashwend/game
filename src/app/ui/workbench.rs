@@ -270,9 +270,9 @@ mod tests {
         inventory
     }
 
-    fn run_ui(f: impl FnMut(&egui::Context)) -> egui::FullOutput {
+    fn run_ui(f: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {
         let ctx = egui::Context::default();
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -291,8 +291,8 @@ mod tests {
         let local = local_player(None, PlayerInventoryState::empty());
         let mut toasts: Vec<String> = Vec::new();
 
-        let output = run_ui(|ctx| {
-            workbench_ui(ctx, &mut menu, &mut runtime, &local, &mut toasts);
+        let output = run_ui(|ui| {
+            workbench_ui(ui.ctx(), &mut menu, &mut runtime, &local, &mut toasts);
         });
         assert!(output.shapes.is_empty());
     }
@@ -307,8 +307,8 @@ mod tests {
         let local = local_player(Some(workbench_view(1)), affordable_inventory());
         let mut toasts: Vec<String> = Vec::new();
 
-        let output = run_ui(|ctx| {
-            workbench_ui(ctx, &mut menu, &mut runtime, &local, &mut toasts);
+        let output = run_ui(|ui| {
+            workbench_ui(ui.ctx(), &mut menu, &mut runtime, &local, &mut toasts);
         });
         assert!(output.shapes.is_empty());
     }
@@ -320,8 +320,8 @@ mod tests {
         let local = local_player(Some(workbench_view(1)), affordable_inventory());
         let mut toasts: Vec<String> = Vec::new();
 
-        let output = run_ui(|ctx| {
-            workbench_ui(ctx, &mut menu, &mut runtime, &local, &mut toasts);
+        let output = run_ui(|ui| {
+            workbench_ui(ui.ctx(), &mut menu, &mut runtime, &local, &mut toasts);
         });
         // A tier-1 workbench has an upgrade row, so the panel paints.
         assert!(!output.shapes.is_empty());
@@ -336,8 +336,8 @@ mod tests {
         let local = local_player(Some(workbench_view(2)), PlayerInventoryState::empty());
         let mut toasts: Vec<String> = Vec::new();
 
-        let output = run_ui(|ctx| {
-            workbench_ui(ctx, &mut menu, &mut runtime, &local, &mut toasts);
+        let output = run_ui(|ui| {
+            workbench_ui(ui.ctx(), &mut menu, &mut runtime, &local, &mut toasts);
         });
         assert!(!output.shapes.is_empty());
     }

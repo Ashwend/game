@@ -21,7 +21,21 @@ impl Default for MenuBackdropVisibility {
 }
 
 impl MenuBackdropVisibility {
-    pub(crate) fn cover_alpha(&mut self, screen: Screen, delta_seconds: f32) -> u8 {
+    /// Alpha for the opaque cover drawn over the 3D menu backdrop.
+    ///
+    /// `reveal_allowed` gates the reveal: while it is false (auth still in
+    /// flight, outcome unknown) the cover stays fully opaque so the backdrop
+    /// never peeks out from behind the loading/login splash. The backdrop keeps
+    /// rendering behind the opaque cover, so its blur/DoF converge during the
+    /// wait; we pin the warmup timer at its end so the moment the gate lifts the
+    /// cover goes straight to the fade instead of re-running the 1.5s warmup
+    /// (which would blank the just-revealed menu).
+    pub(crate) fn cover_alpha(
+        &mut self,
+        screen: Screen,
+        reveal_allowed: bool,
+        delta_seconds: f32,
+    ) -> u8 {
         let active = screen.uses_menu_backdrop();
         if active != self.active {
             self.active = active;
@@ -30,6 +44,11 @@ impl MenuBackdropVisibility {
 
         if !active {
             return 0;
+        }
+
+        if !reveal_allowed {
+            self.elapsed_seconds = MENU_BACKDROP_BLUR_WARMUP_SECONDS;
+            return u8::MAX;
         }
 
         self.elapsed_seconds += delta_seconds.max(0.0);
@@ -83,5 +102,60 @@ impl Default for MenuBackdropTime {
         Self {
             seconds_of_day: MENU_BACKDROP_SECONDS,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cover_stays_opaque_while_reveal_is_gated() {
+        let mut backdrop = MenuBackdropVisibility::default();
+        // Far more than the warmup window: with the reveal gated (auth in
+        // flight) the cover must never fade, so the 3D backdrop can't peek out
+        // behind the loading splash.
+        for _ in 0..40 {
+            let alpha = backdrop.cover_alpha(Screen::MainMenu, false, 0.1);
+            assert_eq!(alpha, u8::MAX, "gated cover must stay fully opaque");
+        }
+    }
+
+    #[test]
+    fn releasing_the_gate_crossfades_without_re_running_the_warmup() {
+        let mut backdrop = MenuBackdropVisibility::default();
+        // Sit gated for a while (a slow silent restore).
+        for _ in 0..20 {
+            let _ = backdrop.cover_alpha(Screen::MainMenu, false, 0.1);
+        }
+        // First frame after the gate lifts is still opaque, then it must fade
+        // straight away (no fresh 1.5s warmup) and reach fully transparent
+        // within the fade window rather than blanking the revealed menu.
+        assert_eq!(backdrop.cover_alpha(Screen::MainMenu, true, 0.0), u8::MAX);
+        let mut saw_partial = false;
+        let mut revealed = false;
+        for _ in 0..30 {
+            match backdrop.cover_alpha(Screen::MainMenu, true, 0.05) {
+                0 => {
+                    revealed = true;
+                    break;
+                }
+                a if a < u8::MAX => saw_partial = true,
+                _ => {}
+            }
+        }
+        assert!(saw_partial, "reveal must crossfade, not hard-cut");
+        assert!(revealed, "cover must fully clear within the fade window");
+    }
+
+    #[test]
+    fn ungated_reveal_runs_the_full_warmup_then_fades() {
+        // The logged-out path (reveal allowed from the start) keeps the original
+        // behaviour: opaque through the warmup, then a fade.
+        let mut backdrop = MenuBackdropVisibility::default();
+        assert_eq!(backdrop.cover_alpha(Screen::MainMenu, true, 1.0), u8::MAX);
+        assert!(!backdrop.has_finished_warmup());
+        let _ = backdrop.cover_alpha(Screen::MainMenu, true, 1.0);
+        assert!(backdrop.has_finished_warmup());
     }
 }

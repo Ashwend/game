@@ -323,7 +323,10 @@ impl InventoryUiState {
                 }
                 // Shuffles only happen from an open item surface; a
                 // server-side rearrangement with everything closed is not a
-                // player action.
+                // player action. (Not collapsed into a match guard: the match is
+                // exhaustive with no catch-all, so a `Some(Move) if ..` guard
+                // would leave `Some(Move)` with the UI open uncovered.)
+                #[allow(clippy::collapsible_match)]
                 Some(InventorySoundEvent::Move) => {
                     if !item_ui_open {
                         event = None;

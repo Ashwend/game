@@ -387,6 +387,31 @@ impl GameServer {
                 seq: client.swing_seq,
                 model: client.swing_model,
             },
+            // Peer-visible charge progress for whichever held item is charging:
+            // a bow draw, or a bandage being wrapped. One component covers both
+            // because a peer only ever charges one item at a time (they are
+            // different held items) and both animate off a 0->1 fraction.
+            //
+            // Peers need to see this: a drawn bow means an arrow is coming, and
+            // someone mid-bandage is slowed, committed, and worth rushing.
+            //
+            // Zero whenever nothing is charging. The instant-fire crossbow is
+            // excluded (`draw_ticks_to_full > 0`): it has no draw window to show.
+            // Static registry lookups only, so no extra borrow of `self`.
+            charge_fraction: player_ecs::PlayerChargeFraction(
+                client
+                    .draw_started_tick
+                    .and_then(|start| {
+                        client
+                            .inventory
+                            .active_actionbar_stack()
+                            .and_then(|stack| crate::items::item_definition(&stack.item_id))
+                            .and_then(|def| def.ranged.as_ref())
+                            .filter(|profile| profile.draw_ticks_to_full > 0)
+                            .map(|profile| profile.draw_fraction(self.tick.saturating_sub(start)))
+                    })
+                    .unwrap_or_else(|| client.consumable_use_fraction(self.tick)),
+            ),
         })
     }
 

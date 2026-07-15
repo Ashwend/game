@@ -653,7 +653,8 @@ fn all_swing_models_listed_and_have_valid_timing() {
             | ItemModel::Mace
             | ItemModel::Bow
             | ItemModel::Crossbow
-            | ItemModel::ThrownBomb => true,
+            | ItemModel::ThrownBomb
+            | ItemModel::Bandage => true,
         }
     }
     assert!(ALL_SWING_MODELS.iter().copied().all(listed));

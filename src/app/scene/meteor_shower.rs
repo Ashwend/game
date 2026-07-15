@@ -952,7 +952,7 @@ fn spawn_crater(
                             intensity: FIRE_LIGHT_INTENSITY * (0.7 + r2 * 0.6),
                             range: FIRE_LIGHT_RANGE_M,
                             radius: 0.3,
-                            shadows_enabled: false,
+                            shadow_maps_enabled: false,
                             ..default()
                         },
                         Transform::from_translation(cluster + Vec3::new(0.0, 1.0, 0.0)),
@@ -1112,7 +1112,7 @@ fn spawn_impact_rock_blast(
             intensity: FIRE_LIGHT_INTENSITY * 12.0,
             range: METEOR_SHOWER_IMPACT_RADIUS_M * 4.0,
             radius: 2.0,
-            shadows_enabled: false,
+            shadow_maps_enabled: false,
             ..default()
         },
         Transform::from_translation(position + Vec3::Y * 4.0),

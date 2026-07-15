@@ -48,6 +48,13 @@ impl GameServer {
         // Lift the crossbow reload movement slow off anyone whose reload window
         // (`next_ranged_tick`) elapsed this tick, restoring full movement.
         self.tick_reload_slows();
+        // Consumables: apply any bandage whose use charge completed on OUR clock
+        // this tick (the client never gets to say it finished), then pay out a
+        // tick of every heal-over-time in flight. Both are envelope-free: the
+        // health change reaches the local HUD and peer nameplates through the
+        // replicated `PlayerHealth` diff, not a bespoke message.
+        self.tick_consumable_uses();
+        self.tick_heal_over_time();
 
         // Armed explosive charges: count each fuse down and detonate any that
         // reach zero this tick. Returns the blast consequences (player damage,

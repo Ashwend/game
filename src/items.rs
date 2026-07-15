@@ -6,6 +6,7 @@
 //! call sites stay stable regardless of which submodule owns `X`.
 
 mod armor;
+mod consumables;
 mod deployables;
 mod explosives;
 mod ids;
@@ -22,6 +23,7 @@ pub use armor::{
     ARMOR_TOTAL_CAP_PCT, ArmorProfile, ArmorProtection, armor_profile, equipped_protection,
     protection_from_profiles, worn_armor_profiles,
 };
+pub use consumables::ConsumableProfile;
 pub use deployables::{DeployableKind, DeployableProfile, DoorVariant};
 pub use explosives::{ExplosiveDelivery, ExplosiveKind, ExplosiveProfile};
 pub use ids::*;

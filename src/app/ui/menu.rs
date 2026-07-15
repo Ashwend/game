@@ -224,9 +224,9 @@ mod tests {
         let mut update = UpdateState::idle_for_test();
         let mut backdrop_time = MenuBackdropTime::default();
 
-        let output = ctx.run(raw_input(), |ctx| {
+        let output = ctx.run_ui(raw_input(), |ui| {
             main_menu_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &store,
                 &user,

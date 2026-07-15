@@ -411,9 +411,9 @@ mod tests {
     #[test]
     fn overlay_without_camera_draws_nothing() {
         let ctx = egui::Context::default();
-        let output = ctx.run(raw_input(), |ctx| {
+        let output = ctx.run_ui(raw_input(), |ui| {
             deployable_overlay_ui(
-                ctx,
+                ui.ctx(),
                 DeployableOverlay {
                     camera: None,
                     entries: Vec::new(),
@@ -431,14 +431,14 @@ mod tests {
         let damaged = entry(120, 500);
 
         let ctx_full = egui::Context::default();
-        let out_full = ctx_full.run(raw_input(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let out_full = ctx_full.run_ui(raw_input(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 nameplate(ui, &full, 0.0);
             });
         });
         let ctx_dmg = egui::Context::default();
-        let out_dmg = ctx_dmg.run(raw_input(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let out_dmg = ctx_dmg.run_ui(raw_input(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 nameplate(ui, &damaged, 1.0);
             });
         });

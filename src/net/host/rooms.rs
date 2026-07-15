@@ -1,72 +1,55 @@
 //! Chunk-room / AoI replication helpers for the host.
 //!
-//! Each `ChunkCoord` lazily owns one Lightyear `Room` entity. Networked
-//! entities (resource nodes, dropped items, deployables, players, loot bags)
-//! join their chunk's room, and client senders join the rooms covering their
-//! AoI ring. Lightyear delta-ships components to senders that share a room
-//! with an entity and auto-despawns on the client when the rooms diverge.
+//! Each `ChunkCoord` lazily owns one lightyear [`RoomId`] (allocated from the
+//! [`RoomAllocator`] resource). Networked entities (resource nodes, dropped
+//! items, deployables, players, loot bags) carry a [`Rooms`] component naming
+//! their chunk's room, and each client sender carries a [`Rooms`] component
+//! naming the rooms covering its AoI ring. lightyear ships an entity's
+//! components to a sender iff the two share at least one room, and auto-despawns
+//! on the client when the rooms diverge.
+//!
+//! Owner-only player state lives on a **separate private mirror entity** (see
+//! [`crate::server::PlayerPrivateState`]) that sits in a per-client private room
+//! which only that client's sender joins, so its inventory/crafting never reach
+//! peers. lightyear 0.28 (bevy_replicon-backed) removed the old
+//! `ComponentReplicationOverrides` per-component gate; the private room replaces
+//! it. That backend also removed `ReplicationGroup`: it tracks change detection
+//! per entity per client, so the shared-group ack race that
+//! `ReplicationGroup::new_from_entity()` used to work around (upstream #740)
+//! cannot occur, and no per-entity group is needed.
 
 use std::collections::HashSet;
 
 use bevy::{log::info_span, prelude::*};
 use lightyear::prelude::{
-    ComponentReplicationOverrides, LinkOf, NetworkTarget, NetworkVisibility, Replicate,
-    ReplicationGroup, ReplicationSender, Room, RoomEvent, RoomTarget,
+    LinkOf, NetworkTarget, Replicate, ReplicationSender, RoomAllocator, RoomId, Rooms,
 };
 
 use crate::{protocol::ClientId, world::ChunkCoord};
 
 use super::routing::ServerConnections;
-use super::{AuthoritativeServer, ChunkRoomMap, ClientChunkSubs};
+use super::{AuthoritativeServer, ChunkRoomMap, ClientChunkSubs, ClientPrivateRooms};
 
-/// Attach the room-gated replication marker to a freshly-spawned
-/// world-entity (resource node, dropped item, deployable). Adds
-/// `Replicate::to_clients(NetworkTarget::All) + NetworkVisibility +
-/// ReplicationGroup::new_from_entity()` and then joins the chunk's room.
-/// `NetworkVisibility` narrows the `All` target down to the senders
-/// currently in a shared room with the entity, without it, every
-/// client would see every node.
-///
-/// `ReplicationGroup::new_from_entity()` is the fix for the upstream
-/// Lightyear 0.26.4 post-spawn-diff dropout bug. By default Lightyear
-/// puts every replicated entity in `DEFAULT_GROUP = ReplicationGroupId(0)`
-/// and gates change-detection sends on a per-group ack tick, so a
-/// frequently-updated entity in the group can advance the shared ack
-/// past a slowly-changing entity's local `Changed` mark and Lightyear
-/// concludes "nothing new to send" for the slow entity even though it
-/// just changed. Giving each entity its own group (derived from
-/// `Entity::to_bits()`) means each entity has its own ack tick and the
-/// share-the-tick race goes away. See [Networking § Replication](../../docs/networking.md#replication).
-///
-/// `NetworkTarget::All` (not `None`) is load-bearing: the Phase 6a
-/// diagnostic showed Lightyear shipping the initial spawn but not
-/// subsequent component updates with `None + room`. The room machinery
-/// uses `gain_visibility` which inserts a fresh `PerSenderReplicationState`
-/// when the sender isn't already in the entity's targets, that path
-/// admits the sender for the spawn message but apparently does not
-/// register the sender for the subsequent change-detection update
-/// pipeline. Listing the sender in the `Replicate` target up front
-/// avoids that ambiguity; `NetworkVisibility` still gates the actual
-/// visibility per the room state, so peers in unrelated chunks
-/// receive nothing.
+/// Attach room-gated replication to a freshly-spawned world entity (resource
+/// node, dropped item, deployable, loot bag): `Replicate::to_clients(All)` plus
+/// a [`Rooms`] component naming the entity's chunk room. The `Rooms` component
+/// is itself the visibility filter, so senders in unrelated chunks receive
+/// nothing.
 pub(super) fn attach_room_gated_replication(world: &mut World, entity: Entity, chunk: ChunkCoord) {
-    let room_entity = ensure_chunk_room_world(world, chunk);
+    let room = ensure_chunk_room_world(world, chunk);
     if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
         entity_mut.insert((
             Replicate::to_clients(NetworkTarget::All),
-            ReplicationGroup::new_from_entity(),
-            NetworkVisibility,
+            Rooms::single(room),
         ));
     }
-    world.trigger(RoomEvent {
-        room: room_entity,
-        target: RoomTarget::AddEntity(entity),
-    });
 }
 
-/// Move an already-replicated entity between two chunk rooms. No-op when
-/// the coords are equal. Used by dropped items and players whose anchor
-/// chunk can change after spawn (physics rollover, footsteps).
+/// Move an already-replicated single-room entity to a different chunk room.
+/// No-op when the coords are equal. Used by dropped items and players' public
+/// entities whose anchor chunk can change after spawn (physics rollover,
+/// footsteps). `Rooms` is an immutable component, so this re-inserts a fresh
+/// single-room membership rather than mutating in place.
 pub(super) fn move_entity_between_rooms(
     world: &mut World,
     entity: Entity,
@@ -76,160 +59,125 @@ pub(super) fn move_entity_between_rooms(
     if from == to {
         return;
     }
-    let from_room = world
-        .resource::<ChunkRoomMap>()
-        .by_coord
-        .get(&from)
-        .copied();
     let to_room = ensure_chunk_room_world(world, to);
-    if let Some(from_room) = from_room {
-        world.trigger(RoomEvent {
-            room: from_room,
-            target: RoomTarget::RemoveEntity(entity),
-        });
+    if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+        entity_mut.insert(Rooms::single(to_room));
     }
-    world.trigger(RoomEvent {
-        room: to_room,
-        target: RoomTarget::AddEntity(entity),
-    });
 }
 
-/// Player replication: broadcast the peer-visible components
-/// (`PlayerProfile` / `PlayerPose` / `PlayerHealth` / `PlayerChatBubble`
-/// and the lifecycle/armor/sleeping markers) to every sender in the same
-/// room, and gate each owner-only component (`PlayerInventory`,
-/// `PlayerCrafting`, `PlayerOpenContainers`, `PlayerInputAck`) behind a
-/// per-component override so only the owning client receives those wire
-/// bytes. The owner's prediction supplies their own pose locally, so
-/// them re-receiving it is a small, acceptable redundancy.
-pub(super) fn attach_player_replication(
-    world: &mut World,
-    entity: Entity,
-    chunk: ChunkCoord,
-    owner_sender: Option<Entity>,
-) {
-    let room_entity = ensure_chunk_room_world(world, chunk);
+/// Re-insert an entity's single-chunk [`Rooms`] membership WITHOUT changing its
+/// chunk, re-firing lightyear's `on_insert` visibility observer against the
+/// current sender subscriptions. The 0.28 room model latches per-client
+/// visibility only when an entity's or a client's `Rooms` is (re)inserted and
+/// never recomputes it per tick, so a settled entity that stops moving (a rested
+/// arrow) would otherwise freeze its visibility at its last move with no recovery
+/// path. Re-affirming for a short window after it settles lets a client whose
+/// subscriptions settled a tick later still gain it. This restores the
+/// self-healing the pre-0.28 per-tick room model had.
+pub(super) fn reaffirm_entity_room(world: &mut World, entity: Entity, chunk: ChunkCoord) {
+    let room = ensure_chunk_room_world(world, chunk);
     if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
-        // See `attach_room_gated_replication` for why
-        // `ReplicationGroup::new_from_entity()` is load-bearing.
+        entity_mut.insert(Rooms::single(room));
+    }
+}
+
+/// Player replication. The player's **public** mirror entity carries the
+/// peer-visible components (`PlayerProfile`/`PlayerPose`/... plus the cosmetic
+/// rig state) and joins its chunk room, so every sender sharing that room sees
+/// it. The player's **private** mirror entity (reached via
+/// [`crate::server::PlayerPrivateLink`], holding inventory/crafting/containers/
+/// input-ack) joins a per-client private room that only the owning sender ever
+/// subscribes to (see [`update_client_room_subscriptions`]), so peers never
+/// receive the private bytes.
+pub(super) fn attach_player_replication(world: &mut World, entity: Entity, chunk: ChunkCoord) {
+    let chunk_room = ensure_chunk_room_world(world, chunk);
+    if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
         entity_mut.insert((
             Replicate::to_clients(NetworkTarget::All),
-            ReplicationGroup::new_from_entity(),
-            NetworkVisibility,
-            owner_only_overrides::<crate::server::PlayerInventory>(owner_sender),
-            owner_only_overrides::<crate::server::PlayerCrafting>(owner_sender),
-            owner_only_overrides::<crate::server::PlayerOpenContainers>(owner_sender),
-            owner_only_overrides::<crate::server::PlayerInputAck>(owner_sender),
-            OwnerSender(owner_sender),
+            Rooms::single(chunk_room),
         ));
     }
-    world.trigger(RoomEvent {
-        room: room_entity,
-        target: RoomTarget::AddEntity(entity),
-    });
-}
 
-/// The sender entity the player's owner-only component overrides
-/// currently target. Lives on the mirror entity so
-/// [`rebind_player_owner_if_changed`] can notice when a reconnect hands
-/// the same player a new sender. Server-side only, never replicated.
-#[derive(Component)]
-pub(super) struct OwnerSender(Option<Entity>);
-
-/// Build the per-component override for one owner-only component:
-/// disabled for everyone, then re-enabled only for the owner's sender
-/// (if any). Applied to each private player component so peers never
-/// receive another player's private state.
-fn owner_only_overrides<T: Component>(
-    owner_sender: Option<Entity>,
-) -> ComponentReplicationOverrides<T> {
-    let overrides = ComponentReplicationOverrides::<T>::default().disable_all();
-    match owner_sender {
-        Some(sender) => overrides.enable_for(sender),
-        None => overrides,
+    // Wire the private mirror entity into the owner's private room.
+    let private_entity = world
+        .get::<crate::server::PlayerPrivateLink>(entity)
+        .map(|link| link.0);
+    let client_id = world
+        .get::<crate::server::Player>(entity)
+        .map(|player| player.client_id);
+    if let (Some(private_entity), Some(client_id)) = (private_entity, client_id) {
+        let private_room = ensure_private_room(world, client_id);
+        if let Ok(mut private_mut) = world.get_entity_mut(private_entity) {
+            private_mut.insert((
+                Replicate::to_clients(NetworkTarget::All),
+                Rooms::single(private_room),
+            ));
+        }
     }
 }
 
-/// Re-point a persisted player entity's owner-only component overrides at
-/// the client's *current* sender when it has changed. The mirror entity for a
-/// sleeping body survives the owner's logout, so when they reconnect and
-/// `wake_sleeper` reuses the same client id, the entity is refreshed in place
-/// (not respawned) and its overrides still name the old, now-despawned sender.
-/// Without this re-bind the woken player's inventory/crafting never reaches
-/// their new connection. Cheap: only writes on an actual sender change.
-pub(super) fn rebind_player_owner_if_changed(
-    world: &mut World,
-    entity: Entity,
-    current_sender: Option<Entity>,
-) {
-    if world.get::<OwnerSender>(entity).map(|o| o.0) == Some(current_sender) {
-        return;
-    }
-    if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
-        entity_mut.insert((
-            owner_only_overrides::<crate::server::PlayerInventory>(current_sender),
-            owner_only_overrides::<crate::server::PlayerCrafting>(current_sender),
-            owner_only_overrides::<crate::server::PlayerOpenContainers>(current_sender),
-            owner_only_overrides::<crate::server::PlayerInputAck>(current_sender),
-            OwnerSender(current_sender),
-        ));
-    }
-}
-
-/// World-side lazy lookup: returns the Room entity for `chunk`, spawning
-/// one if it does not yet exist. The mirror sync system uses this; the
-/// per-tick subscription update uses the Commands-side
-/// `ensure_chunk_room_commands` instead so it can defer the spawn.
-pub(super) fn ensure_chunk_room_world(world: &mut World, chunk: ChunkCoord) -> Entity {
-    if let Some(entity) = world
+/// World-side lazy lookup: returns the [`RoomId`] for `chunk`, allocating one
+/// from the [`RoomAllocator`] on first use. Server shutdown drops the world, so
+/// no explicit cleanup is required.
+pub(super) fn ensure_chunk_room_world(world: &mut World, chunk: ChunkCoord) -> RoomId {
+    if let Some(id) = world
         .resource::<ChunkRoomMap>()
         .by_coord
         .get(&chunk)
         .copied()
     {
-        return entity;
+        return id;
     }
-    let entity = world
-        .spawn((
-            Name::new(format!("Chunk Room {}/{}", chunk.x, chunk.z)),
-            Room::default(),
-        ))
-        .id();
+    let id = world.resource_mut::<RoomAllocator>().allocate();
     world
         .resource_mut::<ChunkRoomMap>()
         .by_coord
-        .insert(chunk, entity);
-    entity
+        .insert(chunk, id);
+    id
 }
 
-fn ensure_chunk_room_commands(
-    commands: &mut Commands,
-    rooms: &mut ChunkRoomMap,
-    chunk: ChunkCoord,
-) -> Entity {
-    if let Some(entity) = rooms.by_coord.get(&chunk).copied() {
-        return entity;
+/// Returns the per-client private [`RoomId`], allocating one on first use. The
+/// owning sender joins this room in [`update_client_room_subscriptions`]; the
+/// player's private mirror entity sits in it, so its owner-only components reach
+/// that client alone.
+fn ensure_private_room(world: &mut World, client_id: ClientId) -> RoomId {
+    if let Some(id) = world
+        .resource::<ClientPrivateRooms>()
+        .by_client
+        .get(&client_id)
+        .copied()
+    {
+        return id;
     }
-    let entity = commands
-        .spawn((
-            Name::new(format!("Chunk Room {}/{}", chunk.x, chunk.z)),
-            Room::default(),
-        ))
-        .id();
-    rooms.by_coord.insert(chunk, entity);
-    entity
+    let id = world.resource_mut::<RoomAllocator>().allocate();
+    world
+        .resource_mut::<ClientPrivateRooms>()
+        .by_client
+        .insert(client_id, id);
+    id
 }
 
-/// Observer that fires when Lightyear's link layer spawns a `LinkOf`
-/// entity (a new pending or connected client). Adds the
-/// `ReplicationSender` Lightyear needs to actually ship per-component
-/// updates to that client. Connection plugins handle the
-/// `Disconnected` tear-down for us, `RoomPlugin::handle_disconnect`
-/// removes the sender from all rooms automatically.
+/// Commands-side chunk-room lookup used by the per-tick subscription reconcile.
+fn ensure_chunk_room_commands(
+    chunk_rooms: &mut ChunkRoomMap,
+    allocator: &mut RoomAllocator,
+    chunk: ChunkCoord,
+) -> RoomId {
+    if let Some(id) = chunk_rooms.by_coord.get(&chunk).copied() {
+        return id;
+    }
+    let id = allocator.allocate();
+    chunk_rooms.by_coord.insert(chunk, id);
+    id
+}
+
+/// Observer that fires when lightyear's link layer spawns a `LinkOf` entity (a
+/// new pending or connected client). Adds the [`ReplicationSender`] lightyear
+/// needs to actually ship per-component updates to that client. The sender's
+/// [`Rooms`] membership is filled in by [`update_client_room_subscriptions`];
+/// on disconnect the `LinkOf` entity is despawned, taking its `Rooms` with it.
 pub(super) fn install_replication_sender_on_link(trigger: On<Add, LinkOf>, mut commands: Commands) {
-    commands
-        .entity(trigger.entity)
-        .insert(ReplicationSender::default());
+    commands.entity(trigger.entity).insert(ReplicationSender);
 }
 
 /// Reconciles each connected client's chunk-room subscriptions with their AoI
@@ -238,14 +186,21 @@ pub(super) fn install_replication_sender_on_link(trigger: On<Add, LinkOf>, mut c
 /// but only unsubscribed once it falls outside the wider *keep* radius
 /// (`retained_chunks_for_client`). The gap between the two thresholds means a
 /// player wobbling across a chunk boundary never crosses both, so nothing
-/// loads/unloads/reloads. On disconnect, RoomPlugin scrubs the sender from
-/// every room; we just drop our cached set.
+/// loads/unloads/reloads.
+///
+/// Each reconcile rebuilds the sender's [`Rooms`] component (immutable, so a
+/// full re-insert) from the accumulated chunk-room set plus the client's private
+/// room. On disconnect the sender entity is despawned by lightyear; we just drop
+/// our cached bookkeeping here.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn update_client_room_subscriptions(
     server: Res<AuthoritativeServer>,
     connections: Res<ServerConnections>,
     mut subs: ResMut<ClientChunkSubs>,
     mut anchors: ResMut<super::ClientAoiAnchors>,
     mut chunk_rooms: ResMut<ChunkRoomMap>,
+    private_rooms: Res<ClientPrivateRooms>,
+    mut allocator: ResMut<RoomAllocator>,
     mut commands: Commands,
 ) {
     let _span = info_span!("update_client_room_subscriptions").entered();
@@ -255,27 +210,22 @@ pub(super) fn update_client_room_subscriptions(
 
     for client_id in live_clients {
         let Some(sender_entity) = connections.entity_for_client(client_id) else {
-            // This client id is "in the world" but has no live sender right
-            // now, the classic case is a sleeping body: the player logged out,
-            // their body stays in the world (so the id remains in
-            // `connected_client_ids`), but the transport, and thus the
-            // `ReplicationSender`, is gone. Drop the cached AoI anchor and
-            // subscribed-chunk set so that when a sender reappears, i.e. the
-            // player reconnects and `wake_sleeper` reuses this same id with a
-            // brand-new sender, the next reconcile re-subscribes that new sender
-            // from scratch. Without this, the stale anchor short-circuits the
-            // reconcile (and the stale subscribed-set's `insert` guard suppresses
-            // the AddSender), so the new sender is never put into any room: the
-            // woken player receives nothing, not even its own entity, and the
-            // join splash hangs forever (`local_player_entity` never arrives).
+            // This client id is "in the world" but has no live sender right now,
+            // the classic case is a sleeping body: the player logged out, their
+            // body stays in the world (so the id remains in
+            // `connected_client_ids`), but the transport, and thus the sender, is
+            // gone. Drop the cached AoI anchor and subscribed-chunk set so that
+            // when a sender reappears (the player reconnects and `wake_sleeper`
+            // reuses this id with a brand-new sender) the next reconcile rebuilds
+            // that new sender's `Rooms` from scratch.
             anchors.by_client.remove(&client_id);
             subs.by_client.remove(&client_id);
             continue;
         };
         // Spatial short-circuit: if the client's anchor chunk and view tier are
-        // unchanged since last reconcile, the loaded-chunk grid being fixed
-        // means the add/keep sets are identical to last time, so there is
-        // nothing to add or remove. Skip the grid scan + set diff entirely.
+        // unchanged since last reconcile, the loaded-chunk grid being fixed means
+        // the add/keep sets are identical to last time, so the sender's room set
+        // hasn't changed. Skip the grid scan + re-insert entirely.
         let aoi_key = server.0.client_aoi_key(client_id);
         if let Some(key) = aoi_key
             && anchors.by_client.get(&client_id) == Some(&key)
@@ -286,31 +236,26 @@ pub(super) fn update_client_room_subscriptions(
         let keep_set: HashSet<ChunkCoord> = server.0.retained_chunks_for_client(client_id);
         let subscribed = subs.by_client.entry(client_id).or_default();
 
-        // Subscribe chunks that entered the add radius.
-        for coord in &add_set {
-            if subscribed.insert(*coord) {
-                let room = ensure_chunk_room_commands(&mut commands, &mut chunk_rooms, *coord);
-                commands.trigger(RoomEvent {
-                    room,
-                    target: RoomTarget::AddSender(sender_entity),
-                });
-            }
-        }
+        // Add chunks that entered the add radius, drop chunks that fell outside
+        // the wider keep radius (add_set is within keep_set, so this is the
+        // hysteresis band).
+        subscribed.extend(add_set.iter().copied());
+        subscribed.retain(|coord| keep_set.contains(coord));
 
-        // Unsubscribe chunks that fell outside the wider keep radius.
-        let to_remove: Vec<ChunkCoord> = subscribed.difference(&keep_set).copied().collect();
-        for coord in to_remove {
-            subscribed.remove(&coord);
-            if let Some(room) = chunk_rooms.by_coord.get(&coord).copied() {
-                commands.trigger(RoomEvent {
-                    room,
-                    target: RoomTarget::RemoveSender(sender_entity),
-                });
-            }
+        // Rebuild the sender's full room set: every subscribed chunk room plus
+        // the client's own private room (so it keeps receiving its private
+        // mirror entity regardless of where it stands).
+        let mut rooms: Vec<RoomId> = subscribed
+            .iter()
+            .map(|coord| ensure_chunk_room_commands(&mut chunk_rooms, &mut allocator, *coord))
+            .collect();
+        if let Some(private) = private_rooms.by_client.get(&client_id).copied() {
+            rooms.push(private);
         }
+        commands
+            .entity(sender_entity)
+            .insert(Rooms::from(rooms.into_iter()));
 
-        // Remember the key we just reconciled so an idle player short-circuits
-        // next tick.
         if let Some(key) = aoi_key {
             anchors.by_client.insert(client_id, key);
         }
@@ -322,26 +267,24 @@ mod tests {
     use std::time::Duration;
 
     use bevy::app::App;
-    use lightyear::prelude::{ReplicationGroupId, RoomPlugin, server::ServerPlugins};
+    use lightyear::prelude::{RoomPlugin, server::ServerPlugins};
 
     use super::*;
 
-    /// `attach_room_gated_replication` must give the spawned entity its own
-    /// per-entity `ReplicationGroup` (the fix for the Lightyear 0.26.4
-    /// post-spawn-diff dropout) alongside the `Replicate` marker.
+    /// `attach_room_gated_replication` must give the spawned entity the
+    /// `Replicate` marker and a `Rooms` component naming a freshly-allocated
+    /// room for its chunk.
     ///
-    /// Inserting `Replicate` fires Lightyear component hooks that touch
-    /// server-side replication resources (`ReplicableRootEntities`, the
-    /// authority broker, …), so a bare `World` panics. We stand up the same
-    /// minimal plugin set the host uses (`ServerPlugins` + `RoomPlugin`) so
-    /// the hooks resolve, then assert the helper attached both components and
-    /// allocated a room for the chunk. The `RoomEvent` path is exercised by
-    /// the integration tests in `net/tests.rs`; here we guard the
-    /// component-attachment contract specifically.
+    /// Inserting `Replicate` fires lightyear component hooks that touch
+    /// server-side replication resources, so a bare `World` panics. We stand up
+    /// the same minimal plugin set the host uses (`ServerPlugins` + `RoomPlugin`,
+    /// the latter providing `RoomAllocator`) so the hooks resolve.
     #[test]
-    fn attach_room_gated_replication_adds_replicate_and_per_entity_group() {
+    fn attach_room_gated_replication_adds_replicate_and_room() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
+        // Bevy 0.19: ServerPlugins calls init_state, which needs StatesPlugin.
+        app.add_plugins(bevy::state::app::StatesPlugin);
         app.add_plugins(ServerPlugins {
             tick_duration: Duration::from_secs_f32(1.0 / 60.0),
         });
@@ -355,32 +298,24 @@ mod tests {
         let chunk = ChunkCoord::new(3, -1);
 
         attach_room_gated_replication(world, entity, chunk);
-        // Flush the deferred component-hook commands the inserts queued.
         world.flush();
 
-        // Both replication components were attached.
         assert!(
             world.get::<Replicate>(entity).is_some(),
             "entity should carry the Replicate marker"
         );
-        let group = world
-            .get::<ReplicationGroup>(entity)
-            .expect("entity should carry a ReplicationGroup");
-
-        // A per-entity group resolves to the entity bits, NOT the shared
-        // default group 0 that the upstream bug routes everything into.
-        assert_eq!(
-            group.group_id(Some(entity)),
-            ReplicationGroupId(entity.to_bits())
-        );
-        assert_ne!(group.group_id(Some(entity)), ReplicationGroupId(0));
-
-        // A chunk room was lazily allocated for the entity's chunk.
+        let room = world
+            .resource::<ChunkRoomMap>()
+            .by_coord
+            .get(&chunk)
+            .copied()
+            .expect("a room should have been allocated for the chunk");
+        let rooms = world
+            .get::<Rooms>(entity)
+            .expect("entity should carry a Rooms component");
         assert!(
-            world
-                .resource::<ChunkRoomMap>()
-                .by_coord
-                .contains_key(&chunk)
+            rooms.contains_room(room),
+            "entity's Rooms should name its chunk room"
         );
     }
 }

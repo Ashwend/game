@@ -224,7 +224,7 @@ fn draw_active_input(
         input_text_rect(rect),
         theme::text_input(&mut menu.chat_input)
             .id(input_id)
-            .frame(false)
+            .frame(egui::Frame::NONE)
             // Cap at the wire limit so what the player types is exactly
             // what peers see; without this the server silently truncates
             // at MAX_CHAT_LEN and the tail of a long message vanishes.
@@ -257,7 +257,7 @@ fn draw_inactive_input(ui: &mut egui::Ui, menu: &mut MenuState, interactive: boo
         input_text_rect(rect),
         theme::text_input(&mut menu.chat_input)
             .id(egui::Id::new(CHAT_INPUT_ID))
-            .frame(false)
+            .frame(egui::Frame::NONE)
             .interactive(false)
             .hint_text("Chat"),
     );
@@ -389,6 +389,7 @@ mod tests {
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(0.0, -48.0),
                 modifiers: egui::Modifiers::default(),
+                phase: egui::TouchPhase::Move,
             },
         ]
     }
@@ -407,10 +408,10 @@ mod tests {
         let ctx = egui::Context::default();
         let mut menu = MenuState::default();
 
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             raw_input(vec![key_press(egui::Key::T, egui::Modifiers::default())]),
-            |ctx| {
-                assert!(handle_chat_shortcuts(ctx, &mut menu));
+            |ui| {
+                assert!(handle_chat_shortcuts(ui.ctx(), &mut menu));
             },
         );
 
@@ -430,8 +431,8 @@ mod tests {
 
         let mut input = raw_input(vec![key_press(egui::Key::T, modifiers)]);
         input.modifiers = modifiers;
-        let _ = ctx.run(input, |ctx| {
-            assert!(!handle_chat_shortcuts(ctx, &mut menu));
+        let _ = ctx.run_ui(input, |ui| {
+            assert!(!handle_chat_shortcuts(ui.ctx(), &mut menu));
         });
 
         assert!(!menu.chat_open);
@@ -461,9 +462,9 @@ mod tests {
             ..Default::default()
         };
 
-        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+        let _ = ctx.run_ui(raw_input(Vec::new()), |ui| {
             chat_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &mut runtime,
                 &mut Vec::<String>::new(),
@@ -474,9 +475,9 @@ mod tests {
 
         menu.chat_open = true;
         menu.chat_focus_pending = true;
-        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+        let _ = ctx.run_ui(raw_input(Vec::new()), |ui| {
             chat_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &mut runtime,
                 &mut Vec::<String>::new(),
@@ -499,9 +500,9 @@ mod tests {
         let mut wants_pointer = true;
         let mut scroll_delta = egui::Vec2::ZERO;
 
-        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+        let _ = ctx.run_ui(raw_input(Vec::new()), |ui| {
             chat_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &mut runtime,
                 &mut Vec::<String>::new(),
@@ -509,17 +510,17 @@ mod tests {
                 None,
             );
         });
-        let _ = ctx.run(raw_input(pointer_scroll_over_chat()), |ctx| {
+        let _ = ctx.run_ui(raw_input(pointer_scroll_over_chat()), |ui| {
             chat_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &mut runtime,
                 &mut Vec::<String>::new(),
                 false,
                 None,
             );
-            wants_pointer = ctx.wants_pointer_input();
-            scroll_delta = ctx.input(|input| input.smooth_scroll_delta);
+            wants_pointer = ui.ctx().egui_wants_pointer_input();
+            scroll_delta = ui.ctx().input(|input| input.smooth_scroll_delta);
         });
 
         assert!(!wants_pointer);
@@ -536,9 +537,9 @@ mod tests {
         };
         let mut wants_pointer = false;
 
-        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+        let _ = ctx.run_ui(raw_input(Vec::new()), |ui| {
             chat_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &mut runtime,
                 &mut Vec::<String>::new(),
@@ -546,16 +547,16 @@ mod tests {
                 None,
             );
         });
-        let _ = ctx.run(raw_input(pointer_scroll_over_chat()), |ctx| {
+        let _ = ctx.run_ui(raw_input(pointer_scroll_over_chat()), |ui| {
             chat_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &mut runtime,
                 &mut Vec::<String>::new(),
                 true,
                 None,
             );
-            wants_pointer = ctx.wants_pointer_input();
+            wants_pointer = ui.ctx().egui_wants_pointer_input();
         });
 
         assert!(wants_pointer);
@@ -573,8 +574,8 @@ mod tests {
         let mut runtime = ClientRuntime::default();
         let mut sink: Vec<String> = Vec::new();
 
-        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(raw_input(Vec::new()), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let response = ui.allocate_response(egui::vec2(20.0, 20.0), egui::Sense::click());
                 submit_chat(&mut menu, &mut runtime, &mut sink, &response);
             });
@@ -589,8 +590,8 @@ mod tests {
         menu.chat_open = true;
         menu.chat_focus_pending = true;
         menu.chat_input = "draft".to_owned();
-        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(raw_input(Vec::new()), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let response = ui.allocate_response(egui::vec2(20.0, 20.0), egui::Sense::click());
                 cancel_chat(&mut menu, &response);
             });

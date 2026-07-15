@@ -211,10 +211,10 @@ fn escape_cancels_modal_or_returns_to_main_menu() {
         ..Default::default()
     };
 
-    let _ = ctx.run(
+    let _ = ctx.run_ui(
         raw_input_with_events(vec![key_press(egui::Key::Escape)]),
-        |ctx| {
-            super::handle_worlds_escape(ctx, &mut menu);
+        |ui| {
+            super::handle_worlds_escape(ui.ctx(), &mut menu);
         },
     );
 
@@ -231,10 +231,10 @@ fn escape_cancels_modal_or_returns_to_main_menu() {
         ..Default::default()
     };
 
-    let _ = ctx.run(
+    let _ = ctx.run_ui(
         raw_input_with_events(vec![key_press(egui::Key::Escape)]),
-        |ctx| {
-            super::handle_worlds_escape(ctx, &mut menu);
+        |ui| {
+            super::handle_worlds_escape(ui.ctx(), &mut menu);
         },
     );
 
@@ -254,11 +254,11 @@ fn enter_confirms_create_world_modal() {
     };
     let mut runtime = ClientRuntime::default();
 
-    let _ = ctx.run(
+    let _ = ctx.run_ui(
         raw_input_with_events(vec![key_press(egui::Key::Enter)]),
-        |ctx| {
+        |ui| {
             super::worlds_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &mut runtime,
                 &store,
@@ -287,9 +287,9 @@ fn worlds_ui_renders_empty_and_populated_tables() {
     let mut menu = MenuState::default();
     let mut runtime = ClientRuntime::default();
 
-    let _ = ctx.run(raw_input(), |ctx| {
+    let _ = ctx.run_ui(raw_input(), |ui| {
         super::worlds_ui(
-            ctx,
+            ui.ctx(),
             &mut menu,
             &mut runtime,
             &store,
@@ -306,9 +306,9 @@ fn worlds_ui_renders_empty_and_populated_tables() {
     refresh_worlds(&mut menu, &store);
     assert_eq!(menu.worlds[0].map, MapType::default());
 
-    let _ = ctx.run(raw_input(), |ctx| {
+    let _ = ctx.run_ui(raw_input(), |ui| {
         super::worlds_ui(
-            ctx,
+            ui.ctx(),
             &mut menu,
             &mut runtime,
             &store,

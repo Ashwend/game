@@ -1,20 +1,20 @@
 use bevy::{
     asset::RenderAssetUsages,
     audio::SpatialListener,
-    camera::{ClearColorConfig, visibility::RenderLayers},
+    camera::{ClearColorConfig, Hdr, visibility::RenderLayers},
     core_pipeline::tonemapping::Tonemapping,
     gltf::GltfAssetLabel,
     image::{
         CompressedImageFormats, ImageAddressMode, ImageFilterMode, ImageSampler,
         ImageSamplerDescriptor, ImageType,
     },
-    light::AtmosphereEnvironmentMapLight,
-    pbr::{Atmosphere, AtmosphereSettings, ScatteringMedium},
+    light::{Atmosphere, AtmosphereEnvironmentMapLight, atmosphere::ScatteringMedium},
+    pbr::AtmosphereSettings,
     post_process::dof::{DepthOfField, DepthOfFieldMode},
     prelude::*,
     render::{
         render_resource::{Extent3d, TextureDimension, TextureFormat},
-        view::{Hdr, NoIndirectDrawing},
+        view::NoIndirectDrawing,
     },
 };
 
@@ -540,18 +540,18 @@ pub(crate) fn setup_scene(
             // which reads softer and more painterly (closer to the stylized-grass
             // reference). Scene-wide; verified against the daytime/dusk scene.
             Tonemapping::AgX,
-            // Procedural physically-based sky. `earthlike` uses the default
-            // earthlike scattering medium; `AtmosphereSettings` is auto-required
-            // with sensible defaults (scene units are already metres). The
-            // atmosphere reads the sun `DirectionalLight` to place the sun disc and
-            // tint sunlight through the air, and renders the sky behind all
-            // geometry, so the old hand-authored `ClearColor` sky is retired.
-            // Grouped into a nested sub-bundle so the camera's component tuple
+            // Procedural physically-based sky. In Bevy 0.19 the `Atmosphere` itself
+            // lives on its own entity (spawned just below); a 3D camera opts in
+            // simply by carrying `AtmosphereSettings` (the renderer picks the nearest
+            // atmosphere), plus the `AtmosphereEnvironmentMapLight` that turns the sky
+            // into image-based ambient. The atmosphere reads the sun `DirectionalLight`
+            // to place the sun disc and tint sunlight through the air, and renders the
+            // sky behind all geometry, so the old hand-authored `ClearColor` sky is
+            // retired. Grouped into a nested sub-bundle so the camera's component tuple
             // stays under Bevy's 15-element bundle arity limit.
             (
-                Atmosphere::earthlike(scattering_media.add(ScatteringMedium::default())),
                 // The atmosphere recomputes its LUTs every frame (no skip-if-unchanged
-                // gating in Bevy 0.18), so these are a per-frame GPU cost. We trim them
+                // gating), so these are a per-frame GPU cost. We trim them
                 // for performance, favouring sample-count cuts (slightly noisier
                 // integration, ~imperceptible) over resolution cuts (which band). The
                 // transmittance/multiscattering *resolutions* stay at default to keep
@@ -606,6 +606,18 @@ pub(crate) fn setup_scene(
             Transform::from_xyz(0.0, EYE_HEIGHT, 3.0).looking_at(Vec3::ZERO, Vec3::Y),
         ))
         .id();
+
+    // The procedural sky's `Atmosphere` is a standalone entity in Bevy 0.19 (it was
+    // a camera component in 0.18). Its `GlobalTransform` marks the planet centre; the
+    // component's on-add hook auto-places an untouched transform `inner_radius` below
+    // the origin, so the scene sits on the planet surface with no manual transform
+    // needed. The camera opts in via the `AtmosphereSettings` in its bundle above.
+    // Earth scattering medium at 256x256 LUT resolution (Bevy's atmosphere-example
+    // default; `ScatteringMedium::default()` no longer exists in 0.19).
+    commands.spawn((
+        Name::new("Atmosphere"),
+        Atmosphere::earth(scattering_media.add(ScatteringMedium::earth(256, 256))),
+    ));
 
     // Dedicated first-person viewmodel camera. It is a child of the world camera
     // (so it shares the eye transform every frame for free) and renders ONLY the

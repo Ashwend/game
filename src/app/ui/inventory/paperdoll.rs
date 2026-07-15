@@ -202,9 +202,9 @@ mod tests {
         }
     }
 
-    fn run_ui(f: impl FnMut(&egui::Context)) -> egui::FullOutput {
+    fn run_ui(f: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {
         let ctx = egui::Context::default();
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -222,10 +222,10 @@ mod tests {
     fn paperdoll_registers_all_four_slot_rects() {
         let local = local_player(Some(PlayerInventoryState::empty()));
         let mut inv_ui = InventoryUiState::default();
-        run_ui(|ctx| {
+        run_ui(|ui| {
             egui::Area::new("paperdoll_test".into())
                 .fixed_pos(egui::pos2(0.0, 0.0))
-                .show(ctx, |ui| {
+                .show(ui.ctx(), |ui| {
                     draw_paperdoll_column(ui, &local, &mut inv_ui);
                 });
         });
@@ -241,10 +241,10 @@ mod tests {
     fn paperdoll_slots_stack_top_to_bottom() {
         let local = local_player(Some(PlayerInventoryState::empty()));
         let mut inv_ui = InventoryUiState::default();
-        run_ui(|ctx| {
+        run_ui(|ui| {
             egui::Area::new("paperdoll_order".into())
                 .fixed_pos(egui::pos2(0.0, 0.0))
-                .show(ctx, |ui| {
+                .show(ui.ctx(), |ui| {
                     draw_paperdoll_column(ui, &local, &mut inv_ui);
                 });
         });
@@ -307,14 +307,14 @@ mod tests {
         let worn = local_player(Some(worn_inventory));
 
         let mut inv_ui_a = InventoryUiState::default();
-        let empty_out = run_ui(|ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let empty_out = run_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 draw_paperdoll_column(ui, &empty, &mut inv_ui_a);
             });
         });
         let mut inv_ui_b = InventoryUiState::default();
-        let worn_out = run_ui(|ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let worn_out = run_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 draw_paperdoll_column(ui, &worn, &mut inv_ui_b);
             });
         });

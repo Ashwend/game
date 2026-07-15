@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, Result, bail};
 use bevy::{app::TerminalCtrlCHandlerPlugin, log::info_span, prelude::*};
 use lightyear::prelude::{
-    LocalAddr, MessageSender, RoomPlugin,
+    LocalAddr, MessageSender, RoomId, RoomPlugin,
     server::{self, ClientOf},
 };
 
@@ -45,7 +45,8 @@ use self::{
     },
 };
 use super::channels::{
-    LIGHTYEAR_PROTOCOL_ID, LightyearProtocolPlugin, PrivateKeyContext, private_key,
+    LIGHTYEAR_PROTOCOL_ID, LightyearProtocolPlugin, NETCODE_CLIENT_TIMEOUT_SECS, PrivateKeyContext,
+    private_key,
 };
 
 const HOST_SLEEP: Duration = Duration::from_millis(1);
@@ -113,13 +114,24 @@ struct HostShutdown {
     requested: bool,
 }
 
-/// Lazy `ChunkCoord -> RoomEntity` allocator. A `Room` is a regular Bevy
-/// entity in Lightyear 0.26; we spawn one the first time we need to attach
-/// a node or subscribe a client to that chunk, then cache it here. Server
-/// shutdown drops the world entirely so no explicit cleanup is required.
+/// Lazy `ChunkCoord -> RoomId` allocator. lightyear 0.28 rooms are `RoomId`
+/// values minted from the `RoomAllocator` resource (not entities); we allocate
+/// one the first time we need to gate a node or a client sender to that chunk,
+/// then cache it here. Server shutdown drops the world entirely so no explicit
+/// cleanup is required.
 #[derive(Resource, Default)]
 struct ChunkRoomMap {
-    by_coord: HashMap<ChunkCoord, Entity>,
+    by_coord: HashMap<ChunkCoord, RoomId>,
+}
+
+/// Per-client private `RoomId`, minted on first player spawn. Only the owning
+/// client's sender joins this room, so the player's private mirror entity (its
+/// inventory/crafting/open-containers/input-ack) replicates to that client
+/// alone. Replaces the per-component `ComponentReplicationOverrides` gate that
+/// lightyear 0.28 removed.
+#[derive(Resource, Default)]
+struct ClientPrivateRooms {
+    by_client: HashMap<ClientId, RoomId>,
 }
 
 /// Per-client snapshot of which chunk rooms the client currently has a sender
@@ -313,6 +325,11 @@ fn run_host(
     let bind_addr = reserved_addr.addr();
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
+    // Bevy 0.19: `init_state` (called inside lightyear's `ServerPlugins`) needs
+    // the `StateTransition` schedule that `StatesPlugin` provides. `MinimalPlugins`
+    // no longer bundles it (only `DefaultPlugins` does), so this headless host app
+    // must add it explicitly or the server panics on startup.
+    app.add_plugins(bevy::state::app::StatesPlugin);
     if install_terminal_shutdown {
         app.add_plugins(TerminalCtrlCHandlerPlugin);
     }
@@ -327,6 +344,7 @@ fn run_host(
     // auto-despawns on the client when rooms diverge.
     app.add_plugins(RoomPlugin);
     app.insert_resource(ChunkRoomMap::default());
+    app.insert_resource(ClientPrivateRooms::default());
     app.insert_resource(ClientChunkSubs::default());
     app.insert_resource(ClientAoiAnchors::default());
     app.add_observer(install_replication_sender_on_link);
@@ -340,7 +358,10 @@ fn run_host(
             server::NetcodeServer::new(
                 server::NetcodeConfig::default()
                     .with_protocol_id(LIGHTYEAR_PROTOCOL_ID)
-                    .with_key(private_key(key_context)),
+                    .with_key(private_key(key_context))
+                    // Default is 3s, far too short for the multi-second initial
+                    // world stream, a slow-loading joiner would be dropped mid-load.
+                    .with_client_timeout_secs(NETCODE_CLIENT_TIMEOUT_SECS),
             ),
         ))
         .id();

@@ -47,7 +47,7 @@ pub struct RangedProfile {
 impl RangedProfile {
     /// Observed draw fraction in `[0, 1]` after `draw_ticks` ticks of held draw.
     /// `1` for an instant-fire weapon (no draw window to scale against).
-    fn draw_fraction(&self, draw_ticks: u64) -> f32 {
+    pub fn draw_fraction(&self, draw_ticks: u64) -> f32 {
         if self.draw_ticks_to_full == 0 {
             return 1.0;
         }

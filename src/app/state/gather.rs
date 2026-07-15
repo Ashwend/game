@@ -227,6 +227,12 @@ pub(crate) fn swing_duration_seconds(model: ItemModel) -> f32 {
         ItemModel::Crossbow => CROSSBOW_FIRE_RECOVERY_SECONDS,
         // The thrown bomb's lob beat (wind-up + release + recovery).
         ItemModel::ThrownBomb => THROW_BOMB_SECONDS,
+        // The bandage does not swing at all: its whole animation is the use
+        // charge, which lives in `ConsumeChargeState`, not the swing clock. This
+        // entry is never consulted for a real swing (the input layer claims the
+        // frame before the melee path runs); it exists only to keep the table
+        // total, so it reports the inert bag beat.
+        ItemModel::Bandage => BAG_SWING_SECONDS,
     }
 }
 
@@ -247,6 +253,9 @@ pub(crate) fn swing_impact_fraction(model: ItemModel) -> f32 {
         ItemModel::Crossbow => CROSSBOW_FIRE_IMPACT_FRACTION,
         // The bomb leaves the hand at the toss pose's release point.
         ItemModel::ThrownBomb => THROW_BOMB_IMPACT_FRACTION,
+        // The bandage never swings, so it has no contact frame. See
+        // `swing_duration_seconds`.
+        ItemModel::Bandage => BAG_IMPACT_FRACTION,
     }
 }
 
@@ -314,7 +323,10 @@ pub(crate) fn swap_duration_for_model(model: ItemModel) -> f32 {
         // Deployables are bulky like the bag, same lift cadence keeps
         // them feeling consistent without a bespoke pose. The thrown bomb is a
         // light held bundle, so it lifts at the bag cadence too.
-        ItemModel::Bag | ItemModel::Deployable | ItemModel::ThrownBomb => SWAP_DURATION_BAG,
+        // The bandage is a light held bundle too, so it lifts at the bag cadence.
+        ItemModel::Bag | ItemModel::Deployable | ItemModel::ThrownBomb | ItemModel::Bandage => {
+            SWAP_DURATION_BAG
+        }
         // The club, spear, and sword lift like the hatchet (a one/two-handed
         // haft); the mace is the heaviest thing you can carry, so it lifts like
         // the pickaxe.

@@ -148,6 +148,10 @@ pub enum ClientMessage {
     /// is the authority on the id space, the per-player cap, and persistence;
     /// it answers with [`ServerMessage::WorldMapMarkers`].
     WorldMapMarker(WorldMapMarkerCommand),
+    /// Start / cancel using a held consumable (the bandage). The server tracks
+    /// the charge on its own clock and applies the heal itself when it completes,
+    /// so there is no "apply" variant to forge. See [`ConsumableCommand`].
+    Consumable(ConsumableCommand),
 }
 
 /// Player-controlled view radius for chunk AoI streaming. Resolved to a
@@ -193,6 +197,12 @@ impl ClientMessage {
             // A thrown bomb is a one-shot, item-consuming intent (a dropped throw
             // would eat the bomb), so it is reliable like the ranged fire.
             | Self::Explosive(_)
+            // A consumable use is item-consuming and its cancel restores the
+            // movement slow, so BOTH variants must land. A dropped `UseStart`
+            // silently eats the player's press; a dropped `UseCancel` would leave
+            // them stuck at walking speed with a charge the server still thinks is
+            // running, and it would go on to spend the bandage they let go of.
+            | Self::Consumable(_)
             | Self::DamageDeployable(_)
             | Self::AttackPlayer(_)
             // Reliable: a swing-start is tiny (~5 bytes) and infrequent, and

@@ -395,9 +395,9 @@ mod tests {
         }
     }
 
-    fn run_ui(f: impl FnMut(&egui::Context)) -> egui::FullOutput {
+    fn run_ui(f: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {
         let ctx = egui::Context::default();
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -491,8 +491,8 @@ mod tests {
         let local = local_player_with_jobs(Vec::new());
         let mut toasts: Vec<String> = Vec::new();
 
-        run_ui(|ctx| {
-            crafting_queue_hud(ctx, &mut runtime, &local, &mut hud, &mut toasts);
+        run_ui(|ui| {
+            crafting_queue_hud(ui.ctx(), &mut runtime, &local, &mut hud, &mut toasts);
         });
         // Empty queue forgets every baseline.
         assert!(hud.progress.is_empty());
@@ -506,8 +506,8 @@ mod tests {
         let local = local_player_with_jobs(jobs);
         let mut toasts: Vec<String> = Vec::new();
 
-        let output = run_ui(|ctx| {
-            crafting_queue_hud(ctx, &mut runtime, &local, &mut hud, &mut toasts);
+        let output = run_ui(|ui| {
+            crafting_queue_hud(ui.ctx(), &mut runtime, &local, &mut hud, &mut toasts);
         });
         // Five jobs → three cards + a "+2 more" overflow bar all paint.
         assert!(!output.shapes.is_empty());
@@ -526,8 +526,8 @@ mod tests {
         let local = local_player_with_jobs(vec![job(0, 0, 40)]);
         let mut toasts: Vec<String> = Vec::new();
 
-        run_ui(|ctx| {
-            crafting_queue_hud(ctx, &mut runtime, &local, &mut hud, &mut toasts);
+        run_ui(|ui| {
+            crafting_queue_hud(ui.ctx(), &mut runtime, &local, &mut hud, &mut toasts);
         });
         assert!(!hud.progress.contains_key(&404));
         assert!(hud.progress.contains_key(&0));

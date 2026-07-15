@@ -2,7 +2,7 @@
 name = "ashwend"
 version = "0.22.2"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.95"
 default-run = "ashwend"
 license-file = "LICENSE"
 publish = false
@@ -61,8 +61,8 @@ base64 = "0.22"
 # sets `soft_shadow_size` so long low-sun shadows get a distance-widening
 # penumbra (soft gradient edge) instead of a hard line. Experimental upstream
 # (bevyengine/bevy#16155); verify it renders cleanly on the Metal backend.
-bevy = { version = "0.18.1", features = ["wav", "experimental_pbr_pcss"] }
-bevy_egui = "0.39.1"
+bevy = { version = "0.19", features = ["wav", "experimental_pbr_pcss"] }
+bevy_egui = "0.41"
 # Software frame-pacer. Caps the frame rate to the display refresh by
 # sleeping on the CPU before each frame is presented. We rely on this
 # rather than the GPU's vsync (`PresentMode::Fifo`/`AutoVsync`) because
@@ -91,12 +91,12 @@ crossbeam-channel = "0.5"
 directories = "6.0.0"
 # CommonMark renderer for egui. Used by the in-game update modal to render the
 # GitHub release notes (changelog since the player's version) as styled
-# markdown. Pinned to the 0.22 line because that is the release that targets
-# egui ^0.33, which is what `bevy_egui` 0.39 pulls in. `default-features = off`
+# markdown. Pinned to the 0.24 line because that is the release that targets
+# egui ^0.35, which is what `bevy_egui` 0.41 pulls in. `default-features = off`
 # drops the optional image/syntax-highlighting backends, our changelog is
 # headings, bullet lists, inline code, and links, no images, so we avoid
 # dragging in the `image`/`syntect` crates.
-egui_commonmark = { version = "0.22", default-features = false }
+egui_commonmark = { version = "0.24", default-features = false }
 # Compile-time tree of `assets/` baked into the binary. The audio system walks
 # this at startup to register every shipped sound with Bevy's embedded asset
 # source, adding a new clip is now "drop the file in `assets/`", no per-file
@@ -106,7 +106,7 @@ include_dir = "0.7"
 # (RS256 against the WorkOS JWKS) plus JWK parsing. No secrets needed, the
 # server only ever holds the public client id and the public signing keys.
 jsonwebtoken = "9.3"
-lightyear = { version = "0.26.4", default-features = false, features = ["client", "server", "netcode", "udp", "replication"] }
+lightyear = { version = "0.28", default-features = false, features = ["client", "server", "netcode", "udp", "replication"] }
 # Opens a URL/file in the user's default handler: the menu's Discord link, the
 # WorkOS sign-in page, and the updater's download-page fallback all route
 # through `crate::util::open_url`. Replaces a hand-rolled per-OS launcher whose
@@ -196,3 +196,14 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# `bevy_framepace` has no crates.io release for Bevy 0.19 yet (latest published is
+# 0.21.0, Bevy 0.18). We override it to hacknus's open PR (aevyrie/bevy_framepace#77,
+# branch `bevy_0.19`), pinned to the exact commit for reproducibility. The PR is a
+# one-line dependency bump: it does NOT touch `src/lib.rs`, so `FramepacePlugin`,
+# `FramepaceSettings`, and `Limiter` are unchanged and no call sites move. The branch
+# keeps the crate version at 0.21.0, so the dependency line above must stay at "0.21"
+# for this patch to apply. TODO: drop this once a Bevy-0.19 `bevy_framepace` is
+# published on crates.io (expected 0.22).
+[patch.crates-io]
+bevy_framepace = { git = "https://github.com/hacknus/bevy_framepace", rev = "4a950ca526bd4fb56d03b7caf28a04f2bbac2123" }

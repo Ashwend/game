@@ -538,7 +538,15 @@ impl ClientRuntime {
     }
 
     fn apply_world_time_snapshot(&mut self, snapshot: WorldTimeSnapshot) {
-        self.server_tick_estimate = snapshot.server_tick as f64;
+        // The snapshot carries the server tick at the moment it was built; it
+        // reaches us ~one-way latency later, so the true server tick is already a
+        // little further ahead. Compensate by half the measured RTT (as ticks) so
+        // tick-timed visuals (the meteor impact) line up with when the server
+        // actually resolved and broadcast the impact effects. ~0 on a loopback
+        // singleplayer host.
+        let one_way_ticks = (f64::from(self.local_ping_ms) / 2.0 / 1000.0)
+            * f64::from(crate::protocol::SERVER_TICK_RATE_HZ);
+        self.server_tick_estimate = snapshot.server_tick as f64 + one_way_ticks;
         self.world_time.seconds_of_day = snapshot.seconds_of_day;
         self.world_time.multiplier = snapshot.multiplier;
         // Re-clamp on the read side: a future server might broadcast a
@@ -658,6 +666,25 @@ impl ClientRuntime {
     pub(super) fn seed_local_prediction(&mut self, seed: &PlayerState) {
         self.predicted_local = Some(PlayerController::from_player_state(seed));
         self.input_sequence = self.input_sequence.max(seed.last_processed_input);
+    }
+
+    /// Overwrite the local player's predicted health with the authoritative
+    /// value from their replicated `PlayerHealth` mirror.
+    ///
+    /// Health is the one field the client NEVER predicts (it cannot damage
+    /// itself), so the replicated value is always the truth. It used to reach
+    /// the HUD only via the `Correction` **message** the server pushes on each
+    /// hit; if that single message is dropped the local bar stays full while the
+    /// server records every hit (exactly the failure the `apply_player_damage`
+    /// comment warns about). The mirror is already replicated to the owner, so
+    /// reading it here makes the HUD self-healing: a dropped `Correction` is
+    /// repaired by the next replicated diff instead of stranding the bar.
+    pub(crate) fn sync_local_health(&mut self, health: f32) {
+        if let Some(predicted) = &mut self.predicted_local
+            && predicted.health != health
+        {
+            predicted.health = health;
+        }
     }
 
     /// Server-authoritative correction of the local prediction. Health

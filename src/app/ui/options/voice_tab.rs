@@ -172,7 +172,7 @@ mod tests {
             // false exercises the "output unavailable" warning branch.
             playback_available: false,
         };
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -180,8 +180,8 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     render(ui, &mut settings, &mut io);
                 });
             },

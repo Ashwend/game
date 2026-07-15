@@ -46,6 +46,7 @@ impl GameServer {
             "drain" => self.command_drain(client_id, &args),
             "time" => self.command_set_time(client_id, &args),
             "speed" => self.command_set_run_speed(client_id, &args),
+            "health" | "hp" => self.command_set_health(client_id, &args),
             "knockback-scale" | "knockbackscale" => {
                 self.command_set_knockback_scale(client_id, &args)
             }
@@ -102,6 +103,12 @@ impl GameServer {
             "  /speed <multiplier>: admin only"
         };
         lines.push(speed_line.to_owned());
+        let health_line = if is_admin {
+            "  /health <value>: set your own HP (e.g. /health 25), a cheat"
+        } else {
+            "  /health <value>: admin only"
+        };
+        lines.push(health_line.to_owned());
         let knockback_line = if is_admin {
             "  /knockback-scale <factor>: scale PvP knockback for feel tuning (0 to 5, 1 to reset)"
         } else {

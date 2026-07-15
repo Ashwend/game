@@ -256,7 +256,7 @@ pub(crate) fn sword_slash_trail_system(
         }
     };
 
-    if let Some(mesh) = meshes.get_mut(&handles.mesh) {
+    if let Some(mut mesh) = meshes.get_mut(&handles.mesh) {
         let (positions, colors) = ribbon_attributes(held_mesh, tail, head, envelope);
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);

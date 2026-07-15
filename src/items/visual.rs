@@ -50,6 +50,11 @@ pub enum ItemModel {
     /// APPEND-ONLY (this rides the wire on `PlayerHeldItem`/`PlayerAction`); a new
     /// variant goes at the end and never reorders.
     ThrownBomb,
+    /// Bandage: a hold-to-use consumable. Neither swings nor fires. The roll is
+    /// raised across the body and the loose tail visibly unrolls as the use charge
+    /// ramps (see `held::held_piece_local_transform`), then a quick cinch on
+    /// completion. Its charge fraction, like the bow's draw, comes from the server.
+    Bandage,
 }
 
 impl ItemModel {
@@ -68,6 +73,7 @@ impl ItemModel {
         ItemModel::Bow,
         ItemModel::Crossbow,
         ItemModel::ThrownBomb,
+        ItemModel::Bandage,
     ];
 }
 
@@ -120,6 +126,11 @@ pub enum HeldMesh {
     /// Satchel charge: a cloth-and-leather pack (Cloth) with a leather strap
     /// (Leather).
     SatchelCharge,
+    /// Bandage: an ANIMATABLE two-primitive glb, both on the Cloth family. The
+    /// roll is static; the loose tail is its own primitive so it can visibly
+    /// UNROLL out of the roll as the use charge ramps (see
+    /// `held::held_piece_local_transform`).
+    Bandage,
 }
 
 impl HeldMesh {
@@ -144,6 +155,7 @@ impl HeldMesh {
         HeldMesh::PowderBomb,
         HeldMesh::PowderKeg,
         HeldMesh::SatchelCharge,
+        HeldMesh::Bandage,
     ];
 
     /// The declarative in-hand visual for this mesh: one [`HeldLayerSpec`] per
@@ -252,6 +264,12 @@ impl HeldMesh {
                 HeldMeshMaterial::Cloth,
                 HeldMeshMaterial::Leather,
             ),
+            // The bandage is a two-primitive glb, BOTH on the Cloth family (roll
+            // and tail are the same linen; only the COLOR_0 differs). Unlike the
+            // other two-prim items it is not static: primitive 1 is tagged
+            // `BandageTail` so the per-piece animator can unroll it off the use
+            // charge. Primitive order matches the glb: 0 roll, 1 tail.
+            HeldMesh::Bandage => HeldMeshVisual::bandage("items/bandage/model.glb"),
         }
     }
 
@@ -268,6 +286,10 @@ impl HeldMesh {
             HeldMesh::PowderKeg => 0.45,
             HeldMesh::SatchelCharge => 0.60,
             HeldMesh::PowderBomb => 0.70,
+            // The bandage glb is authored at true world scale (a ~0.20 m roll),
+            // which at 1.0 fills a third of the frame in first person. Shrink it to
+            // a hand-prop read.
+            HeldMesh::Bandage => 0.42,
             _ => 1.0,
         }
     }
@@ -292,21 +314,26 @@ impl HeldMesh {
             | HeldMesh::Arrow
             | HeldMesh::PowderBomb
             | HeldMesh::PowderKeg
-            | HeldMesh::SatchelCharge => HeldGrip::Silhouette,
+            | HeldMesh::SatchelCharge
+            | HeldMesh::Bandage => HeldGrip::Silhouette,
             // The bladed/pointed long tools (and dedicated weapons that reuse
             // this look) are gripped low on a haft carried out front. The sword
             // sits here for its blade-forward silhouette, the spear for its long
-            // point-forward haft, and the bow/crossbow for their held-out-front
-            // ranged carry (their draw / reload animation rides the per-piece
-            // transform + the ranged pose, not this carry grip).
+            // point-forward haft, and the crossbow for its held-out-front ranged
+            // carry (its reload animation rides the per-piece transform + the
+            // ranged pose, not this carry grip).
             HeldMesh::StoneHatchet
             | HeldMesh::IronHatchet
             | HeldMesh::StonePickaxe
             | HeldMesh::IronPickaxe
-            | HeldMesh::StoneSpear
             | HeldMesh::IronSword
-            | HeldMesh::WoodenBow
             | HeldMesh::Crossbow => HeldGrip::LongHafted,
+            // The bow carries upright with no quarter-turn yaw; its draw rides the
+            // per-piece transform + ranged pose on top of this rest carry.
+            HeldMesh::WoodenBow => HeldGrip::Bow,
+            // The spear carries couched down the aim (point forward), matching the
+            // first-person viewmodel; the thrust rides the arm extension on top.
+            HeldMesh::StoneSpear => HeldGrip::Spear,
             // Short one-handers held close in: the construction mallet and the
             // two blunt weapons (club, mace).
             HeldMesh::Hammer | HeldMesh::WoodenClub | HeldMesh::IronMace => HeldGrip::Mallet,
@@ -329,6 +356,18 @@ pub enum HeldGrip {
     LongHafted,
     /// A short one-handed mallet held close to the body: the construction hammer.
     Mallet,
+    /// A bow held upright in the fist: the stave vertical, the flat of the bow
+    /// edge-on to the archer, and the down-range (target) side pointing forward.
+    /// Unlike a hafted tool it takes no quarter-turn yaw (that yaw is what spun
+    /// the bow the wrong way in third-person); the draw animation rides the
+    /// per-piece transform + ranged pose on top of this rest carry.
+    Bow,
+    /// A spear held COUCHED down the aim: the shaft laid horizontal with the
+    /// point forward and the butt back by the hip, matching the first-person
+    /// viewmodel's couched carry (the hafted-tool grip left it standing upright,
+    /// which read nothing like the thrust weapon it is). The forward thrust rides
+    /// the arm extension on top of this stance.
+    Spear,
 }
 
 /// Which shared material family a held-item layer binds. Resolves to the
@@ -406,6 +445,11 @@ pub enum HeldPieceSlot {
     /// on fire (the real projectile is flying) and seats back in as the reload
     /// crank finishes.
     CrossbowBolt,
+    /// The bandage's loose tail: rooted at the roll's bottom tangent and scaled
+    /// out along its length as the use charge ramps, so the strip visibly unrolls
+    /// in hand. Authored at FULL extension in the glb (see
+    /// art/consumables/build_consumables.py), so the rest pose scales it back in.
+    BandageTail,
 }
 
 /// One overlaid layer of a held item: its mesh source, material family, and rig
@@ -451,6 +495,33 @@ impl HeldMeshVisual {
             layers: [
                 Some(Self::glb_layer(glb, 0, first, HeldPieceSlot::Static)),
                 Some(Self::glb_layer(glb, 1, second, HeldPieceSlot::Static)),
+                None,
+                None,
+                None,
+                None,
+            ],
+        }
+    }
+
+    /// The animatable bandage: two primitives in the glb's primitive order,
+    /// 0 the roll (static) and 1 the loose tail. Both are the same linen, so both
+    /// ride the Cloth family; only the tail carries a rig slot, because it is the
+    /// only piece that moves (it scales out of the roll as the use charge ramps).
+    const fn bandage(glb: &'static str) -> Self {
+        Self {
+            layers: [
+                Some(Self::glb_layer(
+                    glb,
+                    0,
+                    HeldMeshMaterial::Cloth,
+                    HeldPieceSlot::Static,
+                )),
+                Some(Self::glb_layer(
+                    glb,
+                    1,
+                    HeldMeshMaterial::Cloth,
+                    HeldPieceSlot::BandageTail,
+                )),
                 None,
                 None,
                 None,
@@ -852,7 +923,11 @@ mod tests {
             assert!(
                 matches!(
                     grip,
-                    HeldGrip::Silhouette | HeldGrip::LongHafted | HeldGrip::Mallet
+                    HeldGrip::Silhouette
+                        | HeldGrip::LongHafted
+                        | HeldGrip::Mallet
+                        | HeldGrip::Bow
+                        | HeldGrip::Spear
                 ),
                 "{mesh:?} resolved to an unexpected grip {grip:?}"
             );
@@ -1006,9 +1081,10 @@ mod tests {
             | HeldMesh::Arrow
             | HeldMesh::PowderBomb
             | HeldMesh::PowderKeg
-            | HeldMesh::SatchelCharge => true,
+            | HeldMesh::SatchelCharge
+            | HeldMesh::Bandage => true,
         };
         assert!(HeldMesh::ALL.iter().all(|&mesh| expected(mesh)));
-        assert_eq!(HeldMesh::ALL.len(), 17);
+        assert_eq!(HeldMesh::ALL.len(), 18);
     }
 }

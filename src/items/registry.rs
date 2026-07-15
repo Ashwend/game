@@ -9,6 +9,7 @@ use std::{
 use crate::protocol::ItemStack;
 
 use super::armor::ArmorProfile;
+use super::consumables::ConsumableProfile;
 use super::deployables::{DeployableKind, DeployableProfile, DoorVariant};
 use super::explosives::{ExplosiveDelivery, ExplosiveKind, ExplosiveProfile};
 use super::ids::*;
@@ -94,6 +95,10 @@ pub struct ItemDefinition {
     /// item. The four charges carry it; the effectiveness-per-material
     /// multiplier is the separate `explosive_effectiveness_pct` matrix.
     pub explosive: Option<ExplosiveProfile>,
+    /// Charge-to-use healing stats (bandage). `None` for every non-consumable
+    /// item. A consumable is neither swung, fired, nor placed: it is held down,
+    /// and the effect lands only if the charge completes on the *server's* clock.
+    pub consumable: Option<ConsumableProfile>,
     pub deployable: Option<DeployableProfile>,
 }
 
@@ -165,6 +170,7 @@ const fn building_piece_item(
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: Some(DeployableProfile {
             kind: DeployableKind::Building {
                 piece,
@@ -221,6 +227,7 @@ const fn armor_item(
             max_durability: Some(max_durability),
         }),
         explosive: None,
+        consumable: None,
         deployable: None,
     }
 }
@@ -240,6 +247,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -256,6 +264,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -272,6 +281,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -288,6 +298,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -304,6 +315,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -320,6 +332,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -336,6 +349,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -352,6 +366,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -369,6 +384,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -386,6 +402,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -403,6 +420,35 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
+        deployable: None,
+    },
+    ItemDefinition {
+        id: BANDAGE_ID,
+        name: "Bandage",
+        description: "A rolled linen strip. Hold to bind a wound: it takes a few \
+                      seconds and slows you to a walk, so bind up before the \
+                      fight, not during it. Some of the mending is immediate, the \
+                      rest seeps back over the following seconds.",
+        stack_size: crate::game_balance::BANDAGE_STACK_SIZE,
+        // Equipable, or the viewmodel never renders it and there is nothing to
+        // hold down.
+        equipable: true,
+        model: ItemModel::Bandage,
+        held_mesh: HeldMesh::Bandage,
+        tint: ItemTint::new(226, 214, 186),
+        tool: None,
+        weapon: None,
+        ranged: None,
+        armor: None,
+        explosive: None,
+        consumable: Some(ConsumableProfile {
+            use_ticks_to_full: crate::game_balance::BANDAGE_USE_TICKS,
+            instant_heal: crate::game_balance::BANDAGE_INSTANT_HEAL,
+            heal_over_time: crate::game_balance::BANDAGE_HEAL_OVER_TIME,
+            heal_duration_ticks: crate::game_balance::BANDAGE_HEAL_DURATION_TICKS,
+            use_move_multiplier: crate::game_balance::BANDAGE_USE_MOVE_MULTIPLIER,
+        }),
         deployable: None,
     },
     ItemDefinition {
@@ -420,6 +466,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -438,6 +485,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -455,6 +503,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -472,6 +521,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -495,6 +545,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -518,6 +569,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -545,6 +597,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -569,6 +622,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     // melee weapons. Each carries a `WeaponProfile` (not a
@@ -598,6 +652,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -623,6 +678,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -647,6 +703,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -672,6 +729,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     // ranged weapons. Each carries a `RangedProfile` (not a
@@ -705,6 +763,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         }),
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -732,6 +791,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         }),
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -750,6 +810,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     // Blackpowder explosives. Each carries an `ExplosiveProfile` (base
@@ -783,6 +844,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
             delivery: ExplosiveDelivery::Thrown,
             max_health: crate::game_balance::EXPLOSIVE_CHARGE_HP,
         }),
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -808,6 +870,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
             delivery: ExplosiveDelivery::Placed,
             max_health: crate::game_balance::EXPLOSIVE_CHARGE_HP,
         }),
+        consumable: None,
         deployable: Some(DeployableProfile {
             kind: DeployableKind::Explosive {
                 kind: ExplosiveKind::PowderKeg,
@@ -841,6 +904,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
             delivery: ExplosiveDelivery::Placed,
             max_health: crate::game_balance::EXPLOSIVE_CHARGE_HP,
         }),
+        consumable: None,
         deployable: Some(DeployableProfile {
             kind: DeployableKind::Explosive {
                 kind: ExplosiveKind::SatchelCharge,
@@ -866,6 +930,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: Some(DeployableProfile {
             kind: DeployableKind::Workbench { tier: 1 },
             max_health: 500,
@@ -889,6 +954,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: Some(DeployableProfile {
             kind: DeployableKind::Furnace { tier: 1 },
             max_health: 800,
@@ -912,6 +978,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -938,6 +1005,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: None,
     },
     ItemDefinition {
@@ -955,6 +1023,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: Some(DeployableProfile {
             kind: DeployableKind::Door {
                 variant: DoorVariant::HewnLog,
@@ -981,6 +1050,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: Some(DeployableProfile {
             kind: DeployableKind::Door {
                 variant: DoorVariant::Iron,
@@ -1006,6 +1076,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: Some(DeployableProfile {
             kind: DeployableKind::SleepingBag,
             max_health: crate::game_balance::SLEEPING_BAG_MAX_HP,
@@ -1029,6 +1100,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: Some(DeployableProfile {
             // `wall` is the placement default; the server overwrites it from
             // the placement command (floor vs wall mount).
@@ -1054,6 +1126,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: Some(DeployableProfile {
             kind: DeployableKind::StorageBox { tier: 1 },
             max_health: crate::game_balance::STORAGE_BOX_SMALL_HP,
@@ -1077,6 +1150,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: Some(DeployableProfile {
             kind: DeployableKind::StorageBox { tier: 2 },
             max_health: crate::game_balance::STORAGE_BOX_LARGE_HP,
@@ -1102,6 +1176,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: Some(DeployableProfile {
             kind: DeployableKind::ToolCupboard,
             max_health: crate::game_balance::TOOL_CUPBOARD_MAX_HP,
@@ -1132,6 +1207,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         ranged: None,
         armor: None,
         explosive: None,
+        consumable: None,
         deployable: Some(DeployableProfile {
             kind: DeployableKind::RuinCache,
             // Collider matches the small knee-height chest model (~0.92 x

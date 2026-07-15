@@ -188,9 +188,9 @@ mod tests {
         let mut pending_session_end = PendingSessionEndReason::default();
         let mut update = UpdateState::idle_for_test();
 
-        let output = ctx.run(raw_input(), |ctx| {
+        let output = ctx.run_ui(raw_input(), |ui| {
             pause_ui(
-                ctx,
+                ui.ctx(),
                 &mut menu,
                 &mut runtime,
                 &mut shutdown_tasks,

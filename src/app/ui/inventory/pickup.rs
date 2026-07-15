@@ -222,8 +222,8 @@ mod tests {
             ..Default::default()
         };
 
-        let output = ctx.run(raw_input(), |ctx| {
-            pickup_tooltip(ctx, &menu, &pickup_target, false);
+        let output = ctx.run_ui(raw_input(), |ui| {
+            pickup_tooltip(ui.ctx(), &menu, &pickup_target, false);
         });
 
         assert!(!output.shapes.is_empty());
@@ -254,8 +254,8 @@ mod tests {
                 ..Default::default()
             };
 
-            let output = ctx.run(raw_input(), |ctx| {
-                pickup_tooltip(ctx, &menu, &pickup_target, false);
+            let output = ctx.run_ui(raw_input(), |ui| {
+                pickup_tooltip(ui.ctx(), &menu, &pickup_target, false);
             });
 
             assert!(

@@ -468,9 +468,9 @@ mod tests {
         }
     }
 
-    fn run_ui(f: impl FnMut(&egui::Context)) -> egui::FullOutput {
+    fn run_ui(f: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {
         let ctx = egui::Context::default();
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -489,9 +489,9 @@ mod tests {
         let pickup = PickupTargetState::default();
         let mut sounds = InventorySoundRequests::default();
         let mut toasts: Vec<String> = Vec::new();
-        run_ui(|ctx| {
+        run_ui(|ui| {
             inventory_panel_ui(
-                ctx,
+                ui.ctx(),
                 menu,
                 &mut runtime,
                 local,
@@ -699,9 +699,9 @@ mod tests {
         let stations = StationContext::default();
         let mut inventory_rect = egui::Rect::NOTHING;
         let mut toasts: Vec<String> = Vec::new();
-        run_ui(|ctx| {
+        run_ui(|ui| {
             inventory_rect = draw_panel(
-                ctx,
+                ui.ctx(),
                 &mut inventory_menu,
                 Tab::Inventory,
                 &mut runtime,
@@ -718,9 +718,9 @@ mod tests {
             ..Default::default()
         };
         let mut crafting_rect = egui::Rect::NOTHING;
-        run_ui(|ctx| {
+        run_ui(|ui| {
             crafting_rect = draw_panel(
-                ctx,
+                ui.ctx(),
                 &mut crafting_menu,
                 Tab::Crafting,
                 &mut runtime,
@@ -763,7 +763,7 @@ mod tests {
         // Click near the screen corner (on the scrim, outside the centered
         // panel) while a drag is held.
         let ctx = egui::Context::default();
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -785,9 +785,9 @@ mod tests {
                 ],
                 ..Default::default()
             },
-            |ctx| {
+            |ui| {
                 draw_panel(
-                    ctx,
+                    ui.ctx(),
                     &mut menu,
                     Tab::Inventory,
                     &mut runtime,

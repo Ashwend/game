@@ -556,6 +556,11 @@ const FINGERPRINT_MIX: u64 = 0x9E37_79B9_7F4A_7C15;
 /// lookup) for each node just to detect "nothing changed". The probe
 /// below short-circuits before that scan when `Added`/`Removed` events
 /// confirm the entity set is unchanged.
+/// During the initial world stream, coalesce collision-grid rebuilds whose only
+/// trigger is newly-streamed entities to at most one per this interval, so the
+/// per-frame O(all-entities) rebuild does not freeze the loading splash.
+const GRID_STREAM_REBUILD_THROTTLE_SECS: f32 = 0.5;
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn maintain_world_grid_system(
     mut runtime: ResMut<ClientRuntime>,
@@ -579,6 +584,11 @@ pub(crate) fn maintain_world_grid_system(
     // which moves `last_fingerprint` but not the grass set, never re-pushes
     // the displacer field or re-filters the detail grass.
     mut last_grass_fingerprint: Local<Option<u64>>,
+    time: Res<Time>,
+    stream: Res<crate::app::state::WorldStreamState>,
+    // Wall-clock of the last full grid rebuild, to throttle rebuilds during the
+    // initial world stream (see the guard below).
+    mut last_rebuild_secs: Local<f32>,
 ) {
     let world_version = runtime.world_version;
     // Cheap probe: skip the O(N) fingerprint scan when the entity sets
@@ -588,6 +598,24 @@ pub(crate) fn maintain_world_grid_system(
     let removed_count = removed_nodes.read().count() + removed_deps.read().count();
     let added_any = !added_nodes.is_empty() || !added_deps.is_empty();
     if !world_changed && !added_any && removed_count == 0 && changed_active.is_empty() {
+        return;
+    }
+
+    // During the initial world stream the AoI floods in over several seconds and
+    // `Added` fires on nearly every frame, so the O(all-entities) rebuild below
+    // would run every frame and freeze the loading splash. While the stream is
+    // still arriving, coalesce rebuilds whose ONLY trigger is newly-streamed
+    // entities to one per `GRID_STREAM_REBUILD_THROTTLE_SECS`. World-version
+    // changes, removals, and door active-flips still rebuild immediately so live
+    // collision stays correct; the grid (with its ground blocks) is still built
+    // within the throttle window, so the settling player keeps ground collision.
+    let now = time.elapsed_secs();
+    if !stream.initial_stream_settled(now)
+        && !world_changed
+        && removed_count == 0
+        && changed_active.is_empty()
+        && now - *last_rebuild_secs < GRID_STREAM_REBUILD_THROTTLE_SECS
+    {
         return;
     }
 
@@ -603,6 +631,8 @@ pub(crate) fn maintain_world_grid_system(
     if *last_fingerprint == Some(current) {
         return;
     }
+    // A real rebuild is about to happen; stamp it for the stream throttle above.
+    *last_rebuild_secs = now;
 
     let resource_colliders: Vec<WorldBlock> = resource_nodes
         .iter()

@@ -173,6 +173,7 @@ pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta
                 &resources.local_player,
                 &resources.ranged_input,
                 &resources.throw_charge,
+                &resources.consume_charge,
                 // The actionbar rect is one frame stale (it is set while drawing
                 // the actionbar, later in this same in-game pass), which is fine
                 // for anchoring the ranged ammo count + reload bar off it, exactly

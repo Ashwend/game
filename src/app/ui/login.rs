@@ -155,8 +155,14 @@ mod tests {
         let workos = workos();
         let mut menu = MenuState::default();
 
-        let output = ctx.run(raw_input(), |ctx| {
-            login_overlay_ui(ctx, &mut auth, &workos, &mut menu, &Analytics::disabled());
+        let output = ctx.run_ui(raw_input(), |ui| {
+            login_overlay_ui(
+                ui.ctx(),
+                &mut auth,
+                &workos,
+                &mut menu,
+                &Analytics::disabled(),
+            );
         });
 
         assert!(output.shapes.len() > 1, "the login splash should draw");
@@ -174,8 +180,14 @@ mod tests {
         let workos = workos();
         let mut menu = MenuState::default();
 
-        let output = ctx.run(raw_input(), |ctx| {
-            login_overlay_ui(ctx, &mut auth, &workos, &mut menu, &Analytics::disabled());
+        let output = ctx.run_ui(raw_input(), |ui| {
+            login_overlay_ui(
+                ui.ctx(),
+                &mut auth,
+                &workos,
+                &mut menu,
+                &Analytics::disabled(),
+            );
         });
 
         assert!(output.shapes.len() > 1);
@@ -193,8 +205,14 @@ mod tests {
             let workos = workos();
             let mut menu = MenuState::default();
 
-            let output = ctx.run(raw_input(), |ctx| {
-                login_overlay_ui(ctx, &mut auth, &workos, &mut menu, &Analytics::disabled());
+            let output = ctx.run_ui(raw_input(), |ui| {
+                login_overlay_ui(
+                    ui.ctx(),
+                    &mut auth,
+                    &workos,
+                    &mut menu,
+                    &Analytics::disabled(),
+                );
             });
 
             assert!(output.shapes.len() > 1, "the busy splash should draw");
@@ -208,8 +226,14 @@ mod tests {
         let workos = workos();
         let mut menu = MenuState::default();
 
-        let _ = ctx.run(raw_input(), |ctx| {
-            login_overlay_ui(ctx, &mut auth, &workos, &mut menu, &Analytics::disabled());
+        let _ = ctx.run_ui(raw_input(), |ui| {
+            login_overlay_ui(
+                ui.ctx(),
+                &mut auth,
+                &workos,
+                &mut menu,
+                &Analytics::disabled(),
+            );
         });
 
         // Still authenticated and untouched, the overlay drew nothing.

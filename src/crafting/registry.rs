@@ -6,10 +6,10 @@
 use std::{collections::HashMap, sync::OnceLock};
 
 use crate::items::{
-    ARROW_ID, BASIC_HATCHET_ID, BASIC_PICKAXE_ID, BUILDING_PLAN_ID, CLOTH_ID, COAL_ID, CROSSBOW_ID,
-    CRUDE_FURNACE_ID, FIBER_ID, GUNPOWDER_ID, HAMMER_ID, HEWN_LOG_DOOR_ID, HEWN_LOG_ID,
-    IRON_BAR_ID, IRON_BOOTS_ID, IRON_CUIRASS_ID, IRON_DOOR_ID, IRON_GREAVES_ID, IRON_HATCHET_ID,
-    IRON_HELM_ID, IRON_MACE_ID, IRON_PICKAXE_ID, IRON_SWORD_ID, LAMELLAR_BOOTS_ID,
+    ARROW_ID, BANDAGE_ID, BASIC_HATCHET_ID, BASIC_PICKAXE_ID, BUILDING_PLAN_ID, CLOTH_ID, COAL_ID,
+    CROSSBOW_ID, CRUDE_FURNACE_ID, FIBER_ID, GUNPOWDER_ID, HAMMER_ID, HEWN_LOG_DOOR_ID,
+    HEWN_LOG_ID, IRON_BAR_ID, IRON_BOOTS_ID, IRON_CUIRASS_ID, IRON_DOOR_ID, IRON_GREAVES_ID,
+    IRON_HATCHET_ID, IRON_HELM_ID, IRON_MACE_ID, IRON_PICKAXE_ID, IRON_SWORD_ID, LAMELLAR_BOOTS_ID,
     LAMELLAR_GREAVES_ID, LAMELLAR_HELM_ID, LAMELLAR_VEST_ID, PADDED_HOOD_ID, PADDED_LEGGINGS_ID,
     PADDED_TUNIC_ID, PADDED_WRAPS_ID, PLANT_TWINE_ID, POWDER_BOMB_ID, POWDER_KEG_ID,
     SALVAGED_FITTINGS_ID, SATCHEL_CHARGE_ID, SLEEPING_BAG_ID, STONE_ID, STONE_SPEAR_ID,
@@ -21,6 +21,7 @@ use super::types::{CraftingInput, RecipeCategory, RecipeDefinition, RecipeStatio
 
 pub const PLANT_TWINE_RECIPE_ID: &str = "plant_twine";
 pub const CLOTH_RECIPE_ID: &str = "cloth";
+pub const BANDAGE_RECIPE_ID: &str = "bandage";
 pub const GUNPOWDER_RECIPE_ID: &str = "gunpowder";
 pub const HEWN_LOG_RECIPE_ID: &str = "hewn_log";
 pub const STONE_HATCHET_RECIPE_ID: &str = "wood_stone_hatchet";
@@ -96,6 +97,28 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         output_item: CLOTH_ID,
         output_quantity: 1,
         craft_seconds: 4.0,
+        tier: 0,
+        station: RecipeStation::None,
+    },
+    RecipeDefinition {
+        id: BANDAGE_RECIPE_ID,
+        name: "Bandage",
+        description: "Tear cloth into a strip and roll it. Binds a wound: some of \
+                      the mending is immediate, the rest seeps back over the \
+                      following seconds. Cheap enough to always carry a few.",
+        category: RecipeCategory::Consumables,
+        // Deliberately cheap and hand-craftable. Cloth is 4 fiber, so a bandage is
+        // 6 hand-gathers of tall grass end to end, with no station, no smelting,
+        // and no tech gate. Healing should never be the thing you cannot afford:
+        // the item's cost is the 3 seconds and the movement slow you pay to USE it
+        // (see game_balance::BANDAGE_*), not the materials.
+        inputs: &[
+            CraftingInput::new(CLOTH_ID, 1),
+            CraftingInput::new(FIBER_ID, 2),
+        ],
+        output_item: BANDAGE_ID,
+        output_quantity: 1,
+        craft_seconds: 3.0,
         tier: 0,
         station: RecipeStation::None,
     },
@@ -864,5 +887,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_bandage_is_cheap_hand_craftable_and_needs_no_station() {
+        // Healing must never be the thing you cannot afford. The bandage's cost is
+        // the 3 seconds and the movement slow you pay to USE it (see
+        // game_balance::BANDAGE_*), not the materials, so this pins the recipe as
+        // station-free and buildable out of the two most abundant materials in the
+        // game. If a future pass gates it behind a workbench or an iron ingot, this
+        // fails loudly rather than quietly making the game harsher.
+        let recipe = recipe_definition(BANDAGE_RECIPE_ID).expect("bandage recipe is registered");
+        assert_eq!(recipe.output_item, BANDAGE_ID);
+        assert_eq!(
+            recipe.station,
+            RecipeStation::None,
+            "must be hand-craftable"
+        );
+        assert_eq!(recipe.category, RecipeCategory::Consumables);
+
+        // Every input must itself be hand-gatherable or trivially hand-crafted from
+        // something that is: cloth is 4 fiber, and fiber comes off tall grass with
+        // bare hands.
+        for input in recipe.inputs {
+            assert!(
+                input.item_id == CLOTH_ID || input.item_id == FIBER_ID,
+                "bandage input {} is not a basic hand-gathered material",
+                input.item_id
+            );
+        }
+        assert!(recipe.craft_seconds <= 5.0, "should be a quick craft");
     }
 }

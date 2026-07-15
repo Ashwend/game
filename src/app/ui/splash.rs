@@ -252,11 +252,11 @@ mod tests {
         // Warm the backdrop past its blur warmup window before the first
         // splash tick so the readiness signal is true.
         for _ in 0..40 {
-            let _ = backdrop.cover_alpha(crate::app::state::Screen::MainMenu, 0.1);
+            let _ = backdrop.cover_alpha(crate::app::state::Screen::MainMenu, true, 0.1);
         }
         assert!(backdrop.has_finished_warmup());
 
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -264,7 +264,7 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| loading_splash_ui(ctx, &mut menu, &backdrop, false, 0, 0.05),
+            |ui| loading_splash_ui(ui.ctx(), &mut menu, &backdrop, false, 0, 0.05),
         );
         assert!(menu.loading_splash.as_ref().expect("startup splash").ready);
     }
@@ -281,7 +281,7 @@ mod tests {
         };
         let backdrop = MenuBackdropVisibility::default();
 
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -289,7 +289,7 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| loading_splash_ui(ctx, &mut menu, &backdrop, false, 0, 0.016),
+            |ui| loading_splash_ui(ui.ctx(), &mut menu, &backdrop, false, 0, 0.016),
         );
 
         assert!(!output.shapes.is_empty());

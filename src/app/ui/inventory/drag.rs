@@ -348,9 +348,9 @@ mod tests {
         }
     }
 
-    fn run_input(events: Vec<egui::Event>, mut f: impl FnMut(&egui::Context)) {
+    fn run_input(events: Vec<egui::Event>, mut f: impl FnMut(&mut egui::Ui)) {
         let ctx = egui::Context::default();
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -359,7 +359,7 @@ mod tests {
                 events,
                 ..Default::default()
             },
-            |ctx| f(ctx),
+            |ui| f(ui),
         );
     }
 
@@ -377,9 +377,9 @@ mod tests {
         let mut inv_ui = drag_state(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0)));
         let mut toasts: Vec<String> = Vec::new();
 
-        run_input(Vec::new(), |ctx| {
+        run_input(Vec::new(), |ui| {
             handle_drag_release(
-                ctx,
+                ui.ctx(),
                 &menu,
                 &mut runtime,
                 &mut prediction,
@@ -407,9 +407,9 @@ mod tests {
         let mut toasts: Vec<String> = Vec::new();
 
         // No pointer-release event this frame.
-        run_input(Vec::new(), |ctx| {
+        run_input(Vec::new(), |ui| {
             handle_drag_release(
-                ctx,
+                ui.ctx(),
                 &menu,
                 &mut runtime,
                 &mut prediction,
@@ -454,9 +454,9 @@ mod tests {
                 modifiers: egui::Modifiers::default(),
             },
         ];
-        run_input(events, |ctx| {
+        run_input(events, |ui| {
             handle_drag_release(
-                ctx,
+                ui.ctx(),
                 &menu,
                 &mut runtime,
                 &mut prediction,
@@ -500,9 +500,9 @@ mod tests {
                 modifiers: egui::Modifiers::default(),
             },
         ];
-        run_input(events, |ctx| {
+        run_input(events, |ui| {
             handle_drag_release(
-                ctx,
+                ui.ctx(),
                 &menu,
                 &mut runtime,
                 &mut prediction,
@@ -547,9 +547,9 @@ mod tests {
                 modifiers: egui::Modifiers::default(),
             },
         ];
-        run_input(events, |ctx| {
+        run_input(events, |ui| {
             handle_drag_release(
-                ctx,
+                ui.ctx(),
                 &menu,
                 &mut runtime,
                 &mut prediction,
@@ -590,9 +590,9 @@ mod tests {
                 modifiers: egui::Modifiers::default(),
             },
         ];
-        run_input(events, |ctx| {
+        run_input(events, |ui| {
             handle_drag_release(
-                ctx,
+                ui.ctx(),
                 &menu,
                 &mut runtime,
                 &mut prediction,
@@ -645,9 +645,9 @@ mod tests {
                 modifiers: egui::Modifiers::default(),
             },
         ];
-        run_input(events, |ctx| {
+        run_input(events, |ui| {
             handle_drag_release(
-                ctx,
+                ui.ctx(),
                 &menu,
                 &mut runtime,
                 &mut prediction,
@@ -689,9 +689,9 @@ mod tests {
             Some(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0)));
         let mut toasts: Vec<String> = Vec::new();
 
-        run_input(Vec::new(), |ctx| {
+        run_input(Vec::new(), |ui| {
             handle_drag_release(
-                ctx,
+                ui.ctx(),
                 &menu,
                 &mut runtime,
                 &mut prediction,
@@ -747,9 +747,9 @@ mod tests {
             Some(UnifiedSlotRef::Player(ItemContainerSlot::inventory(0)));
         let mut toasts: Vec<String> = Vec::new();
 
-        run_input(Vec::new(), |ctx| {
+        run_input(Vec::new(), |ui| {
             handle_drag_release(
-                ctx,
+                ui.ctx(),
                 &menu,
                 &mut runtime,
                 &mut prediction,
@@ -768,7 +768,7 @@ mod tests {
 
     fn run_preview(inv_ui: &InventoryUiState) -> egui::FullOutput {
         let ctx = egui::Context::default();
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -777,7 +777,7 @@ mod tests {
                 events: vec![egui::Event::PointerMoved(egui::pos2(100.0, 100.0))],
                 ..Default::default()
             },
-            |ctx| draw_drag_preview(ctx, inv_ui),
+            |ui| draw_drag_preview(ui.ctx(), inv_ui),
         )
     }
 

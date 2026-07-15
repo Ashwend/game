@@ -21,10 +21,7 @@
 //! as before. Shipped builds carry no runtime cost.
 
 use bevy::{
-    camera::RenderTarget,
-    image::{BevyDefault, Image},
-    prelude::*,
-    render::render_resource::TextureFormat,
+    camera::RenderTarget, image::Image, prelude::*, render::render_resource::TextureFormat,
 };
 
 use crate::app::scene::{MainCamera, ViewmodelCamera};
@@ -80,7 +77,7 @@ fn parse_resolution(raw: &str) -> Option<(u32, u32)> {
 /// Call once at startup after `DefaultPlugins` (so `Assets<Image>` exists) when
 /// [`HeadlessCapture::resolution_from_env`] returned a size.
 pub(crate) fn insert_capture_target(app: &mut App, width: u32, height: u32) {
-    let image = Image::new_target_texture(width, height, TextureFormat::bevy_default(), None);
+    let image = Image::new_target_texture(width, height, TextureFormat::Rgba8UnormSrgb, None);
     let handle = app.world_mut().resource_mut::<Assets<Image>>().add(image);
     app.insert_resource(HeadlessCapture { image: handle });
 }

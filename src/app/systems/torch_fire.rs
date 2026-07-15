@@ -92,7 +92,7 @@ pub(crate) fn sync_torch_fire(
                             intensity: TORCH_LIGHT_BASE_INTENSITY,
                             range: TORCH_LIGHT_RANGE_M,
                             radius: 0.06,
-                            shadows_enabled: false,
+                            shadow_maps_enabled: false,
                             ..default()
                         },
                         Transform::from_xyz(0.0, FLAME_ANCHOR_Y, 0.0),

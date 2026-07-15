@@ -156,7 +156,7 @@ mod tests {
         let ctx = egui::Context::default();
         apply_game_style(&ctx);
 
-        let style = ctx.style();
+        let style = ctx.global_style();
         assert_eq!(style.visuals.override_text_color, Some(text()));
         assert_eq!(style.visuals.window_fill, panel_fill());
         assert_eq!(style.visuals.widgets.active.bg_fill, accent_dark());
@@ -171,10 +171,10 @@ mod tests {
     fn scrim_and_panel_render_in_headless_context() {
         let ctx = egui::Context::default();
 
-        let output = ctx.run(input(), |ctx| {
-            screen_scrim(ctx, "test_scrim", 120);
-            backdrop_cover(ctx, 180);
-            grow_panel(ctx, "test_panel", 500.0, 40.0, 40.0, |ui| {
+        let output = ctx.run_ui(input(), |ui| {
+            screen_scrim(ui.ctx(), "test_scrim", 120);
+            backdrop_cover(ui.ctx(), 180);
+            grow_panel(ui.ctx(), "test_panel", 500.0, 40.0, 40.0, |ui| {
                 ui.label("content");
             });
         });

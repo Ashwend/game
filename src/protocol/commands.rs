@@ -489,6 +489,33 @@ pub enum ExplosiveCommand {
     Defuse { id: DeployedEntityId },
 }
 
+/// Client -> server consumable intent (the bandage). Deliberately only TWO
+/// variants: there is no "apply" message, because the client never gets to say
+/// the charge finished.
+///
+/// The server records the tick `UseStart` arrived, re-derives the charge from
+/// its own clock every tick, and applies the effect itself the moment the charge
+/// completes. `UseCancel` is the only way to stop it. That is stricter than the
+/// bow, which does take a client `Fire`, and it has to be: the bow's `Fire` is
+/// gated by a *minimum* draw and scales the damage down for a short hold, so a
+/// forged early fire only ever hurts the forger. An "I finished the bandage"
+/// message has no such gradient, so a forged one would be a free instant heal.
+/// Never add an apply/finish variant here.
+///
+/// APPEND-ONLY: this rides `ClientMessage` and is postcard-encoded by variant
+/// index, so new variants go at the end and never reorder.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub enum ConsumableCommand {
+    /// Begin using the held consumable. Rejected (no use started) unless the
+    /// active item actually carries a `ConsumableProfile` and the player is
+    /// alive. Slows movement for the duration of the charge.
+    UseStart,
+    /// Abandon the current use without applying it. Idempotent: a no-op when no
+    /// use is active. Restores movement. Costs nothing: the item is only consumed
+    /// when the charge completes, so releasing early is always free.
+    UseCancel,
+}
+
 /// Client → server crafting intent. Enqueue costs `inputs × quantity` of
 /// the recipe's inputs immediately; cancel refunds whatever's left of them.
 /// The recipe id is shipped as a plain `String` on the wire and resolved

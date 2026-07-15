@@ -117,7 +117,7 @@ fn fill_slots(slots: &mut Vec<Option<ItemStack>>, loot: Vec<ItemStack>) {
     // persisted grid), then drop each stack into the next free slot.
     slots.clear();
     slots.resize(RUIN_CACHE_SLOT_COUNT, None);
-    for (slot, stack) in slots.iter_mut().zip(loot.into_iter()) {
+    for (slot, stack) in slots.iter_mut().zip(loot) {
         *slot = Some(stack);
     }
 }

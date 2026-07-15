@@ -273,18 +273,22 @@ fn create_world_dialog_builds_selected_maps() {
 fn menu_backdrop_visibility_covers_until_blur_warms() {
     let mut visibility = MenuBackdropVisibility::default();
 
-    let warmup_alpha =
-        visibility.cover_alpha(Screen::MainMenu, MENU_BACKDROP_BLUR_WARMUP_SECONDS * 0.5);
+    let warmup_alpha = visibility.cover_alpha(
+        Screen::MainMenu,
+        true,
+        MENU_BACKDROP_BLUR_WARMUP_SECONDS * 0.5,
+    );
     assert_eq!(warmup_alpha, u8::MAX);
 
     let fading_alpha = visibility.cover_alpha(
         Screen::MainMenu,
+        true,
         MENU_BACKDROP_BLUR_WARMUP_SECONDS * 0.5 + MENU_BACKDROP_FADE_SECONDS * 0.5,
     );
     assert!(fading_alpha > 0);
     assert!(fading_alpha < u8::MAX);
 
-    let visible_alpha = visibility.cover_alpha(Screen::MainMenu, MENU_BACKDROP_FADE_SECONDS);
+    let visible_alpha = visibility.cover_alpha(Screen::MainMenu, true, MENU_BACKDROP_FADE_SECONDS);
     assert_eq!(visible_alpha, 0);
 }
 
@@ -295,12 +299,13 @@ fn menu_backdrop_visibility_resets_when_reentering_menu() {
     assert_eq!(
         visibility.cover_alpha(
             Screen::MainMenu,
+            true,
             MENU_BACKDROP_BLUR_WARMUP_SECONDS + MENU_BACKDROP_FADE_SECONDS,
         ),
         0
     );
-    assert_eq!(visibility.cover_alpha(Screen::InGame, 0.1), 0);
-    assert_eq!(visibility.cover_alpha(Screen::MainMenu, 0.1), u8::MAX);
+    assert_eq!(visibility.cover_alpha(Screen::InGame, true, 0.1), 0);
+    assert_eq!(visibility.cover_alpha(Screen::MainMenu, true, 0.1), u8::MAX);
 }
 
 #[test]

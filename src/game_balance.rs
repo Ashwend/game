@@ -1031,3 +1031,41 @@ pub const EXPLOSIVE_DEFUSE_REACH_M: f32 = 5.0;
 /// the refund math stays exact (`input.quantity * NUM / DEN`, floor).
 pub const EXPLOSIVE_DEFUSE_REFUND_NUMERATOR: u16 = 1;
 pub const EXPLOSIVE_DEFUSE_REFUND_DENOMINATOR: u16 = 2;
+
+// =====================================================================
+// CONSUMABLES (healing)
+// =====================================================================
+// The bandage is the game's first consumable and its only healing outside a
+// respawn. It is deliberately cheap and abundant (see the recipe: cloth + fiber,
+// both hand-gathered from tall grass) because it is not meant to be a scarce
+// resource to hoard. It is meant to be a *tempo* decision: the charge is long
+// enough that you cannot use one in the middle of a fight and survive, and the
+// movement slow means committing to it in the open is how you get killed.
+//
+// Total per bandage is 35 HP, of which under half lands immediately. That split
+// is the whole design: the instant chunk stops a bleed-out, but you only bank
+// the full value if you actually break contact.
+
+/// Bandage: ticks the use must be held before it applies (3 s at 20 Hz). Long on
+/// purpose. Shorter than this and a bandage becomes a mid-melee panic button
+/// that erases a landed hit; at 3 s you have to disengage first, which is the
+/// decision the item is supposed to pose.
+pub const BANDAGE_USE_TICKS: u64 = (3.0 * SERVER_TICK_RATE_HZ) as u64;
+/// Bandage: health restored the instant the wrap completes. Enough that finishing
+/// the charge has a felt payoff and pulls you off the floor, well short of a full
+/// reset.
+pub const BANDAGE_INSTANT_HEAL: f32 = 15.0;
+/// Bandage: additional health trickled in over `BANDAGE_HEAL_DURATION_TICKS`
+/// after it applies. The larger half of the item's value, and the half you lose
+/// if you walk straight back into a fight.
+pub const BANDAGE_HEAL_OVER_TIME: f32 = 20.0;
+/// Bandage: how long the over-time remainder takes to fully land (10 s at 20 Hz).
+/// Long enough that re-engaging immediately forfeits most of it.
+pub const BANDAGE_HEAL_DURATION_TICKS: u64 = (10.0 * SERVER_TICK_RATE_HZ) as u64;
+/// Bandage: run-speed multiplier while the use is being charged. Harsher than the
+/// bow's draw slow (0.6): binding a wound is a full commitment, and you should not
+/// be able to back-pedal out of a fight at near-full speed while doing it.
+pub const BANDAGE_USE_MOVE_MULTIPLIER: f32 = 0.4;
+/// Bandage: max stack. Small, so carrying a meaningful amount of healing costs
+/// real inventory slots and a bandage stack is a visible commitment in a loot bag.
+pub const BANDAGE_STACK_SIZE: u16 = 5;

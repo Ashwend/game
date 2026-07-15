@@ -75,6 +75,10 @@ impl TestRig {
 fn build_test_app() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
+    // Bevy 0.19: lightyear's ClientPlugins calls init_state, which needs the
+    // StateTransition schedule from StatesPlugin (the real client app gets it
+    // via DefaultPlugins; this headless test client uses MinimalPlugins).
+    app.add_plugins(bevy::state::app::StatesPlugin);
     app.add_plugins(client_plugins());
     app.add_plugins(LightyearProtocolPlugin);
     app.add_plugins(ClientNetworkPlugin);

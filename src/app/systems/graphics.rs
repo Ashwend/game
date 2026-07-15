@@ -5,7 +5,7 @@
 //!
 //! Ownership split: this system owns the camera's [`Bloom`] component, the
 //! atmosphere/sky quality (`AtmosphereSettings` + `AtmosphereEnvironmentMapLight`),
-//! and the sun's shadow config (`DirectionalLight::shadows_enabled`,
+//! and the sun's shadow config (`DirectionalLight::shadow_maps_enabled`,
 //! `soft_shadow_size` for PCSS, the cascade config, and the global shadow map
 //! resolution). MSAA / FXAA / TAA are intentionally *not* touched here, the
 //! `menu_backdrop_camera_system` already owns those camera AA components (it
@@ -113,8 +113,8 @@ pub(crate) fn apply_graphics_settings_system(
         } else {
             None
         };
-        if light.shadows_enabled != config.is_some() {
-            light.shadows_enabled = config.is_some();
+        if light.shadow_maps_enabled != config.is_some() {
+            light.shadow_maps_enabled = config.is_some();
         }
         // PCSS soft shadows: a distance-widening penumbra when both shadows and
         // the soft-shadow toggle are on; `None` falls back to the hard PCF path.
@@ -196,7 +196,7 @@ mod tests {
             .spawn((
                 SunLight,
                 DirectionalLight {
-                    shadows_enabled: true,
+                    shadow_maps_enabled: true,
                     ..default()
                 },
             ))
@@ -209,7 +209,7 @@ mod tests {
             app.world()
                 .get::<DirectionalLight>(sun)
                 .unwrap()
-                .shadows_enabled,
+                .shadow_maps_enabled,
             "Ultra keeps shadows on"
         );
         assert_eq!(
@@ -227,7 +227,7 @@ mod tests {
             !app.world()
                 .get::<DirectionalLight>(sun)
                 .unwrap()
-                .shadows_enabled,
+                .shadow_maps_enabled,
             "Off disables shadows"
         );
 
@@ -241,7 +241,7 @@ mod tests {
             app.world()
                 .get::<DirectionalLight>(sun)
                 .unwrap()
-                .shadows_enabled
+                .shadow_maps_enabled
         );
         assert_eq!(
             app.world().resource::<DirectionalLightShadowMap>().size,
@@ -259,7 +259,7 @@ mod tests {
             .spawn((
                 SunLight,
                 DirectionalLight {
-                    shadows_enabled: true,
+                    shadow_maps_enabled: true,
                     ..default()
                 },
             ))

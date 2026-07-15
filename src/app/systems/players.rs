@@ -4,21 +4,25 @@ use bevy::{ecs::change_detection::Ref, light::NotShadowCaster, prelude::*};
 
 use crate::{
     app::PLAYER_VISUAL_CENTER_Y,
-    items::{ArmorJoint, ArmorMesh, HeldMesh, ItemModel},
+    items::{ArmorJoint, ArmorMesh, HeldMesh, HeldPieceSlot, ItemModel},
     protocol::ClientId,
     server::{
-        Player, PlayerAction, PlayerEquipmentVisual, PlayerHeldItem, PlayerLifecycle, PlayerPose,
-        PlayerSleeping,
+        Player, PlayerAction, PlayerChargeFraction, PlayerEquipmentVisual, PlayerHeldItem,
+        PlayerLifecycle, PlayerPose, PlayerSleeping,
     },
 };
 
 use super::super::{
-    scene::{NetworkPlayer, PlayerPart, PlayerVisualAssets, player_visual_position, rig_layout},
+    scene::{
+        NetworkPlayer, PLAYER_HEAD_TOP_LOCAL_Y, PlayerPart, PlayerVisualAssets,
+        player_visual_position, rig_layout,
+    },
     state::{ClientRuntime, swing_duration_seconds},
 };
 use super::items::{
-    ArmorVisuals, HeldItemVisuals, armor_layers, carry_forearm_rotation, carry_upper_arm_rotation,
-    held_item_hand_transform, held_item_layers, insert_held_layer_material, remote_swing_arm_pose,
+    ArmorVisuals, HeldItemVisuals, RangedPoseInputs, armor_layers, carry_forearm_rotation,
+    carry_upper_arm_rotation, held_item_hand_transform, held_item_layers,
+    held_piece_local_transform, insert_held_layer_material, remote_swing_arm_pose,
 };
 
 const REMOTE_PLAYER_INTERPOLATION_SECONDS: f32 = 0.1;
@@ -164,6 +168,7 @@ pub(crate) fn apply_snapshot_system(
         Option<&PlayerHeldItem>,
         Option<&PlayerEquipmentVisual>,
         Option<&PlayerAction>,
+        Option<&PlayerChargeFraction>,
     )>,
 ) {
     let Some(local_client_id) = runtime.client_id else {
@@ -181,7 +186,7 @@ pub(crate) fn apply_snapshot_system(
     let mut visible_ids = HashSet::new();
     let entities = &mut *entities;
 
-    for (player, pose, lifecycle, sleeping, held, equipment, action) in &replicated {
+    for (player, pose, lifecycle, sleeping, held, equipment, action, charge) in &replicated {
         if player.client_id == local_client_id {
             continue;
         }
@@ -198,6 +203,7 @@ pub(crate) fn apply_snapshot_system(
         let (action_seq, action_model) = action
             .map(|action| (action.seq, action.model))
             .unwrap_or((0, ItemModel::Bag));
+        let charge_fraction = charge.map(|charge| charge.0).unwrap_or(0.0);
         let velocity = Vec3::from(pose.velocity);
         let horizontal_speed = velocity.with_y(0.0).length();
         // Keep the entity around even while dead so the tilt-and-fade
@@ -280,6 +286,8 @@ pub(crate) fn apply_snapshot_system(
                     // writes; the animators read these by value each frame.
                     loco.speed = horizontal_speed;
                     loco.grounded = pose.grounded;
+                    loco.pitch = pose.pitch;
+                    loco.charge_fraction = charge_fraction;
                     held_comp.0 = held_mesh;
                     // Worn-armor mirror: manual edge detection against the local
                     // value (never `Ref::is_changed`, which lies for
@@ -353,6 +361,8 @@ pub(crate) fn apply_snapshot_system(
                     RemoteLocomotion {
                         speed: horizontal_speed,
                         grounded: pose.grounded,
+                        pitch: pose.pitch,
+                        charge_fraction,
                     },
                     RemoteHeld(held_mesh),
                     equipment_visual,
@@ -512,7 +522,7 @@ pub(crate) fn tick_dying_players_system(
             ((dying.elapsed - fade_start) / DEATH_FADE_DURATION_S).clamp(0.0, 1.0)
         };
         let alpha = (1.0 - fade_t).clamp(0.0, 1.0);
-        if let Some(material) = materials.get_mut(&dying.material) {
+        if let Some(mut material) = materials.get_mut(&dying.material) {
             material.base_color = material.base_color.with_alpha(alpha);
         }
 
@@ -608,18 +618,74 @@ const STRIDE_CADENCE_SCALE: f32 = 1.5;
 /// Constant slight elbow bend so arms aren't ramrod-straight at rest.
 const ELBOW_REST_BEND: f32 = 0.15;
 
-/// Local mirror of the replicated pose's movement, written onto the visual
-/// NetworkPlayer by `apply_snapshot_system` so the locomotion animator never
-/// re-joins the replicated entity.
+/// Fraction of a peer's look pitch that leans the visible torso (head + chest +
+/// both arms). The held arm makes up the remaining fraction on its own shoulder
+/// so the item in hand still tracks the FULL aim, while the spine only bends this
+/// much: a standing peer glancing straight up/down leans convincingly without
+/// folding in half. `torso + held-arm compensation == 1.0`, so the bow/tool ends
+/// pointed exactly where the peer is looking.
+const REMOTE_TORSO_PITCH_FRACTION: f32 = 0.6;
+
+/// Hip-line pivot (root-local Y) the torso pitch rotates about, so the pelvis
+/// (baked into the `Body` mesh) stays glued to the root-parented legs instead of
+/// swinging forward off the origin.
+const REMOTE_TORSO_PITCH_PIVOT_Y: f32 = -0.13;
+
+/// Local transform for the `Body` part that leans the upper torso by
+/// `torso_pitch` (radians, +up = lean back to look up, matching the FP camera's
+/// `from_euler(YXZ, yaw, pitch, 0)` sign) and twists it by `torso_twist` (the
+/// swing wind-up), rotating about the hip line so the pelvis holds its place over
+/// the legs. Returned as an explicit (rotation, translation) pair because pitch
+/// about an off-origin pivot needs a compensating translation, unlike the
+/// rotation-only rest pose.
+fn remote_body_pose(torso_pitch: f32, torso_twist: f32) -> (Quat, Vec3) {
+    let rotation = Quat::from_rotation_x(torso_pitch) * Quat::from_rotation_y(torso_twist);
+    let pivot = Vec3::new(0.0, REMOTE_TORSO_PITCH_PIVOT_Y, 0.0);
+    // Keep the pivot point fixed: world(pivot) = translation + rotation*pivot = pivot.
+    let translation = pivot - rotation * pivot;
+    (rotation, translation)
+}
+
+/// Root-local position of the top of a remote peer's head AFTER the look-pitch
+/// lean, so a head-anchored overlay (nametag, health bar, chat bubble) tracks the
+/// leaning head instead of floating off it. The head is baked into the `Body`
+/// mesh at local `(0, PLAYER_HEAD_TOP_LOCAL_Y, 0)`, and `Body` sits at the root
+/// origin, so applying the same hip-pivot lean the animator uses gives the head
+/// top in the root frame. Twist is passed as 0: a point on the local Y axis is
+/// invariant under the swing's yaw twist, so only the pitch lean moves the head.
+/// Callers project it through the root's `GlobalTransform` (which carries the
+/// yaw + world position) to reach world space.
+pub(crate) fn remote_head_anchor_local(pitch: f32) -> Vec3 {
+    let torso_pitch = pitch * REMOTE_TORSO_PITCH_FRACTION;
+    let (rotation, translation) = remote_body_pose(torso_pitch, 0.0);
+    translation + rotation * Vec3::new(0.0, PLAYER_HEAD_TOP_LOCAL_Y, 0.0)
+}
+
+/// Local mirror of the replicated pose's movement + look, written onto the
+/// visual NetworkPlayer by `apply_snapshot_system` so the animators never
+/// re-join the replicated entity.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub(crate) struct RemoteLocomotion {
     pub(crate) speed: f32,
     pub(crate) grounded: bool,
+    /// Replicated look pitch (radians, +up), so the animator can lean the peer's
+    /// upper body / held item to match where they are aiming.
+    pub(crate) pitch: f32,
+    /// Replicated bow-draw fraction (0 rest, 1 full draw), so the animator can
+    /// flex the peer's drawn bow. Zero for a non-bow or an undrawn bow.
+    pub(crate) charge_fraction: f32,
 }
 
 /// Local mirror of the replicated `PlayerHeldItem`.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub(crate) struct RemoteHeld(pub(crate) Option<HeldMesh>);
+
+/// The rig slot a spawned remote held-item layer fills (bow limb/string/arrow,
+/// crossbow string, or `Static`), so the per-frame draw animator can compose the
+/// same per-piece transform the first-person viewmodel uses on top of the
+/// whole-item grip. `Static` layers stay put (identity piece transform).
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct RemoteHeldPiece(pub(crate) HeldPieceSlot);
 
 /// Local mirror of the replicated `PlayerEquipmentVisual`: the four worn-armor
 /// mesh selectors for a remote body. Copied off the replicated component by
@@ -701,6 +767,14 @@ pub(crate) struct PlayerRig {
     swing: Option<RemoteSwing>,
     /// Accumulated walk-cycle phase.
     stride_phase: f32,
+    /// Render-smoothed look pitch. The replicated pose (hence `RemoteLocomotion::
+    /// pitch`) steps at the network tick rate; this eases toward it each frame so
+    /// the upper-body lean glides instead of stair-stepping, matching how the root
+    /// yaw is interpolated. Seeded on first sight in the animator.
+    smoothed_pitch: f32,
+    /// True once `smoothed_pitch` has been seeded from the first replicated pitch
+    /// (so a peer first seen mid-look snaps to it instead of easing up from level).
+    pitch_seeded: bool,
     /// True once the rig parts have been repointed to the per-corpse fade
     /// material (so the repoint runs once per death, not every frame).
     corpse_faded: bool,
@@ -784,6 +858,8 @@ pub(crate) fn reconcile_player_rigs_system(
             last_swing_seq: 0,
             swing: None,
             stride_phase: 0.0,
+            smoothed_pitch: 0.0,
+            pitch_seeded: false,
             corpse_faded: false,
         });
     }
@@ -821,6 +897,10 @@ pub(crate) fn apply_remote_player_appearance_system(
                         Name::new("Held Item (remote)"),
                         Mesh3d(held_layer.mesh),
                         grip,
+                        // Tag the layer's rig slot so the draw animator can flex
+                        // the bow's limbs / string per-piece; `Static` pieces stay
+                        // put at the whole-item grip.
+                        RemoteHeldPiece(held_layer.slot),
                         Visibility::Inherited,
                         // Shadow would be noise at this scale; it rides the
                         // swinging arm anyway.
@@ -924,8 +1004,15 @@ pub(crate) fn animate_remote_players_system(
     let dt = time.delta_secs().max(0.0);
     for (mut rig, loco, action, held, dying, sleeping) in &mut rigs {
         // A collapsing corpse keeps the pose it died in (the death tick owns the
-        // root transform); don't keep walking it.
+        // root transform); don't keep walking it. The look-pitch lean is a
+        // living-peer behavior, though: clear the Body's local pitch + hip-pivot
+        // translation so the corpse collapses with an upright torso instead of
+        // freezing an arched back (a dead player has no aim to track).
         if dying.is_some() {
+            if let Ok(mut transform) = parts.get_mut(rig.body) {
+                transform.rotation = Quat::IDENTITY;
+                transform.translation = Vec3::ZERO;
+            }
             continue;
         }
         let holding = held.0.is_some();
@@ -959,8 +1046,39 @@ pub(crate) fn animate_remote_players_system(
             ] {
                 set_rot(&mut parts, part, Quat::IDENTITY);
             }
+            // The torso pitch also moves the body's translation (hip-pivot
+            // compensation); clear it so a sleeper relaxes to the rest origin.
+            if let Ok(mut transform) = parts.get_mut(body) {
+                transform.translation = Vec3::ZERO;
+            }
             continue;
         }
+
+        // Ease the look pitch toward the replicated value, which steps at the
+        // network tick rate, so the lean glides like the interpolated root yaw
+        // instead of stair-stepping. Seed it on first sight so a peer already
+        // looking up snaps to that aim rather than ramping up from level.
+        let target_pitch = loco.pitch;
+        if rig.pitch_seeded {
+            let ease = 1.0 - (-dt / REMOTE_PLAYER_INTERPOLATION_SECONDS).exp();
+            rig.smoothed_pitch += (target_pitch - rig.smoothed_pitch) * ease;
+        } else {
+            rig.smoothed_pitch = target_pitch;
+            rig.pitch_seeded = true;
+        }
+
+        // Look pitch leans the upper body: the visible torso bends
+        // `REMOTE_TORSO_PITCH_FRACTION` of the way, and (when holding) the held
+        // arm makes up the rest on its own shoulder so the item in hand tracks
+        // the FULL aim. Both are rotations about the same world axis (the peer's
+        // right), so torso + arm sum back to the exact look pitch.
+        let look_pitch = rig.smoothed_pitch;
+        let torso_pitch = look_pitch * REMOTE_TORSO_PITCH_FRACTION;
+        let arm_aim_pitch = if holding {
+            look_pitch * (1.0 - REMOTE_TORSO_PITCH_FRACTION)
+        } else {
+            0.0
+        };
 
         // Swing edge detection (seq, never `is_changed`).
         let mut swing = rig.swing;
@@ -1017,7 +1135,13 @@ pub(crate) fn animate_remote_players_system(
         let (rest_right_arm, rest_right_elbow) = if holding {
             let bob = (phase * 0.5).sin() * 0.04 * walk_blend;
             (
-                carry_upper_arm_rotation() * Quat::from_rotation_x(bob),
+                // Aim pitch (body-frame X, pre-multiplied) raises the whole arm so
+                // the held item points at the peer's look; it sums with the torso
+                // lean about the same axis to the full pitch. The swing delta
+                // below composes on top of this aimed rest.
+                Quat::from_rotation_x(arm_aim_pitch)
+                    * carry_upper_arm_rotation()
+                    * Quat::from_rotation_x(bob),
                 carry_forearm_rotation(),
             )
         } else {
@@ -1063,8 +1187,88 @@ pub(crate) fn animate_remote_players_system(
         };
         rig.swing = next_swing;
 
-        // Upper body twists into a swing.
-        set_rot(&mut parts, body, Quat::from_rotation_y(torso_twist));
+        // Upper body leans to the peer's look pitch and twists into a swing,
+        // pivoting at the hips so the pelvis stays over the legs.
+        let (body_rot, body_translation) = remote_body_pose(torso_pitch, torso_twist);
+        if let Ok(mut transform) = parts.get_mut(body) {
+            transform.rotation = body_rot;
+            transform.translation = body_translation;
+        }
+    }
+}
+
+/// Animate the *charging* held items on a peer's rig: the drawn bow and the
+/// bandage being wrapped.
+///
+/// Both are multi-primitive glbs whose layers are tagged with a
+/// [`RemoteHeldPiece`] slot, and both are driven by the one replicated
+/// [`RemoteLocomotion::charge_fraction`] the server computes. This composes the
+/// SAME per-piece transform the first-person viewmodel uses on top of the
+/// whole-item grip, so peers see exactly the motion the owner sees: the bow's
+/// limbs bend and its string pulls into a deep V, and the bandage's tail unrolls
+/// out of its roll.
+///
+/// Seeing this matters tactically, which is the whole reason the fraction is
+/// replicated at all: a drawn bow tells you an arrow is coming, and someone
+/// mid-bandage is slowed, committed, and worth rushing.
+///
+/// Every other held item keeps the static grip it was spawned with in
+/// `apply_remote_player_appearance_system` (its per-piece transform is identity),
+/// and a dead body's item is left frozen wherever it was.
+pub(crate) fn animate_remote_held_charge_system(
+    time: Res<Time>,
+    rigs: Query<(
+        &PlayerRig,
+        &RemoteHeld,
+        &RemoteLocomotion,
+        Option<&DyingPlayer>,
+    )>,
+    mut layers: Query<(&RemoteHeldPiece, &mut Transform)>,
+) {
+    let t = time.elapsed_secs();
+    for (rig, held, loco, dying) in &rigs {
+        if dying.is_some() {
+            continue;
+        }
+        // Only the bow and the bandage carry a replicated charge.
+        let Some(model) = held.0.and_then(|mesh| match mesh {
+            HeldMesh::WoodenBow => Some(ItemModel::Bow),
+            HeldMesh::Bandage => Some(ItemModel::Bandage),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let Some(mesh) = held.0 else { continue };
+
+        let grip = held_item_hand_transform(mesh);
+        let charge = loco.charge_fraction.clamp(0.0, 1.0);
+        let active = charge > 1e-3;
+        let pose = RangedPoseInputs {
+            draw_fraction: charge,
+            drawing: active,
+            // Not drawing => fully settled at rest (the release flick is a
+            // first-person nicety we skip for peers); the pose falls back to the
+            // rest bow.
+            release_progress: if active { 0.0 } else { 1.0 },
+            reload_fraction: 1.0,
+            recoil: 0.0,
+            aim: 0.0,
+            throw_wind_up: 0.0,
+            use_fraction: charge,
+            // Peers get no settle animation: the server stops reporting a charge
+            // the instant the use ends, so `use_settle: 1.0` (fully at rest) makes
+            // the tail roll straight back up. Reproducing the owner's ease-out
+            // would need the *end* event replicated too, which is not worth a
+            // component for a quarter-second of polish on someone else's hands.
+            use_settle: 1.0,
+            use_ended_at: 0.0,
+            time_seconds: t,
+        };
+        for &layer in &rig.held_layers {
+            if let Ok((piece, mut transform)) = layers.get_mut(layer) {
+                *transform = grip * held_piece_local_transform(model, piece.0, pose);
+            }
+        }
     }
 }
 
@@ -1118,6 +1322,72 @@ mod tests {
         assert!((halfway.translation.x - 2.0).abs() < 0.001);
         assert!(halfway.rotation.angle_between(current.rotation) > 0.1);
         assert!(halfway.rotation.angle_between(target.rotation) > 0.1);
+    }
+
+    #[test]
+    fn remote_body_pose_leans_to_look_pitch_about_the_hip() {
+        // Rest: identity rotation, no translation offset.
+        let (rot, tr) = remote_body_pose(0.0, 0.0);
+        assert!(rot.angle_between(Quat::IDENTITY) < 1e-5);
+        assert!(
+            tr.length() < 1e-6,
+            "rest torso must sit at the origin: {tr:?}"
+        );
+
+        // Looking up (+pitch): the body's forward (-Z) tilts UP (+Y), matching the
+        // first-person camera's `from_euler(YXZ, yaw, pitch, 0)` sign.
+        let (up_rot, up_tr) = remote_body_pose(0.5, 0.0);
+        let forward = up_rot * Vec3::NEG_Z;
+        assert!(
+            forward.y > 0.0,
+            "positive pitch should look up: {forward:?}"
+        );
+
+        // Hip pivot is preserved: the pivot point maps back to itself, so the
+        // pelvis holds its place over the legs instead of swinging off the origin.
+        let pivot = Vec3::new(0.0, REMOTE_TORSO_PITCH_PIVOT_Y, 0.0);
+        let mapped = up_tr + up_rot * pivot;
+        assert!(
+            (mapped - pivot).length() < 1e-5,
+            "hip pivot moved: {mapped:?}"
+        );
+    }
+
+    #[test]
+    fn remote_head_anchor_tracks_the_leaned_head() {
+        // At rest the anchor sits straight up the Y axis at the head top, matching
+        // the pre-lean overlay position (so nothing shifts when nobody is aiming).
+        let rest = remote_head_anchor_local(0.0);
+        assert!((rest - Vec3::new(0.0, PLAYER_HEAD_TOP_LOCAL_Y, 0.0)).length() < 1e-5);
+
+        // Looking up (+pitch) leans the torso back, so the head top swings toward
+        // the archer's back (+Z) and drops a little; the anchor must follow it off
+        // the Y axis, otherwise the nametag detaches from the head.
+        let up = remote_head_anchor_local(1.2);
+        assert!(
+            up.z > 0.01,
+            "head should swing back (+Z) when looking up: {up:?}"
+        );
+        assert!(
+            up.y < PLAYER_HEAD_TOP_LOCAL_Y,
+            "head top drops as it leans: {up:?}"
+        );
+    }
+
+    #[test]
+    fn torso_lean_and_arm_aim_sum_to_the_full_look_pitch() {
+        // The held item must point exactly where the peer looks: the torso bends a
+        // fraction and the held arm makes up the rest on the SAME axis (the peer's
+        // right), so the two X-rotations compose to the full look pitch.
+        let look = 0.9_f32;
+        let torso = look * REMOTE_TORSO_PITCH_FRACTION;
+        let arm = look * (1.0 - REMOTE_TORSO_PITCH_FRACTION);
+        let composed = Quat::from_rotation_x(torso) * Quat::from_rotation_x(arm);
+        let full = Quat::from_rotation_x(look);
+        assert!(
+            composed.angle_between(full) < 1e-5,
+            "torso + arm aim must reconstruct the full look pitch"
+        );
     }
 
     #[test]
@@ -1241,6 +1511,8 @@ mod tests {
             last_swing_seq: 0,
             swing: None,
             stride_phase: 0.0,
+            smoothed_pitch: 0.0,
+            pitch_seeded: false,
             corpse_faded: false,
         }
     }

@@ -247,31 +247,45 @@ pub(crate) fn build_mip_chain(image: &mut Image) {
     let mut src = image.data.clone().expect("decoded image has pixel data");
     let mut levels = 1u32;
 
+    // The per-texel sRGB<->linear conversions are cheap in a release build (~1 ms
+    // per 768px texture) but slow at the dev opt-level 0: serial, the ~20 textures
+    // decoded at startup cost ~1.4 s of mip building and froze the first frame (the
+    // spinner can't animate while the main thread is blocked). A LUT doesn't help
+    // because opt-0 makes the array indexing just as slow; the dst rows of each
+    // level are independent, so fan them out across the compute pool (same pattern
+    // as `bake_terrain_weight_parallel`), which cuts the dev cost by ~the core count.
+    let pool = ComputeTaskPool::get_or_init(Default::default);
+    let threads = pool.thread_num().max(1);
+
     while w > 1 || h > 1 {
         let nw = (w / 2).max(1);
         let nh = (h / 2).max(1);
         let mut dst = vec![0u8; (nw * nh * 4) as usize];
-        for y in 0..nh {
-            for x in 0..nw {
-                let mut acc = [0.0f32; 4];
-                for dy in 0..2 {
-                    for dx in 0..2 {
-                        let sx = (x * 2 + dx).min(w - 1);
-                        let sy = (y * 2 + dy).min(h - 1);
-                        let i = ((sy * w + sx) * 4) as usize;
-                        acc[0] += srgb_to_linear(src[i]);
-                        acc[1] += srgb_to_linear(src[i + 1]);
-                        acc[2] += srgb_to_linear(src[i + 2]);
-                        acc[3] += src[i + 3] as f32 / 255.0;
-                    }
+        let row_bytes = (nw * 4) as usize;
+
+        if (nh as usize) <= threads {
+            // Too few rows to be worth the fan-out overhead; downsample serially.
+            fill_mip_rows(&src, w, h, nw, 0, nh, &mut dst);
+        } else {
+            let bands = (threads * 4).clamp(1, nh as usize);
+            let rows_per_band = nh.div_ceil(bands as u32);
+            pool.scope(|scope| {
+                let src_ref = &src;
+                let mut remaining = dst.as_mut_slice();
+                let mut row_start = 0u32;
+                while row_start < nh {
+                    let row_end = (row_start + rows_per_band).min(nh);
+                    let band_len = (row_end - row_start) as usize * row_bytes;
+                    let (band, rest) = remaining.split_at_mut(band_len);
+                    remaining = rest;
+                    scope.spawn(async move {
+                        fill_mip_rows(src_ref, w, h, nw, row_start, row_end, band);
+                    });
+                    row_start = row_end;
                 }
-                let o = ((y * nw + x) * 4) as usize;
-                dst[o] = linear_to_srgb(acc[0] * 0.25);
-                dst[o + 1] = linear_to_srgb(acc[1] * 0.25);
-                dst[o + 2] = linear_to_srgb(acc[2] * 0.25);
-                dst[o + 3] = (acc[3] * 0.25 * 255.0).round() as u8;
-            }
+            });
         }
+
         image
             .data
             .as_mut()
@@ -284,6 +298,42 @@ pub(crate) fn build_mip_chain(image: &mut Image) {
     }
 
     image.texture_descriptor.mip_level_count = levels;
+}
+
+/// Box-downsample source rows `[row_start, row_end)` of the `w`x`sh` source into
+/// `dst_band`, which holds exactly those destination rows (each `nw` texels wide).
+/// Colours are averaged in linear space; alpha is already linear. Split out so the
+/// bands can be filled in parallel (see [`build_mip_chain`]).
+fn fill_mip_rows(
+    src: &[u8],
+    w: u32,
+    sh: u32,
+    nw: u32,
+    row_start: u32,
+    row_end: u32,
+    dst_band: &mut [u8],
+) {
+    for y in row_start..row_end {
+        for x in 0..nw {
+            let mut acc = [0.0f32; 4];
+            for dy in 0..2 {
+                for dx in 0..2 {
+                    let sx = (x * 2 + dx).min(w - 1);
+                    let sy = (y * 2 + dy).min(sh - 1);
+                    let i = ((sy * w + sx) * 4) as usize;
+                    acc[0] += srgb_to_linear(src[i]);
+                    acc[1] += srgb_to_linear(src[i + 1]);
+                    acc[2] += srgb_to_linear(src[i + 2]);
+                    acc[3] += src[i + 3] as f32 / 255.0;
+                }
+            }
+            let o = ((y - row_start) * nw + x) as usize * 4;
+            dst_band[o] = linear_to_srgb(acc[0] * 0.25);
+            dst_band[o + 1] = linear_to_srgb(acc[1] * 0.25);
+            dst_band[o + 2] = linear_to_srgb(acc[2] * 0.25);
+            dst_band[o + 3] = (acc[3] * 0.25 * 255.0).round() as u8;
+        }
+    }
 }
 
 fn srgb_to_linear(c: u8) -> f32 {

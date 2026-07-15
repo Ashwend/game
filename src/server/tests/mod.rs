@@ -29,6 +29,7 @@ mod door;
 mod dropped_items;
 mod explosives;
 mod furnace;
+mod heal;
 mod inventory;
 mod loot_bag;
 mod movement;

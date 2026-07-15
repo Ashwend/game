@@ -427,7 +427,11 @@ impl CameraImpactKick {
             ),
             // The thrown bomb has no swing / fire kick (the blast's proximity
             // shake is its feedback); the light toss barely nudges the camera.
-            ItemModel::ThrownBomb => (HANDS_KICK_PITCH, HANDS_KICK_DOWN, HANDS_KICK_DURATION),
+            // The bandage has no kick at all: it is never swung, and jolting the
+            // camera when someone finishes binding a wound would read as damage.
+            ItemModel::ThrownBomb | ItemModel::Bandage => {
+                (HANDS_KICK_PITCH, HANDS_KICK_DOWN, HANDS_KICK_DURATION)
+            }
         };
         self.apply_kick(pitch, down, duration);
     }
@@ -475,7 +479,11 @@ impl CameraImpactKick {
             | ItemModel::Crossbow
             | ItemModel::Bag
             | ItemModel::Deployable
-            | ItemModel::ThrownBomb => (
+            | ItemModel::ThrownBomb
+            // The bandage cannot be an attacker's model (it deals no damage), so
+            // it never really reaches here; it takes the light profile for the
+            // same defensive reason the others do.
+            | ItemModel::Bandage => (
                 HIT_RECEIVED_AXE_PITCH,
                 HIT_RECEIVED_AXE_DOWN,
                 HIT_RECEIVED_AXE_DURATION,

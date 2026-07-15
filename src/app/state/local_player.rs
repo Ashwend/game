@@ -15,8 +15,8 @@
 use bevy::prelude::*;
 
 use crate::server::{
-    Player, PlayerCrafting, PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerOpenContainers,
-    PlayerPrivate,
+    Player, PlayerCrafting, PlayerHealth, PlayerInputAck, PlayerInventory, PlayerLifecycle,
+    PlayerOpenContainers, PlayerPrivate, PlayerPrivateState,
 };
 
 use super::{ClientRuntime, MenuState, PredictionState};
@@ -33,18 +33,32 @@ pub(crate) struct LocalPlayerState {
 
 #[allow(clippy::type_complexity)]
 pub(crate) fn update_local_player_state_system(
-    runtime: Res<ClientRuntime>,
+    mut runtime: ResMut<ClientRuntime>,
     mut state: ResMut<LocalPlayerState>,
     mut menu: ResMut<MenuState>,
+    // `PlayerHealth` rides here so the local HUD tracks the authoritative
+    // replicated health. The bar reads the *predicted* health, which only the
+    // server's per-hit `Correction` message writes; a single dropped message
+    // would otherwise strand it at full while the server records every hit.
     players: Query<(
         Entity,
         &Player,
-        Option<&PlayerInventory>,
-        Option<&PlayerCrafting>,
-        Option<&PlayerOpenContainers>,
-        Option<&PlayerInputAck>,
         Option<&PlayerLifecycle>,
+        Option<&PlayerHealth>,
     )>,
+    // The four owner-only components live on a separate private mirror entity
+    // that the server replicates to this client alone, so this query yields
+    // exactly one row (our own). Requiring all four keeps the assembled view
+    // atomic (they ship together in the private entity's initial replication).
+    private: Query<
+        (
+            &PlayerInventory,
+            &PlayerCrafting,
+            &PlayerOpenContainers,
+            &PlayerInputAck,
+        ),
+        With<PlayerPrivateState>,
+    >,
 ) {
     let Some(client_id) = runtime.client_id else {
         state.entity = None;
@@ -53,35 +67,34 @@ pub(crate) fn update_local_player_state_system(
         return;
     };
 
-    for (entity, player, inventory, crafting, containers, input_ack, lifecycle) in &players {
+    state.private =
+        private.single().ok().map(
+            |(inventory, crafting, containers, input_ack)| PlayerPrivate {
+                inventory: inventory.0.clone(),
+                crafting: crafting.0.clone(),
+                open_furnace: containers.open_furnace.clone(),
+                open_loot_bag: containers.open_loot_bag.clone(),
+                open_workbench: containers.open_workbench,
+                last_processed_input: input_ack.last_processed_input,
+                applied_action_seq: input_ack.applied_action_seq,
+                run_speed_multiplier: input_ack.run_speed_multiplier,
+            },
+        );
+
+    for (entity, player, lifecycle, health) in &players {
         if player.client_id == client_id {
+            // Authoritative health -> the predicted value the HUD renders.
+            if let Some(health) = health {
+                runtime.sync_local_health(health.0);
+            }
             let prior = state.lifecycle;
             state.entity = Some(entity);
-            // All four owner-only components ship in the entity's
-            // initial replication action, so they appear together;
-            // requiring all of them keeps the assembled view atomic.
-            state.private = match (inventory, crafting, containers, input_ack) {
-                (Some(inventory), Some(crafting), Some(containers), Some(input_ack)) => {
-                    Some(PlayerPrivate {
-                        inventory: inventory.0.clone(),
-                        crafting: crafting.0.clone(),
-                        open_furnace: containers.open_furnace.clone(),
-                        open_loot_bag: containers.open_loot_bag.clone(),
-                        open_workbench: containers.open_workbench,
-                        last_processed_input: input_ack.last_processed_input,
-                        applied_action_seq: input_ack.applied_action_seq,
-                        run_speed_multiplier: input_ack.run_speed_multiplier,
-                    })
-                }
-                _ => None,
-            };
             state.lifecycle = lifecycle.copied();
-            // Auto-clear the death splash when the replicated
-            // lifecycle transitions Dead → Alive (i.e. server-side
-            // respawn has landed). Gated on the transition rather
-            // than "current lifecycle is Alive" so a `PlayerKilled`
-            // message arriving on the same frame as the initial
-            // component spawn (lifecycle defaults to `Alive`) can't
+            // Auto-clear the death splash when the replicated lifecycle
+            // transitions Dead → Alive (i.e. server-side respawn has landed).
+            // Gated on the transition rather than "current lifecycle is Alive"
+            // so a `PlayerKilled` message arriving on the same frame as the
+            // initial component spawn (lifecycle defaults to `Alive`) can't
             // silently dismiss the splash before the Dead diff lands.
             if menu.death_splash.is_some()
                 && matches!(prior, Some(PlayerLifecycle::Dead { .. }))
@@ -94,7 +107,6 @@ pub(crate) fn update_local_player_state_system(
     }
 
     state.entity = None;
-    state.private = None;
     state.lifecycle = None;
 }
 

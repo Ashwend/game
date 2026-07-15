@@ -212,8 +212,8 @@ mod tests {
         };
         let ctx = egui::Context::default();
 
-        let _ = ctx.run(raw_input_with_events(vec![escape_event()]), |ctx| {
-            handle_multiplayer_escape(ctx, &mut menu);
+        let _ = ctx.run_ui(raw_input_with_events(vec![escape_event()]), |ui| {
+            handle_multiplayer_escape(ui.ctx(), &mut menu);
         });
 
         assert_eq!(menu.screen, Screen::MainMenu);
@@ -237,8 +237,8 @@ mod tests {
         };
         let ctx = egui::Context::default();
 
-        let _ = ctx.run(raw_input_with_events(vec![escape_event()]), |ctx| {
-            handle_multiplayer_escape(ctx, &mut menu);
+        let _ = ctx.run_ui(raw_input_with_events(vec![escape_event()]), |ui| {
+            handle_multiplayer_escape(ui.ctx(), &mut menu);
         });
 
         assert_eq!(menu.screen, Screen::Multiplayer);

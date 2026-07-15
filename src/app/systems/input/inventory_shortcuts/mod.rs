@@ -19,6 +19,7 @@ use crate::{
 
 use super::gating::{gameplay_accepts_controls, primary_window_focused};
 
+mod consumable;
 mod explosive;
 mod predict;
 mod ranged;
@@ -67,6 +68,7 @@ pub(crate) struct GameplayInventoryShortcutsParams<'w, 's> {
     primary_window: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     analytics: Res<'w, crate::analytics::Analytics>,
     ranged_fire_sampler: ResMut<'w, ranged::RangedFireSampler>,
+    consume_charge: ResMut<'w, crate::app::state::ConsumeChargeState>,
 }
 
 pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryShortcutsParams) {
@@ -74,8 +76,11 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
         params.mouse_wheel.clear();
         params.gather_input.cancel();
         // An overlay opening (or losing focus) mid-charge abandons the bomb
-        // wind-up too (no throw fires from behind a menu).
+        // wind-up too (no throw fires from behind a menu), and abandons a
+        // half-wrapped bandage: opening the inventory must not finish binding a
+        // wound for you. Costs nothing, the item is only spent on completion.
         params.throw_charge.cancel();
+        consumable::cancel_if_active(&mut params);
         // An overlay opening (or losing focus) mid-draw abandons the shot: send a
         // DrawCancel so the server lowers the bow and restores movement, instead of
         // leaving the player stuck at draw speed behind the menu. The local reload
@@ -91,6 +96,7 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
         params.mouse_wheel.clear();
         params.gather_input.cancel();
         params.throw_charge.cancel();
+        consumable::cancel_if_active(&mut params);
         ranged::idle_tick_and_cancel(&mut params);
         return;
     }
@@ -344,6 +350,14 @@ pub(crate) fn gameplay_inventory_shortcuts_system(mut params: GameplayInventoryS
     // plays, the release cue + throw fire at the pose's release frame, and the
     // recovery beat gates re-throw; so we do NOT cancel the swing here, and we
     // still drain the SwingStart below so peers see the toss.
+    // A consumable (the bandage) intercepts before every other path: it neither
+    // swings, fires, nor throws. It does NOT drive the swing state machine at all
+    // (unlike the thrown bomb, whose toss IS a swing), so cancel any stale melee
+    // swing left over from a just-swapped-away tool and claim the frame.
+    if consumable::drive_consumable_input(&mut params, local_dead, swapping) {
+        params.gather_input.cancel();
+        return;
+    }
     if explosive::drive_explosive_input(&mut params, local_dead, swapping) {
         if let Some((seq, model)) = params.gather_input.take_swing_start() {
             send_gameplay_message(

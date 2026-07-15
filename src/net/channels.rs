@@ -13,12 +13,12 @@ use crate::{
     protocol::{ClientMessage, PacketDelivery, ServerMessage},
     server::{
         Deployable, DeployableActive, DeployableAuth, DeployableHealth, DeployableLabel,
-        DeployableStability, DeployableTransform, DroppedItem, DroppedItemTransform,
-        LootBagContents, LootBagEntity, LootBagTransform, Player, PlayerAction, PlayerArmor,
+        DeployableStability, DeployableTransform, DroppedItem, DroppedItemTransform, LootBagEntity,
+        LootBagTransform, Player, PlayerAction, PlayerArmor, PlayerChargeFraction,
         PlayerChatBubble, PlayerCrafting, PlayerEquipmentVisual, PlayerHealth, PlayerHeldItem,
         PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerOpenContainers, PlayerPose,
-        PlayerProfile, PlayerSleeping, Projectile, ProjectileTransform, ResourceNode,
-        ResourceNodeStorage,
+        PlayerPrivateState, PlayerProfile, PlayerSleeping, Projectile, ProjectileTransform,
+        ResourceNode, ResourceNodeStorage,
     },
 };
 
@@ -38,6 +38,19 @@ use crate::{
 /// genuinely incompatible *transport* change.
 pub(crate) const LIGHTYEAR_PROTOCOL_ID: u64 = 0x4153_4857_454E_4401; // b"ASHWEND\x01"
 const LIGHTYEAR_PRIVATE_KEY: [u8; 32] = [0; 32];
+
+/// Netcode connection timeout, in seconds: the server drops a client it has not
+/// heard a packet from for this long, and the client gives up on a silent server
+/// after the same window (it is baked into the client-generated connect token).
+///
+/// lightyear's default is a mere **3 seconds**, which is far too short here: the
+/// initial world sync streams the whole AoI (~1800 nodes + terrain + peers) over
+/// several seconds behind the loading splash, and a heavily-loading client (the
+/// 2nd joiner especially) can go >3 s between packets while it grinds through the
+/// burst, so the server would drop it mid-load. Sized above the client's own
+/// `WORLD_ENTRY_READY_TIMEOUT_SECONDS` (20 s) so a legitimate slow load never
+/// trips it; a genuinely dead client is still reaped well inside a minute.
+pub(crate) const NETCODE_CLIENT_TIMEOUT_SECS: i32 = 30;
 
 #[derive(Clone)]
 pub(crate) struct LightyearProtocolPlugin;
@@ -85,52 +98,68 @@ impl Plugin for LightyearProtocolPlugin {
         // client receives them automatically once it subscribes to the
         // chunk room. Both sides need an identical registry here so the
         // wire bytes round-trip.
-        app.register_component::<ResourceNode>();
-        app.register_component::<ResourceNodeStorage>();
-        app.register_component::<DroppedItem>();
-        app.register_component::<DroppedItemTransform>();
-        app.register_component::<Deployable>();
-        app.register_component::<DeployableTransform>();
-        app.register_component::<DeployableHealth>();
-        app.register_component::<DeployableActive>();
-        app.register_component::<DeployableLabel>();
-        app.register_component::<DeployableStability>();
-        app.register_component::<DeployableAuth>();
-        app.register_component::<Player>();
+        app.component::<ResourceNode>().replicate();
+        app.component::<ResourceNodeStorage>().replicate();
+        app.component::<DroppedItem>().replicate();
+        app.component::<DroppedItemTransform>().replicate();
+        app.component::<Deployable>().replicate();
+        app.component::<DeployableTransform>().replicate();
+        app.component::<DeployableHealth>().replicate();
+        app.component::<DeployableActive>().replicate();
+        app.component::<DeployableLabel>().replicate();
+        app.component::<DeployableStability>().replicate();
+        app.component::<DeployableAuth>().replicate();
+        app.component::<Player>().replicate();
         // Peer-visible player state, one component per cadence: the
         // pose ticks at 20 Hz while moving, the rest only on real
         // changes (see `src/server/player_ecs.rs`).
-        app.register_component::<PlayerProfile>();
-        app.register_component::<PlayerPose>();
-        app.register_component::<PlayerHealth>();
-        app.register_component::<PlayerChatBubble>();
+        app.component::<PlayerProfile>().replicate();
+        app.component::<PlayerPose>().replicate();
+        app.component::<PlayerHealth>().replicate();
+        app.component::<PlayerChatBubble>().replicate();
         // Peer-visible cosmetic state for the rigged remote body: what the
         // player holds, and their current swing. Both change far less often
         // than the pose, so they sit apart from it (one diff per tool swap /
         // per swing, not per movement tick).
-        app.register_component::<PlayerHeldItem>();
+        app.component::<PlayerHeldItem>().replicate();
         // Peer-visible worn-armor mesh selectors (one per equipment slot), for
         // rendering another player's armor on their rig. Changes only on
         // equip/unequip, so it sits apart from the pose alongside the held item.
-        app.register_component::<PlayerEquipmentVisual>();
-        app.register_component::<PlayerAction>();
+        app.component::<PlayerEquipmentVisual>().replicate();
+        app.component::<PlayerAction>().replicate();
+        // Peer-visible bow-draw progress, so a peer's drawn bow flexes on the
+        // remote rig. Changes only while a bow is drawn (idle at 0 otherwise).
+        app.component::<PlayerChargeFraction>().replicate();
         // Owner-only player state, gated per component to the owning
         // sender in `attach_player_replication`.
-        app.register_component::<PlayerInventory>();
-        app.register_component::<PlayerCrafting>();
-        app.register_component::<PlayerOpenContainers>();
-        app.register_component::<PlayerInputAck>();
-        app.register_component::<PlayerArmor>();
-        app.register_component::<PlayerLifecycle>();
-        app.register_component::<PlayerSleeping>();
-        app.register_component::<LootBagEntity>();
-        app.register_component::<LootBagTransform>();
-        app.register_component::<LootBagContents>();
+        app.component::<PlayerInventory>().replicate();
+        app.component::<PlayerCrafting>().replicate();
+        app.component::<PlayerOpenContainers>().replicate();
+        app.component::<PlayerInputAck>().replicate();
+        app.component::<PlayerArmor>().replicate();
+        app.component::<PlayerLifecycle>().replicate();
+        app.component::<PlayerSleeping>().replicate();
+        // Identity marker for the per-player private mirror entity. The four
+        // owner-only components above (PlayerInventory/Crafting/OpenContainers/
+        // InputAck) are registered so they round-trip, but they now ride this
+        // private entity, replicated only to the owner (see `PlayerPrivateState`).
+        app.component::<PlayerPrivateState>().replicate();
+        app.component::<LootBagEntity>().replicate();
+        app.component::<LootBagTransform>().replicate();
+        // LootBagContents: trace builds only. Nothing in release consumes the
+        // replicated bag contents (the bag UI rides the owner-only
+        // PlayerOpenContainers view), so release never registers it and it never
+        // reaches the wire. This replaces the old
+        // `ComponentReplicationOverrides::disable_all()` gate that lightyear 0.28
+        // removed.
+        #[cfg(feature = "replication-trace")]
+        app.component::<crate::server::LootBagContents>()
+            .replicate();
         // In-flight projectiles (arrows): one identity component + one mutable
         // transform (position + velocity for client extrapolation between the
         // 20 Hz diffs).
-        app.register_component::<Projectile>();
-        app.register_component::<ProjectileTransform>();
+        app.component::<Projectile>().replicate();
+        app.component::<ProjectileTransform>().replicate();
     }
 }
 

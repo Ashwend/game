@@ -278,6 +278,7 @@ fn client_message_kind(message: &ClientMessage) -> &'static str {
         ClientMessage::OpenStorageBox { .. } => "OpenStorageBox",
         ClientMessage::RequestWorldMap => "RequestWorldMap",
         ClientMessage::WorldMapMarker(_) => "WorldMapMarker",
+        ClientMessage::Consumable(_) => "Consumable",
     }
 }
 

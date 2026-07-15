@@ -34,7 +34,7 @@ mod worlds;
 use bevy::input::ButtonInput;
 use bevy::window::{Monitor, PrimaryMonitor};
 use bevy::{diagnostic::DiagnosticsStore, ecs::system::SystemParam, prelude::*};
-use bevy_egui::{EguiContextSettings, EguiContexts, PrimaryEguiContext, egui};
+use bevy_egui::{EguiContexts, egui};
 
 use super::audio::{PlaySound, SoundId};
 
@@ -130,6 +130,7 @@ pub(crate) struct UiResources<'w, 's> {
     ranged_input: Res<'w, RangedDrawState>,
     /// Thrown-bomb charge state, read by the HUD's throw charge bar.
     throw_charge: Res<'w, crate::app::state::ThrowChargeState>,
+    consume_charge: Res<'w, crate::app::state::ConsumeChargeState>,
     prediction: ResMut<'w, PredictionState>,
     scene_state: Res<'w, WorldSceneState>,
     update: ResMut<'w, UpdateState>,
@@ -245,22 +246,22 @@ fn ui_zoom_factor(settings: &ClientSettings) -> f32 {
 
 /// Applies the player's UI-scale preference to the primary egui context.
 ///
-/// bevy_egui 0.39 bakes the display scale factor into egui's zoom every frame,
-/// so driving zoom directly fights it and breaks layout (see the note in
-/// [`ui_system`]). The supported knob is [`EguiContextSettings::scale_factor`],
-/// which bevy_egui multiplies into the context's pixels-per-point on top of the
-/// display scale. Written only when it changes so a stable value never
-/// re-triggers egui's per-frame zoom path.
+/// bevy_egui 0.40 stopped baking the display scale into egui's zoom every frame
+/// (it now uses `native_pixels_per_point` and leaves the zoom factor for the
+/// app to own), so the per-context `EguiContextSettings::scale_factor` knob is
+/// gone. The supported path is egui's own `Context::set_zoom_factor`, which
+/// multiplies into pixels-per-point on top of the display scale. Written only
+/// when it changes so a stable value never re-triggers egui's zoom-discard path.
 pub(crate) fn apply_ui_scale_system(
     settings: Res<ClientSettings>,
-    mut contexts: Query<&mut EguiContextSettings, With<PrimaryEguiContext>>,
-) {
+    mut contexts: EguiContexts,
+) -> bevy::prelude::Result {
     let target = ui_zoom_factor(&settings);
-    for mut ctx_settings in &mut contexts {
-        if ctx_settings.scale_factor != target {
-            ctx_settings.scale_factor = target;
-        }
+    let ctx = contexts.ctx_mut()?;
+    if ctx.zoom_factor() != target {
+        ctx.set_zoom_factor(target);
     }
+    Ok(())
 }
 
 /// Registers the custom title typeface on the primary egui context once.
@@ -289,22 +290,24 @@ pub(crate) fn ui_system(
 ) -> bevy::prelude::Result {
     let ctx = contexts.ctx_mut()?;
     theme::apply_game_style(ctx);
-    // NOTE: do NOT call `ctx.set_zoom_factor()` here. bevy_egui 0.39 bakes the
-    // display scale factor into egui's zoom every frame via
-    // `set_pixels_per_point`; setting a different zoom here makes the two
-    // ping-pong, and egui's `begin_pass` jitter-avoidance hack discards the
-    // real `screen_rect` on every zoom change, so the whole UI is laid out in
-    // egui's ~5000x5000 default and centred menus render off-screen on HiDPI.
-    // User UI scale is applied via `EguiContextSettings::scale_factor` in
-    // `apply_ui_scale_system` instead.
+    // NOTE: user UI scale is owned by `apply_ui_scale_system` (via
+    // `Context::set_zoom_factor`), not here, so this per-frame UI build never
+    // touches the zoom factor. Keeping the single writer avoids re-triggering
+    // egui's zoom-change discard path every frame.
     let delta_seconds = resources
         .time
         .as_ref()
         .map(|time| time.delta_secs())
         .unwrap_or(1.0 / 60.0);
-    let cover_alpha = resources
-        .backdrop_visibility
-        .cover_alpha(resources.menu.screen, delta_seconds);
+    // Hold the backdrop cover opaque until auth settles, so the 3D menu
+    // backdrop never fades in behind the "Signing you in…" splash while a silent
+    // restore (which routinely outlasts the 1.5s blur warmup) is still resolving.
+    let reveal_allowed = !resources.auth.is_in_flight();
+    let cover_alpha = resources.backdrop_visibility.cover_alpha(
+        resources.menu.screen,
+        reveal_allowed,
+        delta_seconds,
+    );
     theme::backdrop_cover(ctx, cover_alpha);
 
     // Gate the title screen behind WorkOS sign-in: until authenticated, render

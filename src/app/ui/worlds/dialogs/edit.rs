@@ -233,9 +233,9 @@ mod tests {
         // and the rename fires.
         menu.edit_world.as_mut().unwrap().name = "Renamed".to_owned();
 
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             raw_input_with_events(vec![key_press(egui::Key::Enter)]),
-            |ctx| edit_world_dialog_ui(ctx, &mut menu, &store),
+            |ui| edit_world_dialog_ui(ui.ctx(), &mut menu, &store),
         );
         // The dialog should now be flagged confirmed + closing.
         {
@@ -251,8 +251,8 @@ mod tests {
             if menu.edit_world.is_none() {
                 break;
             }
-            let _ = ctx.run(raw_input(), |ctx| {
-                edit_world_dialog_ui(ctx, &mut menu, &store);
+            let _ = ctx.run_ui(raw_input(), |ui| {
+                edit_world_dialog_ui(ui.ctx(), &mut menu, &store);
             });
         }
 
@@ -270,9 +270,9 @@ mod tests {
         let (mut menu, store) = menu_with_open_edit_dialog("KeepMe");
         menu.edit_world.as_mut().unwrap().name = "   ".to_owned();
 
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             raw_input_with_events(vec![key_press(egui::Key::Enter)]),
-            |ctx| edit_world_dialog_ui(ctx, &mut menu, &store),
+            |ui| edit_world_dialog_ui(ui.ctx(), &mut menu, &store),
         );
 
         let dialog = menu.edit_world.as_ref().expect("dialog should stay open");
@@ -293,8 +293,8 @@ mod tests {
         let store = temp_store();
         let mut menu = MenuState::default();
         // Should not panic and should leave edit_world unset.
-        let _ = ctx.run(raw_input(), |ctx| {
-            edit_world_dialog_ui(ctx, &mut menu, &store);
+        let _ = ctx.run_ui(raw_input(), |ui| {
+            edit_world_dialog_ui(ui.ctx(), &mut menu, &store);
         });
         assert!(menu.edit_world.is_none());
         let _ = fs::remove_dir_all(store.0.root());
@@ -332,8 +332,8 @@ mod tests {
         let (mut menu, store) = menu_with_open_edit_dialog("Valid Name");
         let mut dialog = menu.edit_world.take().unwrap();
 
-        let output = ctx.run(raw_input(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let output = ctx.run_ui(raw_input(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let mut choice = None;
                 draw_edit_world_form(ui, &mut dialog, &mut choice);
             });

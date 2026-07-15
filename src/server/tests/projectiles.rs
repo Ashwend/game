@@ -878,3 +878,64 @@ fn swapping_off_a_reloading_crossbow_restores_movement() {
         "swapping off the crossbow restores movement immediately"
     );
 }
+
+// ---- peer-visible bow draw (PlayerChargeFraction) ----
+
+/// The peer-replicated draw fraction ramps 0 -> 1 while a bow is held drawn and
+/// snaps back to 0 when the draw clears, so peers can animate the drawn bow.
+#[test]
+fn held_bow_draw_replicates_a_rising_fraction() {
+    let mut server = server();
+    let shooter = connect_named(&mut server, 1, "Shooter");
+    equip_ranged(&mut server, shooter, WOODEN_BOW_ID, 5);
+
+    let draw_of = |server: &GameServer| {
+        server
+            .players_iter()
+            .find(|view| view.client_id == shooter)
+            .expect("shooter view")
+            .charge_fraction
+            .0
+    };
+
+    // Not drawing: zero.
+    assert_eq!(draw_of(&server), 0.0);
+
+    // Half the draw window in: about half drawn.
+    server.apply_ranged_command(shooter, RangedCommand::DrawStart);
+    server.tick += WOODEN_BOW_DRAW_TICKS / 2;
+    let half = draw_of(&server);
+    assert!(
+        (0.4..=0.6).contains(&half),
+        "half-drawn fraction was {half}"
+    );
+
+    // Held past the full window: clamped to full draw.
+    server.tick += WOODEN_BOW_DRAW_TICKS;
+    assert_eq!(draw_of(&server), 1.0);
+
+    // Cleared (cancel / release): back to rest.
+    server.clear_ranged_draw(shooter);
+    assert_eq!(draw_of(&server), 0.0);
+}
+
+/// A crossbow is instant-fire (no draw window), so its replicated draw fraction
+/// stays 0 even mid-"draw": peers never see a crossbow hold a draw pose.
+#[test]
+fn crossbow_never_reports_a_draw_fraction() {
+    let mut server = server();
+    let shooter = connect_named(&mut server, 1, "Shooter");
+    equip_ranged(&mut server, shooter, CROSSBOW_ID, 5);
+    server.apply_ranged_command(shooter, RangedCommand::DrawStart);
+    server.tick += 100;
+    let draw = server
+        .players_iter()
+        .find(|view| view.client_id == shooter)
+        .expect("shooter view")
+        .charge_fraction
+        .0;
+    assert_eq!(
+        draw, 0.0,
+        "a crossbow has no draw window, so no peer draw pose"
+    );
+}
