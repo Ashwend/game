@@ -53,7 +53,9 @@ pub(crate) use meteor_shower::{
     meteor_shower_camera_shake_system, meteor_shower_rumble_system,
     update_meteor_shower_ground_system,
 };
-pub(crate) use meteor_sky::{tick_meteor_ember_system, update_meteor_sky_system};
+pub(crate) use meteor_sky::{
+    tick_meteor_airburst_system, tick_meteor_ember_system, update_meteor_sky_system,
+};
 pub(crate) use sky::{SUN_SOFT_SHADOW_SIZE, SunLight, update_sky_system};
 pub(crate) use terrain::{TerrainMaterial, TerrainTextureAssets};
 pub(crate) use toon::{ToonMaterial, ToonViewmodelMaterial};

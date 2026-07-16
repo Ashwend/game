@@ -1,5 +1,8 @@
-//! Airborne meteor shower VFX: the burning-rock fireball body, its segmented
-//! fiery trail, and the ember/smoke stream it sheds in flight.
+//! Airborne meteor shower VFX: the burning-rock fireball body, the animated
+//! flame tongues licking off it, its segmented fiery trail, the ember/smoke
+//! stream it sheds in flight, and the one-time mid-flight airburst (a bolide
+//! fragmentation flash that fans out small burning fragments which sputter and
+//! burn up in the sky).
 //!
 //! This is the SKY half of the meteor shower event; the ground half (crater,
 //! site fires, rock blast, strike cues) lives in `scene::meteor_shower`. The
@@ -7,10 +10,13 @@
 //! deterministic trajectory (`crate::world::meteor_shower`) evaluated against
 //! the local clock estimate; see [`MeteorVisual`] and
 //! [`update_meteor_sky_system`] for the far-plane proxy scheme that keeps it
-//! renderable and correctly sized from kilometres out. The body and trail
-//! entities are spawned once by [`setup_meteor_sky`] (called from `setup_scene`
-//! right after the sky rig) and repositioned/reshaded per frame; the shed
-//! embers are short-lived world-space particles.
+//! renderable and correctly sized from kilometres out. The body, tongue, and
+//! trail entities are spawned once by [`setup_meteor_sky`] (called from
+//! `setup_scene` right after the sky rig) and repositioned/reshaded per frame;
+//! the shed embers and airburst fragments are short-lived world-space
+//! particles. Everything here is presentation only: the authoritative meteor
+//! (arc, impact, blast) is untouched by the airburst, the main fireball simply
+//! flies on as the surviving core.
 
 use bevy::{light::NotShadowCaster, prelude::*};
 
@@ -45,11 +51,17 @@ pub(crate) enum MeteorBodyLayer {
     /// White-hot leading CAP: a small very-hot additive blob offset FORWARD along
     /// travel over the rock's nose, the incandescent shock front.
     Corona,
+    /// Thin additive HDR GLOW RIM just past the shell: a bright annulus whose
+    /// bloom is what makes the fireball read as LUMINOUS. The deep opaque shell
+    /// carries the saturated colour mass; this rim carries the light. Thin on
+    /// purpose: a bright additive area this narrow blooms into a hot aura
+    /// without tonemapping the whole ball to cream.
+    Glow,
 }
 
 /// How a body layer renders. See the `body_layer` builder in `setup_meteor_sky`
 /// for the per-mode reasoning (irregular dark rock / additive flame halo /
-/// additive cap).
+/// additive cap / additive glow rim).
 #[derive(Clone, Copy)]
 enum MeteorBodyRender {
     /// Opaque, default back-face cull, IRREGULAR mesh: the solid dark rock heart.
@@ -58,6 +70,11 @@ enum MeteorBodyRender {
     OpaqueRing,
     /// Additive, back-face cull: the small white-hot leading cap.
     AdditiveCap,
+    /// Additive, FRONT-face cull: the far bowl of a sphere slightly larger than
+    /// the shell. The opaque shell's far wall depth-occludes everything inside
+    /// its own silhouette, so only the thin annulus between the shell rim and
+    /// this sphere's rim survives: a narrow blazing ring that blooms.
+    AdditiveRing,
 }
 
 /// The meteor shower fireball body, a **true world-anchored object**, not a disc on
@@ -106,6 +123,49 @@ pub(crate) struct MeteorEmber {
     smoke: bool,
 }
 
+/// One animated flame tongue licking around the fireball shell: a small opaque
+/// unlit ellipsoid anchored on the rock's rim, orbiting the travel axis slowly
+/// and flaring backward on its own seeded pulse. A co-moving TOP-LEVEL world
+/// entity like the trail segments (parenting under [`MeteorVisual`] renders
+/// invisible in this Bevy version), repositioned each frame by
+/// [`update_meteor_flame_tongues`]. The tongues are what make the distant
+/// slow-crossing phase read as a thing on FIRE rather than a static glowing
+/// dot: the silhouette constantly sprouts and swallows little flame spikes.
+#[derive(Component)]
+pub(crate) struct MeteorFlameTongue {
+    index: usize,
+}
+
+/// One small burning fragment flung out by the mid-flight airburst: an additive
+/// hot blob elongated along its own velocity that arcs away from the core,
+/// sputters [`MeteorEmber`] sparks behind it, and burns up (shrinks away) well
+/// before reaching the ground. World-space and self-despawning; advanced by
+/// [`tick_meteor_airburst_system`].
+#[derive(Component)]
+pub(crate) struct MeteorFragment {
+    velocity: Vec3,
+    age: f32,
+    lifetime: f32,
+    initial_scale: f32,
+    /// Downward pull (m/s^2), pre-scaled to the rendered ball size at burst so
+    /// proxy-space fragments arc at the ball's apparent rate.
+    gravity: f32,
+    /// Countdown (seconds) to the next shed ember spark.
+    ember_cooldown: f32,
+    /// Free-running draw seed salting each shed ember so the sputter varies.
+    seed: u32,
+}
+
+/// The airburst's one-shot core flash: an additive sphere that pops outward and
+/// fades over [`METEOR_AIRBURST_FLASH_SECONDS`]. Owns its material instance
+/// (created at burst time) so the per-frame fade never touches a shared handle.
+#[derive(Component)]
+pub(crate) struct MeteorAirburstFlash {
+    age: f32,
+    lifetime: f32,
+    peak_scale: f32,
+}
+
 /// Base radius of the fireball sphere in **world metres**, at the reference
 /// distance of the far-plane proxy ([`METEOR_PROXY_DISTANCE`]). This is the size
 /// the ball reads when far out on the proxy at the ENTRY of its descent; it grows
@@ -136,6 +196,17 @@ const METEOR_PROXY_GROWTH: f32 = 4.0;
 /// proxy to the true position so there is no pop. Sized so the true-scale ball
 /// (a few metres) matches the apparent size the grown proxy had at the boundary.
 const METEOR_TRUE_SCALE_DISTANCE: f32 = 200.0;
+
+/// Descent window over which the proxy's DRAMA growth converges back to the
+/// TRUE apparent size (angular-size-preserving: mesh scale = proxy distance /
+/// true distance). The camera-distance blend above only helps observers the
+/// meteor actually approaches; a player watching a far impact used to keep the
+/// fully-grown proxy sprite all the way to the ground, where it just vanished.
+/// Converging on descent instead means every observer watches the giant far
+/// glow settle into the real few-metre object diving onto the site, matching
+/// the crater it leaves.
+const METEOR_TRUE_SIZE_CONVERGE_START: f32 = 0.70;
+const METEOR_TRUE_SIZE_CONVERGE_END: f32 = 0.96;
 
 // Meteor colour/brightness. The fireball is a BURNING ROCK, not a glowing ball.
 // Fire runs HOT-to-COOL: white/yellow at the hottest point, then orange, then deep
@@ -202,7 +273,12 @@ const METEOR_CORE_IMPACT: Vec3 = Vec3::new(0.11, 0.035, 0.010);
 // sits just above the sky, so the flame envelope is kept deep + thin and the bright
 // SATURATED read is carried by the small high-contrast ember sparks (which hold hue
 // because they are tiny points on dark sky) and a compact white-hot leading cap.
-const METEOR_SHELL_ENTRY: Vec3 = Vec3::new(1.35, 0.15, 0.0);
+// The ENTRY value is deeper still: on the distant slow phase the ring IS most
+// of the fireball's area, and at 1.35 red it tonemapped to a pale tan donut at
+// noon (screenshot-confirmed); darker holds the saturated ember-red. It lerps
+// up to the hotter impact value as the ball dives, so the close pass keeps its
+// brighter flame.
+const METEOR_SHELL_ENTRY: Vec3 = Vec3::new(0.85, 0.09, 0.0);
 const METEOR_SHELL_IMPACT: Vec3 = Vec3::new(1.9, 0.22, 0.0);
 /// ADDITIVE white-hot leading cap linear base_color at entry / impact. Hotter than
 /// the halo (high red + strong green so it reads white-yellow, the hottest part of
@@ -211,6 +287,19 @@ const METEOR_SHELL_IMPACT: Vec3 = Vec3::new(1.9, 0.22, 0.0);
 /// white disc that swallows the rock. Sits over the rock's nose only.
 const METEOR_CORONA_ENTRY: Vec3 = Vec3::new(1.5, 0.52, 0.05);
 const METEOR_CORONA_IMPACT: Vec3 = Vec3::new(2.2, 0.80, 0.10);
+/// GLOW rim sphere radius fraction: a HAIR past the shell, so the additive rim
+/// survives depth-testing only as a thin annulus between the two silhouettes.
+/// Thin is the whole trick: at 0.72 the annulus was as wide as the shell ring
+/// and tonemapped to yet another flat tan band (screenshot-confirmed); a
+/// narrow line stays a crisp blazing edge that bloom spreads into a halo.
+const METEOR_GLOW_RADIUS_FRAC: f32 = 0.665;
+/// ADDITIVE glow-rim linear base_color at entry / impact. HDR-bright on purpose:
+/// this is the layer that feeds bloom so the fireball actually GLOWS instead of
+/// reading as flat stacked sprites. It can afford to be bright where the shell
+/// cannot because the visible area is a narrow ring, so AgX never sees a large
+/// bright patch to bleach.
+const METEOR_GLOW_ENTRY: Vec3 = Vec3::new(3.2, 0.70, 0.04);
+const METEOR_GLOW_IMPACT: Vec3 = Vec3::new(4.5, 1.10, 0.08);
 
 /// Forward-leaning ovoid stretch of the body along travel (local +Z after the
 /// NEG_Z -> travel mapping) at entry / impact. Slightly stronger near impact so
@@ -227,8 +316,9 @@ const METEOR_TRAIL_SEGMENTS: usize = 6;
 /// Total tail length as a multiple of the rendered BALL RADIUS at entry / impact.
 /// A comet is mostly tail, so this is long: many body-lengths, tapering to a
 /// point. (Sized in world units off the ball radius so it reads at the ball's
-/// apparent size from any distance.)
-const METEOR_TRAIL_LENGTH_ENTRY: f32 = 8.0;
+/// apparent size from any distance.) The entry length is generous too, so the
+/// distant slow-crossing phase already drags a real fire streak.
+const METEOR_TRAIL_LENGTH_ENTRY: f32 = 10.0;
 const METEOR_TRAIL_LENGTH_IMPACT: f32 = 20.0;
 /// Fraction of the total tail length each segment spans, root -> tip. Unequal so
 /// the near-ball part is dense and the far part is a long whisker. Sums to 1.0.
@@ -266,11 +356,89 @@ const METEOR_TRAIL_WAVER_FRAC: f32 = 0.22;
 /// Ember spark rate (per second) far out (proxy) and close (true scale). Ramps up
 /// as the fireball nears so the dense streaking stream only shows in the last
 /// seconds; far out it is a steady sputter (bumped up so the shed embers are
-/// clearly visible even mid-flight, not just in the final seconds).
-const METEOR_EMBER_RATE_FAR: f32 = 90.0;
+/// clearly visible even mid-flight, not just in the final seconds; raised again
+/// so the distant slow phase reads as actively burning, not a quiet dot).
+const METEOR_EMBER_RATE_FAR: f32 = 130.0;
 const METEOR_EMBER_RATE_CLOSE: f32 = 240.0;
 /// Downward acceleration (m/s^2) applied to shed sparks so they arc off the tail.
 const METEOR_EMBER_GRAVITY: f32 = 9.0;
+
+// Far-phase fire. Early in the flight the fireball crosses the sky slowly and
+// far out, and the calm shared flicker (+/-8%) made it read as a static glowing
+// disc rather than a burning object. Two renderer-side treatments fix that
+// without touching the shared deterministic trajectory: the flame TONGUES (small
+// opaque licks dancing around the shell, see [`MeteorFlameTongue`]) and a far
+// AMPLIFICATION of the shared flicker, easing back to the calm value for the
+// close pass (a +/-20% scale wobble on a screen-filling ball would strobe).
+
+/// How many flame tongues lick around the fireball shell.
+const METEOR_FLAME_TONGUE_COUNT: usize = 7;
+/// Tongue hue at full flare / at rest (linear HDR). DEEP saturated fire: under
+/// AgX at noon even the trail-root value (0.95 red) drifts tan on shapes this
+/// size, and the darker the value the more saturation survives (the first
+/// tongue pass at 1.5 red read as dough lumps, screenshot-confirmed; 0.95 was
+/// still salmon). These sit low enough to hold a genuine ember-red by day and
+/// glow saturated orange against the night sky.
+const METEOR_TONGUE_HUE_FLARE: Vec3 = Vec3::new(0.70, 0.075, 0.0);
+const METEOR_TONGUE_HUE_REST: Vec3 = Vec3::new(0.34, 0.020, 0.0);
+/// Per-vertex multipliers baked into the tongue mesh's COLOR_0, root -> tip
+/// along local Y. The ROOT (the end buried in the ball) multiplies the deep
+/// material hue up into HDR hot orange, so each lick has a small incandescent
+/// base that blooms and fades along its own length toward the deep-red tip.
+/// This gradient is what stops a tongue reading as one flat solid sprite: the
+/// flame glows where it leaves the fire and cools along its length.
+const METEOR_TONGUE_ROOT_MULT: Vec3 = Vec3::new(3.2, 5.0, 1.0);
+const METEOR_TONGUE_TIP_MULT: Vec3 = Vec3::new(0.55, 0.40, 1.0);
+/// Tongue prominence multiplier at entry / impact. Full drama on the distant
+/// slow phase (where the licks carry the "on fire" read); scaled well down for
+/// the close pass, whose look (rock + shell + cap + trail + dense embers) was
+/// already right without them.
+const METEOR_TONGUE_PROMINENCE_ENTRY: f32 = 1.0;
+const METEOR_TONGUE_PROMINENCE_IMPACT: f32 = 0.45;
+/// Multiplier on the shared flicker's amplitude at the far/entry extreme; 1.0
+/// (the calm shared value) at the close extreme.
+const METEOR_FAR_SHIMMER_BOOST: f32 = 2.8;
+
+// Mid-flight airburst. Real bolides often fragment before impact: partway
+// through the descent the fireball pops a brief hot flash and fans out a
+// handful of small burning fragments that scatter from the core, sputter
+// embers, and burn up in the sky long before the ground. Pure presentation,
+// deterministic off the trajectory seed; the authoritative meteor and the main
+// fireball are untouched (the ball flies on as the surviving core).
+
+/// Fraction of the VISIBLE flight (from the first frame THIS client saw the
+/// fireball, to impact) after which the airburst pops. Anchoring on the watched
+/// window rather than a fixed descent fraction means a short-warning event
+/// (`/meteor-here`, 8 s) still gets its burst a few seconds in, right as the
+/// object kicks into its fast dive, instead of the trigger point having
+/// silently passed before the fireball ever appeared. For the standard event
+/// watched from the announce, the visible window IS the whole flight, so this
+/// stays "halfway down".
+const METEOR_AIRBURST_VISIBLE_FRACTION: f32 = 0.5;
+/// Grace window past the trigger fraction inside which an observed crossing
+/// still fires (a hitch or brief menu straddling the moment). Beyond it the
+/// burst is skipped entirely so a stale pop never replays.
+const METEOR_AIRBURST_WINDOW: f32 = 0.06;
+/// How many burning fragments the airburst fans out.
+const METEOR_AIRBURST_FRAGMENTS: u32 = 9;
+/// One-off ember sparks flung radially at the burst instant.
+const METEOR_AIRBURST_SPARKS: u32 = 26;
+/// Flash lifetime in seconds and peak radius in rendered ball radii.
+const METEOR_AIRBURST_FLASH_SECONDS: f32 = 0.45;
+const METEOR_AIRBURST_FLASH_PEAK_FRAC: f32 = 2.5;
+/// Additive flash colour at full brightness (linear HDR). Held DEEP (a broad
+/// additive area brighter than this tonemaps to a tan disc, not fire); it
+/// fades to nothing over the flash lifetime.
+const METEOR_AIRBURST_FLASH_COLOR: Vec3 = Vec3::new(1.9, 0.32, 0.02);
+/// Opaque fragment hues (linear HDR), alternated across the fan: an ember
+/// orange and a deeper ember red. Both kept LOW: the first pass on the shared
+/// bright-additive ember material washed to cream petals, and even opaque
+/// 0.95-red drifted salmon at noon; of the two test hues only the darker one
+/// held its red (screenshot-confirmed), so both now sit in that range.
+const METEOR_FRAGMENT_HUE_HOT: Vec3 = Vec3::new(0.70, 0.075, 0.0);
+const METEOR_FRAGMENT_HUE_DEEP: Vec3 = Vec3::new(0.42, 0.025, 0.0);
+/// Seconds between ember sparks shed by one burning fragment.
+const METEOR_FRAGMENT_EMBER_INTERVAL: f32 = 0.07;
 
 /// Spawn the meteor shower fireball and its trail chain, all `Hidden` until an
 /// event is in flight. Called from `setup_scene` right after `setup_sky` so the
@@ -329,6 +497,10 @@ pub(super) fn setup_meteor_sky(
         //  - `AdditiveCap`: the white-hot leading cap. Additive, back-face cull (near
         //    hemisphere), a small hot blob the update loop pushes forward along travel
         //    so it caps the nose.
+        //  - `AdditiveRing`: the glow rim. Additive, FRONT-face cull, on a sphere just
+        //    larger than the shell: the shell's opaque far wall depth-hides everything
+        //    inside its own silhouette, leaving a THIN blazing annulus that feeds
+        //    bloom, which is where the fireball's "it glows" read comes from.
         let (alpha_mode, cull_mode) = match render {
             MeteorBodyRender::OpaqueRock => {
                 (AlphaMode::Opaque, StandardMaterial::default().cull_mode)
@@ -340,6 +512,10 @@ pub(super) fn setup_meteor_sky(
             MeteorBodyRender::AdditiveCap => {
                 (AlphaMode::Add, StandardMaterial::default().cull_mode)
             }
+            MeteorBodyRender::AdditiveRing => (
+                AlphaMode::Add,
+                Some(bevy::render::render_resource::Face::Front),
+            ),
         };
         let material = materials.add(StandardMaterial {
             base_color: Color::linear_rgb(entry.x, entry.y, entry.z),
@@ -384,6 +560,16 @@ pub(super) fn setup_meteor_sky(
         commands,
         meshes,
         materials,
+        MeteorBodyLayer::Glow,
+        "Meteor Glow Rim",
+        METEOR_GLOW_RADIUS_FRAC,
+        METEOR_GLOW_ENTRY,
+        MeteorBodyRender::AdditiveRing,
+    );
+    body_layer(
+        commands,
+        meshes,
+        materials,
         MeteorBodyLayer::Corona,
         "Meteor Corona",
         METEOR_CORONA_RADIUS_FRAC,
@@ -415,6 +601,37 @@ pub(super) fn setup_meteor_sky(
             Name::new(format!("Meteor Trail Segment {index}")),
             MeteorTrailSegment { index },
             Mesh3d(mesh),
+            MeshMaterial3d(material),
+            Transform::IDENTITY,
+            Visibility::Hidden,
+            NotShadowCaster,
+        ));
+    }
+
+    // Flame tongues: small OPAQUE unlit ellipsoids (a shared unit sphere,
+    // stretched by the per-frame transform) that dance around the shell rim.
+    // Opaque for the same AgX reason as the trail cones: additive licks over a
+    // bright day sky wash to cream, an opaque deep-orange lump occludes the sky
+    // and keeps its fire hue. The mesh bakes a COLOR_0 gradient (incandescent
+    // root -> deep tip) so each lick glows where it leaves the fire and cools
+    // along its length instead of reading as one flat solid sprite. Each tongue
+    // owns its material so the per-frame pulse can shade it independently.
+    let tongue_mesh = meshes.add(flame_tongue_mesh());
+    for index in 0..METEOR_FLAME_TONGUE_COUNT {
+        let material = materials.add(StandardMaterial {
+            base_color: Color::linear_rgb(
+                METEOR_TONGUE_HUE_FLARE.x,
+                METEOR_TONGUE_HUE_FLARE.y,
+                METEOR_TONGUE_HUE_FLARE.z,
+            ),
+            unlit: true,
+            fog_enabled: false,
+            ..default()
+        });
+        commands.spawn((
+            Name::new(format!("Meteor Flame Tongue {index}")),
+            MeteorFlameTongue { index },
+            Mesh3d(tongue_mesh.clone()),
             MeshMaterial3d(material),
             Transform::IDENTITY,
             Visibility::Hidden,
@@ -461,6 +678,36 @@ pub(crate) fn irregular_rock_mesh(radius: f32, seed: u32) -> Mesh {
     // Flat per-face normals so the facets read as distinct planes under the glow.
     mesh.duplicate_vertices();
     mesh.compute_normals();
+    mesh
+}
+
+/// Build the shared flame-tongue mesh: a unit ico-sphere with a COLOR_0
+/// gradient along local Y, from [`METEOR_TONGUE_ROOT_MULT`] at `y = -1` (the
+/// root end, buried in the ball) to [`METEOR_TONGUE_TIP_MULT`] at `y = +1`
+/// (the tip). The standard material multiplies vertex colour into the base
+/// colour, so the per-frame deep hue gets an incandescent HDR root (small
+/// enough to bloom without washing) fading to a deep-red tip along each lick.
+fn flame_tongue_mesh() -> Mesh {
+    use bevy::mesh::VertexAttributeValues;
+
+    let mut mesh = Sphere::new(1.0).mesh().ico(2).expect("valid subdivisions");
+    let Some(VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+    else {
+        return mesh;
+    };
+    let colors: Vec<[f32; 4]> = positions
+        .iter()
+        .map(|p| {
+            // t = 0 at the root (y = -1), 1 at the tip (y = +1), smoothed so
+            // the hot zone hugs the root instead of bleeding halfway up.
+            let t = ((p[1] + 1.0) * 0.5).clamp(0.0, 1.0);
+            let t = t * t * (3.0 - 2.0 * t);
+            let m = METEOR_TONGUE_ROOT_MULT.lerp(METEOR_TONGUE_TIP_MULT, t);
+            [m.x, m.y, m.z, 1.0]
+        })
+        .collect();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh
 }
 
@@ -563,6 +810,25 @@ type MeteorTrailQuery<'w, 's> = Query<
     ),
 >;
 
+type MeteorTongueQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut Transform,
+        &'static mut Visibility,
+        &'static MeteorFlameTongue,
+        &'static MeshMaterial3d<StandardMaterial>,
+    ),
+    (
+        Without<MeteorVisual>,
+        Without<MeteorTrailSegment>,
+        Without<MoonVisual>,
+        Without<SunLight>,
+        Without<MoonLight>,
+        Without<MainCamera>,
+    ),
+>;
+
 /// Resolve where to draw the fireball, at what scale, and how "close" it is.
 /// Returns the render translation, the render-scale multiplier on top of
 /// [`METEOR_BASE_RADIUS`], and a `true_scale_factor` in `[0, 1]` (1 within
@@ -591,8 +857,21 @@ fn meteor_render_placement(true_pos: Vec3, camera_pos: Vec3, descent: f32) -> (V
     }
     let dir = to_meteor / distance;
 
-    // Apparent size on the proxy: grows with descent so the ball bears down.
-    let proxy_scale = 1.0 + descent.clamp(0.0, 1.0) * (METEOR_PROXY_GROWTH - 1.0);
+    // Apparent size on the proxy: grows with descent so the ball bears down,
+    // then CONVERGES back to the true angular size over the final stretch of
+    // descent (see the converge constants) so a far observer watches the grown
+    // glow settle into the real object diving onto the site rather than a huge
+    // sprite that never transitions and simply vanishes at impact.
+    let drama_scale = 1.0 + descent.clamp(0.0, 1.0) * (METEOR_PROXY_GROWTH - 1.0);
+    // Mesh drawn at the proxy distance has the true apparent size when scaled
+    // by the distance ratio. Clamped so a degenerate close distance cannot
+    // explode the scale before the band blend takes over.
+    let true_apparent_scale = (METEOR_PROXY_DISTANCE / distance).min(METEOR_PROXY_GROWTH);
+    let converge = ((descent - METEOR_TRUE_SIZE_CONVERGE_START)
+        / (METEOR_TRUE_SIZE_CONVERGE_END - METEOR_TRUE_SIZE_CONVERGE_START))
+        .clamp(0.0, 1.0);
+    let converge = converge * converge * (3.0 - 2.0 * converge);
+    let proxy_scale = drama_scale + (true_apparent_scale - drama_scale) * converge;
     let proxy_pos = camera_pos + dir * METEOR_PROXY_DISTANCE;
 
     // Close-ness LOD factor: 1 at/inside the true-scale distance, 0 at/beyond the
@@ -631,6 +910,41 @@ pub(crate) struct MeteorEmberEmitter {
     spawn_seq: u32,
 }
 
+/// Airburst bookkeeping: which event the flags belong to, the descent at which
+/// this client FIRST saw the fireball (anchors the trigger point to the watched
+/// window), the descent observed on the previous in-flight frame, and whether
+/// the one-shot burst has fired.
+#[derive(Default)]
+pub(crate) struct MeteorAirburstState {
+    event_tick: u64,
+    first_seen_descent: Option<f32>,
+    prev_descent: Option<f32>,
+    fired: bool,
+}
+
+/// The descent fraction at which the airburst pops for a client that first saw
+/// the fireball at `first_seen_descent`: [`METEOR_AIRBURST_VISIBLE_FRACTION`]
+/// of the way through the flight it actually gets to watch. A full-flight
+/// viewer bursts halfway down; a short `/meteor-here` viewer bursts halfway
+/// through its brief dive. Pure so the timing is unit-testable.
+fn airburst_threshold(first_seen_descent: f32) -> f32 {
+    let first_seen = first_seen_descent.clamp(0.0, 1.0);
+    first_seen + METEOR_AIRBURST_VISIBLE_FRACTION * (1.0 - first_seen)
+}
+
+/// Whether the airburst fires this frame, given the trigger threshold and the
+/// descent observed on the previous in-flight frame (`None` if this is the
+/// first observed frame of the event). Only a WATCHED crossing inside the
+/// grace window fires; a client returning from a long menu straddle past the
+/// window skips the pop entirely rather than replaying it stale. Pure so the
+/// trigger is unit-testable.
+fn airburst_crossing(prev_descent: Option<f32>, descent: f32, threshold: f32) -> bool {
+    let Some(prev) = prev_descent else {
+        return false;
+    };
+    prev < threshold && (threshold..threshold + METEOR_AIRBURST_WINDOW).contains(&descent)
+}
+
 /// Hide every trail segment (used from the fireball's early-return /
 /// not-in-flight paths so a stale streak never lingers on the sky).
 fn set_trail_hidden(trail: &mut MeteorTrailQuery) {
@@ -642,6 +956,13 @@ fn set_trail_hidden(trail: &mut MeteorTrailQuery) {
 /// Hide every fireball body layer (core/shell/corona) on the not-in-flight paths.
 fn set_body_hidden(body: &mut MeteorVisualQuery) {
     for (_, mut visibility, _, _) in body.iter_mut() {
+        *visibility = Visibility::Hidden;
+    }
+}
+
+/// Hide every flame tongue on the not-in-flight paths.
+fn set_tongues_hidden(tongues: &mut MeteorTongueQuery) {
+    for (_, mut visibility, _, _) in tongues.iter_mut() {
         *visibility = Visibility::Hidden;
     }
 }
@@ -669,10 +990,12 @@ pub(crate) fn update_meteor_sky_system(
     time: Res<Time>,
     ember_assets: Option<Res<MeteorEmberAssets>>,
     mut emitter: Local<MeteorEmberEmitter>,
+    mut airburst: Local<MeteorAirburstState>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     camera: CameraTransformQuery,
     mut meteor: MeteorVisualQuery,
     mut trail: MeteorTrailQuery,
+    mut tongues: MeteorTongueQuery,
 ) {
     // Resolve the live event, or hide the fireball + trail. Hidden when: no event,
     // the title backdrop is up, the meteor is not yet in flight, or it has struck.
@@ -684,6 +1007,7 @@ pub(crate) fn update_meteor_sky_system(
     let Some(event) = event else {
         set_body_hidden(&mut meteor);
         set_trail_hidden(&mut trail);
+        set_tongues_hidden(&mut tongues);
         return;
     };
     // The FRACTIONAL clock estimate: evaluating the committed arc at whole 20 Hz
@@ -698,12 +1022,14 @@ pub(crate) fn update_meteor_sky_system(
     ) else {
         set_body_hidden(&mut meteor);
         set_trail_hidden(&mut trail);
+        set_tongues_hidden(&mut tongues);
         return;
     };
 
     let Ok(camera_transform) = camera.single() else {
         set_body_hidden(&mut meteor);
         set_trail_hidden(&mut trail);
+        set_tongues_hidden(&mut tongues);
         return;
     };
     let camera_pos = camera_transform.translation;
@@ -717,6 +1043,13 @@ pub(crate) fn update_meteor_sky_system(
     let (render_pos, render_scale, tf) =
         meteor_render_placement(state.position, camera_pos, descent);
     let ball_radius = METEOR_BASE_RADIUS * render_scale;
+
+    // Far-phase shimmer: widen the shared deterministic flicker while the ball
+    // is distant + early in its flight, so the slow-crossing phase visibly
+    // sputters and burns rather than gliding as a static disc, easing back to
+    // the calm shared amplitude for the close pass.
+    let far_fire = ((1.0 - descent) * (1.0 - tf)).clamp(0.0, 1.0);
+    let shimmer = 1.0 + (flicker - 1.0) * lerp(1.0, METEOR_FAR_SHIMMER_BOOST, far_fire);
 
     // Travel direction: the analytic velocity, stable and continuous (no
     // finite-difference jitter). Aligning local -Z with it points the ball's nose
@@ -734,6 +1067,10 @@ pub(crate) fn update_meteor_sky_system(
         METEOR_BODY_STRETCH_IMPACT,
         descent,
     );
+    // Scale wobbles only with the CALM shared flicker; the amplified far
+    // shimmer drives brightness alone. Pumping the amplified value into the
+    // mesh scale made the whole rig visibly inflate and deflate, which read as
+    // a pulsating sprite rather than a burning object.
     let s = render_scale * flicker;
     let body_scale = Vec3::new(s, s, s * stretch);
 
@@ -758,22 +1095,33 @@ pub(crate) fn update_meteor_sky_system(
         transform.rotation = rotation;
         transform.scale = body_scale;
         transform.translation = render_pos;
-        let (entry, impact) = match layer {
+        let (entry, impact, heat_t) = match layer {
             MeteorBodyLayer::Core => {
                 // The stone tumbles (about its own centre) inside the fixed halo.
                 transform.rotation = rotation * tumble;
-                (METEOR_CORE_ENTRY, METEOR_CORE_IMPACT)
+                (METEOR_CORE_ENTRY, METEOR_CORE_IMPACT, descent)
             }
-            MeteorBodyLayer::Shell => (METEOR_SHELL_ENTRY, METEOR_SHELL_IMPACT),
+            // The shell's heat ramp is EASED (descent cubed): a linear lerp
+            // put the ring halfway to the bright impact value by mid-flight,
+            // where AgX washed it back to the tan donut the deep entry colour
+            // exists to avoid (squared still drifted pale by mid-flight).
+            // Cubing keeps the whole crossing ember-red and saves the hot
+            // flame for the final plunge.
+            MeteorBodyLayer::Shell => (
+                METEOR_SHELL_ENTRY,
+                METEOR_SHELL_IMPACT,
+                descent * descent * descent,
+            ),
+            MeteorBodyLayer::Glow => (METEOR_GLOW_ENTRY, METEOR_GLOW_IMPACT, descent),
             MeteorBodyLayer::Corona => {
                 // Leading cap: shove it forward over the nose so the incandescent
                 // shock front sits on the travel-forward face, not the centre.
                 transform.translation = render_pos + cap_offset;
-                (METEOR_CORONA_ENTRY, METEOR_CORONA_IMPACT)
+                (METEOR_CORONA_ENTRY, METEOR_CORONA_IMPACT, descent)
             }
         };
         if let Some(mut material) = materials.get_mut(&material.0) {
-            let color = entry.lerp(impact, descent.clamp(0.0, 1.0)) * flicker;
+            let color = entry.lerp(impact, heat_t.clamp(0.0, 1.0)) * shimmer;
             material.base_color = Color::linear_rgb(color.x, color.y, color.z);
         }
     }
@@ -789,11 +1137,54 @@ pub(crate) fn update_meteor_sky_system(
         camera_transform.forward().as_vec3(),
         ball_radius,
         descent,
-        flicker,
+        shimmer,
         event.trajectory_seed,
         now,
         camera_pos,
     );
+
+    // Flame tongues: small opaque licks dancing around the shell rim, the "it
+    // is on fire" read for the distant slow phase (and extra flame mass close).
+    update_meteor_flame_tongues(
+        &mut tongues,
+        &mut materials,
+        render_pos,
+        travel,
+        ball_radius,
+        descent,
+        shimmer,
+        event.trajectory_seed,
+        now,
+    );
+
+    // Mid-flight airburst: fire the one-shot fragmentation on a watched crossing
+    // of the trigger point, anchored to when THIS client first saw the fireball
+    // (so a short `/meteor-here` dive still bursts partway in). Spawned at the
+    // RENDER position (like the embers) so the pop sits on the visible ball
+    // whether it is on the proxy or close.
+    if airburst.event_tick != event.impact_tick {
+        airburst.event_tick = event.impact_tick;
+        airburst.first_seen_descent = None;
+        airburst.prev_descent = None;
+        airburst.fired = false;
+    }
+    let first_seen = *airburst.first_seen_descent.get_or_insert(descent);
+    let prev_descent = airburst.prev_descent.replace(descent);
+    if !airburst.fired && airburst_crossing(prev_descent, descent, airburst_threshold(first_seen)) {
+        airburst.fired = true;
+        if let Some(ember_assets) = ember_assets.as_ref() {
+            spawn_meteor_airburst(
+                &mut commands,
+                ember_assets,
+                &mut materials,
+                render_pos,
+                travel,
+                ball_radius,
+                (1.0 - descent).max(0.0) * crate::world::METEOR_FLIGHT_SECONDS,
+                event.trajectory_seed,
+            );
+        }
+    }
 
     // Ember + smoke stream: shed at the fireball's RENDER position (so they read as
     // coming off the visible ball), each a world-space particle so it lingers and
@@ -890,21 +1281,25 @@ fn update_meteor_trail(
     let phase = (splitmix64(trajectory_seed ^ WAVER_SALT) % 6_283) as f32 / 1_000.0;
     let t = (now / f64::from(crate::protocol::SERVER_TICK_RATE_HZ)) as f32;
 
-    // Foreshortening flare: widen the first two segments when the tail is end-on so
-    // it shows a bright flared skirt hugging the ball instead of a nub.
+    // Foreshortening flare: widen the first segments when the tail is end-on so
+    // it shows a flared skirt hugging the ball instead of a nub. Kept modest,
+    // and the root DEEPENS as it flares: at 1.6x the end-on root projected as a
+    // big flat disc wrapping the whole silhouette, and at full root intensity
+    // that disc tonemapped to a solid tan slab (the "layered sprites" read).
     let f = foreshortening_factor(travel, camera_forward);
-    let flare = lerp(1.0, 1.6, f);
+    let flare = lerp(1.0, 1.3, f);
+    let end_on_deepen = lerp(1.0, 0.78, f);
 
     let root_intensity = lerp(
         METEOR_TRAIL_ROOT_INTENSITY_ENTRY,
         METEOR_TRAIL_ROOT_INTENSITY_IMPACT,
         descent,
-    );
+    ) * end_on_deepen;
     let tip_intensity = lerp(
         METEOR_TRAIL_TIP_INTENSITY_ENTRY,
         METEOR_TRAIL_TIP_INTENSITY_IMPACT,
         descent,
-    );
+    ) * end_on_deepen;
 
     // Precompute each segment's start point walking back from just behind the ball's
     // back edge (a small gap so the wide bright root does not overlap and wash out the
@@ -979,6 +1374,223 @@ fn orthonormal_basis(axis: Vec3) -> (Vec3, Vec3) {
     let a = seed.cross(axis).normalize_or_zero();
     let b = axis.cross(a).normalize_or_zero();
     (a, b)
+}
+
+/// Position, orient, size, and shade every flame tongue for one frame. Each
+/// tongue roots on the shell rim, orbits the travel axis slowly (alternating
+/// directions so the licks slide past each other instead of rotating as a rigid
+/// cage), and flares outward-backward on its own quick seeded pulse, so the
+/// fireball's silhouette constantly sprouts and swallows little flame spikes.
+/// All motion is deterministic in (trajectory_seed, now), so every client sees
+/// the identical dance.
+#[expect(clippy::too_many_arguments, reason = "split-out system helper")]
+fn update_meteor_flame_tongues(
+    tongues: &mut MeteorTongueQuery,
+    materials: &mut Assets<StandardMaterial>,
+    render_pos: Vec3,
+    travel: Vec3,
+    ball_radius: f32,
+    descent: f32,
+    shimmer: f32,
+    trajectory_seed: u64,
+    now: f64,
+) {
+    if travel == Vec3::ZERO || ball_radius <= 0.0 {
+        set_tongues_hidden(tongues);
+        return;
+    }
+    let back = -travel;
+    let (perp_a, perp_b) = orthonormal_basis(back);
+    const TONGUE_SALT: u64 = 0x70D6_0E00_0000_0000;
+    let phase = (splitmix64(trajectory_seed ^ TONGUE_SALT) % 6_283) as f32 / 1_000.0;
+    let t = (now / f64::from(crate::protocol::SERVER_TICK_RATE_HZ)) as f32;
+    let seed_lo = trajectory_seed as u32;
+    let n = METEOR_FLAME_TONGUE_COUNT as f32;
+
+    for (mut transform, mut visibility, tongue, material) in tongues.iter_mut() {
+        *visibility = Visibility::Visible;
+        let k = tongue.index;
+        let kf = k as f32;
+        let h1 = hashed_unit((k as u32).wrapping_mul(0x9E37_79B9) ^ seed_lo);
+        let h2 = hashed_unit((k as u32).wrapping_mul(0x85EB_CA6B) ^ seed_lo.rotate_left(13));
+
+        // Slow per-tongue orbit around the travel axis.
+        let orbit_dir = if k % 2 == 0 { 1.0 } else { -1.0 };
+        let angle = kf / n * std::f32::consts::TAU + phase + t * (0.5 + h1 * 0.9) * orbit_dir;
+        let radial = perp_a * angle.cos() + perp_b * angle.sin();
+
+        // The flame beat: one quick pulse drives flare length, sweep-back, and
+        // heat together, so each lick genuinely licks.
+        let pulse = 0.5 + 0.5 * (t * (5.0 + h2 * 4.0) + phase * 1.3 + kf * 2.1).sin();
+
+        // Slim streaming licks, dialled down toward impact (the close pass was
+        // already right without them). Rooted INSIDE the shell and leaning hard
+        // toward the tail so they read as fire being dragged off the rock into
+        // the trail, never a fat lump ring wrapping the silhouette (the first
+        // pass's donut read).
+        let prominence = lerp(
+            METEOR_TONGUE_PROMINENCE_ENTRY,
+            METEOR_TONGUE_PROMINENCE_IMPACT,
+            descent,
+        );
+        let dir = (radial + back * (0.55 + 0.75 * pulse)).normalize_or_zero();
+        let length = ball_radius * (0.55 + 0.70 * pulse) * prominence;
+        let width = ball_radius * (0.09 + 0.05 * pulse) * prominence;
+        transform.translation = render_pos + radial * ball_radius * 0.45 + dir * length * 0.5;
+        transform.rotation = Quat::from_rotation_arc(Vec3::Y, dir);
+        // Unit-sphere mesh: Y half-extent is half the lick's full length.
+        transform.scale = Vec3::new(width, length * 0.5, width);
+
+        if let Some(mut material) = materials.get_mut(&material.0) {
+            // Hotter at full flare, deeper at rest, and a touch hotter overall
+            // as the ball dives, like the body layers.
+            let hue = METEOR_TONGUE_HUE_REST.lerp(METEOR_TONGUE_HUE_FLARE, pulse);
+            let color = hue * lerp(0.85, 1.15, descent) * shimmer;
+            material.base_color = Color::linear_rgb(color.x, color.y, color.z);
+        }
+    }
+}
+
+/// Throw the mid-flight airburst at the fireball's render position: the hot
+/// core flash, a fan of burning fragments, and a one-off radial ember spray.
+/// Everything is sized and paced against the RENDERED ball radius (like the
+/// shed embers) so the burst reads at the ball's apparent size on the far
+/// proxy. `remaining_seconds` caps the fragment lifetimes so a burst late in a
+/// short `/meteor-here` dive still burns out before the impact. Deterministic
+/// in the trajectory seed.
+#[expect(clippy::too_many_arguments, reason = "split-out system helper")]
+fn spawn_meteor_airburst(
+    commands: &mut Commands,
+    assets: &MeteorEmberAssets,
+    materials: &mut Assets<StandardMaterial>,
+    render_pos: Vec3,
+    travel: Vec3,
+    ball_radius: f32,
+    remaining_seconds: f32,
+    trajectory_seed: u64,
+) {
+    if travel == Vec3::ZERO || ball_radius <= 0.0 {
+        return;
+    }
+    let back = -travel;
+    let (perp_a, perp_b) = orthonormal_basis(back);
+    let seed_lo = trajectory_seed as u32;
+
+    // The core flash, popping outward and fading via its own material instance
+    // (freed with the entity, so the per-frame fade never touches a shared
+    // handle).
+    let flash_material = materials.add(StandardMaterial {
+        base_color: Color::linear_rgb(
+            METEOR_AIRBURST_FLASH_COLOR.x,
+            METEOR_AIRBURST_FLASH_COLOR.y,
+            METEOR_AIRBURST_FLASH_COLOR.z,
+        ),
+        unlit: true,
+        fog_enabled: false,
+        alpha_mode: AlphaMode::Add,
+        ..default()
+    });
+    let peak_scale = ball_radius * METEOR_AIRBURST_FLASH_PEAK_FRAC;
+    commands.spawn((
+        Name::new("Meteor Airburst Flash"),
+        MeteorAirburstFlash {
+            age: 0.0,
+            lifetime: METEOR_AIRBURST_FLASH_SECONDS,
+            peak_scale,
+        },
+        Mesh3d(assets.flash_mesh.clone()),
+        MeshMaterial3d(flash_material),
+        Transform::from_translation(render_pos).with_scale(Vec3::splat(peak_scale * 0.30)),
+        Visibility::Visible,
+        NotShadowCaster,
+    ));
+
+    // Burning fragments: a fan around the travel axis. Each keeps a slice of the
+    // core's onward motion plus a radial kick, so the fragments visibly separate
+    // from the ball (which accelerates on ahead) while still falling with it.
+    // OPAQUE deep-fire materials (two alternating hues for variety): the first
+    // pass reused the bright-additive ember material and the big blobs washed to
+    // cream petals under AgX; opaque deep orange holds fire hue at any size, the
+    // same lesson as the trail cones.
+    let fragment_materials = [METEOR_FRAGMENT_HUE_HOT, METEOR_FRAGMENT_HUE_DEEP].map(|hue| {
+        materials.add(StandardMaterial {
+            base_color: Color::linear_rgb(hue.x, hue.y, hue.z),
+            unlit: true,
+            fog_enabled: false,
+            ..default()
+        })
+    });
+    for i in 0..METEOR_AIRBURST_FRAGMENTS {
+        let s = seed_lo ^ i.wrapping_mul(0x9E37_79B9);
+        let r1 = hashed_unit(s);
+        let r2 = hashed_unit(s ^ 0x85EB_CA6B);
+        let r3 = hashed_unit(s ^ 0xC2B2_AE35);
+        let r4 = hashed_unit(s ^ 0x2545_F491);
+
+        let ring = (i as f32 + r1 * 0.8) / METEOR_AIRBURST_FRAGMENTS as f32 * std::f32::consts::TAU;
+        let radial = perp_a * ring.cos() + perp_b * ring.sin();
+        let dir = (travel * (0.50 + r2 * 0.45) + radial * (0.50 + r3 * 0.50)).normalize_or_zero();
+        let speed = ball_radius * (1.3 + r4 * 1.4);
+        // Rendered head radius = ember_mesh(0.12) * scale, so this lands the
+        // fragments around 17-30% of the ball radius: clearly smaller rocks, but
+        // far bigger than the shed spark motes.
+        let initial_scale = ball_radius * (1.4 + r2 * 1.1);
+        commands.spawn((
+            Name::new("Meteor Airburst Fragment"),
+            MeteorFragment {
+                velocity: dir * speed,
+                age: 0.0,
+                // Capped by the time left so a late burst (short /meteor-here
+                // dive) still burns its fragments out before the strike.
+                lifetime: (1.6 + r3 * 1.2).min((remaining_seconds * 0.75).max(0.4)),
+                initial_scale,
+                gravity: ball_radius * 0.45,
+                ember_cooldown: r1 * METEOR_FRAGMENT_EMBER_INTERVAL,
+                seed: s,
+            },
+            Mesh3d(assets.ember_mesh.clone()),
+            MeshMaterial3d(fragment_materials[i as usize % fragment_materials.len()].clone()),
+            Transform::from_translation(render_pos + dir * ball_radius * 0.4)
+                .with_scale(Vec3::splat(initial_scale)),
+            Visibility::Visible,
+            NotShadowCaster,
+        ));
+    }
+
+    // A one-off radial spark spray so the pop itself scatters glitter beyond the
+    // solid fragments. Ordinary shed embers; the shared ticker cleans them up.
+    for i in 0..METEOR_AIRBURST_SPARKS {
+        let s = seed_lo
+            .rotate_left(11)
+            .wrapping_add(i.wrapping_mul(0x27D4_EB2F));
+        let r1 = hashed_unit(s);
+        let r2 = hashed_unit(s ^ 0x1656_67B1);
+        let r3 = hashed_unit(s ^ 0x94D0_49BB);
+
+        let ring = r1 * std::f32::consts::TAU;
+        let radial = perp_a * ring.cos() + perp_b * ring.sin();
+        let dir = (radial * (0.7 + r2 * 0.5) + back * (r3 - 0.35)).normalize_or_zero();
+        // Small (the additive spark only holds orange as a compact point) and
+        // born OUTSIDE the ball, so the spray reads as glitter flying off the
+        // pop rather than white flecks stuck on the dark rock.
+        let initial_scale = ball_radius * (0.30 + r3 * 0.35);
+        commands.spawn((
+            Name::new("Meteor Ember"),
+            MeteorEmber {
+                velocity: dir * ball_radius * (0.7 + r2 * 1.0),
+                age: 0.0,
+                lifetime: 0.6 + r1 * 0.6,
+                initial_scale,
+                smoke: false,
+            },
+            Mesh3d(assets.ember_mesh.clone()),
+            MeshMaterial3d(assets.ember_material.clone()),
+            Transform::from_translation(render_pos + dir * ball_radius * (0.9 + r2 * 0.4))
+                .with_scale(Vec3::splat(initial_scale)),
+            Visibility::Visible,
+            NotShadowCaster,
+        ));
+    }
 }
 
 /// Shed the ember spark stream (and a sparser dark smoke ribbon) behind the
@@ -1151,9 +1763,184 @@ pub(crate) fn tick_meteor_ember_system(
     }
 }
 
+/// Advance the airburst's transient entities: fragments arc away from the core,
+/// sputter ember sparks behind them, and burn up (shrink away) across the tail
+/// of their life; the core flash pops outward and fades to nothing. Both
+/// self-despawn, so an ended event never needs to clean them up. Runs in
+/// `ClientSystemSet::Sky` alongside the ember ticker.
+pub(crate) fn tick_meteor_airburst_system(
+    mut commands: Commands,
+    time: Res<Time>,
+    assets: Option<Res<MeteorEmberAssets>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut fragments: Query<
+        (Entity, &mut Transform, &mut MeteorFragment),
+        Without<MeteorAirburstFlash>,
+    >,
+    mut flashes: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut MeteorAirburstFlash,
+            &MeshMaterial3d<StandardMaterial>,
+        ),
+        Without<MeteorFragment>,
+    >,
+) {
+    let dt = time.delta_secs().max(0.0);
+    if dt == 0.0 {
+        return;
+    }
+
+    for (entity, mut transform, mut fragment) in &mut fragments {
+        fragment.age += dt;
+        if fragment.age >= fragment.lifetime {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        fragment.velocity.y -= fragment.gravity * dt;
+        fragment.velocity *= 1.0 - (0.35 * dt).min(0.9);
+        let step = fragment.velocity * dt;
+        transform.translation += step;
+
+        // Burn-up: hold size while it streaks, then shrink away over the tail of
+        // its life so the fragment visibly dies in the sky, never reaching ground.
+        let life_t = (fragment.age / fragment.lifetime).clamp(0.0, 1.0);
+        let burn = 1.0 - ((life_t - 0.45) / 0.55).clamp(0.0, 1.0);
+        let s = fragment.initial_scale * burn;
+        let dir = fragment.velocity.normalize_or_zero();
+        if dir != Vec3::ZERO {
+            transform.rotation = Quat::from_rotation_arc(Vec3::Y, dir);
+        }
+        // Elongated along its own flight so it reads as a streaking mini-meteor.
+        transform.scale = Vec3::new(s * 0.62, s * 1.7, s * 0.62);
+
+        // Sputter embers behind the head; they linger where shed like the main
+        // ball's stream and ride the shared ember ticker. Capped per frame so a
+        // long hitch cannot dump a fragment's whole trail at once.
+        let Some(assets) = assets.as_ref() else {
+            continue;
+        };
+        fragment.ember_cooldown -= dt;
+        let mut shed = 0;
+        while fragment.ember_cooldown <= 0.0 && shed < 4 {
+            fragment.ember_cooldown += METEOR_FRAGMENT_EMBER_INTERVAL;
+            shed += 1;
+            fragment.seed = fragment.seed.wrapping_add(0x9E37_79B9);
+            let r1 = hashed_unit(fragment.seed);
+            let r2 = hashed_unit(fragment.seed ^ 0x85EB_CA6B);
+            let r3 = hashed_unit(fragment.seed ^ 0xC2B2_AE35);
+            let jitter = Vec3::new(r1 - 0.5, r2 - 0.5, r3 - 0.5) * fragment.initial_scale * 0.8;
+            // Kept small: the additive ember material only holds its orange as
+            // a compact spark; larger and it whites out.
+            let ember_scale = (fragment.initial_scale * (0.22 + r2 * 0.20) * burn).max(0.01);
+            commands.spawn((
+                Name::new("Meteor Ember"),
+                MeteorEmber {
+                    velocity: fragment.velocity * -0.12 + jitter,
+                    age: 0.0,
+                    lifetime: 0.5 + r1 * 0.5,
+                    initial_scale: ember_scale,
+                    smoke: false,
+                },
+                Mesh3d(assets.ember_mesh.clone()),
+                MeshMaterial3d(assets.ember_material.clone()),
+                Transform::from_translation(transform.translation - dir * s * 0.9)
+                    .with_scale(Vec3::splat(ember_scale)),
+                Visibility::Visible,
+                NotShadowCaster,
+            ));
+        }
+        fragment.ember_cooldown = fragment.ember_cooldown.max(0.0);
+    }
+
+    for (entity, mut transform, mut flash, material) in &mut flashes {
+        flash.age += dt;
+        if flash.age >= flash.lifetime {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let t = (flash.age / flash.lifetime).clamp(0.0, 1.0);
+        // Fast ease-out growth with a fade to nothing: a pop, not a balloon.
+        let grow = 1.0 - (1.0 - t) * (1.0 - t);
+        transform.scale = Vec3::splat(flash.peak_scale * (0.30 + 0.70 * grow));
+        if let Some(mut material) = materials.get_mut(&material.0) {
+            let c = METEOR_AIRBURST_FLASH_COLOR * (1.0 - t).powf(1.7);
+            material.base_color = Color::linear_rgb(c.x, c.y, c.z);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn airburst_fires_only_on_a_watched_crossing() {
+        let threshold = airburst_threshold(0.0);
+        // The normal case: last frame just under the trigger, this frame at or
+        // past it (and inside the grace window) fires.
+        assert!(airburst_crossing(
+            Some(threshold - 0.001),
+            threshold + 0.001,
+            threshold
+        ));
+        // First observed frame of the event: no previous descent, never fires,
+        // wherever the meteor already is.
+        assert!(!airburst_crossing(None, threshold + 0.001, threshold));
+        // Already past the trigger on both frames: the crossing happened
+        // earlier (and fired then), not now.
+        assert!(!airburst_crossing(
+            Some(threshold + 0.01),
+            threshold + 0.02,
+            threshold
+        ));
+        // Still before the trigger: nothing yet.
+        assert!(!airburst_crossing(
+            Some(threshold - 0.02),
+            threshold - 0.01,
+            threshold
+        ));
+    }
+
+    #[test]
+    fn airburst_skips_a_crossing_observed_past_the_grace_window() {
+        let threshold = airburst_threshold(0.0);
+        // A long menu straddle: the previous observed frame was before the
+        // trigger, but by the time we look again the meteor is far past the
+        // window. Skip entirely rather than popping a stale burst.
+        assert!(!airburst_crossing(
+            Some(threshold - 0.01),
+            threshold + METEOR_AIRBURST_WINDOW + 0.01,
+            threshold
+        ));
+        // Just inside the window still fires (a brief hitch is fine).
+        assert!(airburst_crossing(
+            Some(threshold - 0.01),
+            threshold + METEOR_AIRBURST_WINDOW * 0.5,
+            threshold
+        ));
+    }
+
+    #[test]
+    fn airburst_threshold_anchors_to_the_watched_window() {
+        // Watched from the announce (full flight): bursts halfway down.
+        assert!((airburst_threshold(0.0) - METEOR_AIRBURST_VISIBLE_FRACTION).abs() < 1e-6);
+        // A short /meteor-here dive (8 s of a 45 s arc): first seen at descent
+        // ~0.822, so the burst lands halfway through the watched window, a few
+        // seconds in, still clearly before impact.
+        let first_seen = 1.0 - 8.0 / crate::world::METEOR_FLIGHT_SECONDS;
+        let threshold = airburst_threshold(first_seen);
+        assert!(
+            threshold > first_seen,
+            "burst comes after the fireball shows"
+        );
+        assert!(threshold < 1.0, "and before the impact");
+        let expected = first_seen + 0.5 * (1.0 - first_seen);
+        assert!((threshold - expected).abs() < 1e-6);
+        // Degenerate first-seen values stay sane.
+        assert!(airburst_threshold(1.5) <= 1.0);
+    }
 
     #[test]
     fn meteor_render_close_object_in_place_at_true_scale() {
@@ -1225,34 +2012,67 @@ mod tests {
     #[test]
     fn meteor_apparent_size_grows_with_descent_on_the_proxy() {
         let camera = Vec3::ZERO;
-        // Same far point at two descent fractions: it should be bigger later.
+        // Same far point across the drama phase (before the true-size
+        // convergence window opens): it should be bigger later.
         let true_pos = Vec3::new(4_000.0, 3_000.0, 0.0);
         let (_, entry_scale, _) = meteor_render_placement(true_pos, camera, 0.0);
-        let (_, mid_scale, _) = meteor_render_placement(true_pos, camera, 0.5);
-        let (_, near_scale, _) = meteor_render_placement(true_pos, camera, 1.0);
+        let (_, mid_scale, _) = meteor_render_placement(true_pos, camera, 0.4);
+        let (_, late_scale, _) =
+            meteor_render_placement(true_pos, camera, METEOR_TRUE_SIZE_CONVERGE_START);
         assert!(
             (entry_scale - 1.0).abs() < 1e-6,
             "at entry the proxy ball is the base size, got {entry_scale}"
         );
         assert!(
-            mid_scale > entry_scale && near_scale > mid_scale,
-            "the ball swells as it descends: {entry_scale} < {mid_scale} < {near_scale}"
+            mid_scale > entry_scale && late_scale > mid_scale,
+            "the ball swells as it descends: {entry_scale} < {mid_scale} < {late_scale}"
+        );
+    }
+
+    #[test]
+    fn meteor_far_observer_final_descent_converges_to_true_apparent_size() {
+        // A player watching a far-off impact: the meteor never comes near the
+        // camera, so the camera-distance blend never engages. The grown drama
+        // sprite must still hand over visually: by the end of the descent the
+        // rendered scale matches the TRUE angular size of the physical ball at
+        // its actual distance, instead of a huge glow that vanishes at impact.
+        let camera = Vec3::ZERO;
+        let distance = 500.0;
+        let true_pos = Vec3::new(400.0, 300.0, 0.0);
+        let (_, drama_scale, _) = meteor_render_placement(true_pos, camera, 0.5);
+        let (_, end_scale, _) = meteor_render_placement(true_pos, camera, 1.0);
+        assert!(drama_scale > 1.0, "mid-flight keeps the drama growth");
+        let true_apparent = METEOR_PROXY_DISTANCE / distance;
+        assert!(
+            (end_scale - true_apparent).abs() < 1e-3,
+            "at impact the far observer sees the true angular size: {end_scale} vs {true_apparent}"
         );
         assert!(
-            (near_scale - METEOR_PROXY_GROWTH).abs() < 1e-5,
-            "by the proxy boundary it has grown to the full growth factor, got {near_scale}"
+            end_scale < drama_scale,
+            "the sprite visibly settles down out of the drama phase"
         );
+        // And the convergence is progressive, not a snap.
+        let (_, converging_scale, _) = meteor_render_placement(
+            true_pos,
+            camera,
+            (METEOR_TRUE_SIZE_CONVERGE_START + METEOR_TRUE_SIZE_CONVERGE_END) * 0.5,
+        );
+        assert!(converging_scale < drama_scale * METEOR_PROXY_GROWTH);
+        assert!(converging_scale > end_scale);
     }
 
     #[test]
     fn meteor_placement_blends_smoothly_across_the_handoff_band() {
         let camera = Vec3::ZERO;
-        let descent = 1.0;
+        // Mid-flight (before the true-size convergence), so the proxy is in
+        // its grown drama phase and the band blend is what varies.
+        let descent = 0.5;
+        let proxy_scale = 1.0 + descent * (METEOR_PROXY_GROWTH - 1.0);
         // Just outside the proxy distance: full proxy (grown), on the sphere.
         let far = Vec3::new(0.0, METEOR_PROXY_DISTANCE + 5.0, 0.0);
         let (far_pos, far_scale, _) = meteor_render_placement(far, camera, descent);
         assert!((far_pos.length() - METEOR_PROXY_DISTANCE).abs() < 1e-2);
-        assert!((far_scale - METEOR_PROXY_GROWTH).abs() < 1e-3);
+        assert!((far_scale - proxy_scale).abs() < 1e-3);
 
         // Just inside the true-scale distance: true position + true scale.
         let close = Vec3::new(0.0, METEOR_TRUE_SCALE_DISTANCE - 5.0, 0.0);

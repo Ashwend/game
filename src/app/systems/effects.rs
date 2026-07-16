@@ -37,8 +37,10 @@ pub(crate) struct ImpactChip {
     gravity_scale: f32,
     /// When set, the chip keeps its spawn scale for its whole life and simply
     /// despawns at the end, instead of shrinking out over the final stretch.
-    /// For debris that should read as solid physical chunks (the MeteorShower
-    /// rock blast), not twinkling particles.
+    /// Every flung debris chip (rock chunks, gather chips, the MeteorShower
+    /// rock blast) sets this: solid matter holds its size and only tumbles
+    /// under physics, it never animates scale. Only non-solid effects (the
+    /// blood pool decal, the impact fireball flash) still shrink out.
     fixed_scale: bool,
 }
 
@@ -227,6 +229,10 @@ pub(crate) fn spawn_ore_shatter_burst(
 
         commands.spawn((
             Name::new("Ore Shatter Chunk"),
+            // Fixed scale: broken rock is solid matter, it tumbles under
+            // physics but never grows or shrinks (a chunk visibly animating
+            // in size reads as a rendering glitch, seen mixed into the
+            // meteor-strike ejecta next to the fixed-size boulder blast).
             ImpactChip {
                 velocity,
                 spin_axis,
@@ -235,7 +241,7 @@ pub(crate) fn spawn_ore_shatter_burst(
                 age: 0.0,
                 initial_scale,
                 gravity_scale,
-                fixed_scale: false,
+                fixed_scale: true,
             },
             Mesh3d(assets.stone_shard_mesh.clone()),
             MeshMaterial3d(assets.stone_shard_material.clone()),
@@ -379,6 +385,10 @@ pub(crate) fn spawn_impact_burst(
 
         commands.spawn((
             Name::new("Impact Chip"),
+            // Fixed scale for the same reason as the ore shatter and meteor
+            // rubble: flung chips are physical debris, so they keep their
+            // spawn size and only rotate; the short lifetimes mean they pop
+            // out at rest rather than shrinking mid-flight.
             ImpactChip {
                 velocity,
                 spin_axis,
@@ -387,7 +397,7 @@ pub(crate) fn spawn_impact_burst(
                 age: 0.0,
                 initial_scale,
                 gravity_scale,
-                fixed_scale: false,
+                fixed_scale: true,
             },
             Mesh3d(mesh.clone()),
             MeshMaterial3d(material.clone()),

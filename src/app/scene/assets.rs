@@ -239,6 +239,9 @@ pub(crate) struct MeteorEmberAssets {
     pub(crate) ember_material: Handle<StandardMaterial>,
     pub(crate) smoke_mesh: Handle<Mesh>,
     pub(crate) smoke_material: Handle<StandardMaterial>,
+    /// Unit sphere for the one-shot airburst flash (the material is created
+    /// per burst so its fade-out never touches a shared handle).
+    pub(crate) flash_mesh: Handle<Mesh>,
 }
 
 #[derive(Resource, Clone)]
@@ -1492,6 +1495,10 @@ fn insert_fire_particle_assets(
             unlit: true,
             ..default()
         }),
+        // Unit radius so the airburst spawner scales it straight to world
+        // metres. ico(3) keeps the silhouette round even at the flash's
+        // multi-ball-radius peak.
+        flash_mesh: meshes.add(Sphere::new(1.0).mesh().ico(3).expect("valid subdivisions")),
     });
 }
 

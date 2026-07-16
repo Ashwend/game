@@ -59,7 +59,7 @@ use self::{
         GrassInstancingPlugin, GrassState, TerrainMaterial, ToonMaterial, ToonViewmodelMaterial,
         animate_meteor_shower_site_fire_system, apply_world_scene_system,
         meteor_shower_audio_system, meteor_shower_camera_shake_system, meteor_shower_rumble_system,
-        setup_scene, stream_grass_system, tick_meteor_ember_system,
+        setup_scene, stream_grass_system, tick_meteor_airburst_system, tick_meteor_ember_system,
         update_meteor_shower_ground_system, update_meteor_sky_system, update_sky_system,
     },
     state::{
@@ -992,6 +992,10 @@ fn add_scene_systems(app: &mut App) {
         .add_systems(
             Update,
             tick_meteor_ember_system.in_set(ClientSystemSet::Sky),
+        )
+        .add_systems(
+            Update,
+            tick_meteor_airburst_system.in_set(ClientSystemSet::Sky),
         )
         .add_systems(
             Update,
