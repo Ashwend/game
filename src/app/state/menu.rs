@@ -374,6 +374,7 @@ mod tests {
             vec![crate::protocol::RespawnBagOption {
                 id: crate::protocol::DeployedEntityId(7),
                 name: "home".to_owned(),
+                cooldown_seconds: 0,
             }],
         );
         assert_eq!(splash.respawn_bags.len(), 1);

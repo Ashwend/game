@@ -98,4 +98,22 @@ mod tests {
             Some(SoundId::ImpactPickaxeOnWood)
         );
     }
+
+    #[test]
+    fn sickle_contact_plays_the_fiber_pickup_rustle() {
+        // The sickle's only gatherable target is the Tall Grass tuft, so its
+        // contact cue is the same grass-rustle the hand E-pluck plays (owner
+        // request): collecting fiber sounds the same however you collect it.
+        // Surface-independent on purpose.
+        for surface in [
+            SurfaceMaterial::Dirt,
+            SurfaceMaterial::Wood,
+            SurfaceMaterial::Stone,
+        ] {
+            assert_eq!(
+                impact_sound_for(ItemModel::Sickle, surface),
+                Some(SoundId::InventoryPickup)
+            );
+        }
+    }
 }

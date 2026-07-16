@@ -39,7 +39,10 @@ fn nearby_crude_nodes(
         .iter()
         .filter_map(|node| {
             let definition = crate::resource_nodes::resource_node_definition(&node.definition_id)?;
-            if definition.required_tool.kind != crate::items::ToolKind::Hands {
+            // Keyed on the crude model (not on `required_tool == Hands`): the
+            // hay tuft requires a sickle for swings but is still E-pluckable,
+            // and the tutorial ring is about the E pickup.
+            if !definition.model.is_crude() {
                 return None;
             }
             let yield_item = definition.storage.first().map(|mat| mat.item_id)?;

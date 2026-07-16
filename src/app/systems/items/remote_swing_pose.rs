@@ -63,8 +63,10 @@ pub(crate) fn remote_swing_arm_pose(model: ItemModel, phase: f32) -> RemoteArmPo
         ItemModel::Hatchet | ItemModel::Club | ItemModel::ThrownBomb => hatchet_arm_pose(phase),
         // The sword now has its OWN wide horizontal slash (its first-person pose is
         // a level arc, not a chop), so peers read a sweep across the body rather
-        // than the hatchet's overhead diagonal.
-        ItemModel::Sword => sword_arm_pose(phase),
+        // than the hatchet's overhead diagonal. The sickle's reap is the same
+        // level yaw-sweep from a peer's distance, so it reuses the sword arm
+        // (the same way the club reuses the hatchet's).
+        ItemModel::Sword | ItemModel::Sickle => sword_arm_pose(phase),
         ItemModel::Spear => spear_arm_pose(phase),
         // The bow's swing "phase" is driven by the draw window: a peer reads a
         // draw-to-anchor, a brief full-draw hold, and a forward loose flick.

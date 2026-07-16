@@ -115,10 +115,19 @@ fn pickup_tooltip_text(
     // stays a "what is this / how do I gather it" hint and the node running dry
     // stays a surprise.
     //
-    // Crude nodes (branches, surface stones, grass tufts) are quick-grab only,
-    // swinging at them does nothing, so the tooltip only mentions E.
-    let body = if definition.required_tool.kind == ToolKind::Hands {
-        "Press E to pick up".to_owned()
+    // Crude nodes (branches, surface stones) are quick-grab only, swinging at
+    // them does nothing, so the tooltip only mentions E. The hay tuft is both:
+    // E-pluckable for a token handful, or reaped whole with a sickle, and the
+    // tooltip teaches that trade.
+    let body = if definition.model.is_crude() {
+        if definition.required_tool.kind == ToolKind::Hands {
+            "Press E to pick up".to_owned()
+        } else {
+            format!(
+                "Press E to pluck a handful\n{}: harvest the whole tuft",
+                definition.required_tool.label()
+            )
+        }
     } else {
         format!(
             "Hold Left Mouse to gather\nRequires: {}",

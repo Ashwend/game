@@ -114,6 +114,7 @@ mod tick;
 mod toasts;
 mod tool_wear;
 mod torch;
+mod upkeep;
 mod voice;
 mod workbench;
 mod world_map;
@@ -138,10 +139,10 @@ pub use loot_bag_ecs::{
 };
 pub use player_ecs::{
     Player, PlayerAction, PlayerArmor, PlayerChargeFraction, PlayerChatBubble, PlayerChunk,
-    PlayerCrafting, PlayerEquipmentVisual, PlayerHealth, PlayerHeldItem, PlayerIndex,
-    PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerOpenContainers, PlayerPose,
-    PlayerPrivate, PlayerPrivateLink, PlayerPrivateState, PlayerProfile, PlayerSleeping,
-    PlayerView, despawn_player_entity, spawn_player_entity,
+    PlayerClaimStatus, PlayerCrafting, PlayerEquipmentVisual, PlayerHealth, PlayerHeldItem,
+    PlayerIndex, PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerOpenContainers,
+    PlayerPose, PlayerPrivate, PlayerPrivateLink, PlayerPrivateState, PlayerProfile,
+    PlayerSleeping, PlayerView, despawn_player_entity, spawn_player_entity,
 };
 pub use projectile_ecs::{
     Projectile, ProjectileChunk, ProjectileIndex, ProjectileTransform, ProjectileView,
@@ -269,6 +270,18 @@ pub struct GameServer {
     /// or replicated; rebuilt by [`GameServer::recompute_claim_footprints`]
     /// on every structural change and on cupboard placement.
     claim_footprints: HashMap<DeployedEntityId, Vec<(f32, f32)>>,
+    /// Last tick each deployable took combat damage (any source: tool swing,
+    /// projectile, or blast), keyed by id. Drives the repair/upgrade combat
+    /// lockout (`BUILDING_REPAIR_COMBAT_LOCKOUT_TICKS`). Server-only and
+    /// transient: never persisted or replicated (a restart clears it);
+    /// entries are dropped when the entity is removed.
+    pub(super) recently_damaged: HashMap<DeployedEntityId, u64>,
+    /// Tick until which each sleeping bag refuses respawns, keyed by bag id.
+    /// Written on a successful bag respawn (the used bag plus every
+    /// same-owner bag within `SLEEPING_BAG_SHARED_COOLDOWN_RADIUS_M`).
+    /// Server-only and transient like `recently_damaged`; entries are
+    /// dropped when the bag is removed.
+    pub(super) bag_respawn_cooldowns: HashMap<DeployedEntityId, u64>,
     next_dropped_item_id: DroppedItemId,
     next_client_id: ClientId,
     next_resource_node_id: ResourceNodeId,
@@ -313,8 +326,9 @@ pub struct GameServer {
     /// server restart, matching the throwaway nature of a live-tuning cheat.
     knockback_scale: f32,
     /// meteor shower event engine: the scheduler for the next event plus the
-    /// live event (announce through crater despawn). Deliberately NOT persisted:
-    /// on world load the scheduler rolls a fresh next event and an in-flight
+    /// live event's meteors (announce through the last crater despawn, each
+    /// meteor on its own staggered clock). Deliberately NOT persisted: on
+    /// world load the scheduler rolls a fresh next event and an in-flight
     /// event does not survive a restart, so the save format is untouched. See
     /// `src/server/meteor_shower.rs`.
     meteor_shower: meteor_shower::MeteorShowerState,

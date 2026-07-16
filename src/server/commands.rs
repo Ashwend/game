@@ -122,7 +122,7 @@ impl GameServer {
         };
         lines.push(time_speed_line.to_owned());
         let test_kit_line = if is_admin {
-            "  /test-kit: grant every tool + 100 of each resource + 1 workbench + 1 furnace"
+            "  /test-kit: grant every tool, weapon, armor piece, deployable, and explosive (full stacks) + resources"
         } else {
             "  /test-kit: admin only"
         };
@@ -146,15 +146,15 @@ impl GameServer {
         };
         lines.push(ruins_line.to_owned());
         let meteor_shower_line = if is_admin {
-            "  /meteor [warning_seconds]: force a meteor now (default 30s to impact)"
+            "  /meteor [warning_seconds]: force a full meteor shower now (default 30s to first impact)"
         } else {
             "  /meteor [warning_seconds]: admin only"
         };
         lines.push(meteor_shower_line.to_owned());
         let meteor_shower_here_line = if is_admin {
-            "  /meteor-here [warning_seconds]: drop a meteor on your position (default 8s, can hit you/bases)"
+            "  /meteor-here [warning_seconds] [size]: drop one meteor on your position (default 8s, size 1.0, can hit you/bases)"
         } else {
-            "  /meteor-here [warning_seconds]: admin only"
+            "  /meteor-here [warning_seconds] [size]: admin only"
         };
         lines.push(meteor_shower_here_line.to_owned());
 

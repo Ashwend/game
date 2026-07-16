@@ -241,6 +241,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
             respawn_bags: vec![RespawnBagOption {
                 id: crate::protocol::DeployedEntityId(30),
                 name: "camp".to_owned(),
+                cooldown_seconds: 90,
             }],
         },
         ServerMessage::DoorCodePrompt {
@@ -251,9 +252,12 @@ fn server_fixtures() -> Vec<ServerMessage> {
         },
         ServerMessage::WorldTime(world_time),
         ServerMessage::MeteorShower {
-            impact_position: Vec3Net::new(2.0, 0.0, 3.0),
-            impact_tick: 999,
-            trajectory_seed: 4242,
+            meteors: vec![MeteorStrike {
+                impact_position: Vec3Net::new(2.0, 0.0, 3.0),
+                impact_tick: 999,
+                trajectory_seed: 4242,
+                size: 1.0,
+            }],
         },
         ServerMessage::Explosion {
             position: Vec3Net::new(5.0, 0.0, 6.0),
@@ -410,7 +414,7 @@ fn wire_protocol_postcard_layout_is_stable() {
     let digest = Sha256::digest(&payload);
     let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(
-        hex, "25ea9a18887b3aeeef5271424f89066b548142e4e31909758f329674e089cc5e",
+        hex, "6b2d9d1f498b127fe8eaf9d135085dc58eb81d71d237ea73102ecf72f29e0258",
         "Wire protocol postcard layout changed. If intentional, bump \
          PROTOCOL_VERSION and update this golden hash to {hex}."
     );

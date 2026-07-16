@@ -217,36 +217,11 @@ pub(super) fn world_map_ui(
                 }
                 draw_grid(&map_painter, map_rect, &view);
 
-                // Ruins: faint permanent landmark glyphs computed from the same
-                // shared, seed-pure `ruin_layout` the server worldgen uses, so
-                // the pictograms sit exactly where the ruins are. Drawn under
-                // the player markers so a pin is never hidden behind a glyph.
-                if let Some((seed, dims)) = runtime.world_map_seed_dims {
-                    for site in crate::world::ruin_layout(seed, dims) {
-                        let pos = world_to_map(map_rect, &view, site.x, site.z);
-                        if !map_rect.contains(pos) {
-                            continue;
-                        }
-                        draw_ruin_glyph(&map_painter, pos);
-                    }
-                }
-
-                // Temporary meteor shower impact marker: drawn from the live event
-                // state (NOT the per-account marker store), from announce until
-                // the event cleans up, then it vanishes. A pulsing ember pip so a
-                // player can navigate to (or away from) the incoming strike.
-                if let Some(event) = runtime.meteor_shower {
-                    let pos = world_to_map(
-                        map_rect,
-                        &view,
-                        event.impact_position.x,
-                        event.impact_position.z,
-                    );
-                    if map_rect.contains(pos) {
-                        let t = ui.input(|input| input.time) as f32;
-                        draw_meteor_shower_marker(&map_painter, pos, t);
-                    }
-                }
+                // Deliberately NO ruin glyphs and NO meteor impact marker: ruins
+                // are discovered by exploring (the terrain raster still hints at
+                // them through their biome surroundings), and the meteor shower
+                // is unannounced by design (the sky fireballs and the audio are
+                // the announcement, see docs/meteor-shower.md).
 
                 // Markers: draw a pin per visible marker, sense hover/click.
                 // Off-view pins are skipped entirely (no draw, no interaction).
@@ -391,12 +366,8 @@ pub(super) fn world_map_ui(
             // from `biome_legend` (the same `biome_rgb` the raster uses), so the
             // key can never drift from what's drawn.
             {
-                // Biome swatches from the shared `biome_legend`, plus a trailing
-                // "Ruins" key for the landmark glyphs (not a biome, so it's
-                // appended here rather than in `biome_legend`).
-                let mut legend: Vec<(&'static str, [u8; 3])> =
-                    crate::world::biome_legend().to_vec();
-                legend.push(("Burnt ruins (landmark)", [186, 180, 172]));
+                // Biome swatches from the shared `biome_legend`.
+                let legend: Vec<(&'static str, [u8; 3])> = crate::world::biome_legend().to_vec();
                 let font = egui::FontId::proportional(11.0);
                 let text_col = egui::Color32::from_gray(210);
                 let sw = 11.0;
@@ -671,71 +642,6 @@ fn grid_label(
         font.clone(),
         egui::Color32::from_rgb(226, 233, 242),
     );
-}
-
-/// Draw the temporary meteor shower impact marker at `pos`: a bright pulsing ember
-/// pip with a soft ring, so the incoming (or landed) strike stands out from the
-/// muted ruin glyphs and the player's own pins. `time` drives a gentle pulse.
-/// Rendered from the live event state, never persisted.
-fn draw_meteor_shower_marker(painter: &egui::Painter, pos: egui::Pos2, time: f32) {
-    let pulse = 0.5 + 0.5 * (time * std::f32::consts::TAU * 1.2).sin();
-    // Outer warning ring: a faint expanding halo.
-    let ring_radius = 7.0 + pulse * 3.0;
-    painter.circle_stroke(
-        pos,
-        ring_radius,
-        egui::Stroke::new(
-            1.5,
-            egui::Color32::from_rgba_unmultiplied(255, 120, 60, (90.0 + pulse * 80.0) as u8),
-        ),
-    );
-    // Hot core pip.
-    painter.circle_filled(
-        pos,
-        3.2,
-        egui::Color32::from_rgba_unmultiplied(255, 180, 90, 235),
-    );
-    painter.circle_filled(pos, 1.6, egui::Color32::from_rgb(255, 240, 210));
-}
-
-/// Draw a faint permanent ruin glyph centred on `pos`: a small burnt-house
-/// pictogram (a squat wall rectangle under a half-collapsed roof line, one
-/// gable still up, the other side fallen in). Deliberately faint and
-/// desaturated so ruins read as background landmarks, never competing with
-/// the player's own markers.
-fn draw_ruin_glyph(painter: &egui::Painter, pos: egui::Pos2) {
-    // Ash-grey fill, low alpha so it sits behind the markers.
-    let fill = egui::Color32::from_rgba_unmultiplied(186, 180, 172, 150);
-    let outline = egui::Color32::from_rgba_unmultiplied(62, 58, 54, 170);
-    let w = 5.5; // half-width of the house body
-    let h = 6.0; // half-height of the glyph
-
-    // Squat wall rectangle.
-    let walls = egui::Rect::from_min_max(
-        egui::pos2(pos.x - w, pos.y - h * 0.1),
-        egui::pos2(pos.x + w, pos.y + h),
-    );
-    painter.rect_filled(walls, 1.0, fill);
-    painter.rect_stroke(
-        walls,
-        1.0,
-        egui::Stroke::new(0.8, outline),
-        egui::StrokeKind::Middle,
-    );
-
-    // Half-collapsed roof: the left gable still rises to a peak, then the
-    // ridge line drops and breaks off short of the right wall.
-    let roof = vec![
-        egui::pos2(pos.x - w, pos.y - h * 0.1),
-        egui::pos2(pos.x - w * 0.35, pos.y - h),
-        egui::pos2(pos.x + w * 0.25, pos.y - h * 0.35),
-        egui::pos2(pos.x + w * 0.55, pos.y - h * 0.1),
-    ];
-    painter.add(egui::Shape::convex_polygon(
-        roof,
-        fill,
-        egui::Stroke::new(0.8, outline),
-    ));
 }
 
 /// Draw a teardrop pin whose tip sits exactly on the marker's map position.

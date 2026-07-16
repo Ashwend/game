@@ -47,7 +47,7 @@ use crate::{
     items::{
         BUILDING_PLAN_ID, DeployableKind, DeployableProfile, DoorVariant, ItemId, item_definition,
     },
-    protocol::{AccountId, PlaceBuildingCommand, PlaceDeployableCommand, Vec3Net},
+    protocol::{AccountId, DoorCommand, PlaceBuildingCommand, PlaceDeployableCommand, Vec3Net},
     server::{Deployable, DeployableAuth, DeployableStability, DeployableTransform},
     world::WorldBlock,
 };
@@ -61,7 +61,7 @@ pub(crate) use claim_ring::update_claim_boundary_system;
 
 use snapping::{
     any_replicated_overlap, foundation_cell_occupied, nearest_ceiling_cell,
-    nearest_foundation_neighbor, nearest_free_doorway, nearest_stairs_cell, nearest_wall_hit,
+    nearest_foundation_neighbor, nearest_free_mount, nearest_stairs_cell, nearest_wall_hit,
     nearest_wall_socket, wall_socket_occupied,
 };
 
@@ -266,7 +266,13 @@ pub(crate) fn update_placement_ghost_system(
             }
         }
         GhostIntent::Door(variant) => {
-            update_door_placement(&mut placement, camera_transform, player_feet, &replicated);
+            update_door_placement(
+                &mut placement,
+                variant,
+                camera_transform,
+                player_feet,
+                &replicated,
+            );
             placement.building_cost = None;
             DeployableKind::Door { variant }
         }
@@ -642,11 +648,13 @@ fn building_cost_readout(
     })
 }
 
-/// Door ghost: latch onto the nearest free doorway around the aim point.
+/// Door/shutter ghost: latch onto the nearest free mount opening around
+/// the aim point (a doorway for doors, a window wall for the shutter).
 /// The flip toggle is a half-turn, mirroring hinge + swing together,
 /// which the arc indicator baked into the ghost mesh makes visible.
 fn update_door_placement(
     placement: &mut DeployablePlacementState,
+    variant: crate::items::DoorVariant,
     camera_transform: &GlobalTransform,
     player_feet: Option<Vec3>,
     replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
@@ -654,7 +662,7 @@ fn update_door_placement(
     let aim = ground_under_aim(camera_transform);
     let aim_net = aim.map(|aim| Vec3Net::new(aim.x, 0.0, aim.z));
 
-    let target = aim_net.and_then(|aim| nearest_free_doorway(aim, replicated));
+    let target = aim_net.and_then(|aim| nearest_free_mount(aim, variant.mount_piece(), replicated));
     match target {
         Some((doorway_id, position, doorway_yaw)) => {
             let yaw = snap_yaw_quarter_turn(
@@ -848,13 +856,33 @@ pub(crate) fn placement_input_system(
             let Some(doorway_id) = placement.door_target else {
                 return;
             };
-            // The door only ships once the player confirms a lock code;
-            // cancelling the prompt places nothing.
-            menu.text_prompt = Some(TextPrompt::new(TextPromptKind::DoorSetCode {
-                doorway_id,
-                variant,
-                flip: placement.door_flip,
-            }));
+            if variant.code_locked() {
+                // The door only ships once the player confirms a lock code;
+                // cancelling the prompt places nothing.
+                menu.text_prompt = Some(TextPrompt::new(TextPromptKind::DoorSetCode {
+                    doorway_id,
+                    variant,
+                    flip: placement.door_flip,
+                }));
+            } else {
+                // Codeless panels (the shutter) hang straight away: no code
+                // to confirm, the server gates the toggle on base auth.
+                let Some(session) = runtime.session.as_mut() else {
+                    return;
+                };
+                use crate::app::state::ErrorToastSink;
+                if let Err(error) =
+                    session.send(crate::protocol::ClientMessage::Door(DoorCommand::Place {
+                        doorway_id,
+                        variant,
+                        flip: placement.door_flip,
+                        code: String::new(),
+                    }))
+                {
+                    error_toasts.push_error(format!("place failed: {error}"));
+                }
+                placement.manual_yaw = false;
+            }
         }
         GhostIntent::Torch(item_id, _) => {
             send_place_deployable_command(
@@ -1146,7 +1174,10 @@ fn refresh_ghost_entity(
         DeployableKind::Workbench { tier } => assets.workbench_mesh(tier),
         DeployableKind::Furnace { .. } => assets.furnace_mesh.clone(),
         DeployableKind::Building { piece, tier } => assets.building_mesh(piece, tier),
-        DeployableKind::Door { .. } => assets.door_ghost_mesh.clone(),
+        DeployableKind::Door { variant } => match variant {
+            crate::items::DoorVariant::Shutter => assets.shutter_ghost_mesh.clone(),
+            _ => assets.door_ghost_mesh.clone(),
+        },
         DeployableKind::SleepingBag => assets.sleeping_bag_mesh.clone(),
         DeployableKind::StorageBox { tier } => assets.storage_box_mesh(tier),
         DeployableKind::Torch { .. } => assets.torch_mesh.clone(),

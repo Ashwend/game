@@ -8,7 +8,7 @@ use crate::{
             PickupTargetState, SwingImpact, SwingTarget,
         },
     },
-    items::{HANDS_TOOL, ToolKind, ToolProfile, item_definition},
+    items::{HANDS_TOOL, ToolProfile, item_definition},
     protocol::{
         AttackPlayerCommand, ClientMessage, DamageDeployableCommand, ResourceGatherCommand,
     },
@@ -25,7 +25,8 @@ use super::send::send_gameplay_message;
 /// identity carried on the wire (`SwingStart`/`PlayerImpact`). Both a real gather
 /// tool and a dedicated weapon produce a swing:
 ///
-/// - A tool maps its [`ToolKind`] to a swing archetype (Hatchet/Pickaxe).
+/// - A tool maps its [`ToolKind`](crate::items::ToolKind) to a swing
+///   archetype (Hatchet/Pickaxe/Sickle).
 /// - A weapon animates and reads as its own registry `model`
 ///   (Club/Spear/Sword/Mace).
 ///
@@ -78,7 +79,9 @@ pub(super) fn dispatch_swing_impact(
         Some(SwingTarget::ResourceNode(id)) => dispatch_resource_swing(params, impact, id),
         Some(SwingTarget::Deployable(id)) => dispatch_deployable_swing(params, impact, id),
         Some(SwingTarget::Player(id)) => dispatch_player_swing(params, impact, id),
-        None => params.gather_input.set_pending_miss_audio(),
+        None => {
+            params.gather_input.set_pending_miss_audio();
+        }
     }
 }
 
@@ -343,9 +346,11 @@ pub(super) fn resource_target_model(
     resource_node_definition(definition_id).map(|definition| definition.model)
 }
 
-/// Returns true when the looked-at resource node is hand-harvestable
-/// (its `required_tool` is `Hands`). The E quick-pickup path is gated on
-/// this client-side and re-checked server-side.
+/// Returns true when the looked-at resource node is hand-harvestable (a
+/// crude model: branch pile, surface stone, hay tuft). The E quick-pickup
+/// path is gated on this client-side and re-checked server-side. Keyed on
+/// the model, not on `required_tool`, because the hay tuft requires a
+/// sickle for swings yet stays E-pluckable.
 pub(super) fn resource_target_is_crude(target: &PickupTargetState) -> bool {
     let Some(definition_id) = target.resource_definition_id.as_deref() else {
         return false;
@@ -353,7 +358,7 @@ pub(super) fn resource_target_is_crude(target: &PickupTargetState) -> bool {
     let Some(definition) = resource_node_definition(definition_id) else {
         return false;
     };
-    definition.required_tool.kind == ToolKind::Hands
+    definition.model.is_crude()
 }
 
 pub(super) fn resource_target_anchor(

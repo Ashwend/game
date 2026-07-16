@@ -407,6 +407,15 @@ pub(crate) fn apply_deployed_entities_system(
             } else {
                 0.0
             };
+            // The hinge sits on the -X jamb of the opening the panel spans:
+            // the doorway width for doors, the window opening for the
+            // shutter (whose mesh carries its own sill-height offset).
+            let hinge_x = match variant {
+                crate::items::DoorVariant::Shutter => {
+                    -(crate::building::WINDOW_OPENING_WIDTH_M / 2.0)
+                }
+                _ => -(DOOR_PANEL_WIDTH_M / 2.0),
+            };
             commands.spawn((
                 Name::new("Door Panel"),
                 DoorPanel {
@@ -415,7 +424,7 @@ pub(crate) fn apply_deployed_entities_system(
                 },
                 Mesh3d(assets.door_panel_mesh(variant)),
                 MeshMaterial3d(assets.door_material(variant)),
-                Transform::from_translation(Vec3::new(-(DOOR_PANEL_WIDTH_M / 2.0), 0.0, 0.0))
+                Transform::from_translation(Vec3::new(hinge_x, 0.0, 0.0))
                     .with_rotation(Quat::from_rotation_y(initial_angle)),
                 Visibility::Visible,
                 ChildOf(parent),
@@ -766,9 +775,12 @@ pub(crate) fn deployable_colliders(
         DeployableKind::Building { piece, .. } => {
             crate::building::building_collider_blocks(piece, transform.position, transform.yaw)
         }
-        DeployableKind::Door { .. } => {
-            crate::building::door_collider_blocks(transform.position, transform.yaw, active)
-        }
+        DeployableKind::Door { variant } => match variant {
+            crate::items::DoorVariant::Shutter => {
+                crate::building::shutter_collider_blocks(transform.position, transform.yaw, active)
+            }
+            _ => crate::building::door_collider_blocks(transform.position, transform.yaw, active),
+        },
         _ => {
             let Some(profile) = item_definition(&meta.item_id).and_then(|def| def.deployable)
             else {

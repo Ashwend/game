@@ -526,6 +526,13 @@ fn cupboard_wheel(id: DeployedEntityId, pickup_target: &PickupTargetState) -> Ac
         action,
     };
     let mut options = Vec::new();
+    // The upkeep grid is open to anyone in reach (walls and doors are what
+    // protect a cupboard); the server re-validates range.
+    options.push(option(
+        "Open Upkeep",
+        Some("Stock materials to pay the base's upkeep"),
+        WheelAction::OpenCupboard(id),
+    ));
     match auth {
         Some(CupboardAuthState::Authorized) => {
             options.push(option(
@@ -640,6 +647,12 @@ fn perform_wheel_action(
             error_toasts,
             ClientMessage::Claim(ClaimCommand::ClearList { id }),
             "cupboard clear",
+        ),
+        WheelAction::OpenCupboard(id) => send_gameplay_message(
+            runtime,
+            error_toasts,
+            ClientMessage::OpenStorageBox { id },
+            "cupboard open",
         ),
         WheelAction::DefuseCharge(id) => {
             // Resolve the charge kind from the replicated deployable so the event

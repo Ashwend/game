@@ -221,49 +221,53 @@ pub(crate) fn workbench_upgrade_system(
     watch.open_tier = current;
 }
 
-/// The `impact_tick` of the last meteor shower the local player witnessed, so
-/// [`meteor_shower_impact_system`] fires `meteor_shower_impact_witnessed` exactly once
-/// per impact rather than every frame of the crater phase.
+/// The impact ticks of meteors whose strikes have already been checked for a
+/// local witness, so [`meteor_shower_impact_system`] fires
+/// `meteor_shower_impact_witnessed` at most once per meteor rather than every
+/// frame of its crater phase.
 #[derive(Resource, Default)]
 pub(crate) struct MeteorShowerImpactWatch {
-    witnessed_tick: Option<u64>,
+    checked_ticks: std::collections::HashSet<u64>,
 }
 
-/// Fires `meteor_shower_impact_witnessed` the first frame the authoritative clock
-/// crosses a meteor shower's impact tick while the local player is within the
-/// danger radius (they saw or were caught in the strike). Everything is derived
-/// client-side from the announce payload plus the player position, so no wire
-/// traffic and no server-side gate is needed.
+/// Fires `meteor_shower_impact_witnessed` the first frame the authoritative
+/// clock crosses one of a shower's impact ticks while the local player is
+/// within that meteor's size-scaled danger radius (they saw or were caught in
+/// the strike). Everything is derived client-side from the announce payload
+/// plus the player position, so no wire traffic and no server-side gate is
+/// needed.
 pub(crate) fn meteor_shower_impact_system(
     analytics: Res<Analytics>,
     runtime: Res<ClientRuntime>,
     mut watch: ResMut<MeteorShowerImpactWatch>,
 ) {
-    let Some(event) = runtime.meteor_shower else {
-        // No live event: clear so the next event can re-fire.
-        watch.witnessed_tick = None;
-        return;
-    };
-    let estimated_tick = runtime.server_tick();
-    if !event.has_impacted(estimated_tick) {
-        return;
-    }
-    if watch.witnessed_tick == Some(event.impact_tick) {
-        return;
-    }
-    // Only count it as witnessed when the player was near the impact (the same
-    // radius the escalating HUD evacuation warning uses). A player across the
-    // map neither sees nor feels the strike.
-    if let Some(view) = runtime.local_view() {
-        let dx = view.position.x - event.impact_position.x;
-        let dz = view.position.z - event.impact_position.z;
-        if (dx * dx + dz * dz).sqrt() <= crate::game_balance::METEOR_SHOWER_DANGER_RADIUS_M {
-            analytics.track(Event::MeteorShowerImpactWitnessed);
+    if runtime.meteor_showers.is_empty() {
+        // No live event: clear so the next event's ticks can re-fire.
+        if !watch.checked_ticks.is_empty() {
+            watch.checked_ticks.clear();
         }
+        return;
     }
-    // Record it either way so a distant player does not re-check every crater
-    // frame; the next distinct event has a different impact tick.
-    watch.witnessed_tick = Some(event.impact_tick);
+    let estimated_tick = runtime.server_tick();
+    for event in &runtime.meteor_showers {
+        if !event.has_impacted(estimated_tick) || watch.checked_ticks.contains(&event.impact_tick) {
+            continue;
+        }
+        // Only count it as witnessed when the player was near the impact (the
+        // same size-scaled radius the escalating HUD evacuation warning uses).
+        // A player across the map neither sees nor feels the strike.
+        if let Some(view) = runtime.local_view() {
+            let dx = view.position.x - event.impact_position.x;
+            let dz = view.position.z - event.impact_position.z;
+            let danger = crate::game_balance::METEOR_SHOWER_DANGER_RADIUS_M * event.size;
+            if (dx * dx + dz * dz).sqrt() <= danger {
+                analytics.track(Event::MeteorShowerImpactWitnessed);
+            }
+        }
+        // Record it either way so a distant player does not re-check every
+        // crater frame; each meteor has a distinct impact tick.
+        watch.checked_ticks.insert(event.impact_tick);
+    }
 }
 
 fn map_screen(screen: Screen) -> ScreenKind {

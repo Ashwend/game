@@ -104,10 +104,17 @@ impl GameServer {
             return Vec::new();
         };
         let position = entity.position;
-        let unlocked = entity
-            .door
-            .as_ref()
-            .is_some_and(|door| door.authorized.contains(&account));
+        // "Knows the door": entered the code at least once. A codeless
+        // shutter has no code, so its key is base authorization instead
+        // (the same gate that swings it).
+        let unlocked = if variant.code_locked() {
+            entity
+                .door
+                .as_ref()
+                .is_some_and(|door| door.authorized.contains(&account))
+        } else {
+            self.building_modify_allowed(position, account, entity.owner == Some(account))
+        };
         // Building privilege: unclaimed ground, or authorized on the
         // covering claim. (Unlike demolish, an unclaimed door is pick-up-able
         // by anyone who knows its code, not just the original placer: the
@@ -120,11 +127,12 @@ impl GameServer {
             );
         }
         if !unlocked {
-            return door_toast(
-                client_id,
-                ToastKind::Warning,
-                "Enter the code first to pick it up".to_owned(),
-            );
+            let text = if variant.code_locked() {
+                "Enter the code first to pick it up"
+            } else {
+                "Only authorized players can pick this up"
+            };
+            return door_toast(client_id, ToastKind::Warning, text.to_owned());
         }
         let door_item = variant.item_id();
         let Some(definition) = item_definition(door_item) else {
@@ -153,7 +161,9 @@ impl GameServer {
         flip: bool,
         code: String,
     ) -> Vec<ServerEnvelope> {
-        if !code_is_valid(&code) {
+        // Codeless panels (the shutter) hang without a lock; the client sends
+        // an empty code and no digit rule applies.
+        if variant.code_locked() && !code_is_valid(&code) {
             return door_toast(
                 client_id,
                 ToastKind::Warning,
@@ -166,20 +176,21 @@ impl GameServer {
         let owner = client.account_id;
         let feet = client.controller.position;
         let Some(doorway) = self.deployed_entities.get(&doorway_id) else {
-            return door_toast(client_id, ToastKind::Warning, "No doorway there".to_owned());
+            return door_toast(client_id, ToastKind::Warning, "No opening there".to_owned());
         };
-        if !matches!(
+        let mount_piece = variant.mount_piece();
+        let mounts = matches!(
             doorway.kind,
-            DeployableKind::Building {
-                piece: crate::building::BuildingPiece::Doorway,
-                ..
-            }
-        ) {
-            return door_toast(
-                client_id,
-                ToastKind::Warning,
-                "Doors only mount in doorways".to_owned(),
-            );
+            DeployableKind::Building { piece, .. } if piece == mount_piece
+        );
+        if !mounts {
+            let text = match mount_piece {
+                crate::building::BuildingPiece::WindowWall => {
+                    "Shutters only mount in window openings"
+                }
+                _ => "Doors only mount in doorways",
+            };
+            return door_toast(client_id, ToastKind::Warning, text.to_owned());
         }
         if !feet.within_horizontal_range(doorway.position, PLACEMENT_REACH_M) {
             return door_toast(client_id, ToastKind::Warning, "Too far away".to_owned());
@@ -234,7 +245,13 @@ impl GameServer {
         let entity = DeployedEntity {
             id,
             door: Some(DoorState {
-                code,
+                // Codeless panels store an empty code; their toggle gate is
+                // base authorization, never the code/authorized list.
+                code: if variant.code_locked() {
+                    code
+                } else {
+                    String::new()
+                },
                 authorized: Vec::new(),
                 open: false,
                 parent: doorway_id,
@@ -254,19 +271,51 @@ impl GameServer {
         // Doors inherit their doorway's stability; pull it in.
         self.refresh_structural_stability();
 
-        door_toast(
-            client_id,
-            ToastKind::Success,
-            "Door hung. Enter the code once to unlock it.".to_owned(),
-        )
+        let text = if variant.code_locked() {
+            "Door hung. Enter the code once to unlock it."
+        } else {
+            "Shutter hung. Base authorization swings it."
+        };
+        door_toast(client_id, ToastKind::Success, text.to_owned())
     }
 
     /// E-press on a door: authorized accounts toggle it; everyone else is
-    /// prompted for the code.
+    /// prompted for the code. Codeless panels (the shutter) never prompt:
+    /// their toggle is gated on base authorization (owner, or authorized on
+    /// the covering Tool Cupboard), the same gate hammer upgrades use.
     fn interact_door(&mut self, client_id: ClientId, id: DeployedEntityId) -> Vec<ServerEnvelope> {
         let Some(account) = self.door_actor_in_range(client_id, id) else {
             return Vec::new();
         };
+        let Some(entity) = self.deployed_entities.get(&id) else {
+            return Vec::new();
+        };
+        let DeployableKind::Door { variant } = entity.kind else {
+            return Vec::new();
+        };
+        if !variant.code_locked() {
+            let allowed = self.building_modify_allowed(
+                entity.position,
+                account,
+                entity.owner == Some(account),
+            );
+            if !allowed {
+                return door_toast(
+                    client_id,
+                    ToastKind::Warning,
+                    "Only authorized players can open this".to_owned(),
+                );
+            }
+            let Some(door) = self
+                .deployed_entity_mut(id)
+                .and_then(|entity| entity.door.as_mut())
+            else {
+                return Vec::new();
+            };
+            door.open = !door.open;
+            self.refresh_deployable_physics_colliders(id);
+            return Vec::new();
+        }
         let Some(entity) = self.deployed_entity_mut(id) else {
             return Vec::new();
         };
@@ -305,6 +354,10 @@ impl GameServer {
         let Some(entity) = self.deployed_entity_mut(id) else {
             return Vec::new();
         };
+        // A codeless panel has no lock to unlock; nothing to do.
+        if matches!(entity.kind, DeployableKind::Door { variant } if !variant.code_locked()) {
+            return Vec::new();
+        }
         let Some(door) = entity.door.as_mut() else {
             return Vec::new();
         };
@@ -346,6 +399,10 @@ impl GameServer {
         let Some(entity) = self.deployed_entity_mut(id) else {
             return Vec::new();
         };
+        // A codeless panel has no code to rotate.
+        if matches!(entity.kind, DeployableKind::Door { variant } if !variant.code_locked()) {
+            return Vec::new();
+        }
         let Some(door) = entity.door.as_mut() else {
             return Vec::new();
         };

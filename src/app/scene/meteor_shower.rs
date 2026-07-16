@@ -1,14 +1,19 @@
-//! World-space meteor shower impact visuals: a shallow dug-in crater with a fading
-//! painted burn skirt, strewn with LIVE particle fires that burn for the first
-//! minute or two after the strike, then die out and leave only the crater for
-//! the rest of the window.
+//! World-space meteor shower impact visuals: per meteor, a shallow dug-in
+//! crater with a fading painted burn skirt, strewn with LIVE particle fires
+//! that burn for the first minute or two after the strike, then die out and
+//! leave only the crater for the rest of the window. A shower lands 4 to 5
+//! size-varied meteors, so several crater rigs (keyed by each meteor's
+//! `impact_tick`) can be live at once, each uniformly scaled by its meteor's
+//! `size` (the shared crater profile is a pure homothety of size, so the
+//! scaled mesh still matches the movement floor point for point).
 //!
-//! Entirely client-side and derived from the event state (`runtime.meteor_shower`):
-//! there is no replicated crater entity and no save bump. The site appears the
-//! instant the local clock passes `impact_tick` and is removed when the event
-//! clears (crater despawn window, matching the server). Because the announce is
-//! resent to late joiners while the event is alive, a player who connects during
-//! the crater phase gets the announce and this system draws the site for them
+//! Entirely client-side and derived from the event state
+//! (`runtime.meteor_showers`): there is no replicated crater entity and no
+//! save bump. Each site appears the instant the local clock passes its
+//! meteor's `impact_tick` and is removed when that meteor clears (crater
+//! despawn window, matching the server). Because the announce is resent to
+//! late joiners while the event is alive, a player who connects during a
+//! crater phase gets the announce and this system draws the sites for them
 //! too (fires only if the burn window is still open on their clock).
 //!
 //! The site has three parts, each deliberately transient except the crater:
@@ -75,13 +80,16 @@ use crate::{
 /// late, which read as a mistimed clap.
 const IMPACT_BOOM_LEAD_S: f32 = 2.95;
 
-/// Seconds before impact the flyby crossing bed is started. The 18.1 s
-/// `world/meteor-flyby.wav` decays to silence over its final ~4 s, so starting
-/// it at this fixed lead lets the file die out naturally just before the
-/// strike; the impact cue's own rising lead-in carries the final seconds. The
-/// old start rule (whenever the proximity curve first went non-zero) left the
-/// file mid-waveform at impact, and the hard despawn cut it with a loud click.
-const FLYBY_LEAD_S: f32 = 17.5;
+/// Seconds before impact the flyby crossing bed is started: the moment the
+/// fireball becomes visible (`METEOR_FLIGHT_SECONDS`), so sight and sound
+/// arrive together for every meteor, exactly the `/meteor-here` feel the
+/// owner tuned against (its short warning always started the bed at spawn).
+/// The 18.1 s `world/meteor-flyby.wav` therefore still has tail left when the
+/// strike lands; that reads as the pass's rolling echo under the boom, the
+/// same overlap `/meteor-here` has always played. (The previous fixed 17.5 s
+/// lead predated the short flight window and left the audio trailing the
+/// visual by several seconds on scheduled events; owner report.)
+const FLYBY_LEAD_S: f32 = crate::world::METEOR_FLIGHT_SECONDS;
 
 /// Per-second fade applied to the flyby bed when it must be torn down while
 /// still audible (menu opened, event replaced, late-join edge). ~0.25 s to
@@ -89,31 +97,42 @@ const FLYBY_LEAD_S: f32 = 17.5;
 const FLYBY_FADE_OUT_PER_S: f32 = 4.0;
 
 /// Proximity model for the meteor's crossing rumble + slight camera shake. Both
-/// swell as the fireball's true world position nears the listener: silent/still
-/// beyond `METEOR_RUMBLE_RANGE_M`, full inside `METEOR_RUMBLE_FULL_M`. Kept in
-/// one place so the audible rumble and the felt shake ramp together off the same
-/// distance.
+/// swell as the fireball's true world position nears the listener: full inside
+/// `METEOR_RUMBLE_FULL_M`, tapering with distance to a floor of
+/// `METEOR_RUMBLE_FAR_FLOOR` at `METEOR_RUMBLE_RANGE_M` and beyond. The floor
+/// is deliberate: a meteor is a huge object, so its crossing stays AUDIBLE from
+/// anywhere in the world, just quiet; only the volume is distance-based, capped
+/// at the tuned near level (owner requirement). Kept in one place so the
+/// audible rumble and the felt shake ramp together off the same distance.
 const METEOR_RUMBLE_RANGE_M: f32 = 2_500.0;
 const METEOR_RUMBLE_FULL_M: f32 = 120.0;
+const METEOR_RUMBLE_FAR_FLOOR: f32 = 0.07;
 
 /// Peak linear volume scale for the crossing rumble loop at closest approach. The
 /// loop's manifest base gain is already low; this scales it further so even an
 /// overhead pass sits under the impact thump.
 const METEOR_RUMBLE_PEAK_VOLUME: f32 = 1.0;
 
-/// Marks the whole impact-site visual rig (crater mesh + fire emitters), so it
-/// can be found and despawned as a unit when the event ends. The one-time rock
-/// blast is thrown as free-standing `ImpactChip` debris that self-despawns, so
-/// it is not parented here.
+/// Marks one meteor's impact-site visual rig (crater mesh + fire emitters), so
+/// it can be found and despawned as a unit when its meteor ends. Keyed by the
+/// meteor's `impact_tick` so a multi-meteor shower keeps one rig per landed
+/// meteor. The one-time rock blast is thrown as free-standing `ImpactChip`
+/// debris that self-despawns, so it is not parented here.
 #[derive(Component)]
-pub(crate) struct MeteorShowerCrater;
+pub(crate) struct MeteorShowerCrater {
+    /// The owning meteor's impact tick (its identity within the event).
+    impact_tick: u64,
+}
 
-/// Marker + emitter state for one scattered fire at the impact site. A child of
-/// the crater rig carrying the fire's `PointLight`; while the site's burn window
+/// Marker + emitter state for one scattered fire at an impact site. A child of
+/// its crater rig carrying the fire's `PointLight`; while the site's burn window
 /// is open it sheds furnace-style flame puffs and embers each frame (see
 /// [`animate_meteor_shower_site_fire_system`]), then despawns when the fire dies.
 #[derive(Component)]
 pub(crate) struct MeteorShowerSiteFire {
+    /// The owning meteor's impact tick, so the burn-out envelope reads the
+    /// right meteor's age in a multi-meteor shower.
+    impact_tick: u64,
     /// Seconds until the next flame-puff emission.
     flame_cooldown: f32,
     /// Seconds until the next rising-ember emission.
@@ -122,19 +141,19 @@ pub(crate) struct MeteorShowerSiteFire {
     /// other instead of pulsing in lockstep.
     phase: f32,
     /// Per-fire size multiplier on particle scale/loft and light output, so the
-    /// site mixes small licks and real blazes.
+    /// site mixes small licks and real blazes (already folded with the meteor's
+    /// size at spawn).
     scale: f32,
+    /// World-space distance from the (rig-scaled) emitter entity down to just
+    /// above the ground, where the flames are born. Precomputed at spawn
+    /// because the emitter's lift is scaled by the rig's size transform.
+    anchor_drop: f32,
 }
 
-/// Per-event impact-cue bookkeeping so the pre-armed boom and the strike camera
-/// kick each fire exactly once. Keyed on the event's `impact_tick` so a new
-/// event resets the flags. The crossing rumble is a separate one-shot the
-/// renderer owns (see [`meteor_shower_rumble_system`]); there is no longer a
-/// separate approach roar (the flyby bed carries the whole approach).
-#[derive(Default)]
-pub(crate) struct MeteorShowerCueState {
-    /// The `impact_tick` of the event these flags belong to (0 = no event yet).
-    event_tick: u64,
+/// Per-meteor impact-cue flags so the pre-armed boom and the strike camera
+/// kick each fire exactly once per meteor.
+#[derive(Default, Clone, Copy)]
+struct MeteorCueFlags {
     /// The boom cue has been scheduled (pre-armed [`IMPACT_BOOM_LEAD_S`] before
     /// the strike so the file's baked lead-in ends ON the strike).
     impact_played: bool,
@@ -142,11 +161,32 @@ pub(crate) struct MeteorShowerCueState {
     impact_shake_fired: bool,
 }
 
+/// Impact-cue bookkeeping across the shower's meteors, keyed by each meteor's
+/// `impact_tick`; entries for dead meteors are pruned so a long session never
+/// grows the map. The crossing rumble is a separate one-shot the renderer owns
+/// (see [`meteor_shower_rumble_system`]); there is no separate approach roar
+/// (the flyby bed carries the whole approach).
+#[derive(Default)]
+pub(crate) struct MeteorShowerCueState {
+    per_meteor: std::collections::HashMap<u64, MeteorCueFlags>,
+}
+
 /// How many distinct fire emitter points strew the impact site. Each is a
 /// furnace-style particle fire plus its own shadowless `PointLight`, so the site
 /// reads as many separate burning patches (not one painted ring) that genuinely
 /// glow and light the ground at night.
 const FIRE_CLUSTER_COUNT: u32 = 12;
+
+/// Global budget of LIVE site-fire point lights across every burning impact
+/// site. One site never exceeds it (`FIRE_CLUSTER_COUNT` at size 1.0), but a
+/// multi-meteor shower can have 4-5 sites blazing at once, which is up to
+/// ~40-60 concurrent shadowless lights, a real forward-pass cost for glow the
+/// player can't see from across the map. Each frame the nearest fires to the
+/// camera keep their animated lights; the rest keep shedding flame particles
+/// (which read fine at distance) with their light zeroed. Matches the old
+/// single-site worst case, so night scenes cost what they did before the
+/// multi-meteor rework.
+const FIRE_LIGHT_BUDGET: usize = 12;
 
 // The crater's GEOMETRY (radii, heights, surface profile) lives in
 // `crate::world::meteor_shower` (`CRATER_*_M`, `crater_surface_height`): the
@@ -194,9 +234,10 @@ const SITE_FLAMES_PER_EMISSION: u32 = 3;
 /// flame so embers read as occasional flecks lofting off the blaze.
 const SITE_SPARK_INTERVAL: f32 = 0.13;
 
-/// Spawn, position, and tear down the crater visual from the event state. Runs
-/// in `ClientSystemSet::Sky`; a no-op on the title backdrop (no world) and
-/// whenever no event has impacted yet.
+/// Spawn and tear down the per-meteor crater rigs from the event state: one
+/// rig per live, already-impacted meteor, keyed by `impact_tick`. Runs in
+/// `ClientSystemSet::Sky`; a no-op on the title backdrop (no world) and
+/// whenever no meteor has impacted yet.
 pub(crate) fn update_meteor_shower_ground_system(
     mut commands: Commands,
     runtime: Res<ClientRuntime>,
@@ -204,51 +245,62 @@ pub(crate) fn update_meteor_shower_ground_system(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     existing: Query<(Entity, &MeteorShowerCrater)>,
-    mut transforms: Query<&mut Transform, With<MeteorShowerCrater>>,
 ) {
-    // Should the crater be shown? Only when an event exists, it has impacted, and
-    // we are not on the title backdrop.
-    let crater_event = (!menu.screen.uses_menu_backdrop())
-        .then(|| runtime.meteor_shower)
-        .flatten()
-        .filter(|event| event.has_impacted(runtime.server_tick()));
+    // Which meteors should show a crater? Only impacted, still-live ones, and
+    // never on the title backdrop.
+    let now = runtime.server_tick();
+    let wanted: Vec<&crate::app::state::MeteorShowerEvent> = if menu.screen.uses_menu_backdrop() {
+        Vec::new()
+    } else {
+        runtime
+            .meteor_showers
+            .iter()
+            .filter(|event| event.has_impacted(now))
+            .collect()
+    };
 
-    match (crater_event, existing.iter().next()) {
-        (Some(event), None) => {
-            // First frame the site appears on this client. Usually that IS the
-            // impact moment, but a late joiner (or a client returning from the
-            // backdrop) spawns it mid-window: the site age gates the one-time
-            // blast and the fires so they never replay stale.
-            let position = event.impact_position;
-            let age_seconds = ((runtime.server_tick_precise() - event.impact_tick as f64)
-                / f64::from(crate::protocol::SERVER_TICK_RATE_HZ))
-                as f32;
+    // Tear down rigs whose meteor is gone (event ended or backdrop opened).
+    let mut live_rigs: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    for (entity, crater) in existing.iter() {
+        if wanted
+            .iter()
+            .any(|event| event.impact_tick == crater.impact_tick)
+        {
+            live_rigs.insert(crater.impact_tick);
+        } else {
             info!(
-                "meteor_shower: crater rig spawned at ({:.1}, {:.1}), site age {age_seconds:.1}s",
-                position.x, position.z
+                "meteor_shower: crater rig {} despawned (meteor ended or backdrop)",
+                crater.impact_tick
             );
-            spawn_crater(
-                &mut commands,
-                &mut meshes,
-                &mut materials,
-                Vec3::new(position.x, position.y, position.z),
-                age_seconds,
-            );
-        }
-        (Some(event), Some(_)) => {
-            // Live crater: keep it anchored (the impact point never moves, but a
-            // reconnect or world reload could re-seed it, so reassert).
-            if let Ok(mut transform) = transforms.single_mut() {
-                let position = event.impact_position;
-                transform.translation = Vec3::new(position.x, position.y, position.z);
-            }
-        }
-        (None, Some((entity, _))) => {
-            // Event ended (or backdrop opened): tear the rig down.
-            info!("meteor_shower: crater rig despawned (event ended or backdrop)");
             commands.entity(entity).despawn();
         }
-        (None, None) => {}
+    }
+
+    // Spawn a rig for each impacted meteor that lacks one. Usually the first
+    // such frame IS the impact moment, but a late joiner (or a client
+    // returning from the backdrop) spawns it mid-window: the site age gates
+    // the one-time blast and the fires so they never replay stale.
+    for event in wanted {
+        if live_rigs.contains(&event.impact_tick) {
+            continue;
+        }
+        let position = event.impact_position;
+        let age_seconds = ((runtime.server_tick_precise() - event.impact_tick as f64)
+            / f64::from(crate::protocol::SERVER_TICK_RATE_HZ)) as f32;
+        info!(
+            "meteor_shower: crater rig {} spawned at ({:.1}, {:.1}), size {:.2}, site age \
+             {age_seconds:.1}s",
+            event.impact_tick, position.x, position.z, event.size
+        );
+        spawn_crater(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            Vec3::new(position.x, position.y, position.z),
+            age_seconds,
+            event.impact_tick,
+            event.size,
+        );
     }
 }
 
@@ -279,6 +331,7 @@ pub(crate) fn animate_meteor_shower_site_fire_system(
     time: Res<Time>,
     runtime: Res<ClientRuntime>,
     assets: Option<Res<FurnaceFireAssets>>,
+    camera: super::sky::CameraTransformQuery,
     mut fires: Query<(
         Entity,
         &GlobalTransform,
@@ -289,25 +342,54 @@ pub(crate) fn animate_meteor_shower_site_fire_system(
     if fires.is_empty() {
         return;
     }
-    // Burn-out envelope off the site age. If the event vanished from under the
-    // fires (the rig teardown despawn is still queued this frame), treat them as
-    // burnt out rather than freezing at full blaze.
-    let intensity = runtime
-        .meteor_shower
-        .map(|event| {
-            let age_seconds = ((runtime.server_tick_precise() - event.impact_tick as f64)
-                / f64::from(crate::protocol::SERVER_TICK_RATE_HZ))
-                as f32;
-            site_fire_intensity(age_seconds)
-        })
-        .unwrap_or(0.0);
     let Some(assets) = assets else {
         return;
     };
     let dt = time.delta_secs().max(0.0);
     let t = time.elapsed_secs();
+    let now = runtime.server_tick_precise();
+
+    // Light budget: rank every live fire by distance to the camera and let
+    // only the nearest FIRE_LIGHT_BUDGET keep a lit PointLight this frame
+    // (see the constant for why). Fires past the budget still animate and
+    // shed particles; only their light is zeroed. With no camera (menu
+    // backdrop teardown frame) everything is treated as over-budget.
+    let lit: std::collections::HashSet<Entity> = camera
+        .single()
+        .map(|camera_transform| {
+            let eye = camera_transform.translation;
+            let mut ranked: Vec<(f32, Entity)> = fires
+                .iter()
+                .map(|(entity, global, _, _)| (global.translation().distance_squared(eye), entity))
+                .collect();
+            ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
+            ranked
+                .into_iter()
+                .take(FIRE_LIGHT_BUDGET)
+                .map(|(_, entity)| entity)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Per-meteor burn-out envelope off each site's own age. If a fire's meteor
+    // vanished from under it (the rig teardown despawn is still queued this
+    // frame), treat it as burnt out rather than freezing at full blaze.
+    let intensity_for = |impact_tick: u64| -> f32 {
+        runtime
+            .meteor_showers
+            .iter()
+            .find(|event| event.impact_tick == impact_tick)
+            .map(|event| {
+                let age_seconds = ((now - event.impact_tick as f64)
+                    / f64::from(crate::protocol::SERVER_TICK_RATE_HZ))
+                    as f32;
+                site_fire_intensity(age_seconds)
+            })
+            .unwrap_or(0.0)
+    };
 
     for (entity, global, mut fire, mut light) in &mut fires {
+        let intensity = intensity_for(fire.impact_tick);
         if intensity <= 0.0 {
             // Burnt out: remove the fire and its light, leave the crater.
             // `try_despawn`, not `despawn`: when the event ends (or the menu
@@ -319,11 +401,18 @@ pub(crate) fn animate_meteor_shower_site_fire_system(
             continue;
         }
         let flicker = furnace_flicker(t, fire.phase);
-        light.intensity = FIRE_LIGHT_INTENSITY * fire.scale * intensity * (0.7 + 0.55 * flicker);
+        light.intensity = if lit.contains(&entity) {
+            FIRE_LIGHT_INTENSITY * fire.scale * intensity * (0.7 + 0.55 * flicker)
+        } else {
+            // Over the global light budget this frame: flames only, no light.
+            0.0
+        };
 
         // The emitter entity sits lifted so its light pools on the ground around
-        // it; the flames themselves are born at ground level under it.
-        let anchor = global.translation() - Vec3::Y * 0.95;
+        // it; the flames themselves are born at ground level under it. The lift
+        // is scaled by the rig's size transform, so the drop is precomputed at
+        // spawn.
+        let anchor = global.translation() - Vec3::Y * fire.anchor_drop;
         let base_seed = t.to_bits() ^ fire.phase.to_bits();
 
         fire.flame_cooldown -= dt;
@@ -426,18 +515,175 @@ fn spawn_site_spark(
     ));
 }
 
-/// Fire the meteor shower strike cues from the event state, each exactly once per
-/// event:
+/// The boom cue's gain offset for a meteor of `size`: the amplitude ratio in
+/// decibels (`20 log10(size)`), so a 0.4 meteor thumps ~8 dB softer than the
+/// headliner, floored so a tiny dev meteor stays audible. Pure so it is
+/// unit-testable.
+fn meteor_size_gain_db(size: f32) -> f32 {
+    (20.0 * size.clamp(0.05, 1.0).log10()).max(-14.0)
+}
+
+/// Inside this listener distance the boom plays through the tuned SPATIAL path
+/// (positional, at the crater) exactly as before: this is the loudness cap the
+/// far model tapers down from.
+const BOOM_SPATIAL_RANGE_M: f32 = 300.0;
+
+/// Floor on the far boom's distance attenuation. Even a strike on the far side
+/// of the world lands as a soft distant thump: a meteor impact is a
+/// world-scale event and must be audible to everyone (owner requirement); only
+/// the volume is distance-based.
+const BOOM_FAR_FLOOR_DB: f32 = -34.0;
+
+/// Attenuation slope of the far boom, in dB per decade of distance past the
+/// spatial handoff. Steeper than the free-field inverse-distance law's 20:
+/// the extra ~8 dB/decade stands in for air absorption and ground effect,
+/// which real kilometre-scale blasts lose on top of geometric spreading (the
+/// plain 20 left cross-map strikes too loud; owner report).
+const BOOM_FAR_DB_PER_DECADE: f32 = -28.0;
+
+/// Beyond this listener distance the boom plays the MUFFLED variant
+/// (`SoundId::MeteorShowerImpactFar`, a double 450 Hz low-pass of the same
+/// file): air absorption strips the crack long before it strips the thump, so
+/// a far strike must sound dull, not merely quiet. Between the spatial
+/// handoff and here the crisp file plays (quieter, slightly lagged).
+const BOOM_MUFFLED_RANGE_M: f32 = 800.0;
+
+/// Extra attenuation when the listener is SHELTERED toward the strike (a
+/// solid collider within [`SHELTER_SCAN_RANGE_M`] blocks the bearing from
+/// their ear to the impact, e.g. standing inside a walled base). Sheltered
+/// listeners also always get the muffled variant, whatever the distance.
+const BOOM_SHELTER_EXTRA_DB: f32 = -5.0;
+
+/// How far from the listener the shelter check scans for occluding colliders.
+/// Deliberately LOCAL: only structures around the listener are in their AoI
+/// (the strike's own surroundings are not replicated to a far listener), and
+/// "I am indoors / behind my wall" is also the perceptually meaningful case.
+const SHELTER_SCAN_RANGE_M: f32 = 35.0;
+
+/// Listener ear height above the feet for the shelter ray.
+const SHELTER_EYE_HEIGHT_M: f32 = 1.6;
+
+/// The far boom's distance gain: 0 dB at the spatial handoff range, then
+/// [`BOOM_FAR_DB_PER_DECADE`] per decade, floored at [`BOOM_FAR_FLOOR_DB`].
+/// Pure so the taper is unit-testable.
+fn meteor_boom_distance_gain_db(distance: f32) -> f32 {
+    if !distance.is_finite() || distance <= BOOM_SPATIAL_RANGE_M {
+        return 0.0;
+    }
+    (BOOM_FAR_DB_PER_DECADE * (distance / BOOM_SPATIAL_RANGE_M).log10()).max(BOOM_FAR_FLOOR_DB)
+}
+
+/// The `ScheduledSounds` delay that lands the file's detonation peak (at
+/// [`IMPACT_BOOM_LEAD_S`] into playback) EXACTLY at the visual impact frame,
+/// regardless of which frame the trigger fired on (the old fixed-lead push
+/// drifted by however far past the lead the triggering frame ran, which read
+/// as the boom slightly missing the explosion; owner report). Clamped at zero
+/// for a witness who arrives too late to pre-arm.
+///
+/// Deliberately NO speed-of-sound travel lag: an earlier pass delayed far
+/// booms by `distance / 343 m/s` for physical realism, but a lagged boom
+/// splits the impact into two events, the trees fell and the crater blast
+/// fires at the strike, then the "actual impact" boom lands seconds later
+/// (owner report: the felling read as happening BEFORE the impact). Distance
+/// is expressed through gain + the muffled variant instead; the timing is
+/// always the impact frame itself.
+fn meteor_boom_push_delay(seconds_to_impact: f32) -> f32 {
+    (seconds_to_impact - IMPACT_BOOM_LEAD_S).max(0.0)
+}
+
+/// Segment-vs-AABB slab test: does the ray from `origin` along the unit `dir`
+/// hit `block` within `max_t` metres? Pure so the shelter check is
+/// unit-testable.
+fn segment_hits_block(
+    origin: Vec3,
+    dir: Vec3,
+    max_t: f32,
+    block: &crate::world::WorldBlock,
+) -> bool {
+    let min = block.min();
+    let max = block.max();
+    let (mut t_enter, mut t_exit) = (0.0_f32, max_t);
+    for axis in 0..3 {
+        let (o, d, lo, hi) = match axis {
+            0 => (origin.x, dir.x, min.x, max.x),
+            1 => (origin.y, dir.y, min.y, max.y),
+            _ => (origin.z, dir.z, min.z, max.z),
+        };
+        if d.abs() < 1e-6 {
+            if o < lo || o > hi {
+                return false;
+            }
+            continue;
+        }
+        let (mut near, mut far) = ((lo - o) / d, (hi - o) / d);
+        if near > far {
+            std::mem::swap(&mut near, &mut far);
+        }
+        t_enter = t_enter.max(near);
+        t_exit = t_exit.min(far);
+        if t_enter > t_exit {
+            return false;
+        }
+    }
+    true
+}
+
+/// True when a solid collider near the LISTENER blocks the horizontal bearing
+/// from their ear toward the strike: standing inside a walled base (or behind
+/// one) toward the impact muffles and softens the boom. Scans only replicated
+/// deployables within [`SHELTER_SCAN_RANGE_M`] (the strike's own surroundings
+/// are outside a far listener's AoI, and local cover is the perceptually
+/// meaningful case anyway); open doors don't block (their swung collider
+/// clears the opening).
+fn listener_sheltered_toward(
+    runtime: &ClientRuntime,
+    impact: Vec3,
+    occluders: &Query<(
+        &crate::server::Deployable,
+        &crate::server::DeployableTransform,
+        &crate::server::DeployableActive,
+    )>,
+) -> bool {
+    let Some(view) = runtime.local_view() else {
+        return false;
+    };
+    let eye = Vec3::new(
+        view.position.x,
+        view.position.y + SHELTER_EYE_HEIGHT_M,
+        view.position.z,
+    );
+    let mut bearing = impact - eye;
+    bearing.y = 0.0;
+    let Some(dir) = bearing.try_normalize() else {
+        return false;
+    };
+    let cull_sq = (SHELTER_SCAN_RANGE_M + 6.0) * (SHELTER_SCAN_RANGE_M + 6.0);
+    occluders.iter().any(|(meta, transform, active)| {
+        let dx = transform.position.x - eye.x;
+        let dz = transform.position.z - eye.z;
+        if dx * dx + dz * dz > cull_sq {
+            return false;
+        }
+        crate::app::systems::deployable_colliders(meta, transform, active.0)
+            .iter()
+            .any(|block| segment_hits_block(eye, dir, SHELTER_SCAN_RANGE_M, block))
+    })
+}
+
+/// Fire the meteor shower strike cues from the event state, each exactly once
+/// PER METEOR (a shower staggers several strikes):
 ///
 /// - **Boom** (spatial at the crater): started [`IMPACT_BOOM_LEAD_S`] BEFORE
-///   the strike so the file's baked rising lead-in plays through the final
-///   descent and its detonation peak lands on the visual impact frame.
-/// - **Camera kick**: at the impact frame itself, distance-scaled via
+///   each strike so the file's baked rising lead-in plays through the final
+///   descent and its detonation peak lands on the visual impact frame. The
+///   gain scales with the meteor's size.
+/// - **Camera kick**: at each impact frame itself, distance-scaled via
 ///   `CameraImpactKick::trigger_meteor_impact` (felt from hundreds of metres,
-///   the payoff the crossing tremor builds to).
+///   the payoff the crossing tremor builds to). A small meteor kicks like a
+///   proportionally more distant strike.
 ///
-/// A late joiner who connects after the strike gets neither (the crater is
-/// stale news). The approach is carried wholly by the crossing bed (see
+/// A late joiner who connects after a strike gets neither for it (the crater
+/// is stale news). The approach is carried wholly by the crossing bed (see
 /// [`meteor_shower_rumble_system`]). Gated on `!uses_menu_backdrop`.
 pub(crate) fn meteor_shower_audio_system(
     runtime: Res<ClientRuntime>,
@@ -445,94 +691,191 @@ pub(crate) fn meteor_shower_audio_system(
     mut cue: Local<MeteorShowerCueState>,
     mut scheduled: ResMut<ScheduledSounds>,
     mut kick: ResMut<CameraImpactKick>,
+    occluders: Query<(
+        &crate::server::Deployable,
+        &crate::server::DeployableTransform,
+        &crate::server::DeployableActive,
+    )>,
 ) {
     if menu.screen.uses_menu_backdrop() {
         return;
     }
-    let Some(event) = runtime.meteor_shower else {
+    if runtime.meteor_showers.is_empty() {
+        if !cue.per_meteor.is_empty() {
+            cue.per_meteor.clear();
+        }
         return;
-    };
-    // Reset the per-event flags when a new (or resent-but-different) event lands.
-    if cue.event_tick != event.impact_tick {
-        cue.event_tick = event.impact_tick;
-        cue.impact_played = false;
-        cue.impact_shake_fired = false;
     }
+    // Prune flags for meteors that have cleaned up.
+    cue.per_meteor.retain(|impact_tick, _| {
+        runtime
+            .meteor_showers
+            .iter()
+            .any(|event| event.impact_tick == *impact_tick)
+    });
 
     let now = runtime.server_tick();
-    let seconds_to_impact = event.seconds_to_impact(now);
-    let impact = Vec3::new(
-        event.impact_position.x,
-        event.impact_position.y,
-        event.impact_position.z,
-    );
-    // Horizontal listener distance to ground zero, for the strike kick falloff.
-    let impact_distance = runtime
-        .local_view()
-        .map(|view| {
-            let dx = view.position.x - impact.x;
-            let dz = view.position.z - impact.z;
-            (dx * dx + dz * dz).sqrt()
-        })
-        .unwrap_or(f32::INFINITY);
+    for event in &runtime.meteor_showers {
+        let flags = cue.per_meteor.entry(event.impact_tick).or_default();
+        let seconds_to_impact = event.seconds_to_impact(now);
+        let impact = Vec3::new(
+            event.impact_position.x,
+            event.impact_position.y,
+            event.impact_position.z,
+        );
+        // Horizontal listener distance to ground zero, for the strike kick falloff.
+        let impact_distance = runtime
+            .local_view()
+            .map(|view| {
+                let dx = view.position.x - impact.x;
+                let dz = view.position.z - impact.z;
+                (dx * dx + dz * dz).sqrt()
+            })
+            .unwrap_or(f32::INFINITY);
 
-    // Boom: pre-armed so the file's lead-in ends exactly at the strike. Only
-    // when we are genuinely witnessing the strike window (not a joiner arriving
-    // mid-crater, whose clock is already well past impact).
-    if !cue.impact_played && seconds_to_impact <= IMPACT_BOOM_LEAD_S {
-        cue.impact_played = true;
-        if seconds_to_impact >= -1.0 {
-            scheduled.push(0.0, PlaySound::at(SoundId::MeteorShowerImpact, impact));
+        // Boom: pre-armed so the file's detonation peak lands exactly on the
+        // visual impact frame (`meteor_boom_push_delay`; no sound-travel lag,
+        // see its doc). Only when we are genuinely witnessing the strike
+        // window (not a joiner arriving mid-crater, whose clock is already
+        // well past impact). Gain scales with the meteor's size so a small
+        // strike lands a smaller thump.
+        //
+        // Near (inside BOOM_SPATIAL_RANGE_M) keeps the tuned spatial path
+        // unchanged; that loudness is the cap. Far strikes play NON-spatially
+        // (Bevy's spatial rolloff would silence them entirely) with the
+        // steepened distance gain; past the muffle handoff, or whenever the
+        // listener is sheltered toward the strike, the low-passed FAR variant
+        // plays instead, so distance and cover genuinely dull the sound
+        // rather than just quieting it.
+        if !flags.impact_played && seconds_to_impact <= IMPACT_BOOM_LEAD_S {
+            flags.impact_played = true;
+            if seconds_to_impact >= -1.0 {
+                let size_db = meteor_size_gain_db(event.size);
+                let delay = meteor_boom_push_delay(seconds_to_impact);
+                if impact_distance <= BOOM_SPATIAL_RANGE_M {
+                    scheduled.push(
+                        delay,
+                        PlaySound::at(SoundId::MeteorShowerImpact, impact)
+                            .with_gain_offset_db(size_db),
+                    );
+                } else {
+                    let sheltered = listener_sheltered_toward(&runtime, impact, &occluders);
+                    let muffled = sheltered || impact_distance >= BOOM_MUFFLED_RANGE_M;
+                    let id = if muffled {
+                        SoundId::MeteorShowerImpactFar
+                    } else {
+                        SoundId::MeteorShowerImpact
+                    };
+                    let shelter_db = if sheltered {
+                        BOOM_SHELTER_EXTRA_DB
+                    } else {
+                        0.0
+                    };
+                    scheduled.push(
+                        delay,
+                        PlaySound::non_spatial(id).with_gain_offset_db(
+                            size_db + meteor_boom_distance_gain_db(impact_distance) + shelter_db,
+                        ),
+                    );
+                }
+            }
         }
-    }
 
-    // Strike camera kick: the frame the clock crosses impact, distance-scaled.
-    if !cue.impact_shake_fired && event.has_impacted(now) {
-        cue.impact_shake_fired = true;
-        if seconds_to_impact >= -1.0 {
-            kick.trigger_meteor_impact(impact_distance);
+        // Strike camera kick: the frame the clock crosses impact, distance-scaled.
+        // Dividing the distance by size makes a small meteor kick like a farther
+        // strike, reusing the tuned falloff instead of a second knob.
+        if !flags.impact_shake_fired && event.has_impacted(now) {
+            flags.impact_shake_fired = true;
+            if seconds_to_impact >= -1.0 {
+                kick.trigger_meteor_impact(impact_distance / event.size.clamp(0.05, 1.0));
+            }
         }
     }
 }
 
-/// Proximity intensity in `[0, 1]` for the meteor's crossing rumble + shake,
-/// given the listener's horizontal distance to the fireball's true world
-/// position. Full inside [`METEOR_RUMBLE_FULL_M`], linear taper to zero at
-/// [`METEOR_RUMBLE_RANGE_M`], zero beyond. Pure so the curve is unit-testable.
+/// Proximity intensity for the meteor's crossing rumble + shake, given the
+/// listener's horizontal distance to the fireball's true world position. Full
+/// (1.0) inside [`METEOR_RUMBLE_FULL_M`], linear taper down to
+/// [`METEOR_RUMBLE_FAR_FLOOR`] at [`METEOR_RUMBLE_RANGE_M`], and HELD at the
+/// floor beyond: a crossing meteor is audible from anywhere in the world, just
+/// distance-quiet, never cut to silence mid-flight. Pure so the curve is
+/// unit-testable.
 fn meteor_crossing_intensity(distance: f32) -> f32 {
     if !distance.is_finite() || distance <= METEOR_RUMBLE_FULL_M {
         return 1.0;
     }
     if distance >= METEOR_RUMBLE_RANGE_M {
-        return 0.0;
+        return METEOR_RUMBLE_FAR_FLOOR;
     }
     let span = (METEOR_RUMBLE_RANGE_M - METEOR_RUMBLE_FULL_M).max(f32::EPSILON);
-    (1.0 - (distance - METEOR_RUMBLE_FULL_M) / span).clamp(0.0, 1.0)
+    let t = (1.0 - (distance - METEOR_RUMBLE_FULL_M) / span).clamp(0.0, 1.0);
+    METEOR_RUMBLE_FAR_FLOOR + (1.0 - METEOR_RUMBLE_FAR_FLOOR) * t
 }
 
-/// Distance from the listener to the fireball's current true world position for a
-/// live, in-flight event, or `None` when there is no fireball to hear (no event,
-/// not yet in flight, already struck, backdrop up, or no local player yet).
-fn meteor_listener_distance(runtime: &ClientRuntime, menu: &MenuState) -> Option<f32> {
+/// The in-flight meteor currently driving the crossing rumble + shake: the
+/// LOUDEST one, where loudness is the proximity curve weighted by the meteor's
+/// size (a big rock roars from farther out than a small one).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MeteorRumbleDriver {
+    /// The driving meteor's impact tick (its identity within the event).
+    impact_tick: u64,
+    /// Real seconds until the driving meteor strikes.
+    seconds_to_impact: f32,
+    /// Size-weighted proximity intensity in `[0, 1]` (already folds the
+    /// meteor's size into the crossing curve).
+    intensity: f32,
+}
+
+/// Find the loudest live, in-flight fireball for the listener, or `None` when
+/// there is nothing to hear (no event, none in its flight window, all already
+/// struck, backdrop up, or no local player yet).
+fn meteor_rumble_driver(runtime: &ClientRuntime, menu: &MenuState) -> Option<MeteorRumbleDriver> {
     if menu.screen.uses_menu_backdrop() {
         return None;
     }
-    let event = runtime.meteor_shower?;
-    let state = crate::world::meteor_world_state(
-        bevy::math::Vec2::new(event.impact_position.x, event.impact_position.z),
-        event.impact_tick,
-        event.trajectory_seed,
-        runtime.server_tick_precise(),
-    )?;
     let view = runtime.local_view()?;
     let listener = Vec3::new(view.position.x, view.position.y, view.position.z);
-    Some(listener.distance(state.position))
+    let now_precise = runtime.server_tick_precise();
+    let now = runtime.server_tick();
+
+    let mut best: Option<MeteorRumbleDriver> = None;
+    for event in &runtime.meteor_showers {
+        let Some(state) = crate::world::meteor_world_state(
+            bevy::math::Vec2::new(event.impact_position.x, event.impact_position.z),
+            event.impact_tick,
+            event.trajectory_seed,
+            now_precise,
+        ) else {
+            continue;
+        };
+        let distance = listener.distance(state.position);
+        let intensity = meteor_crossing_intensity(distance) * event.size.clamp(0.0, 1.0);
+        let candidate = MeteorRumbleDriver {
+            impact_tick: event.impact_tick,
+            seconds_to_impact: event.seconds_to_impact(now),
+            intensity,
+        };
+        // Loudest wins; earliest impact breaks ties so the bed keys stably.
+        let better = match best {
+            None => true,
+            Some(current) => {
+                candidate.intensity > current.intensity
+                    || (candidate.intensity == current.intensity
+                        && candidate.impact_tick < current.impact_tick)
+            }
+        };
+        if better {
+            best = Some(candidate);
+        }
+    }
+    best
 }
 
-/// The live crossing-bed entity + which event it belongs to, so the bed is
-/// spawned exactly once per event and torn down cleanly. `started` guards a
-/// respawn: because the bed is a one-shot (not a loop) it may self-despawn when
-/// the file ends, and we must NOT start it again mid-event. `last_volume` and
+/// The live crossing-bed entity + which meteor drives it (`event_tick` is the
+/// driving meteor's impact tick), so the bed is spawned exactly once per
+/// driving meteor and torn down cleanly. `started` guards a respawn: because
+/// the bed is a one-shot (not a loop) it may self-despawn when the file ends,
+/// and we must NOT start it again for the same driver. `last_volume` and
 /// `fade` drive the click-free teardown (ramp to silence, then despawn).
 #[derive(Default)]
 pub(crate) struct MeteorRumbleLoop {
@@ -549,14 +892,17 @@ pub(crate) struct MeteorRumbleLoop {
 /// Play, gain-scale, and tear down the meteor's non-spatial crossing bed
 /// (`world/meteor-flyby.wav`). The bed is a ONE-SHOT, not a loop: the file has
 /// its own approach-then-pass shape, so a loop would restart it mid-descent and
-/// sound wrong. It is started at a FIXED lead of [`FLYBY_LEAD_S`] before impact
-/// so the file's baked decay-to-silence tail lands on the strike and the bed
-/// simply dies out on its own; its volume is driven each frame off the
-/// proximity curve (inaudible kilometres out, swelling as it nears). If it ever
-/// has to stop while still audible (menu opened, event replaced) it fades over
-/// ~0.25 s instead of being cut mid-waveform, which used to produce a loud
-/// click at impact. Zero wire cost: the distance is computed client-side from
-/// the announce payload. Runs in `ClientSystemSet::Sky`.
+/// sound wrong. It is keyed to the LOUDEST (nearest, size-weighted) in-flight
+/// meteor of the shower: started at a FIXED lead of [`FLYBY_LEAD_S`] before
+/// that meteor's impact so the file's baked decay-to-silence tail lands on the
+/// strike and the bed simply dies out on its own; its volume is driven each
+/// frame off the size-weighted proximity curve (inaudible kilometres out,
+/// swelling as it nears). When the driving meteor lands and a later sibling is
+/// still crossing, the bed re-keys to the sibling and plays its crossing too.
+/// If it ever has to stop while still audible (menu opened, event replaced) it
+/// fades over ~0.25 s instead of being cut mid-waveform, which used to produce
+/// a loud click at impact. Zero wire cost: the distance is computed
+/// client-side from the announce payload. Runs in `ClientSystemSet::Sky`.
 #[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 pub(crate) fn meteor_shower_rumble_system(
     mut commands: Commands,
@@ -572,32 +918,26 @@ pub(crate) fn meteor_shower_rumble_system(
         return;
     };
 
-    // Is there an in-flight fireball to hear, and how loud?
-    let live = runtime
-        .meteor_shower
-        .filter(|_| !menu.screen.uses_menu_backdrop());
-    let distance = meteor_listener_distance(&runtime, &menu);
-
-    match (live, distance) {
-        (Some(event), Some(distance)) => {
-            // Reset the bed for a new event: fade out any prior entity's leftovers
-            // is moot here (a replaced event is rare); drop it and clear the
-            // once-per-event start guard.
-            if loop_state.event_tick != event.impact_tick {
+    // Is there an in-flight fireball to hear, and how loud? The loudest
+    // (nearest, size-weighted) meteor drives the bed.
+    match meteor_rumble_driver(&runtime, &menu) {
+        Some(driver) => {
+            // Reset the bed when the driving meteor changes (a new event, or
+            // the previous driver landed and a sibling takes over).
+            if loop_state.event_tick != driver.impact_tick {
                 if let Some(entity) = loop_state.entity.take() {
                     // The bed is a one-shot that may have already self-despawned
                     // at the file's end; despawning it again must stay silent.
                     commands.entity(entity).try_despawn();
                 }
-                loop_state.event_tick = event.impact_tick;
+                loop_state.event_tick = driver.impact_tick;
                 loop_state.started = false;
             }
-            let intensity = meteor_crossing_intensity(distance);
-            let seconds_to_impact = event.seconds_to_impact(runtime.server_tick());
+            let intensity = driver.intensity;
             // Start the one-shot at the fixed lead so the file's silent tail ends
-            // at the strike (no teardown cut, no click). Never restart it:
-            // `started` stays true for the whole event even after the file ends.
-            if !loop_state.started && seconds_to_impact <= FLYBY_LEAD_S {
+            // at the strike (no teardown cut, no click). Never restart it for the
+            // same driver: `started` stays true even after the file ends.
+            if !loop_state.started && driver.seconds_to_impact <= FLYBY_LEAD_S {
                 loop_state.entity = spawn_managed_sound(
                     &mut commands,
                     &library,
@@ -611,9 +951,10 @@ pub(crate) fn meteor_shower_rumble_system(
                 loop_state.started = true;
                 loop_state.fade = 1.0;
             } else if let Some(entity) = loop_state.entity {
-                // Gain-scale the live bed by proximity. `sinks.get_mut` fails
-                // silently once the one-shot self-despawns at the file's end,
-                // which is fine (nothing left to scale).
+                // Gain-scale the live bed by size-weighted proximity.
+                // `sinks.get_mut` fails silently once the one-shot
+                // self-despawns at the file's end, which is fine (nothing left
+                // to scale).
                 if let Ok(mut sink) = sinks.get_mut(entity) {
                     // Manifest base gain lands the reference level; scale it by
                     // proximity so far is a whisper, overhead a roar.
@@ -624,7 +965,7 @@ pub(crate) fn meteor_shower_rumble_system(
                 }
             }
         }
-        _ => {
+        None => {
             // No live fireball. If a bed is still playing (menu opened mid-flight,
             // late-join edge), ramp it to silence and only then despawn: an
             // instant despawn cuts the waveform mid-sample and clicks.
@@ -661,23 +1002,23 @@ fn sink_base_volume(settings: &ClientSettings, library: &SoundLibrary) -> f32 {
         .max(0.0)
 }
 
-/// Drive the slight continuous camera shake while the meteor crosses the sky,
-/// ramping with the same proximity curve as the rumble and hard-capped small (a
-/// fraction of the explosion kick, per the owner's "not too much"). Cuts off at
-/// impact: the impact's own shake fires separately from the explosion path, so
-/// this only covers the crossing. Runs in `ClientSystemSet::Sky`, before the
-/// camera consumes the kick.
+/// Drive the slight continuous camera shake while a meteor crosses the sky,
+/// ramping with the same size-weighted proximity curve as the rumble (the
+/// loudest of the shower's in-flight meteors) and hard-capped small (a
+/// fraction of the explosion kick, per the owner's "not too much"). Cuts off
+/// at each impact: the impact's own shake fires separately from the explosion
+/// path, so this only covers the crossings. Runs in `ClientSystemSet::Sky`,
+/// before the camera consumes the kick.
 pub(crate) fn meteor_shower_camera_shake_system(
     runtime: Res<ClientRuntime>,
     menu: Res<MenuState>,
     mut kick: ResMut<CameraImpactKick>,
 ) {
-    let Some(distance) = meteor_listener_distance(&runtime, &menu) else {
+    let Some(driver) = meteor_rumble_driver(&runtime, &menu) else {
         return;
     };
-    let intensity = meteor_crossing_intensity(distance);
-    if intensity > 0.0 {
-        kick.trigger_meteor_rumble(intensity);
+    if driver.intensity > 0.0 {
+        kick.trigger_meteor_rumble(driver.intensity);
     }
 }
 
@@ -758,7 +1099,10 @@ fn crater_vertex(seed: u32, ring: usize, segment: usize, radius: f32) -> ([f32; 
         (j1 - 0.5) * 0.14 * radius
     };
     let r = (radius + r_jitter).max(0.05);
-    let mut h = crater_surface_height(r);
+    // The mesh is built in unit-size local space; the rig's uniform size
+    // transform scales it into world space (the profile is a homothety of
+    // size, so the scaled mesh matches the analytic floor exactly).
+    let mut h = crater_surface_height(r, 1.0);
     if !outer {
         h += (j2 - 0.5) * (h * 0.5).min(0.12);
     }
@@ -784,7 +1128,7 @@ fn build_crater_mesh(seed: u32, first_ring: usize, last_ring: usize) -> Mesh {
     let mut uvs: Vec<[f32; 2]> = Vec::new();
 
     if has_center {
-        positions.push([0.0, crater_surface_height(0.0), 0.0]);
+        positions.push([0.0, crater_surface_height(0.0, 1.0), 0.0]);
         colors.push(crater_color(0.0));
         uvs.push([0.5, 0.5]);
     }
@@ -844,22 +1188,33 @@ fn build_crater_mesh(seed: u32, first_ring: usize, last_ring: usize) -> Mesh {
     .with_computed_smooth_normals()
 }
 
-/// Build the impact-site rig at `position`: the dug-in crater (raised rim bowl
-/// and fading burn skirt, one vertex-coloured mesh) plus the scattered
-/// particle-fire emitters (when the burn window is still open at
-/// `age_seconds`). No persistent rubble and no static flame geometry:
+/// Build one meteor's impact-site rig at `position`: the dug-in crater (raised
+/// rim bowl and fading burn skirt, one vertex-coloured mesh) plus the
+/// scattered particle-fire emitters (when the burn window is still open at
+/// `age_seconds`). The whole rig is uniformly scaled by the meteor's `size`;
+/// because the shared crater profile is a pure homothety of size, the scaled
+/// mesh still matches the movement grid's analytic floor and the server's
+/// node seating exactly. No persistent rubble and no static flame geometry:
 /// everything fiery is live particles that burn out. Also throws the one-time
-/// rock-and-stone blast (fixed-size physics debris + a bright flash), but only
-/// when the impact just happened, never replayed for a late joiner. The rig
-/// despawns with the crater window (the debris via its own `ImpactChip`
-/// lifetime, the fires via [`animate_meteor_shower_site_fire_system`]).
+/// rock-and-stone blast (fixed-size physics debris + a bright flash, both
+/// intensity-scaled by size), but only when the impact just happened, never
+/// replayed for a late joiner. The rig despawns with the crater window (the
+/// debris via its own `ImpactChip` lifetime, the fires via
+/// [`animate_meteor_shower_site_fire_system`]).
 fn spawn_crater(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     position: Vec3,
     age_seconds: f32,
+    impact_tick: u64,
+    size: f32,
 ) {
+    let size = if size.is_finite() && size > 0.0 {
+        size
+    } else {
+        1.0
+    };
     let seed = site_seed(position);
 
     // The crater in two meshes sharing one seam ring: the SOLID bowl+rim body
@@ -889,8 +1244,10 @@ fn spawn_crater(
     commands
         .spawn((
             Name::new("MeteorShower Impact Site"),
-            MeteorShowerCrater,
-            Transform::from_translation(position),
+            MeteorShowerCrater { impact_tick },
+            // Uniform size scale: the unit-space crater mesh and fire anchors
+            // scale into the meteor's own footprint (homothety contract).
+            Transform::from_translation(position).with_scale(Vec3::splat(size)),
             Visibility::Visible,
         ))
         .with_children(|parent| {
@@ -916,9 +1273,11 @@ fn spawn_crater(
             // + rising embers, shed by `animate_meteor_shower_site_fire_system`) with
             // its own shadowless PointLight so the patches genuinely glow and
             // light the night ground. Only spawned while the burn window is
-            // open; a late joiner past it gets scorch only.
+            // open; a late joiner past it gets scorch only. A small meteor
+            // burns with proportionally fewer, smaller, dimmer fires.
+            let fire_count = ((FIRE_CLUSTER_COUNT as f32 * size).round() as u32).max(3);
             if age_seconds < METEOR_SHOWER_SITE_FIRE_SECONDS {
-                for c in 0..FIRE_CLUSTER_COUNT {
+                for c in 0..fire_count {
                     let s = seed
                         .wrapping_add(0x5152_5354)
                         .wrapping_mul(2_246_822_519)
@@ -931,7 +1290,9 @@ fn spawn_crater(
                     // pink over bright sunlit grass: a few burn down inside the
                     // bowl, the rest on the burn skirt outside the rim (never ON
                     // the lip, where they would sit half-buried). Anchored to
-                    // the crater surface height at their radius.
+                    // the crater surface height at their radius. All in the
+                    // rig's unit-size local space; the size transform scales
+                    // the anchor positions into place.
                     let dist = if c % 3 == 0 {
                         0.8 + r3 * 3.0
                     } else {
@@ -939,12 +1300,13 @@ fn spawn_crater(
                             + (CRATER_SKIRT_RADIUS_M - CRATER_RIM_END_M - 1.0) * r3.sqrt()
                     };
                     let theta = r1 * std::f32::consts::TAU;
-                    let ground = crater_surface_height(dist);
+                    let ground = crater_surface_height(dist, 1.0);
                     let cluster = Vec3::new(dist * theta.cos(), ground, dist * theta.sin());
 
                     parent.spawn((
                         Name::new("MeteorShower Site Fire"),
                         MeteorShowerSiteFire {
+                            impact_tick,
                             // Hold off one interval so the rig's GlobalTransform
                             // propagates before the first particle, otherwise the
                             // first puff would emit from the world origin.
@@ -952,13 +1314,19 @@ fn spawn_crater(
                             spark_cooldown: SITE_SPARK_INTERVAL,
                             phase: hashed_unit(s ^ 0x00F1_4E55) * std::f32::consts::TAU,
                             // Per-fire size spread so the site mixes small licks
-                            // and real blazes rather than a field of clones.
-                            scale: 0.75 + r2 * 0.65,
+                            // and real blazes rather than a field of clones,
+                            // eased down with the meteor's size (particles are
+                            // world-space, so the rig scale does not touch them).
+                            scale: (0.75 + r2 * 0.65) * (0.5 + 0.5 * size),
+                            // The local 1.0 lift below lands at `size` world
+                            // metres above ground once the rig scale applies;
+                            // flames are born just above the ground under it.
+                            anchor_drop: size - 0.05,
                         },
                         PointLight {
                             color: Color::srgb(1.0, 0.45, 0.12),
-                            intensity: FIRE_LIGHT_INTENSITY * (0.7 + r2 * 0.6),
-                            range: FIRE_LIGHT_RANGE_M,
+                            intensity: FIRE_LIGHT_INTENSITY * (0.7 + r2 * 0.6) * size,
+                            range: FIRE_LIGHT_RANGE_M * (0.5 + 0.5 * size),
                             radius: 0.3,
                             shadow_maps_enabled: false,
                             ..default()
@@ -977,20 +1345,22 @@ fn spawn_crater(
     // impact JUST happened: a late joiner gets the burning/burnt site, not a
     // replayed explosion.
     if age_seconds < IMPACT_BLAST_WINDOW_S {
-        spawn_impact_rock_blast(commands, meshes, materials, position, seed);
+        spawn_impact_rock_blast(commands, meshes, materials, position, seed, size);
     }
 }
 
 /// Throw the meteor's rock/stone debris burst + a bright flash, once, at the
 /// impact moment. Reuses the [`ImpactChip`] integrator (like the explosive
 /// debris burst) but larger and rock-tinted, with more chunks: a meteor strike,
-/// not a satchel charge.
+/// not a satchel charge. `size` scales the burst's intensity: fewer, smaller,
+/// slower chunks and a smaller flash for a small meteor.
 fn spawn_impact_rock_blast(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     position: Vec3,
     seed: u32,
+    size: f32,
 ) {
     // A small pool of lumpy faceted rock variants (the meteor core's
     // `irregular_rock_mesh` off different seeds), so the flung chunks read as
@@ -1015,7 +1385,9 @@ fn spawn_impact_rock_blast(
         ..default()
     });
 
-    for i in 0..IMPACT_DEBRIS_COUNT {
+    // Fewer chunks for a small strike (still a real fountain at the size floor).
+    let debris_count = ((IMPACT_DEBRIS_COUNT as f32 * size).round() as u32).max(20);
+    for i in 0..debris_count {
         let s = seed
             .wrapping_mul(2_654_435_761)
             .wrapping_add(i.wrapping_mul(374_761_393));
@@ -1027,12 +1399,13 @@ fn spawn_impact_rock_blast(
         // boulders genuinely LAUNCH into the air and arc, reading as ejecta in
         // flight at the impact moment (the round 2 debris fell too fast to be
         // seen mid-air). Up-bias comparable to the outward push.
-        let angle = (i as f32 / IMPACT_DEBRIS_COUNT as f32) * std::f32::consts::TAU + r1 * 0.9;
+        let angle = (i as f32 / debris_count as f32) * std::f32::consts::TAU + r1 * 0.9;
         let radial = Vec3::new(angle.cos(), 0.0, angle.sin());
         let up = 1.4 + r2 * 2.2;
         // A hard, fast throw so chunks fountain up and out before arcing back:
-        // this is a meteor strike, the rubble is hurled far.
-        let speed = 11.0 + r3 * 12.0;
+        // this is a meteor strike, the rubble is hurled far. A small strike
+        // hurls a touch gentler.
+        let speed = (11.0 + r3 * 12.0) * (0.7 + 0.3 * size);
         let velocity = (radial * (1.1 + r1 * 1.2) + Vec3::Y * up).normalize_or_zero() * speed;
         let spin_axis = Vec3::new(r1 * 2.0 - 1.0, r2 * 2.0 - 1.0, r3 * 2.0 - 1.0)
             .normalize_or_zero()
@@ -1050,10 +1423,11 @@ fn spawn_impact_rock_blast(
         // under ground friction, their spin bleeding off with it. Lifetimes
         // are long enough to watch the whole fall and the chunk resting on the
         // ground for a beat before it pops out. Sizes are capped modest (the
-        // largest ~0.8 m across, a stone you could just about lift) and the
-        // squared draw skews the spread toward the SMALLER variants, so the
-        // fountain reads as smashed-up rubble, not flying boulders.
-        let chip_scale = 0.2 + r3 * r3 * 0.7;
+        // largest ~0.8 m across at size 1.0, a stone you could just about
+        // lift) and the squared draw skews the spread toward the SMALLER
+        // variants, so the fountain reads as smashed-up rubble, not flying
+        // boulders. A small meteor smashes smaller rubble.
+        let chip_scale = (0.2 + r3 * r3 * 0.7) * (0.6 + 0.4 * size);
         let rock_mesh = rock_meshes[(s >> 7) as usize % rock_meshes.len()].clone();
         commands.spawn((
             Name::new("MeteorShower Debris"),
@@ -1084,7 +1458,7 @@ fn spawn_impact_rock_blast(
     // SHORT so it punches the impact but clears fast, and its emissive is
     // red-biased so it reads as a fireball, not a bleached white bulb that reads
     // as a central rock mass (the round 2 failure). The flung debris is the star.
-    let flash_radius = 5.0;
+    let flash_radius = 5.0 * size;
     let flash_mesh = meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap());
     let flash_material = materials.add(StandardMaterial {
         // A broad area, so it must stay DEEP to keep its hue under AgX (a bright
@@ -1117,13 +1491,13 @@ fn spawn_impact_rock_blast(
         ImpactChip::new(Vec3::ZERO, Vec3::Y, 0.0, 0.4, 1.0, 0.0),
         PointLight {
             color: Color::srgb(1.0, 0.55, 0.2),
-            intensity: FIRE_LIGHT_INTENSITY * 12.0,
-            range: METEOR_SHOWER_IMPACT_RADIUS_M * 4.0,
+            intensity: FIRE_LIGHT_INTENSITY * 12.0 * size,
+            range: METEOR_SHOWER_IMPACT_RADIUS_M * 4.0 * size,
             radius: 2.0,
             shadow_maps_enabled: false,
             ..default()
         },
-        Transform::from_translation(position + Vec3::Y * 4.0),
+        Transform::from_translation(position + Vec3::Y * 4.0 * size.max(0.4)),
         Visibility::Visible,
     ));
 }
@@ -1134,17 +1508,110 @@ mod tests {
     use crate::world::CRATER_RIM_HEIGHT_M;
 
     #[test]
-    fn crossing_intensity_is_full_close_and_zero_far() {
+    fn crossing_intensity_is_full_close_and_floored_far() {
         assert_eq!(meteor_crossing_intensity(0.0), 1.0);
         assert_eq!(meteor_crossing_intensity(METEOR_RUMBLE_FULL_M), 1.0);
         assert_eq!(meteor_crossing_intensity(METEOR_RUMBLE_FULL_M * 0.5), 1.0);
-        assert_eq!(meteor_crossing_intensity(METEOR_RUMBLE_RANGE_M), 0.0);
+        // A crossing meteor never goes silent, no matter the distance: the
+        // taper bottoms out at the world-audible floor and holds it.
+        assert_eq!(
+            meteor_crossing_intensity(METEOR_RUMBLE_RANGE_M),
+            METEOR_RUMBLE_FAR_FLOOR
+        );
         assert_eq!(
             meteor_crossing_intensity(METEOR_RUMBLE_RANGE_M + 1_000.0),
-            0.0
+            METEOR_RUMBLE_FAR_FLOOR
         );
-        // Kilometres out (like the entry point) is silent.
-        assert_eq!(meteor_crossing_intensity(6_000.0), 0.0);
+        assert_eq!(meteor_crossing_intensity(6_000.0), METEOR_RUMBLE_FAR_FLOOR);
+    }
+
+    #[test]
+    fn boom_distance_gain_is_flat_near_and_floored_far() {
+        // Inside the spatial handoff range the tuned spatial path plays at
+        // full gain (the cap the far model tapers from).
+        assert_eq!(meteor_boom_distance_gain_db(0.0), 0.0);
+        assert_eq!(meteor_boom_distance_gain_db(BOOM_SPATIAL_RANGE_M), 0.0);
+        // Steepened law past the handoff: 10x the range is one decade.
+        let ten_x = meteor_boom_distance_gain_db(BOOM_SPATIAL_RANGE_M * 10.0);
+        assert!(
+            (ten_x - BOOM_FAR_DB_PER_DECADE).abs() < 1e-3,
+            "10x range is one decade of attenuation, got {ten_x}"
+        );
+        // Monotonic and floored: the far side of any world still thumps.
+        assert!(meteor_boom_distance_gain_db(800.0) > meteor_boom_distance_gain_db(1_600.0));
+        assert_eq!(meteor_boom_distance_gain_db(1.0e9), BOOM_FAR_FLOOR_DB);
+        assert_eq!(meteor_boom_distance_gain_db(f32::NAN), 0.0);
+    }
+
+    #[test]
+    fn boom_peak_lands_exactly_at_the_impact_frame() {
+        // The scheduled delay puts the file's detonation peak
+        // (IMPACT_BOOM_LEAD_S into playback) exactly at the visual impact,
+        // with NO distance-dependent travel lag (a lagged boom split the
+        // strike into "trees fell" and then a late "impact", owner report):
+        // distance shapes only gain and the muffled variant. The normal
+        // trigger fires the frame the countdown crosses the lead, so
+        // seconds_to_impact sits a frame under IMPACT_BOOM_LEAD_S and the
+        // peak error is that sub-frame sliver, never a distance term.
+        for frame in [0.0_f32, 1.0 / 144.0, 1.0 / 30.0] {
+            let seconds_to_impact = IMPACT_BOOM_LEAD_S - frame;
+            let delay = meteor_boom_push_delay(seconds_to_impact);
+            let peak_after_impact = delay + IMPACT_BOOM_LEAD_S - seconds_to_impact;
+            assert!(
+                (peak_after_impact - frame).abs() < 1e-4,
+                "peak error must be only the trigger frame's sliver, got {peak_after_impact}"
+            );
+        }
+        // A LATE witness (first saw the strike inside the lead window)
+        // clamps at zero rather than scheduling into the past: the peak
+        // lands late by exactly the missed lead, never early.
+        let late = meteor_boom_push_delay(1.0);
+        assert_eq!(late, 0.0);
+        assert_eq!(late + IMPACT_BOOM_LEAD_S - 1.0, IMPACT_BOOM_LEAD_S - 1.0);
+    }
+
+    #[test]
+    fn shelter_segment_test_hits_blocks_on_the_bearing_only() {
+        use crate::protocol::Vec3Net;
+        use crate::world::WorldBlock;
+        let eye = Vec3::new(0.0, 1.6, 0.0);
+        let wall = WorldBlock::new(Vec3Net::new(5.0, 1.5, 0.0), Vec3Net::new(0.15, 1.5, 1.5));
+        // Straight through the wall: sheltered.
+        assert!(segment_hits_block(
+            eye,
+            Vec3::X,
+            SHELTER_SCAN_RANGE_M,
+            &wall
+        ));
+        // Behind the listener, or off to the side: clear.
+        assert!(!segment_hits_block(
+            eye,
+            -Vec3::X,
+            SHELTER_SCAN_RANGE_M,
+            &wall
+        ));
+        assert!(!segment_hits_block(
+            eye,
+            Vec3::Z,
+            SHELTER_SCAN_RANGE_M,
+            &wall
+        ));
+        // Beyond the scan range: clear (local cover only).
+        let far_wall = WorldBlock::new(Vec3Net::new(100.0, 1.5, 0.0), Vec3Net::new(0.15, 1.5, 1.5));
+        assert!(!segment_hits_block(
+            eye,
+            Vec3::X,
+            SHELTER_SCAN_RANGE_M,
+            &far_wall
+        ));
+        // A knee-high fence under the ear line does not shelter.
+        let fence = WorldBlock::new(Vec3Net::new(5.0, 0.4, 0.0), Vec3Net::new(0.15, 0.4, 1.5));
+        assert!(!segment_hits_block(
+            eye,
+            Vec3::X,
+            SHELTER_SCAN_RANGE_M,
+            &fence
+        ));
     }
 
     #[test]
@@ -1164,6 +1631,20 @@ mod tests {
     fn crossing_intensity_handles_non_finite() {
         // A degenerate distance clamps to full rather than NaN-propagating.
         assert_eq!(meteor_crossing_intensity(f32::NAN), 1.0);
+    }
+
+    #[test]
+    fn size_gain_is_zero_for_the_headliner_and_softer_for_small_meteors() {
+        assert!(meteor_size_gain_db(1.0).abs() < 1e-4);
+        let small = meteor_size_gain_db(0.4);
+        assert!(
+            small < -6.0 && small > -14.0,
+            "0.4 lands ~-8 dB, got {small}"
+        );
+        // Monotonic in size, floored for degenerate sizes.
+        assert!(meteor_size_gain_db(0.8) > meteor_size_gain_db(0.4));
+        assert!(meteor_size_gain_db(0.0) >= -14.0);
+        assert!(meteor_size_gain_db(f32::NAN).is_finite());
     }
 
     #[test]

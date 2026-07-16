@@ -26,7 +26,7 @@ use crate::{
     },
     game_balance::{
         BUILDING_DEMOLISH_WINDOW_TICKS, BUILDING_MIN_PLACEMENT_STABILITY_PCT,
-        BUILDING_REPAIR_FRACTION_PCT,
+        BUILDING_REPAIR_COMBAT_LOCKOUT_TICKS, BUILDING_REPAIR_FRACTION_PCT,
     },
     inventory::{count_items_in_inventory, take_items_from_inventory},
     items::{DeployableKind, ToolKind, item_definition},
@@ -448,12 +448,26 @@ impl GameServer {
         let Some(entity) = self.deployed_entities.get(&id) else {
             return Vec::new();
         };
+        // Combat lockout: damage must stick for its window before the piece
+        // can be patched back up (see BUILDING_REPAIR_COMBAT_LOCKOUT_TICKS).
+        if let Some(remaining) = self.repair_lockout_remaining_ticks(id) {
+            return building_toast(
+                client_id,
+                ToastKind::Warning,
+                format!(
+                    "Recently damaged, repairable in {}",
+                    format_ticks_mmss(remaining)
+                ),
+            );
+        }
         let (cost_item, cost_quantity) = match entity.kind {
             DeployableKind::Building { tier, .. } => repair_cost(tier),
             // Doors repair in their own material: hewn logs for the wood
-            // door, iron bars for the iron one.
+            // door and the shutter, iron bars for the iron one.
             DeployableKind::Door { variant } => match variant {
-                crate::items::DoorVariant::HewnLog => (crate::items::HEWN_LOG_ID, 1),
+                crate::items::DoorVariant::HewnLog | crate::items::DoorVariant::Shutter => {
+                    (crate::items::HEWN_LOG_ID, 1)
+                }
                 crate::items::DoorVariant::Iron => (crate::items::IRON_BAR_ID, 1),
             },
             // Crafted deployables (furnace, workbench, bag, boxes)
@@ -521,6 +535,19 @@ impl GameServer {
                 client_id,
                 ToastKind::Warning,
                 "Only authorized players can upgrade this".to_owned(),
+            );
+        }
+        // Upgrades share the repair combat lockout: an upgrade refills HP to
+        // the new tier's full, a bigger heal than any repair hit, so a
+        // recently-hit piece can't be upgraded out from under a raid either.
+        if let Some(remaining) = self.repair_lockout_remaining_ticks(id) {
+            return building_toast(
+                client_id,
+                ToastKind::Warning,
+                format!(
+                    "Recently damaged, upgradeable in {}",
+                    format_ticks_mmss(remaining)
+                ),
             );
         }
         let DeployableKind::Building { piece, tier } = entity.kind else {
@@ -638,6 +665,17 @@ impl GameServer {
             .within_horizontal_range(entity.position, PLACEMENT_REACH_M)
             .then_some(tool)
     }
+
+    /// Ticks left on the combat repair/upgrade lockout for `id`, `None` when
+    /// the piece may be repaired or upgraded. Reads the transient
+    /// `recently_damaged` stamp the three damage paths (tool swing,
+    /// projectile, blast) write.
+    fn repair_lockout_remaining_ticks(&self, id: DeployedEntityId) -> Option<u64> {
+        let last = *self.recently_damaged.get(&id)?;
+        let elapsed = self.tick.saturating_sub(last);
+        let remaining = BUILDING_REPAIR_COMBAT_LOCKOUT_TICKS.saturating_sub(elapsed);
+        (remaining > 0).then_some(remaining)
+    }
 }
 
 fn distance_3d(a: Vec3Net, b: Vec3Net) -> f32 {
@@ -651,6 +689,13 @@ fn material_name(item_id: &str) -> &'static str {
     item_definition(item_id)
         .map(|definition| definition.name)
         .unwrap_or("materials")
+}
+
+/// Render a tick count as "m:ss" for the lockout toasts, rounding the tail
+/// second up so a lockout never reads "0:00" while still active.
+fn format_ticks_mmss(ticks: u64) -> String {
+    let secs = (ticks as f32 / crate::protocol::SERVER_TICK_RATE_HZ).ceil() as u64;
+    format!("{}:{:02}", secs / 60, secs % 60)
 }
 
 fn building_toast(client_id: ClientId, kind: ToastKind, text: String) -> Vec<ServerEnvelope> {

@@ -175,9 +175,18 @@ pub(crate) enum SoundId {
     /// written by the renderer. Aliases the flyby bed.
     MeteorShowerRoar,
     /// The impact explosion boom, played spatially at the crater with a distance
-    /// delay (light-then-sound). Backed by `world/meteor-impact.wav`, a 9.3 s mono
-    /// one-shot whose leading silence is trimmed so the hit lands at t=0.
+    /// delay (light-then-sound). Backed by `world/meteor-impact.wav`, a 6.0 s mono
+    /// one-shot: leading silence trimmed, and the source's flat 4.5 s drag tail
+    /// (lumpy re-swell artifacts; owner report) faded out from 4.6 s so the boom
+    /// decays clean instead of rumbling on.
     MeteorShowerImpact,
+    /// The distance-muffled variant of the impact boom: the same file through a
+    /// double 450 Hz low-pass, RMS-matched to the source
+    /// (`ffmpeg -af "lowpass=f=450,lowpass=f=450,volume=1dB"`). Played
+    /// NON-spatially for strikes heard from far away (or from behind shelter),
+    /// where air absorption strips the crack and leaves the low thump; the
+    /// renderer picks it over the crisp file past the muffle handoff distance.
+    MeteorShowerImpactFar,
     /// The meteor's crossing/approach rumble: `world/meteor-flyby.wav`, an 18 s
     /// stereo bed with its own approach-then-pass shape. Played ONCE per event
     /// (NOT looped, a loop would restart mid-descent and sound wrong), non-spatial,
@@ -261,6 +270,7 @@ pub(crate) fn all_sound_ids() -> &'static [SoundId] {
         SoundId::DoorClose,
         SoundId::MeteorShowerRoar,
         SoundId::MeteorShowerImpact,
+        SoundId::MeteorShowerImpactFar,
         SoundId::MeteorShowerRumble,
         SoundId::FuseHiss,
         SoundId::ExplosionThump,
@@ -618,7 +628,7 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
             looped: false,
         },
         // The impact boom is spatial at the crater and a loud one-shot (NOT
-        // looped). A wide full-gain zone (small scale) so the 9.3 s explosion
+        // looped). A wide full-gain zone (small scale) so the 6.0 s explosion
         // still reads as a heavy blast from a fair way off, matching the map-wide
         // plume.
         SoundId::MeteorShowerImpact => SoundDefaults {
@@ -628,6 +638,18 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
                 scale: 0.012,
                 height_offset: 2.0,
             }),
+            pitch_jitter: 0.0,
+            looped: false,
+        },
+        // The muffled far boom: same reference level as the crisp file (the
+        // renderer's per-instance distance gain does ALL the level work, so
+        // the two variants stay directly comparable), non-spatial because a
+        // kilometres-out thump has no meaningful bearing through Bevy's
+        // spatial panner and its rolloff would double-count the distance.
+        SoundId::MeteorShowerImpactFar => SoundDefaults {
+            category: SoundCategory::Sfx3d,
+            base_gain_db: -2.0,
+            spatial: None,
             pitch_jitter: 0.0,
             looped: false,
         },
@@ -811,6 +833,7 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
     // folded into it) ride the flyby; the impact rides the explosion boom.
     static METEOR_FLYBY: [&str; 1] = ["world/meteor-flyby.wav"];
     static METEOR_IMPACT: [&str; 1] = ["world/meteor-impact.wav"];
+    static METEOR_IMPACT_FAR: [&str; 1] = ["world/meteor-impact-far.wav"];
 
     // Dedicated explosion foley (trimmed / mono-folded / normalized offline).
     // close-1 and close-2 are cut straight from the user-supplied reference
@@ -886,6 +909,7 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         // the explosion boom.
         SoundId::MeteorShowerRoar | SoundId::MeteorShowerRumble => &METEOR_FLYBY,
         SoundId::MeteorShowerImpact => &METEOR_IMPACT,
+        SoundId::MeteorShowerImpactFar => &METEOR_IMPACT_FAR,
         // Dedicated explosion foley (see the statics above). The old aliases
         // (miss whoosh for the fuse, tree-fall for the boom) are gone.
         SoundId::FuseHiss => &FUSE_SIZZLE,
@@ -916,6 +940,10 @@ pub(crate) fn impact_sound_for(model: ItemModel, surface: SurfaceMaterial) -> Op
     let heavy_pick = match model {
         ItemModel::Pickaxe | ItemModel::Mace => true,
         ItemModel::Hatchet | ItemModel::Club | ItemModel::Spear | ItemModel::Sword => false,
+        // The sickle's only gatherable surface is a grass tuft, so its
+        // contact cue IS the fiber-collection sound: the same grass-rustle
+        // the hand E-pluck plays (owner request), not a tool clang.
+        ItemModel::Sickle => return Some(SoundId::InventoryPickup),
         // An arrow/bolt lodging in the world gets its own cue on every surface;
         // the tool pools read as a pickaxe chipping rock (owner report).
         ItemModel::Bow | ItemModel::Crossbow => return Some(SoundId::ImpactArrowWorld),
@@ -948,7 +976,9 @@ pub(crate) fn impact_sound_for(model: ItemModel, surface: SurfaceMaterial) -> Op
 pub(crate) fn impact_sound_for_player(model: ItemModel) -> Option<SoundId> {
     match model {
         // Gather tools (a desperation weapon) share the generic blunt thump.
-        ItemModel::Hatchet | ItemModel::Pickaxe => Some(SoundId::ImpactPlayerBlunt),
+        ItemModel::Hatchet | ItemModel::Pickaxe | ItemModel::Sickle => {
+            Some(SoundId::ImpactPlayerBlunt)
+        }
         ItemModel::Club => Some(SoundId::ImpactPlayerClub),
         ItemModel::Spear => Some(SoundId::ImpactPlayerSpear),
         ItemModel::Sword => Some(SoundId::ImpactPlayerSword),

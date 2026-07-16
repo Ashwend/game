@@ -330,22 +330,24 @@ pub(super) fn any_replicated_overlap(
     false
 }
 
-/// The nearest doorway (by horizontal distance to the aim point) that
-/// doesn't already hold a door. Doors sit at exactly their doorway's
-/// position, so occupancy is a position match against door entities.
-pub(super) fn nearest_free_doorway(
+/// The nearest mount opening of `mount_piece` (by horizontal distance to
+/// the aim point) that doesn't already hold a panel. Panels sit at exactly
+/// their opening's position, so occupancy is a position match against door
+/// entities. Doors pass `Doorway`; the shutter passes `WindowWall`.
+pub(super) fn nearest_free_mount(
     aim: Vec3Net,
+    mount_piece: BuildingPiece,
     replicated: &Query<(&Deployable, &DeployableTransform, &DeployableStability)>,
 ) -> Option<(DeployedEntityId, Vec3Net, f32)> {
     let mut best: Option<(f32, DeployedEntityId, Vec3Net, f32)> = None;
     for (meta, transform, _) in replicated.iter() {
-        let DeployableKind::Building {
-            piece: BuildingPiece::Doorway,
-            ..
-        } = meta.kind
-        else {
+        let matches_mount = matches!(
+            meta.kind,
+            DeployableKind::Building { piece, .. } if piece == mount_piece
+        );
+        if !matches_mount {
             continue;
-        };
+        }
         let dx = transform.position.x - aim.x;
         let dz = transform.position.z - aim.z;
         let distance = (dx * dx + dz * dz).sqrt();

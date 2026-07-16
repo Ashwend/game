@@ -79,7 +79,15 @@ pub fn door_collider_blocks(position: Vec3Net, yaw: f32, open: bool) -> Vec<Worl
 /// rectangle rotated `-DOOR_OPEN_ANGLE_RAD` about the hinge at local
 /// `(-DOOR_PANEL_WIDTH_M / 2, 0)`, matching `animate_door_panels_system`.
 fn open_door_panel_local_box() -> ((f32, f32), (f32, f32)) {
-    let hinge_x = -DOOR_PANEL_WIDTH_M / 2.0;
+    open_panel_local_box(DOOR_PANEL_WIDTH_M)
+}
+
+/// [`open_door_panel_local_box`] generalized over the panel width, so the
+/// window shutter (window-opening width) computes its swung AABB with the
+/// same hinge convention: hinge at local `(-width / 2, 0)`, swing
+/// `-DOOR_OPEN_ANGLE_RAD` about Y.
+fn open_panel_local_box(width_m: f32) -> ((f32, f32), (f32, f32)) {
+    let hinge_x = -width_m / 2.0;
     let angle = -DOOR_OPEN_ANGLE_RAD;
     // Local +X (the panel span) and +Z (the panel thickness) after the
     // hinge rotation about Y.
@@ -88,7 +96,7 @@ fn open_door_panel_local_box() -> ((f32, f32), (f32, f32)) {
     let half_t = DOOR_PANEL_THICKNESS_M / 2.0;
     let mut min = (f32::INFINITY, f32::INFINITY);
     let mut max = (f32::NEG_INFINITY, f32::NEG_INFINITY);
-    for reach in [0.0, DOOR_PANEL_WIDTH_M] {
+    for reach in [0.0, width_m] {
         for side in [-half_t, half_t] {
             let x = hinge_x + span.0 * reach + thickness.0 * side;
             let z = span.1 * reach + thickness.1 * side;
@@ -100,6 +108,32 @@ fn open_door_panel_local_box() -> ((f32, f32), (f32, f32)) {
         ((min.0 + max.0) / 2.0, (min.1 + max.1) / 2.0),
         ((max.0 - min.0) / 2.0, (max.1 - min.1) / 2.0),
     )
+}
+
+/// Collider for a window shutter seated in a window-wall opening at
+/// `position`/`yaw`. Same hinge convention as [`door_collider_blocks`]
+/// (hinge on the local -X jamb, swing `DOOR_OPEN_ANGLE_RAD`), but the panel
+/// spans the window opening and sits raised on the sill: closed it fills
+/// the window plane (blocking movement, projectiles, and targeting through
+/// the hole); open it is the AABB around the swung panel, leaving the
+/// window genuinely clear to shoot through.
+pub fn shutter_collider_blocks(position: Vec3Net, yaw: f32, open: bool) -> Vec<WorldBlock> {
+    let half_h = WINDOW_OPENING_HEIGHT_M / 2.0;
+    let center_y = WINDOW_SILL_HEIGHT_M + half_h;
+    let ((cx_local, cz_local), (hx_local, hz_local)) = if open {
+        open_panel_local_box(WINDOW_OPENING_WIDTH_M)
+    } else {
+        (
+            (0.0, 0.0),
+            (WINDOW_OPENING_WIDTH_M / 2.0, DOOR_PANEL_THICKNESS_M / 2.0),
+        )
+    };
+    let (cx, cz) = rotate_offset(yaw, cx_local, cz_local);
+    let (hx, hz) = rotate_half_extents(yaw, hx_local, hz_local);
+    vec![WorldBlock::new(
+        Vec3Net::new(position.x + cx, position.y + center_y, position.z + cz),
+        Vec3Net::new(hx, half_h, hz),
+    )]
 }
 
 /// Half-extents swap between X and Z on quarter turns.
@@ -254,6 +288,35 @@ mod tests {
             previous_top = top;
         }
         assert!((previous_top - STAIR_RISE_M).abs() < 1e-4);
+    }
+
+    #[test]
+    fn shutter_collider_fills_the_window_closed_and_clears_it_open() {
+        // Closed: one box centred in the window opening (blocks arrows and
+        // targeting through the hole).
+        let closed = shutter_collider_blocks(Vec3Net::ZERO, 0.0, false);
+        assert_eq!(closed.len(), 1);
+        let probe_y = WINDOW_SILL_HEIGHT_M + WINDOW_OPENING_HEIGHT_M / 2.0;
+        let block = closed[0];
+        assert!(block.min().x < 0.0 && block.max().x > 0.0);
+        assert!(block.min().y < probe_y && block.max().y > probe_y);
+        assert!(
+            block.center.z.abs() < 1e-6,
+            "closed panel sits in the plane"
+        );
+
+        // Open: the swung panel clears the opening (the window is shootable)
+        // and stays raised at sill height.
+        let open = shutter_collider_blocks(Vec3Net::ZERO, 0.0, true);
+        assert_eq!(open.len(), 1);
+        let panel = open[0];
+        assert!(
+            panel.max().x < -0.2,
+            "open panel must leave the window passable, max x {}",
+            panel.max().x
+        );
+        assert!(panel.center.z > 0.2, "open panel sits on the swing side");
+        assert!((panel.min().y - WINDOW_SILL_HEIGHT_M).abs() < 1e-5);
     }
 
     #[test]

@@ -72,7 +72,7 @@ pub(crate) use ranged::RangedPoseOverride;
 pub(crate) use ranged::{RangedAction, RangedDrawState};
 pub(crate) use runtime::{
     ClientErrorToast, ClientLogEntry, ClientLogKind, ClientRuntime, ErrorToastSink,
-    SessionShutdownTasks,
+    MeteorShowerEvent, SessionShutdownTasks,
 };
 pub(crate) use settings::{
     AntiAliasing, AtmosphereQuality, ClientSettings, ClientSettingsStore,

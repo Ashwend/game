@@ -409,7 +409,11 @@ impl CameraImpactKick {
             ItemModel::Bag | ItemModel::Deployable => {
                 (HANDS_KICK_PITCH, HANDS_KICK_DOWN, HANDS_KICK_DURATION)
             }
-            ItemModel::Hatchet => (AXE_KICK_PITCH, AXE_KICK_DOWN, AXE_KICK_DURATION),
+            // The sickle's light reap kicks like the hatchet: same gather-tool
+            // weight class, no bespoke profile needed.
+            ItemModel::Hatchet | ItemModel::Sickle => {
+                (AXE_KICK_PITCH, AXE_KICK_DOWN, AXE_KICK_DURATION)
+            }
             ItemModel::Pickaxe => (PICKAXE_KICK_PITCH, PICKAXE_KICK_DOWN, PICKAXE_KICK_DURATION),
             ItemModel::Club => (CLUB_KICK_PITCH, CLUB_KICK_DOWN, CLUB_KICK_DURATION),
             ItemModel::Spear => (SPEAR_KICK_PITCH, SPEAR_KICK_DOWN, SPEAR_KICK_DURATION),
@@ -475,6 +479,7 @@ impl CameraImpactKick {
             // lighter profile keeps the kick proportionate if a ranged model ever
             // surfaces here.
             ItemModel::Hatchet
+            | ItemModel::Sickle
             | ItemModel::Bow
             | ItemModel::Crossbow
             | ItemModel::Bag

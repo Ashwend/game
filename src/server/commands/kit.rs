@@ -2,15 +2,17 @@
 
 use crate::{
     items::{
-        ARROW_ID, BASIC_HATCHET_ID, BASIC_PICKAXE_ID, BUILDING_PLAN_ID, CLOTH_ID, COAL_ID,
-        CROSSBOW_ID, CRUDE_FURNACE_ID, FIBER_ID, GUNPOWDER_ID, HAMMER_ID, HEWN_LOG_DOOR_ID,
-        HEWN_LOG_ID, IRON_BAR_ID, IRON_BOOTS_ID, IRON_CUIRASS_ID, IRON_GREAVES_ID, IRON_HATCHET_ID,
-        IRON_HELM_ID, IRON_MACE_ID, IRON_ORE_ID, IRON_PICKAXE_ID, IRON_SWORD_ID, LAMELLAR_BOOTS_ID,
-        LAMELLAR_GREAVES_ID, LAMELLAR_HELM_ID, LAMELLAR_VEST_ID, METEORITE_ALLOY_ID,
-        METEORITE_INGOT_ID, PADDED_HOOD_ID, PADDED_LEGGINGS_ID, PADDED_TUNIC_ID, PADDED_WRAPS_ID,
-        PLANT_TWINE_ID, POWDER_BOMB_ID, POWDER_KEG_ID, SALVAGED_FITTINGS_ID, SATCHEL_CHARGE_ID,
-        SLEEPING_BAG_ID, STONE_ID, STONE_SPEAR_ID, SULFUR_ID, SULFUR_ORE_ID, WOOD_ID,
-        WOODEN_BOW_ID, WOODEN_CLUB_ID, WORKBENCH_T1_ID, item_definition, stack_limit,
+        ARROW_ID, BANDAGE_ID, BASIC_HATCHET_ID, BASIC_PICKAXE_ID, BUILDING_PLAN_ID, CLOTH_ID,
+        COAL_ID, CROSSBOW_ID, CRUDE_FURNACE_ID, FIBER_ID, GUNPOWDER_ID, HAMMER_ID,
+        HEWN_LOG_DOOR_ID, HEWN_LOG_ID, IRON_BAR_ID, IRON_BOOTS_ID, IRON_CUIRASS_ID, IRON_DOOR_ID,
+        IRON_GREAVES_ID, IRON_HATCHET_ID, IRON_HELM_ID, IRON_MACE_ID, IRON_ORE_ID, IRON_PICKAXE_ID,
+        IRON_SICKLE_ID, IRON_SWORD_ID, LAMELLAR_BOOTS_ID, LAMELLAR_GREAVES_ID, LAMELLAR_HELM_ID,
+        LAMELLAR_VEST_ID, METEORITE_ALLOY_ID, METEORITE_INGOT_ID, PADDED_HOOD_ID,
+        PADDED_LEGGINGS_ID, PADDED_TUNIC_ID, PADDED_WRAPS_ID, PLANT_TWINE_ID, POWDER_BOMB_ID,
+        POWDER_KEG_ID, SALVAGED_FITTINGS_ID, SATCHEL_CHARGE_ID, SLEEPING_BAG_ID, STONE_ID,
+        STONE_SPEAR_ID, STORAGE_BOX_LARGE_ID, STORAGE_BOX_SMALL_ID, SULFUR_ID, SULFUR_ORE_ID,
+        TOOL_CUPBOARD_ID, TORCH_ID, WOOD_ID, WOOD_SHUTTER_ID, WOODEN_BOW_ID, WOODEN_CLUB_ID,
+        WORKBENCH_T1_ID, item_definition, stack_limit,
     },
     protocol::{ClientId, ItemStack},
 };
@@ -37,19 +39,22 @@ impl GameServer {
             return reply_warning(client_id, "admin only");
         }
 
-        // (item_id, quantity) tuples. Tools, deployables, and worn armor are
-        // all equipables and go to the actionbar first (falling back to the
-        // inventory grid once the nine actionbar slots fill); resources go
-        // straight to the inventory grid. All twelve armor pieces (padded,
-        // lamellar, iron) land as stacks of one alongside the tools so a tester
-        // can drag a full set onto the paperdoll and see it on the rig. The kit
-        // has 31 equipables + 16 resources = 47 items, well within the 9
-        // actionbar + 60 inventory slots, so nothing overflows.
+        // Equipables (tools, weapons, deployables, worn armor, consumables,
+        // explosives) go to the actionbar first (falling back to the inventory
+        // grid once the nine actionbar slots fill); resources go straight to
+        // the inventory grid. EVERY entry lands as its registry FULL STACK
+        // (owner request): tools/armor/deployables have stack size 1 so they
+        // stay singles, while the explosives, bandages, torches, and shutters
+        // arrive ready for a real raid test instead of one-shot samples. The
+        // kit has 39 equipables + 17 resources = 56 slots, within the 9
+        // actionbar + 60 inventory slots (one kit per clear bag).
         const EQUIPABLES: &[&str] = &[
             BASIC_HATCHET_ID,
             BASIC_PICKAXE_ID,
             IRON_HATCHET_ID,
             IRON_PICKAXE_ID,
+            // The fiber tool: one sweep reaps a whole Tall Grass tuft.
+            IRON_SICKLE_ID,
             // The four melee weapons, so a tester can pull them onto
             // the actionbar and swing without crafting.
             WOODEN_CLUB_ID,
@@ -63,8 +68,18 @@ impl GameServer {
             CRUDE_FURNACE_ID,
             BUILDING_PLAN_ID,
             HAMMER_ID,
+            // Both doors, the window shutter, and the claim/storage/light
+            // deployables, so a full base (upkeep included) needs no crafting.
             HEWN_LOG_DOOR_ID,
+            IRON_DOOR_ID,
+            WOOD_SHUTTER_ID,
+            TOOL_CUPBOARD_ID,
+            STORAGE_BOX_SMALL_ID,
+            STORAGE_BOX_LARGE_ID,
+            TORCH_ID,
             SLEEPING_BAG_ID,
+            // Healing, a full stack.
+            BANDAGE_ID,
             // The three armor sets: padded (hand), lamellar (workbench 1), iron
             // (workbench 2). One piece per slot per set.
             PADDED_HOOD_ID,
@@ -79,8 +94,9 @@ impl GameServer {
             IRON_CUIRASS_ID,
             IRON_GREAVES_ID,
             IRON_BOOTS_ID,
-            // The three explosives, so a tester can throw the bomb and place
-            // the keg / satchel to raid without crafting.
+            // The three explosives, full stacks each, so a tester can throw
+            // bombs and place kegs / satchels for a whole raid without
+            // crafting.
             POWDER_BOMB_ID,
             POWDER_KEG_ID,
             SATCHEL_CHARGE_ID,
@@ -120,11 +136,12 @@ impl GameServer {
         let mut placed = 0u32;
         let mut overflow = 0u32;
 
-        // Equipables: actionbar first → inventory fallback. Each one
-        // is a stack of 1 (tools and deployables are equipable), so
-        // we never need to merge them with an existing matching stack.
+        // Equipables: actionbar first → inventory fallback, each as its
+        // registry full stack (stack size 1 for tools/armor/deployables, the
+        // real limit for explosives/bandages/torches). Placed into empty
+        // slots directly, so we never merge into existing stacks.
         for item_id in EQUIPABLES {
-            let stack = ItemStack::new(*item_id, 1);
+            let stack = ItemStack::new(*item_id, stack_limit(item_id).unwrap_or(1));
             if let Some(slot) = client
                 .inventory
                 .actionbar_slots

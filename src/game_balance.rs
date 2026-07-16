@@ -116,6 +116,11 @@ pub const STONE_HATCHET_PVP_DAMAGE: u32 = 8;
 pub const IRON_HATCHET_PVP_DAMAGE: u32 = 12;
 pub const STONE_PICKAXE_PVP_DAMAGE: u32 = 15;
 pub const IRON_PICKAXE_PVP_DAMAGE: u32 = 22;
+/// Per-swing PvP damage for the iron sickle. A harvesting blade, not a
+/// weapon: matches the stone hatchet and sits well under the iron hatchet
+/// (12), so carrying one into a fight is strictly worse than any real
+/// tool or weapon of its tier.
+pub const SICKLE_PVP_DAMAGE: u32 = 8;
 
 /// Magnitude of the PvP knockback impulse, in m/s, per tool kind. The
 /// hatchet's light tap keeps melee chases tight; the pickaxe's heavy
@@ -522,6 +527,16 @@ pub const BUILDING_REPAIR_COST_STONE: u16 = 20;
 /// Percentage of max HP restored per hammer repair hit.
 pub const BUILDING_REPAIR_FRACTION_PCT: u32 = 25;
 
+/// How long after a structure last took combat damage (any source: tool
+/// swing, projectile, or blast) hammer repairs AND tier upgrades on it stay
+/// locked out, in ticks (5 minutes). Without the lockout every breach turns
+/// into a materials race the defender wins from behind the wall, quietly
+/// healing back each charge's damage; with it, landed damage sticks long
+/// enough for the raid (or skirmish) to resolve. Upgrades are covered too
+/// because an upgrade refills HP to the new tier's full, a bigger heal than
+/// any repair hit.
+pub const BUILDING_REPAIR_COMBAT_LOCKOUT_TICKS: u64 = (5.0 * 60.0 * SERVER_TICK_RATE_HZ) as u64;
+
 /// How long after placement (or upgrade) the owner's hammer can still
 /// demolish a piece, in ticks. 15 minutes: long enough to fix layout
 /// mistakes, short enough that a compromised base can't be deleted out
@@ -574,8 +589,25 @@ pub const DOOR_MAX_HP: u32 = 1_500;
 /// The HP is what those explosives will chew through.
 pub const IRON_DOOR_MAX_HP: u32 = 3_000;
 
+/// Window shutter HP. Half the wood door: a shutter is a lighter panel than
+/// a door, so a shuttered window is a real but weaker soft spot
+/// (WoodBuilding material: tools chew it slowly, any charge tears it off).
+pub const SHUTTER_MAX_HP: u32 = 750;
+
 /// Sleeping bag HP. Cloth tears fast; bags are respawn anchors, not cover.
 pub const SLEEPING_BAG_MAX_HP: u32 = 100;
+
+/// How long a sleeping bag stays unusable after a player respawns at it, in
+/// ticks (5 minutes). Without a cooldown a defender with a bag bank inside
+/// the base re-engages a raid endlessly at zero cost; with it, each bag is
+/// one re-entry per fight. Transient server state (a restart clears it).
+pub const SLEEPING_BAG_RESPAWN_COOLDOWN_TICKS: u64 = (5.0 * 60.0 * SERVER_TICK_RATE_HZ) as u64;
+
+/// Radius, in metres, around a just-used bag within which the owner's OTHER
+/// bags also enter the respawn cooldown. Stops a carpet of bags in one base
+/// from being a respawn chain: using any bag in the cluster cools the whole
+/// cluster, while a genuinely remote bag (a forward camp) stays ready.
+pub const SLEEPING_BAG_SHARED_COOLDOWN_RADIUS_M: f32 = 100.0;
 
 /// Storage box HP (plain Wood material, so any proper tool opens one up
 /// eventually). Boxes are loot pinatas by design: keeping valuables safe
@@ -589,6 +621,40 @@ pub const STORAGE_BOX_LARGE_HP: u32 = 700;
 /// casual griefing. Not stone-immune by design, the claim should fall to
 /// a committed raid.
 pub const TOOL_CUPBOARD_MAX_HP: u32 = 1_000;
+
+// ---------------------------------------------------------------------
+// Tool Cupboard upkeep + decay
+// ---------------------------------------------------------------------
+
+/// Slot count of the Tool Cupboard's upkeep storage grid. Between the two
+/// storage boxes in size: enough to stock days of upkeep for a serious
+/// base, small enough that the cupboard is a tax box, not a vault.
+pub const TOOL_CUPBOARD_SLOT_COUNT: usize = 12;
+
+/// How often the upkeep drain runs, in ticks (every 5 real minutes, 1/6 of
+/// an in-game day). Fractional per-period costs accumulate in the
+/// cupboard's carry (`CupboardState::upkeep_carry`) so the long-run rate is
+/// exactly the per-day constants below regardless of the period length.
+/// Real-time like the meteor scheduler: the `/time-speed` cheat does not
+/// change what a base costs per real hour.
+pub const UPKEEP_PERIOD_TICKS: u64 = (5.0 * 60.0 * SERVER_TICK_RATE_HZ) as u64;
+
+/// Upkeep cost per building piece per in-game day (30 real minutes), paid
+/// from the Tool Cupboard's storage in the piece's tier material: sticks
+/// pieces cost raw wood, hewn-wood pieces cost hewn logs, stone pieces cost
+/// stone. Sized at roughly 10% of a piece's build cost per day, so a base
+/// costs about a tenth of itself daily: cheap enough that an active player
+/// tops it up incidentally, real enough that surplus materials finally have
+/// a sink and an abandoned base rots away.
+pub const UPKEEP_PER_DAY_STICKS_WOOD: f32 = 3.0;
+pub const UPKEEP_PER_DAY_HEWN_LOGS: f32 = 1.0;
+pub const UPKEEP_PER_DAY_STONE: f32 = 13.0;
+
+/// Percent of max HP a claimed piece loses per upkeep period while its tier
+/// material went unpaid. At 5% per 5-minute period a dry base decays to
+/// rubble in about 100 real minutes; restocking the cupboard stops further
+/// decay immediately (lost HP stays lost until hammer-repaired).
+pub const UPKEEP_DECAY_PCT_PER_PERIOD: u32 = 5;
 
 /// Building-privilege margin, in 3 m grid cells, that a Tool Cupboard's
 /// claim projects outward from its base's connected footprint. Non-
@@ -845,23 +911,53 @@ pub const RUIN_CACHE_METEORITE_CHANCE_PCT: u32 = 8;
 // Meteor shower event
 // =====================================================================
 
-/// Minimum and maximum in-game days between scheduled meteor shower events.
-/// The scheduler rolls the next event uniformly in this window (converted to
-/// real server ticks via `REAL_SECONDS_PER_DAY` at cycle multiplier 1). Two to
-/// four in-game days keeps the event a periodic, anticipated flashpoint without
-/// letting it dominate a session. NOTE: these are *in-game* days measured
-/// against the fixed real-time tick clock, so the admin `/time-speed` cheat
-/// (which accelerates only the day/night cycle, not the wall clock) does NOT
-/// pull meteors closer together; the schedule is real-time.
-pub const METEOR_SHOWER_INTERVAL_DAYS_MIN: f32 = 2.0;
-pub const METEOR_SHOWER_INTERVAL_DAYS_MAX: f32 = 4.0;
+/// Minimum and maximum REAL MINUTES between meteor shower events, measured
+/// event start to event start (the previous event's first-impact-minus-warning
+/// anchors the roll, so the ~10 minute crater window does not silently pad
+/// every gap). The scheduler rolls uniformly in this window. Ten to twenty
+/// minutes keeps the (unannounced, two-meteor) shower a regular session beat:
+/// players discover each one by looking up. Real-time by construction: the
+/// admin `/time-speed` cheat (which accelerates only the day/night cycle)
+/// does not pull meteors closer together.
+pub const METEOR_SHOWER_INTERVAL_MINUTES_MIN: f32 = 10.0;
+pub const METEOR_SHOWER_INTERVAL_MINUTES_MAX: f32 = 20.0;
 
-/// Real seconds between the announce (fireball appears, countdown starts) and
-/// impact. Ten real minutes: long enough that a player anywhere on the map can
-/// see the streak, read the countdown, and either rush the impact site to
-/// contest the crater cluster or evacuate the danger zone. Tunable, an Eco-style
-/// longer approach is just a larger value here.
-pub const METEOR_SHOWER_WARNING_SECONDS: f32 = 600.0;
+/// Real seconds between the announce broadcast and the FIRST meteor's impact.
+/// There is no countdown UI: the sky fireballs and the audio ARE the
+/// announcement. Sixty seconds means the visible flight window
+/// (`METEOR_FLIGHT_SECONDS` = 10 s) and the escalating evacuate warning (which
+/// ramps over the final 60 s inside a meteor's danger radius) cover the whole
+/// approach.
+pub const METEOR_SHOWER_WARNING_SECONDS: f32 = 60.0;
+
+/// Minimum and maximum meteors per shower event. Each event rolls a seeded
+/// count in this range; exactly one meteor per event is the full-size
+/// headliner (size 1.0) and the rest roll in the secondary size band below.
+/// Pinned to exactly two (owner call, down from the rework's 4-5): one
+/// headliner plus one smaller companion keeps the shower read without
+/// littering the map in craters every event.
+pub const METEOR_SHOWER_COUNT_MIN: u32 = 2;
+pub const METEOR_SHOWER_COUNT_MAX: u32 = 2;
+
+/// Size band for the non-headliner meteors of an event. `size` multiplies the
+/// impact radius, ground-zero damage, danger radius, crater geometry, crater
+/// node count, and the fireball's visual/audio scale, so a 0.4 meteor is a
+/// strictly smaller, safer strike than the headliner.
+pub const METEOR_SHOWER_SECONDARY_SIZE_MIN: f32 = 0.4;
+pub const METEOR_SHOWER_SECONDARY_SIZE_MAX: f32 = 0.8;
+
+/// Maximum seeded stagger, in real seconds, added to a meteor's impact tick
+/// past the event's first impact. The first meteor lands exactly at the end of
+/// the warning window; the rest land at seeded offsets in `[0, this]`, so the
+/// event reads as a shower rolling across the sky, not a single volley.
+pub const METEOR_SHOWER_IMPACT_STAGGER_SECONDS: f32 = 45.0;
+
+/// Minimum spacing, in metres, between two impact sites of the SAME event.
+/// The siting pass splits the outer ring into equal angular sectors (one per
+/// meteor) and additionally rejects a candidate within this distance of an
+/// already-accepted site, so two craters (danger radius 60 m at size 1.0)
+/// never merge into one indistinct blast zone.
+pub const METEOR_SHOWER_INTER_SITE_SPACING_M: f32 = 120.0;
 
 /// Clearance, in metres, kept between a chosen impact site and ANY player
 /// structure (building piece, deployed entity, or Tool Cupboard claim
@@ -872,29 +968,34 @@ pub const METEOR_SHOWER_WARNING_SECONDS: f32 = 600.0;
 /// the crater's edge.
 pub const METEOR_SHOWER_BUILDING_CLEARANCE_M: f32 = 60.0;
 
-/// Radius, in metres, of the meteor's lethal impact. Players inside take Blast
-/// damage with linear falloff from ground zero; resource nodes inside are
-/// felled/depleted; the meteorite crater cluster scatters within it. Kept below
-/// the building clearance so the siting guarantee holds.
+/// Radius, in metres, of a size-1.0 meteor's lethal impact (scaled by the
+/// meteor's `size` for smaller strikes). Players inside take Blast damage with
+/// linear falloff from ground zero; resource nodes inside are felled/depleted;
+/// the meteorite crater cluster scatters within it. Kept below the building
+/// clearance so the siting guarantee holds (smaller sizes are strictly safer).
 pub const METEOR_SHOWER_IMPACT_RADIUS_M: f32 = 18.0;
 
-/// Radius, in metres, of the evacuation danger zone. A player whose own position
-/// is inside this ring of the announced impact point gets the escalating
-/// client-side "evacuate" warning over the final 60 seconds. Larger than the
-/// impact radius so the warning gives players room to run clear rather than
-/// firing only once they are already at ground zero.
+/// Radius, in metres, of a size-1.0 meteor's evacuation danger zone (scaled by
+/// the meteor's `size`). A player whose own position is inside this ring of a
+/// meteor's impact point gets the escalating client-side "evacuate" warning
+/// over the final 60 seconds before THAT meteor lands. Larger than the impact
+/// radius so the warning gives players room to run clear rather than firing
+/// only once they are already at ground zero.
 pub const METEOR_SHOWER_DANGER_RADIUS_M: f32 = 60.0;
 
-/// Blast damage applied at ground zero (distance 0 from the impact point). At
-/// `MAX_HEALTH` this is lethal through any current armor set (the 60% cap still
-/// leaves ~100 landing), matching the "standing on the marker is lethal" design.
-/// Falls off linearly to 0 at `METEOR_SHOWER_IMPACT_RADIUS_M`.
+/// Blast damage a size-1.0 meteor applies at ground zero (scaled by the
+/// meteor's `size`). At `MAX_HEALTH` this is lethal through any current armor
+/// set (the 60% cap still leaves ~100 landing), matching the "standing at
+/// ground zero is lethal" design. Falls off linearly to 0 at the size-scaled
+/// impact radius.
 pub const METEOR_SHOWER_IMPACT_PLAYER_DAMAGE: f32 = 250.0;
 
-/// Minimum and maximum number of rich meteorite crater nodes the impact
-/// scatters inside the crater. A contested windfall (several nodes' worth of the
-/// rare iron-gated mineral in one spot) that despawns if unmined, so it rewards
-/// rushing the site. Placed with a minimum spacing so they do not overlap.
+/// Minimum and maximum number of rich meteorite crater nodes a size-1.0
+/// impact scatters inside the crater (smaller meteors scale the rolled count
+/// by their `size`, minimum 1). A contested windfall (several nodes' worth of
+/// the rare iron-gated mineral in one spot) that despawns if unmined, so it
+/// rewards rushing the site. Placed with a minimum spacing so they do not
+/// overlap.
 pub const METEOR_SHOWER_CRATER_NODE_COUNT_MIN: u32 = 3;
 pub const METEOR_SHOWER_CRATER_NODE_COUNT_MAX: u32 = 6;
 
@@ -956,9 +1057,12 @@ pub const METEOR_SHOWER_SITE_BOUNDS_MARGIN_M: f32 = 20.0;
 //     a bomb (300 * 40% = 120) also break it.
 //   Stone wall (6,000 HP): satchel 2,000 * 45% = 900/charge -> 7 satchels
 //     (6,300) break it.
-//   Iron door (3,000 HP): with no dedicated metal charge the satchel.s 8%
-//     (160/charge, ~19 satchels) is the only thing that touches metal at all;
-//     an iron door is effectively raid-proof until a top-tier metal charge lands.
+//   Iron door (3,000 HP): satchel 2,000 * 30% = 600/charge -> 5 satchels
+//     (3,000) break it exactly, 4 (2,400) do not. The satchel is the only
+//     charge that touches metal (keg and bomb stay at 0%), so an iron door
+//     costs 5 satchels vs the wood door's 2: pricier than any door, cheaper
+//     than the 7-satchel stone wall, keeping the door the designed breach
+//     point. Revisit if a third door tier lands.
 // Tune here, never inline.
 
 /// Base blast damage at ground zero for each charge, before the per-material
@@ -986,7 +1090,7 @@ pub const POWDER_KEG_EFFECTIVENESS_METAL_PCT: u32 = 0;
 pub const SATCHEL_CHARGE_EFFECTIVENESS_STICKS_PCT: u32 = 100;
 pub const SATCHEL_CHARGE_EFFECTIVENESS_WOOD_PCT: u32 = 85;
 pub const SATCHEL_CHARGE_EFFECTIVENESS_STONE_PCT: u32 = 45;
-pub const SATCHEL_CHARGE_EFFECTIVENESS_METAL_PCT: u32 = 8;
+pub const SATCHEL_CHARGE_EFFECTIVENESS_METAL_PCT: u32 = 30;
 
 /// Blast radius, in metres, for each charge. Full base damage at the centre,
 /// falling off linearly to zero at this edge (both against structures and

@@ -118,29 +118,34 @@ pub(crate) struct ClientRuntime {
     /// Latest connected-player roster from `ServerMessage::PlayerList`, name +
     /// ping for every online player (AoI-independent). Cleared on disconnect.
     pub(crate) players: Vec<crate::protocol::PlayerListEntry>,
-    /// The live meteor shower event, if one has been announced. Seeded by a
-    /// single `ServerMessage::MeteorShower` (resent to late joiners) and cleared
-    /// once the client-side clock passes the crater despawn window. The sky
-    /// visual, countdown HUD, danger warning, and temporary map marker all read
-    /// this; nothing about the meteor is per-tick replicated.
-    pub(crate) meteor_shower: Option<MeteorShowerEvent>,
+    /// The live meteor shower's meteors, if an event has been announced.
+    /// Seeded by a single `ServerMessage::MeteorShower` (resent with all
+    /// still-live meteors to late joiners); each entry is dropped once the
+    /// client-side clock passes its own crater despawn window. The sky rigs,
+    /// per-meteor danger warning, craters, and audio cues all read this;
+    /// nothing about a meteor is per-tick replicated. There is deliberately
+    /// no global announcement UI keyed on it.
+    pub(crate) meteor_showers: Vec<MeteorShowerEvent>,
 }
 
-/// Client-side mirror of an announced meteor shower event. A pure record of the
-/// announce payload; all timing is derived on read against the authoritative
-/// clock estimate ([`ClientRuntime::server_tick`]).
+/// Client-side mirror of one announced meteor of a shower event. A pure record
+/// of the announce payload; all timing is derived on read against the
+/// authoritative clock estimate ([`ClientRuntime::server_tick`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MeteorShowerEvent {
     /// Ground-zero world position (y is floor level).
     pub(crate) impact_position: crate::protocol::Vec3Net,
-    /// Server tick the meteor strikes.
+    /// Server tick this meteor strikes (staggered within the event).
     pub(crate) impact_tick: u64,
     /// Seeds the fireball's approach azimuth (see `crate::world::meteor_shower`).
     pub(crate) trajectory_seed: u64,
-    /// The client tick estimate at which this event stops being rendered (the
-    /// crater and its map marker are removed). Derived from `impact_tick` plus
-    /// the despawn window at announce time so the client cleans up without a
-    /// second message.
+    /// Size multiplier in `(0, 1]`; scales the fireball/crater visuals, audio,
+    /// and danger radius client-side (the server scales the blast off the same
+    /// value).
+    pub(crate) size: f32,
+    /// The client tick estimate at which this meteor stops being rendered (the
+    /// crater is removed). Derived from `impact_tick` plus the despawn window
+    /// at announce time so the client cleans up without a second message.
     pub(crate) despawn_tick: u64,
 }
 
@@ -283,7 +288,7 @@ impl ClientRuntime {
         self.messages.clear();
         self.input_sequence = 0;
         self.depleted_node_ids.clear();
-        self.meteor_shower = None;
+        self.meteor_showers.clear();
         self.connection.reset();
         self.world_time = WorldTime::default();
         self.server_tick_estimate = 0.0;
@@ -312,7 +317,7 @@ impl ClientRuntime {
         self.is_admin = false;
         self.depleted_node_ids.clear();
         self.players.clear();
-        self.meteor_shower = None;
+        self.meteor_showers.clear();
         self.local_ping_ms = 0;
         self.connection.reset();
     }
@@ -345,19 +350,27 @@ impl ClientRuntime {
         let mut extras: Vec<WorldBlock> = resource_node_colliders.into_iter().collect();
         extras.extend(deployable_colliders);
         let mut grid = BlockGrid::build_with_extras(world, &extras);
-        // Carry the live crater's analytic floor across rebuilds (the per-frame
-        // sync in `tick_world_time` also covers the impact moment itself).
-        grid.set_crater(self.impacted_crater_center());
+        // Carry the live craters' analytic floors across rebuilds (the per-frame
+        // sync in `tick_world_time` also covers each impact moment itself).
+        grid.set_craters(self.impacted_crater_floors());
         self.world_grid = Some(grid);
     }
 
-    /// Ground-zero `(x, z)` of the live, already-impacted meteor shower crater, if
-    /// any. Drives the movement grid's analytic floor so players walk over the
-    /// crater mound; `None` before impact and once the event cleans up.
-    fn impacted_crater_center(&self) -> Option<[f32; 2]> {
-        self.meteor_shower
-            .filter(|event| event.has_impacted(self.server_tick()))
-            .map(|event| [event.impact_position.x, event.impact_position.z])
+    /// The live, already-impacted meteor craters (ground-zero `(x, z)` plus
+    /// size). Drives the movement grid's analytic floor so players walk over
+    /// the crater mounds; a meteor contributes nothing before its impact and
+    /// drops out once it cleans up.
+    fn impacted_crater_floors(&self) -> Vec<crate::controller::CraterFloor> {
+        let now = self.server_tick();
+        self.meteor_showers
+            .iter()
+            .filter(|event| event.has_impacted(now))
+            .map(|event| crate::controller::CraterFloor {
+                x: event.impact_position.x,
+                z: event.impact_position.z,
+                size: event.size,
+            })
+            .collect()
     }
 
     /// Replace the grass-displacer footprints (placed deployables/buildings only, not
@@ -478,27 +491,30 @@ impl ClientRuntime {
             ServerMessage::WorldTime(snapshot) => {
                 self.apply_world_time_snapshot(snapshot);
             }
-            ServerMessage::MeteorShower {
-                impact_position,
-                impact_tick,
-                trajectory_seed,
-            } => {
-                // Store the announce; the sky/HUD/map systems derive everything
-                // from it against the local clock estimate. The crater persists
-                // for the despawn window after impact, matching the server, so a
-                // late joiner who gets the resend during the crater phase still
-                // sees the crater. Idempotent: a resend of the same event just
-                // overwrites with identical data.
-                let despawn_tick = impact_tick.saturating_add(
-                    (crate::game_balance::METEOR_SHOWER_DESPAWN_SECONDS
-                        * crate::protocol::SERVER_TICK_RATE_HZ) as u64,
-                );
-                self.meteor_shower = Some(MeteorShowerEvent {
-                    impact_position,
-                    impact_tick,
-                    trajectory_seed,
-                    despawn_tick,
-                });
+            ServerMessage::MeteorShower { meteors } => {
+                // Store the announce; the sky/HUD systems derive everything
+                // from it against the local clock estimate. Each crater
+                // persists for its own despawn window after impact, matching
+                // the server, so a late joiner who gets the resend during a
+                // crater phase still sees the craters. Idempotent: a resend of
+                // the same event just overwrites with identical data.
+                self.meteor_showers = meteors
+                    .into_iter()
+                    .map(|strike| {
+                        let despawn_tick = strike.impact_tick.saturating_add(
+                            (crate::game_balance::METEOR_SHOWER_DESPAWN_SECONDS
+                                * crate::protocol::SERVER_TICK_RATE_HZ)
+                                as u64,
+                        );
+                        MeteorShowerEvent {
+                            impact_position: strike.impact_position,
+                            impact_tick: strike.impact_tick,
+                            trajectory_seed: strike.trajectory_seed,
+                            size: strike.size,
+                            despawn_tick,
+                        }
+                    })
+                    .collect();
             }
             ServerMessage::PerfStats(stats) => {
                 self.perf_stats = Some(stats);
@@ -563,23 +579,21 @@ impl ClientRuntime {
         self.world_time.advance(delta_seconds);
         self.server_tick_estimate +=
             f64::from(delta_seconds.max(0.0)) * f64::from(crate::protocol::SERVER_TICK_RATE_HZ);
-        // Drop a finished meteor shower event once its crater window closes on the
-        // local clock estimate, matching the server's cleanup. The visuals key
-        // on `runtime.meteor_shower`, so clearing it here removes the crater/marker.
-        if let Some(event) = self.meteor_shower
-            && !event.is_alive(self.server_tick())
-        {
-            self.meteor_shower = None;
-        }
-        // Keep the movement grid's analytic crater floor in step with the event
-        // (installed the frame the impact lands, cleared when the event ends).
-        // The grid rebuild path is fingerprint-gated on collider changes, so it
-        // alone would miss the impact moment.
-        let crater = self.impacted_crater_center();
+        // Drop each finished meteor once its crater window closes on the local
+        // clock estimate, matching the server's per-meteor cleanup. The
+        // visuals key on `runtime.meteor_showers`, so retaining here removes
+        // the craters.
+        let now = self.server_tick();
+        self.meteor_showers.retain(|event| event.is_alive(now));
+        // Keep the movement grid's analytic crater floors in step with the
+        // event (each installed the frame its impact lands, cleared when the
+        // meteor ends). The grid rebuild path is fingerprint-gated on collider
+        // changes, so it alone would miss the impact moments.
+        let craters = self.impacted_crater_floors();
         if let Some(grid) = self.world_grid.as_mut()
-            && grid.crater() != crater
+            && grid.craters() != craters.as_slice()
         {
-            grid.set_crater(crater);
+            grid.set_craters(craters);
         }
     }
 

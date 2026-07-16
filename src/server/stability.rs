@@ -287,9 +287,14 @@ fn compute_stabilities(
                 }
             }
         }
-        // Doorway: the mounted door rides at full retention.
-        if matches!(node.piece, BuildingPiece::Doorway)
-            && let Some(doors) = doors_by_parent.get(&id)
+        // Mount openings (doorway for doors, window wall for the shutter):
+        // the mounted panel rides at full retention. The parent link on the
+        // panel's DoorState is what ties the pair; the piece kind only
+        // matters for what can mount there at placement time.
+        if matches!(
+            node.piece,
+            BuildingPiece::Doorway | BuildingPiece::WindowWall
+        ) && let Some(doors) = doors_by_parent.get(&id)
         {
             for door in doors {
                 relaxations.push((*door, 100));

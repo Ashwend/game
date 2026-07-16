@@ -21,6 +21,11 @@ pub enum ToolKind {
     /// repairs building blocks and its held-right-click wheel upgrades or
     /// demolishes them.
     Hammer,
+    /// Harvesting sickle. The only tool that satisfies the Tall Grass
+    /// node's `ToolRequirement`, reaping the whole tuft's fiber in one
+    /// sweep; does zero damage to every destructible material (like the
+    /// hammer).
+    Sickle,
 }
 
 impl ToolKind {
@@ -30,6 +35,7 @@ impl ToolKind {
             Self::Axe => "Hatchet",
             Self::Pickaxe => "Pickaxe",
             Self::Hammer => "Hammer",
+            Self::Sickle => "Sickle",
         }
     }
 
@@ -48,6 +54,9 @@ impl ToolKind {
             // like deliberate work, same weight class of swing.
             Self::Axe | Self::Hammer => ItemModel::Hatchet,
             Self::Pickaxe => ItemModel::Pickaxe,
+            // The sickle has its own archetype: a low horizontal reaping
+            // slash, not the hatchet's overhead chop.
+            Self::Sickle => ItemModel::Sickle,
         }
     }
 }

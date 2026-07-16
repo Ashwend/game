@@ -468,7 +468,13 @@ fn catmull_rom(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
 }
 
 pub(crate) fn sword_swing_pose(phase: f32) -> ToolSwingPose {
-    let keys = &SWORD_SLASH_KEYS;
+    sample_keys(&SWORD_SLASH_KEYS, phase)
+}
+
+/// Sample a Catmull-Rom keyframe table at `phase`: the shared spline sampler
+/// behind the keyed slashes (sword, sickle). Clamped ends (the first/last key
+/// doubles as the missing neighbour), C1-continuous across segments.
+fn sample_keys(keys: &[(f32, ToolSwingPose)], phase: f32) -> ToolSwingPose {
     let phase = phase.clamp(0.0, 1.0);
     // Find the segment [i, i+1] containing `phase`.
     let mut i = 0;
@@ -498,6 +504,43 @@ pub(crate) fn sword_swing_pose(phase: f32) -> ToolSwingPose {
         right: ch(|p| p.right),
         up: ch(|p| p.up),
     }
+}
+
+// Sickle: a low horizontal REAPING cut, keyed as a Catmull-Rom spline like the
+// sword. Where the sword whips shoulder-high around the frame, the sickle's
+// whole arc stays DOWN at grass height. Authoring constraint: the crescent's
+// plane CONTAINS the haft, so the face reads only while the haft stays
+// roughly upright in view (yaw the blade toward the view axis, or lay the
+// haft along it, and the mesh collapses to a paper-thin line). The sweep is
+// therefore a windshield-wiper arc: the haft stays near vertical, ROLL tips
+// it right-then-left through the cut, and the lateral `right` travel carries
+// it across the bottom of the frame, with only a whisper of yaw. Contact
+// (`SICKLE_IMPACT_FRACTION` = 0.42) is the crescent crossing under the
+// crosshair mid-sweep, face-on the whole way.
+const SICKLE_REAP_KEYS: [(f32, ToolSwingPose); 7] = [
+    // carry rest: a near-upright haft with a whisper of image-plane lean
+    // (positive roll = haft top toward screen LEFT), the owner's reference
+    // framing: the pale handle sits at the lower right and the forged hook
+    // arcs up and INWARD with its point hanging down. The hook shape is in
+    // the mesh now, so the carry needs no big compensating lean.
+    (0.00, pose(-0.15, 0.10, 0.15, 0.0, -0.02, -0.04)),
+    // drawn out low to the right, the hook rolled up and cocked (the roll
+    // swings from the rest lean through upright, loading the wiper)
+    (0.22, pose(-0.35, -0.15, 0.50, -0.10, 0.34, -0.08)),
+    // sweep begins: coming in low along the right, tipping through upright
+    (0.34, pose(-0.50, 0.05, 0.10, 0.10, 0.14, -0.22)),
+    // crossing under the crosshair, the fastest stretch of the reap
+    (0.42, pose(-0.55, 0.22, -0.35, 0.22, -0.16, -0.28)),
+    // exited: off past the left edge, hook swept through, still low
+    (0.54, pose(-0.50, 0.40, -0.90, 0.18, -0.78, -0.24)),
+    // short hang out left so the cut reads
+    (0.68, pose(-0.44, 0.32, -0.65, 0.12, -0.55, -0.18)),
+    // settle back to the carry
+    (1.00, pose(-0.15, 0.10, 0.15, 0.0, -0.02, -0.04)),
+];
+
+pub(crate) fn sickle_swing_pose(phase: f32) -> ToolSwingPose {
+    sample_keys(&SICKLE_REAP_KEYS, phase)
 }
 
 // Iron mace: a big, slow overhead with a pronounced wind-up and follow-through,
@@ -964,6 +1007,80 @@ mod tests {
         assert!(
             (start.pitch - end.pitch).abs() < 1e-6 && (start.right - end.right).abs() < 1e-6,
             "the spline returns to the exact guard pose"
+        );
+    }
+
+    #[test]
+    fn sickle_swing_pose_is_a_low_horizontal_reap() {
+        let ready = sickle_swing_pose(0.0);
+        let cocked = sickle_swing_pose(0.22);
+        let contact = sickle_swing_pose(0.42);
+        let exit = sickle_swing_pose(0.54);
+
+        // The wind-up draws out to the right at carry height, never up over
+        // the shoulder: no overhead load at all.
+        assert!(cocked.right > ready.right + 0.2, "draws out to the right");
+        assert!(cocked.up < ready.up + 0.05, "no overhead load");
+        assert!(
+            cocked.roll > ready.roll + 0.3,
+            "the wiper cocks to the right"
+        );
+        // The cut is roll+travel driven and LOW: at contact the crescent is
+        // crossing under the crosshair at grass height, and the haft stays
+        // near upright (small pitch/yaw travel) so the crescent's face reads
+        // through the whole sweep (the blade plane contains the haft; yawing
+        // it toward the view axis collapses it to a line).
+        assert!(contact.up < -0.2, "the cut skims the ground");
+        assert!(
+            contact.right.abs() < 0.30,
+            "contact happens crossing the centre, got {}",
+            contact.right
+        );
+        assert!(exit.right < -0.7, "the reap exits past the left edge");
+        assert!(
+            exit.roll < cocked.roll - 1.0,
+            "roll carries the wiper arc across"
+        );
+        assert!(exit.up < -0.15, "the exit stays low");
+        for phase in [0.22, 0.34, 0.42, 0.54, 0.68] {
+            let p = sickle_swing_pose(phase);
+            assert!(
+                p.yaw.abs() < 0.6 && (p.pitch - ready.pitch).abs() < 0.45,
+                "the haft stays near upright through the reap (phase {phase})"
+            );
+        }
+    }
+
+    #[test]
+    fn sickle_swing_pose_is_continuous_with_no_velocity_spikes() {
+        // Same dense-sample smoothness bar the sword spline is held to.
+        const N: usize = 200;
+        let sample = |i: usize| sickle_swing_pose(i as f32 / N as f32);
+        let mut prev = sample(0);
+        let mut max_step = 0.0f32;
+        for i in 1..=N {
+            let cur = sample(i);
+            for (a, b) in [
+                (prev.pitch, cur.pitch),
+                (prev.yaw, cur.yaw),
+                (prev.roll, cur.roll),
+                (prev.forward, cur.forward),
+                (prev.right, cur.right),
+                (prev.up, cur.up),
+            ] {
+                max_step = max_step.max((b - a).abs());
+            }
+            prev = cur;
+        }
+        assert!(
+            max_step < 0.06,
+            "no channel may jump between adjacent samples, got {max_step}"
+        );
+        let start = sickle_swing_pose(0.0);
+        let end = sickle_swing_pose(1.0);
+        assert!(
+            (start.pitch - end.pitch).abs() < 1e-6 && (start.right - end.right).abs() < 1e-6,
+            "the spline returns to the exact carry pose"
         );
     }
 

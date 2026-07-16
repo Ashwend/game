@@ -15,10 +15,10 @@ use crate::{
         Deployable, DeployableActive, DeployableAuth, DeployableHealth, DeployableLabel,
         DeployableStability, DeployableTransform, DroppedItem, DroppedItemTransform, LootBagEntity,
         LootBagTransform, Player, PlayerAction, PlayerArmor, PlayerChargeFraction,
-        PlayerChatBubble, PlayerCrafting, PlayerEquipmentVisual, PlayerHealth, PlayerHeldItem,
-        PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerOpenContainers, PlayerPose,
-        PlayerPrivateState, PlayerProfile, PlayerSleeping, Projectile, ProjectileTransform,
-        ResourceNode, ResourceNodeStorage,
+        PlayerChatBubble, PlayerClaimStatus, PlayerCrafting, PlayerEquipmentVisual, PlayerHealth,
+        PlayerHeldItem, PlayerInputAck, PlayerInventory, PlayerLifecycle, PlayerOpenContainers,
+        PlayerPose, PlayerPrivateState, PlayerProfile, PlayerSleeping, Projectile,
+        ProjectileTransform, ResourceNode, ResourceNodeStorage,
     },
 };
 
@@ -136,6 +136,7 @@ impl Plugin for LightyearProtocolPlugin {
         app.component::<PlayerCrafting>().replicate();
         app.component::<PlayerOpenContainers>().replicate();
         app.component::<PlayerInputAck>().replicate();
+        app.component::<PlayerClaimStatus>().replicate();
         app.component::<PlayerArmor>().replicate();
         app.component::<PlayerLifecycle>().replicate();
         app.component::<PlayerSleeping>().replicate();

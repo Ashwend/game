@@ -27,11 +27,12 @@ pub enum InventoryCommand {
         seq: u32,
     },
     /// Quick-pick a crude (hand-harvestable) resource node, surface
-    /// stones, branch piles, grass tufts. Server treats this as an
-    /// instant full drain: as much of the node's storage as fits flows
-    /// straight into the player's inventory, and the node despawns if
-    /// fully emptied. Rejected server-side for non-crude nodes (trees,
-    /// ore veins), those still require a tool swing.
+    /// stones, branch piles, grass tufts. Server drains the node's
+    /// storage straight into the player's inventory, capped per material
+    /// by the definition's `hand_pickup_yield` (the grass tuft's token
+    /// handful; the excess is discarded with the node). Rejected
+    /// server-side for non-crude nodes (trees, ore veins), those still
+    /// require a tool swing.
     PickUpResourceNode {
         resource_node_id: ResourceNodeId,
         /// Optimistic-prediction sequence number (see [`InventoryCommand::action_seq`]).
@@ -243,6 +244,10 @@ pub enum ClaimCommand {
 pub struct RespawnBagOption {
     pub id: DeployedEntityId,
     pub name: String,
+    /// Seconds until this bag accepts a respawn again, `0` when ready.
+    /// Snapshotted at death; the death screen ticks it down locally and the
+    /// server re-validates on the actual respawn command.
+    pub cooldown_seconds: u32,
 }
 
 /// Loot bag commands. Same Open/Close/Move shape as
@@ -298,15 +303,32 @@ pub enum ContainerViewKind {
     StorageBox,
     /// A world-spawned salvage chest in a burnt-out house (the ruin cache).
     /// Same container plumbing as a storage box; only the panel copy
-    /// differs. Appended LAST so existing variants keep their postcard
-    /// variant indices.
+    /// differs. Appended so existing variants keep their postcard variant
+    /// indices.
     SalvageChest,
+    /// The Tool Cupboard's upkeep storage grid. Same container plumbing;
+    /// the panel additionally renders the `OpenLootBagView::upkeep`
+    /// readout. Appended LAST for postcard index stability.
+    ToolCupboard,
+}
+
+/// Upkeep readout attached to the Tool Cupboard's container view: what the
+/// claimed base costs and what is stocked, so the panel can show rates and
+/// time remaining without another round trip.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ContainerUpkeepInfo {
+    /// One row per upkeep material with a nonzero bill: `(item id, cost per
+    /// in-game day rounded up, currently stocked)`.
+    pub materials: Vec<(crate::items::ItemId, u32, u32)>,
+    /// True when any bucket went unpaid on the last drain: the base is
+    /// actively decaying.
+    pub decaying: bool,
 }
 
 /// Per-client view of the container currently open on the server (loot
-/// bag, sleeping body, or storage box; they share one transfer UI).
-/// Replicated as a field of `PlayerPrivate.open_loot_bag` so the
-/// owning client renders the transfer UI off its replicated data. `id`
+/// bag, sleeping body, storage box, or Tool Cupboard grid; they share one
+/// transfer UI). Replicated as a field of `PlayerPrivate.open_loot_bag` so
+/// the owning client renders the transfer UI off its replicated data. `id`
 /// is an opaque handle scoped to `kind`: a `LootBagId`, the sleeper's
 /// `ClientId`, or a `DeployedEntityId`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -314,6 +336,8 @@ pub struct OpenLootBagView {
     pub id: LootBagId,
     pub slots: Vec<Option<ItemStack>>,
     pub kind: ContainerViewKind,
+    /// `Some` only for the Tool Cupboard: the upkeep rates/stock readout.
+    pub upkeep: Option<ContainerUpkeepInfo>,
 }
 
 /// Client → server messages for furnace interaction. The server gates

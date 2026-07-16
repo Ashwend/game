@@ -213,3 +213,76 @@ fn respawn_at_bag_requires_being_dead() {
         "alive players can't teleport via the respawn path"
     );
 }
+
+#[test]
+fn bag_respawn_starts_a_cooldown_shared_with_nearby_bags_only() {
+    let mut server = server();
+    let owner = connect_host(&mut server);
+    let used = place_bag(&mut server, owner, Vec3Net::new(3.0, 0.0, 0.0));
+    let nearby = place_bag(&mut server, owner, Vec3Net::new(0.0, 0.0, 3.0));
+    // A remote camp bag, well outside the shared-cooldown radius. Walk the
+    // owner out to it so the placement reach check passes, then walk back.
+    let far_anchor = crate::game_balance::SLEEPING_BAG_SHARED_COOLDOWN_RADIUS_M + 25.0;
+    server.clients.get_mut(&owner).unwrap().controller.position =
+        Vec3Net::new(far_anchor, 0.0, 0.0);
+    let far = place_bag(&mut server, owner, Vec3Net::new(far_anchor + 2.0, 0.0, 0.0));
+    server.clients.get_mut(&owner).unwrap().controller.position = Vec3Net::ZERO;
+
+    kill(&mut server, owner);
+    server.receive(owner, ClientMessage::RespawnAtBag { id: used });
+    assert!(server.clients[&owner].lifecycle.is_alive());
+
+    // The used bag and its 3 m neighbour are cooling; the remote bag is ready.
+    let bags = server.respawn_bag_options(crate::protocol::AccountId(1));
+    let secs = |id: DeployedEntityId| {
+        bags.iter()
+            .find(|bag| bag.id == id)
+            .expect("bag listed")
+            .cooldown_seconds
+    };
+    assert!(secs(used) > 0, "the used bag starts its cooldown");
+    assert!(
+        secs(nearby) > 0,
+        "a same-owner bag in the cluster shares it"
+    );
+    assert_eq!(secs(far), 0, "a remote bag stays ready");
+
+    // Dying again immediately: the cooling neighbour refuses (the player
+    // stays dead and can still pick another option)...
+    kill(&mut server, owner);
+    server.receive(owner, ClientMessage::RespawnAtBag { id: nearby });
+    assert!(
+        server.clients[&owner].lifecycle.is_dead(),
+        "a cooling bag refuses the respawn"
+    );
+    // ...while the remote bag accepts.
+    server.receive(owner, ClientMessage::RespawnAtBag { id: far });
+    assert!(
+        server.clients[&owner].lifecycle.is_alive(),
+        "a ready bag still works"
+    );
+}
+
+#[test]
+fn bag_cooldown_expires_after_the_window() {
+    let mut server = server();
+    let owner = connect_host(&mut server);
+    let id = place_bag(&mut server, owner, Vec3Net::new(3.0, 0.0, 0.0));
+
+    kill(&mut server, owner);
+    server.receive(owner, ClientMessage::RespawnAtBag { id });
+    assert!(server.clients[&owner].lifecycle.is_alive());
+
+    // Straight back onto the same bag: refused inside the window.
+    kill(&mut server, owner);
+    server.receive(owner, ClientMessage::RespawnAtBag { id });
+    assert!(server.clients[&owner].lifecycle.is_dead());
+
+    // After the window the same bag accepts again.
+    server.tick += crate::game_balance::SLEEPING_BAG_RESPAWN_COOLDOWN_TICKS + 1;
+    server.receive(owner, ClientMessage::RespawnAtBag { id });
+    assert!(
+        server.clients[&owner].lifecycle.is_alive(),
+        "after the cooldown the bag accepts again"
+    );
+}

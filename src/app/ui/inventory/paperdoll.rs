@@ -197,6 +197,7 @@ mod tests {
                 last_processed_input: 0,
                 applied_action_seq: 0,
                 run_speed_multiplier: 1.0,
+                claim_status: Default::default(),
             }),
             lifecycle: None,
         }

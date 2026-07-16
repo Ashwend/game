@@ -650,7 +650,7 @@ fn impact_effect_kind_maps_wire_kinds() {
 /// Every [`ItemModel`] swing archetype. The exhaustive match forces a new
 /// variant to be added here, so the completeness test below then covers it and a
 /// model can never reach the swing machine without a duration + contact fraction.
-const ALL_SWING_MODELS: [ItemModel; 11] = [
+const ALL_SWING_MODELS: [ItemModel; 12] = [
     ItemModel::Bag,
     ItemModel::Deployable,
     ItemModel::Hatchet,
@@ -662,6 +662,7 @@ const ALL_SWING_MODELS: [ItemModel; 11] = [
     ItemModel::Bow,
     ItemModel::Crossbow,
     ItemModel::ThrownBomb,
+    ItemModel::Sickle,
 ];
 
 #[test]
@@ -682,6 +683,7 @@ fn all_swing_models_listed_and_have_valid_timing() {
             | ItemModel::Bow
             | ItemModel::Crossbow
             | ItemModel::ThrownBomb
+            | ItemModel::Sickle
             | ItemModel::Bandage => true,
         }
     }

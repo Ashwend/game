@@ -62,6 +62,10 @@ pub fn tool_effectiveness_pct(tool: ToolKind, material: DestructibleMaterial) ->
         // ride their own commands, so zero here closes the "hammer as a
         // free raid tool" hole outright.
         (ToolKind::Hammer, _) => 0,
+        // The sickle harvests grass, it never breaks structures. Zero across
+        // every material for the same reason as the hammer: a fiber tool must
+        // not double as a free raid tool.
+        (ToolKind::Sickle, _) => 0,
         // Hands shouldn't reach here, but if they do treat them as
         // worst-case mismatched so they make minimal dents.
         (ToolKind::Hands, _) => 50,
@@ -197,7 +201,7 @@ mod tests {
         let rows = [
             (PowderBomb, 100, 40, 8, 0),
             (PowderKeg, 100, 80, 25, 0),
-            (SatchelCharge, 100, 85, 45, 8),
+            (SatchelCharge, 100, 85, 45, 30),
         ];
         for (kind, sticks, wood, stone, metal) in rows {
             assert_eq!(
@@ -223,8 +227,9 @@ mod tests {
         }
     }
 
-    /// A bomb does 0 to metal (an iron door is bomb-proof) and satchel does
-    /// exactly its spec 8% against metal, the two edges the raid math leans on.
+    /// A bomb does 0 to metal (an iron door is bomb-proof) and the satchel is
+    /// the ONLY charge with a real metal arm (30%, so an iron door is exactly
+    /// 5 satchels), the two edges the raid math leans on.
     #[test]
     fn explosive_metal_edges_hold() {
         assert_eq!(
@@ -240,8 +245,8 @@ mod tests {
                 ExplosiveKind::SatchelCharge,
                 DestructibleMaterial::MetalBuilding
             ),
-            8,
-            "a satchel does exactly 8% of base vs metal"
+            30,
+            "a satchel does exactly 30% of base vs metal (5 satchels per iron door)"
         );
     }
 

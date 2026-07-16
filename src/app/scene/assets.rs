@@ -1146,6 +1146,7 @@ fn insert_deployable_visuals(
         building_materials,
         hewn_door_panel_mesh: prim_mesh(&hewn_door_glb, 0),
         iron_door_panel_mesh: prim_mesh(&iron_door_glb, 0),
+        shutter_panel_mesh: meshes.add(crate::app::scene::mesh::shutter_panel_mesh()),
         // Wood door: matte plank surface. Iron door: rough forged metal, a
         // touch metallic so it picks up the sky IBL and reads as steel rather
         // than flat-dark; the dark plate texture drives the F0 tint.
@@ -1164,6 +1165,7 @@ fn insert_deployable_visuals(
             ..default()
         }),
         door_ghost_mesh: meshes.add(door_ghost_mesh()),
+        shutter_ghost_mesh: meshes.add(crate::app::scene::mesh::shutter_ghost_mesh()),
         sleeping_bag_mesh: prim_mesh(&sleeping_bag_glb, 0),
         storage_box_small_mesh: prim_mesh(&storage_box_small_glb, 0),
         storage_box_large_mesh: prim_mesh(&storage_box_large_glb, 0),

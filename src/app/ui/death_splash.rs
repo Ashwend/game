@@ -157,9 +157,33 @@ pub(super) fn death_splash_ui(ctx: &egui::Context, splash: &DeathSplash) -> Opti
                 }
                 // One button per placed sleeping bag, capped so a bag
                 // hoarder can't push the hint off-screen. Secondary
-                // styling keeps the random respawn the visual default.
+                // styling keeps the random respawn the visual default. A
+                // bag still on its respawn cooldown renders disabled with
+                // the remaining time, ticked down locally from the
+                // seconds snapshotted at death (the server re-validates
+                // on the actual respawn command regardless).
                 for bag in splash.respawn_bags.iter().take(5) {
                     ui.add_space(6.0);
+                    let cooldown_left = (bag.cooldown_seconds as f32 - splash.elapsed)
+                        .ceil()
+                        .max(0.0) as u32;
+                    if cooldown_left > 0 {
+                        let label = format!(
+                            "{} ({}:{:02})",
+                            bag.name,
+                            cooldown_left / 60,
+                            cooldown_left % 60
+                        );
+                        ui.add_enabled_ui(false, |ui| {
+                            let _ = super::theme::game_button(
+                                ui,
+                                &label,
+                                super::theme::ButtonKind::Secondary,
+                                super::theme::MENU_BUTTON_WIDTH,
+                            );
+                        });
+                        continue;
+                    }
                     let bag_button = super::theme::game_button(
                         ui,
                         &bag.name,

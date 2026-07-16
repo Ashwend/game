@@ -1276,3 +1276,109 @@ fn extending_one_grid_cannot_overlap_an_offset_foundation() {
         "an extension overlapping another foundation must be rejected"
     );
 }
+
+#[test]
+fn repair_is_locked_out_after_combat_damage_until_the_window_passes() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    give(&mut server, client_id, WOOD_ID, 200);
+    equip(&mut server, client_id, crate::items::BASIC_HATCHET_ID);
+
+    place(
+        &mut server,
+        client_id,
+        BuildingPiece::Foundation,
+        Vec3Net::new(0.0, 0.0, 2.0),
+        0.0,
+    );
+    let id = building_ids(&server, BuildingPiece::Foundation)[0];
+
+    // A real hatchet hit (sticks shred to axes) lands damage and stamps the
+    // combat lockout.
+    server.clients.get_mut(&client_id).unwrap().next_gather_tick = 0;
+    let _ = server.apply_damage_deployable_command(client_id, DamageDeployableCommand { id });
+    let damaged = server.deployed_entities[&id].health;
+    assert!(
+        damaged < server.deployed_entities[&id].max_health,
+        "the hatchet hit landed"
+    );
+
+    // Repair inside the lockout window is refused: health unchanged.
+    equip(&mut server, client_id, HAMMER_ID);
+    server.clients.get_mut(&client_id).unwrap().next_gather_tick = 0;
+    server.receive(
+        client_id,
+        ClientMessage::Building(BuildingCommand::Repair { id }),
+    );
+    assert_eq!(
+        server.deployed_entities[&id].health, damaged,
+        "a recently-damaged piece cannot be repaired"
+    );
+
+    // Once the window passes, the same repair goes through.
+    server.tick += crate::game_balance::BUILDING_REPAIR_COMBAT_LOCKOUT_TICKS + 1;
+    server.clients.get_mut(&client_id).unwrap().next_gather_tick = 0;
+    server.receive(
+        client_id,
+        ClientMessage::Building(BuildingCommand::Repair { id }),
+    );
+    assert!(
+        server.deployed_entities[&id].health > damaged,
+        "after the lockout the piece repairs normally"
+    );
+}
+
+#[test]
+fn upgrade_is_locked_out_after_combat_damage_until_the_window_passes() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    give(&mut server, client_id, WOOD_ID, 200);
+    give(&mut server, client_id, crate::items::HEWN_LOG_ID, 50);
+    equip(&mut server, client_id, crate::items::BASIC_HATCHET_ID);
+
+    place(
+        &mut server,
+        client_id,
+        BuildingPiece::Foundation,
+        Vec3Net::new(0.0, 0.0, 2.0),
+        0.0,
+    );
+    let id = building_ids(&server, BuildingPiece::Foundation)[0];
+
+    // Damage stamps the lockout; an upgrade would refill HP to the new tier's
+    // full, so it must be refused inside the window too.
+    server.clients.get_mut(&client_id).unwrap().next_gather_tick = 0;
+    let _ = server.apply_damage_deployable_command(client_id, DamageDeployableCommand { id });
+
+    equip(&mut server, client_id, HAMMER_ID);
+    server.receive(
+        client_id,
+        ClientMessage::Building(BuildingCommand::Upgrade { id }),
+    );
+    assert!(
+        matches!(
+            server.deployed_entities[&id].kind,
+            DeployableKind::Building {
+                tier: BuildingTier::Sticks,
+                ..
+            }
+        ),
+        "a recently-damaged piece cannot be upgraded"
+    );
+
+    server.tick += crate::game_balance::BUILDING_REPAIR_COMBAT_LOCKOUT_TICKS + 1;
+    server.receive(
+        client_id,
+        ClientMessage::Building(BuildingCommand::Upgrade { id }),
+    );
+    assert!(
+        matches!(
+            server.deployed_entities[&id].kind,
+            DeployableKind::Building {
+                tier: BuildingTier::HewnWood,
+                ..
+            }
+        ),
+        "after the lockout the upgrade goes through"
+    );
+}

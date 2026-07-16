@@ -69,6 +69,7 @@ fn place_cupboard(
         torch: None,
         cupboard: Some(CupboardState {
             authorized: vec![owner],
+            ..Default::default()
         }),
         ruin_cache: None,
         fuse: None,
@@ -94,6 +95,35 @@ fn claim_gate_blocks_non_owner_but_not_owner_or_admin() {
     assert!(server.claim_blocks_placement(margin, crate::protocol::AccountId(2)));
     // An authorized account (the placer, auto-added) is never blocked.
     assert!(!server.claim_blocks_placement(inside, crate::protocol::AccountId(1)));
+}
+
+#[test]
+fn claim_status_reports_coverage_and_authorization_for_the_hud() {
+    let mut server = server();
+    place_foundation(&mut server, Vec3Net::ZERO);
+    let cupboard = place_cupboard(&mut server, Vec3Net::ZERO, crate::protocol::AccountId(1));
+
+    let inside = Vec3Net::ZERO;
+    let margin = crate::game_balance::BUILDING_PRIVILEGE_MARGIN_CELLS;
+    let outside = Vec3Net::new((margin + 2) as f32 * 3.0, 0.0, 0.0);
+
+    // The owner standing on their base: covered + authorized (green bar).
+    let status = server.claim_status_at(inside, crate::protocol::AccountId(1));
+    assert!(status.inside_claim && status.authorized);
+
+    // A stranger on the same spot: covered but not authorized (red bar).
+    let status = server.claim_status_at(inside, crate::protocol::AccountId(2));
+    assert!(status.inside_claim && !status.authorized);
+
+    // Anyone outside every claim: neither, the HUD draws nothing.
+    let status = server.claim_status_at(outside, crate::protocol::AccountId(1));
+    assert!(!status.inside_claim && !status.authorized);
+
+    // Authorizing the stranger flips their standing to green.
+    let raider = connect_account(&mut server, crate::protocol::AccountId(2), "Raider");
+    server.apply_claim_command(raider, ClaimCommand::AuthorizeSelf { id: cupboard });
+    let status = server.claim_status_at(inside, crate::protocol::AccountId(2));
+    assert!(status.inside_claim && status.authorized);
 }
 
 #[test]

@@ -43,6 +43,11 @@ impl GameServer {
         self.tick_furnaces();
         self.tick_torches();
         self.tick_ruin_caches();
+        // Tool Cupboard upkeep drain + decay (no-ops between periods).
+        // Envelope-free: drained slots reach an open viewer through the
+        // per-player container view, and decay HP through the deployable
+        // mirror's `DeployableHealth` diff.
+        self.tick_upkeep();
         self.tick_loot_bags(delta_seconds);
         self.expire_chat_bubbles();
         // Lift the crossbow reload movement slow off anyone whose reload window

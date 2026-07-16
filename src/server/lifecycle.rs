@@ -49,7 +49,24 @@ impl GameServer {
             (Some(saved_nodes), Some(saved_chunk)) => {
                 let nodes: HashMap<ResourceNodeId, ResourceNodeState> = saved_nodes
                     .into_iter()
-                    .map(|node| (node.id, node))
+                    .map(|mut node| {
+                        // Crude clutter (branch piles, surface stones, hay
+                        // tufts) is all-or-nothing: it is never left
+                        // partially drained, so its persisted storage is
+                        // only ever a stale copy of an older definition.
+                        // Refresh it to the CURRENT definition on load so a
+                        // balance change (e.g. the hay tuft's fiber boost)
+                        // reaches worlds saved before it; trees and ore keep
+                        // their genuinely-partial saved storage.
+                        if let Some(definition) =
+                            crate::resource_nodes::resource_node_definition(&node.definition_id)
+                            && definition.model.is_crude()
+                        {
+                            node.storage =
+                                crate::resource_nodes::definition_storage_stacks(definition);
+                        }
+                        (node.id, node)
+                    })
                     .collect();
                 let manager = ChunkManager::from_save(saved_chunk, load_tick_for_chunk);
                 (manager, nodes)
@@ -252,6 +269,10 @@ impl GameServer {
             stuck_projectiles: HashMap::new(),
             loot_bags: HashMap::new(),
             claim_footprints: HashMap::new(),
+            // Transient: a restart clears the repair lockout stamps and the
+            // sleeping-bag respawn cooldowns.
+            recently_damaged: HashMap::new(),
+            bag_respawn_cooldowns: HashMap::new(),
             next_dropped_item_id: crate::protocol::DroppedItemId(next_dropped_item_id),
             next_client_id,
             next_resource_node_id: crate::protocol::ResourceNodeId(next_resource_node_id),

@@ -10,7 +10,7 @@ sources:
   - src/server/chunk_manager/save.rs - ChunkManagerSave, PendingRegrowSave
   - src/net/host/rooms.rs - attach_room_gated_replication, update_client_room_subscriptions, ensure_chunk_room_*
   - src/net/host/mirror.rs - sync_projectile_entities
-  - src/server/meteor_shower.rs - spawn_meteor_shower_crater_nodes, cleanup_meteor_shower
+  - src/server/meteor_shower.rs - spawn_meteor_shower_crater_nodes, cleanup_expired_meteors
   - src/server/queries.rs - client_aoi_key, visible_chunks_for_client, retained_chunks_for_client
 related:
   - docs/replication.md - the attach helpers, bug #740, the host mirror this AoI gates
@@ -141,7 +141,7 @@ Ruin footprints are a node-rejection input to both placement passes: `ChunkManag
 Two sources feed nodes into this system differently:
 
 - **Meteorite** is a normal world-gen kind. It rides the raw ore channel (`channel_for`, `src/world/chunk/classification.rs`), has base capacity 1 and only in `RockyOutcrop`/`OreVein` chunks (`base_capacity`, same file), and is further gated in `chunk_kind_target` (`src/world/chunk/generator.rs:87`) by a centre-distance ring (`METEORITE_MIN_CENTER_DISTANCE_FRACTION`) plus an ore-channel floor, so most eligible chunks hold none. It depletes and regrows like any other kind, capped by that same ceiling.
-- **Meteor shower crater nodes** are spliced into the live map at runtime by the meteor event (`spawn_meteor_shower_crater_nodes`, `src/server/meteor_shower.rs:577`): each crater node enters membership via `track_resource_node` so it is AoI-visible like any node. A crater node mined by a player depletes through the normal gather path, so its regrow event is subject to the same capacity gate as any other kind. Any crater node still unmined at event end is force-despawned by `cleanup_meteor_shower` (`meteor_shower.rs:654`), which removes it and calls `untrack_resource_node` with **no regrow scheduled** (event spawns, not world nodes). See [meteor-shower.md](meteor-shower.md).
+- **Meteor shower crater nodes** are spliced into the live map at runtime by the meteor event, per meteor (`spawn_meteor_shower_crater_nodes`, `src/server/meteor_shower.rs`; the count scales with the meteor's size): each crater node enters membership via `track_resource_node` so it is AoI-visible like any node. A crater node mined by a player depletes through the normal gather path, so its regrow event is subject to the same capacity gate as any other kind. Any crater node still unmined when its meteor's window ends is force-despawned by `cleanup_expired_meteors` (same file), which removes it and calls `untrack_resource_node` with **no regrow scheduled** (event spawns, not world nodes). See [meteor-shower.md](meteor-shower.md).
 
 ### Capacity ceiling is shared with world-gen
 

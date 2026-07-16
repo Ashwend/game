@@ -396,20 +396,20 @@ pub enum ServerMessage {
     /// clock or speed. Clients integrate locally between broadcasts using
     /// the same multiplier, so the visible cycle stays smooth.
     WorldTime(WorldTimeSnapshot),
-    /// A meteor shower event is live: the announce. Broadcast reliably once
-    /// at T minus the warning window, and resent to any client that connects
-    /// while the event is still alive (including the post-impact crater window)
-    /// so late joiners see the fireball / crater immediately. The client
-    /// computes the entire sky show, countdown, danger warning, and temporary
-    /// map marker as a deterministic function of this payload plus its own
-    /// authoritative-clock estimate, so nothing about the meteor is per-tick
-    /// replicated. `impact_tick` is the server tick the meteor strikes;
-    /// `trajectory_seed` seeds the fireball's approach azimuth. See
-    /// `docs/meteor_shower.md` and `crate::world::meteor_shower`.
+    /// A meteor shower event is live: the announce, carrying EVERY meteor of
+    /// the event (4 to 5 size-varied strikes with staggered impact ticks; the
+    /// admin `/meteor-here` sends a single-strike list). Broadcast reliably
+    /// once at T minus the warning window, and resent (with all still-live
+    /// meteors) to any client that connects while the event is alive
+    /// (including the post-impact crater windows) so late joiners see the
+    /// fireballs / craters immediately. There is deliberately NO global
+    /// announcement UI: the client computes the sky show, per-meteor danger
+    /// warning, and craters as a deterministic function of this payload plus
+    /// its own authoritative-clock estimate, so nothing about a meteor is
+    /// per-tick replicated. See `docs/meteor-shower.md` and
+    /// `crate::world::meteor_shower`.
     MeteorShower {
-        impact_position: Vec3Net,
-        impact_tick: u64,
-        trajectory_seed: u64,
+        meteors: Vec<MeteorStrike>,
     },
     /// An explosive detonated at `position`. Purely a cosmetic VFX/SFX cue: the
     /// authoritative blast (player damage, structure destruction) already lands
@@ -524,6 +524,26 @@ impl ServerMessage {
 pub enum PlayerEvent {
     Joined { client_id: ClientId, name: String },
     Left { client_id: ClientId, name: String },
+}
+
+/// One meteor of a shower event, as announced in [`ServerMessage::MeteorShower`].
+/// Everything a client needs to derive that meteor's whole presentation
+/// (fireball arc, danger warning, crater) plus the shared clock estimate.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct MeteorStrike {
+    /// Ground-zero world position (y is floor level).
+    pub impact_position: Vec3Net,
+    /// Server tick this meteor strikes. Staggered per meteor so the event
+    /// reads as a shower, not a volley.
+    pub impact_tick: u64,
+    /// Seeds this meteor's approach azimuth/arc (see
+    /// `crate::world::meteor_shower::meteor_world_state`).
+    pub trajectory_seed: u64,
+    /// Size multiplier in `(0, 1]`: exactly one meteor per event is the 1.0
+    /// headliner, the rest roll the secondary band. Scales the blast radius,
+    /// ground-zero damage, danger radius, crater geometry, loot count, and
+    /// the fireball's visual/audio scale.
+    pub size: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

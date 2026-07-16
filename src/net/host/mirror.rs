@@ -724,6 +724,14 @@ pub(super) fn sync_player_entities(world: &mut World) {
                     crate::server::PlayerInputAck,
                     view.input_ack
                 );
+                refresh_player_component!(
+                    world,
+                    private_entity,
+                    view.client_id,
+                    "PlayerClaimStatus  ",
+                    crate::server::PlayerClaimStatus,
+                    view.claim_status
+                );
             }
             // Refresh armor. Carries the melee column of the worn
             // set's protection, recomputed server-side on every

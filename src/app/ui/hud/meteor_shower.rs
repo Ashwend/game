@@ -1,26 +1,14 @@
-//! Meteor shower HUD: the CENTER_TOP countdown pill plus the escalating
-//! danger-zone evacuation warning. Both are computed client-side from the
-//! announce payload against the authoritative clock estimate, so they cost
-//! nothing on the wire and can never desync from the countdown.
+//! Meteor shower HUD: the escalating danger-zone evacuation warning, shown
+//! only while the local player stands inside a live meteor's size-scaled
+//! danger radius. There is deliberately NO global announcement UI (no
+//! countdown pill, no map marker): the sky fireballs and the audio are the
+//! announcement, and this warning is the one piece of chrome, computed
+//! client-side from the announce payload against the authoritative clock
+//! estimate so it costs nothing on the wire.
 
 use bevy_egui::egui;
 
 use crate::app::state::ClientRuntime;
-
-use super::super::theme;
-
-/// Format a meteor shower countdown for the HUD pill from the seconds remaining to
-/// impact. Under 30 s it switches to a terse "Impact imminent"; otherwise it
-/// reads `M:SS`. Pure so it can be unit-tested.
-fn format_meteor_shower_countdown(seconds_to_impact: f32) -> String {
-    if seconds_to_impact <= 30.0 {
-        return "Impact imminent".to_owned();
-    }
-    let total = seconds_to_impact.max(0.0) as u32;
-    let minutes = total / 60;
-    let secs = total % 60;
-    format!("MeteorShower {minutes}:{secs:02}")
-}
 
 /// Escalation intensity `0.0..=1.0` for the danger-zone evacuation warning,
 /// ramping over the final 60 seconds before impact. `0.0` at 60 s out, `1.0` at
@@ -31,106 +19,51 @@ fn meteor_shower_danger_intensity(seconds_to_impact: f32) -> f32 {
     ((60.0 - seconds_to_impact) / 60.0).clamp(0.0, 1.0)
 }
 
-/// The meteor shower countdown pill and the danger-zone evacuation warning. Both are
-/// computed client-side from the announce payload (`runtime.meteor_shower`) plus the
-/// player's own position against the authoritative clock estimate, so they cost
-/// nothing on the wire and can never desync from the countdown. Silent when no
-/// event is live or after impact.
+/// The danger-zone evacuation warning: shown only while the player's OWN
+/// position is inside the size-scaled danger radius of a live, not-yet-landed
+/// meteor. Evaluated against EVERY meteor of the shower; the most imminent
+/// covering meteor drives the escalation. Computed client-side from the
+/// announce payload (`runtime.meteor_showers`) plus the player's own position
+/// against the authoritative clock estimate. Silent when no meteor threatens
+/// the player's spot.
 pub(super) fn meteor_shower_hud(ctx: &egui::Context, runtime: &ClientRuntime) {
-    let Some(event) = runtime.meteor_shower else {
-        return;
-    };
-    let now = runtime.server_tick();
-    // Only the pre-impact fireball phase gets a countdown; after impact the pill
-    // and warning go quiet (the crater visual takes over).
-    if event.has_impacted(now) {
+    if runtime.meteor_showers.is_empty() {
         return;
     }
-    let seconds_to_impact = event.seconds_to_impact(now);
-
-    // Countdown pill: CENTER_TOP, the voice-indicator template.
-    let imminent = seconds_to_impact <= 30.0;
-    let (fill, stroke, text_color) = if imminent {
-        (
-            egui::Color32::from_rgba_unmultiplied(38, 10, 6, 235),
-            egui::Color32::from_rgba_unmultiplied(255, 120, 70, 200),
-            egui::Color32::from_rgb(255, 190, 150),
-        )
-    } else {
-        (
-            egui::Color32::from_rgba_unmultiplied(10, 8, 12, 220),
-            egui::Color32::from_rgba_unmultiplied(248, 150, 70, 110),
-            theme::text(),
-        )
-    };
-    let label = format_meteor_shower_countdown(seconds_to_impact);
-    egui::Area::new("meteor_shower_countdown".into())
-        .order(egui::Order::Foreground)
-        .anchor(egui::Align2::CENTER_TOP, [0.0, 24.0])
-        .show(ctx, |ui| {
-            egui::Frame::NONE
-                .fill(fill)
-                .stroke(egui::Stroke::new(1.0, stroke))
-                .corner_radius(12)
-                .inner_margin(egui::Margin::symmetric(14, 6))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        // A small painter-drawn ember dot, warmer/pulsing when
-                        // imminent (no font glyph dependency, same reason as the
-                        // voice indicator).
-                        let dot_radius = 4.5;
-                        let (dot_rect, _) = ui.allocate_exact_size(
-                            egui::vec2(dot_radius * 2.0, dot_radius * 2.0),
-                            egui::Sense::hover(),
-                        );
-                        let pulse = if imminent {
-                            let t = ctx.input(|input| input.time) as f32;
-                            0.5 + 0.5 * (t * std::f32::consts::TAU * 1.6).sin()
-                        } else {
-                            1.0
-                        };
-                        let dot_alpha = (150.0 + pulse * 105.0) as u8;
-                        ui.painter().circle_filled(
-                            dot_rect.center(),
-                            dot_radius,
-                            egui::Color32::from_rgba_unmultiplied(255, 120, 60, dot_alpha),
-                        );
-                        ui.add_space(3.0);
-                        ui.label(
-                            egui::RichText::new(label)
-                                .size(13.0)
-                                .strong()
-                                .color(text_color),
-                        );
-                    });
-                });
-        });
-    if imminent {
-        ctx.request_repaint();
-    }
-
-    // Danger-zone evacuation warning: only when the player's OWN position is
-    // inside the danger radius of the impact point. Escalates over the final 60 s
-    // (colour + pulse). Because the impact siting guarantees the clearance
-    // exceeds the blast, the warning directs players OUT of the zone rather than
-    // under a roof that cannot exist inside it.
     let Some(player) = runtime.local_view() else {
         return;
     };
-    let inside_danger = event.impact_position.within_horizontal_range(
-        player.position,
-        crate::game_balance::METEOR_SHOWER_DANGER_RADIUS_M,
-    );
-    if !inside_danger {
-        return;
+    let now = runtime.server_tick();
+
+    // The most imminent meteor whose (size-scaled) danger radius covers the
+    // player. Because impact siting guarantees the clearance exceeds the
+    // blast, the warning directs players OUT of the zone rather than under a
+    // roof that cannot exist inside it.
+    let mut intensity: Option<f32> = None;
+    for event in &runtime.meteor_showers {
+        // Only the pre-impact phase warns; after a meteor lands its crater
+        // visual takes over.
+        if event.has_impacted(now) {
+            continue;
+        }
+        let danger_radius = crate::game_balance::METEOR_SHOWER_DANGER_RADIUS_M * event.size;
+        if !event
+            .impact_position
+            .within_horizontal_range(player.position, danger_radius)
+        {
+            continue;
+        }
+        let candidate = meteor_shower_danger_intensity(event.seconds_to_impact(now));
+        intensity = Some(intensity.map_or(candidate, |best: f32| best.max(candidate)));
     }
-    let intensity = meteor_shower_danger_intensity(seconds_to_impact);
-    meteor_shower_danger_warning(ctx, intensity);
+    if let Some(intensity) = intensity {
+        meteor_shower_danger_warning(ctx, intensity);
+    }
 }
 
 /// The escalating "evacuate the area" banner shown while the player stands inside
-/// the danger zone. Sits below the countdown pill; its colour saturates and it
-/// pulses faster as `intensity` (0..=1, ramping over the final 60 s) climbs.
+/// a meteor's danger zone. Its colour saturates and it pulses faster as
+/// `intensity` (0..=1, ramping over the final 60 s) climbs.
 fn meteor_shower_danger_warning(ctx: &egui::Context, intensity: f32) {
     let intensity = intensity.clamp(0.0, 1.0);
     let t = ctx.input(|input| input.time) as f32;
@@ -160,7 +93,7 @@ fn meteor_shower_danger_warning(ctx: &egui::Context, intensity: f32) {
                     // large the late-intensity text grows.
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new("Meteor shower incoming. Evacuate the area.")
+                            egui::RichText::new("Meteor incoming. Evacuate the area.")
                                 .size(15.0 + intensity * 3.0)
                                 .strong()
                                 .color(egui::Color32::from_rgb(255, green, 170)),
@@ -176,18 +109,6 @@ fn meteor_shower_danger_warning(ctx: &egui::Context, intensity: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn meteor_shower_countdown_formats_minutes_and_switches_to_imminent() {
-        // Well out: M:SS with zero-padded seconds.
-        assert_eq!(format_meteor_shower_countdown(504.0), "MeteorShower 8:24");
-        assert_eq!(format_meteor_shower_countdown(65.0), "MeteorShower 1:05");
-        // The 30 s boundary and below switches to the terse imminent copy.
-        assert_eq!(format_meteor_shower_countdown(31.0), "MeteorShower 0:31");
-        assert_eq!(format_meteor_shower_countdown(30.0), "Impact imminent");
-        assert_eq!(format_meteor_shower_countdown(5.0), "Impact imminent");
-        assert_eq!(format_meteor_shower_countdown(0.0), "Impact imminent");
-    }
 
     #[test]
     fn meteor_shower_danger_intensity_ramps_over_the_final_minute() {

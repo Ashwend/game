@@ -55,6 +55,9 @@ pub(crate) enum WheelAction {
     AuthorizeCupboard(DeployedEntityId),
     DeauthorizeCupboard(DeployedEntityId),
     ClearCupboard(DeployedEntityId),
+    /// Tool Cupboard hold-E wheel: open the upkeep storage grid (rides the
+    /// shared storage-box container flow).
+    OpenCupboard(DeployedEntityId),
     /// Explosive-charge hold-E wheel: defuse the live charge (server gates on
     /// reach + claim authorization, refunds half the materials).
     DefuseCharge(DeployedEntityId),

@@ -63,7 +63,7 @@ update_client_room_subscriptions,
 
 `src/net/host.rs` is the bootstrap only: `spawn_loopback_server`, `run_game_server`, `run_host`, `tick_authoritative_server`, the `ServerTickPulse` resource, and the `mirror_systems` wiring. The work lives in `src/net/host/`:
 
-- `mirror.rs` - the six exclusive `sync_*` systems (`world: &mut World`) and the `refresh_player_component!` macro. This is where `HashMap -> ECS` reconciliation and the server-side `MUTATE` trace logs live. Five of the six ride the shared `reconcile_mirror_entities` skeleton (snapshot the delta, despawn removed ids, then refresh-or-spawn per item); only the per-entity refresh/spawn closures are bespoke. `sync_resource_node_entities` stays fully bespoke for its world-load spawn budget.
+- `mirror.rs` - the six exclusive `sync_*` systems (`world: &mut World`) and the `refresh_player_component!` macro. This is where `HashMap -> ECS` reconciliation and the server-side `MUTATE` trace logs live. All but one ride the shared `reconcile_mirror_entities` skeleton (snapshot the delta, despawn removed ids, then refresh-or-spawn per item); only the per-entity refresh/spawn closures are bespoke. `sync_resource_node_entities` stays fully bespoke for its world-load spawn budget.
 - `rooms.rs` - chunk-room AoI: `attach_room_gated_replication` / `attach_player_replication` (the only sanctioned spawn paths), `owner_only_overrides`, `rebind_player_owner_if_changed`, `update_client_room_subscriptions`, `install_replication_sender_on_link`, and the unit test guarding the per-entity `ReplicationGroup` contract.
 - `routing.rs` - `receive_client_messages`, `route_envelopes`, the pre-auth handshake (`handle_unauthenticated_message`, `VersionMismatch`).
 - `admin.rs` - the dedicated-only Unix admin socket.
@@ -146,8 +146,9 @@ Owner-only (gated to the owning client's sender, never seen by peers):
 | `PlayerCrafting` | while jobs run | |
 | `PlayerOpenContainers` | while a furnace/loot-bag/workbench view is open | the loot-bag UI rides `open_loot_bag` here, not `LootBagContents`; the workbench upgrade UI rides `open_workbench: Option<OpenWorkbenchView>` (id + current tier, `src/server/player_ecs.rs`) |
 | `PlayerInputAck` | per-tick while moving | last processed input + applied action seq |
+| `PlayerClaimStatus` | on claim-boundary crossing / auth change | `{ inside_claim, authorized }`, the server's Tool Cupboard standing at the player's position (`claim_status_at` in `src/server/claim.rs`); drives the HUD's green/red authorization bar (`src/app/ui/hud/claim.rs`) |
 
-The four owner-only components were split out because the old `PlayerPublic`/`PlayerPrivate` mega-components re-shipped the full inventory at 20 Hz (the input ack ticking every tick made the bundled value compare unequal). The client reassembles the four owner-only components into one view struct in `update_local_player_state_system`.
+The owner-only components were split out because the old `PlayerPublic`/`PlayerPrivate` mega-components re-shipped the full inventory at 20 Hz (the input ack ticking every tick made the bundled value compare unequal). The client reassembles the owner-only components into one view struct in `update_local_player_state_system`.
 
 #### Owner-only gating and rebind-on-reconnect
 

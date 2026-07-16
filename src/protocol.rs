@@ -65,7 +65,22 @@ pub struct AccountId(pub u64);
 /// container panel title) and renamed the item id vocabulary that travels in
 /// `ItemStack`s (`meteorite_alloy`, `meteorite_ingot`, `salvaged_fittings`);
 /// an old client can neither decode the new view kind nor resolve the ids.
-pub const PROTOCOL_VERSION: u32 = 46;
+/// 47: `RespawnBagOption` gained `cooldown_seconds` (the sleeping-bag respawn
+/// cooldown shown on the death screen); an old client mis-decodes the
+/// `PlayerKilled` bag list.
+/// 48: appended `ContainerViewKind::ToolCupboard` and `OpenLootBagView`
+/// gained `upkeep` (the Tool Cupboard upkeep grid + readout); an old client
+/// mis-decodes the container view.
+/// 50: `ServerMessage::MeteorShower` became `{ meteors: Vec<MeteorStrike> }`
+/// (multi-meteor showers with per-meteor `size`); an old client mis-decodes
+/// the announce payload. Also appended `HeldMesh::Sickle` (the sickle's own
+/// held-mesh selector on the replicated `PlayerHeldItem`), which an old
+/// client cannot decode when a peer holds one.
+/// 51: removed `ClientMessage::HarvestGrass` and the replicated harvest-spot
+/// entity from 49 (the sickle now swings at the Tall Grass node through the
+/// ordinary `Gather` path), and appended `ItemModel::Sickle` (the sickle's
+/// reaping-slash swing archetype on the wire `PlayerAction`/`SwingStart`).
+pub const PROTOCOL_VERSION: u32 = 51;
 pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_CHAT_LEN: usize = 240;

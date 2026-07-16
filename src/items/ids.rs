@@ -39,6 +39,10 @@ pub const BASIC_HATCHET_ID: &str = "wood_stone_hatchet";
 pub const BASIC_PICKAXE_ID: &str = "wood_stone_pickaxe";
 pub const IRON_HATCHET_ID: &str = "iron_hatchet";
 pub const IRON_PICKAXE_ID: &str = "iron_pickaxe";
+/// Hand-craftable harvesting sickle. Gathers nothing from resource nodes;
+/// its swing sweeps plant fiber out of the instanced grass carpet, scaled by
+/// the biome's grass density (see `crate::server::harvest`).
+pub const IRON_SICKLE_ID: &str = "iron_sickle";
 /// The four melee weapons. They carry a `WeaponProfile` (not a
 /// `ToolProfile`), so they gather nothing and combat resolves them ahead of any
 /// tool. Meshes and icons live at `assets/items/<id>/{model.glb,icon.png}`.
@@ -75,6 +79,9 @@ pub const HEWN_LOG_DOOR_ID: &str = "hewn_log_door";
 /// Iron door variant: same code lock + doorway mount as the hewn log door,
 /// but tool-immune (only future explosives breach it) and double the HP.
 pub const IRON_DOOR_ID: &str = "iron_door";
+/// Codeless window shutter: mounts only in window-wall openings; toggled by
+/// the owner or anyone authorized on the covering Tool Cupboard.
+pub const WOOD_SHUTTER_ID: &str = "wood_shutter";
 /// Respawn-anchor deployable crafted from plant fiber.
 pub const SLEEPING_BAG_ID: &str = "sleeping_bag";
 /// Placeable item containers; small is hand-craftable, large needs a

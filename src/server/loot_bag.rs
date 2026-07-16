@@ -118,6 +118,7 @@ impl LootBag {
             id: self.id,
             slots: self.slots.clone(),
             kind: ContainerViewKind::LootBag,
+            upkeep: None,
         }
     }
 }
@@ -368,12 +369,13 @@ impl GameServer {
             OpenContainer::StorageBox(entity_id) => {
                 let entity = self.deployed_entities.get(&entity_id)?;
                 let storage = entity.storage.as_ref()?;
-                // The ruin cache rides the storage-box container pointer but
-                // titles its panel as the salvage chest it is.
-                let kind = if matches!(entity.kind, crate::items::DeployableKind::RuinCache) {
-                    ContainerViewKind::SalvageChest
-                } else {
-                    ContainerViewKind::StorageBox
+                // The ruin cache and the Tool Cupboard ride the storage-box
+                // container pointer but title their panels as themselves;
+                // the cupboard additionally carries the upkeep readout.
+                let kind = match entity.kind {
+                    crate::items::DeployableKind::RuinCache => ContainerViewKind::SalvageChest,
+                    crate::items::DeployableKind::ToolCupboard => ContainerViewKind::ToolCupboard,
+                    _ => ContainerViewKind::StorageBox,
                 };
                 Some(OpenLootBagView {
                     // The view id is an opaque handle: for storage-box
@@ -382,6 +384,7 @@ impl GameServer {
                     id: LootBagId(entity_id.0),
                     slots: storage.slots.clone(),
                     kind,
+                    upkeep: self.upkeep_info_for(entity_id),
                 })
             }
         }
@@ -623,5 +626,6 @@ fn sleeper_inventory_view(
         id: LootBagId(sleeper_id.0),
         slots,
         kind: ContainerViewKind::Sleeper,
+        upkeep: None,
     }
 }

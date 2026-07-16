@@ -1,6 +1,6 @@
 use crate::{
     game_balance::PICKUP_SERVER_REACH_SLACK_M,
-    items::{ToolKind, normalize_stack, within_pickup_reach},
+    items::{normalize_stack, within_pickup_reach},
     protocol::{
         ACTIONBAR_SLOT_COUNT, ClientId, DroppedItemId, DroppedWorldItem, InventoryCommand,
         ItemStack, PlayerInventoryState, ResourceNodeId, Vec3Net,
@@ -201,11 +201,13 @@ impl GameServer {
     }
 
     /// Quick-pickup path for crude resource nodes: drains storage straight
-    /// into the player's inventory, removes the node if fully emptied
-    /// (and schedules a fresh-position respawn via the chunk manager), and
-    /// returns toasts mirroring the per-item gather path. Server-side
-    /// gate: rejects nodes whose `required_tool` is anything other than
-    /// `Hands`, trees and ore veins still require a tool swing.
+    /// into the player's inventory (capped per material by the node's
+    /// `hand_pickup_yield`, the excess discarded with the node), removes
+    /// the node when done (and schedules a fresh-position respawn via the
+    /// chunk manager), and returns toasts mirroring the per-item gather
+    /// path. Server-side gate: only `is_crude()` models (branch pile,
+    /// surface stone, hay tuft); trees and ore veins still require a tool
+    /// swing.
     fn pick_up_resource_node(
         &mut self,
         client_id: ClientId,
@@ -217,7 +219,7 @@ impl GameServer {
         let Some(definition) = resource_node_definition(&node.definition_id) else {
             return Vec::new();
         };
-        if definition.required_tool.kind != ToolKind::Hands {
+        if !definition.model.is_crude() {
             return Vec::new();
         }
         let Some(client) = self.clients.get(&client_id) else {
@@ -247,8 +249,15 @@ impl GameServer {
             if stack.quantity == 0 {
                 continue;
             }
-            let requested = stack.quantity;
-            let remainder = add_stack_to_inventory(&mut client.inventory, stack.clone());
+            // A hand pluck takes at most `hand_pickup_yield` per material;
+            // the rest of the storage is deliberately NOT re-banked (the
+            // tuft is ruined either way), so the node still despawns and
+            // the sickle stays the only way to reap the full storage.
+            let requested = stack
+                .quantity
+                .min(definition.hand_pickup_yield.unwrap_or(u16::MAX));
+            let offered = ItemStack::new(stack.item_id.clone(), requested);
+            let remainder = add_stack_to_inventory(&mut client.inventory, offered);
             let accepted = match &remainder {
                 Some(rem) => requested.saturating_sub(rem.quantity),
                 None => requested,

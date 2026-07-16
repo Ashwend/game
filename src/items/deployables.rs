@@ -3,7 +3,7 @@
 //! on `ItemDefinition` for placeable items.
 
 use super::explosives::ExplosiveKind;
-use super::ids::{HEWN_LOG_DOOR_ID, IRON_DOOR_ID};
+use super::ids::{HEWN_LOG_DOOR_ID, IRON_DOOR_ID, WOOD_SHUTTER_ID};
 use super::materials::DestructibleMaterial;
 
 /// Which door model a [`DeployableKind::Door`] is. The variant is immutable
@@ -21,6 +21,13 @@ pub enum DoorVariant {
     /// Forged iron door. Tools do nothing to it (`MetalBuilding` material);
     /// it only falls to explosives, and carries double the wood door's HP.
     Iron,
+    /// Codeless window shutter. Mounts in a window-wall opening instead of a
+    /// doorway; toggled by the owner or anyone authorized on the covering
+    /// Tool Cupboard (no code lock). Closed it blocks the window (movement,
+    /// projectiles, targeting); open it folds clear so defenders can shoot
+    /// out. Appended LAST so the postcard variant index of the two doors is
+    /// unchanged in saves and on the wire.
+    Shutter,
 }
 
 impl DoorVariant {
@@ -29,6 +36,7 @@ impl DoorVariant {
         match self {
             Self::HewnLog => HEWN_LOG_DOOR_ID,
             Self::Iron => IRON_DOOR_ID,
+            Self::Shutter => WOOD_SHUTTER_ID,
         }
     }
 
@@ -37,14 +45,15 @@ impl DoorVariant {
         match self {
             Self::HewnLog => crate::game_balance::DOOR_MAX_HP,
             Self::Iron => crate::game_balance::IRON_DOOR_MAX_HP,
+            Self::Shutter => crate::game_balance::SHUTTER_MAX_HP,
         }
     }
 
     /// Raid material, the lever the tool-vs-material table reads. Wood doors
-    /// chip under tools; iron doors are tool-immune.
+    /// and shutters chip under tools; iron doors are tool-immune.
     pub const fn material(self) -> DestructibleMaterial {
         match self {
-            Self::HewnLog => DestructibleMaterial::WoodBuilding,
+            Self::HewnLog | Self::Shutter => DestructibleMaterial::WoodBuilding,
             Self::Iron => DestructibleMaterial::MetalBuilding,
         }
     }
@@ -53,6 +62,26 @@ impl DoorVariant {
         match self {
             Self::HewnLog => "Hewn Log Door",
             Self::Iron => "Iron Door",
+            Self::Shutter => "Window Shutter",
+        }
+    }
+
+    /// Which building piece this panel mounts in: doors hang in doorway
+    /// openings, the shutter in a window-wall opening.
+    pub const fn mount_piece(self) -> crate::building::BuildingPiece {
+        match self {
+            Self::HewnLog | Self::Iron => crate::building::BuildingPiece::Doorway,
+            Self::Shutter => crate::building::BuildingPiece::WindowWall,
+        }
+    }
+
+    /// Whether this panel carries a code lock. Codeless panels (the shutter)
+    /// skip the set-code prompt on hang and gate their toggle on base
+    /// authorization (owner or covering-cupboard auth) instead of a code.
+    pub const fn code_locked(self) -> bool {
+        match self {
+            Self::HewnLog | Self::Iron => true,
+            Self::Shutter => false,
         }
     }
 }

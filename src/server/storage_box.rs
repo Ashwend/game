@@ -72,6 +72,20 @@ impl StorageBoxState {
         slots.resize(crate::game_balance::RUIN_CACHE_SLOT_COUNT, None);
         Self { slots }
     }
+
+    /// The Tool Cupboard's upkeep grid rides the same slot state, with its
+    /// own slot count (`TOOL_CUPBOARD_SLOT_COUNT`).
+    pub(crate) fn new_tool_cupboard() -> Self {
+        Self {
+            slots: vec![None; crate::game_balance::TOOL_CUPBOARD_SLOT_COUNT],
+        }
+    }
+
+    pub(crate) fn from_tool_cupboard_persisted(persisted: PersistedStorageBoxState) -> Self {
+        let mut slots = persisted.slots;
+        slots.resize(crate::game_balance::TOOL_CUPBOARD_SLOT_COUNT, None);
+        Self { slots }
+    }
 }
 
 impl GameServer {
@@ -90,11 +104,14 @@ impl GameServer {
         let Some(entity) = self.deployed_entities.get(&id) else {
             return Vec::new();
         };
-        // Storage boxes and ruin caches share the container view: both store
-        // their loot in the `storage` grid and open through this message. The
-        // ruin cache uses its own (wider) interact range.
+        // Storage boxes, ruin caches, and the Tool Cupboard's upkeep grid
+        // share the container view: all store their contents in the
+        // `storage` grid and open through this message. The ruin cache uses
+        // its own (wider) interact range.
         let range = match entity.kind {
-            DeployableKind::StorageBox { .. } => STORAGE_BOX_INTERACT_RANGE_M,
+            DeployableKind::StorageBox { .. } | DeployableKind::ToolCupboard => {
+                STORAGE_BOX_INTERACT_RANGE_M
+            }
             DeployableKind::RuinCache => crate::game_balance::RUIN_CACHE_INTERACT_RANGE_M,
             _ => return Vec::new(),
         };

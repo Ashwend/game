@@ -1,9 +1,10 @@
 //! In-game HUD dispatcher. [`hud_ui`] owns the per-frame draw order of every
 //! HUD widget; each widget lives in a focused submodule (ranged/throw/consume
-//! readouts, meteor shower pill + warning, perf overlay, low-health vignette,
+//! readouts, the meteor evacuate warning, perf overlay, low-health vignette,
 //! combat feedback, health bar). Only the small voice "transmitting" chip
 //! stays here, next to the dispatcher.
 
+mod claim;
 mod combat_feedback;
 mod health;
 mod meteor_shower;
@@ -22,6 +23,7 @@ use crate::app::{
     voice::VoiceState,
 };
 
+use self::claim::claim_indicator;
 use self::combat_feedback::combat_feedback_ui;
 use self::health::health_bar;
 use self::meteor_shower::meteor_shower_hud;
@@ -82,6 +84,15 @@ pub(super) fn hud_ui(
     egui::Area::new("hud_bars".into())
         .anchor(egui::Align2::RIGHT_BOTTOM, [-18.0, -18.0])
         .show(ctx, |ui| {
+            // Tool Cupboard standing, only while inside some claim's
+            // footprint: green = authorized, red = someone else's base.
+            // Drawn first so it stacks directly above the health bar.
+            if let Some(private) = local_player.private.as_ref()
+                && private.claim_status.inside_claim
+            {
+                claim_indicator(ui, private.claim_status.authorized);
+                ui.add_space(4.0);
+            }
             health_bar(ui, player.health);
         });
 }

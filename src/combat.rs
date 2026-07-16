@@ -85,7 +85,10 @@ pub enum DamageSource {
 /// `player_damage: 0` and get rejected in the same branch.
 pub fn tool_player_damage(tool: ToolProfile, attacker: ClientId) -> Option<DamageInstance> {
     let knockback_speed = match tool.kind {
-        ToolKind::Axe => HATCHET_KNOCKBACK_SPEED,
+        // The sickle swings like the hatchet (same archetype) and lands the
+        // same light tap of knockback; its low `player_damage` is what keeps
+        // it a harvesting blade rather than a weapon.
+        ToolKind::Axe | ToolKind::Sickle => HATCHET_KNOCKBACK_SPEED,
         ToolKind::Pickaxe => PICKAXE_KNOCKBACK_SPEED,
         // Hands and the hammer can't damage players; the hammer is a
         // construction tool, not a weapon.

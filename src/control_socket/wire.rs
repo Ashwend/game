@@ -244,21 +244,24 @@ pub(crate) struct ClientStateDump {
     /// Replicated deployables in AoI (placed structures, building blocks,
     /// doors, bags) so an agent can assert on placements and resolve ids.
     pub(crate) deployables: Vec<DeployableDump>,
-    /// The live meteor shower fireball's true world position `[x, y, z]` this frame,
-    /// or `null` when no meteor is in flight (no event, not yet in flight, or
-    /// already struck). Lets a headless capture aim the camera straight at the
-    /// descending object without knowing the trajectory seed. Dev-only, like the
-    /// rest of this dump.
+    /// The NEXT-to-impact in-flight fireball's true world position `[x, y, z]`
+    /// this frame, or `null` when no meteor is in flight (no event, none in
+    /// its flight window yet, or all already struck). A shower carries several
+    /// meteors; this tracks the most imminent one so a headless capture can
+    /// aim the camera straight at a descending object without knowing the
+    /// trajectory seeds. Dev-only, like the rest of this dump.
     pub(crate) meteor_world: Option<[f32; 3]>,
-    /// The live fireball's world-space velocity `[x, y, z]` (m/s), or `null` when
-    /// no meteor is in flight. Lets a headless capture stand broadside to the
-    /// trajectory so the trail is not occluded behind the ball. Dev-only.
+    /// The same tracked fireball's world-space velocity `[x, y, z]` (m/s), or
+    /// `null` when no meteor is in flight. Lets a headless capture stand
+    /// broadside to the trajectory so the trail is not occluded behind the
+    /// ball. Dev-only.
     pub(crate) meteor_velocity: Option<[f32; 3]>,
-    /// The announced meteor shower impact point `[x, y, z]`, or `null` when no event
-    /// is live. Non-null for the whole event (countdown, flight, crater), unlike
-    /// `meteor_world`: lets an agent position itself relative to ground zero
-    /// BEFORE the strike (e.g. inside the danger radius for the HUD warning, or
-    /// at a safe vantage for the impact) and find the crater afterwards. Dev-only.
+    /// The next-to-impact live meteor's announced impact point `[x, y, z]`, or
+    /// `null` when no event is live. Non-null for that meteor's whole life
+    /// (flight and crater), unlike `meteor_world`: lets an agent position
+    /// itself relative to ground zero BEFORE the strike (e.g. inside the
+    /// danger radius for the HUD warning, or at a safe vantage for the impact)
+    /// and find a crater afterwards. Dev-only.
     pub(crate) meteor_shower_impact: Option<[f32; 3]>,
 }
 

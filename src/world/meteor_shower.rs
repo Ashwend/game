@@ -1,15 +1,17 @@
 //! Shared, pure meteor-trajectory math for the meteor shower world event.
 //!
-//! The meteor is **never streamed**. The server broadcasts one small announce
-//! (`impact_position`, `impact_tick`, `trajectory_seed`), and every client
-//! evaluates the fireball's **world-space** position each frame as a
-//! deterministic function of that announce against its own authoritative-clock
-//! estimate. Because both sides run this identical function over the same three
-//! inputs plus the shared tick, every player sees the same object at the same
-//! world point with zero per-tick replication. See `docs/meteor_shower.md` and
-//! `docs/replication.md` (events go through a message; per-entity
-//! state goes through replication; the meteor is neither, it is a function of
-//! time).
+//! The meteors are **never streamed**. The server broadcasts one small
+//! announce carrying every meteor of the event (each a `MeteorStrike`:
+//! `impact_position`, `impact_tick`, `trajectory_seed`, `size`), and every
+//! client evaluates each fireball's **world-space** position each frame as a
+//! deterministic function of that strike against its own authoritative-clock
+//! estimate. Because both sides run this identical function over the same
+//! per-meteor inputs plus the shared tick, every player sees the same objects
+//! at the same world points with zero per-tick replication. `size` never
+//! enters the trajectory itself; it scales the renderer's fireball/crater and
+//! the server's blast at the call sites. See `docs/meteor-shower.md` and
+//! `docs/replication.md` (events go through a message; per-entity state goes
+//! through replication; a meteor is neither, it is a function of time).
 //!
 //! ## The path is committed
 //!
@@ -32,9 +34,8 @@
 //!
 //! Before the flight window opens (`remaining > METEOR_FLIGHT_SECONDS`) and after
 //! impact (`estimated_tick >= impact_tick`) the function returns `None`: the
-//! fireball is not on screen. The countdown HUD, danger warning, and map marker
-//! run off the announce payload independently, so a long warning window still
-//! counts down before the object appears.
+//! fireball is not on screen. The per-meteor evacuate warning runs off the
+//! announce payload independently, so it can fire before the object appears.
 //!
 //! This module is dependency-light on purpose (only `Vec2`/`Vec3` math and the
 //! shared [`splitmix64`]) so both the client world renderer and the determinism
@@ -44,19 +45,18 @@ use bevy::math::{Vec2, Vec3};
 
 use crate::world::chunk::splitmix64;
 
-/// Real seconds the meteor is in visible flight before impact. The committed arc
+/// Real seconds a meteor is in visible flight before impact. The committed arc
 /// spans exactly this window: at `impact_tick - METEOR_FLIGHT_SECONDS` the object
 /// is at its far/high entry point, and it arrives at the impact point at
-/// `impact_tick`. Forty-five seconds is long enough to read as a genuine plunge
-/// from the edge of the sky (visible as a distant burning point through the
-/// renderer's far-plane proxy for most of it, screaming overhead at the end) and
-/// short enough that it always feels like it is coming *now*, not loitering.
-/// Shorter than the shipped warning window (`METEOR_SHOWER_WARNING_SECONDS` = 600 s),
-/// so the countdown ticks for minutes before the fireball appears for its final
-/// visible descent; matched by the forced short test window (`/meteor_shower 45`), in
-/// which the object is on screen descending from the entry point for the whole
-/// warning.
-pub const METEOR_FLIGHT_SECONDS: f32 = 45.0;
+/// `impact_tick`. Ten seconds, matched to the `/meteor-here` dev feel the owner
+/// tuned against (8 s warning): the fireball appears and DIVES, a fast committed
+/// streak, instead of loitering in the sky for most of a minute (the original
+/// 45 s window left far meteors hanging, with the audio trailing well behind the
+/// visual; owner report). The crossing rumble starts the moment the fireball
+/// appears (`FLYBY_LEAD_S` in the scene audio ties itself to this constant), so
+/// sight and sound arrive together for every meteor of a shower, each on its own
+/// staggered window (`METEOR_SHOWER_IMPACT_STAGGER_SECONDS`).
+pub const METEOR_FLIGHT_SECONDS: f32 = 10.0;
 
 /// Minimum and maximum horizontal distance, in metres, from the impact point to
 /// the meteor's entry point. Five to seven kilometres: far outside the few-
@@ -105,33 +105,51 @@ pub struct MeteorWorldState {
     pub flicker: f32,
 }
 
-// Crater surface geometry (metres), shared by everything that must agree on
-// the impact site's shape: the client's crater mesh + fire anchoring
-// (`app::scene::meteor_shower`), the movement collider's analytic floor
-// (`controller`), and the server's crater-node placement. The terrain plane
-// cannot be cut, so the "dug in" read comes from a raised, irregular rim lip
-// around a floor that sits at grade.
-/// Radius of the rim crest (the top of the raised lip).
+// Crater surface geometry (metres, at meteor size 1.0), shared by everything
+// that must agree on an impact site's shape: the client's crater mesh + fire
+// anchoring (`app::scene::meteor_shower`), the movement collider's analytic
+// floor (`controller`), and the server's crater-node placement. The terrain
+// plane cannot be cut, so the "dug in" read comes from a raised, irregular rim
+// lip around a floor that sits at grade. A meteor's `size` scales the whole
+// profile uniformly (radii AND heights, see `crater_surface_height`), so a
+// small meteor digs a proportionally small crater.
+/// Radius of the rim crest (the top of the raised lip), at size 1.0.
 pub const CRATER_BOWL_RADIUS_M: f32 = 6.5;
-/// Radius where the outside of the lip returns to grade.
+/// Radius where the outside of the lip returns to grade, at size 1.0.
 pub const CRATER_RIM_END_M: f32 = 9.5;
-/// Outer edge of the fading burn skirt; the painted decal reaches zero here.
+/// Outer edge of the fading burn skirt (the painted decal reaches zero here),
+/// at size 1.0.
 pub const CRATER_SKIRT_RADIUS_M: f32 = 14.5;
-/// Rim crest height above grade. Tall enough to read over the ~0.3 m grass
-/// carpet from a standing eye across the field; also buries the grass cards
-/// inside the bowl so the interior reads as clean charred earth.
+/// Rim crest height above grade, at size 1.0. Tall enough to read over the
+/// ~0.3 m grass carpet from a standing eye across the field; also buries the
+/// grass cards inside the bowl so the interior reads as clean charred earth.
 pub const CRATER_RIM_HEIGHT_M: f32 = 0.85;
 /// Bowl floor height at the centre, just above the terrain plane so the mesh
-/// never z-fights the ground it covers.
+/// never z-fights the ground it covers. At size 1.0.
 pub const CRATER_FLOOR_HEIGHT_M: f32 = 0.08;
 
 /// The crater surface height above grade at radial `distance` from ground
-/// zero: bowl floor near grade at the centre, sweeping up into the rim crest
-/// at [`CRATER_BOWL_RADIUS_M`], falling back to just above grade at
-/// [`CRATER_RIM_END_M`], then a flat skirt out to [`CRATER_SKIRT_RADIUS_M`]
-/// and exactly grade (0) beyond. Pure so the mesh, the movement floor, and
-/// the server's crater-node placement all sample the identical surface.
-pub fn crater_surface_height(distance: f32) -> f32 {
+/// zero, for a meteor of the given `size`: bowl floor near grade at the
+/// centre, sweeping up into the rim crest at `CRATER_BOWL_RADIUS_M * size`,
+/// falling back to just above grade at `CRATER_RIM_END_M * size`, then a flat
+/// skirt out to `CRATER_SKIRT_RADIUS_M * size` and exactly grade (0) beyond.
+///
+/// `size` scales the profile as a pure homothety (radii and heights alike),
+/// so a size-scaled crater is exactly the size-1.0 crater under a uniform
+/// scale; the client can render a scaled mesh and it still matches this
+/// function point for point. Pure so the mesh, the movement floor, and the
+/// server's crater-node placement all sample the identical surface.
+pub fn crater_surface_height(distance: f32, size: f32) -> f32 {
+    let size = if size.is_finite() && size > 0.0 {
+        size
+    } else {
+        1.0
+    };
+    crater_unit_surface_height(distance / size) * size
+}
+
+/// The size-1.0 crater profile [`crater_surface_height`] scales.
+fn crater_unit_surface_height(distance: f32) -> f32 {
     if !distance.is_finite() || distance < 0.0 {
         return CRATER_FLOOR_HEIGHT_M;
     }
@@ -323,15 +341,54 @@ mod tests {
     fn crater_surface_dips_inside_a_raised_rim_and_ends_at_grade() {
         // Floor near grade at the centre, crest at the bowl radius, back near
         // grade past the rim, flat skirt, then exactly grade outside.
-        assert!(crater_surface_height(0.0) <= CRATER_FLOOR_HEIGHT_M + 1e-4);
-        let crest = crater_surface_height(CRATER_BOWL_RADIUS_M);
+        assert!(crater_surface_height(0.0, 1.0) <= CRATER_FLOOR_HEIGHT_M + 1e-4);
+        let crest = crater_surface_height(CRATER_BOWL_RADIUS_M, 1.0);
         assert!((crest - CRATER_RIM_HEIGHT_M).abs() < 1e-4);
-        assert!(crater_surface_height(CRATER_BOWL_RADIUS_M * 0.5) < crest * 0.5);
-        assert!(crater_surface_height(CRATER_RIM_END_M) < 0.06);
-        assert!(crater_surface_height(CRATER_SKIRT_RADIUS_M) < 0.06);
-        assert_eq!(crater_surface_height(CRATER_SKIRT_RADIUS_M + 1.0), 0.0);
+        assert!(crater_surface_height(CRATER_BOWL_RADIUS_M * 0.5, 1.0) < crest * 0.5);
+        assert!(crater_surface_height(CRATER_RIM_END_M, 1.0) < 0.06);
+        assert!(crater_surface_height(CRATER_SKIRT_RADIUS_M, 1.0) < 0.06);
+        assert_eq!(crater_surface_height(CRATER_SKIRT_RADIUS_M + 1.0, 1.0), 0.0);
         // Degenerate input stays finite.
-        assert!(crater_surface_height(f32::NAN).is_finite());
+        assert!(crater_surface_height(f32::NAN, 1.0).is_finite());
+    }
+
+    #[test]
+    fn crater_surface_scales_as_a_pure_homothety_of_size() {
+        // A size-scaled crater is exactly the size-1.0 crater under a uniform
+        // scale: height at (d * size) equals size * height at d. This is the
+        // contract that lets the client render a uniformly-scaled mesh while
+        // the movement floor and node seating sample this function directly.
+        for size in [0.4_f32, 0.6, 0.8, 1.0] {
+            // Sampled just inside each band edge: the exact edges are float
+            // boundary-fuzzy under the `d / size * size` round trip.
+            for d in [
+                0.0_f32,
+                CRATER_BOWL_RADIUS_M * 0.5,
+                CRATER_BOWL_RADIUS_M - 0.01,
+                CRATER_RIM_END_M - 0.01,
+                CRATER_SKIRT_RADIUS_M - 0.01,
+                CRATER_SKIRT_RADIUS_M + 3.0,
+            ] {
+                let scaled = crater_surface_height(d * size, size);
+                let reference = crater_surface_height(d, 1.0) * size;
+                assert!(
+                    (scaled - reference).abs() < 1e-4,
+                    "size {size} at unit distance {d}: {scaled} vs {reference}"
+                );
+            }
+            // The crest sits at the scaled bowl radius at the scaled height.
+            let crest = crater_surface_height(CRATER_BOWL_RADIUS_M * size, size);
+            assert!((crest - CRATER_RIM_HEIGHT_M * size).abs() < 1e-4);
+            // Beyond the scaled skirt the ground is exactly flat.
+            assert_eq!(
+                crater_surface_height(CRATER_SKIRT_RADIUS_M * size + 0.5, size),
+                0.0
+            );
+        }
+        // Degenerate sizes fall back to the unit profile instead of dividing
+        // by zero.
+        assert!(crater_surface_height(3.0, 0.0).is_finite());
+        assert!(crater_surface_height(3.0, f32::NAN).is_finite());
     }
 
     #[test]
@@ -339,7 +396,8 @@ mod tests {
         let impact = Vec2::new(120.0, -80.0);
         let seed = 0xABCD_1234;
         let impact_tick = 10_000;
-        let est = before(impact_tick, 30.0);
+        // Sample mid-flight (inside the METEOR_FLIGHT_SECONDS window).
+        let est = before(impact_tick, METEOR_FLIGHT_SECONDS * 0.5);
         let a = meteor_world_state(impact, impact_tick, seed, est).unwrap();
         let b = meteor_world_state(impact, impact_tick, seed, est).unwrap();
         assert_eq!(a, b, "same inputs must be deterministic");
@@ -469,12 +527,15 @@ mod tests {
             );
             prev_dist = dist;
         }
-        // The last sample (1 tick before impact) is within a couple of crater
-        // radii of ground zero and closing fast; the analytic limit at
-        // impact_tick is exactly the impact point (evaluated below).
+        // The last sample (0.05 s before impact) is on final plunge toward
+        // ground zero; the analytic limit at impact_tick is exactly the impact
+        // point (evaluated below). The 10 s flight window crosses kilometres,
+        // so the eased final speed is ~1.5 km/s and 0.05 s still spans tens of
+        // metres; the bound only pins "essentially at the site", the exact
+        // endpoint proof is the Bezier evaluation below.
         assert!(
-            prev_dist < 2.0 * crate::game_balance::METEOR_SHOWER_IMPACT_RADIUS_M,
-            "one tick before impact the fireball is essentially at the site, dist {prev_dist}"
+            prev_dist < 6.0 * crate::game_balance::METEOR_SHOWER_IMPACT_RADIUS_M,
+            "an instant before impact the fireball is essentially at the site, dist {prev_dist}"
         );
 
         // Exact endpoint: the analytic path evaluated at the impact instant (the

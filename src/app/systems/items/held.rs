@@ -31,7 +31,8 @@ use crate::{
 use super::swing_poses::{
     ToolSwingPose, bag_idle_pose, bandage_use_pose, bow_draw_pose, bow_release_pose,
     club_swing_pose, crossbow_pose, hatchet_swing_pose, mace_swing_pose, pickaxe_swing_pose,
-    smoothstep, spear_swing_pose, sword_swing_pose, throw_charge_pose, throw_lob_pose,
+    sickle_swing_pose, smoothstep, spear_swing_pose, sword_swing_pose, throw_charge_pose,
+    throw_lob_pose,
 };
 
 mod ranged_viewmodel;
@@ -516,7 +517,8 @@ pub(super) fn held_item_local_transform(
         | ItemModel::Club
         | ItemModel::Spear
         | ItemModel::Sword
-        | ItemModel::Mace => HELD_ITEM_DOWN_OFFSET - 0.03,
+        | ItemModel::Mace
+        | ItemModel::Sickle => HELD_ITEM_DOWN_OFFSET - 0.03,
     };
 
     // The head-in-X-plane glbs (tools + weapons + the ranged glbs) get the shared
@@ -622,6 +624,20 @@ pub(super) fn held_item_local_transform(
         ItemModel::Spear => (spear_swing_pose(phase), spear_model_rotation),
         ItemModel::Sword => (sword_swing_pose(phase), head_forward_yaw),
         ItemModel::Mace => (mace_swing_pose(phase), head_forward_yaw),
+        // The sickle's hook lies in a vertical plane containing the haft
+        // (like a hatchet blade), so which way its FACE points is set by the
+        // yaw. Composed per the owner's reference framing: handle at the
+        // lower RIGHT with the hook arcing up and INWARD (screen-left,
+        // toward the crosshair) and the point hanging down; no half-turn, so
+        // the authored -X hook sweeps left. The face wants to point at the
+        // CAMERA RAY through the carry slot, not down the view axis: the
+        // item rides the right edge of the frame, where perspective adds
+        // ~15-20 degrees of effective yaw, so only a small trim keeps the
+        // face reading. The small X lean tips the hook forward.
+        ItemModel::Sickle => (
+            sickle_swing_pose(phase),
+            head_forward_yaw * Quat::from_rotation_y(0.10) * Quat::from_rotation_x(-0.35),
+        ),
     };
     // The hatchet/pickaxe glbs carry their blade in the X plane, so the
     // shared quarter-turn yaw above faces it forward. The mallet's head
@@ -685,6 +701,12 @@ pub(super) fn held_item_local_transform(
         let carry = Vec3::new(-0.16, 0.10, 0.20);
         let aimed = Vec3::new(-HELD_ITEM_RIGHT_OFFSET, 0.155, 0.26);
         carry.lerp(aimed, smoothstep(ranged.aim.clamp(0.0, 1.0)))
+    } else if matches!(model, ItemModel::Sickle) {
+        // Keep the sickle out of the frame centre by pushing it AWAY from the
+        // camera (negative Z runs down the view axis): the crescent is a big
+        // mesh, and at the shared tool distance it loomed across half the
+        // screen. Only a small drop; the leaned carry already sits low.
+        Vec3::new(0.02, -0.06, -0.14)
     } else if matches!(model, ItemModel::Bow) {
         // The bow rests on the RIGHT side of the frame (only a small `-X` pull
         // off the base right offset, not the old deep pull toward centre) and a
@@ -742,10 +764,13 @@ pub(super) fn held_item_local_transform(
 
     // The club renders slightly under true scale in first person: even pushed
     // out to the mallet family's carry distance its bulky head dominated the
-    // frame (owner report: too big). Viewmodel only; the third-person club on
-    // remote rigs stays authored size.
+    // frame (owner report: too big). The sickle's long crescent has the same
+    // problem at the shared tool distance. Viewmodel only; the third-person
+    // meshes on remote rigs stay authored size.
     let viewmodel_scale = if matches!(model, ItemModel::Club) {
         Vec3::splat(0.82)
+    } else if matches!(model, ItemModel::Sickle) {
+        Vec3::splat(0.86)
     } else {
         Vec3::ONE
     };
@@ -777,6 +802,7 @@ pub(super) fn held_item_local_transform(
         | ItemModel::Club
         | ItemModel::Spear
         | ItemModel::Sword
+        | ItemModel::Sickle
         | ItemModel::Bow => (0.50, 0.05, -0.40),
         ItemModel::Pickaxe | ItemModel::Mace | ItemModel::Crossbow => (0.68, 0.06, -0.55),
     };
@@ -994,6 +1020,7 @@ mod tests {
             ItemModel::Crossbow,
             ItemModel::ThrownBomb,
             ItemModel::Bandage,
+            ItemModel::Sickle,
         ];
         for model in all_models {
             // A representative held mesh + the two pose states to compare, per
@@ -1033,6 +1060,11 @@ mod tests {
                     ),
                     ItemModel::Mace => (
                         HeldMesh::IronMace,
+                        RangedPoseInputs::default(),
+                        RangedPoseInputs::default(),
+                    ),
+                    ItemModel::Sickle => (
+                        HeldMesh::Sickle,
                         RangedPoseInputs::default(),
                         RangedPoseInputs::default(),
                     ),

@@ -217,22 +217,105 @@ fn seven_satchels_break_a_stone_wall_and_six_do_not() {
 }
 
 #[test]
-fn a_satchel_does_exactly_eight_percent_of_base_vs_metal() {
-    // Satchel base 2,000, metal effectiveness 8% => 160 per hit. Assert the door
-    // lost exactly that after one point-blank satchel.
-    let mut server = server();
-    let door = place_iron_door(&mut server, Vec3Net::ZERO);
+fn five_satchels_break_an_iron_door_and_four_do_not() {
+    // Satchel base 2,000, metal effectiveness 30% => 600 per point-blank hit, so
+    // 4 satchels (2,400) leave the 3,000 HP iron door hanging and 5 (3,000)
+    // break it exactly. This prices the iron door above the wood door
+    // (2 satchels) and below the stone wall (7): the door stays the designed
+    // breach point of a stone base.
+    let mut four = server();
+    let door = place_iron_door(&mut four, Vec3Net::ZERO);
     let remaining = blast_n_times(
-        &mut server,
+        &mut four,
         Vec3Net::ZERO,
         ExplosiveKind::SatchelCharge,
-        1,
+        4,
         door,
     );
     assert_eq!(
         remaining,
-        Some(3_000 - 160),
-        "one satchel must do exactly 8% of base (160) to metal"
+        Some(3_000 - 4 * 600),
+        "4 satchels must NOT break an iron door (2,400 of 3,000)"
+    );
+
+    let mut five = server();
+    let door = place_iron_door(&mut five, Vec3Net::ZERO);
+    let remaining = blast_n_times(
+        &mut five,
+        Vec3Net::ZERO,
+        ExplosiveKind::SatchelCharge,
+        5,
+        door,
+    );
+    assert_eq!(remaining, None, "5 satchels must break an iron door");
+}
+
+/// Place a Tool Cupboard entity directly (bypassing the foundation-mount
+/// placement path) so a blast test has a WoodBuilding-band claim object at a
+/// known position. The claim footprint itself is irrelevant to blast math.
+fn place_cupboard(server: &mut GameServer, position: Vec3Net) -> DeployedEntityId {
+    let item_id = intern_item_id(crate::items::TOOL_CUPBOARD_ID);
+    let max_health = crate::game_balance::TOOL_CUPBOARD_MAX_HP;
+    let id = server.next_deployed_entity_id;
+    server.next_deployed_entity_id.0 += 1;
+    let entity = crate::server::deployables::DeployedEntity {
+        id,
+        item_id,
+        kind: DeployableKind::ToolCupboard,
+        position,
+        yaw: 0.0,
+        health: max_health,
+        max_health,
+        owner: Some(crate::protocol::AccountId(1)),
+        furnace: None,
+        placed_at_tick: 0,
+        door: None,
+        label: None,
+        stability: 100,
+        storage: None,
+        torch: None,
+        cupboard: None,
+        ruin_cache: None,
+        fuse: None,
+    };
+    server.insert_deployed_entity(id, entity);
+    server.chunk_manager.track_deployed_entity(id, position);
+    id
+}
+
+/// PINS CURRENT BEHAVIOUR, flagged for a design decision: `resolve_explosion`
+/// has no line-of-sight / occlusion check, so a blast set against a base's
+/// OUTER wall splashes everything within its radius INCLUDING objects behind
+/// the wall. Concretely: a Tool Cupboard (1,000 HP, WoodBuilding band) placed
+/// within a satchel's 4 m radius of an exterior wall takes real damage from
+/// charges that never breach that wall, so a claim can be lifted without
+/// entering the base. If an occlusion rule is added later, this test flips to
+/// assert the cupboard stays pristine.
+#[test]
+fn blast_splash_ignores_walls_and_damages_a_cupboard_behind_one() {
+    let mut server = server();
+    // Layout on the x-axis: blast at 0, a stone wall at 1.5 between the blast
+    // and the cupboard at 3.0 (inside the satchel's 4 m radius).
+    let wall = place_wall(
+        &mut server,
+        Vec3Net::new(1.5, 0.0, 0.0),
+        BuildingTier::Stone,
+    );
+    let cupboard = place_cupboard(&mut server, Vec3Net::new(3.0, 0.0, 0.0));
+    let cupboard_hp = server.deployed_entities[&cupboard].health;
+
+    let _ = server.resolve_explosion(Vec3Net::ZERO, ExplosiveKind::SatchelCharge);
+
+    let wall_after = server.deployed_entities.get(&wall).map(|e| e.health);
+    let cupboard_after = server.deployed_entities.get(&cupboard).map(|e| e.health);
+    assert!(
+        wall_after.is_some_and(|hp| hp > 0),
+        "the stone wall survives one satchel (it is not a breach)"
+    );
+    assert!(
+        cupboard_after.is_some_and(|hp| hp < cupboard_hp) || cupboard_after.is_none(),
+        "current behaviour: the blast splashes THROUGH the standing wall and \
+         damages the cupboard behind it (no occlusion check)"
     );
 }
 

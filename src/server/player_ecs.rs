@@ -133,11 +133,26 @@ impl Default for PlayerInputAck {
     }
 }
 
+/// Owner-only Tool Cupboard claim standing at the player's position, for the
+/// HUD's at-a-glance authorization indicator. `inside_claim` is whether ANY
+/// cupboard's claimed footprint covers the player right now; `authorized` is
+/// whether at least one covering cupboard has them on its auth list. Both
+/// false is the common open-world case (the HUD draws nothing). Its own tiny
+/// component (not folded into [`PlayerInputAck`]) because it changes at walk-
+/// across-a-boundary cadence, not per input tick, so the compare-and-write
+/// refresh keeps it off the wire almost every diff.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlayerClaimStatus {
+    pub inside_claim: bool,
+    pub authorized: bool,
+}
+
 /// Client-side assembled view of the owner-only player state. **Not a
 /// wire shape**: the server replicates [`PlayerInventory`],
-/// [`PlayerCrafting`], [`PlayerOpenContainers`], and [`PlayerInputAck`]
-/// as separate components; `update_local_player_state_system`
-/// reassembles them into this struct so UI consumers keep one handle.
+/// [`PlayerCrafting`], [`PlayerOpenContainers`], [`PlayerInputAck`], and
+/// [`PlayerClaimStatus`] as separate components;
+/// `update_local_player_state_system` reassembles them into this struct
+/// so UI consumers keep one handle.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerPrivate {
     pub inventory: PlayerInventoryState,
@@ -149,6 +164,9 @@ pub struct PlayerPrivate {
     pub applied_action_seq: u32,
     /// Admin `/speed` run-speed multiplier (see [`PlayerInputAck`]).
     pub run_speed_multiplier: f32,
+    /// Tool Cupboard standing at the player's position (see
+    /// [`PlayerClaimStatus`]); drives the HUD authorization indicator.
+    pub claim_status: PlayerClaimStatus,
 }
 
 /// Identity marker on the per-player **private** mirror entity.
@@ -325,6 +343,7 @@ pub struct PlayerView {
     pub crafting: PlayerCrafting,
     pub containers: PlayerOpenContainers,
     pub input_ack: PlayerInputAck,
+    pub claim_status: PlayerClaimStatus,
     pub armor: PlayerArmor,
     pub lifecycle: PlayerLifecycle,
     pub sleeping: PlayerSleeping,
@@ -347,6 +366,7 @@ pub fn spawn_player_entity(world: &mut World, view: PlayerView, chunk: ChunkCoor
             view.crafting,
             view.containers,
             view.input_ack,
+            view.claim_status,
         ))
         .id();
     let entity = world
@@ -409,6 +429,7 @@ mod tests {
             crafting: PlayerCrafting(PlayerCraftingState::default()),
             containers: PlayerOpenContainers::default(),
             input_ack: PlayerInputAck::default(),
+            claim_status: PlayerClaimStatus::default(),
             armor: PlayerArmor::default(),
             lifecycle: PlayerLifecycle::default(),
             sleeping: PlayerSleeping::default(),

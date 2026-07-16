@@ -246,10 +246,11 @@ fn load_grass_card_texture(mut images: ResMut<Assets<Image>>, mut commands: Comm
     commands.insert_resource(GrassCardTexture(images.add(image)));
 }
 
-/// Build the group(3) bind group (tuft texture + sampler + dev flags) once the GPU
-/// image and the dev-flags buffer are ready. Cheap guard: skips if already built or
-/// an input isn't ready. The dev-flags buffer is rewritten in place each frame
-/// (see [`prepare_grass_dev_flags`]), so the cached bind group stays live.
+/// Build the group(3) bind group (tuft texture + sampler + dev flags) once
+/// the GPU image and the uniform buffer are ready. Cheap guard: skips if
+/// already built or an input isn't ready. The dev-flags buffer is rewritten
+/// in place each frame (see [`prepare_grass_dev_flags`]), so the cached bind
+/// group stays live.
 fn prepare_grass_bind_group(
     mut commands: Commands,
     pipeline: Res<GrassInstancePipeline>,

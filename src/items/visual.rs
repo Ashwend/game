@@ -55,6 +55,11 @@ pub enum ItemModel {
     /// ramps (see `held::held_piece_local_transform`), then a quick cinch on
     /// completion. Its charge fraction, like the bow's draw, comes from the server.
     Bandage,
+    /// Sickle: a low horizontal reaping slash. Unlike the sword's shoulder-high
+    /// whip, the whole cut stays down at grass height: draw out level to the
+    /// right, sweep flat across the frame, exit left. Appended LAST (this
+    /// archetype rides the wire on `PlayerAction`/`SwingStart`/`PlayerImpact`).
+    Sickle,
 }
 
 impl ItemModel {
@@ -74,6 +79,7 @@ impl ItemModel {
         ItemModel::Crossbow,
         ItemModel::ThrownBomb,
         ItemModel::Bandage,
+        ItemModel::Sickle,
     ];
 }
 
@@ -131,6 +137,10 @@ pub enum HeldMesh {
     /// UNROLL out of the roll as the use charge ramps (see
     /// `held::held_piece_local_transform`).
     Bandage,
+    /// Iron sickle: the grass-harvesting tool. A wood haft (prim 0) under a
+    /// broad forged-iron crescent (prim 1), the classic haft+head split.
+    /// Appended LAST (this selector rides the wire in `PlayerHeldItem`).
+    Sickle,
 }
 
 impl HeldMesh {
@@ -156,6 +166,7 @@ impl HeldMesh {
         HeldMesh::PowderKeg,
         HeldMesh::SatchelCharge,
         HeldMesh::Bandage,
+        HeldMesh::Sickle,
     ];
 
     /// The declarative in-hand visual for this mesh: one [`HeldLayerSpec`] per
@@ -187,6 +198,11 @@ impl HeldMesh {
                 "items/wood_stone_pickaxe/model.glb",
                 HeldMeshMaterial::Stone,
             ),
+            // The sickle is the same haft+head split as the iron tools:
+            // wood haft, forged iron crescent (see art/tools/build_sickle.py).
+            HeldMesh::Sickle => {
+                HeldMeshVisual::tool("items/iron_sickle/model.glb", HeldMeshMaterial::Iron)
+            }
             HeldMesh::IronHatchet => {
                 HeldMeshVisual::tool("items/iron_hatchet/model.glb", HeldMeshMaterial::Iron)
             }
@@ -327,6 +343,7 @@ impl HeldMesh {
             | HeldMesh::StonePickaxe
             | HeldMesh::IronPickaxe
             | HeldMesh::IronSword
+            | HeldMesh::Sickle
             | HeldMesh::Crossbow => HeldGrip::LongHafted,
             // The bow carries upright with no quarter-turn yaw; its draw rides the
             // per-piece transform + ranged pose on top of this rest carry.
@@ -1082,9 +1099,10 @@ mod tests {
             | HeldMesh::PowderBomb
             | HeldMesh::PowderKeg
             | HeldMesh::SatchelCharge
-            | HeldMesh::Bandage => true,
+            | HeldMesh::Bandage
+            | HeldMesh::Sickle => true,
         };
         assert!(HeldMesh::ALL.iter().all(|&mesh| expected(mesh)));
-        assert_eq!(HeldMesh::ALL.len(), 18);
+        assert_eq!(HeldMesh::ALL.len(), 19);
     }
 }

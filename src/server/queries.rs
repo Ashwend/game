@@ -359,6 +359,9 @@ impl GameServer {
                 applied_action_seq: client.applied_action_seq,
                 run_speed_multiplier: client.run_speed_multiplier,
             },
+            // Owner-only HUD standing: whether a Tool Cupboard claim covers
+            // the player right now, and whether they're authorized on it.
+            claim_status: self.claim_status_at(client.controller.position, client.account_id),
             // The replicated HUD armor value is the melee mitigation; the full
             // per-kind protection stays server-only.
             armor: PlayerArmor(client.protection.melee),

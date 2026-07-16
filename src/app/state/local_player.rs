@@ -15,8 +15,8 @@
 use bevy::prelude::*;
 
 use crate::server::{
-    Player, PlayerCrafting, PlayerHealth, PlayerInputAck, PlayerInventory, PlayerLifecycle,
-    PlayerOpenContainers, PlayerPrivate, PlayerPrivateState,
+    Player, PlayerClaimStatus, PlayerCrafting, PlayerHealth, PlayerInputAck, PlayerInventory,
+    PlayerLifecycle, PlayerOpenContainers, PlayerPrivate, PlayerPrivateState,
 };
 
 use super::{ClientRuntime, MenuState, PredictionState};
@@ -45,9 +45,9 @@ pub(crate) fn update_local_player_state_system(
         Option<&PlayerLifecycle>,
         Option<&PlayerHealth>,
     )>,
-    // The four owner-only components live on a separate private mirror entity
+    // The five owner-only components live on a separate private mirror entity
     // that the server replicates to this client alone, so this query yields
-    // exactly one row (our own). Requiring all four keeps the assembled view
+    // exactly one row (our own). Requiring all five keeps the assembled view
     // atomic (they ship together in the private entity's initial replication).
     private: Query<
         (
@@ -55,6 +55,7 @@ pub(crate) fn update_local_player_state_system(
             &PlayerCrafting,
             &PlayerOpenContainers,
             &PlayerInputAck,
+            &PlayerClaimStatus,
         ),
         With<PlayerPrivateState>,
     >,
@@ -66,19 +67,19 @@ pub(crate) fn update_local_player_state_system(
         return;
     };
 
-    state.private =
-        private.single().ok().map(
-            |(inventory, crafting, containers, input_ack)| PlayerPrivate {
-                inventory: inventory.0.clone(),
-                crafting: crafting.0.clone(),
-                open_furnace: containers.open_furnace.clone(),
-                open_loot_bag: containers.open_loot_bag.clone(),
-                open_workbench: containers.open_workbench,
-                last_processed_input: input_ack.last_processed_input,
-                applied_action_seq: input_ack.applied_action_seq,
-                run_speed_multiplier: input_ack.run_speed_multiplier,
-            },
-        );
+    state.private = private.single().ok().map(
+        |(inventory, crafting, containers, input_ack, claim_status)| PlayerPrivate {
+            inventory: inventory.0.clone(),
+            crafting: crafting.0.clone(),
+            open_furnace: containers.open_furnace.clone(),
+            open_loot_bag: containers.open_loot_bag.clone(),
+            open_workbench: containers.open_workbench,
+            last_processed_input: input_ack.last_processed_input,
+            applied_action_seq: input_ack.applied_action_seq,
+            run_speed_multiplier: input_ack.run_speed_multiplier,
+            claim_status: *claim_status,
+        },
+    );
 
     for (entity, player, lifecycle, health) in &players {
         if player.client_id == client_id {

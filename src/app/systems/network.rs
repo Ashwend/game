@@ -525,14 +525,16 @@ pub(crate) fn network_tick_system(
             });
         }
         // A brand-new meteor shower announce (not the resend a mid-event joiner
-        // gets, which repeats the same `impact_tick`) means a meteor event just
+        // gets, which repeats the same impact ticks) means a shower event just
         // went live. Compared before `apply_message` stores it below.
-        if let ServerMessage::MeteorShower { impact_tick, .. } = &message {
-            let is_new = runtime
-                .meteor_shower
-                .as_ref()
-                .map(|event| event.impact_tick != *impact_tick)
-                .unwrap_or(true);
+        if let ServerMessage::MeteorShower { meteors } = &message {
+            let is_new = !meteors.is_empty()
+                && (runtime.meteor_showers.len() != meteors.len()
+                    || runtime
+                        .meteor_showers
+                        .iter()
+                        .zip(meteors.iter())
+                        .any(|(event, strike)| event.impact_tick != strike.impact_tick));
             if is_new {
                 analytics.track(Event::MeteorShowerAnnounced);
             }

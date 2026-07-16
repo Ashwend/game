@@ -31,7 +31,10 @@ pub use claims::{
     ClaimPlatform, claim_cell_of, claim_cells_cover, claim_cells_overlap_aabb,
     claim_cells_overlap_blocks, claim_footprint_cells,
 };
-pub use collision::{LocalBox, building_collider_blocks, door_collider_blocks, piece_local_boxes};
+pub use collision::{
+    LocalBox, building_collider_blocks, door_collider_blocks, piece_local_boxes,
+    shutter_collider_blocks,
+};
 pub use costs::{
     MaterialCost, building_max_health, placement_cost, repair_cost, tier_material, upgrade_cost,
 };

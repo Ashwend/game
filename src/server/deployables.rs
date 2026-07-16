@@ -97,9 +97,14 @@ impl DeployedEntity {
             DeployableKind::Building { piece, .. } => {
                 crate::building::building_collider_blocks(piece, self.position, self.yaw)
             }
-            DeployableKind::Door { .. } => {
+            DeployableKind::Door { variant } => {
                 let open = self.door.as_ref().is_some_and(|door| door.open);
-                crate::building::door_collider_blocks(self.position, self.yaw, open)
+                match variant {
+                    crate::items::DoorVariant::Shutter => {
+                        crate::building::shutter_collider_blocks(self.position, self.yaw, open)
+                    }
+                    _ => crate::building::door_collider_blocks(self.position, self.yaw, open),
+                }
             }
             _ => {
                 let center = Vec3Net::new(
@@ -345,7 +350,11 @@ impl GameServer {
             // against them the moment they place the cupboard.
             entity.cupboard = Some(super::claim::CupboardState {
                 authorized: vec![owner_account_id],
+                ..Default::default()
             });
+            // The upkeep grid: materials stocked here pay the claimed
+            // base's periodic upkeep (see server/upkeep.rs).
+            entity.storage = Some(super::storage_box::StorageBoxState::new_tool_cupboard());
         }
         let position = entity.position;
         self.insert_deployed_entity(id, entity);
@@ -630,6 +639,11 @@ impl GameServer {
         };
         entity.health = entity.health.saturating_sub(damage);
         let dead = entity.health == 0;
+        // Stamp the combat-damage tick for the repair lockout. A 0-damage tap
+        // (a tool at 0% vs stone/metal) locks nothing.
+        if damage > 0 {
+            self.recently_damaged.insert(command.id, self.tick);
+        }
         // A charge that reaches 0 HP FIZZLES: it is destroyed WITHOUT detonating,
         // no blast and no material refund, the defender's counterplay. Capture
         // whether this dying entity is a charge (and its armed owner) before the
@@ -748,6 +762,10 @@ impl GameServer {
     ) -> Option<DeployedEntity> {
         let removed = self.remove_deployed_entity(id)?;
         self.chunk_manager.untrack_deployed_entity(id);
+        // Drop the transient repair-lockout and bag-cooldown stamps with the
+        // entity.
+        self.recently_damaged.remove(&id);
+        self.bag_respawn_cooldowns.remove(&id);
         // Loot bags resting on the removed piece fall to the next support
         // instead of floating where the floor used to be.
         self.unsettle_loot_bags_on(&removed);
@@ -848,6 +866,15 @@ impl GameServer {
                                 super::storage_box::StorageBoxState::from_ruin_cache_persisted(s)
                             })
                             .unwrap_or_else(super::storage_box::StorageBoxState::new_ruin_cache),
+                    ),
+                    // The Tool Cupboard's upkeep grid. Older saves that
+                    // predate upkeep restore an empty grid.
+                    DeployableKind::ToolCupboard => Some(
+                        p.storage
+                            .map(|s| {
+                                super::storage_box::StorageBoxState::from_tool_cupboard_persisted(s)
+                            })
+                            .unwrap_or_else(super::storage_box::StorageBoxState::new_tool_cupboard),
                     ),
                     _ => None,
                 };

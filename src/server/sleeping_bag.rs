@@ -7,11 +7,14 @@
 //! `combat.rs` via [`GameServer::respawn_bag_options`].
 
 use crate::{
-    game_balance::SLEEPING_BAG_NAME_MAX_LEN,
+    game_balance::{
+        SLEEPING_BAG_NAME_MAX_LEN, SLEEPING_BAG_RESPAWN_COOLDOWN_TICKS,
+        SLEEPING_BAG_SHARED_COOLDOWN_RADIUS_M,
+    },
     items::{DeployableKind, SLEEPING_BAG_ID},
     protocol::{
         ClientId, DeployedEntityId, ItemStack, MAX_HEALTH, PlayerState, RespawnBagOption,
-        ServerMessage, SleepingBagCommand, ToastKind, Vec3Net,
+        SERVER_TICK_RATE_HZ, ServerMessage, SleepingBagCommand, ToastKind, Vec3Net,
     },
     server::PlayerLifecycle,
 };
@@ -101,10 +104,21 @@ impl GameServer {
                     .label
                     .clone()
                     .unwrap_or_else(|| "Sleeping Bag".to_owned()),
+                cooldown_seconds: self.bag_cooldown_seconds_left(entity.id),
             })
             .collect();
         bags.sort_by_key(|bag| bag.id);
         bags
+    }
+
+    /// Seconds until bag `id` accepts a respawn again, `0` when ready.
+    /// Rounds the tail second up so an active cooldown never reads "0".
+    fn bag_cooldown_seconds_left(&self, id: DeployedEntityId) -> u32 {
+        let Some(until) = self.bag_respawn_cooldowns.get(&id).copied() else {
+            return 0;
+        };
+        let ticks = until.saturating_sub(self.tick);
+        (ticks as f32 / SERVER_TICK_RATE_HZ).ceil() as u32
     }
 
     /// Respawn at an owned sleeping bag. Same lifecycle rules as the
@@ -127,6 +141,18 @@ impl GameServer {
         };
         if !matches!(entity.kind, DeployableKind::SleepingBag) || entity.owner != Some(account) {
             return Vec::new();
+        }
+        // Cooldown gate: a freshly-used bag (or one near a freshly-used bag)
+        // can't chain-respawn a defender straight back into the same fight.
+        // The player stays dead; the death screen still offers the random
+        // respawn and any other ready bag.
+        let cooldown = self.bag_cooldown_seconds_left(id);
+        if cooldown > 0 {
+            return bag_toast(
+                client_id,
+                ToastKind::Warning,
+                format!("Bag ready in {}:{:02}", cooldown / 60, cooldown % 60),
+            );
         }
         let bag_position = entity.position;
 
@@ -162,6 +188,27 @@ impl GameServer {
         let last_processed_input = client.controller.last_processed_input;
 
         self.chunk_manager.update_player_chunk(client_id, spawn);
+
+        // Put the used bag on cooldown, shared with every same-owner bag
+        // within the cluster radius so a carpet of bags in one base is one
+        // re-entry, not a respawn chain. A remote bag stays ready.
+        let until = self.tick + SLEEPING_BAG_RESPAWN_COOLDOWN_TICKS;
+        let cluster: Vec<DeployedEntityId> = self
+            .deployed_entities
+            .values()
+            .filter(|entity| {
+                matches!(entity.kind, DeployableKind::SleepingBag)
+                    && entity.owner == Some(account)
+                    && entity.position.within_horizontal_range(
+                        bag_position,
+                        SLEEPING_BAG_SHARED_COOLDOWN_RADIUS_M,
+                    )
+            })
+            .map(|entity| entity.id)
+            .collect();
+        for bag_id in cluster {
+            self.bag_respawn_cooldowns.insert(bag_id, until);
+        }
 
         vec![ServerEnvelope {
             target: DeliveryTarget::Client(client_id),

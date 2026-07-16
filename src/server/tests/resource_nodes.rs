@@ -1,4 +1,6 @@
 use super::*;
+use crate::items::{FIBER_ID, IRON_SICKLE_ID};
+use crate::resource_nodes::HAY_GRASS_NODE_ID;
 
 fn coal_node(id: u64, quantity: u16) -> ResourceNodeState {
     ResourceNodeState {
@@ -15,6 +17,183 @@ fn look_at_test_node(server: &mut GameServer, client_id: ClientId) {
     let mut movement = movement(1, Vec3Net::ZERO);
     movement.pitch = -0.42;
     server.receive(client_id, ClientMessage::Movement(movement));
+}
+
+fn hay_node(id: u64) -> ResourceNodeState {
+    ResourceNodeState {
+        id: crate::protocol::ResourceNodeId(id),
+        definition_id: HAY_GRASS_NODE_ID.to_owned(),
+        position: Vec3Net::new(0.0, 0.0, -2.2),
+        yaw: 0.0,
+        // The production definition's storage: 40 fiber per tuft.
+        storage: vec![ItemStack::new(FIBER_ID, 40)],
+        dead: false,
+    }
+}
+
+/// Count fiber across the whole inventory (actionbar + grid).
+fn fiber_count(server: &GameServer, client_id: ClientId) -> u32 {
+    let client = server.clients.get(&client_id).expect("client exists");
+    client
+        .inventory
+        .actionbar_slots
+        .iter()
+        .chain(client.inventory.inventory_slots.iter())
+        .flatten()
+        .filter(|stack| stack.item_id.as_ref() == FIBER_ID)
+        .map(|stack| u32::from(stack.quantity))
+        .sum()
+}
+
+#[test]
+fn sickle_reaps_a_whole_tall_grass_tuft_in_one_swing() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    {
+        let client = server.clients.get_mut(&client_id).expect("host client");
+        client.inventory.actionbar_slots[0] = Some(ItemStack::new(IRON_SICKLE_ID, 1));
+    }
+    server.resource_nodes.clear();
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(99), hay_node(99));
+    look_at_test_node(&mut server, client_id);
+
+    server.receive(
+        client_id,
+        ClientMessage::Gather(ResourceGatherCommand {
+            resource_node_id: crate::protocol::ResourceNodeId(99),
+            seq: 0,
+            hit_point: Vec3Net::ZERO,
+        }),
+    );
+
+    assert_eq!(
+        fiber_count(&server, client_id),
+        40,
+        "one sickle sweep empties the tuft's whole storage"
+    );
+    assert!(
+        !server
+            .resource_nodes
+            .contains_key(&crate::protocol::ResourceNodeId(99)),
+        "the reaped tuft despawns like any depleted node"
+    );
+}
+
+#[test]
+fn other_tools_cannot_swing_tall_grass() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    equip_basic_tools(&mut server, client_id);
+    server.resource_nodes.clear();
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(99), hay_node(99));
+    look_at_test_node(&mut server, client_id);
+
+    // Hatchet (slot 0): the tuft requires a sickle, so the swing is rejected.
+    let envelopes = server.receive(
+        client_id,
+        ClientMessage::Gather(ResourceGatherCommand {
+            resource_node_id: crate::protocol::ResourceNodeId(99),
+            seq: 0,
+            hit_point: Vec3Net::ZERO,
+        }),
+    );
+    assert!(envelopes.is_empty(), "hatchet swing at grass is rejected");
+    assert_eq!(fiber_count(&server, client_id), 0);
+    assert!(
+        server
+            .resource_nodes
+            .contains_key(&crate::protocol::ResourceNodeId(99))
+    );
+}
+
+#[test]
+fn crude_node_storage_refreshes_to_the_current_definition_on_load() {
+    use crate::server::ServerSettings;
+
+    // A saved world carries per-node storage from whatever the definition
+    // said WHEN IT SPAWNED. Crude clutter is all-or-nothing (never left
+    // partially drained), so the load path refreshes it to the current
+    // definition; otherwise a fiber-yield balance change never reaches
+    // tufts that already exist in old saves (they only refresh via the
+    // despawn + fresh-position respawn cycle, which untouched tufts never
+    // enter). Trees/ore keep their genuinely-partial saved storage.
+    let mut server = server();
+    server.resource_nodes.clear();
+    // A stale tuft saved with the pre-boost 1-fiber storage, and a
+    // half-chopped coal node that must NOT be topped back up.
+    let mut stale_tuft = hay_node(99);
+    stale_tuft.storage = vec![ItemStack::new(FIBER_ID, 1)];
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(99), stale_tuft);
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(100), coal_node(100, 5));
+
+    let save = server.world_save();
+    let restored = GameServer::new(
+        save,
+        ServerSettings {
+            auth_mode: crate::auth::AuthMode::NoAuth,
+            singleplayer_host: Some(crate::protocol::AccountId(1)),
+        },
+    );
+
+    let tuft = restored
+        .resource_nodes
+        .get(&crate::protocol::ResourceNodeId(99))
+        .expect("tuft survives the round trip");
+    assert_eq!(
+        tuft.storage,
+        vec![ItemStack::new(FIBER_ID, 40)],
+        "the stale tuft refreshes to the current definition's storage"
+    );
+    let coal = restored
+        .resource_nodes
+        .get(&crate::protocol::ResourceNodeId(100))
+        .expect("coal node survives the round trip");
+    assert_eq!(
+        coal.storage,
+        vec![ItemStack::new(COAL_ID, 5)],
+        "a partially-drained non-crude node keeps its saved storage"
+    );
+}
+
+#[test]
+fn hand_pluck_takes_a_handful_and_ruins_the_tuft() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    server.resource_nodes.clear();
+    server
+        .resource_nodes
+        .insert(crate::protocol::ResourceNodeId(99), hay_node(99));
+
+    // E quick-pickup, bare-handed: capped by the tuft's hand_pickup_yield
+    // (3), with the rest of the storage discarded alongside the node, so the
+    // sickle stays the only way to reap the full 40.
+    server.receive(
+        client_id,
+        ClientMessage::Inventory(InventoryCommand::PickUpResourceNode {
+            resource_node_id: crate::protocol::ResourceNodeId(99),
+            seq: 1,
+        }),
+    );
+
+    assert_eq!(
+        fiber_count(&server, client_id),
+        3,
+        "a hand pluck yields only the capped handful"
+    );
+    assert!(
+        !server
+            .resource_nodes
+            .contains_key(&crate::protocol::ResourceNodeId(99)),
+        "the plucked tuft is ruined (removed) even though most fiber was left"
+    );
 }
 
 #[test]

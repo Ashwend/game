@@ -145,6 +145,7 @@ fn draw_panel(
         ContainerViewKind::Sleeper => "Sleeping player",
         ContainerViewKind::StorageBox => "Storage box",
         ContainerViewKind::SalvageChest => "Salvage chest",
+        ContainerViewKind::ToolCupboard => "Tool Cupboard",
     };
     ui.horizontal(|ui| {
         ui.label(theme::section(title));
@@ -167,6 +168,33 @@ fn draw_panel(
         .small(),
     );
     ui.add_space(12.0);
+
+    // Tool Cupboard: the upkeep readout above the grid. One line per
+    // material the claimed base bills, with days of cover left, plus a
+    // decay warning when the last drain went unpaid.
+    if let Some(upkeep) = &view.upkeep {
+        ui.label(theme::field_label("Upkeep"));
+        for (item_id, per_day, stocked) in &upkeep.materials {
+            let name = crate::items::item_definition(item_id)
+                .map(|definition| definition.name)
+                .unwrap_or(item_id.as_ref());
+            let line = if *per_day > 0 {
+                let days = *stocked as f32 / *per_day as f32;
+                format!("{name}: {per_day} per day, {stocked} stocked ({days:.1} days)")
+            } else {
+                format!("{name}: {stocked} stocked")
+            };
+            ui.label(RichText::new(line).color(theme::muted_text()).small());
+        }
+        if upkeep.decaying {
+            ui.label(
+                RichText::new("Upkeep unpaid: the base is decaying!")
+                    .color(egui::Color32::from_rgb(0xE0, 0x50, 0x40))
+                    .strong(),
+            );
+        }
+        ui.add_space(12.0);
+    }
 
     ui.label(theme::field_label("Contents"));
     let mut idx = 0;
@@ -217,6 +245,7 @@ mod tests {
             id: crate::protocol::LootBagId(7),
             slots,
             kind: ContainerViewKind::LootBag,
+            upkeep: None,
         }
     }
 
@@ -232,6 +261,7 @@ mod tests {
                 last_processed_input: 0,
                 applied_action_seq: 0,
                 run_speed_multiplier: 1.0,
+                claim_status: Default::default(),
             }),
             lifecycle: None,
         }

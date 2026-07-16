@@ -652,6 +652,38 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
         deployable: None,
     },
     ItemDefinition {
+        id: IRON_SICKLE_ID,
+        name: "Iron Sickle",
+        description: "A forged iron crescent that reaps a whole tuft of tall \
+                      grass in one sweep. Harvests nothing else.",
+        stack_size: 1,
+        equipable: true,
+        // Its own reaping-slash archetype (low horizontal cut); authored
+        // crescent glb + ComfyUI icon (art/tools/build_sickle.py). Iron-only
+        // by design: a knapped stone crescent made no sense (owner), and the
+        // fiber-heavy recipes it accelerates (armor, bow, bags) are all
+        // bench-tier anyway, so the sickle sits beside the iron tools.
+        model: ItemModel::Sickle,
+        held_mesh: HeldMesh::Sickle,
+        tint: ItemTint::new(148, 122, 82),
+        tool: Some(ToolProfile {
+            kind: ToolKind::Sickle,
+            tier: 2,
+            // One sweep empties a Tall Grass tuft (storage 40): the whole
+            // point of crafting the sickle over hand-plucking.
+            gather_amount: 40,
+            cooldown_ticks: 6,
+            max_durability: Some(crate::game_balance::IRON_TOOL_DURABILITY),
+            player_damage: crate::game_balance::SICKLE_PVP_DAMAGE,
+        }),
+        weapon: None,
+        ranged: None,
+        armor: None,
+        explosive: None,
+        consumable: None,
+        deployable: None,
+    },
+    ItemDefinition {
         id: IRON_HATCHET_ID,
         name: "Iron Hatchet",
         description: "A forged iron axe head on a hewn handle. Bites twice as \
@@ -1137,6 +1169,34 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
             max_health: crate::game_balance::IRON_DOOR_MAX_HP,
             collider_half_width: 0.55,
             collider_half_height: 1.1,
+            station_radius: 0.0,
+        }),
+    },
+    ItemDefinition {
+        id: WOOD_SHUTTER_ID,
+        name: "Window Shutter",
+        description: "A hewn-wood panel that mounts in a window opening. No \
+                      lock: the base's owner and anyone authorized on the \
+                      Tool Cupboard can swing it open to shoot out, then \
+                      shut it against arrows.",
+        stack_size: 1,
+        equipable: true,
+        model: ItemModel::Deployable,
+        held_mesh: HeldMesh::Bag,
+        tint: ItemTint::new(122, 88, 52),
+        tool: None,
+        weapon: None,
+        ranged: None,
+        armor: None,
+        explosive: None,
+        consumable: None,
+        deployable: Some(DeployableProfile {
+            kind: DeployableKind::Door {
+                variant: DoorVariant::Shutter,
+            },
+            max_health: crate::game_balance::SHUTTER_MAX_HP,
+            collider_half_width: 0.55,
+            collider_half_height: 0.7,
             station_radius: 0.0,
         }),
     },

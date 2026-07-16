@@ -570,3 +570,144 @@ fn anyone_who_knows_the_code_can_pick_up_an_unclaimed_door() {
         "the picker, not the owner, gets the door"
     );
 }
+
+/// Foundation + window wall + a shutter item in the inventory; returns the
+/// window wall's entity id.
+fn build_window_wall(server: &mut GameServer, client_id: ClientId) -> DeployedEntityId {
+    give(server, client_id, WOOD_ID, 200);
+    give(server, client_id, crate::items::WOOD_SHUTTER_ID, 1);
+    server.receive(
+        client_id,
+        ClientMessage::PlaceBuilding(PlaceBuildingCommand {
+            piece: BuildingPiece::Foundation,
+            position: Vec3Net::new(0.0, 0.0, 2.0),
+            yaw: 0.0,
+        }),
+    );
+    server.receive(
+        client_id,
+        ClientMessage::PlaceBuilding(PlaceBuildingCommand {
+            piece: BuildingPiece::WindowWall,
+            position: Vec3Net::new(0.0, 0.0, 0.6),
+            yaw: 0.0,
+        }),
+    );
+    server
+        .deployed_entities
+        .values()
+        .find(|entity| {
+            matches!(
+                entity.kind,
+                DeployableKind::Building {
+                    piece: BuildingPiece::WindowWall,
+                    ..
+                }
+            )
+        })
+        .map(|entity| entity.id)
+        .expect("window wall placed")
+}
+
+#[test]
+fn shutter_hangs_codeless_in_a_window_wall_only() {
+    let mut server = server();
+    let client_id = connect_host(&mut server);
+    let window_id = build_window_wall(&mut server, client_id);
+
+    // An empty code hangs it (shutters are codeless).
+    let envelopes = server.apply_door_command(
+        client_id,
+        DoorCommand::Place {
+            doorway_id: window_id,
+            variant: DoorVariant::Shutter,
+            flip: false,
+            code: String::new(),
+        },
+    );
+    let shutter = door_id(&server)
+        .unwrap_or_else(|| panic!("shutter hung in the window; server said {envelopes:?}"));
+    assert!(matches!(
+        server.deployed_entities[&shutter].kind,
+        DeployableKind::Door {
+            variant: DoorVariant::Shutter
+        }
+    ));
+
+    // A shutter aimed at a DOORWAY is rejected.
+    let mut second = crate::server::test_support::server();
+    let owner = connect_host(&mut second);
+    let doorway_id = build_doorway(&mut second, owner);
+    give(&mut second, owner, crate::items::WOOD_SHUTTER_ID, 1);
+    second.receive(
+        owner,
+        ClientMessage::Door(DoorCommand::Place {
+            doorway_id,
+            variant: DoorVariant::Shutter,
+            flip: false,
+            code: String::new(),
+        }),
+    );
+    assert!(
+        door_id(&second).is_none(),
+        "a shutter must not mount in a doorway"
+    );
+}
+
+#[test]
+fn shutter_toggles_for_the_owner_and_rejects_strangers_without_a_prompt() {
+    let mut server = server();
+    let owner = connect_host(&mut server);
+    let window_id = build_window_wall(&mut server, owner);
+    server.receive(
+        owner,
+        ClientMessage::Door(DoorCommand::Place {
+            doorway_id: window_id,
+            variant: DoorVariant::Shutter,
+            flip: false,
+            code: String::new(),
+        }),
+    );
+    let shutter = door_id(&server).expect("shutter hung");
+
+    // The owner toggles it open with a plain E, no code flow at all.
+    server.receive(
+        owner,
+        ClientMessage::Door(DoorCommand::Interact { id: shutter }),
+    );
+    assert!(
+        server.deployed_entities[&shutter]
+            .door
+            .as_ref()
+            .is_some_and(|door| door.open),
+        "the owner swings the shutter open without a code"
+    );
+
+    // A stranger (not owner, no claim auth) cannot toggle it, and is NOT
+    // prompted for a code (there is none).
+    let stranger = connect_other(&mut server, 2, "Stranger");
+    let envelopes = server.apply_door_command(stranger, DoorCommand::Interact { id: shutter });
+    assert!(
+        server.deployed_entities[&shutter]
+            .door
+            .as_ref()
+            .is_some_and(|door| door.open),
+        "the stranger's toggle is rejected (still open, unchanged)"
+    );
+    server.receive(
+        stranger,
+        ClientMessage::Door(DoorCommand::Interact { id: shutter }),
+    );
+    assert!(
+        server.deployed_entities[&shutter]
+            .door
+            .as_ref()
+            .is_some_and(|door| door.open),
+        "still unchanged through the receive path too"
+    );
+    assert!(
+        !envelopes
+            .iter()
+            .any(|e| matches!(e.message, ServerMessage::DoorCodePrompt { .. })),
+        "a codeless shutter never prompts for a code"
+    );
+}

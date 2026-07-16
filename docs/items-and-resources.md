@@ -79,7 +79,7 @@ The bandage is the only consumable and the only healing in the game outside a re
 
 Healing routes through a single `apply_player_heal` tail (`src/server/heal.rs`), mirroring the single `apply_player_damage` tail on the damage side, so the clamp to `MAX_HEALTH` and the don't-heal-a-corpse rule are stated once. The value splits into an instant chunk and a heal-over-time remainder; the trickle accumulates sub-point in a server-only field and only writes `controller.health` on whole points, or a 10-second heal would ship a replication diff every tick. Balance lives in `game_balance.rs` (`BANDAGE_*`).
 
-`ToolKind` is `Hands`, `Axe`, `Pickaxe`, `Hammer`. `Hands` is the `Default` and is synthesized via `HANDS_TOOL` when no tool is held, so the gather pipeline always has a profile to read; it is never a valid gather tool (see the crude-node rule below). The hammer never gathers and never damages (`gather_amount: 0`, `player_damage: 0`); its swing repairs and its wheel upgrades/demolishes.
+`ToolKind` is `Hands`, `Axe`, `Pickaxe`, `Hammer`, `Sickle`. `Hands` is the `Default` and is synthesized via `HANDS_TOOL` when no tool is held, so the gather pipeline always has a profile to read; it is never a valid gather tool (see the crude-node rule below). The hammer never gathers and never damages (`gather_amount: 0`, `player_damage: 0`); its swing repairs and its wheel upgrades/demolishes. The sickle satisfies exactly one node's `ToolRequirement` (the Tall Grass tuft) and does zero structure damage (see the sickle section below).
 
 Tier is how progression scales, with zero per-tool branching:
 
@@ -109,6 +109,16 @@ The only capped node today is meteorite: `METEORITE_PER_SWING_YIELD = 2` (`game_
 Server and client run the identical function so optimistic client gain matches the authoritative payout (test `client_storage_payout_matches_server_node_payout` in `src/resource_nodes.rs` checks this for all storage+tool combos, uncapped and capped). `storage` is a `&[ResourceMaterial]` list even though every current node has exactly one entry; the payout walks the first non-empty stack, do not assume one-item-per-node is enforced.
 
 Reach is one knob per category: `PICKUP_RANGE = 3.4` (`src/items.rs`) for dropped items, `RESOURCE_GATHER_RANGE = 2.75` (`src/resource_nodes.rs`) for nodes. The server validates with lenient distance-only checks (`within_pickup_reach` / `within_gather_reach`) plus `PICKUP_SERVER_REACH_SLACK_M = 1.5` (`src/game_balance.rs`) so it doesn't false-reject a target the client already locked.
+
+## Sickle: reaping Tall Grass tufts
+
+The iron sickle (`IRON_SICKLE_ID`, bench tier 1 beside the iron hatchet/pickaxe: 1 hewn log + 8 iron bars + 2 twine; `ToolKind::Sickle`, its own `ItemModel::Sickle` reaping-slash swing archetype) is the fiber tool, and it works through the **ordinary resource-node gather path**, no bespoke wire message. It is iron-only by design (a knapped stone crescent made no sense, and everything it accelerates, the cloth/twine sinks like armor/bow/bags, is bench-tier anyway). The Tall Grass node (`HAY_GRASS_NODE_ID`) is the one node whose `required_tool` is `Sickle`; its 40-fiber storage against the sickle's `gather_amount: 40` means one sweep reaps the whole tuft and despawns it (fresh-position respawn via the chunk manager like any depleted node). The 40 is sized against the cloth/twine sinks (a padded chest piece is 33 fiber, a full starter kit a couple hundred): one tuft per armor piece, not a mowing session. Its contact cue is `SoundId::InventoryPickup`, the same grass-rustle the hand E-pluck plays (`impact_sound_for` special-cases `ItemModel::Sickle`), so collecting fiber sounds the same however you collect it.
+
+The pre-forge fiber path is the crude quick-pickup: the tuft is still `is_crude()`, so a bare-handed E-pluck works long before the sickle exists, but it is capped by the definition's `hand_pickup_yield` (3 fiber) and RUINS the tuft (the node despawns, the rest of the storage is discarded). Every early twine recipe (stone tools, hammer, spear) is fed by plucks; the sickle is the bench-tier multiplier for the fiber-heavy mid game. Hand pluck 3 vs sickle sweep 40 is the whole crafting incentive. Fiber abundance is tuned by tuft density per biome (`base_capacity` in `src/world/chunk/classification.rs`: Plains 28, Forest 12, Mixed 8, Rocky 2, Ore 1), not by a per-swing density formula.
+
+Note the gating asymmetry this introduced: the E quick-pickup path is keyed on `ResourceNodeModel::is_crude()` (client `resource_target_is_crude`, server `pick_up_resource_node`), NOT on `required_tool.kind == Hands`, because the hay tuft requires a sickle for swings yet stays E-pluckable. Branch piles and surface stones keep `Hands` (pickup-only, no tool swings at all).
+
+`SICKLE_PVP_DAMAGE` lives in `src/game_balance.rs`. Tests in `src/server/tests/resource_nodes.rs` (`sickle_reaps_a_whole_tall_grass_tuft_in_one_swing`, `other_tools_cannot_swing_tall_grass`, `hand_pluck_takes_a_handful_and_ruins_the_tuft`).
 
 ## ResourceNodeDefinition shape
 
@@ -148,9 +158,10 @@ A mined-out node respawns 5 to 15 minutes later (jittered) at a noise-valid chun
 | Axe | 150 | 50 | 300 | 15 | 0 | 0 | 300 |
 | Pickaxe | 50 | 150 | 200 | 5 | 0 | 0 | 300 |
 | Hammer | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Sickle | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Hands | 50 | 50 | 50 | 50 | 50 | 50 | 50 |
 
-Matched proper tool is roughly 1.5x, mismatched proper tool roughly 0.5x. `StoneBuilding` and `MetalBuilding` return `0` for every tool, so those entities are tool-proof by construction; the explosives (through `explosive_effectiveness_pct`) are the intended breach path for them. The hammer returns `0` for everything, which closes the "hammer as a free raid tool" hole. `Hands` is a worst-case catch-all (bare hands are normally rejected upstream before reaching here).
+Matched proper tool is roughly 1.5x, mismatched proper tool roughly 0.5x. `StoneBuilding` and `MetalBuilding` return `0` for every tool, so those entities are tool-proof by construction; the explosives (through `explosive_effectiveness_pct`) are the intended breach path for them. The hammer returns `0` for everything, which closes the "hammer as a free raid tool" hole; the sickle mirrors it (a fiber tool must not double as a raid tool). `Hands` is a worst-case catch-all (bare hands are normally rejected upstream before reaching here).
 
 **Make a deployable tool-immune by giving it a 0-arm material, never by special-casing the damage handler.** The iron door is the worked example. The same table shape carries the `Cloth` column the placed charges use, so a charge is fizzle-able by a defender's swing.
 

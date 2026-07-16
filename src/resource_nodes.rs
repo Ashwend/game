@@ -74,7 +74,8 @@ pub enum ResourceNodeModel {
     SurfaceStone,
     /// Bundle of fallen sticks. E-pickup only.
     BranchPile,
-    /// Tuft of long grass. E-pickup only.
+    /// Tuft of long grass. E-pluck rips out a token handful (ruining the
+    /// tuft); a sickle sweep reaps the whole storage in one swing.
     HayGrass,
 }
 
@@ -99,8 +100,11 @@ impl ResourceNodeModel {
     }
 
     /// Crude, hand-harvestable starter resource (branch pile, surface
-    /// stone, hay tuft). Used by the gather pipeline to skip tool checks
-    /// and by the renderer to scale meshes smaller than full trees/ore.
+    /// stone, hay tuft). Gates the E quick-pickup path on both sides (so a
+    /// fresh player can bootstrap without tools) and tells the renderer to
+    /// scale meshes smaller than full trees/ore. Independent of
+    /// `required_tool`: the hay tuft is crude (E-pluckable) AND
+    /// sickle-swingable.
     pub fn is_crude(self) -> bool {
         matches!(self, Self::SurfaceStone | Self::BranchPile | Self::HayGrass)
     }
@@ -121,8 +125,9 @@ impl ToolRequirement {
         // A `Hands` requirement means "this node can't be swung at, pick
         // it up with E". Swinging any tool (or empty hands) at a Hands
         // node is rejected so the player learns to use the quick-pickup
-        // key for crude clutter. The matching `kind == Hands` check is
-        // still what gates the E pickup path on both client and server.
+        // key for crude clutter. (The E pickup path itself is gated on
+        // `ResourceNodeModel::is_crude`, not on this: the hay tuft
+        // requires a Sickle for swings yet stays E-pluckable.)
         if self.kind == ToolKind::Hands {
             return false;
         }
@@ -168,6 +173,13 @@ pub struct ResourceNodeDefinition {
     /// for every common node). Rare small-storage nodes set it so a find takes
     /// several deliberate hits instead of vanishing into one swing.
     pub per_swing_yield: Option<u16>,
+    /// Cap on how much one E quick-pickup extracts from a crude node. `None`
+    /// (the default) drains the whole storage, the classic branch-pile grab.
+    /// `Some(n)` means a hand pluck rips out at most `n` per material and the
+    /// REST IS DISCARDED with the node: the tuft is ruined either way, so the
+    /// proper tool (the sickle) is what turns the same find into a real
+    /// harvest. Only meaningful on `is_crude()` models.
+    pub hand_pickup_yield: Option<u16>,
     pub anchor_height: f32,
     pub ray_radius: f32,
 }
@@ -180,6 +192,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         required_tool: ToolRequirement::new(ToolKind::Pickaxe, 1),
         storage: &[ResourceMaterial::new(COAL_ID, 72)],
         per_swing_yield: None,
+        hand_pickup_yield: None,
         anchor_height: 0.62,
         ray_radius: 0.72,
     },
@@ -190,6 +203,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         required_tool: ToolRequirement::new(ToolKind::Pickaxe, 1),
         storage: &[ResourceMaterial::new(IRON_ORE_ID, 72)],
         per_swing_yield: None,
+        hand_pickup_yield: None,
         anchor_height: 0.66,
         ray_radius: 0.72,
     },
@@ -200,6 +214,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         required_tool: ToolRequirement::new(ToolKind::Pickaxe, 1),
         storage: &[ResourceMaterial::new(SULFUR_ORE_ID, 72)],
         per_swing_yield: None,
+        hand_pickup_yield: None,
         anchor_height: 0.58,
         ray_radius: 0.72,
     },
@@ -213,6 +228,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         // rocks, but still finite enough to require moving around.
         storage: &[ResourceMaterial::new(STONE_ID, 96)],
         per_swing_yield: None,
+        hand_pickup_yield: None,
         anchor_height: 0.60,
         ray_radius: 0.72,
     },
@@ -232,6 +248,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         // would otherwise vaporise all 8 in a single swing.
         storage: &[ResourceMaterial::new(METEORITE_ALLOY_ID, 8)],
         per_swing_yield: Some(crate::game_balance::METEORITE_PER_SWING_YIELD),
+        hand_pickup_yield: None,
         // Anchor mid-mound. Slightly wider ray radius so aiming at the
         // boulder's upper seams still focuses the node.
         anchor_height: 0.55,
@@ -244,6 +261,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
         storage: &[ResourceMaterial::new(WOOD_ID, 24)],
         per_swing_yield: None,
+        hand_pickup_yield: None,
         anchor_height: 1.35,
         ray_radius: 0.72,
     },
@@ -254,6 +272,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
         storage: &[ResourceMaterial::new(WOOD_ID, 48)],
         per_swing_yield: None,
+        hand_pickup_yield: None,
         anchor_height: 1.45,
         ray_radius: 0.86,
     },
@@ -264,6 +283,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
         storage: &[ResourceMaterial::new(WOOD_ID, 84)],
         per_swing_yield: None,
+        hand_pickup_yield: None,
         anchor_height: 1.55,
         ray_radius: 1.05,
     },
@@ -274,6 +294,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
         storage: &[ResourceMaterial::new(WOOD_ID, 18)],
         per_swing_yield: None,
+        hand_pickup_yield: None,
         anchor_height: 1.25,
         ray_radius: 0.68,
     },
@@ -284,6 +305,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
         storage: &[ResourceMaterial::new(WOOD_ID, 42)],
         per_swing_yield: None,
+        hand_pickup_yield: None,
         anchor_height: 1.40,
         ray_radius: 0.82,
     },
@@ -294,6 +316,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         required_tool: ToolRequirement::new(ToolKind::Axe, 1),
         storage: &[ResourceMaterial::new(WOOD_ID, 72)],
         per_swing_yield: None,
+        hand_pickup_yield: None,
         anchor_height: 1.50,
         ray_radius: 0.98,
     },
@@ -304,6 +327,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         required_tool: ToolRequirement::new(ToolKind::Hands, 0),
         storage: &[ResourceMaterial::new(STONE_ID, 1)],
         per_swing_yield: None,
+        hand_pickup_yield: None,
         anchor_height: 0.18,
         ray_radius: 0.55,
     },
@@ -317,6 +341,7 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         // hatchet on a tree.
         storage: &[ResourceMaterial::new(WOOD_ID, 1)],
         per_swing_yield: None,
+        hand_pickup_yield: None,
         anchor_height: 0.16,
         ray_radius: 0.55,
     },
@@ -324,14 +349,24 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         id: HAY_GRASS_NODE_ID,
         name: "Tall Grass",
         model: ResourceNodeModel::HayGrass,
-        required_tool: ToolRequirement::new(ToolKind::Hands, 0),
-        storage: &[ResourceMaterial::new(FIBER_ID, 1)],
+        // The fiber plant. Sickle-swingable (the only node a sickle
+        // satisfies) AND still E-pluckable via the crude quick-pickup path
+        // (`is_crude()`): hand plucks are the ONLY fiber source until the
+        // bench-tier iron sickle is forged, covering every early twine
+        // recipe. A hand pluck rips out a token handful and ruins the tuft;
+        // one sickle sweep (gather_amount 40) reaps the whole storage.
+        // Sized against the cloth/twine sinks: a padded chest piece is 33
+        // fiber, a full starter kit a couple hundred, so one tuft per armor
+        // piece rather than a mowing session.
+        required_tool: ToolRequirement::new(ToolKind::Sickle, 1),
+        storage: &[ResourceMaterial::new(FIBER_ID, 40)],
         // The tuft's blades stand 0.55-0.9 m tall and fan out to ~0.34 m, but
         // the old 0.22 m anchor + 0.45 m radius focus box sat low and narrow,
         // so aiming at the visible grass missed it and E wouldn't prompt. Raise
         // the anchor to the middle of the visible tuft and widen the radius so
         // looking anywhere at the clump focuses it.
         per_swing_yield: None,
+        hand_pickup_yield: Some(3),
         anchor_height: 0.42,
         ray_radius: 0.68,
     },

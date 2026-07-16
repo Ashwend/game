@@ -40,4 +40,5 @@ mod ruins;
 mod sleeping_bag;
 mod storage_box;
 mod tool_wear;
+mod upkeep;
 mod workbench;

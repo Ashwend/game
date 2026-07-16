@@ -13,6 +13,16 @@ use super::{PLAYER_HEIGHT, PLAYER_RADIUS};
 /// for very dense fields of small blocks.
 const CELL_SIZE: f32 = 4.0;
 
+/// One live meteor crater's analytic floor: ground-zero `(x, z)` plus the
+/// meteor's size (which scales the shared crater profile uniformly). A shower
+/// leaves several of these at once, one per impacted meteor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CraterFloor {
+    pub x: f32,
+    pub z: f32,
+    pub size: f32,
+}
+
 /// Uniform spatial hash over collidable AABBs. The grid owns its own block
 /// list so it can mix static `WorldData::blocks` with dynamic colliders
 /// (e.g. live tree trunks from the current snapshot). Cells are keyed by
@@ -21,15 +31,15 @@ const CELL_SIZE: f32 = 4.0;
 /// rebuilt by the runtime; consulted by the collision routines.
 ///
 /// Besides the AABBs the grid carries the world's analytic FLOOR: flat at
-/// `y = 0` everywhere except over a live meteor shower crater, whose raised-rim
-/// mound is walked over via [`Self::floor_height`] (the collision routines use
-/// it as the ground baseline instead of a hardcoded 0).
+/// `y = 0` everywhere except over live meteor shower craters, whose raised-rim
+/// mounds are walked over via [`Self::floor_height`] (the collision routines
+/// use it as the ground baseline instead of a hardcoded 0).
 #[derive(Debug, Clone, Default)]
 pub struct BlockGrid {
     blocks: Vec<WorldBlock>,
     cells: HashMap<(i32, i32), Vec<u32>>,
-    /// Ground-zero `(x, z)` of the live meteor shower crater, if one is impacted.
-    crater: Option<[f32; 2]>,
+    /// The live, already-impacted meteor craters (a shower lands several).
+    craters: Vec<CraterFloor>,
 }
 
 impl BlockGrid {
@@ -37,34 +47,41 @@ impl BlockGrid {
         Self::build_with_extras(world, &[])
     }
 
-    /// Install (or clear) the live meteor shower crater so the analytic floor
-    /// follows its raised-rim mound. Set from the event state by whoever owns
-    /// this grid; `None` restores the flat plane.
-    pub fn set_crater(&mut self, center: Option<[f32; 2]>) {
-        self.crater = center;
+    /// Install (or clear) the live meteor shower craters so the analytic floor
+    /// follows their raised-rim mounds. Set from the event state by whoever
+    /// owns this grid; an empty list restores the flat plane.
+    pub fn set_craters(&mut self, craters: Vec<CraterFloor>) {
+        self.craters = craters;
     }
 
-    /// The installed crater centre, for change detection by the owner.
-    pub fn crater(&self) -> Option<[f32; 2]> {
-        self.crater
+    /// The installed craters, for change detection by the owner.
+    pub fn craters(&self) -> &[CraterFloor] {
+        &self.craters
     }
 
     /// The world floor height at `(x, z)`: `0.0` everywhere except over a live
-    /// meteor shower crater, where it follows the shared crater surface profile
-    /// (`crate::world::crater_surface_height`), so players walk up and over the
-    /// rim mound instead of clipping through it.
+    /// meteor shower crater, where it follows the shared size-scaled crater
+    /// surface profile (`crate::world::crater_surface_height`), so players walk
+    /// up and over the rim mounds instead of clipping through them. Craters of
+    /// one shower are sited well apart, but if profiles ever overlap (an admin
+    /// `/meteor-here` next to a live crater) the higher surface wins.
     pub fn floor_height(&self, x: f32, z: f32) -> f32 {
-        let Some([cx, cz]) = self.crater else {
-            return 0.0;
-        };
-        let (dx, dz) = (x - cx, z - cz);
-        let distance_sq = dx * dx + dz * dz;
-        // Cheap reject: outside the skirt the floor is exactly flat.
-        if distance_sq >= crate::world::CRATER_SKIRT_RADIUS_M * crate::world::CRATER_SKIRT_RADIUS_M
-        {
-            return 0.0;
+        let mut floor = 0.0_f32;
+        for crater in &self.craters {
+            let (dx, dz) = (x - crater.x, z - crater.z);
+            let distance_sq = dx * dx + dz * dz;
+            // Cheap reject: outside this crater's scaled skirt it contributes
+            // nothing.
+            let skirt = crate::world::CRATER_SKIRT_RADIUS_M * crater.size;
+            if distance_sq >= skirt * skirt {
+                continue;
+            }
+            floor = floor.max(crate::world::crater_surface_height(
+                distance_sq.sqrt(),
+                crater.size,
+            ));
         }
-        crate::world::crater_surface_height(distance_sq.sqrt())
+        floor
     }
 
     /// Same as [`Self::build`] but mixes additional collider blocks into the chunk.
@@ -93,7 +110,7 @@ impl BlockGrid {
         Self {
             blocks,
             cells,
-            crater: None,
+            craters: Vec::new(),
         }
     }
 

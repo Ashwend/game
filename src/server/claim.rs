@@ -37,18 +37,26 @@ use crate::{
 
 use super::{GameServer, ServerEnvelope};
 
-/// Authorized-account list for one Tool Cupboard. The owner is *not* in
-/// this list (it lives on the entity); clearing the list therefore can
-/// never lock the owner out.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Authorized-account list for one Tool Cupboard, plus the transient upkeep
+/// bookkeeping. The owner is *not* in the list (it lives on the entity);
+/// clearing the list therefore can never lock the owner out.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct CupboardState {
     pub(crate) authorized: Vec<AccountId>,
+    /// Fractional upkeep owed carried between drain periods, one bucket per
+    /// building tier (`[sticks-wood, hewn-logs, stone]`). Transient: never
+    /// persisted, a restart forgives the sub-integer remainder.
+    pub(crate) upkeep_carry: [f32; 3],
+    /// Which tier buckets went unpaid on the last drain (their pieces are
+    /// decaying). Drives the container panel's decay warning. Transient.
+    pub(crate) upkeep_unpaid: [bool; 3],
 }
 
 impl CupboardState {
     pub(crate) fn from_persisted(p: crate::save::PersistedCupboardState) -> Self {
         Self {
             authorized: p.authorized,
+            ..Default::default()
         }
     }
 
@@ -269,6 +277,34 @@ impl GameServer {
             }
         }
         if covered { false } else { is_owner }
+    }
+
+    /// The player's Tool Cupboard standing at `position`, for the HUD's
+    /// at-a-glance indicator: inside any claimed footprint at all, and if
+    /// so, authorized on at least one covering cupboard. Same walk as
+    /// [`Self::building_modify_allowed`], minus the outside-claim owner
+    /// fallback (outside every claim the HUD shows nothing).
+    pub(super) fn claim_status_at(
+        &self,
+        position: crate::protocol::Vec3Net,
+        account: AccountId,
+    ) -> crate::server::PlayerClaimStatus {
+        let mut inside_claim = false;
+        let mut authorized = false;
+        for (cupboard_id, cells) in &self.claim_footprints {
+            if !claim_cells_cover(cells, position) {
+                continue;
+            }
+            inside_claim = true;
+            if self.cupboard_authorizes(*cupboard_id, account) {
+                authorized = true;
+                break;
+            }
+        }
+        crate::server::PlayerClaimStatus {
+            inside_claim,
+            authorized,
+        }
     }
 
     /// Rebuild the per-cupboard claim footprint cache. Called on every

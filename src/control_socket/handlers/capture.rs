@@ -80,25 +80,11 @@ fn build_dump(
             })
             .collect(),
         deployables: deployables.to_vec(),
-        meteor_world: runtime.meteor_shower.and_then(|event| {
-            crate::world::meteor_world_state(
-                bevy::math::Vec2::new(event.impact_position.x, event.impact_position.z),
-                event.impact_tick,
-                event.trajectory_seed,
-                runtime.server_tick_precise(),
-            )
-            .map(|state| [state.position.x, state.position.y, state.position.z])
-        }),
-        meteor_velocity: runtime.meteor_shower.and_then(|event| {
-            crate::world::meteor_world_state(
-                bevy::math::Vec2::new(event.impact_position.x, event.impact_position.z),
-                event.impact_tick,
-                event.trajectory_seed,
-                runtime.server_tick_precise(),
-            )
-            .map(|state| [state.velocity.x, state.velocity.y, state.velocity.z])
-        }),
-        meteor_shower_impact: runtime.meteor_shower.map(|event| {
+        meteor_world: tracked_meteor_state(runtime)
+            .map(|state| [state.position.x, state.position.y, state.position.z]),
+        meteor_velocity: tracked_meteor_state(runtime)
+            .map(|state| [state.velocity.x, state.velocity.y, state.velocity.z]),
+        meteor_shower_impact: tracked_meteor(runtime).map(|event| {
             [
                 event.impact_position.x,
                 event.impact_position.y,
@@ -106,4 +92,40 @@ fn build_dump(
             ]
         }),
     }
+}
+
+/// The shower meteor the dump tracks: the next-to-impact live one, preferring
+/// meteors that have NOT yet landed (so the camera target moves on to the next
+/// strike instead of staying pinned to the first crater for its whole despawn
+/// window), falling back to the earliest crater when everything has landed.
+fn tracked_meteor(runtime: &ClientRuntime) -> Option<&crate::app::state::MeteorShowerEvent> {
+    let now = runtime.server_tick();
+    runtime
+        .meteor_showers
+        .iter()
+        .min_by_key(|event| (event.has_impacted(now), event.impact_tick))
+}
+
+/// The tracked meteor's in-flight world state, preferring the most imminent
+/// meteor that is actually inside its flight window this frame.
+fn tracked_meteor_state(runtime: &ClientRuntime) -> Option<crate::world::MeteorWorldState> {
+    let now = runtime.server_tick_precise();
+    let mut in_flight: Vec<(
+        &crate::app::state::MeteorShowerEvent,
+        crate::world::MeteorWorldState,
+    )> = runtime
+        .meteor_showers
+        .iter()
+        .filter_map(|event| {
+            crate::world::meteor_world_state(
+                bevy::math::Vec2::new(event.impact_position.x, event.impact_position.z),
+                event.impact_tick,
+                event.trajectory_seed,
+                now,
+            )
+            .map(|state| (event, state))
+        })
+        .collect();
+    in_flight.sort_by_key(|(event, _)| event.impact_tick);
+    in_flight.into_iter().next().map(|(_, state)| state)
 }

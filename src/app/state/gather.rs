@@ -52,6 +52,13 @@ const SPEAR_IMPACT_FRACTION: f32 = 0.55;
 const MACE_SWING_SECONDS: f32 = 0.95;
 const MACE_IMPACT_FRACTION: f32 = 0.70;
 
+// The sickle's reaping cut: brisker than the hatchet chop (a light crescent,
+// not a heavy head) but more committed than the sword's whip, and contact is
+// the crescent crossing under the crosshair mid-sweep (see
+// `sickle_swing_pose`).
+const SICKLE_SWING_SECONDS: f32 = 0.62;
+const SICKLE_IMPACT_FRACTION: f32 = 0.42;
+
 // The two ranged archetypes. A draw is NOT a swing: the hold is driven by
 // `RangedDrawState` (src/app/state/ranged.rs) and never enters the swing state
 // machine, so these table entries are the FIRE-RECOVERY beats: the short
@@ -221,6 +228,7 @@ pub(crate) fn swing_duration_seconds(model: ItemModel) -> f32 {
         ItemModel::Spear => SPEAR_SWING_SECONDS,
         ItemModel::Sword => SWORD_SWING_SECONDS,
         ItemModel::Mace => MACE_SWING_SECONDS,
+        ItemModel::Sickle => SICKLE_SWING_SECONDS,
         // Ranged weapons don't swing: the draw hold lives in `RangedDrawState`.
         // These entries are the fire-recovery beats (see the constants above).
         ItemModel::Bow => BOW_FIRE_RECOVERY_SECONDS,
@@ -247,6 +255,7 @@ pub(crate) fn swing_impact_fraction(model: ItemModel) -> f32 {
         ItemModel::Spear => SPEAR_IMPACT_FRACTION,
         ItemModel::Sword => SWORD_IMPACT_FRACTION,
         ItemModel::Mace => MACE_IMPACT_FRACTION,
+        ItemModel::Sickle => SICKLE_IMPACT_FRACTION,
         // Ranged fire-recovery beats: the shot leaves early in the beat, the rest
         // of the window is the settle (see the constants above).
         ItemModel::Bow => BOW_FIRE_IMPACT_FRACTION,
@@ -327,12 +336,14 @@ pub(crate) fn swap_duration_for_model(model: ItemModel) -> f32 {
         ItemModel::Bag | ItemModel::Deployable | ItemModel::ThrownBomb | ItemModel::Bandage => {
             SWAP_DURATION_BAG
         }
-        // The club, spear, and sword lift like the hatchet (a one/two-handed
-        // haft); the mace is the heaviest thing you can carry, so it lifts like
-        // the pickaxe.
-        ItemModel::Hatchet | ItemModel::Club | ItemModel::Spear | ItemModel::Sword => {
-            SWAP_DURATION_HATCHET
-        }
+        // The club, spear, sword, and sickle lift like the hatchet (a
+        // one/two-handed haft); the mace is the heaviest thing you can carry,
+        // so it lifts like the pickaxe.
+        ItemModel::Hatchet
+        | ItemModel::Club
+        | ItemModel::Spear
+        | ItemModel::Sword
+        | ItemModel::Sickle => SWAP_DURATION_HATCHET,
         ItemModel::Pickaxe | ItemModel::Mace => SWAP_DURATION_PICKAXE,
         // The bow is a light wooden two-hander: it lifts at the hatchet cadence.
         ItemModel::Bow => SWAP_DURATION_HATCHET,

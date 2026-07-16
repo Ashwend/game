@@ -662,7 +662,11 @@ fn player_walks_up_and_over_the_crater_mound() {
         resource_nodes: Vec::new(),
     };
     let mut grid = BlockGrid::build(&world);
-    grid.set_crater(Some([0.0, 0.0]));
+    grid.set_craters(vec![crate::controller::CraterFloor {
+        x: 0.0,
+        z: 0.0,
+        size: 1.0,
+    }]);
 
     let mut controller = PlayerController::spawn();
     controller.position = Vec3Net::new(0.0, 0.0, CRATER_SKIRT_RADIUS_M + 2.0);
@@ -677,7 +681,7 @@ fn player_walks_up_and_over_the_crater_mound() {
         let distance = (controller.position.x * controller.position.x
             + controller.position.z * controller.position.z)
             .sqrt();
-        let floor = crater_surface_height(distance);
+        let floor = crater_surface_height(distance, 1.0);
         worst_sink = worst_sink.max(floor - controller.position.y);
         if controller.position.z < -(CRATER_SKIRT_RADIUS_M + 2.0) {
             break;
@@ -712,7 +716,11 @@ fn crater_floor_supports_standing_inside_the_bowl() {
         resource_nodes: Vec::new(),
     };
     let mut grid = BlockGrid::build(&world);
-    grid.set_crater(Some([10.0, -5.0]));
+    grid.set_craters(vec![crate::controller::CraterFloor {
+        x: 10.0,
+        z: -5.0,
+        size: 1.0,
+    }]);
 
     // Drop a player from above the bowl floor, 2 m out from ground zero: they
     // must land ON the crater surface, not fall through to the flat plane.
@@ -723,7 +731,7 @@ fn crater_floor_supports_standing_inside_the_bowl() {
     for _ in 0..400 {
         controller.simulate_with_grid(1.0 / 120.0, &grid);
     }
-    let floor = crater_surface_height(2.0);
+    let floor = crater_surface_height(2.0, 1.0);
     assert!(
         (controller.position.y - floor).abs() < 0.02,
         "should rest on the bowl floor at {floor}, got {}",
@@ -731,8 +739,8 @@ fn crater_floor_supports_standing_inside_the_bowl() {
     );
     assert!(controller.grounded);
 
-    // Clearing the crater restores the flat plane.
-    grid.set_crater(None);
+    // Clearing the craters restores the flat plane.
+    grid.set_craters(Vec::new());
     for _ in 0..400 {
         controller.simulate_with_grid(1.0 / 120.0, &grid);
     }

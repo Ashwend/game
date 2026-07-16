@@ -180,7 +180,11 @@ impl GameServer {
             return Vec::new();
         };
         entity.health = entity.health.saturating_sub(damage);
-        if entity.health == 0 {
+        let dead = entity.health == 0;
+        // Stamp the combat-damage tick for the repair lockout (`damage` is
+        // always nonzero here; the structure pass filters zero hits).
+        self.recently_damaged.insert(id, self.tick);
+        if dead {
             // Same destroy path a swing/projectile takes: spill + stability.
             self.destroy_deployed_entity(id);
         }

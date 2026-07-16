@@ -54,7 +54,7 @@ Authoritative state on `GameServer` (`src/server.rs` - struct fields):
 | `chunk_manager` | `ChunkManager` | no | yes (`ChunkManagerSave`) | Owns anchor chunks + regrow schedule. See [chunks-and-aoi.md](chunks-and-aoi.md). |
 | `claim_footprints` | `HashMap<DeployedEntityId, Vec<(f32,f32)>>` | **no** | **no** | Server-only derived cache. Rebuilt by `recompute_claim_footprints` on structural change. |
 | `world` / `world_grid` | `WorldData` / `BlockGrid` | no | yes (`world`) | `world_grid` is a block spatial index used **only** for combat line-of-sight, not movement (movement is client-authoritative). |
-| `meteor_shower` | `MeteorShowerState` | no | no | Runtime-only meteor-event engine (scheduler + live event). Deliberately neither replicated nor persisted: world load rolls a fresh next event, an in-flight event does not survive restart. |
+| `meteor_shower` | `MeteorShowerState` | no | no | Runtime-only meteor-event engine (scheduler + the live event's meteors, each on its own staggered impact/cleanup clock). Deliberately neither replicated nor persisted: world load rolls a fresh next event, an in-flight event does not survive restart. |
 | `next_*_id`, `tick`, `auto_save_*` | scalars | no | partly | Bookkeeping counters. |
 
 `claim_footprints` is the one to remember: it is never persisted and never replicated. It is a pure runtime cache derived from placed cupboards + connected building footprint, recomputed on every structural change. Do not try to ship or save it.
@@ -213,7 +213,7 @@ Armor is live: `ServerClient.protection` (`src/server.rs` - `struct ServerClient
 
 ## Slash commands
 
-`GameServer::apply_command` (`src/server/commands.rs`) parses the leading `/`, splits on whitespace, and dispatches. Submodules: `kit.rs`, `player.rs`, `time.rs`, `world.rs` (plus colocated `tests.rs`); the two `/meteor_shower` handlers live in `src/server/meteor_shower.rs`. Commands: `/spawn`, `/drain`, `/time`, `/speed`, `/knockback-scale` (alias `knockbackscale`), `/time-speed` (aliases `timespeed`, `timescale`), `/test-kit` (alias `testkit`), `/give`, `/tp` (alias `teleport`), `/ruins [tp]`, `/meteor_shower`, `/meteor_shower-here` (alias `meteor_showerhere`), `/help`. All except `/help` are admin-gated; `/help` lists every command and marks the gated ones for non-admins.
+`GameServer::apply_command` (`src/server/commands.rs`) parses the leading `/`, splits on whitespace, and dispatches. Submodules: `kit.rs`, `player.rs`, `time.rs`, `world.rs` (plus colocated `tests.rs`); the two meteor handlers live in `src/server/meteor_shower.rs`. Commands: `/spawn`, `/drain`, `/time`, `/speed`, `/knockback-scale` (alias `knockbackscale`), `/time-speed` (aliases `timespeed`, `timescale`), `/test-kit` (alias `testkit`), `/give`, `/tp` (alias `teleport`), `/ruins [tp]`, `/meteor [warning_seconds]` (a full multi-meteor shower), `/meteor-here [warning_seconds] [size]` (alias `meteorhere`; one placed meteor), `/help`. All except `/help` are admin-gated; `/help` lists every command and marks the gated ones for non-admins.
 
 ## Loopback vs dedicated: the only differences
 

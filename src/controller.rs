@@ -16,7 +16,7 @@ use self::movement::{
 };
 
 pub use self::collision::block_under_feet;
-pub use self::grid::BlockGrid;
+pub use self::grid::{BlockGrid, CraterFloor};
 pub use self::movement::{RUN_SPEED, WALK_SPEED, first_person_move_direction};
 
 /// Whether a player capsule standing at `position` overlaps any solid block in

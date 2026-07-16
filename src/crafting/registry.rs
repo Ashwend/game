@@ -9,12 +9,13 @@ use crate::items::{
     ARROW_ID, BANDAGE_ID, BASIC_HATCHET_ID, BASIC_PICKAXE_ID, BUILDING_PLAN_ID, CLOTH_ID, COAL_ID,
     CROSSBOW_ID, CRUDE_FURNACE_ID, FIBER_ID, GUNPOWDER_ID, HAMMER_ID, HEWN_LOG_DOOR_ID,
     HEWN_LOG_ID, IRON_BAR_ID, IRON_BOOTS_ID, IRON_CUIRASS_ID, IRON_DOOR_ID, IRON_GREAVES_ID,
-    IRON_HATCHET_ID, IRON_HELM_ID, IRON_MACE_ID, IRON_PICKAXE_ID, IRON_SWORD_ID, LAMELLAR_BOOTS_ID,
-    LAMELLAR_GREAVES_ID, LAMELLAR_HELM_ID, LAMELLAR_VEST_ID, PADDED_HOOD_ID, PADDED_LEGGINGS_ID,
-    PADDED_TUNIC_ID, PADDED_WRAPS_ID, PLANT_TWINE_ID, POWDER_BOMB_ID, POWDER_KEG_ID,
-    SALVAGED_FITTINGS_ID, SATCHEL_CHARGE_ID, SLEEPING_BAG_ID, STONE_ID, STONE_SPEAR_ID,
-    STORAGE_BOX_LARGE_ID, STORAGE_BOX_SMALL_ID, SULFUR_ID, TOOL_CUPBOARD_ID, TORCH_ID, WOOD_ID,
-    WOODEN_BOW_ID, WOODEN_CLUB_ID, WORKBENCH_T1_ID, item_definition,
+    IRON_HATCHET_ID, IRON_HELM_ID, IRON_MACE_ID, IRON_PICKAXE_ID, IRON_SICKLE_ID, IRON_SWORD_ID,
+    LAMELLAR_BOOTS_ID, LAMELLAR_GREAVES_ID, LAMELLAR_HELM_ID, LAMELLAR_VEST_ID, PADDED_HOOD_ID,
+    PADDED_LEGGINGS_ID, PADDED_TUNIC_ID, PADDED_WRAPS_ID, PLANT_TWINE_ID, POWDER_BOMB_ID,
+    POWDER_KEG_ID, SALVAGED_FITTINGS_ID, SATCHEL_CHARGE_ID, SLEEPING_BAG_ID, STONE_ID,
+    STONE_SPEAR_ID, STORAGE_BOX_LARGE_ID, STORAGE_BOX_SMALL_ID, SULFUR_ID, TOOL_CUPBOARD_ID,
+    TORCH_ID, WOOD_ID, WOOD_SHUTTER_ID, WOODEN_BOW_ID, WOODEN_CLUB_ID, WORKBENCH_T1_ID,
+    item_definition,
 };
 
 use super::types::{CraftingInput, RecipeCategory, RecipeDefinition, RecipeStation};
@@ -72,6 +73,8 @@ pub const TOOL_CUPBOARD_RECIPE_ID: &str = "tool_cupboard";
 pub const POWDER_BOMB_RECIPE_ID: &str = "powder_bomb";
 pub const POWDER_KEG_RECIPE_ID: &str = "powder_keg";
 pub const SATCHEL_CHARGE_RECIPE_ID: &str = "satchel_charge";
+pub const WOOD_SHUTTER_RECIPE_ID: &str = "wood_shutter";
+pub const IRON_SICKLE_RECIPE_ID: &str = "iron_sickle";
 
 /// Static recipe table. Append-only, entries must keep stable ids so saves
 /// and queued jobs survive across versions.
@@ -780,6 +783,43 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         craft_seconds: 20.0,
         tier: 3,
         station: RecipeStation::Workbench { min_tier: 2 },
+    },
+    RecipeDefinition {
+        id: WOOD_SHUTTER_RECIPE_ID,
+        name: "Window Shutter",
+        description: "Batten hewn boards into a window panel. Mounts in a \
+                      window opening; no lock, base authorization swings it.",
+        category: RecipeCategory::Building,
+        inputs: &[
+            CraftingInput::new(HEWN_LOG_ID, 3),
+            CraftingInput::new(PLANT_TWINE_ID, 2),
+        ],
+        output_item: WOOD_SHUTTER_ID,
+        output_quantity: 1,
+        craft_seconds: 10.0,
+        tier: 1,
+        station: RecipeStation::Workbench { min_tier: 1 },
+    },
+    RecipeDefinition {
+        id: IRON_SICKLE_RECIPE_ID,
+        name: "Iron Sickle",
+        description: "Forge a curved iron blade onto a short haft. Reaps a \
+                      whole tuft of tall grass in one sweep.",
+        category: RecipeCategory::Tools,
+        // Bench-tier beside the iron hatchet/pickaxe, a touch cheaper (a
+        // light harvest blade, not a work head). Everything it accelerates
+        // (the cloth/twine sinks: armor, bow, bags) is bench-tier anyway;
+        // before the forge, fiber comes from bare-hand tuft plucks.
+        inputs: &[
+            CraftingInput::new(HEWN_LOG_ID, 1),
+            CraftingInput::new(IRON_BAR_ID, 8),
+            CraftingInput::new(PLANT_TWINE_ID, 2),
+        ],
+        output_item: IRON_SICKLE_ID,
+        output_quantity: 1,
+        craft_seconds: 16.0,
+        tier: 2,
+        station: RecipeStation::Workbench { min_tier: 1 },
     },
 ];
 

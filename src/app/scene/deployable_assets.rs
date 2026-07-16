@@ -31,13 +31,19 @@ pub(crate) struct DeployableVisualAssets {
     /// `art/building/build_door.py`.
     pub(crate) hewn_door_panel_mesh: Handle<Mesh>,
     pub(crate) iron_door_panel_mesh: Handle<Mesh>,
+    /// Procedural window-shutter panel (battened boards spanning the window
+    /// opening, hinge-at-origin like the door glbs). Placeholder until an
+    /// authored glb lands; rides the hewn door material.
+    pub(crate) shutter_panel_mesh: Handle<Mesh>,
     /// Textured door materials (base-white + plank/plate texture, COLOR_0
     /// tints the frame/braces/straps), one per variant.
     pub(crate) hewn_door_material: Handle<StandardMaterial>,
     pub(crate) iron_door_material: Handle<StandardMaterial>,
     /// Door placement ghost: closed panel + swing-arc indicator (procedural,
-    /// shared by both variants; the ghost is a translucent preview).
+    /// shared by both door variants; the ghost is a translucent preview).
     pub(crate) door_ghost_mesh: Handle<Mesh>,
+    /// Shutter placement ghost: the window panel + swing arc at sill height.
+    pub(crate) shutter_ghost_mesh: Handle<Mesh>,
     pub(crate) sleeping_bag_mesh: Handle<Mesh>,
     /// Authored storage box models (Blender glbs, vertex-coloured like
     /// the workbench/furnace).
@@ -154,6 +160,7 @@ impl DeployableVisualAssets {
         match variant {
             crate::items::DoorVariant::HewnLog => self.hewn_door_panel_mesh.clone(),
             crate::items::DoorVariant::Iron => self.iron_door_panel_mesh.clone(),
+            crate::items::DoorVariant::Shutter => self.shutter_panel_mesh.clone(),
         }
     }
 
@@ -163,7 +170,11 @@ impl DeployableVisualAssets {
         variant: crate::items::DoorVariant,
     ) -> Handle<StandardMaterial> {
         match variant {
-            crate::items::DoorVariant::HewnLog => self.hewn_door_material.clone(),
+            // The shutter is battened hewn boards, so it shares the wood
+            // door's plank material.
+            crate::items::DoorVariant::HewnLog | crate::items::DoorVariant::Shutter => {
+                self.hewn_door_material.clone()
+            }
             crate::items::DoorVariant::Iron => self.iron_door_material.clone(),
         }
     }

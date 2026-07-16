@@ -827,6 +827,11 @@ impl GameServer {
         if let Some(entity) = self.deployed_entity_mut(deployable_id) {
             entity.health = entity.health.saturating_sub(damage);
             let dead = entity.health == 0;
+            // Stamp the combat-damage tick for the repair lockout (a 0-damage
+            // arrow tap locks nothing).
+            if damage > 0 {
+                self.recently_damaged.insert(deployable_id, self.tick);
+            }
             if dead {
                 self.destroy_deployed_entity(deployable_id);
             }

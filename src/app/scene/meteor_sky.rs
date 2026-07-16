@@ -32,6 +32,24 @@ use super::{
     sky::{CameraTransformQuery, MoonLight, MoonVisual, SunLight, lerp},
 };
 
+/// How many fireball rigs the sky pre-spawns. One per possible concurrent
+/// meteor: a shower rolls at most `METEOR_SHOWER_COUNT_MAX` meteors, and the
+/// impact staggering keeps several in flight at once, so every meteor needs
+/// its own body/trail/tongue set. Const-asserted against the balance knob so a
+/// count bump cannot silently starve the sky of rigs.
+pub(crate) const METEOR_SKY_RIGS: usize = 5;
+const _: () = assert!(
+    crate::game_balance::METEOR_SHOWER_COUNT_MAX as usize <= METEOR_SKY_RIGS,
+    "pre-spawned sky rigs must cover the maximum shower size"
+);
+
+/// Which pre-spawned fireball rig an entity belongs to. Every body layer,
+/// trail segment, and flame tongue carries one; the update system assigns
+/// meteor `k` of the live shower to rig `k` and drives each rig's entities
+/// from its own meteor's trajectory.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MeteorRig(pub(crate) usize);
+
 /// Which of the three co-moving fireball body layers an entity is. The body is a
 /// BURNING ROCK: a dark, irregular, near-black charred-rock CORE, a hot additive
 /// orange flame HALO wrapping it (SHELL), and a small white-hot leading CAP over
@@ -207,6 +225,19 @@ const METEOR_TRUE_SCALE_DISTANCE: f32 = 200.0;
 /// the crater it leaves.
 const METEOR_TRUE_SIZE_CONVERGE_START: f32 = 0.70;
 const METEOR_TRUE_SIZE_CONVERGE_END: f32 = 0.96;
+
+/// Distance band over which the proxy's drama growth is DAMPED for meteors
+/// that stay far from this camera. The full `METEOR_PROXY_GROWTH` swell is the
+/// bearing-down read and only makes sense for a meteor actually coming at you;
+/// a strike landing on the far side of the map used to swell just as huge in
+/// the sky, which read wrong (owner report). Inside `FULL` the drama is
+/// untouched; by `FAR` only `KEEP` of the growth term survives, so a distant
+/// crossing is a modest bright streak, still clearly visible (and, via the
+/// audio floor, audible) but plausibly far. Keyed off the CURRENT camera
+/// distance, so a near-site meteor regains its full swell as it closes.
+const METEOR_DRAMA_FULL_DISTANCE_M: f32 = 800.0;
+const METEOR_DRAMA_FAR_DISTANCE_M: f32 = 2_200.0;
+const METEOR_DRAMA_FAR_KEEP: f32 = 0.15;
 
 // Meteor colour/brightness. The fireball is a BURNING ROCK, not a glowing ball.
 // Fire runs HOT-to-COOL: white/yellow at the hottest point, then orange, then deep
@@ -440,11 +471,12 @@ const METEOR_FRAGMENT_HUE_DEEP: Vec3 = Vec3::new(0.42, 0.025, 0.0);
 /// Seconds between ember sparks shed by one burning fragment.
 const METEOR_FRAGMENT_EMBER_INTERVAL: f32 = 0.07;
 
-/// Spawn the meteor shower fireball and its trail chain, all `Hidden` until an
-/// event is in flight. Called from `setup_scene` right after `setup_sky` so the
-/// meteor rig spawns alongside the rest of the sky.
+/// Spawn the meteor shower fireball rigs (one per possible concurrent meteor,
+/// [`METEOR_SKY_RIGS`]) and their trail chains, all `Hidden` until an event is
+/// in flight. Called from `setup_scene` right after `setup_sky` so the meteor
+/// rigs spawn alongside the rest of the sky.
 ///
-/// The fireball is three co-moving unlit fog-immune meshes placed at a TRUE
+/// Each fireball is three co-moving unlit fog-immune meshes placed at a TRUE
 /// world position (or its far-plane proxy) by `update_meteor_sky_system`, with
 /// HDR heat in each `base_color` (the unlit path skips both `emissive` and
 /// exposure, so the base colour IS the HDR emitter). It reads as a BURNING ROCK:
@@ -462,6 +494,20 @@ pub(super) fn setup_meteor_sky(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
+    for rig in 0..METEOR_SKY_RIGS {
+        setup_meteor_rig(commands, meshes, materials, rig);
+    }
+}
+
+/// Spawn one fireball rig (body layers, trail chain, flame tongues), every
+/// entity tagged [`MeteorRig`] so the update system can drive each rig from
+/// its own meteor.
+fn setup_meteor_rig(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    rig: usize,
+) {
     let body_layer = |commands: &mut Commands,
                       meshes: &mut Assets<Mesh>,
                       materials: &mut Assets<StandardMaterial>,
@@ -471,11 +517,15 @@ pub(super) fn setup_meteor_sky(
                       entry: Vec3,
                       render: MeteorBodyRender| {
         // The rock CORE gets an irregular, vertex-perturbed mesh so its silhouette
-        // is a jagged stone, not a smooth ball; the two fire layers stay smooth
-        // spheres (the additive glow does not want facets).
+        // is a jagged stone, not a smooth ball (seeded per rig so concurrent
+        // meteors are not clones); the two fire layers stay smooth spheres (the
+        // additive glow does not want facets).
         let radius = METEOR_BASE_RADIUS * radius_frac;
         let mesh = match render {
-            MeteorBodyRender::OpaqueRock => meshes.add(irregular_rock_mesh(radius, 0x1234_5678)),
+            MeteorBodyRender::OpaqueRock => meshes.add(irregular_rock_mesh(
+                radius,
+                0x1234_5678 ^ (rig as u32).wrapping_mul(0x9E37_79B9),
+            )),
             _ => meshes.add(
                 Sphere::new(radius)
                     .mesh()
@@ -526,8 +576,9 @@ pub(super) fn setup_meteor_sky(
             ..default()
         });
         commands.spawn((
-            Name::new(name.to_string()),
+            Name::new(format!("{name} {rig}")),
             MeteorVisual,
+            MeteorRig(rig),
             layer,
             Mesh3d(mesh),
             MeshMaterial3d(material),
@@ -598,8 +649,9 @@ pub(super) fn setup_meteor_sky(
             ..default()
         });
         commands.spawn((
-            Name::new(format!("Meteor Trail Segment {index}")),
+            Name::new(format!("Meteor Trail Segment {rig}.{index}")),
             MeteorTrailSegment { index },
+            MeteorRig(rig),
             Mesh3d(mesh),
             MeshMaterial3d(material),
             Transform::IDENTITY,
@@ -629,8 +681,9 @@ pub(super) fn setup_meteor_sky(
             ..default()
         });
         commands.spawn((
-            Name::new(format!("Meteor Flame Tongue {index}")),
+            Name::new(format!("Meteor Flame Tongue {rig}.{index}")),
             MeteorFlameTongue { index },
+            MeteorRig(rig),
             Mesh3d(tongue_mesh.clone()),
             MeshMaterial3d(material),
             Transform::IDENTITY,
@@ -781,6 +834,7 @@ type MeteorVisualQuery<'w, 's> = Query<
         &'static mut Transform,
         &'static mut Visibility,
         &'static MeteorBodyLayer,
+        &'static MeteorRig,
         &'static MeshMaterial3d<StandardMaterial>,
     ),
     (
@@ -799,6 +853,7 @@ type MeteorTrailQuery<'w, 's> = Query<
         &'static mut Transform,
         &'static mut Visibility,
         &'static MeteorTrailSegment,
+        &'static MeteorRig,
         &'static MeshMaterial3d<StandardMaterial>,
     ),
     (
@@ -817,6 +872,7 @@ type MeteorTongueQuery<'w, 's> = Query<
         &'static mut Transform,
         &'static mut Visibility,
         &'static MeteorFlameTongue,
+        &'static MeteorRig,
         &'static MeshMaterial3d<StandardMaterial>,
     ),
     (
@@ -861,8 +917,15 @@ fn meteor_render_placement(true_pos: Vec3, camera_pos: Vec3, descent: f32) -> (V
     // then CONVERGES back to the true angular size over the final stretch of
     // descent (see the converge constants) so a far observer watches the grown
     // glow settle into the real object diving onto the site rather than a huge
-    // sprite that never transitions and simply vanishes at impact.
-    let drama_scale = 1.0 + descent.clamp(0.0, 1.0) * (METEOR_PROXY_GROWTH - 1.0);
+    // sprite that never transitions and simply vanishes at impact. The growth
+    // is distance-damped (the drama-damp constants): a meteor that stays far
+    // from THIS camera swells only a fraction, so cross-map strikes read as
+    // plausibly distant streaks instead of looming overhead.
+    let far_t = ((distance - METEOR_DRAMA_FULL_DISTANCE_M)
+        / (METEOR_DRAMA_FAR_DISTANCE_M - METEOR_DRAMA_FULL_DISTANCE_M))
+        .clamp(0.0, 1.0);
+    let drama_damp = 1.0 - far_t * (1.0 - METEOR_DRAMA_FAR_KEEP);
+    let drama_scale = 1.0 + descent.clamp(0.0, 1.0) * (METEOR_PROXY_GROWTH - 1.0) * drama_damp;
     // Mesh drawn at the proxy distance has the true apparent size when scaled
     // by the distance ratio. Clamped so a degenerate close distance cannot
     // explode the scale before the band blend takes over.
@@ -945,43 +1008,56 @@ fn airburst_crossing(prev_descent: Option<f32>, descent: f32, threshold: f32) ->
     prev < threshold && (threshold..threshold + METEOR_AIRBURST_WINDOW).contains(&descent)
 }
 
-/// Hide every trail segment (used from the fireball's early-return /
-/// not-in-flight paths so a stale streak never lingers on the sky).
-fn set_trail_hidden(trail: &mut MeteorTrailQuery) {
-    for (_, mut visibility, _, _) in trail.iter_mut() {
-        *visibility = Visibility::Hidden;
+/// Hide trail segments (used from the fireball's early-return / not-in-flight
+/// paths so a stale streak never lingers on the sky). `rig` limits the hide to
+/// one rig; `None` hides every rig.
+fn set_trail_hidden(trail: &mut MeteorTrailQuery, rig: Option<usize>) {
+    for (_, mut visibility, _, rig_tag, _) in trail.iter_mut() {
+        if rig.is_none_or(|rig| rig_tag.0 == rig) {
+            *visibility = Visibility::Hidden;
+        }
     }
 }
 
-/// Hide every fireball body layer (core/shell/corona) on the not-in-flight paths.
-fn set_body_hidden(body: &mut MeteorVisualQuery) {
-    for (_, mut visibility, _, _) in body.iter_mut() {
-        *visibility = Visibility::Hidden;
+/// Hide fireball body layers (core/shell/corona/glow) on the not-in-flight
+/// paths. `rig` limits the hide to one rig; `None` hides every rig.
+fn set_body_hidden(body: &mut MeteorVisualQuery, rig: Option<usize>) {
+    for (_, mut visibility, _, rig_tag, _) in body.iter_mut() {
+        if rig.is_none_or(|rig| rig_tag.0 == rig) {
+            *visibility = Visibility::Hidden;
+        }
     }
 }
 
-/// Hide every flame tongue on the not-in-flight paths.
-fn set_tongues_hidden(tongues: &mut MeteorTongueQuery) {
-    for (_, mut visibility, _, _) in tongues.iter_mut() {
-        *visibility = Visibility::Hidden;
+/// Hide flame tongues on the not-in-flight paths. `rig` limits the hide to one
+/// rig; `None` hides every rig.
+fn set_tongues_hidden(tongues: &mut MeteorTongueQuery, rig: Option<usize>) {
+    for (_, mut visibility, _, rig_tag, _) in tongues.iter_mut() {
+        if rig.is_none_or(|rig| rig_tag.0 == rig) {
+            *visibility = Visibility::Hidden;
+        }
     }
 }
 
-/// Position, orient, size, and shade the meteor shower fireball each frame from the
-/// shared deterministic **world-space** trajectory
-/// (`crate::world::meteor_shower::meteor_world_state`) evaluated against the local
-/// clock estimate, and shed the ember sputter trail behind it.
+/// Position, orient, size, and shade every live meteor's fireball each frame
+/// from the shared deterministic **world-space** trajectory
+/// (`crate::world::meteor_shower::meteor_world_state`) evaluated against the
+/// local clock estimate, and shed each fireball's ember sputter stream behind
+/// it. Meteor `k` of the shower drives rig `k` ([`MeteorRig`]); rigs without a
+/// live in-flight meteor stay hidden.
 ///
-/// The object is a true world entity: the far-plane proxy
-/// ([`meteor_render_placement`]) keeps it renderable and correctly sized from any
-/// distance while preserving parallax, so players can follow it from a distant
-/// burning point all the way to a scream-overhead landing. The trail child's
-/// local -Z is aligned with the (analytic, stable) velocity so the streak drags
-/// straight behind travel, and both materials' HDR brightness is rewritten per
-/// frame (descent ramp x seeded flicker) so the ball visibly burns against day
-/// and night skies alike. Runs in `ClientSystemSet::Sky` alongside
-/// `update_sky_system`; gated on `!uses_menu_backdrop` (the title screen has no
-/// world) per gotcha 12.
+/// Each object is a true world entity: the far-plane proxy
+/// ([`meteor_render_placement`]) keeps it renderable and correctly sized from
+/// any distance while preserving parallax, so players can follow it from a
+/// distant burning point all the way to a scream-overhead landing. A meteor's
+/// `size` multiplies the rendered ball radius, so every dependent effect
+/// (trail length, tongues, embers, airburst) scales with it for free. The
+/// trail entities' local -Z is aligned with the (analytic, stable) velocity so
+/// the streak drags straight behind travel, and the materials' HDR brightness
+/// is rewritten per frame (descent ramp x seeded flicker) so each ball visibly
+/// burns against day and night skies alike. Runs in `ClientSystemSet::Sky`
+/// alongside `update_sky_system`; gated on `!uses_menu_backdrop` (the title
+/// screen has no world) per gotcha 12.
 #[expect(clippy::too_many_arguments, reason = "Bevy system params")]
 pub(crate) fn update_meteor_sky_system(
     mut commands: Commands,
@@ -989,52 +1065,100 @@ pub(crate) fn update_meteor_sky_system(
     menu: Res<MenuState>,
     time: Res<Time>,
     ember_assets: Option<Res<MeteorEmberAssets>>,
-    mut emitter: Local<MeteorEmberEmitter>,
-    mut airburst: Local<MeteorAirburstState>,
+    mut emitters: Local<[MeteorEmberEmitter; METEOR_SKY_RIGS]>,
+    mut airbursts: Local<[MeteorAirburstState; METEOR_SKY_RIGS]>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     camera: CameraTransformQuery,
     mut meteor: MeteorVisualQuery,
     mut trail: MeteorTrailQuery,
     mut tongues: MeteorTongueQuery,
 ) {
-    // Resolve the live event, or hide the fireball + trail. Hidden when: no event,
-    // the title backdrop is up, the meteor is not yet in flight, or it has struck.
-    let event = if menu.screen.uses_menu_backdrop() {
-        None
-    } else {
-        runtime.meteor_shower
-    };
-    let Some(event) = event else {
-        set_body_hidden(&mut meteor);
-        set_trail_hidden(&mut trail);
-        set_tongues_hidden(&mut tongues);
+    // Resolve the live shower, or hide every rig. Hidden when: no event or the
+    // title backdrop is up (per-rig hiding below covers not-in-flight meteors).
+    if menu.screen.uses_menu_backdrop() || runtime.meteor_showers.is_empty() {
+        set_body_hidden(&mut meteor, None);
+        set_trail_hidden(&mut trail, None);
+        set_tongues_hidden(&mut tongues, None);
         return;
-    };
-    // The FRACTIONAL clock estimate: evaluating the committed arc at whole 20 Hz
-    // ticks quantises the plunge into 50 ms position steps, which reads as a
-    // stuttering final descent on any client rendering faster than the tick rate.
-    let now = runtime.server_tick_precise();
-    let Some(state) = crate::world::meteor_world_state(
-        Vec2::new(event.impact_position.x, event.impact_position.z),
-        event.impact_tick,
-        event.trajectory_seed,
-        now,
-    ) else {
-        set_body_hidden(&mut meteor);
-        set_trail_hidden(&mut trail);
-        set_tongues_hidden(&mut tongues);
-        return;
-    };
-
+    }
     let Ok(camera_transform) = camera.single() else {
-        set_body_hidden(&mut meteor);
-        set_trail_hidden(&mut trail);
-        set_tongues_hidden(&mut tongues);
+        set_body_hidden(&mut meteor, None);
+        set_trail_hidden(&mut trail, None);
+        set_tongues_hidden(&mut tongues, None);
         return;
     };
     let camera_pos = camera_transform.translation;
+    let camera_forward = camera_transform.forward().as_vec3();
+    // The FRACTIONAL clock estimate: evaluating a committed arc at whole 20 Hz
+    // ticks quantises the plunge into 50 ms position steps, which reads as a
+    // stuttering final descent on any client rendering faster than the tick rate.
+    let now = runtime.server_tick_precise();
+
+    for rig in 0..METEOR_SKY_RIGS {
+        let event = runtime.meteor_showers.get(rig).copied();
+        let state = event.and_then(|event| {
+            crate::world::meteor_world_state(
+                Vec2::new(event.impact_position.x, event.impact_position.z),
+                event.impact_tick,
+                event.trajectory_seed,
+                now,
+            )
+        });
+        let (Some(event), Some(state)) = (event, state) else {
+            // No meteor assigned to this rig, or its meteor is not in flight
+            // (pre-entry, or already struck): hide just this rig.
+            set_body_hidden(&mut meteor, Some(rig));
+            set_trail_hidden(&mut trail, Some(rig));
+            set_tongues_hidden(&mut tongues, Some(rig));
+            continue;
+        };
+        update_meteor_rig_frame(
+            &mut commands,
+            &mut materials,
+            &mut meteor,
+            &mut trail,
+            &mut tongues,
+            ember_assets.as_deref(),
+            &mut emitters[rig],
+            &mut airbursts[rig],
+            rig,
+            &event,
+            &state,
+            camera_pos,
+            camera_forward,
+            now,
+            time.delta_secs(),
+        );
+    }
+}
+
+/// Drive one rig's body layers, trail, tongues, airburst, and ember stream for
+/// one frame from its meteor's in-flight state. Split out of
+/// [`update_meteor_sky_system`] so the per-rig loop stays legible.
+#[expect(clippy::too_many_arguments, reason = "split-out system helper")]
+fn update_meteor_rig_frame(
+    commands: &mut Commands,
+    materials: &mut Assets<StandardMaterial>,
+    meteor: &mut MeteorVisualQuery,
+    trail: &mut MeteorTrailQuery,
+    tongues: &mut MeteorTongueQuery,
+    ember_assets: Option<&MeteorEmberAssets>,
+    emitter: &mut MeteorEmberEmitter,
+    airburst: &mut MeteorAirburstState,
+    rig: usize,
+    event: &crate::app::state::MeteorShowerEvent,
+    state: &crate::world::MeteorWorldState,
+    camera_pos: Vec3,
+    camera_forward: Vec3,
+    now: f64,
+    dt: f32,
+) {
     let descent = state.descent_fraction;
     let flicker = state.flicker;
+    // The meteor's size scales the whole rendered fireball; every dependent
+    // effect below is sized off `ball_radius`, so trail/tongues/embers/airburst
+    // inherit the scale for free.
+    let size = event.size.clamp(0.05, 1.0);
 
     // Place on the far-plane proxy (growing with descent) or, once close, at the
     // true world position and true scale. Preserves parallax and lets the object
@@ -1042,7 +1166,7 @@ pub(crate) fn update_meteor_sky_system(
     // is the close-ness LOD factor that gates the dense ember stream.
     let (render_pos, render_scale, tf) =
         meteor_render_placement(state.position, camera_pos, descent);
-    let ball_radius = METEOR_BASE_RADIUS * render_scale;
+    let ball_radius = METEOR_BASE_RADIUS * size * render_scale;
 
     // Far-phase shimmer: widen the shared deterministic flicker while the ball
     // is distant + early in its flight, so the slow-crossing phase visibly
@@ -1070,8 +1194,9 @@ pub(crate) fn update_meteor_sky_system(
     // Scale wobbles only with the CALM shared flicker; the amplified far
     // shimmer drives brightness alone. Pumping the amplified value into the
     // mesh scale made the whole rig visibly inflate and deflate, which read as
-    // a pulsating sprite rather than a burning object.
-    let s = render_scale * flicker;
+    // a pulsating sprite rather than a burning object. The meteor's size folds
+    // in here (the meshes are built at the size-1.0 base radius).
+    let s = render_scale * flicker * size;
     let body_scale = Vec3::new(s, s, s * stretch);
 
     // Body: place, orient, size, and shade each of the three co-moving layers. The
@@ -1090,7 +1215,10 @@ pub(crate) fn update_meteor_sky_system(
         tumble_t * 0.5,
         tumble_t * 0.3,
     );
-    for (mut transform, mut visibility, layer, material) in meteor.iter_mut() {
+    for (mut transform, mut visibility, layer, rig_tag, material) in meteor.iter_mut() {
+        if rig_tag.0 != rig {
+            continue;
+        }
         *visibility = Visibility::Visible;
         transform.rotation = rotation;
         transform.scale = body_scale;
@@ -1130,11 +1258,12 @@ pub(crate) fn update_meteor_sky_system(
     // from a chain of frustum segments (world entities, not children). Foreshorten-
     // ing flare + a bounded lateral waver make it read as a comet from any pose.
     update_meteor_trail(
-        &mut trail,
-        &mut materials,
+        trail,
+        materials,
+        rig,
         render_pos,
         travel,
-        camera_transform.forward().as_vec3(),
+        camera_forward,
         ball_radius,
         descent,
         shimmer,
@@ -1146,8 +1275,9 @@ pub(crate) fn update_meteor_sky_system(
     // Flame tongues: small opaque licks dancing around the shell rim, the "it
     // is on fire" read for the distant slow phase (and extra flame mass close).
     update_meteor_flame_tongues(
-        &mut tongues,
-        &mut materials,
+        tongues,
+        materials,
+        rig,
         render_pos,
         travel,
         ball_radius,
@@ -1172,16 +1302,17 @@ pub(crate) fn update_meteor_sky_system(
     let prev_descent = airburst.prev_descent.replace(descent);
     if !airburst.fired && airburst_crossing(prev_descent, descent, airburst_threshold(first_seen)) {
         airburst.fired = true;
-        if let Some(ember_assets) = ember_assets.as_ref() {
+        if let Some(ember_assets) = ember_assets {
             spawn_meteor_airburst(
-                &mut commands,
+                commands,
                 ember_assets,
-                &mut materials,
+                materials,
                 render_pos,
                 travel,
                 ball_radius,
                 (1.0 - descent).max(0.0) * crate::world::METEOR_FLIGHT_SECONDS,
                 event.trajectory_seed,
+                size,
             );
         }
     }
@@ -1191,13 +1322,13 @@ pub(crate) fn update_meteor_sky_system(
     // drifts where shed. The dedicated bright ember material (not the dim torch
     // flame) holds orange in daylight; the stream is LOD-gated to the close pass so
     // dozens of additive sparks only appear in the last seconds.
-    if let Some(ember_assets) = ember_assets.as_ref() {
+    if let Some(ember_assets) = ember_assets {
         // Foreshortening factor: 0 side-on, 1 head-on (tail pointing at camera).
-        let f = foreshortening_factor(travel, camera_transform.forward().as_vec3());
+        let f = foreshortening_factor(travel, camera_forward);
         emit_meteor_embers(
-            &mut commands,
+            commands,
             ember_assets,
-            &mut emitter,
+            emitter,
             event.impact_tick,
             render_pos,
             travel,
@@ -1205,7 +1336,8 @@ pub(crate) fn update_meteor_sky_system(
             descent,
             tf,
             f,
-            time.delta_secs(),
+            size,
+            dt,
         );
     }
 }
@@ -1222,14 +1354,15 @@ fn foreshortening_factor(travel: Vec3, camera_forward: Vec3) -> f32 {
     ((back.dot(camera_forward).abs() - 0.6) / 0.4).clamp(0.0, 1.0)
 }
 
-/// Position, orient, size, and shade every trail segment for one frame. The chain
-/// walks straight back from the ball along `-travel`, each segment a frustum
+/// Position, orient, size, and shade one rig's trail segments for one frame. The
+/// chain walks straight back from the ball along `-travel`, each segment a frustum
 /// scaled to its share of the total tail length, with a bounded lateral waver and
 /// a root-flare for the head-on pose. Split out to keep the update system legible.
 #[expect(clippy::too_many_arguments, reason = "split-out system helper")]
 fn update_meteor_trail(
     trail: &mut MeteorTrailQuery,
     materials: &mut Assets<StandardMaterial>,
+    rig: usize,
     render_pos: Vec3,
     travel: Vec3,
     camera_forward: Vec3,
@@ -1241,7 +1374,7 @@ fn update_meteor_trail(
     camera_pos: Vec3,
 ) {
     if travel == Vec3::ZERO || ball_radius <= 0.0 {
-        set_trail_hidden(trail);
+        set_trail_hidden(trail, Some(rig));
         return;
     }
     let back = -travel;
@@ -1270,7 +1403,7 @@ fn update_meteor_trail(
         length = length.min(max_l.max(0.0));
     }
     if length <= 0.0 {
-        set_trail_hidden(trail);
+        set_trail_hidden(trail, Some(rig));
         return;
     }
 
@@ -1324,7 +1457,10 @@ fn update_meteor_trail(
         (perp_a * wa + perp_b * wb) * amp
     };
 
-    for (mut transform, mut visibility, segment, material) in trail.iter_mut() {
+    for (mut transform, mut visibility, segment, rig_tag, material) in trail.iter_mut() {
+        if rig_tag.0 != rig {
+            continue;
+        }
         let k = segment.index;
         if k >= n || seg_lengths[k] <= 0.0 {
             *visibility = Visibility::Hidden;
@@ -1376,7 +1512,7 @@ fn orthonormal_basis(axis: Vec3) -> (Vec3, Vec3) {
     (a, b)
 }
 
-/// Position, orient, size, and shade every flame tongue for one frame. Each
+/// Position, orient, size, and shade one rig's flame tongues for one frame. Each
 /// tongue roots on the shell rim, orbits the travel axis slowly (alternating
 /// directions so the licks slide past each other instead of rotating as a rigid
 /// cage), and flares outward-backward on its own quick seeded pulse, so the
@@ -1387,6 +1523,7 @@ fn orthonormal_basis(axis: Vec3) -> (Vec3, Vec3) {
 fn update_meteor_flame_tongues(
     tongues: &mut MeteorTongueQuery,
     materials: &mut Assets<StandardMaterial>,
+    rig: usize,
     render_pos: Vec3,
     travel: Vec3,
     ball_radius: f32,
@@ -1396,7 +1533,7 @@ fn update_meteor_flame_tongues(
     now: f64,
 ) {
     if travel == Vec3::ZERO || ball_radius <= 0.0 {
-        set_tongues_hidden(tongues);
+        set_tongues_hidden(tongues, Some(rig));
         return;
     }
     let back = -travel;
@@ -1407,7 +1544,10 @@ fn update_meteor_flame_tongues(
     let seed_lo = trajectory_seed as u32;
     let n = METEOR_FLAME_TONGUE_COUNT as f32;
 
-    for (mut transform, mut visibility, tongue, material) in tongues.iter_mut() {
+    for (mut transform, mut visibility, tongue, rig_tag, material) in tongues.iter_mut() {
+        if rig_tag.0 != rig {
+            continue;
+        }
         *visibility = Visibility::Visible;
         let k = tongue.index;
         let kf = k as f32;
@@ -1455,9 +1595,10 @@ fn update_meteor_flame_tongues(
 /// core flash, a fan of burning fragments, and a one-off radial ember spray.
 /// Everything is sized and paced against the RENDERED ball radius (like the
 /// shed embers) so the burst reads at the ball's apparent size on the far
-/// proxy. `remaining_seconds` caps the fragment lifetimes so a burst late in a
-/// short `/meteor-here` dive still burns out before the impact. Deterministic
-/// in the trajectory seed.
+/// proxy; `size` additionally thins the fragment/spark COUNTS so a small
+/// meteor pops a smaller burst. `remaining_seconds` caps the fragment
+/// lifetimes so a burst late in a short `/meteor-here` dive still burns out
+/// before the impact. Deterministic in the trajectory seed.
 #[expect(clippy::too_many_arguments, reason = "split-out system helper")]
 fn spawn_meteor_airburst(
     commands: &mut Commands,
@@ -1468,6 +1609,7 @@ fn spawn_meteor_airburst(
     ball_radius: f32,
     remaining_seconds: f32,
     trajectory_seed: u64,
+    size: f32,
 ) {
     if travel == Vec3::ZERO || ball_radius <= 0.0 {
         return;
@@ -1475,6 +1617,11 @@ fn spawn_meteor_airburst(
     let back = -travel;
     let (perp_a, perp_b) = orthonormal_basis(back);
     let seed_lo = trajectory_seed as u32;
+    // Size thins the burst's counts (the geometry already scales off the ball
+    // radius); floors keep even a small meteor's pop reading as a real burst.
+    let size = size.clamp(0.05, 1.0);
+    let fragment_count = ((METEOR_AIRBURST_FRAGMENTS as f32 * size).round() as u32).max(4);
+    let spark_count = ((METEOR_AIRBURST_SPARKS as f32 * size).round() as u32).max(10);
 
     // The core flash, popping outward and fading via its own material instance
     // (freed with the entity, so the per-frame fade never touches a shared
@@ -1520,14 +1667,14 @@ fn spawn_meteor_airburst(
             ..default()
         })
     });
-    for i in 0..METEOR_AIRBURST_FRAGMENTS {
+    for i in 0..fragment_count {
         let s = seed_lo ^ i.wrapping_mul(0x9E37_79B9);
         let r1 = hashed_unit(s);
         let r2 = hashed_unit(s ^ 0x85EB_CA6B);
         let r3 = hashed_unit(s ^ 0xC2B2_AE35);
         let r4 = hashed_unit(s ^ 0x2545_F491);
 
-        let ring = (i as f32 + r1 * 0.8) / METEOR_AIRBURST_FRAGMENTS as f32 * std::f32::consts::TAU;
+        let ring = (i as f32 + r1 * 0.8) / fragment_count as f32 * std::f32::consts::TAU;
         let radial = perp_a * ring.cos() + perp_b * ring.sin();
         let dir = (travel * (0.50 + r2 * 0.45) + radial * (0.50 + r3 * 0.50)).normalize_or_zero();
         let speed = ball_radius * (1.3 + r4 * 1.4);
@@ -1559,7 +1706,7 @@ fn spawn_meteor_airburst(
 
     // A one-off radial spark spray so the pop itself scatters glitter beyond the
     // solid fragments. Ordinary shed embers; the shared ticker cleans them up.
-    for i in 0..METEOR_AIRBURST_SPARKS {
+    for i in 0..spark_count {
         let s = seed_lo
             .rotate_left(11)
             .wrapping_add(i.wrapping_mul(0x27D4_EB2F));
@@ -1593,15 +1740,16 @@ fn spawn_meteor_airburst(
     }
 }
 
-/// Shed the ember spark stream (and a sparser dark smoke ribbon) behind the
+/// Shed the ember spark stream (and a sparser dark smoke ribbon) behind one
 /// fireball at LOD-gated rates, accumulating fractional emissions across frames.
 /// Sparks streak in a tight column hugging the tail (not a scattered cloud); the
 /// stream ramps up close (`max(descent, tf)`) so dozens of additive sparks only
 /// appear in the last seconds. Sized and spread against the RENDERED ball radius
 /// so far particles on the grown proxy read at the ball's apparent size and close
-/// ones are physical-scale. `f` is the head-on foreshortening factor: it widens
-/// the spark spread so sparks streak across the ball's face when the tail is
-/// end-on.
+/// ones are physical-scale; the meteor's `size` additionally thins the emission
+/// rate so a small rock sputters a sparser stream. `f` is the head-on
+/// foreshortening factor: it widens the spark spread so sparks streak across
+/// the ball's face when the tail is end-on.
 #[expect(clippy::too_many_arguments, reason = "split-out system helper")]
 fn emit_meteor_embers(
     commands: &mut Commands,
@@ -1614,6 +1762,7 @@ fn emit_meteor_embers(
     descent: f32,
     tf: f32,
     f: f32,
+    size: f32,
     dt: f32,
 ) {
     if emitter.event_tick != event_tick {
@@ -1627,9 +1776,11 @@ fn emit_meteor_embers(
     }
 
     // Spark rate ramps with the greater of descent / closeness so the dense stream
-    // is confined to the close, final-seconds pass; smoke is far sparser.
+    // is confined to the close, final-seconds pass; smoke is far sparser. A small
+    // meteor sheds proportionally fewer sparks (eased so it never goes quiet).
     let closeness = descent.max(tf).clamp(0.0, 1.0);
-    let spark_rate = lerp(METEOR_EMBER_RATE_FAR, METEOR_EMBER_RATE_CLOSE, closeness);
+    let spark_rate = lerp(METEOR_EMBER_RATE_FAR, METEOR_EMBER_RATE_CLOSE, closeness)
+        * (0.4 + 0.6 * size.clamp(0.0, 1.0));
     // Smoke only in the genuine close pass (LOD-gated on `tf`, not descent): far out
     // on the proxy a translucent dark puff reads as an ugly debris dot against the
     // sky, so keep the faint ribbon to when the ball is actually near the camera.
@@ -2026,6 +2177,34 @@ mod tests {
         assert!(
             mid_scale > entry_scale && late_scale > mid_scale,
             "the ball swells as it descends: {entry_scale} < {mid_scale} < {late_scale}"
+        );
+    }
+
+    #[test]
+    fn meteor_drama_growth_is_damped_for_far_cameras() {
+        let camera = Vec3::ZERO;
+        let descent = 0.5;
+        // Same descent, two observers: one under the flight path (inside the
+        // full-drama distance), one across the map. The far observer sees a
+        // much smaller swell: the bearing-down growth is for meteors actually
+        // coming at you (owner report: distant meteors read far too large).
+        let near_pos = Vec3::new(0.0, 600.0, 0.0);
+        let far_pos = Vec3::new(0.0, METEOR_DRAMA_FAR_DISTANCE_M + 500.0, 0.0);
+        let (_, near_scale, _) = meteor_render_placement(near_pos, camera, descent);
+        let (_, far_scale, _) = meteor_render_placement(far_pos, camera, descent);
+        let full_growth = 1.0 + descent * (METEOR_PROXY_GROWTH - 1.0);
+        let damped_growth = 1.0 + descent * (METEOR_PROXY_GROWTH - 1.0) * METEOR_DRAMA_FAR_KEEP;
+        assert!(
+            (near_scale - full_growth).abs() < 1e-4,
+            "inside the full-drama band the swell is untouched, got {near_scale}"
+        );
+        assert!(
+            (far_scale - damped_growth).abs() < 1e-4,
+            "past the far band only the KEEP fraction of growth survives, got {far_scale}"
+        );
+        assert!(
+            far_scale < near_scale * 0.6,
+            "a far crossing reads much smaller"
         );
     }
 
