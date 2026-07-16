@@ -25,7 +25,7 @@ mod wheel;
 mod world_map;
 mod world_stream;
 
-pub(crate) use auth::{AuthFlow, WorkosAuth};
+pub(crate) use auth::{AuthFlow, AuthRetry, WorkosAuth};
 pub(crate) use backdrop::{MenuBackdropTime, MenuBackdropVisibility};
 pub(crate) use combat_feedback::CombatFeedbackState;
 #[cfg(test)]

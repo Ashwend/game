@@ -65,7 +65,8 @@ pub(crate) fn screen_viewed_system(
     // doesn't log a spurious `sign_in` view before the menu loads.
     let screen = match &*auth {
         AuthFlow::Authenticated => map_screen(menu.screen),
-        AuthFlow::LoggedOut { .. } => ScreenKind::SignIn,
+        // The provider-outage dialog is part of the sign-in surface.
+        AuthFlow::LoggedOut { .. } | AuthFlow::Unreachable { .. } => ScreenKind::SignIn,
         AuthFlow::Verifying(_) | AuthFlow::Authenticating(_) => return,
     };
     if last.0 == Some(screen) {

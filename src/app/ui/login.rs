@@ -2,8 +2,8 @@ use bevy_egui::egui;
 
 use crate::{
     analytics::{Analytics, AuthMethod, Event},
-    app::state::{AuthFlow, MenuState, WorkosAuth},
-    auth::workos::{ScreenHint, begin_login},
+    app::state::{AuthFlow, AuthRetry, MenuState, WorkosAuth},
+    auth::workos::{ScreenHint, begin_login, begin_restore},
 };
 
 use super::{
@@ -14,8 +14,16 @@ use super::{
 /// What the login splash should render this frame, snapshotted so the closure
 /// doesn't borrow `AuthFlow` (we mutate it after, to start a login).
 enum LoginView {
-    LoggedOut { error: Option<String> },
+    LoggedOut {
+        error: Option<String>,
+    },
     Busy(&'static str),
+    /// The provider-outage decision dialog: the sign-in service could not be
+    /// reached after retries, and the player picks the next step.
+    Unreachable {
+        error: String,
+        retry: AuthRetry,
+    },
 }
 
 /// The auth gate shown in place of the title screen until the user is signed
@@ -38,15 +46,22 @@ pub(super) fn login_overlay_ui(
         AuthFlow::Authenticating(_) => {
             LoginView::Busy("Finish signing in in your browser, then return here.")
         }
+        AuthFlow::Unreachable { error, retry } => LoginView::Unreachable {
+            error: error.clone(),
+            retry: *retry,
+        },
     };
     // Whether a sign-in/restore is in flight, so the busy splash can offer a way
     // out (a hung browser wait or a stalled restore would otherwise trap the
     // player on a spinner with no escape).
     let busy = matches!(*auth, AuthFlow::Verifying(_) | AuthFlow::Authenticating(_));
+    let unreachable = matches!(*auth, AuthFlow::Unreachable { .. });
 
     theme::screen_scrim(ctx, "login_scrim", 170);
 
     let mut start: Option<ScreenHint> = None;
+    let mut retry_restore = false;
+    let mut dismiss = false;
     let mut quit = false;
     let mut cancel = false;
     egui::Area::new("login_overlay".into())
@@ -91,17 +106,66 @@ pub(super) fn login_overlay_ui(
                                 cancel = true;
                             }
                         }
+                        LoginView::Unreachable { error, retry } => {
+                            ui.label(
+                                egui::RichText::new("Sign-in service unreachable")
+                                    .size(18.0)
+                                    .strong(),
+                            );
+                            ui.add_space(8.0);
+                            let explain = match retry {
+                                AuthRetry::SilentRestore => {
+                                    "We couldn't reach the sign-in service to restore your \
+                                     session, even after several attempts. It may be having \
+                                     temporary issues. You have NOT been signed out."
+                                }
+                                AuthRetry::BrowserSignIn => {
+                                    "Your browser sign-in completed, but the sign-in service \
+                                     didn't respond when we tried to finish it, even after \
+                                     several attempts. It may be having temporary issues."
+                                }
+                            };
+                            ui.label(theme::muted(explain));
+                            ui.add_space(14.0);
+                            if primary_menu_button(ui, "Try again").clicked() {
+                                match retry {
+                                    AuthRetry::SilentRestore => retry_restore = true,
+                                    AuthRetry::BrowserSignIn => start = Some(ScreenHint::SignIn),
+                                }
+                            }
+                            if retry == AuthRetry::SilentRestore
+                                && menu_button(ui, "Sign in again").clicked()
+                            {
+                                start = Some(ScreenHint::SignIn);
+                            }
+                            if menu_button(ui, "Not now").clicked() {
+                                dismiss = true;
+                            }
+                            ui.add_space(12.0);
+                            ui.label(
+                                egui::RichText::new(error)
+                                    .color(theme::error_text())
+                                    .size(12.0),
+                            );
+                        }
                     });
                 });
             });
         });
 
-    // Escape is the same "get me out of here" as the Cancel button.
+    // Escape is the same "get me out of here" as the Cancel / Not now button.
     if busy && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
         cancel = true;
     }
+    if unreachable && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        dismiss = true;
+    }
 
-    if let Some(hint) = start {
+    if retry_restore {
+        // Re-run the silent stored-session refresh behind the spinner; the
+        // refresh token is still on disk (transport failures never clear it).
+        *auth = AuthFlow::Verifying(begin_restore(&workos.0));
+    } else if let Some(hint) = start {
         analytics.track(Event::SignInStarted {
             method: match hint {
                 ScreenHint::SignIn => AuthMethod::SignIn,
@@ -109,6 +173,8 @@ pub(super) fn login_overlay_ui(
             },
         });
         *auth = AuthFlow::Authenticating(begin_login(&workos.0, hint));
+    } else if dismiss {
+        *auth = AuthFlow::LoggedOut { error: None };
     }
     if cancel {
         menu.cancel_auth_requested = true;
@@ -216,6 +282,34 @@ mod tests {
             });
 
             assert!(output.shapes.len() > 1, "the busy splash should draw");
+        }
+    }
+
+    #[test]
+    fn unreachable_view_renders_the_decision_dialog() {
+        for retry in [AuthRetry::SilentRestore, AuthRetry::BrowserSignIn] {
+            let ctx = ctx();
+            let mut auth = AuthFlow::Unreachable {
+                error: "sign-in provider error (503) (after 3 attempts)".to_owned(),
+                retry,
+            };
+            let workos = workos();
+            let mut menu = MenuState::default();
+
+            let output = ctx.run_ui(raw_input(), |ui| {
+                login_overlay_ui(
+                    ui.ctx(),
+                    &mut auth,
+                    &workos,
+                    &mut menu,
+                    &Analytics::disabled(),
+                );
+            });
+
+            assert!(output.shapes.len() > 1, "the outage dialog should draw");
+            // No input was fed, so the dialog stays up awaiting a decision.
+            assert!(matches!(auth, AuthFlow::Unreachable { .. }));
+            assert!(!menu.quit_requested);
         }
     }
 

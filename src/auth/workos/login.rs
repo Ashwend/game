@@ -33,7 +33,10 @@ use super::{
     config::{AUTHORIZE_URL, WorkosConfig},
     pkce::{code_challenge, percent_decode, percent_encode, random_token},
     token_store::{clear_refresh_token, load_refresh_token, store_refresh_token},
-    tokens::{access_token_expiry, post_authenticate, session_from},
+    tokens::{
+        AUTH_RENEW_ATTEMPTS, AUTH_RETRY_ATTEMPTS, access_token_expiry,
+        post_authenticate_with_retry, session_from,
+    },
 };
 
 /// How long the loopback listener waits for the browser to come back before
@@ -110,12 +113,47 @@ pub struct Session {
     pub expires_at: Option<SystemTime>,
 }
 
+/// A failed login/restore outcome, split by whether trying again might help.
+#[derive(Debug, Clone)]
+pub struct LoginError {
+    /// Player-presentable message; also what the auth poller logs.
+    pub message: String,
+    /// `true` when the failure was transport-shaped (network trouble or a
+    /// provider outage) and the in-worker retry budget is already exhausted:
+    /// the credentials were never REJECTED, so the player choosing to try
+    /// again may well succeed. `false` for definitive provider rejections and
+    /// local/browser-side failures (cancelled, timed out waiting, listener
+    /// bind), which drop back to the ordinary login splash instead of the
+    /// outage dialog.
+    pub transient: bool,
+}
+
+impl LoginError {
+    /// A local (non-provider) failure: never worth the outage dialog.
+    fn local(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            transient: false,
+        }
+    }
+
+    /// Classify a token-endpoint failure: transport-shaped errors are
+    /// transient (the grant may be fine, the provider was unreachable),
+    /// rejections are not.
+    fn from_call(error: super::tokens::AuthCallError) -> Self {
+        Self {
+            transient: !error.is_rejected(),
+            message: error.into_message(),
+        }
+    }
+}
+
 /// Polled by the UI while a login is in flight.
 #[derive(Debug)]
 pub enum LoginOutcome {
     Pending,
     Success(Box<Session>),
-    Failed(String),
+    Failed(LoginError),
 }
 
 /// Handle to an in-flight browser login. The work happens on a background
@@ -123,10 +161,11 @@ pub enum LoginOutcome {
 pub struct LoginHandle {
     // `Mutex` so the handle is `Sync` (an `mpsc::Receiver` is `Send` but not
     // `Sync`) and can live inside the Bevy `AuthFlow` resource.
-    rx: Mutex<mpsc::Receiver<Result<Session, String>>>,
+    rx: Mutex<mpsc::Receiver<Result<Session, LoginError>>>,
     // Flipped by [`LoginHandle::cancel`] when the player bails out of the
-    // browser wait; the interactive login worker watches it and stops polling
-    // the loopback listener so the bound port is released for a later attempt.
+    // browser wait; the workers watch it to stop polling the loopback listener
+    // (so the bound port is released for a later attempt) and to cut a token
+    // retry backoff short.
     cancel: Arc<AtomicBool>,
     // When the work began, for the poller's lifecycle logging (see
     // [`Self::started`]).
@@ -144,23 +183,23 @@ impl LoginHandle {
 
     pub fn poll(&self) -> LoginOutcome {
         let Ok(rx) = self.rx.lock() else {
-            return LoginOutcome::Failed("sign-in state was lost".to_owned());
+            return LoginOutcome::Failed(LoginError::local("sign-in state was lost"));
         };
         match rx.try_recv() {
             Ok(Ok(session)) => LoginOutcome::Success(Box::new(session)),
             Ok(Err(error)) => LoginOutcome::Failed(error),
             Err(mpsc::TryRecvError::Empty) => LoginOutcome::Pending,
             Err(mpsc::TryRecvError::Disconnected) => {
-                LoginOutcome::Failed("sign-in was interrupted".to_owned())
+                LoginOutcome::Failed(LoginError::local("sign-in was interrupted"))
             }
         }
     }
 
-    /// Tell the background worker to stop waiting on the browser callback. The
-    /// interactive-login worker checks this each poll and returns promptly,
-    /// dropping its loopback listener so the next sign-in can re-bind the port.
-    /// A no-op for workers that don't watch the flag (the silent startup
-    /// restore is a single blocking refresh, not a listener poll).
+    /// Tell the background worker to stop. The interactive-login worker checks
+    /// this each loopback poll and returns promptly, dropping its listener so
+    /// the next sign-in can re-bind the port; both workers also check it
+    /// between token-endpoint retries so a Cancel on the spinner cuts the
+    /// outage backoff short.
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
     }
@@ -170,7 +209,7 @@ impl LoginHandle {
 impl LoginHandle {
     /// Test-only handle that immediately resolves to `outcome`, so the auth
     /// state machine and UI can be driven without a real browser round-trip.
-    pub(crate) fn ready(outcome: Result<Session, String>) -> Self {
+    pub(crate) fn ready(outcome: Result<Session, LoginError>) -> Self {
         let (tx, rx) = mpsc::channel();
         let _ = tx.send(outcome);
         Self {
@@ -183,7 +222,7 @@ impl LoginHandle {
     /// Test-only handle that stays `Pending`. The returned sender keeps the
     /// channel open; hold it for the duration of the test (drop it to make the
     /// handle report `Disconnected`).
-    pub(crate) fn pending() -> (Self, mpsc::Sender<Result<Session, String>>) {
+    pub(crate) fn pending() -> (Self, mpsc::Sender<Result<Session, LoginError>>) {
         let (tx, rx) = mpsc::channel();
         (
             Self {
@@ -193,6 +232,21 @@ impl LoginHandle {
             },
             tx,
         )
+    }
+}
+
+#[cfg(test)]
+impl LoginError {
+    /// Test-only shorthands so state-machine tests read as intent.
+    pub(crate) fn test_local(message: &str) -> Self {
+        Self::local(message)
+    }
+
+    pub(crate) fn test_transient(message: &str) -> Self {
+        Self {
+            message: message.to_owned(),
+            transient: true,
+        }
     }
 }
 
@@ -233,46 +287,55 @@ pub fn has_stored_session() -> bool {
 /// for that log; the UI never shows it for a silent restore.
 pub fn begin_restore(config: &WorkosConfig) -> LoginHandle {
     let (tx, rx) = mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let worker_cancel = Arc::clone(&cancel);
     let config = config.clone();
     thread::Builder::new()
         .name("workos-restore".to_owned())
         .spawn(move || {
-            let _ = tx.send(restore_session(&config));
+            let _ = tx.send(restore_session(&config, Some(&worker_cancel)));
         })
         .ok();
     LoginHandle {
         rx: Mutex::new(rx),
-        cancel: Arc::new(AtomicBool::new(false)),
+        cancel,
         started: Instant::now(),
     }
 }
 
-/// Silently restore a session at startup from the stored refresh token.
+/// Silently restore a session at startup from the stored refresh token, riding
+/// the provider-outage retry policy (transport failures retry with backoff up
+/// to [`AUTH_RETRY_ATTEMPTS`]; `cancel` cuts the backoff short).
 ///
 /// A definitive provider rejection clears the stored token: it is dead, and the
 /// next launch should go straight to the login splash. A transport failure
-/// (offline boot, sleepy Wi-Fi, provider outage) keeps it, so the player is not
-/// signed out over a network blip; this launch falls back to the login splash
-/// but the next one retries silently.
-pub fn restore_session(config: &WorkosConfig) -> Result<Session, String> {
+/// (offline boot, sleepy Wi-Fi, provider outage) keeps it AND comes back marked
+/// `transient`, so the player is not signed out over a network blip and the
+/// auth flow can offer a retry instead of silently appearing logged out.
+pub fn restore_session(
+    config: &WorkosConfig,
+    cancel: Option<&AtomicBool>,
+) -> Result<Session, LoginError> {
     let Some(refresh_token) = load_refresh_token() else {
-        return Err("no stored session".to_owned());
+        return Err(LoginError::local("no stored session"));
     };
-    match refresh_grant(config, &refresh_token) {
+    match refresh_grant(config, &refresh_token, AUTH_RETRY_ATTEMPTS, cancel) {
         Ok(session) => Ok(session),
         Err(error) => {
             if error.is_rejected() {
                 clear_refresh_token();
             }
-            Err(error.into_message())
+            Err(LoginError::from_call(error))
         }
     }
 }
 
 /// Refresh an access token that's expired or about to. Rotates and re-stores
-/// the refresh token.
+/// the refresh token. Runs the LIGHT retry budget ([`AUTH_RENEW_ATTEMPTS`]):
+/// the pre-connect caller has its own inline retry UX on the join prompt.
 pub fn refresh(config: &WorkosConfig, refresh_token: &str) -> Result<Session, String> {
-    refresh_grant(config, refresh_token).map_err(super::tokens::AuthCallError::into_message)
+    refresh_grant(config, refresh_token, AUTH_RENEW_ATTEMPTS, None)
+        .map_err(super::tokens::AuthCallError::into_message)
 }
 
 /// [`refresh`] with the rejected-vs-transport split preserved, for callers
@@ -280,12 +343,18 @@ pub fn refresh(config: &WorkosConfig, refresh_token: &str) -> Result<Session, St
 fn refresh_grant(
     config: &WorkosConfig,
     refresh_token: &str,
+    attempts: u32,
+    cancel: Option<&AtomicBool>,
 ) -> Result<Session, super::tokens::AuthCallError> {
-    let response = post_authenticate(serde_json::json!({
-        "client_id": config.client_id,
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-    }))?;
+    let response = post_authenticate_with_retry(
+        serde_json::json!({
+            "client_id": config.client_id,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        }),
+        attempts,
+        cancel,
+    )?;
     let session = session_from(response);
     store_refresh_token(&session.refresh_token);
     Ok(session)
@@ -340,32 +409,47 @@ fn run_login_flow(
     config: &WorkosConfig,
     hint: ScreenHint,
     cancel: &AtomicBool,
-) -> Result<Session, String> {
+) -> Result<Session, LoginError> {
     let verifier = random_token(64);
     let challenge = code_challenge(&verifier);
     let state = random_token(24);
 
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, config.redirect_port))
-        .map_err(|err| format!("could not start local sign-in listener: {err}"))?;
+    // Everything up to the token exchange is local/browser-side: those
+    // failures are not provider outages, so they surface as ordinary login
+    // errors, never the outage dialog.
+    let listener =
+        TcpListener::bind((Ipv4Addr::LOCALHOST, config.redirect_port)).map_err(|err| {
+            LoginError::local(format!("could not start local sign-in listener: {err}"))
+        })?;
     listener
         .set_nonblocking(true)
-        .map_err(|err| format!("could not configure sign-in listener: {err}"))?;
+        .map_err(|err| LoginError::local(format!("could not configure sign-in listener: {err}")))?;
 
     super::open_url(&authorize_url(config, &challenge, &state, hint))
-        .map_err(|err| format!("could not open the browser: {err}"))?;
+        .map_err(|err| LoginError::local(format!("could not open the browser: {err}")))?;
 
-    let (code, returned_state) = accept_callback(&listener, cancel)?;
+    let (code, returned_state) = accept_callback(&listener, cancel).map_err(LoginError::local)?;
     if returned_state != state {
-        return Err("sign-in could not be verified (state mismatch)".to_owned());
+        return Err(LoginError::local(
+            "sign-in could not be verified (state mismatch)",
+        ));
     }
 
-    let response = post_authenticate(serde_json::json!({
-        "client_id": config.client_id,
-        "grant_type": "authorization_code",
-        "code": code,
-        "code_verifier": verifier,
-    }))
-    .map_err(super::tokens::AuthCallError::into_message)?;
+    // The code exchange is a provider call: ride the outage retry policy. A
+    // definitive rejection (used/expired code) stops immediately; transport
+    // failures retry with backoff and come back marked transient so the player
+    // gets the try-again dialog rather than a bare login splash.
+    let response = post_authenticate_with_retry(
+        serde_json::json!({
+            "client_id": config.client_id,
+            "grant_type": "authorization_code",
+            "code": code,
+            "code_verifier": verifier,
+        }),
+        AUTH_RETRY_ATTEMPTS,
+        Some(cancel),
+    )
+    .map_err(LoginError::from_call)?;
     let session = session_from(response);
     store_refresh_token(&session.refresh_token);
     Ok(session)
@@ -516,13 +600,17 @@ mod tests {
             other => panic!("expected success, got {other:?}"),
         }
 
-        let failed = LoginHandle::ready(Err("nope".to_owned()));
-        assert!(matches!(failed.poll(), LoginOutcome::Failed(msg) if msg == "nope"));
+        let failed = LoginHandle::ready(Err(LoginError::test_local("nope")));
+        assert!(matches!(failed.poll(), LoginOutcome::Failed(error) if error.message == "nope"));
 
         let (pending, tx) = LoginHandle::pending();
         assert!(matches!(pending.poll(), LoginOutcome::Pending));
         drop(tx);
-        assert!(matches!(pending.poll(), LoginOutcome::Failed(_)));
+        // A dropped worker is a local failure, never the outage dialog.
+        assert!(matches!(
+            pending.poll(),
+            LoginOutcome::Failed(error) if !error.transient
+        ));
     }
 
     #[test]

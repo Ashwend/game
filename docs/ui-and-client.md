@@ -97,7 +97,7 @@ if !resources.auth.is_authenticated() {           // src/app/ui.rs - ui_system
 }
 ```
 
-Until WorkOS sign-in completes the title screen is unreachable; the login splash (and the verifying/authenticating spinner) renders in its place. `CurrentUser` is absent until authenticated, so the menu arms only `.expect()` it after the gate. The `--connect` / test bypass injects an authenticated identity and never inserts the WorkOS config, so it never hits the login branch. Auth-state machinery lives in `src/app/state/auth.rs`; the spinner is advanced by `drive_auth_flow_system`.
+Until WorkOS sign-in completes the title screen is unreachable; the login splash (and the verifying/authenticating spinner) renders in its place. `CurrentUser` is absent until authenticated, so the menu arms only `.expect()` it after the gate. The `--connect` / test bypass injects an authenticated identity and never inserts the WorkOS config, so it never hits the login branch. Auth-state machinery lives in `src/app/state/auth.rs`; the spinner is advanced by `drive_auth_flow_system`. Token-endpoint calls (silent restore, browser code exchange) retry transport-shaped failures with doubling backoff inside the auth worker (`src/auth/workos/tokens.rs - retry_auth_call`; rejections never retry, and the spinner's Cancel cuts the backoff short). When the retry budget is exhausted the failure comes back marked transient and lands in `AuthFlow::Unreachable`, whose decision dialog (same login overlay) offers Try again / Sign in again / Not now instead of silently presenting the player as logged out; only definitive rejections and local/browser-side failures drop straight back to the splash.
 
 ### enter_in_game funnel
 

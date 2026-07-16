@@ -22,8 +22,9 @@ pub use login::{
     LoginHandle, LoginOutcome, ScreenHint, TokenFreshness, begin_login, begin_restore,
     ensure_fresh_token, has_stored_session, logout,
 };
-// `Session` is only referenced by name from tests (the login system consumes a
-// boxed `Session` without naming the type), so the re-export is test-only to
-// avoid an unused-import warning in the lib build.
+// `Session` and `LoginError` are only referenced by NAME from tests (the login
+// system consumes them through `LoginOutcome` without naming the types), so
+// the re-exports are test-only to avoid unused-import warnings in the lib
+// build.
 #[cfg(test)]
-pub(crate) use login::Session;
+pub(crate) use login::{LoginError, Session};

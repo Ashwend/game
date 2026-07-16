@@ -18,8 +18,26 @@ pub(crate) enum AuthFlow {
     LoggedOut { error: Option<String> },
     /// Browser sign-in in flight (spinner splash), waiting on the callback.
     Authenticating(LoginHandle),
+    /// The sign-in provider could not be reached even after the worker's retry
+    /// budget (network trouble or a provider outage; the credentials were
+    /// never rejected). The login overlay renders a decision dialog instead of
+    /// silently appearing logged out: try the same flow again, fall back to a
+    /// fresh browser sign-in, or dismiss to the ordinary splash.
+    Unreachable { error: String, retry: AuthRetry },
     /// Signed in; `CurrentUser` is present and the normal menu renders.
     Authenticated,
+}
+
+/// What "Try again" on the [`AuthFlow::Unreachable`] dialog re-runs: the flow
+/// that failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuthRetry {
+    /// The silent stored-session refresh (boot restore) failed: retry it
+    /// silently; the stored refresh token is still on disk and may be fine.
+    SilentRestore,
+    /// An interactive browser sign-in failed at the token exchange: retry
+    /// means a fresh browser round-trip (the old code is single-use).
+    BrowserSignIn,
 }
 
 impl AuthFlow {

@@ -1,7 +1,12 @@
 //! WorkOS token endpoint: swap an authorization code (or refresh token) for a
-//! session, and the small response-shaping helpers around it.
+//! session, retry wrapping for provider outages, and the small
+//! response-shaping helpers around it.
 
-use std::time::{Duration, SystemTime};
+use std::{
+    sync::atomic::{AtomicBool, Ordering},
+    thread,
+    time::{Duration, SystemTime},
+};
 
 use base64::Engine;
 use serde::Deserialize;
@@ -33,6 +38,22 @@ struct WorkosUser {
 /// JSON round trip; if it hasn't answered in this window it isn't going to.
 const AUTH_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const AUTH_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Attempts the sign-in flows (silent restore, browser code exchange) make
+/// against a TRANSPORT-shaped failure before giving up and surfacing the
+/// outage to the player. Rejections (4xx) never retry: the grant is dead and
+/// hammering the provider will not resurrect it.
+pub(super) const AUTH_RETRY_ATTEMPTS: u32 = 3;
+/// Attempts the pre-connect token renewal makes. Kept lighter than the sign-in
+/// flows: the join prompt has its own inline error + retry loop, so a long
+/// blocking backoff behind the "Joining server" splash buys little.
+pub(super) const AUTH_RENEW_ATTEMPTS: u32 = 2;
+/// Base delay between retry attempts; doubles each retry (2 s, then 4 s, ...).
+/// Injected into [`retry_auth_call`] so tests can pass zero.
+pub(super) const AUTH_RETRY_BACKOFF: Duration = Duration::from_secs(2);
+/// Slice length for the backoff sleep, so a raised cancel flag (the player
+/// pressing Cancel on the spinner) is honoured promptly mid-backoff.
+const RETRY_CANCEL_POLL: Duration = Duration::from_millis(100);
 
 /// Token-endpoint failure, split by whether the provider definitively rejected
 /// the grant (the presented token/code is dead) or the call failed in transit
@@ -69,6 +90,66 @@ pub(super) fn post_authenticate(body: serde_json::Value) -> Result<AuthResponse,
         .map_err(classify_ureq_error)?
         .into_json::<AuthResponse>()
         .map_err(|err| AuthCallError::Transport(format!("unexpected sign-in response: {err}")))
+}
+
+/// [`post_authenticate`] wrapped in the standard outage retry policy: up to
+/// `attempts` tries, doubling backoff between them, honouring `cancel`.
+pub(super) fn post_authenticate_with_retry(
+    body: serde_json::Value,
+    attempts: u32,
+    cancel: Option<&AtomicBool>,
+) -> Result<AuthResponse, AuthCallError> {
+    retry_auth_call(attempts, AUTH_RETRY_BACKOFF, cancel, || {
+        post_authenticate(body.clone())
+    })
+}
+
+/// Run an auth call with the provider-outage retry policy. Only
+/// TRANSPORT-shaped failures (network trouble, timeouts, provider 5xx) retry;
+/// a definitive rejection returns immediately (the grant is dead). Between
+/// attempts it sleeps a doubling backoff (`backoff`, then 2x, ...), checking
+/// `cancel` in short slices so the player's Cancel takes effect promptly. The
+/// final transport error is annotated with the attempt count so the log line
+/// and the failure dialog both say how hard we tried. Blocking: only call
+/// this from the auth worker threads, never a Bevy system.
+pub(super) fn retry_auth_call<T>(
+    attempts: u32,
+    backoff: Duration,
+    cancel: Option<&AtomicBool>,
+    mut call: impl FnMut() -> Result<T, AuthCallError>,
+) -> Result<T, AuthCallError> {
+    let attempts = attempts.max(1);
+    let mut delay = backoff;
+    for attempt in 1..=attempts {
+        match call() {
+            Ok(value) => return Ok(value),
+            Err(error @ AuthCallError::Rejected(_)) => return Err(error),
+            Err(AuthCallError::Transport(message)) => {
+                let cancelled = cancel.is_some_and(|flag| flag.load(Ordering::Relaxed));
+                if attempt == attempts || cancelled {
+                    return Err(AuthCallError::Transport(format!(
+                        "{message} (after {attempt} attempt{s})",
+                        s = if attempt == 1 { "" } else { "s" },
+                    )));
+                }
+                // Backoff, sliced so a raised cancel flag cuts the wait short.
+                let mut remaining = delay;
+                while remaining > Duration::ZERO {
+                    if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                        return Err(AuthCallError::Transport(format!(
+                            "{message} (cancelled after {attempt} attempt{s})",
+                            s = if attempt == 1 { "" } else { "s" },
+                        )));
+                    }
+                    let slice = remaining.min(RETRY_CANCEL_POLL);
+                    thread::sleep(slice);
+                    remaining = remaining.saturating_sub(slice);
+                }
+                delay *= 2;
+            }
+        }
+    }
+    unreachable!("the loop always returns on its final attempt");
 }
 
 pub(super) fn session_from(response: AuthResponse) -> Session {
@@ -154,6 +235,73 @@ mod tests {
             },
         });
         assert_eq!(no_name.display_name, "fallback@example.com");
+    }
+
+    #[test]
+    fn retry_auth_call_retries_transport_up_to_the_attempt_budget() {
+        let mut calls = 0;
+        let result: Result<(), _> = retry_auth_call(3, Duration::ZERO, None, || {
+            calls += 1;
+            Err(AuthCallError::Transport("provider down".to_owned()))
+        });
+        assert_eq!(calls, 3, "transport failures use the whole budget");
+        match result {
+            Err(AuthCallError::Transport(message)) => {
+                assert!(
+                    message.contains("after 3 attempts"),
+                    "final error says how hard we tried: {message}"
+                );
+            }
+            other => panic!("expected a transport error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn retry_auth_call_succeeds_mid_budget_and_stops() {
+        let mut calls = 0;
+        let result = retry_auth_call(3, Duration::ZERO, None, || {
+            calls += 1;
+            if calls < 2 {
+                Err(AuthCallError::Transport("blip".to_owned()))
+            } else {
+                Ok(42)
+            }
+        });
+        assert_eq!(calls, 2, "a success stops the retry loop");
+        assert!(matches!(result, Ok(42)));
+    }
+
+    #[test]
+    fn retry_auth_call_never_retries_a_rejection() {
+        let mut calls = 0;
+        let result: Result<(), _> = retry_auth_call(3, Duration::ZERO, None, || {
+            calls += 1;
+            Err(AuthCallError::Rejected("grant is dead".to_owned()))
+        });
+        assert_eq!(calls, 1, "a 4xx rejection must not hammer the provider");
+        assert!(matches!(result, Err(AuthCallError::Rejected(_))));
+    }
+
+    #[test]
+    fn retry_auth_call_stops_when_cancelled() {
+        let cancel = AtomicBool::new(true);
+        let mut calls = 0;
+        let result: Result<(), _> = retry_auth_call(3, Duration::ZERO, Some(&cancel), || {
+            calls += 1;
+            Err(AuthCallError::Transport("outage".to_owned()))
+        });
+        assert_eq!(calls, 1, "a raised cancel flag skips the remaining budget");
+        assert!(matches!(result, Err(AuthCallError::Transport(_))));
+    }
+
+    #[test]
+    fn retry_auth_call_treats_zero_attempts_as_one() {
+        let mut calls = 0;
+        let _: Result<(), _> = retry_auth_call(0, Duration::ZERO, None, || {
+            calls += 1;
+            Err(AuthCallError::Transport("x".to_owned()))
+        });
+        assert_eq!(calls, 1);
     }
 
     #[test]

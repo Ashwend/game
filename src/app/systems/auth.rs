@@ -2,15 +2,20 @@ use bevy::prelude::*;
 
 use crate::{
     analytics::{Analytics, Event},
-    app::state::{AuthFlow, CurrentUser, LoadingSplash, MenuState},
+    app::state::{AuthFlow, AuthRetry, CurrentUser, LoadingSplash, MenuState},
     auth::AuthenticatedUser,
     auth::workos::LoginOutcome,
 };
 
 /// Polls the in-flight WorkOS login/refresh handle each frame and advances the
-/// auth state machine: on success it installs [`CurrentUser`] and crossfades into
-/// the title screen; on failure it drops back to the login splash (surfacing
-/// the error only for an explicit sign-in attempt, not a silent refresh).
+/// auth state machine: on success it installs [`CurrentUser`] and crossfades
+/// into the title screen. Failures fork on the worker's classification: a
+/// TRANSIENT failure (the provider was unreachable even after the in-worker
+/// retry budget) lands in [`AuthFlow::Unreachable`], whose dialog lets the
+/// player decide the next step, so a provider outage never silently presents
+/// as "you are logged out"; every other failure drops back to the login splash
+/// (surfacing the error text only for an explicit sign-in attempt, not a
+/// silent refresh).
 ///
 /// This poller also owns the auth lifecycle LOGGING (in flight, resolved, with
 /// durations off `LoginHandle::started`): the silent restore's worker thread
@@ -74,7 +79,9 @@ pub(crate) fn drive_auth_flow_system(
     let (outcome, was_explicit, elapsed_seconds) = match &*auth {
         AuthFlow::Verifying(handle) => (handle.poll(), false, handle.started().elapsed()),
         AuthFlow::Authenticating(handle) => (handle.poll(), true, handle.started().elapsed()),
-        AuthFlow::LoggedOut { .. } | AuthFlow::Authenticated => return,
+        AuthFlow::LoggedOut { .. } | AuthFlow::Unreachable { .. } | AuthFlow::Authenticated => {
+            return;
+        }
     };
     let elapsed_seconds = elapsed_seconds.as_secs_f32();
     let flow = if was_explicit {
@@ -98,10 +105,30 @@ pub(crate) fn drive_auth_flow_system(
             // hard cut, once the user is in.
             menu.loading_splash = Some(LoadingSplash::startup());
         }
+        LoginOutcome::Failed(error) if error.transient => {
+            // The provider was unreachable even after the worker's retries:
+            // the stored credentials were never rejected, so put the decision
+            // to the player instead of silently appearing logged out.
+            warn!(
+                "auth: {flow} could not reach the provider after {elapsed_seconds:.2}s: {}",
+                error.message
+            );
+            *auth = AuthFlow::Unreachable {
+                error: error.message,
+                retry: if was_explicit {
+                    AuthRetry::BrowserSignIn
+                } else {
+                    AuthRetry::SilentRestore
+                },
+            };
+        }
         LoginOutcome::Failed(error) => {
-            warn!("auth: {flow} failed after {elapsed_seconds:.2}s: {error}");
+            warn!(
+                "auth: {flow} failed after {elapsed_seconds:.2}s: {}",
+                error.message
+            );
             *auth = AuthFlow::LoggedOut {
-                error: was_explicit.then_some(error),
+                error: was_explicit.then_some(error.message),
             };
         }
     }
@@ -174,7 +201,7 @@ mod tests {
     #[test]
     fn explicit_sign_in_failure_surfaces_the_error() {
         let mut app = app_with(AuthFlow::Authenticating(LoginHandle::ready(Err(
-            "bad code".to_owned(),
+            crate::auth::workos::LoginError::test_local("bad code"),
         ))));
         app.update();
         match app.world().resource::<AuthFlow>() {
@@ -186,7 +213,7 @@ mod tests {
     #[test]
     fn silent_restore_failure_returns_to_login_without_an_error() {
         let mut app = app_with(AuthFlow::Verifying(LoginHandle::ready(Err(
-            "expired".to_owned()
+            crate::auth::workos::LoginError::test_local("expired"),
         ))));
         app.update();
         match app.world().resource::<AuthFlow>() {
@@ -194,6 +221,42 @@ mod tests {
                 assert!(error.is_none(), "a silent refresh failure stays quiet");
             }
             _ => panic!("expected LoggedOut after a silent restore failure"),
+        }
+    }
+
+    #[test]
+    fn transient_restore_failure_opens_the_unreachable_dialog() {
+        // A provider outage during the boot restore must NOT silently present
+        // as logged out: the player gets the decision dialog, with retry wired
+        // to re-run the silent restore (the stored token may be fine).
+        let mut app = app_with(AuthFlow::Verifying(LoginHandle::ready(Err(
+            crate::auth::workos::LoginError::test_transient("sign-in provider error (503)"),
+        ))));
+        app.update();
+        match app.world().resource::<AuthFlow>() {
+            AuthFlow::Unreachable { error, retry } => {
+                assert!(error.contains("503"));
+                assert_eq!(*retry, crate::app::state::AuthRetry::SilentRestore);
+            }
+            _ => panic!("expected Unreachable after a transient restore failure"),
+        }
+        assert!(
+            app.world().get_resource::<CurrentUser>().is_none(),
+            "no user is installed on failure"
+        );
+    }
+
+    #[test]
+    fn transient_sign_in_failure_opens_the_unreachable_dialog_with_browser_retry() {
+        let mut app = app_with(AuthFlow::Authenticating(LoginHandle::ready(Err(
+            crate::auth::workos::LoginError::test_transient("sign-in network error"),
+        ))));
+        app.update();
+        match app.world().resource::<AuthFlow>() {
+            AuthFlow::Unreachable { retry, .. } => {
+                assert_eq!(*retry, crate::app::state::AuthRetry::BrowserSignIn);
+            }
+            _ => panic!("expected Unreachable after a transient sign-in failure"),
         }
     }
 
