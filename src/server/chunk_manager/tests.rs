@@ -84,7 +84,7 @@ fn regrow_handles_the_meteorite_kind() {
     // A big world so some far rocky/ore chunks qualify for meteorite. The
     // generator + capacity grid share `chunk_kind_target`, so a capacity slot
     // marks a chunk the generator would have seeded meteorite in.
-    let (mut manager, _nodes) = ChunkManager::new_for_world(0x5EED_EA11, ChunkDims::new(25));
+    let (mut manager, nodes) = ChunkManager::new_for_world(0x5EED_EA11, ChunkDims::new(25));
     let ember_coords: Vec<ChunkCoord> = manager
         .grids
         .iter()
@@ -96,12 +96,30 @@ fn regrow_handles_the_meteorite_kind() {
         "a 25x25 world should have at least one meteorite-eligible chunk"
     );
 
+    // Worldgen actually fills (some of) those slots now that minerals are
+    // exempt from the ring budget (the budget used to round every lone
+    // meteorite away). Deplete the live ones so the regrow slots are open;
+    // this also mirrors the real flow (a regrow always follows a depletion).
+    let live_meteorites: Vec<ResourceNodeId> = nodes
+        .iter()
+        .filter(|state| state.definition_id == METEORITE_NODE_ID)
+        .map(|state| state.id)
+        .collect();
+    assert!(
+        !live_meteorites.is_empty(),
+        "worldgen must seed at least one meteorite on a 25x25 world"
+    );
+    for id in live_meteorites {
+        manager.handle_node_depleted(id, 0);
+    }
+
     // Fire a meteorite regrow in each eligible chunk. Placement can legitimately
     // come up empty in a given chunk (the strict noise mask + capacity 1 rarity is
-    // the point), so we require that ACROSS the eligible chunks at least one
-    // meteorite actually regrows, and that every placement is a meteorite node
-    // tracked for the AoI system, proving the kind flows through place_fresh_node
-    // and the capacity ceiling like any other kind.
+    // the point, and chunks whose node survives stay at cap), so we require that
+    // ACROSS the eligible chunks at least one meteorite actually regrows, and
+    // that every placement is a meteorite node tracked for the AoI system,
+    // proving the kind flows through place_fresh_node and the capacity ceiling
+    // like any other kind.
     let existing: HashMap<ResourceNodeId, ResourceNodeState> = HashMap::new();
     let mut total_placed = 0usize;
     for coord in ember_coords {
@@ -126,6 +144,87 @@ fn regrow_handles_the_meteorite_kind() {
     assert!(
         total_placed >= 1,
         "at least one meteorite should regrow across the eligible chunks"
+    );
+}
+
+#[test]
+fn ring_budget_thins_clutter_but_never_deletes_minerals() {
+    // Regression: `keep_n` ROUNDS, so at ring >= 3 (multiplier 0.45 and
+    // below) a single-node group used to round to zero, which silently
+    // deleted every stray/fringe iron node, lone stone vein, and worldgen
+    // meteorite from the outer ~97% of the map. Minerals are exempt now;
+    // the abundant clutter kinds still take the density falloff.
+    let coord = ChunkCoord::new(7, 0); // ring 7 -> outermost multiplier (0.30)
+    let mut next_id = 1u64;
+    let mut spawn_of = |kind: NodeKind| {
+        let id = next_id;
+        next_id += 1;
+        ChunkSpawn {
+            coord,
+            kind,
+            spawn: crate::world::WorldResourceNodeSpawn::new(
+                ResourceNodeId(id),
+                kind.definition_id(),
+                Vec3Net::new(id as f32 * 2.0, 0.0, 0.0),
+                0.0,
+            ),
+        }
+    };
+    let mut spawns = Vec::new();
+    for _ in 0..20 {
+        spawns.push(spawn_of(NodeKind::HayGrass));
+    }
+    spawns.push(spawn_of(NodeKind::IronOre));
+    spawns.push(spawn_of(NodeKind::Meteorite));
+    spawns.push(spawn_of(NodeKind::StoneVein));
+    spawns.push(spawn_of(NodeKind::SulfurOre));
+
+    apply_ring_budget(&mut spawns);
+
+    let count = |kind: NodeKind| spawns.iter().filter(|s| s.kind == kind).count();
+    assert_eq!(
+        count(NodeKind::HayGrass),
+        6,
+        "clutter still takes the outer-ring falloff (20 * 0.30)"
+    );
+    assert_eq!(count(NodeKind::IronOre), 1, "a lone iron node survives");
+    assert_eq!(count(NodeKind::Meteorite), 1, "a meteorite survives");
+    assert_eq!(count(NodeKind::StoneVein), 1, "a lone stone vein survives");
+    assert_eq!(count(NodeKind::SulfurOre), 1, "a lone sulfur node survives");
+}
+
+#[test]
+fn outer_ring_home_biomes_actually_hold_iron() {
+    // End-to-end pin for the same regression: on a real fresh world, iron
+    // spawned by the forest/plains stray rolls must survive into the live
+    // node list OUTSIDE the centre 5x5 chunk block (ring >= 3), where the
+    // old rounding deleted every single-node group. Summed across seeds so
+    // one unlucky world can't flake the test.
+    let dims = ChunkDims::new(15);
+    let mut outer_home_iron = 0usize;
+    for seed in [0xCAFEu64, 7, 42] {
+        let (_manager, nodes) = ChunkManager::new_for_world(seed, dims);
+        for state in &nodes {
+            if state.definition_id != crate::resource_nodes::IRON_NODE_ID {
+                continue;
+            }
+            let coord = ChunkCoord::from_world(state.position.x, state.position.z);
+            let ring = coord.x.abs().max(coord.z.abs());
+            if ring < 3 {
+                continue;
+            }
+            let classification = ClassificationChannels::sample(seed, coord).classify();
+            if matches!(
+                classification,
+                ChunkClassification::Forest | ChunkClassification::Plains
+            ) {
+                outer_home_iron += 1;
+            }
+        }
+    }
+    assert!(
+        outer_home_iron > 0,
+        "stray iron must survive the ring budget in outer forest/plains chunks"
     );
 }
 

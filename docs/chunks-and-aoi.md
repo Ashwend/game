@@ -145,7 +145,7 @@ Two sources feed nodes into this system differently:
 
 ### Capacity ceiling is shared with world-gen
 
-`build_empty_grids` (`src/server/chunk_manager.rs - build_empty_grids`) computes each chunk's per-kind `capacity` from `chunk_kind_target(classification, channels, kind, center_dist_frac)`, the **same** formula `src/world/chunk/generator.rs` uses to place the initial nodes. The fourth argument (the chunk centre's distance from the world origin as a fraction of the playable radius) exists for the meteorite ring gate; both sites compute it via the shared `chunk_center_distance_fraction`, so the meteorite ceiling cannot drift between generation and regrow. This is load-bearing: if regrow used a different ceiling than world-gen, the world would silently over- or under-fill on respawn. Change one, change both. Classification is recomputed from the seed on every load (not persisted), so this stays in sync automatically. See [worlds-and-saves.md](worlds-and-saves.md) for the classification/generator pipeline and the consequences of editing `BIOME_BIAS` or thresholds.
+`build_empty_grids` (`src/server/chunk_manager.rs - build_empty_grids`) computes each chunk's per-kind `capacity` from `chunk_kind_target(classification, channels, kind, center_dist_frac, stray_hash)`, the **same** formula `src/world/chunk/generator.rs` uses to place the initial nodes. The fourth argument (the chunk centre's distance from the world origin as a fraction of the playable radius) exists for the meteorite ring gate, and the fifth (the per-chunk `chunk_stray_hash`) for the forest/plains stray-deposit rolls; both sites compute them via the shared helpers, so the meteorite ceiling and the stray slots cannot drift between generation and regrow. This is load-bearing: if regrow used a different ceiling than world-gen, the world would silently over- or under-fill on respawn. Change one, change both. Classification is recomputed from the seed on every load (not persisted), so this stays in sync automatically. See [worlds-and-saves.md](worlds-and-saves.md) for the classification/generator pipeline and the consequences of editing `BIOME_BIAS` or thresholds.
 
 ## Density falloff: RING_BUDGET, applied once at creation
 
@@ -158,6 +158,8 @@ const RING_BUDGET: [f32; 5] = [1.0, 0.85, 0.65, 0.45, 0.30];
 ```
 
 For each `(coord, kind)` group, the ring distance is the Chebyshev distance `coord.x.abs().max(coord.z.abs())`. The multiplier is `RING_BUDGET[ring]`, falling back to `OUTERMOST_RING_BUDGET` (the table's last entry, 0.30) for rings beyond index 4. It keeps the first `round(count * multiplier)` spawns per group, a **deterministic suffix-trim** of the spawn list rather than a re-run of the Poisson sampler with a scaled target. The spawns themselves are not persisted; only the surviving node ids end up in `node_chunks`.
+
+**Mineral deposits (coal, iron, sulfur, stone vein, meteorite) are exempt from the budget.** Their per-chunk targets are tiny (1 to 6), so trimming them saves nothing, and because `keep_n` rounds, a single-node group at ring 3+ used to round to zero: every stray/fringe iron node, lone stone vein, and worldgen meteorite silently vanished from the outer ~97% of the map (pinned by `ring_budget_thins_clutter_but_never_deletes_minerals`). The falloff applies to the abundant clutter kinds (trees, grass, branches, surface stones) only.
 
 ## Persistence: ChunkManagerSave
 

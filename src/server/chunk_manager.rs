@@ -105,7 +105,8 @@ const KEEP_MARGIN_RINGS: u32 = 2;
 /// "density falloff" the design called for, implemented as a fixed
 /// spawn-budget instead of a moving culling window, players moving
 /// around the world don't see neighbouring grids fade in/out, only
-/// brand-new grids respect the budget.
+/// brand-new grids respect the budget. Applies to the abundant clutter
+/// kinds only; mineral deposits are exempt (see `apply_ring_budget`).
 const RING_BUDGET: [f32; 5] = [1.0, 0.85, 0.65, 0.45, 0.30];
 
 /// Budget multiplier for rings beyond the end of [`RING_BUDGET`]. Always the
@@ -447,6 +448,16 @@ fn build_empty_grids(world_seed: u64, dims: ChunkDims) -> HashMap<ChunkCoord, Ac
 /// [`RING_BUDGET`]. Deterministic: sorts by node id then keeps the first
 /// `keep_n` entries per `(coord, kind)`. Saving the spawns themselves
 /// would also work but adds save complexity for no gameplay win.
+///
+/// Mineral deposits (ores, stone veins, meteorite) are EXEMPT: the budget is a
+/// visual-density falloff for the abundant clutter kinds (trees, grass,
+/// branches, surface stones), whose outer-ring counts are a cost without being
+/// gameplay-critical. Mineral targets are tiny (1 to 6 per chunk) so cutting
+/// them saves nothing, and `keep_n` ROUNDS, so beyond ring 2 (multiplier
+/// 0.45 and down) every single-node group used to round to ZERO, silently
+/// deleting all stray/fringe iron and stone veins and every worldgen
+/// meteorite (whose distance ring forces it into the deepest-cut rings) from
+/// ~97% of the map.
 fn apply_ring_budget(spawns: &mut Vec<ChunkSpawn>) {
     // Group by (coord, kind) → list of indices into spawns. Walk groups,
     // compute keep_n from the ring distance, mark survivors.
@@ -458,12 +469,24 @@ fn apply_ring_budget(spawns: &mut Vec<ChunkSpawn>) {
             .push(idx);
     }
     let mut keep: HashSet<usize> = HashSet::new();
-    for ((coord, _kind), indices) in groups {
+    for ((coord, kind), indices) in groups {
+        let mineral = matches!(
+            kind,
+            NodeKind::CoalOre
+                | NodeKind::IronOre
+                | NodeKind::SulfurOre
+                | NodeKind::StoneVein
+                | NodeKind::Meteorite
+        );
         let ring = coord.x.abs().max(coord.z.abs()) as usize;
-        let multiplier = RING_BUDGET
-            .get(ring)
-            .copied()
-            .unwrap_or(OUTERMOST_RING_BUDGET);
+        let multiplier = if mineral {
+            1.0
+        } else {
+            RING_BUDGET
+                .get(ring)
+                .copied()
+                .unwrap_or(OUTERMOST_RING_BUDGET)
+        };
         let keep_n = (indices.len() as f32 * multiplier).round() as usize;
         for idx in indices.into_iter().take(keep_n) {
             keep.insert(idx);
