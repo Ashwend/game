@@ -34,10 +34,14 @@ pub struct DeployableUpgrade {
 pub const DEPLOYABLE_UPGRADES: &[DeployableUpgrade] = &[DeployableUpgrade {
     from: DeployableKind::Workbench { tier: 1 },
     to: DeployableKind::Workbench { tier: 2 },
+    // The gate in front of every tier-2 craft (satchels, iron armor, mace,
+    // crossbow), so it is priced as a mid-game project, not a checkpoint:
+    // 6 ingots is most of one meteorite find (8 alloy) or a slice of a
+    // crater cluster, and 8 fittings is two to three salvage-chest cycles.
     cost: &[
-        CraftingInput::new(IRON_BAR_ID, 30),
-        CraftingInput::new(SALVAGED_FITTINGS_ID, 6),
-        CraftingInput::new(METEORITE_INGOT_ID, 4),
+        CraftingInput::new(IRON_BAR_ID, 50),
+        CraftingInput::new(SALVAGED_FITTINGS_ID, 8),
+        CraftingInput::new(METEORITE_INGOT_ID, 6),
     ],
 }];
 
@@ -66,7 +70,7 @@ mod tests {
             upgrade
                 .cost
                 .iter()
-                .any(|input| input.item_id == METEORITE_INGOT_ID && input.quantity == 4)
+                .any(|input| input.item_id == METEORITE_INGOT_ID && input.quantity == 6)
         );
     }
 

@@ -268,9 +268,9 @@ mod tests {
 
     fn affordable_inventory() -> PlayerInventoryState {
         let mut inventory = PlayerInventoryState::empty();
-        inventory.inventory_slots[0] = Some(ItemStack::new(IRON_BAR_ID, 30));
-        inventory.inventory_slots[1] = Some(ItemStack::new(SALVAGED_FITTINGS_ID, 6));
-        inventory.inventory_slots[2] = Some(ItemStack::new(METEORITE_INGOT_ID, 4));
+        inventory.inventory_slots[0] = Some(ItemStack::new(IRON_BAR_ID, 50));
+        inventory.inventory_slots[1] = Some(ItemStack::new(SALVAGED_FITTINGS_ID, 8));
+        inventory.inventory_slots[2] = Some(ItemStack::new(METEORITE_INGOT_ID, 6));
         inventory
     }
 

@@ -180,7 +180,7 @@ All accessors are `const fn`. Adding a door is one arm here plus a recipe and a 
 
 ## Full roster
 
-**Raw materials / refined (`Bag` mesh, not equipable):** `wood`, `stone`, `coal`, `iron_ore`, `sulfur_ore`, `fiber`, `plant_twine`, `iron_bar`, `hewn_log`, plus the materials `sulfur` (smelted from sulfur ore), `cloth` (4 fiber to 1, hand-crafted armor padding / charge wrap), `gunpowder` (2 coal + 1 sulfur to 2, bench t1), `meteorite_alloy` (mined from the rare meteorite node), `meteorite_ingot` (furnace-smelted from the alloy, the top-tier metal), and `salvaged_fittings` (looted from the salvage chests in burnt-out houses, never craftable).
+**Raw materials / refined (`Bag` mesh, not equipable):** `wood`, `stone`, `coal`, `iron_ore`, `sulfur_ore`, `fiber`, `plant_twine`, `iron_bar`, `hewn_log`, plus the materials `sulfur` (smelted from sulfur ore), `cloth` (4 fiber to 1, hand-crafted armor padding / charge wrap), `gunpowder` (2 coal + 2 sulfur to 1, bench t1; the master raid-cost lever), `meteorite_alloy` (mined from the rare meteorite node), `meteorite_ingot` (furnace-smelted from the alloy, the top-tier metal), and `salvaged_fittings` (looted from the salvage chests in burnt-out houses, never craftable).
 
 **Tools (four, all equipable, all stack to 1):** `wood_stone_hatchet` (Axe t1), `wood_stone_pickaxe` (Pickaxe t1), `iron_hatchet` (Axe t2), `iron_pickaxe` (Pickaxe t2). Every tool is an authored Blender glb matched to its icon; see [docs/playbooks/art-pipeline.md](playbooks/art-pipeline.md).
 
@@ -200,7 +200,7 @@ All accessors are `const fn`. Adding a door is one arm here plus a recipe and a 
 
 **Resource nodes (14 in `RESOURCE_NODE_DEFINITIONS`):**
 
-- Ores (Pickaxe t1): `coal_node`, `iron_node`, `sulfur_node` (72 each), `stone_node` (Stone Vein, 96 stone).
+- Ores (Pickaxe t1): `coal_node`, `iron_node` (72 each), `sulfur_node` (48, deliberately the leanest ore: sulfur only becomes gunpowder, so raid prep is paced by nodes toured), `stone_node` (Stone Vein, 120 stone, deliberately the most generous: stone is the defensive material).
 - Meteorite (Pickaxe t2, the one iron-gated node): `meteorite_node`, yielding `meteorite_alloy` (furnace-smelts to `meteorite_ingot`). Rare, a scorched slag boulder studded with pale alloy nuggets, far-from-center rocky/ore chunks only (worldgen gating in `src/world/chunk/`); also runtime-spawned in rich clusters by a meteor shower impact.
 - Trees (Axe t1, six size variants): `pine_tree_small` / `pine_tree` / `pine_tree_large`, `birch_tree_small` / `birch_tree` / `birch_tree_large` (wood, scaling 18 to 84 by size). The un-suffixed ids (`pine_tree`, `birch_tree`) are the **medium** variants on purpose, so pre-size-variant saves load as medium without migration.
 - Crude (Hands, E-pickup): `surface_stone` (1 stone), `branch_pile` (1 wood), `hay_grass` (1 fiber).

@@ -52,7 +52,7 @@ pub const LAMELLAR_VEST_RECIPE_ID: &str = "lamellar_vest";
 pub const LAMELLAR_GREAVES_RECIPE_ID: &str = "lamellar_greaves";
 pub const LAMELLAR_BOOTS_RECIPE_ID: &str = "lamellar_boots";
 /// Iron (plate) armor set recipes, workbench tier 2. Total across the set is
-/// ~30 iron_bar + 10 cloth + 6 salvaged_fittings.
+/// ~40 iron_bar + 10 cloth + 6 salvaged_fittings.
 pub const IRON_HELM_RECIPE_ID: &str = "iron_helm";
 pub const IRON_CUIRASS_RECIPE_ID: &str = "iron_cuirass";
 pub const IRON_GREAVES_RECIPE_ID: &str = "iron_greaves";
@@ -131,13 +131,20 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         description: "Grind coal and sulfur together into coarse blasting powder. \
                       Needs a workbench to mill the charge evenly.",
         category: RecipeCategory::Materials,
+        // The master raid-economy lever. Every charge is priced in gunpowder,
+        // so this recipe is what makes raiding an investment: 2 coal + 2
+        // sulfur PER unit (sulfur is the strategic ore, mined from the
+        // leanest node and smelted 1:1 at furnace pace). A satchel run on an
+        // iron door (5 charges, 300 powder) is a real farming expedition,
+        // not an afternoon errand. Tune raid cost here and in the charge
+        // recipes below, never by inflating charge damage.
         inputs: &[
             CraftingInput::new(COAL_ID, 2),
-            CraftingInput::new(SULFUR_ID, 1),
+            CraftingInput::new(SULFUR_ID, 2),
         ],
         output_item: GUNPOWDER_ID,
-        output_quantity: 2,
-        craft_seconds: 5.0,
+        output_quantity: 1,
+        craft_seconds: 4.0,
         tier: 2,
         station: RecipeStation::Workbench { min_tier: 1 },
     },
@@ -194,7 +201,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         category: RecipeCategory::Tools,
         inputs: &[
             CraftingInput::new(HEWN_LOG_ID, 2),
-            CraftingInput::new(IRON_BAR_ID, 12),
+            CraftingInput::new(IRON_BAR_ID, 18),
             CraftingInput::new(PLANT_TWINE_ID, 2),
         ],
         output_item: IRON_HATCHET_ID,
@@ -211,7 +218,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         category: RecipeCategory::Tools,
         inputs: &[
             CraftingInput::new(HEWN_LOG_ID, 2),
-            CraftingInput::new(IRON_BAR_ID, 18),
+            CraftingInput::new(IRON_BAR_ID, 25),
             CraftingInput::new(PLANT_TWINE_ID, 2),
         ],
         output_item: IRON_PICKAXE_ID,
@@ -260,7 +267,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
                       balanced workhorse, good in any fight.",
         category: RecipeCategory::Weapons,
         inputs: &[
-            CraftingInput::new(IRON_BAR_ID, 10),
+            CraftingInput::new(IRON_BAR_ID, 15),
             CraftingInput::new(HEWN_LOG_ID, 1),
             CraftingInput::new(CLOTH_ID, 1),
             CraftingInput::new(PLANT_TWINE_ID, 2),
@@ -278,7 +285,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
                       slowest, hardest swing in the game, and the answer to plate.",
         category: RecipeCategory::Weapons,
         inputs: &[
-            CraftingInput::new(IRON_BAR_ID, 14),
+            CraftingInput::new(IRON_BAR_ID, 20),
             CraftingInput::new(HEWN_LOG_ID, 2),
             CraftingInput::new(PLANT_TWINE_ID, 2),
         ],
@@ -477,9 +484,9 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         tier: 1,
         station: RecipeStation::Workbench { min_tier: 1 },
     },
-    // Iron (plate) armor set. Workbench tier 2. The set totals ~30 iron_bar +
-    // 10 cloth + 6 salvaged_fittings, split chest-heaviest: chest 12/4/3, head
-    // 8/2/1, legs 7/2/1, feet 3/2/1.
+    // Iron (plate) armor set. Workbench tier 2. The set totals ~40 iron_bar +
+    // 10 cloth + 6 salvaged_fittings, split chest-heaviest: chest 16/4/3, head
+    // 10/2/1, legs 9/2/1, feet 5/2/1.
     RecipeDefinition {
         id: IRON_HELM_RECIPE_ID,
         name: "Iron Helmet",
@@ -487,7 +494,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
                       the heaviest blows.",
         category: RecipeCategory::Armor,
         inputs: &[
-            CraftingInput::new(IRON_BAR_ID, 8),
+            CraftingInput::new(IRON_BAR_ID, 10),
             CraftingInput::new(CLOTH_ID, 2),
             CraftingInput::new(SALVAGED_FITTINGS_ID, 1),
         ],
@@ -504,7 +511,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
                       The most protective piece in the game.",
         category: RecipeCategory::Armor,
         inputs: &[
-            CraftingInput::new(IRON_BAR_ID, 12),
+            CraftingInput::new(IRON_BAR_ID, 16),
             CraftingInput::new(CLOTH_ID, 4),
             CraftingInput::new(SALVAGED_FITTINGS_ID, 3),
         ],
@@ -520,7 +527,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         description: "Forge plate greaves over padded leggings.",
         category: RecipeCategory::Armor,
         inputs: &[
-            CraftingInput::new(IRON_BAR_ID, 7),
+            CraftingInput::new(IRON_BAR_ID, 9),
             CraftingInput::new(CLOTH_ID, 2),
             CraftingInput::new(SALVAGED_FITTINGS_ID, 1),
         ],
@@ -537,7 +544,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
                       and still plate.",
         category: RecipeCategory::Armor,
         inputs: &[
-            CraftingInput::new(IRON_BAR_ID, 3),
+            CraftingInput::new(IRON_BAR_ID, 5),
             CraftingInput::new(CLOTH_ID, 2),
             CraftingInput::new(SALVAGED_FITTINGS_ID, 1),
         ],
@@ -636,7 +643,7 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
                       doorway; you set the code when you hang it.",
         category: RecipeCategory::Building,
         inputs: &[
-            CraftingInput::new(IRON_BAR_ID, 30),
+            CraftingInput::new(IRON_BAR_ID, 40),
             CraftingInput::new(HEWN_LOG_ID, 4),
             CraftingInput::new(PLANT_TWINE_ID, 2),
         ],

@@ -50,9 +50,9 @@ fn fixture() -> (GameServer, ClientId, DeployedEntityId) {
 /// Seed the full tier-2 upgrade cost into the player's inventory.
 fn give_upgrade_materials(server: &mut GameServer, client_id: ClientId) {
     let client = server.clients.get_mut(&client_id).unwrap();
-    client.inventory.inventory_slots[0] = Some(ItemStack::new(IRON_BAR_ID, 30));
-    client.inventory.inventory_slots[1] = Some(ItemStack::new(SALVAGED_FITTINGS_ID, 6));
-    client.inventory.inventory_slots[2] = Some(ItemStack::new(METEORITE_INGOT_ID, 4));
+    client.inventory.inventory_slots[0] = Some(ItemStack::new(IRON_BAR_ID, 50));
+    client.inventory.inventory_slots[1] = Some(ItemStack::new(SALVAGED_FITTINGS_ID, 8));
+    client.inventory.inventory_slots[2] = Some(ItemStack::new(METEORITE_INGOT_ID, 6));
 }
 
 fn kind_of(server: &GameServer, id: DeployedEntityId) -> DeployableKind {
@@ -171,8 +171,8 @@ fn upgrade_out_of_range_warns_and_does_not_consume() {
         DeployableKind::Workbench { tier: 1 }
     );
     let inv = &server.clients[&client].inventory;
-    assert_eq!(count_items_in_inventory(inv, IRON_BAR_ID), 30);
-    assert_eq!(count_items_in_inventory(inv, METEORITE_INGOT_ID), 4);
+    assert_eq!(count_items_in_inventory(inv, IRON_BAR_ID), 50);
+    assert_eq!(count_items_in_inventory(inv, METEORITE_INGOT_ID), 6);
 }
 
 #[test]
@@ -184,7 +184,7 @@ fn upgrade_unaffordable_warns_and_does_not_consume() {
         .get_mut(&client)
         .unwrap()
         .inventory
-        .inventory_slots[0] = Some(ItemStack::new(IRON_BAR_ID, 30));
+        .inventory_slots[0] = Some(ItemStack::new(IRON_BAR_ID, 50));
 
     let out = server.apply_workbench_command(client, WorkbenchCommand::Upgrade { id: workbench });
     assert!(matches!(
@@ -198,7 +198,7 @@ fn upgrade_unaffordable_warns_and_does_not_consume() {
     );
     assert_eq!(
         count_items_in_inventory(&server.clients[&client].inventory, IRON_BAR_ID),
-        30
+        50
     );
 }
 

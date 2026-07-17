@@ -1063,6 +1063,13 @@ pub const METEOR_SHOWER_SITE_BOUNDS_MARGIN_M: f32 = 20.0;
 //     costs 5 satchels vs the wood door's 2: pricier than any door, cheaper
 //     than the 7-satchel stone wall, keeping the door the designed breach
 //     point. Revisit if a third door tier lands.
+//
+// The third lever is ACQUISITION cost, and it lives in the recipes, not
+// here: the gunpowder recipe (2 coal + 2 sulfur per unit, bench-milled)
+// times the per-charge powder counts (bomb 10 / keg 30 / satchel 60,
+// `src/crafting/registry.rs`) is what prices a raid in farm hours. Cheapen
+// powder and every wall on the map gets softer without an HP number
+// moving; keep the damage math above stable and tune raid pace there.
 // Tune here, never inline.
 
 /// Base blast damage at ground zero for each charge, before the per-material

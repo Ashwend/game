@@ -87,7 +87,7 @@ The list also holds the cloth and gunpowder intermediates, the four melee-weapon
 
 ### Workbench tiers and the generic upgrade
 
-A placed workbench upgrades in place from tier 1 to tier 2; it is not a separate deployable. The upgrade path is DATA, not workbench-shaped code: `src/items/upgrades.rs - DEPLOYABLE_UPGRADES` declares `(from kind, to kind, cost)` rows (today the one row is Workbench t1 to t2 for 30 iron_bar + 6 salvaged_fittings + 4 meteorite ingots), and `upgrade_for(kind)` looks up the available upgrade. Because `DeployableKind::Furnace { tier }` already exists, a furnace tier 2 later is a table row, not new plumbing.
+A placed workbench upgrades in place from tier 1 to tier 2; it is not a separate deployable. The upgrade path is DATA, not workbench-shaped code: `src/items/upgrades.rs - DEPLOYABLE_UPGRADES` declares `(from kind, to kind, cost)` rows (today the one row is Workbench t1 to t2 for 50 iron_bar + 8 salvaged_fittings + 6 meteorite ingots), and `upgrade_for(kind)` looks up the available upgrade. Because `DeployableKind::Furnace { tier }` already exists, a furnace tier 2 later is a table row, not new plumbing.
 
 The client opens the bench with tap-E, which sets the replicated `open_workbench` pointer (`OpenWorkbenchView { id, tier }` on `PlayerPrivate`, the furnace-view pattern). `src/app/ui/workbench.rs - workbench_ui` renders the current tier, a blurb, and the cost list read from the compile-time upgrade table (costs never travel the wire), with an Upgrade button gated on client-side affordability. The server handler (`src/server/workbench.rs - apply_workbench_command`, `WorkbenchCommand::{Open, Close, Upgrade}`) re-validates entity, kind, range, and materials, consumes the cost, and mutates the kind.
 
@@ -113,7 +113,7 @@ Furnaces are deployables with a `FurnaceState` sub-state (`src/server/furnace/st
 **Fuel and recipes** (the two extension points for new smelt content):
 
 - `fuel_burn_ticks_for`: `wood` burns `FURNACE_WOOD_BURN_TICKS` (4s), `coal` burns `FURNACE_COAL_BURN_TICKS` (16s).
-- `smelt_result`: `iron_ore -> iron_bar` and `sulfur_ore -> sulfur`. One output per `FURNACE_SMELT_TICKS_PER_OUTPUT` (6s). Add a smelt recipe by extending `smelt_result` (and `fuel_burn_ticks_for` for a new fuel). The sulfur smelt is what activates the gunpowder chain (gunpowder is a bench t1 recipe, 2 coal + 1 sulfur to 2).
+- `smelt_result`: `iron_ore -> iron_bar` and `sulfur_ore -> sulfur`. One output per `FURNACE_SMELT_TICKS_PER_OUTPUT` (6s). Add a smelt recipe by extending `smelt_result` (and `fuel_burn_ticks_for` for a new fuel). The sulfur smelt is what activates the gunpowder chain (gunpowder is a bench t1 recipe, 2 coal + 2 sulfur to 1, priced so charge stacks are farmed, not incidental).
 
 **Smelt loop** (`tick_one_furnace`):
 

@@ -212,7 +212,12 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         name: "Sulfur Node",
         model: ResourceNodeModel::SulfurOre,
         required_tool: ToolRequirement::new(ToolKind::Pickaxe, 1),
-        storage: &[ResourceMaterial::new(SULFUR_ORE_ID, 72)],
+        // Leaner than the other ores (48 vs 72) on purpose: sulfur exists
+        // only to become gunpowder, so the raid economy is paced by how
+        // many of these a raider must find, drain, and survive holding.
+        // Stocking a satchel run means touring sulfur nodes across the
+        // map, not emptying the one behind the base.
+        storage: &[ResourceMaterial::new(SULFUR_ORE_ID, 48)],
         per_swing_yield: None,
         hand_pickup_yield: None,
         anchor_height: 0.58,
@@ -223,10 +228,12 @@ pub const RESOURCE_NODE_DEFINITIONS: &[ResourceNodeDefinition] = &[
         name: "Stone Vein",
         model: ResourceNodeModel::StoneVein,
         required_tool: ToolRequirement::new(ToolKind::Pickaxe, 1),
-        // Bigger than ore (96 stone = 16 swings at 6/swing) so the player
-        // can stock up on stone for crafting without juggling pickup
-        // rocks, but still finite enough to require moving around.
-        storage: &[ResourceMaterial::new(STONE_ID, 96)],
+        // The most generous node in the game (120 stone = 20 swings at
+        // 6/swing): stone is the defensive material (walls, furnaces), and
+        // hardening a base into the explosives-only tier should be the
+        // easy half of the raid equation. Still finite enough to require
+        // moving around.
+        storage: &[ResourceMaterial::new(STONE_ID, 120)],
         per_swing_yield: None,
         hand_pickup_yield: None,
         anchor_height: 0.60,

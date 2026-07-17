@@ -98,7 +98,7 @@ Doors are generic over `DoorVariant` (`src/items.rs` - `enum DoorVariant`): `Hew
 | HewnLog | `WoodBuilding` | `DOOR_MAX_HP` 1500 | axe 15% / pickaxe 5% (the soft spot) |
 | Iron | `MetalBuilding` | `IRON_DOOR_MAX_HP` 3000 | 0% for every tool (tool-proof) |
 
-Iron Door recipe (`src/crafting.rs` - `IRON_DOOR_RECIPE_ID`): 30 `iron_bar` + 4 `hewn_log` + 2 `plant_twine`, station `Workbench { min_tier: 1 }`. (The recipe's own `tier: 2` is its tech-gate field, distinct from the workbench tier it needs, which is 1.)
+Iron Door recipe (`src/crafting.rs` - `IRON_DOOR_RECIPE_ID`): 40 `iron_bar` + 4 `hewn_log` + 2 `plant_twine`, station `Workbench { min_tier: 1 }`. (The recipe's own `tier: 2` is its tech-gate field, distinct from the workbench tier it needs, which is 1.)
 
 **Authority and lock** (`src/server/door.rs` - `DoorState`, `apply_door_command`). A door mounts only in a doorway opening via `DoorCommand::Place`; `DoorState.parent` is the doorway block, and destroying the doorway destroys the door. The lock code is 4-6 ASCII digits (`DOOR_CODE_MIN_LEN`/`DOOR_CODE_MAX_LEN` = 4/6, `code_is_valid`), chosen in a dialog when the door is hung. Nobody, including the placer, is authorized until they enter the code at the door once. A correct code **authorizes only**; the door stays shut until an explicit E-press.
 
