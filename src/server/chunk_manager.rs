@@ -414,16 +414,19 @@ fn build_empty_grids(world_seed: u64, dims: ChunkDims) -> HashMap<ChunkCoord, Ac
     for coord in dims.coords() {
         let channels = ClassificationChannels::sample(world_seed, coord);
         let classification = channels.classify();
-        // Same centre-distance fraction the generator computes for this coord, so
-        // the meteorite ceiling here matches what generation placed (regrow can't
-        // refill meteorite past what worldgen would have seeded).
+        // Same centre-distance fraction and stray-deposit hash the generator
+        // computes for this coord, so the meteorite ceiling and the stray
+        // iron/stone slots here match what generation placed (regrow can't
+        // refill past what worldgen would have seeded).
         let center_dist_frac = chunk_center_distance_fraction(coord, bounds);
+        let stray_hash = crate::world::chunk::chunk_stray_hash(world_seed, coord);
         let mut capacity = HashMap::new();
         for kind in NodeKind::ALL {
-            // Same target (incl. the forest-fringe ore rule + meteorite gate) the
-            // generator used to place nodes, so regrow refills to exactly that
-            // ceiling.
-            let target = chunk_kind_target(classification, channels, kind, center_dist_frac);
+            // Same target (incl. the forest-fringe ore rule, stray-deposit
+            // rolls, and meteorite gate) the generator used to place nodes,
+            // so regrow refills to exactly that ceiling.
+            let target =
+                chunk_kind_target(classification, channels, kind, center_dist_frac, stray_hash);
             if target > 0 {
                 capacity.insert(kind, target);
             }

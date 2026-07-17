@@ -70,25 +70,58 @@ const FOREST_IRON_ORE_CHANNEL: f32 = 0.64;
 /// than iron so veins turn up "now and again" rather than rarely.
 const FOREST_STONE_VEIN_CHANNEL: f32 = 0.56;
 
+/// Per-chunk seeded hash behind the stray-deposit rolls, the coord/seed mixing
+/// shared by world generation and the regrow capacity grid (mirrors the
+/// `chunk_center_distance_fraction` contract: both callers MUST pass the same
+/// value for a coord or generation and regrow ceilings drift). Unlike the
+/// channel-gated fringe rules above, which cluster near barren-biome edges
+/// because the channels are smooth over ~600 m, a hash roll is independent per
+/// chunk, so the deposits it seeds scatter through biome interiors.
+pub fn chunk_stray_hash(world_seed: u64, coord: ChunkCoord) -> u64 {
+    splitmix64(
+        world_seed
+            ^ 0x57A1_DE90_5EED_0001
+            ^ ((coord.x as i64 as u64).wrapping_mul(0xA076_1D64_78BD_642F))
+            ^ ((coord.z as i64 as u64).wrapping_mul(0xE703_7ED1_A0B4_28DB)),
+    )
+}
+
+/// Whether this chunk's stray-deposit roll for `kind` hits, at `chance_pct`
+/// percent. Re-mixes the chunk hash with the kind's stream so the iron and
+/// stone rolls of one chunk are independent.
+fn stray_roll(stray_hash: u64, kind: NodeKind, chance_pct: u32) -> bool {
+    splitmix64(stray_hash ^ (kind_stream(kind) as u64).wrapping_mul(0x8EBC_6AF0_9C88_C6E3)) % 100
+        < chance_pct as u64
+}
+
 /// Per-chunk node target for one kind, the single source of truth shared by
 /// world generation and the regrow capacity grid (they MUST agree or the world
-/// over/under-fills). Wraps `base_capacity` + channel scaling, plus the
-/// forest-fringe rule: a forest's interior has no veins (the rich deposits stay
-/// in the high-risk rocky/ore biomes), but where the ore/stone channel runs
-/// high, the edge of a nearby barren biome, a forest can hold a lone iron node
-/// and a little more often a stone vein, so a forest newcomer can still strike
-/// it lucky without diluting the barren yields.
+/// over/under-fills). Wraps `base_capacity` + channel scaling, plus two home-
+/// biome rules layered on top:
+///
+/// - The channel-gated **fringe rule**: where the ore/stone channel runs high
+///   (the edge of a nearby barren biome) a forest holds a lone iron node and a
+///   somewhat richer stone vein, so the fringe reads as ore country bleeding
+///   into the trees.
+/// - The seeded **stray-deposit roll**: independent of the channels, a forest
+///   or plains chunk has a small per-chunk chance of one iron node (and a
+///   forest of one stone vein), so large biome interiors are not ore deserts
+///   and a home-biome player finds iron "every now and again" without
+///   crossing the map. Coal and sulfur stay barren-only by design: the raid
+///   feedstock is what forces trips into the dangerous biomes.
 ///
 /// `center_dist_frac` is the chunk centre's distance from the world origin as a
 /// fraction of the playable radius; it gates meteorite to the outer reaches
-/// (see [`crate::game_balance::METEORITE_MIN_CENTER_DISTANCE_FRACTION`]). Both
-/// world generation and the regrow capacity grid pass the SAME value for a given
-/// coord, so their meteorite ceilings can't drift.
+/// (see [`crate::game_balance::METEORITE_MIN_CENTER_DISTANCE_FRACTION`]).
+/// `stray_hash` is [`chunk_stray_hash`] for the coord. Both world generation
+/// and the regrow capacity grid pass the SAME values for a given coord, so
+/// their ceilings can't drift.
 pub fn chunk_kind_target(
     classification: ChunkClassification,
     channels: ClassificationChannels,
     kind: NodeKind,
     center_dist_frac: f32,
+    stray_hash: u64,
 ) -> u16 {
     // Meteorite: rocky/ore biomes only (base_capacity is 0 elsewhere), beyond
     // the centre-distance ring, and only where the ore channel runs very high.
@@ -107,21 +140,44 @@ pub fn chunk_kind_target(
 
     if classification == ChunkClassification::Forest {
         match kind {
-            // A single lucky iron node where the ore channel is high.
-            NodeKind::IronOre => return u16::from(channels.ore >= FOREST_IRON_ORE_CHANNEL),
-            // An occasional small stone vein, channel-scaled like everywhere
-            // else so it's a vein, not a lone rock.
+            // A single lucky iron node where the ore channel is high (the
+            // fringe rule), or a seeded stray deposit in the interior.
+            NodeKind::IronOre => {
+                return u16::from(
+                    channels.ore >= FOREST_IRON_ORE_CHANNEL
+                        || stray_roll(
+                            stray_hash,
+                            kind,
+                            crate::game_balance::FOREST_STRAY_IRON_CHANCE_PCT,
+                        ),
+                );
+            }
+            // An occasional stone vein: channel-scaled on the stony fringe
+            // (a vein, not a lone rock), a single stray one in the interior.
             NodeKind::StoneVein => {
                 return if channels.stone >= FOREST_STONE_VEIN_CHANNEL {
                     kind_target(1, channels.stone)
                 } else {
-                    0
+                    u16::from(stray_roll(
+                        stray_hash,
+                        kind,
+                        crate::game_balance::FOREST_STRAY_STONE_VEIN_CHANCE_PCT,
+                    ))
                 };
             }
             // Forest never holds coal or sulfur, those stay barren-only.
             NodeKind::CoalOre | NodeKind::SulfurOre => return 0,
             _ => {}
         }
+    }
+    // Plains: base capacity holds no ore at all, but the same stray-iron roll
+    // as the forest keeps big meadows from being iron deserts.
+    if classification == ChunkClassification::Plains && kind == NodeKind::IronOre {
+        return u16::from(stray_roll(
+            stray_hash,
+            kind,
+            crate::game_balance::PLAINS_STRAY_IRON_CHANCE_PCT,
+        ));
     }
     kind_target(
         base_capacity(classification, kind),
@@ -237,6 +293,7 @@ pub fn generate_chunk_spawns(
     let channels = ClassificationChannels::sample(world_seed, coord);
     let classification = channels.classify();
     let center_dist_frac = chunk_center_distance_fraction(coord, bounds);
+    let stray_hash = chunk_stray_hash(world_seed, coord);
 
     // Pre-filter the world's ruin footprints down to just those whose circle
     // can reach into this chunk (the chunk AABB expanded by the footprint
@@ -266,8 +323,10 @@ pub fn generate_chunk_spawns(
         // Scale the classification's base capacity by the channel value
         // (a channel just above the ~0.42 threshold still delivers ~0.7×
         // capacity, a saturated channel ~1.05×), with the forest-fringe ore
-        // rule folded in. Shared verbatim with the regrow capacity grid.
-        let target = chunk_kind_target(classification, channels, kind, center_dist_frac);
+        // rule and the stray-deposit rolls folded in. Shared verbatim with
+        // the regrow capacity grid.
+        let target =
+            chunk_kind_target(classification, channels, kind, center_dist_frac, stray_hash);
         if target == 0 {
             continue;
         }
@@ -413,28 +472,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn forest_holds_lucky_iron_and_occasional_veins_while_barren_stays_rich() {
+    fn home_biomes_hold_stray_iron_and_veins_while_barren_stays_rich() {
         let (mut forest, mut forest_iron, mut forest_vein) = (0u32, 0u32, 0u32);
+        let (mut plains, mut plains_iron, mut plains_sulfur) = (0u32, 0u32, 0u32);
         let (mut barren_chunks, mut barren_iron) = (0u32, 0u32);
         for seed in 0..50u64 {
             for x in -25..25 {
                 for z in -25..25 {
-                    let ch = ClassificationChannels::sample(seed, ChunkCoord::new(x, z));
+                    let coord = ChunkCoord::new(x, z);
+                    let ch = ClassificationChannels::sample(seed, coord);
                     let c = ch.classify();
+                    let hash = chunk_stray_hash(seed, coord);
+                    // iron/stone-vein ignore the distance fraction, so the
+                    // value here is irrelevant; pass 1.0.
+                    let target = |kind: NodeKind| chunk_kind_target(c, ch, kind, 1.0, hash);
                     match c {
                         ChunkClassification::Forest => {
                             forest += 1;
-                            // iron/stone-vein ignore the distance fraction, so the
-                            // value here is irrelevant; pass 1.0.
-                            forest_iron +=
-                                u32::from(chunk_kind_target(c, ch, NodeKind::IronOre, 1.0) > 0);
-                            forest_vein +=
-                                u32::from(chunk_kind_target(c, ch, NodeKind::StoneVein, 1.0) > 0);
+                            forest_iron += u32::from(target(NodeKind::IronOre) > 0);
+                            forest_vein += u32::from(target(NodeKind::StoneVein) > 0);
+                        }
+                        ChunkClassification::Plains => {
+                            plains += 1;
+                            plains_iron += u32::from(target(NodeKind::IronOre) > 0);
+                            plains_sulfur += u32::from(target(NodeKind::SulfurOre) > 0);
                         }
                         ChunkClassification::OreVein | ChunkClassification::RockyOutcrop => {
                             barren_chunks += 1;
-                            barren_iron +=
-                                u32::from(chunk_kind_target(c, ch, NodeKind::IronOre, 1.0));
+                            barren_iron += u32::from(target(NodeKind::IronOre));
                         }
                         _ => {}
                     }
@@ -443,22 +508,36 @@ mod tests {
         }
         let iron_pct = 100.0 * forest_iron as f32 / forest as f32;
         let vein_pct = 100.0 * forest_vein as f32 / forest as f32;
+        let plains_iron_pct = 100.0 * plains_iron as f32 / plains.max(1) as f32;
         let barren_iron_avg = barren_iron as f32 / barren_chunks.max(1) as f32;
         println!(
-            "forest chunks {forest}: iron {iron_pct:.1}%  stone-vein {vein_pct:.1}%  | barren iron/chunk {barren_iron_avg:.2}"
+            "forest chunks {forest}: iron {iron_pct:.1}%  stone-vein {vein_pct:.1}%  | plains iron {plains_iron_pct:.1}%  | barren iron/chunk {barren_iron_avg:.2}"
         );
-        // Iron in the forest is a lucky strike, not a blanket.
+        // Iron in the forest is an occasional find (fringe rule + stray roll),
+        // never a blanket.
         assert!(
-            (5.0..30.0).contains(&iron_pct),
-            "forest iron should be a lucky minority, got {iron_pct:.1}%"
+            (8.0..40.0).contains(&iron_pct),
+            "forest iron should be an occasional minority, got {iron_pct:.1}%"
         );
+        // Plains iron comes only from the stray roll, so it hugs the tuned
+        // chance: present, but rarer than the forest's combined sources.
+        assert!(
+            (5.0..20.0).contains(&plains_iron_pct),
+            "plains iron should hug the stray chance, got {plains_iron_pct:.1}%"
+        );
+        assert!(
+            plains_iron_pct < iron_pct,
+            "plains (stray only) should trail forest (fringe + stray): {plains_iron_pct:.1} vs {iron_pct:.1}"
+        );
+        // Plains never roll sulfur: the raid feedstock stays barren-only.
+        assert_eq!(plains_sulfur, 0, "plains must never hold sulfur");
         // Stone veins turn up "now and again", a bit more often than iron.
         assert!(
             vein_pct > iron_pct,
             "veins should beat iron: {vein_pct:.1} vs {iron_pct:.1}"
         );
         assert!(
-            vein_pct < 55.0,
+            vein_pct < 60.0,
             "veins still a minority, got {vein_pct:.1}%"
         );
         // The high-risk barren biomes keep the rich iron (much more than forest).
@@ -487,11 +566,14 @@ mod tests {
             ChunkClassification::RockyOutcrop,
             ChunkClassification::OreVein,
         ] {
+            // The meteorite path resolves before the stray-deposit rolls, so
+            // the hash value is irrelevant here (and below); pass 0.
             let target = chunk_kind_target(
                 classification,
                 rich_ore_channels(),
                 NodeKind::Meteorite,
                 far,
+                0,
             );
             assert_eq!(
                 target, 1,
@@ -513,7 +595,8 @@ mod tests {
                     classification,
                     rich_ore_channels(),
                     NodeKind::Meteorite,
-                    far
+                    far,
+                    0
                 ),
                 0,
                 "meteorite must never seed in {classification:?} (base_capacity 0)"
@@ -532,6 +615,7 @@ mod tests {
                 rich_ore_channels(),
                 NodeKind::Meteorite,
                 inside,
+                0,
             ),
             0,
             "an eligible chunk inside the centre ring must hold no meteorite"
@@ -554,6 +638,7 @@ mod tests {
                 thin_ore,
                 NodeKind::Meteorite,
                 far,
+                0,
             ),
             0,
             "an eligible far chunk below the ore floor must hold no meteorite"
@@ -572,7 +657,13 @@ mod tests {
                     let ch = ClassificationChannels::sample(seed, coord);
                     let c = ch.classify();
                     // Use a generous distance fraction so the ring never clips it.
-                    let target = chunk_kind_target(c, ch, NodeKind::Meteorite, 1.0);
+                    let target = chunk_kind_target(
+                        c,
+                        ch,
+                        NodeKind::Meteorite,
+                        1.0,
+                        chunk_stray_hash(seed, coord),
+                    );
                     assert!(
                         target <= 1,
                         "meteorite target must be 0 or 1, got {target} at {coord:?}"

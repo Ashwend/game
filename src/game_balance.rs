@@ -812,6 +812,24 @@ pub const METEORITE_MIN_CENTER_DISTANCE_FRACTION: f32 = 0.4;
 /// stricter.
 pub const METEORITE_ORE_CHANNEL_FLOOR: f32 = 0.72;
 
+/// Chance, in percent, that a forest or plains chunk holds a single stray
+/// iron node, rolled per chunk from the seed independently of the noise
+/// channels. The channel-gated forest-fringe rule clusters iron near barren
+/// biome edges, which left large forest and plains interiors with no iron at
+/// all; this scatter guarantees "every now and again" finds (roughly one node
+/// per 8 to 10 chunks, ~500 m of wandering) so home biomes support the iron
+/// tier without crossing the map. Kept low so the rocky/ore biomes stay the
+/// place to farm iron in earnest, and deliberately NOT extended to coal or
+/// sulfur: the raid feedstock keeps forcing trips into the dangerous biomes.
+pub const FOREST_STRAY_IRON_CHANCE_PCT: u32 = 10;
+pub const PLAINS_STRAY_IRON_CHANCE_PCT: u32 = 10;
+
+/// Chance, in percent, that a forest chunk holds a single stray stone vein
+/// where the stone channel is too low for the channel-gated vein rule. A bit
+/// more common than the stray iron (stone is the bulk building material), so
+/// a forest-based builder can feed walls without leaving the treeline.
+pub const FOREST_STRAY_STONE_VEIN_CHANCE_PCT: u32 = 15;
+
 // =====================================================================
 // Ruins (POI worldgen) and loot caches
 // =====================================================================
