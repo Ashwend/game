@@ -12,6 +12,15 @@
 /art/_staging/
 art/items/*/source/
 art/textures/candidates/
+# runpod-flash CLI state (activity logs, deploy artifacts), written wherever
+# the `flash` command runs from. The deployed worker's SOURCE lives in
+# runpod/flash_app/ and is committed; this state is not.
+.flash/
+# Asset-family pipeline dirs (art/ore/ is the template): meshes/ holds the
+# raw image-to-3D output (~50 MB per glb) plus the built game outputs, all
+# regenerable from the committed candidates/ + prompts.json + selection.json,
+# which ARE the authoring record and stay in git.
+art/ore/meshes/
 *.contact.png
 *.preview.png
 

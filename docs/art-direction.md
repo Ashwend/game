@@ -8,7 +8,7 @@ sources:
   - src/app/scene/assets.rs - per-family ToonMaterial params, the cel-vs-PBR material handles
   - src/app/systems/deployables.rs - DeployableMaterial::Toon vs Standard family split
   - src/app/scene/grass.rs - instanced-grass colour (per-biome tint, not uniform)
-  - art/ore/build_ore.py - ore identity-in-chunks COLOR_0 rule
+  - art/ore/prompts.json - ore identity-in-chunks rule (enforced at the reference-prompt level)
   - art/trees/build_tree.py - solid faceted canopy, up-biased normals
 related:
   - docs/toon-shading.md - the cel shader mechanics + how to extend a cel family (this doc owns the why, that doc owns the how)
@@ -59,7 +59,7 @@ The instanced detail grass is in the cel-lit camp but does **not** use `ToonMate
 ## Colour and palette philosophy
 
 - **Vertex-colour albedos are LINEAR.** `COLOR_0` never goes through the sRGB decode that `Color::srgb` performs, so a value eyeballed as perceptual mid-grey renders ~1.5-2x brighter (chalk white in daylight). Pick `COLOR_0` physically; if converting an sRGB pick, raise it to ~2.2 power. The calibration anchor is the ground at linear `(0.027, 0.095, 0.040)`; anything that should "sit in the scene" lives within a few multiples of that. Physical-albedo conversion detail lives in `docs/rendering-materials.md`.
-- **Ore identity is in the chunks, not the rock.** The rock body is **one shared bright warm-grey on every node** (`_ROCK` in `art/ore/build_ore.py`); the per-mineral identity (iron rust, coal near-black, sulfur yellow, stone-vein plain knobs) rides **entirely** in the studded mineral chunks' `COLOR_0`. This is a user-directed decision: an earlier "tint the whole mound toward the mineral" look read as a coloured blob, and players expect chunks of ore in plain stone. Keep the rock grey.
+- **Ore identity is in the chunks, not the rock.** The rock body is one shared grey on every node; the per-mineral identity (iron rust, coal near-black, sulfur yellow, stone-vein plain knobs) rides **entirely** in the studded mineral chunks. Since the 2026-07 image-to-3D rework this rule is enforced in the reference prompts (`art/ore/prompts.json`, the shared-grey-body backbone) and carried by each type's baked albedo (`assets/textures/ore/<type>.png`); the meteorite alone gets a dark slag body. This is a user-directed decision: an earlier "tint the whole mound toward the mineral" look read as a coloured blob, and players expect chunks of ore in plain stone. Keep the rock grey.
 - **Identity must read at gameplay distance.** Colour that matters belongs in bold, large surfaces (the mineral chunks, the canopy mass, the trunk), not tiny accents. Anything subtle washes out by the time the cel bands quantise it.
 - **Detail grass colour is NOT uniform across biomes.** It is a per-biome tint (`biome_grass_tint` in `src/app/scene/grass.rs`): forest stays lush green, plains dries to yellow-green, rocky desaturates toward grey, ore dulls toward brown, multiplied onto the neutral blade green, plus low-frequency tonal patches and per-blade warm/cool jitter so the field reads as a painterly mass. (An earlier design tried one flat dry-green and per-biome density-only variation; the live code grades colour by biome. If a sibling doc still says "uniform grass colour," it is stale.) Density also varies by biome: bare rock/ore thin the field via `GRASS_BIOME_MAX_THIN`.
 
@@ -95,7 +95,7 @@ Values verified in `src/app/scene/assets.rs`. Note: an older consistency rule "r
 
 ## Asset-generation toolchain
 
-The cel meshes and textures are authored, not procedural, through a ComfyUI Flux + parametric Blender pipeline (concept image, OpenCV silhouette measurement, parametric Blender glb, soft hand-painted tileable textures). The parametric scripts live under `art/` (`art/ore/build_ore.py`, `art/trees/build_tree.py`, and the deployable/building builders); inventory icons and tileable world textures come from the `lowpoly-game-assets` skill. The full step-by-step is in `docs/playbooks/art-pipeline.md`.
+The cel meshes and textures are authored, not procedural. Most families go through a ComfyUI Flux + parametric Blender pipeline (concept image, OpenCV silhouette measurement, parametric Blender glb, soft hand-painted tileable textures); the parametric scripts live under `art/` (`art/trees/build_tree.py` and the deployable/building builders). The ore nodes instead come from the image-to-3D generation lane (`art/ore/`, reference prompts -> TRELLIS.2 mesh -> retopo + albedo rebake, the template for future family reworks). Inventory icons and tileable world textures come from the `lowpoly-game-assets` skill. The full step-by-step is in `docs/playbooks/art-pipeline.md`.
 
 Correct names to use when extending the cel family (the old `OreToonMaterial` / `ore_toon.rs` / `ore_toon.wgsl` names are gone):
 

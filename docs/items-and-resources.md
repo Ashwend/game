@@ -207,7 +207,7 @@ All accessors are `const fn`. Adding a door is one arm here plus a recipe and a 
 
 ## Ore depletion stages (cosmetic, client-side)
 
-Ore and stone-vein nodes step through `ORE_NODE_STAGE_COUNT = 3` meshes while being mined (untouched, worn, gutted), defined in `src/app/scene/mesh/ore.rs`. The stage meshes are authored glbs (`assets/ore/<type>/stage_<n>.glb`, built by `art/ore/build_ore.py`) loaded into `ResourceVisualAssets` in `src/app/scene/assets.rs`.
+Ore and stone-vein nodes step through `ORE_NODE_STAGE_COUNT = 3` meshes while being mined (untouched, worn, gutted), defined in `src/app/scene/mesh/ore.rs`. The stage meshes are generated glbs (`assets/ore/<type>/stage_<n>.glb`, built by `art/ore/build_nodes.py` from image-to-3D output; stages are scaled copies sharing one baked albedo `assets/textures/ore/<type>.png`) loaded into `ResourceVisualAssets` in `src/app/scene/assets.rs`, each type on its own `ToonMaterial`.
 
 The ore boulders are cel-shaded via the shared `ToonMaterial` (`src/app/scene/toon.rs`), the same material the deployable props and trees use; ores are no longer the only cel family. The spawn path (`src/app/systems/items/resource_nodes/spawn.rs`) imports `ToonMaterial`, not the old `OreToonMaterial`. See [docs/toon-shading.md](toon-shading.md).
 

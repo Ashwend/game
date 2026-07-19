@@ -171,7 +171,7 @@ def to_detail(img, desat=0.85, target_mean=210.0):
     shading multiplies texture * COLOR_0, so the mesh COLOR_0 owns the colour and
     the texture must only carry light value grain. Pull most of the saturation out
     (toward luma) and rescale the mean luminance to a light neutral so it never
-    darkens or hue-shifts the COLOR_0. Mirrors the ore rock.png (mean ~0.8)."""
+    darkens or hue-shifts the COLOR_0. Neutral grey detail-map convention (mean ~0.8, shared with the old ore rock texture)."""
     f = img.astype(np.float32)
     luma = (f * np.array([0.114, 0.587, 0.299])).sum(2, keepdims=True)  # BGR weights
     f = f * (1.0 - desat) + luma * desat

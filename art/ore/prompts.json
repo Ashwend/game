@@ -1,0 +1,242 @@
+{
+  "node_backbone": "a single {subject}, one isolated 3D game prop, just one object alone, low-poly hard-surface model built from LARGE FLAT POLYGON FACES meeting at CRISP STRAIGHT EDGES, flat shading, every plane clearly visible, no smooth curved surfaces, no rounded chamfers, no bevelled fillets, no photographic detail, simple readable silhouette, muted desaturated colours, matte with no gloss, nothing glowing, no crystals, three-quarter view slightly above the horizon, the whole object complete and uncropped, centered with a generous empty margin on a plain uniform flat light-grey backdrop, no ground, no horizon, no cast shadow, no vignette, no text, neutral stone grey the colour of bare granite, no tan, no beige, no sandstone, no orange or brown tint, medium value that is neither near-white nor near-black",
+  "icon_backbone": "a single {subject}, one isolated 3D game prop, just one object alone, low-poly, flat shading, faceted geometry with visible polygon faces and crisp hard edges, simple readable silhouette, muted earthy desaturated colours, matte with no gloss, nothing glowing, one soft key light from the upper left with gentle ambient fill so upper facets read clearly brighter than lower ones, three-quarter view about thirty degrees above the horizon, the object wider than tall and filling most of the frame width, mass resting on an implied undrawn ground plane, centered on a plain uniform flat light-grey backdrop, no ground, no horizon, no cast shadow, no vignette, no text, neutral stone grey the colour of bare granite, no tan, no beige, no sandstone, no orange or brown tint, medium value that is neither near-white nor near-black",
+  "nodes": [
+    {
+      "key": "stone",
+      "node_prompts": [
+        {
+          "label": "broad squat dome",
+          "subject": "faceted grey granite boulder studded with darker grey rock knobs",
+          "extra": "Broad squat dome, twice as wide as tall, knee high. Neutral mid-grey granite body, no tan or beige. Seven blocky slightly darker grey rock knobs of the same granite clustered on the crown with paler grey top facets, two strays low on the flanks."
+        },
+        {
+          "label": "cleaved sheared wedge",
+          "subject": "cleaved faceted grey granite outcrop with darker grey rock knobs",
+          "extra": "Angular wedge cleaved by one huge flat sheared face across the front, a few big planes stepping back behind it. Neutral mid-grey granite body, no tan or beige. Banded horizontal seam of slightly darker grey rock knobs of the same granite across the shear face, paler grey top facets. Low broad stance."
+        },
+        {
+          "label": "multi-lobe outcrop",
+          "subject": "multi-lobed faceted grey granite boulder with darker grey rock knobs",
+          "extra": "Three fused lobes of unequal size forming one low knuckled mound, wider than tall. Neutral mid-grey granite body, no tan or beige. Small slightly darker grey rock knobs of the same granite scattered in the saddles and around every side, paler grey top facets, two loose lumps at the foot."
+        },
+        {
+          "label": "craggy tilted upthrust",
+          "subject": "craggy tilted faceted grey granite upthrust studded with darker grey rock knobs",
+          "extra": "Low leaning deposit, knee high and no taller than it is wide, stepped blocky top and a flared foot. Neutral mid-grey granite body, no tan or beige. Diagonal seam of slightly darker grey rock knobs of the same granite up the leading ridge, paler grey top facets, a small cluster at the base."
+        }
+      ],
+      "icon_prompts": [
+        {
+          "label": "single hero lump",
+          "subject": "chunky faceted grey stone block",
+          "extra": "One fist-sized angular stone. Neutral mid-grey granite, no tan or beige. Chunky readable planes, two or three tonal steps per face, mild painted grain."
+        },
+        {
+          "label": "tight four-piece cluster",
+          "subject": "tight cluster of four chunky faceted grey stone cobbles",
+          "extra": "Four angular cobbles of varied size nested together, largest in front. Neutral mid-grey granite, no tan or beige. Chunky readable planes, two or three tonal steps per face, mild painted grain."
+        },
+        {
+          "label": "low broad heap",
+          "subject": "small low heap of about twelve chunky faceted grey stone cobbles",
+          "extra": "Loose low pile, a few pieces stacked on the crown and two spilled at the foot. Neutral mid-grey granite, no tan or beige. Chunky readable planes, two or three tonal steps per face."
+        },
+        {
+          "label": "cleaved open piece",
+          "subject": "cleaved chunky faceted grey stone showing a flat fresh interior face",
+          "extra": "One stone split open beside a small chip, the large flat fracture plane angled toward the viewer and slightly paler than the weathered outer facets. Neutral mid-grey granite, no tan or beige, mild painted grain."
+        }
+      ]
+    },
+    {
+      "key": "iron",
+      "node_prompts": [
+        {
+          "label": "broad squat dome",
+          "subject": "faceted grey granite boulder studded with rust orange-brown iron ore chunks",
+          "extra": "Broad squat dome, twice as wide as tall, knee high. Neutral mid-grey granite body, no tan or beige. Seven blocky oxidised rust orange-brown nuggets clustered on the crown with brighter ochre-rust top facets, two strays low on the flanks."
+        },
+        {
+          "label": "cleaved sheared wedge",
+          "subject": "cleaved faceted grey granite outcrop with a rust orange-brown iron ore seam",
+          "extra": "Angular wedge cleaved by one huge flat sheared face across the front, a few big planes stepping back behind it. Neutral mid-grey granite body, no tan or beige. Banded horizontal seam of blocky rust orange-brown ore across the shear face, brighter ochre-rust top facets. Low broad stance."
+        },
+        {
+          "label": "multi-lobe outcrop",
+          "subject": "multi-lobed faceted grey granite boulder studded with rust orange-brown iron ore lumps",
+          "extra": "Three fused lobes of unequal size forming one low knuckled mound, wider than tall. Neutral mid-grey granite body, no tan or beige. Small blocky rust orange-brown lumps scattered in the saddles and around every side, brighter ochre-rust top facets, two loose lumps at the foot."
+        },
+        {
+          "label": "craggy tilted upthrust",
+          "subject": "craggy tilted faceted grey granite upthrust studded with rust orange-brown iron ore nuggets",
+          "extra": "Low leaning deposit, knee high and no taller than it is wide, stepped blocky top and a flared foot. Neutral mid-grey granite body, no tan or beige. Diagonal seam of rust orange-brown nuggets up the leading ridge, brighter ochre-rust top facets, a small cluster at the base."
+        }
+      ],
+      "icon_prompts": [
+        {
+          "label": "single hero lump",
+          "subject": "chunky faceted chunk of raw iron ore",
+          "extra": "One fist-sized angular lump, neutral mid-grey granite body patched with desaturated rust orange-brown oxide on the upper facets. Chunky readable planes, two or three tonal steps per face, mild painted grain."
+        },
+        {
+          "label": "tight four-piece cluster",
+          "subject": "tight cluster of four chunky faceted raw iron ore chunks",
+          "extra": "Four angular chunks of varied size nested together, largest in front. Neutral mid-grey granite with dull desaturated rust orange-brown oxide patches. Chunky readable planes, two or three tonal steps per face."
+        },
+        {
+          "label": "low broad heap",
+          "subject": "small low heap of about twelve chunky faceted raw iron ore chunks",
+          "extra": "Loose low pile, a few pieces stacked on the crown and two spilled at the foot. Neutral mid-grey granite with dull desaturated rust orange-brown staining on the upward faces. Chunky readable planes."
+        },
+        {
+          "label": "cleaved open piece",
+          "subject": "cleaved chunk of raw iron ore showing a flat fresh interior face",
+          "extra": "One piece split open beside a small chip, the large flat fracture plane angled toward the viewer showing dense desaturated rust orange-brown ore against a neutral mid-grey granite rind. Chunky readable planes."
+        }
+      ]
+    },
+    {
+      "key": "coal",
+      "node_prompts": [
+        {
+          "label": "broad squat dome",
+          "subject": "faceted grey granite boulder studded with near-black coal chunks",
+          "extra": "Broad squat dome, twice as wide as tall, knee high. Neutral mid-grey granite body, no tan or beige. Seven blocky sooty near-black coal lumps clustered on the crown with lighter graphite-grey top facets so they never read as a hole, two strays low on the flanks."
+        },
+        {
+          "label": "cleaved sheared wedge",
+          "subject": "cleaved faceted grey granite outcrop with a near-black coal seam",
+          "extra": "Angular wedge cleaved by one huge flat sheared face across the front, a few big planes stepping back behind it. Neutral mid-grey granite body, no tan or beige. Banded horizontal seam of blocky sooty near-black lumps across the shear face, lighter graphite-grey top facets. Low broad stance."
+        },
+        {
+          "label": "multi-lobe outcrop",
+          "subject": "multi-lobed faceted grey granite boulder studded with near-black coal chunks",
+          "extra": "Three fused lobes of unequal size forming one low knuckled mound, wider than tall. Neutral mid-grey granite body, no tan or beige. Small blocky sooty near-black studs scattered in the saddles and around every side, lighter graphite-grey top facets, two loose lumps at the foot."
+        },
+        {
+          "label": "craggy tilted upthrust",
+          "subject": "craggy tilted faceted grey granite upthrust studded with near-black coal chunks",
+          "extra": "Low leaning deposit, knee high and no taller than it is wide, stepped blocky top and a flared foot. Neutral mid-grey granite body, no tan or beige. Diagonal seam of sooty near-black lumps up the leading ridge, lighter graphite-grey top facets, a small cluster at the base."
+        }
+      ],
+      "icon_prompts": [
+        {
+          "label": "single hero lump",
+          "subject": "chunky faceted chunk of black coal",
+          "extra": "One fist-sized angular lump, sooty near-black body with cool graphite-grey lit planes, muted and nearly colourless. Chunky readable planes, two or three tonal steps per face, mild painted grain."
+        },
+        {
+          "label": "tight four-piece cluster",
+          "subject": "tight cluster of four chunky faceted black coal chunks",
+          "extra": "Four sharp-edged lumps of varied size nested together, largest in front. Sooty near-black bodies with cool graphite-grey upper facets, muted and nearly colourless. Chunky readable planes, two or three tonal steps per face."
+        },
+        {
+          "label": "low broad heap",
+          "subject": "small low heap of about twelve chunky faceted black coal shards",
+          "extra": "Loose low pile, a few shards stacked on the crown and two spilled at the foot. Sooty near-black with cool graphite-grey highlights on the upward faces, muted. Chunky readable planes."
+        },
+        {
+          "label": "cleaved open piece",
+          "subject": "cleaved lump of black coal showing a flat fresh interior face",
+          "extra": "One blocky piece split open beside a small chip, the large flat cleavage plane angled toward the viewer in cool graphite-grey against rougher sooty near-black outer facets. Muted and nearly colourless."
+        }
+      ]
+    },
+    {
+      "key": "sulfur",
+      "node_prompts": [
+        {
+          "label": "broad squat dome",
+          "subject": "faceted grey granite boulder studded with chalky ochre-yellow sulfur chunks",
+          "extra": "Broad squat dome, twice as wide as tall, knee high. Neutral mid-grey granite body, no tan or beige. Seven blocky chalky ochre-yellow lumps clustered on the crown with pale straw top facets, two strays low on the flanks. Dusty mustard, never gold."
+        },
+        {
+          "label": "cleaved sheared wedge",
+          "subject": "cleaved faceted grey granite outcrop with a chalky ochre-yellow sulfur seam",
+          "extra": "Angular wedge cleaved by one huge flat sheared face across the front, a few big planes stepping back behind it. Neutral mid-grey granite body, no tan or beige. Banded horizontal seam of chalky ochre-yellow ore across the shear face, pale straw top facets. Low broad stance."
+        },
+        {
+          "label": "multi-lobe outcrop",
+          "subject": "multi-lobed faceted grey granite boulder studded with chalky ochre-yellow sulfur lumps",
+          "extra": "Three fused lobes of unequal size forming one low knuckled mound, wider than tall. Neutral mid-grey granite body, no tan or beige. Small blocky chalky ochre-yellow nuggets wedged in the saddles and around every side, pale straw top facets, two loose lumps at the foot."
+        },
+        {
+          "label": "craggy tilted upthrust",
+          "subject": "craggy tilted faceted grey granite upthrust studded with chalky ochre-yellow sulfur chunks",
+          "extra": "Low leaning deposit, knee high and no taller than it is wide, stepped blocky top and a flared foot. Neutral mid-grey granite body, no tan or beige. Diagonal seam of chalky ochre-yellow chunks up the leading ridge, pale straw top facets, a small cluster at the base."
+        }
+      ],
+      "icon_prompts": [
+        {
+          "label": "single hero lump",
+          "subject": "chunky faceted chunk of raw sulfur ore",
+          "extra": "One fist-sized angular lump, neutral mid-grey granite body crusted with dusty ochre-yellow sulfur over the upper facets and one pale straw top plane. Chunky readable planes, two or three tonal steps per face, closer to dusty mustard than gold."
+        },
+        {
+          "label": "tight four-piece cluster",
+          "subject": "tight cluster of four chunky faceted raw sulfur ore rocks",
+          "extra": "Four angular rocks of varied size nested together, largest in front. Neutral mid-grey granite with dusty ochre-yellow crusting on the upper faces. Chunky readable planes, two or three tonal steps per face, dusty mustard rather than gold."
+        },
+        {
+          "label": "low broad heap",
+          "subject": "small low heap of about twelve chunky faceted raw sulfur ore shards",
+          "extra": "Loose low pile, a few shards stacked on the crown and two spilled at the foot. Muted grey rock with dull ochre-yellow faces and pale straw top planes. Chunky readable planes, dusty mustard rather than gold."
+        },
+        {
+          "label": "cleaved open piece",
+          "subject": "cleaved chunk of raw sulfur ore showing a flat fresh interior face",
+          "extra": "One rock split open beside a small chip, the large flat fracture plane angled toward the viewer showing dusty ochre-yellow sulfur against a weathered neutral mid-grey granite rind. Chunky readable planes, dusty mustard rather than gold."
+        }
+      ]
+    },
+    {
+      "key": "meteorite",
+      "node_prompts": [
+        {
+          "label": "broad squat dome",
+          "subject": "faceted scorched-black meteorite slag boulder studded with pale silver-grey iron-nickel nuggets",
+          "extra": "Low squat dome, distinctly wider than tall and stouter than a stone boulder, knee high. Sooty charcoal-black burnt slag body. Dense crown cluster of eight small blocky pale silver-grey nuggets with brighter silver top facets, two strays on the flanks."
+        },
+        {
+          "label": "cleaved sheared wedge",
+          "subject": "cleaved faceted scorched-black meteorite slag block with a pale silver-grey iron-nickel seam",
+          "extra": "Squat angular wedge cleaved by one huge flat sheared face across the front, a few big planes stepping back behind it. Sooty charcoal-black burnt slag body. Banded horizontal seam of blocky pale silver-grey nuggets across the shear face, brighter silver top facets."
+        },
+        {
+          "label": "multi-lobe outcrop",
+          "subject": "multi-lobed faceted scorched-black meteorite slag clump studded with pale silver-grey iron-nickel lumps",
+          "extra": "Three fused lobes of unequal size forming one low knuckled clump, clearly wider than tall. Sooty charcoal-black burnt slag body. Small blocky pale silver-grey nuggets scattered in the saddles and around every side, brighter silver top facets, two loose lumps at the foot."
+        },
+        {
+          "label": "craggy tilted upthrust",
+          "subject": "craggy tilted faceted scorched-black meteorite slag mass crowned with pale silver-grey iron-nickel nuggets",
+          "extra": "Low leaning mass with an off-centre peak, knee high and no taller than it is wide, stepped blocky top and a flared foot. Sooty charcoal-black burnt slag body. Horizontal band of pale silver-grey nuggets across the upper third, brighter silver top facets."
+        }
+      ],
+      "icon_prompts": [
+        {
+          "label": "single hero lump",
+          "subject": "chunky faceted lump of dark meteorite alloy",
+          "extra": "One fist-sized angular chunk, sooty charcoal-black fusion crust with pale silver-grey raw metal on a few upper facets, nearly colourless. Chunky readable planes, two or three tonal steps per face, no cracks or veining."
+        },
+        {
+          "label": "tight four-piece cluster",
+          "subject": "tight cluster of four chunky faceted dark meteorite alloy chunks",
+          "extra": "Four angular pieces of varied size nested together, largest in front. Charcoal-black crusted faces with pale silver-grey metal on the top planes, nearly colourless. Chunky readable planes, no cracks or veining."
+        },
+        {
+          "label": "low broad heap",
+          "subject": "small low heap of about twelve chunky faceted dark meteorite alloy fragments",
+          "extra": "Loose low pile, a few pieces stacked on the crown and two spilled at the foot. Charcoal-black crust with pale silver-grey metal catching the upward faces, nearly colourless. Chunky readable planes, no cracks or veining."
+        },
+        {
+          "label": "cleaved open piece",
+          "subject": "cleaved piece of dark meteorite alloy showing a flat fresh cut face",
+          "extra": "One chunk split open beside a small fragment, the large flat cut plane angled toward the viewer showing plain pale silver-grey raw metal against sooty charcoal-black crust on every other facet. No cracks or veining."
+        }
+      ]
+    }
+  ],
+  "notes": "Two backbones now carry every generic instruction, each with one {subject} token. The node backbone front-loads the image-to-3D requirement (large flat polygon faces, crisp straight edges, and an explicit ban on smooth curves, rounded chamfers, bevelled fillets and photographic detail) plus the single-complete-uncropped-object framing. The icon backbone hard-locks the three axes the audit found broken: one camera (three-quarter, thirty degrees above horizon), one key direction (soft key from upper left with ambient fill, upper facets brighter), and one subject scale (wider than tall, filling most of the frame width, resting on an implied undrawn ground plane). Both ban cast shadow, vignette, ground, horizon and text, so sulfur's shadow-broken centering cannot recur.\n\nEvery extra was rewritten to say only what the backbone does not: silhouette, chunk placement, colour, surface character, proportion. All references to view angle, margin, backdrop, faceting-in-general, matte, gloss and shadow were deleted from the extras. Every extra is under 45 words, contains no em dashes, and the words icon and inventory icon appear nowhere inside a prompt.\n\nCross-type parallelism is now exact. All five types use the same four node labels (broad squat dome, cleaved sheared wedge, multi-lobe outcrop, craggy tilted upthrust) and the same four icon labels (single hero lump, tight four-piece cluster, low broad heap, cleaved open piece). Within each node theme the four grey types share a literally identical sentence skeleton, so only the mineral clause differs: dome = seven chunks crowned plus two flank strays, wedge = banded horizontal seam across the shear face, outcrop = studs in the saddles and around every side plus two foot lumps, upthrust = diagonal seam up the leading ridge plus a base cluster. That also preserves the source rationales' intent (crown cluster, seam, 360 degree scatter, vertical read) while making the picker grid compare like with like.\n\nShared-grey-rock-body rule enforced verbatim: stone, iron, coal and sulfur all read \"Bright warm-grey rock body\" in the same sentence position, and identity lives only in the chunk clause with its chunk plus brighter-top-facet pair, matching the COLOR_0 split. Coal's chunks always carry an explicit lighter graphite-grey top facet so near-black lumps do not collapse into a silhouette hole once the three cel bands quantise. Sulfur is repeatedly pinned to dusty mustard rather than gold to kill the measured 0.66 to 0.885 saturation blowout. Meteorite keeps its brief-mandated exception (sooty charcoal-black burnt slag body, pale silver-grey iron-nickel nuggets) and is described as squatter and stouter than the grey family in every variant, including the upthrust, which is worded as low and stout rather than tall.\n\nIcon family: proportion, count grammar and surface language are now uniform. Variants 2 to 4 are the pile grammar that coal and stone already use for raw bulk materials, variant 1 is the deliberate single-object counter-option, and every extra specifies chunky readable planes with two or three tonal steps per face so the smooth iron_ore and sulfur_ore treatment cannot diverge from the crunchy stone and coal treatment. Meteorite icons explicitly say no cracks or veining, removing the photographic cracked-marble and blown-white failure.\n\nMagic and glow language is fully absent: no emissive, no crystals, no shards of light, no runes. Both backbones state nothing glowing, and the node backbone additionally states no crystals."
+}

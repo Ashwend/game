@@ -19,7 +19,7 @@ Four pieces, one glb per id at assets/items/<id>/model.glb:
                   gaps. prim0 = iron cage + feet (ember_charge_cage),
                   prim1 = crystal mass (ember_charge_crystal).
 
-EMBER GLOW CONVENTION (copied from art/ore/build_ore.py's ember type): the crystal
+EMBER GLOW CONVENTION (originally from the retired build_ore.py ember type): the crystal
 prim's COLOR_0 carries an ember-orange colour with VERTEX ALPHA 1.0 as a GLOW MASK;
 the engine's ToonMaterial emissive path gates on alpha >= 0.5, so only the crystal
 facets emit. The cage prim (and every non-ember piece) uses alpha 0.0, so the glow
@@ -138,7 +138,7 @@ class Builder:
     index (0 / 1) so the export splits into two primitives. Each piece is recalc'd
     on its own faces only, then joined. Carries a per-piece GLOW ALPHA written into
     COLOR_0's alpha channel (1.0 = emissive crystal glow mask, 0.0 = everything
-    else), matching art/ore/build_ore.py's ember convention."""
+    else), the ember convention inherited from the retired build_ore.py."""
 
     def __init__(self):
         self.bm = bmesh.new()
@@ -250,7 +250,7 @@ class Builder:
     def add_crystal(self, base_center, height, base_r, lean_deg, lean_az, seed,
                     color_of, mat_index, glow=1.0, sides=5):
         """A tall faceted gem spike (pentagonal base -> gem-cut shoulder -> apex),
-        leaning away from a cluster axis. Copied from build_ore.py's add_crystal so
+        leaning away from a cluster axis. Inherited from the retired build_ore.py so
         the ember charge's inner mass reads the same as the meteorite node. glow
         defaults to 1.0 (the emissive glow mask)."""
         bx, by, bz = base_center

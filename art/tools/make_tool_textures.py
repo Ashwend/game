@@ -71,7 +71,7 @@ VARIANTS = {
         ("c", "leather strap wrap, warm mid-brown hide binding, stylized", 73),
     ],
     # Smooth/toony retake of the heads: big broad rounded forms + soft wide seams
-    # (like the ore node `rock.png`), NOT lots of small cobbles. Matches the
+    # (the ore-node detail-map convention), NOT lots of small cobbles. Matches the
     # smooth ground-stone look the art direction wants.
     "stone2": [
         ("a", "large smooth grey stone boulder surface, a few broad rounded "
@@ -135,7 +135,7 @@ def to_detail(img, desat=0.85, target_mean=210.0):
     colour (wood brown / stone grey / iron steel) and the texture must only carry
     light value grain. Pull most of the saturation out (toward luma) and rescale
     the mean luminance to a light neutral so it never darkens or hue-shifts the
-    COLOR_0. Mirrors the ore `rock.png` (neutral grey, mean ~0.8) approach."""
+    COLOR_0. Neutral grey, mean ~0.8, the shared detail-map convention."""
     f = img.astype(np.float32)
     luma = (f * np.array([0.114, 0.587, 0.299])).sum(2, keepdims=True)  # BGR weights
     f = f * (1.0 - desat) + luma * desat

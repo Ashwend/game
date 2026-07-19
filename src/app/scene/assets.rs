@@ -175,11 +175,18 @@ pub(crate) struct ResourceVisualAssets {
     pub(crate) surface_stone_mesh: Handle<Mesh>,
     pub(crate) branch_pile_mesh: Handle<Mesh>,
     pub(crate) hay_grass_mesh: Handle<Mesh>,
-    /// One shared cel-shaded material for all five ore/vein nodes (meteorite
-    /// included): the per-mineral colour rides on the glb COLOR_0, so the rock
-    /// texture + toon ramp are shared (see [`ToonMaterial`] and
-    /// `art/ore/build_ore.py`).
-    pub(crate) ore_toon_material: Handle<ToonMaterial>,
+    /// Per-type cel-shaded ore materials. Each ore glb carries a baked albedo
+    /// (`assets/textures/ore/<type>.png`, rebaked from the image-to-3D
+    /// output's texture onto the low-poly UVs by
+    /// `art/ore/rework/build_nodes.py`), so the mineral identity lives in the
+    /// texture; the glb COLOR_0 is white. Same toon ramp/params across all
+    /// five; the three depletion stages of a type share its texture because
+    /// the stage meshes are scaled copies with identical UVs.
+    pub(crate) stone_vein_material: Handle<ToonMaterial>,
+    pub(crate) iron_node_material: Handle<ToonMaterial>,
+    pub(crate) coal_node_material: Handle<ToonMaterial>,
+    pub(crate) sulfur_node_material: Handle<ToonMaterial>,
+    pub(crate) meteorite_node_material: Handle<ToonMaterial>,
     pub(crate) vertex_material: Handle<StandardMaterial>,
     /// Cel-shaded ([`ToonMaterial`]) alpha-masked cards for the harvestable hay
     /// tuft: the shared grass-tuft texture, lit by the same PBR-then-posterise path
@@ -775,15 +782,16 @@ fn insert_resource_node_visuals(
     let birch_bark_tex = load_tree_texture("bark_birch");
     let birch_foliage_tex = load_tree_texture("foliage_birch");
 
-    // Shared ore/vein rock-surface texture: a neutral grey cracked-stone detail
-    // map (mean ~0.8) box-projected across every ore boulder + its chunks. Base
-    // white * COLOR_0 (per-mineral) * this texture, the same trick as the bark.
-    // Decoded sRGB with a CPU mip chain + repeat/aniso sampler. Source:
-    // `art/ore/rock_master.png` -> `assets/textures/ore/rock.png`.
-    let ore_rock_tex = {
-        let rel = "textures/ore/rock.png";
+    // Per-type ore albedo: the image-to-3D bake rebaked onto the low-poly
+    // UVs (`art/ore/rework/build_nodes.py`), one texture per ore type shared
+    // by that type's three depletion stages. The mineral identity (grey rock
+    // vs rust/coal/sulfur chunks, meteorite slag) lives entirely in this
+    // texture; the glb COLOR_0 is white. Decoded sRGB with a CPU mip chain +
+    // aniso sampler, same as the tree textures.
+    let mut load_ore_albedo = |ty: &str| -> Handle<Image> {
+        let rel = format!("textures/ore/{ty}.png");
         let bytes =
-            embedded_bytes(rel).unwrap_or_else(|| panic!("embedded ore texture missing: {rel}"));
+            embedded_bytes(&rel).unwrap_or_else(|| panic!("embedded ore texture missing: {rel}"));
         let mut image = Image::from_buffer(
             bytes,
             ImageType::Extension("png"),
@@ -796,6 +804,11 @@ fn insert_resource_node_visuals(
         build_mip_chain(&mut image);
         images.add(image)
     };
+    let stone_albedo = load_ore_albedo("stone");
+    let iron_albedo = load_ore_albedo("iron");
+    let coal_albedo = load_ore_albedo("coal");
+    let sulfur_albedo = load_ore_albedo("sulfur");
+    let meteorite_albedo = load_ore_albedo("meteorite");
 
     // Each live tree is an authored Blender glb with two meshes: mesh 0 = the
     // bark trunk, mesh 1 = the canopy. Geometry + UVs + COLOR_0 come from the
@@ -815,10 +828,10 @@ fn insert_resource_node_visuals(
         asset_server
             .load(GltfAssetLabel::Primitive { mesh, primitive: 0 }.from_asset(glb.to_owned()))
     };
-    // Ore/vein nodes: one authored glb per (type, depletion stage), each a single
-    // mesh + single material slot with the per-mineral look on COLOR_0 (grey rock
-    // body vs bright mineral chunks). Stage index = mesh 0/1/2 glb. See
-    // `art/ore/build_ore.py`.
+    // Ore/vein nodes: one generated glb per (type, depletion stage), lean
+    // meshes (UVs + white COLOR_0) whose per-mineral look lives in the baked
+    // per-type albedo on the materials above. Stage index = mesh 0/1/2 glb.
+    // See `art/ore/build_nodes.py`.
     let ore_stage_meshes = |ty: &str| -> [Handle<Mesh>; ORE_NODE_STAGE_COUNT] {
         std::array::from_fn(|stage| {
             asset_server.load(
@@ -829,6 +842,15 @@ fn insert_resource_node_visuals(
                 .from_asset(embedded_asset_path(&format!("ore/{ty}/stage_{stage}.glb"))),
             )
         })
+    };
+    let ore_material = |albedo: &Handle<Image>| ToonMaterial {
+        detail: albedo.clone(),
+        params: Vec4::new(3.0, 0.0, 0.8, 2.2),
+        tex_scale: 1.0, // ore glbs carry their own UVs; triplanar scale unused
+        fade: 1.0,
+        dev_flags: 0,
+        emissive_tex: toon_no_glow_tex.clone(),
+        emissive: Vec4::ZERO,
     };
     commands.insert_resource(ResourceVisualAssets {
         coal_node_meshes: ore_stage_meshes("coal"),
@@ -863,20 +885,15 @@ fn insert_resource_node_visuals(
         // wider than a detail-grass card (~0.2-0.8 m) so the harvestable plant is easy
         // to spot for pickup in any biome.
         hay_grass_mesh: meshes.add(build_hay_tuft_mesh(1.0, 0.42, 3)),
-        // One shared cel-shaded material for all four ores. The hand-painted rock
-        // texture is shared; the per-mineral colour is the glb COLOR_0. params =
-        // (cel band count, alpha cutoff, ink-edge strength, ink-edge width exp).
-        // Harder cartoon: 3 bands + a strong dark silhouette edge. Alpha cutoff 0
+        // Per-type cel-shaded ore materials over the baked albedos. params =
+        // (cel band count, alpha cutoff, ink-edge strength, ink-edge width
+        // exp): 3 bands + a strong dark silhouette edge, alpha cutoff 0
         // keeps the solid boulder opaque (only the grass-card tufts mask).
-        ore_toon_material: toon_materials.add(ToonMaterial {
-            detail: ore_rock_tex.clone(),
-            params: Vec4::new(3.0, 0.0, 0.8, 2.2),
-            tex_scale: 1.0, // ore glbs carry their own UVs; triplanar scale unused
-            fade: 1.0,
-            dev_flags: 0,
-            emissive_tex: toon_no_glow_tex.clone(),
-            emissive: Vec4::ZERO,
-        }),
+        stone_vein_material: toon_materials.add(ore_material(&stone_albedo)),
+        iron_node_material: toon_materials.add(ore_material(&iron_albedo)),
+        coal_node_material: toon_materials.add(ore_material(&coal_albedo)),
+        sulfur_node_material: toon_materials.add(ore_material(&sulfur_albedo)),
+        meteorite_node_material: toon_materials.add(ore_material(&meteorite_albedo)),
         vertex_material: materials.add(StandardMaterial {
             base_color: VERTEX_MATERIAL_COLOR,
             perceptual_roughness: 0.98,

@@ -6,7 +6,8 @@ sources:
   - "src/app/scene/assets.rs - setup_scene asset wiring (the prim_mesh closure in insert_deployable_visuals, ItemVisualAssets, DeployableVisualAssets)"
   - "src/app/systems/items/held.rs - held_item_layers"
   - "src/app/scene/toon.rs - ToonMaterial"
-  - "art/ore/build_ore.py - parametric ore glbs"
+  - "art/ore/ - image-to-3D ore family (prompts, candidates, build_nodes.py)"
+  - "art/pipeline/ - family-agnostic tools (render_turntable.py, retopo_experiment.py)"
   - "art/deployables/build_deployables.py - deployable UV bake + workbench rebuild"
   - "scripts/icon_finalize.py - master->in-game icon.png downscale"
 related:
@@ -79,11 +80,11 @@ bpy.ops.export_scene.gltf(
 
 ## Parametric families
 
-Each script mirrors a Rust constant as its parity point and exports COLOR_0 glbs. `build_ore.py` and `build_tree.py` export with `export_materials='NONE'`; `build_pieces.py`, `build_door.py`, and `build_deployables.py` export with `export_materials='EXPORT'`. Either way the in-game material is built or selected in Rust by `setup_scene` in `src/app/scene/assets.rs`, so the export flag value differs but the embedded material is ignored or replaced at load time.
+Each script mirrors a Rust constant as its parity point and exports COLOR_0 glbs. `build_tree.py` exports with `export_materials='NONE'`; `build_pieces.py`, `build_door.py`, and `build_deployables.py` export with `export_materials='EXPORT'`. Either way the in-game material is built or selected in Rust by `setup_scene` in `src/app/scene/assets.rs`, so the export flag value differs but the embedded material is ignored or replaced at load time.
 
 | Script | assets/ output | Rust load site | Material kind | Mirrored constant |
 |---|---|---|---|---|
-| `art/ore/build_ore.py` | `assets/ore/<type>/stage_{0,1,2}.glb` (4 types x 3 stages) | `ResourceVisualAssets` (ore stage meshes), `ore_toon_material` | `ToonMaterial` (one shared, COLOR_0 = per-mineral) | `src/app/systems/items/resource_nodes/stages.rs` (3 stages) |
+| `art/ore/build_nodes.py` (image-to-3D family, see next section) | `assets/ore/<type>/stage_{0,1,2}.glb` (5 types x 3 stages) + `assets/textures/ore/<type>.png` | `ResourceVisualAssets` (ore stage meshes), five `<type>_node_material`s | `ToonMaterial` per type (baked albedo, COLOR_0 = white) | `src/app/systems/items/resource_nodes/stages.rs` (3 stages; ratios also in `STAGE_RATIOS`) |
 | `art/trees/build_tree.py` | `assets/trees/<species>_<size>/model.glb` (mesh0 trunk, mesh1 foliage) | bark/foliage/dead `ToonMaterial`s | `ToonMaterial` (bark, foliage, dead-bark variants) | `src/app/scene/mesh/trees.rs` geometry constants + `tree_mesh_height` (`src/app/scene/components.rs`; pine 4.5/6.6/9.1, birch 3.6/5.3/7.15) |
 | `art/building/build_pieces.py` | `assets/building/<piece>_<tier>.glb` (6 pieces x 3 tiers) | `building_meshes` + `building_materials` | textured `StandardMaterial` per tier | `crate::building::piece_local_boxes` (`src/building/collision.rs` - `piece_local_boxes`) |
 | `art/building/build_door.py` | `assets/items/{hewn_log_door,iron_door}/model.glb` | `hewn_door_*` / `iron_door_*` | textured `StandardMaterial` (iron door: roughness 0.55, metallic 0.8) | door panel geometry |
@@ -92,7 +93,50 @@ Each script mirrors a Rust constant as its parity point and exports COLOR_0 glbs
 
 The sleeping bag glb (`assets/items/sleeping_bag/model.glb`) ships through the same `prim_mesh` path and uses `toon_fabric_material`.
 
-All embedded PNG textures (tree bark/foliage, ore rock, deployable wood/stone/fabric, building/door tiers) are decoded synchronously and given a CPU mip chain via `build_mip_chain` (`src/app/scene/terrain.rs`) with a repeat + anisotropic sampler, because Bevy 0.18 builds no mips for loaded PNGs and the grain would otherwise alias into sparkle at range.
+## Image-to-3D asset families (`art/ore/` is the template)
+
+The ore nodes were re-authored 2026-07-19 through the RunPod generation lane
+instead of a parametric builder. The process is deliberately reusable: to
+rework another asset family, copy the `art/ore/` directory shape and swap the
+prompts. Per-family directory contents:
+
+- `prompts.json` - the prompt set (one shared backbone, per-variant labels
+  kept identical across types so the picker compares like with like).
+- `gen_candidates.py` / `patch_prompts.py` - generate reference candidates
+  through the 2D lane (rembg RGBA cutouts; the mesh worker REQUIRES real
+  alpha) and write `pick.html` for side-by-side picking. When a colour drifts,
+  patch the SUBJECT clause first: a correction in the tail never beats the
+  leading noun phrase.
+- `selection.json` - the pick record (which candidate variant per type).
+- `gen_meshes.py` - submits picked references to the RunPod TRELLIS.2 worker
+  (`~/Desktop/dev/mesh-worker`, needs its `.venv` for the S3 download),
+  renders turntables, writes `review.html`. Every completed job also leaves
+  its glb on the network volume under `outputs/<job_id>.glb`, so a dead
+  client loses nothing.
+- `build_nodes.py` - raw glb to game format: voxel remesh 0.015 m (makes the
+  non-manifold TRELLIS output collapsible at all) -> planar dissolve 12 deg ->
+  collapse to the tri budget -> Smart UV -> Cycles selected-to-active
+  DIFFUSE/COLOR bake of the AI texture onto the low-poly (BEFORE the world-fit
+  transform; the bake matches surfaces in world space) -> per-type albedo PNG +
+  lean stage glbs (UVs + white COLOR_0, no material). Per-family knobs at the
+  top: world fit (up-axis fix + footprint), stage ratios, albedo curves (a
+  near-black reference needs a gamma lift or it renders as a silhouette hole).
+- `candidates/` - COMMITTED: only the picked references survive; unpicked
+  variants are pruned at retirement time. This is the authoring record.
+- `meshes/` - GITIGNORED: raw image-to-3D glbs (~50 MB each) and built
+  outputs, all regenerable from the committed inputs.
+
+Family-agnostic tools live in `art/pipeline/`: `render_turntable.py` (glb ->
+N-angle strip + tri stats; pass `color` as the 5th arg when judging albedo,
+the default hot-key + AgX rig desaturates colours) and `retopo_experiment.py`
+(dissolve-angle sweep diagnostic).
+
+Retirement is part of the rework: when the new family lands in `assets/`, the
+old build script, masters, concepts, and any now-orphaned textures are deleted
+in the same commit (see the rework hygiene rule in `ART-PIPELINE-REWORK.md`,
+moving into the docs map when that file dissolves).
+
+All embedded PNG textures (tree bark/foliage, per-type ore albedos, deployable wood/stone/fabric, building/door tiers) are decoded synchronously and given a CPU mip chain via `build_mip_chain` (`src/app/scene/terrain.rs`) with a repeat + anisotropic sampler, because Bevy 0.18 builds no mips for loaded PNGs and the grain would otherwise alias into sparkle at range.
 
 The build-script docstrings carry the full upstream chain (ComfyUI Flux concept -> OpenCV silhouette measurement -> Blender). Some of those docstrings predate the cel migration and still say "Rust builds the StandardMaterials"; the live `assets.rs` uses `ToonMaterial` for ore, trees, and deployables. Trust `assets.rs`, not the script header, for material kind.
 

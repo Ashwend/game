@@ -263,15 +263,29 @@ pub(crate) fn resource_node_visual(
     model: ResourceNodeModel,
     id: ResourceNodeId,
 ) -> (Handle<Mesh>, ResourceNodeMaterial) {
-    let toon = || ResourceNodeMaterial::Toon(assets.ore_toon_material.clone());
+    let toon = |material: &Handle<ToonMaterial>| ResourceNodeMaterial::Toon(material.clone());
     match model {
-        ResourceNodeModel::CoalOre => (assets.coal_node_meshes[0].clone(), toon()),
-        ResourceNodeModel::IronOre => (assets.iron_node_meshes[0].clone(), toon()),
-        ResourceNodeModel::SulfurOre => (assets.sulfur_node_meshes[0].clone(), toon()),
-        ResourceNodeModel::StoneVein => (assets.stone_vein_meshes[0].clone(), toon()),
-        // Meteorite: the shared ore cel material like every other ore; its
-        // identity is the distinct slag-mound + alloy-nugget glb silhouette.
-        ResourceNodeModel::Meteorite => (assets.meteorite_node_meshes[0].clone(), toon()),
+        ResourceNodeModel::CoalOre => (
+            assets.coal_node_meshes[0].clone(),
+            toon(&assets.coal_node_material),
+        ),
+        ResourceNodeModel::IronOre => (
+            assets.iron_node_meshes[0].clone(),
+            toon(&assets.iron_node_material),
+        ),
+        ResourceNodeModel::SulfurOre => (
+            assets.sulfur_node_meshes[0].clone(),
+            toon(&assets.sulfur_node_material),
+        ),
+        ResourceNodeModel::StoneVein => (
+            assets.stone_vein_meshes[0].clone(),
+            toon(&assets.stone_vein_material),
+        ),
+        // Meteorite: same toon ramp, its own baked slag/nugget albedo.
+        ResourceNodeModel::Meteorite => (
+            assets.meteorite_node_meshes[0].clone(),
+            toon(&assets.meteorite_node_material),
+        ),
         // Trees: the cel-shaded bark trunk mesh + shared bark `ToonMaterial`. The
         // solid faceted canopy is a separate child (see `tree_foliage_visual` +
         // the spawn path), also cel-shaded.
