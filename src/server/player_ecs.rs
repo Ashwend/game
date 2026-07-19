@@ -295,7 +295,7 @@ impl PlayerEquipmentVisual {
 /// last-seen value (NOT `Ref::is_changed`, which lies for Lightyear-touched
 /// components) and plays `model`'s swing curve from elapsed 0 at the moment of
 /// observation. `model` is the swing archetype (a weapon its own
-/// Club/Spear/Sword/Mace, a gather tool its Hatchet/Pickaxe), so a peer animates
+/// Club/Spear/Sword, a gather tool its Hatchet/Pickaxe), so a peer animates
 /// the right weapon directly off the wire rather than inferring it from the held
 /// mesh. No tick is carried: movement is client-authoritative, so there is no
 /// trusted shared clock to compare a `start_tick` against (the pose reconciler

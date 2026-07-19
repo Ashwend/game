@@ -69,7 +69,7 @@ In `src/combat.rs`, never serialized to the wire:
 - `AttackProfile { damage, reach_m, cooldown_ticks, knockback_speed, armor_pierce_pct, kind }`: the unified profile resolved at the top of the melee chain from the item's `WeaponProfile` (weapon first) or `ToolProfile` (`resolve_attack_profile` / `attack_profile_from_tool`). Reach and pierce are fields, not special cases, so a new weapon is a registry row, not a new code branch.
 - `DamageInstance { raw: u32, kind, knockback_speed: f32, source }`. Built on the server, lives on the stack while the damage path runs.
 - `DamageSource`. **Still only the `Player { client_id, model }` variant.** Projectiles and explosions do not add a `DamageSource` variant; they feed the shared post-hit tail through a `PlayerDamageHit` that carries the attacker id and `DamageKind` directly. There is no `Environment` variant (the meteor attributes damage the same way).
-- `effective_armor_after_pierce(armor, armor_pierce_pct) -> u8`: applies a weapon's pierce to the target's per-kind armor before mitigation (`armor * (100 - pierce) / 100`). The iron mace's 50% pierce is what makes it the anti-armor answer.
+- `effective_armor_after_pierce(armor, armor_pierce_pct) -> u8`: applies a weapon's pierce to the target's per-kind armor before mitigation (`armor * (100 - pierce) / 100`). No shipped weapon pierces today (the iron mace, the former anti-armor answer, was cut 2026-07-19); the math stays for future gear.
 - `damage_after_armor(raw, armor) -> u32`: armor clamped to `<= 100`, then `raw * (100 - armor) / 100` with saturating math (clamped armor can never heal).
 
 Armor is now populated. `src/items/armor.rs - ArmorProtection { melee, projectile, blast }` is the per-kind mitigation, recomputed by `equipped_protection(&equipment_slots)` on every equipment change and cached on `ServerClient.protection` (`src/server.rs`). The damage tail reads `protection.for_kind(profile.kind)`, applies pierce, then `damage_after_armor`. The set totals are capped at `ARMOR_TOTAL_CAP_PCT = 60` per kind, so a player always takes at least 40% of every hit. The replicated `PlayerArmor(u8)` (`src/server/player_ecs.rs`) survives as the HUD readout, fed the melee column; the per-kind protection itself never ships (it is re-derived server-side from the worn pieces).
@@ -88,16 +88,15 @@ Tools remain viable desperation weapons: their PvP damage scales per tier, and k
 | Iron pickaxe | `IRON_PICKAXE_PVP_DAMAGE` = 22 | 4.0 m/s | 1.60 s |
 | Hands / Hammer | none (`resolve_attack_profile` returns `None`) | n/a | hands 0.42 s |
 
-The dedicated melee weapons (a `WeaponProfile`, read before the tool) widen the light-to-heavy axis. Damage/cooldown/pierce constants are the `WOODEN_CLUB_*`, `STONE_SPEAR_*`, `IRON_SWORD_*`, `IRON_MACE_*` families in `game_balance.rs`:
+The dedicated melee weapons (a `WeaponProfile`, read before the tool) widen the light-to-heavy axis. Damage/cooldown/pierce constants are the `WOODEN_CLUB_*`, `STONE_SPEAR_*`, `IRON_SWORD_*` families in `game_balance.rs`:
 
 | Weapon | PvP damage | Cooldown ticks | Reach | Knockback | Notable |
 |---|---:|---:|---:|---:|---|
 | Wooden club | 12 | 7 | 3.5 m | 2.4 m/s | Fast, cheap, hand-crafted starter. |
 | Stone spear | 16 | 11 | 4.5 m | 1.2 m/s | Reaches past the standard 3.5 m; slow, controls space. |
 | Iron sword | 20 | 9 | 3.5 m | 3.0 m/s | The medium-speed workhorse (bench t1). |
-| Iron mace | 26 | 14 | 3.5 m | 5.0 m/s | Slowest, biggest knockback, `IRON_MACE_ARMOR_PIERCE_PCT = 50` (the anti-armor answer). |
 
-Weapons do hands-tier damage to structures (they are not raid tools) and gather nothing. Cooldown ordering is club < sword < spear < mace, so the mace's payoff is paid for in commitment. Iron hits ~1.5x stone among the tools. Knockback also gets a small vertical pop: `COMBAT_KNOCKBACK_VERTICAL_FRACTION` = 0.25 of horizontal magnitude, so the target slides instead of grinding into the floor. The co-located edge case (zero horizontal separation) shoves straight up.
+Weapons do hands-tier damage to structures (they are not raid tools) and gather nothing. Cooldown ordering is club < sword < spear. Iron hits ~1.5x stone among the tools. Knockback also gets a small vertical pop: `COMBAT_KNOCKBACK_VERTICAL_FRACTION` = 0.25 of horizontal magnitude, so the target slides instead of grinding into the floor. The co-located edge case (zero horizontal separation) shoves straight up.
 
 All combat tuning lives in `src/game_balance.rs` under `COMBAT_*` / `RESPAWN_*` / `*_PVP_DAMAGE` / `*_KNOCKBACK_SPEED` / the weapon and armor and explosive families, re-imported with aliases by the combat modules. Never inline a combat magic number (see CLAUDE.md: balance-in-game_balance.rs).
 

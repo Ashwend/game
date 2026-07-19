@@ -105,6 +105,7 @@ fn blade_points(held_mesh: HeldMesh, phase: f32) -> (Vec3, Vec3) {
     let transform = held_item_local_transform(
         ItemModel::Sword,
         held_mesh,
+        None,
         phase,
         1.0,
         RangedPoseInputs::default(),

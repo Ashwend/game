@@ -33,9 +33,6 @@ pub enum ItemModel {
     Spear,
     /// Iron sword: a wide horizontal arc.
     Sword,
-    /// Iron mace: a big, slow overhead with a pronounced wind-up and
-    /// follow-through.
-    Mace,
     /// Wooden bow: a hold-to-draw ranged pose (no swing arc). Drives the animated
     /// draw viewmodel: the limbs flex and the string pulls into a V off the draw
     /// fraction, with a forward-flick loose (see `held::held_piece_local_transform`).
@@ -74,7 +71,6 @@ impl ItemModel {
         ItemModel::Club,
         ItemModel::Spear,
         ItemModel::Sword,
-        ItemModel::Mace,
         ItemModel::Bow,
         ItemModel::Crossbow,
         ItemModel::ThrownBomb,
@@ -112,8 +108,6 @@ pub enum HeldMesh {
     StoneSpear,
     /// Iron sword: a wood-wrapped grip (Wood) and a forged iron blade (Iron).
     IronSword,
-    /// Iron mace: a wooden haft (Wood) under a forged iron head (Iron).
-    IronMace,
     /// Wooden bow: an ANIMATABLE five-primitive glb (grip + two limbs on the Wood
     /// family, two string legs on the Cord family). The limbs flex and the string
     /// pulls into a V as the draw ramps (see `held::held_piece_local_transform`).
@@ -158,7 +152,6 @@ impl HeldMesh {
         HeldMesh::WoodenClub,
         HeldMesh::StoneSpear,
         HeldMesh::IronSword,
-        HeldMesh::IronMace,
         HeldMesh::WoodenBow,
         HeldMesh::Crossbow,
         HeldMesh::Arrow,
@@ -183,61 +176,54 @@ impl HeldMesh {
         // its ties reuse Wood. Per-item colour is baked into each glb's COLOR_0,
         // so the family is only which shared material a layer binds.
         match self {
-            // The bag silhouette covers raw materials and deployables-in-hand;
-            // its mesh is the one procedural cuboid, not an authored glb.
-            HeldMesh::Bag => HeldMeshVisual::single(HeldLayerSpec {
-                mesh: HeldLayerMeshSource::ProceduralBag,
-                material: HeldMeshMaterial::BagStandard,
-                slot: HeldPieceSlot::Static,
-            }),
-            HeldMesh::StoneHatchet => HeldMeshVisual::tool(
+            // The bag silhouette covers deployables-in-hand: the generic
+            // carried bundle (a tied burlap sack, image-to-3D like the tools
+            // but WITHOUT a grip socket; it keeps the legacy silhouette
+            // placement).
+            HeldMesh::Bag => {
+                HeldMeshVisual::baked_tool("items/generic_held/model.glb", "generic_held")
+            }
+            // The five gathering tools are image-to-3D rebuilds (art/held/):
+            // ONE primitive with real UVs and a per-item baked albedo (the
+            // `Baked` family), plus a `socket_grip` node the engine reads for
+            // hand placement instead of per-item Rust constants.
+            HeldMesh::StoneHatchet => HeldMeshVisual::baked_tool(
                 "items/wood_stone_hatchet/model.glb",
-                HeldMeshMaterial::Stone,
+                "wood_stone_hatchet",
             ),
-            HeldMesh::StonePickaxe => HeldMeshVisual::tool(
+            HeldMesh::StonePickaxe => HeldMeshVisual::baked_tool(
                 "items/wood_stone_pickaxe/model.glb",
-                HeldMeshMaterial::Stone,
+                "wood_stone_pickaxe",
             ),
-            // The sickle is the same haft+head split as the iron tools:
-            // wood haft, forged iron crescent (see art/tools/build_sickle.py).
             HeldMesh::Sickle => {
-                HeldMeshVisual::tool("items/iron_sickle/model.glb", HeldMeshMaterial::Iron)
+                HeldMeshVisual::baked_tool("items/iron_sickle/model.glb", "iron_sickle")
             }
             HeldMesh::IronHatchet => {
-                HeldMeshVisual::tool("items/iron_hatchet/model.glb", HeldMeshMaterial::Iron)
+                HeldMeshVisual::baked_tool("items/iron_hatchet/model.glb", "iron_hatchet")
             }
             HeldMesh::IronPickaxe => {
-                HeldMeshVisual::tool("items/iron_pickaxe/model.glb", HeldMeshMaterial::Iron)
+                HeldMeshVisual::baked_tool("items/iron_pickaxe/model.glb", "iron_pickaxe")
             }
-            // The hammer is a wooden mallet glb: wood body (handle + head) plus
-            // its iron band hoops, so its head layer rides the Iron family.
-            HeldMesh::Hammer => {
-                HeldMeshVisual::tool("items/hammer/model.glb", HeldMeshMaterial::Iron)
+            // The hammer, the building-plan scroll, the four melee weapons, the
+            // arrow, and the three explosives are batch-2 image-to-3D rebuilds:
+            // one primitive, real UVs, per-item baked albedo. Unlike the five
+            // gathering tools they carry NO grip socket; their heavily tuned
+            // per-item carry poses (mallet pull-in, upright sword guard, couched
+            // spear, silhouette bundles) live in `held.rs` keyed on the same
+            // local frames the old authored glbs used, so each rebuild is
+            // fitted into its predecessor's frame at build time (art/held/).
+            HeldMesh::Hammer => HeldMeshVisual::baked_tool("items/hammer/model.glb", "hammer"),
+            HeldMesh::BuildingPlan => {
+                HeldMeshVisual::baked_tool("items/building_plan/model.glb", "building_plan")
             }
-            // The building plan is a rolled scroll glb: parchment paper (roll +
-            // flap) plus its twine ties (Wood family, a brown COLOR_0).
-            HeldMesh::BuildingPlan => HeldMeshVisual::two(
-                "items/building_plan/model.glb",
-                HeldMeshMaterial::Parchment,
-                HeldMeshMaterial::Wood,
-            ),
-            // The four melee weapons are all two-primitive haft+head glbs
-            // (primitive 0 the wooden grip, primitive 1 the worked head), so
-            // they reuse the same `tool()` layout as the hatchets; only the head
-            // family differs. Per-weapon colour is baked into each glb's COLOR_0.
-            // The club's head is wood too, so both its layers ride the Wood
-            // family.
             HeldMesh::WoodenClub => {
-                HeldMeshVisual::tool("items/wooden_club/model.glb", HeldMeshMaterial::Wood)
+                HeldMeshVisual::baked_tool("items/wooden_club/model.glb", "wooden_club")
             }
             HeldMesh::StoneSpear => {
-                HeldMeshVisual::tool("items/stone_spear/model.glb", HeldMeshMaterial::Stone)
+                HeldMeshVisual::baked_tool("items/stone_spear/model.glb", "stone_spear")
             }
             HeldMesh::IronSword => {
-                HeldMeshVisual::tool("items/iron_sword/model.glb", HeldMeshMaterial::Iron)
-            }
-            HeldMesh::IronMace => {
-                HeldMeshVisual::tool("items/iron_mace/model.glb", HeldMeshMaterial::Iron)
+                HeldMeshVisual::baked_tool("items/iron_sword/model.glb", "iron_sword")
             }
             // The bow and crossbow are ANIMATABLE multi-primitive glbs (their
             // limbs / string bend off the draw): the bow is five pieces (grip, two
@@ -256,30 +242,20 @@ impl HeldMesh {
             // fittings, and an animatable string. The string slot slides forward on
             // release / back on the reload crank off the cock value.
             HeldMesh::Crossbow => HeldMeshVisual::crossbow("items/crossbow/model.glb"),
-            HeldMesh::Arrow => {
-                HeldMeshVisual::tool("items/arrow/model.glb", HeldMeshMaterial::Stone)
+            HeldMesh::Arrow => HeldMeshVisual::baked_tool("items/arrow/model.glb", "arrow"),
+            // The three explosive glbs double as the placed-charge / thrown
+            // projectile world models, so they stay authored at WORLD scale
+            // (see `viewmodel_scale`) and keep their old origins (the bomb's
+            // is the ball's bottom, the placed charges sit on their base).
+            HeldMesh::PowderBomb => {
+                HeldMeshVisual::baked_tool("items/powder_bomb/model.glb", "powder_bomb")
             }
-            // The three explosives are two-primitive glbs (primitive 0 the body,
-            // primitive 1 the detail), following the 2-prim convention the art
-            // agent authors to. Per-charge colour is baked into each glb's
-            // COLOR_0; the family is only which shared material a layer binds.
-            // Bomb: cloth ball + iron fuse cap. Keg: staved wood barrel + iron
-            // hoops. Satchel: cloth pack + leather strap.
-            HeldMesh::PowderBomb => HeldMeshVisual::two(
-                "items/powder_bomb/model.glb",
-                HeldMeshMaterial::Cloth,
-                HeldMeshMaterial::Iron,
-            ),
-            HeldMesh::PowderKeg => HeldMeshVisual::two(
-                "items/powder_keg/model.glb",
-                HeldMeshMaterial::Wood,
-                HeldMeshMaterial::Iron,
-            ),
-            HeldMesh::SatchelCharge => HeldMeshVisual::two(
-                "items/satchel_charge/model.glb",
-                HeldMeshMaterial::Cloth,
-                HeldMeshMaterial::Leather,
-            ),
+            HeldMesh::PowderKeg => {
+                HeldMeshVisual::baked_tool("items/powder_keg/model.glb", "powder_keg")
+            }
+            HeldMesh::SatchelCharge => {
+                HeldMeshVisual::baked_tool("items/satchel_charge/model.glb", "satchel_charge")
+            }
             // The bandage is a two-primitive glb, BOTH on the Cloth family (roll
             // and tail are the same linen; only the COLOR_0 differs). Unlike the
             // other two-prim items it is not static: primitive 1 is tagged
@@ -308,6 +284,26 @@ impl HeldMesh {
             HeldMesh::Bandage => 0.42,
             _ => 1.0,
         }
+    }
+
+    /// Whether this mesh's glb carries a `socket_grip` node the engine derives
+    /// hand placement from (the five gathering-tool rebuilds, ART-PIPELINE
+    /// Phase 0 contract). The batch-2 rebuilds deliberately ship WITHOUT a
+    /// socket: their per-item carry poses (mallet pull-in, upright sword
+    /// guard, couched spear, silhouette bundles) are tuned in `held.rs`
+    /// against each mesh's authored frame, and the socket path would bypass
+    /// all of that tuning. Gating the socket load here (not on the `Baked`
+    /// family) keeps startup free of pointless Gltf scans + missing-socket
+    /// warnings for the socketless rebuilds.
+    pub const fn uses_grip_socket(self) -> bool {
+        matches!(
+            self,
+            HeldMesh::StoneHatchet
+                | HeldMesh::IronHatchet
+                | HeldMesh::StonePickaxe
+                | HeldMesh::IronPickaxe
+                | HeldMesh::Sickle
+        )
     }
 
     /// The first-person *grip archetype* this mesh is carried by. The renderer
@@ -352,8 +348,8 @@ impl HeldMesh {
             // first-person viewmodel; the thrust rides the arm extension on top.
             HeldMesh::StoneSpear => HeldGrip::Spear,
             // Short one-handers held close in: the construction mallet and the
-            // two blunt weapons (club, mace).
-            HeldMesh::Hammer | HeldMesh::WoodenClub | HeldMesh::IronMace => HeldGrip::Mallet,
+            // blunt wooden club.
+            HeldMesh::Hammer | HeldMesh::WoodenClub => HeldGrip::Mallet,
         }
     }
 }
@@ -396,33 +392,30 @@ pub enum HeldGrip {
 /// place without touching the per-item table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeldMeshMaterial {
-    /// Wooden haft + twine bindings (tools) and the building-plan ties.
+    /// Wooden pieces of the authored animatable glbs (bow stave + nocked
+    /// arrow, crossbow stock + bolt).
     Wood,
-    /// Knapped stone tool heads.
-    Stone,
-    /// Forged iron tool heads and the hammer's band hoops.
+    /// Forged iron: the crossbow's fittings.
     Iron,
-    /// Rolled parchment paper of the building-plan scroll.
-    Parchment,
-    /// Woven cloth: the powder bomb's wrap and the satchel charge's pack body.
+    /// Woven cloth: the bandage's roll and tail.
     Cloth,
-    /// Tanned leather: the satchel charge's strap.
-    Leather,
     /// Pale tan bowstring / crossbow-string cord. A slim neutral cord tile whose
     /// COLOR_0 carries the pale-tan string colour, the same `detail * COLOR_0` cel
     /// path the other families use.
     Cord,
-    /// The bag silhouette's flat `StandardMaterial` (no cel/viewmodel variant).
-    BagStandard,
+    /// A per-item BAKED albedo (image-to-3D rebuilds, `art/held/`): the glb ships
+    /// white COLOR_0 + real UVs and the texture at `textures/held/<id>.png`
+    /// carries the whole painted surface. The str is the item id the renderer
+    /// keys the per-item material pair on.
+    Baked(&'static str),
 }
 
-/// Where a held-item layer's mesh comes from: an authored glb primitive or the
-/// single procedural bag cuboid. Kept as data so the renderer loads glbs and
-/// builds the bag mesh from one table pass.
+/// Where a held-item layer's mesh comes from. Every held item is an authored
+/// glb primitive now (the procedural bag cuboid retired to the image-to-3D
+/// bundle rebuild); the enum stays so a future non-glb source is a variant,
+/// not a rework.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeldLayerMeshSource {
-    /// The shared procedural bag cuboid (`ItemVisualAssets::held_bag_mesh`).
-    ProceduralBag,
     /// Primitive `primitive` of the (mesh 0 of the) glb at `glb`, an
     /// `embedded_asset_path`-relative path (no `embedded://` prefix).
     GlbPrimitive { glb: &'static str, primitive: usize },
@@ -494,36 +487,27 @@ impl HeldMeshVisual {
         }
     }
 
-    /// A two-primitive authored tool glb: primitive 0 is the wooden haft body
-    /// (Wood family) and primitive 1 is the worked head (`head` family). Both are
-    /// static pieces (the swing transform moves the whole tool).
-    const fn tool(glb: &'static str, head: HeldMeshMaterial) -> Self {
-        Self::two_glb(glb, HeldMeshMaterial::Wood, head)
+    /// A single-primitive image-to-3D glb (`art/held/`): the whole item is one
+    /// mesh whose painted surface lives in the per-item baked albedo, so one
+    /// layer on the [`HeldMeshMaterial::Baked`] family. The five gathering
+    /// tools additionally carry the `socket_grip` node the engine derives hand
+    /// placement from (see [`HeldMesh::uses_grip_socket`]); every other rebuild
+    /// keeps its legacy tuned carry.
+    const fn baked_tool(glb: &'static str, item_id: &'static str) -> Self {
+        Self::single(Self::glb_layer(
+            glb,
+            0,
+            HeldMeshMaterial::Baked(item_id),
+            HeldPieceSlot::Static,
+        ))
     }
 
-    /// A two-primitive authored glb with an explicit family for each primitive
-    /// (primitive 0 = `first`, primitive 1 = `second`). Both static.
-    const fn two(glb: &'static str, first: HeldMeshMaterial, second: HeldMeshMaterial) -> Self {
-        Self::two_glb(glb, first, second)
-    }
-
-    const fn two_glb(glb: &'static str, first: HeldMeshMaterial, second: HeldMeshMaterial) -> Self {
-        Self {
-            layers: [
-                Some(Self::glb_layer(glb, 0, first, HeldPieceSlot::Static)),
-                Some(Self::glb_layer(glb, 1, second, HeldPieceSlot::Static)),
-                None,
-                None,
-                None,
-                None,
-            ],
-        }
-    }
-
-    /// The animatable bandage: two primitives in the glb's primitive order,
-    /// 0 the roll (static) and 1 the loose tail. Both are the same linen, so both
-    /// ride the Cloth family; only the tail carries a rig slot, because it is the
-    /// only piece that moves (it scales out of the roll as the use charge ramps).
+    /// The animatable bandage: two AUTHORED primitives, 0 the roll (static)
+    /// and 1 the loose tail (it scales out of the roll as the use charge
+    /// ramps), both on the Cloth family. Still the old authored glb: the
+    /// batch-2 rebuild's roll fit kept reading as a flat wedge in hand, so
+    /// its rebuild is parked with the crossbow's (the new icon ships
+    /// regardless).
     const fn bandage(glb: &'static str) -> Self {
         Self {
             layers: [
@@ -549,29 +533,32 @@ impl HeldMeshVisual {
 
     /// The animatable wooden bow: six primitives (grip, upper limb, lower limb,
     /// upper string leg, lower string leg, nocked arrow) in the glb's primitive
-    /// order. The wood pieces ride Wood (the arrow's stone head is carried by
-    /// its COLOR_0); the two string legs ride Cord. Each carries its rig slot so
-    /// the per-piece animator can flex the limbs, pull the string, and slide the
-    /// nocked arrow back with it.
+    /// order. The stave pieces are ONE image-to-3D rebuild fitted to the
+    /// authored anchors and bisected at the limb pivots
+    /// (art/held/build_animatable.py), riding the per-item baked albedo; the
+    /// two rebuilt string legs ride Cord; the reused nocked arrow keeps its
+    /// authored COLOR_0 on Wood. Each carries its rig slot so the per-piece
+    /// animator can flex the limbs, pull the string, and slide the nocked
+    /// arrow back with it.
     const fn bow(glb: &'static str) -> Self {
         Self {
             layers: [
                 Some(Self::glb_layer(
                     glb,
                     0,
-                    HeldMeshMaterial::Wood,
+                    HeldMeshMaterial::Baked("wooden_bow"),
                     HeldPieceSlot::Static,
                 )),
                 Some(Self::glb_layer(
                     glb,
                     1,
-                    HeldMeshMaterial::Wood,
+                    HeldMeshMaterial::Baked("wooden_bow"),
                     HeldPieceSlot::BowLimbUpper,
                 )),
                 Some(Self::glb_layer(
                     glb,
                     2,
-                    HeldMeshMaterial::Wood,
+                    HeldMeshMaterial::Baked("wooden_bow"),
                     HeldPieceSlot::BowLimbLower,
                 )),
                 Some(Self::glb_layer(
@@ -596,8 +583,12 @@ impl HeldMeshVisual {
         }
     }
 
-    /// The animatable crossbow: four primitives (wood stock, iron fittings,
-    /// string, loaded bolt). The stock and iron are static; the string slides
+    /// The animatable crossbow: four AUTHORED primitives (wood stock, iron
+    /// fittings, string, loaded bolt). Still the old authored glb: the
+    /// batch-2 image-to-3D body reconstructed with a tall rifle stock that
+    /// blocked the owner-tuned ADS sight picture, so its rebuild is parked
+    /// until a better reference or a re-tuned aim pose exists (its new icon
+    /// ships regardless). The stock and iron are static; the string slides
     /// off the cock value and the bolt rides it, showing only while cocked.
     const fn crossbow(glb: &'static str) -> Self {
         Self {
@@ -1092,7 +1083,6 @@ mod tests {
             | HeldMesh::WoodenClub
             | HeldMesh::StoneSpear
             | HeldMesh::IronSword
-            | HeldMesh::IronMace
             | HeldMesh::WoodenBow
             | HeldMesh::Crossbow
             | HeldMesh::Arrow
@@ -1103,6 +1093,6 @@ mod tests {
             | HeldMesh::Sickle => true,
         };
         assert!(HeldMesh::ALL.iter().all(|&mesh| expected(mesh)));
-        assert_eq!(HeldMesh::ALL.len(), 19);
+        assert_eq!(HeldMesh::ALL.len(), 18);
     }
 }

@@ -87,9 +87,6 @@ pub(crate) enum SoundId {
     /// PvP impact for the iron sword: the sharper of the two sets (aliases the
     /// axe-wood pool, matching the hatchet's brighter transient). ALIAS.
     ImpactPlayerSword,
-    /// PvP impact for the iron mace: the heaviest blunt read (aliases the
-    /// pickaxe-ore hard-thud pool, the bluntest existing set). ALIAS.
-    ImpactPlayerMace,
 
     // --- Ranged (bow / crossbow) cues ---
     //
@@ -248,7 +245,6 @@ pub(crate) fn all_sound_ids() -> &'static [SoundId] {
         SoundId::ImpactPlayerClub,
         SoundId::ImpactPlayerSpear,
         SoundId::ImpactPlayerSword,
-        SoundId::ImpactPlayerMace,
         SoundId::RangedDryClick,
         SoundId::ImpactArrowWorld,
         SoundId::SwingMiss,
@@ -440,8 +436,7 @@ pub(crate) const fn sound_defaults(id: SoundId) -> SoundDefaults {
         SoundId::ImpactPlayerBlunt
         | SoundId::ImpactPlayerClub
         | SoundId::ImpactPlayerSpear
-        | SoundId::ImpactPlayerSword
-        | SoundId::ImpactPlayerMace => SoundDefaults {
+        | SoundId::ImpactPlayerSword => SoundDefaults {
             category: SoundCategory::Sfx3d,
             base_gain_db: -8.0,
             spatial: Some(SpatialDefaults {
@@ -793,7 +788,7 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
     //     transient: the gather-tool PvP thump, the sword, and the spear
     //     (hatchet-vs-flesh) route here.
     //   - The "harder / blunter" set (pickaxe-ore) reads as a heavy hard thud:
-    //     the club and the mace route here.
+    //     the club routes here.
     static PLAYER_BLUNT_SOFT: [&str; 3] = [
         "impacts/axe-wood-1.wav",
         "impacts/axe-wood-2.wav",
@@ -880,11 +875,11 @@ pub(crate) fn sound_paths(id: SoundId) -> &'static [&'static str] {
         SoundId::OreStageCrumble => &ORE_CRUMBLE,
         SoundId::OreNodeBreak => &ORE_BREAK,
         // Gather-tool PvP thump, the sword, and the spear share the sharper
-        // (axe-wood) set; the club and mace share the blunter (pickaxe-ore) set.
+        // (axe-wood) set; the club takes the blunter (pickaxe-ore) set.
         SoundId::ImpactPlayerBlunt | SoundId::ImpactPlayerSword | SoundId::ImpactPlayerSpear => {
             &PLAYER_BLUNT_SOFT
         }
-        SoundId::ImpactPlayerClub | SoundId::ImpactPlayerMace => &PLAYER_BLUNT_HARD,
+        SoundId::ImpactPlayerClub => &PLAYER_BLUNT_HARD,
         SoundId::RangedDryClick => &RANGED_DRY_CLICK,
         SoundId::ImpactArrowWorld => &ARROW_IMPACT,
         SoundId::SwingMiss => &MISS,
@@ -938,7 +933,7 @@ pub(crate) fn impact_sound_for(model: ItemModel, surface: SurfaceMaterial) -> Op
     // Pickaxe; a weapon that struck a deployable resolves to its own archetype
     // and reads as the pickaxe (heavy) or hatchet (everything else) family.
     let heavy_pick = match model {
-        ItemModel::Pickaxe | ItemModel::Mace => true,
+        ItemModel::Pickaxe => true,
         ItemModel::Hatchet | ItemModel::Club | ItemModel::Spear | ItemModel::Sword => false,
         // The sickle's only gatherable surface is a grass tuft, so its
         // contact cue IS the fiber-collection sound: the same grass-rustle
@@ -982,7 +977,6 @@ pub(crate) fn impact_sound_for_player(model: ItemModel) -> Option<SoundId> {
         ItemModel::Club => Some(SoundId::ImpactPlayerClub),
         ItemModel::Spear => Some(SoundId::ImpactPlayerSpear),
         ItemModel::Sword => Some(SoundId::ImpactPlayerSword),
-        ItemModel::Mace => Some(SoundId::ImpactPlayerMace),
         // Ranged hits share the generic blunt thump as a placeholder; P3b's feel
         // pass gives arrow impacts their own cue.
         ItemModel::Bow | ItemModel::Crossbow => Some(SoundId::ImpactPlayerBlunt),
@@ -1153,10 +1147,6 @@ mod tests {
         assert_eq!(
             impact_sound_for_player(ItemModel::Sword),
             Some(SoundId::ImpactPlayerSword)
-        );
-        assert_eq!(
-            impact_sound_for_player(ItemModel::Mace),
-            Some(SoundId::ImpactPlayerMace)
         );
         assert_eq!(
             impact_sound_for_player(ItemModel::Hatchet),

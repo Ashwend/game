@@ -184,7 +184,7 @@ pub struct ItemDefinition {
 impl ItemDefinition {
     /// The swing/impact archetype ([`ItemModel`]) this item animates and reads as
     /// on the wire when swung. A dedicated weapon uses its own registry `model`
-    /// (Club/Spear/Sword/Mace); a gather tool uses its [`ToolKind`] archetype
+    /// (Club/Spear/Sword); a gather tool uses its [`ToolKind`] archetype
     /// (which equals the registry `model` for tools too, but routing through the
     /// tool keeps the authoritative kind as the source of truth); anything else
     /// (raw materials, deployables-in-hand) resolves to [`ItemModel::Bag`], the
@@ -739,7 +739,7 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
     // melee weapons. Each carries a `WeaponProfile` (not a
     // `ToolProfile`), so it gathers nothing and combat resolves it ahead of any
     // tool through one `AttackProfile`. Every number lives in game_balance.
-    // `model` is the swing archetype (Club/Spear/Sword/Mace); `held_mesh` is the
+    // `model` is the swing archetype (Club/Spear/Sword); `held_mesh` is the
     // two-primitive haft+head glb.
     ItemDefinition {
         id: WOODEN_CLUB_ID,
@@ -809,32 +809,6 @@ pub const REGISTERED_ITEMS: &[ItemDefinition] = &[
             reach_m: crate::game_balance::COMBAT_ATTACK_RANGE_M,
             cooldown_ticks: crate::game_balance::IRON_SWORD_COOLDOWN_TICKS,
             armor_pierce_pct: 0,
-            max_durability: Some(crate::game_balance::IRON_TOOL_DURABILITY),
-        }),
-        ranged: None,
-        armor: None,
-        explosive: None,
-        consumable: None,
-        deployable: None,
-    },
-    ItemDefinition {
-        id: IRON_MACE_ID,
-        name: "Iron Mace",
-        description: "A brutal iron head on a heavy haft. The slowest, hardest \
-                      swing in the game, with the biggest shove and enough force \
-                      to punch through half of any armor. The answer to plate.",
-        stack_size: 1,
-        equipable: true,
-        model: ItemModel::Mace,
-        held_mesh: HeldMesh::IronMace,
-        tint: ItemTint::new(150, 152, 158),
-        tool: None,
-        weapon: Some(WeaponProfile {
-            pvp_damage: crate::game_balance::IRON_MACE_PVP_DAMAGE,
-            knockback_speed: crate::game_balance::IRON_MACE_KNOCKBACK_SPEED,
-            reach_m: crate::game_balance::COMBAT_ATTACK_RANGE_M,
-            cooldown_ticks: crate::game_balance::IRON_MACE_COOLDOWN_TICKS,
-            armor_pierce_pct: crate::game_balance::IRON_MACE_ARMOR_PIERCE_PCT,
             max_durability: Some(crate::game_balance::IRON_TOOL_DURABILITY),
         }),
         ranged: None,

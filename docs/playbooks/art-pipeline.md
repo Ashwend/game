@@ -22,36 +22,35 @@ related:
 
 > When to read this: modelling a new held item or prop, deriving a sibling tool, authoring a deployable/building glb, or generating an icon/texture. Source of truth: `src/app/scene/assets.rs` (setup_scene), `art/*/build_*.py`, `scripts/icon_finalize.py`. Canonical invariants live in CLAUDE.md.
 
-Two facts shape everything below: in-game props get their colour from a `COLOR_0` vertex-colour attribute baked into the glb (LINEAR albedos, see [rendering-materials.md](../rendering-materials.md)), and the **material is attached in Rust at load time**, not exported from the model, for every family except the four held tools. The icon-generation half (img2img reskins, tileable texture synthesis) lives in the `lowpoly-game-assets` skill, not the repo; the repo owns the build scripts, `icon_finalize.py`, and the `assets.rs` wiring.
+Two facts shape everything below: in-game props get their colour either from a `COLOR_0` vertex-colour attribute baked into the glb (LINEAR albedos, see [rendering-materials.md](../rendering-materials.md)) or, for the image-to-3D rebuilds, from a per-item baked albedo texture over white COLOR_0; and the **material is attached in Rust at load time**, not exported from the model. The icon-generation half (img2img reskins, tileable texture synthesis) lives in the `lowpoly-game-assets` skill, not the repo; the repo owns the build scripts, `icon_finalize.py`, and the `assets.rs` wiring.
 
-## Two authoring tracks
+## Three authoring tracks
 
-| | Hand-modelled held tools | Parametric headless scripts |
-|---|---|---|
-| What | The four tools: stone/iron pickaxe + hatchet | ore nodes, trees, building pieces, doors, deployables |
-| How | Blender driven live over the Blender MCP; the `.blend` is source of truth | `art/<family>/build_*.py` run headless (`Blender --background --python ...`) |
-| `export_materials` | `'EXPORT'` (glb embeds its own materials) | ore + trees use `'NONE'`; building, door, and deployable scripts use `'EXPORT'` (Rust attaches/selects the shared material either way) |
-| Primitives | 2 (matte haft = prim 0, worked head = prim 1) | typically 1 (trees = 2: trunk + foliage) |
-| Material kind | `StandardMaterial`, two per tool, tinted by COLOR_0 | mostly `ToonMaterial`; building pieces + doors are textured `StandardMaterial` |
-| Rust load | `prim_mesh` (closure in `assets.rs` - `insert_deployable_visuals`) | `prim_mesh` only; material built/selected in Rust |
+| | Image-to-3D families | Hand-modelled glbs | Parametric headless scripts |
+|---|---|---|---|
+| What | ore nodes (`art/ore/`), the five gathering tools (`art/held/`); the default lane for future held-item batches | hammer, melee weapons, deployable `.blend`s | trees, building pieces, doors, deployable post-processing |
+| How | reference prompt -> RunPod TRELLIS.2 -> `build_*.py` retopo + albedo rebake (see the family section below) | Blender driven live over the Blender MCP; the `.blend` is source of truth | `art/<family>/build_*.py` run headless (`Blender --background --python ...`) |
+| `export_materials` | `'NONE'` (the engine attaches the per-item/per-type material) | `'EXPORT'` | trees use `'NONE'`; building, door, and deployable scripts use `'EXPORT'` (Rust attaches/selects the shared material either way) |
+| Primitives | 1 (whole prop; held items add a `socket_grip` NODE) | per model | typically 1 (trees = 2: trunk + foliage) |
+| Material kind | `ToonMaterial` (+ `ToonViewmodelMaterial` for held) over a baked albedo, COLOR_0 white | shared tool-family cel materials tinted by COLOR_0 | mostly `ToonMaterial`; building pieces + doors are textured `StandardMaterial` |
+| Rust load | `prim_mesh` + per-item/per-type material in `assets.rs`; held sockets via `HeldGripSockets` | `prim_mesh` per primitive | `prim_mesh` only; material built/selected in Rust |
 
-Rule of thumb: **do not** commit a headless build script for a hand-modelled tool, and **do not** hand-model in interactive Blender a shape that must stay in lockstep with a Rust constant (a building piece, a tree silhouette, an ore stage). Those go through a parametric script that mirrors the constant.
+Rule of thumb: **do not** hand-model in interactive Blender a shape that must stay in lockstep with a Rust constant (a building piece, a tree silhouette, an ore stage); those go through a parametric script that mirrors the constant. The five gathering tools (stone/iron hatchet + pickaxe, iron sickle) moved to the image-to-3D track 2026-07; their old hand-modelled `.blend`s and the sickle build scripts are retired.
 
 Note the deployables straddle the line: their `.blend` source was hand-authored, but `art/deployables/build_deployables.py` post-processes them (bakes UVs, rebuilds the workbench). Treat them as the parametric track for material/UV purposes.
 
 The Blender MCP (`mcp__Blender__execute_blender_code`, render helpers) is an **external dependency** that may not be connected in a given session. The hand-modelled track requires it; the parametric scripts only need a local Blender binary.
 
-## Held-item reference frame
+## Held-item reference frame and the grip-socket contract
 
-Every held tool is scaled into one shared reference frame so the existing swing transform and poses just work. Read the reference glb bounds first (`assets/items/iron_hatchet/model.glb`), do not invent new anchors:
+Every held glb is scaled into one shared reference frame so the shared carry/swing transforms just work:
 
-- prim 0 (haft) POSITION min Y = `-0.514` (the pommel)
-- prim 1 (head) POSITION max Y = `0.356` (head top, ~0.36)
-- total height ~`0.87`
+- pommel at authoring z = `-0.514`, head top ~`+0.356`, total height ~`0.87`
+- authoring frame (Blender is Z-up, the glb exports +Y up via `export_yup=True`): handle along Blender `+Z` (in-game up), working edge along Blender `+X` (in-game forward, so it faces the swing), thin axis along Blender `+Y`
 
-Build in the authoring frame (Blender is Z-up, the glb exports +Y up via `export_yup=True`): handle along Blender `+Z` (in-game up), head blade/prong axis along Blender `+X` (in-game forward, so the working edge faces the swing), thin axis along Blender `+Y`. Solve eye height and handle length from the two anchors, then place the icon-measured silhouette (in handle-length units) into that frame.
+For image-to-3D rebuilds this fit is enforced by `art/held/build_held.py` (`HELD_FIT` knobs: up-axis/yaw fixes, height, grip height); nothing is eyeballed.
 
-**Measure the icon, do not eyeball it.** Extract the silhouette with OpenCV (numpy is installed; PIL is not) and transform it into the authoring frame: classify pixels (warm `R - B` = wood, low-saturation grey = stone/iron), find the handle axis by PCA anchored on the unambiguous class, locate the eye (handle end nearest the head) and pommel (farthest), then map the head contour into a handle-aligned, eye-origin frame scaled so handle length = 1.0. The measure script is scratch (`/tmp`, not committed).
+**The grip-socket contract (Phase 0 of ART-PIPELINE-REWORK).** Every rebuilt held glb carries a `socket_grip` node (a Blender empty parented to the mesh): socket `+Y` runs along the haft toward the head, socket `+Z` faces the working edge, position is the authored grip point on the haft. On a `+X`-edge tool that is a `Rot_Y(PI/2)` node. The engine (`HeldGripSockets` in `src/app/systems/items/held.rs`) resolves the node by name from the loaded Gltf and DERIVES hand placement as `carry_anchor * socket⁻¹` in all three views (first-person, remote rig, paperdoll), so a socketed item needs zero per-item Rust constants; items without a socket keep the legacy constant path. A contract socket at the mesh origin reproduces the legacy tool pose exactly (regression-tested in `held.rs`).
 
 ### COLOR_0 albedos are LINEAR
 
@@ -89,7 +88,7 @@ Each script mirrors a Rust constant as its parity point and exports COLOR_0 glbs
 | `art/building/build_pieces.py` | `assets/building/<piece>_<tier>.glb` (6 pieces x 3 tiers) | `building_meshes` + `building_materials` | textured `StandardMaterial` per tier | `crate::building::piece_local_boxes` (`src/building/collision.rs` - `piece_local_boxes`) |
 | `art/building/build_door.py` | `assets/items/{hewn_log_door,iron_door}/model.glb` | `hewn_door_*` / `iron_door_*` | textured `StandardMaterial` (iron door: roughness 0.55, metallic 0.8) | door panel geometry |
 | `art/deployables/build_deployables.py` | UV-baked `assets/items/{workbench_t1,crude_furnace,storage_box_*,tool_cupboard,torch}/model.glb` + workbench rebuild | `DeployableVisualAssets` meshes, `toon_{wood,stone,fabric}_material` | `ToonMaterial` (see deployables section) | `DeployableProfile.collider_half_width` in `src/items.rs` (workbench 0.55, furnace 0.50) |
-| `art/tools/build_sickle.py` | `assets/items/iron_sickle/model.glb` (prim 0 curved rosewood handle, prim 1 collar + forged blade on the metal slot) | `HeldMesh::Sickle.visual()` row (`src/items/visual.rs`) | held-item family materials (Wood + Iron) | ICON-FIRST: the shipped icon is the rembg cutout of the chosen ComfyUI generation (`art/concepts/sickle/icon3_v6.png` -> `art/items/iron_sickle/icon_master_512.png` -> `scripts/icon_finalize.py`), and the mesh is built to MATCH it via `art/tools/measure_sickle.py` (collar/butt pixel anchors, blade circle fit + station table). The blade is a thin knife cross-section (sharp bright edge on the concave side, near-black forged cheeks, blunt spine) and is yawed -55 deg about the haft so its face reads in first person. Blade COLOR_0 is authored VERY dark (~0.05-0.09 linear): the viewmodel cel path multiplies albedo by a ~3-4x noon scene probe, so anything brighter silvers out in hand |
+| `art/held/build_held.py` (image-to-3D family, see next section) | `assets/items/<id>/model.glb` for the five gathering tools (1 prim + `socket_grip` node), the hammer, building plan, melee weapons, arrow, explosives, and `generic_held` (1 prim, NO socket) + `assets/textures/held/<id>.png` | `HeldMesh::visual()` `baked_tool` rows (`src/items/visual.rs`), `baked_tool_materials` in `assets.rs`, sockets via `HeldGripSockets` | per-item baked-albedo `ToonMaterial` + `ToonViewmodelMaterial` | The held reference frame + socket contract above. Dark-steel calibration survives from the old sickle work: forged steel wants ~0.05-0.09 linear in the viewmodel (the cel path multiplies albedo by a ~3-4x noon scene probe, so brighter silvers out); a TRELLIS bake that lands NEAR-ZERO instead needs the `ALBEDO_CURVE` floor lift or it renders as a silhouette hole |
 
 The sleeping bag glb (`assets/items/sleeping_bag/model.glb`) ships through the same `prim_mesh` path and uses `toon_fabric_material`.
 
@@ -125,6 +124,63 @@ prompts. Per-family directory contents:
   variants are pruned at retirement time. This is the authoring record.
 - `meshes/` - GITIGNORED: raw image-to-3D glbs (~50 MB each) and built
   outputs, all regenerable from the committed inputs.
+
+`art/held/` is the second family through this lane (the five gathering tools,
+2026-07-19) and adds the held-item specifics on top of the ore recipe:
+
+- **One picked image serves as BOTH the inventory icon and the mesh
+  reference** (unlike ore, where the deposit and the yielded item differ).
+  `prompts.json` carries a single toony backbone per item; the picker exports
+  `{"<item_id>": <variant>}`; `make_icon_masters.py` derives the icon side
+  (auto-rotate/flip to the head-upper-left convention, largest-alpha-component
+  keep, recenter) and `gen_meshes.py` feeds the same file to TRELLIS.
+- **Prompt-side lessons**: describe the item as FLOATING in empty space,
+  evenly lit; 'lying' phrasing makes Flux infer a ground plane and paint an
+  OPAQUE shadow no ban or alpha-strip removes. 'As one connected piece'
+  guards against disassembled tools. Composition cues beat bans: to keep a
+  sickle's handle short, fill the frame with the BLADE, not the tool.
+- **Held items use TRELLIS's NATIVE low-poly export, not local reduction**
+  (final recipe after two A/B rounds in `preview.html`, the local three.js
+  viewer served with `python3 -m http.server 8321` from `art/held/`):
+  `gen_meshes.py` submits with `--decimation-target ~10000` and the worker's
+  own mesh-aware simplifier returns ~10k tris with FULL silhouette fidelity
+  plus its own baked 2048 texture and UVs. `build_held.py` keeps all of it
+  as-is; its whole job is PCA canonicalization into the held reference frame
+  (`auto_level`: haft = major axis up, thin normal to Y, wider-end-up,
+  working edge to +X; TRELLIS output pose varies with the reference
+  composition), the `socket_grip` empty (contract above), white COLOR_0,
+  extracting the embedded baseColor PNG as the per-item albedo, and the lean
+  export. `trim_ground_disc` stays as a per-item knob.
+- **Why local reduction was abandoned** (keep these failure modes in mind if
+  it is ever revived): the voxel remesh ERODES anything thinner than the
+  voxel (slimmed pick arms at 8 mm); a 12 deg planar dissolve facets the
+  whole tool before the budget applies, and even 4 deg + 6k + smooth shading
+  lost thin-feature volume; and the Cycles DIFFUSE/COLOR rebake returns
+  BLACK for metallic-flagged regions regardless of base colour (the TRELLIS
+  material carries a metallic-roughness map; zeroing source metallic fixes
+  it). Extracting the native texture sidesteps the bake entirely.
+  `ALBEDO_CURVE` (gamma/gain + near-black floor lift) remains available on
+  the extracted texture.
+- **Batch 2 (everything else, 2026-07-19) ships SOCKETLESS in each
+  predecessor's frame.** The hammer, building plan, four melee weapons,
+  arrow, three explosives, and the new generic held bundle (`generic_held`,
+  which replaced the procedural bag cuboid every mesh-less equipable shows
+  in hand) are `baked_tool` rows like the tools, but deliberately carry NO
+  `socket_grip`: their per-item carry poses in `held.rs` (mallet pull-in,
+  upright sword guard, couched spear, silhouette bundles) are tuned against
+  the OLD glbs' local frames, and the socket path would bypass all of that
+  tuning. Instead `build_held.py` fits each rebuild into its predecessor's
+  measured frame (`HELD_FIT` per item: `z_min`/`height` or `width`,
+  `center: grip|full`, `invert_head` for narrow-tipped silhouettes,
+  `align_limb_down` for big-head short-handle shapes PCA cannot solve,
+  `socket=False`). `HeldMesh::uses_grip_socket()` (src/items/visual.rs) is
+  the allowlist that keeps the engine from even scanning the socketless glbs.
+  The placed charges bind the same per-item baked `ToonMaterial` as the held
+  view (`charge_body_material` in `src/app/systems/deployables.rs`), and the
+  projectile visuals reuse the held layer table unchanged. The three
+  ANIMATABLE viewmodels (bow, crossbow, bandage) keep their authored
+  multi-primitive glbs: a single-prim rebuild cannot carry their rig slots,
+  so their batch-2 picks ship as icons only until a rigging path exists.
 
 Family-agnostic tools live in `art/pipeline/`: `render_turntable.py` (glb ->
 N-angle strip + tri stats; pass `color` as the 5th arg when judging albedo,
@@ -163,7 +219,7 @@ In `src/app/scene/assets.rs` (`insert_deployable_visuals`, one of the `setup_sce
 let prim_mesh = |glb: &str, primitive: usize| asset_server.load(GltfAssetLabel::Primitive { mesh: 0, primitive }.from_asset(glb.to_owned()));
 ```
 
-Glb paths come from `embedded_asset_path("items/<id>/model.glb")` (re-exported from `embedded_assets::asset_path` in `src/app.rs`). For a **held tool**, store `*_body_mesh` / `*_head_mesh` (prims 0/1) and `*_body_material` / `*_head_material` (materials 0/1) in `ItemVisualAssets`, then add the two layers to `held_item_layers` in `src/app/systems/items/held.rs`. Held items render as overlaid layers sharing one swing transform, one layer per primitive; this same function feeds the third-person rig so peers see what is held. For a **parametric prop**, load only `prim_mesh(&glb, 0)` and attach the shared material (no `glb_material`).
+Glb paths come from `embedded_asset_path("items/<id>/model.glb")` (re-exported from `embedded_assets::asset_path` in `src/app.rs`). For a **held item**, add a row to the declarative `HeldMesh::visual()` table (`src/items/visual.rs`): an image-to-3D rebuild is one `baked_tool(glb, item_id)` row (single primitive, `HeldMeshMaterial::Baked` family; the per-item material pair is built automatically in `assets.rs` from `textures/held/<id>.png`, and its `socket_grip` resolves through `HeldGripSockets`); a shared-family glb lists its layers with their families. Held items render as overlaid layers sharing one swing transform; the same table feeds the third-person rig and the paperdoll so peers see what is held. For a **parametric prop**, load only `prim_mesh(&glb, 0)` and attach the shared material (no `glb_material`).
 
 `build.rs` fingerprints the `assets/` tree, so a re-exported glb re-embeds on the next `cargo build`. Remove Blender's `.blend1` auto-backup before finishing.
 
@@ -174,14 +230,14 @@ This is the single biggest mental model to get right. **Icon generation lives in
 - `gen_icon_ref.py` (img2img reskin from a reference icon) and `generate.py` (text-to-icon, tileable textures) are in `~/.claude/skills/lowpoly-game-assets/scripts/`. Do not grep the repo for them.
 - `scripts/icon_finalize.py` is the committed repo script. It does only the `art/items/<id>/icon_master_512.png` -> `assets/items/<id>/icon.png` downscale (default 160px). Rationale, from its docstring: egui user textures have **no mipmaps**, so each icon minifies into its slot with plain bilinear. It uses ImageMagick's **Triangle** filter (no negative lobes, unlike Lanczos which rings into bright edge speckles) and **edge-bleeds** opaque RGB outward first so straight-alpha bilinear never interpolates undefined RGB across the silhouette. Both transforms are always-on and safe; `--desaturate`, `--smooth`, `--despeckle` are opt-in (never `--desaturate` a colourful icon like an ore or ember).
 
-`icon_finalize.py` itself defers img2img to the skill's `gen_icon_ref.py`. Of the 20 `art/items/<id>/` dirs, all 20 carry `icon_master_512.png`; only the 10 with a `.blend` have a 3D model (the four tools + crude_furnace, workbench_t1, both storage boxes, tool_cupboard, torch). The other 10 are flat inventory icons with no model.
+`icon_finalize.py` itself defers img2img to the skill's `gen_icon_ref.py`. Every `art/items/<id>/` dir carries `icon_master_512.png`; only those with a `.blend` are hand-modelled 3D sources (hammer, building_plan, crude_furnace, workbench_t1, both storage boxes, tool_cupboard, torch). The five gathering tools' mesh sources live in `art/held/` (picked candidates + prompts + selection are the committed authoring record); everything else is a flat inventory icon with no model.
 
 ### Deriving a sibling tool
 
-When a new item shares an existing tool's shape (a stone tier of an iron tool, a reskin), do not remodel from scratch:
+When a new item shares an existing tool's shape (a stone tier of an iron tool, a reskin):
 
-1. **Icon via img2img** from the sibling's icon using the skill: `gen_icon_ref.py --ref <sibling>/icon_master_512.png --subject "<new material> <tool>"`. Push `--strength` up (~0.85) if the material changes a lot (iron head -> rough stone). Run the OpenCV measure on the result to confirm it carries the sibling's silhouette.
-2. **Model by copying the sibling's `.blend` geometry** (`me = sibling_obj.data.copy()`), swap the head material (matte stone: metallic 0, roughness 0.9), recolour the head loops into a stone palette, add bindings (fibre lashing = a few twine-coloured ring bands at the joint), export. The copied footprint is already first-person-comfortable, so no rescaling. A whole tier family can share one geometry and differ only in the head material.
+- **Image-to-3D families**: duplicate the item's variant block in the family's `prompts.json`, swap the material clause in the SUBJECT noun phrase (a correction in the tail never beats the leading noun phrase), and run the same candidates -> pick -> mesh -> build loop. Like-numbered icon and reference variants describe the same design, so the pair stays coherent.
+- **Hand-modelled glbs**: icon via img2img from the sibling's icon (`gen_icon_ref.py --ref <sibling>/icon_master_512.png --subject "<new material> <tool>"`, `--strength` ~0.85 for a big material change), then copy the sibling's `.blend` geometry, swap the head material, recolour the head loops, export. A whole tier family can share one geometry and differ only in the head material.
 
 ## Verify in-game
 

@@ -21,6 +21,11 @@ art/textures/candidates/
 # regenerable from the committed candidates/ + prompts.json + selection.json,
 # which ARE the authoring record and stay in git.
 art/ore/meshes/
+art/held/meshes/
+# Regenerable per-family picker/review pages (gen_candidates.py --html-only /
+# gen_meshes.py --html-only rebuild them from the committed inputs).
+art/*/pick.html
+art/*/review.html
 *.contact.png
 *.preview.png
 

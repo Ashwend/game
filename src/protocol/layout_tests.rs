@@ -414,7 +414,7 @@ fn wire_protocol_postcard_layout_is_stable() {
     let digest = Sha256::digest(&payload);
     let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(
-        hex, "6b2d9d1f498b127fe8eaf9d135085dc58eb81d71d237ea73102ecf72f29e0258",
+        hex, "cbfb0d08e527694485857a8d656ad96c539d409b23f5b48a4522a7bbf830e0cc",
         "Wire protocol postcard layout changed. If intentional, bump \
          PROTOCOL_VERSION and update this golden hash to {hex}."
     );

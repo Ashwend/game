@@ -3,12 +3,20 @@
 //! `setup_scene` (see `assets.rs`); consumed by the deployable mirror spawn,
 //! the placement ghost, and the world-scene ruin spawns.
 
+use std::collections::HashMap;
+
 use bevy::prelude::*;
 
 use super::toon::ToonMaterial;
 
 #[derive(Resource, Clone)]
 pub(crate) struct DeployableVisualAssets {
+    /// Per-item BAKED cel materials for the image-to-3D world rebuilds
+    /// (batch 2): keyed by item id, each over
+    /// `textures/deployables/baked/<id>.png`. The placed prop, its upgrade
+    /// swap, and the door panels all bind these; the shared line-art tiles
+    /// below remain only for the shutter and legacy props.
+    pub(crate) baked_materials: HashMap<&'static str, Handle<ToonMaterial>>,
     pub(crate) workbench_mesh: Handle<Mesh>,
     /// Tier-2 workbench model (heavier bench + anvil + vice + bolted frame +
     /// lower-shelf clutter), swapped in by [`Self::workbench_mesh`] when a placed
@@ -79,12 +87,6 @@ pub(crate) struct DeployableVisualAssets {
     /// Cel-shaded stone material (hand-painted cobble line-art, UV-mapped) for the
     /// crude furnace.
     pub(crate) toon_stone_material: Handle<ToonMaterial>,
-    /// Cel-shaded fabric material (woven-quilt line-art, UV-mapped) for the
-    /// sleeping bag bedroll. See [Toon / cel shading](../../../docs/toon-shading.md).
-    pub(crate) toon_fabric_material: Handle<ToonMaterial>,
-    /// Woven-cloth cel material for placed cloth-bodied charges (the powder bomb
-    /// and the satchel), the shared fabric tile tinted by each glb's COLOR_0.
-    pub(crate) charge_cloth_material: Handle<ToonMaterial>,
     /// Semi-transparent green tint used by the placement ghost when the
     /// slot is valid. Mirrors the convention from popular survival games
     ///, green means "click to place", we pair it with a slight pulse.
@@ -162,6 +164,16 @@ impl DeployableVisualAssets {
             crate::items::DoorVariant::Iron => self.iron_door_panel_mesh.clone(),
             crate::items::DoorVariant::Shutter => self.shutter_panel_mesh.clone(),
         }
+    }
+
+    /// The per-item baked cel material for a batch-2 world rebuild. The map
+    /// is built from a fixed id list at startup, so a missing entry is a
+    /// wiring bug, not a data state.
+    pub(crate) fn baked(&self, item_id: &str) -> Handle<ToonMaterial> {
+        self.baked_materials
+            .get(item_id)
+            .unwrap_or_else(|| panic!("no baked deployable material for {item_id}"))
+            .clone()
     }
 
     /// Textured material for a door variant.

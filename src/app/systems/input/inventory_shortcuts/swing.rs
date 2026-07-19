@@ -28,7 +28,7 @@ use super::send::send_gameplay_message;
 /// - A tool maps its [`ToolKind`](crate::items::ToolKind) to a swing
 ///   archetype (Hatchet/Pickaxe/Sickle).
 /// - A weapon animates and reads as its own registry `model`
-///   (Club/Spear/Sword/Mace).
+///   (Club/Spear/Sword).
 ///
 /// This is exactly the server's [`crate::items::ItemDefinition::swing_model`]
 /// derivation, so the client's local swing and the server's stamped peer-visible

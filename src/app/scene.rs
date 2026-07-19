@@ -109,6 +109,12 @@ mod tests {
         // for the terrain material, and `asset_server.load::<Image>` panics if the
         // type was never registered.
         app.init_asset::<Image>();
+        // `setup_scene` kicks off whole-file Gltf loads for the held glbs that
+        // carry a `socket_grip` node (`load_grip_sockets`); the real app gets
+        // these asset types from `GltfPlugin`, which the bare test app doesn't
+        // add.
+        app.init_asset::<bevy::gltf::Gltf>();
+        app.init_asset::<bevy::gltf::GltfNode>();
         // `setup_scene` adds an earthlike `Atmosphere` to the camera, which
         // pulls a `ScatteringMedium` handle out of this asset collection.
         app.init_resource::<Assets<ScatteringMedium>>();

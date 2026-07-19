@@ -137,7 +137,7 @@ pub const PICKAXE_KNOCKBACK_SPEED: f32 = 4.0;
 pub const METEORITE_PER_SWING_YIELD: u16 = 2;
 
 // =====================================================================
-// Weapons (dedicated melee: club, spear, sword, mace)
+// Weapons (dedicated melee: club, spear, sword)
 // =====================================================================
 //
 // The four melee weapons widen the tool spectrum rather than blur it: the
@@ -146,7 +146,7 @@ pub const METEORITE_PER_SWING_YIELD: u16 = 2;
 // resolves a weapon's `WeaponProfile` ahead of any gather tool (weapons gather
 // nothing), so these are the numbers a swing actually reads.
 //
-// Cooldown ordering is a hard design constraint: club < sword < spear < mace,
+// Cooldown ordering is a hard design constraint: club < sword < spear,
 // in server ticks (20 per second), so faster weapons have the smaller floor.
 // The tool anchors are the stone hatchet / pickaxe at 6 ticks and the iron
 // tools at 5; the club sits just slower than the stone hatchet and the rest
@@ -181,20 +181,6 @@ pub const IRON_SWORD_PVP_DAMAGE: u32 = 20;
 pub const IRON_SWORD_KNOCKBACK_SPEED: f32 = 3.0;
 pub const IRON_SWORD_COOLDOWN_TICKS: u64 = 9;
 
-/// Iron mace: the anti-armor answer. The slowest weapon (14 ticks, slower even
-/// than the hammer's 8) and the hardest single hit at 26, with the biggest
-/// knockback in the game, heavier than the pickaxe's 4.0 m/s shove, so a landed
-/// mace blow flings a target clear. Its 50% armor pierce is what makes it the
-/// counter to a fully armored opponent: half their mitigation is ignored before
-/// the hit lands. Iron-tier durability.
-pub const IRON_MACE_PVP_DAMAGE: u32 = 26;
-pub const IRON_MACE_KNOCKBACK_SPEED: f32 = 5.0;
-pub const IRON_MACE_COOLDOWN_TICKS: u64 = 14;
-/// Percent of the target's armor the mace ignores before mitigation. The
-/// heaviest weapon punches through half of any set, its role in the
-/// rock-paper-scissors: it punishes iron armor the way nothing else does.
-pub const IRON_MACE_ARMOR_PIERCE_PCT: u8 = 50;
-
 // =====================================================================
 // Ranged (bow, crossbow, arrows, projectile simulation)
 // =====================================================================
@@ -203,7 +189,7 @@ pub const IRON_MACE_ARMOR_PIERCE_PCT: u8 = 50;
 // than firing a melee swing. The bow draws to build damage; the crossbow is a
 // flat, slow, hard-hitting shot. Both spawn a server-simulated arrow that flies
 // under gravity and resolves its own hit. Projectile damage is `DamageKind::
-// Projectile`, so armor's projectile column (and the mace's pierce path) apply
+// Projectile`, so armor's projectile column (and the pierce path) apply
 // through the shared post-hit tail. Draw and cooldown are in server ticks
 // (20 per second). Speeds are in metres per second.
 
@@ -260,7 +246,7 @@ pub const CROSSBOW_DRAW_TICKS: u64 = 0;
 pub const CROSSBOW_COOLDOWN_TICKS: u64 = (3.5 * SERVER_TICK_RATE_HZ) as u64;
 /// Crossbow: knockback impulse magnitude on a hit, in m/s. The heavy hitter of
 /// the two: a 55-damage bolt lands with a real shove (well past the sword and
-/// near the mace), so eating one clearly rocks the target back.
+/// near the pickaxe's), so eating one clearly rocks the target back.
 pub const CROSSBOW_KNOCKBACK_SPEED: f32 = 4.0;
 
 /// Downward acceleration applied to a live projectile each second, in m/s^2. A

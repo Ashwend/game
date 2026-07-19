@@ -94,11 +94,12 @@ use self::{
         maintain_world_grid_system, menu_backdrop_camera_system, meteor_shower_impact_system,
         mouse_look_system, multiplayer_test_owns_window, network_tick_system,
         placement_input_system, reconcile_player_rigs_system, register_render_stats,
-        reposition_test_window_system, save_client_settings_system, screen_viewed_system,
-        session_ended_system, session_shutdown_poll_system, session_started_system,
-        setup_paperdoll_preview, spawn_explosion_effects_system, spawn_impact_effects_system,
-        spawn_predicted_arrows_system, surface_client_error_toasts_system, sway_hay_grass_system,
-        sword_slash_trail_system, sync_furnace_open_flag_system, sync_loot_bag_open_flag_system,
+        reposition_test_window_system, resolve_grip_sockets_system, save_client_settings_system,
+        screen_viewed_system, session_ended_system, session_shutdown_poll_system,
+        session_started_system, setup_paperdoll_preview, spawn_explosion_effects_system,
+        spawn_impact_effects_system, spawn_predicted_arrows_system,
+        surface_client_error_toasts_system, sway_hay_grass_system, sword_slash_trail_system,
+        sync_furnace_open_flag_system, sync_loot_bag_open_flag_system,
         sync_paperdoll_preview_system, sync_view_radius_system, sync_viewmodel_fov_system,
         sync_workbench_open_flag_system, tick_charge_spark_particles_system,
         tick_combat_feedback_system, tick_explosion_flash_system, tick_explosion_smoke_system,
@@ -981,7 +982,12 @@ fn add_scene_systems(app: &mut App) {
         )
         .add_systems(
             Update,
-            (apply_held_item_visual_system, sword_slash_trail_system)
+            (
+                resolve_grip_sockets_system,
+                apply_held_item_visual_system,
+                sword_slash_trail_system,
+            )
+                .chain()
                 .in_set(ClientSystemSet::HeldItem),
         )
         .add_systems(Update, update_sky_system.in_set(ClientSystemSet::Sky))

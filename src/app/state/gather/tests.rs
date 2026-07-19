@@ -390,7 +390,7 @@ fn hit_stop_scale_zero_disables_the_freeze() {
     // A 0 scale (the Dev slider's disable setting) must arm no freeze at all, so
     // the swing advances normally on the very next step.
     let mut state = GatherInputState::default();
-    let model = ItemModel::Mace;
+    let model = ItemModel::Pickaxe;
     let _ = state.update(
         0.05,
         true,
@@ -650,7 +650,7 @@ fn impact_effect_kind_maps_wire_kinds() {
 /// Every [`ItemModel`] swing archetype. The exhaustive match forces a new
 /// variant to be added here, so the completeness test below then covers it and a
 /// model can never reach the swing machine without a duration + contact fraction.
-const ALL_SWING_MODELS: [ItemModel; 12] = [
+const ALL_SWING_MODELS: [ItemModel; 11] = [
     ItemModel::Bag,
     ItemModel::Deployable,
     ItemModel::Hatchet,
@@ -658,7 +658,6 @@ const ALL_SWING_MODELS: [ItemModel; 12] = [
     ItemModel::Club,
     ItemModel::Spear,
     ItemModel::Sword,
-    ItemModel::Mace,
     ItemModel::Bow,
     ItemModel::Crossbow,
     ItemModel::ThrownBomb,
@@ -679,7 +678,6 @@ fn all_swing_models_listed_and_have_valid_timing() {
             | ItemModel::Club
             | ItemModel::Spear
             | ItemModel::Sword
-            | ItemModel::Mace
             | ItemModel::Bow
             | ItemModel::Crossbow
             | ItemModel::ThrownBomb
@@ -709,16 +707,14 @@ fn all_swing_models_listed_and_have_valid_timing() {
 
 #[test]
 fn weapon_swing_durations_preserve_the_speed_ordering() {
-    // Club fastest, then sword, spear, mace, mirroring the server cooldown
-    // ordering (club < sword < spear < mace). The swing the player feels must
+    // Club fastest, then sword, then spear, mirroring the server cooldown
+    // ordering (club < sword < spear). The swing the player feels must
     // keep that order so the weapons stay distinguishable.
     let club = swing_duration_seconds(ItemModel::Club);
     let sword = swing_duration_seconds(ItemModel::Sword);
     let spear = swing_duration_seconds(ItemModel::Spear);
-    let mace = swing_duration_seconds(ItemModel::Mace);
     assert!(club < sword, "club swings faster than the sword");
     assert!(sword < spear, "sword swings faster than the spear");
-    assert!(spear < mace, "spear swings faster than the mace");
 }
 
 #[test]

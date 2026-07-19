@@ -320,7 +320,7 @@ pub enum ServerMessage {
         /// ignore it.
         attacker_position: Vec3Net,
         /// The swing's impact identity: the weapon's own archetype
-        /// (Club/Spear/Sword/Mace) or a gather tool's archetype
+        /// (Club/Spear/Sword) or a gather tool's archetype
         /// (Hatchet/Pickaxe). Drives the peer hit audio, the impact VFX, and
         /// the target's camera reaction, so the feedback matches what actually
         /// landed the hit rather than a generic stand-in.

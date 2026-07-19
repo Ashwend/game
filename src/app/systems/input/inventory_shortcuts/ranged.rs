@@ -212,7 +212,7 @@ fn fire_shot(
     }
 
     // Camera recoil ON FIRE: give the shot real punch. The kick profile is keyed
-    // on the weapon's ItemModel (bow = medium string-snap, crossbow = near-mace
+    // on the weapon's ItemModel (bow = medium string-snap, crossbow = heavy
     // lurch); `camera_kick.trigger` applies the live DevCombat kick scales exactly
     // like the melee swing path, which `camera_follow_system` syncs every frame.
     if let Some(model) = item_definition(weapon_id).map(|def| def.model) {

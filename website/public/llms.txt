@@ -14,15 +14,14 @@ The game is early and openly described as such on the site. The core loop is gen
 
 ## Download
 
-The downloads always point at the newest GitHub release, so they never need bumping per release.
+The downloads always point at the newest GitHub release, so they never need bumping per release. Each build is roughly an 80 MB download; the game runs on Apple Silicon Macs and 64-bit Windows or Linux PCs with a reasonably recent GPU.
 
 - [All releases and patch notes](https://github.com/Ashwend/game/releases): every build with its changelog.
-- [Windows (x86-64)](https://github.com/Ashwend/game/releases/latest/download/ashwend-x86_64-pc-windows-msvc.zip)
-- [macOS (Apple Silicon)](https://github.com/Ashwend/game/releases/latest/download/ashwend-aarch64-apple-darwin.zip)
-- [Linux (x86-64)](https://github.com/Ashwend/game/releases/latest/download/ashwend-x86_64-unknown-linux-gnu.tar.gz)
-- [Linux (ARM64)](https://github.com/Ashwend/game/releases/latest/download/ashwend-aarch64-unknown-linux-gnu.tar.gz)
+- [Windows (x86-64) installer](https://github.com/Ashwend/game/releases/latest/download/ashwend-x86_64-pc-windows-msvc-setup.exe): per-user setup.exe with Start Menu shortcut and uninstaller. A portable [zip](https://github.com/Ashwend/game/releases/latest/download/ashwend-x86_64-pc-windows-msvc.zip) is also published.
+- [macOS (Apple Silicon) .dmg](https://github.com/Ashwend/game/releases/latest/download/ashwend-aarch64-apple-darwin.dmg): drag-to-Applications, Developer ID signed and notarized. A bare [zip](https://github.com/Ashwend/game/releases/latest/download/ashwend-aarch64-apple-darwin.zip) is also published.
+- [Linux (x86-64)](https://github.com/Ashwend/game/releases/latest/download/ashwend-x86_64-unknown-linux-gnu.tar.gz) and [Linux (ARM64)](https://github.com/Ashwend/game/releases/latest/download/ashwend-aarch64-unknown-linux-gnu.tar.gz): untar and run `./ashwend`.
 
-macOS one-line install (no Gatekeeper prompt, since the download is via curl rather than a browser):
+macOS one-line install for terminal users and automation (installs the same signed build to /Applications):
 
 ```
 curl -fsSL https://www.ashwend.com/install.sh | sh
@@ -32,14 +31,3 @@ curl -fsSL https://www.ashwend.com/install.sh | sh
 
 - [Discord](https://discord.gg/gVqTumNb8b): playtest community and patch announcements.
 - [Source on GitHub](https://github.com/Ashwend/game): source-available under PolyForm Strict 1.0.0. The name and logo are trademarks, not covered by the code license.
-
-## Screenshots
-
-In-engine captures from the current build:
-
-- Mining stone with a pickaxe, a timber base on the horizon.
-- Dawn mist burning off the open plains.
-- Lone pines standing in the morning fog.
-- A lit furnace smelting ore beside a workbench.
-- A torch-lit timber cabin holding back the night.
-- The inventory and crafting menu, mid-session.

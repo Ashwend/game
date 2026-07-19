@@ -37,8 +37,8 @@ const BAG_IMPACT_FRACTION: f32 = 0.55;
 // The four melee weapons. Each duration is coherent with the weapon's server
 // cooldown (duration ~= cooldown_ticks / SERVER_TICK_RATE_HZ), so the swing the
 // player feels tracks the anti-spam floor, and each pair matches its pose in
-// `swing_poses.rs`. The ordering (club fastest, then sword, spear, mace) mirrors
-// the cooldown ordering in game_balance. The mace is deliberately a touch slower
+// `swing_poses.rs`. The ordering (club fastest, then sword, then spear) mirrors
+// the cooldown ordering in game_balance.
 // than its cooldown alone would imply, its huge wind-up and follow-through are
 // its identity.
 const CLUB_SWING_SECONDS: f32 = 0.42;
@@ -49,8 +49,6 @@ const SWORD_SWING_SECONDS: f32 = 0.46;
 const SWORD_IMPACT_FRACTION: f32 = 0.34;
 const SPEAR_SWING_SECONDS: f32 = 0.62;
 const SPEAR_IMPACT_FRACTION: f32 = 0.55;
-const MACE_SWING_SECONDS: f32 = 0.95;
-const MACE_IMPACT_FRACTION: f32 = 0.70;
 
 // The sickle's reaping cut: brisker than the hatchet chop (a light crescent,
 // not a heavy head) but more committed than the sword's whip, and contact is
@@ -227,7 +225,6 @@ pub(crate) fn swing_duration_seconds(model: ItemModel) -> f32 {
         ItemModel::Club => CLUB_SWING_SECONDS,
         ItemModel::Spear => SPEAR_SWING_SECONDS,
         ItemModel::Sword => SWORD_SWING_SECONDS,
-        ItemModel::Mace => MACE_SWING_SECONDS,
         ItemModel::Sickle => SICKLE_SWING_SECONDS,
         // Ranged weapons don't swing: the draw hold lives in `RangedDrawState`.
         // These entries are the fire-recovery beats (see the constants above).
@@ -254,7 +251,6 @@ pub(crate) fn swing_impact_fraction(model: ItemModel) -> f32 {
         ItemModel::Club => CLUB_IMPACT_FRACTION,
         ItemModel::Spear => SPEAR_IMPACT_FRACTION,
         ItemModel::Sword => SWORD_IMPACT_FRACTION,
-        ItemModel::Mace => MACE_IMPACT_FRACTION,
         ItemModel::Sickle => SICKLE_IMPACT_FRACTION,
         // Ranged fire-recovery beats: the shot leaves early in the beat, the rest
         // of the window is the settle (see the constants above).
@@ -337,14 +333,13 @@ pub(crate) fn swap_duration_for_model(model: ItemModel) -> f32 {
             SWAP_DURATION_BAG
         }
         // The club, spear, sword, and sickle lift like the hatchet (a
-        // one/two-handed haft); the mace is the heaviest thing you can carry,
         // so it lifts like the pickaxe.
         ItemModel::Hatchet
         | ItemModel::Club
         | ItemModel::Spear
         | ItemModel::Sword
         | ItemModel::Sickle => SWAP_DURATION_HATCHET,
-        ItemModel::Pickaxe | ItemModel::Mace => SWAP_DURATION_PICKAXE,
+        ItemModel::Pickaxe => SWAP_DURATION_PICKAXE,
         // The bow is a light wooden two-hander: it lifts at the hatchet cadence.
         ItemModel::Bow => SWAP_DURATION_HATCHET,
         // The crossbow is heavy iron machinery shouldered into place: it lifts
@@ -538,7 +533,7 @@ pub(crate) struct GatherInputState {
 
 #[derive(Debug, Clone, Copy)]
 struct ActiveSwing {
-    /// The swing archetype ([`ItemModel`]): a weapon's own Club/Spear/Sword/Mace
+    /// The swing archetype ([`ItemModel`]): a weapon's own Club/Spear/Sword
     /// or a gather tool's Hatchet/Pickaxe (or Bag for the empty-hand punch). This
     /// is the impact identity carried into the [`SwingImpact`] and the wire
     /// `SwingStart`/`PlayerImpact`, and it keys the audio pool, camera kick, and

@@ -36,22 +36,17 @@ const SPEAR_KICK_PITCH: f32 = 0.030;
 const SPEAR_KICK_DOWN: f32 = 0.018;
 const SPEAR_KICK_DURATION: f32 = 0.17;
 // Iron sword: a balanced arc, roughly hatchet-plus, between the spear and the
-// mace.
+// pickaxe.
 const SWORD_KICK_PITCH: f32 = 0.032;
 const SWORD_KICK_DOWN: f32 = 0.020;
 const SWORD_KICK_DURATION: f32 = 0.16;
-// Iron mace: clearly the HEAVIEST kick in the game, a big overhead slam that
-// out-punches even the pickaxe and lingers longest.
-const MACE_KICK_PITCH: f32 = 0.050;
-const MACE_KICK_DOWN: f32 = 0.034;
-const MACE_KICK_DURATION: f32 = 0.24;
 // Wooden bow release: a medium recoil, the string's snap felt through the grip.
 // Sits around the hatchet/sword band, punchy but not a slam: a bow shot should
 // feel like a real loose, well above the old bare-hands placeholder.
 const BOW_KICK_PITCH: f32 = 0.022;
 const BOW_KICK_DOWN: f32 = 0.014;
 const BOW_KICK_DURATION: f32 = 0.12;
-// Crossbow fire: a HEAVY recoil, near the mace. The 55-damage bolt leaves the
+// Crossbow fire: the HEAVIEST recoil. The 55-damage bolt leaves the
 // rail with a hard snap, so the camera lurches: the crossbow is the game's
 // hardest-hitting shot and the kick sells it.
 const CROSSBOW_KICK_PITCH: f32 = 0.045;
@@ -62,7 +57,7 @@ const CROSSBOW_KICK_DURATION: f32 = 0.20;
 // than any swing-side kick, the camera jolts down rather than up, so the
 // recipient can tell at a glance whether the wobble was their own swing or
 // an incoming hit. The profile scales with the attacker's swing archetype so a
-// mace blow rocks the camera hardest and a club jab the least.
+// pickaxe blow rocks the camera hardest and a club jab the least.
 const HIT_RECEIVED_AXE_PITCH: f32 = 0.015;
 const HIT_RECEIVED_AXE_DOWN: f32 = 0.045;
 const HIT_RECEIVED_AXE_DURATION: f32 = 0.16;
@@ -81,11 +76,6 @@ const HIT_RECEIVED_SPEAR_DURATION: f32 = 0.18;
 const HIT_RECEIVED_SWORD_PITCH: f32 = 0.022;
 const HIT_RECEIVED_SWORD_DOWN: f32 = 0.066;
 const HIT_RECEIVED_SWORD_DURATION: f32 = 0.20;
-// Mace incoming: the HARDEST hit reaction, a bone-rocking overhead that
-// out-jolts every other source.
-const HIT_RECEIVED_MACE_PITCH: f32 = 0.034;
-const HIT_RECEIVED_MACE_DOWN: f32 = 0.100;
-const HIT_RECEIVED_MACE_DURATION: f32 = 0.26;
 
 // Explosion shake: a placed charge detonating nearby rocks the camera scaled by
 // proximity. At ground zero it is the hardest kick in the game (a breach should
@@ -402,7 +392,7 @@ impl CameraImpactKick {
 
     /// Trigger the swing-side camera kick for a swing of archetype `model`. The
     /// magnitude/duration scale by weight class: the club is the lightest weapon,
-    /// the mace clearly the heaviest; the Hatchet/Pickaxe/Bag values are the
+    /// the pickaxe clearly the heaviest; the Hatchet/Pickaxe/Bag values are the
     /// shipped tool kicks, unchanged.
     pub(crate) fn trigger(&mut self, model: ItemModel) {
         let (pitch, down, duration) = match model {
@@ -418,10 +408,9 @@ impl CameraImpactKick {
             ItemModel::Club => (CLUB_KICK_PITCH, CLUB_KICK_DOWN, CLUB_KICK_DURATION),
             ItemModel::Spear => (SPEAR_KICK_PITCH, SPEAR_KICK_DOWN, SPEAR_KICK_DURATION),
             ItemModel::Sword => (SWORD_KICK_PITCH, SWORD_KICK_DOWN, SWORD_KICK_DURATION),
-            ItemModel::Mace => (MACE_KICK_PITCH, MACE_KICK_DOWN, MACE_KICK_DURATION),
             // Ranged weapons recoil ON FIRE (fired straight from the ranged fire
             // path, not the swing path): the bow's medium string-snap, the
-            // crossbow's near-mace lurch. A firm shot should feel like a real
+            // crossbow's heavy lurch. A firm shot should feel like a real
             // loose, so these sit well above the old bare-hands placeholder.
             ItemModel::Bow => (BOW_KICK_PITCH, BOW_KICK_DOWN, BOW_KICK_DURATION),
             ItemModel::Crossbow => (
@@ -443,15 +432,10 @@ impl CameraImpactKick {
     /// Trigger the "I just got hit by a player" kick. Distinct profile from the
     /// swing-side kick, sharper, more downward-biased, so the recipient can tell
     /// at a glance whether the wobble was their own swing or an incoming hit.
-    /// `attacker_model` scales the response by weight class: a mace blow rocks the
+    /// `attacker_model` scales the response by weight class: a pickaxe blow rocks the
     /// camera hardest, a club jab the least.
     pub(crate) fn trigger_from_hit(&mut self, attacker_model: ItemModel) {
         let (pitch, down, duration) = match attacker_model {
-            ItemModel::Mace => (
-                HIT_RECEIVED_MACE_PITCH,
-                HIT_RECEIVED_MACE_DOWN,
-                HIT_RECEIVED_MACE_DURATION,
-            ),
             ItemModel::Pickaxe => (
                 HIT_RECEIVED_PICKAXE_PITCH,
                 HIT_RECEIVED_PICKAXE_DOWN,
@@ -911,27 +895,6 @@ mod tests {
     }
 
     #[test]
-    fn mace_is_the_heaviest_and_club_the_lightest_weapon_kick() {
-        // Sample each weapon's peak at the crest of its own pulse (halfway
-        // through its own duration) so the comparison is magnitude, not timing.
-        let club = kick_peak(ItemModel::Club, CLUB_KICK_DURATION * 0.5).0;
-        let spear = kick_peak(ItemModel::Spear, SPEAR_KICK_DURATION * 0.5).0;
-        let sword = kick_peak(ItemModel::Sword, SWORD_KICK_DURATION * 0.5).0;
-        let mace = kick_peak(ItemModel::Mace, MACE_KICK_DURATION * 0.5).0;
-        let pickaxe = kick_peak(ItemModel::Pickaxe, PICKAXE_KICK_DURATION * 0.5).0;
-
-        // The mace out-punches every weapon and even the pickaxe (the previous
-        // heaviest swing in the game).
-        for other in [club, spear, sword, pickaxe] {
-            assert!(mace > other, "mace out-kicks {other}");
-        }
-        // The club is the lightest of the four weapons.
-        for other in [spear, sword, mace] {
-            assert!(club < other, "club under-kicks {other}");
-        }
-    }
-
-    #[test]
     fn ranged_shots_arm_a_real_recoil_and_crossbow_out_kicks_the_bow() {
         // The ranged fire recoil must be a genuine kick, not the old bare-hands
         // placeholder: both bow and crossbow out-punch the hands profile, and the
@@ -955,10 +918,7 @@ mod tests {
         // The crossbow recoil lands in the heavyweight band (at or above the
         // sword, the game's balanced weapon kick).
         let sword = kick_peak(ItemModel::Sword, SWORD_KICK_DURATION * 0.5).0;
-        assert!(
-            crossbow >= sword,
-            "the crossbow recoil is a heavyweight, near the mace"
-        );
+        assert!(crossbow >= sword, "the crossbow recoil is a heavyweight");
     }
 
     #[test]

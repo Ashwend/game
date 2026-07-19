@@ -15,6 +15,8 @@ use bevy::{
     },
 };
 
+use std::collections::HashMap;
+
 use bevy_egui::PrimaryEguiContext;
 
 use super::mesh::builder::build_hay_tuft_mesh;
@@ -58,7 +60,6 @@ pub(crate) const ATMOSPHERE_ENV_MAP_SIZE: u32 = 64;
 
 pub(crate) const WORLD_COLOR: Color = Color::srgb(0.18, 0.34, 0.22);
 pub(crate) const DROPPED_BAG_COLOR: Color = Color::srgb(0.42, 0.31, 0.18);
-pub(crate) const HELD_BAG_COLOR: Color = Color::srgb(0.50, 0.38, 0.24);
 pub(crate) const VERTEX_MATERIAL_COLOR: Color = Color::WHITE;
 
 #[derive(Resource, Clone)]
@@ -76,40 +77,26 @@ pub(crate) struct PlayerVisualAssets {
 #[derive(Resource, Clone)]
 pub(crate) struct ItemVisualAssets {
     pub(crate) dropped_mesh: Handle<Mesh>,
-    /// The one procedural cuboid the bag silhouette (raw materials +
-    /// deployables-in-hand) renders as. The authored tool/hammer/plan glbs load
-    /// through the [`crate::items::HeldMesh`] visual table into
-    /// `HeldItemVisuals`, not fields here.
-    pub(crate) held_bag_mesh: Handle<Mesh>,
-    /// Shared cel [`ToonMaterial`]s for the tool layers, resolved from a
-    /// [`crate::items::HeldMeshMaterial`] family. The tools joined the cel/anime
-    /// family, so each layer is lit by the same PBR-then-posterise path as the ore
-    /// and deployables. Wood carries the haft plus its twine bindings; Stone is
-    /// knapped stone; Iron is forged steel plus the hammer bands; Parchment is the
-    /// building-plan paper. Per-item colour comes from the glb COLOR_0 (warm wood,
-    /// tan twine, grey stone, cool steel); the light neutral-grain textures only
-    /// add surface detail (`detail * COLOR_0`). Sources: `assets/textures/tools/*`.
+    /// Shared cel [`ToonMaterial`]s for the authored ANIMATABLE glbs (bow,
+    /// crossbow, bandage), resolved from a [`crate::items::HeldMeshMaterial`]
+    /// family: Wood carries the bow stave / crossbow stock / nocked arrow,
+    /// Iron the crossbow fittings. Per-piece colour comes from the glb COLOR_0;
+    /// the light neutral-grain textures only add surface detail
+    /// (`detail * COLOR_0`). Sources: `assets/textures/tools/*`. Every other
+    /// held item is an image-to-3D rebuild on the per-item `Baked` family
+    /// below.
     pub(crate) tool_wood_material: Handle<ToonMaterial>,
-    pub(crate) tool_stone_material: Handle<ToonMaterial>,
     pub(crate) tool_iron_material: Handle<ToonMaterial>,
-    /// Camera-relative variants of the three tool materials, used only for the
+    /// Camera-relative variants of the family materials, used only for the
     /// FIRST-PERSON held viewmodel (a camera-child). They light the cel bands from
     /// a fixed view-space key light so the bands don't swim as the camera turns;
-    /// the world-space `*_material` above stays on the third-person tool, which is
+    /// the world-space `*_material` above stays on the third-person item, which is
     /// in world space on a remote player's hand and should be lit like the scene.
     pub(crate) tool_wood_vm_material: Handle<ToonViewmodelMaterial>,
-    pub(crate) tool_stone_vm_material: Handle<ToonViewmodelMaterial>,
     pub(crate) tool_iron_vm_material: Handle<ToonViewmodelMaterial>,
-    /// Parchment material for the rolled building-plan scroll (world + viewmodel
-    /// variants, same as the tools). Its twine ties reuse the wood material with a
-    /// brown COLOR_0.
-    pub(crate) tool_parchment_material: Handle<ToonMaterial>,
-    pub(crate) tool_parchment_vm_material: Handle<ToonViewmodelMaterial>,
-    /// Woven-cloth cel material for the explosive charges (world + viewmodel):
-    /// the powder bomb's wrap and the satchel's pack body bind this, and the
-    /// satchel's leather strap reuses it too (both ride the shared `cloth.png`
-    /// tool tile; each glb's COLOR_0 carries the fabric colour vs the tan leather,
-    /// the same `detail * COLOR_0` cel path the tools use).
+    /// Woven-cloth cel material for the bandage roll + tail (world + viewmodel);
+    /// the glb's COLOR_0 carries the linen colour, the shared `cloth.png` tile
+    /// only adds weave detail (`detail * COLOR_0`).
     pub(crate) tool_cloth_material: Handle<ToonMaterial>,
     pub(crate) tool_cloth_vm_material: Handle<ToonViewmodelMaterial>,
     /// Pale bowstring / crossbow-string cord cel material (world + viewmodel). The
@@ -120,10 +107,15 @@ pub(crate) struct ItemVisualAssets {
     /// cord is slim enough that its grain barely reads, only its colour does).
     pub(crate) tool_cord_material: Handle<ToonMaterial>,
     pub(crate) tool_cord_vm_material: Handle<ToonViewmodelMaterial>,
+    /// Per-item cel materials for the image-to-3D tool rebuilds (the `Baked`
+    /// family): each keys `textures/held/<id>.png`, the albedo rebaked from the
+    /// TRELLIS.2 output (`art/held/build_held.py`), onto a white-COLOR_0 glb.
+    /// World + viewmodel variants, keyed by item id, collected from whatever
+    /// `Baked(id)` layers the `HeldMesh::visual` table declares, so a new baked
+    /// tool is still one table row plus its glb + texture.
+    pub(crate) baked_tool_materials: HashMap<&'static str, Handle<ToonMaterial>>,
+    pub(crate) baked_tool_vm_materials: HashMap<&'static str, Handle<ToonViewmodelMaterial>>,
     pub(crate) dropped_material: Handle<StandardMaterial>,
-    /// Flat `StandardMaterial` the bag silhouette binds (resolved from the
-    /// `BagStandard` family; no cel/viewmodel variant).
-    pub(crate) held_bag_material: Handle<StandardMaterial>,
 }
 
 #[derive(Resource, Clone)]
@@ -612,20 +604,14 @@ fn insert_held_item_visuals(
         dev_flags: 0,
     };
     let wood_tex = load_tool_texture("wood");
-    let stone_tex = load_tool_texture("stone");
     let iron_tex = load_tool_texture("iron");
     let parchment_tex = load_tool_texture("parchment");
     let tool_wood_material = toon_materials.add(tool_toon(wood_tex.clone()));
-    let tool_stone_material = toon_materials.add(tool_toon(stone_tex.clone()));
     let tool_iron_material = toon_materials.add(tool_toon(iron_tex.clone()));
-    let tool_parchment_material = toon_materials.add(tool_toon(parchment_tex.clone()));
     let tool_wood_vm_material = toon_viewmodel_materials.add(tool_vm(wood_tex));
-    let tool_stone_vm_material = toon_viewmodel_materials.add(tool_vm(stone_tex));
     let tool_iron_vm_material = toon_viewmodel_materials.add(tool_vm(iron_tex));
-    let tool_parchment_vm_material = toon_viewmodel_materials.add(tool_vm(parchment_tex.clone()));
-    // Explosive-charge cloth family: the powder bomb's wrap, the satchel's pack
-    // body, and the satchel's leather strap all bind this one cloth-tile cel
-    // material (each glb's COLOR_0 gives it the fabric vs tan-leather colour).
+    // Cloth family: the bandage's roll + tail bind this one cloth-tile cel
+    // material (the glb's COLOR_0 gives it the linen colour).
     let cloth_tex = load_tool_texture("cloth");
     let tool_cloth_material = toon_materials.add(tool_toon(cloth_tex.clone()));
     let tool_cloth_vm_material = toon_viewmodel_materials.add(tool_vm(cloth_tex));
@@ -634,30 +620,75 @@ fn insert_held_item_visuals(
     // the string is thin enough that only its COLOR_0 reads.
     let tool_cord_material = toon_materials.add(tool_toon(parchment_tex.clone()));
     let tool_cord_vm_material = toon_viewmodel_materials.add(tool_vm(parchment_tex.clone()));
+    // Per-item baked albedos for the image-to-3D tool rebuilds (the `Baked`
+    // family). The id set is collected from the `HeldMesh::visual` table so this
+    // block never needs editing for a new baked tool. The baked texture carries
+    // the painted surface itself (COLOR_0 ships white), so these run the softer
+    // ore-style cel params rather than the punchy facet-outline tool params.
+    let baked_params = Vec4::new(3.0, 0.0, 0.8, 2.2);
+    let mut baked_tool_materials = HashMap::new();
+    let mut baked_tool_vm_materials = HashMap::new();
+    for &held_mesh in crate::items::HeldMesh::ALL {
+        for layer in held_mesh.visual().layers() {
+            let crate::items::HeldMeshMaterial::Baked(item_id) = layer.material else {
+                continue;
+            };
+            if baked_tool_materials.contains_key(item_id) {
+                continue;
+            }
+            let rel = format!("textures/held/{item_id}.png");
+            let bytes = embedded_bytes(&rel)
+                .unwrap_or_else(|| panic!("embedded held albedo missing: {rel}"));
+            let mut image = Image::from_buffer(
+                bytes,
+                ImageType::Extension("png"),
+                CompressedImageFormats::NONE,
+                true,
+                ImageSampler::Descriptor(tree_texture_sampler()),
+                RenderAssetUsages::RENDER_WORLD,
+            )
+            .unwrap_or_else(|err| panic!("decode held albedo {rel}: {err:?}"));
+            build_mip_chain(&mut image);
+            let tex = images.add(image);
+            baked_tool_materials.insert(
+                item_id,
+                toon_materials.add(ToonMaterial {
+                    detail: tex.clone(),
+                    params: baked_params,
+                    tex_scale: 1.0,
+                    fade: 1.0,
+                    dev_flags: 0,
+                    emissive_tex: toon_no_glow_tex.clone(),
+                    emissive: Vec4::ZERO,
+                }),
+            );
+            baked_tool_vm_materials.insert(
+                item_id,
+                toon_viewmodel_materials.add(ToonViewmodelMaterial {
+                    detail: tex,
+                    params: baked_params,
+                    tex_scale: 1.0,
+                    fade: 1.0,
+                    dev_flags: 0,
+                }),
+            );
+        }
+    }
     let item_visual_assets = ItemVisualAssets {
         dropped_mesh: meshes.add(low_poly_bag_mesh()),
-        held_bag_mesh: meshes.add(Cuboid::new(0.26, 0.22, 0.34)),
         tool_wood_material,
-        tool_stone_material,
         tool_iron_material,
         tool_wood_vm_material,
-        tool_stone_vm_material,
         tool_iron_vm_material,
-        tool_parchment_material,
-        tool_parchment_vm_material,
         tool_cloth_material,
         tool_cloth_vm_material,
         tool_cord_material,
         tool_cord_vm_material,
+        baked_tool_materials,
+        baked_tool_vm_materials,
         dropped_material: materials.add(StandardMaterial {
             base_color: DROPPED_BAG_COLOR,
             perceptual_roughness: 0.95,
-            reflectance: 0.15,
-            ..default()
-        }),
-        held_bag_material: materials.add(StandardMaterial {
-            base_color: HELD_BAG_COLOR,
-            perceptual_roughness: 0.88,
             reflectance: 0.15,
             ..default()
         }),
@@ -669,6 +700,9 @@ fn insert_held_item_visuals(
         asset_server,
         &item_visual_assets,
     ));
+    // Grip sockets for the socket-carrying rebuilds: whole-file Gltf loads kick
+    // off here; `resolve_grip_sockets_system` fills the map as they land.
+    commands.insert_resource(crate::app::systems::load_grip_sockets(asset_server));
     commands.insert_resource(item_visual_assets);
 }
 
@@ -1026,7 +1060,39 @@ fn insert_deployable_visuals(
     };
     let deployable_wood_tex = load_toon_texture("wood");
     let deployable_stone_tex = load_toon_texture("stone");
-    let deployable_fabric_tex = load_toon_texture("fabric");
+    // Per-item BAKED albedos for the image-to-3D world rebuilds (batch 2,
+    // art/held/build_deployable_world.py): each glb ships white COLOR_0 +
+    // real UVs and textures/deployables/baked/<id>.png carries the whole
+    // painted surface, the same recipe as the held rebuilds (softer
+    // ore-style cel params, not the punchy line-art tiles above).
+    let baked_params = Vec4::new(3.0, 0.0, 0.8, 2.2);
+    let mut baked_materials = HashMap::new();
+    for id in [
+        "workbench_t1",
+        "workbench_t2",
+        "crude_furnace",
+        "hewn_log_door",
+        "iron_door",
+        "sleeping_bag",
+        "storage_box_small",
+        "storage_box_large",
+        "tool_cupboard",
+        "ruin_cache",
+    ] {
+        let tex = load_toon_texture(&format!("baked/{id}"));
+        baked_materials.insert(
+            id,
+            toon_materials.add(ToonMaterial {
+                detail: tex,
+                params: baked_params,
+                tex_scale: 1.0,
+                fade: 1.0,
+                dev_flags: 0,
+                emissive_tex: toon_no_glow_tex.clone(),
+                emissive: Vec4::ZERO,
+            }),
+        );
+    }
 
     // Placed structures are authored Blender glbs matching their inventory icons
     // (a splay-legged wooden bench, a cobblestone furnace with an arched glowing
@@ -1156,6 +1222,7 @@ fn insert_deployable_visuals(
         }),
     });
     commands.insert_resource(DeployableVisualAssets {
+        baked_materials,
         workbench_mesh: prim_mesh(&workbench_glb, 0),
         workbench_t2_mesh: prim_mesh(&workbench_t2_glb, 0),
         furnace_mesh: prim_mesh(&furnace_glb, 0),
@@ -1232,26 +1299,6 @@ fn insert_deployable_visuals(
         }),
         toon_stone_material: toon_materials.add(ToonMaterial {
             detail: deployable_stone_tex.clone(),
-            params: Vec4::new(3.0, 0.0, 1.0, 1.4),
-            tex_scale: 1.5,
-            fade: 1.0,
-            dev_flags: 0,
-            emissive_tex: toon_no_glow_tex.clone(),
-            emissive: Vec4::ZERO,
-        }),
-        toon_fabric_material: toon_materials.add(ToonMaterial {
-            detail: deployable_fabric_tex.clone(),
-            params: Vec4::new(3.0, 0.0, 1.0, 1.4),
-            tex_scale: 1.5,
-            fade: 1.0,
-            dev_flags: 0,
-            emissive_tex: toon_no_glow_tex.clone(),
-            emissive: Vec4::ZERO,
-        }),
-        // Placed cloth charges (bomb + satchel) reuse the deployable fabric
-        // line-art; each glb's COLOR_0 gives the wrap its colour.
-        charge_cloth_material: toon_materials.add(ToonMaterial {
-            detail: deployable_fabric_tex.clone(),
             params: Vec4::new(3.0, 0.0, 1.0, 1.4),
             tex_scale: 1.5,
             fade: 1.0,

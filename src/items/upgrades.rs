@@ -34,7 +34,7 @@ pub struct DeployableUpgrade {
 pub const DEPLOYABLE_UPGRADES: &[DeployableUpgrade] = &[DeployableUpgrade {
     from: DeployableKind::Workbench { tier: 1 },
     to: DeployableKind::Workbench { tier: 2 },
-    // The gate in front of every tier-2 craft (satchels, iron armor, mace,
+    // The gate in front of every tier-2 craft (satchels, iron armor,
     // crossbow), so it is priced as a mid-game project, not a checkpoint:
     // 6 ingots is most of one meteorite find (8 alloy) or a slice of a
     // crater cluster, and 8 fittings is two to three salvage-chest cycles.

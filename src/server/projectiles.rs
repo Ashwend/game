@@ -742,7 +742,7 @@ impl GameServer {
             .map(|c| c.name.clone())
             .unwrap_or_default();
 
-        // Projectiles carry no armor pierce (only the mace does today); still
+        // Projectiles carry no armor pierce (nothing does today); still
         // route through the pierce helper so a future piercing bolt just works.
         let effective_armor = effective_armor_after_pierce(target_armor, 0);
         let damage_dealt = damage_after_armor(projectile.damage, effective_armor);

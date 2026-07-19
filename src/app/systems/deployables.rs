@@ -31,7 +31,10 @@ use bevy::prelude::*;
 
 use crate::{
     app::{
-        scene::{DeployableVisualAssets, NetworkDeployedEntity, ToonMaterial, TorchFireAssets},
+        scene::{
+            DeployableVisualAssets, ItemVisualAssets, NetworkDeployedEntity, ToonMaterial,
+            TorchFireAssets,
+        },
         state::{ClientRuntime, MenuState},
         systems::furnace_fire::{FurnaceFire, sync_furnace_fire},
         systems::torch_fire::{TorchFire, sync_torch_fire},
@@ -140,7 +143,13 @@ impl DeployedEntityVisuals {
 pub(crate) fn apply_deployed_entities_system(
     mut commands: Commands,
     runtime: Res<ClientRuntime>,
-    assets: Option<Res<DeployableVisualAssets>>,
+    // The deployable assets plus the item assets (the placed charges bind the
+    // per-item BAKED cel materials their single-prim rebuilds carry), bundled
+    // to stay under Bevy's system-param limit.
+    assets: (
+        Option<Res<DeployableVisualAssets>>,
+        Option<Res<ItemVisualAssets>>,
+    ),
     torch_assets: Option<Res<TorchFireAssets>>,
     mut visuals: ResMut<DeployedEntityVisuals>,
     // World-entry loading trio, bundled to stay under Bevy's 16-param
@@ -162,7 +171,7 @@ pub(crate) fn apply_deployed_entities_system(
     mut remote_impacts: MessageWriter<crate::app::state::RemoteImpactEvent>,
 ) {
     let (time, mut stream, menu) = world_load;
-    let Some(assets) = assets else {
+    let (Some(assets), Some(item_assets)) = assets else {
         return;
     };
     let torch_assets = torch_assets.as_deref();
@@ -248,7 +257,7 @@ pub(crate) fn apply_deployed_entities_system(
                 // Swap the mesh in place and celebrate with a material
                 // burst (chips/shards + impact audio ride the same
                 // remote-impact pipeline as gather hits).
-                let (mesh, material) = deployable_visual(&assets, meta.kind);
+                let (mesh, material) = deployable_visual(&assets, &item_assets, meta.kind);
                 let mut ec = commands.entity(entry.entity);
                 ec.insert((NetworkDeployedEntity { id: meta.id }, Mesh3d(mesh)));
                 insert_deployable_material(&mut ec, material);
@@ -416,22 +425,34 @@ pub(crate) fn apply_deployed_entities_system(
                 }
                 _ => -(DOOR_PANEL_WIDTH_M / 2.0),
             };
-            commands.spawn((
+            let mut panel = commands.spawn((
                 Name::new("Door Panel"),
                 DoorPanel {
                     angle: initial_angle,
                     open: spawn.active,
                 },
                 Mesh3d(assets.door_panel_mesh(variant)),
-                MeshMaterial3d(assets.door_material(variant)),
                 Transform::from_translation(Vec3::new(hinge_x, 0.0, 0.0))
                     .with_rotation(Quat::from_rotation_y(initial_angle)),
                 Visibility::Visible,
                 ChildOf(parent),
             ));
+            // The two rebuilt door panels bind their baked cel material; the
+            // shutter's procedural panel keeps the plank Standard.
+            match variant {
+                crate::items::DoorVariant::Shutter => {
+                    panel.insert(MeshMaterial3d(assets.door_material(variant)));
+                }
+                crate::items::DoorVariant::HewnLog => {
+                    panel.insert(MeshMaterial3d(assets.baked("hewn_log_door")));
+                }
+                crate::items::DoorVariant::Iron => {
+                    panel.insert(MeshMaterial3d(assets.baked("iron_door")));
+                }
+            }
             parent
         } else {
-            let (mesh, material) = deployable_visual(&assets, spawn.kind);
+            let (mesh, material) = deployable_visual(&assets, &item_assets, spawn.kind);
             let mut ec = commands.spawn((
                 Name::new(format!("Deployable {}", spawn.id)),
                 NetworkDeployedEntity { id: spawn.id },
@@ -876,6 +897,7 @@ fn insert_deployable_material(entity: &mut EntityCommands, material: DeployableM
 
 fn deployable_visual(
     assets: &DeployableVisualAssets,
+    item_assets: &ItemVisualAssets,
     kind: DeployableKind,
 ) -> (Handle<Mesh>, DeployableMaterial) {
     let mesh = match kind {
@@ -894,38 +916,52 @@ fn deployable_visual(
         DeployableKind::Explosive { kind } => charge_body_mesh(assets, kind),
     };
     // Building pieces carry their tier's textured `StandardMaterial` (twig /
-    // timber / stone) and doors their variant material, both still PBR for now.
-    // The free-standing deployables are cel-shaded: wood props share the toon wood
-    // material, the furnace the toon stone material, and the sleeping bag the
-    // toon fabric material.
+    // timber / stone), still PBR. Everything else is a batch-2 image-to-3D
+    // rebuild binding its per-item BAKED cel material (white COLOR_0 + the
+    // painted albedo); only the shutter still rides the plank Standard
+    // (its world panel is procedural, not a rebuilt glb).
     let material = match kind {
         DeployableKind::Building { tier, .. } => {
             DeployableMaterial::Standard(assets.building_material(tier))
         }
-        DeployableKind::Door { variant } => {
-            DeployableMaterial::Standard(assets.door_material(variant))
+        DeployableKind::Door { variant } => match variant {
+            crate::items::DoorVariant::Shutter => {
+                DeployableMaterial::Standard(assets.door_material(variant))
+            }
+            crate::items::DoorVariant::HewnLog => {
+                DeployableMaterial::Toon(assets.baked("hewn_log_door"))
+            }
+            crate::items::DoorVariant::Iron => DeployableMaterial::Toon(assets.baked("iron_door")),
+        },
+        DeployableKind::Furnace { .. } => DeployableMaterial::Toon(assets.baked("crude_furnace")),
+        DeployableKind::Workbench { tier } => {
+            DeployableMaterial::Toon(assets.baked(if tier >= 2 {
+                "workbench_t2"
+            } else {
+                "workbench_t1"
+            }))
         }
-        // The furnace reads as weathered stone.
-        DeployableKind::Furnace { .. } => {
-            DeployableMaterial::Toon(assets.toon_stone_material.clone())
+        DeployableKind::StorageBox { tier } => {
+            DeployableMaterial::Toon(assets.baked(if tier >= 2 {
+                "storage_box_large"
+            } else {
+                "storage_box_small"
+            }))
         }
-        // The salvage chest is charred wood under iron bands, so it rides the
-        // wood plank line-art with its near-black COLOR_0 identity.
-        DeployableKind::Workbench { .. }
-        | DeployableKind::StorageBox { .. }
-        | DeployableKind::ToolCupboard
-        | DeployableKind::RuinCache
-        | DeployableKind::Torch { .. } => {
-            DeployableMaterial::Toon(assets.toon_wood_material.clone())
-        }
-        // A placed charge's body material by kind: the keg's staved barrel reads
-        // as wood, the cloth-bodied bomb + satchel as fabric.
+        DeployableKind::ToolCupboard => DeployableMaterial::Toon(assets.baked("tool_cupboard")),
+        DeployableKind::RuinCache => DeployableMaterial::Toon(assets.baked("ruin_cache")),
+        // The torch keeps its authored model + wood line-art: the icon's
+        // flame reconstructed as PERMANENT geometry, which would double the
+        // live fire rig and glow on burnt-out torches.
+        DeployableKind::Torch { .. } => DeployableMaterial::Toon(assets.toon_wood_material.clone()),
+        // A placed charge binds its item's BAKED cel material: the charge glbs
+        // are single-prim image-to-3D rebuilds whose whole painted surface
+        // lives in the per-item albedo, exactly like the held view of the same
+        // mesh.
         DeployableKind::Explosive { kind } => {
-            DeployableMaterial::Toon(charge_body_material(assets, kind))
+            DeployableMaterial::Toon(charge_body_material(item_assets, kind))
         }
-        DeployableKind::SleepingBag => {
-            DeployableMaterial::Toon(assets.toon_fabric_material.clone())
-        }
+        DeployableKind::SleepingBag => DeployableMaterial::Toon(assets.baked("sleeping_bag")),
     };
     (mesh, material)
 }
@@ -944,18 +980,25 @@ pub(super) fn charge_body_mesh(
     }
 }
 
-/// The body-primitive cel material for a placed charge of `kind`.
+/// The cel material for a placed charge of `kind`: the item's per-item baked
+/// albedo material, shared with the held / projectile views of the same glb.
+/// The map is built from the `HeldMesh::visual` table at startup, so a missing
+/// entry is a wiring bug, not a data state.
 fn charge_body_material(
-    assets: &DeployableVisualAssets,
+    item_assets: &ItemVisualAssets,
     kind: crate::items::ExplosiveKind,
 ) -> Handle<ToonMaterial> {
     use crate::items::ExplosiveKind;
-    match kind {
-        ExplosiveKind::PowderKeg => assets.toon_wood_material.clone(),
-        ExplosiveKind::PowderBomb | ExplosiveKind::SatchelCharge => {
-            assets.charge_cloth_material.clone()
-        }
-    }
+    let item_id = match kind {
+        ExplosiveKind::PowderKeg => crate::items::POWDER_KEG_ID,
+        ExplosiveKind::SatchelCharge => crate::items::SATCHEL_CHARGE_ID,
+        ExplosiveKind::PowderBomb => crate::items::POWDER_BOMB_ID,
+    };
+    item_assets
+        .baked_tool_materials
+        .get(item_id)
+        .unwrap_or_else(|| panic!("no baked material for placed charge {item_id}"))
+        .clone()
 }
 
 pub(super) fn deployable_transform(position: Vec3, yaw: f32) -> Transform {

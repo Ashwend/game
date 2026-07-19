@@ -46,8 +46,8 @@ Both are slices baked into the binary. Adding an entry means editing the file an
 | `description` | `&'static str` | tooltip copy, present on every entry. |
 | `stack_size` | `u16` | declared slot limit. |
 | `equipable` | `bool` | gates whether the item can be held in hand (read in `held.rs`, `tool_swap.rs`, `inventory/slot.rs`, `server/queries.rs`). Raw materials and the hidden building blocks are `false`. |
-| `model` | `ItemModel` | first-person animation archetype. Now `Bag`, `Hatchet`, `Pickaxe`, `Deployable` plus the melee archetypes (club chop, spear thrust, sword arc, mace overhead) and the bow/crossbow draw archetypes. Same-kind items share an archetype. |
-| `held_mesh` | `HeldMesh` | first-person mesh selector: the tools (`StoneHatchet`, `IronHatchet`, `StonePickaxe`, `IronPickaxe`), `Hammer`, `BuildingPlan`, plus the weapon and explosive-prop meshes. Decoupled from `model` so look and animation vary independently. Replicated as a 1-byte selector on `PlayerHeldItem` so peers render the right mesh without shipping the string id. |
+| `model` | `ItemModel` | first-person animation archetype. Now `Bag`, `Hatchet`, `Pickaxe`, `Deployable` plus the melee archetypes (club chop, spear thrust, sword arc) and the bow/crossbow draw archetypes. Same-kind items share an archetype. |
+| `held_mesh` | `HeldMesh` | first-person mesh selector: the tools (`StoneHatchet`, `IronHatchet`, `StonePickaxe`, `IronPickaxe`, `Sickle`), `Hammer`, `BuildingPlan`, plus the weapon and explosive-prop meshes. Decoupled from `model` so look and animation vary independently. Replicated as a 1-byte selector on `PlayerHeldItem` so peers render the right mesh without shipping the string id. The five gathering tools resolve to single-primitive image-to-3D glbs whose hand placement comes from their `socket_grip` node (`HeldGripSockets`), not per-item constants. |
 | `tint` | `ItemTint` | `ItemTint::new(r, g, b)`, the placeholder/UI tint. |
 | `tool` | `Option<ToolProfile>` | present only for gather tools (`src/items/tools.rs`). |
 | `weapon` | `Option<WeaponProfile>` | present only for dedicated melee weapons (`src/items/weapons.rs`): `pvp_damage`, `reach_m`, `cooldown_ticks`, `knockback_speed`, `armor_pierce_pct`, `max_durability`. Combat resolution reads `weapon` first, then falls back to `tool`. |
@@ -184,7 +184,7 @@ All accessors are `const fn`. Adding a door is one arm here plus a recipe and a 
 
 **Tools (four, all equipable, all stack to 1):** `wood_stone_hatchet` (Axe t1), `wood_stone_pickaxe` (Pickaxe t1), `iron_hatchet` (Axe t2), `iron_pickaxe` (Pickaxe t2). Every tool is an authored Blender glb matched to its icon; see [docs/playbooks/art-pipeline.md](playbooks/art-pipeline.md).
 
-**Melee weapons (`weapon` profile, equipable, stack to 1):** `wooden_club` (12 dmg, fast, hand-crafted), `stone_spear` (16, reach 4.5 m, hand), `iron_sword` (20, bench t1), `iron_mace` (26, biggest knockback, 50% armor pierce, bench t2). Combat reads `weapon` before `tool`; weapons gather nothing and do hands-tier damage to structures (they are not raid tools).
+**Melee weapons (`weapon` profile, equipable, stack to 1):** `wooden_club` (12 dmg, fast, hand-crafted), `stone_spear` (16, reach 4.5 m, hand), `iron_sword` (20, bench t1). Combat reads `weapon` before `tool`; weapons gather nothing and do hands-tier damage to structures (they are not raid tools).
 
 **Ranged weapons and ammo (`ranged` profile):** `wooden_bow` (hold-to-draw, 15 to 40 damage, bench t1: 12 wood + 6 plant twine + 2 cloth), `crossbow` (55, slow reload, bench t2: 6 hewn logs + 8 iron bars + 4 plant twine + 4 `salvaged_fittings`, making it a ruin-loot sink), `arrow` (stacks to 24, ~50% recoverable, hand-crafted four at a time).
 

@@ -288,7 +288,7 @@ pub(crate) fn pickaxe_swing_pose(phase: f32) -> ToolSwingPose {
 // over the shoulder, then a fast snap down and slightly across drives through
 // contact at phase 0.45 (early, this is the fastest melee weapon), a short bite,
 // then a quick recovery back to rest. Deliberately compact: no long overhead
-// load like the mace, no reach like the spear, just a snappy one-hander. Keep
+// heavy load, no reach like the spear, just a snappy one-hander. Keep
 // `CLUB_IMPACT_FRACTION` in `gather.rs` matched to the 0.45 contact.
 pub(crate) fn club_swing_pose(phase: f32) -> ToolSwingPose {
     if phase <= 0.30 {
@@ -541,68 +541,6 @@ const SICKLE_REAP_KEYS: [(f32, ToolSwingPose); 7] = [
 
 pub(crate) fn sickle_swing_pose(phase: f32) -> ToolSwingPose {
     sample_keys(&SICKLE_REAP_KEYS, phase)
-}
-
-// Iron mace: a big, slow overhead with a pronounced wind-up and follow-through,
-// the heaviest swing in the game. A long, deliberate draw hauls the head high
-// overhead and well back (ease-out, so it decelerates into a long hang at the
-// apex, the anticipation that sells the mass), then an explosive downward smash
-// drives forward through the centre at contact (phase 0.70, late, the payoff of
-// the load). The head buries low and DWELLS there, then is dragged slowly back
-// up to rest, slower than it came down. The huge wind-up and the late, heavy
-// contact are the mace's whole identity. Keep `MACE_IMPACT_FRACTION` matched to
-// the 0.70 contact.
-pub(crate) fn mace_swing_pose(phase: f32) -> ToolSwingPose {
-    if phase <= 0.55 {
-        // Long, deliberate overhead draw. Smoothstep gives an immediate but
-        // controlled rise that decelerates into a long hang at the apex, the
-        // pronounced wind-up. The head goes high and well back, near vertical.
-        let t = smoothstep((phase / 0.55).clamp(0.0, 1.0));
-        return ToolSwingPose {
-            pitch: lerp(-0.30, 1.30, t),
-            yaw: lerp(0.10, -0.05, t),
-            roll: lerp(0.08, -0.04, t),
-            forward: lerp(0.0, -0.24, t),
-            right: lerp(0.0, 0.06, t),
-            up: lerp(0.0, 0.42, t),
-        };
-    }
-    if phase <= 0.70 {
-        // Smash: an explosive downward drive through the centre (ease-in), so the
-        // head is moving hardest at the late contact (phase 0.70).
-        let t = ease_in((phase - 0.55) / 0.15);
-        return ToolSwingPose {
-            pitch: lerp(1.30, -2.00, t),
-            yaw: lerp(-0.05, 0.04, t),
-            roll: lerp(-0.04, 0.04, t),
-            forward: lerp(-0.24, 0.42, t),
-            right: lerp(0.06, -0.03, t),
-            up: lerp(0.42, -0.36, t),
-        };
-    }
-    if phase <= 0.86 {
-        // Follow-through + dwell: the head buries low and forward and holds there,
-        // a heavy settle that reads as the weapon's full mass landing.
-        let t = smoothstep((phase - 0.70) / 0.16);
-        return ToolSwingPose {
-            pitch: lerp(-2.00, -1.80, t),
-            yaw: lerp(0.04, 0.05, t),
-            roll: lerp(0.04, 0.02, t),
-            forward: lerp(0.42, 0.30, t),
-            right: lerp(-0.03, -0.01, t),
-            up: lerp(-0.36, -0.30, t),
-        };
-    }
-    // Slow drag back to rest, slower than the smash: you don't snap a mace up.
-    let t = smoothstep((phase - 0.86) / 0.14);
-    ToolSwingPose {
-        pitch: lerp(-1.80, -0.30, t),
-        yaw: lerp(0.05, 0.10, t),
-        roll: lerp(0.02, 0.08, t),
-        forward: lerp(0.30, 0.0, t),
-        right: lerp(-0.01, 0.0, t),
-        up: lerp(-0.30, 0.0, t),
-    }
 }
 
 // Wooden bow: a hold-to-draw pose, not a swing. `draw_fraction` (0 = at rest just
@@ -1081,39 +1019,6 @@ mod tests {
         assert!(
             (start.pitch - end.pitch).abs() < 1e-6 && (start.right - end.right).abs() < 1e-6,
             "the spline returns to the exact carry pose"
-        );
-    }
-
-    #[test]
-    fn mace_swing_pose_is_a_big_slow_overhead_with_a_late_contact() {
-        let ready = mace_swing_pose(0.0);
-        let apex = mace_swing_pose(0.55);
-        let impact = mace_swing_pose(0.70);
-        let follow = mace_swing_pose(0.80);
-
-        // A pronounced overhead wind-up hauls the head high and well back, higher
-        // than the pickaxe's already-heavy apex.
-        assert!(apex.pitch > ready.pitch + 1.4, "big overhead wind-up");
-        assert!(apex.up > ready.up + 0.35, "the head goes high overhead");
-        assert!(
-            apex.up > pickaxe_swing_pose(0.60).up,
-            "the mace winds up higher than the pickaxe"
-        );
-        // The smash drives down through contact at the LATE fraction (0.70).
-        assert!(impact.pitch < apex.pitch - 2.5, "explosive downward smash");
-        assert!(
-            impact.forward > apex.forward + 0.4,
-            "drives forward at contact"
-        );
-        // A pronounced follow-through: the head buries low and dwells past contact
-        // rather than snapping back.
-        assert!(
-            follow.up < ready.up - 0.15,
-            "the head dwells low after contact"
-        );
-        assert!(
-            follow.forward > 0.2,
-            "the follow-through stays committed forward"
         );
     }
 

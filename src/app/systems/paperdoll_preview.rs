@@ -36,8 +36,9 @@ use super::super::state::{
     InventoryUiState, LoadingSplashKind, LocalPlayerState, MenuState, Screen,
 };
 use super::items::{
-    ArmorVisuals, HeldItemVisuals, armor_layers, carry_forearm_rotation, carry_upper_arm_rotation,
-    held_item_hand_transform, held_item_layers, insert_held_layer_material,
+    ArmorVisuals, HeldGripSockets, HeldItemVisuals, armor_layers, carry_forearm_rotation,
+    carry_upper_arm_rotation, held_item_hand_transform, held_item_layers,
+    insert_held_layer_material,
 };
 
 /// Render layer the preview rig, its light, and its camera live on. Layer 0 is
@@ -266,6 +267,7 @@ pub(crate) fn sync_paperdoll_preview_system(
     local_player: Res<LocalPlayerState>,
     armor_visuals: Res<ArmorVisuals>,
     held_visuals: Res<HeldItemVisuals>,
+    grip_sockets: Res<HeldGripSockets>,
     time: Res<Time>,
     mut cameras: Query<&mut Camera>,
     mut transforms: Query<&mut Transform>,
@@ -343,7 +345,7 @@ pub(crate) fn sync_paperdoll_preview_system(
             commands.entity(entity).despawn();
         }
         if let Some(mesh) = held {
-            let grip = held_item_hand_transform(mesh);
+            let grip = held_item_hand_transform(mesh, grip_sockets.get(mesh));
             let anchor = preview.parts[&PlayerPart::HandAnchor];
             for held_layer in held_item_layers(&held_visuals, mesh, false) {
                 let mut layer = commands.spawn((

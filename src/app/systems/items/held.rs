@@ -8,7 +8,10 @@ use std::collections::HashMap;
 use std::f32::consts::PI;
 
 use bevy::{
-    camera::visibility::RenderLayers, gltf::GltfAssetLabel, light::NotShadowCaster, prelude::*,
+    camera::visibility::RenderLayers,
+    gltf::{Gltf, GltfAssetLabel, GltfNode},
+    light::NotShadowCaster,
+    prelude::*,
 };
 
 use crate::{
@@ -30,9 +33,8 @@ use crate::{
 
 use super::swing_poses::{
     ToolSwingPose, bag_idle_pose, bandage_use_pose, bow_draw_pose, bow_release_pose,
-    club_swing_pose, crossbow_pose, hatchet_swing_pose, mace_swing_pose, pickaxe_swing_pose,
-    sickle_swing_pose, smoothstep, spear_swing_pose, sword_swing_pose, throw_charge_pose,
-    throw_lob_pose,
+    club_swing_pose, crossbow_pose, hatchet_swing_pose, pickaxe_swing_pose, sickle_swing_pose,
+    smoothstep, spear_swing_pose, sword_swing_pose, throw_charge_pose, throw_lob_pose,
 };
 
 mod ranged_viewmodel;
@@ -51,6 +53,7 @@ pub(crate) fn apply_held_item_visual_system(
     local_player: Res<LocalPlayerState>,
     menu: Res<MenuState>,
     visuals: Res<HeldItemVisuals>,
+    grip_sockets: Res<HeldGripSockets>,
     gather_input: Res<GatherInputState>,
     ranged: Res<RangedDrawState>,
     throw_charge: Res<crate::app::state::ThrowChargeState>,
@@ -126,6 +129,7 @@ pub(crate) fn apply_held_item_visual_system(
         held_item_local_transform(
             definition.model,
             definition.held_mesh,
+            grip_sockets.get(definition.held_mesh),
             gather_input.swing_fraction(),
             swap_state.fraction(),
             ranged_pose,
@@ -205,14 +209,12 @@ pub(crate) fn apply_held_item_visual_system(
 /// A held-item layer's material. Each is a different asset type, so
 /// `MeshMaterial3d<T>` is a different component: this enum lets `held_item_layers`
 /// mix them and `insert_held_layer_material` attaches the right one.
-/// - `Standard`: the bag silhouette.
-/// - `Toon`: world-lit cel tool, used for the THIRD-PERSON tool on a remote
+/// - `Toon`: world-lit cel material, used for the THIRD-PERSON item on a remote
 ///   player's hand (lit by the scene like every other world prop).
-/// - `ToonViewmodel`: camera-relative cel tool, used for the FIRST-PERSON in-hand
-///   tool so its bands stay stable as the camera turns.
+/// - `ToonViewmodel`: camera-relative cel material, used for the FIRST-PERSON
+///   in-hand item so its bands stay stable as the camera turns.
 #[derive(Clone)]
 pub(crate) enum HeldLayerMaterial {
-    Standard(Handle<StandardMaterial>),
     Toon(Handle<ToonMaterial>),
     ToonViewmodel(Handle<ToonViewmodelMaterial>),
 }
@@ -222,9 +224,6 @@ pub(crate) enum HeldLayerMaterial {
 /// material kind per layer.
 pub(crate) fn insert_held_layer_material(layer: &mut EntityCommands, material: HeldLayerMaterial) {
     match material {
-        HeldLayerMaterial::Standard(handle) => {
-            layer.insert(MeshMaterial3d(handle));
-        }
         HeldLayerMaterial::Toon(handle) => {
             layer.insert(MeshMaterial3d(handle));
         }
@@ -260,6 +259,88 @@ impl HeldItemVisuals {
     }
 }
 
+/// Grip-socket transforms read out of the held glbs (the `socket_grip` node the
+/// image-to-3D rebuilds carry, ART-PIPELINE-REWORK Phase 0 contract: socket +Y
+/// along the haft toward the head, +Z facing the working edge). Hand placement
+/// for a socketed item is DERIVED (`carry_anchor * socket⁻¹`), replacing the
+/// per-item offset/rotation constants; items whose glb has no socket keep the
+/// legacy constant path, so the rollout is per-asset.
+///
+/// Gltf assets load async, so sockets resolve a frame or two after startup via
+/// [`resolve_grip_sockets_system`]; until then the item renders on the legacy
+/// path for those frames.
+#[derive(Resource, Default)]
+pub(crate) struct HeldGripSockets {
+    sockets: HashMap<HeldMesh, Transform>,
+    pending: Vec<(HeldMesh, Handle<Gltf>)>,
+}
+
+impl HeldGripSockets {
+    pub(crate) fn get(&self, held_mesh: HeldMesh) -> Option<Transform> {
+        self.sockets.get(&held_mesh).copied()
+    }
+}
+
+/// Kick off whole-file Gltf loads for every held glb that ships a grip socket
+/// ([`HeldMesh::uses_grip_socket`], the five gathering-tool rebuilds). Called
+/// once from `setup_scene`; [`resolve_grip_sockets_system`] drains the pending
+/// list as the assets land. The batch-2 rebuilds are deliberately NOT queued:
+/// they ship without a socket, keeping their tuned legacy carries, and queuing
+/// them would only produce missing-socket warnings.
+pub(crate) fn load_grip_sockets(asset_server: &AssetServer) -> HeldGripSockets {
+    let mut pending = Vec::new();
+    for &held_mesh in HeldMesh::ALL {
+        if !held_mesh.uses_grip_socket() {
+            continue;
+        }
+        let socket_glb = held_mesh.visual().layers().find_map(|layer| {
+            let HeldLayerMeshSource::GlbPrimitive { glb, .. } = layer.mesh;
+            matches!(layer.material, HeldMeshMaterial::Baked(_)).then_some(glb)
+        });
+        if let Some(glb) = socket_glb {
+            pending.push((
+                held_mesh,
+                asset_server.load::<Gltf>(embedded_asset_path(glb)),
+            ));
+        }
+    }
+    HeldGripSockets {
+        sockets: HashMap::new(),
+        pending,
+    }
+}
+
+/// Resolve pending `socket_grip` lookups as their Gltf assets finish loading.
+/// Cheap: no-ops (empty pending) for the whole session after the first frames.
+pub(crate) fn resolve_grip_sockets_system(
+    mut grip_sockets: ResMut<HeldGripSockets>,
+    gltfs: Res<Assets<Gltf>>,
+    nodes: Res<Assets<GltfNode>>,
+) {
+    if grip_sockets.pending.is_empty() {
+        return;
+    }
+    let mut resolved = Vec::new();
+    grip_sockets.pending.retain(|(held_mesh, handle)| {
+        let Some(gltf) = gltfs.get(handle) else {
+            return true;
+        };
+        let Some(node_handle) = gltf.named_nodes.get("socket_grip") else {
+            warn!("held glb for {held_mesh:?} has no socket_grip node; keeping legacy placement");
+            return false;
+        };
+        let Some(node) = nodes.get(node_handle) else {
+            return true;
+        };
+        resolved.push((*held_mesh, node.transform));
+        false
+    });
+    for (held_mesh, transform) in resolved {
+        info!("grip socket for {held_mesh:?}: {transform:?}");
+        grip_sockets.sockets.insert(held_mesh, transform);
+    }
+}
+
 /// Resolve a [`HeldMeshMaterial`] family to its concrete layer material, picking
 /// the world-lit or camera-relative variant. Keeping this the single family ->
 /// handle mapping means the in-flight tools-PBR rework can flip a family to a
@@ -269,35 +350,35 @@ fn resolve_material(
     assets: &ItemVisualAssets,
     viewmodel: bool,
 ) -> HeldLayerMaterial {
-    use HeldLayerMaterial::{Standard, Toon, ToonViewmodel};
+    use HeldLayerMaterial::{Toon, ToonViewmodel};
     match family {
-        // The bag silhouette is a flat `StandardMaterial` in both views.
-        HeldMeshMaterial::BagStandard => Standard(assets.held_bag_material.clone()),
         HeldMeshMaterial::Wood if viewmodel => ToonViewmodel(assets.tool_wood_vm_material.clone()),
         HeldMeshMaterial::Wood => Toon(assets.tool_wood_material.clone()),
-        HeldMeshMaterial::Stone if viewmodel => {
-            ToonViewmodel(assets.tool_stone_vm_material.clone())
-        }
-        HeldMeshMaterial::Stone => Toon(assets.tool_stone_material.clone()),
         HeldMeshMaterial::Iron if viewmodel => ToonViewmodel(assets.tool_iron_vm_material.clone()),
         HeldMeshMaterial::Iron => Toon(assets.tool_iron_material.clone()),
-        HeldMeshMaterial::Parchment if viewmodel => {
-            ToonViewmodel(assets.tool_parchment_vm_material.clone())
-        }
-        HeldMeshMaterial::Parchment => Toon(assets.tool_parchment_material.clone()),
-        // The explosive families bind their own dedicated cel materials. Cloth
-        // and Leather share the woven-cloth tile (each glb's COLOR_0 gives the
-        // fabric its light colour vs the tan leather strap).
         HeldMeshMaterial::Cloth if viewmodel => {
             ToonViewmodel(assets.tool_cloth_vm_material.clone())
         }
         HeldMeshMaterial::Cloth => Toon(assets.tool_cloth_material.clone()),
-        HeldMeshMaterial::Leather if viewmodel => {
-            ToonViewmodel(assets.tool_cloth_vm_material.clone())
-        }
-        HeldMeshMaterial::Leather => Toon(assets.tool_cloth_material.clone()),
         HeldMeshMaterial::Cord if viewmodel => ToonViewmodel(assets.tool_cord_vm_material.clone()),
         HeldMeshMaterial::Cord => Toon(assets.tool_cord_material.clone()),
+        // Per-item baked albedo (image-to-3D tool rebuilds). The material pair is
+        // built in `insert_held_item_visuals` from the same table this family
+        // came from, so a missing entry is a wiring bug, not a data state.
+        HeldMeshMaterial::Baked(item_id) if viewmodel => ToonViewmodel(
+            assets
+                .baked_tool_vm_materials
+                .get(item_id)
+                .unwrap_or_else(|| panic!("no baked viewmodel material for {item_id}"))
+                .clone(),
+        ),
+        HeldMeshMaterial::Baked(item_id) => Toon(
+            assets
+                .baked_tool_materials
+                .get(item_id)
+                .unwrap_or_else(|| panic!("no baked world material for {item_id}"))
+                .clone(),
+        ),
     }
 }
 
@@ -316,10 +397,8 @@ pub(crate) fn build_held_item_visuals(
         )
     };
     let mesh_handle = |source: HeldLayerMeshSource| -> Handle<Mesh> {
-        match source {
-            HeldLayerMeshSource::ProceduralBag => assets.held_bag_mesh.clone(),
-            HeldLayerMeshSource::GlbPrimitive { glb, primitive } => prim_mesh(glb, primitive),
-        }
+        let HeldLayerMeshSource::GlbPrimitive { glb, primitive } = source;
+        prim_mesh(glb, primitive)
     };
     // Load each layer's glb primitive at most once and share the handle between
     // the two variants (they differ only in material, never mesh), so a two-view
@@ -412,7 +491,10 @@ fn carry_anchor_rotation() -> Quat {
     carry_upper_arm_rotation() * carry_forearm_rotation()
 }
 
-pub(crate) fn held_item_hand_transform(held_mesh: HeldMesh) -> Transform {
+pub(crate) fn held_item_hand_transform(
+    held_mesh: HeldMesh,
+    grip_socket: Option<Transform>,
+) -> Transform {
     // The tool glbs (and the procedural hammer) are authored with the haft along
     // +Y, the butt near y = -0.51, and the *origin up near the head* (~65% up
     // the handle). With the posed carry arm, the hand is bent up in front of the
@@ -427,6 +509,19 @@ pub(crate) fn held_item_hand_transform(held_mesh: HeldMesh) -> Transform {
     // bladed tools' heads (authored spanning X) yawed to face forward (-Z).
     let tilt = Quat::from_rotation_x(-0.4);
     let yaw = Quat::from_rotation_y(PI * 0.5);
+    // Socket-carrying glbs derive the grip exactly like the first-person path:
+    // the hand frame is one shared pose (the LongHafted tilt with the
+    // `Rot_Y(PI)` carry frame of the socket contract) and the mesh transform is
+    // its composition with `socket⁻¹`, so the authored grip point lands in the
+    // palm with no per-item constants. A `Rot_Y(PI/2)` socket on a `+X`-edge
+    // tool reproduces the legacy `tilt * yaw` carry exactly.
+    if let Some(socket) = grip_socket {
+        let desired = tilt * Quat::from_rotation_y(PI) * socket.rotation.inverse();
+        let rotation = carry_anchor_rotation().inverse() * desired;
+        let grip = rotation * socket.translation;
+        let translation = -grip + Vec3::new(0.0, -0.01, -0.02);
+        return Transform::from_translation(translation).with_rotation(rotation);
+    }
     // The grip is keyed on the mesh's carry archetype (data on the item
     // registry), not on the mesh variant itself, so a new HeldMesh that reuses
     // an existing carry shape needs no change here.
@@ -500,6 +595,7 @@ fn apply_idle_sway(transform: Transform, t: f32, steadiness: f32) -> Transform {
 pub(super) fn held_item_local_transform(
     model: ItemModel,
     held_mesh: HeldMesh,
+    grip_socket: Option<Transform>,
     swing_fraction: f32,
     swap_fraction: f32,
     ranged: RangedPoseInputs,
@@ -517,13 +613,12 @@ pub(super) fn held_item_local_transform(
         | ItemModel::Club
         | ItemModel::Spear
         | ItemModel::Sword
-        | ItemModel::Mace
         | ItemModel::Sickle => HELD_ITEM_DOWN_OFFSET - 0.03,
     };
 
     // The head-in-X-plane glbs (tools + weapons + the ranged glbs) get the shared
     // quarter-turn yaw to face the head/blade/limbs forward; the mallet override
-    // below undoes it for the one-handed blunt weapons (club, mace) whose head
+    // below undoes it for the one-handed blunt club whose head
     // strikes along local Z.
     let head_forward_yaw = Quat::from_rotation_y(PI * 0.5);
     // Orientation fix for the two ranged glbs. Both are authored in a rest pose
@@ -623,7 +718,6 @@ pub(super) fn held_item_local_transform(
         ItemModel::Club => (club_swing_pose(phase), head_forward_yaw),
         ItemModel::Spear => (spear_swing_pose(phase), spear_model_rotation),
         ItemModel::Sword => (sword_swing_pose(phase), head_forward_yaw),
-        ItemModel::Mace => (mace_swing_pose(phase), head_forward_yaw),
         // The sickle's hook lies in a vertical plane containing the haft
         // (like a hatchet blade), so which way its FACE points is set by the
         // yaw. Composed per the owner's reference framing: handle at the
@@ -656,10 +750,10 @@ pub(super) fn held_item_local_transform(
     // The mallet is a short one-handed tool, not a long two-handed one, so it
     // sits closer to the player: pull it back toward the camera (much less
     // forward) and drop it a touch, reading as a relaxed one-arm carry rather
-    // than a weapon held out front. The wooden club is the exception within the
-    // mallet family: its head is far bulkier than the hammer's, so pulled that
-    // close it filled the frame (owner report: too big); it keeps most of the
-    // forward distance instead.
+    // than a weapon held out front. The wooden club is the exception within
+    // the mallet family: its head is far bulkier than the hammer's, so pulled
+    // that close it filled the frame (owner report: too big); it keeps most
+    // of the forward distance instead.
     let model_offset = if matches!(model, ItemModel::Club) {
         Vec3::new(0.02, -0.05, 0.04)
     } else if mallet_grip {
@@ -751,20 +845,34 @@ pub(super) fn held_item_local_transform(
 
     let swing_translation = Vec3::NEG_Z * pose.forward + Vec3::X * pose.right + Vec3::Y * pose.up;
     let base_rotation = Quat::from_euler(EulerRot::XYZ, pose.pitch, pose.yaw, pose.roll);
-    let base_quat = base_rotation * model_rotation;
-    // The grip seat is in the item's local frame, so rotate it by the whole-item
-    // rotation before adding it to the view-space translation.
-    let seat_translation = base_quat * grip_seat;
+    // Socket-carrying glbs (the image-to-3D rebuilds) DERIVE their placement:
+    // the carry anchor is one shared frame and the item transform is
+    // `carry * socket⁻¹`, so the hand lands exactly on the authored grip point
+    // whatever the mesh's own frame does. The carry rotation is `Rot_Y(PI)`
+    // because the socket contract (+Y up the haft, +Z at the working edge, i.e.
+    // a `Rot_Y(PI/2)` node on a `+X`-edge tool) then reproduces the legacy
+    // head-forward pose exactly; the per-item offset/rotation/seat constants
+    // below no longer apply to these items.
+    let (base_quat, seat_translation) = if let Some(socket) = grip_socket {
+        let carry_rotation = base_rotation * Quat::from_rotation_y(PI);
+        let rotation = carry_rotation * socket.rotation.inverse();
+        (rotation, -(rotation * socket.translation))
+    } else {
+        let base_quat = base_rotation * model_rotation;
+        // The grip seat is in the item's local frame, so rotate it by the
+        // whole-item rotation before adding it to the view-space translation.
+        (base_quat, model_offset + base_quat * grip_seat)
+    };
     let base_translation = Vec3::NEG_Z * HELD_ITEM_FORWARD_OFFSET
         + Vec3::X * HELD_ITEM_RIGHT_OFFSET
         - Vec3::Y * model_down_offset
-        + model_offset
         + seat_translation
         + swing_translation;
 
-    // The club renders slightly under true scale in first person: even pushed
-    // out to the mallet family's carry distance its bulky head dominated the
-    // frame (owner report: too big). The sickle's long crescent has the same
+    // The club renders slightly under true scale in first person: even
+    // pushed out to the mallet family's carry distance its bulky head
+    // dominated the frame (owner report: too big). The sickle's long
+    // crescent has the same
     // problem at the shared tool distance. Viewmodel only; the third-person
     // meshes on remote rigs stay authored size.
     let viewmodel_scale = if matches!(model, ItemModel::Club) {
@@ -795,7 +903,7 @@ pub(super) fn held_item_local_transform(
         }
         // The club and sword are hatchet-weight one/two-handers; the spear is
         // similar; they all lift like the hatchet, and so does the bow (a light
-        // wooden two-hander). The mace and the crossbow are the heaviest carries,
+        // wooden two-hander). The crossbow is the heaviest carry,
         // so they drop and tilt the most, like the pickaxe; the crossbow's slow
         // shouldering matches its SWAP_DURATION_PICKAXE cadence in gather.rs.
         ItemModel::Hatchet
@@ -804,7 +912,7 @@ pub(super) fn held_item_local_transform(
         | ItemModel::Sword
         | ItemModel::Sickle
         | ItemModel::Bow => (0.50, 0.05, -0.40),
-        ItemModel::Pickaxe | ItemModel::Mace | ItemModel::Crossbow => (0.68, 0.06, -0.55),
+        ItemModel::Pickaxe | ItemModel::Crossbow => (0.68, 0.06, -0.55),
     };
 
     let enter_offset = Vec3::new(0.0, -drop * lag, back * lag);
@@ -828,6 +936,7 @@ mod tests {
         let sword = held_item_local_transform(
             ItemModel::Sword,
             HeldMesh::IronSword,
+            None,
             0.0,
             1.0,
             RangedPoseInputs::default(),
@@ -835,6 +944,7 @@ mod tests {
         let hatchet = held_item_local_transform(
             ItemModel::Hatchet,
             HeldMesh::IronHatchet,
+            None,
             0.0,
             1.0,
             RangedPoseInputs::default(),
@@ -861,6 +971,74 @@ mod tests {
     }
 
     #[test]
+    fn contract_socket_reproduces_the_legacy_tool_pose() {
+        // A socket at the mesh origin rotated per the Phase 0 contract (+Y up
+        // the haft, +Z at the working edge, i.e. `Rot_Y(PI/2)` on a +X-edge
+        // tool) must land the tool exactly where the legacy constant path put
+        // the hatchet: `carry * socket⁻¹` preserves the tuned feel with the
+        // per-item override table empty.
+        let socket = Transform::from_rotation(Quat::from_rotation_y(PI * 0.5));
+        let args = (0.0, 1.0, RangedPoseInputs::default());
+        let legacy = held_item_local_transform(
+            ItemModel::Hatchet,
+            HeldMesh::IronHatchet,
+            None,
+            args.0,
+            args.1,
+            args.2,
+        );
+        let socketed = held_item_local_transform(
+            ItemModel::Hatchet,
+            HeldMesh::IronHatchet,
+            Some(socket),
+            args.0,
+            args.1,
+            args.2,
+        );
+        assert!(
+            socketed.translation.distance(legacy.translation) < 1e-5,
+            "contract socket must reproduce the legacy translation"
+        );
+        assert!(
+            socketed.rotation.angle_between(legacy.rotation) < 1e-5,
+            "contract socket must reproduce the legacy rotation"
+        );
+    }
+
+    #[test]
+    fn grip_socket_position_slides_the_mesh_not_the_hand() {
+        // Raising the authored grip point along the haft must slide the MESH
+        // by exactly the rotated grip offset while the hand (the carry
+        // anchor) stays put, and must not touch the rotation.
+        let contract_rot = Quat::from_rotation_y(PI * 0.5);
+        let at_origin = Transform::from_rotation(contract_rot);
+        let raised =
+            Transform::from_translation(Vec3::new(0.0, 0.2, 0.0)).with_rotation(contract_rot);
+        let base = held_item_local_transform(
+            ItemModel::Hatchet,
+            HeldMesh::IronHatchet,
+            Some(at_origin),
+            0.0,
+            1.0,
+            RangedPoseInputs::default(),
+        );
+        let shifted = held_item_local_transform(
+            ItemModel::Hatchet,
+            HeldMesh::IronHatchet,
+            Some(raised),
+            0.0,
+            1.0,
+            RangedPoseInputs::default(),
+        );
+        assert!(shifted.rotation.angle_between(base.rotation) < 1e-6);
+        let expected = base.translation - base.rotation * Vec3::new(0.0, 0.2, 0.0);
+        assert!(
+            shifted.translation.distance(expected) < 1e-5,
+            "the mesh slides down by the rotated grip offset"
+        );
+    }
+
+    #[test]
     fn fully_swapped_in_tool_sits_at_its_rest_pose() {
         // swap_fraction == 1.0 means the tool has finished lifting into
         // view, so no enter-offset is applied, the transform is the
@@ -868,6 +1046,7 @@ mod tests {
         let rest = held_item_local_transform(
             ItemModel::Hatchet,
             HeldMesh::StoneHatchet,
+            None,
             0.0,
             1.0,
             RangedPoseInputs::default(),
@@ -882,7 +1061,7 @@ mod tests {
     /// Rest-pose transform for a melee / tool item (neutral ranged inputs), so the
     /// existing tests read as before the ranged parameter was added.
     fn melee_transform(model: ItemModel, mesh: HeldMesh, swing: f32, swap: f32) -> Transform {
-        held_item_local_transform(model, mesh, swing, swap, RangedPoseInputs::default())
+        held_item_local_transform(model, mesh, None, swing, swap, RangedPoseInputs::default())
     }
 
     #[test]
@@ -925,6 +1104,7 @@ mod tests {
         let rest = held_item_local_transform(
             ItemModel::Bow,
             HeldMesh::WoodenBow,
+            None,
             0.0,
             1.0,
             RangedPoseInputs {
@@ -936,6 +1116,7 @@ mod tests {
         let full = held_item_local_transform(
             ItemModel::Bow,
             HeldMesh::WoodenBow,
+            None,
             0.0,
             1.0,
             RangedPoseInputs {
@@ -959,6 +1140,7 @@ mod tests {
         let ready = held_item_local_transform(
             ItemModel::Crossbow,
             HeldMesh::Crossbow,
+            None,
             0.0,
             1.0,
             RangedPoseInputs::default(),
@@ -966,6 +1148,7 @@ mod tests {
         let fired = held_item_local_transform(
             ItemModel::Crossbow,
             HeldMesh::Crossbow,
+            None,
             0.0,
             1.0,
             RangedPoseInputs {
@@ -976,6 +1159,7 @@ mod tests {
         let cranking = held_item_local_transform(
             ItemModel::Crossbow,
             HeldMesh::Crossbow,
+            None,
             0.0,
             1.0,
             RangedPoseInputs {
@@ -1015,7 +1199,6 @@ mod tests {
             ItemModel::Club,
             ItemModel::Spear,
             ItemModel::Sword,
-            ItemModel::Mace,
             ItemModel::Bow,
             ItemModel::Crossbow,
             ItemModel::ThrownBomb,
@@ -1055,11 +1238,6 @@ mod tests {
                     ),
                     ItemModel::Sword => (
                         HeldMesh::IronSword,
-                        RangedPoseInputs::default(),
-                        RangedPoseInputs::default(),
-                    ),
-                    ItemModel::Mace => (
-                        HeldMesh::IronMace,
                         RangedPoseInputs::default(),
                         RangedPoseInputs::default(),
                     ),
@@ -1123,8 +1301,8 @@ mod tests {
                 ItemModel::Bow | ItemModel::Crossbow | ItemModel::Bandage
             );
             let (swing_a, swing_b) = if is_ranged { (0.0, 0.0) } else { (0.0, 0.5) };
-            let rest = held_item_local_transform(model, mesh, swing_a, 1.0, state_a);
-            let mid = held_item_local_transform(model, mesh, swing_b, 1.0, state_b);
+            let rest = held_item_local_transform(model, mesh, None, swing_a, 1.0, state_a);
+            let mid = held_item_local_transform(model, mesh, None, swing_b, 1.0, state_b);
             assert!(
                 rest.translation.distance(mid.translation) > 1e-4
                     || rest.rotation.angle_between(mid.rotation) > 1e-4,

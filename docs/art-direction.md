@@ -40,7 +40,7 @@ Mixing cel and PBR on adjacent props reads as a mistake, so the conversion proce
 
 | Family | Look | Material | Evidence |
 |---|---|---|---|
-| Ore / vein nodes (coal, iron, sulfur, stone vein) | cel | shared `ToonMaterial` (`ore_toon_material`) | `src/app/scene/assets.rs` - `ore_toon_material` |
+| Ore / vein nodes (stone, iron, coal, sulfur, meteorite) | cel | five per-type baked-albedo `ToonMaterial`s | `src/app/scene/assets.rs` - `stone_vein_material` .. `meteorite_node_material` |
 | Trees (pine + birch trunk + solid faceted canopy) | cel | per-species bark + foliage `ToonMaterial` | `src/app/scene/assets.rs` - `pine_bark_material` .. `birch_foliage_material` |
 | Dead snags | cel | bark `ToonMaterial` over a cool-grey `COLOR_0` glb | `src/app/scene/assets.rs` - `dead_bark_material` |
 | Free-standing deployables (workbench, furnace, storage boxes, torch, tool cupboard, sleeping bag) | cel | toon wood / stone / fabric `ToonMaterial` | `src/app/systems/deployables.rs` - `DeployableMaterial::Toon` |
@@ -49,7 +49,8 @@ Mixing cel and PBR on adjacent props reads as a mistake, so the conversion proce
 | Building pieces (sticks / hewn wood / stone tiers) | PBR | textured `StandardMaterial` | `src/app/scene/assets.rs` - `building_materials` |
 | Doors (wood + iron) | PBR | textured `StandardMaterial` | `src/app/scene/assets.rs` - `hewn_door_material`, iron door |
 | Players / remote rig | PBR | `StandardMaterial` | `src/app/scene/assets.rs` - `remote_material` |
-| Held tools (stone + iron pickaxe/hatchet) | PBR | `StandardMaterial` (two-layer body/head) | `src/app/scene/assets.rs` - `held_*_body_material`, `held_*_head_material` |
+| Gathering tools (stone/iron hatchet + pickaxe, sickle) | cel | per-item baked-albedo `ToonMaterial` + `ToonViewmodelMaterial` pair (image-to-3D rebuilds, `art/held/`) | `src/app/scene/assets.rs` - `baked_tool_materials` |
+| Other held items (hammer, weapons, scroll, charges, strings) | cel | shared tool-family `ToonMaterial`/`ToonViewmodelMaterial` (wood/stone/iron/parchment/cloth/cord) | `src/app/scene/assets.rs` - `tool_*_material` |
 | Terrain ground floor | PBR (custom `TerrainMaterial`) | biome splat-blend, daylight-lit | see `docs/rendering-materials.md` |
 
 The deployable family routes through one of three shared cel materials: furnace uses **toon stone**, sleeping bag uses **toon fabric**, every other wooden deployable uses **toon wood** (`src/app/systems/deployables.rs` - the `DeployableMaterial` mapping). Building pieces and doors stay PBR for now (the `DeployableMaterial::Standard` branch); that is the next natural family if the conversion continues.
@@ -84,18 +85,20 @@ The cel tuning is data, not code: `ToonMaterial.params` is a `Vec4 = (cel band c
 | Dead bark | `(3, 0, 0.5, 2.6)` | |
 | Hay / tall grass | `(3, 0.4, 0, 2.0)` | `params.y = 0.4` is the alpha-mask cutoff; no ink edge |
 | Deployables (wood/stone/fabric) | `(3, 0, 1.0, 1.4)` | punchier, full-strength wider edge so every beveled box corner reads as a drawn line |
+| Held items, shared tool families | `(3, 0, 1.0, 1.4)` | same punchy edge as the deployables (flat-faceted man-made props) |
+| Held items, per-item baked albedos | `(3, 0, 0.8, 2.2)` | the softer ore-style edge; the baked painted surface carries its own shading |
 
 Values verified in `src/app/scene/assets.rs`. Note: an older consistency rule "reuse the same params as ore for every family" is aspirational, not what the live code does; the families intentionally diverge as shown.
 
 ## Trajectory
 
-- **Extend by whole families.** Convert a family fully before moving on, so the scene never looks half-converted. The next natural candidate is the building-pieces + doors family (currently PBR), then players/held tools last (character/world consistency matters most there, and the rig is `StandardMaterial`).
+- **Extend by whole families.** Convert a family fully before moving on, so the scene never looks half-converted. The five gathering tools joined the cel family 2026-07 through the image-to-3D lane (`art/held/`, per-item baked albedos); the remaining held items follow the same lane in batches. The next natural candidate after that is the building-pieces + doors family (currently PBR), then players last (character/world consistency matters most there, and the rig is `StandardMaterial`).
 - **Per-material vs a global pass.** Two real ways to push the whole game anime. (1) The **current per-material path**: convert each family's material to cel. Surgical, keeps per-material control (alpha, emissive, special cases), no render-graph work, but consistency is on us via shared `params` and a true unifying outline is hard. (2) A **global post-process cel + outline pass**: one fullscreen pass after the main pass that posterizes luminance and draws outlines from a depth+normal prepass. One place to tune, gives real geometric outlines around every object (including un-converted ones), but it is render-graph work and interacts with the existing atmosphere/fog/bloom/TAA stack. These two compose. (Aspirational: the global pass is not implemented.)
 - **A true ink outline is the biggest missing signal.** The current dark edge is a per-fragment silhouette darkening; it reads as a shaded edge, not a crisp ink line. A real outline (post-process depth+normal edge detect, or per-mesh inverted-hull) is what most reads as "anime" and would unify families that have not been converted. If the art-direction shift is ever prioritized, prototype the outline pass early; it is the highest-payoff change. (Aspirational: not implemented.)
 
 ## Asset-generation toolchain
 
-The cel meshes and textures are authored, not procedural. Most families go through a ComfyUI Flux + parametric Blender pipeline (concept image, OpenCV silhouette measurement, parametric Blender glb, soft hand-painted tileable textures); the parametric scripts live under `art/` (`art/trees/build_tree.py` and the deployable/building builders). The ore nodes instead come from the image-to-3D generation lane (`art/ore/`, reference prompts -> TRELLIS.2 mesh -> retopo + albedo rebake, the template for future family reworks). Inventory icons and tileable world textures come from the `lowpoly-game-assets` skill. The full step-by-step is in `docs/playbooks/art-pipeline.md`.
+The cel meshes and textures are authored, not procedural. Most families go through a ComfyUI Flux + parametric Blender pipeline (concept image, OpenCV silhouette measurement, parametric Blender glb, soft hand-painted tileable textures); the parametric scripts live under `art/` (`art/trees/build_tree.py` and the deployable/building builders). The ore nodes and the five gathering tools instead come from the image-to-3D generation lane (`art/ore/` and `art/held/`: reference prompts -> TRELLIS.2 mesh -> retopo + albedo rebake, plus a `socket_grip` node on held items; `art/ore/` is the template for future family reworks). Inventory icons and tileable world textures come from the `lowpoly-game-assets` skill. The full step-by-step is in `docs/playbooks/art-pipeline.md`.
 
 Correct names to use when extending the cel family (the old `OreToonMaterial` / `ore_toon.rs` / `ore_toon.wgsl` names are gone):
 

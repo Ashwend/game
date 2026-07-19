@@ -106,13 +106,13 @@ mod tests {
             .inventory
             .active_actionbar_slot = 0;
 
-        // Client lies that it is swinging a mace; the server overrides from the
-        // actionbar, which holds the hatchet.
+        // Client lies that it is swinging a sword; the server overrides from
+        // the actionbar, which holds the hatchet.
         server.apply_swing_start(
             host,
             SwingStartCommand {
                 seq: 1,
-                model: ItemModel::Mace,
+                model: ItemModel::Sword,
             },
         );
 

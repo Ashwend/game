@@ -9,7 +9,7 @@ use crate::{
         scene::{PLAYER_HEAD_TOP_LOCAL_Y, PlayerPart},
         state::swing_duration_seconds,
         systems::items::{
-            RangedPoseInputs, carry_forearm_rotation, carry_upper_arm_rotation,
+            HeldGripSockets, RangedPoseInputs, carry_forearm_rotation, carry_upper_arm_rotation,
             held_item_hand_transform, held_piece_local_transform, remote_swing_arm_pose,
         },
     },
@@ -199,7 +199,7 @@ pub(crate) fn animate_remote_players_system(
         if action.seq > rig.last_swing_seq {
             rig.last_swing_seq = action.seq;
             // The wire `model` is the swing archetype directly (a weapon's own
-            // Club/Spear/Sword/Mace, a gather tool's Hatchet/Pickaxe), so a peer
+            // Club/Spear/Sword, a gather tool's Hatchet/Pickaxe), so a peer
             // animates the right swing straight off the replicated action, no need
             // to infer it from the held mesh.
             let model = action.model;
@@ -331,6 +331,7 @@ pub(crate) fn animate_remote_players_system(
 /// and a dead body's item is left frozen wherever it was.
 pub(crate) fn animate_remote_held_charge_system(
     time: Res<Time>,
+    grip_sockets: Res<HeldGripSockets>,
     rigs: Query<(
         &PlayerRig,
         &RemoteHeld,
@@ -354,7 +355,7 @@ pub(crate) fn animate_remote_held_charge_system(
         };
         let Some(mesh) = held.0 else { continue };
 
-        let grip = held_item_hand_transform(mesh);
+        let grip = held_item_hand_transform(mesh, grip_sockets.get(mesh));
         let charge = loco.charge_fraction.clamp(0.0, 1.0);
         let active = charge > 1e-3;
         let pose = RangedPoseInputs {

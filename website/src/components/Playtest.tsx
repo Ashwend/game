@@ -1,12 +1,9 @@
 import { useEffect, useState } from 'react'
-import {
-  ArrowUpRight,
-  Download as DownloadIcon,
-  ShieldAlert,
-} from 'lucide-react'
+import { ArrowUpRight, Download as DownloadIcon } from 'lucide-react'
 import { DOWNLOADS } from '#/data/content'
 import type { Platform } from '#/data/content'
 import { latestDownloadUrl, releasesUrl } from '#/lib/config'
+import { detectMobile, detectPlatform } from '#/lib/platform'
 import { buttonClasses } from './ui'
 
 /**
@@ -53,7 +50,11 @@ function DownloadCallout() {
   // Server + first paint render this default so hydration matches; the effect
   // then narrows it to the visitor's actual OS.
   const [platform, setPlatform] = useState<Platform>('windows')
-  useEffect(() => setPlatform(detectPlatform()), [])
+  const [mobile, setMobile] = useState(false)
+  useEffect(() => {
+    setPlatform(detectPlatform())
+    setMobile(detectMobile())
+  }, [])
 
   const primary = DOWNLOADS.find((build) => build.platform === platform)
   if (primary === undefined) return null
@@ -73,6 +74,12 @@ function DownloadCallout() {
       <p className="mt-3 text-sm text-muted">
         {primary.arch} &middot; always the latest release &middot; free
       </p>
+      {mobile && (
+        <p className="mt-2 text-sm text-muted/85">
+          Ashwend is a desktop game; grab it when you&rsquo;re back at your
+          computer.
+        </p>
+      )}
 
       <div className="mt-8 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm text-muted">
         <span className="text-muted/85">Also on</span>
@@ -95,6 +102,15 @@ function DownloadCallout() {
         ))}
       </div>
 
+      <p className="mx-auto mt-4 max-w-md text-sm leading-relaxed text-muted/85">
+        About an 80 MB download. Runs on Apple Silicon Macs and 64-bit Windows
+        or Linux PCs with a reasonably recent GPU. On Linux, untar and run{' '}
+        <code className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[0.8rem] text-fg/80">
+          ./ashwend
+        </code>
+        .
+      </p>
+
       <a
         href={releasesUrl()}
         target="_blank"
@@ -104,70 +120,6 @@ function DownloadCallout() {
         Browse all releases
         <ArrowUpRight className="size-3.5" aria-hidden="true" />
       </a>
-
-      <UnsignedBuildNotice />
     </div>
   )
-}
-
-/**
- * First-launch heads-up. The builds aren't code-signed yet, so both macOS and
- * Windows flag them as coming from an unidentified developer. Shown visibly
- * (not behind a disclosure) because a confused "unsafe app" prompt is the most
- * likely reason a new player bounces before ever launching the game.
- */
-function UnsignedBuildNotice() {
-  return (
-    <div className="mt-10 w-full max-w-md rounded-xl border border-ember-500/20 bg-ember-500/[0.04] p-4 text-left text-sm leading-relaxed text-muted">
-      <p className="flex items-center gap-2 font-medium text-fg/90">
-        <ShieldAlert
-          className="size-4 shrink-0 text-ember-300"
-          aria-hidden="true"
-        />
-        First launch: the build isn&rsquo;t signed yet
-      </p>
-      <p className="mt-2">
-        Ashwend isn&rsquo;t code-signed yet, so your system flags it as coming
-        from an unidentified developer the first time you open it. It&rsquo;s
-        safe to run; you just have to allow it once.
-      </p>
-      <p className="mt-2">
-        <span className="font-medium text-fg/90">macOS:</span> open the app and
-        dismiss the first warning, then go to System Settings &rarr; Privacy
-        &amp; Security, scroll to the bottom, and click Open Anyway. Confirm
-        once and it launches normally from then on.
-      </p>
-      <p className="mt-2">
-        <span className="font-medium text-fg/90">Windows:</span> if
-        &ldquo;Windows protected your PC&rdquo; appears, click More info, then
-        Run anyway.
-      </p>
-    </div>
-  )
-}
-
-/** Best-effort OS guess from the browser. Falls back to Windows when unsure;
- *  every platform is reachable from the "other platforms" row regardless. */
-function detectPlatform(): Platform {
-  const nav = navigator as Navigator & {
-    userAgentData?: { platform?: string }
-  }
-  const hint =
-    `${nav.userAgentData?.platform ?? ''} ${nav.userAgent}`.toLowerCase()
-  if (hint.includes('win')) return 'windows'
-  if (
-    hint.includes('mac') ||
-    hint.includes('iphone') ||
-    hint.includes('ipad')
-  ) {
-    return 'macos'
-  }
-  if (
-    hint.includes('android') ||
-    hint.includes('linux') ||
-    hint.includes('x11')
-  ) {
-    return 'linux'
-  }
-  return 'windows'
 }

@@ -1,0 +1,1350 @@
+{
+  "backbones": {
+    "default": "a single {subject}, one isolated stylized game item floating in empty space, anime cel shaded hand-painted style, smooth simplified toony shapes with a clean readable silhouette, soft painted shading with two or three tonal steps per surface and gentle painted highlights, evenly lit from all sides so it casts no shadow anywhere, matte with no gloss, nothing glowing, no white outline, no pale rim stroke around the silhouette, no drop shadow, no cast shadow, no photographic detail, {orient}, suspended with nothing beneath it, the whole item complete and uncropped as one connected piece, filling most of the frame, centered on a plain uniform flat light-grey backdrop, no ground, no surface, no horizon, no vignette, no text, no hands, no characters",
+    "glow": "a single {subject}, one isolated stylized game item floating in empty space, anime cel shaded hand-painted style, smooth simplified toony shapes with a clean readable silhouette, soft painted shading with two or three tonal steps per surface and gentle painted highlights, evenly lit from all sides so it casts no shadow anywhere, matte with no gloss everywhere except the fire, the flame the only glowing element with its warm light kept soft and contained, no white outline, no pale rim stroke around the silhouette, no drop shadow, no cast shadow, no photographic detail, {orient}, suspended with nothing beneath it, the whole item complete and uncropped as one connected piece, filling most of the frame, centered on a plain uniform flat light-grey backdrop, no ground, no surface, no horizon, no vignette, no text, no hands, no characters",
+    "cluster": "a single {subject}, one isolated stylized game item pile floating in empty space, anime cel shaded hand-painted style, smooth simplified toony shapes with a clean readable silhouette, soft painted shading with two or three tonal steps per surface and gentle painted highlights, evenly lit from all sides so it casts no shadow anywhere, matte with no gloss, nothing glowing, no white outline, no pale rim stroke around the silhouette, no drop shadow, no cast shadow, no photographic detail, {orient}, suspended with nothing beneath it, the whole subject complete and uncropped, gathered into one tight compact cluster, filling most of the frame, centered on a plain uniform flat light-grey backdrop, no ground, no surface, no horizon, no vignette, no text, no hands, no characters"
+  },
+  "group_order": [
+    "generic",
+    "held",
+    "deployable_icon",
+    "material_icon",
+    "armor_icon"
+  ],
+  "groups": {
+    "generic": {
+      "title": "Generic held bundle",
+      "note": "The one NEW viewmodel mesh of this batch: it replaces the procedural bag cuboid every mesh-less equipable item shows in the hand. Judge it as a 3D prop first, icon never ships from it."
+    },
+    "held": {
+      "title": "Hand-held items (pick = icon AND mesh reference)",
+      "note": "Each pick becomes both the inventory icon and the image-to-3D reference for a real held model, exactly like the five gathering tools. The bow, crossbow and bandage animate in-hand, so their meshes will need extra handling at build time; judge the look, not the rigging."
+    },
+    "deployable_icon": {
+      "title": "Deployables (icon only)",
+      "note": "The placed world models already exist and stay. The pick becomes the new inventory icon; in the hand these items will carry the generic bundle above."
+    },
+    "material_icon": {
+      "title": "Materials (icon only)",
+      "note": "Raw materials never reach a hand, so the pick is purely the new inventory icon."
+    },
+    "armor_icon": {
+      "title": "Armor (icon only)",
+      "note": "Worn rig models already exist and stay on the PBR family. The pick becomes the new inventory / paperdoll icon."
+    }
+  },
+  "items": [
+    {
+      "key": "generic_held",
+      "label": "Generic Held Bundle",
+      "group": "generic",
+      "orient": "floating at a slightly raised three-quarter angle so its front and one side both show",
+      "subject": "plump rough burlap cloth sack bundle, warm grey-tan sacking gathered at the top and tied off with a short loop of tan twine, a small knotted tail of cloth sticking up above the tie, the body gently lumpy as if packed with gear",
+      "prompts": [
+        {
+          "label": "classic sack",
+          "extra": "The archetypal carried sack: a rounded body a little wider at the base, soft painted weave texture, one or two gentle creases, a neat twine tie."
+        },
+        {
+          "label": "chunky stuffed",
+          "extra": "Cartoon proportions: a fat overstuffed body bulging with vague angular lumps of unseen gear, a tight twine tie squeezing the neck, a short flared cloth tail."
+        },
+        {
+          "label": "worn patched",
+          "extra": "Survival-made feel: a squarish stitched patch on the body, visible seam stitching, a frayed cloth tail above a messy double-wrapped twine tie."
+        },
+        {
+          "label": "sleek satchel",
+          "extra": "A tidier carry bundle: smoother canvas-like cloth, a single clean diagonal crease, a slim cord tie finished with a small knot."
+        }
+      ]
+    },
+    {
+      "key": "hammer",
+      "label": "Hammer",
+      "group": "held",
+      "orient": "floating diagonally with the head at the upper left and the handle running down to the lower right",
+      "subject": "sturdy wooden construction mallet, a thick cylindrical warm brown wooden head bound by two forged dark blue-grey iron band hoops near each striking face, mounted crosswise on a straight warm brown wooden handle",
+      "prompts": [
+        {
+          "label": "classic mallet",
+          "extra": "The archetypal builder's mallet: a barrel-shaped head with flat striking faces, two neat iron hoops, a straight handle with a subtle pommel swell, mild painted wood grain."
+        },
+        {
+          "label": "chunky mallet",
+          "extra": "Cartoon proportions: a huge oversized head dwarfing the handle, broad iron hoops, a stout handle with a flared pommel, mild painted wood grain."
+        },
+        {
+          "label": "worn mallet",
+          "extra": "Work-worn: dents and small splits on the striking faces, one hoop slightly askew, a cord-wrapped grip band on the handle, mild painted wood grain."
+        },
+        {
+          "label": "sleek mallet",
+          "extra": "A refined joiner's mallet: a gently tapered head, slim tidy iron hoops, a slender handle widening at the pommel, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "building_plan",
+      "label": "Building Plan",
+      "group": "held",
+      "orient": "floating diagonally, the rolled scroll running from the upper left down to the lower right",
+      "subject": "rolled parchment scroll, cream paper wound in a tight roll with a loose outer flap curling open at one end, tied around the middle with thin brown twine",
+      "prompts": [
+        {
+          "label": "classic scroll",
+          "extra": "A clean tight roll, the outer flap curling open just enough to hint at faint blue plan linework inside, one neat twine tie, soft cream paper tones."
+        },
+        {
+          "label": "chunky scroll",
+          "extra": "Cartoon proportions: a fat plump roll with big spiral ends, a broad twine tie, the flap curling in one bold sweep, warm cream paper."
+        },
+        {
+          "label": "worn scroll",
+          "extra": "Field-used: dog-eared flap corners, a small tear at the edge, uneven roll ends, a messy double-wrapped twine tie, slightly darkened parchment."
+        },
+        {
+          "label": "sealed scroll",
+          "extra": "A tidier document: a crisp even roll closed with a small dark red wax seal on the twine, clean pale cream paper, fine painted edge lines on the roll ends."
+        }
+      ]
+    },
+    {
+      "key": "wooden_club",
+      "label": "Wooden Club",
+      "group": "held",
+      "orient": "floating diagonally with the head at the upper left and the handle running down to the lower right",
+      "subject": "crude wooden war club carved from one piece of warm brown hardwood, a thick gnarly knotted striking head full of carved character swelling from a narrower straight grip wrapped in tan cord",
+      "prompts": [
+        {
+          "label": "knotted brute",
+          "extra": "The head covered in blunt carved wooden knots and knobs standing proud like a rough cudgel, deep painted wood grain, a cord-wrapped grip with a flared pommel."
+        },
+        {
+          "label": "studded club",
+          "extra": "Short dark iron studs hammered in rings around the wooden head, visible wood grain between them, a neat cord-wrapped grip, a small iron pommel cap."
+        },
+        {
+          "label": "root cudgel",
+          "extra": "The head is the natural root burl of the branch: gnarled, asymmetric, full of lumps and bark remnants, survival-made feel, messy cord wrap on the grip."
+        },
+        {
+          "label": "carved warclub",
+          "extra": "A shaped rectangular-profile warclub head with carved edge ridges and chip-carved notch rows, an elegant taper into the wrapped grip, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "stone_spear",
+      "label": "Stone Spear",
+      "group": "held",
+      "orient": "floating diagonally with the stone point at the upper left and the shaft running down to the lower right",
+      "subject": "primitive hunting spear, a long straight warm brown wooden shaft tipped with a leaf-shaped point knapped from rough dull matte grey stone, the point showing visible chipped knapping scallops and a grainy unpolished rock texture, absolutely not metal, no smooth faces, no shine, lashed onto the split shaft end with criss-crossed tan cord",
+      "prompts": [
+        {
+          "label": "classic spear",
+          "extra": "EVERY part of the stone point is the same dull matte medium-grey with no pale rim and no sheen, because stone does not shine like iron. A clean leaf-shaped point, neat criss-cross lashing, a straight smooth shaft, mild painted wood grain."
+        },
+        {
+          "label": "chunky spear",
+          "extra": "EVERY part of the stone point is the same dull matte medium-grey with no pale rim and no sheen. Cartoon proportions: a broad oversized point with bold chip facets, heavy rope lashing, a thick shaft, mild painted wood grain."
+        },
+        {
+          "label": "worn spear",
+          "extra": "EVERY part of the stone point is the same dull matte medium-grey with no pale rim and no sheen. Survival-made: an uneven chipped point, messy layered lashing, a slightly crooked shaft with bark patches, mild painted wood grain."
+        },
+        {
+          "label": "sleek spear",
+          "extra": "EVERY part of the stone point is the same dull matte medium-grey with no pale rim and no sheen. A refined thrown-spear look: a long slender point, tight minimal lashing, a smooth tapered shaft with a small butt cap of wrapped cord."
+        }
+      ]
+    },
+    {
+      "key": "iron_sword",
+      "label": "Iron Sword",
+      "group": "held",
+      "orient": "floating diagonally with the blade tip at the upper left and the grip at the lower right",
+      "subject": "forged iron sword with real presence, a BROAD straight dark blue-grey steel blade with a strong bright honed edge on each side and a deep dark fuller groove down the centre, a sturdy dark iron crossguard with weight to it, a warm brown leather-wrapped grip ending in a heavy round iron pommel",
+      "prompts": [
+        {
+          "label": "broad arming",
+          "extra": "A wide confident blade tapering to a strong point, bold contrast between the dark flat and the bright edges, a thick straight crossguard, a chunky disc pommel."
+        },
+        {
+          "label": "heavy falchion",
+          "extra": "A SINGLE-EDGED falchion: the blade shaped like a broad machete or cleaver, its straight thick dark spine on one side and the bright sweeping cutting edge on the other, widening toward a clipped angled tip, a short stout crossguard, a curved grip."
+        },
+        {
+          "label": "anime greatsword",
+          "extra": "Exaggerated heroic anime proportions: the blade almost as wide as a plank and clearly LONGER and BIGGER than a normal sword, a dramatic bright edge band, a bold dark fuller, a wide sweeping winged crossguard, a long two-hand wrapped grip with a heavy pommel."
+        },
+        {
+          "label": "worn veteran",
+          "extra": "A broad blade with two or three honest edge notches and faint hammer marks on the flat, a brass-pinned crossguard, a leather grip polished by use, a scarred pommel."
+        }
+      ]
+    },
+    {
+      "key": "wooden_bow",
+      "label": "Wooden Bow",
+      "group": "held",
+      "orient": "floating upright with a slight diagonal tilt, the curved wooden belly of the bow on the left and the taut string on the right",
+      "subject": "simple wooden hunting bow, one smoothly curved stave of warm brown wood, thickest at the wrapped grip in the middle and tapering toward each nocked tip, strung with a single taut pale tan cord running straight between the tips",
+      "prompts": [
+        {
+          "label": "classic longbow",
+          "extra": "The archetypal longbow: one clean shallow D-curve, a cord-wrapped grip section, small notched tips, the string perfectly straight and taut, mild painted wood grain."
+        },
+        {
+          "label": "chunky recurve",
+          "extra": "Cartoon proportions: a thick bold stave with exaggerated curled-back recurve tips, a broad wrapped grip, a heavy pale string, mild painted wood grain."
+        },
+        {
+          "label": "worn bow",
+          "extra": "Survival-made: an uneven hand-shaved stave with bark patches near the tips, a messy cord-wrapped grip, a slightly frayed string, mild painted wood grain."
+        },
+        {
+          "label": "sleek recurve",
+          "extra": "A refined recurve: an elegant double-curve profile, a slim leather grip wrap, fine tapered tips with neat string nocks, a thin crisp string, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "crossbow",
+      "label": "Crossbow",
+      "group": "held",
+      "orient": "floating diagonally seen from slightly above, the bow at the upper left and the tiller butt at the lower right",
+      "subject": "historical medieval hunting crossbow, a thick straight warm brown wooden tiller beam with a shallow bolt groove along its top, a short WIDE bow fixed crosswise at the muzzle end with its two stiff limbs sweeping slightly back, a taut pale tan cord strung between the limb tips, a small iron stirrup loop at the very front for cocking, forged dark blue-grey iron bindings, an ancient hand-made weapon, not a rifle, not a gun, no barrel, no bolt handle, no scope",
+      "prompts": [
+        {
+          "label": "classic crossbow",
+          "extra": "The archetypal medieval crossbow: a plain straight tiller with a shallow bolt groove on top, the wide bow clearly crossing it at the front, a taut straight string, mild painted wood grain."
+        },
+        {
+          "label": "chunky crossbow",
+          "extra": "Cartoon proportions: a thick heavy tiller, an oversized bold bow crossing at the front, broad riveted iron bindings, mild painted wood grain."
+        },
+        {
+          "label": "worn crossbow",
+          "extra": "Seen from the same slightly-above angle as a museum photograph: the short wide bow clearly crossing the tiller near the front, field-worn with scuffed iron bindings, a cord-whipped repair wrap on one bow limb, mild painted wood grain."
+        },
+        {
+          "label": "sleek crossbow",
+          "extra": "A refined medieval crossbow with a slim elegant tiller and fine tapered bow limbs clearly crossing at the front, tidy inset iron bindings, a thin crisp string, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "arrow",
+      "label": "Arrow",
+      "group": "held",
+      "orient": "floating diagonally with the stone tip at the upper left and the feather fletching at the lower right",
+      "subject": "single arrow, a long straight warm brown wooden shaft tipped with a small knapped dull matte grey stone head lashed on with thin tan cord, twin pale feather fletchings and a small string nock at the rear end",
+      "prompts": [
+        {
+          "label": "classic arrow",
+          "extra": "EVERY part of the stone head is the same dull matte medium-grey with no pale rim and no sheen. A clean straight shaft, a neat compact point, tidy paired cream feather fletchings, mild painted wood grain."
+        },
+        {
+          "label": "chunky arrow",
+          "extra": "EVERY part of the stone head is the same dull matte medium-grey with no pale rim and no sheen. Cartoon proportions: a broad oversized head, a thick shaft, big bold fletching vanes, heavy lashing, mild painted wood grain."
+        },
+        {
+          "label": "worn arrow",
+          "extra": "EVERY part of the stone head is the same dull matte medium-grey with no pale rim and no sheen. Survival-made: a slightly uneven shaft, a chipped point, ragged mismatched fletching feathers, messy lashing, mild painted wood grain."
+        },
+        {
+          "label": "banded arrow",
+          "extra": "EVERY part of the stone head is the same dull matte medium-grey with no pale rim and no sheen. A fletcher's arrow: a slender shaft with a thin painted band near the nock, fine tapered point, crisp fletchings with subtle darker barred stripes."
+        }
+      ]
+    },
+    {
+      "key": "powder_bomb",
+      "label": "Powder Bomb",
+      "group": "held",
+      "orient": "floating centered, seen from a slightly raised angle, the fuse pointing up and to the left",
+      "subject": "round thrown powder bomb, a fist-sized ball wrapped tight in undyed beige cloth with the wrapping folds converging at the top, criss-crossed with thin tan cord, topped by a small dark iron fuse cap holding a short braided fuse",
+      "prompts": [
+        {
+          "label": "classic bomb",
+          "extra": "The archetypal cloth bomb: a clean round ball, neat converging wrap folds, a tidy criss-cross cord net, a small riveted cap and a short kinked fuse."
+        },
+        {
+          "label": "chunky bomb",
+          "extra": "Cartoon proportions: a fat slightly squashed ball, bold thick cord in a wide net, an oversized cap and a fat curly fuse, exaggerated wrap folds."
+        },
+        {
+          "label": "worn bomb",
+          "extra": "Backyard-made: a lumpy uneven ball, a squarish stitched patch, loose cord ends dangling, a scuffed cap and a frayed fuse tip."
+        },
+        {
+          "label": "sleek bomb",
+          "extra": "A tidier charge: a smooth even sphere, minimal fine cordwork, a neat collar-shaped cap with a clean coiled fuse, subtle painted cloth weave."
+        }
+      ]
+    },
+    {
+      "key": "powder_keg",
+      "label": "Powder Keg",
+      "group": "held",
+      "orient": "standing upright, floating at a slightly raised three-quarter angle so its front and one side both show",
+      "subject": "small wooden powder keg, a staved warm brown barrel bound by two forged dark blue-grey iron hoops, a short braided fuse rising from a small bung hole in the flat top",
+      "prompts": [
+        {
+          "label": "classic keg",
+          "extra": "The archetypal powder keg: evenly curved staves with visible seams, two neat iron hoops, a flat top with a small dark bung, a short kinked fuse, mild painted wood grain."
+        },
+        {
+          "label": "chunky keg",
+          "extra": "Cartoon proportions: a fat squat barrel bulging in the middle, broad bold hoops, an oversized fuse curling up from the top, mild painted wood grain."
+        },
+        {
+          "label": "worn keg",
+          "extra": "Field-worn: one hoop sitting slightly crooked, a split stave with a cord repair wrap, scuffed edges, a frayed fuse, a faint dusting of dark powder around the bung, mild painted wood grain."
+        },
+        {
+          "label": "sleek keg",
+          "extra": "A cooper's tidy keg: a taller slender barrel, slim tidy hoops with rivet dots, a neat coiled fuse, clean straight stave lines, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "satchel_charge",
+      "label": "Satchel Charge",
+      "group": "held",
+      "orient": "floating upright shown straight from the front, the shoulder strap draping behind it",
+      "subject": "satchel explosive charge, a bulging rectangular undyed beige canvas pack with a fold-over flap cinched shut by two warm brown leather straps and dark iron buckles, a short braided fuse sticking out from under the flap, a wide leather shoulder strap",
+      "prompts": [
+        {
+          "label": "classic satchel",
+          "extra": "The archetypal satchel charge: a plump squared pack, two neat straps with small buckles, a short kinked fuse at one top corner, soft painted canvas weave."
+        },
+        {
+          "label": "chunky satchel",
+          "extra": "Cartoon proportions: an overstuffed bulging pack with vague cylindrical lumps pressing through the canvas, thick bold straps, an oversized buckle and a fat curly fuse."
+        },
+        {
+          "label": "worn satchel",
+          "extra": "Improvised feel: a stitched patch on the flap, one strap tied off in a knot where the buckle is missing, frayed canvas corners, a ragged fuse."
+        },
+        {
+          "label": "sleek satchel",
+          "extra": "A tidier demolition pack: a crisp squared silhouette, slim neat straps with tidy buckles, a clean coiled fuse tucked under the flap edge, fine stitched seams."
+        }
+      ]
+    },
+    {
+      "key": "bandage",
+      "label": "Bandage",
+      "group": "held",
+      "orient": "floating centered, the roll at the upper left and the loose tail unrolling toward the lower right",
+      "subject": "rolled linen bandage, a plump off-white cloth roll with a visible spiral on its end face, a loose tail of cloth unrolling from the bottom of the roll and gently curling at its tip",
+      "prompts": [
+        {
+          "label": "classic roll",
+          "extra": "The archetypal bandage: a clean tight roll with a soft spiral end, a smooth ribbon tail with one gentle S-curve, soft warm off-white linen tones."
+        },
+        {
+          "label": "chunky roll",
+          "extra": "Cartoon proportions: a fat plump roll with a bold spiral, a wide short tail flipping up at the tip, thick soft cloth edges."
+        },
+        {
+          "label": "worn homespun",
+          "extra": "Homespun feel: a slightly loose uneven roll, frayed tail edges with loose thread ends, a faint woven texture, warm unbleached linen tone."
+        },
+        {
+          "label": "sleek pinned",
+          "extra": "A tidy field dressing: a crisp even roll secured by a tiny dark metal pin clasp, a slim neat tail with clean edges, pale clean linen."
+        }
+      ]
+    },
+    {
+      "key": "workbench_t1",
+      "label": "Workbench (Tier 1)",
+      "group": "deployable_icon",
+      "orient": "floating at a slightly raised three-quarter angle so its top and front both show",
+      "subject": "sturdy crude wooden workbench, a thick warm brown plank top on four stout squared legs joined by a lower shelf brace, built from rough hewn timber with visible joints",
+      "prompts": [
+        {
+          "label": "classic bench",
+          "extra": "The archetypal crafting bench: a heavy two-plank top with a visible seam, honest chunky joinery pegs at the corners, an empty lower shelf, mild painted wood grain."
+        },
+        {
+          "label": "chunky bench",
+          "extra": "Cartoon proportions: an extra thick slab top with rounded edges, fat stubby legs, oversized joinery pegs, mild painted wood grain."
+        },
+        {
+          "label": "worn bench",
+          "extra": "Well-used: scattered cut marks and dents on the top, a darker worn patch in the middle, one slightly crooked leg brace, mild painted wood grain."
+        },
+        {
+          "label": "sleek bench",
+          "extra": "A joiner's tidy bench: a smooth even top with a bevelled front edge, slender tapered legs, a neat full-width lower shelf, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "workbench_t2",
+      "label": "Workbench (Tier 2)",
+      "group": "deployable_icon",
+      "orient": "floating at a slightly raised three-quarter angle so its top and front both show",
+      "subject": "heavy reinforced crafting workbench built as one SOLID mass: a thick warm brown slab top with riveted dark blue-grey iron edge plates and corner caps, standing on a CLOSED solid plank base cabinet that reaches the ground on every side, no open legs, no gaps under the top, clean simple silhouette",
+      "prompts": [
+        {
+          "label": "solid cabinet",
+          "extra": "The archetypal upgraded bench: a clean slab top with tidy iron edging, a closed base cabinet with a single plank door and iron hinges, one unbroken volume, mild painted wood grain."
+        },
+        {
+          "label": "chunky solid",
+          "extra": "Cartoon proportions: an extra thick top with bold riveted iron caps, a fat closed base with wide planks, big friendly rivets, one unbroken volume, mild painted wood grain."
+        },
+        {
+          "label": "worn solid",
+          "extra": "Forge-worn: hammer dents in the top, scuffed bright edges on the iron plates, a soot-darkened patch, a closed base with one replaced lighter plank, one unbroken volume, mild painted wood grain."
+        },
+        {
+          "label": "vice solid",
+          "extra": "The solid cabinet bench with a compact iron vice mounted flush on one end of the top edge, tidy iron edging, a closed plank base, one unbroken volume, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "crude_furnace",
+      "label": "Crude Furnace",
+      "group": "deployable_icon",
+      "backbone": "glow",
+      "orient": "floating at a slightly raised three-quarter angle so its front and one side both show",
+      "subject": "squat crude smelting furnace built as ONE SOLID MASS of large flat-faced rough-hewn stone blocks mortared in even courses, a clean simple silhouette with no loose stones and no round boulders, a dark arched mouth at the base filled with warm orange firelight, a short thick square chimney on top",
+      "prompts": [
+        {
+          "label": "block kiln",
+          "extra": "EVERY stone is the same dull matte grey with no sheen. Even courses of big rectangular blocks, a neat arched mouth with a stone lintel, a stout square chimney, the whole furnace one solid unbroken volume."
+        },
+        {
+          "label": "clay kiln",
+          "extra": "Built instead as a SOLID smooth packed-clay beehive kiln: one continuous matte earthen surface with rounded shoulders, a small arched mouth glowing warmly, a short clay chimney, zero visible stones."
+        },
+        {
+          "label": "square forge",
+          "extra": "EVERY stone is the same dull matte grey with no sheen. A blocky rectangular furnace like a mason's forge: straight vertical walls of large flat blocks, a wide square mouth with a thick lintel, a chunky rectangular chimney."
+        },
+        {
+          "label": "worn block kiln",
+          "extra": "EVERY stone is the same dull matte grey with no sheen. The block kiln long-fired: a soot streak fanning up from the mouth, two chipped block corners, ember flecks in the glow, still one solid unbroken volume."
+        }
+      ]
+    },
+    {
+      "key": "hewn_log_door",
+      "label": "Hewn Log Door",
+      "group": "deployable_icon",
+      "orient": "floating upright shown straight from the front",
+      "subject": "heavy rectangular door built of vertical squared hewn warm brown timber planks, two horizontal cross battens pegged across them, two dark blue-grey iron hinge straps reaching in from one side, a simple iron ring handle on the other",
+      "prompts": [
+        {
+          "label": "classic door",
+          "extra": "The archetypal timber door: even plank widths with visible seams, straight battens with peg dots, neat tapered hinge straps, a round ring handle, mild painted wood grain."
+        },
+        {
+          "label": "chunky door",
+          "extra": "Cartoon proportions: extra wide chunky planks, fat rounded battens, bold oversized hinge straps with big rivets, a heavy ring handle, mild painted wood grain."
+        },
+        {
+          "label": "worn door",
+          "extra": "Frontier-worn: uneven plank ends at the bottom edge, a knothole, scuffed batten corners, slightly rusted hinge straps, mild painted wood grain."
+        },
+        {
+          "label": "sleek door",
+          "extra": "A carpenter's tidy door: evenly matched planks with chamfered seams, slim elegant hinge straps ending in leaf-shaped finials, a neat latch plate under the handle, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "iron_door",
+      "label": "Iron Door",
+      "group": "deployable_icon",
+      "orient": "floating upright shown straight from the front",
+      "subject": "heavy rectangular forged iron door, dark blue-grey riveted iron plates with two thick horizontal reinforcement bands, a narrow barred peep slot near the top, a sturdy iron handle on one side",
+      "prompts": [
+        {
+          "label": "classic iron",
+          "extra": "The archetypal vault-like door: clean plate seams with rows of rivet dots, two bold bands, a small barred slot, brighter worn edges on the bands, a solid handle."
+        },
+        {
+          "label": "chunky iron",
+          "extra": "Cartoon proportions: fat bulging plates, oversized dome rivets, extra thick bands, a big blocky handle, bold panel seams."
+        },
+        {
+          "label": "worn iron",
+          "extra": "Siege-worn: shallow dents in the plates, scuffed bright streaks along the band edges, faint rust blooms around the lower rivets, a scratched handle."
+        },
+        {
+          "label": "sleek iron",
+          "extra": "A master smith's door: slim tidy bands, fine even rivet rows, a neatly framed peep slot with slender bars, a refined curved handle, crisp plate lines."
+        }
+      ]
+    },
+    {
+      "key": "wood_shutter",
+      "label": "Window Shutter",
+      "group": "deployable_icon",
+      "orient": "floating upright shown straight from the front",
+      "subject": "square wooden window shutter panel of vertical warm brown planks held by a single diagonal cross batten, two small dark blue-grey iron hinge straps along one side, a small wooden turn latch on the other",
+      "prompts": [
+        {
+          "label": "classic shutter",
+          "extra": "The archetypal shutter: even planks, one clean diagonal batten with peg dots, neat little hinge straps, a simple turn latch, mild painted wood grain."
+        },
+        {
+          "label": "chunky shutter",
+          "extra": "Cartoon proportions: wide chunky planks with rounded edges, a fat bold batten, oversized hinge straps, a big friendly turn latch, mild painted wood grain."
+        },
+        {
+          "label": "worn shutter",
+          "extra": "Weathered: sun-faded streaks on the planks, a small knothole, one plank end slightly proud of the rest, scuffed hinges, mild painted wood grain."
+        },
+        {
+          "label": "sleek shutter",
+          "extra": "A joiner's shutter: matched planks with chamfered seams, a slim elegant Z-brace instead of the single diagonal, tidy hinge straps, a neat carved latch, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "sleeping_bag",
+      "label": "Sleeping Bag",
+      "group": "deployable_icon",
+      "orient": "floating at a slightly raised three-quarter angle so its top surface reads clearly",
+      "subject": "simple camp sleeping bag laid out flat, a slightly puffy quilted top of undyed beige canvas with wide horizontal quilt channels, a rolled headrest bump at the top end, plain stitched edging all round",
+      "prompts": [
+        {
+          "label": "classic bag",
+          "extra": "The archetypal bedroll bag: a soft rounded rectangle, three or four gentle quilt channels, a plump headrest roll, soft painted canvas weave."
+        },
+        {
+          "label": "chunky bag",
+          "extra": "Cartoon proportions: an extra puffy marshmallow-like bag with deep pinched quilt seams, a fat headrest roll, bold rounded corners."
+        },
+        {
+          "label": "rolled bedroll",
+          "extra": "Shown instead as the packed form: the same bag rolled up tight into a cylinder and cinched with two cord ties, the spiral visible on the end face, a small carry loop."
+        },
+        {
+          "label": "mossy bag",
+          "extra": "The same laid-out bag in a muted moss-green canvas with warm tan edging and ties, gentle quilt channels, a tidy headrest roll."
+        }
+      ]
+    },
+    {
+      "key": "torch",
+      "label": "Torch",
+      "group": "deployable_icon",
+      "backbone": "glow",
+      "orient": "floating diagonally with the flaming head at the upper left and the handle running down to the lower right",
+      "subject": "handheld torch, a stout warm brown wooden stick whose top end is wrapped in undyed cloth bound with criss-crossed tan cord, a lively warm orange and yellow flame rising from the wrapped head",
+      "prompts": [
+        {
+          "label": "classic torch",
+          "extra": "The archetypal torch: a neat cloth wrap, a teardrop flame with two or three painted tongue shapes and a brighter yellow core, a straight stick with mild painted wood grain."
+        },
+        {
+          "label": "chunky torch",
+          "extra": "Cartoon proportions: a fat bold flame with big lapping tongues, a thick chunky wrap, a stout stick with a flared end, mild painted wood grain."
+        },
+        {
+          "label": "worn torch",
+          "extra": "Half-burned: the top of the wrap charred black, ragged wrap edges, a smaller tired flame with a drifting spark, a scuffed stick, mild painted wood grain."
+        },
+        {
+          "label": "sleek torch",
+          "extra": "A tidy lantern-substitute: a neat tapered wrap with even cord bands, a tall elegant single-tongue flame with a clean bright core, a slim smooth stick, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "storage_box_small",
+      "label": "Small Storage Box",
+      "group": "deployable_icon",
+      "orient": "floating at a slightly raised three-quarter angle so its front and one side both show",
+      "subject": "small wooden storage chest built as one SOLID closed box: flat planked sides identical on every face, a gently domed hinged lid, dark blue-grey iron corner brackets and a small iron hasp on the front, every side fully closed with no holes and no missing planks",
+      "prompts": [
+        {
+          "label": "classic solid",
+          "extra": "Clean plank seams all around, four neat corner brackets with rivet dots, a small hasp, a thin lid lip, one unbroken volume, mild painted wood grain."
+        },
+        {
+          "label": "chunky solid",
+          "extra": "Cartoon proportions: a squat rounded chest with fat plank edges, bold oversized brackets, a big friendly hasp, one unbroken volume, mild painted wood grain."
+        },
+        {
+          "label": "banded solid",
+          "extra": "Two slim iron bands wrapping fully around body and lid instead of corner brackets, a neat hasp, clean seams, one unbroken volume, mild painted wood grain."
+        },
+        {
+          "label": "worn solid",
+          "extra": "Well-travelled but intact: scuffed lid corners, faint rust at the hasp, one darker replaced plank, every side still fully closed, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "storage_box_large",
+      "label": "Large Storage Box",
+      "group": "deployable_icon",
+      "orient": "floating at a slightly raised three-quarter angle so its front and one side both show",
+      "subject": "large long wooden storage chest, thick warm brown planks with a flat hinged lid, two broad dark blue-grey iron bands wrapping vertically around the body and lid, a heavy iron hasp latch on the front",
+      "prompts": [
+        {
+          "label": "classic chest",
+          "extra": "The archetypal big chest: a long low body, two clean iron bands with rivet dots, a heavy hasp, straight plank seams, mild painted wood grain."
+        },
+        {
+          "label": "chunky chest",
+          "extra": "Cartoon proportions: a fat deep body with bulging plank edges, extra broad bands with dome rivets, an oversized hasp, mild painted wood grain."
+        },
+        {
+          "label": "worn chest",
+          "extra": "Loot-worn: scuffed band edges showing brighter metal, a dented lid corner, a scratched hasp, one darker replaced plank, mild painted wood grain."
+        },
+        {
+          "label": "sleek chest",
+          "extra": "A shipwright's chest: slim tidy bands, fine rivet rows, chamfered plank seams, a neat hasp with a small ring pull, a gently crowned lid, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "tool_cupboard",
+      "label": "Tool Cupboard",
+      "group": "deployable_icon",
+      "orient": "floating at a slightly raised three-quarter angle so its front and one side both show",
+      "subject": "tall narrow wooden cupboard cabinet standing upright, two vertical warm brown plank doors with dark blue-grey iron hinge straps, a small central latch, a slightly overhanging flat top board",
+      "prompts": [
+        {
+          "label": "classic cupboard",
+          "extra": "The archetypal claim cupboard: two even doors with a clean centre seam, tapered hinge straps, a small hasp latch, a plain plinth base, mild painted wood grain."
+        },
+        {
+          "label": "chunky cupboard",
+          "extra": "Cartoon proportions: a stout wide-shouldered cabinet, fat plank doors, bold oversized hinge straps and latch, a thick overhanging top, mild painted wood grain."
+        },
+        {
+          "label": "worn cupboard",
+          "extra": "Base-worn: scuffed door corners, a knothole in one door, slightly rusted hinge straps, a faint gap at the centre seam, mild painted wood grain."
+        },
+        {
+          "label": "sleek cupboard",
+          "extra": "A cabinetmaker's piece: matched door planks with chamfered seams, slim elegant hinge straps with leaf finials, a neat turned latch knob, a bevelled top, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "ruin_cache",
+      "label": "Salvage Chest",
+      "group": "deployable_icon",
+      "orient": "floating at a slightly raised three-quarter angle so its front and one side both show",
+      "subject": "small knee-height chest of charred blackened wood planks, banded with rough dark iron straps, a heavy scuffed iron hasp on the front, ash-grey weathering dusting the charred surfaces",
+      "prompts": [
+        {
+          "label": "classic salvage",
+          "extra": "The archetypal burnt survivor: charcoal-dark planks with faint warm brown showing through at worn edges, two rough bands, a heavy hasp, subtle ash dusting."
+        },
+        {
+          "label": "chunky salvage",
+          "extra": "Cartoon proportions: a squat rounded chest with fat charred planks, bold bent bands with big rivets, an oversized hasp hanging slightly open."
+        },
+        {
+          "label": "worn salvage",
+          "extra": "Fire-ravaged: deeply cracked alligator-char texture on the planks, one band snapped and curling away, a rust-streaked hasp, ash flakes at the edges."
+        },
+        {
+          "label": "sturdy salvage",
+          "extra": "The best-preserved find: mostly intact planks scorched only at the corners, straight tidy bands, a solid working hasp with a ring pull, light ash dusting."
+        }
+      ]
+    },
+    {
+      "key": "wood",
+      "label": "Wood",
+      "group": "material_icon",
+      "backbone": "cluster",
+      "orient": "floating centered, seen from a slightly raised angle",
+      "subject": "short stack of three rough split warm brown wooden logs with pale cut end grain and patches of darker bark, stacked into one compact pyramid bundle",
+      "prompts": [
+        {
+          "label": "classic stack",
+          "extra": "Two logs below and one resting on top, clean pale end-grain circles with painted growth rings, bark along the rounded sides, mild painted wood grain."
+        },
+        {
+          "label": "single log",
+          "extra": "Just one thick hero log instead of a stack, a bold pale end-grain face with painted rings, a strip of bark peeling at one edge, mild painted wood grain."
+        },
+        {
+          "label": "chunky stack",
+          "extra": "Cartoon proportions: three fat stubby logs with oversized end-grain rings and thick soft bark, stacked in a plump pyramid."
+        },
+        {
+          "label": "split billets",
+          "extra": "Three quarter-split firewood billets instead of round logs, wedge-shaped with pale split faces and bark backs, leaning together in one tight bundle."
+        }
+      ]
+    },
+    {
+      "key": "stone",
+      "label": "Stone",
+      "group": "material_icon",
+      "backbone": "cluster",
+      "orient": "floating centered, seen from a slightly raised angle",
+      "subject": "compact cluster of dull matte medium-grey stone chunks with blunt chipped facets, every surface the same dull matte grey with no pale rim and no sheen because stone does not shine",
+      "prompts": [
+        {
+          "label": "classic cluster",
+          "extra": "One large chunk with two smaller ones tucked against it, honest blunt facets with slightly darker crevices, uniform dull grey."
+        },
+        {
+          "label": "single chunk",
+          "extra": "Just one bold hero boulder chunk, softly rounded with four or five big readable facets and a couple of chip scars, uniform dull grey."
+        },
+        {
+          "label": "chunky cluster",
+          "extra": "Cartoon proportions: three plump rounded stones like river cobbles pressed together, minimal facets, soft tonal steps, uniform dull grey."
+        },
+        {
+          "label": "sharp rubble",
+          "extra": "A tighter pile of five smaller angular shards with crisp chipped edges, the same dull grey on every face including the edges."
+        }
+      ]
+    },
+    {
+      "key": "coal",
+      "label": "Coal",
+      "group": "material_icon",
+      "backbone": "cluster",
+      "orient": "floating centered, seen from a slightly raised angle",
+      "subject": "compact cluster of jagged near-black coal lumps, deep charcoal grey with subtle darker crevices and a faint cool highlight on the largest facets",
+      "prompts": [
+        {
+          "label": "classic cluster",
+          "extra": "One big lump with two or three smaller ones against it, bold angular facets, the faint highlights kept small and dull so it reads as coal not glass."
+        },
+        {
+          "label": "single lump",
+          "extra": "Just one bold hero lump, strongly faceted like broken slate, a hairline lighter seam across one face, faint dull facet highlights."
+        },
+        {
+          "label": "chunky cluster",
+          "extra": "Cartoon proportions: three plump rounded nuggets pressed together with soft simple facets and a single small highlight each."
+        },
+        {
+          "label": "fine rubble",
+          "extra": "A tight heap of many small sharp chips and grains, the silhouette still one compact mound, tiny dull glints scattered sparsely."
+        }
+      ]
+    },
+    {
+      "key": "iron_ore",
+      "label": "Iron Ore",
+      "group": "material_icon",
+      "backbone": "cluster",
+      "orient": "floating centered, seen from a slightly raised angle",
+      "subject": "rough chunk of dull matte grey rock streaked with thick veins of rusty orange-brown iron ore running across its faces, the rock itself dull with no sheen",
+      "prompts": [
+        {
+          "label": "classic chunk",
+          "extra": "One hero chunk with two bold rust-orange veins wrapping over its facets, a smaller shard tucked beside it carrying a matching vein."
+        },
+        {
+          "label": "single chunk",
+          "extra": "Just one large chunk, a single wide rust vein crossing the biggest face diagonally with a few speckled ore spots around it."
+        },
+        {
+          "label": "chunky cluster",
+          "extra": "Cartoon proportions: three plump rounded rocks pressed together, each with one fat simple orange vein, soft tonal steps."
+        },
+        {
+          "label": "rich chunk",
+          "extra": "A vein-heavy hero chunk almost half covered in layered rust-orange ore crust, small nodular bumps along the veins, the remaining rock dull grey."
+        }
+      ]
+    },
+    {
+      "key": "sulfur_ore",
+      "label": "Sulfur Ore",
+      "group": "material_icon",
+      "backbone": "cluster",
+      "orient": "floating centered, seen from a slightly raised angle",
+      "subject": "rough chunk of dull matte grey rock crusted with crumbly bright yellow sulfur veins and patches, the rock itself dull with no sheen, the yellow matte and powdery",
+      "prompts": [
+        {
+          "label": "classic chunk",
+          "extra": "One hero chunk with two bold yellow crusted veins across its facets, a smaller shard beside it with a matching yellow patch."
+        },
+        {
+          "label": "single chunk",
+          "extra": "Just one large chunk, one wide crumbly yellow vein crossing the biggest face with powdery yellow speckles fading around it."
+        },
+        {
+          "label": "chunky cluster",
+          "extra": "Cartoon proportions: three plump rounded rocks pressed together, each wearing one fat simple yellow patch, soft tonal steps."
+        },
+        {
+          "label": "rich chunk",
+          "extra": "A crust-heavy hero chunk nearly half covered in built-up yellow sulfur with tiny crystalline nubs, the remaining rock dull grey."
+        }
+      ]
+    },
+    {
+      "key": "sulfur",
+      "label": "Sulfur",
+      "group": "material_icon",
+      "backbone": "cluster",
+      "orient": "floating centered, seen from a slightly raised angle",
+      "subject": "small conical mound of bright matte yellow sulfur powder with a few tiny angular yellow crystal chips resting on its slopes",
+      "prompts": [
+        {
+          "label": "classic mound",
+          "extra": "A soft even cone with gentle painted slope shading, three or four small crystal chips, the yellow warm and matte with no gloss."
+        },
+        {
+          "label": "chunky mound",
+          "extra": "Cartoon proportions: a plump rounded heap like poured sugar, big soft tonal steps, two oversized chunky crystal bits perched on top."
+        },
+        {
+          "label": "cloth pile",
+          "extra": "The mound heaped on a small open square of undyed beige cloth whose corners curl up around it, powder spilling toward one corner."
+        },
+        {
+          "label": "crystal heap",
+          "extra": "More crystal than powder: a tight heap of small angular bright yellow crystal chunks over a dusting of powder, each chunk simply faceted."
+        }
+      ]
+    },
+    {
+      "key": "gunpowder",
+      "label": "Gunpowder",
+      "group": "material_icon",
+      "backbone": "cluster",
+      "orient": "floating centered, seen from a slightly raised angle",
+      "subject": "small conical mound of coarse near-black gunpowder grains, deep charcoal grey with a subtle granular texture and faint cool highlights on a few grains",
+      "prompts": [
+        {
+          "label": "classic mound",
+          "extra": "A soft even cone of visibly grainy powder, gentle slope shading, a few stray grains resting at the base edge of the mound."
+        },
+        {
+          "label": "chunky mound",
+          "extra": "Cartoon proportions: a plump rounded heap with exaggerated pebble-like grains, big soft tonal steps, three or four stray grains."
+        },
+        {
+          "label": "pouch spill",
+          "extra": "The powder spilling from a small tipped-over open drawstring pouch of undyed beige cloth, the dark mound pooling in front of its mouth."
+        },
+        {
+          "label": "fine dune",
+          "extra": "A finer smoother pile like dark sand, a crisp ridge line down the cone, an almost silky surface with the faintest granular speckle."
+        }
+      ]
+    },
+    {
+      "key": "fiber",
+      "label": "Plant Fiber",
+      "group": "material_icon",
+      "backbone": "cluster",
+      "orient": "floating centered, seen from a slightly raised angle",
+      "subject": "loose bundle of long dry plant fibers in muted grass-green and pale tan, the strands folded over and gathered in the middle so both ends splay out",
+      "prompts": [
+        {
+          "label": "classic bundle",
+          "extra": "A relaxed folded sheaf with softly splaying ends, individual painted strands readable, a mix of green and tan tones."
+        },
+        {
+          "label": "chunky bundle",
+          "extra": "Cartoon proportions: a fat plump sheaf with thick noodle-like strands, bold simple strand shapes, ends flipping outward playfully."
+        },
+        {
+          "label": "tied bundle",
+          "extra": "The same sheaf cinched in the middle with a single wrapped strand knotted off, the waist pinched tight, the ends fanning wide."
+        },
+        {
+          "label": "wild handful",
+          "extra": "A looser just-harvested handful: strands crossing at angles, a few loose wisps escaping the bundle, fresher green tones with tan tips."
+        }
+      ]
+    },
+    {
+      "key": "plant_twine",
+      "label": "Plant Twine",
+      "group": "material_icon",
+      "orient": "floating centered, shown nearly straight on",
+      "subject": "neat coil of braided pale tan-green plant twine, wound into a plump ring of several loops with a short loose end tucked through and hanging free",
+      "prompts": [
+        {
+          "label": "classic coil",
+          "extra": "A tidy round coil of five or six visible loops, the braid texture painted in soft repeating chevrons, a short free end with a small knot."
+        },
+        {
+          "label": "chunky coil",
+          "extra": "Cartoon proportions: a fat rope-like coil of three thick loops, bold oversized braid chevrons, a stubby curled free end."
+        },
+        {
+          "label": "hank twist",
+          "extra": "Wound instead as a hand-twisted hank: a doubled skein twisted on itself into a compact spiral bundle, both looped ends visible."
+        },
+        {
+          "label": "fine coil",
+          "extra": "A slimmer cord in an elegant coil of many thin loops, seen from a low three-quarter angle so the coil reads as a solid stack of loops with NO see-through centre hole, one wrap binding the coil at its top, a long free end trailing in a gentle curve."
+        }
+      ]
+    },
+    {
+      "key": "cloth",
+      "label": "Cloth",
+      "group": "material_icon",
+      "orient": "floating centered, seen from a slightly raised angle",
+      "subject": "neatly folded stack of woven undyed beige linen cloth, three folded layers with soft rounded fold edges facing forward, a subtle painted weave texture",
+      "prompts": [
+        {
+          "label": "classic stack",
+          "extra": "Three even folded layers with plump rounded folds, gentle tonal steps between layers, one corner of the top layer lifting slightly."
+        },
+        {
+          "label": "chunky stack",
+          "extra": "Cartoon proportions: two extra thick pillowy folds with deep soft creases, bold rounded edges, a springy overhanging top corner."
+        },
+        {
+          "label": "rolled bolt",
+          "extra": "Shown instead as a loose roll: the cloth wound into a soft cylinder with a spiral visible on the end face and a loose tail draping off."
+        },
+        {
+          "label": "draped fold",
+          "extra": "A single folded square with one corner draping down in a soft S-curve, showing the hemmed edge and a hint of fray at the drape tip."
+        }
+      ]
+    },
+    {
+      "key": "hewn_log",
+      "label": "Hewn Log",
+      "group": "material_icon",
+      "orient": "floating diagonally, the beam running from the upper left down to the lower right",
+      "subject": "single squared hewn timber beam of warm brown wood, cleanly worked flat faces with long straight painted grain, gently chamfered edges, crisp pale sawn end faces",
+      "prompts": [
+        {
+          "label": "classic beam",
+          "extra": "One clean rectangular beam, straight grain lines down each face, honest tool-flattened facets catching slightly different tones, pale end grain with painted rings."
+        },
+        {
+          "label": "chunky beam",
+          "extra": "Cartoon proportions: a short fat stubby beam with bold rounded chamfers, oversized end-grain rings, thick simple grain strokes."
+        },
+        {
+          "label": "adzed beam",
+          "extra": "A rougher hand-hewn finish: shallow scalloped adze marks rippling down the faces, slightly waney edges where bark was, pale scarred end faces."
+        },
+        {
+          "label": "stacked pair",
+          "extra": "Two beams stacked crosswise into one compact unit, the top beam angled slightly, clean faces and crisp pale ends on both."
+        }
+      ]
+    },
+    {
+      "key": "iron_bar",
+      "label": "Iron Bar",
+      "group": "material_icon",
+      "orient": "floating diagonally, the bar running from the upper left down to the lower right",
+      "subject": "single forged iron ingot bar, dark blue-grey steel with slightly rounded edges, a subtly brighter top face and soft hammered undulations along its length",
+      "prompts": [
+        {
+          "label": "classic ingot",
+          "extra": "The archetypal trapezoid-profile ingot: a clean loaf shape, gentle hammer ripples, one brighter worn line along the top edge."
+        },
+        {
+          "label": "chunky ingot",
+          "extra": "Cartoon proportions: a fat plump loaf-like bar with bold rounded corners, big soft tonal steps, one confident bright band on top."
+        },
+        {
+          "label": "rough ingot",
+          "extra": "Fresh from a crude mold: slightly uneven sagging sides, a rippled shrink dip along the top face, faint dark scale patches at the ends."
+        },
+        {
+          "label": "stacked pair",
+          "extra": "Two ingots stacked crosswise into one compact unit, the top bar angled, matching dark blue-grey with brighter top edges on both."
+        }
+      ]
+    },
+    {
+      "key": "meteorite_alloy",
+      "label": "Meteorite Alloy",
+      "group": "material_icon",
+      "orient": "floating centered, seen from a slightly raised angle",
+      "subject": "jagged chunk of dark blue-black meteoric metal slag, a pitted rough surface with small rounded craters, thin silvery metallic veins branching across its faces and catching faint cool highlights",
+      "prompts": [
+        {
+          "label": "classic chunk",
+          "extra": "One hero chunk with three or four branching silver veins, scattered small pits, the highlights kept thin and cool so the body stays dark."
+        },
+        {
+          "label": "chunky nugget",
+          "extra": "Cartoon proportions: a plump rounded nugget with big soft craters and two fat bold silver veins, simple confident shapes."
+        },
+        {
+          "label": "sheared face",
+          "extra": "A chunk broken open: one flat sheared face showing a bright silvery metallic interior with a subtle crystalline pattern, the outer faces dark and pitted."
+        },
+        {
+          "label": "twin shards",
+          "extra": "Two angular shards leaning together as one compact cluster, silver veins continuing across the break between them, dark pitted crusts."
+        }
+      ]
+    },
+    {
+      "key": "meteorite_ingot",
+      "label": "Meteorite Ingot",
+      "group": "material_icon",
+      "orient": "floating diagonally, the bar running from the upper left down to the lower right",
+      "subject": "single cast ingot of dark blue-black meteoric metal, slightly rounded edges, faint silvery flecks scattered through the surface and a subtle cool sheen along the top face",
+      "prompts": [
+        {
+          "label": "classic ingot",
+          "extra": "A clean loaf-shaped bar, sparse fine silver flecks, one restrained cool highlight line along the top edge, the body kept deep blue-black."
+        },
+        {
+          "label": "chunky ingot",
+          "extra": "Cartoon proportions: a fat plump bar with bold rounded corners, larger playful silver speckles, one wide soft highlight band."
+        },
+        {
+          "label": "veined ingot",
+          "extra": "A thin branching silver vein surfacing across the top face like frozen lightning, fine flecks around it, crisp cast edges."
+        },
+        {
+          "label": "stamped ingot",
+          "extra": "A tidier refined bar with a small recessed circular stamp mark on the top face, even fleck distribution, a precise narrow edge highlight."
+        }
+      ]
+    },
+    {
+      "key": "salvaged_fittings",
+      "label": "Salvaged Fittings",
+      "group": "material_icon",
+      "backbone": "cluster",
+      "orient": "floating centered, seen from a slightly raised angle",
+      "subject": "small compact heap of old dark iron hardware: a door hinge strap, a latch plate, a coil spring and a few bent nails, dull worn blue-grey metal with faint rust edges",
+      "prompts": [
+        {
+          "label": "classic heap",
+          "extra": "The hinge lying across the latch plate with the spring leaning against them and nails tucked in the gaps, each part simply readable, faint rust on the edges only."
+        },
+        {
+          "label": "chunky heap",
+          "extra": "Cartoon proportions: fat simplified parts with bold rivet dots, a plump oversized spring, thick friendly nails, soft tonal steps."
+        },
+        {
+          "label": "rusty heap",
+          "extra": "More decayed: stronger orange-brown rust blooming across the plates, one nail snapped, the spring slightly crushed, edges worn bright."
+        },
+        {
+          "label": "sorted row",
+          "extra": "The parts arranged in one tight tidy row instead of a heap, hinge then latch then spring then nails, like a workbench inventory, dull worn metal."
+        }
+      ]
+    },
+    {
+      "key": "padded_hood",
+      "label": "Padded Helmet",
+      "group": "armor_icon",
+      "orient": "floating upright shown straight from the front, worn by no one, no mannequin, no head inside, the face opening empty and dark",
+      "subject": "quilted cloth armor hood of warm undyed tan linen, stitched quilting squares across the crown and sides, an open face hole with a rolled hem, a short collar skirt at the bottom",
+      "prompts": [
+        {
+          "label": "classic hood",
+          "extra": "The archetypal padded coif: an even diamond quilt pattern, a soft rounded crown, a neat rolled face hem, gentle cloth creases."
+        },
+        {
+          "label": "deep coif",
+          "extra": "A deeper medieval arming coif: the hood drooping into a soft point behind the crown, wide quilt cells, a generous shoulder skirt, a fat rolled face hem. It is ONLY a hood: no sleeves, no arms, no jacket, no torso."
+        },
+        {
+          "label": "worn hood",
+          "extra": "Well-used: a small stitched patch on one side, slightly flattened quilting on the crown, a loose thread at the collar skirt, faint stain tones."
+        },
+        {
+          "label": "sleek hood",
+          "extra": "A tidier arming cap: finer close quilting rows, a trim fitted silhouette, a small cloth tie hanging below the collar."
+        }
+      ]
+    },
+    {
+      "key": "padded_tunic",
+      "label": "Padded Chestplate",
+      "group": "armor_icon",
+      "orient": "floating upright shown straight from the front, worn by no one, no mannequin, no body inside",
+      "subject": "thick quilted cloth armor tunic of warm undyed tan linen, vertical stitched quilting channels down the torso, short quilted shoulder caps, cloth ties closing the collar",
+      "prompts": [
+        {
+          "label": "classic tunic",
+          "extra": "The archetypal gambeson: even vertical quilt channels, a straight hem, neat collar ties, soft plump cloth volume."
+        },
+        {
+          "label": "chunky tunic",
+          "extra": "Cartoon proportions: fat pillowy quilt channels with deep seams, broad rounded shoulder caps, a bold boxy silhouette."
+        },
+        {
+          "label": "worn tunic",
+          "extra": "Campaign-worn: a stitched patch at the hip, one shoulder cap slightly deflated, a dangling loose collar tie, faint stain tones."
+        },
+        {
+          "label": "sleek tunic",
+          "extra": "A tailor's gambeson: finer close quilting, a fitted waist, a short standing collar with tidy paired ties, clean hems."
+        }
+      ]
+    },
+    {
+      "key": "padded_leggings",
+      "label": "Padded Leggings",
+      "group": "armor_icon",
+      "orient": "floating upright shown straight from the front, worn by no one, no mannequin, no legs inside",
+      "subject": "pair of quilted cloth armor leggings of warm undyed tan linen, horizontal stitched quilting bands down each leg, a drawstring waist, plain open cuffs",
+      "prompts": [
+        {
+          "label": "classic leggings",
+          "extra": "The archetypal padded chausses: even horizontal quilt bands, softly rounded leg volumes, a simple knotted drawstring."
+        },
+        {
+          "label": "chunky leggings",
+          "extra": "Cartoon proportions: fat pillowy quilt bands with deep pinched seams, plump rounded legs, a bold bow-tied drawstring."
+        },
+        {
+          "label": "worn leggings",
+          "extra": "Well-used: a stitched knee patch on one leg, flattened quilting at the knees, a frayed cuff edge, faint stain tones."
+        },
+        {
+          "label": "sleek leggings",
+          "extra": "A tailor's cut: finer close quilting, trim tapered legs, tidy buttoned cuff tabs, a neat waistband channel."
+        }
+      ]
+    },
+    {
+      "key": "padded_wraps",
+      "label": "Padded Boots",
+      "group": "armor_icon",
+      "orient": "floating upright shown straight from the front, worn by no one, no mannequin, no feet inside, the pair standing side by side",
+      "subject": "empty pair of soft cloth wrap boots, each boot made ONLY of strips of warm undyed tan linen wound around in overlapping diagonal layers with a fully CLOSED rounded cloth toe, hollow dark openings at the top, tied off at the ankle with a knotted band, completely empty garments with no feet inside, no toes, no skin, no legs, no sandals",
+      "prompts": [
+        {
+          "label": "classic wraps",
+          "extra": "The archetypal wraps: clean overlapping diagonal strips, softly rounded toes, neat ankle knots with short tails."
+        },
+        {
+          "label": "chunky wraps",
+          "extra": "Cartoon proportions: fat thick strips with bold rounded overlaps, plump toes, big friendly ankle knots."
+        },
+        {
+          "label": "worn wraps",
+          "extra": "Road-worn: a loose strip end escaping one wrap, frayed strip edges, faint dust-toned lower layers."
+        },
+        {
+          "label": "sleek wraps",
+          "extra": "Tidy laced wraps: slimmer even strips in a precise herringbone overlap, a small buckle at each ankle instead of a knot."
+        }
+      ]
+    },
+    {
+      "key": "lamellar_helm",
+      "label": "Lamellar Helmet",
+      "group": "armor_icon",
+      "orient": "floating upright shown straight from the front, worn by no one, no mannequin, no head inside, the face opening empty and dark",
+      "subject": "ancient medieval lamellar helmet of small warm brown hewn wood slats laced together in overlapping horizontal rows over a padded tan cloth cap, dark cord lacing visible at each slat, a plain open face with a cloth-trimmed rim, a hand-made iron-age relic, no visor, no chin strap, no buckles, no modern motorcycle helmet, no plastic",
+      "prompts": [
+        {
+          "label": "classic helm",
+          "extra": "The archetypal lamellar dome: even rows of rounded-end slats stepping down from the crown, tidy cord knots, a soft cloth rim, mild painted wood grain."
+        },
+        {
+          "label": "chunky helm",
+          "extra": "Cartoon proportions: fat wide slats in bold rows, thick rope-like lacing, a plump rounded dome, mild painted wood grain."
+        },
+        {
+          "label": "worn helm",
+          "extra": "Battle-worn: one cracked slat, a missing slat gap laced over with cord, scuffed slat edges, a frayed cloth rim, mild painted wood grain."
+        },
+        {
+          "label": "sleek helm",
+          "extra": "A craftsman's helm: slim even slats in fine rows, a subtle peak ridge, neat minimal lacing, a trim cloth rim, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "lamellar_vest",
+      "label": "Lamellar Chestplate",
+      "group": "armor_icon",
+      "orient": "floating upright shown straight from the front, worn by no one, no mannequin, no body inside",
+      "subject": "armor vest of overlapping horizontal rows of small warm brown hewn wood slats laced with dark cord over a tan cloth backing, a slatted shoulder cap on each side, a cloth-bound neckline and hem",
+      "prompts": [
+        {
+          "label": "classic vest",
+          "extra": "The archetypal lamellar cuirass: even slat rows across the torso, tidy visible knot columns, matching shoulder caps, mild painted wood grain."
+        },
+        {
+          "label": "chunky vest",
+          "extra": "Cartoon proportions: fat wide slats in bold rows, thick rope lacing, plump oversized shoulder caps, a stout silhouette, mild painted wood grain."
+        },
+        {
+          "label": "worn vest",
+          "extra": "Campaign-worn: two cracked slats, one slat missing with crossed cord over the gap, scuffed row edges, a frayed hem, mild painted wood grain."
+        },
+        {
+          "label": "sleek vest",
+          "extra": "A craftsman's cuirass: slim even slats in fine dense rows, elegant tapered shoulder caps, neat lacing in tidy vertical lines, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "lamellar_greaves",
+      "label": "Lamellar Leggings",
+      "group": "armor_icon",
+      "orient": "floating upright shown straight from the front, worn by no one, no mannequin, no legs inside, the pair standing side by side",
+      "subject": "pair of leg greaves of overlapping horizontal rows of small warm brown hewn wood slats laced with dark cord over tan padded cloth leggings, cloth binding at the waist and cuffs",
+      "prompts": [
+        {
+          "label": "classic greaves",
+          "extra": "The archetypal slatted chausses: even slat rows down each leg, tidy knot columns, soft cloth showing at the knees' articulation gaps, mild painted wood grain."
+        },
+        {
+          "label": "chunky greaves",
+          "extra": "Cartoon proportions: fat wide slats, thick rope lacing, plump rounded leg volumes, mild painted wood grain."
+        },
+        {
+          "label": "worn greaves",
+          "extra": "Well-marched: a cracked slat on one shin, scuffed row edges, a patched cloth knee, a frayed cuff, mild painted wood grain."
+        },
+        {
+          "label": "sleek greaves",
+          "extra": "A craftsman's pair: slim even slats in fine rows, trim tapered legs, neat minimal lacing, tidy cloth cuffs, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "lamellar_boots",
+      "label": "Lamellar Boots",
+      "group": "armor_icon",
+      "orient": "floating upright shown straight from the front, worn by no one, no mannequin, no feet inside, the pair standing side by side",
+      "subject": "pair of boots armored with overlapping rows of small warm brown hewn wood slats laced with dark cord over bound tan cloth, rounded slat-capped toes, cloth binding at the top cuffs",
+      "prompts": [
+        {
+          "label": "classic boots",
+          "extra": "The archetypal slatted boots: even slat rows curving over each foot, tidy knots, soft cloth cuffs, mild painted wood grain."
+        },
+        {
+          "label": "chunky boots",
+          "extra": "Cartoon proportions: fat wide slats, big rounded toes, thick rope lacing, plump cuffs, mild painted wood grain."
+        },
+        {
+          "label": "worn boots",
+          "extra": "Road-worn: a chipped toe slat, scuffed slat edges, one cuff sagging, faint dust tones on the lower rows, mild painted wood grain."
+        },
+        {
+          "label": "sleek boots",
+          "extra": "A craftsman's pair: slim even slats in fine rows, elegantly tapered toes, neat lacing, trim cloth cuffs, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "iron_helm",
+      "label": "Iron Helmet",
+      "group": "armor_icon",
+      "orient": "floating upright shown straight from the front, worn by no one, no mannequin, no head inside, the eye slot dark and empty",
+      "subject": "forged iron helmet, a dark blue-grey rounded dome of riveted plates with a brow band, fixed cheek guards framing a dark open face, brighter worn edges along the bands",
+      "prompts": [
+        {
+          "label": "classic helm",
+          "extra": "The archetypal spangenhelm: a four-plate dome with riveted seam bands, a straight brow band, simple cheek guards, restrained bright edge wear."
+        },
+        {
+          "label": "chunky helm",
+          "extra": "Cartoon proportions: a fat rounded dome, extra broad bands with big dome rivets, bold chunky cheek guards, confident bright edges."
+        },
+        {
+          "label": "worn helm",
+          "extra": "Battle-worn: a shallow dent in the dome, a bright scratch across one cheek guard, faint rust at the lower rim, scuffed rivets."
+        },
+        {
+          "label": "sleek helm",
+          "extra": "A master smith's helm: an elegant tall-curved dome with a subtle centre ridge, slim tidy bands, refined tapered cheek guards, crisp edge highlights."
+        }
+      ]
+    },
+    {
+      "key": "iron_cuirass",
+      "label": "Iron Chestplate",
+      "group": "armor_icon",
+      "orient": "floating upright shown straight from the front, worn by no one, no mannequin, no body inside",
+      "subject": "forged iron cuirass, a dark blue-grey breastplate of riveted horizontal plates with a raised chest ridge, a rounded pauldron cap on each shoulder, warm brown leather side straps with iron buckles",
+      "prompts": [
+        {
+          "label": "classic cuirass",
+          "extra": "The archetypal plate torso: clean overlapping plate bands with rivet rows, a subtle medial ridge, matched pauldron caps, restrained bright edge wear."
+        },
+        {
+          "label": "chunky cuirass",
+          "extra": "Cartoon proportions: fat bulging plates, oversized dome rivets, big rounded pauldrons, broad straps with chunky buckles, bold bright edges."
+        },
+        {
+          "label": "worn cuirass",
+          "extra": "Battle-worn: two shallow dents, a bright diagonal scratch across the chest, faint rust at the plate overlaps, one strap end fraying."
+        },
+        {
+          "label": "sleek cuirass",
+          "extra": "A master smith's harness: a smoothly sculpted breastplate with an elegant flared waist, slim tidy rivet lines, refined fluted pauldrons, crisp highlights."
+        }
+      ]
+    },
+    {
+      "key": "iron_greaves",
+      "label": "Iron Leggings",
+      "group": "armor_icon",
+      "orient": "floating upright shown straight from the front, worn by no one, no mannequin, no legs inside, the pair standing side by side",
+      "subject": "pair of forged iron leg greaves, dark blue-grey riveted plates curving around each leg with articulated knee caps, warm brown leather straps and buckles at the thigh and calf",
+      "prompts": [
+        {
+          "label": "classic greaves",
+          "extra": "The archetypal plate legs: smooth shin plates with riveted seams, simple rounded knee caps, neat paired straps, restrained bright edge wear."
+        },
+        {
+          "label": "chunky greaves",
+          "extra": "Cartoon proportions: fat rounded plates, big dome knee caps, oversized rivets, broad straps with chunky buckles, bold bright edges."
+        },
+        {
+          "label": "worn greaves",
+          "extra": "Campaign-worn: a dented shin plate, bright scuff streaks at the knees, faint rust along the lower rims, one strap tied off where a buckle is missing."
+        },
+        {
+          "label": "sleek greaves",
+          "extra": "A master smith's pair: elegantly tapered plates with a subtle shin ridge, refined fluted knee caps, slim tidy straps, crisp highlights."
+        }
+      ]
+    },
+    {
+      "key": "iron_boots",
+      "label": "Iron Boots",
+      "group": "armor_icon",
+      "orient": "floating upright shown straight from the front, worn by no one, no mannequin, no feet inside, the pair standing side by side",
+      "subject": "pair of forged iron plate boots, dark blue-grey overlapping riveted toe plates stepping back over each foot, a solid ankle cuff, warm brown leather straps with iron buckles",
+      "prompts": [
+        {
+          "label": "classic boots",
+          "extra": "The archetypal sabatons: clean overlapping toe lames with rivet dots, rounded toes, simple ankle cuffs, restrained bright edge wear."
+        },
+        {
+          "label": "chunky boots",
+          "extra": "Cartoon proportions: fat stubby boots with big bold toe plates, oversized rivets, thick cuffs, broad straps, confident bright edges."
+        },
+        {
+          "label": "worn boots",
+          "extra": "Battle-worn: scuffed bright streaks across the toes, a dented cuff, faint rust in the plate overlaps, one frayed strap end."
+        },
+        {
+          "label": "sleek boots",
+          "extra": "A master smith's pair: elegantly pointed overlapping lames, fine rivet rows, trim ankle cuffs, slim tidy straps, crisp highlights."
+        }
+      ]
+    }
+  ],
+  "notes": "Batch 2 (2026-07-19): everything except the five shipped gathering tools (their round lives in prompts_tools_shipped.json and candidates/shipped/). Schema changes vs the tool round: item-level subject shared by all four variants (variant-level subject still overrides if present), per-item orient string injected into the backbone, three backbones (default / glow for the two fire items / cluster for pile-shaped materials, which relaxes the one-connected-piece guard), and per-item group + label driving the grouped picker. Groups: generic (the burlap bundle replacing the procedural bag viewmodel, mesh-bound), held (icon + mesh reference, like the tools), deployable_icon / material_icon / armor_icon (icon only, no mesh). Prompt lessons carried over from the tool round: floating + evenly lit (never lying, kills painted shadows), one connected piece, dull-matte-stone constant wherever stone appears, forged dark blue-grey steel with brighter honed edges as the iron palette, mild painted wood grain as the wood constant. Armor adds worn-by-no-one/no-mannequin to the orient line so Z-Image does not stage the piece on a body."
+}

@@ -19,6 +19,14 @@ from runpod_flash import Endpoint, GpuGroup, NetworkVolume, DataCenter
 
 # Weights persist here across cold starts (downloaded once). Pin the volume and
 # the endpoint to the same datacenter.
+#
+# The REAL volume is 150 GB since 2026-07-19 (resized via the REST API so
+# flux ~34 GB + TRELLIS.2 ~16 GB + Qwen-Image-2512 ~40 GB fit together), but
+# the size DECLARED here must stay at the originally-provisioned 80: Flash
+# reconciles this declaration against its recorded resource state and treats
+# a size change as replace-the-volume, which it cannot do (undeploy
+# unsupported) and which would lose the cached weights anyway. Resize via
+# REST, never here.
 DC = DataCenter.EU_RO_1
 VOLUME = NetworkVolume(name="ashwend-model-cache", size=80, datacenter=DC)
 
@@ -52,6 +60,39 @@ MODELS = {
         "max_seq_len": None,
         "default_steps": 30,
         "uses_negative": True,
+        "offload": False,
+    },
+    # Strongest open T2I as of mid-2026 (blind-eval leader; Apache-2.0,
+    # ungated). 20B, so it runs CPU-offloaded on the 24 GB workers: slow
+    # (minutes per image) but batch-tolerable. Its guidance knob is
+    # true_cfg_scale, NOT guidance_scale (which is the distilled-guidance
+    # embed and must stay at its default), hence guidance None + extra_kwargs.
+    # min_steps guards against the client's schnell-tuned steps=4 default.
+    "qwen-image-2512": {
+        "repo": "Qwen/Qwen-Image-2512",                # Apache-2.0, ungated
+        "txt2img_pipe": "QwenImagePipeline",
+        "img2img_pipe": None,
+        "dtype": "bfloat16",
+        "guidance": None,
+        "max_seq_len": None,
+        "default_steps": 50,
+        "min_steps": 40,
+        "uses_negative": True,
+        "offload": True,
+        "extra_kwargs": {"true_cfg_scale": 4.0},
+    },
+    # Fast quality tier: 6B, ~9 steps, fits the 24 GB workers fully resident.
+    # Guidance must be 0.0 (Turbo distillation).
+    "z-image-turbo": {
+        "repo": "Tongyi-MAI/Z-Image-Turbo",            # Apache-2.0, ungated
+        "txt2img_pipe": "ZImagePipeline",
+        "img2img_pipe": None,
+        "dtype": "bfloat16",
+        "guidance": 0.0,
+        "max_seq_len": None,
+        "default_steps": 9,
+        "min_steps": 9,
+        "uses_negative": False,
         "offload": False,
     },
 }
@@ -105,6 +146,8 @@ async def generate(
     pipe = cache.get(key)
     if pipe is None:
         cls_name = spec["img2img_pipe"] if mode == "img2img" else spec["txt2img_pipe"]
+        if cls_name is None:
+            return {"error": f"model {model} does not support mode {mode}"}
         cls = getattr(diffusers, cls_name)
         pipe = cls.from_pretrained(
             spec["repo"],
@@ -120,8 +163,11 @@ async def generate(
 
     kwargs = {
         "prompt": prompt,
-        "num_inference_steps": int(steps or spec["default_steps"]),
+        "num_inference_steps": max(
+            int(steps or spec["default_steps"]), int(spec.get("min_steps", 1))
+        ),
     }
+    kwargs.update(spec.get("extra_kwargs", {}))
     if spec["guidance"] is not None:
         kwargs["guidance_scale"] = float(spec["guidance"])
     if spec["max_seq_len"]:

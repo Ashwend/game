@@ -3,11 +3,10 @@
 #
 #   curl -fsSL https://www.ashwend.com/install.sh | sh
 #
-# Downloads the latest macOS build and installs it to /Applications. Because the
-# download happens via curl (not a browser), macOS does NOT attach the
-# `com.apple.quarantine` flag, so Ashwend.app opens normally, with no "damaged"
-# or Gatekeeper prompt. (The app is ad-hoc signed but not yet notarized; this
-# installer is the friction-free path until then.)
+# Downloads the latest macOS build and installs it to /Applications. The app is
+# Developer ID signed and notarized, so the .dmg from the website is just as
+# friction-free; this script is the no-clicks path for terminal folk and
+# automation.
 set -eu
 
 REPO="Ashwend/game"

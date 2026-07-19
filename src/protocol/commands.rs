@@ -141,7 +141,7 @@ pub struct AttackPlayerCommand {
 /// swing on the rigged body. `seq` is the client's per-swing counter (its
 /// local `swing_seed`) so the server, and peers, can dedupe back-to-back
 /// swings; `model` selects the swing archetype (curve/cadence/pose), a weapon
-/// carries its own (Club/Spear/Sword/Mace), a gather tool its archetype. The
+/// carries its own (Club/Spear/Sword), a gather tool its archetype. The
 /// server re-derives the model from the authoritative held item too, so a lie
 /// here only mis-picks an animation.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

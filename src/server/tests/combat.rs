@@ -8,7 +8,7 @@
 use super::*;
 use crate::{
     game_balance::{STONE_HATCHET_PVP_DAMAGE, STONE_PICKAXE_PVP_DAMAGE},
-    items::{BASIC_HATCHET_ID, BASIC_PICKAXE_ID, IRON_MACE_ID, ItemModel, WOODEN_CLUB_ID},
+    items::{BASIC_HATCHET_ID, BASIC_PICKAXE_ID, IRON_SWORD_ID, ItemModel, WOODEN_CLUB_ID},
     protocol::{
         AccountId, AttackPlayerCommand, ClientMessage, ItemStack, LootBagCommand, LootBagSlotRef,
         MAX_HEALTH, PROTOCOL_VERSION, PlayerMovement,
@@ -64,7 +64,7 @@ fn equip_pickaxe(server: &mut GameServer, client_id: ClientId) {
 }
 
 /// Equip an arbitrary weapon (or any item) into the active actionbar slot, so a
-/// test can put a spear / sword / mace in hand.
+/// test can put a spear or sword in hand.
 fn equip_item(server: &mut GameServer, client_id: ClientId, item_id: &str) {
     let client = server.clients.get_mut(&client_id).expect("client exists");
     client.inventory.actionbar_slots[0] = Some(ItemStack::new(item_id, 1));
@@ -153,14 +153,14 @@ fn weapon_hit_broadcasts_its_own_item_model_not_hands() {
         "a club hit must ship the Club impact identity, not Bag/Hands"
     );
 
-    // A mace hit broadcasts the Mace model.
+    // A sword hit broadcasts the Sword model.
     reset_attack_cooldown(&mut server, attacker);
-    equip_item(&mut server, attacker, IRON_MACE_ID);
-    let mace_impact = attack(&mut server, attacker, target);
+    equip_item(&mut server, attacker, IRON_SWORD_ID);
+    let sword_impact = attack(&mut server, attacker, target);
     assert_eq!(
-        player_impact_model_of(&mace_impact),
-        ItemModel::Mace,
-        "a mace hit must ship the Mace impact identity"
+        player_impact_model_of(&sword_impact),
+        ItemModel::Sword,
+        "a sword hit must ship the Sword impact identity"
     );
 }
 
@@ -1101,44 +1101,7 @@ fn pierce_interaction_is_unchanged_by_the_equipment_rework() {
 
 // ---- melee weapons ----
 
-use crate::items::{IRON_SWORD_ID, STONE_SPEAR_ID};
-
-#[test]
-fn a_mace_hit_pierces_armor_against_an_armored_target() {
-    // The mace is the anti-armor weapon: its 50% pierce shaves the target's
-    // effective armor before mitigation, so an armored victim takes more from a
-    // mace than the same armor would leave through a non-piercing weapon.
-    use crate::combat::{damage_after_armor, effective_armor_after_pierce};
-    use crate::game_balance::{IRON_MACE_ARMOR_PIERCE_PCT, IRON_MACE_PVP_DAMAGE};
-
-    let mut server = server();
-    let attacker = connect_named(&mut server, crate::protocol::AccountId(1), "Attacker");
-    let target = connect_named(&mut server, crate::protocol::AccountId(2), "Target");
-    place_player(&mut server, attacker, Vec3Net::new(0.0, 0.0, 0.0), 0.0);
-    place_player(&mut server, target, Vec3Net::new(0.0, 0.0, -2.0), 0.0);
-    equip_item(&mut server, attacker, IRON_MACE_ID);
-    // 40% melee mitigation. A mace is Blunt, so the melee column is what the hit
-    // reads. Set it directly to keep the test on the pierce math.
-    server.clients.get_mut(&target).unwrap().protection.melee = 40;
-
-    let start = target_health(&server, target);
-    attack(&mut server, attacker, target);
-    let dealt = start - target_health(&server, target);
-
-    // Expected: pierce halves the effective armor (40 -> 20), then mitigation.
-    let effective = effective_armor_after_pierce(40, IRON_MACE_ARMOR_PIERCE_PCT);
-    assert_eq!(effective, 20, "50% pierce halves 40 armor to 20");
-    let expected = damage_after_armor(IRON_MACE_PVP_DAMAGE, effective) as f32;
-    assert_eq!(dealt, expected, "the mace pierces before mitigation");
-
-    // And it beats what the same armor would leave through with no pierce, the
-    // whole point of the anti-armor weapon.
-    let without_pierce = damage_after_armor(IRON_MACE_PVP_DAMAGE, 40) as f32;
-    assert!(
-        dealt > without_pierce,
-        "pierce lets more damage through than the raw armor would"
-    );
-}
+use crate::items::STONE_SPEAR_ID;
 
 #[test]
 fn a_spear_connects_where_a_sword_does_not_at_extended_range() {

@@ -116,9 +116,9 @@ pub fn tool_player_damage(tool: ToolProfile, attacker: ClientId) -> Option<Damag
 ///
 /// `model` carries the swing's peer-visible impact identity for the wire shapes
 /// (`ServerMessage::PlayerImpact` and [`DamageSource::Player`]): a dedicated
-/// weapon resolves to its own archetype (Club/Spear/Sword/Mace), a gather tool
+/// weapon resolves to its own archetype (Club/Spear/Sword), a gather tool
 /// to its archetype (Hatchet/Pickaxe). This is what a peer's audio, VFX, and
-/// camera reaction key on, so a mace hit reads as a mace even to observers.
+/// camera reaction key on, so a sword hit reads as a sword even to observers.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AttackProfile {
     /// Raw pre-armor damage in HP.
@@ -169,7 +169,7 @@ pub fn resolve_attack_profile_parts(
             cooldown_ticks: weapon.cooldown_ticks,
             armor_pierce_pct: weapon.armor_pierce_pct,
             // A weapon's impact identity is its own registry archetype
-            // (Club/Spear/Sword/Mace).
+            // (Club/Spear/Sword).
             model,
         });
     }
@@ -581,20 +581,17 @@ mod tests {
     #[test]
     fn each_melee_weapon_resolves_to_its_game_balance_values() {
         use crate::game_balance::{
-            COMBAT_ATTACK_RANGE_M, IRON_MACE_ARMOR_PIERCE_PCT, IRON_MACE_COOLDOWN_TICKS,
-            IRON_MACE_KNOCKBACK_SPEED, IRON_MACE_PVP_DAMAGE, IRON_SWORD_COOLDOWN_TICKS,
-            IRON_SWORD_KNOCKBACK_SPEED, IRON_SWORD_PVP_DAMAGE, STONE_SPEAR_COOLDOWN_TICKS,
-            STONE_SPEAR_KNOCKBACK_SPEED, STONE_SPEAR_PVP_DAMAGE, STONE_SPEAR_REACH_M,
-            WOODEN_CLUB_COOLDOWN_TICKS, WOODEN_CLUB_KNOCKBACK_SPEED, WOODEN_CLUB_PVP_DAMAGE,
+            COMBAT_ATTACK_RANGE_M, IRON_SWORD_COOLDOWN_TICKS, IRON_SWORD_KNOCKBACK_SPEED,
+            IRON_SWORD_PVP_DAMAGE, STONE_SPEAR_COOLDOWN_TICKS, STONE_SPEAR_KNOCKBACK_SPEED,
+            STONE_SPEAR_PVP_DAMAGE, STONE_SPEAR_REACH_M, WOODEN_CLUB_COOLDOWN_TICKS,
+            WOODEN_CLUB_KNOCKBACK_SPEED, WOODEN_CLUB_PVP_DAMAGE,
         };
-        use crate::items::{
-            IRON_MACE_ID, IRON_SWORD_ID, ItemModel, STONE_SPEAR_ID, WOODEN_CLUB_ID,
-        };
+        use crate::items::{IRON_SWORD_ID, ItemModel, STONE_SPEAR_ID, WOODEN_CLUB_ID};
 
         // Every weapon resolves with Blunt damage, its own peer-visible impact
         // model (never a gather-tool archetype), and exactly its game_balance
-        // numbers. Reach is the melee default except the spear; pierce is zero
-        // except the mace.
+        // numbers. Reach is the melee default except the spear; no melee weapon
+        // pierces armor today (the profile field stays for future gear).
         let club = weapon_profile(WOODEN_CLUB_ID);
         assert_eq!(club.damage, WOODEN_CLUB_PVP_DAMAGE);
         assert_eq!(club.knockback_speed, WOODEN_CLUB_KNOCKBACK_SPEED);
@@ -624,58 +621,21 @@ mod tests {
         assert_eq!(sword.armor_pierce_pct, 0);
         assert_eq!(sword.model, ItemModel::Sword);
 
-        let mace = weapon_profile(IRON_MACE_ID);
-        assert_eq!(mace.damage, IRON_MACE_PVP_DAMAGE);
-        assert_eq!(mace.knockback_speed, IRON_MACE_KNOCKBACK_SPEED);
-        assert_eq!(mace.reach_m, COMBAT_ATTACK_RANGE_M);
-        assert_eq!(mace.cooldown_ticks, IRON_MACE_COOLDOWN_TICKS);
-        assert_eq!(mace.model, ItemModel::Mace);
-        // The mace is the ONLY melee weapon that pierces armor (50%).
-        assert_eq!(mace.armor_pierce_pct, IRON_MACE_ARMOR_PIERCE_PCT);
-        assert_eq!(mace.armor_pierce_pct, 50);
         assert_eq!(club.armor_pierce_pct, 0);
         assert_eq!(spear.armor_pierce_pct, 0);
         assert_eq!(sword.armor_pierce_pct, 0);
     }
 
     #[test]
-    fn mace_deals_the_most_damage_and_the_biggest_knockback() {
-        use crate::game_balance::PICKAXE_KNOCKBACK_SPEED;
-        use crate::items::{IRON_MACE_ID, IRON_SWORD_ID, STONE_SPEAR_ID, WOODEN_CLUB_ID};
-
-        let club = weapon_profile(WOODEN_CLUB_ID);
-        let spear = weapon_profile(STONE_SPEAR_ID);
-        let sword = weapon_profile(IRON_SWORD_ID);
-        let mace = weapon_profile(IRON_MACE_ID);
-
-        // Damage climbs club < spear < sword < mace.
-        assert!(club.damage < spear.damage);
-        assert!(spear.damage < sword.damage);
-        assert!(sword.damage < mace.damage);
-
-        // The mace has the biggest knockback in the game, heavier even than the
-        // pickaxe's 4.0 m/s shove.
-        assert!(mace.knockback_speed > PICKAXE_KNOCKBACK_SPEED);
-        for other in [club, spear, sword] {
-            assert!(
-                mace.knockback_speed > other.knockback_speed,
-                "the mace out-shoves every other weapon"
-            );
-        }
-    }
-
-    #[test]
-    fn weapon_cooldowns_order_club_fastest_then_sword_spear_mace() {
-        use crate::items::{IRON_MACE_ID, IRON_SWORD_ID, STONE_SPEAR_ID, WOODEN_CLUB_ID};
-        // Speed ordering is a hard design constraint: club < sword < spear < mace
-        // in cooldown ticks (smaller = faster).
+    fn weapon_cooldowns_order_club_fastest_then_sword_then_spear() {
+        use crate::items::{IRON_SWORD_ID, STONE_SPEAR_ID, WOODEN_CLUB_ID};
+        // Speed ordering is a hard design constraint: club < sword < spear in
+        // cooldown ticks (smaller = faster).
         let club = weapon_profile(WOODEN_CLUB_ID).cooldown_ticks;
         let sword = weapon_profile(IRON_SWORD_ID).cooldown_ticks;
         let spear = weapon_profile(STONE_SPEAR_ID).cooldown_ticks;
-        let mace = weapon_profile(IRON_MACE_ID).cooldown_ticks;
         assert!(club < sword, "club is faster than the sword");
         assert!(sword < spear, "sword is faster than the spear");
-        assert!(spear < mace, "spear is faster than the mace");
     }
 
     // ---- Armor pierce math ----

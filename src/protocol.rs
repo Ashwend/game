@@ -80,7 +80,7 @@ pub struct AccountId(pub u64);
 /// entity from 49 (the sickle now swings at the Tall Grass node through the
 /// ordinary `Gather` path), and appended `ItemModel::Sickle` (the sickle's
 /// reaping-slash swing archetype on the wire `PlayerAction`/`SwingStart`).
-pub const PROTOCOL_VERSION: u32 = 51;
+pub const PROTOCOL_VERSION: u32 = 52;
 pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVER_TICK_RATE_HZ: f32 = 20.0;
 pub const MAX_CHAT_LEN: usize = 240;

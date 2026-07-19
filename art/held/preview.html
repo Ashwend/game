@@ -1,0 +1,165 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Ashwend held-item mesh previewer</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #24272b; color: #e8e6e1; overflow: hidden;
+         font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  #ui { position: fixed; top: 14px; left: 14px; z-index: 10; background: #191c21ee;
+        border: 1px solid #2b3038; border-radius: 10px; padding: 12px 14px;
+        display: flex; flex-direction: column; gap: 9px; min-width: 240px; }
+  #ui .row { display: flex; align-items: center; gap: 8px; }
+  #ui label { color: #9aa0a8; font-size: 12px; min-width: 52px; }
+  select, button { font: inherit; background: #262b33; color: #e8e6e1;
+                   border: 1px solid #3a414b; border-radius: 6px; padding: 4px 8px; }
+  button.on { background: #3f7a4a; border-color: #4b8f57; }
+  #stats { font: 11px/1.6 ui-monospace, Menlo, monospace; color: #8fbf9a;
+           white-space: pre; }
+  #loading { position: fixed; inset: 0; display: grid; place-items: center;
+             background: #24272bcc; z-index: 20; font-size: 15px; color: #c8ccd2;
+             visibility: hidden; }
+</style>
+<div id="ui">
+  <div class="row"><label>Item</label>
+    <select id="item">
+      <option value="wood_stone_hatchet">Stone Hatchet</option>
+      <option value="wood_stone_pickaxe">Stone Pickaxe</option>
+      <option value="iron_hatchet">Iron Hatchet</option>
+      <option value="iron_pickaxe">Iron Pickaxe</option>
+      <option value="iron_sickle">Iron Sickle</option>
+    </select>
+  </div>
+  <div class="row"><label>Mesh</label>
+    <select id="variant">
+      <option value="raw">RAW TRELLIS output (~1M tris)</option>
+      <option value="built">Built game mesh (smooth recipe)</option>
+      <option value="lowpoly">TRELLIS native low-poly (if generated)</option>
+    </select>
+  </div>
+  <div class="row">
+    <button id="wire">wireframe</button>
+    <button id="bg">light bg</button>
+    <button id="spin" class="on">spin</button>
+  </div>
+  <div id="stats">pick a model</div>
+</div>
+<div id="loading">loading glb (the raw ones are ~40 MB)...</div>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+document.body.appendChild(renderer.domElement);
+
+const DARK = 0x24272b, LIGHT = 0xd6d4cf;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(DARK);
+// Neutral studio environment so the TRELLIS metallic-roughness materials
+// actually light up (metal is black without an environment).
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+const key = new THREE.DirectionalLight(0xffffff, 1.2);
+key.position.set(2.5, 4, 2);
+scene.add(key, new THREE.AmbientLight(0xffffff, 0.25));
+
+const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.01, 100);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+const loader = new GLTFLoader();
+let current = null, wireframe = false, spinning = true;
+const ui = id => document.getElementById(id);
+
+function setWireframe(on) {
+  if (!current) return;
+  current.traverse(o => {
+    if (o.isMesh) {
+      o.material.wireframe = on;
+    }
+  });
+}
+
+async function load() {
+  const item = ui('item').value;
+  const variant = ui('variant').value;
+  const url = variant === 'raw' ? `meshes/${item}.glb`
+            : variant === 'lowpoly' ? `meshes/${item}_lowpoly.glb`
+            : `meshes/game/review_${item}.glb`;
+  ui('loading').style.visibility = 'visible';
+  ui('stats').textContent = 'loading...';
+  try {
+    const gltf = await loader.loadAsync(url);
+    if (current) scene.remove(current);
+    current = gltf.scene;
+
+    // Center + frame.
+    const box = new THREE.Box3().setFromObject(current);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    current.position.sub(center);
+    scene.add(current);
+    const radius = Math.max(size.x, size.y, size.z);
+    camera.position.set(radius * 1.1, radius * 0.45, radius * 1.4);
+    controls.target.set(0, 0, 0);
+    controls.update();
+
+    let tris = 0, verts = 0, meshes = 0;
+    current.traverse(o => {
+      if (o.isMesh) {
+        meshes++;
+        verts += o.geometry.attributes.position.count;
+        const idx = o.geometry.index;
+        tris += (idx ? idx.count : o.geometry.attributes.position.count) / 3;
+      }
+    });
+    setWireframe(wireframe);
+    ui('stats').textContent =
+      `${url}\ntris ${tris.toLocaleString()}  verts ${verts.toLocaleString()}  meshes ${meshes}\n` +
+      `bbox ${size.x.toFixed(2)} x ${size.y.toFixed(2)} x ${size.z.toFixed(2)}`;
+  } catch (err) {
+    ui('stats').textContent = `FAILED: ${url}\n${err.message || err}`;
+  }
+  ui('loading').style.visibility = 'hidden';
+}
+
+ui('item').addEventListener('change', load);
+ui('variant').addEventListener('change', load);
+ui('wire').addEventListener('click', () => {
+  wireframe = !wireframe;
+  ui('wire').classList.toggle('on', wireframe);
+  setWireframe(wireframe);
+});
+ui('bg').addEventListener('click', () => {
+  const light = scene.background.getHex() === DARK;
+  scene.background.setHex(light ? LIGHT : DARK);
+  ui('bg').classList.toggle('on', light);
+});
+ui('spin').addEventListener('click', () => {
+  spinning = !spinning;
+  ui('spin').classList.toggle('on', spinning);
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+renderer.setAnimationLoop(() => {
+  if (current && spinning) current.rotation.y += 0.004;
+  controls.update();
+  renderer.render(scene, camera);
+});
+
+load();
+</script>

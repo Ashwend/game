@@ -11,7 +11,7 @@ use crate::{
     app::{
         scene::{NetworkPlayer, PlayerPart, PlayerVisualAssets, rig_layout},
         systems::items::{
-            ArmorVisuals, HeldItemVisuals, armor_layers, held_item_hand_transform,
+            ArmorVisuals, HeldGripSockets, HeldItemVisuals, armor_layers, held_item_hand_transform,
             held_item_layers, insert_held_layer_material,
         },
     },
@@ -171,6 +171,7 @@ pub(crate) fn reconcile_player_rigs_system(
 pub(crate) fn apply_remote_player_appearance_system(
     mut commands: Commands,
     held_visuals: Res<HeldItemVisuals>,
+    grip_sockets: Res<HeldGripSockets>,
     armor_visuals: Res<ArmorVisuals>,
     player_assets: Res<PlayerVisualAssets>,
     mut rigs: Query<(
@@ -188,7 +189,7 @@ pub(crate) fn apply_remote_player_appearance_system(
                 commands.entity(entity).despawn();
             }
             if let Some(mesh) = held.0 {
-                let grip = held_item_hand_transform(mesh);
+                let grip = held_item_hand_transform(mesh, grip_sockets.get(mesh));
                 let anchor = rig.hand_anchor;
                 for held_layer in held_item_layers(&held_visuals, mesh, false) {
                     let mut layer = commands.spawn((

@@ -1,0 +1,131 @@
+{
+  "backbone": "a single {subject}, one isolated stylized game item floating in empty space, anime cel shaded hand-painted style, smooth simplified toony shapes with a clean readable silhouette, soft painted shading with two or three tonal steps per surface and gentle painted highlights, evenly lit from all sides so it casts no shadow anywhere, matte with no gloss, nothing glowing, no white outline, no pale rim stroke around the silhouette, no drop shadow, no cast shadow, no photographic detail, floating diagonally with the head at the upper left and the handle running down to the lower right, suspended with nothing beneath it, the whole item complete and uncropped as one connected piece, filling most of the frame, centered on a plain uniform flat light-grey backdrop, no ground, no surface, no horizon, no vignette, no text, no hands, no characters",
+  "items": [
+    {
+      "key": "wood_stone_hatchet",
+      "prompts": [
+        {
+          "label": "classic cracked",
+          "subject": "primitive stone hatchet shaped like a real camp hatchet, a rough cracked knapped dull matte grey stone wedge head with a deeply chipped jagged working edge in the same dull grey as the rest of the stone, capping the very top end of a warm brown wooden haft, lashed on with tan cord",
+          "extra": "EVERY part of the stone head is the same dull matte medium-grey, including the chipped edge: no pale rim, no lighter band along the edge, no bright highlight, no sheen, no polish anywhere, because stone does not shine like iron. The head sits fully at the top end of the haft, edge facing sideways like an axe. A straight haft, neat cord lashing just under the head, mild painted wood grain."
+        },
+        {
+          "label": "chunky cracked",
+          "subject": "primitive stone hatchet with cartoon proportions, a huge chunky cracked knapped dull matte grey stone head, its deeply chipped jagged edge the same dull grey as the rest of the stone, capping the very top end of a thick warm brown wooden haft, lashed on with tan cord",
+          "extra": "EVERY part of the stone head is the same dull matte medium-grey, including the chipped edge: no pale rim, no lighter band along the edge, no bright highlight, no sheen, no polish anywhere, because stone does not shine like iron. Exaggerated proportions, the cracked head caps the top end of the haft, edge sideways. A stout haft with a flared pommel, broad cord lashing, mild painted wood grain."
+        },
+        {
+          "label": "worn cracked",
+          "subject": "crude primitive stone hatchet, a worn cracked knapped dull matte grey stone wedge head with an uneven deeply chipped jagged edge in the same dull grey as the rest of the stone, capping the very top end of a crooked branch haft, lashed on with heavy tan cord",
+          "extra": "EVERY part of the stone head is the same dull matte medium-grey, including the chipped edge: no pale rim, no lighter band along the edge, no bright highlight, no sheen, no polish anywhere, because stone does not shine like iron. Survival-made feel, the worn cracked head fully at the top end of the crooked haft, edge sideways. Bark patches on the haft, messy criss-cross lashing, mild painted wood grain."
+        },
+        {
+          "label": "broad cracked",
+          "subject": "primitive stone hatchet with a broad cracked knapped dull matte grey stone head, jagged notched edge in the same dull grey as the rest of the stone, capping the very top end of a warm brown wooden haft, lashed on with tan cord",
+          "extra": "EVERY part of the stone head is the same dull matte medium-grey, including the chipped edge: no pale rim, no lighter band along the edge, no bright highlight, no sheen, no polish anywhere, because stone does not shine like iron. A wide readable head fully at the top end of the haft, edge sideways. A sturdy haft with a cord lashing band, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "wood_stone_pickaxe",
+      "prompts": [
+        {
+          "label": "balanced bulk",
+          "subject": "primitive stone pickaxe in a crude survival style, a massive rough knapped matte grey stone pick head whose BOTH arms curve downward and taper toward rounded stone points, chunky and bulky in the middle like a stone hammer, lashed across the top of a warm brown wooden haft with heavy rope in a criss-cross wrap",
+          "extra": "Both arms clearly curve down and come to blunt rounded points while the centre stays massive, cracked matte stone with chip scars, no metal, rope lashing visible, a straight haft, mild painted wood grain."
+        },
+        {
+          "label": "chunky bulk",
+          "subject": "primitive stone pickaxe in a crude survival style, a massive rough knapped matte grey stone pick head whose BOTH arms curve downward and taper toward rounded stone points, chunky and bulky in the middle like a stone hammer, lashed across the top of a warm brown wooden haft with heavy rope in a criss-cross wrap",
+          "extra": "The bulkiest of the family: a huge cracked stone mass in the middle, yet both arms still curve downward into rounded points, heavy rope wrapping, a stout haft with a flared pommel, mild painted wood grain."
+        },
+        {
+          "label": "worn bulk",
+          "subject": "primitive stone pickaxe in a crude survival style, a massive rough knapped matte grey stone pick head whose BOTH arms curve downward and taper toward rounded stone points, chunky and bulky in the middle like a stone hammer, lashed across the top of a warm brown wooden haft with heavy rope in a criss-cross wrap",
+          "extra": "Worn and battered: deep chips along both curved arms, the points blunted from use but still clearly pointed, cracked matte stone, messy rope lashing, bark patches on the haft, mild painted wood grain."
+        },
+        {
+          "label": "slim bulk",
+          "subject": "primitive stone pickaxe in a crude survival style, a massive rough knapped matte grey stone pick head whose BOTH arms curve downward and taper toward rounded stone points, chunky and bulky in the middle like a stone hammer, lashed across the top of a warm brown wooden haft with heavy rope in a criss-cross wrap",
+          "extra": "The slimmest of the family while keeping the bulky stone centre: both arms curve down longer and thinner toward rounded points, cracked matte stone, tidy rope lashing, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "iron_hatchet",
+      "prompts": [
+        {
+          "label": "compact beard",
+          "subject": "iron hatchet with a broad bearded forged dark blue-grey steel axe blade sweeping downward, a brighter honed edge along the sweep, on a gently curved warm brown wooden haft",
+          "extra": "A slightly more compact beard than the hero version, still clearly a bearded axe with the blade sweeping down past the haft line, a small steel collar at the eye, a gently curved haft with a swell at the pommel, mild painted wood grain."
+        },
+        {
+          "label": "broad beard",
+          "subject": "iron hatchet with a broad bearded forged dark blue-grey steel axe blade sweeping downward, a brighter honed edge along the sweep, on a gently curved warm brown wooden haft",
+          "extra": "The widest beard of the family, the blade sweeping far down in one bold curve, an iron collar at the eye, a stout gently curved haft with a flared pommel, mild painted wood grain."
+        },
+        {
+          "label": "worn beard",
+          "subject": "iron hatchet with a broad bearded forged dark blue-grey steel axe blade sweeping downward, a brighter honed edge along the sweep, on a gently curved warm brown wooden haft",
+          "extra": "Battle-worn: visible hammer marks and small nicks along the bearded blade, the same downward sweeping silhouette, a leather grip band on the gently curved haft, mild painted wood grain."
+        },
+        {
+          "label": "sleek heroic",
+          "subject": "elegant iron hatchet with a slender sweeping forged dark blue-grey steel axe blade and a brighter honed edge on a gently curved warm brown wooden haft",
+          "extra": "Refined hatchet silhouette, a long graceful bearded axe blade, a slim curved haft that widens at the pommel, a small neat steel collar at the eye, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "iron_pickaxe",
+      "prompts": [
+        {
+          "label": "classic shallow",
+          "subject": "double-pointed mining pick, its forged dark blue-grey steel head a single slender bar shaped like a very SHALLOW wide arc mounted at its centre on top of a straight warm brown wooden haft, PERFECTLY SYMMETRIC left and right: each end of the bar is a long thin spike reaching mostly straight OUTWARD to the side, dipping only GENTLY downward toward its sharp tip, the tips ending far out to the sides, the spikes never hooking, never curling under, never bending inward",
+          "extra": "The archetypal mining pick: a wide shallow two-spike head, tips only slightly below the small central mounting block, a straight haft with a subtle pommel swell, mild painted wood grain."
+        },
+        {
+          "label": "wide shallow",
+          "subject": "double-pointed mining pick, its forged dark blue-grey steel head a single slender bar shaped like a very SHALLOW wide arc mounted at its centre on top of a straight warm brown wooden haft, PERFECTLY SYMMETRIC left and right: each end of the bar is a long thin spike reaching mostly straight OUTWARD to the side, dipping only GENTLY downward toward its sharp tip, the tips ending far out to the sides, the spikes never hooking, never curling under, never bending inward",
+          "extra": "The widest span of the family, both spikes reaching far out sideways with the gentlest dip, tips fine and sharp, an iron collar at the eye, mild painted wood grain."
+        },
+        {
+          "label": "worn shallow",
+          "subject": "double-pointed mining pick, its forged dark blue-grey steel head a single slender bar shaped like a very SHALLOW wide arc mounted at its centre on top of a straight warm brown wooden haft, PERFECTLY SYMMETRIC left and right: each end of the bar is a long thin spike reaching mostly straight OUTWARD to the side, dipping only GENTLY downward toward its sharp tip, the tips ending far out to the sides, the spikes never hooking, never curling under, never bending inward",
+          "extra": "The same wide shallow silhouette worn from use: hammer marks along both spikes, tips still sharp, a leather grip band on the haft, mild painted wood grain."
+        },
+        {
+          "label": "slender shallow",
+          "subject": "double-pointed mining pick, its forged dark blue-grey steel head a single slender bar shaped like a very SHALLOW wide arc mounted at its centre on top of a straight warm brown wooden haft, PERFECTLY SYMMETRIC left and right: each end of the bar is a long thin spike reaching mostly straight OUTWARD to the side, dipping only GENTLY downward toward its sharp tip, the tips ending far out to the sides, the spikes never hooking, never curling under, never bending inward",
+          "extra": "Extra long thin spikes in the same shallow arc, tapering to the finest points, a slim haft widening at the pommel, mild painted wood grain."
+        }
+      ]
+    },
+    {
+      "key": "iron_sickle",
+      "prompts": [
+        {
+          "label": "classic inner-edge",
+          "subject": "harvesting sickle with a wide OPEN crescent blade like a crescent moon, forged dark blue-grey steel sweeping around in an open C-curve with a LARGE open gap between the blade tip and the handle, the SHARP brighter honed cutting edge running along the INNER CONCAVE side of the curve facing into the gap, while the OUTER convex side is the thick blunt dark spine, the tip pointing down toward the handle side but never closing the loop, on a stubby short warm brown wooden grip handle",
+          "extra": "The open crescent DOMINATES the picture, filling the upper left, the bright sharp edge clearly on the inside of the C facing the gap, the thick dark spine outside, a neat steel collar, the stubby handle small in the lower right, mild painted wood grain."
+        },
+        {
+          "label": "chunky inner-edge",
+          "subject": "harvesting sickle with a wide OPEN crescent blade like a crescent moon, forged dark blue-grey steel sweeping around in an open C-curve with a LARGE open gap between the blade tip and the handle, the SHARP brighter honed cutting edge running along the INNER CONCAVE side of the curve facing into the gap, while the OUTER convex side is the thick blunt dark spine, the tip pointing down toward the handle side but never closing the loop, on a stubby short warm brown wooden grip handle",
+          "extra": "A thicker blade band, same open C with the bright sharp edge on the inside facing the gap and the dark blunt spine outside, broad steel collar, stubby handle small in the lower right, mild painted wood grain."
+        },
+        {
+          "label": "worn inner-edge",
+          "subject": "harvesting sickle with a wide OPEN crescent blade like a crescent moon, forged dark blue-grey steel sweeping around in an open C-curve with a LARGE open gap between the blade tip and the handle, the SHARP brighter honed cutting edge running along the INNER CONCAVE side of the curve facing into the gap, while the OUTER convex side is the thick blunt dark spine, the tip pointing down toward the handle side but never closing the loop, on a stubby short warm brown wooden grip handle",
+          "extra": "The same open crescent worn from use, hammer marks on the dark outer spine, the bright sharp edge still clean along the inner concave side, a cord-wrapped joint, stubby handle small in the lower right, mild painted wood grain."
+        },
+        {
+          "label": "slender inner-edge",
+          "subject": "harvesting sickle with a wide OPEN crescent blade like a crescent moon, forged dark blue-grey steel sweeping around in an open C-curve with a LARGE open gap between the blade tip and the handle, the SHARP brighter honed cutting edge running along the INNER CONCAVE side of the curve facing into the gap, while the OUTER convex side is the thick blunt dark spine, the tip pointing down toward the handle side but never closing the loop, on a stubby short warm brown wooden grip handle",
+          "extra": "A long thin elegant open crescent, the widest clear gap, bright sharp edge along the inner concave side, fine tip, neat steel collar, stubby handle small in the lower right, mild painted wood grain."
+        }
+      ]
+    }
+  ],
+  "notes": "Round 2, unified set (owner decision 2026-07-19): ONE image per variant serves as BOTH the inventory icon and the image-to-3D mesh reference, because for items (unlike ore nodes, where the deposit and the yielded item genuinely differ) the icon and the model are the same object, and generating them separately made them look like different items. The single backbone keeps the ICON look the owner preferred (anime, toony, smooth, soft painted shading, less sculpted depth than round 1's mesh references) while carrying the mesh-lane requirements (single complete uncropped object, plain flat backdrop, rembg-friendly). The round-1 icons' whiteish rim stroke is banned (no white outline, no pale rim stroke); it would otherwise bake into the mesh texture as a halo. The drop shadow needed more than bans: with 'lying diagonally' Flux inferred a ground plane and painted an OPAQUE grey shadow no ban removed (its opaque core survives alpha-based stripping), so the backbone describes the item as FLOATING in empty space, evenly lit, suspended with nothing beneath it; 'as one connected piece' guards against the disassembled-tool failure a first batch produced. Framing is the inventory diagonal (head upper left, handle to lower right); the mesh build recovers upright via build_held.py's auto_level (an in-plane image rotation becomes a rotation about the Blender Y axis after import). Both pickaxes are pinned to the CLASSIC curved double-pointed miner's pick silhouette in every variant per owner feedback (round 1's stone pickaxe read as a hammer); the variant axis varies proportion and finish, never the head anatomy. Variant labels stay the round-1 four (faithful classic, chunky oversized, rough-hewn crude, sleek heroic) so the picker compares like with like."
+}

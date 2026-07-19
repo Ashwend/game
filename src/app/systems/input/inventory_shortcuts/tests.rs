@@ -9,8 +9,8 @@ use super::*;
 use crate::app::state::LocalPlayerState;
 use crate::app::state::{ClientRuntime, ClientSettings, PickupTargetState, PredictionState};
 use crate::items::{
-    BASIC_HATCHET_ID, BASIC_PICKAXE_ID, IRON_MACE_ID, ItemModel, STONE_SPEAR_ID, ToolKind, WOOD_ID,
-    WOODEN_CLUB_ID,
+    BASIC_HATCHET_ID, BASIC_PICKAXE_ID, IRON_SWORD_ID, ItemModel, STONE_SPEAR_ID, ToolKind,
+    WOOD_ID, WOODEN_CLUB_ID,
 };
 use crate::protocol::{ClientMessage, InventoryCommand, ItemStack, PlayerInventoryState, Vec3Net};
 use crate::resource_nodes::{
@@ -67,8 +67,8 @@ fn equipped_swing_resolves_tools_and_weapons_but_not_bare_or_inert_items() {
     assert_eq!(equipped_swing(&with_club), Some(ItemModel::Club));
     let with_spear = local_player_holding(Some(STONE_SPEAR_ID));
     assert_eq!(equipped_swing(&with_spear), Some(ItemModel::Spear));
-    let with_mace = local_player_holding(Some(IRON_MACE_ID));
-    assert_eq!(equipped_swing(&with_mace), Some(ItemModel::Mace));
+    let with_sword = local_player_holding(Some(IRON_SWORD_ID));
+    assert_eq!(equipped_swing(&with_sword), Some(ItemModel::Sword));
 
     // Bare hands -> no swing.
     let empty = local_player_holding(None);

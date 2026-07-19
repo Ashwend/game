@@ -54,7 +54,7 @@ pub(super) struct PlayerImpactFanout {
     /// The attacker's world position, used by the victim's hit-direction arrow.
     pub(super) attacker_position: Vec3Net,
     /// Impact identity carried on the wire: the swing's archetype (a weapon's own
-    /// Club/Spear/Sword/Mace, or a gather tool's Hatchet/Pickaxe), so a peer's
+    /// Club/Spear/Sword, or a gather tool's Hatchet/Pickaxe), so a peer's
     /// hit audio, VFX, and camera reaction match what landed the hit.
     pub(super) model: crate::items::ItemModel,
 }

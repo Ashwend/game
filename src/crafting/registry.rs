@@ -9,7 +9,7 @@ use crate::items::{
     ARROW_ID, BANDAGE_ID, BASIC_HATCHET_ID, BASIC_PICKAXE_ID, BUILDING_PLAN_ID, CLOTH_ID, COAL_ID,
     CROSSBOW_ID, CRUDE_FURNACE_ID, FIBER_ID, GUNPOWDER_ID, HAMMER_ID, HEWN_LOG_DOOR_ID,
     HEWN_LOG_ID, IRON_BAR_ID, IRON_BOOTS_ID, IRON_CUIRASS_ID, IRON_DOOR_ID, IRON_GREAVES_ID,
-    IRON_HATCHET_ID, IRON_HELM_ID, IRON_MACE_ID, IRON_PICKAXE_ID, IRON_SICKLE_ID, IRON_SWORD_ID,
+    IRON_HATCHET_ID, IRON_HELM_ID, IRON_PICKAXE_ID, IRON_SICKLE_ID, IRON_SWORD_ID,
     LAMELLAR_BOOTS_ID, LAMELLAR_GREAVES_ID, LAMELLAR_HELM_ID, LAMELLAR_VEST_ID, PADDED_HOOD_ID,
     PADDED_LEGGINGS_ID, PADDED_TUNIC_ID, PADDED_WRAPS_ID, PLANT_TWINE_ID, POWDER_BOMB_ID,
     POWDER_KEG_ID, SALVAGED_FITTINGS_ID, SATCHEL_CHARGE_ID, SLEEPING_BAG_ID, STONE_ID,
@@ -32,7 +32,6 @@ pub const IRON_PICKAXE_RECIPE_ID: &str = "iron_pickaxe";
 pub const WOODEN_CLUB_RECIPE_ID: &str = "wooden_club";
 pub const STONE_SPEAR_RECIPE_ID: &str = "stone_spear";
 pub const IRON_SWORD_RECIPE_ID: &str = "iron_sword";
-pub const IRON_MACE_RECIPE_ID: &str = "iron_mace";
 /// Ranged weapons and their ammunition. The bow and arrows are hand/tier-1
 /// entry-level; the crossbow is a tier-2 forge job that sinks looted salvaged
 /// fittings.
@@ -277,23 +276,6 @@ pub const REGISTERED_RECIPES: &[RecipeDefinition] = &[
         craft_seconds: 20.0,
         tier: 2,
         station: RecipeStation::Workbench { min_tier: 1 },
-    },
-    RecipeDefinition {
-        id: IRON_MACE_RECIPE_ID,
-        name: "Iron Mace",
-        description: "Forge a brutal iron head and haul it onto a heavy haft. The \
-                      slowest, hardest swing in the game, and the answer to plate.",
-        category: RecipeCategory::Weapons,
-        inputs: &[
-            CraftingInput::new(IRON_BAR_ID, 20),
-            CraftingInput::new(HEWN_LOG_ID, 2),
-            CraftingInput::new(PLANT_TWINE_ID, 2),
-        ],
-        output_item: IRON_MACE_ID,
-        output_quantity: 1,
-        craft_seconds: 24.0,
-        tier: 2,
-        station: RecipeStation::Workbench { min_tier: 2 },
     },
     RecipeDefinition {
         id: WOODEN_BOW_RECIPE_ID,

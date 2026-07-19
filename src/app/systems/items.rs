@@ -28,9 +28,10 @@ mod tool_swap;
 pub(crate) use armor::{ArmorMaterials, ArmorVisuals, armor_layers, build_armor_visuals};
 pub(crate) use dropped::{DroppedItemEntities, apply_dropped_items_system};
 pub(crate) use held::{
-    HeldItemVisuals, RangedPoseInputs, apply_held_item_visual_system, build_held_item_visuals,
-    carry_forearm_rotation, carry_upper_arm_rotation, held_item_hand_transform, held_item_layers,
-    held_piece_local_transform, insert_held_layer_material,
+    HeldGripSockets, HeldItemVisuals, RangedPoseInputs, apply_held_item_visual_system,
+    build_held_item_visuals, carry_forearm_rotation, carry_upper_arm_rotation,
+    held_item_hand_transform, held_item_layers, held_piece_local_transform,
+    insert_held_layer_material, load_grip_sockets, resolve_grip_sockets_system,
 };
 pub(crate) use loot_bag::{LootBagEntities, apply_loot_bags_system};
 pub(crate) use pickup::update_pickup_target_system;

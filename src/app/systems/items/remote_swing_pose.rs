@@ -49,14 +49,13 @@ pub(crate) struct RemoteArmPose {
 /// through contact at the same instant the swinger feels it:
 ///
 /// - Club and sword read as the hatchet's diagonal chop.
-/// - The mace reads as the pickaxe's heavy overhead smash.
 /// - The spear is a genuine forward thrust (shoulder-forward extension with a
 ///   body lean), distinct from the short bag jab.
 /// - Bag/deployable-in-hand and bare hands read as the short jab.
 pub(crate) fn remote_swing_arm_pose(model: ItemModel, phase: f32) -> RemoteArmPose {
     let phase = phase.clamp(0.0, 1.0);
     match model {
-        ItemModel::Pickaxe | ItemModel::Mace => pickaxe_arm_pose(phase),
+        ItemModel::Pickaxe => pickaxe_arm_pose(phase),
         // The thrown bomb's overhand lob reads as an overhand chop from PvP range,
         // so it reuses the hatchet arm archetype (keeps the toss "light", no new
         // third-person pose to maintain). The club also reuses the hatchet chop.
@@ -421,7 +420,6 @@ mod tests {
             ItemModel::Club,
             ItemModel::Spear,
             ItemModel::Sword,
-            ItemModel::Mace,
         ] {
             let start = remote_swing_arm_pose(model, 0.0);
             let end = remote_swing_arm_pose(model, 1.0);
@@ -462,19 +460,14 @@ mod tests {
     }
 
     #[test]
-    fn club_and_mace_reuse_their_nearest_existing_arc() {
-        // Club reads as the hatchet chop and the mace as the pickaxe overhead. The
-        // spear and sword are their OWN arcs now (asserted separately below).
+    fn club_reuses_its_nearest_existing_arc() {
+        // Club reads as the hatchet chop. The spear and sword are their OWN
+        // arcs now (asserted separately below).
         for phase in [0.0, 0.2, 0.4, 0.58, 0.68, 0.8] {
             assert_eq!(
                 remote_swing_arm_pose(ItemModel::Club, phase),
                 remote_swing_arm_pose(ItemModel::Hatchet, phase),
                 "club reuses the hatchet arc"
-            );
-            assert_eq!(
-                remote_swing_arm_pose(ItemModel::Mace, phase),
-                remote_swing_arm_pose(ItemModel::Pickaxe, phase),
-                "mace reuses the pickaxe arc"
             );
         }
     }

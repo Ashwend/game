@@ -43,13 +43,12 @@ pub const IRON_PICKAXE_ID: &str = "iron_pickaxe";
 /// its swing sweeps plant fiber out of the instanced grass carpet, scaled by
 /// the biome's grass density (see `crate::server::harvest`).
 pub const IRON_SICKLE_ID: &str = "iron_sickle";
-/// The four melee weapons. They carry a `WeaponProfile` (not a
+/// The three melee weapons. They carry a `WeaponProfile` (not a
 /// `ToolProfile`), so they gather nothing and combat resolves them ahead of any
 /// tool. Meshes and icons live at `assets/items/<id>/{model.glb,icon.png}`.
 pub const WOODEN_CLUB_ID: &str = "wooden_club";
 pub const STONE_SPEAR_ID: &str = "stone_spear";
 pub const IRON_SWORD_ID: &str = "iron_sword";
-pub const IRON_MACE_ID: &str = "iron_mace";
 /// The two ranged weapons and their shared ammunition. The bow and
 /// crossbow carry a `RangedProfile` (not a `ToolProfile` or `WeaponProfile`), so
 /// they gather nothing and fire a server-simulated projectile instead of

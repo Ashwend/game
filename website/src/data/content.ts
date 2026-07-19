@@ -1,6 +1,14 @@
 // All marketing copy + asset references in one typed place, so the section
 // components stay layout-only.
 
+/** One tile in the "in the playtest right now" section. `icon` keys into the
+ *  icon map in Features.tsx so this file stays free of component imports. */
+export interface Feature {
+  readonly icon: 'gather' | 'build' | 'raid' | 'pvp' | 'meteor' | 'voice'
+  readonly title: string
+  readonly body: string
+}
+
 /** The OS families we ship desktop builds for. Used to pick a sensible default
  *  download from the visitor's browser. */
 export type Platform = 'windows' | 'macos' | 'linux'
@@ -75,4 +83,39 @@ export const HERO_META: ReadonlyArray<string> = [
   'Open-world',
   'PvP',
   'First-person',
+]
+
+// What is actually in the playtest today. Keep this honest and current: every
+// line here should describe a shipped mechanic, not a roadmap item.
+export const FEATURES: ReadonlyArray<Feature> = [
+  {
+    icon: 'gather',
+    title: 'Gather and craft',
+    body: 'Fell pines, mine stone and ore veins, smelt ingots in a furnace, and work up from stone tools to iron.',
+  },
+  {
+    icon: 'build',
+    title: 'Build and claim',
+    body: 'Raise a timber base, hang code-locked doors, and stake your ground with a tool cupboard claim.',
+  },
+  {
+    icon: 'raid',
+    title: 'Raid and defend',
+    body: 'Powder bombs, satchel charges, and kegs crack open walls; upkeep and decay keep the map from fossilizing.',
+  },
+  {
+    icon: 'pvp',
+    title: 'Fight in first person',
+    body: 'Committed melee swings, bows and crossbows, and three armor tiers that change how a fight goes.',
+  },
+  {
+    icon: 'meteor',
+    title: 'Meteor showers',
+    body: 'Showers streak in over the plains and leave craters of meteorite alloy worth fighting over.',
+  },
+  {
+    icon: 'voice',
+    title: 'Proximity voice',
+    body: 'Spatial voice chat: talk to whoever is close enough to hear you, and no one else.',
+  },
 ]
