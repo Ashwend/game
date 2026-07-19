@@ -40,6 +40,7 @@ Find your intent, jump to the doc. This mirrors `CLAUDE.md`'s routing table; if 
 - Add a screen/overlay/modal/egui surface, or find where a UI surface lives: [ui-and-client.md](ui-and-client.md)
 - Optimize, chase a frame spike, or add O(live-entities)-per-tick work: [profiling.md](profiling.md)
 - Change release-asset names, the self-update flow, changelog modals, or installers: [updates-and-distribution.md](updates-and-distribution.md)
+- Change player auth, or look up Steamworks package/store IDs: [steam.md](steam.md)
 - Launch/drive/screenshot/assert on the running game to verify a change: [headless-agent-testing.md](headless-agent-testing.md)
 - Run or modify the two-client multiplayer-test helper: [multiplayer-testing.md](multiplayer-testing.md)
 - Run/build/test/profile/release, or find a `./cli` subcommand: [build-and-dev.md](build-and-dev.md)
@@ -79,6 +80,7 @@ One row per agent doc. `owns` is the single concern the doc is source of truth f
 | [profiling.md](profiling.md) | profiling workflow and the per-tick cost discipline | before optimizing, chasing a spike, or adding O(live-entities) work |
 | [resource-node-instancing.md](resource-node-instancing.md) | unimplemented proposal: cutting the resource-node render floor | only when asked to reduce the ~1800-visible-entity per-frame render cost |
 | [updates-and-distribution.md](updates-and-distribution.md) | self-update flow, changelog modals, packaging/signing | before changing release-asset names, the update flow, or installers |
+| [steam.md](steam.md) | Steamworks package/store IDs and Steam auth notes | before changing auth or touching Steamworks packages |
 | [headless-agent-testing.md](headless-agent-testing.md) | driving the game headless to verify changes | when you need to launch/drive/screenshot/assert on the running game |
 | [multiplayer-testing.md](multiplayer-testing.md) | the two-client multiplayer-test helper | before running or modifying that helper or capturing peer-to-peer visuals |
 | [build-and-dev.md](build-and-dev.md) | the `./cli` surface (build/run/test/profile/ship) | before running, building, testing, or releasing |
