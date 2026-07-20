@@ -2,7 +2,6 @@ import { createFileRoute } from '@tanstack/react-router'
 import { Header } from '#/components/Header'
 import { Hero } from '#/components/Hero'
 import { Playtest } from '#/components/Playtest'
-import { Features } from '#/components/Features'
 import { DiscordCta } from '#/components/DiscordCta'
 import { Footer } from '#/components/Footer'
 
@@ -23,7 +22,6 @@ function Home() {
       <main id="main">
         <Hero />
         <Playtest />
-        <Features />
         <DiscordCta />
       </main>
       <Footer />
