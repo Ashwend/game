@@ -137,6 +137,7 @@ fn create_world_from_dialog_persists_selected_map() {
     let mut menu = MenuState::default();
     let dialog = CreateWorldDialog {
         name: "Generated".to_owned(),
+        cinematic: false,
         procedural_size: ProceduralMapSize::Small,
         seed: "1234".to_owned(),
         error: None,

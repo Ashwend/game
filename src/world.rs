@@ -42,6 +42,13 @@ pub enum MapType {
         #[serde(default)]
         size: ProceduralMapSize,
     },
+    /// The hand-authored marketing stage: a Small world generated from a
+    /// pinned seed with the stage clear zones and authored placements from
+    /// `crate::cinematic::layout` injected at generation. Every world created
+    /// from this type is identical, so the cinematic shot script can assume
+    /// exact object positions. Appended after `Procedural` so the postcard
+    /// variant index of existing saves is unchanged.
+    Cinematic,
 }
 
 impl Default for MapType {
@@ -57,6 +64,7 @@ impl MapType {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Procedural { .. } => "Procedural",
+            Self::Cinematic => "Cinematic Stage",
         }
     }
 
@@ -65,6 +73,10 @@ impl MapType {
             Self::Procedural { seed, size } => {
                 WorldData::chunk_world(*seed, ChunkDims::new(size.dims()))
             }
+            Self::Cinematic => WorldData::chunk_world(
+                crate::cinematic::CINEMATIC_SEED,
+                crate::cinematic::cinematic_dims(),
+            ),
         }
     }
 
@@ -72,6 +84,7 @@ impl MapType {
     pub fn world_seed(&self) -> u64 {
         match self {
             Self::Procedural { seed, .. } => *seed,
+            Self::Cinematic => crate::cinematic::CINEMATIC_SEED,
         }
     }
 
@@ -79,6 +92,7 @@ impl MapType {
     pub fn chunk_dims(&self) -> ChunkDims {
         match self {
             Self::Procedural { size, .. } => ChunkDims::new(size.dims()),
+            Self::Cinematic => crate::cinematic::cinematic_dims(),
         }
     }
 }

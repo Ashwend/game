@@ -125,7 +125,12 @@ pub(super) const SAVE_MAGIC: &[u8; 8] = b"GAMESAVE";
 /// two door variants keep their postcard indices, so a v21 save decodes in
 /// this build, but a v22 save holding a shutter would fail to decode mid-file
 /// in a v21 binary; bumping keeps the failure at the clean version gate.
-pub(super) const SAVE_FORMAT_VERSION: u32 = 22;
+///
+/// `23` appended `MapType::Cinematic` (the fixed marketing stage world).
+/// `Procedural` keeps postcard index 0, so a v22 save decodes in this build,
+/// but a v23 cinematic save would fail to decode mid-file in a v22 binary;
+/// bumping keeps the failure at the clean version gate, same as v22.
+pub(super) const SAVE_FORMAT_VERSION: u32 = 23;
 /// zstd level 5 sits in the sweet spot for save files: ~70-75% size reduction
 /// at >100MB/s compression and ~1GB/s decompression.
 const ZSTD_LEVEL: i32 = 5;

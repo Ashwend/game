@@ -65,6 +65,11 @@ pub(crate) struct FurnaceParticle {
     age: f32,
     lifetime: f32,
     initial_scale: f32,
+    /// When set, the particle keeps its spawn scale for its whole life and pops
+    /// out at the end instead of shrinking to nothing. The meteor site fires set
+    /// this (owner call: every impact-related particle holds a fixed size from
+    /// spawn); the furnace's own small mouth flames keep the legacy twinkle-out.
+    fixed_scale: bool,
 }
 
 impl FurnaceParticle {
@@ -85,7 +90,15 @@ impl FurnaceParticle {
             age: 0.0,
             lifetime,
             initial_scale,
+            fixed_scale: false,
         }
+    }
+
+    /// Keep the spawn scale for the particle's whole life (no end-of-life
+    /// shrink).
+    pub(crate) fn with_fixed_scale(mut self) -> Self {
+        self.fixed_scale = true;
+        self
     }
 }
 
@@ -223,9 +236,14 @@ pub(crate) fn tick_furnace_particles_system(
         transform.translation += particle.velocity * dt;
 
         // Shrink to nothing over life so the particle twinkles out instead of
-        // popping.
-        let life_t = (particle.age / particle.lifetime).clamp(0.0, 1.0);
-        transform.scale = Vec3::splat((particle.initial_scale * (1.0 - life_t)).max(0.0));
+        // popping. Fixed-scale particles (the meteor site fires) hold their
+        // spawn size for their whole life instead; the constant churn of many
+        // size-animating puffs is exactly what read as "particles flickering
+        // in and out of sizes" on the impact crater.
+        if !particle.fixed_scale {
+            let life_t = (particle.age / particle.lifetime).clamp(0.0, 1.0);
+            transform.scale = Vec3::splat((particle.initial_scale * (1.0 - life_t)).max(0.0));
+        }
     }
 }
 
@@ -266,14 +284,7 @@ fn spawn_flame(commands: &mut Commands, assets: &FurnaceFireAssets, anchor: Vec3
 
     commands.spawn((
         Name::new("Furnace Flame"),
-        FurnaceParticle {
-            velocity,
-            gravity: 0.3,
-            drag: 0.8,
-            age: 0.0,
-            lifetime,
-            initial_scale,
-        },
+        FurnaceParticle::new(velocity, 0.3, 0.8, lifetime, initial_scale),
         Mesh3d(assets.flame_mesh.clone()),
         MeshMaterial3d(assets.flame_material.clone()),
         Transform::from_translation(anchor + offset).with_scale(Vec3::splat(initial_scale)),
@@ -300,14 +311,7 @@ fn spawn_spark(commands: &mut Commands, assets: &FurnaceFireAssets, anchor: Vec3
 
     commands.spawn((
         Name::new("Furnace Spark"),
-        FurnaceParticle {
-            velocity,
-            gravity: 1.6,
-            drag: 1.6,
-            age: 0.0,
-            lifetime,
-            initial_scale,
-        },
+        FurnaceParticle::new(velocity, 1.6, 1.6, lifetime, initial_scale),
         Mesh3d(assets.spark_mesh.clone()),
         MeshMaterial3d(assets.spark_material.clone()),
         Transform::from_translation(anchor + offset).with_scale(Vec3::splat(initial_scale)),

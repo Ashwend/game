@@ -69,6 +69,13 @@ enum Command {
         /// saves keep whatever size they were authored with.
         #[arg(long, value_enum, default_value_t = MapSizeArg::Medium)]
         map_size: MapSizeArg,
+        /// Generate a *fresh* world as the fixed cinematic stage
+        /// (`MapType::Cinematic`) instead of a procedural map, so a
+        /// dedicated host can serve `/cinematic` recording sessions (e.g.
+        /// several clients filming the same take from different angles).
+        /// Ignores `--map-size`; existing saves keep their map type.
+        #[arg(long)]
+        cinematic: bool,
     },
     Admin {
         #[arg(long, default_value = DEFAULT_ADMIN_SOCKET)]
@@ -167,6 +174,7 @@ pub fn run() -> Result<()> {
             admin_socket,
             admins,
             map_size,
+            cinematic,
         } => {
             // The server runs MinimalPlugins (no LogPlugin), so install our own
             // tracing subscriber + file log and the crash/exception reporter
@@ -186,7 +194,7 @@ pub fn run() -> Result<()> {
                 }
                 AuthMode::NoAuth => None,
             };
-            let mut world = load_server_world(world, map_size.into())?;
+            let mut world = load_server_world(world, map_size.into(), cinematic)?;
             let admins: Vec<AccountId> = admins.into_iter().map(AccountId).collect();
             seed_admin_accounts(&mut world.save, &admins);
             net::run_dedicated_server(
@@ -219,12 +227,21 @@ fn seed_admin_accounts(save: &mut WorldSave, admins: &[AccountId]) {
 fn load_server_world(
     path: Option<PathBuf>,
     map_size: crate::world::ProceduralMapSize,
+    cinematic: bool,
 ) -> Result<ServerWorld> {
-    let fresh_map = match crate::world::MapType::default() {
-        crate::world::MapType::Procedural { seed, .. } => crate::world::MapType::Procedural {
-            seed,
-            size: map_size,
-        },
+    let fresh_map = if cinematic {
+        // `--cinematic`: a fresh world is the fixed marketing stage. An
+        // existing save keeps its authored map type regardless (the flag only
+        // shapes generation, mirroring `--map-size`).
+        crate::world::MapType::Cinematic
+    } else {
+        match crate::world::MapType::default() {
+            crate::world::MapType::Procedural { seed, .. } => crate::world::MapType::Procedural {
+                seed,
+                size: map_size,
+            },
+            other @ crate::world::MapType::Cinematic => other,
+        }
     };
     if let Some(path) = path {
         let save = if path.exists() {
@@ -292,8 +309,11 @@ fn ensure_map_size_matches(
     requested: crate::world::ProceduralMapSize,
     path: &std::path::Path,
 ) -> Result<()> {
-    let crate::world::MapType::Procedural { size: existing, .. } = &save.map;
-    let existing = *existing;
+    let existing = match &save.map {
+        crate::world::MapType::Procedural { size, .. } => *size,
+        // Cinematic stages carry pinned dims; `--map-size` doesn't apply.
+        crate::world::MapType::Cinematic => return Ok(()),
+    };
     if existing != requested {
         anyhow::bail!(
             "world save {} was generated as a {} map but --map-size {} was requested; \
@@ -381,7 +401,7 @@ mod tests {
     #[test]
     fn load_server_world_creates_fresh_save_when_path_missing() {
         let path = temp_world_path();
-        let world = load_server_world(Some(path.clone()), ProceduralMapSize::Large)
+        let world = load_server_world(Some(path.clone()), ProceduralMapSize::Large, false)
             .expect("fresh world should load");
 
         assert!(matches!(
@@ -405,20 +425,36 @@ mod tests {
     fn load_server_world_rejects_size_mismatch_against_existing_save() {
         let path = temp_world_path();
         // Generate a Large world up front.
-        load_server_world(Some(path.clone()), ProceduralMapSize::Large)
+        load_server_world(Some(path.clone()), ProceduralMapSize::Large, false)
             .expect("fresh large world should load");
 
         // Re-loading with a different size must refuse rather than silently
         // honoring the on-disk size.
-        let mismatch = load_server_world(Some(path.clone()), ProceduralMapSize::Medium);
+        let mismatch = load_server_world(Some(path.clone()), ProceduralMapSize::Medium, false);
         assert!(
             mismatch.is_err(),
             "loading a Large save with --map-size medium should be rejected"
         );
 
         // Loading with the matching size still works.
-        load_server_world(Some(path.clone()), ProceduralMapSize::Large)
+        load_server_world(Some(path.clone()), ProceduralMapSize::Large, false)
             .expect("matching size should reload");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_server_world_generates_the_cinematic_stage_on_request() {
+        let path = temp_world_path();
+        let world = load_server_world(Some(path.clone()), ProceduralMapSize::Medium, true)
+            .expect("fresh cinematic world should load");
+        assert_eq!(world.save.map, MapType::Cinematic);
+
+        // On reload the saved map type wins and `--map-size` doesn't apply
+        // to a cinematic stage (its dims are pinned).
+        let reloaded = load_server_world(Some(path.clone()), ProceduralMapSize::Large, false)
+            .expect("cinematic save should reload regardless of --map-size");
+        assert_eq!(reloaded.save.map, MapType::Cinematic);
 
         let _ = fs::remove_file(&path);
     }
@@ -428,12 +464,12 @@ mod tests {
         let path = temp_world_path();
         fs::write(&path, b"not a real save file").expect("garbage save should be written");
 
-        let world = load_server_world(Some(path.clone()), ProceduralMapSize::Medium)
+        let world = load_server_world(Some(path.clone()), ProceduralMapSize::Medium, false)
             .expect("unloadable save should be replaced");
 
         // The fresh save should be loadable on a second call, proving the
         // unreadable file was renamed and a valid one written in its place.
-        let reloaded = load_server_world(Some(path.clone()), ProceduralMapSize::Medium)
+        let reloaded = load_server_world(Some(path.clone()), ProceduralMapSize::Medium, false)
             .expect("fresh save should reload");
         assert_eq!(world.save.id, reloaded.save.id);
 

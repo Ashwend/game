@@ -214,50 +214,53 @@ fn hands_arm_pose(phase: f32) -> RemoteArmPose {
 /// shoulder pitch dips only a little, so the motion is dominated by elbow
 /// extension + torso lean (a thrust), never a chop or overhead.
 fn spear_arm_pose(phase: f32) -> RemoteArmPose {
-    // Wind-up: retract. The elbow folds (drawing the spear back over the grip)
-    // and the arm cocks slightly down/back, the torso winds away from the target.
+    // Chamber: the elbow folds DEEP (the spear draws well back over the
+    // grip), the arm cocks down-back, and the torso winds up. Bigger travel
+    // than round 1: from a peer's distance the old subtle chamber read as
+    // the start of a swing.
     if phase <= 0.38 {
         let t = ease_out(phase / 0.38);
         return RemoteArmPose {
-            shoulder_pitch: lerp(0.0, -0.18, t),
+            shoulder_pitch: lerp(0.0, -0.30, t),
             shoulder_yaw: 0.0,
             shoulder_roll: 0.0,
-            forearm_pitch: lerp(0.0, 0.85, t),
-            torso_twist: lerp(0.0, 0.20, t),
+            forearm_pitch: lerp(0.0, 1.10, t),
+            torso_twist: lerp(0.0, 0.30, t),
         };
     }
-    // Thrust: drive the arm forward and snap the elbow straight (negative flex =
-    // full extension) so the point lunges along the aim axis, contact at 0.55.
-    // The torso leans in behind the point (twist swings past zero to negative).
+    // Thrust: the whole arm PUNCHES forward and level (shoulder drives up
+    // past rest) while the elbow snaps to full extension, contact at 0.55.
+    // The torso slams through behind the point. The dominant motion is the
+    // straight-line hand translation this produces, unmistakably a stab.
     if phase <= 0.55 {
         let t = ease_in((phase - 0.38) / 0.17);
         return RemoteArmPose {
-            shoulder_pitch: lerp(-0.18, 0.14, t),
+            shoulder_pitch: lerp(-0.30, 0.55, t),
             shoulder_yaw: 0.0,
             shoulder_roll: 0.0,
-            forearm_pitch: lerp(0.85, -0.75, t),
-            torso_twist: lerp(0.20, -0.24, t),
+            forearm_pitch: lerp(1.10, -1.05, t),
+            torso_twist: lerp(0.30, -0.34, t),
         };
     }
-    // Brief dwell at full extension (the point held out at the target).
-    if phase <= 0.68 {
-        let t = smoothstep((phase - 0.55) / 0.13);
+    // Dwell at full extension: the point held out on the target.
+    if phase <= 0.70 {
+        let t = smoothstep((phase - 0.55) / 0.15);
         return RemoteArmPose {
-            shoulder_pitch: lerp(0.14, 0.10, t),
+            shoulder_pitch: lerp(0.55, 0.44, t),
             shoulder_yaw: 0.0,
             shoulder_roll: 0.0,
-            forearm_pitch: lerp(-0.75, -0.55, t),
-            torso_twist: lerp(-0.24, -0.16, t),
+            forearm_pitch: lerp(-1.05, -0.80, t),
+            torso_twist: lerp(-0.34, -0.22, t),
         };
     }
     // Recover: retract the arm and unwind the torso back to the carry rest.
-    let t = smoothstep((phase - 0.68) / 0.32);
+    let t = smoothstep((phase - 0.70) / 0.30);
     RemoteArmPose {
-        shoulder_pitch: lerp(0.10, 0.0, t),
+        shoulder_pitch: lerp(0.44, 0.0, t),
         shoulder_yaw: 0.0,
         shoulder_roll: 0.0,
-        forearm_pitch: lerp(-0.55, 0.0, t),
-        torso_twist: lerp(-0.16, 0.0, t),
+        forearm_pitch: lerp(-0.80, 0.0, t),
+        torso_twist: lerp(-0.22, 0.0, t),
     }
 }
 

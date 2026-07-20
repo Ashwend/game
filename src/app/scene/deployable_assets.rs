@@ -87,6 +87,9 @@ pub(crate) struct DeployableVisualAssets {
     /// Cel-shaded stone material (hand-painted cobble line-art, UV-mapped) for the
     /// crude furnace.
     pub(crate) toon_stone_material: Handle<ToonMaterial>,
+    /// Cel-shaded fabric material (woven-quilt line-art, UV-mapped) for the
+    /// sleeping bag bedroll, restored with the pre-rewrite bedroll mesh.
+    pub(crate) toon_fabric_material: Handle<ToonMaterial>,
     /// Semi-transparent green tint used by the placement ghost when the
     /// slot is valid. Mirrors the convention from popular survival games
     ///, green means "click to place", we pair it with a slight pulse.

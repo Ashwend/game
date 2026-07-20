@@ -42,6 +42,16 @@ impl GameServer {
         // the save has `None` and we seed from the chunk generator. (No
         // fresh-world flag any more: the one consumer, ruin-chest spawning,
         // now reconciles against the current layout on every load.)
+        // Cinematic stage worlds fold hand-authored placements into
+        // generation and keep their clear zones node-free (including
+        // regrows). Empty for every other map type.
+        let (stage_exclusions, stage_authored) = match &save.map {
+            crate::world::MapType::Cinematic => (
+                crate::cinematic::stage_exclusion_footprints(),
+                crate::cinematic::layout::authored_chunk_spawns(1),
+            ),
+            _ => (Vec::new(), Vec::new()),
+        };
         let (mut chunk_manager, resource_nodes) = match (
             save.state.resource_nodes.take(),
             save.state.chunk_manager.take(),
@@ -68,7 +78,11 @@ impl GameServer {
                         (node.id, node)
                     })
                     .collect();
-                let manager = ChunkManager::from_save(saved_chunk, load_tick_for_chunk);
+                let mut manager = ChunkManager::from_save(saved_chunk, load_tick_for_chunk);
+                // `from_save` recomputes only the seed-derived ruin
+                // footprints; re-append the stage clear zones so regrow
+                // keeps respecting them on reloaded cinematic worlds.
+                manager.add_placement_exclusions(&stage_exclusions);
                 (manager, nodes)
             }
             _ => {
@@ -76,8 +90,12 @@ impl GameServer {
                 // save without grid state would also fall here, but
                 // that's prevented at the save-format level (version
                 // bumps are not migrated).
-                let (manager, spawns) =
-                    ChunkManager::new_for_world(save.map.world_seed(), save.map.chunk_dims());
+                let (manager, spawns) = ChunkManager::new_for_world_with_stage(
+                    save.map.world_seed(),
+                    save.map.chunk_dims(),
+                    &stage_exclusions,
+                    &stage_authored,
+                );
                 let nodes: HashMap<ResourceNodeId, ResourceNodeState> =
                     spawns.into_iter().map(|node| (node.id, node)).collect();
                 (manager, nodes)
@@ -290,6 +308,7 @@ impl GameServer {
             // every fresh server starts at the shipped feel.
             knockback_scale: 1.0,
             meteor_shower,
+            cinematic: Default::default(),
         };
         // Stability is not persisted: recompute it from the restored
         // pieces (which also culls anything a legacy save left without a

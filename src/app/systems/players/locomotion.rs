@@ -138,6 +138,7 @@ pub(crate) fn animate_remote_players_system(
         let upper_arm_r = rig.upper_arm_r;
         let forearm_l = rig.forearm_l;
         let forearm_r = rig.forearm_r;
+        let hand_anchor = rig.hand_anchor;
         let thigh_l = rig.thigh_l;
         let thigh_r = rig.thigh_r;
         let shin_l = rig.shin_l;
@@ -264,6 +265,9 @@ pub(crate) fn animate_remote_players_system(
                 Quat::from_rotation_x(-ELBOW_REST_BEND - arm_r.max(0.0) * 0.3),
             )
         };
+        // The held item hangs off the hand anchor; it stays at its identity rest
+        // rotation except for the spear-thrust lock computed inside the swing.
+        let mut hand_anchor_rot = Quat::IDENTITY;
         let next_swing = match swing {
             Some(mut active) => {
                 active.elapsed += dt;
@@ -284,12 +288,23 @@ pub(crate) fn animate_remote_players_system(
                     let shoulder_delta = Quat::from_rotation_x(pose.shoulder_pitch)
                         * Quat::from_rotation_y(pose.shoulder_yaw)
                         * Quat::from_rotation_z(pose.shoulder_roll);
-                    set_rot(&mut parts, upper_arm_r, shoulder_delta * rest_right_arm);
-                    set_rot(
-                        &mut parts,
-                        forearm_r,
-                        rest_right_elbow * Quat::from_rotation_x(pose.forearm_pitch),
-                    );
+                    let swung_arm = shoulder_delta * rest_right_arm;
+                    let swung_elbow = rest_right_elbow * Quat::from_rotation_x(pose.forearm_pitch);
+                    set_rot(&mut parts, upper_arm_r, swung_arm);
+                    set_rot(&mut parts, forearm_r, swung_elbow);
+                    // Spear thrust lock: on a rotation-only rig the elbow
+                    // fold/extend sweeps the long shaft through a big arc, so
+                    // from a peer's view the thrust read as a swing no matter
+                    // how the arm curves were shaped. Counter-rotate the hand
+                    // anchor so the spear KEEPS its carry orientation for the
+                    // whole swing: the shaft stays couched and level while the
+                    // hand translation drives it straight forward, which is
+                    // exactly a stab. Other archetypes want the tool to swing
+                    // with the arm, so they keep the identity anchor.
+                    if active.model == ItemModel::Spear {
+                        let rest_chain = rest_right_arm * rest_right_elbow;
+                        hand_anchor_rot = (swung_arm * swung_elbow).inverse() * rest_chain;
+                    }
                     Some(active)
                 }
             }
@@ -299,6 +314,7 @@ pub(crate) fn animate_remote_players_system(
                 None
             }
         };
+        set_rot(&mut parts, hand_anchor, hand_anchor_rot);
         rig.swing = next_swing;
 
         // Upper body leans to the peer's look pitch and twists into a swing,

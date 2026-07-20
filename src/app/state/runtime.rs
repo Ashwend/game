@@ -549,6 +549,11 @@ impl ClientRuntime {
                 // `network.rs`), and the authoritative blast already landed via
                 // the replicated mirrors. Nothing to keep in runtime history.
             }
+            ServerMessage::Cinematic(_) => {
+                // Phase cues are routed onto `MenuState.cinematic` by the
+                // network tick system (camera + slate are UI-layer concerns).
+                // No runtime history.
+            }
             ServerMessage::Heartbeat => {}
         }
     }

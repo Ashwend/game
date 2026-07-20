@@ -83,8 +83,9 @@ const RING_RADIUS_FRACTION: f32 = 1.15;
 /// Mesh + material handles for the explosion VFX. Built once in `setup_scene`.
 #[derive(Resource, Clone)]
 pub(crate) struct ExplosionEffectAssets {
-    /// The shared angular debris shard (reuses the impact stone-shard silhouette).
-    pub(crate) shard_mesh: Handle<Mesh>,
+    /// Seeded angular debris chunk variants (reuse the impact stone-chunk
+    /// silhouettes); the spawn picks one per shard so the burst mixes shapes.
+    pub(crate) shard_meshes: Vec<Handle<Mesh>>,
     /// Dark smoke-grey debris material.
     pub(crate) shard_grey_material: Handle<StandardMaterial>,
     /// Ember-orange debris material, mixed in for the hot look.
@@ -239,20 +240,25 @@ pub(crate) fn spawn_explosion_burst(
         } else {
             assets.shard_ember_material.clone()
         };
+        // Mass-relative feel: the bigger fixed-size variants leave the blast
+        // slower and tumble slower, the small ones fly and spin quickest.
+        let variant = super::effects::debris_variant(1.1, r3);
+        let shard_mesh = assets.shard_meshes[(s >> 7) as usize % assets.shard_meshes.len()].clone();
         commands.spawn((
             Name::new("Explosion Debris"),
             ImpactChip::new(
-                velocity,
+                velocity * variant.speed,
                 spin_axis,
-                12.0 + r1 * 18.0,
+                (9.0 + r1 * 11.0) * variant.spin,
                 0.55 + r2 * 0.5,
-                0.9 + r3 * 0.7,
+                variant.scale,
                 1.4,
-            ),
-            Mesh3d(assets.shard_mesh.clone()),
+            )
+            .with_fixed_scale(),
+            Mesh3d(shard_mesh),
             MeshMaterial3d(material),
             Transform::from_translation(center + Vec3::Y * 0.2)
-                .with_scale(Vec3::splat(0.9 + r3 * 0.7)),
+                .with_scale(Vec3::splat(variant.scale)),
             Visibility::Visible,
             NotShadowCaster,
         ));

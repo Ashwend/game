@@ -1,5 +1,6 @@
 mod admin_items;
 mod chat;
+mod cinematic;
 mod confirm;
 mod crafting;
 mod crafting_queue;

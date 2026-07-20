@@ -10,7 +10,12 @@ impl GameServer {
         let mut save = self.save.clone();
         let mut persisted = self.persisted_players.clone();
         // Capture any currently connected players' live state before writing.
+        // Cinematic dummy actors are skipped: they are scripted stage bodies,
+        // not players, and must never come back as sleeping bodies on load.
         for client in self.clients.values() {
+            if client.synthetic {
+                continue;
+            }
             persisted.insert(client.account_id, persisted_player_from(client));
         }
         let mut players = persisted.into_values().collect::<Vec<_>>();

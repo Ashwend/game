@@ -167,6 +167,7 @@ impl GameServer {
             account_id,
             name: name.clone(),
             online: true,
+            synthetic: false,
             controller,
             inventory,
             protection,

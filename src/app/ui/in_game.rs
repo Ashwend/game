@@ -162,9 +162,13 @@ pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta
         // Screenshot toggles. `show_hud` is the master switch for all
         // always-on HUD chrome; `show_chat` additionally hides just the
         // chat box. Neither pauses the game: the world keeps simulating,
-        // these only gate what's painted on top.
-        let show_hud = resources.settings.hud.show_hud;
-        let show_chat = resources.settings.hud.show_chat;
+        // these only gate what's painted on top. Cinematic playback forces
+        // both off for a clean capture frame; nameplates and floating damage
+        // deliberately stay on (they are what sells the shots as live
+        // multiplayer), see `world_overlays_visible` below.
+        let cinematic_active = resources.menu.cinematic.is_some();
+        let show_hud = resources.settings.hud.show_hud && !cinematic_active;
+        let show_chat = resources.settings.hud.show_chat && !cinematic_active;
         if show_hud {
             hud_ui(
                 ctx,
@@ -203,6 +207,8 @@ pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta
             .single()
             .ok()
             .map(|(camera, transform)| (camera, *transform));
+        // Nameplates stay OFF during a cinematic: range-gated plates popping
+        // in and out mid-shot read as UI noise on camera.
         if world_overlays_visible && show_hud {
             let peers = collect_peer_overlay_entries(
                 resources.peer_overlay.network_players.iter(),
@@ -216,10 +222,14 @@ pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta
         // Floating damage + deployable nametags are also
         // world-overlay layers; suppress them under the same
         // gate so a full-screen modal isn't pocked with
-        // floating numbers and structure labels.
-        if world_overlays_visible && show_hud {
+        // floating numbers and structure labels. During a cinematic the
+        // nameplates and damage numbers stay (multiplayer signal on
+        // camera); only the structure labels and cost readouts hide with
+        // the rest of the chrome.
+        if world_overlays_visible && (show_hud || cinematic_active) {
             floating_damage_ui(ctx, camera, resources.floating_damage.iter());
-
+        }
+        if world_overlays_visible && show_hud {
             let entries = collect_deployable_overlay_entries(
                 camera.map(|(_, transform)| transform.translation()),
                 resources.deployable_overlay.placed.iter(),
@@ -446,6 +456,12 @@ pub(super) fn in_game_ui(ctx: &egui::Context, resources: &mut UiResources, delta
             && let Some(choice) = death_splash_ui(ctx, &splash)
         {
             send_respawn(&mut resources.runtime, choice);
+        }
+        // Cinematic slate (preparing / countdown / intermission chip).
+        // Above the world layers, deliberately drawing nothing while a shot
+        // plays so the capture frame stays clean.
+        if let Some(overlay) = resources.menu.cinematic {
+            super::cinematic::cinematic_slate_ui(ctx, &overlay);
         }
     }
     if resources.menu.pause_open && !resources.menu.pause_options_open {

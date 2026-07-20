@@ -35,6 +35,13 @@ pub(crate) fn camera_follow_system(
         motion.reset();
         return;
     }
+    // Cinematic playback owns the camera: `cinematic_camera_system` writes
+    // the transform from the authored shot paths, so the follow writer must
+    // stand down entirely (bob, kicks, and FOV included).
+    if menu.cinematic.is_some() {
+        motion.reset();
+        return;
+    }
 
     let Ok((mut camera_transform, projection)) = camera.single_mut() else {
         return;

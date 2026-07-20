@@ -81,6 +81,9 @@ pub(crate) fn apply_held_item_visual_system(
         && !menu.pause_open
         && !menu.panel_overlay_open()
         && !menu.world_entry_splash_active()
+        // Cinematic playback detaches the camera; a first-person tool
+        // floating in a flying shot would break the take.
+        && menu.cinematic.is_none()
         && !local_dead)
         .then(|| {
             local_player
@@ -336,8 +339,22 @@ pub(crate) fn resolve_grip_sockets_system(
         false
     });
     for (held_mesh, transform) in resolved {
+        let transform = effective_grip_socket(transform);
         info!("grip socket for {held_mesh:?}: {transform:?}");
         grip_sockets.sockets.insert(held_mesh, transform);
+    }
+}
+
+/// The EFFECTIVE grip stored for a held glb's authored `socket_grip` node: the
+/// node slid [`GRIP_FIST_DOWN_HAFT_M`] down the haft (socket contract: +Y up
+/// the haft, so socket-local -Y walks toward the butt). Applied once at
+/// resolve time, so first person and third person grip the identical point on
+/// the handle.
+fn effective_grip_socket(authored: Transform) -> Transform {
+    Transform {
+        translation: authored.translation
+            + authored.rotation * Vec3::new(0.0, -GRIP_FIST_DOWN_HAFT_M, 0.0),
+        ..authored
     }
 }
 
@@ -491,6 +508,16 @@ fn carry_anchor_rotation() -> Quat {
     carry_upper_arm_rotation() * carry_forearm_rotation()
 }
 
+/// How far down the haft (metres) the fist sits below the glb's authored
+/// `socket_grip` node on the socket-carrying gathering tools. Applied ONCE at
+/// socket-resolve time, so the effective grip point is the SAME in first and
+/// third person (owner rule); the sockets were authored a touch high on the
+/// handle, which read as choking up near the tool head on the visible rigged
+/// hand. The first-person carry composition is preserved by an equal-opposite
+/// hand lift in `held_item_local_transform` (the arm tunes the view, never the
+/// grip).
+const GRIP_FIST_DOWN_HAFT_M: f32 = 0.12;
+
 pub(crate) fn held_item_hand_transform(
     held_mesh: HeldMesh,
     grip_socket: Option<Transform>,
@@ -518,6 +545,10 @@ pub(crate) fn held_item_hand_transform(
     if let Some(socket) = grip_socket {
         let desired = tilt * Quat::from_rotation_y(PI) * socket.rotation.inverse();
         let rotation = carry_anchor_rotation().inverse() * desired;
+        // `socket` is the SHARED effective grip (the authored node plus the
+        // fist drop applied once in `resolve_grip_sockets_system`), so this
+        // fist closes around exactly the same point on the handle the
+        // first-person grip derivation uses.
         let grip = rotation * socket.translation;
         let translation = -grip + Vec3::new(0.0, -0.01, -0.02);
         return Transform::from_translation(translation).with_rotation(rotation);
@@ -556,7 +587,14 @@ pub(crate) fn held_item_hand_transform(
     };
     let rotation = carry_anchor_rotation().inverse() * desired;
     // Place the grip point at the hand anchor, plus a small seat into the palm.
-    let grip = rotation * Vec3::new(0.0, grip_y, 0.0);
+    // A mesh with its own authored grip point (`HeldMesh::grip_point`, the
+    // definition shared with the first-person seat) uses that exact point;
+    // otherwise the archetype's generic grip height stands in.
+    let grip_point = held_mesh
+        .grip_point()
+        .map(Vec3::from_array)
+        .unwrap_or(Vec3::new(0.0, grip_y, 0.0));
+    let grip = rotation * grip_point;
     let translation = -grip + Vec3::new(0.0, -0.01, -0.02);
     Transform::from_translation(translation).with_rotation(rotation)
 }
@@ -815,8 +853,17 @@ pub(super) fn held_item_local_transform(
 
     // Per-item grip seat, expressed in the ITEM'S OWN frame and applied after
     // the whole-item rotation: it slides the mesh along itself so the hand
-    // grips the right part of the handle (the sword's short wrap, the spear's
-    // mid-shaft) whatever the carry rotation is doing.
+    // grips the right part of the handle whatever the carry rotation is doing.
+    // The grip POINT comes from `HeldMesh::grip_point()`, the single shared
+    // definition both this viewmodel and the third-person hand use, so the
+    // fist closes around the identical spot on the item in both views; the
+    // seat is its negation (moving the mesh so that point lands at the hand).
+    let shared_grip_seat = || {
+        held_mesh
+            .grip_point()
+            .map(|point| -Vec3::from_array(point))
+            .unwrap_or(Vec3::ZERO)
+    };
     let (model_rotation, grip_seat) = if matches!(model, ItemModel::Sword) {
         // Hold the blade UPRIGHT at guard (owner feedback: upright, not laid
         // toward the target): near-vertical on screen with only a whisper of
@@ -824,21 +871,16 @@ pub(super) fn held_item_local_transform(
         // cutout. Axis note: the head-forward yaw (about Y) swaps the pre-yaw
         // local axes, so a pre-yaw X tilt becomes the on-screen LEFT/RIGHT lean
         // (positive = right) and a pre-yaw Z tilt becomes the away-from-camera
-        // foreshortening (negative = away).
+        // foreshortening (negative = away). The shared grip point seats the
+        // fist on the wrap with the pommel hanging just below it.
         let tilt = Quat::from_rotation_x(0.10) * Quat::from_rotation_z(-0.14);
-        // Seat the handle centre at the hand: the handle spans local y [-0.5, -0.28]
-        // (centre ~ -0.39) and the blade runs from -0.53 up to +0.35. Translate the
-        // mesh by +0.44 along its local Y so a point just above the handle centre
-        // lands at the base offset, i.e. the hand grips the wrap and the pommel
-        // hangs just below it, both on screen.
-        (model_rotation * tilt, Vec3::new(0.0, 0.44, 0.0))
+        (model_rotation * tilt, shared_grip_seat())
     } else if matches!(model, ItemModel::Spear) {
-        // Slide the spear mesh backward along its own shaft so the hand sits at
-        // MID-SHAFT: the butt runs off past the bottom-right frame edge instead
-        // of ending right at the hand, which read as the spear being held by
-        // its very bottom (owner report). Expressed in the spear's local frame
-        // (negative Y = toward the butt), rotated with the couched shaft.
-        (model_rotation, Vec3::new(0.0, -0.22, 0.0))
+        // The shared mid-shaft grip point slides the spear mesh backward along
+        // its own shaft: the butt runs off past the bottom-right frame edge
+        // instead of ending right at the hand, which read as the spear being
+        // held by its very bottom (owner report).
+        (model_rotation, shared_grip_seat())
     } else {
         (model_rotation, Vec3::ZERO)
     };
@@ -856,7 +898,14 @@ pub(super) fn held_item_local_transform(
     let (base_quat, seat_translation) = if let Some(socket) = grip_socket {
         let carry_rotation = base_rotation * Quat::from_rotation_y(PI);
         let rotation = carry_rotation * socket.rotation.inverse();
-        (rotation, -(rotation * socket.translation))
+        // The shared fist drop (`resolve_grip_sockets_system`) moved the grip
+        // point down the haft for the visible third-person hand. First person
+        // draws no hand, so the tuned carry composition is preserved by moving
+        // the INVISIBLE hand back up the same distance along the carried haft
+        // (owner rule: the grip itself is shared and accurate; each view tunes
+        // its look via the arm, never by bending the grip).
+        let hand_lift = carry_rotation * Vec3::new(0.0, GRIP_FIST_DOWN_HAFT_M, 0.0);
+        (rotation, -(rotation * socket.translation) - hand_lift)
     } else {
         let base_quat = base_rotation * model_rotation;
         // The grip seat is in the item's local frame, so rotate it by the
@@ -976,8 +1025,12 @@ mod tests {
         // the haft, +Z at the working edge, i.e. `Rot_Y(PI/2)` on a +X-edge
         // tool) must land the tool exactly where the legacy constant path put
         // the hatchet: `carry * socket⁻¹` preserves the tuned feel with the
-        // per-item override table empty.
-        let socket = Transform::from_rotation(Quat::from_rotation_y(PI * 0.5));
+        // per-item override table empty. Routed through the same
+        // `effective_grip_socket` adjustment the resolver applies: the shared
+        // fist drop and the viewmodel's hand lift cancel exactly, so the
+        // first-person composition is untouched by the ergonomic grip shift.
+        let socket =
+            effective_grip_socket(Transform::from_rotation(Quat::from_rotation_y(PI * 0.5)));
         let args = (0.0, 1.0, RangedPoseInputs::default());
         let legacy = held_item_local_transform(
             ItemModel::Hatchet,
@@ -1002,6 +1055,41 @@ mod tests {
         assert!(
             socketed.rotation.angle_between(legacy.rotation) < 1e-5,
             "contract socket must reproduce the legacy rotation"
+        );
+    }
+
+    #[test]
+    fn effective_socket_slides_the_grip_down_the_haft() {
+        // The resolver's ergonomic adjustment moves the stored grip point
+        // exactly `GRIP_FIST_DOWN_HAFT_M` toward the butt along the socket's
+        // own haft axis (+Y up the haft), and never touches the rotation.
+        let authored = Transform::from_translation(Vec3::new(0.1, 0.3, -0.05))
+            .with_rotation(Quat::from_rotation_y(PI * 0.5));
+        let effective = effective_grip_socket(authored);
+        assert_eq!(effective.rotation, authored.rotation);
+        let slid = effective.translation - authored.translation;
+        let expected = authored.rotation * Vec3::new(0.0, -GRIP_FIST_DOWN_HAFT_M, 0.0);
+        assert!((slid - expected).length() < 1e-6);
+    }
+
+    #[test]
+    fn sword_third_person_fist_closes_on_the_shared_grip_point() {
+        // The third-person hand transform must place the sword's authored
+        // grip point (`HeldMesh::grip_point`, shared with the first-person
+        // seat) at the palm, so both views grip the identical spot on the
+        // wrap. The old LongHafted fallback put the fist at y = -0.16,
+        // visibly on the blade (owner report).
+        let grip_point = Vec3::from_array(
+            HeldMesh::IronSword
+                .grip_point()
+                .expect("the sword has an authored grip point"),
+        );
+        let hand = held_item_hand_transform(HeldMesh::IronSword, None);
+        let palm_seat = Vec3::new(0.0, -0.01, -0.02);
+        let at_palm = hand.rotation * grip_point + hand.translation;
+        assert!(
+            at_palm.distance(palm_seat) < 1e-5,
+            "the fist must close on the authored wrap point, not the blade (got {at_palm:?})"
         );
     }
 

@@ -62,7 +62,8 @@ pub(crate) use look::LookState;
 #[cfg(all(unix, debug_assertions))]
 pub(crate) use look::AgentWalk;
 pub(crate) use menu::{
-    CurrentUser, DeathSplash, MenuState, SaveStore, Screen, TextPrompt, TextPromptKind,
+    CinematicOverlay, CinematicOverlayPhase, CurrentUser, DeathSplash, MenuState, SaveStore,
+    Screen, TextPrompt, TextPromptKind,
 };
 pub(crate) use options_ui::{OptionsTab, OptionsUiState, PendingRebind};
 pub(crate) use prediction::PredictionState;

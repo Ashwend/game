@@ -71,6 +71,7 @@ const AUTO_SAVE_WARNING_TICKS: u64 = (SERVER_TICK_RATE_HZ as u64) * 30;
 
 mod building;
 pub mod chunk_manager;
+mod cinematic;
 mod claim;
 mod combat;
 mod commands;
@@ -332,6 +333,11 @@ pub struct GameServer {
     /// event does not survive a restart, so the save format is untouched. See
     /// `src/server/meteor_shower.rs`.
     meteor_shower: meteor_shower::MeteorShowerState,
+    /// Cinematic playback engine (`/cinematic` on cinematic-stage worlds):
+    /// phase machine + the synthetic dummy-actor roster. Transient and never
+    /// persisted; a restart lands back at `Idle` with no actors. See
+    /// `src/server/cinematic.rs`.
+    cinematic: cinematic::CinematicState,
 }
 
 #[derive(Debug)]
@@ -345,6 +351,12 @@ pub(super) struct ServerClient {
     /// killable, but frozen and excluded from the online roster / stale-timeout.
     /// A reconnect from the same account wakes the body in place.
     pub(super) online: bool,
+    /// True for cinematic dummy actors: server-scripted bodies with no
+    /// transport behind them. Replicated and rendered exactly like real
+    /// players, but excluded from persistence (they never become sleeping
+    /// bodies in a save); the cinematic orchestrator owns their lifetime and
+    /// keeps `last_seen_tick` fresh while playback runs.
+    pub(super) synthetic: bool,
     pub(super) controller: PlayerController,
     pub(super) inventory: PlayerInventoryState,
     /// Authoritative per-damage-kind mitigation (each 0..=60 percent), recomputed
@@ -512,6 +524,7 @@ pub(super) fn sleeping_body_from_persisted(
         account_id: player.account_id,
         name: player.name,
         online: false,
+        synthetic: false,
         controller,
         inventory,
         protection,

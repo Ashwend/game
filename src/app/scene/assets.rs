@@ -27,8 +27,8 @@ use super::{
     deployable_assets::DeployableVisualAssets,
     materials::{hay_tall_grass_material, tree_texture_sampler},
     mesh::{
-        ORE_NODE_STAGE_COUNT, PlayerRigMeshes, build_player_rig_meshes, door_ghost_mesh,
-        impact_stone_shard_mesh, impact_wood_chip_mesh, low_poly_bag_mesh,
+        IMPACT_CHIP_MESH_VARIANTS, ORE_NODE_STAGE_COUNT, PlayerRigMeshes, build_player_rig_meshes,
+        door_ghost_mesh, impact_stone_chunk_mesh, impact_wood_chip_mesh, low_poly_bag_mesh,
         low_poly_birch_tree_large_lod_mesh, low_poly_birch_tree_medium_lod_mesh,
         low_poly_birch_tree_small_lod_mesh, low_poly_branch_pile_mesh,
         low_poly_pine_tree_large_lod_mesh, low_poly_pine_tree_medium_lod_mesh,
@@ -245,8 +245,11 @@ pub(crate) struct MeteorEmberAssets {
 
 #[derive(Resource, Clone)]
 pub(crate) struct ImpactEffectAssets {
-    pub(crate) wood_chip_mesh: Handle<Mesh>,
-    pub(crate) stone_shard_mesh: Handle<Mesh>,
+    /// Seeded volumetric splinter/chunk variants; spawns pick one per chip via
+    /// [`ImpactEffectAssets::wood_chip_mesh`] / [`ImpactEffectAssets::stone_chunk_mesh`]
+    /// so a burst mixes silhouettes.
+    pub(crate) wood_chip_meshes: Vec<Handle<Mesh>>,
+    pub(crate) stone_chunk_meshes: Vec<Handle<Mesh>>,
     /// Small round droplet for the PvP blood spray (a low-poly sphere, so it
     /// reads as a blob rather than the angular rock-shard mesh).
     pub(crate) blood_droplet_mesh: Handle<Mesh>,
@@ -263,6 +266,18 @@ pub(crate) struct ImpactEffectAssets {
     /// shard mesh like the grass burst; the red base colour multiplies through
     /// the shard's vertex colours so the chips read as blood droplets.
     pub(crate) blood_material: Handle<StandardMaterial>,
+}
+
+impl ImpactEffectAssets {
+    /// Pick a wood-splinter mesh variant off a chip seed.
+    pub(crate) fn wood_chip_mesh(&self, seed: u32) -> Handle<Mesh> {
+        self.wood_chip_meshes[(seed >> 7) as usize % self.wood_chip_meshes.len()].clone()
+    }
+
+    /// Pick a stone-chunk mesh variant off a chip seed.
+    pub(crate) fn stone_chunk_mesh(&self, seed: u32) -> Handle<Mesh> {
+        self.stone_chunk_meshes[(seed >> 7) as usize % self.stone_chunk_meshes.len()].clone()
+    }
 }
 
 /// Startup system wiring the whole client scene: the shared defaults, the
@@ -1060,6 +1075,7 @@ fn insert_deployable_visuals(
     };
     let deployable_wood_tex = load_toon_texture("wood");
     let deployable_stone_tex = load_toon_texture("stone");
+    let deployable_fabric_tex = load_toon_texture("fabric");
     // Per-item BAKED albedos for the image-to-3D world rebuilds (batch 2,
     // art/held/build_deployable_world.py): each glb ships white COLOR_0 +
     // real UVs and textures/deployables/baked/<id>.png carries the whole
@@ -1306,6 +1322,15 @@ fn insert_deployable_visuals(
             emissive_tex: toon_no_glow_tex.clone(),
             emissive: Vec4::ZERO,
         }),
+        toon_fabric_material: toon_materials.add(ToonMaterial {
+            detail: deployable_fabric_tex.clone(),
+            params: Vec4::new(3.0, 0.0, 1.0, 1.4),
+            tex_scale: 1.5,
+            fade: 1.0,
+            dev_flags: 0,
+            emissive_tex: toon_no_glow_tex.clone(),
+            emissive: Vec4::ZERO,
+        }),
         ghost_valid_material: materials.add(StandardMaterial {
             // Translucent green: visible against grass + stone without
             // hiding the surface under the ghost. Alpha blending only,
@@ -1355,8 +1380,16 @@ fn insert_impact_effect_assets(
     materials: &mut Assets<StandardMaterial>,
 ) {
     commands.insert_resource(ImpactEffectAssets {
-        wood_chip_mesh: meshes.add(impact_wood_chip_mesh()),
-        stone_shard_mesh: meshes.add(impact_stone_shard_mesh()),
+        wood_chip_meshes: (0..IMPACT_CHIP_MESH_VARIANTS)
+            .map(|i| meshes.add(impact_wood_chip_mesh(0x51C4 ^ i.wrapping_mul(0x9E37_79B9))))
+            .collect(),
+        stone_chunk_meshes: (0..IMPACT_CHIP_MESH_VARIANTS)
+            .map(|i| {
+                meshes.add(impact_stone_chunk_mesh(
+                    0xA11C ^ i.wrapping_mul(0x85EB_CA6B),
+                ))
+            })
+            .collect(),
         // A tiny round droplet (the particle scale shrinks it to ~a few cm).
         blood_droplet_mesh: meshes.add(Sphere::new(0.06).mesh().ico(1).expect("valid ico")),
         // Unit disc, laid flat + scaled to a small pool at spawn.
@@ -1402,9 +1435,15 @@ fn insert_explosion_effect_assets(
     materials: &mut Assets<StandardMaterial>,
 ) {
     // Explosion feedback VFX: debris shards (grey + ember mix), a bright flash,
-    // and a smoke puff. Reuses the impact stone-shard silhouette for debris.
+    // and a smoke puff. Reuses the impact stone-chunk silhouettes for debris.
     commands.insert_resource(crate::app::systems::ExplosionEffectAssets {
-        shard_mesh: meshes.add(impact_stone_shard_mesh()),
+        shard_meshes: (0..IMPACT_CHIP_MESH_VARIANTS)
+            .map(|i| {
+                meshes.add(impact_stone_chunk_mesh(
+                    0xB007 ^ i.wrapping_mul(0xC2B2_AE35),
+                ))
+            })
+            .collect(),
         shard_grey_material: materials.add(StandardMaterial {
             // Dark smoke-grey blasted debris.
             base_color: Color::srgb(0.20, 0.19, 0.18),

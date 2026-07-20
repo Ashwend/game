@@ -39,8 +39,9 @@ pub(crate) struct ImpactChip {
     /// despawns at the end, instead of shrinking out over the final stretch.
     /// Every flung debris chip (rock chunks, gather chips, the MeteorShower
     /// rock blast) sets this: solid matter holds its size and only tumbles
-    /// under physics, it never animates scale. Only non-solid effects (the
-    /// blood pool decal, the impact fireball flash) still shrink out.
+    /// under physics, it never animates scale. Only the blood pool decal still
+    /// shrinks out (its shrink IS its fade; it is a flat ground stain, not a
+    /// flying particle).
     fixed_scale: bool,
 }
 
@@ -217,9 +218,10 @@ pub(crate) fn spawn_ore_shatter_burst(
         let spin_axis = Vec3::new(r1 * 2.0 - 1.0, r2 * 2.0 - 1.0, r3 * 2.0 - 1.0)
             .normalize_or_zero()
             .max(Vec3::new(0.001, 1.0, 0.001));
-        let spin_speed = 14.0 + r1 * 18.0;
 
-        let initial_scale = chunk_scale * (0.85 + r2 * 0.45);
+        // Fixed quantized size with the matching mass feel: big chunks leave
+        // slower and tumble slower, small ones skitter.
+        let variant = debris_variant(chunk_scale, r2);
         let rotation = Quat::from_euler(
             EulerRot::XYZ,
             r1 * std::f32::consts::TAU,
@@ -234,20 +236,20 @@ pub(crate) fn spawn_ore_shatter_burst(
             // in size reads as a rendering glitch, seen mixed into the
             // meteor-strike ejecta next to the fixed-size boulder blast).
             ImpactChip {
-                velocity,
+                velocity: velocity * variant.speed,
                 spin_axis,
-                spin_speed,
+                spin_speed: (10.0 + r1 * 12.0) * variant.spin,
                 lifetime,
                 age: 0.0,
-                initial_scale,
+                initial_scale: variant.scale,
                 gravity_scale,
                 fixed_scale: true,
             },
-            Mesh3d(assets.stone_shard_mesh.clone()),
+            Mesh3d(assets.stone_chunk_mesh(seed)),
             MeshMaterial3d(assets.stone_shard_material.clone()),
             Transform::from_translation(anchor)
                 .with_rotation(rotation)
-                .with_scale(Vec3::splat(initial_scale)),
+                .with_scale(Vec3::splat(variant.scale)),
             Visibility::Visible,
             // Sub-cm flying debris. A shadow would be a single fuzzy
             // texel at best and just adds work to the cascade pass.
@@ -269,10 +271,17 @@ pub(crate) fn spawn_impact_burst(
     seed: u32,
     intensity: f32,
 ) {
-    let (mesh, material, base_count, base_speed, base_lifetime, base_scale, gravity_scale) =
+    // Which seeded mesh family a burst kind throws (picked per chip below, so
+    // one burst mixes silhouettes).
+    enum ChipMeshFamily {
+        Wood,
+        Stone,
+        Droplet,
+    }
+    let (family, material, base_count, base_speed, base_lifetime, base_scale, gravity_scale) =
         match kind {
             ImpactEffectKind::WoodChips => (
-                assets.wood_chip_mesh.clone(),
+                ChipMeshFamily::Wood,
                 assets.wood_chip_material.clone(),
                 6.0,
                 2.4,
@@ -281,7 +290,7 @@ pub(crate) fn spawn_impact_burst(
                 1.6,
             ),
             ImpactEffectKind::StoneShards => (
-                assets.stone_shard_mesh.clone(),
+                ChipMeshFamily::Stone,
                 assets.stone_shard_material.clone(),
                 7.0,
                 2.6,
@@ -296,7 +305,7 @@ pub(crate) fn spawn_impact_burst(
             // material so the tuft visibly bursts into leaves rather
             // than gray pebbles.
             ImpactEffectKind::Sticks => (
-                assets.wood_chip_mesh.clone(),
+                ChipMeshFamily::Wood,
                 assets.wood_chip_material.clone(),
                 3.0,
                 1.6,
@@ -305,7 +314,7 @@ pub(crate) fn spawn_impact_burst(
                 1.6,
             ),
             ImpactEffectKind::Pebbles => (
-                assets.stone_shard_mesh.clone(),
+                ChipMeshFamily::Stone,
                 assets.stone_shard_material.clone(),
                 3.0,
                 1.7,
@@ -314,7 +323,7 @@ pub(crate) fn spawn_impact_burst(
                 2.0,
             ),
             ImpactEffectKind::GrassBlades => (
-                assets.stone_shard_mesh.clone(),
+                ChipMeshFamily::Stone,
                 assets.grass_blade_material.clone(),
                 3.0,
                 1.4,
@@ -328,7 +337,7 @@ pub(crate) fn spawn_impact_burst(
             // separately (see `spawn_blood_splatter`). The droplet mesh keeps it
             // from reading as red rock chips.
             ImpactEffectKind::FleshHit => (
-                assets.blood_droplet_mesh.clone(),
+                ChipMeshFamily::Droplet,
                 assets.blood_material.clone(),
                 8.0,
                 2.8,
@@ -373,9 +382,16 @@ pub(crate) fn spawn_impact_burst(
         let spin_axis = Vec3::new(r1 * 2.0 - 1.0, r2 * 2.0 - 1.0, r3 * 2.0 - 1.0)
             .normalize_or_zero()
             .max(Vec3::new(0.001, 1.0, 0.001));
-        let spin_speed = 10.0 + r1 * 16.0;
 
-        let initial_scale = chip_scale * (0.85 + r2 * 0.4);
+        // Fixed quantized size with the matching mass feel (heavy = slower
+        // launch, lazier tumble), and a per-chip mesh variant so the handful
+        // mixes silhouettes.
+        let variant = debris_variant(chip_scale, r2);
+        let mesh = match family {
+            ChipMeshFamily::Wood => assets.wood_chip_mesh(seed),
+            ChipMeshFamily::Stone => assets.stone_chunk_mesh(seed),
+            ChipMeshFamily::Droplet => assets.blood_droplet_mesh.clone(),
+        };
         let rotation = Quat::from_euler(
             EulerRot::XYZ,
             r1 * std::f32::consts::TAU,
@@ -390,20 +406,20 @@ pub(crate) fn spawn_impact_burst(
             // spawn size and only rotate; the short lifetimes mean they pop
             // out at rest rather than shrinking mid-flight.
             ImpactChip {
-                velocity,
+                velocity: velocity * variant.speed,
                 spin_axis,
-                spin_speed,
+                spin_speed: (8.0 + r1 * 11.0) * variant.spin,
                 lifetime,
                 age: 0.0,
-                initial_scale,
+                initial_scale: variant.scale,
                 gravity_scale,
                 fixed_scale: true,
             },
-            Mesh3d(mesh.clone()),
+            Mesh3d(mesh),
             MeshMaterial3d(material.clone()),
             Transform::from_translation(anchor)
                 .with_rotation(rotation)
-                .with_scale(Vec3::splat(initial_scale)),
+                .with_scale(Vec3::splat(variant.scale)),
             Visibility::Visible,
             NotShadowCaster,
         ));
@@ -425,6 +441,41 @@ pub(crate) fn tick_impact_chips_system(
             commands.entity(entity).despawn();
         }
     }
+}
+
+/// One drawn debris variant: a fixed size plus the physics feel of its mass.
+/// All four sizes fall under the same gravity like real matter, but the
+/// heavier chunks leave the impact slower and tumble slower (more mass, more
+/// angular inertia) while the small chips fly and spin quickest, so a chunk's
+/// size always reads as proportional to how it moves (owner rule). Sizes are
+/// fixed from spawn and never animate.
+pub(crate) struct DebrisVariant {
+    pub(crate) scale: f32,
+    /// Launch-velocity multiplier for this mass class.
+    pub(crate) speed: f32,
+    /// Tumble-rate multiplier for this mass class.
+    pub(crate) spin: f32,
+}
+
+/// Quantize a debris chip onto one of four FIXED size variants around `base`,
+/// with the matching mass feel. The top variant doubles as a hard size cap
+/// (owner call: continuous rolls sometimes read as huge boulders).
+pub(crate) fn debris_variant(base: f32, unit: f32) -> DebrisVariant {
+    const SCALE: [f32; 4] = [0.7, 0.85, 1.0, 1.2];
+    const SPEED: [f32; 4] = [1.22, 1.08, 1.0, 0.85];
+    const SPIN: [f32; 4] = [1.40, 1.15, 1.0, 0.72];
+    let index = (((unit.clamp(0.0, 0.999)) * SCALE.len() as f32) as usize).min(SCALE.len() - 1);
+    DebrisVariant {
+        scale: base * SCALE[index],
+        speed: SPEED[index],
+        spin: SPIN[index],
+    }
+}
+
+/// Size-only view of [`debris_variant`], for particles whose motion is not a
+/// ballistic launch (fire, sparks, smoke).
+pub(crate) fn quantized_chip_scale(base: f32, unit: f32) -> f32 {
+    debris_variant(base, unit).scale
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -463,6 +514,15 @@ fn advance_chip(transform: &mut Transform, chip: &mut ImpactChip, dt: f32) -> Ch
         chip.velocity.x *= friction;
         chip.velocity.z *= friction;
         chip.spin_speed *= friction;
+        // Once it has essentially stopped sliding, it has landed: kill the
+        // residual motion outright so a resting chunk lies dead still (no
+        // slow-motion spin on the spot).
+        let horizontal =
+            (chip.velocity.x * chip.velocity.x + chip.velocity.z * chip.velocity.z).sqrt();
+        if horizontal < 0.25 && chip.velocity.y.abs() < 0.5 {
+            chip.velocity = Vec3::ZERO;
+            chip.spin_speed = 0.0;
+        }
     }
 
     let rotation = Quat::from_axis_angle(chip.spin_axis, chip.spin_speed * dt);

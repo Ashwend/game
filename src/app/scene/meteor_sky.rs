@@ -128,16 +128,15 @@ pub(crate) struct MeteorTrailSegment {
 /// One short-lived particle shed behind the fireball: either a bright ember spark
 /// streaking off the tail or a faint dark smoke puff drifting under it, chosen by
 /// `smoke`. A world-space entity (lingers where shed, does not follow the meteor)
-/// that drifts, shrinks or grows, and despawns. One component so
+/// that drifts at its fixed spawn size and despawns. One component so
 /// [`tick_meteor_ember_system`] stays a single query pass.
 #[derive(Component)]
 pub(crate) struct MeteorEmber {
     velocity: Vec3,
     age: f32,
     lifetime: f32,
-    initial_scale: f32,
-    /// `true` for a smoke puff (grows over life, drifts, fades alpha), `false`
-    /// for a spark (gravity + light drag, shrinks to a point).
+    /// `true` for a smoke puff (buoyant drift), `false` for a spark (gravity +
+    /// light drag). Neither animates scale.
     smoke: bool,
 }
 
@@ -172,16 +171,37 @@ pub(crate) struct MeteorFragment {
     ember_cooldown: f32,
     /// Free-running draw seed salting each shed ember so the sputter varies.
     seed: u32,
+    /// Age at the moment the fragment reached the ground plane, or `None`
+    /// while airborne. A grounded fragment rests in place (no more spin,
+    /// no more embers) for a beat before despawning: solid matter lands and
+    /// stays, it never burns away mid-air or sinks through the floor.
+    grounded_at: Option<f32>,
 }
 
-/// The airburst's one-shot core flash: an additive sphere that pops outward and
-/// fades over [`METEOR_AIRBURST_FLASH_SECONDS`]. Owns its material instance
-/// (created at burst time) so the per-frame fade never touches a shared handle.
+/// A one-shot additive flash at a FIXED size that fades its emissive color to
+/// black over `lifetime`, then despawns. Owns its material instance (created at
+/// spawn) so the per-frame fade never touches a shared handle. Used by the
+/// mid-flight airburst core pop and the ground-zero impact fireball; neither
+/// animates scale (owner call: no particle ever transforms in size, and the old
+/// growing/shrinking flash domes read as huge scale-animating particles).
 #[derive(Component)]
 pub(crate) struct MeteorAirburstFlash {
     age: f32,
     lifetime: f32,
-    peak_scale: f32,
+    /// Peak emissive color (linear); the fade multiplies this down to black.
+    color: Vec3,
+}
+
+impl MeteorAirburstFlash {
+    /// Crate-visible so the impact-site VFX (`super::meteor_shower`) can spawn
+    /// its ground fireball through the same fade ticker.
+    pub(crate) fn new(lifetime: f32, color: Vec3) -> Self {
+        Self {
+            age: 0.0,
+            lifetime,
+            color,
+        }
+    }
 }
 
 /// Base radius of the fireball sphere in **world metres**, at the reference
@@ -470,6 +490,8 @@ const METEOR_FRAGMENT_HUE_HOT: Vec3 = Vec3::new(0.70, 0.075, 0.0);
 const METEOR_FRAGMENT_HUE_DEEP: Vec3 = Vec3::new(0.42, 0.025, 0.0);
 /// Seconds between ember sparks shed by one burning fragment.
 const METEOR_FRAGMENT_EMBER_INTERVAL: f32 = 0.07;
+/// How long a landed airburst fragment rests on the ground before despawning.
+const METEOR_FRAGMENT_REST_SECONDS: f32 = 2.5;
 
 /// Spawn the meteor shower fireball rigs (one per possible concurrent meteor,
 /// [`METEOR_SKY_RIGS`]) and their trail chains, all `Hidden` until an event is
@@ -1623,9 +1645,9 @@ fn spawn_meteor_airburst(
     let fragment_count = ((METEOR_AIRBURST_FRAGMENTS as f32 * size).round() as u32).max(4);
     let spark_count = ((METEOR_AIRBURST_SPARKS as f32 * size).round() as u32).max(10);
 
-    // The core flash, popping outward and fading via its own material instance
-    // (freed with the entity, so the per-frame fade never touches a shared
-    // handle).
+    // The core flash: full size from the first frame, fading via its own
+    // material instance (freed with the entity, so the per-frame fade never
+    // touches a shared handle).
     let flash_material = materials.add(StandardMaterial {
         base_color: Color::linear_rgb(
             METEOR_AIRBURST_FLASH_COLOR.x,
@@ -1640,14 +1662,11 @@ fn spawn_meteor_airburst(
     let peak_scale = ball_radius * METEOR_AIRBURST_FLASH_PEAK_FRAC;
     commands.spawn((
         Name::new("Meteor Airburst Flash"),
-        MeteorAirburstFlash {
-            age: 0.0,
-            lifetime: METEOR_AIRBURST_FLASH_SECONDS,
-            peak_scale,
-        },
+        MeteorAirburstFlash::new(METEOR_AIRBURST_FLASH_SECONDS, METEOR_AIRBURST_FLASH_COLOR),
         Mesh3d(assets.flash_mesh.clone()),
         MeshMaterial3d(flash_material),
-        Transform::from_translation(render_pos).with_scale(Vec3::splat(peak_scale * 0.30)),
+        // Born at full size; the pop is carried entirely by the color fade.
+        Transform::from_translation(render_pos).with_scale(Vec3::splat(peak_scale)),
         Visibility::Visible,
         NotShadowCaster,
     ));
@@ -1678,22 +1697,30 @@ fn spawn_meteor_airburst(
         let radial = perp_a * ring.cos() + perp_b * ring.sin();
         let dir = (travel * (0.50 + r2 * 0.45) + radial * (0.50 + r3 * 0.50)).normalize_or_zero();
         let speed = ball_radius * (1.3 + r4 * 1.4);
-        // Rendered head radius = ember_mesh(0.12) * scale, so this lands the
-        // fragments around 17-30% of the ball radius: clearly smaller rocks, but
-        // far bigger than the shed spark motes.
-        let initial_scale = ball_radius * (1.4 + r2 * 1.1);
+        // Rendered head radius = ember_mesh(0.12) * scale. SMALL: real
+        // fragments are chips off the parent rock, and the ball CONVERGES
+        // toward its true apparent size after the burst while fragments keep
+        // their spawn size, so anything generous ends up reading nearly
+        // ball-sized moments later (owner report, twice: the burst fan drew a
+        // ring of pale near-ball-sized chunks; the earlier 3.0 cap was still
+        // dominated by it). Four fixed variants plus a hard absolute cap so a
+        // fragment that arcs down and lands rests as a fist-sized stone.
+        let initial_scale =
+            crate::app::systems::quantized_chip_scale((ball_radius * 0.35).min(1.2), r2);
         commands.spawn((
             Name::new("Meteor Airburst Fragment"),
             MeteorFragment {
                 velocity: dir * speed,
                 age: 0.0,
-                // Capped by the time left so a late burst (short /meteor-here
-                // dive) still burns its fragments out before the strike.
-                lifetime: (1.6 + r3 * 1.2).min((remaining_seconds * 0.75).max(0.4)),
+                // Long enough for most fragments to arc all the way down and
+                // land; still capped by the time left so a late burst (short
+                // /meteor-here dive) cleans its fragments up by the strike.
+                lifetime: (3.0 + r3 * 1.6).min((remaining_seconds * 0.9).max(0.4)),
                 initial_scale,
                 gravity: ball_radius * 0.45,
                 ember_cooldown: r1 * METEOR_FRAGMENT_EMBER_INTERVAL,
                 seed: s,
+                grounded_at: None,
             },
             Mesh3d(assets.ember_mesh.clone()),
             MeshMaterial3d(fragment_materials[i as usize % fragment_materials.len()].clone()),
@@ -1717,17 +1744,19 @@ fn spawn_meteor_airburst(
         let ring = r1 * std::f32::consts::TAU;
         let radial = perp_a * ring.cos() + perp_b * ring.sin();
         let dir = (radial * (0.7 + r2 * 0.5) + back * (r3 - 0.35)).normalize_or_zero();
-        // Small (the additive spark only holds orange as a compact point) and
-        // born OUTSIDE the ball, so the spray reads as glitter flying off the
-        // pop rather than white flecks stuck on the dark rock.
-        let initial_scale = ball_radius * (0.30 + r3 * 0.35);
+        // SMALL: the additive spark material only holds its orange as a
+        // compact point; at any real size it washes to a cream blob, and the
+        // old sizing drew a ring of pale ball-sized blobs around the fireball
+        // in daylight (owner report: huge chunks). Glitter, not chunks. Born
+        // OUTSIDE the ball so the spray reads as flying off the pop.
+        let initial_scale =
+            crate::app::systems::quantized_chip_scale((ball_radius * 0.25).min(1.2), r3);
         commands.spawn((
             Name::new("Meteor Ember"),
             MeteorEmber {
                 velocity: dir * ball_radius * (0.7 + r2 * 1.0),
                 age: 0.0,
                 lifetime: 0.6 + r1 * 0.6,
-                initial_scale,
                 smoke: false,
             },
             Mesh3d(assets.ember_mesh.clone()),
@@ -1818,9 +1847,12 @@ fn emit_meteor_embers(
         let offset = back * ball_radius * (1.0 + r1 * 3.0) + perp;
         let velocity = back * ember_unit * (0.9 + r2 * 1.2) + perp * 0.6;
         // Rendered spark radius = ember_mesh(0.12) * initial_scale, so scale off the
-        // ball radius directly. Kept smaller (~6-14% of the ball) so each spark stays
-        // a distinct high-contrast point that holds its orange, not a fat blob.
-        let initial_scale = ball_radius * (0.45 + r3 * 0.7);
+        // ball radius directly. Kept small so each spark stays a distinct
+        // high-contrast point that holds its orange, not a fat pale blob. Four
+        // fixed size variants with an absolute cap (the ball radius is the
+        // rendered proxy size and can reach ~20).
+        let initial_scale =
+            crate::app::systems::quantized_chip_scale((ball_radius * 0.45).min(2.0), r3);
         let lifetime = 0.7 + r4 * 0.6;
 
         commands.spawn((
@@ -1829,7 +1861,6 @@ fn emit_meteor_embers(
                 velocity,
                 age: 0.0,
                 lifetime,
-                initial_scale,
                 smoke: false,
             },
             Mesh3d(assets.ember_mesh.clone()),
@@ -1848,13 +1879,14 @@ fn emit_meteor_embers(
         let r3 = hashed_unit(seq.wrapping_mul(0xC2B2_AE35) ^ 0x1656_67B1);
 
         // Smoke sheds further back and a touch below, near-still with slow +Y
-        // buoyancy; it grows and fades over life. The 0.5-radius mesh needs only a
-        // modest scale.
+        // buoyancy, at a FIXED size for its whole life. The 0.5-radius mesh needs
+        // only a modest scale; four fixed variants with an absolute cap.
         let smoke_unit = ball_radius * 0.14;
         let perp = (perp_a * (r2 - 0.5) + perp_b * (r3 - 0.5)) * ball_radius * 0.10;
         let offset = back * ball_radius * (1.0 + r1 * 1.5) - Vec3::Y * ball_radius * 0.15 + perp;
         let velocity = Vec3::Y * smoke_unit * 0.3 + perp * 0.2;
-        let initial_scale = smoke_unit * (0.6 + r3 * 0.5);
+        let initial_scale =
+            crate::app::systems::quantized_chip_scale((smoke_unit * 0.85).min(2.2), r3);
         let lifetime = 0.8 + r1 * 0.6;
 
         commands.spawn((
@@ -1863,7 +1895,6 @@ fn emit_meteor_embers(
                 velocity,
                 age: 0.0,
                 lifetime,
-                initial_scale,
                 smoke: true,
             },
             Mesh3d(assets.smoke_mesh.clone()),
@@ -1876,10 +1907,9 @@ fn emit_meteor_embers(
 }
 
 /// Advance and despawn the shed meteor particles in one query pass, branching on
-/// the `smoke` flag: sparks fall under gravity with light drag and shrink to a
-/// point; smoke drifts up, grows over life, and fades its alpha. World-space, so
-/// they linger where shed (the fireball has already moved on). Runs in
-/// `ClientSystemSet::Sky`.
+/// the `smoke` flag: sparks fall under gravity with light drag; smoke drifts up.
+/// Both hold their fixed spawn size. World-space, so they linger where shed (the
+/// fireball has already moved on). Runs in `ClientSystemSet::Sky`.
 pub(crate) fn tick_meteor_ember_system(
     mut commands: Commands,
     time: Res<Time>,
@@ -1895,29 +1925,27 @@ pub(crate) fn tick_meteor_ember_system(
             commands.entity(entity).despawn();
             continue;
         }
-        let life_t = (ember.age / ember.lifetime).clamp(0.0, 1.0);
+        // Both kinds hold their spawn scale for their whole (short) life and pop
+        // out at the end: no particle ever animates size (owner call; the old
+        // grow-over-life smoke and shrink-to-a-point sparks read as particles
+        // flickering between sizes). Motion is the only animation.
         if ember.smoke {
-            // Smoke: light drift, grow over life. Fade handled per material below.
+            // Smoke: light drift up and away.
             ember.velocity *= 1.0 - (0.4 * dt).min(0.9);
             transform.translation += ember.velocity * dt;
-            transform.scale = Vec3::splat(ember.initial_scale * (1.0 + 1.5 * life_t));
-            // Note: smoke shares one blended material; fading its alpha here would
-            // fade every live puff. The short lifetimes + additive fire above keep
-            // the ribbon reading as a faint fade without a per-instance clone.
         } else {
-            // Spark: gravity + light drag, shrink to a point.
+            // Spark: gravity + light drag.
             ember.velocity.y -= METEOR_EMBER_GRAVITY * dt;
             ember.velocity *= 1.0 - (0.6 * dt).min(0.9);
             transform.translation += ember.velocity * dt;
-            transform.scale = Vec3::splat((ember.initial_scale * (1.0 - life_t)).max(0.0));
         }
     }
 }
 
-/// Advance the airburst's transient entities: fragments arc away from the core,
-/// sputter ember sparks behind them, and burn up (shrink away) across the tail
-/// of their life; the core flash pops outward and fades to nothing. Both
-/// self-despawn, so an ended event never needs to clean them up. Runs in
+/// Advance the airburst's transient entities: fragments arc away from the core
+/// at a fixed size, sputter ember sparks behind them, and land or expire; the
+/// core flash holds its size and fades its color to nothing. Both self-despawn,
+/// so an ended event never needs to clean them up. Runs in
 /// `ClientSystemSet::Sky` alongside the ember ticker.
 pub(crate) fn tick_meteor_airburst_system(
     mut commands: Commands,
@@ -1931,7 +1959,6 @@ pub(crate) fn tick_meteor_airburst_system(
     mut flashes: Query<
         (
             Entity,
-            &mut Transform,
             &mut MeteorAirburstFlash,
             &MeshMaterial3d<StandardMaterial>,
         ),
@@ -1945,6 +1972,13 @@ pub(crate) fn tick_meteor_airburst_system(
 
     for (entity, mut transform, mut fragment) in &mut fragments {
         fragment.age += dt;
+        // A grounded fragment rests where it landed for a beat, then goes.
+        if let Some(grounded_at) = fragment.grounded_at {
+            if fragment.age - grounded_at >= METEOR_FRAGMENT_REST_SECONDS {
+                commands.entity(entity).despawn();
+            }
+            continue;
+        }
         if fragment.age >= fragment.lifetime {
             commands.entity(entity).despawn();
             continue;
@@ -1954,11 +1988,17 @@ pub(crate) fn tick_meteor_airburst_system(
         let step = fragment.velocity * dt;
         transform.translation += step;
 
-        // Burn-up: hold size while it streaks, then shrink away over the tail of
-        // its life so the fragment visibly dies in the sky, never reaching ground.
-        let life_t = (fragment.age / fragment.lifetime).clamp(0.0, 1.0);
-        let burn = 1.0 - ((life_t - 0.45) / 0.55).clamp(0.0, 1.0);
-        let s = fragment.initial_scale * burn;
+        // Fixed size for the whole flight: solid matter holds its scale and
+        // only moves under physics (the old burn-up shrink read as particles
+        // animating size). A fragment that reaches the ground plane LANDS:
+        // it seats on the floor, stops reorienting, and rests.
+        let s = fragment.initial_scale;
+        let ground_y = s * 0.12;
+        if transform.translation.y <= ground_y {
+            transform.translation.y = ground_y;
+            fragment.grounded_at = Some(fragment.age);
+            continue;
+        }
         let dir = fragment.velocity.normalize_or_zero();
         if dir != Vec3::ZERO {
             transform.rotation = Quat::from_rotation_arc(Vec3::Y, dir);
@@ -1983,15 +2023,18 @@ pub(crate) fn tick_meteor_airburst_system(
             let r3 = hashed_unit(fragment.seed ^ 0xC2B2_AE35);
             let jitter = Vec3::new(r1 - 0.5, r2 - 0.5, r3 - 0.5) * fragment.initial_scale * 0.8;
             // Kept small: the additive ember material only holds its orange as
-            // a compact spark; larger and it whites out.
-            let ember_scale = (fragment.initial_scale * (0.22 + r2 * 0.20) * burn).max(0.01);
+            // a compact spark; larger and it whites out. Quantized like every
+            // other debris size.
+            let ember_scale = crate::app::systems::quantized_chip_scale(
+                (fragment.initial_scale * 0.30).max(0.01),
+                r2,
+            );
             commands.spawn((
                 Name::new("Meteor Ember"),
                 MeteorEmber {
                     velocity: fragment.velocity * -0.12 + jitter,
                     age: 0.0,
                     lifetime: 0.5 + r1 * 0.5,
-                    initial_scale: ember_scale,
                     smoke: false,
                 },
                 Mesh3d(assets.ember_mesh.clone()),
@@ -2005,18 +2048,17 @@ pub(crate) fn tick_meteor_airburst_system(
         fragment.ember_cooldown = fragment.ember_cooldown.max(0.0);
     }
 
-    for (entity, mut transform, mut flash, material) in &mut flashes {
+    for (entity, mut flash, material) in &mut flashes {
         flash.age += dt;
         if flash.age >= flash.lifetime {
             commands.entity(entity).despawn();
             continue;
         }
         let t = (flash.age / flash.lifetime).clamp(0.0, 1.0);
-        // Fast ease-out growth with a fade to nothing: a pop, not a balloon.
-        let grow = 1.0 - (1.0 - t) * (1.0 - t);
-        transform.scale = Vec3::splat(flash.peak_scale * (0.30 + 0.70 * grow));
+        // The flash never changes size: the pop is a hard fade of its own
+        // additive material instance down to black.
         if let Some(mut material) = materials.get_mut(&material.0) {
-            let c = METEOR_AIRBURST_FLASH_COLOR * (1.0 - t).powf(1.7);
+            let c = flash.color * (1.0 - t).powf(1.7);
             material.base_color = Color::linear_rgb(c.x, c.y, c.z);
         }
     }

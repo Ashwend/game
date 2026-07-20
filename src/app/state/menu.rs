@@ -113,6 +113,12 @@ pub(crate) struct MenuState {
     /// respawn lands (server pushes a `Correction` and the runtime
     /// flips back to alive) so the splash auto-dismisses.
     pub(crate) death_splash: Option<DeathSplash>,
+    /// Live cinematic playback state, mirroring the server's
+    /// `ServerMessage::Cinematic` cues. While set, the camera detaches onto
+    /// the shot paths, controls are blocked (simulation keeps ticking, per
+    /// the invariant), the HUD hides, and the countdown slate draws. Cleared
+    /// by the `Stopped` cue.
+    pub(crate) cinematic: Option<CinematicOverlay>,
     pub(crate) quit_requested: bool,
     /// Set by the title-screen "Sign out" link; consumed by
     /// `drive_auth_flow_system` (token store cleared + back to the login splash).
@@ -128,6 +134,62 @@ pub(crate) struct MenuState {
     /// the login splash showing this reason, so the player understands why they
     /// were signed out instead of just being bounced.
     pub(crate) force_sign_out: Option<String>,
+}
+
+/// Client-side cinematic playback state, driven by the server's
+/// `ServerMessage::Cinematic` phase cues plus a local elapsed clock (the
+/// countdown display, camera-path time, and intermission chip all derive
+/// from `elapsed` against the shared script; only phase edges ride the
+/// wire). Stored on `MenuState` because it gates input exactly like the
+/// other overlays.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct CinematicOverlay {
+    pub(crate) phase: CinematicOverlayPhase,
+    /// Seconds since the current phase's cue arrived (client-local clock,
+    /// advanced by `tick_cinematic_overlay_system`).
+    pub(crate) elapsed: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum CinematicOverlayPhase {
+    /// Server init phase: world cleanup + stage spawn. Camera parks on shot
+    /// 0's opening frame under a "preparing" slate.
+    Preparing,
+    /// Countdown slate before `shot_index`; camera parked on its opening
+    /// frame so the operator sees the framing before action.
+    Countdown { shot_index: usize, seconds: f32 },
+    /// The shot is live: clean frame, camera flying the authored path.
+    Playing { shot_index: usize },
+    /// Post-shot idle: camera holds `prev_shot_index`'s final frame for a
+    /// clean cut; a small chip shows what's next (or that it finished).
+    Intermission {
+        prev_shot_index: usize,
+        next_shot_index: Option<usize>,
+        seconds: f32,
+    },
+}
+
+impl CinematicOverlay {
+    pub(crate) fn new(phase: CinematicOverlayPhase) -> Self {
+        Self {
+            phase,
+            elapsed: 0.0,
+        }
+    }
+
+    /// Which shot the detached camera should show, and at what path time.
+    /// `Playing` advances with the local clock; every other phase parks on
+    /// a still frame (start of the upcoming shot, or end of the previous).
+    pub(crate) fn camera_target(&self) -> (usize, f32) {
+        match self.phase {
+            CinematicOverlayPhase::Preparing => (0, 0.0),
+            CinematicOverlayPhase::Countdown { shot_index, .. } => (shot_index, 0.0),
+            CinematicOverlayPhase::Playing { shot_index } => (shot_index, self.elapsed),
+            CinematicOverlayPhase::Intermission {
+                prev_shot_index, ..
+            } => (prev_shot_index, f32::MAX),
+        }
+    }
 }
 
 /// Snapshot of "I just died" UI state. Stored on `MenuState` because
@@ -267,6 +329,7 @@ impl Default for MenuState {
             notice: None,
             text_prompt: None,
             death_splash: None,
+            cinematic: None,
             quit_requested: false,
             sign_out_requested: false,
             cancel_auth_requested: false,

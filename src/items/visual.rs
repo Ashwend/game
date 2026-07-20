@@ -352,6 +352,31 @@ impl HeldMesh {
             HeldMesh::Hammer | HeldMesh::WoodenClub => HeldGrip::Mallet,
         }
     }
+
+    /// Mesh-local grip point for meshes WITHOUT an authored `socket_grip`
+    /// node: the exact point on the handle the fist closes around. This is the
+    /// single source of truth shared by the first-person seat and the
+    /// third-person hand placement, so both views grip the identical spot on
+    /// the item (owner rule: the grip is accurate and the same everywhere;
+    /// per-view composition is tuned via the arm/carry offsets, never by
+    /// moving the grip). Socket glbs carry this point inside the asset
+    /// instead; meshes returning `None` fall back to their archetype's
+    /// generic grip height.
+    pub const fn grip_point(self) -> Option<[f32; 3]> {
+        match self {
+            // The sword's wrapped handle spans local y [-0.50, -0.28] under
+            // the guard; the fist closes low on the wrap so the pommel peeks
+            // just below the hand. (The old third-person LongHafted fallback
+            // put the fist at y = -0.16, visibly ON the blade.)
+            HeldMesh::IronSword => Some([0.0, -0.44, 0.0]),
+            // Mid-shaft on the spear (point at ~+0.65, butt at ~-0.5): the
+            // couched thrusting grip, with the butt riding well behind the
+            // hand. Matches the first-person mid-shaft seat; the third
+            // person used to grip near the butt end.
+            HeldMesh::StoneSpear => Some([0.0, 0.22, 0.0]),
+            _ => None,
+        }
+    }
 }
 
 /// First-person carry archetype for a held mesh: how the hand grips it and how

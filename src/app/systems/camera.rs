@@ -9,11 +9,13 @@
 //! - [`menu_backdrop`] owns the menu-screen panning camera plus its
 //!   post-processing toggles for the depth-of-field backdrop look.
 
+mod cinematic;
 mod effects;
 mod follow;
 mod menu_backdrop;
 mod viewmodel_fov;
 
+pub(crate) use cinematic::{cinematic_camera_system, tick_cinematic_overlay_system};
 pub(crate) use effects::{CameraImpactKick, CameraMotionEffects};
 pub(crate) use follow::camera_follow_system;
 pub(crate) use menu_backdrop::menu_backdrop_camera_system;

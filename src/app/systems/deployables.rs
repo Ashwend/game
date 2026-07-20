@@ -933,13 +933,15 @@ fn deployable_visual(
             }
             crate::items::DoorVariant::Iron => DeployableMaterial::Toon(assets.baked("iron_door")),
         },
-        DeployableKind::Furnace { .. } => DeployableMaterial::Toon(assets.baked("crude_furnace")),
-        DeployableKind::Workbench { tier } => {
-            DeployableMaterial::Toon(assets.baked(if tier >= 2 {
-                "workbench_t2"
-            } else {
-                "workbench_t1"
-            }))
+        // The furnace, workbench, and sleeping bag are rolled back to their
+        // pre-rewrite authored meshes (owner call): weathered-stone cel for
+        // the furnace, wood line-art for the workbench, quilt fabric for the
+        // bedroll. Their ICONS stay on the new art.
+        DeployableKind::Furnace { .. } => {
+            DeployableMaterial::Toon(assets.toon_stone_material.clone())
+        }
+        DeployableKind::Workbench { .. } => {
+            DeployableMaterial::Toon(assets.toon_wood_material.clone())
         }
         DeployableKind::StorageBox { tier } => {
             DeployableMaterial::Toon(assets.baked(if tier >= 2 {
@@ -961,7 +963,9 @@ fn deployable_visual(
         DeployableKind::Explosive { kind } => {
             DeployableMaterial::Toon(charge_body_material(item_assets, kind))
         }
-        DeployableKind::SleepingBag => DeployableMaterial::Toon(assets.baked("sleeping_bag")),
+        DeployableKind::SleepingBag => {
+            DeployableMaterial::Toon(assets.toon_fabric_material.clone())
+        }
     };
     (mesh, material)
 }

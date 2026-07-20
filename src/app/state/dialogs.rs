@@ -432,6 +432,9 @@ impl DirectConnectDialog {
 #[derive(Debug, Clone)]
 pub(crate) struct CreateWorldDialog {
     pub(crate) name: String,
+    /// When set the world is created as the fixed cinematic stage
+    /// (`MapType::Cinematic`); size and seed inputs don't apply.
+    pub(crate) cinematic: bool,
     pub(crate) procedural_size: ProceduralMapSize,
     pub(crate) seed: String,
     pub(crate) error: Option<String>,
@@ -452,6 +455,7 @@ impl CreateWorldDialog {
     pub(crate) fn new() -> Self {
         Self {
             name: "New World".to_owned(),
+            cinematic: false,
             procedural_size: ProceduralMapSize::Medium,
             seed: random_seed().to_string(),
             error: None,
@@ -467,6 +471,9 @@ impl CreateWorldDialog {
     }
 
     pub(crate) fn selected_map(&self) -> Result<MapType, &'static str> {
+        if self.cinematic {
+            return Ok(MapType::Cinematic);
+        }
         let seed = self
             .seed
             .trim()

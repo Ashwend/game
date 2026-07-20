@@ -51,6 +51,7 @@ Find your intent, jump to the doc. This mirrors `CLAUDE.md`'s routing table; if 
 - Add an explosive / placed charge, touch the fuse/defuse flow, or workbench tiers: [crafting-and-deployables.md](crafting-and-deployables.md)
 - Change ruins (POI scatter, prefab layouts) or meteorite worldgen: [worlds-and-saves.md](worlds-and-saves.md)
 - Touch the meteor shower event (announce, trajectory, scheduler, impact, VFX/HUD): [meteor-shower.md](meteor-shower.md)
+- Touch the cinematic stage map, `/cinematic` playback, or record the hero/trailer footage: [cinematic.md](cinematic.md)
 - Add a weapon / armor set / explosive / ranged weapon, or touch workbench tiers, ruins, meteorite, or the meteor shower event: the shipped behavior lives in the same subsystem docs (weapons/armor/ranged/explosives in [pvp-combat.md](pvp-combat.md), charges + workbench tiers + ruin caches in [crafting-and-deployables.md](crafting-and-deployables.md), the item rows in [items-and-resources.md](items-and-resources.md), ruins/meteorite worldgen in [worlds-and-saves.md](worlds-and-saves.md), the meteor shower event in [meteor-shower.md](meteor-shower.md)); the design intent behind them lives in [game-design.md](game-design.md).
 
 ## Per-doc index
@@ -71,6 +72,7 @@ One row per agent doc. `owns` is the single concern the doc is source of truth f
 | [pvp-combat.md](pvp-combat.md) | combat validation, weapon feel, knockback, death/respawn, loot bags | before touching combat, knockback, or the death/respawn flow |
 | [worlds-and-saves.md](worlds-and-saves.md) | world generation, biome classification, and save persistence | before changing generation, a persisted struct, or save format |
 | [meteor-shower.md](meteor-shower.md) | the meteor shower event end to end: announce wire contract, seed-pure trajectory math, scheduler and site selection, impact resolution, crater/shards/VFX/HUD | before touching anything meteor-related |
+| [cinematic.md](cinematic.md) | the cinematic stage map type, the `/cinematic` shot sequence (server orchestrator, dummy actors, camera paths, slate UI), and the recording workflow | before touching anything cinematic-related or recording the trailer |
 | [chunks-and-aoi.md](chunks-and-aoi.md) | runtime chunk grid and Lightyear room-based AoI | before touching chunk membership, AoI math, regrow, or room subscription |
 | [art-direction.md](art-direction.md) | overall look-and-feel, palette, lighting mood | before making a prop cel-shaded or planning a wider art shift |
 | [toon-shading.md](toon-shading.md) | cel shader mechanics and the `ToonMaterial` family | before editing the cel shader or adding a prop to the cel family |

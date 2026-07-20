@@ -243,11 +243,29 @@ impl ChunkManager {
     /// manager along with the initial node spawn list; the server inserts
     /// those into its `resource_nodes` map as usual.
     pub fn new_for_world(world_seed: u64, dims: ChunkDims) -> (Self, Vec<ResourceNodeState>) {
+        Self::new_for_world_with_stage(world_seed, dims, &[], &[])
+    }
+
+    /// Like [`Self::new_for_world`] but with a hand-authored stage folded in:
+    /// `extra_exclusions` are additional circular footprints (beyond the
+    /// ruins) that both initial generation and regrow reject candidates
+    /// inside, and `authored` are exact-position spawns appended after the
+    /// procedural set. Authored spawn ids are reassigned densely above the
+    /// procedural range, and authored trees are always alive (no dead-snag
+    /// noise roll), so the composed stage looks the same on every world.
+    /// Used by `MapType::Cinematic` (see `crate::cinematic::layout`).
+    pub fn new_for_world_with_stage(
+        world_seed: u64,
+        dims: ChunkDims,
+        extra_exclusions: &[crate::world::RuinFootprint],
+        authored: &[crate::world::ChunkSpawn],
+    ) -> (Self, Vec<ResourceNodeState>) {
         // Ruin layout is a pure function of the seed; compute the footprints
         // once so both the initial generation and later regrows reject nodes
-        // that would land inside a ruin.
-        let ruin_footprints =
+        // that would land inside a ruin (or inside an authored stage zone).
+        let mut ruin_footprints =
             crate::world::ruin_footprints(&crate::world::ruin_layout(world_seed, dims));
+        ruin_footprints.extend_from_slice(extra_exclusions);
         let mut spawns = generate_world_spawns(world_seed, dims, &ruin_footprints);
         // Trim outer rings to the spawn-budget table, strips out a
         // deterministic suffix of spawns per (coord, kind) so the world's
@@ -265,6 +283,23 @@ impl ChunkManager {
                 continue;
             };
             next_node_id = next_node_id.max(chunk_spawn.spawn.id.0 + 1);
+            if let Some(grid) = grids.get_mut(&chunk_spawn.coord) {
+                grid.record_live(chunk_spawn.kind, node.id);
+            }
+            node_chunks.insert(node.id, (chunk_spawn.coord, chunk_spawn.kind));
+            live_states.push(node);
+        }
+
+        // Authored stage spawns: ids reassigned densely above the procedural
+        // range, and no dead-snag roll (`world_seed: None`) so authored trees
+        // are always alive regardless of the biome noise underneath them.
+        for chunk_spawn in authored {
+            let mut spawn = chunk_spawn.spawn.clone();
+            spawn.id = ResourceNodeId(next_node_id);
+            let Some(node) = spawn_resource_node(&spawn, None) else {
+                continue;
+            };
+            next_node_id += 1;
             if let Some(grid) = grids.get_mut(&chunk_spawn.coord) {
                 grid.record_live(chunk_spawn.kind, node.id);
             }
@@ -338,6 +373,14 @@ impl ChunkManager {
                 dims,
             )),
         }
+    }
+
+    /// Append placement-exclusion footprints beyond the seed-derived ruin
+    /// set, so the regrow sampler rejects candidates inside them.
+    /// [`Self::from_save`] recomputes only the ruin footprints; a reloaded
+    /// cinematic world re-appends its stage clear zones through this.
+    pub fn add_placement_exclusions(&mut self, extra: &[crate::world::RuinFootprint]) {
+        self.ruin_footprints.extend_from_slice(extra);
     }
 
     /// Wire-friendly snapshot of chunk manager state for the save file.

@@ -54,7 +54,8 @@ pub(crate) use auto_connect::{
 };
 pub(crate) use camera::{
     CameraImpactKick, CameraMotionEffects, VIEWMODEL_BASE_FOV_DEG, camera_follow_system,
-    menu_backdrop_camera_system, sync_viewmodel_fov_system,
+    cinematic_camera_system, menu_backdrop_camera_system, sync_viewmodel_fov_system,
+    tick_cinematic_overlay_system,
 };
 pub(crate) use chunk_overlay::chunk_overlay_system;
 pub(crate) use combat_feedback::tick_combat_feedback_system;
@@ -69,7 +70,9 @@ pub(crate) use deployables::{
     update_claim_boundary_system, update_placement_ghost_system,
 };
 pub(crate) use display::apply_display_settings_system;
-pub(crate) use effects::{spawn_impact_effects_system, tick_impact_chips_system};
+pub(crate) use effects::{
+    debris_variant, quantized_chip_scale, spawn_impact_effects_system, tick_impact_chips_system,
+};
 pub(crate) use explosion_vfx::{
     ExplosionEffectAssets, ExplosionEvent, spawn_explosion_effects_system,
     tick_explosion_flash_system, tick_explosion_smoke_system,

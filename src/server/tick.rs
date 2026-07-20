@@ -71,6 +71,9 @@ impl GameServer {
         // time (this tick count), not the day/night clock, so `/time-speed` does
         // not accelerate meteors. Returns its own broadcast/consequence envelopes.
         envelopes.extend(self.tick_world_events());
+        // Cinematic playback (admin `/cinematic`): actor choreography + the
+        // shot phase machine. A cheap no-op check while idle.
+        envelopes.extend(self.tick_cinematic());
         envelopes.extend(self.tick_projectiles(delta_seconds));
         envelopes.extend(self.tick_crafting());
         envelopes.extend(self.disconnect_stale_clients());

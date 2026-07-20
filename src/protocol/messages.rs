@@ -466,6 +466,38 @@ pub enum ServerMessage {
     WorldMapMarkers {
         markers: Vec<WorldMapMarker>,
     },
+    /// Cinematic playback phase cue, broadcast at every phase edge while the
+    /// admin-started `/cinematic` sequence runs (see `crate::cinematic` for
+    /// the shared shot script and `crate::server::cinematic` for the
+    /// orchestrator). The client reacts by parking or driving the detached
+    /// camera and drawing the countdown slate; all timing beyond the cue edge
+    /// itself is derived locally from the shared script, so the wire carries
+    /// only the shot index and the phase lengths.
+    Cinematic(CinematicCue),
+}
+
+/// One phase edge of cinematic playback, the payload of
+/// [`ServerMessage::Cinematic`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum CinematicCue {
+    /// The init phase started: the server is cleaning the world and spawning
+    /// the stage (props, dummy actors). The client blanks the HUD and holds.
+    Initializing,
+    /// The on-screen countdown to `shot_index` started; the camera parks on
+    /// the shot's opening frame for the whole slate.
+    Countdown { shot_index: u8, seconds: f32 },
+    /// Shot `shot_index` is playing; the client drives the camera along the
+    /// shot's authored path.
+    ShotStarted { shot_index: u8 },
+    /// Idle gap after a shot (the camera holds the last frame so post has a
+    /// clean cut). `next_shot_index` is `None` after the final shot.
+    Intermission {
+        next_shot_index: Option<u8>,
+        seconds: f32,
+    },
+    /// Playback finished or was aborted; the client restores the normal
+    /// first-person camera, controls, and HUD.
+    Stopped,
 }
 
 impl ServerMessage {
@@ -491,6 +523,10 @@ impl ServerMessage {
             // blind to an incoming meteor, so it rides the reliable channel
             // (and is resent on connect for late joiners regardless).
             | Self::MeteorShower { .. }
+            // Cinematic cues are rare one-shot phase edges; a dropped cue
+            // would desync the local director from the server timeline for
+            // the rest of the phase, so they ride the reliable channel.
+            | Self::Cinematic(_)
             | Self::Toast(_) => PacketDelivery::Reliable,
             // Voice rides an unordered unreliable channel so every delivered
             // frame is played even if it arrives out of order. See the

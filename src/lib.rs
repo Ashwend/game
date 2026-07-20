@@ -2,6 +2,7 @@ pub(crate) mod analytics;
 pub(crate) mod app;
 pub(crate) mod auth;
 pub mod building;
+pub mod cinematic;
 pub(crate) mod cli;
 pub(crate) mod combat;
 pub(crate) mod console;

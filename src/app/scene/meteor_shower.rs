@@ -444,8 +444,8 @@ pub(crate) fn animate_meteor_shower_site_fire_system(
 
 /// One buoyant flame puff for a site fire: the furnace flame scaled up an order
 /// of magnitude (an open ground blaze, not a furnace mouth), born across a small
-/// disc and rising a metre or two before fading. Rides the furnace-particle
-/// integrator (loft, drag, shrink to nothing, despawn).
+/// disc and rising a metre or two before despawning. Rides the furnace-particle
+/// integrator in fixed-scale mode (loft, drag, despawn; no size animation).
 fn spawn_site_flame(
     commands: &mut Commands,
     assets: &FurnaceFireAssets,
@@ -469,13 +469,19 @@ fn spawn_site_flame(
     // The shared flame mesh is a 0.07 m sphere, so the puff lands around
     // 0.2-0.4 m: a knot of licks about a metre tall, NOT a glowing dome (the
     // first-round 0.5-0.9 m puffs merged into giant marshmallow blobs at
-    // night). Shrinks with the burn-out envelope so a dying fire is smaller.
-    let initial_scale = (3.0 + r2 * 2.5) * fire_scale * (0.55 + 0.45 * intensity);
+    // night). Four FIXED size variants held for the puff's whole life (no
+    // shrink-out): the constant size churn of dozens of scaling puffs is what
+    // read as flickering particle sizes on the crater. The burn-out envelope
+    // still shrinks NEW puffs as the fire dies.
+    let initial_scale = crate::app::systems::quantized_chip_scale(
+        3.4 * fire_scale.min(1.1) * (0.55 + 0.45 * intensity),
+        r2,
+    );
     let lifetime = 0.45 + r1 * 0.4;
 
     commands.spawn((
         Name::new("MeteorShower Fire Flame"),
-        FurnaceParticle::new(velocity, 0.3, 0.8, lifetime, initial_scale),
+        FurnaceParticle::new(velocity, 0.3, 0.8, lifetime, initial_scale).with_fixed_scale(),
         Mesh3d(assets.flame_mesh.clone()),
         MeshMaterial3d(assets.flame_material.clone()),
         Transform::from_translation(anchor + offset).with_scale(Vec3::splat(initial_scale)),
@@ -501,12 +507,14 @@ fn spawn_site_spark(
     let drift = Vec3::new((r2 - 0.5) * 1.6, 0.0, (r1 - 0.5) * 1.6);
     let rise = (2.2 + r3 * 2.0) * fire_scale;
     let velocity = drift + Vec3::Y * rise;
-    let initial_scale = (2.5 + r2 * 2.5) * fire_scale;
+    // Four fixed size variants, held for the spark's whole life (see the flame
+    // above for why nothing here animates scale any more).
+    let initial_scale = crate::app::systems::quantized_chip_scale(2.6 * fire_scale.min(1.1), r2);
     let lifetime = 0.7 + r1 * 0.7;
 
     commands.spawn((
         Name::new("MeteorShower Fire Spark"),
-        FurnaceParticle::new(velocity, 2.2, 1.2, lifetime, initial_scale),
+        FurnaceParticle::new(velocity, 2.2, 1.2, lifetime, initial_scale).with_fixed_scale(),
         Mesh3d(assets.spark_mesh.clone()),
         MeshMaterial3d(assets.spark_material.clone()),
         Transform::from_translation(anchor + offset).with_scale(Vec3::splat(initial_scale)),
@@ -1402,10 +1410,11 @@ fn spawn_impact_rock_blast(
         let angle = (i as f32 / debris_count as f32) * std::f32::consts::TAU + r1 * 0.9;
         let radial = Vec3::new(angle.cos(), 0.0, angle.sin());
         let up = 1.4 + r2 * 2.2;
-        // A hard, fast throw so chunks fountain up and out before arcing back:
-        // this is a meteor strike, the rubble is hurled far. A small strike
-        // hurls a touch gentler.
-        let speed = (11.0 + r3 * 12.0) * (0.7 + 0.3 * size);
+        // A hard throw so chunks fountain up and out before arcing back, but
+        // capped below the old speeds: rubble that rocketed 20 m/s toward the
+        // lens filled the frame and read as giant boulders. The per-variant
+        // mass multiplier below slows the big chunks further.
+        let speed = (8.5 + r3 * 8.5) * (0.7 + 0.3 * size);
         let velocity = (radial * (1.1 + r1 * 1.2) + Vec3::Y * up).normalize_or_zero() * speed;
         let spin_axis = Vec3::new(r1 * 2.0 - 1.0, r2 * 2.0 - 1.0, r3 * 2.0 - 1.0)
             .normalize_or_zero()
@@ -1418,32 +1427,35 @@ fn spawn_impact_rock_blast(
         } else {
             rock_grey.clone()
         };
-        // Fixed-size chunks under realistic gravity (1.8 x the shared base
-        // lands near 9.8 m/s²): they launch, arc, land, bounce, and tumble out
-        // under ground friction, their spin bleeding off with it. Lifetimes
-        // are long enough to watch the whole fall and the chunk resting on the
-        // ground for a beat before it pops out. Sizes are capped modest (the
-        // largest ~0.8 m across at size 1.0, a stone you could just about
-        // lift) and the squared draw skews the spread toward the SMALLER
-        // variants, so the fountain reads as smashed-up rubble, not flying
-        // boulders. A small meteor smashes smaller rubble.
-        let chip_scale = (0.2 + r3 * r3 * 0.7) * (0.6 + 0.4 * size);
+        // Fixed-size chunks under heavy gravity (2.2 x the shared base): they
+        // launch, arc, land, bounce, and tumble out under ground friction,
+        // their spin bleeding off with it. Lifetimes are long enough to watch
+        // the whole fall and the chunk resting on the ground for a beat before
+        // it pops out. Sizes are capped modest (the largest ~0.3 m across at
+        // size 1.0, a stone you could lift one-handed), so the fountain reads
+        // as smashed-up rubble, not flying boulders. A small meteor smashes
+        // smaller rubble.
+        // Four fixed rubble sizes, capped well below "boulder", each with its
+        // mass feel: the biggest chunks are hurled slowest and tumble lazily,
+        // the small ones fly and spin quickest, so every chunk's motion reads
+        // proportional to its size (owner rule).
+        let variant = crate::app::systems::debris_variant(0.28 * (0.6 + 0.4 * size), r3);
         let rock_mesh = rock_meshes[(s >> 7) as usize % rock_meshes.len()].clone();
         commands.spawn((
             Name::new("MeteorShower Debris"),
             ImpactChip::new(
-                velocity,
+                velocity * variant.speed,
                 spin_axis,
-                4.0 + r1 * 8.0,
+                (4.0 + r1 * 6.0) * variant.spin,
                 5.0 + r2 * 2.5,
-                chip_scale,
-                1.8,
+                variant.scale,
+                2.2,
             )
             .with_fixed_scale(),
             Mesh3d(rock_mesh),
             MeshMaterial3d(material),
             Transform::from_translation(position + Vec3::Y * (0.5 + r4 * 0.8))
-                .with_scale(Vec3::splat(chip_scale)),
+                .with_scale(Vec3::splat(variant.scale)),
             Visibility::Visible,
             NotShadowCaster,
         ));
@@ -1453,27 +1465,32 @@ fn spawn_impact_rock_blast(
     // cubes strobed against the sky. The blast is carried by the solid rock
     // fountain plus the flash + flash light below.)
 
-    // A brief fireball flash at ground zero: a low, wide unlit HDR ember dome that
-    // the chip integrator lets sit (zero velocity/gravity) then shrinks out. Kept
-    // SHORT so it punches the impact but clears fast, and its emissive is
-    // red-biased so it reads as a fireball, not a bleached white bulb that reads
-    // as a central rock mass (the round 2 failure). The flung debris is the star.
-    let flash_radius = 5.0 * size;
+    // A brief fireball flash at ground zero: a low, wide additive dome at a FIXED
+    // size that fades its own material instance to black through the shared
+    // meteor-flash ticker, then despawns. The old opaque dome shrank out over its
+    // life, which read as a huge scale-animating particle (owner report); a pure
+    // color fade keeps the punch with no size animation. Its emissive stays
+    // red-biased so it reads as a fireball, not a bleached white bulb (the round
+    // 2 failure). The flung debris is the star. Kept a touch smaller than the old
+    // dome since it now opens at full size.
+    let flash_radius = 4.0 * size;
     let flash_mesh = meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap());
+    let flash_color = Vec3::new(1.6, 0.22, 0.0);
     let flash_material = materials.add(StandardMaterial {
-        // A broad area, so it must stay DEEP to keep its hue under AgX (a bright
-        // value here is exactly what bleached round 2 to a white central mass).
-        // This is the deep orange ground fireball. unlit -> base_color emits.
-        base_color: Color::linear_rgb(1.6, 0.22, 0.0),
+        // DEEP color to keep its hue under AgX (a bright value here is exactly
+        // what bleached round 2 to a white central mass). unlit -> base_color
+        // emits; additive so the fade-to-black reads as the fireball clearing.
+        base_color: Color::linear_rgb(flash_color.x, flash_color.y, flash_color.z),
         unlit: true,
         fog_enabled: false,
+        alpha_mode: AlphaMode::Add,
         ..default()
     });
     commands.spawn((
         Name::new("MeteorShower Impact Flash"),
-        // Squashed low so it is a ground fireball, not a dome. Lives ~0.8s so the
+        // Squashed low so it is a ground fireball, not a dome. Lives ~0.7s so the
         // fireball is still up while the ejecta fountains through it, then clears.
-        ImpactChip::new(Vec3::ZERO, Vec3::Y, 0.0, 0.8, flash_radius, 0.0),
+        super::meteor_sky::MeteorAirburstFlash::new(0.7, flash_color),
         Mesh3d(flash_mesh),
         MeshMaterial3d(flash_material),
         Transform::from_translation(position + Vec3::Y * flash_radius * 0.35)

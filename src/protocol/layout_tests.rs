@@ -296,6 +296,9 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 name: "home".to_owned(),
             }],
         },
+        // Pin the LAST CinematicCue variant so appending a cue variant trips
+        // the hash (nested payload rule, see the module doc).
+        ServerMessage::Cinematic(crate::protocol::CinematicCue::Stopped),
     ]
 }
 
@@ -373,6 +376,7 @@ fn _server_fixture_reminder(message: ServerMessage) {
         ServerMessage::Heartbeat => {}
         ServerMessage::DoorCodeResult { .. } => {}
         ServerMessage::WorldMapMarkers { .. } => {}
+        ServerMessage::Cinematic(_) => {}
     }
 }
 
@@ -405,7 +409,7 @@ fn wire_protocol_postcard_layout_is_stable() {
     );
     assert_eq!(
         server.len(),
-        26,
+        27,
         "ServerMessage fixture count drifted from the enum's variant count"
     );
 
@@ -414,7 +418,7 @@ fn wire_protocol_postcard_layout_is_stable() {
     let digest = Sha256::digest(&payload);
     let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(
-        hex, "cbfb0d08e527694485857a8d656ad96c539d409b23f5b48a4522a7bbf830e0cc",
+        hex, "e917f1431e82075be4f0c7c428ba1a588f5affb7b142dc1c2abe704255208952",
         "Wire protocol postcard layout changed. If intentional, bump \
          PROTOCOL_VERSION and update this golden hash to {hex}."
     );

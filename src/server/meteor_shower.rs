@@ -272,6 +272,44 @@ impl GameServer {
         envelopes
     }
 
+    /// Cinematic hooks. `suspend_meteor_events` clears any live event and
+    /// unschedules the next one so a random shower can't wander into a take;
+    /// `force_cinematic_meteor` drops the scripted starfall strike at an
+    /// explicit position. The orchestrator re-rolls the scheduler with a
+    /// fresh [`MeteorShowerState`] when playback ends.
+    pub(super) fn suspend_meteor_events(&mut self) -> Vec<ServerEnvelope> {
+        let envelopes = self.clear_live_meteors();
+        self.meteor_shower.next_announce_tick = None;
+        envelopes
+    }
+
+    pub(super) fn force_cinematic_meteor(
+        &mut self,
+        impact_position: Vec3Net,
+        warning_seconds: f32,
+        size: f32,
+        trajectory_seed: u64,
+    ) -> Vec<ServerEnvelope> {
+        let mut envelopes = self.clear_live_meteors();
+        envelopes.extend(self.begin_meteor_shower_at(impact_position, warning_seconds, size));
+        // Pin the streak: the cinematic take must get the identical entry
+        // azimuth every run, where the derived seed varies with the tick.
+        // Set before the announce is built? No: `begin_meteor_shower_at`
+        // already broadcast, so rewrite the stored meteor AND re-announce.
+        if let Some(meteor) = self.meteor_shower.meteors.last_mut() {
+            meteor.trajectory_seed = trajectory_seed;
+        }
+        envelopes
+            .retain(|envelope| !matches!(envelope.message, ServerMessage::MeteorShower { .. }));
+        envelopes.push(ServerEnvelope {
+            target: DeliveryTarget::Broadcast,
+            message: ServerMessage::MeteorShower {
+                meteors: self.meteor_shower_strikes(),
+            },
+        });
+        envelopes
+    }
+
     /// Force-despawn the crater nodes of every live meteor and clear the event,
     /// WITHOUT rolling the next schedule (the caller immediately begins a fresh
     /// forced event). Used by the admin commands so a replaced event never

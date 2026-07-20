@@ -269,6 +269,66 @@ pub(crate) fn network_tick_system(
             menu.chat_open = false;
             menu.text_prompt = None;
         }
+        // Cinematic phase cues: mirror the server's phase edge onto the
+        // overlay state. All in-phase timing (countdown numbers, camera path
+        // time) derives locally from the shared script against the overlay's
+        // elapsed clock, so each cue simply restarts that clock.
+        if let ServerMessage::Cinematic(cinematic_cue) = &message {
+            use crate::app::state::{CinematicOverlay, CinematicOverlayPhase};
+            use crate::protocol::CinematicCue;
+            match cinematic_cue {
+                CinematicCue::Initializing => {
+                    menu.cinematic = Some(CinematicOverlay::new(CinematicOverlayPhase::Preparing));
+                    // Pop every overlay so the take starts from a clean frame
+                    // (same sweep the death splash does).
+                    menu.pause_open = false;
+                    menu.inventory_open = false;
+                    menu.crafting_open = false;
+                    menu.furnace_open = false;
+                    menu.world_map_open = false;
+                    menu.chat_open = false;
+                    menu.text_prompt = None;
+                }
+                CinematicCue::Countdown {
+                    shot_index,
+                    seconds,
+                } => {
+                    menu.cinematic =
+                        Some(CinematicOverlay::new(CinematicOverlayPhase::Countdown {
+                            shot_index: *shot_index as usize,
+                            seconds: *seconds,
+                        }));
+                }
+                CinematicCue::ShotStarted { shot_index } => {
+                    menu.cinematic = Some(CinematicOverlay::new(CinematicOverlayPhase::Playing {
+                        shot_index: *shot_index as usize,
+                    }));
+                }
+                CinematicCue::Intermission {
+                    next_shot_index,
+                    seconds,
+                } => {
+                    // Hold the shot we were just playing (fall back to the
+                    // countdown target if a cue was somehow missed).
+                    let prev = match menu.cinematic.map(|overlay| overlay.phase) {
+                        Some(
+                            CinematicOverlayPhase::Playing { shot_index }
+                            | CinematicOverlayPhase::Countdown { shot_index, .. },
+                        ) => shot_index,
+                        _ => 0,
+                    };
+                    menu.cinematic =
+                        Some(CinematicOverlay::new(CinematicOverlayPhase::Intermission {
+                            prev_shot_index: prev,
+                            next_shot_index: next_shot_index.map(|index| index as usize),
+                            seconds: *seconds,
+                        }));
+                }
+                CinematicCue::Stopped => {
+                    menu.cinematic = None;
+                }
+            }
+        }
         // The player tried a locked door without being authorized; the
         // server asks for the code. One prompt slot: a newer ask replaces
         // an older one.

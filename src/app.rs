@@ -86,29 +86,30 @@ use self::{
         apply_resource_nodes_system, apply_snapshot_system, apply_test_mode_overrides_system,
         apply_update_system, auto_connect_poll_system, auto_connect_start_system,
         camera_follow_system, center_cursor_on_focus_system, chat_shortcut_system,
-        chunk_overlay_system, client_input_system, close_furnace_on_escape_system,
-        close_loot_bag_on_escape_system, close_workbench_on_escape_system,
-        craft_complete_cue_system, drive_auth_flow_system, equipment_change_system,
-        error_relay_system, flush_settings_on_exit_system, gameplay_inventory_shortcuts_system,
-        generate_world_map_texture_system, maintain_wall_visual_insets_system,
-        maintain_world_grid_system, menu_backdrop_camera_system, meteor_shower_impact_system,
-        mouse_look_system, multiplayer_test_owns_window, network_tick_system,
-        placement_input_system, reconcile_player_rigs_system, register_render_stats,
-        reposition_test_window_system, resolve_grip_sockets_system, save_client_settings_system,
-        screen_viewed_system, session_ended_system, session_shutdown_poll_system,
-        session_started_system, setup_paperdoll_preview, spawn_explosion_effects_system,
-        spawn_impact_effects_system, spawn_predicted_arrows_system,
-        surface_client_error_toasts_system, sway_hay_grass_system, sword_slash_trail_system,
-        sync_furnace_open_flag_system, sync_loot_bag_open_flag_system,
+        chunk_overlay_system, cinematic_camera_system, client_input_system,
+        close_furnace_on_escape_system, close_loot_bag_on_escape_system,
+        close_workbench_on_escape_system, craft_complete_cue_system, drive_auth_flow_system,
+        equipment_change_system, error_relay_system, flush_settings_on_exit_system,
+        gameplay_inventory_shortcuts_system, generate_world_map_texture_system,
+        maintain_wall_visual_insets_system, maintain_world_grid_system,
+        menu_backdrop_camera_system, meteor_shower_impact_system, mouse_look_system,
+        multiplayer_test_owns_window, network_tick_system, placement_input_system,
+        reconcile_player_rigs_system, register_render_stats, reposition_test_window_system,
+        resolve_grip_sockets_system, save_client_settings_system, screen_viewed_system,
+        session_ended_system, session_shutdown_poll_system, session_started_system,
+        setup_paperdoll_preview, spawn_explosion_effects_system, spawn_impact_effects_system,
+        spawn_predicted_arrows_system, surface_client_error_toasts_system, sway_hay_grass_system,
+        sword_slash_trail_system, sync_furnace_open_flag_system, sync_loot_bag_open_flag_system,
         sync_paperdoll_preview_system, sync_view_radius_system, sync_viewmodel_fov_system,
         sync_workbench_open_flag_system, tick_charge_spark_particles_system,
-        tick_combat_feedback_system, tick_explosion_flash_system, tick_explosion_smoke_system,
-        tick_felling_trees_system, tick_furnace_particles_system, tick_impact_chips_system,
-        tick_resource_node_pop_in_system, tick_torch_particles_system, toggle_crafting_system,
-        toggle_inventory_system, toggle_pause_system, toggle_perf_stats_system,
-        update_claim_boundary_system, update_cursor_system, update_link_ping_system,
-        update_pickup_target_system, update_placement_ghost_system, update_tool_swap_state_system,
-        wheel_menu_system, workbench_upgrade_system, world_map_input_system,
+        tick_cinematic_overlay_system, tick_combat_feedback_system, tick_explosion_flash_system,
+        tick_explosion_smoke_system, tick_felling_trees_system, tick_furnace_particles_system,
+        tick_impact_chips_system, tick_resource_node_pop_in_system, tick_torch_particles_system,
+        toggle_crafting_system, toggle_inventory_system, toggle_pause_system,
+        toggle_perf_stats_system, update_claim_boundary_system, update_cursor_system,
+        update_link_ping_system, update_pickup_target_system, update_placement_ghost_system,
+        update_tool_swap_state_system, wheel_menu_system, workbench_upgrade_system,
+        world_map_input_system,
     },
     ui::{
         ButtonSoundRequests, InventorySoundRequests, apply_ui_scale_system, button_sound_system,
@@ -976,10 +977,19 @@ fn add_scene_systems(app: &mut App) {
         // ranged draw on the same frame (the follow system advances the pinch).
         .add_systems(
             PostUpdate,
-            (camera_follow_system, sync_viewmodel_fov_system)
+            (
+                camera_follow_system,
+                // Cinematic playback: the follow writer stands down on its
+                // cinematic gate and this one takes the transform instead,
+                // flying the authored shot paths. Chained so exactly one
+                // writer runs per frame, still ahead of propagation.
+                cinematic_camera_system,
+                sync_viewmodel_fov_system,
+            )
                 .chain()
                 .before(TransformSystems::Propagate),
         )
+        .add_systems(Update, tick_cinematic_overlay_system)
         .add_systems(
             Update,
             (

@@ -159,29 +159,46 @@ fn draw_create_world_form(
 
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        field_label(ui, "Map Size");
-        for size in ProceduralMapSize::ALL {
-            let response = ui.selectable_value(
-                &mut dialog.procedural_size,
-                size,
-                format!("{} ({:.0})", size.label(), size.floor_size()),
-            );
-            theme::record_click_sound(ui, &response);
-        }
+        field_label(ui, "Map Type");
+        let response = ui.selectable_value(&mut dialog.cinematic, false, "Procedural");
+        theme::record_click_sound(ui, &response);
+        let response = ui.selectable_value(&mut dialog.cinematic, true, "Cinematic Stage");
+        theme::record_click_sound(ui, &response);
     });
 
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        field_label(ui, "Seed");
-        let seed_width = (ui.available_width() - 92.0).max(120.0);
-        ui.add_sized(
-            [seed_width, COMPACT_ROW_HEIGHT],
-            theme::text_input(&mut dialog.seed).id(egui::Id::new(CREATE_WORLD_SEED_INPUT_ID)),
-        );
-        if theme::compact_button(ui, "Refresh", ButtonKind::Secondary, 82.0).clicked() {
-            dialog.refresh_seed();
-        }
-    });
+    if !dialog.cinematic {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            field_label(ui, "Map Size");
+            for size in ProceduralMapSize::ALL {
+                let response = ui.selectable_value(
+                    &mut dialog.procedural_size,
+                    size,
+                    format!("{} ({:.0})", size.label(), size.floor_size()),
+                );
+                theme::record_click_sound(ui, &response);
+            }
+        });
+
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            field_label(ui, "Seed");
+            let seed_width = (ui.available_width() - 92.0).max(120.0);
+            ui.add_sized(
+                [seed_width, COMPACT_ROW_HEIGHT],
+                theme::text_input(&mut dialog.seed).id(egui::Id::new(CREATE_WORLD_SEED_INPUT_ID)),
+            );
+            if theme::compact_button(ui, "Refresh", ButtonKind::Secondary, 82.0).clicked() {
+                dialog.refresh_seed();
+            }
+        });
+    } else {
+        ui.add_space(6.0);
+        ui.label(theme::muted(
+            "The fixed marketing stage: identical every time, built for the \
+             /cinematic shot script.",
+        ));
+    }
 
     error_line(ui, dialog.error.as_ref());
     confirm_button_row(ui, "Create", name_is_valid, choice);

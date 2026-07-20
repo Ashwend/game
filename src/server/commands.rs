@@ -59,6 +59,7 @@ impl GameServer {
             "ruins" => self.command_ruins(client_id, &args),
             "meteor" => self.command_meteor_shower(client_id, &args),
             "meteor-here" | "meteorhere" => self.command_meteor_shower_here(client_id, &args),
+            "cinematic" => self.command_cinematic(client_id, &args),
             "help" => self.command_help(client_id),
             other => reply_warning(client_id, format!("unknown command: /{other}")),
         }
@@ -157,6 +158,12 @@ impl GameServer {
             "  /meteor-here [warning_seconds] [size]: admin only"
         };
         lines.push(meteor_shower_here_line.to_owned());
+        let cinematic_line = if is_admin {
+            "  /cinematic [play|stop]: run the scripted marketing shot sequence (Cinematic Stage worlds)"
+        } else {
+            "  /cinematic [play|stop]: admin only"
+        };
+        lines.push(cinematic_line.to_owned());
 
         lines
             .into_iter()

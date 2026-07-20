@@ -40,6 +40,10 @@ fn no_blocking_modal(menu: &MenuState) -> bool {
         // or movement input may leak through the opaque overlay: the player
         // can't see what they'd be doing.
         && !menu.world_entry_splash_active()
+        // Cinematic playback owns the camera; player controls are frozen for
+        // the whole take while, per the invariant, simulation keeps ticking
+        // (that is what the camera is filming).
+        && menu.cinematic.is_none()
 }
 
 /// True if the local player should accept look/swing/cursor-capture controls.
@@ -196,6 +200,24 @@ mod tests {
             loading_splash: Some(crate::app::state::LoadingSplash::new(
                 crate::app::state::LoadingSplashKind::EnteringWorld,
                 "World",
+            )),
+            ..Default::default()
+        };
+
+        assert!(gameplay_simulation_allowed(&menu));
+        assert!(!gameplay_accepts_controls(&menu, true));
+        assert!(!gameplay_accepts_movement(&menu, true));
+    }
+
+    #[test]
+    fn cinematic_playback_blocks_controls_without_blocking_simulation() {
+        // The whole point of the cinematic is filming live simulation: the
+        // camera detaches and controls freeze, but the world (actors,
+        // meteor, replication) must keep ticking underneath the take.
+        let menu = MenuState {
+            screen: Screen::InGame,
+            cinematic: Some(crate::app::state::CinematicOverlay::new(
+                crate::app::state::CinematicOverlayPhase::Playing { shot_index: 0 },
             )),
             ..Default::default()
         };
