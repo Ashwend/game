@@ -167,7 +167,18 @@ def delete_near_segment(me, p0, p1, radius, z_guard):
         boundary = [e for e in bm.edges if e.is_boundary]
         if boundary:
             bmesh.ops.holes_fill(bm, edges=boundary)
+        # A second pass catches non-planar openings holes_fill skipped, then
+        # the normals are recomputed OUTWARD across the whole (again closed)
+        # shell: an inverted cap under backface culling reads as a
+        # see-through hole exactly like a missing face does (owner report).
+        boundary = [e for e in bm.edges if e.is_boundary]
+        if boundary:
+            bmesh.ops.contextual_create(bm, geom=boundary)
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
         bm.to_mesh(me)
+        # The fills can leave degenerate loops the exporter chokes on
+        # ("mesh is not valid"); validate() drops them.
+        me.validate()
         me.update()
     bm.free()
     log(f"  deleted {len(doomed)} string faces, capped the cut")
@@ -186,6 +197,7 @@ def bisect_part(obj, plane_co, plane_no, keep_positive):
         clear_outer=not keep_positive, clear_inner=keep_positive,
     )
     bm.to_mesh(dup.data)
+    dup.data.validate()
     dup.data.update()
     bm.free()
     return dup
@@ -327,35 +339,96 @@ def build_bow(raw):
         me.transform(Matrix.Rotation(math.pi, 4, "Z"))
         me.update()
 
-    # Tip points: extreme-z vertices.
-    top = max(me.vertices, key=lambda v: v.co.z).co.copy()
-    bot = min(me.vertices, key=lambda v: v.co.z).co.copy()
+    # STRING ATTACH points, not extreme-z tips: in each tip band the max-x
+    # (string-side) vertex is where the string leaves the stave. Fitting the
+    # EXTREME tip vertices instead put the authored anchors past the real
+    # nock grooves, so the rebuilt string floated off the stave (owner
+    # report: string placement wrong).
+    def attach_points():
+        _, _, (z0, z1) = bounds(me)
+        band = 0.05 * (z1 - z0)
+        top_band = [v.co for v in me.vertices if v.co.z >= z1 - band]
+        bot_band = [v.co for v in me.vertices if v.co.z <= z0 + band]
+        return (max(top_band, key=lambda c: c.x).copy(),
+                max(bot_band, key=lambda c: c.x).copy())
 
-    # Delete the reconstructed string: faces hugging the tip-to-tip chord.
-    # The radius stays TIGHT (a string is ~1% of the span; the earlier 3.5%
-    # sweep also ate stave faces where the limbs curve toward the chord and
-    # left see-through holes, owner report) and the guard keeps a wider
-    # keep-zone at the tips where stave and string genuinely meet.
-    span = (top - bot).length
-    delete_near_segment(me, bot, top, radius=0.028 * span, z_guard=abs(top.z) - 0.12 * span)
+    # No string cull: the bow regenerates from the STRINGLESS reference
+    # (candidates/item_wooden_bow_v3_stringless.png, string stubs erased in
+    # 2D), so TRELLIS reconstructs a bare stave and there is nothing to carve
+    # off. The old chord-cull + hole-cap surgery mangled the limbs (owner
+    # report) and is retired for the bow; delete_near_segment stays for the
+    # parked crossbow lane.
 
-    # Two-point similarity fit in the bow plane (X-Z): tips -> authored
-    # anchors glTF (0.16, +/-0.45, 0) = Blender (0.16, 0, +/-0.45).
-    top = max(me.vertices, key=lambda v: v.co.z).co.copy()
-    bot = min(me.vertices, key=lambda v: v.co.z).co.copy()
+    # Two-point similarity fit in the bow plane (X-Z): the ATTACH points land
+    # exactly on the authored anchors glTF (0.16, +/-0.45, 0) = Blender
+    # (0.16, 0, +/-0.45), so the rebuilt string meets the stave's own nock
+    # grooves; the carved tips are free to extend past the anchors like a
+    # real bow's.
     t_top, t_bot = Vector((0.16, 0.0, 0.45)), Vector((0.16, 0.0, -0.45))
-    src_v, dst_v = top - bot, t_top - t_bot
-    scale = dst_v.length / src_v.length
-    ang = math.atan2(dst_v.x, dst_v.z) - math.atan2(src_v.x, src_v.z)
-    rot = Matrix.Rotation(-ang, 4, "Y")
-    me.transform(rot)
-    me.transform(Matrix.Scale(scale, 4))
-    new_bot = min(me.vertices, key=lambda v: v.co.z).co.copy()
-    me.transform(Matrix.Translation(t_bot - new_bot))
-    # Flatten depth around 0.
-    _, (y0, y1), _ = bounds(me)
-    me.transform(Matrix.Translation(Vector((0, -(y0 + y1) / 2, 0))))
-    me.update()
+
+    def fit_to_anchors():
+        a_top, a_bot = attach_points()
+        src_v, dst_v = a_top - a_bot, t_top - t_bot
+        scale = dst_v.length / src_v.length
+        ang = math.atan2(dst_v.x, dst_v.z) - math.atan2(src_v.x, src_v.z)
+        me.transform(Matrix.Rotation(-ang, 4, "Y"))
+        me.transform(Matrix.Scale(scale, 4))
+        a_top, a_bot = attach_points()
+        me.transform(Matrix.Translation(t_bot - a_bot))
+        # Flatten depth around 0.
+        _, (y0, y1), _ = bounds(me)
+        me.transform(Matrix.Translation(Vector((0, -(y0 + y1) / 2, 0))))
+        me.update()
+
+    fit_to_anchors()
+
+    # BRACE the stave: the stringless reference is an UNSTRUNG bow, so the
+    # reconstruction keeps its reflex and a limb can cross the string plane
+    # x = 0.16 (the rebuilt straight string then runs THROUGH the wood; owner
+    # report: string on the wrong side of the upper limb). Stringing a real
+    # bow bends the limbs back, so do the same: a smooth graded rotation of
+    # each limb about its rig pivot (the same axis the draw rig flexes it
+    # around) until, below the attach points, the wood stays behind the
+    # string with a small margin. Re-fit after every bend because bending
+    # moves the attach points.
+    PIVOT_X, PIVOT_Z = -0.1079, 0.085  # ranged_viewmodel.rs limb pivots
+    BELLY_X = 0.150                    # wood must stay behind this plane
+
+    def limb_excess(sign):
+        """Worst string-plane intrusion (excess, lever) on one limb. The
+        window stops at |z| 0.40: above that the limb legitimately closes
+        onto the anchor at x 0.16 (and a recurve tip curls past it), so
+        measuring there fights the anchor and the loop never settles."""
+        best = (0.0, 1.0)
+        for v in me.vertices:
+            zz = sign * v.co.z
+            if 0.13 <= zz < 0.40 and v.co.x > BELLY_X + best[0]:
+                best = (v.co.x - BELLY_X, max(zz - PIVOT_Z, 0.05))
+        return best
+
+    for round_i in range(8):
+        e_up, e_lo = limb_excess(1), limb_excess(-1)
+        log(f"  brace round {round_i}: upper excess {e_up[0]:.3f}, "
+            f"lower excess {e_lo[0]:.3f}")
+        if e_up[0] < 0.005 and e_lo[0] < 0.005:
+            break
+        for sign, (exc, lever) in ((1, e_up), (-1, e_lo)):
+            if exc < 0.005:
+                continue
+            theta = min(0.12, exc / lever)
+            for v in me.vertices:
+                zz = sign * v.co.z
+                if zz <= PIVOT_Z:
+                    continue
+                # ramp to the full angle by |z| = 0.3 so the hinge is smooth
+                a = theta * min(1.0, (zz - PIVOT_Z) / 0.215)
+                phi = sign * a
+                dx = v.co.x - PIVOT_X
+                dz = v.co.z - sign * PIVOT_Z
+                v.co.x = PIVOT_X + dx * math.cos(phi) - dz * math.sin(phi)
+                v.co.z = sign * PIVOT_Z + dx * math.sin(phi) + dz * math.cos(phi)
+        me.update()
+        fit_to_anchors()
 
     # Split at the limb pivots (authoring z +/-0.085).
     grip = bisect_part(raw, Vector((0, 0, 0.085)), Vector((0, 0, 1)), False)
